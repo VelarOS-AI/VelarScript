@@ -1,0 +1,53 @@
+/// Chapter 12's first neighbour — an ordinary dependency module.
+///
+/// It exists so chapter 12 can show a real second module: a named import, a
+/// renamed import, a namespace import, and the `export let` live binding that
+/// only a second module can demonstrate.
+
+print("dependency initialized first")
+
+// ---------------------------------------------------------------------------
+// Every export form
+// ---------------------------------------------------------------------------
+
+export const version = "1"
+
+// An `export let` stays a live ES-module value: this module can reassign it
+// between the consumer's reads, and a module with live exports must be
+// imported by name rather than through `* as`.
+export let requestCount = 0
+
+export def bumpRequestCount() -> number:
+    requestCount += 1
+    return requestCount
+
+export def encode(value: unknown) -> string:
+    return Json.stringify(value)
+
+export async def encodeLater(value: unknown) -> string:
+    return encode(value)
+
+export type User:
+    id: string
+    name: string
+
+export type UserId = string
+
+export enum Role:
+    owner
+    viewer
+
+export class Badge:
+    constructor(const label: string):
+        pass
+
+    def render() -> string:
+        return f"[{self.label}]"
+
+// A name that is never exported stays private to this module; a value may
+// still carry its shape across the graph.
+type Internal:
+    seed: number
+
+export def makeInternal(seed: number) -> Internal:
+    return {seed}

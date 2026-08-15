@@ -1,0 +1,30 @@
+{
+  "formatVersion": 2,
+  "entry": "main.vel",
+  "outDir": "dist/renderer",
+  "publicDir": "public",
+  "extensions": [
+    "@velarscript/desktop"
+  ],
+  "desktop": {
+    "productName": "VelarScript Desktop tour",
+    "identifier": "dev.velarscript.tour",
+    "window": {
+      "width": 1040,
+      "height": 720,
+      "minWidth": 640,
+      "minHeight": 480
+    },
+    "permissions": {
+      "files": [
+        "app-data",
+        "project"
+      ],
+      "processes": [],
+      "terminal": false,
+      "network": [],
+      "environment": [],
+      "secrets": []
+    }
+  }
+}

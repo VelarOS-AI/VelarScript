@@ -1,0 +1,51 @@
+// Chapter 12 — the Web unit test.
+//
+// Authority: charter section 16 on `tick()` — "answers `Promise<null>` that
+// resolves after the pending reactive flush has settled, which is how a test
+// observes the DOM that a state write produces" — and charter section 12 on
+// where `test "…":` is legal. A `test` block only exists at the top level of a
+// `*.test.vel` module (VEL3019), which is why this chapter carries that suffix
+// instead of being imported from `main.vel` like chapters 01 through 11.
+//
+// This is the *unit* half of testing: it runs in the test process against the
+// compiled module, with no page. Driving a real browser is chapter 13.
+
+import {expect} from "velar/test"
+import {openTasks, recordVisit, retitle, tasks, visits} from "./03-state-and-derived.vel"
+import {describeHttpFailure} from "./11-storage-realtime-http.vel"
+import {HttpError, HttpTransportError, HttpTransportPhase} from "velar/http"
+import {refreshEverything} from "./04-resources-and-actions.vel"
+
+test "a module state write is visible after the reactive flush settles":
+    const before = visits
+    recordVisit()
+    await tick()
+    expect(visits).toBe(before + 1)
+
+test "a computed follows the collection it reads":
+    const before = openTasks()
+    tasks.append({id: "tick", title: "Observe one flush", done: false})
+    await tick()
+    expect(openTasks()).toBe(before + 1)
+    tasks[tasks.size - 1].done = true
+    await tick()
+    expect(openTasks()).toBe(before)
+
+test "a helper may mutate the value a state binding owns":
+    retitle(tasks[0], "Read the chapter twice")
+    await tick()
+    expect(tasks[0].title).toBe("Read the chapter twice")
+
+test "a module action publishes pending around its call":
+    expect(refreshEverything.pending).toBe(false)
+    const running = refreshEverything()
+    expect(refreshEverything.pending).toBe(true)
+    await running
+    expect(refreshEverything.pending).toBe(false)
+    expect(refreshEverything.error).toBe(null)
+
+test "velar/http failures are discriminated by class":
+    expect(describeHttpFailure(HttpError("Not found", 404, "/api/draft"))).toBe("http 404 from /api/draft")
+    expect(describeHttpFailure(HttpTransportError("Send failed", HttpTransportPhase.request))).toBe("transport failed while sending the request")
+    expect(describeHttpFailure(HttpTransportError("Read failed", HttpTransportPhase.response))).toBe("transport failed while reading the response")
+    expect(describeHttpFailure(Error("something else"))).toBe("unclassified: something else")

@@ -1,0 +1,200 @@
+// Chapter 04 — asynchronous component data: `resource` and `action`.
+//
+// Authority: charter section 15, second half. `resource` and `action` are two of
+// the ten contextual keywords in packages/web/src/lexer.ts.
+//
+// Three rules here read backwards from what a reader who knows other reactive
+// frameworks expects, so each one is written twice — the shape the expectation
+// produces, and the shape the language actually means:
+//
+//   1. a resource is a load, not a formula: it does not reload when an input
+//      it reads changes;
+//   2. `reload()` is the explicit call that re-evaluates the initializer, and
+//      it answers a Promise, so a synchronous watch body starts it detached;
+//   3. actions do not serialize: a second call starts a second run.
+
+export type Profile:
+    id: string
+    name: string
+
+export type SaveReceipt:
+    id: string
+    at: number
+
+state loadCount = 0
+state saveCount = 0
+
+async def loadProfile(id: string) -> Profile:
+    await Promise.sleep(10ms)
+    loadCount += 1
+    return {id: id, name: f"Profile {id} (load {loadCount})"}
+
+async def saveProfile(profile: readonly Profile) -> SaveReceipt:
+    await Promise.sleep(10ms)
+    saveCount += 1
+    return {id: profile.id, at: saveCount}
+
+async def failingLoad(id: string) -> Profile:
+    await Promise.sleep(10ms)
+    throw Error(f"Profile {id} is unavailable")
+
+// A module-level action lives for the life of the module and is never disposed,
+// so a shared store owns an operation together with its `pending`/`error`
+// surface. A `resource` stays component-owned because its stale-result handling
+// is tied to component destruction.
+export action refreshEverything() -> number:
+    await Promise.sleep(10ms)
+    return loadCount
+
+// Rule 1, spelling A — the expectation. `userId` is read by the initializer,
+// which makes it look like a dependency. It is not: this resource loads once,
+// when the component mounts, and a later `userId` keeps showing the first load.
+component ResourceWithoutReload(userId: string):
+    resource profile: Profile = loadProfile(userId)
+
+    return <div data-resource-without-reload>
+        <p data-value>{profile.value?.name ?? "no value yet"}</p>
+        <p data-input>{userId}</p>
+    </div>
+
+// Rule 1, spelling B — the same component saying what it means. "Refetch when
+// the input changes" is spelled by watching the input and reloading.
+component ResourceWithReload(userId: string):
+    resource profile: Profile = loadProfile(userId)
+
+    watch userId:
+        async profile.reload()
+
+    return <div data-resource-with-reload>
+        <p data-value>{profile.value?.name ?? "no value yet"}</p>
+        <p data-input>{userId}</p>
+    </div>
+
+// Rule 2, both spellings in one component. A watch body is synchronous, so the
+// reload there is started with the detached `async` statement; an action body
+// is asynchronous, so the same call is awaited and its Promise of `null` is the
+// point where the reload has settled.
+component ReloadSpellings(userId: string):
+    resource profile: Profile = loadProfile(userId)
+    state detachedStarts = 0
+
+    watch userId:
+        detachedStarts += 1
+        async profile.reload()
+
+    action reloadAndReport() -> string:
+        await profile.reload()
+        return profile.value?.name ?? "no value"
+
+    return <div data-reload-spellings>
+        <p data-value>{profile.value?.name ?? "no value yet"}</p>
+        <p data-detached-starts>{detachedStarts}</p>
+        <button type="button" data-reload-awaited on:click={reloadAndReport} disabled={reloadAndReport.pending}>
+            Reload and report
+        </button>
+    </div>
+
+// All five resource fields, and the failure contract: a failed load keeps the
+// last successful `value`, publishes the failure in `error`, sets `ready` to
+// true and `loading` to false, and a successful reload clears `error` when it
+// starts.
+component ResourceFields(userId: string):
+    resource profile: Profile = loadProfile(userId)
+    resource broken: Profile = failingLoad(userId)
+
+    return <div data-resource-fields>
+        <p data-loading>{profile.loading ? "loading" : "idle"}</p>
+        <p data-ready>{profile.ready ? "ready" : "pending"}</p>
+        <p data-value>{profile.value?.name ?? "no value"}</p>
+        <p data-error>{profile.error?.message ?? "no error"}</p>
+        <p data-broken-error>{broken.error?.message ?? "no error"}</p>
+        <p data-broken-ready>{broken.ready ? "ready" : "pending"}</p>
+        <button type="button" data-reload on:click={profile.reload}>Reload</button>
+    </div>
+
+// Rule 3, spelling A — the expectation. Two clicks start two runs; there is no
+// implicit queue, drop, or debounce. `pending` means *some* call is active and
+// turns false only when the last one settles, and `error` belongs to the newest
+// call.
+component OverlappingAction(profile: Profile):
+    state finished = 0
+
+    action save() -> SaveReceipt:
+        const receipt = await saveProfile(profile)
+        finished += 1
+        return receipt
+
+    return <div data-overlapping-action>
+        <p data-pending>{save.pending ? "pending" : "settled"}</p>
+        <p data-error>{save.error?.message ?? "no error"}</p>
+        <p data-finished>{finished}</p>
+        <button type="button" data-save on:click={save}>Save (overlapping)</button>
+    </div>
+
+// Rule 3, spelling B — the two ways an application says "not twice". Guard the
+// call, or disable the control. Both are application decisions because the
+// language refuses to guess which one an operation wants.
+component GuardedAction(profile: Profile):
+    state finished = 0
+
+    action save():
+        await saveProfile(profile)
+        finished += 1
+
+    def saveOnce():
+        if not save.pending:
+            async save()
+
+    return <div data-guarded-action>
+        <p data-pending>{save.pending ? "pending" : "settled"}</p>
+        <p data-finished>{finished}</p>
+        <button type="button" data-save-guarded on:click={saveOnce}>Save (guarded)</button>
+        <button type="button" data-save-disabled on:click={save} disabled={save.pending}>
+            Save (disabled while pending)
+        </button>
+    </div>
+
+// An action reports its failure through the Web error chain and still rejects
+// its call; failures are never converted into successful `null` results. Use
+// `try`/`catch` when the caller owns recovery.
+component ActionFailure:
+    state recovered = ""
+
+    action alwaysFails() -> string:
+        await Promise.sleep(10ms)
+        throw Error("This action always fails")
+
+    action recover() -> string:
+        try:
+            return await alwaysFails()
+        catch error:
+            recovered = error.message
+            return recovered
+
+    return <div data-action-failure>
+        <p data-recovered>{recovered == "" ? "not run" : recovered}</p>
+        <p data-error>{alwaysFails.error?.message ?? "no error"}</p>
+        <button type="button" data-recover on:click={recover} disabled={recover.pending}>Recover</button>
+    </div>
+
+export component ResourcePanel:
+    state userId = "ada"
+
+    def switchUser():
+        userId = userId == "ada" ? "grace" : "ada"
+
+    return <section data-chapter="04">
+        <h2>04 — resources and actions</h2>
+        <button type="button" data-switch-user on:click={switchUser}>Switch user ({userId})</button>
+        <button type="button" data-refresh-everything on:click={refreshEverything} disabled={refreshEverything.pending}>
+            Refresh everything
+        </button>
+        <p data-module-action-error>{refreshEverything.error?.message ?? "no error"}</p>
+        <ResourceWithoutReload userId={userId} />
+        <ResourceWithReload userId={userId} />
+        <ReloadSpellings userId={userId} />
+        <ResourceFields userId={userId} />
+        <OverlappingAction profile={{id: userId, name: "in memory"}} />
+        <GuardedAction profile={{id: userId, name: "in memory"}} />
+        <ActionFailure />
+    </section>

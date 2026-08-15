@@ -1,0 +1,128 @@
+/// Chapter 13 — the JavaScript boundary: `extern module`, `import js`,
+/// `import js unsafe`, and what `any` means.
+///
+/// Charter section 12's tail and section 18. The specifier is `node:crypto`
+/// so the four keywords `extern`, `module`, `js`, and `unsafe` need no
+/// third-party dependency: a project compile skips the existence probe for
+/// `node:` specifiers.
+
+// ---------------------------------------------------------------------------
+// `extern module` — a checked, manual adapter
+// ---------------------------------------------------------------------------
+
+// A manual adapter describes only runtime exports and never executes
+// declarations. Extern functions and getters have no body to infer, so they
+// always declare their result — `-> null` included.
+extern module "node:crypto":
+    export const webcrypto: unknown
+
+    // A default-export-only package is declared with the export name
+    // `default`; `default` is not a VelarScript keyword, so it names the
+    // extern export directly.
+    export const default: unknown
+
+    export def randomUUID() -> string
+    export def randomInt(maximum: number) -> number
+    export def timingSafeEqual(left: unknown, right: unknown) -> bool
+    export def checkPrimeSync(candidate: unknown) -> bool
+
+    export class Hash:
+        def update(data: string) -> Hash
+        def digest(encoding: string) -> string
+        def copy() -> Hash
+
+    export def createHash(algorithm: string) -> Hash
+
+// `import js` brings a declared name across the checked bridge. The emitted
+// bridge verifies at module initialization that each imported name exists on
+// the JavaScript module.
+import js {createHash, randomUUID, webcrypto} from "node:crypto"
+import js {timingSafeEqual as constantTimeEqual} from "node:crypto"
+import js * as crypto from "node:crypto"
+
+// The bare form is the canonical default import; `{default as ...}` is the
+// equivalent explicit spelling. Both lower through the same presence-checked
+// bridge, and the binding always carries another local name because
+// JavaScript reserves the word.
+import js nodeCrypto from "node:crypto"
+import js {default as explicitDefault} from "node:crypto"
+
+// `import js unsafe` admits a value as `any` — no declaration, no promise.
+import js unsafe {createHash as rawCreateHash} from "node:crypto"
+import js unsafe {webcrypto as rawWebcrypto} from "node:crypto"
+import js unsafe rawDefault from "node:crypto"
+
+// ---------------------------------------------------------------------------
+// Using the checked side
+// ---------------------------------------------------------------------------
+
+export def digest(text: string) -> string:
+    return createHash("sha256").update(text).digest("hex")
+
+export def identifier() -> string:
+    return randomUUID()
+
+export def sameLength(left: unknown, right: unknown) -> bool:
+    return constantTimeEqual(left, right)
+
+export def throughNamespace(text: string) -> string:
+    // A namespace import of an extern module reads the same declared contract.
+    return crypto.createHash("sha512").update(text).digest("hex")
+
+// A declared `const` export has no VelarScript initializer, and an `unknown`
+// must be validated before use.
+type CryptoSubtle:
+    subtle: unknown
+
+export def readDeclaredConstant() -> bool:
+    return webcrypto is CryptoSubtle
+
+export def readDefaultExport() -> bool:
+    return nodeCrypto == null and explicitDefault == null
+
+// ---------------------------------------------------------------------------
+// What `any` means
+// ---------------------------------------------------------------------------
+
+type Config:
+    retries: number
+
+// 1. Operations on `any` are raw JavaScript: member reads and writes, calls,
+//    arithmetic, indexing, `match`, and `is` all pass through with no
+//    adaptation, and the `undefined`-to-`null` normalization does not happen.
+export def rawOperations() -> string:
+    const hasher = rawCreateHash("sha256")
+    const updated = hasher.update("text")
+    const digested = updated.digest("hex")
+    const indexed = rawWebcrypto["subtle"]
+    const fromDefault = rawDefault.randomUUID()
+    return f"{digested is string} {indexed == null} {fromDefault is string}"
+
+// 2. `any` is assignable to every type with no runtime check, so a leaked
+//    `any` is laundered into a type that then behaves like a lie.
+export def launderedValue() -> string:
+    const believed: string = rawCreateHash("sha256")
+    return believed
+
+// Assigning an `any` into a checked optional normalizes it, which is one more
+// reason the annotation belongs at the boundary.
+export def normalizedAtTheBoundary() -> bool:
+    const value: string? = rawWebcrypto
+    return value == null
+
+// 3. Therefore the import site is the only correctness boundary: validate at
+//    the edge and let only checked values inward.
+export def validatedAtTheEdge(candidate: unknown) -> number:
+    const config = Config.parse(candidate)
+    return config.retries
+
+// An `unknown` is the ordinary spelling for unvalidated dynamic input; `any`
+// is reserved for explicit unsafe JavaScript declarations.
+export def validatesUnknown(value: unknown) -> string:
+    if value is Config:
+        return str(value.retries)
+    if value is string:
+        return value
+    return "unusable"
+
+export const chapterThirteen = {chapterName: "the JavaScript boundary"}

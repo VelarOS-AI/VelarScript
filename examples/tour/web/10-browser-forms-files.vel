@@ -1,0 +1,296 @@
+// Chapter 10 — the browser capability surface: `velar/browser`, `velar/forms`,
+// and `velar/files`.
+//
+// Authority: the three module export tables in packages/web/src/compiler.ts —
+// `velar/browser` (28 exports), `velar/forms` (14), and `velar/files` (4).
+// Charter section 13 owns why these modules exist: an official Web module owns
+// the browser operations it exposes and captures the host objects when it
+// initializes, so a later ambient replacement cannot redirect them.
+//
+// Every call that would actually *do* something to the machine — open a window,
+// read the clipboard, choose a file, save a download, scroll the document, open
+// a modal — is written inside a `def` that nothing calls. The spelling is the
+// point; performing it while a reader browses the tour is not.
+
+import {after, blur, capturePointer, clipboardText, closeDialog, copyText, dialogResult, environment, every, focus, frame, location, measure, media, open, readClipboardText, releasePointer, scrollElementTo, scrollIntoView, scrollMetrics, scrollTo, setClipboardText, setTextSelection, showDialog, textSelection, watchMedia, watchOnline, watchVisibility} from "velar/browser"
+import {checkedValue, clearError, clearErrors, errors, fieldValue, fieldValues, focusFirstError, numberValue, read, reset, setError, setPending, textValue, values} from "velar/forms"
+import {download, pick, readDataUrl, readText} from "velar/files"
+
+export type SignUp:
+    email: string
+    age: number
+
+// `after(duration, callback)` and `every(duration, callback)` take a `Duration`,
+// never a bare number, and each answers its own cancel function. The three
+// `watch*` subscriptions follow the same shape, which is why one `@cleanup`
+// loop releases all five.
+component TimersAndSubscriptions:
+    state ticks = 0
+    state settled = "waiting"
+    state wide = false
+    state online = true
+    state visible = true
+    let stops: List<() -> null> = []
+
+    def countTick():
+        ticks += 1
+
+    def settle():
+        settled = "settled"
+
+    def setWide(next: bool):
+        wide = next
+
+    def setOnline(next: bool):
+        online = next
+
+    def setVisible(next: bool):
+        visible = next
+
+    @mounted:
+        stops = [
+            after(120ms, settle),
+            every(1s, countTick),
+            watchMedia("(min-width: 720px)", setWide),
+            watchOnline(setOnline),
+            watchVisibility(setVisible),
+        ]
+
+    @cleanup:
+        for stop in stops:
+            stop()
+
+    return <div data-timers>
+        <p data-ticks>{ticks}</p>
+        <p data-timer-settled>{settled}</p>
+        <p data-subscriptions>{f"{wide}:{online}:{visible}"}</p>
+    </div>
+
+// `location()`, `environment()`, and `media(query)` are synchronous reads of
+// the host, each returning a checked record rather than a live host object.
+component EnvironmentReadout:
+    state described = "not read"
+
+    def describe():
+        const here = location()
+        const env = environment()
+        const wideNow = media("(min-width: 720px)")
+        described = f"{here.path}|{here.origin != ""}|{here.href != ""}|{here.query.size}|{here.hash == "" ? "no hash" : here.hash}"
+        print(f"{env.language} {env.languages.size} {env.online} {env.visible} {env.colorScheme} {env.reducedMotion} {env.touch} {wideNow}")
+
+    return <div data-environment>
+        <p data-described>{described}</p>
+        <button type="button" data-describe on:click={describe}>Read the environment</button>
+    </div>
+
+// `measure`, `scrollMetrics`, and `frame` are the layout readouts. `frame()`
+// answers a Promise of the frame timestamp, which is the checked way to wait
+// for the next paint.
+component MeasurementReadout:
+    state box = "unmeasured"
+    state metrics = "unmeasured"
+    state stamped = "no frame"
+    let panel: Element? = null
+
+    def measurePanel():
+        if panel != null:
+            const rect = measure(panel)
+            const scroll = scrollMetrics(panel)
+            box = f"{rect.width >= 0}:{rect.height >= 0}:{rect.x >= 0}:{rect.y >= 0}:{rect.top >= 0}:{rect.right >= 0}:{rect.bottom >= 0}:{rect.left >= 0}"
+            metrics = f"{scroll.x}:{scroll.y}:{scroll.viewportWidth > 0}:{scroll.viewportHeight > 0}:{scroll.contentWidth > 0}:{scroll.contentHeight > 0}"
+
+    action awaitFrame() -> string:
+        const stamp = await frame()
+        stamped = f"frame {stamp >= 0}"
+        return stamped
+
+    return <div ref={panel} data-measurement>
+        <p data-box>{box}</p>
+        <p data-metrics>{metrics}</p>
+        <p data-stamped>{stamped}</p>
+        <button type="button" data-measure on:click={measurePanel}>Measure</button>
+        <button type="button" data-await-frame on:click={awaitFrame} disabled={awaitFrame.pending}>
+            Await a frame
+        </button>
+    </div>
+
+// Focus, scrolling, text selection, and pointer capture all take the element
+// itself rather than a selector, so a `ref` is the entry point.
+component ElementControls:
+    state selection = "no selection"
+    state captured = "released"
+    let target: Element? = null
+    let note: TextAreaElement? = null
+
+    def focusNote():
+        if note != null:
+            focus(note)
+
+    def focusWithoutScrolling():
+        if note != null:
+            focus(note, true)
+
+    def blurNote():
+        if note != null:
+            blur(note)
+
+    def revealTarget():
+        if target != null:
+            scrollIntoView(target)
+
+    def revealSmoothly():
+        if target != null:
+            scrollIntoView(target, "smooth")
+
+    def scrollPanel():
+        if target != null:
+            scrollElementTo(target, 0, 24)
+            scrollElementTo(target, 0, 0, "smooth")
+
+    def readSelection():
+        if note != null:
+            const span = textSelection(note)
+            selection = f"{span.start}:{span.end}:{span.direction}"
+
+    def selectFirstWord():
+        if note != null:
+            setTextSelection(note, 0, 4)
+            setTextSelection(note, 0, 4, "forward")
+
+    def capture(event: PointerEvent):
+        if target != null:
+            capturePointer(target, event.pointerId)
+            captured = "captured"
+
+    def release(event: PointerEvent):
+        if target != null:
+            releasePointer(target, event.pointerId)
+            captured = "released"
+
+    return <div ref={target} data-element-controls on:pointerdown={capture} on:pointerup={release}>
+        <textarea ref={note} data-note>Some text to select</textarea>
+        <p data-selection>{selection}</p>
+        <p data-captured>{captured}</p>
+        <button type="button" data-focus on:click={focusNote}>Focus</button>
+        <button type="button" data-focus-quiet on:click={focusWithoutScrolling}>Focus without scrolling</button>
+        <button type="button" data-blur on:click={blurNote}>Blur</button>
+        <button type="button" data-reveal on:click={revealTarget}>Reveal</button>
+        <button type="button" data-reveal-smooth on:click={revealSmoothly}>Reveal smoothly</button>
+        <button type="button" data-scroll-panel on:click={scrollPanel}>Scroll the panel</button>
+        <button type="button" data-read-selection on:click={readSelection}>Read the selection</button>
+        <button type="button" data-select-word on:click={selectFirstWord}>Select the first word</button>
+    </div>
+
+// `clipboardText(event)` and `setClipboardText(event, value)` work on a real
+// clipboard event, so they are reached from `on:copy` and `on:paste` rather
+// than by asking for permission.
+component ClipboardEvents:
+    state pasted = "nothing pasted"
+
+    def onPaste(event: ClipboardEvent):
+        pasted = clipboardText(event)
+
+    def onCopy(event: ClipboardEvent):
+        setClipboardText(event, "copied from the tour")
+
+    return <div data-clipboard-events>
+        <input data-paste-target type="text" on:paste={onPaste} on:copy={onCopy} />
+        <p data-pasted>{pasted}</p>
+    </div>
+
+// The whole `velar/forms` table, driven from one form element. `read(form,
+// Target)` validates the form into a record type; the six readers below answer
+// individual fields; the six error helpers own the accessible error surface.
+component FormReadout:
+    state summary = "not submitted"
+    state errorSummary = "no errors"
+    let form: Element? = null
+
+    def readAll():
+        if form != null:
+            const all = values(form)
+            const one = fieldValue(form, "email")
+            const text = textValue(form, "email")
+            const fallback = textValue(form, "email", "unknown")
+            const age = numberValue(form, "age")
+            const agreed = checkedValue(form, "terms")
+            const tags = fieldValues(form, "tags")
+            summary = f"{all.size}|{one != null}|{text}|{fallback}|{age ?? 0}|{agreed}|{tags.size}"
+
+    def validate():
+        if form != null:
+            const parsed: SignUp? = try read(form, SignUp)
+            if parsed == null:
+                setError(form, "email", "Enter an email address and an age")
+                const messages = errors(form)
+                const moved = focusFirstError(form)
+                errorSummary = f"{messages.size} error(s), focused: {moved}"
+            else:
+                clearError(form, "email")
+                clearErrors(form)
+                errorSummary = f"valid: {parsed.email} is {parsed.age}"
+
+    action submit():
+        if form != null:
+            setPending(form, true)
+            await Promise.sleep(20ms)
+            setPending(form, false)
+            reset(form)
+
+    return <form ref={form} data-form on:submit.prevent={submit}>
+        <input data-email type="email" name="email" />
+        <input data-age type="number" name="age" />
+        <input data-terms type="checkbox" name="terms" value="yes" />
+        <input data-tag-a type="checkbox" name="tags" value="a" />
+        <input data-tag-b type="checkbox" name="tags" value="b" />
+        <p data-form-summary>{summary}</p>
+        <p data-form-errors>{errorSummary}</p>
+        <button type="button" data-read-form on:click={readAll}>Read every field</button>
+        <button type="button" data-validate-form on:click={validate}>Validate</button>
+        <button type="submit" data-submit-form disabled={submit.pending}>Submit</button>
+    </form>
+
+// The calls that reach outside the page. `open` navigates a window, `pick`
+// opens the operating system's file chooser, and `download` writes to the
+// reader's disk, so all four `velar/files` exports and the three navigating
+// `velar/browser` exports live here, unread by any control.
+export def windowAndScrollSpellings(element: Element):
+    open("https://velarscript.dev")
+    open("https://velarscript.dev", "_blank")
+    scrollTo(0, 240)
+    scrollTo(0, 240, "smooth")
+    scrollIntoView(element)
+
+export def dialogSpellings(sheet: DialogElement):
+    showDialog(sheet)
+    closeDialog(sheet)
+    closeDialog(sheet, "confirmed")
+    print(dialogResult(sheet))
+
+export async def clipboardSpellings():
+    await copyText("copied by the tour")
+    const pastedText = await readClipboardText()
+    print(pastedText)
+
+export async def fileSpellings(file: File):
+    const chosen = await pick()
+    const images = await pick({accept: "image/*", multiple: true})
+    const body = await readText(file)
+    const cappedBody = await readText(file, 65536)
+    const dataUrl = await readDataUrl(file)
+    const cappedDataUrl = await readDataUrl(file, 65536)
+    download("tour.txt", body)
+    download("tour.csv", body, "text/csv")
+    print(f"{chosen.size} {images.size} {cappedBody.size} {dataUrl.size} {cappedDataUrl.size}")
+
+export component CapabilitiesPanel:
+    return <section data-chapter="10">
+        <h2>10 — browser, forms, and files</h2>
+        <TimersAndSubscriptions />
+        <EnvironmentReadout />
+        <MeasurementReadout />
+        <ElementControls />
+        <ClipboardEvents />
+        <FormReadout />
+        <dialog data-tour-dialog><p>A dialog the tour never opens.</p></dialog>
+    </section>

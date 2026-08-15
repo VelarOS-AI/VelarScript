@@ -1,0 +1,39 @@
+// The Web tour's entry module.
+//
+// `velar check` does not check a `.vel` that the entry cannot reach, and bare
+// side-effect imports are not part of the language, so every chapter exports at
+// least one name and this file imports each one by name. A chapter added to the
+// directory without a line here is silently not covered — which is the whole
+// reason the list is written out rather than globbed.
+//
+// The two exceptions are `12-unit.test.vel` and `13-browser.browser.test.vel`:
+// a `*.test.vel` module goes through the CLI's second pass on its own.
+
+import {ComponentsPanel} from "./01-components.vel"
+import {DirectivesPanel} from "./02-jsx-directives.vel"
+import {ReactivePanel} from "./03-state-and-derived.vel"
+import {ResourcePanel} from "./04-resources-and-actions.vel"
+import {LifecyclePanel} from "./05-lifecycle-and-mount.vel"
+import {LookPanel} from "./06-look.vel"
+import {MotionPanel} from "./07-look-motion.vel"
+import {CascadePanel} from "./08-look-escape.vel"
+import {RoutingPanel} from "./09-routing-and-app.vel"
+import {CapabilitiesPanel} from "./10-browser-forms-files.vel"
+import {ConnectionsPanel} from "./11-storage-realtime-http.vel"
+
+component Tour:
+    return <div id="tour">
+        <ComponentsPanel />
+        <DirectivesPanel />
+        <ReactivePanel />
+        <ResourcePanel />
+        <LifecyclePanel />
+        <LookPanel />
+        <MotionPanel />
+        <CascadePanel />
+        <RoutingPanel />
+        <CapabilitiesPanel />
+        <ConnectionsPanel />
+    </div>
+
+mount(<Tour />, "#app")

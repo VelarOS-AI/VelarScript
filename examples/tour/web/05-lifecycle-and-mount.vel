@@ -1,0 +1,130 @@
+// Chapter 05 — lifecycle: `@mounted:`, `@cleanup:`, `mount`, and `tick`.
+//
+// Authority: charter section 16. `@mounted` and `@cleanup` are the two lifecycle
+// hooks named in charter section 13's complete list of Web additions; `mount`
+// and `tick` are two of the three reserved Web globals in `webGlobals`
+// (packages/web/src/compiler.ts), which is why no binding may spell them.
+//
+// There is no public React-style `effect` API, and `effect`, `onMount`,
+// `onMounted`, and `on_mount` are refused outright by the Web extension's
+// `forbiddenIdentifiers` table.
+
+import {after, every} from "velar/browser"
+
+// `@mounted` and `@cleanup` are siblings. Cleanup is not nested inside
+// `@mounted` and is not returned from an effect callback, so the two blocks
+// read as what they are: one setup and one teardown for the whole component.
+component TimerLifecycle:
+    state ticks = 0
+    state settled = "waiting"
+    let stopTimer: (() -> null)? = null
+    let stopDelay: (() -> null)? = null
+
+    def countTick():
+        ticks += 1
+
+    def settle():
+        settled = "settled"
+
+    @mounted:
+        stopTimer = every(1s, countTick)
+        stopDelay = after(120ms, settle)
+
+    @cleanup:
+        if stopTimer != null:
+            stopTimer()
+        if stopDelay != null:
+            stopDelay()
+
+    return <div data-timer-lifecycle>
+        <p data-ticks>{ticks}</p>
+        <p data-settled>{settled}</p>
+    </div>
+
+// A ref is null while the body runs and is filled before `@mounted`, which is
+// why lifecycle setup that needs the DOM lives there. Refs are restored to
+// `null` during cleanup.
+component RefLifecycle:
+    state measured = "unmeasured"
+    let board: CanvasElement? = null
+
+    @mounted:
+        if board != null:
+            measured = f"{board.width}x{board.height}"
+
+    @cleanup:
+        measured = "unmeasured"
+
+    return <div data-ref-lifecycle>
+        <canvas ref={board} data-canvas width="48" height="24"></canvas>
+        <p data-measured>{measured}</p>
+    </div>
+
+// A component whose position unmounts is destroyed with its watches,
+// resources, actions, events, refs, and DOM work. Toggling this branch is the
+// visible form of that contract.
+export component LifecycleSwitch:
+    state showing = true
+
+    def toggle():
+        showing = not showing
+
+    return <div data-lifecycle-switch>
+        <button type="button" data-toggle-lifecycle on:click={toggle}>{showing ? "Unmount" : "Mount"}</button>
+        {showing ? <TimerLifecycle /> : <p data-unmounted>unmounted</p>}
+    </div>
+
+// `mount(node, target)` attaches one root to the document and answers `null`.
+// The target is a CSS selector string or an element, the root is constructed
+// synchronously — a direct `await` inside the argument is rejected — and one
+// component instance mounts exactly once, so a repeated mount fails explicitly
+// rather than moving DOM silently.
+//
+// This module already runs inside a mounted application, so the two spellings
+// below live in a function nothing calls: running them would attach a second
+// root to a page that already has one.
+component Secondary:
+    return <p data-secondary>a second root</p>
+
+export def mountSpellings(target: Element):
+    mount(<Secondary />, "#tour-secondary")
+    mount(<Secondary />, target)
+
+// Module-level preload work is awaited into a binding first, precisely because
+// the mount argument may not contain a direct `await`.
+export async def mountAfterPreload() -> string:
+    await Promise.sleep(1ms)
+    const label = "preloaded"
+    mount(<Secondary />, "#tour-secondary")
+    return label
+
+// `tick()` answers `Promise<null>` that resolves after the pending reactive
+// flush has settled, which is how a caller observes the DOM a state write
+// produces. It is also where an unowned failure surfaces: if the flush reported
+// a failure no handler claimed, `tick()` rejects with it.
+export component TickObserver:
+    state written = 0
+    state observed = "not observed"
+
+    action writeThenObserve() -> string:
+        written += 1
+        await tick()
+        observed = f"observed {written}"
+        return observed
+
+    return <div data-tick-observer>
+        <p data-written>{written}</p>
+        <p data-observed>{observed}</p>
+        <button type="button" data-write-then-observe on:click={writeThenObserve} disabled={writeThenObserve.pending}>
+            Write, then observe
+        </button>
+    </div>
+
+export component LifecyclePanel:
+    return <section data-chapter="05">
+        <h2>05 — lifecycle and mount</h2>
+        <LifecycleSwitch />
+        <RefLifecycle />
+        <TickObserver />
+        <div id="tour-secondary" data-secondary-host></div>
+    </section>

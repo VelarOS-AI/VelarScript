@@ -1,0 +1,162 @@
+// Chapter 09 — routing, application errors, and manifest configuration.
+//
+// Authority: the three module export tables in packages/web/src/compiler.ts —
+// `velar/web` (15 exports), `velar/app` (2), and `velar/config` (3). Charter
+// section 13 owns the boundary these modules sit behind.
+//
+// `velar/config` reads the `web.publicConfig` block of `velar.json`, so this
+// chapter only compiles in a project whose manifest declares one.
+
+import {onError, reportError} from "velar/app"
+import {has, keys, publicConfig} from "velar/config"
+import {Head, Link, NavLink, RouteContext, Router, announce, back, currentRoute, domId, forward, lazy, navigate, redirect, reload, route} from "velar/web"
+import {LazyPage} from "./09-routing-lazy.vel"
+
+// `publicConfig(Target)` validates the manifest's `web.publicConfig` against a
+// record type at startup, so a missing or mistyped key fails once rather than
+// somewhere in the page. `has` and `keys` answer the same block untyped.
+export type TourFeatures:
+    realtime: bool
+
+export type TourConfig:
+    apiBase: string
+    channel: string
+    features: TourFeatures
+
+export const config = publicConfig(TourConfig)
+export const hasApiBase = has("apiBase")
+export const configKeys = keys()
+
+// `RouteContext` is a named record type published by the module: `path`,
+// `params`, `query`, and `hash`.
+component TourHome(route: RouteContext):
+    const headingId = domId("tour-home")
+
+    return <article data-route="home">
+        <h3 id={headingId}>Home</h3>
+        <p data-route-path>{route.path}</p>
+        <p data-route-params>{route.params.get("id") ?? "no id"}</p>
+        <p data-route-query>{route.query.get("q") ?? "no query"}</p>
+        <p data-route-hash>{route.hash == "" ? "no hash" : route.hash}</p>
+    </article>
+
+component TourSection(route: RouteContext):
+    return <article data-route="section">
+        <h3>Section</h3>
+        <p data-route-param>{route.params.get("name") ?? "unnamed"}</p>
+    </article>
+
+component RouteLoading:
+    return <p data-route-loading aria-busy="true">Loading the route…</p>
+
+component RouteFailed(error: Error):
+    return <p data-route-failed role="alert">{error.message}</p>
+
+component RouteNotFound(route: RouteContext):
+    return <article data-route="not-found">
+        <h3>Page not found</h3>
+        <p data-route-missing>{f"No tour page matches {route.path}"}</p>
+    </article>
+
+// `lazy(loader, exportName, loading?, failed?)` splits a route into its own
+// chunk. The loader is an ordinary `() => import(...)`, so the target module
+// stays part of the checked module graph.
+const LazyRoute = lazy(() => import("./09-routing-lazy.vel"), "LazyPage", RouteLoading, RouteFailed)
+
+// `route(path, view)` builds one entry; a `:name` segment becomes a param.
+export const tourRoutes = [
+    route("/", TourHome),
+    route("/lazy", LazyRoute),
+    route("/section/:name", TourSection),
+]
+
+// The four navigation calls that leave the current page are written here rather
+// than wired to a control: reading them is the point, and running them during a
+// tour of a single page is not.
+export def navigationSpellings():
+    redirect("/")
+    back()
+    forward()
+    reload()
+
+// `announce(message, priority?)` writes to the application's live region, which
+// is how a single-page navigation stays audible to a screen reader.
+export def announceRouteChange(path: string):
+    announce(f"Navigated to {path}")
+    announce("Navigation failed", "assertive")
+
+// `velar/app` owns the error chain. `onError` registers a handler and answers
+// its own cleanup function; `reportError(error, phase?, detail?)` puts an
+// application failure onto the same chain the runtime already uses.
+export type AppErrorReport:
+    error: Error
+    phase: string
+    detail: string
+    component: string
+    timestamp: number
+
+component ErrorChain:
+    state lastReport = "no report"
+
+    def record(report: AppErrorReport):
+        lastReport = f"{report.phase}:{report.detail}:{report.component}:{report.error.message}:{report.timestamp >= 0}"
+
+    let stop: (() -> null)? = null
+
+    @mounted:
+        stop = onError(record)
+
+    @cleanup:
+        if stop != null:
+            stop()
+
+    def raise():
+        reportError(Error("A reported failure"), "event", "chapter 09")
+
+    def raiseBare():
+        reportError(Error("A failure with no phase"))
+
+    return <div data-error-chain>
+        <p data-last-report>{lastReport}</p>
+        <button type="button" data-report-error on:click={raise}>Report an error</button>
+        <button type="button" data-report-bare on:click={raiseBare}>Report without a phase</button>
+    </div>
+
+// `Head` is the metadata component; every prop except `title` is optional.
+// `Link` and `NavLink` are the two runtime-implemented navigation components,
+// and `NavLink` adds `exact` plus the `aria-current` the `@current` Look hook
+// reads.
+export component RoutingPanel:
+    const here = currentRoute()
+
+    def goToSection():
+        navigate("/section/units")
+
+    def replaceWithLazy():
+        navigate("/lazy", {replace: true, scroll: false})
+
+    return <section data-chapter="09">
+        <Head
+            title="VelarScript Web tour"
+            description="Every Web spelling, once."
+            canonical="/"
+            robots="index,follow"
+            image="/tour-mark.svg"
+            themeColor="#1d2b57"
+            language="en"
+        />
+        <h2>09 — routing, app, and config</h2>
+        <p data-config>{f"{config.apiBase}:{config.channel}:{config.features.realtime}"}</p>
+        <p data-config-keys>{f"{hasApiBase}:{configKeys.size}"}</p>
+        <p data-current-route>{here.path}</p>
+        <nav data-tour-nav aria-label="Tour pages">
+            <Link to="/" replace={false}>Home</Link>
+            <NavLink to="/lazy" exact={true}>Lazy</NavLink>
+            <NavLink to="/section/units" exact={false}>Section</NavLink>
+        </nav>
+        <button type="button" data-navigate on:click={goToSection}>Navigate to a section</button>
+        <button type="button" data-navigate-replace on:click={replaceWithLazy}>Replace with the lazy route</button>
+        <Router routes={tourRoutes} fallback={RouteNotFound} />
+        <ErrorChain />
+        <LazyPage />
+    </section>

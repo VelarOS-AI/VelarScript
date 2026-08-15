@@ -1,0 +1,156 @@
+// Chapter 01 — the component declaration surface.
+//
+// Authority: charter section 14 (Components and JSX) for every shape below,
+// and the Web extension's own tables for what a native element accepts:
+// packages/web/src/elements.ts (void elements) and the analyzer's element
+// vocabulary. `component`, `exposes`, and `expose` are three of the ten
+// contextual keywords in packages/web/src/lexer.ts.
+//
+// The chapter shows the declaration face only. Directives live in chapter 02,
+// reactivity in chapter 03.
+
+export type Task:
+    id: string
+    title: string
+    done: bool
+
+// A component Handle is a concrete record type. Its members are written in a
+// type expression, which is one of the three positions where `-> null` is
+// required rather than inferred (D58 rule 139).
+export type PanelHandle:
+    focus: () -> null
+    label: () -> string
+
+// `Component<Props>` is the zero-Handle contract; the signature describes JSX
+// props and its result must be `WebNode`. `compact?: bool` means the prop may
+// be omitted; `tracking: string?` would stay required and accept `null`.
+type TaskView = Component < (task: Task, compact?: bool) -> WebNode >
+
+// The two-argument form adds the Handle a `ref` on the invocation may claim.
+type PanelView = Component < (title: string) -> WebNode, PanelHandle >
+
+// A prop with no default is required.
+export component TaskRow(task: Task, compact: bool = false):
+    return <li data-task={task.id} data-compact={compact}>{task.title}</li>
+
+// The same contract, spelled with one more optional prop. A constructor may
+// accept more than the contract permits its caller to pass.
+component DetailedTaskRow(task: Task, compact: bool = false, tracking: string = "row"):
+    return <li data-task={task.id} data-tracking={tracking}>{task.title}{compact ? "" : " (detailed)"}</li>
+
+// Record and collection props enter as transitive readonly views, so a helper
+// that only reads them declares `readonly`. A bare class prop is a behavioral
+// value and passes through as-is.
+export class TaskClock:
+    constructor(private const started: number):
+        pass
+
+    def elapsed(now: number) -> number:
+        return now - self.started
+
+component TaskSummary(tasks: readonly List<Task>, index: Map<string, Task>, clock: TaskClock):
+    return <p data-summary>{f"{tasks.size} tasks, {index.size} indexed, {clock.elapsed(10)} elapsed"}</p>
+
+// A component that takes children renders them wherever it likes.
+component Framed(title: string, children: WebNode):
+    return <section data-framed><h3>{title}</h3>{children}</section>
+
+// Bare `Component` and one-argument `Component<Props>` do not authorize a ref.
+component Slot(View: Component):
+    return <div data-slot><View /></div>
+
+component EmptyView:
+    return <span data-empty>empty</span>
+
+// A multi-root component returns a fragment and marks exactly one native
+// element with the valueless `host` directive; `host` receives what the
+// invocation attaches — `class`, `class:*`, `look`, `look:*`, `style:*`.
+component Field(label: string, value: string):
+    return <>
+        <label data-field-label for="tour-field">{label}</label>
+        <input host id="tour-field" type="text" value={value} readonly />
+    </>
+
+// A component whose root is a single element needs no marker: that root is the
+// host, and a component root forwards to its own host in turn.
+component FieldRow(label: string, value: string):
+    return <Field label={label} value={value} />
+
+// `exposes` names the Handle; exactly one `expose` provides it. The
+// conventional order puts `expose` immediately before the single `return`.
+export component LabelledPanel(title: string) exposes PanelHandle:
+    let heading: Element? = null
+
+    def focus():
+        if heading != null:
+            heading.focus()
+
+    def label() -> string:
+        return title
+
+    expose {focus, label}
+    return <article data-panel><h3 ref={heading} tabindex="-1">{title}</h3></article>
+
+// Native element vocabulary: ordinary elements, void elements, a custom
+// element under the platform convention (lowercase, one hyphen), SVG, and
+// MathML. An unknown native spelling is a compile error with a suggestion.
+component NativeVocabulary:
+    return <div data-native>
+        <p>ordinary</p>
+        <br />
+        <hr />
+        <img src="/tour-mark.svg" alt="VelarScript tour mark" width="24" height="24" />
+        <tour-badge data-label="custom element"></tour-badge>
+        <svg data-svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"></circle>
+        </svg>
+        <math data-math aria-label="x plus one"><mi>x</mi><mo>+</mo><mn>1</mn></math>
+    </div>
+
+const tourTasks: List<Task> = [
+    {id: "parse", title: "Parse the module", done: true},
+    {id: "check", title: "Check the module", done: false},
+]
+
+const taskIndex: Map<string, Task> = Map([["parse", tourTasks[0]], ["check", tourTasks[1]]])
+
+// A component value renders only as a PascalCase tag. Calling `View(...)`
+// would bypass JSX ownership and is rejected.
+component TaskList(View: TaskView, variant: string):
+    return <ul data-task-list={variant}>{tourTasks.map(task => <View key={task.id} task={task} compact />)}</ul>
+
+// A contract that carries a Handle authorizes a `ref` on the invocation; a
+// constructor may expose more than the contract requires, but one with no
+// compatible Handle cannot satisfy it.
+component PanelSlot(View: PanelView, title: string):
+    let handle: PanelHandle? = null
+
+    def focusPanel():
+        if handle != null:
+            handle.focus()
+
+    return <div data-panel-slot>
+        <View ref={handle} title={title} />
+        <button type="button" data-focus-slot on:click={focusPanel}>Focus the slotted panel</button>
+    </div>
+
+export component ComponentsPanel:
+    let panel: PanelHandle? = null
+
+    def focusPanel():
+        if panel != null:
+            panel.focus()
+
+    return <section data-chapter="01">
+        <h2>01 — components</h2>
+        <TaskList View={TaskRow} variant="plain" />
+        <TaskList View={DetailedTaskRow} variant="detailed" />
+        <TaskSummary tasks={tourTasks} index={taskIndex} clock={TaskClock(0)} />
+        <Framed title="Framed"><p data-framed-child>a child node</p></Framed>
+        <Slot View={EmptyView} />
+        <FieldRow label="Name" value="Ada" />
+        <LabelledPanel ref={panel} title="Exposed panel" />
+        <button type="button" data-focus-panel on:click={focusPanel}>Focus the panel</button>
+        <PanelSlot View={LabelledPanel} title="Panel through a contract" />
+        <NativeVocabulary />
+    </section>

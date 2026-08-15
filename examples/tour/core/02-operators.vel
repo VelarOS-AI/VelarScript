@@ -1,0 +1,239 @@
+/// Chapter 2 — the operator surface.
+///
+/// Charter section 4. The twelve-level precedence table in declaration order,
+/// plus comparison chains, `??`, `?:`, `in`, `is`, `?.`, and the rules that
+/// removed JavaScript's coercions.
+
+type User:
+    name: string
+    active: bool
+
+const price = 12.5
+const quantity = 4
+const enabled = true
+const optionalValue: number? = null
+const defaultValue = 7
+
+// ---------------------------------------------------------------------------
+// Level 1 — `=>`. The arrow body extends as far as it can.
+// ---------------------------------------------------------------------------
+
+const double = (value: number) => value * 2
+const noParenthesesNeeded = (value: number) => value + 1
+const noArguments = () => 0
+const doesNothing = () => null
+const twoParameters = (left: number, right: number) => left + right
+const emptyRecordFactory = () => {}
+const recordFactory = () => {id: "a"}
+
+// ---------------------------------------------------------------------------
+// Level 2 — `?:`, right-nesting.
+// ---------------------------------------------------------------------------
+
+const total = price * quantity
+const accepted = total >= 10 and enabled
+const label = accepted ? "Accepted" : "Rejected"
+const grade = total > 100 ? "high" : total > 10 ? "middle" : "low"
+
+// As an operand of any binary operator it must be parenthesized.
+const scaled = (accepted ? 2 : 1) * total
+
+// ---------------------------------------------------------------------------
+// Level 3 — `??`, left to right. Never shares a bare chain with `and`/`or`.
+// ---------------------------------------------------------------------------
+
+const fallback = optionalValue ?? defaultValue
+const chainedFallback = optionalValue ?? optionalValue ?? defaultValue
+const names: List<string>? = null
+// A direct fallback receives the expected result type, so these need no
+// further annotation.
+const scores: Map<string, number>? = null
+const optionalCallback: ((number) -> number)? = null
+const directList = names ?? []
+const directMap = scores ?? Map()
+const directCallback = optionalCallback ?? (value => value)
+
+// A mix of `??` with `and`/`or` needs explicit parentheses.
+const optionalTruth: bool? = null
+const parenthesizedFallback = enabled or (optionalTruth ?? false)
+
+// ---------------------------------------------------------------------------
+// Levels 4 and 5 — `or` and `and`, left to right, short-circuit.
+// ---------------------------------------------------------------------------
+
+const maybeUser: User? = null
+
+export def logicalOperators() -> bool:
+    // The right side receives the facts the reaching path established.
+    if maybeUser != null and maybeUser.active:
+        return true
+    if maybeUser == null or not maybeUser.active:
+        return false
+    return enabled or accepted
+
+// An absent `bool?` behaves as `false`.
+const optionalFlag: bool? = null
+const orChain = enabled or accepted or optionalFlag
+const andChain = enabled and accepted and optionalFlag
+
+// A writable `bool` reverses with ordinary assignment.
+let active = false
+
+export def reverse():
+    active = not active
+
+// ---------------------------------------------------------------------------
+// Level 6 — the comparison layer: `== != < <= > >=`, `is`, `in`
+// ---------------------------------------------------------------------------
+
+const equal = total == 50
+const notEqual = total != 50
+const less = price < quantity
+const lessOrEqual = price <= quantity
+const greater = price > quantity
+const greaterOrEqual = price >= quantity
+
+// `null` inhabits every optional, so this is the language's only null test.
+const present = optionalValue != null
+const absent = optionalValue == null
+
+// `NaN == NaN` is `true`, so equality is reflexive.
+const notANumber = 0 / 0
+const reflexive = notANumber == notANumber
+
+// Content comparison has its own spelling.
+const structural = equals([1, 2], [1, 2])
+const structuralMaps = equals(Map([["a", 1]]), Map([["a", 1]]))
+
+// Comparison chains evaluate each operand once and must point one way.
+const percentage = 40
+const high = 9
+const middle = 5
+const low = 1
+
+export def chains():
+    assert 0 < percentage <= 100
+    assert high >= middle > low
+
+// `in` and `is` are not chain links; inside another comparison they need
+// parentheses.
+const flags: List<bool> = [true, false]
+const parenthesizedMembership = (price < quantity) in flags
+
+const roles: Set<string> = Set(["admin", "viewer"])
+const ignoredRoutes: List<string> = ["/health"]
+const route = "/dashboard"
+
+export def membershipAndTypeTests(input: User | Error) -> string:
+    if "admin" in roles:
+        print("Allowed")
+    if route not in ignoredRoutes:
+        print("Visible")
+    if input is User:
+        return input.name
+    if input is not Error:
+        return "Usable"
+    return input.message
+
+// Substring membership is the same operator.
+const title = "advertisement"
+const substring = "ad" in title
+
+// ---------------------------------------------------------------------------
+// Level 7 — binary `+ -`, left to right
+// ---------------------------------------------------------------------------
+
+const sum = price + quantity
+const difference = price - quantity
+const concatenated = "left" + "right"
+
+// ---------------------------------------------------------------------------
+// Level 8 — `* / %`, left to right. `%` keeps JavaScript's sign.
+// ---------------------------------------------------------------------------
+
+const product = price * quantity
+const quotient = price / quantity
+const remainder = price % quantity
+const negativeRemainder = -3 % 2
+
+// ---------------------------------------------------------------------------
+// Level 9 — `not` and unary `+ -`, looser than `**`
+// ---------------------------------------------------------------------------
+
+const negated = not enabled
+const negative = -price
+const positive = +price
+
+// Unary minus is looser than `**`, so this is `-(2 ** 2)`.
+const looseUnary = -2 ** 2
+const tightUnary = (-2) ** 2
+
+// Member access is tighter than unary minus, so this is `-(2.abs())`.
+const looseAccess = -2.abs()
+const tightAccess = (-2).abs()
+
+// A number literal needs no ceremony before a member: `1.abs()`, `1 .abs()`,
+// and `(1).abs()` all mean the same thing, and `velar format` writes the first.
+const bareLiteralMember = 1.abs()
+const parenthesizedLiteralMember = (1).abs()
+
+// ---------------------------------------------------------------------------
+// Level 10 — `**`, right to left
+// ---------------------------------------------------------------------------
+
+const power = 2 ** 8
+const rightAssociative = 2 ** 3 ** 2
+
+// ---------------------------------------------------------------------------
+// Level 11 — `await` and `try`, prefix
+// ---------------------------------------------------------------------------
+
+async def load() -> number:
+    return 1
+
+export async def prefixLevel() -> number:
+    const awaited = await load()
+    const attempted = try await load()
+    return awaited + (attempted ?? 0)
+
+// ---------------------------------------------------------------------------
+// Level 12 — `()`, `.`, `?.`, `[]`, the tightest level
+// ---------------------------------------------------------------------------
+
+type Address:
+    city: string
+
+type Details:
+    address: Address?
+
+type Account:
+    profile: Details?
+
+const account: Account? = null
+const optionalValues: List<number>? = null
+const callback: ((number) -> number)? = null
+
+const city = account?.profile?.address?.city
+const firstValue = optionalValues?.[0]
+const result = callback?.(1)
+
+const call = double(2)
+const member = title.size
+const index = flags[0]
+
+// `//` is always a comment, in every position. Floor division is a method.
+const floorDivision = (7 / 2).floor()
+
+export const chapterTwo = {
+    double, noParenthesesNeeded, noArguments, doesNothing, twoParameters,
+    emptyRecordFactory, recordFactory, total, accepted, label, grade, scaled,
+    fallback, chainedFallback, directList, directMap, directCallback,
+    parenthesizedFallback, orChain, andChain, equal, notEqual, less, lessOrEqual,
+    greater, greaterOrEqual, present, absent, reflexive, structural,
+    structuralMaps, parenthesizedMembership, substring, sum, difference,
+    concatenated, product, quotient, remainder, negativeRemainder, negated,
+    negative, positive, looseUnary, tightUnary, looseAccess, tightAccess,
+    bareLiteralMember, parenthesizedLiteralMember, power,
+    rightAssociative, city, firstValue, result, call, member, index,
+    floorDivision,
+}

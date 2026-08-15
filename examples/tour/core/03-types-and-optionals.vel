@@ -1,0 +1,249 @@
+/// Chapter 3 — the type annotation vocabulary, `readonly` views, and optionals.
+///
+/// Charter section 5. Every built-in Core type in a written annotation, the
+/// `Promise`/`Function` shorthand table, read-only data views, and every shape
+/// a narrowing check can take.
+
+type Tag:
+    label: string
+
+type Details:
+    label: string
+
+type User:
+    id: string
+    name: string
+    avatar: string?
+
+// ---------------------------------------------------------------------------
+// The built-in Core types, each in a written annotation
+// ---------------------------------------------------------------------------
+
+const text: string = "a"
+const quantity: number = 1
+const flag: bool = true
+const nothing: null = null
+const listOfText: List<string> = ["a"]
+const setOfNumbers: Set<number> = Set([1])
+const mapOfUsers: Map<string, User> = Map()
+const recordOfTags: Record<Tag> = {}
+const optionalText: string? = null
+const smallUnion: string | number = 1
+const threeArmUnion: string | number | bool = true
+const dynamic: unknown = 1
+
+// A function type always writes its result, `-> null` included.
+const handler: (User) -> null = user => print(user.name)
+const twoParameters: (string, number) -> bool = (left, right) => left.size == right
+const noParameters: () -> string = () => "a"
+const namedParameters: (user: User, prefix: string) -> string = (user, prefix) => prefix + user.name
+
+// `prefix?: string` is an omittable parameter; `prefix: string?` is a required
+// parameter whose value may be `null`. The two are different contracts.
+const omittableParameter: (user: User, prefix?: string) -> string = (user: User, prefix: string = "@") => prefix + user.name
+const optionalTypedParameter: (user: User, prefix: string?) -> string = (user, prefix) => (prefix ?? "@") + user.name
+
+// A rest parameter states its element type even when the annotation supplies
+// one: contextual typing covers the fixed parameters only.
+const restParameter: (...values: number) -> number = (...values: number) => values.size
+
+// Read-only data views.
+const readonlyUser: readonly User = {id: "u", name: "Ada", avatar: null}
+const readonlyList: readonly List<User> = []
+const readonlyMap: readonly Map<string, User> = Map()
+const readonlySet: readonly Set<string> = Set()
+const readonlyRecord: readonly Record<Tag> = {}
+const readonlyOptional: readonly User? = null
+
+// ---------------------------------------------------------------------------
+// The `Promise` and `Function` shorthand table
+// ---------------------------------------------------------------------------
+
+async def resolvesNull():
+    pass
+
+async def resolvesText() -> string:
+    return "a"
+
+const barePromise: Promise = resolvesNull()
+const explicitPromise: Promise<null> = resolvesNull()
+const promiseOfText: Promise<string> = resolvesText()
+
+const bareFunction: Function = () => null
+const functionResult: Function<string> = () => "a"
+const functionOneInput: Function<number, string> = value => str(value)
+const functionTwoInputs: Function<number, number, string> = (left, right) => str(left + right)
+
+// ---------------------------------------------------------------------------
+// Read-only data views: what they promise
+// ---------------------------------------------------------------------------
+
+type Profile:
+    readonly id: string
+    details: Details
+    tags: List<Tag>
+
+def loadProfile() -> Profile:
+    return {id: "p", details: {label: "d"}, tags: []}
+
+export def display(profile: readonly Profile) -> string:
+    // A read-only view is transitive through reads.
+    const nestedLabel = profile.details.label
+    const firstTag = profile.tags.get(0)
+    return profile.id + nestedLabel + (firstTag?.label ?? "")
+
+export def update(profile: Profile):
+    profile.details.label = "Updated"
+
+const owned: Profile = loadProfile()
+let selected: readonly Profile = owned
+selected = loadProfile()
+
+// A new collection returned by `copy` or `slice` owns its outer container.
+export def copiedContainer(profile: readonly Profile) -> number:
+    const copied = profile.tags.copy()
+    return copied.size
+
+// ---------------------------------------------------------------------------
+// Optional values: `T?` means `T | null`
+// ---------------------------------------------------------------------------
+
+def findUser(id: string) -> User?:
+    return id == "" ? null : {id, name: "Ada", avatar: null}
+
+export def presenceTests(id: string) -> string:
+    const user: User? = findUser(id)
+
+    if user != null:
+        print(user.name)
+
+    if user == null:
+        return "Missing"
+    else:
+        return user.name
+
+// A guard whose arm terminates keeps the negated fact on the fall-through path.
+export def terminatingGuard(user: User?) -> string:
+    if user == null:
+        return "Missing"
+    return user.name
+
+// An assignment establishes a fact of its own.
+export def assignmentFacts() -> string:
+    const pinned: string? = "a"
+    let open: string? = "a"
+    open = null
+    return pinned + (open ?? "b")
+
+// Equality against a literal carries a fact back to its subject.
+export def equalityFacts(flagOrNothing: bool?) -> string:
+    if flagOrNothing == true:
+        return "true"
+    if flagOrNothing == false:
+        return "false"
+    return "absent"
+
+// A membership probe narrows the same way.
+export def membershipFacts(candidate: string?, names: List<string>) -> string:
+    if candidate in names:
+        return candidate
+    return "missing"
+
+// An optional chain that produced a value proves every link along it.
+type Contact:
+    email: string
+
+type Owner:
+    profile: Contact?
+
+export def chainFacts(owner: Owner) -> string:
+    if owner.profile?.email != null:
+        return owner.profile.email
+    return "missing"
+
+// A fact survives calls, but a hot loop should bind the narrowed value once.
+export def boundOnce(user: User?) -> number:
+    if user == null:
+        return 0
+    const present = user
+    let total = 0
+    for _ in range(3):
+        total += present.name.size
+    return total
+
+// Narrowing does not flow into a nested function body.
+export def nestedFunction(user: User?) -> (() -> string):
+    if user == null:
+        return () => "missing"
+    const present = user
+    return () => present.name
+
+// A getter is a computed value, not a stable location: read it into a `const`.
+class Session:
+    let stored: string? = null
+
+    get current() -> string?:
+        return self.stored
+
+export def getterNarrowing(session: Session) -> string:
+    const current = session.current
+    if current == null:
+        return "missing"
+    return current
+
+// An index and a `Map.get` are reads, not locations.
+export def indexNarrowing(values: List<string>, lookup: Map<string, string>) -> string:
+    const firstValue = values.get(0)
+    const looked = lookup.get("a")
+    if firstValue == null or looked == null:
+        return "missing"
+    return firstValue + looked
+
+// ---------------------------------------------------------------------------
+// The text-conversion contract
+// ---------------------------------------------------------------------------
+
+enum Status:
+    pending
+    done
+
+export def textConversion(status: Status, maybe: string?) -> string:
+    const fromString = f"{text}"
+    const fromNumber = f"{quantity}"
+    const fromBool = f"{flag}"
+    const fromNull = f"{nothing}"
+    const fromEnum = f"{status}"
+    const fromOptional = f"{maybe}"
+    const fromUnion = f"{smallUnion}"
+    return fromString + fromNumber + fromBool + fromNull + fromEnum + fromOptional + fromUnion
+
+// ---------------------------------------------------------------------------
+// Optional access is explicit at each optional continuation
+// ---------------------------------------------------------------------------
+
+type Address:
+    city: string
+
+type AccountDetails:
+    address: Address?
+
+type Account:
+    profile: AccountDetails?
+
+const account: Account? = null
+const optionalValues: List<number>? = null
+const optionalCallback: ((number) -> number)? = null
+
+const city = account?.profile?.address?.city
+const firstValue = optionalValues?.[0]
+const called = optionalCallback?.(1)
+
+export const chapterThree = {
+    text, quantity, flag, nothing, listOfText, setOfNumbers, mapOfUsers,
+    recordOfTags, optionalText, smallUnion, threeArmUnion, dynamic, handler,
+    twoParameters, noParameters, namedParameters, omittableParameter,
+    optionalTypedParameter, restParameter, readonlyUser, readonlyList, readonlyMap, readonlySet,
+    readonlyRecord, readonlyOptional, barePromise, explicitPromise,
+    promiseOfText, bareFunction, functionResult, functionOneInput,
+    functionTwoInputs, owned, selected, city, firstValue, called,
+}

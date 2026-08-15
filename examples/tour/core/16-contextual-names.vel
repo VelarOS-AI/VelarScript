@@ -1,0 +1,191 @@
+/// Chapter 16 — every contextual keyword standing as an ordinary name.
+///
+/// Charter section 3: "`type`, `match`, `from`, `as`, `using`, `test`, and
+/// every word the Web extension adds … are ordinary names anywhere a name can
+/// stand: a binding, a parameter, a loop binding, a named argument, a record
+/// field, a member name, and a record shorthand."
+///
+/// That is a claim about the whole table at once, so it is checked in one
+/// place: each Core contextual keyword appears in all seven positions, and
+/// `case` appears in the six that do not *bind*.
+
+// ---------------------------------------------------------------------------
+// Position 1 — a binding
+// ---------------------------------------------------------------------------
+
+const type = "declaration"
+const match = "dispatch"
+const from = "origin"
+const as = "alias"
+const using = "ownership"
+const test = "assertion"
+
+// A binding may reuse a contextual keyword under `let` too.
+let usingCounter = 0
+
+// ---------------------------------------------------------------------------
+// Position 2 — a parameter
+// ---------------------------------------------------------------------------
+
+export def describe(type: string, match: string, from: string, as: string, using: string, test: string) -> string:
+    return type + match + from + as + using + test
+
+export def withDefaults(type: string = "a", match: string = "b") -> string:
+    return type + match
+
+const arrowParameters = (type: string, match: string) => type + match
+
+// ---------------------------------------------------------------------------
+// Position 3 — a loop binding
+// ---------------------------------------------------------------------------
+
+const rows: List<string> = ["a", "b"]
+const pairs: Map<string, string> = Map([["k", "v"]])
+
+export def loopBindings() -> string:
+    let joined = ""
+    for type in rows:
+        joined += type
+    for match, from in rows:
+        joined += f"{match}{from}"
+    for as, using in pairs:
+        joined += f"{as}{using}"
+    for test in rows:
+        joined += test
+    return joined
+
+// ---------------------------------------------------------------------------
+// Position 4 — a named argument
+// ---------------------------------------------------------------------------
+
+const namedArguments = describe(type = "t", match = "m", from = "f", as = "a", using = "u", test = "x")
+const reorderedNamedArguments = describe(test = "x", using = "u", as = "a", from = "f", match = "m", type = "t")
+
+// ---------------------------------------------------------------------------
+// Position 5 — a record field
+// ---------------------------------------------------------------------------
+
+type Descriptor:
+    type: string
+    match: string
+    from: string
+    as: string
+    using: string
+    test: string
+    case: string
+
+const descriptor: Descriptor = {
+    type: "t",
+    match: "m",
+    from: "f",
+    as: "a",
+    using: "u",
+    test: "x",
+    case: "c",
+}
+
+// ---------------------------------------------------------------------------
+// Position 6 — a member name
+// ---------------------------------------------------------------------------
+
+const readType = descriptor.type
+const readMatch = descriptor.match
+const readFrom = descriptor.from
+const readAs = descriptor.as
+const readUsing = descriptor.using
+const readTest = descriptor.test
+const readCase = descriptor.case
+
+class Rule:
+    let type: string = "class field"
+    let case: string = "also a class field"
+
+    def match(value: string) -> string:
+        return self.type + value
+
+    def test(value: string) -> bool:
+        return self.match(value).size > 0
+
+    get from() -> string:
+        return self.type
+
+    get case2() -> string:
+        return self.case
+
+enum Kind:
+    type
+    match
+    from
+    as
+    using
+    test
+    case
+
+const enumMembers = [Kind.type, Kind.match, Kind.from, Kind.as, Kind.using, Kind.test, Kind.case]
+
+// ---------------------------------------------------------------------------
+// Position 7 — a record shorthand
+// ---------------------------------------------------------------------------
+
+const shorthand = {type, match, from, as, using, test}
+
+// A binding pattern reads the same names back out.
+const {type: readBackType, match: readBackMatch} = descriptor
+const {from: readBackFrom, as: readBackAs, using: readBackUsing, test: readBackTest, case: readBackCase} = descriptor
+
+// ---------------------------------------------------------------------------
+// Where the two readings could compete, the name wins
+// ---------------------------------------------------------------------------
+
+def matchFunction(value: string) -> string:
+    return value
+
+// `match(value)` calls a function; only a header ending in `:` above a block
+// is the declaration.
+const called = matchFunction("v")
+
+export def theNameWins(value: string) -> string:
+    // `state = 1` style assignment: a contextual keyword on the left of `=` is
+    // an ordinary binding write.
+    let using = 0
+    using = 1
+    usingCounter += using
+
+    // `match` as a statement head *is* the declaration.
+    match value:
+        case "a":
+            return type
+        case _:
+            return from
+
+// `using name = expression` is the declaration; `using` alone is a name.
+class Handle:
+    def close():
+        print("closed")
+
+    @dispose:
+        self.close()
+
+export def ownershipStillWorks() -> string:
+    using handle = Handle()
+    const using = "still an ordinary binding in this scope"
+    return using
+
+// `type Name:` and `type Name = …` are the declarations; `type` elsewhere is a
+// name.
+type Aliased = string
+
+export def typeStillDeclares() -> string:
+    const type: Aliased = "an ordinary binding named type"
+    return type
+
+// `case` cannot be a *binding* — JavaScript reserves it and the emitted module
+// would not parse — but it is a field, a member, and a `match` branch above.
+
+export const chapterSixteen = {
+    type, match, from, as, using, test, descriptor, readType, readMatch,
+    readFrom, readAs, readUsing, readTest, readCase, enumMembers, shorthand,
+    namedArguments, reorderedNamedArguments, arrowParameters, called,
+    readBackType, readBackMatch, readBackFrom, readBackAs, readBackUsing,
+    readBackTest, readBackCase,
+}

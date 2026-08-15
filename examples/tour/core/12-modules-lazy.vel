@@ -1,0 +1,14 @@
+/// Chapter 12's third neighbour — the target of a dynamic import.
+///
+/// `await import("./12-modules-lazy.vel")` answers this module's *checked
+/// interface*, not a dynamic object: `reports.title` has the exported
+/// binding's type, and reading a name this module does not export is a
+/// compile error.
+
+export const title = "Lazy reports"
+
+export def render(rows: List<string>) -> string:
+    return f"{title}: {rows.join(", ")}"
+
+export def install():
+    print("the lazy module installed itself")

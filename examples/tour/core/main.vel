@@ -1,0 +1,50 @@
+/// `examples/tour/core` — the Core language, one spelling at a time.
+///
+/// This entry exists to make every chapter *reachable*. `velar check` walks
+/// the entry's module graph and never sees a `.vel` file that nothing imports,
+/// so a chapter added to this directory without a line here would silently
+/// lose its compile coverage. Side-effect imports are refused by the language,
+/// which is why each chapter exports one name and this file imports it by
+/// name.
+///
+/// `17-testing.test.vel` is the one exception: a `*.test.vel` module is
+/// discovered by the runner in its own second pass, so it is reached by
+/// `velar test` rather than from here.
+///
+/// The tour aims at spelling coverage, not scene realism. Ten nearly identical
+/// spellings side by side is the point; `examples/app` is where real structure
+/// lives.
+
+import {chapterOne} from "./01-values.vel"
+import {chapterTwo} from "./02-operators.vel"
+import {chapterThree} from "./03-types-and-optionals.vel"
+import {chapterFour} from "./04-records-aliases-enums.vel"
+import {chapterFive} from "./05-functions-and-calls.vel"
+import {chapterSix} from "./06-text-and-numbers.vel"
+import {chapterSeven} from "./07-list-set-map.vel"
+import {chapterEight} from "./08-collections-and-math.vel"
+import {chapterNine} from "./09-control-flow.vel"
+import {chapterTen} from "./10-classes-and-ownership.vel"
+import {chapterEleven} from "./11-errors-and-assertions.vel"
+import {chapterTwelve} from "./12-modules.vel"
+import {chapterThirteen} from "./13-javascript-boundary.vel"
+import {chapterFourteen} from "./14-files-and-host.vel"
+import {chapterFifteen} from "./15-process-and-network.vel"
+import {chapterSixteen} from "./16-contextual-names.vel"
+
+print(f" 1 values .................. {chapterOne.applicationName}")
+print(f" 2 operators ............... {chapterTwo.label}")
+print(f" 3 types and optionals ..... {chapterThree.text}")
+print(f" 4 records and enums ....... {chapterFour.identifier}")
+print(f" 5 functions and calls ..... {chapterFive.first}")
+print(f" 6 text and numbers ........ {chapterSix.trimmed}")
+print(f" 7 list, set, map .......... {chapterSeven.spreadTarget.size}")
+print(f" 8 collections and math .... {chapterEight.pi}")
+print(f" 9 control flow ............ {chapterNine.limits.max}")
+print(f"10 classes and ownership ... {chapterTen.address}")
+print(f"11 errors and assertions ... {chapterEleven.chapterName}")
+print(f"12 modules ................. {chapterTwelve.barrelName}")
+print(f"13 javascript boundary ..... {chapterThirteen.chapterName}")
+print(f"14 files and host .......... {chapterFourteen.joined}")
+print(f"15 process and network ..... {chapterFifteen.encoded}")
+print(f"16 contextual names ........ {chapterSixteen.type}")

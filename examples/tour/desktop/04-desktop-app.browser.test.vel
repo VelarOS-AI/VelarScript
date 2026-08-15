@@ -1,0 +1,40 @@
+// Chapter 04 — the Desktop browser test, where the six `velar/desktop-test`
+// exports actually run.
+//
+// Authority: the same module interface chapter 03 lists, plus D57 rule 138 for
+// why `velar/web-test` is imported here rather than anywhere else. Under
+// `velar test --browser` the framework host answers the Desktop bridge, so this
+// is the one place a fixture round is a call and not a description.
+
+import {appDataDirectory, makeDirectory, projectDirectory, readText, removeFile, writeText} from "velar/desktop-test"
+import {browser} from "velar/web-test"
+import {expect} from "velar/test"
+import {fixturePath} from "./03-desktop-test.test.vel"
+
+test "the host directories the test process sees are absolute":
+    await browser.open()
+    const data = await appDataDirectory()
+    const project = await projectDirectory()
+    expect(data.startsWith("/")).toBe(true)
+    expect(project.startsWith("/")).toBe(true)
+
+test "a fixture round writes, reads back, and removes":
+    await browser.open()
+    const data = await appDataDirectory()
+    const folder = fixturePath(data, "round")
+    const file = f"{folder}/note.txt"
+    await makeDirectory(folder)
+    await writeText(file, "written by the tour")
+    expect(await readText(file, 4096)).toBe("written by the tour")
+    await writeText(file, "rewritten by the tour")
+    expect(await readText(file, 4096)).toBe("rewritten by the tour")
+    await removeFile(file)
+
+test "the renderer is an ordinary Web page":
+    await browser.open()
+    expect(await browser.text("[data-chapter='01'] h2")).toBe("01 — the Desktop host")
+    expect(await browser.text("[data-chapter='02'] h2")).toBe("02 — project tasks, terminals, and the language server")
+    expect(await browser.text("[data-commands]")).toBe("velar check, velar test, velar build, velar run")
+    expect(await browser.text("[data-channels]")).toBe("out/err")
+    await browser.click("[data-read-summary]")
+    await browser.waitForText("[data-summary]", "|")

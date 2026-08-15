@@ -1,0 +1,19 @@
+// Chapter 09's neighbour module. `lazy(...)` needs a real second module to
+// load, exactly as `await import(...)` does, so this file exists to be the
+// target of the dynamic import in `09-routing-and-app.vel`.
+//
+// A lazily imported module is still reachable from the entry, so `velar check`
+// checks it: the dynamic import is an edge in the module graph, not an escape
+// from it.
+
+import {rgb} from "velar/look"
+
+const lazyLook = look:
+    padding = 8px
+    color = rgb(24, 31, 46)
+
+export component LazyPage:
+    return <article data-lazy-page look={lazyLook}>
+        <h3>A lazily loaded page</h3>
+        <p>This module arrives with its own chunk when the route is first visited.</p>
+    </article>

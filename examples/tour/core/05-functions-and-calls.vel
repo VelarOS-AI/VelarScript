@@ -1,0 +1,212 @@
+/// Chapter 5 — functions, calls, arrows, async, and type parameters.
+///
+/// Charter section 7 apart from the checked value methods, which chapter 6
+/// owns. Result inference, named arguments, defaults, rest and spread, the
+/// `async` statement, and the three closed bounds.
+
+import {User} from "./04-records-aliases-enums.vel"
+
+// ---------------------------------------------------------------------------
+// `def`: parameters, defaults, and the result annotation
+// ---------------------------------------------------------------------------
+
+export def formatUser(user: User, prefix: string = "@") -> string:
+    return f"{prefix}{user.name}"
+
+// A body-backed function may omit its result annotation. Where the inferred
+// result is `null`, omitting is required — `-> null` is rejected there.
+export def inferredNull():
+    print("nothing a caller can use")
+
+export def inferredText(flag: bool):
+    if flag:
+        return "yes"
+    return "no"
+
+// A partial `T` return infers `-> T?`.
+export def inferredOptional(flag: bool):
+    if flag:
+        return "yes"
+
+// An explicit `-> T` stays a checked contract: every reachable path returns.
+export def explicitResult(flag: bool) -> string:
+    if flag:
+        return "yes"
+    return "no"
+
+// Recursive result dependencies solve to a fixed point.
+def countDown(value: number):
+    if value <= 0:
+        return 0
+    return countDown(value - 1)
+
+// ---------------------------------------------------------------------------
+// Calls: positional first, then named
+// ---------------------------------------------------------------------------
+
+const user: User = {id: "u-1", name: "Ada", avatar: null}
+
+const first = formatUser(user)
+const second = formatUser(user, prefix = "#")
+const third = formatUser(user, "!")
+const named = formatUser(user = user, prefix = "?")
+
+// Named arguments may be reordered; source expressions still evaluate left to
+// right.
+const reordered = formatUser(prefix = "~", user = user)
+
+// Once a fixed parameter has a default, every following fixed parameter does
+// too, so positional and named calls stay identical.
+def label(text: string, prefix: string = "[", suffix: string = "]") -> string:
+    return prefix + text + suffix
+
+const defaulted = label("a")
+const oneDefaultGiven = label("a", "<")
+const bothDefaultsGiven = label("a", "<", ">")
+const suffixOnly = label("a", suffix = ">")
+
+// ---------------------------------------------------------------------------
+// Arrows: one expression
+// ---------------------------------------------------------------------------
+
+const values: List<number> = [1, 2, 3]
+const doubled = values.map(value => value * 2)
+const annotatedArrow = values.map((value: number) => value * 3)
+const parenthesizedParameter = values.map((value) => value + 1)
+const twoParameters = (left: number, right: number) => left + right
+const noParameters = () => "a"
+
+// After `=>`, `{` opens a record, never a block.
+const recordFactory = () => {id: "a"}
+const emptyRecordFactory = () => {}
+
+// A function that should do nothing is `() => null`.
+const doesNothing = () => null
+
+// A callback that needs two statements becomes a named `def`.
+def describeValue(value: number) -> string:
+    const scaled = value * 10
+    return f"{value} -> {scaled}"
+
+const described = values.map(describeValue)
+
+// A callback may use a local parameter name while satisfying a named contract.
+const localName: (request: string) -> string = _request => _request.upper()
+
+// ---------------------------------------------------------------------------
+// Rest parameters and call spread
+// ---------------------------------------------------------------------------
+
+export def total(...amounts: number) -> number:
+    return amounts.sum()
+
+export def totalWithBase(base: number, ...amounts: number) -> number:
+    return base + amounts.sum()
+
+export def totalWithDefault(base: number = 0, ...amounts: number) -> number:
+    return base + amounts.sum()
+
+const summed = total(1, 2, 3)
+const spreadInto = total(...values)
+const fixedThenSpread = totalWithBase(10, ...values)
+
+// ---------------------------------------------------------------------------
+// Async functions
+// ---------------------------------------------------------------------------
+
+def apiUser(id: string) -> User:
+    return {id, name: "Ada", avatar: null}
+
+export async def loadUser(id: string) -> User:
+    return apiUser(id)
+
+// Its call type is `Promise<User>`; the declaration annotates the resolved
+// value, never `-> Promise<User>`.
+const pending: Promise<User> = loadUser("u-1")
+
+export async def inferredAsyncResult():
+    print("an async declaration with no value result infers -> null")
+
+export async def awaitsAndDetaches():
+    // `await` waits; the `async` statement runs detached and requires a
+    // checked `Promise<null>`.
+    await loadUser("u-1")
+    async inferredAsyncResult()
+
+const asyncArrow = async(id: string) => await loadUser(id)
+
+// An unannotated arrow parameter takes its type from the annotation it is
+// assigned to; with no annotation on either side it is `unknown`.
+const contextuallyTypedArrow: (number) -> number = value => value * 2
+const contextuallyTypedAsyncArrow: (string) -> Promise<User> = async id => await loadUser(id)
+
+// ---------------------------------------------------------------------------
+// Type parameters
+// ---------------------------------------------------------------------------
+
+export def mapValues<T, U>(items: List<T>, transform: (T) -> U) -> List<U>:
+    return items.map(transform)
+
+const flags: List<bool> = mapValues(["a", ""], value => value != "")
+
+// Type arguments are inferred at each call site; there is no explicit
+// instantiation syntax. A parameter the call leaves unsolved becomes `unknown`.
+export def identity<T>(value: T) -> T:
+    return value
+
+const identicalText = identity("a")
+const identicalNumber = identity(1)
+
+// Class methods take type parameters too.
+class Registry:
+    let stored: List<unknown> = []
+
+    def keep<T>(value: T) -> T:
+        self.stored.append(value)
+        return value
+
+// ---------------------------------------------------------------------------
+// The three bounds: `Comparable`, `Text`, `Data`
+// ---------------------------------------------------------------------------
+
+export def label2<T: Text>(value: T) -> string:
+    return f"{value}"
+
+export def stringified<T: Text>(value: T) -> string:
+    return str(value)
+
+export def ranked<T: Comparable>(values: List<T>) -> List<T>:
+    return values.sorted()
+
+export def smallest<T: Comparable>(values: List<T>) -> T?:
+    return values.min()
+
+export def largest<T: Comparable>(values: List<T>) -> T?:
+    return values.max()
+
+export def orderedByKey<T: Comparable>(left: T, right: T) -> bool:
+    return left < right and left <= right and right > left and right >= left
+
+export def encoded<T: Data>(value: T) -> string:
+    return Json.stringify(value)
+
+export def stablyEncoded<T: Data>(value: T) -> string:
+    return Json.stableStringify(value)
+
+export def cloned<T: Data>(value: T) -> T:
+    return Json.clone(value)
+
+const labelled = label2(5)
+const rankedText = ranked(["b", "a"])
+const encodedRecord = encoded({id: "u-1"})
+
+// A bound survives export, so an imported generic keeps its contract.
+export const chapterFive = {
+    first, second, third, named, reordered, defaulted, oneDefaultGiven,
+    bothDefaultsGiven, suffixOnly, doubled, annotatedArrow,
+    parenthesizedParameter, twoParameters, noParameters, recordFactory,
+    emptyRecordFactory, doesNothing, described, localName, summed, spreadInto,
+    fixedThenSpread, pending, asyncArrow, contextuallyTypedArrow,
+    contextuallyTypedAsyncArrow, flags, identicalText, identicalNumber,
+    labelled, rankedText, encodedRecord,
+}

@@ -1,0 +1,213 @@
+/// Chapter 1 — comments, blocks, literals, strings, and binding patterns.
+///
+/// Charter sections 2 (files, comments, and blocks) and 3 (bindings and
+/// literals). Everything here is lexical surface: what the lexer and the
+/// formatter own. Spellings sit side by side on purpose — this file is also
+/// the formatter's delimiter-choice corpus.
+
+// A normal comment.
+
+/*
+A block comment, which /* nests */ so commenting out a region that already
+contains a block comment works. A multi-line one occupies whole lines.
+*/
+
+// ---------------------------------------------------------------------------
+// Bindings
+// ---------------------------------------------------------------------------
+
+const applicationName = "Atlas"
+let attempts = 0
+attempts += 1
+
+// `$` is allowed in an identifier; the compiler never infers meaning from it.
+const $selectedRow = 3
+const _privateLooking = "underscore is an ordinary letter here"
+
+// ---------------------------------------------------------------------------
+// Blocks, continuation, and bracket contexts
+// ---------------------------------------------------------------------------
+
+const ready = true
+
+export def openingBlock() -> string:
+    // Blocks use a trailing colon and indentation; four spaces are conventional.
+    if ready:
+        return "start"
+    else:
+        return "wait"
+
+const tasks = [{done: false, title: "write the tour"}, {done: true, title: "read the charter"}]
+
+// A line whose first token is `.` or `?.` continues the previous logical line.
+const urgent = tasks
+    .filter(task => not task.done)
+    .map(task => task.title)
+
+const basePrice = 100
+const shipping = 12
+const discount = 5
+
+// Inside brackets the newline is not a statement boundary at all.
+const total = (
+    basePrice
+    +shipping
+    -discount
+)
+const rows = [
+    {label: "open", count: 3},
+    {label: "done", count: 7},
+]
+
+// ---------------------------------------------------------------------------
+// The literal set
+// ---------------------------------------------------------------------------
+
+const title = "VelarScript"
+const count = 42
+const budget = 1_000_000
+const ratio = 0.75
+const grouped = 1_000.5
+const groupedExponent = 1e1_0
+const exponent = 6.02e23
+const negativeExponent = 1.6e-19
+const enabled = true
+const disabled = false
+const missing = null
+const values = [1, 2, 3]
+const user = {id: "user-1", title}
+
+// ---------------------------------------------------------------------------
+// String delimiters: the canonical spelling comes from the text
+// ---------------------------------------------------------------------------
+
+// No `"` in the text — canonical delimiter is `"..."`.
+const plain = "a plain string"
+
+// The text contains `"` and no backtick — canonical delimiter is a backtick.
+const payload = `{"name":"Nova","role":"admin"}`
+const attributeSelector = `[data-role="admin"]`
+
+// Both delimiters appear; the winner escapes fewer characters, and a tie takes
+// `"..."`.
+const bothDelimiters = "one \" and two `` backticks"
+const tieBreak = "one \" and one `"
+
+// ---------------------------------------------------------------------------
+// String prefixes: `f`, `r`, `rf` — independent of the delimiter
+// ---------------------------------------------------------------------------
+
+const message = f"{title}: {count}"
+const interpolatedBacktick = f`"{title}": {count}`
+const windows = r"C:\Users\foo"
+const rawBacktick = r`C:\Users\"foo"`
+const asset = rf"{windows}\assets\main.js"
+const rawInterpolatedBacktick = rf`{windows}\assets\"main.js"`
+
+// Literal interpolation braces stay `{{` and `}}`.
+const braces = f"{{{title}}}"
+
+// JavaScript `${...}` is never interpolation — it is literal text in both
+// delimiters, because generating JavaScript source is a real use of these.
+const generatedJavaScript = "const name = `${value}`"
+
+// A raw inline string doubles the delimiter it uses instead of escaping it.
+const rawDoubledQuote = r`He said "hello"`
+const rawDoubledBacktick = r"a ` backtick"
+
+// ---------------------------------------------------------------------------
+// Escapes
+// ---------------------------------------------------------------------------
+
+const backslash = "one \\ backslash"
+const newline = "first\nsecond"
+const carriageReturn = "first\r\nsecond"
+const tab = "before\tafter"
+const escapedQuote = `an escaped " quote`
+const escapedApostrophe = "it's fine, and so is it's"
+const escapedBacktick = "an escaped ` backtick"
+const emoji = "\u{1F525}"
+const codePointShort = "\u{41}"
+const bidiEscape = "\u{202E} stays visible to a reviewer"
+
+// ---------------------------------------------------------------------------
+// Layout strings: a double quote followed immediately by a newline
+// ---------------------------------------------------------------------------
+
+const poem = "
+    first line
+    second "quoted" line
+"
+
+const report = f"
+    owner: {title}
+    count: {count}
+"
+
+const rawLayout = r"
+    C:\Users\foo
+"
+
+const rawInterpolatedLayout = rf"
+    {windows}\assets\main.js
+"
+
+// Internal indentation beyond the structural margin is preserved exactly.
+const markdown = "
+    # Heading
+
+        indented code block
+    trailing text
+"
+
+// ---------------------------------------------------------------------------
+// Spreads and binding patterns
+// ---------------------------------------------------------------------------
+
+const nextUser = {...user, title: "Owner"}
+const nextValues = [...values, 4]
+
+type Profile:
+    name: string
+    nickname: string?
+    city: string
+    country: string
+
+const profile: Profile = {name: "Ada", nickname: null, city: "London", country: "UK"}
+
+const {name, nickname, ...details} = profile
+const[first, ...rest] = values
+const[onlyOne] = [9]
+
+const pairs: List<List<string>> = [["a", "1"], ["b", "2"]]
+
+export def readPairs() -> string:
+    let joined = ""
+    for [key, value] in pairs:
+        joined += f"{key}: {value};"
+    return joined
+
+// ---------------------------------------------------------------------------
+// A bare `return` and falling off the end both answer `null`
+// ---------------------------------------------------------------------------
+
+export def bareReturn():
+    if count > 0:
+        return
+    print("unreachable in this file")
+
+export def fallsOffTheEnd():
+    print("nothing to return")
+
+export const chapterOne = {
+    applicationName, attempts, $selectedRow, _privateLooking, urgent, total, rows,
+    budget, ratio, grouped, groupedExponent, exponent, negativeExponent,
+    enabled, disabled, missing, values, user, plain, payload, attributeSelector,
+    bothDelimiters, tieBreak, message, interpolatedBacktick, windows,
+    rawBacktick, asset, rawInterpolatedBacktick, braces, generatedJavaScript,
+    rawDoubledQuote, rawDoubledBacktick, backslash, newline, carriageReturn,
+    tab, escapedQuote, escapedApostrophe, escapedBacktick, emoji,
+    codePointShort, bidiEscape, poem, report, rawLayout, rawInterpolatedLayout,
+    markdown, nextUser, nextValues, name, nickname, details, first, rest,
+    onlyOne,
+}

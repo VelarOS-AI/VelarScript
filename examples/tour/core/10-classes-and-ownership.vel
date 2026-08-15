@@ -1,0 +1,203 @@
+/// Chapter 10 — classes, every modifier, `@dispose:`, and `using`.
+///
+/// Charter section 9's *Owned resources* and section 10. `using` and
+/// `@dispose:` travel together on purpose: `using` reads the release contract
+/// from the value's static type, so splitting them would declare one class
+/// twice.
+
+// ---------------------------------------------------------------------------
+// Fields, one explicit constructor, getters, methods
+// ---------------------------------------------------------------------------
+
+class Session:
+    let active: bool = true
+
+    constructor(const id: string):
+        pass
+
+    get label() -> string:
+        return self.active ? self.id : f"{self.id} (closed)"
+
+    def close():
+        self.active = false
+
+// Instances are called directly.
+const session = Session("session-1")
+
+// A class name is not a value: wrap the construction in an arrow to pass a
+// factory around.
+const openSession = () => Session("session-2")
+
+// ---------------------------------------------------------------------------
+// Field kinds, parameter properties, and definite assignment
+// ---------------------------------------------------------------------------
+
+type Options:
+    retries: number
+
+class Connection:
+    // Fields are `const` or `let` and require a type; an initializer is
+    // optional.
+    const protocol: string = "https"
+    let attempts: number = 0
+    let lastError: string?
+    private let secret: string
+
+    // A parameter prefixed with `const`, `let`, or `private` declares a field
+    // and initializes it from that argument.
+    constructor(const host: string, let port: number, private const token: string, options: Options):
+        // A required body field is initialized through one direct assignment.
+        self.secret = f"{options.retries}"
+        self.lastError = null
+
+    get address() -> string:
+        return f"{self.protocol}://{self.host}:{self.port}"
+
+    def rotate(token: string):
+        self.attempts += 1
+
+    // A method may declare type parameters.
+    def tagged<T>(value: T) -> T:
+        return value
+
+    // `static` declares class-owned fields and methods.
+    static const scheme: string = "wss"
+
+    static def describe() -> string:
+        return f"connections speak {Connection.scheme}"
+
+const connection = Connection("example.test", 443, "t-1", {retries: 3})
+const address = connection.address
+const scheme = Connection.scheme
+const described = Connection.describe()
+
+// Reading a method as a value evaluates the receiver once and binds it there.
+const closeSession = session.close
+
+// ---------------------------------------------------------------------------
+// Inheritance: `abstract`, `extends`, `super`, `override`
+// ---------------------------------------------------------------------------
+
+abstract class Entity:
+    constructor(const id: string):
+        pass
+
+    abstract def describe() -> string
+
+    abstract get shortName() -> string
+
+    def shared() -> string:
+        return f"entity {self.id}"
+
+class Player extends Entity:
+    constructor(id: string, let score: number = 0):
+        super(id)
+
+    override def describe() -> string:
+        // `super.member` reaches the base method a derived definition shadows.
+        return f"{super.shared()}: {self.score}"
+
+    override get shortName() -> string:
+        return self.id
+
+class Champion extends Player:
+    constructor(id: string, score: number, let titles: number):
+        super(id, score)
+
+    override def describe() -> string:
+        return f"{super.describe()} ({self.titles} titles)"
+
+const champion = Champion("c-1", 10, 2)
+const championDescription = champion.describe()
+
+// A base field is one storage location shared by the whole instance, so it is
+// read and written through `self.field`.
+class Counter:
+    let count: number = 0
+
+class DoubleCounter extends Counter:
+    def bump():
+        self.count += 2
+
+// `self` is not a reserved member name.
+class SelfReference:
+    let self: string = "a field called self"
+
+    def read() -> string:
+        return self.self
+
+// ---------------------------------------------------------------------------
+// `@dispose:` — the release contract, and `using` — ownership
+// ---------------------------------------------------------------------------
+
+class Terminal:
+    let open: bool = true
+
+    def close():
+        self.open = false
+
+    // `@dispose:` is the one compiler-known class member. It is not callable
+    // from source, it must be safe to run twice, and a class declares at most
+    // one.
+    @dispose:
+        self.close()
+
+    // It may coexist with an ordinary method named `dispose`.
+    def dispose() -> string:
+        return "an ordinary method"
+
+class AsyncTerminal:
+    async def stop():
+        print("stopped")
+
+    // A `@dispose:` body may `await`; releasing then awaits too.
+    @dispose:
+        await self.stop()
+
+// A derived `@dispose:` adds to its base's rather than replacing it: the
+// compiler chains them, derived first and base after.
+class TrackedTerminal extends Terminal:
+    let released: bool = false
+
+    @dispose:
+        self.released = true
+
+export def ownedResource() -> string:
+    // Every exit from the enclosing scope releases the value, and several
+    // owned resources release in reverse declaration order.
+    using first = Terminal()
+    using second = TrackedTerminal()
+    return f"{first.open} {second.released}"
+
+export async def asyncOwnedResource() -> string:
+    using handle = AsyncTerminal()
+    return "released after this line, with an await"
+
+export def ownedInALoop(count: number) -> number:
+    let seen = 0
+    // A loop body is an ordinary owning scope: it releases on every iteration.
+    for _ in range(count):
+        using handle = Terminal()
+        seen += 1
+    return seen
+
+export def ownedWithEarlyExit(flag: bool) -> string:
+    using handle = Terminal()
+    if flag:
+        // `return` releases before leaving.
+        return "early"
+    return "late"
+
+// An owned value may not leave the scope that releases it, but passing it to a
+// function stays legal: a callee borrows, and a borrow is not ownership.
+def borrow(handle: Terminal) -> bool:
+    return handle.open
+
+export def lendsWithoutGivingAway() -> bool:
+    using handle = Terminal()
+    return borrow(handle)
+
+export const chapterTen = {
+    session, openSession, connection, address, scheme, described, closeSession,
+    champion, championDescription,
+}

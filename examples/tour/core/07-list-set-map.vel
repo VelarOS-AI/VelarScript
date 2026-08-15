@@ -1,0 +1,259 @@
+/// Chapter 7 — `List`, `Set`, `Map`, and `Record<T>`: every member and the
+/// iteration-order contract.
+///
+/// Charter section 8. These are the compiler-owned checked methods; the
+/// `velar/collections` toolbox in chapter 8 is a different table that happens
+/// to look similar.
+
+type User:
+    id: string
+    name: string
+
+type Property:
+    type: string
+    description: string
+
+// ---------------------------------------------------------------------------
+// List
+// ---------------------------------------------------------------------------
+
+export def listMembers() -> string:
+    let names: List<string> = ["Ada", "Lin"]
+    names.append("Grace")
+    names.extend(["Edsger", "Margaret"])
+    names.insert(1, "Barbara")
+    names.insert(value = "Alan", index = 0)
+
+    const size = names.size
+    const gotten = names.get(0)
+    const gottenFromEnd = names.get(-1)
+    const outOfRange = names.get(99)
+    const present = names.has("Ada")
+    const removed = names.remove("Ada")
+    const popped = names.pop()
+    const poppedFirst = names.pop(0)
+    const poppedNamed = names.pop(index = 0)
+    const copied = names.copy()
+    const wholeSlice = names.slice()
+    const fromStart = names.slice(1)
+    const bothEnds = names.slice(1, 2)
+    const namedSlice = names.slice(end = 2, start = 1)
+    const occurrences = names.count("Lin")
+    const position = names.index("Lin")
+
+    names.clear()
+
+    return f"{size} {gotten} {gottenFromEnd} {outOfRange} {present} {removed} {popped} {poppedFirst} {poppedNamed} {copied.size} {wholeSlice.size} {fromStart.size} {bothEnds.size} {namedSlice.size} {occurrences} {position}"
+
+export def listCallbacks() -> string:
+    const values: List<number> = [3, 1, 2]
+    const optionals: List<number?> = [1, null, 3]
+
+    const found = values.find(value => value > 1)
+    const anyMatch = values.some(value => value > 2)
+    const allMatch = values.every(value => value > 0)
+    const mapped = values.map(value => value * 2)
+    const flatMapped = values.flatMap(value => [value, value])
+    const filtered = values.filter(value => value > 1)
+    // The exact predicate `x => x != null` narrows `List<T?>` to `List<T>`.
+    const present: List<number> = optionals.filter(value => value != null)
+    const folded = values.reduce((total, value) => total + value, 0)
+    const namedFold = values.reduce(combine = (total, value) => total + value, initial = 0)
+
+    const summed = values.sum()
+    const smallest = values.min()
+    const largest = values.max()
+
+    const defaultOrder = values.sorted()
+    const withComparator = values.sorted((left, right) => left - right)
+    const byKey = values.sorted(by = value => -value)
+    const backwards = values.reversed()
+    const joined = ["a", "b"].join("-")
+    const defaultJoin = ["a", "b"].join()
+    const namedJoin = ["a", "b"].join(separator = "-")
+
+    return f"{found} {anyMatch} {allMatch} {mapped.size} {flatMapped.size} {filtered.size} {present.size} {folded} {namedFold} {summed} {smallest} {largest} {defaultOrder.size} {withComparator.size} {byKey.size} {backwards.size} {joined} {defaultJoin} {namedJoin}"
+
+// Direct indexing and indexed assignment are strict.
+export def listIndexing() -> number:
+    let values: List<number> = [1, 2, 3]
+    const direct = values[0]
+    const fromEnd = values[-1]
+    values[0] = 9
+    return direct + fromEnd + values[0]
+
+// Draining a List is a size guard, not a null dance — `pop` is strict.
+export def drain(chunks: List<string>) -> string:
+    let assembled = ""
+    while chunks.size > 0:
+        assembled += chunks.pop(0)
+    return assembled
+
+// A checked method is a first-class bound value.
+export def boundMethod() -> number:
+    const values: List<number> = []
+    const append = values.append
+    append(value = 1)
+    return values.size
+
+// ---------------------------------------------------------------------------
+// Set
+// ---------------------------------------------------------------------------
+
+export def setMembers() -> string:
+    const tags: Set<string> = Set()
+    const initialTags = Set(["web", "tooling"])
+    const fromSet = Set(initialTags)
+
+    tags.add("web")
+    tags.add(value = "game")
+    tags.update(["game", "tooling"])
+
+    const size = tags.size
+    const present = tags.has("web")
+    const removed = tags.remove("web")
+    const copied = tags.copy()
+    const values = tags.values()
+
+    const combined = tags.union(initialTags)
+    const shared = tags.intersection(initialTags)
+    const only = tags.difference(initialTags)
+
+    tags.clear()
+
+    return f"{size} {present} {removed} {copied.size} {values.size} {combined.size} {shared.size} {only.size} {fromSet.size}"
+
+// ---------------------------------------------------------------------------
+// Map
+// ---------------------------------------------------------------------------
+
+export def mapMembers() -> string:
+    const users: Map<string, User> = Map()
+    const user: User = {id: "user-1", name: "Ada"}
+    users.set(user.id, user)
+    users.set(value = user, key = "user-2")
+
+    const scores = Map([["Ada", 9], ["Lin", 7]])
+    const flags = Map({preview: true, compact: false})
+
+    const size = users.size
+    const selected = users.get("user-1")
+    const missing = users.get("user-9")
+    const present = users.has("user-1")
+    const removed = users.remove("user-1")
+    const copied = users.copy()
+    const keys = users.keys()
+    const values = users.values()
+    const entries = users.entries()
+
+    // `Map.update` merges another Map; `Set.update` accepts a Set or a List.
+    scores.update(Map([["Ada", 10]]))
+    users.clear()
+
+    return f"{size} {selected?.name} {missing == null} {present} {removed} {copied.size} {keys.size} {values.size} {entries.size} {scores.size} {flags.size}"
+
+// ---------------------------------------------------------------------------
+// Record<T> — the JSON-shaped counterpart to Map<K, V>
+// ---------------------------------------------------------------------------
+
+export def recordMembers() -> string:
+    const properties: Record<Property> = {
+        path: {type: "string", description: "Relative path"},
+    }
+    properties["limit"] = {type: "integer", description: "Result limit"}
+    const selected = properties["path"]
+
+    const size = properties.size
+    const gotten = properties.get("path")
+    properties.set("extra", {type: "bool", description: "A flag"})
+    properties.set(key = "named", value = {type: "bool", description: "Another"})
+    const present = properties.has("path")
+    const removed = properties.remove("extra")
+    const copied = properties.copy()
+    const keys = properties.keys()
+    const values = properties.values()
+    const entries = properties.entries()
+
+    properties.clear()
+
+    return f"{selected?.type} {size} {gotten?.type} {present} {removed} {copied.size} {keys.size} {values.size} {entries.size}"
+
+// ---------------------------------------------------------------------------
+// Iteration: one slot, two slots, and per-family order
+// ---------------------------------------------------------------------------
+
+export def iterate() -> string:
+    const values: List<string> = ["a", "b"]
+    const tags: Set<string> = Set(["x", "y"])
+    const scores: Map<string, number> = Map([["Ada", 9]])
+    const counts: Record<number> = {one: 1, two: 2}
+    let joined = ""
+
+    // A one-slot `for` visits List/Set values, Map/Record keys, and string
+    // characters.
+    for value in values:
+        joined += value
+    for tag in tags:
+        joined += tag
+    for key in scores:
+        joined += key
+    for key in counts:
+        joined += key
+    for character in "ab":
+        joined += character
+
+    // A two-slot `for` yields value/index for Lists, Sets, and strings, and
+    // key/value for Maps and Records.
+    for value, index in values:
+        joined += f"{value}{index}"
+    for tag, index in tags:
+        joined += f"{tag}{index}"
+    for character, index in "ab":
+        joined += f"{character}{index}"
+    for key, score in scores:
+        joined += f"{key}{score}"
+    for key, count in counts:
+        joined += f"{key}{count}"
+
+    return joined
+
+// Order is insertion order everywhere, with one `Record` exception inherited
+// from the JavaScript object it is: integer-spelled keys come first.
+const byId: Record<string> = {"2": "second", "1": "first"}
+const ordered = Map([["2", "second"], ["1", "first"]])
+
+// Replacing the value at an existing key keeps that key's position; removing a
+// key and adding it again moves it to the end.
+export def orderContract() -> string:
+    const scores: Map<string, number> = Map([["a", 1], ["b", 2]])
+    scores.set("a", 9)
+    scores.remove("b")
+    scores.set("b", 3)
+    let joined = ""
+    for key in scores:
+        joined += key
+    return joined
+
+// Mutating a collection while a `for` walks it is defined per family.
+export def mutationDuringIteration() -> number:
+    const values: List<number> = [1, 2, 3]
+    let seen = 0
+    for value in values.copy():
+        seen += value
+    return seen
+
+// Empty mutable collections infer from their first checked mutation.
+export def inferredFromFirstMutation() -> number:
+    const inferred = []
+    inferred.append(1)
+    const inferredSet = Set()
+    inferredSet.add("a")
+    const inferredMap = Map()
+    inferredMap.set("a", 1)
+    return inferred.size + inferredSet.size + inferredMap.size
+
+// A List spread evaluates each item and spread source once, in source order.
+const spreadSource: List<number> = [1, 2]
+const spreadTarget = [0, ...spreadSource, 3]
+
+export const chapterSeven = {byId, ordered, spreadTarget}

@@ -1,0 +1,18 @@
+{
+  "formatVersion": 2,
+  "entry": "main.vel",
+  "outDir": "dist",
+  "publicDir": "public",
+  "extensions": ["@velarscript/web"],
+  "web": {
+    "title": "VelarScript Web tour",
+    "base": "/",
+    "publicConfig": {
+      "apiBase": "/api",
+      "channel": "tour",
+      "features": {
+        "realtime": false
+      }
+    }
+  }
+}

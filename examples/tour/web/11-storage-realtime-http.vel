@@ -1,0 +1,237 @@
+// Chapter 11 — persistence and connections: `velar/storage`, `velar/realtime`,
+// and the Web side of `velar/http`.
+//
+// Authority: the module export tables in packages/web/src/compiler.ts —
+// `velar/storage` (3 exports, where `storage` and `session` each publish seven
+// members plus `scope`, and `database` publishes six), `velar/realtime` (2
+// handles), and `velar/http`.
+//
+// `velar/http` is a shared module whose two targets publish different sets: the
+// Node target adds `secretHeader` and the Web target adds `formBody`. Everything
+// else about `velar/http` is the same in both, so the Core tour walks the shared
+// members and this chapter walks the one the Web target adds.
+//
+// The two realtime handles open real connections, so both live in a `def` that
+// nothing calls; `using` is what releases them, because each publishes `close()`
+// and is therefore a standard capability handle.
+
+import {HttpAbortError, HttpError, HttpTransportError, HttpTransportPhase, formBody, http} from "velar/http"
+import {eventStream, socket} from "velar/realtime"
+import {database, session, storage} from "velar/storage"
+
+export type Draft:
+    title: string
+    body: string
+
+const emptyDraft: Draft = {title: "", body: ""}
+
+// `storage` and `session` publish the same seven members, and `storage.scope`
+// answers a namespaced view with the same seven. A typed `get` validates the
+// stored JSON against a record type and falls back when it does not match, so a
+// half-written key cannot travel under a declared type.
+component LocalStorageRound:
+    state stored = "not read"
+    state scoped = "not read"
+    state stashed = "not read"
+    let stopWatch: (() -> null)? = null
+
+    @mounted:
+        storage.set("tour:draft", {title: "Draft", body: "from local storage"})
+        storage.set("tour:capped", emptyDraft, 8192)
+        const current = storage.get("tour:draft", Draft, emptyDraft)
+        stored = f"{current.title}|{storage.has("tour:draft")}|{storage.keys().size}"
+        stopWatch = storage.watch("tour:draft", Draft, (next, previous) => print(f"{next?.title} was {previous?.title}"))
+
+        const namespaced = storage.scope("panel")
+        namespaced.set("draft", {title: "Scoped", body: "inside a namespace"})
+        const scopedDraft = namespaced.get("draft", Draft, emptyDraft)
+        scoped = f"{scopedDraft.title}|{namespaced.has("draft")}|{namespaced.keys().size}"
+
+        session.set("tour:session", {title: "Session", body: "until the tab closes"})
+        const sessionDraft = session.get("tour:session", Draft, emptyDraft)
+        stashed = f"{sessionDraft.title}|{session.has("tour:session")}|{session.keys().size}"
+
+    @cleanup:
+        if stopWatch != null:
+            stopWatch()
+
+    def clearEverything():
+        storage.remove("tour:capped")
+        storage.clear()
+        const namespaced = storage.scope("panel")
+        namespaced.remove("draft")
+        namespaced.clear()
+        session.remove("tour:session")
+        session.clear()
+        stored = "cleared"
+        scoped = "cleared"
+        stashed = "cleared"
+
+    return <div data-storage>
+        <p data-stored>{stored}</p>
+        <p data-scoped>{scoped}</p>
+        <p data-stashed>{stashed}</p>
+        <button type="button" data-clear-storage on:click={clearEverything}>Clear every store</button>
+    </div>
+
+// `database(name)` answers the IndexedDB-backed store: the same vocabulary,
+// every member asynchronous, and no `scope` or `watch`.
+component DatabaseRound:
+    state report = "not opened"
+
+    action openAndRead():
+        const drafts = database("tour")
+        await drafts.set("first", {title: "Stored", body: "in IndexedDB"})
+        const stored = await drafts.get("first", Draft, emptyDraft)
+        const present = await drafts.has("first")
+        const names = await drafts.keys()
+        report = f"{stored.title}|{present}|{names.size}"
+
+    action clearDatabase():
+        const drafts = database("tour")
+        await drafts.remove("first")
+        await drafts.clear()
+        report = "cleared"
+
+    @mounted:
+        async openAndRead()
+
+    return <div data-database>
+        <p data-database-state>{report}</p>
+        <button type="button" data-open-database on:click={openAndRead} disabled={openAndRead.pending}>
+            Read the database
+        </button>
+        <button type="button" data-clear-database on:click={clearDatabase} disabled={clearDatabase.pending}>
+            Clear the database
+        </button>
+    </div>
+
+// `formBody()` is the Web-only export: a checked multipart builder with six
+// members. It is a body value, so it is handed to a request through the usual
+// options record.
+component FormBodyRound:
+    state built = "not built"
+
+    def build():
+        const body = formBody()
+        body.field("title", "Tour")
+        body.field("channel", "web")
+        const present = body.has("title")
+        const named = body.names()
+        body.remove("channel")
+        built = f"{present}|{named.size}|{body.names().size}"
+
+    return <div data-form-body>
+        <p data-built>{built}</p>
+        <button type="button" data-build-body on:click={build}>Build a form body</button>
+    </div>
+
+// A request answers a handle whose five readers each consume the body once, and
+// `parse(Target)` is the one that validates it into a record type. `cancel()`
+// aborts the request, which is what raises `HttpAbortError`.
+component HttpRound:
+    state fetched = "not fetched"
+    state failure = "no failure"
+
+    action fetchHealth() -> string:
+        const response = await http.get("/api/health").response()
+        fetched = f"{response.ok}|{response.status}|{response.statusText}|{response.url != ""}|{response.headers.size >= 0}|{await response.text()}"
+        return fetched
+
+    action fetchTyped() -> string:
+        try:
+            const draft: Draft = await http.get("/api/draft").parse(Draft)
+            fetched = f"typed:{draft.title}"
+        catch error:
+            failure = describeHttpFailure(error)
+        return fetched
+
+    return <div data-http>
+        <p data-fetched>{fetched}</p>
+        <p data-failure>{failure}</p>
+        <button type="button" data-fetch-health on:click={fetchHealth} disabled={fetchHealth.pending}>
+            Fetch health
+        </button>
+        <button type="button" data-fetch-typed on:click={fetchTyped} disabled={fetchTyped.pending}>
+            Fetch a typed draft
+        </button>
+    </div>
+
+// The three imported error classes and the one imported enum. `velar/http`
+// keeps its own hierarchy because a caller branches on `status`, `reason`, and
+// `phase` directly.
+export def describeHttpFailure(error: Error) -> string:
+    if error is HttpAbortError:
+        return f"aborted: {error.reason}"
+    if error is HttpTransportError:
+        match error.phase:
+            case HttpTransportPhase.request:
+                return "transport failed while sending the request"
+            case HttpTransportPhase.response:
+                return "transport failed while reading the response"
+    if error is HttpError:
+        return f"http {error.status} from {error.url}"
+    return f"unclassified: {error.message}"
+
+// Every remaining request spelling, including the ones that change server state
+// and the streaming reader, written where nothing calls them.
+export async def requestSpellings(cover: File):
+    const body = formBody()
+    body.field("title", "Tour")
+    body.file("cover", cover)
+    body.file("cover", cover, "cover.png")
+    body.files("gallery", [cover])
+
+    const request = http.post("/api/drafts", {body: body, headers: Map([["accept", "application/json"]]), timeout: 5000, maxBytes: 65536, credentials: "same-origin", cache: "no-store"})
+    const response = await request.response()
+    await response.streamText(async chunk => print(chunk))
+    keepBlob(await http.get("/api/cover").blob())
+    print(Json.stringify(await http.get("/api/draft").json()))
+
+    http.put("/api/draft", {body: "replaced"}).cancel()
+    await http.patch("/api/draft", {body: "patched"}).text()
+    await http.delete("/api/draft").text()
+    await http.head("/api/draft").text()
+    await http.request("OPTIONS", "/api/draft").text()
+    await request.text()
+    await request.json()
+    await request.streamText(async chunk => print(chunk))
+    const typed: Draft = await request.parse(Draft)
+    print(typed.title)
+
+// `Blob` is produced by `blob()` and has no members of its own, so the only
+// thing a checked program does with one is hand it on.
+def keepBlob(value: Blob):
+    print("received a blob")
+
+// Both realtime handles publish `close()`, so `using` supplies their release
+// contract and each connection is closed at the end of the block.
+export async def realtimeSpellings():
+    using live = socket("wss://example.test/live", {
+        open: () => print("socket open"),
+        message: text => print(text),
+        error: reason => print(reason),
+        close: (code, reason) => print(f"closed {code}: {reason}"),
+    })
+    live.send("hello")
+    live.sendJson(emptyDraft)
+    print(f"{live.url} {live.state()}")
+    live.close()
+    live.close(1000, "done")
+
+    using feed = eventStream("/api/events", {
+        open: () => print("stream open"),
+        message: (event, data) => print(f"{event}: {data}"),
+        error: reason => print(reason),
+    }, true)
+    print(f"{feed.url} {feed.state()}")
+    feed.close()
+
+export component ConnectionsPanel:
+    return <section data-chapter="11">
+        <h2>11 — storage, realtime, and http</h2>
+        <LocalStorageRound />
+        <DatabaseRound />
+        <FormBodyRound />
+        <HttpRound />
+    </section>

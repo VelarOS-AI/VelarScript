@@ -1,0 +1,583 @@
+// Chapter 06 — the Look literal: builders, types, units, conditions, targets.
+//
+// Authority: charter section 17 and its appendix (the published Web visual
+// vocabulary). The compiler's own tables are all in packages/web/src/look.ts:
+// `LOOK_BUILDERS` (20), `LOOK_PUBLIC_TYPE_NAMES` (17), `LOOK_UNIT_TYPES` (13
+// suffixes), `LOOK_HOOKS` (9), `LOOK_TARGETS` (7), `LOOK_MEDIA_SUBJECTS` (3
+// subjects, 5 conditions), `LOOK_PROPERTY_GROUPS` (14 families, 225 properties),
+// `LOOK_PROPERTY_VALUE_KINDS` (18 value kinds), and `LOOK_UNITLESS_PROPERTIES`.
+//
+// `keyframes:` and `animate(...)` are chapter 07; the CSS escape hatch is
+// chapter 08.
+
+import {alpha, animate, asset, border, clamp, color, darken, hsl, lighten, linearGradient, max, min, minmax, repeat, rgb, rgba, shadow, spacing, tracks, transition} from "velar/look"
+import {Angle, Animation, Border, Color, Duration, Image, Keyframes, Length, LengthPercentage, Look, Percentage, Shadow, Spacing, Track, TrackFraction, TrackList, Transition} from "velar/look"
+
+// All 20 builders. `velar/look` exports them as ordinary named values: a
+// builder may be aliased, passed to another function, returned, and called
+// outside a Look block like any other value.
+const ink: Color = rgb(24, 31, 46)
+const brand: Color = color("rebeccapurple")
+const veiled: Color = rgba(24, 31, 46, 0.55)
+const sky: Color = hsl(210, 70, 45)
+const faded: Color = alpha(ink, 0.4)
+const lifted: Color = lighten(ink, 0.2)
+const sunk: Color = darken(ink, 0.2)
+
+const hairline: Border = border(1px, faded)
+const dashedEdge: Border = border(2px, ink, "dashed")
+const raised: Shadow = shadow(0px, 12px, 32px, veiled)
+const pressed: Shadow = shadow(0px, 1px, 2px, veiled, spread = 0px, inset = true)
+const wash: Image = linearGradient(180deg, lifted, sunk)
+const mark: Image = asset("/tour-mark.svg")
+
+const flexibleTrack: Track = minmax(120px, 1fr)
+const threeUp: TrackList = repeat(3, flexibleTrack)
+const explicitTracks: TrackList = tracks(200px, 1fr, minmax(80px, 240px))
+const inset1: Spacing = spacing(16px)
+const inset2: Spacing = spacing(16px, 20px)
+const inset3: Spacing = spacing(16px, 20px, 24px)
+const inset4: Spacing = spacing(16px, 20px, 24px, 28px)
+const narrow: Length = min(16px, 2rem)
+const wide: Length = max(16px, 2rem)
+const fluid: Length = clamp(1rem, 4vw, 3rem)
+
+const fade: Transition = transition("opacity", 200ms)
+const fadeEased: Transition = transition("opacity", 200ms, "ease-in-out", 50ms)
+
+// A builder is an ordinary value, so it can be aliased, passed to another
+// function, and called outside a Look block.
+const makeColor = rgb
+
+def buildRamp(build: (number, number, number) -> Color) -> List<Color>:
+    return [build(45, 79, 190), build(90, 120, 220)]
+
+const ramp: Color = makeColor(45, 79, 190)
+const rampColors: List<Color> = buildRamp(rgb)
+
+// All 13 unit suffixes. They belong to the language and need no import, and
+// they are ordinary reusable values outside Look.
+const gutter: Length = 16px
+const rootScale: Length = 1rem
+const localScale: Length = 2em
+const viewportPart: Length = 25vw
+const viewportTall: Length = 40vh
+const smallSide: Length = 10vmin
+const largeSide: Length = 10vmax
+const share: Percentage = 75%
+const fraction: TrackFraction = 2fr
+const quick: Duration = 200ms
+const slow: Duration = 1s
+const quarterTurn: Angle = 90deg
+const halfTurn: Angle = 0.5turn
+
+// Unit arithmetic: addition and subtraction require the same visual dimension,
+// mixing Length and Percentage yields LengthPercentage, and a visual value may
+// be multiplied or divided by a finite number in either order.
+const mixedMetric: LengthPercentage = share - gutter * 2
+const doubled: Length = gutter * 2
+const preDoubled: Length = 2 * gutter
+const halved: Length = gutter / 2
+const settle: Duration = slow + quick
+const swept: Angle = halfTurn + quarterTurn
+const shrunk: Percentage = share - 25%
+
+// Five of the seventeen public type names appear above only as annotations;
+// `Look` and `Keyframes` name the two literal forms, and `Animation` names what
+// `animate(...)` produces (chapter 07 spends it).
+export const spinFrames: Keyframes = keyframes:
+    from:
+        rotate = 0deg
+    to:
+        rotate = 1turn
+
+const spinning: Animation = animate(spinFrames, 1s, easing = "linear", loop = true)
+
+// One property from each of the 14 published families, and one property for
+// each of the 18 value kinds the compiler assigns. CSS keyword values are
+// strings because bare identifiers are real VelarScript variables.
+export const vocabularyLook: Look = look:
+    display = "grid"
+    position = "relative"
+    boxSizing = "border-box"
+    visibility = "visible"
+    overflow = "hidden"
+    zIndex = 2
+    aspectRatio = 1.5
+
+    gridTemplateColumns = threeUp
+    gridTemplateRows = explicitTracks
+    gridAutoFlow = "row"
+    gridColumn = "1 / -1"
+    gridTemplateAreas = "
+        head head
+        side main
+    "
+
+    flex = 1
+    flexDirection = "row"
+    flexGrow = 1
+    flexShrink = 0
+    flexBasis = 240px
+    gap = gutter
+    alignItems = "center"
+    justifyContent = "space-between"
+
+    width = fluid
+    minWidth = narrow
+    maxWidth = wide
+    height = "auto"
+    inset = 0px
+    top = 8px
+
+    padding = inset2
+    paddingInline = inset1
+    margin = inset4
+    marginBlock = inset3
+
+    background = wash
+    backgroundColor = brand
+    backgroundImage = mark
+    backgroundSize = 100%
+    backgroundPosition = 50%
+    backgroundRepeat = "no-repeat"
+
+    border = hairline
+    borderRadius = 14px
+    outline = dashedEdge
+    outlineOffset = 2px
+
+    boxShadow = raised
+    textShadow = pressed
+    opacity = 1
+    filter = "saturate(1.1)"
+    backdropFilter = "blur(4px)"
+
+    color = ink
+    fontFamily = "Inter, ui-sans-serif, system-ui, sans-serif"
+    fontSize = rootScale
+    fontWeight = 600
+    lineHeight = 1.5
+    letterSpacing = localScale / 32
+    textAlign = "start"
+    textTransform = "none"
+    whiteSpace = "normal"
+
+    listStyle = "none"
+
+    fill = sky
+    stroke = veiled
+    strokeWidth = 2px
+
+    translate = 0px
+    scale = 1
+    rotate = 0deg
+    transform = "translateZ(0)"
+    transformOrigin = 50%
+    transition = fade
+    transitionDuration = quick
+    transitionDelay = 0ms
+    animation = spinning
+
+    cursor = "pointer"
+    userSelect = "none"
+    accentColor = ramp
+    caretColor = ink
+    colorScheme = "light"
+
+    scrollBehavior = "smooth"
+    scrollMarginTop = 12px
+    scrollSnapAlign = "start"
+    scrollbarWidth = "thin"
+
+// Every one of the 225 published property names, once, grouped by the family
+// the compiler assigns it. Nothing here is a design; it is the vocabulary, so
+// that a formatter or property-table change has to walk the whole table before
+// it can pass.
+const everyPropertyLook: Look = look:
+    // layout and containment
+    display = "none"
+    position = "static"
+    boxSizing = "content-box"
+    isolation = "none"
+    contain = "none"
+    visibility = "visible"
+    zIndex = 1
+    overflow = "visible"
+    overflowX = "visible"
+    overflowY = "visible"
+    resize = "none"
+    clip = "auto"
+    clipPath = "inset(0)"
+    objectFit = "fill"
+    objectPosition = "none"
+    aspectRatio = 1
+
+    // grid
+    gridTemplateColumns = threeUp
+    gridTemplateRows = threeUp
+    gridTemplateAreas = "
+        head head
+        side main
+    "
+    gridAutoColumns = threeUp
+    gridAutoRows = threeUp
+    gridAutoFlow = "none"
+    gridColumn = "1 / -1"
+    gridColumnStart = "1"
+    gridColumnEnd = "-1"
+    gridRow = "1 / 2"
+    gridRowStart = "1"
+    gridRowEnd = "2"
+    gridArea = "main"
+
+    // flex and alignment
+    flex = 1
+    flexDirection = "row"
+    flexGrow = 1
+    flexShrink = 1
+    flexBasis = 4px
+    flexWrap = "nowrap"
+    order = 1
+    gap = 4px
+    rowGap = 4px
+    columnGap = 4px
+    alignItems = "normal"
+    justifyItems = "normal"
+    justifyContent = "normal"
+    alignContent = "normal"
+    alignSelf = "auto"
+    justifySelf = "auto"
+    placeItems = "normal"
+    placeContent = "normal"
+    placeSelf = "auto"
+
+    // size and inset
+    width = 4px
+    height = 4px
+    minWidth = 4px
+    maxWidth = 4px
+    minHeight = 4px
+    maxHeight = 4px
+    inlineSize = 4px
+    blockSize = 4px
+    minInlineSize = 4px
+    maxInlineSize = 4px
+    minBlockSize = 4px
+    maxBlockSize = 4px
+    inset = 4px
+    top = 4px
+    right = 4px
+    bottom = 4px
+    left = 4px
+    insetInline = 4px
+    insetBlock = 4px
+    insetInlineStart = 4px
+    insetInlineEnd = 4px
+    insetBlockStart = 4px
+    insetBlockEnd = 4px
+
+    // spacing
+    padding = 4px
+    paddingTop = 4px
+    paddingRight = 4px
+    paddingBottom = 4px
+    paddingLeft = 4px
+    paddingInline = 4px
+    paddingBlock = 4px
+    paddingInlineStart = 4px
+    paddingInlineEnd = 4px
+    paddingBlockStart = 4px
+    paddingBlockEnd = 4px
+    margin = 4px
+    marginTop = 4px
+    marginRight = 4px
+    marginBottom = 4px
+    marginLeft = 4px
+    marginInline = 4px
+    marginBlock = 4px
+    marginInlineStart = 4px
+    marginInlineEnd = 4px
+    marginBlockStart = 4px
+    marginBlockEnd = 4px
+
+    // background
+    background = wash
+    backgroundColor = ink
+    backgroundImage = mark
+    backgroundPosition = 4px
+    backgroundSize = 4px
+    backgroundRepeat = "repeat"
+    backgroundAttachment = "scroll"
+    backgroundClip = "border-box"
+    backgroundOrigin = "border-box"
+    backgroundBlendMode = "none"
+
+    // border and outline
+    border = hairline
+    borderWidth = 4px
+    borderStyle = "none"
+    borderColor = ink
+    borderTop = hairline
+    borderRight = hairline
+    borderBottom = hairline
+    borderLeft = hairline
+    borderTopWidth = 4px
+    borderRightWidth = 4px
+    borderBottomWidth = 4px
+    borderLeftWidth = 4px
+    borderTopStyle = "none"
+    borderRightStyle = "none"
+    borderBottomStyle = "none"
+    borderLeftStyle = "none"
+    borderTopColor = ink
+    borderRightColor = ink
+    borderBottomColor = ink
+    borderLeftColor = ink
+    borderRadius = 4px
+    borderTopLeftRadius = 4px
+    borderTopRightRadius = 4px
+    borderBottomRightRadius = 4px
+    borderBottomLeftRadius = 4px
+    outline = hairline
+    outlineWidth = 4px
+    outlineStyle = "none"
+    outlineColor = ink
+    outlineOffset = 4px
+
+    // effects
+    boxShadow = raised
+    textShadow = raised
+    opacity = 1
+    filter = "saturate(1.1)"
+    backdropFilter = "blur(4px)"
+    content = ""
+
+    // typography and international text
+    color = ink
+    font = "600 1rem/1.5 Inter, system-ui, sans-serif"
+    fontFamily = "Inter, ui-sans-serif, system-ui, sans-serif"
+    fontSize = 4px
+    fontWeight = 1
+    fontStyle = "normal"
+    fontStretch = "none"
+    fontVariant = "none"
+    fontKerning = "auto"
+    fontOpticalSizing = "auto"
+    fontFeatureSettings = "'liga' 1"
+    fontVariationSettings = "'wght' 600"
+    lineHeight = 1.5
+    letterSpacing = 4px
+    wordSpacing = 4px
+    textAlign = "start"
+    textIndent = 4px
+    textDecoration = "none"
+    textDecorationColor = ink
+    textDecorationLine = "none"
+    textDecorationStyle = "none"
+    textDecorationThickness = 4px
+    textUnderlineOffset = 4px
+    textUnderlinePosition = "none"
+    textTransform = "none"
+    textRendering = "none"
+    whiteSpace = "normal"
+    textOverflow = "clip"
+    textWrap = "wrap"
+    overflowWrap = "normal"
+    wordBreak = "normal"
+    hyphens = "none"
+    tabSize = 1
+    writingMode = "horizontal-tb"
+    textOrientation = "mixed"
+    direction = "ltr"
+    unicodeBidi = "normal"
+
+    // lists
+    listStyle = "none"
+    listStyleType = "none"
+    listStylePosition = "none"
+    listStyleImage = mark
+
+    // SVG paint
+    fill = ink
+    stroke = ink
+    strokeWidth = 4px
+    strokeLinecap = "none"
+    strokeLinejoin = "none"
+    strokeDasharray = "4 2"
+    strokeDashoffset = 4px
+
+    // transform and transition
+    translate = 4px
+    scale = 1
+    rotate = 0deg
+    transform = "translateZ(0)"
+    transformOrigin = 4px
+    transition = fade
+    transitionProperty = "none"
+    transitionDuration = 200ms
+    transitionDelay = 200ms
+    transitionTimingFunction = "none"
+    animation = spinning
+
+    // interaction and form theme
+    cursor = "auto"
+    pointerEvents = "auto"
+    userSelect = "auto"
+    touchAction = "auto"
+    appearance = "none"
+    accentColor = ink
+    caretColor = ink
+    colorScheme = "none"
+
+    // scroll
+    scrollBehavior = "auto"
+    scrollMargin = 4px
+    scrollMarginTop = 4px
+    scrollMarginRight = 4px
+    scrollMarginBottom = 4px
+    scrollMarginLeft = 4px
+    scrollPadding = 4px
+    scrollPaddingTop = 4px
+    scrollPaddingRight = 4px
+    scrollPaddingBottom = 4px
+    scrollPaddingLeft = 4px
+    scrollSnapAlign = "none"
+    scrollSnapStop = "none"
+    scrollSnapType = "none"
+    overscrollBehavior = "none"
+    overscrollBehaviorX = "none"
+    overscrollBehaviorY = "none"
+    scrollbarColor = "auto"
+    scrollbarWidth = "auto"
+
+export const propertyVocabulary: Look = everyPropertyLook
+
+// The 9 element states and the 7 pseudo-element targets. Conditions may appear
+// inside a target and a target may appear inside a condition; a target may not
+// appear inside another target.
+export const statefulLook: Look = look:
+    ...vocabularyLook
+    background = brand
+
+    if @hover:
+        background = lifted
+    if @focus:
+        outlineColor = sky
+    if @focusVisible:
+        outlineOffset = 3px
+    if @active:
+        opacity = 0.8
+    if @current:
+        fontWeight = 700
+    if @disabled:
+        opacity = 0.5
+    if @checked:
+        borderColor = sky
+    if @invalid:
+        borderColor = sunk
+    if @open:
+        maxHeight = "none"
+
+    @before:
+        content = "•"
+
+        if @hover:
+            content = "▸"
+
+    @after:
+        content = ""
+        display = "block"
+    @backdrop:
+        background = veiled
+    @placeholder:
+        color = faded
+    @selection:
+        background = lifted
+    @marker:
+        color = ink
+    @fileSelectorButton:
+        cursor = "pointer"
+
+// The whole media vocabulary: `viewport.width`, `viewport.height`,
+// `scheme.dark`, `scheme.light`, and `motion.reduced`. Thresholds compare
+// against compile-time px, rem, or em values, which may be a local or imported
+// const unit token or a field of a const token record. Media subjects compose
+// with element states and with each other, and `not scheme.dark` is the same
+// condition as `scheme.light`.
+const compact: Length = 720px
+const breakpoints = {wide: 1200px}
+
+export const responsiveLook: Look = look:
+    padding = inset2
+
+    if viewport.width <= compact:
+        padding = 12px
+    if viewport.height >= 600px:
+        marginBlock = 8px
+    if viewport.width > breakpoints.wide:
+        gap = 24px
+    if scheme.dark:
+        color = lifted
+        background = sunk
+    if scheme.light:
+        color = sunk
+    if motion.reduced:
+        transition = null
+    else if scheme.dark and viewport.width <= compact:
+        padding = 10px
+    else:
+        padding = inset3
+
+    @before:
+        if viewport.width <= compact:
+            content = "compact"
+
+// Composition happens once at the outer level, and later declarations follow
+// normal CSS cascade order. A Look value has reference identity, so two
+// separately written literals with identical bodies are not `==` equal even
+// though they compile to one shared rule.
+export const controlLook: Look = look:
+    padding = spacing(10px, 14px)
+    borderRadius = 10px
+
+export const primaryControlLook: Look = look:
+    ...controlLook
+    color = rgb(255, 255, 255)
+    background = ramp
+
+// A `look:` literal is built once, where it is written, so it cannot read
+// reactive state — the read would be a snapshot that never updates. Reactive
+// visuals live on the element instead: `look={...}` chooses a whole Look and
+// `look:property={...}` sets one property, and a `null` value removes the
+// controlled property rather than emitting the text "null".
+export component LookPanel:
+    state hot = false
+
+    def toggle():
+        hot = not hot
+
+    return <section data-chapter="06">
+        <h2>06 — Look</h2>
+        <div data-vocabulary look={vocabularyLook}>every published family</div>
+        <div data-property-vocabulary look={propertyVocabulary}></div>
+        <div data-stateful look={statefulLook}>states and targets</div>
+        <div data-responsive look={responsiveLook}>media conditions</div>
+        <button type="button" data-control look={controlLook}>base control</button>
+        <button type="button" data-primary-control look={primaryControlLook}>composed control</button>
+        <p
+            data-reactive-look
+            look={hot ? primaryControlLook : controlLook}
+            look:color={hot ? brand : ink}
+            look:borderColor={hot ? sky : null}
+        >
+            reactive visuals
+        </p>
+        <p data-units>
+            {f"{gutter} {share} {fraction} {quick} {quarterTurn} {doubled} {preDoubled} {halved} {settle} {swept} {shrunk} {rootScale} {localScale} {viewportPart} {viewportTall} {smallSide} {largeSide} {slow} {halfTurn}"}
+        </p>
+        <p data-composites look:width={mixedMetric} look:transition={fadeEased} look:boxShadow={pressed}>
+            composite values have no text form
+        </p>
+        <button type="button" data-toggle-hot on:click={toggle}>Toggle</button>
+    </section>

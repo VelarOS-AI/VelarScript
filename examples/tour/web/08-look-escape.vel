@@ -1,0 +1,59 @@
+// Chapter 08 — the native CSS escape hatch and the cascade it joins.
+//
+// Authority: charter section 17, "Stable output and external overrides" and the
+// paragraph on Look-versus-class specificity, plus the appendix table of the 36
+// real CSS properties deliberately outside checked Look. `css` is one of the ten
+// contextual keywords in packages/web/src/lexer.ts.
+//
+// The two sibling files this chapter needs are `before.css` and `after.css`.
+// `before look` and `after look` specify source order only — they do not assign
+// semantic priority — so specificity and `!important` stay the external
+// stylesheet author's responsibility.
+
+import css unsafe "./before.css" before look
+import css unsafe "./after.css" after look
+import {rgb} from "velar/look"
+
+const ink = rgb(24, 31, 46)
+const accent = rgb(45, 79, 190)
+
+// A base Look selector and a simple class selector both have specificity
+// (0,1,0), so source order decides. `before.css` sets `color` and loses it to
+// this Look; the property it alone sets survives.
+export const cascadeLook = look:
+    color = ink
+    padding = 8px
+
+    if @hover:
+        color = accent
+
+// A stateful Look selector usually adds a second attribute selector, so it is
+// more specific than one simple class — which is why the `@hover` colour above
+// beats an equally simple class rule in either import position.
+export const statefulCascadeLook = look:
+    background = rgb(255, 255, 255)
+
+    if @focusVisible:
+        background = rgb(238, 241, 255)
+
+// Look emits readable tokens on `data-velar-look` and readable `--velar-look-*`
+// variables rather than random CSS Module class names, and an author's own
+// stable `class` and `data-*` attributes remain public hooks. That is what lets
+// the two stylesheets above target this markup at all.
+export component CascadePanel:
+    return <section data-chapter="08">
+        <h2>08 — the CSS escape hatch</h2>
+        <p class="tour-cascade" data-cascade look={cascadeLook}>
+            Look wins the colour; the stylesheet keeps what Look never sets
+        </p>
+        <p class="tour-cascade-override" data-cascade-override look={statefulCascadeLook}>
+            after look wins an equal-specificity conflict
+        </p>
+        <div class="tour-cascade-columns" data-cascade-columns>
+            <p>Multi-column layout is one of the 36 properties outside checked Look, so it is written in native CSS.</p>
+        </div>
+        <ol class="tour-cascade-counter" data-cascade-counter>
+            <li>Generated-content counters have no Look spelling.</li>
+            <li>They reach the page through the same unsafe import.</li>
+        </ol>
+    </section>

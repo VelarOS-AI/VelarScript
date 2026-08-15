@@ -1,0 +1,178 @@
+/// Chapter 6 — the checked value methods on `string` and `number`, plus the
+/// resident `Text.` namespace and the two conversion functions.
+///
+/// Charter section 7 (checked value methods) and the Core permanent namespace
+/// table. These are compiler-owned operations, not JavaScript prototype calls:
+/// the receiver is checked and evaluated once.
+
+const title = "  VelarScript advertisement  "
+const trimmed = title.trim()
+
+// ---------------------------------------------------------------------------
+// String members
+// ---------------------------------------------------------------------------
+
+const size = trimmed.size
+const upper = trimmed.upper()
+const lower = trimmed.lower()
+const blank = "   ".isBlank()
+const notBlank = trimmed.isBlank()
+
+const wholeSlice = trimmed.slice()
+const fromStart = trimmed.slice(2)
+const bothEnds = trimmed.slice(2, 6)
+const namedSlice = trimmed.slice(end = 6, start = 2)
+const negativeSlice = trimmed.slice(-4)
+
+const firstCharacter = trimmed.char(0)
+const lastCharacter = trimmed.char(-1)
+const namedCharacter = trimmed.char(index = 1)
+
+const hasText = trimmed.has("Script")
+const startsWith = trimmed.startsWith("Velar")
+const endsWith = trimmed.endsWith("ment")
+
+const firstIndex = trimmed.index("e")
+const indexFromStart = trimmed.index("e", 5)
+const namedIndex = trimmed.index(text = "e", start = 5)
+
+const occurrences = trimmed.count("e")
+
+const words = trimmed.split(" ")
+const characters = "a😀b".split("")
+const namedSeparator = trimmed.split(separator = " ")
+
+const replacedFirst = "a-b-a".replace("a", "z")
+const replacedAll = "a-b-a".replaceAll("a", "z")
+const namedReplace = "a-b-a".replace(from = "a", to = "z")
+
+const paddedStart = "7".padStart(3, "0")
+const paddedEnd = "7".padEnd(3, "0")
+const defaultPad = "7".padStart(3)
+const namedPad = "7".padStart(size = 3, fill = "0")
+
+const repeated = "ab".repeat(3)
+const namedRepeat = "ab".repeat(count = 3)
+
+// A method value keeps its checked receiver.
+const boundUpper = trimmed.upper
+const calledLater = boundUpper()
+
+// Text equality is code-point-sequence identity; normalize at the boundary.
+const composed = Text.normalize("café")
+
+// ---------------------------------------------------------------------------
+// Number members
+// ---------------------------------------------------------------------------
+
+const magnitude = (-3.7).abs()
+const rounded = 3.5.round()
+const floored = 3.7.floor()
+const ceiled = 3.2.ceil()
+const fixed = 3.14159.toFixed(2)
+const namedFixed = 3.14159.toFixed(digits = 2)
+
+const integral = 3.0.isInteger()
+const notANumber = (0 / 0).isNaN()
+const finite = (1 / 0).isFinite()
+
+// Number text is JavaScript's number text.
+const negativeZero = str(-0)
+const largeExponent = str(1e21)
+const floatingPoint = str(0.1 + 0.2)
+const infinite = str(1 / 0)
+const undefinedQuotient = str(0 / 0)
+
+// ---------------------------------------------------------------------------
+// The two conversions
+// ---------------------------------------------------------------------------
+
+const fromNumber = str(42)
+const fromBool = str(true)
+const fromNull = str(null)
+
+const parsedNumber = number("42")
+const parsedSigned = number("-4.5")
+const parsedExponent = number("4.5e3")
+const parsedPartialFraction = number("4.")
+const parsedLeadingPoint = number(".5")
+const parsedWithWhitespace = number("  42\n")
+const refusedPartial = number("12ab")
+const refusedSeparator = number("1_000")
+const refusedRadix = number("0x10")
+const refusedInfinity = number("1e999")
+const namedParse = number(text = "42")
+
+// ---------------------------------------------------------------------------
+// `Text.` — the extension toolbox, reached without an import
+// ---------------------------------------------------------------------------
+
+const paragraph = "
+    First line
+
+    Second   line
+"
+
+const startTrimmed = Text.trimStart("  a  ")
+const endTrimmed = Text.trimEnd("  a  ")
+const capitalized = Text.capitalize("velar script")
+const titleCased = Text.title("velar script")
+const documentLines = Text.lines(paragraph)
+const lineOffsets = Text.lineStarts(paragraph)
+const fixedChunks = Text.chunks("abcdef", 2)
+const wordList = Text.words("velar   script")
+const slugified = Text.slug("Velar Script 1.0")
+const normalized = Text.normalize("café")
+const normalizedForm = Text.normalize("café", "NFD")
+const truncated = Text.truncate("a long sentence", 6)
+const truncatedWithSuffix = Text.truncate("a long sentence", 6, "…")
+const indented = Text.indent("a\nb", "    ")
+const dedented = Text.dedent("    a\n    b")
+const collapsedWhitespace = Text.normalizeWhitespace("a   b\n c")
+const byteSize = Text.utf8Size("a😀b")
+const escaped = Text.escapeHtml(`<a href="/">x</a>`)
+const codePoint = Text.codePoint("😀")
+const fromCodePoint = Text.fromCodePoint(128512)
+
+// The pattern family takes an expression and an options record.
+// A pattern is ordinary text, so a raw string is the natural spelling for it.
+const matched = Text.matches("2026-08-15", r"^\d{4}-\d{2}-\d{2}$")
+const matchedIgnoringCase = Text.matches("VELAR", "velar", {ignoreCase: true})
+const matchedMultiline = Text.matches("a\nb", "^b$", {multiline: true})
+const matchedDotAll = Text.matches("a\nb", "a.b", {dotAll: true})
+
+const firstMatch = Text.findMatch("a1b2", r"\d")
+const everyMatch = Text.findMatches("a1b2", r"\d")
+const patternReplaced = Text.replaceMatches("a1b2", r"\d", "#")
+const patternSplit = Text.splitPattern("a1b2", r"\d")
+
+export def readMatch() -> string:
+    const found = Text.findMatch("owner: Ada", r"owner: (\w+)")
+    if found == null:
+        return "no match"
+    const captured = found.groups.get(0) ?? "none"
+    return f"{found.value} at {found.index}: {captured}"
+
+// Named arguments work here exactly as they do for user-defined functions.
+const namedTruncate = Text.truncate(value = "a long sentence", length = 6, suffix = "…")
+const namedNormalize = Text.normalize(value = "café", form = "NFKC")
+
+export const chapterSix = {
+    trimmed, size, upper, lower, blank, notBlank, wholeSlice, fromStart,
+    bothEnds, namedSlice, negativeSlice, firstCharacter, lastCharacter,
+    namedCharacter, hasText, startsWith, endsWith, firstIndex, indexFromStart,
+    namedIndex, occurrences, words, characters, namedSeparator, replacedFirst,
+    replacedAll, namedReplace, paddedStart, paddedEnd, defaultPad, namedPad,
+    repeated, namedRepeat, calledLater, composed, magnitude, rounded, floored,
+    ceiled, fixed, namedFixed, integral, notANumber, finite, negativeZero,
+    largeExponent, floatingPoint, infinite, undefinedQuotient, fromNumber,
+    fromBool, fromNull, parsedNumber, parsedSigned, parsedExponent,
+    parsedPartialFraction, parsedLeadingPoint, parsedWithWhitespace,
+    refusedPartial, refusedSeparator, refusedRadix, refusedInfinity, namedParse,
+    startTrimmed, endTrimmed, capitalized, titleCased, documentLines,
+    lineOffsets, fixedChunks, wordList, slugified, normalized, normalizedForm,
+    truncated, truncatedWithSuffix, indented, dedented, collapsedWhitespace,
+    byteSize, escaped, codePoint, fromCodePoint, matched, matchedIgnoringCase,
+    matchedMultiline, matchedDotAll, firstMatch, everyMatch, patternReplaced,
+    patternSplit, namedTruncate, namedNormalize,
+}

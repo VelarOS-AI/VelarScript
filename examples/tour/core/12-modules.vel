@@ -1,0 +1,116 @@
+/// Chapter 12 — imports, exports, re-exports, live bindings, and dynamic
+/// `import()`.
+///
+/// Charter section 12 up to the JavaScript boundary, which chapter 13 owns.
+/// Three neighbour files carry the half of this chapter one module cannot
+/// show on its own: `-dependency` exports, `-barrel` re-exports, and `-lazy`
+/// is loaded on demand.
+
+// A statement written *above* an import still runs *after* that dependency has
+// initialized, because import declarations are hoisted above every other
+// statement in the file. The dependency prints first, then this line.
+print("chapter twelve initialized second")
+
+import {version, encode} from "./12-modules-dependency.vel"
+import {User as Account, UserId, Role, Badge} from "./12-modules-dependency.vel"
+import {requestCount, bumpRequestCount} from "./12-modules-dependency.vel"
+import {barrelName, bump, liveCount, Identifier} from "./12-modules-barrel.vel"
+// A namespace import reads a whole module through one name. `-dependency`
+// cannot be reached this way: it has an `export let`, and a module with live
+// exports must be imported by name because namespace fields are always
+// read-only.
+import * as lazy from "./12-modules-lazy.vel"
+import * as urls from "velar/url"
+
+// An unused import is not an error and produces no warning; importing a name
+// still initializes the module it comes from.
+import {makeInternal} from "./12-modules-dependency.vel"
+
+print(f"chapter twelve read version {version} third")
+
+// ---------------------------------------------------------------------------
+// What each import spelling brings in
+// ---------------------------------------------------------------------------
+
+const encoded = encode({id: "u-1"})
+
+// A renamed type import names the type in an annotation.
+const account: Account = {id: "u-1", name: "Ada"}
+const identifier: UserId = "u-1"
+const aliasedIdentifier: Identifier = "u-2"
+const role: Role = Role.owner
+const badge = Badge("new").render()
+
+// A namespace import's fields are always read-only. A namespace member cannot
+// stand in a type position either — import the type by name for that.
+const namespaceTitle = lazy.title
+const throughNamespace = lazy.render(["a"])
+
+// A standard module reached the same way.
+const joinedUrl = urls.join("https://example.test", "api", "v1")
+
+// ---------------------------------------------------------------------------
+// Live bindings
+// ---------------------------------------------------------------------------
+
+// An imported name is read-only here, but an `export let` remains live: the
+// exporting module reassigns it between reads.
+export def observeLiveBinding() -> string:
+    const before = requestCount
+    bumpRequestCount()
+    const after = requestCount
+    // The same live binding, re-exported through the barrel under an alias.
+    bump()
+    return f"{before} -> {after} -> {liveCount}"
+
+// ---------------------------------------------------------------------------
+// Dynamic import
+// ---------------------------------------------------------------------------
+
+// The path is a literal relative `.vel` path — never a package name, a
+// `velar/*` module, or a computed string — because the module graph must stay
+// decidable at compile time.
+export async def loadReports() -> string:
+    const reports = await import("./12-modules-lazy.vel")
+    return reports.render(["a", "b"])
+
+// The result is the module's checked interface, so its exported bindings keep
+// their types.
+export async def readLazyTitle() -> string:
+    const reports = await import("./12-modules-lazy.vel")
+    const title: string = reports.title
+    return title
+
+// Failure is ordinary and catchable: a module that throws while initializing
+// rejects the Promise with that error.
+export async def loadPlugin() -> string:
+    try:
+        const plugin = await import("./12-modules-lazy.vel")
+        plugin.install()
+        return "installed"
+    catch error:
+        return f"plugin unavailable: {error.message}"
+
+// Caching is the module graph's: the first load initializes the module and
+// every later `import(...)` of the same path answers the same namespace. A
+// module reached both statically — the `import * as lazy` line above — and
+// dynamically is still one instance.
+export async def loadTwice() -> bool:
+    const first = await import("./12-modules-lazy.vel")
+    const second = await import("./12-modules-lazy.vel")
+    return first.title == second.title
+
+// ---------------------------------------------------------------------------
+// A side-effect import is refused; export a function and call it instead
+// ---------------------------------------------------------------------------
+
+export def installsExplicitly():
+    // `import "./12-modules-lazy.vel"` and `import {} from "..."` are both
+    // rejected: a side-effect import is invisible action. The effect appears
+    // where it happens.
+    makeInternal(1)
+
+export const chapterTwelve = {
+    version, encoded, account, identifier, aliasedIdentifier, role, badge,
+    namespaceTitle, throughNamespace, joinedUrl, barrelName,
+}

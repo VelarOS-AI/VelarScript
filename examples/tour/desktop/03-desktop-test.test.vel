@@ -1,0 +1,57 @@
+// Chapter 03 — `velar/desktop-test`.
+//
+// Authority: the `velar/desktop-test` module interface in
+// packages/desktop/src/compiler.ts — six exports, all asynchronous:
+// `appDataDirectory`, `projectDirectory`, `makeDirectory`, `readText`,
+// `writeText`, and `removeFile`.
+//
+// The module is the test-process door into the Desktop host, the way
+// `velar/web-test` is the door into the running page. Its runtime only exists
+// under `velar test --browser` — every export raises
+// "velar/desktop-test requires 'velar test --browser'" otherwise — so the six
+// calls below are written in functions that nothing in this file calls, and the
+// tests themselves assert the pure helpers that surround them.
+//
+// `test "…":` is only legal at the top level of a `*.test.vel` module
+// (VEL3019), which is why this chapter carries that suffix instead of being
+// imported by name from `main.vel` the way chapters 01 and 02 are.
+
+import {appDataDirectory, makeDirectory, projectDirectory, readText, removeFile, writeText} from "velar/desktop-test"
+import {expect} from "velar/test"
+
+// A fixture path is ordinary text, so the helper that builds one is pure and
+// can be asserted directly.
+export def fixturePath(root: string, name: string) -> string:
+    return f"{root}/tour-fixtures/{name}"
+
+// The whole module, in the order a fixture round actually runs: find a
+// directory the host owns, create a folder inside it, write a file, read it
+// back within a byte budget, and remove it again.
+export async def fixtureRound() -> string:
+    const data = await appDataDirectory()
+    const project = await projectDirectory()
+    const folder = fixturePath(data, "round")
+
+    await makeDirectory(folder)
+    await writeText(f"{folder}/note.txt", "written by the tour")
+    const written = await readText(f"{folder}/note.txt", 4096)
+    await removeFile(f"{folder}/note.txt")
+
+    return f"{project}|{written}"
+
+// The six export names in the order `fixtureRound` uses them. A Desktop
+// project's `velar test` runs in Node, where no host bridge exists, so a test
+// module here asserts what it can compute rather than what it would have to
+// call — the calls themselves belong to `velar test --browser`, where the
+// framework host answers them.
+export def fixtureSteps() -> List<string>:
+    return ["appDataDirectory", "projectDirectory", "makeDirectory", "writeText", "readText", "removeFile"]
+
+test "a fixture path is built from the host directory and the file name":
+    expect(fixturePath("/tmp/app-data", "round")).toBe("/tmp/app-data/tour-fixtures/round")
+    expect(fixturePath("/tmp/app-data", "note.txt")).toBe("/tmp/app-data/tour-fixtures/note.txt")
+
+test "a fixture round is described before it is run":
+    expect(fixtureSteps()).toHaveLength(6)
+    expect(fixtureSteps()).toContain("writeText")
+    expect(fixtureSteps().join(" → ")).toMatch("appDataDirectory")

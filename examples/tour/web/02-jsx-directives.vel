@@ -1,0 +1,206 @@
+// Chapter 02 — the JSX directive table.
+//
+// Authority: charter section 14 ("Important native directives include"), the
+// five event modifiers and their fixed order, and the `<`-starts-JSX position
+// list. The compiler's own tables are `nativeDomEventNames` and
+// `webEventTypeNames` in packages/web/src/analyzer.ts (the six event types) and
+// `WEB_JSX_PREVIOUS_TOKEN_KINDS` in packages/web/src/lexer.ts (the positions).
+//
+// Chapter 01 owns the declaration face; this chapter is the invocation face.
+// JSX has no comment form, so every note here sits outside the markup.
+
+import {rgb, spacing} from "velar/look"
+
+export enum Tone:
+    quiet
+    loud
+
+const controlLook = look:
+    display = "inline-flex"
+    gap = 6px
+    padding = spacing(6px, 10px)
+    borderRadius = 8px
+
+const inkColor = rgb(24, 31, 46)
+
+// The six event value types the Web extension publishes, one handler each.
+// `event.target`, `event.currentTarget`, `event.value`, and `event.checked` are
+// deliberately absent: the `self` modifier answers the target question and a
+// bound state cell answers the value question.
+def onPlainEvent(event: Event):
+    print(f"plain: {event.type}")
+
+def onKeyEvent(event: KeyboardEvent):
+    print(f"key: {event.key} {event.code} {event.altKey} {event.ctrlKey} {event.metaKey} {event.shiftKey} {event.repeat}")
+
+def onPointerEvent(event: PointerEvent):
+    print(f"pointer: {event.pointerType} {event.pointerId} {event.button} {event.clientX} {event.clientY}")
+
+def onInputEvent(event: InputEvent):
+    print(f"input: {event.inputType} {event.data ?? "no data"}")
+
+def onCompositionEvent(event: CompositionEvent):
+    print(f"composition: {event.data}")
+
+def onClipboardEvent(event: ClipboardEvent):
+    print(f"clipboard: {event.type}")
+
+// `on:` carries at most one of each modifier, appended with dots. There are
+// exactly five and they always apply in the order self → prevent → stop, then
+// the handler runs.
+component EventDirectives:
+    state clicks = 0
+
+    def count():
+        clicks += 1
+
+    return <form data-directive-form on:submit.prevent={onPlainEvent}>
+        <button type="button" data-count on:click={count}>Clicked {clicks} times</button>
+        <button type="button" data-prevent on:click.prevent={onPlainEvent}>prevent</button>
+        <button type="button" data-stop on:click.stop={onPointerEvent}>stop</button>
+        <button type="button" data-self on:click.self={onPlainEvent}>self</button>
+        <button type="button" data-capture on:click.capture={onPlainEvent}>capture</button>
+        <button type="button" data-once on:click.once={onPlainEvent}>once</button>
+        <button type="button" data-stacked on:click.prevent.stop={onPointerEvent}>prevent and stop</button>
+    </form>
+
+// `bind:value` on the supported form controls, `bind:checked` on one checkbox,
+// `bind:group` on radios (the state holds the selected input's `value`) and on
+// checkboxes (`List<string>` membership). A bind target is a writable reactive
+// location: a state name, or a field or index path rooted in one.
+component BindDirectives:
+    state draft = ""
+    state accepted = false
+    state pick = "beta"
+    state picks: List<string> = []
+    state form = {nickname: "ada"}
+    state rows = ["first"]
+
+    let field: InputElement? = null
+    let note: TextAreaElement? = null
+
+    const options = ["alpha", "beta", "gamma"]
+
+    def describeRefs():
+        print(f"{field != null} {note != null}")
+
+    return <fieldset data-bind-directives>
+        <input
+            ref={field}
+            data-draft
+            type="text"
+            name="draft"
+            bind:value={draft}
+            on:keydown={onKeyEvent}
+            on:beforeinput={onInputEvent}
+            on:compositionend={onCompositionEvent}
+            on:paste={onClipboardEvent}
+        />
+        <textarea ref={note} data-note bind:value={draft}></textarea>
+        <input data-nickname type="text" bind:value={form.nickname} />
+        <input data-row type="text" bind:value={rows[0]} />
+        <input data-accepted type="checkbox" name="terms" bind:checked={accepted} />
+        <input data-pick-alpha type="radio" name="pick" value="alpha" bind:group={pick} />
+        <input data-pick-beta type="radio" name="pick" value="beta" bind:group={pick} />
+        <input data-picks-alpha type="checkbox" name="picks" value="alpha" bind:group={picks} />
+        <input data-picks-beta type="checkbox" name="picks" value="beta" bind:group={picks} />
+        <select data-select name="option" bind:value={pick}>
+            {options.map(option => <option key={option} value={option}>{option}</option>)}
+        </select>
+        <output data-bound>{f"{draft}|{accepted}|{pick}|{picks.size}|{form.nickname}|{rows[0]}"}</output>
+        <button type="button" data-describe-refs on:click={describeRefs}>Describe refs</button>
+    </fieldset>
+
+// `class:name={condition}` adds and removes one class name as a bool changes,
+// while `class` itself accepts a name or a List of names. `look={value}`
+// composes an existing Look, every `look:property` on the element forms one
+// anonymous base applied after it, and `style:property` is the inline-priority
+// compatibility override rather than a second visual language.
+component StyleDirectives:
+    state highlighted = false
+    state tone: Tone = Tone.quiet
+
+    def toggleHighlight():
+        highlighted = not highlighted
+
+    def switchTone():
+        tone = tone == Tone.quiet ? Tone.loud : Tone.quiet
+
+    return <div data-style-directives>
+        <p
+            data-classes
+            class={["tour-note", "tour-note-wide"]}
+            class:tour-active={highlighted}
+            class:tour-quiet={tone == Tone.quiet}
+        >
+            class directives
+        </p>
+        <p data-visuals look={controlLook} look:color={inkColor} look:fontWeight={600} style:letterSpacing={0.02em}>
+            look and style directives
+        </p>
+        <p
+            data-attributes
+            data-tone={tone}
+            data-flag={highlighted}
+            data-absent={highlighted ? "present" : null}
+            hidden={not highlighted}
+        >
+            attribute values
+        </p>
+        <button type="button" data-toggle-highlight on:click={toggleHighlight}>Toggle highlight</button>
+        <button type="button" data-toggle-tone on:click={switchTone}>Toggle tone</button>
+    </div>
+
+// The three literal attribute delimiters — double quotes, the HTML single
+// quote, and backticks for a value that already contains a quotation mark.
+// Raw HTML is an explicit string-only boundary that cannot carry children.
+component LiteralDirectives:
+    const markup = "<em>trusted markup</em>"
+
+    return <div data-literal-directives>
+        <p data-double="double quoted" data-single='single quoted' data-backtick=`a "quoted" phrase`>attribute delimiters</p>
+        <div data-markup unsafe:html={markup}></div>
+    </div>
+
+// A `key` drives identity-preserving reuse only in the keyed-children shape —
+// `items.map(item => <Row key={item.id} />)`, or a `?:` branch of one. There
+// are no `if`, `else-if`, or `else` JSX attributes: conditional children are
+// ordinary expressions. `<` also begins JSX after `(`, `[`, `,`, `=>`, and
+// `??`, which is why every position below parses.
+component ChildDirectives:
+    state names: List<string> = ["alpha", "beta"]
+    state shown = true
+
+    def reverse():
+        names = [...names].reversed()
+
+    def toggle():
+        shown = not shown
+
+    return <div data-child-directives>
+        <ul data-keyed>
+            {names.size == 0 ? <li data-empty>nothing listed</li> : names.map(name => <li key={name} data-listed={name}>{name}</li>)}
+        </ul>
+        <p data-conditional>
+            {shown ? <strong>on</strong> : <span>off</span>}
+        </p>
+        <p data-nullish>
+            {(shown ? null : "fallback") ?? <em>from nullish</em>}
+        </p>
+        <div data-positions>
+            {[<b>one</b>, <i>two</i>]}
+        </div>
+        <p data-text><b>bold</b> <i>italic</i></p>
+        <button type="button" data-reverse on:click={reverse}>Reverse</button>
+        <button type="button" data-toggle-shown on:click={toggle}>Toggle</button>
+    </div>
+
+export component DirectivesPanel:
+    return <section data-chapter="02">
+        <h2>02 — JSX directives</h2>
+        <EventDirectives />
+        <BindDirectives />
+        <StyleDirectives />
+        <LiteralDirectives />
+        <ChildDirectives />
+    </section>

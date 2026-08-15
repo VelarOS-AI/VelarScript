@@ -1,0 +1,120 @@
+// Chapter 13 — the browser test: `velar/web-test`.
+//
+// Authority: the four controller tables in packages/web/src/compiler.ts —
+// `browser` (21 members), `localStorage` (4), `sessionStorage` (4), and
+// `network` (2) — and D57 rule 138, which put the module's boundary on the
+// import line: `velar/web-test` only has a runtime under `velar test --browser`,
+// so importing it from any module that is not a `*.browser.test.vel` is
+// VEL5062. The `import js` and re-export spellings are closed the same way.
+//
+// A browser test body runs in the *test process* and drives a page that is
+// already running the built application, so `document`, `window`, `navigator`,
+// `localStorage`, and `sessionStorage` do not point at `velar/browser` here.
+// This module is the door instead.
+
+import {expect} from "velar/test"
+import {browser, localStorage, network, sessionStorage} from "velar/web-test"
+
+test "the page opens, reloads, and reports where it is":
+    await browser.open()
+    expect(await browser.currentPath()).toBe("/")
+    await browser.open("/section/units")
+    expect(await browser.currentPath()).toBe("/section/units")
+    await browser.reload()
+    expect(await browser.currentPath()).toBe("/section/units")
+    expect(await browser.text("[data-route-param]")).toBe("units")
+
+test "text, attributes, namespaces, counts, and visibility read the live DOM":
+    await browser.open()
+    expect(await browser.text("[data-chapter='01'] h2")).toBe("01 — components")
+    expect(await browser.attribute("[data-task-list='plain'] li:first-child", "data-task")).toBe("parse")
+    expect(await browser.attribute("[data-task-list='plain'] li:first-child", "data-missing")).toBe(null)
+    expect(await browser.namespace("[data-svg]")).toBe("http://www.w3.org/2000/svg")
+    expect(await browser.namespace("[data-native] p")).toBe("http://www.w3.org/1999/xhtml")
+    expect(await browser.count("[data-child-directives] [data-keyed] li")).toBe(2)
+    expect(await browser.count("[data-chapter='99']")).toBe(0)
+    expect(await browser.visible("[data-chapter='02'] h2")).toBe(true)
+    expect(await browser.visible("[data-attributes]")).toBe(false)
+
+test "clicking, filling, selecting, and pressing drive the reactive page":
+    await browser.open()
+    await browser.click("[data-count]")
+    await browser.waitForText("[data-count]", "Clicked 1 times")
+    await browser.fill("[data-draft]", "half-typed draft")
+    await browser.waitForText("[data-bound]", "half-typed draft")
+    await browser.select("[data-select]", "gamma")
+    await browser.waitForText("[data-bound]", "gamma")
+    await browser.press("[data-draft]", "K")
+    await browser.waitForText("[data-bound]", "half-typed draftK")
+    await browser.click("[data-toggle-highlight]")
+    expect(await browser.visible("[data-attributes]")).toBe(true)
+
+test "waiting comes in both the state and the text spelling":
+    await browser.open()
+    await browser.waitFor("[data-timers]")
+    await browser.waitFor("[data-timers]", "attached")
+    await browser.waitFor("[data-attributes]", "hidden")
+    await browser.waitForText("[data-timer-settled]", "settled")
+    await browser.click("[data-navigate]")
+    await browser.waitFor("[data-route='section']")
+    expect(await browser.currentPath()).toBe("/section/units")
+
+test "scrolling and resizing move the page rather than the model":
+    await browser.open()
+    await browser.viewport(900, 700)
+    await browser.scroll("[data-element-controls]", 0, 24)
+    await browser.scroll("[data-element-controls]", 0, 0)
+    await browser.viewport(1280, 800)
+    expect(await browser.text("[data-captured]")).toBe("released")
+
+test "navigation timings and interaction timings come from the real browser":
+    await browser.open()
+    const navigation = await browser.timings()
+    expect(navigation.domContentLoadedMs >= 0).toBe(true)
+    expect(navigation.loadMs >= navigation.domContentLoadedMs).toBe(true)
+    const clicked = await browser.measureClick("[data-count]")
+    expect(clicked.inputDelayMs >= 0).toBe(true)
+    expect(clicked.processingDurationMs >= 0).toBe(true)
+    expect(clicked.nextFrameMs >= clicked.inputDelayMs + clicked.processingDurationMs).toBe(true)
+    const filled = await browser.measureFill("[data-draft]", "measured")
+    expect(filled.processingDurationMs >= 0).toBe(true)
+    const pressed = await browser.measurePress("[data-draft]", "M")
+    expect(pressed.processingDurationMs >= 0).toBe(true)
+
+test "a checked keyframes animation is actually running":
+    await browser.open()
+    const spinning = await browser.animation("[data-spinning]")
+    expect(spinning.count).toBe(1)
+    expect(spinning.name.startsWith("velar-kf-")).toBe(true)
+    expect(spinning.rotating).toBe(true)
+    const idle = await browser.animation("[data-toggled]")
+    expect(idle.count).toBe(0)
+    await browser.click("[data-toggle-animation]")
+    const started = await browser.animation("[data-toggled]")
+    expect(started.count).toBe(1)
+
+test "the storage controllers read and write the page's raw stores":
+    await browser.open()
+    expect(await localStorage.get("tour:draft") ?? "").toMatch("Draft")
+    await localStorage.set("velar-tour:malformed", "{oops")
+    expect(await localStorage.get("velar-tour:malformed")).toBe("{oops")
+    await localStorage.remove("velar-tour:malformed")
+    expect(await localStorage.get("velar-tour:malformed")).toBe(null)
+    await sessionStorage.set("velar-tour:draft", "half-written")
+    expect(await sessionStorage.get("velar-tour:draft")).toBe("half-written")
+    await sessionStorage.remove("velar-tour:draft")
+    expect(await sessionStorage.get("velar-tour:draft")).toBe(null)
+    await localStorage.clear()
+    await sessionStorage.clear()
+    expect(await localStorage.get("tour:draft")).toBe(null)
+
+test "the network controller answers the page's own requests":
+    await network.respond("/api/health", "healthy")
+    await network.respond("/api/draft", `{"title":"Mocked","body":"from the network controller"}`, 200, "application/json", 10)
+    await browser.open()
+    await browser.click("[data-fetch-health]")
+    await browser.waitForText("[data-fetched]", "healthy")
+    expect(await browser.text("[data-fetched]")).toBe("true|200|OK|true|true|healthy")
+    await browser.click("[data-fetch-typed]")
+    await browser.waitForText("[data-fetched]", "typed:Mocked")
+    await network.clear()

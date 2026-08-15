@@ -1,0 +1,151 @@
+// Chapter 07 — checked motion: `keyframes:`, `animate(...)`, and `transition`.
+//
+// Authority: charter section 17 ("Motion has two checked spellings and no
+// third") and the appendix section "Checked keyframes and animation". The
+// compiler's own closed sets are in packages/web/src/look.ts:
+// `LOOK_ANIMATION_EASINGS` (7), `LOOK_ANIMATION_DIRECTIONS` (4),
+// `LOOK_ANIMATION_FILLS` (4), and `LOOK_NON_ANIMATABLE_PROPERTIES`. The stop
+// grammar itself lives in packages/web/src/keyframes.ts.
+//
+// The CSS `@keyframes` at-rule and the animation longhands are not Look
+// spellings, and a raw CSS animation string is rejected.
+
+import {animate, rgb, transition} from "velar/look"
+
+// A stop is `from:`, `to:`, or an integer percentage from 1% through 99%.
+export const spin = keyframes:
+    from:
+        rotate = 0deg
+    50%:
+        rotate = 0.5turn
+    to:
+        rotate = 1turn
+
+// Comma-separated stops share one body, and declaration groups progress in
+// ascending order.
+export const pulse = keyframes:
+    from, to:
+        opacity = 1
+        scale = 1
+    40%, 60%:
+        opacity = 0.4
+        scale = 1.08
+
+// A keyframes body contains direct, statically lowerable Look properties only:
+// literals, unit values, arithmetic over them, and positional `velar/look`
+// builder calls. Non-interpolating properties such as `display` and `cursor`
+// are rejected here even though a Look accepts them, and a stop cannot read
+// reactive state — make animation presence dynamic on the element instead.
+export const slideIn = keyframes:
+    from:
+        translate = -12px
+        color = rgb(120, 150, 255)
+    to:
+        translate = 0px
+        color = rgb(24, 31, 46)
+
+// `animate(frames, duration, easing?, delay?, count?, loop?, direction?, fill?)`
+// answers `Animation`. Duration must be positive, delay cannot be negative,
+// `count` is a positive integer, and `count` and `loop=true` are mutually
+// exclusive — so these two spellings are the whole repetition vocabulary.
+export const spinForever = animate(spin, 1s, easing = "linear", loop = true)
+export const spinThrice = animate(spin, 900ms, easing = "ease-in-out", count = 3)
+
+// Closed set 1 — the seven easings.
+const easings = [
+    animate(pulse, 400ms, easing = "linear"),
+    animate(pulse, 400ms, easing = "ease"),
+    animate(pulse, 400ms, easing = "ease-in"),
+    animate(pulse, 400ms, easing = "ease-out"),
+    animate(pulse, 400ms, easing = "ease-in-out"),
+    animate(pulse, 400ms, easing = "step-start"),
+    animate(pulse, 400ms, easing = "step-end"),
+]
+
+// Closed set 2 — the four directions.
+const directions = [
+    animate(pulse, 400ms, direction = "normal"),
+    animate(pulse, 400ms, direction = "reverse"),
+    animate(pulse, 400ms, direction = "alternate"),
+    animate(pulse, 400ms, direction = "alternate-reverse"),
+]
+
+// Closed set 3 — the four fills.
+const fills = [
+    animate(slideIn, 400ms, fill = "none"),
+    animate(slideIn, 400ms, fill = "forwards"),
+    animate(slideIn, 400ms, fill = "backwards"),
+    animate(slideIn, 400ms, fill = "both"),
+]
+
+// Closed set 4 — the stop vocabulary itself: `from`, `to`, and the integer
+// percentages 1% through 99%.
+export const edges = keyframes:
+    from:
+        opacity = 0
+    1%:
+        opacity = 0.1
+    99%:
+        opacity = 0.9
+    to:
+        opacity = 1
+
+// The positional spelling of the same call, with delay, alongside the fully
+// named one. Both are ordinary VelarScript calls, so named arguments work
+// normally.
+const positional = animate(slideIn, 300ms, "ease-out", 60ms)
+const named = animate(slideIn, 300ms, easing = "ease-out", delay = 60ms, count = 2, direction = "alternate", fill = "both")
+
+// Look `animation` accepts one `Animation`, a `List<Animation>`, or `null`.
+export const animatedLook = look:
+    animation = spinForever
+
+export const layeredLook = look:
+    animation = [positional, named]
+
+// A media condition still governs motion, which is the checked way to honour a
+// reduced-motion preference.
+export const politeLook = look:
+    animation = null
+
+    if not motion.reduced:
+        animation = spinThrice
+
+// `transition` describes a state change rather than a timeline. The builder
+// takes a property name, a duration, and optionally an easing and a delay; the
+// `transition` property accepts what it returns and rejects a raw CSS string.
+const fade = transition("opacity", 200ms)
+const fadeEased = transition("opacity", 200ms, "ease-in-out", 50ms)
+
+export const transitioningLook = look:
+    opacity = 1
+    transition = fade
+
+    if @hover:
+        opacity = 0.6
+
+// The `transition` property takes one `Transition`, and the two duration
+// longhands take `Duration` values.
+export const transitionLonghandLook = look:
+    transition = fadeEased
+    transitionDuration = 200ms
+    transitionDelay = 50ms
+
+export component MotionPanel:
+    state active = false
+
+    def toggle():
+        active = not active
+
+    return <section data-chapter="07">
+        <h2>07 — motion</h2>
+        <div data-spinning look={animatedLook}>keyframes plus animate</div>
+        <div data-layered look={layeredLook}>two animations at once</div>
+        <div data-polite look={politeLook}>reduced motion is honoured</div>
+        <div data-transitioning look={transitioningLook}>transition on hover</div>
+        <div data-transition-longhand look={transitionLonghandLook}>transition longhands</div>
+        <div data-toggled look:animation={active ? animate(pulse, 600ms, loop = true) : null}>toggled animation</div>
+        <p data-easings>{f"{easings.size} easings, {directions.size} directions, {fills.size} fills"}</p>
+        <div data-edges look:animation={animate(edges, 800ms)}>every stop form</div>
+        <button type="button" data-toggle-animation on:click={toggle}>{active ? "Stop" : "Start"}</button>
+    </section>

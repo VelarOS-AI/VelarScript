@@ -1,0 +1,94 @@
+// Chapter 01 — the Desktop host surface.
+//
+// Authority: the `velar/desktop` module interface in
+// packages/desktop/src/compiler.ts (15 exports; the seven host functions are
+// here and the three handle families are chapter 02), and charter section 1
+// rule 5, which makes Desktop a first-class target rather than a Web project
+// with extras.
+//
+// A Desktop project is one VelarScript project behind one system WebView: there
+// is no renderer/main split, so the same module that declares a component may
+// call the host. `@velarscript/desktop` composes `@velarscript/web`, so every
+// Web spelling in `examples/tour/web` is available here unchanged — this tour
+// only walks what Desktop adds.
+//
+// `velar/desktop` reaches the machine, so every call below runs from a control
+// the reader presses rather than while the page builds.
+
+import {appDataDirectory, homeDirectory, packaged, platform, projectDirectory, selectProjectDirectory, selectedProjectDirectory} from "velar/desktop"
+import {border, rgb, spacing} from "velar/look"
+
+const ink = rgb(24, 24, 24)
+const paper = rgb(247, 247, 244)
+
+const panelLook = look:
+    display = "grid"
+    gap = 12px
+    padding = spacing(20px, 24px)
+    border = border(1px, ink)
+    borderRadius = 12px
+    color = ink
+    background = paper
+
+// `platform()` and `packaged()` are the two synchronous host reads: the host
+// operating system name, and whether this build is running from a packaged
+// application rather than from `velar dev`.
+export def hostSummary() -> string:
+    return f"{platform()}|{packaged()}"
+
+// The three directories every Desktop application eventually needs, each an
+// absolute path validated by the module before it becomes VelarScript text.
+export async def hostDirectories() -> string:
+    const home = await homeDirectory()
+    const data = await appDataDirectory()
+    const project = await projectDirectory()
+    return f"{home}|{data}|{project}"
+
+// The two project-directory spellings differ in exactly one thing, and it is
+// the thing a reader has to get right: `selectedProjectDirectory()` *reads*
+// what the user has already chosen and answers `null` when nothing is chosen,
+// while `selectProjectDirectory()` *opens the system picker* and answers `null`
+// when the user cancels. One is a query, the other is a dialog.
+export async def readSelectedProject() -> string:
+    return await selectedProjectDirectory() ?? "nothing selected yet"
+
+export async def askForProject() -> string:
+    return await selectProjectDirectory() ?? "the picker was cancelled"
+
+export component HostPanel:
+    state summary = "not read"
+    state directories = "not read"
+    state selected = "not read"
+
+    def readSummary():
+        summary = hostSummary()
+
+    action readDirectories() -> string:
+        directories = await hostDirectories()
+        return directories
+
+    action readSelected() -> string:
+        selected = await readSelectedProject()
+        return selected
+
+    action chooseProject() -> string:
+        selected = await askForProject()
+        return selected
+
+    return <section data-chapter="01" look={panelLook}>
+        <img data-mark src="/tour-mark.svg" alt="VelarScript" width="48" height="48" />
+        <h2>01 — the Desktop host</h2>
+        <p data-summary>{summary}</p>
+        <p data-directories>{directories}</p>
+        <p data-selected>{selected}</p>
+        <button type="button" data-read-summary on:click={readSummary}>Read platform and packaging</button>
+        <button type="button" data-read-directories on:click={readDirectories} disabled={readDirectories.pending}>
+            Read the host directories
+        </button>
+        <button type="button" data-read-selected on:click={readSelected} disabled={readSelected.pending}>
+            Read the selected project
+        </button>
+        <button type="button" data-choose-project on:click={chooseProject} disabled={chooseProject.pending}>
+            Choose a project directory
+        </button>
+    </section>

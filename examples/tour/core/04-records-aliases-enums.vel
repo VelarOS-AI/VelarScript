@@ -1,0 +1,177 @@
+/// Chapter 4 — records, aliases, enums, and discriminated unions.
+///
+/// Charter section 6. One `type` keyword owns both record shapes and aliases;
+/// `Type<T>` carries a runtime validator; enums are finite string-backed
+/// states; an enum member in type position discriminates a union.
+
+// ---------------------------------------------------------------------------
+// Record shapes
+// ---------------------------------------------------------------------------
+
+export type User:
+    id: string
+    name: string
+    avatar: string?
+
+type Nested:
+    owner: User
+    tags: List<string>
+    lookup: Map<string, number>
+    counts: Record<number>
+    readonly frozenId: string
+
+// ---------------------------------------------------------------------------
+// Aliases: the same `type` keyword, with `=`
+// ---------------------------------------------------------------------------
+
+export type UserId = string
+export type UserHandler = (User) -> null
+type Scores = Map<string, number>
+type MaybeUser = User?
+type Either = User | Error
+type UserList = readonly List<User>
+
+const identifier: UserId = "u-1"
+const handler: UserHandler = user => print(user.name)
+const scores: Scores = Map()
+const maybe: MaybeUser = null
+const readonlyUsers: UserList = []
+
+// ---------------------------------------------------------------------------
+// The runtime validator every record type carries
+// ---------------------------------------------------------------------------
+
+const untrusted: unknown = {id: "u-1", name: "Ada", avatar: null}
+
+export def validate() -> string:
+    const user = User.parse(untrusted)
+    if untrusted is User:
+        return untrusted.name
+    return user.name
+
+// ---------------------------------------------------------------------------
+// `Type<T>`: validators are first class through a compiler-known carrier
+// ---------------------------------------------------------------------------
+
+export def decode<T>(value: unknown, target: Type<T>) -> T:
+    return target.parse(value)
+
+export def accepts<T>(value: unknown, target: Type<T>) -> bool:
+    return target.is(value)
+
+const decoded: User = decode(untrusted, User)
+const isUser = accepts(untrusted, User)
+
+// An alias and an enum are equally assignable to `Type<T>`.
+const decodedThroughAlias: UserId = decode("u-2", UserId)
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+export enum Status:
+    pending
+    active
+    done
+
+const status: Status = Status.active
+const parsed = Status.parse("done")
+const members = Status.values()
+const isStatus = Status.is("done")
+
+// `values()` answers a fresh mutable List in declaration order.
+const spreadMembers = [...Status.values()]
+
+export def iterateMembers() -> string:
+    let joined = ""
+    for member in Status.values():
+        joined += str(member)
+    return joined
+
+// A `pass` line is the placeholder statement inside an enum body, never a
+// member — the enum still needs at least one real member.
+enum SingleMember:
+    only
+    pass
+
+// An enum member may map its readable name onto one explicit wire string.
+export enum ProviderEventKind:
+    textDelta = "response.output_text.delta"
+    completed = "response.completed"
+    unmapped
+
+const wireValue = str(ProviderEventKind.textDelta)
+
+// An enum's identity follows an alias on the type side and the value side.
+type S = Status
+const throughAlias = S.done
+const throughAliasParsed = S.parse("done")
+const throughAliasMembers = S.values()
+
+// The one-way wire exit: an enum member converts to `string`, never back.
+export def wireComparison(raw: string) -> bool:
+    // `Status.parse(raw) == Status.done` states that the text must name a
+    // member; `str(...) == raw` deliberately compares strings and answers
+    // `false` for an unknown value.
+    const strict = try Status.parse(raw)
+    const forgiving = str(Status.done) == raw
+    return strict == Status.done or forgiving
+
+// ---------------------------------------------------------------------------
+// An enum member in type position: discriminated unions
+// ---------------------------------------------------------------------------
+
+export enum EventKind:
+    text
+    tool
+
+export type TextEvent:
+    kind: EventKind.text
+    text: string
+
+export type ToolEvent:
+    kind: EventKind.tool
+    toolId: string
+
+export type Event = TextEvent | ToolEvent
+
+export def describe(event: Event) -> string:
+    if event.kind == EventKind.text:
+        return event.text
+    return event.toolId
+
+export def describeByMatch(event: Event) -> string:
+    match event:
+        case {kind: EventKind.text}:
+            return event.text
+        case {kind: EventKind.tool}:
+            return event.toolId
+
+// Reading a field shared by every union member produces the union of its
+// field types.
+type Shared:
+    kind: EventKind
+    label: string
+
+export def sharedField(event: Event) -> EventKind:
+    return event.kind
+
+// `assert` carries a singleton fact back to the owning record too.
+export def assertedVariant(event: Event) -> string:
+    assert event.kind == EventKind.tool else "expected a tool event"
+    return event.toolId
+
+// ---------------------------------------------------------------------------
+// A record type is structurally open, and display names stay separate
+// ---------------------------------------------------------------------------
+
+const forwardCompatible: unknown = {id: "u-3", name: "Lin", avatar: null, addedLater: 1}
+
+export def acceptsExtraFields() -> string:
+    return User.parse(forwardCompatible).name
+
+export const chapterFour = {
+    identifier, handler, scores, maybe, readonlyUsers, decoded, isUser,
+    decodedThroughAlias, status, parsed, members, isStatus, spreadMembers,
+    wireValue, throughAlias, throughAliasParsed, throughAliasMembers,
+}

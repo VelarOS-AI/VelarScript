@@ -1,0 +1,141 @@
+// Chapter 02 — the three long-lived Desktop handles.
+//
+// Authority: the `velar/desktop` module interface in
+// packages/desktop/src/compiler.ts — `ProjectTask` (4 members),
+// `TerminalSession` (6), and `LanguageServer` (3), plus the two enums
+// `ProjectTaskCommand` (check, test, build, run) and `ProjectTaskOutputChannel`
+// (stdout, stderr), and the three functions that open them.
+//
+// Every handle here publishes a release operation, so `using` supplies its
+// contract and the handle is closed at the end of the block (charter section 9,
+// *Owned resources*). Starting a child process, opening a PTY, and launching a
+// language server are all real actions, so every call below lives in a function
+// nothing calls.
+
+import {LanguageServer, ProjectTask, ProjectTaskCommand, ProjectTaskOutputChannel, TerminalSession, languageServer, openTerminal, startProjectTask} from "velar/desktop"
+
+// `ProjectTaskCommand` is the closed set of toolchain commands a Desktop
+// application may start: check, test, build, and run.
+export const taskCommands: List<ProjectTaskCommand> = [
+    ProjectTaskCommand.check,
+    ProjectTaskCommand.test,
+    ProjectTaskCommand.build,
+    ProjectTaskCommand.run,
+]
+
+export def commandLabel(command: ProjectTaskCommand) -> string:
+    match command:
+        case ProjectTaskCommand.check:
+            return "velar check"
+        case ProjectTaskCommand.test:
+            return "velar test"
+        case ProjectTaskCommand.build:
+            return "velar build"
+        case ProjectTaskCommand.run:
+            return "velar run"
+
+// `ProjectTaskOutputChannel` discriminates one line of output.
+export def channelLabel(channel: ProjectTaskOutputChannel) -> string:
+    return channel == ProjectTaskOutputChannel.stdout ? "out" : "err"
+
+// `startProjectTask(command, args?, options?)` answers a `ProjectTask`. Its
+// `next()` yields one output record at a time, which is exactly the shape
+// `async for` consumes; `wait()` answers the exit result; `stop()` ends it
+// early; `pid` names the child process.
+export async def runCheck() -> string:
+    using task = await startProjectTaskHandle(ProjectTaskCommand.check)
+    const lines: List<string> = []
+
+    async for output in task:
+        lines.append(f"{channelLabel(output.channel)}: {output.text}")
+
+    return lines.join("\n")
+
+// The same three spellings, written without `async for`, so the polling shape
+// and the streaming shape stand side by side.
+export async def runTestsAndReport() -> string:
+    using task = await startProjectTask(ProjectTaskCommand.test, ["--reporter", "compact"], {timeout: 120000, maxOutputBytes: 1048576})
+    let line = await task.next()
+
+    while line != null:
+        print(f"{channelLabel(line.channel)}: {line.text}")
+        line = await task.next()
+
+    const result = await task.wait()
+    return f"{result.code ?? -1}|{result.signal ?? "none"}|{result.stdout.size}|{result.stderr.size}|{task.pid}"
+
+export async def stopBuild():
+    using task = await startProjectTask(ProjectTaskCommand.build, ["--sourcemaps"])
+    await task.stop()
+
+def startProjectTaskHandle(command: ProjectTaskCommand) -> Promise<ProjectTask>:
+    return startProjectTask(command, ["--quiet"])
+
+// `openTerminal(options?)` answers a `TerminalSession`: a real PTY with `pid`,
+// `write`, `resize`, `next`, `wait`, and `close`. It requires the manifest's
+// `desktop.permissions.terminal` to be enabled.
+export async def terminalSession() -> string:
+    using session = await openTerminal()
+    await session.write("velar --version\n")
+    await session.resize(120, 40)
+
+    async for chunk in session:
+        print(chunk)
+
+    const result = await session.wait()
+    await session.close()
+    return f"{session.pid}|{result.code}"
+
+export async def sizedTerminal() -> number:
+    using session = await openTerminal({columns: 100, rows: 30})
+    const first = await session.next()
+    print(first ?? "no output")
+    return session.pid
+
+// `languageServer()` answers a `LanguageServer` handle speaking the Language
+// Server Protocol as framed text: `send` writes one message, `next` reads the
+// next one, and `close` ends the session.
+export async def languageServerRound() -> string:
+    using server = await languageServer()
+    await server.send(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`)
+    const reply = await server.next()
+    await server.close()
+    return reply ?? "no reply"
+
+export async def streamDiagnostics() -> number:
+    using server = await languageServer()
+    await server.send(`{"jsonrpc":"2.0","id":2,"method":"shutdown"}`)
+    let messages = 0
+
+    async for message in server:
+        messages += 1
+        print(message)
+
+    return messages
+
+// The three named types are ordinary type names, so a handle may be annotated,
+// passed to a helper, and returned like any other value.
+export def describeHandles(task: ProjectTask, session: TerminalSession, server: LanguageServer) -> string:
+    return f"task {task.pid}, terminal {session.pid}, server {describeServer(server)}"
+
+def describeServer(server: LanguageServer) -> string:
+    return "ready"
+
+export component TaskPanel:
+    state report = "no task has run"
+
+    action runTheCheck() -> string:
+        report = await runCheck()
+        return report
+
+    return <section data-chapter="02">
+        <h2>02 — project tasks, terminals, and the language server</h2>
+        <p data-commands>{taskCommands.map(command => commandLabel(command)).join(", ")}</p>
+        <p data-channels>
+            {f"{channelLabel(ProjectTaskOutputChannel.stdout)}/{channelLabel(ProjectTaskOutputChannel.stderr)}"}
+        </p>
+        <p data-report>{report}</p>
+        <button type="button" data-run-check on:click={runTheCheck} disabled={runTheCheck.pending}>
+            Run velar check
+        </button>
+    </section>

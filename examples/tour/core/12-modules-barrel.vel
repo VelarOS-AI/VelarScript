@@ -1,0 +1,16 @@
+/// Chapter 12's second neighbour — a barrel.
+///
+/// A module can re-export another module's named exports without creating
+/// local bindings, which is how a package entry exposes symbols from its
+/// internal modules. Re-exported names join this module's interface under
+/// their aliases with the full origin contract, including live-export
+/// mutability, and lower to native ES-module re-exports.
+///
+/// `export * from` is deliberately absent: every symbol is named, so the
+/// module interface stays explicit.
+
+export {encode, version, Badge, Role, User} from "./12-modules-dependency.vel"
+export {bumpRequestCount as bump, requestCount as liveCount, UserId as Identifier} from "./12-modules-dependency.vel"
+
+// A barrel may also add exports of its own.
+export const barrelName = "chapter twelve barrel"

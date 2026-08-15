@@ -1,0 +1,170 @@
+/// Chapter 8 — the `velar/collections` toolbox, the prelude `range`, and the
+/// resident `Math.` namespace.
+///
+/// Charter section 8's tail and the Core permanent namespace table.
+/// `velar/collections` is a *different* table from chapter 7's checked
+/// methods: `List` has `map` and no `groupBy`; this module has `groupBy` and
+/// no `map`. It stays behind an import because it is a toolbox a program
+/// reaches for, not vocabulary every program speaks.
+
+import * as collections from "velar/collections"
+import {chunk, compact, count as countValue, countBy, drop, enumerate, every, find, first, flatten, groupBy, has, index, join, keyBy, last, maxBy, minBy, partition, repeat, reversed, some, sortBy, sum, take, unique, zip} from "velar/collections"
+
+type Row:
+    id: string
+    group: string
+    rank: number
+
+const rows: List<Row> = [
+    {id: "a", group: "x", rank: 2},
+    {id: "b", group: "y", rank: 1},
+    {id: "c", group: "x", rank: 3},
+]
+const values: List<number> = [3, 1, 2, 3]
+const words: List<string> = ["b", "a", "b"]
+const nested: List<List<number>> = [[1, 2], [3]]
+const sparse: List<number?> = [1, null, 3]
+
+// ---------------------------------------------------------------------------
+// The prelude `range` — no import, and its named forms
+// ---------------------------------------------------------------------------
+
+const toEnd = range(3)
+const fromStart = range(1, 4)
+const stepped = range(0, 10, 2)
+const countingDown = range(10, 0, -2)
+const namedEnd = range(end = 3)
+const namedBounds = range(start = 1, end = 4)
+const namedStep = range(start = 0, end = 10, step = 2)
+
+export def loopOverRange() -> number:
+    let total = 0
+    for value in range(4):
+        total += value
+    return total
+
+// ---------------------------------------------------------------------------
+// `velar/collections`, reached both ways an import can spell it
+// ---------------------------------------------------------------------------
+
+// A namespace import reads the same module through one name.
+const throughNamespace = collections.unique(values)
+
+// Its own `range`, which is also the prelude name.
+const moduleRange = collections.range(3)
+const moduleRangeStepped = collections.range(0, 10, 2)
+
+const paired = enumerate(words)
+const pairedFromOne = enumerate(words, 1)
+const zipped = zip(words, values)
+const uniqueValues = unique(values)
+const chunked = chunk(values, 2)
+const flattened = flatten(nested)
+const compacted = compact(sparse)
+const backwards = reversed(values)
+const firstTwo = take(values, 2)
+const withoutFirst = drop(values, 1)
+const firstValue = first(values)
+const lastValue = last(values)
+
+const found = find(values, value => value > 2)
+const position = index(values, 3)
+const present = has(values, 3)
+const occurrences = countValue(values, 3)
+const anyMatch = some(values, value => value > 2)
+const allMatch = every(values, value => value > 0)
+const split = partition(values, value => value > 2)
+
+const grouped = groupBy(rows, row => row.group)
+const keyed = keyBy(rows, row => row.id)
+const counted = countBy(rows, row => row.group)
+
+const ranked = sortBy(rows, row => row.rank)
+const rankedDescending = sortBy(rows, row => row.rank, true)
+const smallest = minBy(rows, row => row.rank)
+const largest = maxBy(rows, row => row.rank)
+
+const summed = sum(values)
+const joined = join(words)
+const joinedWith = join(words, "-")
+const repeated = repeat("a", 3)
+
+// Named arguments follow the published signatures.
+const namedChunk = chunk(values = values, size = 2)
+const namedSort = sortBy(values = rows, key = row => row.rank, descending = true)
+const namedJoin = join(values = words, separator = "-")
+const namedEnumerate = enumerate(values = words, start = 1)
+
+// ---------------------------------------------------------------------------
+// `Math.` — 30 members, reached without an import
+// ---------------------------------------------------------------------------
+
+const pi = Math.pi
+const e = Math.e
+const tau = Math.tau
+const infinity = Math.infinity
+
+// `min` and `max` are pure rest calls, so their arguments stay positional.
+const smallestOf = Math.min(3, 1, 2)
+const largestOf = Math.max(3, 1, 2)
+
+const clamped = Math.clamp(11, 0, 10)
+const namedClamp = Math.clamp(value = 11, minimum = 0, maximum = 10)
+const sign = Math.sign(-4)
+const truncated = Math.trunc(3.7)
+
+const squareRoot = Math.sqrt(9)
+const cubeRoot = Math.cbrt(27)
+const raised = Math.pow(2, 8)
+const namedPow = Math.pow(base = 2, exponent = 8)
+const exponential = Math.exp(1)
+const naturalLog = Math.log(Math.e)
+const logWithBase = Math.log(8, 2)
+const binaryLog = Math.log2(8)
+const decimalLog = Math.log10(1000)
+
+const sine = Math.sin(0)
+const cosine = Math.cos(0)
+const tangent = Math.tan(0)
+const arcSine = Math.asin(0)
+const arcCosine = Math.acos(1)
+const arcTangent = Math.atan(0)
+const arcTangent2 = Math.atan2(1, 1)
+const namedAtan2 = Math.atan2(y = 1, x = 1)
+
+const asDegrees = Math.degrees(Math.pi)
+const asRadians = Math.radians(180)
+const hypotenuse = Math.hypot(3, 4)
+
+const randomValue = Math.random()
+const randomBounded = Math.randomInt(10)
+const randomInRange = Math.randomInt(1, 6)
+
+const greatestCommon = Math.gcd(12, 18)
+const leastCommon = Math.lcm(4, 6)
+
+// A permanent namespace is vocabulary, not a value — but its members are
+// ordinary values.
+const encode = Json.stringify
+const squareRootValue = Math.sqrt
+
+// Numeric finiteness and integer tests belong to the number methods, not to
+// `Math.`.
+const isWhole = 3.0.isInteger()
+const isFiniteValue = 3.0.isFinite()
+
+export const chapterEight = {
+    toEnd, fromStart, stepped, countingDown, namedEnd, namedBounds, namedStep,
+    throughNamespace, moduleRange, moduleRangeStepped, paired, pairedFromOne,
+    zipped, uniqueValues, chunked, flattened, compacted, backwards, firstTwo,
+    withoutFirst, firstValue, lastValue, found, position, present, occurrences,
+    anyMatch, allMatch, split, grouped, keyed, counted, ranked,
+    rankedDescending, smallest, largest, summed, joined, joinedWith, repeated,
+    namedChunk, namedSort, namedJoin, namedEnumerate, pi, e, tau, infinity,
+    smallestOf, largestOf, clamped, namedClamp, sign, truncated, squareRoot,
+    cubeRoot, raised, namedPow, exponential, naturalLog, logWithBase, binaryLog,
+    decimalLog, sine, cosine, tangent, arcSine, arcCosine, arcTangent,
+    arcTangent2, namedAtan2, asDegrees, asRadians, hypotenuse, randomValue,
+    randomBounded, randomInRange, greatestCommon, leastCommon, encode,
+    squareRootValue, isWhole, isFiniteValue,
+}

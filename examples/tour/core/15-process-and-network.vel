@@ -1,0 +1,276 @@
+/// Chapter 15 — the "acquire a handle, then release it" capability family,
+/// plus the two resident namespaces that go with it.
+///
+/// `velar/process`, `velar/terminal`, `velar/serve`, and the Node contract of
+/// `velar/http`, with `Promise.` and `Json.`. This is where `using` and
+/// `async for` have their real sites.
+///
+/// Nothing here is executed by the tour: starting a subprocess, opening a
+/// port, or closing the terminal would really happen. Every such call sits in
+/// an exported `def` this project never calls.
+
+import {run, start, Process, ProcessOutputChannel} from "velar/process"
+import {terminal} from "velar/terminal"
+import {fileResponse, serve, RequestBodyTooLargeError, ServeRequest, ServeResponse, Server} from "velar/serve"
+import {http, secretHeader, HttpAbortError, HttpError, HttpTransportError, HttpTransportPhase} from "velar/http"
+
+type Report:
+    id: string
+    total: number
+
+// ---------------------------------------------------------------------------
+// Json. — the resident JSON namespace
+// ---------------------------------------------------------------------------
+
+const report: Report = {id: "r-1", total: 3}
+
+const encoded = Json.stringify(report)
+const encodedPretty = Json.stringify(report, true)
+const encodedIndented = Json.stringify(report, 2)
+const stable = Json.stableStringify(report)
+const stablePretty = Json.stableStringify(report, 2)
+const cloned = Json.clone(report)
+const clonedWithTarget = Json.clone(report, Report)
+const serializable = Json.isSerializable(report)
+const namedStringify = Json.stringify(value = report, pretty = true)
+
+const parsedUnknown = Json.parse(`{"id":"r-2","total":4}`)
+const parsedReport = Json.parse(`{"id":"r-2","total":4}`, Report)
+const tried = Json.tryParse("not json", Report)
+const triedWithFallback = Json.tryParse("not json", Report, report)
+const namedParse = Json.parse(text = `{"id":"r-3","total":5}`, target = Report)
+
+// ---------------------------------------------------------------------------
+// Promise. — the resident async namespace, with `Duration` literals
+// ---------------------------------------------------------------------------
+
+// `Duration` is a Core value type written with `ms` or `s`. Addition,
+// subtraction, and numeric scaling preserve the unit-bearing value. In a Core
+// project a `Duration` has no text form — `print(value)` inspects one, and
+// neither `str` nor an f-string accepts it.
+const shortWait: Duration = 200ms
+const longWait: Duration = 2s
+const combinedWait: Duration = 1s + 200ms
+const subtractedWait: Duration = 2s - 200ms
+const scaledWait: Duration = 200ms * 3
+
+export def inspectDuration():
+    print(combinedWait)
+    print(subtractedWait)
+    print(scaledWait)
+
+async def loadReport(id: string) -> Report:
+    return {id, total: id.size}
+
+export async def promiseNamespace() -> string:
+    await Promise.sleep(shortWait)
+    await Promise.sleep(duration = 10ms)
+
+    const both = await Promise.all([loadReport("a"), loadReport("b")])
+    const firstToSettle = await Promise.race([loadReport("a"), loadReport("b")])
+    const bounded = await Promise.timeout(loadReport("a"), longWait)
+    const boundedWithMessage = await Promise.timeout(loadReport("a"), longWait, "the report took too long")
+    const retried = await Promise.retry(() => loadReport("a"))
+    const retriedWithBudget = await Promise.retry(() => loadReport("a"), 3, 100ms)
+    const mapped = await Promise.map(["a", "b"], id => loadReport(id))
+    const mappedWithConcurrency = await Promise.map(["a", "b"], id => loadReport(id), 2)
+    const inSeries = await Promise.series([() => loadReport("a"), () => loadReport("b")])
+
+    return f"{both.size} {firstToSettle.id} {bounded.id} {boundedWithMessage.id} {retried.id} {retriedWithBudget.id} {mapped.size} {mappedWithConcurrency.size} {inSeries.size}"
+
+// ---------------------------------------------------------------------------
+// velar/process — `run` waits, `start` hands back an owned handle
+// ---------------------------------------------------------------------------
+
+export async def runOnce() -> string:
+    const result = await run("git", ["status", "--short"])
+    const withOptions = await run("git", ["log", "-1"], {cwd: "/srv/app", timeout: 5000, maxOutputBytes: 1048576})
+    const withStdin = await run("cat", [], {stdin: "piped text"})
+    const environment: Map<string, string> = Map([["CI", "1"]])
+    const withEnvironment = await run("env", [], {env: environment})
+    return f"{result.code} {result.signal} {result.stdout.size} {result.stderr.size} {withOptions.code} {withStdin.stdout} {withEnvironment.code}"
+
+// A started process is an owned resource: `using` releases it on every exit,
+// and `async for` drives its output.
+export async def streamOutput() -> string:
+    using child = await start("npm", ["run", "build"])
+    let joined = f"pid {child.pid}"
+    async for output in child:
+        if output.channel == ProcessOutputChannel.stdout:
+            joined += output.text
+        else if output.channel == ProcessOutputChannel.stderr:
+            joined += f"! {output.text}"
+    const result = await child.wait()
+    return f"{joined} {result.code}"
+
+// The named types the module publishes stand in ordinary annotations.
+async def summarize(child: Process) -> string:
+    const result = await child.wait()
+    return f"{child.pid} {result.code} {result.signal} {result.stdout.size} {result.stderr.size}"
+
+export async def stopEarly() -> string:
+    using child = await start("sleep", ["60"])
+    print(await summarize(child))
+    // The loop never calls a cleanup hook of its own; `using` owns release.
+    async for output, index in child:
+        if index > 10:
+            break
+    await child.stop()
+    return "stopped"
+
+def describeChannel(channel: ProcessOutputChannel) -> string:
+    match channel:
+        case ProcessOutputChannel.stdout:
+            return "stdout"
+        case ProcessOutputChannel.stderr:
+            return "stderr"
+
+// ---------------------------------------------------------------------------
+// velar/terminal — a standard capability handle with a compiler-supplied
+// release contract, so `using` needs no declaration at all
+// ---------------------------------------------------------------------------
+
+export async def interact() -> string:
+    const args = terminal.args()
+    const interactive = terminal.isInteractive()
+    await terminal.write("Name: ")
+    const answer = await terminal.readLine()
+    const prompted = await terminal.readLine("Age: ")
+    await terminal.writeError("something went wrong\n")
+    // `terminal.close()` really closes standard input, so it is written here
+    // and never called by the tour.
+    terminal.close()
+    return f"{args.size} {interactive} {answer ?? ""} {prompted ?? ""}"
+
+// ---------------------------------------------------------------------------
+// velar/serve — an HTTP server. `serve` really binds a port.
+// ---------------------------------------------------------------------------
+
+async def produce(write: (chunk: string) -> Promise<null>):
+    await write("chunk")
+
+async def handle(request: ServeRequest) -> ServeResponse:
+    const method = request.method
+    const path = request.path
+    const queryParameters = request.query
+    const headers = request.headers
+
+    if path == "/echo":
+        const body = await request.text()
+        return {status: 200, text: body, contentType: "text/plain"}
+    if path == "/bounded":
+        const body = await request.text(1024)
+        return {status: 200, text: body}
+    if path == "/json":
+        const payload = await request.json()
+        return {status: 200, json: payload}
+    if path == "/report":
+        const parsed = await request.parse(Report)
+        return {status: 200, json: parsed, headers: Map([["cache-control", "no-store"]])}
+    if path == "/stream":
+        return {status: 200, stream: produce}
+    if path.startsWith("/assets/"):
+        return fileResponse("./public", path)
+    if path == "/page":
+        return fileResponse("./public", path, "index.html")
+    return {status: 404, text: f"{method} {queryParameters.size} {headers.size} not found"}
+
+export async def startServer() -> string:
+    // Calling this really opens a port, so nothing in this tour calls it.
+    const server = await serve(handle, 0)
+    const onPort = await serve(handle, 8080)
+    const onHostAndPort = await serve(handle, 8080, "127.0.0.1")
+    const named = await serve(handler = handle, port = 0, host = "127.0.0.1")
+    return f"{await shutDown(server)} {onPort.port} {onHostAndPort.port} {named.port}"
+
+async def shutDown(server: Server) -> number:
+    const port = server.port
+    await server.stop()
+    return port
+
+export async def guardsTheBodyBudget(request: ServeRequest) -> string:
+    try:
+        return await request.text(16)
+    catch error:
+        if error is RequestBodyTooLargeError:
+            return f"at most {error.maxBytes} bytes"
+        if error is PermissionError:
+            return "the host refused"
+        if error is AddressInUseError:
+            return "bind another port, or port 0 for any free one"
+        throw error
+
+// ---------------------------------------------------------------------------
+// velar/http — the Node contract, which adds `secretHeader`
+// ---------------------------------------------------------------------------
+
+const apiKey = secretHeader("authorization", "API_TOKEN")
+const bearerKey = secretHeader("authorization", "API_TOKEN", "Bearer ")
+const namedSecret = secretHeader(name = "x-api-key", environment = "API_TOKEN")
+
+export async def httpVerbs(url: string) -> string:
+    const gotten = await http.get(url).text()
+    const posted = await http.post(url, {body: {id: "r-1"}}).json()
+    const put = await http.put(url, {body: {id: "r-1"}}).text()
+    const patched = await http.patch(url, {body: {id: "r-1"}}).text()
+    const deleted = await http.delete(url).text()
+    const headed = await http.head(url).response()
+    const requested = await http.request("OPTIONS", url).response()
+    return f"{gotten.size} {posted != null} {put.size} {patched.size} {deleted.size} {headed.status} {requested.statusText}"
+
+export async def httpOptions(url: string) -> string:
+    const headers: Map<string, string> = Map([["accept", "application/json"]])
+    const request = http.get(url, {
+        headers,
+        secretHeaders: [apiKey, bearerKey],
+        timeout: 5000,
+        maxBytes: 1048576,
+    })
+    const parsed = await request.parse(Report)
+    return parsed.id
+
+export async def httpResponse(url: string) -> string:
+    const response = await http.get(url).response()
+    return f"{response.ok} {response.status} {response.statusText} {response.url} {response.headers.size}"
+
+let streamedCharacters = 0
+
+async def collectChunk(chunk: string):
+    streamedCharacters += chunk.size
+
+export async def httpStreaming(url: string) -> string:
+    await http.get(url).streamText(collectChunk)
+    const response = await http.get(url).response()
+    await response.streamText(collectChunk)
+    const asData = await response.parse(Report)
+    return f"{streamedCharacters} {asData.id}"
+
+export def cancelRequest(url: string):
+    const request = http.get(url)
+    request.cancel()
+
+export async def httpFailures(url: string) -> string:
+    try:
+        return await http.get(url).text()
+    catch error:
+        if error is HttpError:
+            return f"{error.status} {error.url} {error.body != null}"
+        if error is HttpAbortError:
+            return f"aborted: {error.reason}"
+        if error is HttpTransportError:
+            return describePhase(error.phase)
+        throw error
+
+def describePhase(phase: HttpTransportPhase) -> string:
+    match phase:
+        case HttpTransportPhase.request:
+            return "the request never left"
+        case HttpTransportPhase.response:
+            return "the response never arrived"
+
+export const chapterFifteen = {
+    encoded, encodedPretty, encodedIndented, stable, stablePretty, cloned,
+    clonedWithTarget, serializable, namedStringify, parsedUnknown, parsedReport,
+    tried, triedWithFallback, namedParse, shortWait, longWait, combinedWait,
+    subtractedWait, scaledWait, apiKey, bearerKey, namedSecret,
+}

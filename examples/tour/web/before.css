@@ -1,0 +1,17 @@
+/* Imported `before look`, so it loses an equal-specificity conflict to Look.
+   `before look` and `after look` specify source order only; specificity and
+   `!important` remain this file's responsibility. */
+
+.tour-cascade {
+    /* Look sets this too, and Look wins because it comes later. */
+    color: #b00020;
+    /* Look never sets this, so it survives. */
+    text-underline-offset: 3px;
+}
+
+/* One of the 36 real CSS properties deliberately outside checked Look:
+   multi-column layout has no Look spelling, so it lives here. */
+.tour-cascade-columns {
+    column-count: 2;
+    column-gap: 24px;
+}

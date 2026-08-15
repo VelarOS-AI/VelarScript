@@ -1,0 +1,131 @@
+/// Chapter 17 — `test "…":` blocks and every `expect` matcher.
+///
+/// Charter section 12's *Tests*. `test` declares a test only at the top level
+/// of a `*.test.vel` module, followed by a string literal and a block;
+/// everywhere else it is an ordinary name (chapter 16). A test module is
+/// discovered by the runner and needs no `export`, which is why this is the
+/// one chapter `main.vel` does not import: `velar check` walks the entry
+/// graph, and `*.test.vel` modules get their own second pass.
+///
+/// The matcher set is nine, and which matchers exist depends on the type of
+/// the value handed to `expect`: `toBe`/`toEqual` always, `toBeTruthy`/
+/// `toBeFalsy` for `bool`, `toContain`/`toHaveLength` for text and Lists,
+/// `toMatch` for text, `toThrow` for a callable, and `toReject` for a Promise.
+
+import {expect} from "velar/test"
+import {readMatch} from "./06-text-and-numbers.vel"
+import {drain, iterate, listIndexing, orderContract} from "./07-list-set-map.vel"
+import {matchLists, matchOptionalEnum, pullLoop, Status} from "./09-control-flow.vel"
+import {ownedResource} from "./10-classes-and-ownership.vel"
+import {observeLiveBinding} from "./12-modules.vel"
+
+def scale(maximum: number) -> number:
+    assert maximum <= 1000000 else "The chart maximum is beyond the supported range"
+    return maximum
+
+async def loadLater(id: string) -> string:
+    return id
+
+async def failLater():
+    throw Error("the task failed")
+
+// ---------------------------------------------------------------------------
+// toBe and toEqual — available for every value
+// ---------------------------------------------------------------------------
+
+test "toBe compares by exact identity and value equality":
+    expect(scale(10)).toBe(10)
+    expect("Ada").toBe("Ada")
+    expect(null).toBe(null)
+
+test "toEqual is the prelude equals, so it compares data structurally":
+    expect([1, 2, 3]).toEqual([1, 2, 3])
+    // `equals` uses SameValueZero at the leaves, so NaN agrees with itself
+    // exactly as `==` does.
+    expect(0 / 0).toEqual(0 / 0)
+    expect(Set(["a", "b"])).toEqual(Set(["b", "a"]))
+    expect(Map([["a", 1]])).toEqual(Map([["a", 1]]))
+    expect({name: "Ada", tags: ["compiler", "web"]}).toEqual({name: "Ada", tags: ["compiler", "web"]})
+
+test "a matcher may be named through its published parameter":
+    expect(scale(4)).toBe(expected = 4)
+    expect([1]).toEqual(expected = [1])
+
+// ---------------------------------------------------------------------------
+// toBeTruthy and toBeFalsy — bool only, and they require actual true/false
+// ---------------------------------------------------------------------------
+
+test "toBeTruthy and toBeFalsy require an actual bool":
+    expect(1 < 2).toBeTruthy()
+    expect(2 < 1).toBeFalsy()
+
+// ---------------------------------------------------------------------------
+// toContain and toHaveLength — text and dense Lists
+// ---------------------------------------------------------------------------
+
+test "toContain accepts text or a List":
+    expect("advertisement").toContain("ad")
+    expect(["compiler", "web"]).toContain("web")
+
+test "toHaveLength accepts text or a List":
+    expect("Ada").toHaveLength(3)
+    expect([1, 2, 3]).toHaveLength(3)
+    expect([1, 2, 3]).toHaveLength(length = 3)
+
+// ---------------------------------------------------------------------------
+// toMatch — text against a Unicode pattern
+// ---------------------------------------------------------------------------
+
+test "toMatch reads a Unicode string pattern":
+    expect("2026-08-15").toMatch(r"^\d{4}-\d{2}-\d{2}$")
+    expect("owner: Ada").toMatch(expression = r"owner: \w+")
+
+// ---------------------------------------------------------------------------
+// toThrow — a synchronous callable
+// ---------------------------------------------------------------------------
+
+test "an oversized chart maximum is rejected":
+    expect(() => scale(1000001)).toThrow()
+
+test "an out-of-range List position throws IndexError":
+    const values: List<number> = [1]
+    expect(() => values[9]).toThrow()
+
+// ---------------------------------------------------------------------------
+// toReject — an actual Promise, or a function returning one
+// ---------------------------------------------------------------------------
+
+test "a rejected task is observed with toReject":
+    await expect(failLater()).toReject()
+
+test "a test body is its own async frame and may await directly":
+    const loaded = await loadLater("r-1")
+    expect(loaded).toBe("r-1")
+
+// ---------------------------------------------------------------------------
+// The chapters actually run, not merely type-check
+// ---------------------------------------------------------------------------
+
+test "chapter 7 keeps List indexing strict and insertion order stable":
+    expect(listIndexing()).toBe(13)
+    expect(orderContract()).toBe("ab")
+    expect(drain(["a", "b", "c"])).toBe("abc")
+    expect(iterate()).toContain("Ada")
+
+test "chapter 9 matches List shapes and drains a pull source":
+    expect(matchLists([])).toBe("empty")
+    expect(matchLists([7])).toBe("one: 7")
+    expect(matchLists([7, 8])).toBe("two: 7 8")
+    expect(matchLists([7, 8, 9])).toBe("many: 7 + 2")
+    expect(matchOptionalEnum(null)).toBe("absent")
+    expect(matchOptionalEnum(Status.done)).toBe("done")
+    expect(pullLoop(["a", "b"])).toBe("ab")
+
+test "chapter 10 releases an owned resource on the way out":
+    expect(ownedResource()).toBe("true false")
+
+test "chapter 12 reads an export let as a live binding":
+    expect(observeLiveBinding()).toContain("->")
+
+test "chapter 6 reads a capture group out of a pattern match":
+    expect(readMatch()).toBe("owner: Ada at 0: Ada")

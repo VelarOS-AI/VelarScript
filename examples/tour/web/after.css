@@ -1,0 +1,20 @@
+/* Imported `after look`, so it wins an equal-specificity conflict with a base
+   Look selector: both are one simple selector at specificity (0,1,0) and source
+   order decides. */
+
+.tour-cascade-override {
+    letter-spacing: 0.06em;
+    background-color: #eef1ff;
+}
+
+/* Generated-content counters have no Look spelling at all — `content` in Look
+   is text, and `counter(...)`, `attr(...)`, `url(...)`, and `open-quote` are
+   outside the checked domain. */
+.tour-cascade-counter {
+    counter-reset: tour-step;
+}
+
+.tour-cascade-counter li::before {
+    counter-increment: tour-step;
+    content: counter(tour-step) ". ";
+}

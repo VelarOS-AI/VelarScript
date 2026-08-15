@@ -1,0 +1,19 @@
+// The Desktop tour's entry module.
+//
+// Same rule as the Web tour: `velar check` does not check a `.vel` the entry
+// cannot reach, so each chapter exports a name and this file imports it. The
+// two test modules go through the CLI's second pass on their own.
+//
+// A Desktop project mounts one root into one system WebView; there is no
+// renderer/main split, so this entry is the same shape a Web entry has.
+
+import {HostPanel} from "./01-desktop-host.vel"
+import {TaskPanel} from "./02-project-tasks.vel"
+
+component Tour:
+    return <div id="tour">
+        <HostPanel />
+        <TaskPanel />
+    </div>
+
+mount(<Tour />, "#app")

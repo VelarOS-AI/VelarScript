@@ -1,0 +1,244 @@
+/// Chapter 14 — the synchronous / filesystem capability family.
+///
+/// `velar/fs`, `velar/path`, `velar/env`, `velar/host`, `velar/id`,
+/// `velar/time`, `velar/url`, and `velar/log`. These are Node-only or
+/// Core-universal standard modules; the "acquire a handle, then release it"
+/// family lives in chapter 15.
+///
+/// Every capability *call* that would really touch the host — writing files,
+/// exiting the process — sits inside an exported `def` that this tour never
+/// calls. The exemption is on execution, not on spelling.
+
+import {appendText, canonical, copyFile, createText, exists, info, list, makeDirectory, move, readText, removeFile, replaceTextIfMatches, watchFiles, writeText, FileWatchBatch, FileWatcher} from "velar/fs"
+import {basename, contains, dirname, extension, fromFileUrl, isAbsolute, join, normalize, relative, resolve, toFileUrl} from "velar/path"
+import {get, require as requireVariable} from "velar/env"
+import {exit, onShutdown} from "velar/host"
+import {isUuid, uuid} from "velar/id"
+import {date, format, iso, monotonic, now, parse as parseTimestamp, parts, utc} from "velar/time"
+import {decode, encode, isExternal, join as joinUrl, normalize as normalizeUrl, parse as parseUrl, parseQuery, query, withHash, withQuery} from "velar/url"
+import {level, log, logger, setLevel, useSink} from "velar/log"
+
+// ---------------------------------------------------------------------------
+// velar/path — pure lexical path operations
+// ---------------------------------------------------------------------------
+
+const resolved = resolve(["/srv", "app", "main.vel"])
+const emptyResolve = resolve()
+const joined = join(["srv", "app", "main.vel"])
+const emptyJoin = join()
+const normalized = normalize("/srv//app/../app/main.vel")
+const relativePath = relative("/srv/app", "/srv/app/pages/index.vel")
+const directory = dirname("/srv/app/main.vel")
+const fileName = basename("/srv/app/main.vel")
+const suffix = extension("/srv/app/main.vel")
+const absolute = isAbsolute("/srv/app")
+const contained = contains("/srv", "/srv/app/main.vel")
+const fileUrl = toFileUrl("/srv/app/main.vel")
+const backFromUrl = fromFileUrl("file:///srv/app/main.vel")
+const namedResolve = resolve(parts = ["/srv", "app"])
+const namedContains = contains(root = "/srv", target = "/srv/app")
+
+// ---------------------------------------------------------------------------
+// velar/url — pure URL operations
+// ---------------------------------------------------------------------------
+
+const parsedUrl = parseUrl("https://example.test/api/v1?page=2#top")
+const parsedRelative = parseUrl("/api/v1", "https://example.test")
+const urlHref = parsedUrl.href
+const urlProtocol = parsedUrl.protocol
+const urlHost = parsedUrl.host
+const urlHostname = parsedUrl.hostname
+const urlPort = parsedUrl.port
+const urlPath = parsedUrl.path
+const urlQuery = parsedUrl.query
+const urlHash = parsedUrl.hash
+const urlOrigin = parsedUrl.origin
+
+const joinedUrl = joinUrl("https://example.test", "api", "v1")
+const queryText = query({page: "2", sort: "name"})
+const parsedQuery = parseQuery("page=2&sort=name")
+const withParameters = withQuery("https://example.test/api", {page: "2"})
+const withFragment = withHash("https://example.test/api", "top")
+const external = isExternal("https://other.test/x", "https://example.test")
+const encoded = encode("a b&c")
+const decoded = decode("a%20b%26c")
+const normalizedUrl = normalizeUrl("https://example.test/api/../v1")
+const namedQuery = withQuery(value = "https://example.test", params = {page: "2"})
+
+// ---------------------------------------------------------------------------
+// velar/id — entropy, so it stays behind an import
+// ---------------------------------------------------------------------------
+
+export def newIdentifier() -> string:
+    const identifier = uuid()
+    assert isUuid(identifier) else "uuid() answers a UUID"
+    return identifier
+
+// ---------------------------------------------------------------------------
+// velar/time — the clock, so it stays behind an import
+// ---------------------------------------------------------------------------
+
+export def clock() -> string:
+    const milliseconds = now()
+    const elapsed = monotonic()
+    const text = iso(milliseconds)
+    const isoWithoutArgument = iso()
+    const roundTripped = parseTimestamp(text)
+    const readable = format(milliseconds, "en-US", "UTC")
+    const localMidnight = date(2026, 8, 15)
+    const utcMidnight = utc(2026, 8, 15, 12, 30, 15)
+    const broken = parts(milliseconds, "UTC")
+    return f"{text} {isoWithoutArgument} {roundTripped} {readable} {localMidnight} {utcMidnight} {elapsed > 0} {broken.year}-{broken.month}-{broken.day} {broken.weekday} {broken.hour}:{broken.minute}:{broken.second}.{broken.millisecond}"
+
+export def namedClock() -> string:
+    return format(value = now(), locale = "en-GB", timeZone = "UTC")
+
+// ---------------------------------------------------------------------------
+// velar/log — reaches the outside world
+// ---------------------------------------------------------------------------
+
+export def logging() -> string:
+    // A mutable `Map` is invariant, so the field map is built rather than
+    // converted from a `Map<string, string>`.
+    const fields: Map<string, unknown> = Map()
+    fields.set("route", "/api")
+    const tenantFields: Map<string, unknown> = Map()
+    tenantFields.set("tenant", "acme")
+
+    log.debug("a debug line")
+    log.debug("a debug line with fields", fields)
+    log.info("an info line", fields)
+    log.warn("a warning")
+    log.warn("a warning with fields", fields)
+    log.error("a failure", Error("the cause"))
+    log.error("a failure with fields", Error("the cause"), fields)
+
+    const scoped = logger("checkout")
+    const scopedWithFields = logger("checkout", tenantFields)
+    scoped.info("scoped line")
+    scopedWithFields.info("scoped line with default fields")
+
+    const current = level()
+    setLevel("warn")
+    setLevel(current)
+    return current
+
+let sinkCharacters = 0
+
+def countRecord(timestamp: number, recordLevel: string, scope: string, message: string, fields: Map<string, unknown>, error: Error?) -> number:
+    sinkCharacters += message.size + scope.size + recordLevel.size + fields.size + str(timestamp).size
+    if error != null:
+        sinkCharacters += error.message.size
+    return sinkCharacters
+
+export def collectLogRecords() -> number:
+    // `velar/log` publishes no name for the sink record, so the sink is
+    // written as an arrow and its fields are read at the call.
+    const stop = useSink(record => countRecord(record.timestamp, record.level, record.scope, record.message, record.fields, record.error))
+    log.info("counted")
+    stop()
+    return sinkCharacters
+
+// ---------------------------------------------------------------------------
+// velar/env — the process environment
+// ---------------------------------------------------------------------------
+
+export def environment() -> string:
+    const optional = get("PORT")
+    const required = requireVariable("HOME")
+    return f"{optional ?? "8080"} {required}"
+
+// ---------------------------------------------------------------------------
+// velar/host — process lifetime. `exit` is written, never executed here.
+// ---------------------------------------------------------------------------
+
+export def shutdownHook():
+    onShutdown(async() => print("flushing before exit"))
+
+export def stopTheProcess(code: number):
+    // Calling this really ends the process, so nothing in this tour calls it.
+    exit(code)
+
+export def stopSuccessfully():
+    exit()
+
+// ---------------------------------------------------------------------------
+// velar/fs — every export, all inside functions the tour never calls
+// ---------------------------------------------------------------------------
+
+export async def readAndWrite(path: string) -> string:
+    const text = await readText(path)
+    const bounded = await readText(path, 1024)
+    await createText(f"{path}.new", "fresh")
+    const replaced = await replaceTextIfMatches(path, text, "next")
+    await writeText(path, "next")
+    await appendText(path, "\nappended")
+    return f"{bounded.size} {replaced}"
+
+export async def inspect(path: string) -> string:
+    const present = await exists(path)
+    const entries = await list(path)
+    const boundedEntries = await list(path, 10)
+    const metadata = await info(path)
+    const realPath = await canonical(path)
+    if metadata == null:
+        return f"{present} {entries.size} {boundedEntries.size} {realPath}"
+    return f"{metadata.name} {metadata.kind} {metadata.size} {metadata.modifiedAt}"
+
+export async def rearrange(source: string, target: string):
+    await makeDirectory(dirname(target))
+    await copyFile(source, target)
+    await copyFile(source, target, true)
+    await move(source, target)
+    await move(source, target, replace = true)
+    await removeFile(target)
+
+// The file watcher is a resource-owned pull source: `using` releases it, and
+// `async for` drives it.
+export async def watch(path: string) -> number:
+    using watcher = await watchFiles(path)
+    let batches = 0
+    async for batch in watcher:
+        batches += 1
+        if batch.rescan or batch.paths.size > 100:
+            break
+    return batches
+
+def batchSize(batch: FileWatchBatch) -> number:
+    return batch.rescan ? 0 : batch.paths.size
+
+async def firstBatch(watcher: FileWatcher) -> number:
+    const batch = await watcher.next()
+    return batch == null ? 0 : batchSize(batch)
+
+export async def watchRecursively(path: string) -> number:
+    // A `using` binding takes its type from the initializer, so it carries no
+    // annotation of its own.
+    using watcher = await watchFiles(path, true)
+    return await firstBatch(watcher)
+
+// Each filesystem failure a caller recovers from differently arrives as its
+// own class, carrying the failing path.
+export async def recoverFromFailures(path: string) -> string:
+    try:
+        return await readText(path)
+    catch error:
+        if error is FileNotFoundError:
+            await createText(path, "")
+            return ""
+        if error is PermissionError:
+            return f"Cannot read {error.path}: {error.message}"
+        if error is NotADirectoryError:
+            return "the path names a file"
+        if error is FileExistsError:
+            return "choose another name"
+        throw error
+
+export const chapterFourteen = {
+    resolved, emptyResolve, joined, emptyJoin, normalized, relativePath,
+    directory, fileName, suffix, absolute, contained, fileUrl, backFromUrl,
+    namedResolve, namedContains, urlHref, urlProtocol, urlHost, urlHostname,
+    urlPort, urlPath, urlQuery, urlHash, urlOrigin, parsedRelative, joinedUrl,
+    queryText, parsedQuery, withParameters, withFragment, external, encoded,
+    decoded, normalizedUrl, namedQuery,
+}
