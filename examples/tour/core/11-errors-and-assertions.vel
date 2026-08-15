@@ -31,7 +31,7 @@ export def catchOnly(values: List<number>) -> number:
     try:
         return values[99]
     catch error:
-        return - 1
+        return -1
 
 export def finallyOnly() -> string:
     try:

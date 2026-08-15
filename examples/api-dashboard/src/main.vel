@@ -191,7 +191,7 @@ component Dashboard:
 
     def metrics() -> WebNode:
         const current = payload()
-        return current != null ? <>{current.metrics.map(metric => <MetricCard key={metric.id} metric={metric} />)}</> :<></>
+        return current != null ? <>{current.metrics.map(metric => <MetricCard key={metric.id} metric={metric} />)}</> : <></>
 
     def traffic() -> WebNode:
         const current = payload()

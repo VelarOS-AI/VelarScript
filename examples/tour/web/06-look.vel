@@ -27,7 +27,7 @@ const sunk: Color = darken(ink, 0.2)
 const hairline: Border = border(1px, faded)
 const dashedEdge: Border = border(2px, ink, "dashed")
 const raised: Shadow = shadow(0px, 12px, 32px, veiled)
-const pressed: Shadow = shadow(0px, 1px, 2px, veiled, spread = 0px, inset = true)
+const pressed: Shadow = shadow(0px, 1px, 2px, veiled, spread=0px, inset=true)
 const wash: Image = linearGradient(180deg, lifted, sunk)
 const mark: Image = asset("/tour-mark.svg")
 
@@ -91,7 +91,7 @@ export const spinFrames: Keyframes = keyframes:
     to:
         rotate = 1turn
 
-const spinning: Animation = animate(spinFrames, 1s, easing = "linear", loop = true)
+const spinning: Animation = animate(spinFrames, 1s, easing="linear", loop=true)
 
 // One property from each of the 14 published families, and one property for
 // each of the 18 value kinds the compiler assigns. CSS keyword values are

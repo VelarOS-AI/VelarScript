@@ -2,6 +2,7 @@ import { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
 import { findInterpolatedExpressionEnd, scanStringEscape, scanStringLiteral, type StringLiteralScan } from "./interpolated-string.ts";
 import type { CompilerExtension } from "./extension.ts";
 import { isSourceIdentifierPart, isSourceIdentifierStart } from "./source-names.ts";
+import { keywordKinds } from "./token.ts";
 
 export interface FormatOptions {
   readonly indentWidth?: number;
@@ -21,17 +22,20 @@ interface InlineToken {
 const multiCharacterOperators = ["...", "?.", "??", "->", "=>", "==", "!=", "<=", ">=", "**", "+=", "-=", "*=", "/=", "%="] as const;
 const binaryWords = new Set(["and", "or", "in", "is"]);
 const prefixWords = new Set(["not", "await"]);
-const expressionStatementWords = new Set(["return", "throw", "assert"]);
-const parenthesizedKeywordWords = new Set([
-  "if", "while", "for", "catch",
-  ...expressionStatementWords,
-  ...binaryWords,
-  ...prefixWords,
-]);
 // D30 item 16: `match` and `case` are contextual keywords, so `match(value)` is
 // a call and must not gain a keyword's space. They keep it only where a
 // keyword can stand — the head of a statement line.
 const statementHeadKeywordWords = new Set(["match", "case"]);
+/**
+ * The reserved words that stand in expression position: `super` and `import`
+ * name one directly — `super(id)`, `import("./page.vel")` — and the formatter
+ * has already read `true`, `false` and `null` as literals by the time this set
+ * is consulted. Every other reserved word is a keyword in the structural sense
+ * `endsExpression` uses: it cannot end an expression, so what follows it opens
+ * a new one.
+ */
+const expressionKeywordWords = new Set(["true", "false", "null", "super", "import"]);
+const nonExpressionKeywordWords = new Set(Object.keys(keywordKinds).filter((word) => !expressionKeywordWords.has(word)));
 
 /**
  * Formats VelarScript source without round-tripping through generated JavaScript.
@@ -57,6 +61,8 @@ export function formatSource(text: string, options: FormatOptions = {}): string 
   const formatted: string[] = [];
   let embeddedDepth = 0;
   let statementLevel = 0;
+  /** The last token of the previous line — the context a continuation reads. */
+  let preceding: InlineToken | undefined;
 
   for (const original of lines) {
     const line = original.replace(/[ \t]+$/u, "");
@@ -72,7 +78,10 @@ export function formatSource(text: string, options: FormatOptions = {}): string 
     // one level past the statement it continues — without opening a block for
     // the lines that follow it.
     if (embeddedDepth === 0 && isChainContinuationLine(content) && formatted.length > 0) {
-      formatted.push(`${" ".repeat((statementLevel + 1) * indentWidth)}${formatInline(content, angleEmbedding, markupLayout(indentWidth, (statementLevel + 1) * indentWidth, angleEmbedding))}`);
+      const column = (statementLevel + 1) * indentWidth;
+      const line = formatInlineLine(content, angleEmbedding, markupLayout(indentWidth, column, angleEmbedding), preceding);
+      formatted.push(`${" ".repeat(column)}${line.text}`);
+      preceding = line.trailing ?? preceding;
       continue;
     }
     const current = indentation.at(-1) ?? 0;
@@ -85,9 +94,14 @@ export function formatSource(text: string, options: FormatOptions = {}): string 
     statementLevel = indentation.length - 1;
     const indent = " ".repeat(statementLevel * indentWidth);
     const layout = markupLayout(indentWidth, statementLevel * indentWidth, angleEmbedding);
-    formatted.push(`${indent}${embeddedDepth > 0
-      ? formatEmbeddedContent(content, angleEmbedding, layout, layout.column)
-      : formatInline(content, angleEmbedding, layout)}`);
+    if (embeddedDepth > 0) {
+      formatted.push(`${indent}${formatEmbeddedContent(content, angleEmbedding, layout, layout.column)}`);
+      preceding = undefined;
+    } else {
+      const line = formatInlineLine(content, angleEmbedding, layout, preceding);
+      formatted.push(`${indent}${line.text}`);
+      preceding = line.trailing ?? preceding;
+    }
     embeddedDepth = nextEmbeddedDepth(content, embeddedDepth, angleEmbedding);
   }
 
@@ -312,19 +326,41 @@ function formatInline(
   embedding: NonNullable<CompilerExtension["formatting"]>["angleBracketEmbedding"] | null,
   layout: MarkupLayout = heldLayoutFor(embedding),
 ): string {
+  return formatInlineLine(source, embedding, layout).text;
+}
+
+/**
+ * D59 rule 143, fourth item: the formatter reads one physical line at a time,
+ * so a line that opens with `+` or `-` used to have no token in front of it at
+ * all and was read as a negation — `basePrice` on one line and `+ shipping` on
+ * the next came back as `+shipping`, against the charter's own example. Inside
+ * brackets a newline is not a statement boundary (charter §2), so the token in
+ * front is simply on the previous line: the caller carries it across, and the
+ * unary question is answered from the same position every other one is. It also
+ * answers the case with the opposite result, where a list literal's `-1` on its
+ * own line follows the `[` that opened it and stays a negation.
+ */
+function formatInlineLine(
+  source: string,
+  embedding: NonNullable<CompilerExtension["formatting"]>["angleBracketEmbedding"] | null,
+  layout: MarkupLayout = heldLayoutFor(embedding),
+  preceding: InlineToken | undefined = undefined,
+): { readonly text: string; readonly trailing: InlineToken | undefined } {
   const tokens = tokenizeInline(source, embedding, layout);
-  if (tokens.length === 0) return "";
+  if (tokens.length === 0) return { text: "", trailing: undefined };
   let output = "";
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index]!;
     const previous = tokens[index - 1];
     const next = tokens[index + 1];
-    if (previous && needsSpace(previous, token, next, tokens, index)) output += " ";
+    if (previous && needsSpace(previous, token, next, tokens, index, preceding)) output += " ";
     output += token.element
       ? renderMarkupElement(token.element, layout, layout.column + lastLineWidth(output))
       : token.text;
   }
-  return output;
+  // A comment is not part of the expression it sits next to, so it never
+  // becomes the context the next line reads.
+  return { text: output, trailing: tokens.findLast((token) => token.kind !== "comment") };
 }
 
 function lastLineWidth(output: string): number {
@@ -527,9 +563,16 @@ function isTypeAliasLine(tokens: readonly InlineToken[]): boolean {
  * with nothing between the brackets but type syntax. `{visible: count < limit}`
  * never closes, and `{ok: a < b and c > d}` carries a word no type argument
  * list can hold.
+ *
+ * A function type carries its parameter names, so the `:` of `List<(x: number)
+ * -> string>` is type syntax too — but only inside the parameter list it names
+ * a parameter in. At the top of the argument list a `:` is the one in
+ * `{visible: count < limit, other: x > y}`, which is a record and two
+ * comparisons, so the paren depth is what separates them.
  */
 function closesAsTypeArguments(source: string, start: number): boolean {
   let depth = 0;
+  let parenthesized = 0;
   let index = start;
   while (index < source.length) {
     const character = source[index]!;
@@ -558,7 +601,22 @@ function closesAsTypeArguments(source: string, start: number): boolean {
       if (binaryWords.has(word) || prefixWords.has(word)) return false;
       continue;
     }
-    if (" \t,.?|()".includes(character)) {
+    if (character === "(") {
+      parenthesized += 1;
+      index += 1;
+      continue;
+    }
+    if (character === ")") {
+      parenthesized -= 1;
+      if (parenthesized < 0) return false;
+      index += 1;
+      continue;
+    }
+    if (character === ":" && parenthesized > 0) {
+      index += 1;
+      continue;
+    }
+    if (" \t,.?|".includes(character)) {
       index += 1;
       continue;
     }
@@ -793,12 +851,139 @@ function encodeCanonicalStringText(
   return output;
 }
 
+/**
+ * D57 rule 134, restated for this file: the spacing questions below are all one
+ * question — does the token in front end an expression? What follows something
+ * that ends one is applied to it (`values[0]` indexes, `f(x)` calls, `a - b`
+ * subtracts, `a < b` compares); what follows anything else begins a fresh
+ * expression (`const [head, ...tail]` destructures, `async (id) =>` takes
+ * parameters, `return -1` negates, `?? <em>x</em>` is markup).
+ *
+ * The tokens that can end an expression are a closed structural set: a name, a
+ * literal, a string, a closing bracket, an element. The words that cannot are
+ * the language's own reserved vocabulary, read from the lexer's table rather
+ * than kept here. The hand-kept list this replaced was blind to `const` and
+ * `let` (D59 143.1), to `async` (143.2), and to `return` in front of an
+ * operator (143.3), and a word the language gains tomorrow would have gone
+ * missing from it the same way.
+ */
+function endsExpression(token: InlineToken | undefined, statementHead = false): boolean {
+  if (!token) return false;
+  switch (token.kind) {
+    case "word":
+      // `match` and `case` are keywords only at the head of a statement line
+      // (D30 item 16); anywhere else the same spelling is an ordinary name.
+      if (statementHead && statementHeadKeywordWords.has(token.text)) return false;
+      return !nonExpressionKeywordWords.has(token.text);
+    case "literal":
+    case "string":
+    case "close":
+    case "markup":
+    case "embedded":
+      return true;
+    default:
+      return false;
+  }
+}
+
+/**
+ * D60 rule 147: whether a `<` opens embedded markup is the same question. An
+ * element stands where an expression can begin — after `??`, after `and`, after
+ * a comma, at the head of a line — and a comparison stands after something that
+ * ends an expression. Reading a list of the positions instead is what wrote
+ * `{text ?? <em>x</em>}` out as `{text ?? < em > x < / em >}`, which no longer
+ * compiles.
+ */
 function beginsEmbeddedAngleSyntax(tokens: readonly InlineToken[], source: string, index: number): boolean {
   if (!/[A-Za-z>]/u.test(source[index + 1] ?? "")) return false;
-  const previous = tokens.at(-1);
-  return !previous || previous.text === "return" || previous.text === "=>" || previous.text === "="
-    || previous.text === "(" || previous.text === "[" || previous.text === "{" || previous.text === ","
-    || previous.text === ":" || previous.text === "?";
+  return !endsExpression(tokens.at(-1), tokens.length === 1);
+}
+
+/**
+ * D59 rule 142 — `name=value` is one argument, and the charter and every
+ * documentation table spell it tight. Which `=` separates a named argument is a
+ * question about position: the name has to open an argument (it follows the
+ * call's `(`, or a `,` inside it) and the parentheses have to be a call's. The
+ * other `=` that stands inside parentheses is a default value, and a default
+ * value's parentheses belong to a declaration or a lambda, never to a call.
+ */
+function isNamedArgumentEquals(tokens: readonly InlineToken[], index: number): boolean {
+  const equals = tokens[index];
+  if (!equals || equals.kind !== "operator" || equals.text !== "=") return false;
+  if (tokens[index - 1]?.kind !== "word") return false;
+  const opener = tokens[index - 2];
+  if (!opener || (opener.kind !== "comma" && !(opener.kind === "open" && opener.text === "("))) return false;
+  const open = enclosingParenIndex(tokens, index - 2);
+  if (open < 0) return false;
+  return !isDeclarationParameterList(tokens, open) && endsExpression(tokens[open - 1], open === 1);
+}
+
+/** The index of the `(` whose argument list `index` sits directly inside. */
+function enclosingParenIndex(tokens: readonly InlineToken[], index: number): number {
+  let depth = 0;
+  for (let cursor = index; cursor >= 0; cursor -= 1) {
+    const token = tokens[cursor]!;
+    if (token.kind === "close") depth += 1;
+    else if (token.kind === "open") {
+      if (depth === 0) return token.text === "(" ? cursor : -1;
+      depth -= 1;
+    }
+  }
+  return -1;
+}
+
+/**
+ * A declaration's parentheses hold parameters, and a parameter's `= value` is a
+ * default. Three positions say the list is a declaration's, and none of them
+ * needs to know which words introduce a declaration:
+ *
+ *  - `def name(...)`, with or without a type argument list of its own.
+ *  - Two names in a row in front of it. Nothing applies one name to another in
+ *    an expression, so `component Row(...)` and `action submit(...)` are
+ *    declaration headers while `check(...)` and `if check(...)` are calls —
+ *    including the declaration forms an extension owns, which this file cannot
+ *    otherwise see.
+ *  - A single name at the head of a line whose `)` opens a block, which is
+ *    `constructor(...):` and nothing a call can be.
+ */
+function isDeclarationParameterList(tokens: readonly InlineToken[], open: number): boolean {
+  let name = open - 1;
+  const typeArguments = tokens[name];
+  if (typeArguments?.kind === "close" && typeArguments.generic === true) {
+    name = matchingGenericOpenIndex(tokens, name) - 1;
+  }
+  if (name < 0 || tokens[name]?.kind !== "word") return false;
+  const introducer = tokens[name - 1];
+  if (introducer?.text === "def") return true;
+  if (introducer?.kind === "word" && endsExpression(introducer, name === 1)) return true;
+  const close = matchingCloseIndex(tokens, open);
+  return name === 0 && close >= 0 && tokens[close + 1]?.kind === "colon";
+}
+
+function matchingGenericOpenIndex(tokens: readonly InlineToken[], close: number): number {
+  let depth = 0;
+  for (let cursor = close; cursor >= 0; cursor -= 1) {
+    const token = tokens[cursor]!;
+    if (token.kind === "close" && token.generic === true) depth += 1;
+    else if (token.kind === "open" && token.generic === true) {
+      depth -= 1;
+      if (depth === 0) return cursor;
+    }
+  }
+  return -1;
+}
+
+function matchingCloseIndex(tokens: readonly InlineToken[], open: number): number {
+  let depth = 0;
+  for (let cursor = open; cursor < tokens.length; cursor += 1) {
+    const token = tokens[cursor]!;
+    if (token.kind === "open") depth += 1;
+    else if (token.kind === "close") {
+      depth -= 1;
+      if (depth === 0) return cursor;
+    }
+  }
+  return -1;
 }
 
 function needsSpace(
@@ -807,11 +992,17 @@ function needsSpace(
   next: InlineToken | undefined,
   tokens: readonly InlineToken[],
   index: number,
+  preceding: InlineToken | undefined,
 ): boolean {
   if (current.kind === "comment") return true;
   if (previous.kind === "comment") return !previous.text.startsWith("//");
   if (current.kind === "embedded" || current.kind === "markup") {
-    return previous.kind !== "open" && previous.kind !== "comma" && previous.kind !== "colon";
+    // D60 rule 147: markup is an argument like any other after a `,` or a `:`,
+    // so it keeps the separator's space; only an opening bracket sits tight
+    // against it. A named argument's value is the one exception, because
+    // `name=value` is written as one thing.
+    if (previous.text === "=" && isNamedArgumentEquals(tokens, index - 1)) return false;
+    return previous.kind !== "open";
   }
   if (current.kind === "comma" || current.kind === "close" || current.kind === "dot" || current.kind === "colon") {
     if (current.kind === "colon" && isTernaryColon(tokens, index)) return true;
@@ -822,27 +1013,32 @@ function needsSpace(
   if (previous.kind === "comma" || previous.kind === "colon") return true;
   if (previous.kind === "open") return false;
   if (current.kind === "open") {
+    // A named argument's value is written against its name whatever the value
+    // is — `initial=0`, `combine=(total, value) => …`, `value={type: "bool"}`.
+    if (previous.text === "=" && isNamedArgumentEquals(tokens, index - 1)) return false;
     if (current.text === "{") return true;
-    const memberAccess = tokens[index - 2]?.kind === "dot";
-    if (!memberAccess && expressionStatementWords.has(previous.text)) return true;
-    if (!memberAccess && current.text === "(" && parenthesizedKeywordWords.has(previous.text)) return true;
-    if (!memberAccess && current.text === "(" && index === 1 && statementHeadKeywordWords.has(previous.text)) return true;
-    // D51 item NEW-D9: `[` after a word is an index — `values[0]` — unless the
-    // word is a keyword operator or a statement head, where the bracket opens a
-    // fresh literal. `for i in [1, 2]:` used to lose the space and stay
-    // idempotent and check-clean, so `--check` enforced the bad shape.
-    if (!memberAccess && current.text === "[" && previous.kind === "word"
-      && (parenthesizedKeywordWords.has(previous.text) || statementHeadKeywordWords.has(previous.text))) return true;
-    if (current.generic || current.text === "[" && (previous.kind === "word" || previous.kind === "close")) return false;
-    return previous.kind !== "word" && previous.kind !== "close" && previous.kind !== "literal";
+    if (current.generic) return false;
+    // A member name is a name even when it is spelled like a keyword —
+    // `values.in(other)`, `values.case[0]` — so the dot decides, not the word.
+    if (tokens[index - 2]?.kind === "dot") return false;
+    // D51 item NEW-D9, now derived: `[` and `(` after something that ends an
+    // expression apply to it — `values[0]`, `format(value)`. After a keyword
+    // they open a fresh one — `const [head, ...tail]`, `for i in [1, 2]`,
+    // `async (id: string) =>`. The whitelist this replaced had `in` but never
+    // `const`, and `--check` then enforced the shape it wrote.
+    return !endsExpression(previous, index === 1);
   }
   if (previous.kind === "close" && previous.generic) return current.text !== "?";
   if (previous.kind === "operator" || current.kind === "operator") {
+    if (current.text === "=" && isNamedArgumentEquals(tokens, index)) return false;
+    if (previous.text === "=" && isNamedArgumentEquals(tokens, index - 1)) return false;
     if (previous.text === "..." || current.text === "...") return false;
     if (current.text === "?" && isOptionalQuestion(current, next, tokens[index + 2])) return false;
     if (previous.text === "?" && isOptionalQuestion(previous, current, next)) return true;
-    if (isUnaryOperator(previous, tokens[index - 2])) return previous.text === "not" || previous.text === "await";
-    if (isUnaryOperator(current, previous)) return true;
+    if (isUnaryOperator(previous, index >= 2 ? tokens[index - 2] : preceding, index === 2)) {
+      return previous.text === "not" || previous.text === "await";
+    }
+    if (isUnaryOperator(current, previous, index === 1)) return true;
     return true;
   }
   if ((previous.kind === "word" && (binaryWords.has(previous.text) || prefixWords.has(previous.text)))
@@ -850,10 +1046,10 @@ function needsSpace(
   return true;
 }
 
-function isUnaryOperator(token: InlineToken, previous: InlineToken | undefined): boolean {
+function isUnaryOperator(token: InlineToken, previous: InlineToken | undefined, statementHead = false): boolean {
   if (prefixWords.has(token.text)) return true;
   if (token.text !== "+" && token.text !== "-") return false;
-  return !previous || previous.kind === "operator" || previous.kind === "open" || previous.kind === "comma" || previous.kind === "colon";
+  return !endsExpression(previous, statementHead);
 }
 
 function isOptionalQuestion(token: InlineToken, next: InlineToken | undefined, after: InlineToken | undefined): boolean {

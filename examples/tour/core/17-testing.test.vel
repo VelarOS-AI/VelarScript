@@ -48,8 +48,8 @@ test "toEqual is the prelude equals, so it compares data structurally":
     expect({name: "Ada", tags: ["compiler", "web"]}).toEqual({name: "Ada", tags: ["compiler", "web"]})
 
 test "a matcher may be named through its published parameter":
-    expect(scale(4)).toBe(expected = 4)
-    expect([1]).toEqual(expected = [1])
+    expect(scale(4)).toBe(expected=4)
+    expect([1]).toEqual(expected=[1])
 
 // ---------------------------------------------------------------------------
 // toBeTruthy and toBeFalsy — bool only, and they require actual true/false
@@ -70,7 +70,7 @@ test "toContain accepts text or a List":
 test "toHaveLength accepts text or a List":
     expect("Ada").toHaveLength(3)
     expect([1, 2, 3]).toHaveLength(3)
-    expect([1, 2, 3]).toHaveLength(length = 3)
+    expect([1, 2, 3]).toHaveLength(length=3)
 
 // ---------------------------------------------------------------------------
 // toMatch — text against a Unicode pattern
@@ -78,7 +78,7 @@ test "toHaveLength accepts text or a List":
 
 test "toMatch reads a Unicode string pattern":
     expect("2026-08-15").toMatch(r"^\d{4}-\d{2}-\d{2}$")
-    expect("owner: Ada").toMatch(expression = r"owner: \w+")
+    expect("owner: Ada").toMatch(expression=r"owner: \w+")
 
 // ---------------------------------------------------------------------------
 // toThrow — a synchronous callable

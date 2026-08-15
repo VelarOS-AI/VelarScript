@@ -24,10 +24,10 @@ export type PanelHandle:
 // `Component<Props>` is the zero-Handle contract; the signature describes JSX
 // props and its result must be `WebNode`. `compact?: bool` means the prop may
 // be omitted; `tracking: string?` would stay required and accept `null`.
-type TaskView = Component < (task: Task, compact?: bool) -> WebNode >
+type TaskView = Component<(task: Task, compact?: bool) -> WebNode>
 
 // The two-argument form adds the Handle a `ref` on the invocation may claim.
-type PanelView = Component < (title: string) -> WebNode, PanelHandle >
+type PanelView = Component<(title: string) -> WebNode, PanelHandle>
 
 // A prop with no default is required.
 export component TaskRow(task: Task, compact: bool = false):

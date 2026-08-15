@@ -58,8 +58,8 @@ export def loopBindings() -> string:
 // Position 4 — a named argument
 // ---------------------------------------------------------------------------
 
-const namedArguments = describe(type = "t", match = "m", from = "f", as = "a", using = "u", test = "x")
-const reorderedNamedArguments = describe(test = "x", using = "u", as = "a", from = "f", match = "m", type = "t")
+const namedArguments = describe(type="t", match="m", from="f", as="a", using="u", test="x")
+const reorderedNamedArguments = describe(test="x", using="u", as="a", from="f", match="m", type="t")
 
 // ---------------------------------------------------------------------------
 // Position 5 — a record field

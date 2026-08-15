@@ -791,7 +791,7 @@ export class ScriptDocument:
             if offset >= symbol.scopeStart and offset <= symbol.scopeEnd and not seen.has(symbol.name):
                 output.append({label: symbol.name, kind: symbol.kind, detail: symbol.type})
                 seen.add(symbol.name)
-        return output.sorted(by = item => item.label)
+        return output.sorted(by=item => item.label)
 
     def renameAt(offset: number, replacement: string) -> readonly ScriptRename:
         const symbol = self.symbolAt(offset)

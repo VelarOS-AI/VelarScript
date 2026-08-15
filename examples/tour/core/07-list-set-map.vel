@@ -22,7 +22,7 @@ export def listMembers() -> string:
     names.append("Grace")
     names.extend(["Edsger", "Margaret"])
     names.insert(1, "Barbara")
-    names.insert(value = "Alan", index = 0)
+    names.insert(value="Alan", index=0)
 
     const size = names.size
     const gotten = names.get(0)
@@ -32,12 +32,12 @@ export def listMembers() -> string:
     const removed = names.remove("Ada")
     const popped = names.pop()
     const poppedFirst = names.pop(0)
-    const poppedNamed = names.pop(index = 0)
+    const poppedNamed = names.pop(index=0)
     const copied = names.copy()
     const wholeSlice = names.slice()
     const fromStart = names.slice(1)
     const bothEnds = names.slice(1, 2)
-    const namedSlice = names.slice(end = 2, start = 1)
+    const namedSlice = names.slice(end=2, start=1)
     const occurrences = names.count("Lin")
     const position = names.index("Lin")
 
@@ -58,7 +58,7 @@ export def listCallbacks() -> string:
     // The exact predicate `x => x != null` narrows `List<T?>` to `List<T>`.
     const present: List<number> = optionals.filter(value => value != null)
     const folded = values.reduce((total, value) => total + value, 0)
-    const namedFold = values.reduce(combine = (total, value) => total + value, initial = 0)
+    const namedFold = values.reduce(combine=(total, value) => total + value, initial=0)
 
     const summed = values.sum()
     const smallest = values.min()
@@ -66,11 +66,11 @@ export def listCallbacks() -> string:
 
     const defaultOrder = values.sorted()
     const withComparator = values.sorted((left, right) => left - right)
-    const byKey = values.sorted(by = value => -value)
+    const byKey = values.sorted(by=value => -value)
     const backwards = values.reversed()
     const joined = ["a", "b"].join("-")
     const defaultJoin = ["a", "b"].join()
-    const namedJoin = ["a", "b"].join(separator = "-")
+    const namedJoin = ["a", "b"].join(separator="-")
 
     return f"{found} {anyMatch} {allMatch} {mapped.size} {flatMapped.size} {filtered.size} {present.size} {folded} {namedFold} {summed} {smallest} {largest} {defaultOrder.size} {withComparator.size} {byKey.size} {backwards.size} {joined} {defaultJoin} {namedJoin}"
 
@@ -93,7 +93,7 @@ export def drain(chunks: List<string>) -> string:
 export def boundMethod() -> number:
     const values: List<number> = []
     const append = values.append
-    append(value = 1)
+    append(value=1)
     return values.size
 
 // ---------------------------------------------------------------------------
@@ -106,7 +106,7 @@ export def setMembers() -> string:
     const fromSet = Set(initialTags)
 
     tags.add("web")
-    tags.add(value = "game")
+    tags.add(value="game")
     tags.update(["game", "tooling"])
 
     const size = tags.size
@@ -131,7 +131,7 @@ export def mapMembers() -> string:
     const users: Map<string, User> = Map()
     const user: User = {id: "user-1", name: "Ada"}
     users.set(user.id, user)
-    users.set(value = user, key = "user-2")
+    users.set(value=user, key="user-2")
 
     const scores = Map([["Ada", 9], ["Lin", 7]])
     const flags = Map({preview: true, compact: false})
@@ -166,7 +166,7 @@ export def recordMembers() -> string:
     const size = properties.size
     const gotten = properties.get("path")
     properties.set("extra", {type: "bool", description: "A flag"})
-    properties.set(key = "named", value = {type: "bool", description: "Another"})
+    properties.set(key="named", value={type: "bool", description: "Another"})
     const present = properties.has("path")
     const removed = properties.remove("extra")
     const copied = properties.copy()

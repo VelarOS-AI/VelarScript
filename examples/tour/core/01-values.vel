@@ -51,8 +51,8 @@ const discount = 5
 // Inside brackets the newline is not a statement boundary at all.
 const total = (
     basePrice
-    +shipping
-    -discount
+    + shipping
+    - discount
 )
 const rows = [
     {label: "open", count: 3},
@@ -176,8 +176,8 @@ type Profile:
 const profile: Profile = {name: "Ada", nickname: null, city: "London", country: "UK"}
 
 const {name, nickname, ...details} = profile
-const[first, ...rest] = values
-const[onlyOne] = [9]
+const [first, ...rest] = values
+const [onlyOne] = [9]
 
 const pairs: List<List<string>> = [["a", "1"], ["b", "2"]]
 

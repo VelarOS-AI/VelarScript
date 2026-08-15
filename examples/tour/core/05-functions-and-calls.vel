@@ -47,13 +47,13 @@ def countDown(value: number):
 const user: User = {id: "u-1", name: "Ada", avatar: null}
 
 const first = formatUser(user)
-const second = formatUser(user, prefix = "#")
+const second = formatUser(user, prefix="#")
 const third = formatUser(user, "!")
-const named = formatUser(user = user, prefix = "?")
+const named = formatUser(user=user, prefix="?")
 
 // Named arguments may be reordered; source expressions still evaluate left to
 // right.
-const reordered = formatUser(prefix = "~", user = user)
+const reordered = formatUser(prefix="~", user=user)
 
 // Once a fixed parameter has a default, every following fixed parameter does
 // too, so positional and named calls stay identical.
@@ -63,7 +63,7 @@ def label(text: string, prefix: string = "[", suffix: string = "]") -> string:
 const defaulted = label("a")
 const oneDefaultGiven = label("a", "<")
 const bothDefaultsGiven = label("a", "<", ">")
-const suffixOnly = label("a", suffix = ">")
+const suffixOnly = label("a", suffix=">")
 
 // ---------------------------------------------------------------------------
 // Arrows: one expression
@@ -133,7 +133,7 @@ export async def awaitsAndDetaches():
     await loadUser("u-1")
     async inferredAsyncResult()
 
-const asyncArrow = async(id: string) => await loadUser(id)
+const asyncArrow = async (id: string) => await loadUser(id)
 
 // An unannotated arrow parameter takes its type from the annotation it is
 // assigned to; with no annotation on either side it is `unknown`.

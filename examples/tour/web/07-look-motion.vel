@@ -48,34 +48,34 @@ export const slideIn = keyframes:
 // answers `Animation`. Duration must be positive, delay cannot be negative,
 // `count` is a positive integer, and `count` and `loop=true` are mutually
 // exclusive — so these two spellings are the whole repetition vocabulary.
-export const spinForever = animate(spin, 1s, easing = "linear", loop = true)
-export const spinThrice = animate(spin, 900ms, easing = "ease-in-out", count = 3)
+export const spinForever = animate(spin, 1s, easing="linear", loop=true)
+export const spinThrice = animate(spin, 900ms, easing="ease-in-out", count=3)
 
 // Closed set 1 — the seven easings.
 const easings = [
-    animate(pulse, 400ms, easing = "linear"),
-    animate(pulse, 400ms, easing = "ease"),
-    animate(pulse, 400ms, easing = "ease-in"),
-    animate(pulse, 400ms, easing = "ease-out"),
-    animate(pulse, 400ms, easing = "ease-in-out"),
-    animate(pulse, 400ms, easing = "step-start"),
-    animate(pulse, 400ms, easing = "step-end"),
+    animate(pulse, 400ms, easing="linear"),
+    animate(pulse, 400ms, easing="ease"),
+    animate(pulse, 400ms, easing="ease-in"),
+    animate(pulse, 400ms, easing="ease-out"),
+    animate(pulse, 400ms, easing="ease-in-out"),
+    animate(pulse, 400ms, easing="step-start"),
+    animate(pulse, 400ms, easing="step-end"),
 ]
 
 // Closed set 2 — the four directions.
 const directions = [
-    animate(pulse, 400ms, direction = "normal"),
-    animate(pulse, 400ms, direction = "reverse"),
-    animate(pulse, 400ms, direction = "alternate"),
-    animate(pulse, 400ms, direction = "alternate-reverse"),
+    animate(pulse, 400ms, direction="normal"),
+    animate(pulse, 400ms, direction="reverse"),
+    animate(pulse, 400ms, direction="alternate"),
+    animate(pulse, 400ms, direction="alternate-reverse"),
 ]
 
 // Closed set 3 — the four fills.
 const fills = [
-    animate(slideIn, 400ms, fill = "none"),
-    animate(slideIn, 400ms, fill = "forwards"),
-    animate(slideIn, 400ms, fill = "backwards"),
-    animate(slideIn, 400ms, fill = "both"),
+    animate(slideIn, 400ms, fill="none"),
+    animate(slideIn, 400ms, fill="forwards"),
+    animate(slideIn, 400ms, fill="backwards"),
+    animate(slideIn, 400ms, fill="both"),
 ]
 
 // Closed set 4 — the stop vocabulary itself: `from`, `to`, and the integer
@@ -94,7 +94,7 @@ export const edges = keyframes:
 // named one. Both are ordinary VelarScript calls, so named arguments work
 // normally.
 const positional = animate(slideIn, 300ms, "ease-out", 60ms)
-const named = animate(slideIn, 300ms, easing = "ease-out", delay = 60ms, count = 2, direction = "alternate", fill = "both")
+const named = animate(slideIn, 300ms, easing="ease-out", delay=60ms, count=2, direction="alternate", fill="both")
 
 // Look `animation` accepts one `Animation`, a `List<Animation>`, or `null`.
 export const animatedLook = look:
@@ -144,7 +144,7 @@ export component MotionPanel:
         <div data-polite look={politeLook}>reduced motion is honoured</div>
         <div data-transitioning look={transitioningLook}>transition on hover</div>
         <div data-transition-longhand look={transitionLonghandLook}>transition longhands</div>
-        <div data-toggled look:animation={active ? animate(pulse, 600ms, loop = true) : null}>toggled animation</div>
+        <div data-toggled look:animation={active ? animate(pulse, 600ms, loop=true) : null}>toggled animation</div>
         <p data-easings>{f"{easings.size} easings, {directions.size} directions, {fills.size} fills"}</p>
         <div data-edges look:animation={animate(edges, 800ms)}>every stop form</div>
         <button type="button" data-toggle-animation on:click={toggle}>{active ? "Stop" : "Start"}</button>

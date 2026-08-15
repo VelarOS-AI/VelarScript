@@ -49,7 +49,7 @@ export component Newsletter:
 
     def failureView() -> WebNode:
         const current = submitFailure()
-        return current != null ? <p role="alert">{current.message}</p> :<></>
+        return current != null ? <p role="alert">{current.message}</p> : <></>
 
     return <form look={formLook} ref={form} on:submit.prevent={submit} aria-busy={submit.pending}>
         <label look={labelLook} for="newsletter-email">Release newsletter</label>

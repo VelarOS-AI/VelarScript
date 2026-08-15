@@ -61,7 +61,7 @@ const animationProbeLook = look:
     height = 12px
     background = rgb(157, 172, 255)
     if not motion.reduced:
-        animation = animate(probeSpin, 2s, easing = "linear", loop = true)
+        animation = animate(probeSpin, 2s, easing="linear", loop=true)
 
 const animationToggleLook = look:
     width = 12px

@@ -33,9 +33,9 @@ const toEnd = range(3)
 const fromStart = range(1, 4)
 const stepped = range(0, 10, 2)
 const countingDown = range(10, 0, -2)
-const namedEnd = range(end = 3)
-const namedBounds = range(start = 1, end = 4)
-const namedStep = range(start = 0, end = 10, step = 2)
+const namedEnd = range(end=3)
+const namedBounds = range(start=1, end=4)
+const namedStep = range(start=0, end=10, step=2)
 
 export def loopOverRange() -> number:
     let total = 0
@@ -90,10 +90,10 @@ const joinedWith = join(words, "-")
 const repeated = repeat("a", 3)
 
 // Named arguments follow the published signatures.
-const namedChunk = chunk(values = values, size = 2)
-const namedSort = sortBy(values = rows, key = row => row.rank, descending = true)
-const namedJoin = join(values = words, separator = "-")
-const namedEnumerate = enumerate(values = words, start = 1)
+const namedChunk = chunk(values=values, size=2)
+const namedSort = sortBy(values=rows, key=row => row.rank, descending=true)
+const namedJoin = join(values=words, separator="-")
+const namedEnumerate = enumerate(values=words, start=1)
 
 // ---------------------------------------------------------------------------
 // `Math.` — 30 members, reached without an import
@@ -109,14 +109,14 @@ const smallestOf = Math.min(3, 1, 2)
 const largestOf = Math.max(3, 1, 2)
 
 const clamped = Math.clamp(11, 0, 10)
-const namedClamp = Math.clamp(value = 11, minimum = 0, maximum = 10)
+const namedClamp = Math.clamp(value=11, minimum=0, maximum=10)
 const sign = Math.sign(-4)
 const truncated = Math.trunc(3.7)
 
 const squareRoot = Math.sqrt(9)
 const cubeRoot = Math.cbrt(27)
 const raised = Math.pow(2, 8)
-const namedPow = Math.pow(base = 2, exponent = 8)
+const namedPow = Math.pow(base=2, exponent=8)
 const exponential = Math.exp(1)
 const naturalLog = Math.log(Math.e)
 const logWithBase = Math.log(8, 2)
@@ -130,7 +130,7 @@ const arcSine = Math.asin(0)
 const arcCosine = Math.acos(1)
 const arcTangent = Math.atan(0)
 const arcTangent2 = Math.atan2(1, 1)
-const namedAtan2 = Math.atan2(y = 1, x = 1)
+const namedAtan2 = Math.atan2(y=1, x=1)
 
 const asDegrees = Math.degrees(Math.pi)
 const asRadians = Math.radians(180)

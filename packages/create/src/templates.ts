@@ -102,12 +102,12 @@ export const greeting = "Hello from VelarScript Node"
 export async def handle(request: ServeRequest) -> ServeResponse:
     if request.path == "/api/hello":
         return {status: 200, json: {message: greeting, target: "node"}}
-    return fileResponse(root = "public", path = request.path, fallback = "index.html")
+    return fileResponse(root="public", path=request.path, fallback="index.html")
 `],
     ["src/main.vel", `import {serve} from "velar/serve"
 import {appName, handle} from "./app.vel"
 
-const server = await serve(handle, port = 3000)
+const server = await serve(handle, port=3000)
 print(f"{appName} is running at http://127.0.0.1:{server.port}")
 `],
     ["src/app.test.vel", `import {expect} from "velar/test"

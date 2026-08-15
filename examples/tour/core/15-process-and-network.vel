@@ -32,13 +32,13 @@ const stablePretty = Json.stableStringify(report, 2)
 const cloned = Json.clone(report)
 const clonedWithTarget = Json.clone(report, Report)
 const serializable = Json.isSerializable(report)
-const namedStringify = Json.stringify(value = report, pretty = true)
+const namedStringify = Json.stringify(value=report, pretty=true)
 
 const parsedUnknown = Json.parse(`{"id":"r-2","total":4}`)
 const parsedReport = Json.parse(`{"id":"r-2","total":4}`, Report)
 const tried = Json.tryParse("not json", Report)
 const triedWithFallback = Json.tryParse("not json", Report, report)
-const namedParse = Json.parse(text = `{"id":"r-3","total":5}`, target = Report)
+const namedParse = Json.parse(text=`{"id":"r-3","total":5}`, target=Report)
 
 // ---------------------------------------------------------------------------
 // Promise. — the resident async namespace, with `Duration` literals
@@ -64,7 +64,7 @@ async def loadReport(id: string) -> Report:
 
 export async def promiseNamespace() -> string:
     await Promise.sleep(shortWait)
-    await Promise.sleep(duration = 10ms)
+    await Promise.sleep(duration=10ms)
 
     const both = await Promise.all([loadReport("a"), loadReport("b")])
     const firstToSettle = await Promise.race([loadReport("a"), loadReport("b")])
@@ -180,7 +180,7 @@ export async def startServer() -> string:
     const server = await serve(handle, 0)
     const onPort = await serve(handle, 8080)
     const onHostAndPort = await serve(handle, 8080, "127.0.0.1")
-    const named = await serve(handler = handle, port = 0, host = "127.0.0.1")
+    const named = await serve(handler=handle, port=0, host="127.0.0.1")
     return f"{await shutDown(server)} {onPort.port} {onHostAndPort.port} {named.port}"
 
 async def shutDown(server: Server) -> number:
@@ -206,7 +206,7 @@ export async def guardsTheBodyBudget(request: ServeRequest) -> string:
 
 const apiKey = secretHeader("authorization", "API_TOKEN")
 const bearerKey = secretHeader("authorization", "API_TOKEN", "Bearer ")
-const namedSecret = secretHeader(name = "x-api-key", environment = "API_TOKEN")
+const namedSecret = secretHeader(name="x-api-key", environment="API_TOKEN")
 
 export async def httpVerbs(url: string) -> string:
     const gotten = await http.get(url).text()
