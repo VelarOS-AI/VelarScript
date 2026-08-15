@@ -2,6 +2,7 @@ import {NavLink, RouteContext, Router, lazy, route} from "velar/web"
 import {Home} from "./pages/home.vel"
 import {ConstructionFailure} from "./pages/construction-failure.vel"
 import {StateLab} from "./pages/state-lab.vel"
+import {rgb, spacing} from "velar/look"
 
 component RouteLoading:
     return <main aria-busy="true"><p>Loading page…</p></main>
@@ -25,8 +26,8 @@ const routes = [
 
 const shellLook = look:
     minHeight = 100vh
-    color = Look.rgb(232, 236, 255)
-    background = Look.rgb(11, 16, 32)
+    color = rgb(232, 236, 255)
+    background = rgb(11, 16, 32)
     fontFamily = "Inter, ui-sans-serif, system-ui, sans-serif"
 
 const navLook = look:
@@ -39,13 +40,13 @@ const navLook = look:
     paddingInline = 16px
 
 const navLinkLook = look:
-    padding = Look.spacing(7px, 10px)
+    padding = spacing(7px, 10px)
     borderRadius = 8px
-    color = Look.rgb(189, 199, 255)
+    color = rgb(189, 199, 255)
     textDecoration = "none"
     if @current:
-        color = Look.rgb(255, 255, 255)
-        background = Look.rgb(40, 53, 111)
+        color = rgb(255, 255, 255)
+        background = rgb(40, 53, 111)
 
 export component App:
     return <div class="shell" look={shellLook}>

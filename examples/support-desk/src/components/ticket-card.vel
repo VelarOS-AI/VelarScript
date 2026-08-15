@@ -1,14 +1,15 @@
 import {Link} from "velar/web"
 import {format} from "velar/time"
 import {Ticket, TicketPriority, TicketStatus} from "../domain.vel"
+import {border, rgb, spacing} from "velar/look"
 
 const cardLook = look:
     display = "grid"
     gap = 10px
     padding = 16px
-    border = Look.border(1px, Look.rgb(220, 227, 236))
+    border = border(1px, rgb(220, 227, 236))
     borderRadius = 15px
-    background = Look.rgb(255, 255, 255)
+    background = rgb(255, 255, 255)
 
 const rowLook = look:
     display = "flex"
@@ -22,10 +23,10 @@ const badgesLook = look:
 
 def badgeLook(urgent: bool = false) -> Look:
     return look:
-        padding = Look.spacing(4px, 7px)
+        padding = spacing(4px, 7px)
         borderRadius = 9999px
-        color = urgent ? Look.rgb(165, 40, 40) : Look.rgb(83, 96, 121)
-        background = urgent ? Look.rgb(255, 237, 237) : Look.rgb(237, 241, 247)
+        color = urgent ? rgb(165, 40, 40) : rgb(83, 96, 121)
+        background = urgent ? rgb(255, 237, 237) : rgb(237, 241, 247)
         fontSize = 11px
         fontWeight = 800
 
@@ -35,12 +36,12 @@ const titleLook = look:
 
 const bodyLook = look:
     margin = 0
-    color = Look.rgb(104, 117, 138)
+    color = rgb(104, 117, 138)
     fontSize = 13px
     lineHeight = 1.45
 
 const linkLook = look:
-    color = Look.rgb(49, 87, 213)
+    color = rgb(49, 87, 213)
     fontSize = 13px
     fontWeight = 800
     textDecoration = "none"

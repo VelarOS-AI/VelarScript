@@ -20,7 +20,6 @@ import {
   VELAR_REACTIVE_BRIDGE_MODULE_SOURCE,
   VELAR_RUNTIME_REGISTRY_KEY,
   VELAR_RUNTIME_SCHEMA_VERSION,
-  TEXT_NAMESPACE_MEMBERS,
   VELAR_STRICT_JSON_RUNTIME,
   VELAR_TEXT_METHOD_RUNTIME,
   VELAR_TYPE_REGISTRY_RUNTIME,
@@ -143,7 +142,7 @@ const coreModuleInterfaces = new Map<string, ModuleInterface>([
     ["join", apiIntrinsic("collections.join", ["values", "separator"], [listString, stringType], stringType, 1)],
     ["repeat", apiIntrinsic("collections.repeat", ["value", "count"], [anyType, numberType], listAny)],
   ]))],
-  ["velar/text", permanentNamespace(moduleInterface(new Map([
+  ["velar/text", moduleInterface(new Map([
     ["trimStart", apiFunction(["value"], [stringType], stringType)],
     ["trimEnd", apiFunction(["value"], [stringType], stringType)],
     ["capitalize", apiFunction(["value"], [stringType], stringType)],
@@ -167,7 +166,7 @@ const coreModuleInterfaces = new Map<string, ModuleInterface>([
     ["findMatches", apiFunction(["value", "expression", "options"], [stringType, stringType, patternOptionsType], textMatchArrayType, 2)],
     ["replaceMatches", apiFunction(["value", "expression", "replacement", "options"], [stringType, stringType, stringType, patternOptionsType], stringType, 3)],
     ["splitPattern", apiFunction(["value", "expression", "options"], [stringType, stringType, patternOptionsType], listString, 2)],
-  ])), "Text", TEXT_NAMESPACE_MEMBERS)],
+  ]))],
   ["velar/math", moduleInterface(new Map([
     ["pi", numberType], ["e", numberType], ["tau", numberType], ["infinity", numberType],
     // min and max are pure rest calls and therefore have no named rest value.
@@ -199,15 +198,15 @@ const coreModuleInterfaces = new Map<string, ModuleInterface>([
     ["gcd", apiFunction(["left", "right"], [numberType, numberType], numberType)],
     ["lcm", apiFunction(["left", "right"], [numberType, numberType], numberType)],
   ]))],
-  ["velar/json", permanentNamespace(moduleInterface(new Map([
+  ["velar/json", moduleInterface(new Map([
     ["parse", apiIntrinsic("json.parse", ["text", "target"], [stringType, anyType], unknownType, 1)],
     ["tryParse", apiIntrinsic("json.tryParse", ["text", "target", "fallback"], [stringType, anyType, anyType], unknownType, 1)],
     ["stringify", apiIntrinsic("json.stringify", ["value", "pretty"], [anyType, { kind: "union", members: [boolType, numberType] }], stringType, 1)],
     ["stableStringify", apiIntrinsic("json.stableStringify", ["value", "pretty"], [anyType, { kind: "union", members: [boolType, numberType] }], stringType, 1)],
     ["clone", apiIntrinsic("json.clone", ["value", "target"], [anyType, anyType], anyType, 1)],
     ["isSerializable", apiFunction(["value"], [anyType], boolType)],
-  ])), "Json", ["parse", "tryParse", "stringify", "stableStringify", "clone", "isSerializable"])],
-  ["velar/async", permanentNamespace(moduleInterface(new Map([
+  ]))],
+  ["velar/async", moduleInterface(new Map([
     ["sleep", apiFunction(["duration"], [durationType], promise(nullType))],
     ["all", apiIntrinsic("async.all", ["values"], [anyType], promise(anyType))],
     ["race", apiIntrinsic("async.race", ["values"], [listAny], promise(anyType))],
@@ -215,7 +214,7 @@ const coreModuleInterfaces = new Map<string, ModuleInterface>([
     ["retry", apiIntrinsic("async.retry", ["task", "attempts", "delay"], [anyType, numberType, durationType], promise(anyType), 1)],
     ["map", apiIntrinsic("async.map", ["values", "worker", "concurrency"], [listAny, anyType, numberType], promise(listAny), 2)],
     ["series", apiIntrinsic("async.series", ["tasks"], [listAny], promise(listAny))],
-  ])), "Promise", ["all", "race", "sleep", "timeout", "retry", "map", "series"])],
+  ]))],
   ["velar/url", moduleInterface(new Map([
     ["parse", apiFunction(["value", "base"], [stringType, stringType], urlInfoType, 1)],
     // join is a pure rest call, so its segments stay positional.
@@ -261,10 +260,6 @@ function moduleInterface(
   namedTypes: ReadonlyMap<string, ReadonlyMap<string, ValueType>> = new Map(),
 ): ModuleInterface {
   return { exports, mutableExports: new Set(), reactiveExports: new Map(), reExports: new Map(), namedTypes, namedTypeIdentities: new Map(), typeAliases: new Map(), enums: new Map(), classes, tests: [], extensionExports: new Map(), extensionData: new Map() };
-}
-
-function permanentNamespace(interface_: ModuleInterface, name: string, members: readonly string[]): ModuleInterface {
-  return { ...interface_, permanentNamespace: { name, members: new Set(members) } };
 }
 
 export function standardModuleInterfaces(extensions: readonly CompilerExtension[] = []): ReadonlyMap<string, ModuleInterface> {

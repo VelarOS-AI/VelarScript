@@ -3,15 +3,16 @@ import {http} from "velar/http"
 
 import {lazy} from "velar/web"
 import {ChartScale, TrafficPoint} from "./chart.vel"
+import {border, color, minmax, repeat, rgb, rgba, shadow, spacing, tracks} from "velar/look"
 
-const ink = Look.rgb(23, 32, 51)
-const inkSoft = Look.rgb(96, 112, 139)
-const paper = Look.rgb(243, 246, 251)
-const surface = Look.rgb(255, 255, 255)
-const rule = Look.rgb(219, 228, 240)
-const primary = Look.rgb(35, 87, 217)
-const success = Look.rgb(22, 134, 95)
-const danger = Look.rgb(192, 61, 83)
+const ink = rgb(23, 32, 51)
+const inkSoft = rgb(96, 112, 139)
+const paper = rgb(243, 246, 251)
+const surface = rgb(255, 255, 255)
+const rule = rgb(219, 228, 240)
+const primary = rgb(35, 87, 217)
+const success = rgb(22, 134, 95)
+const danger = rgb(192, 61, 83)
 
 def formatValue(value: number) -> string:
     return str(value)
@@ -57,10 +58,10 @@ async def loadDashboard() -> DashboardData:
 
 const metricLook = look:
     padding = 20px
-    border = Look.border(1px, rule)
+    border = border(1px, rule)
     borderRadius = 16px
     background = surface
-    boxShadow = Look.shadow(0px, 12px, 30px, Look.rgba(32, 48, 80, 0.05))
+    boxShadow = shadow(0px, 12px, 30px, rgba(32, 48, 80, 0.05))
 
 const metricValueLook = look:
     marginBlock = 8px
@@ -83,10 +84,10 @@ component MetricCard(metric: Metric):
 const chartSummaryLook = look:
     display = "grid"
     gap = 3px
-    padding = Look.spacing(8px, 10px)
+    padding = spacing(8px, 10px)
     borderRadius = 8px
     color = ink
-    background = Look.rgb(234, 240, 255)
+    background = rgb(234, 240, 255)
     fontFamily = "Inter, ui-sans-serif, system-ui, sans-serif"
     fontSize = 11px
 
@@ -101,7 +102,7 @@ component ChartSummary(peakLabel: string):
 const chartShellLook = look:
     marginTop = 22px
     padding = 22px
-    border = Look.border(1px, rule)
+    border = border(1px, rule)
     borderRadius = 16px
     background = surface
 
@@ -129,7 +130,7 @@ component TrafficChart(points: List<TrafficPoint>, maxValue: number, peakLabel: 
 const dashboardLook = look:
     width = 100%
     minHeight = 100vh
-    padding = Look.spacing(48px, 16px)
+    padding = spacing(48px, 16px)
     color = ink
     background = paper
     fontFamily = "Inter, ui-sans-serif, system-ui, sans-serif"
@@ -145,8 +146,8 @@ const toolbarLook = look:
     gap = 16px
 
 const refreshLook = look:
-    padding = Look.spacing(10px, 14px)
-    border = Look.border(0px, Look.color("transparent"))
+    padding = spacing(10px, 14px)
+    border = border(0px, color("transparent"))
     borderRadius = 10px
     color = surface
     background = primary
@@ -156,15 +157,15 @@ const refreshLook = look:
 
 const gridLook = look:
     display = "grid"
-    gridTemplateColumns = Look.repeat(4, Look.minmax(0px, 1fr))
+    gridTemplateColumns = repeat(4, minmax(0px, 1fr))
     gap = 16px
     marginTop = 22px
 
     if viewport.width <= 860px:
-        gridTemplateColumns = Look.repeat(2, Look.minmax(0px, 1fr))
+        gridTemplateColumns = repeat(2, minmax(0px, 1fr))
 
     if viewport.width <= 520px:
-        gridTemplateColumns = Look.tracks(1fr)
+        gridTemplateColumns = tracks(1fr)
 
 def statusLook(failed: bool) -> Look:
     return look:

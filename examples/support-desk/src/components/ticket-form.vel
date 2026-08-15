@@ -2,38 +2,39 @@ import {announce} from "velar/web"
 import {clearErrors, errors, focusFirstError, read, reset, setError} from "velar/forms"
 import {TicketDraft, TicketPriority} from "../domain.vel"
 import {addTicket} from "../store.vel"
+import {border, color, rgb, rgba, shadow, spacing, tracks} from "velar/look"
 
 const formLook = look:
     display = "grid"
     gap = 12px
     padding = 18px
-    border = Look.border(1px, Look.rgb(220, 227, 236))
+    border = border(1px, rgb(220, 227, 236))
     borderRadius = 18px
-    background = Look.rgb(255, 255, 255)
-    boxShadow = Look.shadow(0px, 16px, 44px, Look.rgba(42, 55, 79, 0.07))
+    background = rgb(255, 255, 255)
+    boxShadow = shadow(0px, 16px, 44px, rgba(42, 55, 79, 0.07))
 
 const gridLook = look:
     display = "grid"
-    gridTemplateColumns = Look.tracks(1.2fr, 1fr, 0.7fr, 0.7fr)
+    gridTemplateColumns = tracks(1.2fr, 1fr, 0.7fr, 0.7fr)
     gap = 10px
 
     if viewport.width <= 820px:
-        gridTemplateColumns = Look.tracks(1fr)
+        gridTemplateColumns = tracks(1fr)
 
 const labelLook = look:
     display = "grid"
     gap = 6px
-    color = Look.rgb(80, 93, 114)
+    color = rgb(80, 93, 114)
     fontSize = 12px
     fontWeight = 800
 
 const fieldLook = look:
     minHeight = 42px
-    border = Look.border(1px, Look.rgb(207, 216, 230))
+    border = border(1px, rgb(207, 216, 230))
     borderRadius = 10px
-    padding = Look.spacing(9px, 11px)
-    color = Look.rgb(23, 32, 51)
-    background = Look.rgb(251, 252, 254)
+    padding = spacing(9px, 11px)
+    color = rgb(23, 32, 51)
+    background = rgb(251, 252, 254)
 
 const textareaLook = look:
     ...fieldLook
@@ -48,11 +49,11 @@ const checkboxLook = look:
     minHeight = "auto"
 const submitLook = look:
     justifySelf = "start"
-    border = Look.border(0px, Look.color("transparent"))
+    border = border(0px, color("transparent"))
     borderRadius = 10px
-    padding = Look.spacing(10px, 15px)
-    color = Look.rgb(255, 255, 255)
-    background = Look.rgb(49, 87, 213)
+    padding = spacing(10px, 15px)
+    color = rgb(255, 255, 255)
+    background = rgb(49, 87, 213)
     fontWeight = 800
     cursor = "pointer"
 export component TicketForm:

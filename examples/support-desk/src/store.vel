@@ -1,4 +1,3 @@
-import {max, min} from "velar/math"
 import {http} from "velar/http"
 import {storage} from "velar/storage"
 import {DeskData, Ticket, TicketCatalog, TicketDraft, TicketFilter, TicketSort, createTicket, findTicket as findInList, pageTickets, resolveTicket as resolveInList, selectTickets} from "./domain.vel"
@@ -14,13 +13,13 @@ export state sort: TicketSort = TicketSort.recent
 export state page = 1
 export const selectedTickets: () -> List<Ticket> = computed(() => selectTickets(tickets, query, filter, sort))
 export const visibleTickets: () -> List<Ticket> = computed(() => pageTickets(selectedTickets(), page, pageSize))
-export const totalPages: () -> number = computed(() => max(1, (selectedTickets().size / pageSize).ceil()))
+export const totalPages: () -> number = computed(() => Math.max(1, (selectedTickets().size / pageSize).ceil()))
 
 def persist() -> null:
     deskStorage.set("desk", {tickets})
 
 def clampPage() -> null:
-    page = min(max(1, page), totalPages())
+    page = Math.min(Math.max(1, page), totalPages())
 
 export async def loadTickets() -> List<Ticket>:
     if tickets.size > 0:

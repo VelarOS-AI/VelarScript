@@ -799,15 +799,12 @@ const add: (
 });
 
 test("async arrows infer standard async workers and Promises cannot leak into JSX", () => {
-  const asyncModule = standardModuleInterface("velar/async")!;
   const result = compile(`
-import {map} from "velar/async"
-
 async def double(value: number) -> number:
     return value * 2
 
-const labels = await map([1, 2], async value => f"item:{await double(value)}")
-`.trimStart(), { analysis: { imports: new Map([["map", asyncModule.exports.get("map")!]]) } });
+const labels = await Promise.map([1, 2], async value => f"item:{await double(value)}")
+`.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
   assert.equal(result.semanticIndex.symbols.find((item) => item.name === "labels")?.type, "List<string>");
@@ -1039,31 +1036,23 @@ const loaded = await hold(box)
 `.trimStart());
   assert.ok(generic.diagnostics.some((item) => item.code === "VEL4024"), JSON.stringify(generic.diagnostics));
 
-  const asyncModule = standardModuleInterface("velar/async")!;
   const retrying = compile(`
-import {retry} from "velar/async"
-
 type Box:
     then: () -> number
 
-const loaded = await retry(() => {then: () => 7})
-`.trimStart(), { analysis: { imports: new Map([["retry", asyncModule.exports.get("retry")!]]) } });
+const loaded = await Promise.retry(() => {then: () => 7})
+`.trimStart());
   assert.ok(retrying.diagnostics.some((item) => item.code === "VEL4024"), JSON.stringify(retrying.diagnostics));
 
   const mapping = compile(`
-import {map, series} from "velar/async"
-
 type Box:
     then: () -> number
 
-const mapped = await map([1], value => {then: () => value})
-const sequenced = await series([() => {then: () => 2}])
+const mapped = await Promise.map([1], value => {then: () => value})
+const sequenced = await Promise.series([() => {then: () => 2}])
 print(mapped[0].then())
 print(sequenced[0].then())
-`.trimStart(), { analysis: { imports: new Map([
-    ["map", asyncModule.exports.get("map")!],
-    ["series", asyncModule.exports.get("series")!],
-  ]) } });
+`.trimStart());
   assert.deepEqual(mapping.diagnostics, []);
   assert.equal(mapping.semanticIndex.symbols.find((item) => item.name === "mapped")?.type, "List<{ then: () -> number }>");
   assert.equal(mapping.semanticIndex.symbols.find((item) => item.name === "sequenced")?.type, "List<{ then: () -> number }>");
@@ -5398,10 +5387,9 @@ test("CLI runs Core programs on Node with forwarded arguments and propagated exi
 
   const printPath = join(directory, "printing.vel");
   await writeFile(printPath, `
-import {clamp} from "velar/math"
 import {iso} from "velar/time"
 
-print(Json.stringify({limit: clamp(12, 0, 10)}))
+print(Json.stringify({limit: Math.clamp(12, 0, 10)}))
 print(iso(0))
 `.trimStart(), "utf8");
   const printed = spawnSync(process.execPath, [cli, "run", printPath], { cwd: process.cwd(), encoding: "utf8" });
@@ -10562,7 +10550,6 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
   const output = join(directory, "dist");
   await writeFile(entry, `
 import {chunk, compact, enumerate, every, find, flatten, groupBy, join as joinItems, partition, repeat as repeatValue, sortBy, sum, unique, zip} from "velar/collections"
-import {clamp, degrees, gcd, lcm, max as maxNumber, min as minNumber, pi, radians} from "velar/math"
 import {decode, encode, isExternal, join as joinUrl, parse as parseUrl, parseQuery, query, withHash, withQuery} from "velar/url"
 import {iso, parse as parseTime, parts, utc} from "velar/time"
 import {level as logLevel, log, logger, setLevel, useSink} from "velar/log"
@@ -10635,13 +10622,13 @@ try:
 catch error:
     print(error.name)
 
-print(pi.toFixed(2))
-print(clamp(12, 0, 10))
-print(minNumber(4, 2, 8))
-print(maxNumber(4, 2, 8))
-print(degrees(radians(90)).round())
-print(gcd(18, 12))
-print(lcm(6, 8))
+print(Math.pi.toFixed(2))
+print(Math.clamp(12, 0, 10))
+print(Math.min(4, 2, 8))
+print(Math.max(4, 2, 8))
+print(Math.degrees(Math.radians(90)).round())
+print(Math.gcd(18, 12))
+print(Math.lcm(6, 8))
 
 const parsed = Json.parse("{\\"name\\":\\"Nova\\",\\"role\\":\\"admin\\"}", User)
 const copied = Json.clone(parsed, User)
@@ -19640,10 +19627,7 @@ async for value in Pull():
 });
 
 test("range named signatures and collection constructors keep checked Core boundaries", () => {
-  const rangeType = standardModuleInterface("velar/collections")!.exports.get("range")!;
   const result = compileCore(`
-import {range} from "velar/collections"
-
 const forward = range(end = 4)
 const descending = range(start = 5, end = 0, step = -2)
 const pairs = Map([["Ada", 9], ["Lin", 7]])
@@ -19652,20 +19636,21 @@ print(f"{forward.size}:{forward[0]}:{forward[3]}")
 print(f"{descending.size}:{descending[0]}:{descending[2]}")
 print(pairs.get("Lin") ?? 0)
 print(record.get("second") ?? 0)
-`.trimStart(), { analysis: { imports: new Map([["range", rangeType]]) } });
+`.trimStart());
   assert.deepEqual(result.diagnostics, []);
   assert.equal(result.semanticIndex.symbols.find((symbol) => symbol.name === "pairs")?.type, "Map<string, number>");
   assert.equal(result.semanticIndex.symbols.find((symbol) => symbol.name === "record")?.type, "Map<string, number>");
   const collectionRuntime = standardModuleSource("velar/collections") ?? "";
-  const execution = executeModule(`${collectionRuntime}\n${(result.code ?? "").replace(/^import .*velar\/collections.*;\n/mu, "")}`);
+  // The prelude `range` lowers to a runtime import; the concatenated runtime
+  // already defines it, so the import line becomes a local alias.
+  const execution = executeModule(`${collectionRuntime}\n${(result.code ?? "").replace(/^import .*velar\/collections.*;\n/mu, "const __velarRange = range;\n")}`);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "4:0:3\n3:5:1\n7\n2\n");
 
   const invalid = compileCore(`
-import {range} from "velar/collections"
 const missing = range(start = 1)
 const malformed = Map([["only"]])
-`.trimStart(), { analysis: { imports: new Map([["range", rangeType]]) } });
+`.trimStart());
   assert.ok(invalid.diagnostics.some((item) => /Named range calls use range\(end/u.test(item.message)));
   assert.ok(invalid.diagnostics.some((item) => /exactly \[key, value\]/u.test(item.message)));
 });
@@ -25638,9 +25623,10 @@ const broken = look:
   assert.match(dynamic.code ?? "", /if \(value == null\) __velarDomStyleClear\(element, /u);
 });
 
-test("Look builders use the permanent namespace and units calculate outside Look", () => {
+test("Look builders are named imports and units calculate outside Look", () => {
   const result = compile(`
-const danger = Look.rgb(226, 75, 75)
+import {rgb, spacing} from "velar/look"
+const danger = rgb(226, 75, 75)
 const base: Length = 8px
 const wide: Length = base * 2
 const viewportWide: Length = 25vw * 2
@@ -25648,7 +25634,7 @@ const ratio: Percentage = 75%
 const fluid: LengthPercentage = ratio - 2rem
 const duration: Duration = 1s + 200ms
 const angle: Angle = 0.5turn + 90deg
-const padding = Look.spacing(fluid, wide)
+const padding = spacing(fluid, wide)
 
 print(danger)
 print(viewportWide)
@@ -25657,7 +25643,7 @@ print(angle)
 print(padding)
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /import \* as __velarLookNamespace from "velar\/look"/u);
+  assert.match(result.code ?? "", /import \{[^}]*\} from "velar\/look"/u);
   assert.doesNotMatch(result.code ?? "", /__velarLookCall/u);
   assert.match(result.code ?? "", /__velarLookMath/u);
   const execution = executeWithLookModule(result.code ?? "");
@@ -25716,17 +25702,19 @@ test("project CSS has one explicit before-Look-after order across module boundar
   await writeFile(join(directory, "feature.css"), ".feature { order: 2; }", "utf8");
   await writeFile(join(directory, "feature-after.css"), ".feature-after { order: 5; }", "utf8");
   await writeFile(join(directory, "feature.vel"), `
+import {rgb} from "velar/look"
 import css unsafe "./feature.css" before look
 import css unsafe "./feature-after.css" after look
 export const featureLook = look:
-    color = Look.rgb(1, 2, 3)
+    color = rgb(1, 2, 3)
 `.trimStart(), "utf8");
   await writeFile(entry, `
+import {rgb} from "velar/look"
 import {featureLook} from "./feature.vel"
 import css unsafe "./base.css" before look
 import css unsafe "./base-after.css" after look
 const appLook = look:
-    background = Look.rgb(4, 5, 6)
+    background = rgb(4, 5, 6)
 component App:
     return <main look={[featureLook, appLook]}>App</main>
 `.trimStart(), "utf8");

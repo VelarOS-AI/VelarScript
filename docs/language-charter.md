@@ -2182,7 +2182,7 @@ invalidate facts on the successful continuation.
 VelarScript modules use explicit imports and exports:
 
 ```velar
-import * as math from "velar/math"
+import * as url from "velar/url"
 
 export const version = "1"
 export def encode(value: unknown) -> string:
@@ -2985,17 +2985,19 @@ property names, VelarScript expressions, typed unit values, composition, conditi
 element states, and explicit pseudo-element targets.
 
 ```velar
+import {alpha, border, rgb, spacing} from "velar/look"
+
 const colors = {
-    text: Look.rgb(24, 31, 46),
-    surface: Look.rgb(248, 250, 255),
-    active: Look.rgb(228, 235, 255),
+    text: rgb(24, 31, 46),
+    surface: rgb(248, 250, 255),
+    active: rgb(228, 235, 255),
 }
 
 export const cardLook = look:
     display = "grid"
     gap = 12px
-    padding = Look.spacing(16px, 20px)
-    border = Look.border(1px, Look.alpha(colors.text, 0.12))
+    padding = spacing(16px, 20px)
+    border = border(1px, alpha(colors.text, 0.12))
     borderRadius = 14px
     color = colors.text
     background = colors.surface
@@ -3032,14 +3034,13 @@ undefined color or spacing token instead of guessing that it was a CSS word.
 
 ### Builders
 
-Look builders live on the permanent `Look.` namespace and need no import, and
-they are not magic names that appear only inside a `look:` block. A builder may
-be aliased (`const make = Look.rgb`), passed to another function, returned, and
-called outside Look like any other VelarScript value. `velar/look` remains an
-importable module only for its visual Type objects, such as `Length` and
-`Color`.
+Look builders are named imports from `velar/look`, and they are not magic names
+that appear only inside a `look:` block. A builder may be aliased
+(`const make = rgb`), passed to another function, returned, and called outside
+Look like any other VelarScript value. The same module exports the visual Type
+objects, such as `Length` and `Color`.
 
-The namespace provides a small checked builder set:
+The module provides a small checked builder set:
 
 - colors: `color`, `rgb`, `rgba`, `hsl`, `alpha`, `lighten`, `darken`
 - visuals: `border`, `shadow`, `linearGradient`, `asset`
@@ -3049,7 +3050,9 @@ The namespace provides a small checked builder set:
 Named arguments work normally:
 
 ```velar
-const raised = Look.shadow(0px, 12px, 32px, Look.rgba(0, 0, 0, 0.16), spread=0px, inset=false)
+import {rgba, shadow} from "velar/look"
+
+const raised = shadow(0px, 12px, 32px, rgba(0, 0, 0, 0.16), spread=0px, inset=false)
 ```
 
 Builder inputs are checked visual values, not JavaScript coercion points.
@@ -3106,8 +3109,10 @@ Simple one-off base properties may be written as JSX directives. They use the
 same camelCase property names and property types as a full Look:
 
 ```velar
-const paper = Look.rgb(251, 250, 247)
-const primary = Look.rgb(45, 79, 190)
+import {rgb, spacing} from "velar/look"
+
+const paper = rgb(251, 250, 247)
+const primary = rgb(45, 79, 190)
 
 const controlLook = look:
     display = "inline-flex"
@@ -3118,7 +3123,7 @@ export component Example:
         <div
             look:display="grid"
             look:gap={12px}
-            look:padding={Look.spacing(16px, 20px)}
+            look:padding={spacing(16px, 20px)}
             look:borderRadius={14px}
         >Content</div>
         <button
@@ -3143,7 +3148,9 @@ VelarScript also accepts checked property-level inline Style when an existing
 Web integration requires native inline priority:
 
 ```velar
-const text = Look.rgb(35, 39, 47)
+import {rgb} from "velar/look"
+
+const text = rgb(35, 39, 47)
 const cardLook = look:
     borderRadius = 12px
 
@@ -3187,14 +3194,16 @@ Look values are ordinary exportable values and may be composed once at their
 outer level:
 
 ```velar
+import {rgb, spacing} from "velar/look"
+
 export const controlLook = look:
-    padding = Look.spacing(10px, 14px)
+    padding = spacing(10px, 14px)
     borderRadius = 10px
 
 export const primaryControlLook = look:
     ...controlLook
-    color = Look.rgb(255, 255, 255)
-    background = Look.rgb(45, 79, 190)
+    color = rgb(255, 255, 255)
+    background = rgb(45, 79, 190)
 ```
 
 Later declarations in the composed result follow normal CSS cascade order.
@@ -3238,13 +3247,15 @@ whole media vocabulary; container queries, print, and orientation have no Look
 spelling. Media subjects compose with element states and each other:
 
 ```velar
+import {rgb} from "velar/look"
+
 const compact = 720px
 
 const panelLook = look:
-    background = Look.rgb(255, 255, 255)
+    background = rgb(255, 255, 255)
 
     if scheme.dark:
-        background = Look.rgb(29, 32, 41)
+        background = rgb(29, 32, 41)
 
     if scheme.dark and viewport.width <= compact:
         padding = 12px
@@ -3504,7 +3515,7 @@ Their diagnostics name this boundary and point to module-level
 | Float layout | `float`, `clear` | Legacy float layout is outside the Grid and Flex model. |
 | Table formatting | `tableLayout`, `borderCollapse`, `borderSpacing`, `captionSide`, `emptyCells` | A typed table-layout contract needs evidence before admission. |
 | Multi-column layout | `columns`, `columnCount`, `columnWidth`, `columnFill`, `columnRule`, `columnRuleColor`, `columnRuleStyle`, `columnRuleWidth`, `columnSpan` | Its value and fragmentation model is not yet typed. |
-| Animation longhands | `animationName`, `animationDuration`, `animationTimingFunction`, `animationDelay`, `animationIterationCount`, `animationDirection`, `animationFillMode`, `animationPlayState`, `animationTimeline`, `animationRangeStart`, `animationRangeEnd` | `keyframes:` plus `Look.animate(...)` owns the checked animation contract. |
+| Animation longhands | `animationName`, `animationDuration`, `animationTimingFunction`, `animationDelay`, `animationIterationCount`, `animationDirection`, `animationFillMode`, `animationPlayState`, `animationTimeline`, `animationRangeStart`, `animationRangeEnd` | `keyframes:` plus `animate(...)` owns the checked animation contract. |
 | Generated content | `counterIncrement`, `counterReset`, `counterSet`, `quotes` | Counters and quoting are not modeled as checked Look values. |
 | Paged fragmentation | `breakAfter`, `breakBefore`, `breakInside`, `orphans`, `widows` | Paged and fragmented media are outside the Web application target. |
 
@@ -3520,6 +3531,8 @@ keyframe structures receive one stable generated CSS name and one emitted rule,
 including when used through another module's checked interface.
 
 ```velar
+import {animate} from "velar/look"
+
 export const spin = keyframes:
     from:
         rotate = 0deg
@@ -3530,10 +3543,10 @@ export const spin = keyframes:
 
 export const spinningLook = look:
     if not motion.reduced:
-        animation = Look.animate(spin, 1s, easing="linear", loop=true)
+        animation = animate(spin, 1s, easing="linear", loop=true)
 ```
 
-`Look.animate(frames, duration, easing?, delay?, count?, loop?, direction?, fill?)`
+`animate(frames, duration, easing?, delay?, count?, loop?, direction?, fill?)`
 returns `Animation`. Duration must be positive, delay cannot be negative,
 `count` is a positive integer, and `count` and `loop=true` are mutually
 exclusive. Easing is one of `linear`, `ease`, `ease-in`, `ease-out`,
@@ -3542,7 +3555,7 @@ exclusive. Easing is one of `linear`, `ease`, `ease-in`, `ease-out`,
 or `both`. Literal options are checked during compilation. Look `animation`
 accepts `Animation`, `List<Animation>`, or `null`, never a CSS animation string.
 An element binding such as
-`look:animation={active ? Look.animate(spin, 1s) : null}` adds and removes the native
+`look:animation={active ? animate(spin, 1s) : null}` adds and removes the native
 animation as reactive state changes.
 
 ### Native elements and extension text forms
@@ -3583,29 +3596,46 @@ permanent name is a name every reader is assumed to know without being told.
 An `import` line is therefore both an audit of what a module touches and a
 statement that this program chose a particular toolbox.
 
+A third rule decides the prefix itself: **a permanent namespace must mirror a
+namespace-shaped global the host language already has.** `JSON`, `Promise`, and
+`Math` are spellings every JavaScript author already knows, and a prefix that
+carries that recognition earns its four characters. A prefix we invented does
+not, however tidy it looks — which is why `Look.` was withdrawn and its
+builders went back to being named imports from `velar/look`.
+
 Four permanent namespaces carry the pure computation nearly every program
 needs, and a program reaches every one of them without writing an import:
 
-| Namespace | Members |
-| --- | --- |
-| `Json.` | `parse`, `tryParse`, `stringify`, `stableStringify`, `clone`, `isSerializable` |
-| `Promise.` | `all`, `race`, `sleep`, `timeout`, `retry`, `map`, `series` |
-| `Text.` | `trimStart`, `trimEnd`, `capitalize`, `title`, `lines`, `lineStarts`, `chunks`, `words`, `slug`, `normalize`, `truncate`, `indent`, `dedent`, `normalizeWhitespace`, `utf8Size`, `escapeHtml`, `codePoint`, `fromCodePoint`, `matches`, `findMatch`, `findMatches`, `replaceMatches`, `splitPattern` |
-| `Look.` | the Web builder roster (`rgb`, `spacing`, `border`, and the rest of section 17) |
+| Namespace | Mirrors | Members |
+| --- | --- | --- |
+| `Json.` | `JSON` | `parse`, `tryParse`, `stringify`, `stableStringify`, `clone`, `isSerializable` |
+| `Promise.` | `Promise` | `all`, `race`, `sleep`, `timeout`, `retry`, `map`, `series` |
+| `Math.` | `Math` | `pi`, `e`, `tau`, `infinity`, `min`, `max`, `clamp`, `sign`, `trunc`, `sqrt`, `cbrt`, `pow`, `exp`, `log`, `log2`, `log10`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `degrees`, `radians`, `hypot`, `random`, `randomInt`, `gcd`, `lcm` |
+| `Text.` | `String` members beyond the core | `trimStart`, `trimEnd`, `capitalize`, `title`, `lines`, `lineStarts`, `chunks`, `words`, `slug`, `normalize`, `truncate`, `indent`, `dedent`, `normalizeWhitespace`, `utf8Size`, `escapeHtml`, `codePoint`, `fromCodePoint`, `matches`, `findMatch`, `findMatches`, `replaceMatches`, `splitPattern` |
+
+The roster is closed. Every namespace-shaped JavaScript global was checked
+against it: `Object` is answered by record fields and `Record<T>`, `Array` by
+List methods, `Number` by number methods and the prelude `number(text)`,
+`String` by string methods and `Text.`, `console` by `print`, and `Date` is
+deliberately an import because reading the clock reaches outside the program.
+A new permanent namespace has to prove it mirrors a host global first.
 
 The prelude adds `print`, `str`, `number`, `equals`, and `range` as bare names.
 
-A permanent namespace is vocabulary, not a value. `Json`, `Promise`, `Text`,
-and `Look` are legal in exactly one position — the head of a member access,
+A permanent namespace is vocabulary, not a value. `Json`, `Promise`, `Math`,
+and `Text` are legal in exactly one position — the head of a member access,
 `Json.parse(text)` — and rejected everywhere else: passed as an argument,
 stored in a binding, spread, destructured, or exported. Allowing any of those
 would invent a second and third spelling for the same functions, which rule 3
 exists to prevent, and there is no program that needs one. The members
 themselves are ordinary values: `const encode = Json.stringify` is fine.
 
-`velar/collections`, `velar/math`, `velar/url`, and `velar/test` are pure too,
-and they stay behind an import on purpose: they are toolboxes a program
+`velar/collections`, `velar/url`, `velar/test`, and Web's `velar/look` are pure
+too, and they stay behind an import on purpose: they are toolboxes a program
 deliberately reaches for rather than vocabulary every program already speaks.
+The import list at the top of a file is also worth something on its own — it
+tells a reader which visual and textual vocabulary this file uses, which a
+zero-import namespace cannot.
 `velar/time`, `velar/id`, and `velar/log` reach the clock, entropy, and the
 outside world, so they are not even eligible.
 
@@ -3635,4 +3665,4 @@ branch narrows `value` to the validated type. An exported `computed` value must
 declare its public accessor result at the export site, for example
 `export const name: () -> T = computed(...)`. Numeric finiteness and integer
 tests use `value.isFinite()` and `value.isInteger()`; the duplicate
-`velar/math` functions are not part of the module surface.
+`Math.` spellings are not part of the namespace.

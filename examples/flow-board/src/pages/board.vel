@@ -3,6 +3,7 @@ import {TaskFilter, TaskStatus} from "../domain.vel"
 import {addTask, advanceTask, changed, deleteTask, doingCount, doneCount, filter, query, resetBoard, tasks, todoCount, visibleTasks} from "../store.vel"
 import {BoardColumn} from "../components/board-column.vel"
 import {TaskForm} from "../components/task-form.vel"
+import {border, clamp, minmax, repeat, rgb, spacing, tracks} from "velar/look"
 
 const pageLook = look:
     display = "grid"
@@ -10,7 +11,7 @@ const pageLook = look:
     width = 100%
     maxWidth = 1240px
     marginInline = "auto"
-    padding = Look.spacing(26px, 16px, 56px, 16px)
+    padding = spacing(26px, 16px, 56px, 16px)
 
 const heroLook = look:
     display = "flex"
@@ -23,21 +24,21 @@ const heroLook = look:
         flexDirection = "column"
 const eyebrowLook = look:
     margin = 0
-    color = Look.rgb(49, 87, 213)
+    color = rgb(49, 87, 213)
     fontSize = 12px
     fontWeight = 800
     letterSpacing = 0.12em
     textTransform = "uppercase"
 const titleLook = look:
-    margin = Look.spacing(5px, 0px, 0px, 0px)
-    color = Look.rgb(21, 32, 58)
-    fontSize = Look.clamp(32px, 5vw, 52px)
+    margin = spacing(5px, 0px, 0px, 0px)
+    color = rgb(21, 32, 58)
+    fontSize = clamp(32px, 5vw, 52px)
     letterSpacing = -0.045em
 
 const introLook = look:
     maxWidth = 590px
-    margin = Look.spacing(8px, 0px, 0px, 0px)
-    color = Look.rgb(105, 117, 140)
+    margin = spacing(8px, 0px, 0px, 0px)
+    color = rgb(105, 117, 140)
     lineHeight = 1.55
 
 const summaryLook = look:
@@ -45,44 +46,44 @@ const summaryLook = look:
     gap = 8px
     flexWrap = "wrap"
 const summaryItemLook = look:
-    padding = Look.spacing(7px, 10px)
-    border = Look.border(1px, Look.rgb(219, 226, 237))
+    padding = spacing(7px, 10px)
+    border = border(1px, rgb(219, 226, 237))
     borderRadius = 9999px
-    color = Look.rgb(83, 96, 121)
-    background = Look.rgb(255, 255, 255)
+    color = rgb(83, 96, 121)
+    background = rgb(255, 255, 255)
     fontSize = 12px
     fontWeight = 700
 
 const toolsLook = look:
     display = "grid"
-    gridTemplateColumns = Look.tracks(1fr, 180px, "auto")
+    gridTemplateColumns = tracks(1fr, 180px, "auto")
     gap = 10px
 
     if viewport.width <= 900px:
-        gridTemplateColumns = Look.tracks(1fr)
+        gridTemplateColumns = tracks(1fr)
 
 def controlLook(button: bool = false) -> Look:
     return look:
         minHeight = 42px
-        border = Look.border(1px, Look.rgb(204, 213, 228))
+        border = border(1px, rgb(204, 213, 228))
         borderRadius = 11px
-        padding = Look.spacing(0px, 12px)
-        color = button ? Look.rgb(89, 101, 122) : Look.rgb(23, 32, 51)
-        background = button ? "transparent" : Look.rgb(255, 255, 255)
+        padding = spacing(0px, 12px)
+        color = button ? rgb(89, 101, 122) : rgb(23, 32, 51)
+        background = button ? "transparent" : rgb(255, 255, 255)
         cursor = button ? "pointer" : "default"
 
 const resultsLook = look:
-    margin = Look.spacing(-8px, 2px, 0px, 2px)
-    color = Look.rgb(122, 133, 152)
+    margin = spacing(-8px, 2px, 0px, 2px)
+    color = rgb(122, 133, 152)
     fontSize = 13px
 
 const boardLook = look:
     display = "grid"
-    gridTemplateColumns = Look.repeat(3, Look.minmax(0px, 1fr))
+    gridTemplateColumns = repeat(3, minmax(0px, 1fr))
     gap = 14px
 
     if viewport.width <= 900px:
-        gridTemplateColumns = Look.tracks(1fr)
+        gridTemplateColumns = tracks(1fr)
 
 export component Board:
     return <main class="page" look={pageLook} data-board>

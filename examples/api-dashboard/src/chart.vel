@@ -1,5 +1,3 @@
-import {clamp} from "velar/math"
-
 /// One plotted dashboard sample with its stable render key and x coordinate.
 export type TrafficPoint:
     id: string
@@ -29,7 +27,7 @@ export class ChartScale:
 
     /// Returns the visible bar height for one metric value.
     def heightFor(value: number) -> number:
-        return clamp(value * self.pixels, 0, self.height)
+        return Math.clamp(value * self.pixels, 0, self.height)
 
     /// Returns the SVG y coordinate for one metric value.
     def yFor(value: number) -> number:

@@ -5,8 +5,8 @@ import { join, resolve } from "node:path";
 import { compile } from "@velarscript/compiler";
 import { compileProject } from "../packages/cli/src/project.ts";
 
-// Batch A' — the value-semantics family (docs/handoff/D42-EQUALITY-AND-ORDER.md
-// items 64 and 65, docs/handoff/D41-BOUNDS-AND-POP.md item 62). One principle
+// Batch A' — the value-semantics family (docs/decisions/D42-EQUALITY-AND-ORDER.md
+// items 64 and 65, docs/decisions/D41-BOUNDS-AND-POP.md item 62). One principle
 // covers all three: a comparison between types no single value inhabits is
 // constant, and an operation with two spellings has one too many.
 

@@ -1,10 +1,11 @@
 import {ChartScale, TrafficPoint} from "../chart.vel"
+import {rgb} from "velar/look"
 
 const barLook = look:
-    fill = Look.rgb(35, 87, 217)
+    fill = rgb(35, 87, 217)
 
 const labelLook = look:
-    fill = Look.rgb(96, 112, 139)
+    fill = rgb(96, 112, 139)
     fontFamily = "Inter, ui-sans-serif, system-ui, sans-serif"
     fontSize = 12px
 

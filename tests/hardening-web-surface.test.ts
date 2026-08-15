@@ -8,7 +8,7 @@ import { compile as compileCore } from "@velarscript/compiler";
 import { velarCompilerExtension, webModuleInterfaces } from "../packages/web/src/compiler.ts";
 
 // Wave N-2c: the Web surface items of completeness audits nine, ten, and eleven
-// (docs/handoff/COMPLETENESS-AUDITS.md) plus D47 rule 84. Each probe sits at the
+// (docs/decisions/archive/COMPLETENESS-AUDITS.md) plus D47 rule 84. Each probe sits at the
 // level the ledger's evidence was taken at: the diagnostics are checked where
 // they are produced, and the four items whose evidence was a live page -- the
 // two Look forms that stay reactive, real computed layout from Look lengths,

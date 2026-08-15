@@ -1,4 +1,5 @@
 import {ProjectSummary} from "../data.vel"
+import {rgb, spacing, tracks} from "velar/look"
 
 def isHealthy(status: string) -> bool:
     match status:
@@ -16,36 +17,36 @@ def projectLook(nested: bool) -> Look:
     return look:
         overflow = "hidden"
         borderRadius = 12px
-        background = nested ? Look.rgb(24, 33, 61) : Look.rgb(17, 24, 46)
+        background = nested ? rgb(24, 33, 61) : rgb(17, 24, 46)
 
 const summaryLook = look:
     display = "grid"
-    gridTemplateColumns = Look.tracks(1fr, "auto")
-    gap = Look.spacing(8px, 18px)
-    padding = Look.spacing(14px, 16px)
+    gridTemplateColumns = tracks(1fr, "auto")
+    gap = spacing(8px, 18px)
+    padding = spacing(14px, 16px)
 
 const childrenLook = look:
     display = "grid"
     gap = 8px
     margin = 0
-    padding = Look.spacing(0px, 10px, 10px, 26px)
+    padding = spacing(0px, 10px, 10px, 26px)
     listStyle = "none"
 const progressLook = look:
     gridColumn = "1 / -1"
     height = 5px
     overflow = "hidden"
     borderRadius = 9999px
-    background = Look.rgb(39, 50, 84)
+    background = rgb(39, 50, 84)
 
 def progressFillLook(progress: number) -> Look:
     return look:
         width = progress * 1%
         height = 100%
-        background = Look.rgb(130, 151, 255)
+        background = rgb(130, 151, 255)
 
 def statusLook(healthy: bool) -> Look:
     return look:
-        color = healthy ? Look.rgb(125, 230, 178) : Look.rgb(170, 181, 222)
+        color = healthy ? rgb(125, 230, 178) : rgb(170, 181, 222)
 
 export component ProjectList(items: List<ProjectSummary>):
     component ProjectBranch(project: ProjectSummary, nested: bool = false):

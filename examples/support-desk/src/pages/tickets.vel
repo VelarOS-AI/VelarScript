@@ -3,6 +3,7 @@ import {TicketFilter, TicketSort} from "../domain.vel"
 import {filter, loadTickets, nextPage, page, previousPage, query, selectedTickets, setPage, sort, totalPages, visibleTickets} from "../store.vel"
 import {TicketCard} from "../components/ticket-card.vel"
 import {TicketForm} from "../components/ticket-form.vel"
+import {border, clamp, color, minmax, repeat, rgb, spacing, tracks} from "velar/look"
 
 const pageLook = look:
     display = "grid"
@@ -10,7 +11,7 @@ const pageLook = look:
     width = 100%
     maxWidth = 1100px
     marginInline = "auto"
-    padding = Look.spacing(34px, 16px, 60px, 16px)
+    padding = spacing(34px, 16px, 60px, 16px)
 
 const heroLook = look:
     display = "flex"
@@ -23,51 +24,51 @@ const heroLook = look:
         flexDirection = "column"
 const titleLook = look:
     margin = 0
-    color = Look.rgb(22, 34, 59)
-    fontSize = Look.clamp(34px, 6vw, 58px)
+    color = rgb(22, 34, 59)
+    fontSize = clamp(34px, 6vw, 58px)
     letterSpacing = -0.05em
 
 const introLook = look:
     maxWidth = 560px
     margin = 0
-    color = Look.rgb(105, 117, 138)
+    color = rgb(105, 117, 138)
     lineHeight = 1.55
 
 const toolsLook = look:
     display = "grid"
-    gridTemplateColumns = Look.tracks(1fr, 170px, 170px)
+    gridTemplateColumns = tracks(1fr, 170px, 170px)
     gap = 10px
 
     if viewport.width <= 760px:
-        gridTemplateColumns = Look.tracks(1fr)
+        gridTemplateColumns = tracks(1fr)
 
 const controlLook = look:
     minHeight = 42px
-    border = Look.border(1px, Look.rgb(204, 214, 229))
+    border = border(1px, rgb(204, 214, 229))
     borderRadius = 10px
-    padding = Look.spacing(0px, 11px)
-    background = Look.rgb(255, 255, 255)
+    padding = spacing(0px, 11px)
+    background = rgb(255, 255, 255)
 
 const listLook = look:
     display = "grid"
-    gridTemplateColumns = Look.repeat(2, Look.minmax(0px, 1fr))
+    gridTemplateColumns = repeat(2, minmax(0px, 1fr))
     gap = 12px
 
     if viewport.width <= 760px:
-        gridTemplateColumns = Look.tracks(1fr)
+        gridTemplateColumns = tracks(1fr)
 
 def stateLook(failed: bool = false) -> Look:
     return look:
         padding = 18px
         borderRadius = 14px
-        color = failed ? Look.rgb(157, 41, 41) : Look.rgb(99, 112, 135)
-        background = failed ? Look.rgb(255, 237, 237) : Look.rgb(237, 241, 247)
+        color = failed ? rgb(157, 41, 41) : rgb(99, 112, 135)
+        background = failed ? rgb(255, 237, 237) : rgb(237, 241, 247)
 
 const retryLook = look:
     marginLeft = 10px
-    border = Look.border(1px, Look.color("currentColor"))
+    border = border(1px, color("currentColor"))
     borderRadius = 8px
-    padding = Look.spacing(6px, 9px)
+    padding = spacing(6px, 9px)
     color = "inherit"
     background = "transparent"
     fontWeight = 800
@@ -79,11 +80,11 @@ const paginationLook = look:
     gap = 12px
 
 const pageButtonLook = look:
-    border = Look.border(1px, Look.rgb(204, 214, 229))
+    border = border(1px, rgb(204, 214, 229))
     borderRadius = 9px
-    padding = Look.spacing(8px, 12px)
-    color = Look.rgb(66, 80, 106)
-    background = Look.rgb(255, 255, 255)
+    padding = spacing(8px, 12px)
+    color = rgb(66, 80, 106)
+    background = rgb(255, 255, 255)
     fontWeight = 800
     cursor = "pointer"
 export component TicketsPage(route: RouteContext):

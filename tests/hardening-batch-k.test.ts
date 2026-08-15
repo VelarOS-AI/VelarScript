@@ -105,18 +105,23 @@ test("[D35/D41] retired pure imports teach permanent spellings while capability 
   const project = await compileProject(entry, new Map([[entry, `
 import {parse} from "velar/json"
 import {sleep} from "velar/async"
-import {rgb} from "velar/look"
+import {sqrt} from "velar/math"
 import {range} from "velar/collections"
 import {isFinite, isInteger} from "velar/math"
 import {http} from "velar/http"
+import {rgb} from "velar/look"
 `.trimStart()]]), { extensions: [velarCompilerExtension] });
   const failures = project.failures.map((item) => item.message);
+  const messages = project.modules.flatMap((module) => module.result.diagnostics).map((item) => item.message);
   for (const message of [
     "Use Json.parse directly; VelarScript's pure namespaces need no import",
     "Use Promise.sleep directly; VelarScript's pure namespaces need no import",
-    "Use Look.rgb directly; VelarScript's pure namespaces need no import",
+    // D52 rule 116: velar/math joined the roster.
+    "Use Math.sqrt directly; VelarScript's pure namespaces need no import",
     "Use range(...) directly; the Core prelude needs no import",
-  ]) assert.ok(failures.includes(message), failures.join("\n"));
+  ]) assert.ok(messages.includes(message), messages.join("\n"));
+  // D52 rule 114: velar/look left it, so its named import is ordinary again.
+  assert.ok(!messages.some((message) => /rgb/u.test(message) && /need no import/u.test(message)), messages.join("\n"));
   assert.ok(failures.some((message) => /Use 'value\.isFinite\(\)'/u.test(message)), failures.join("\n"));
   assert.ok(failures.some((message) => /Use 'value\.isInteger\(\)'/u.test(message)), failures.join("\n"));
   assert.ok(!failures.some((message) => message.includes("velar/http")), failures.join("\n"));
@@ -155,9 +160,13 @@ print(duration)
   assert.equal(execution.status, 0, execution.stderr);
   assert.equal(execution.stdout, "3ms\n");
 
-  const web = compile("const delay: Duration = 1s + 200ms\nconst paint: Color = Look.rgb(1, 2, 3)\nprint(delay)\n", { extensions: [velarCompilerExtension] });
+  const lookRgb = velarCompilerExtension.modules!.interfaces.get("velar/look")!.exports.get("rgb")!;
+  const web = compile("import {rgb} from \"velar/look\"\nconst delay: Duration = 1s + 200ms\nconst paint: Color = rgb(1, 2, 3)\nprint(delay)\n", {
+    extensions: [velarCompilerExtension],
+    analysis: { imports: new Map([["rgb", lookRgb]]) },
+  });
   assert.deepEqual(web.diagnostics, []);
-  assert.match(web.code ?? "", /__velarLookNamespace\.rgb/u);
+  assert.match(web.code ?? "", /rgb\(1, 2, 3\)/u);
   assert.equal(execute(web.code ?? "", true).stdout, "1200ms\n");
 
   const bare = compile("await Promise.sleep(2)\n");

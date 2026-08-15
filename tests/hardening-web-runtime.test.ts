@@ -7,7 +7,7 @@ import test from "node:test";
 
 const root = resolve(new URL("..", import.meta.url).pathname);
 
-// Wave N-2w of the Web surface audit (docs/handoff/COMPLETENESS-AUDITS.md,
+// Wave N-2w of the Web surface audit (docs/decisions/archive/COMPLETENESS-AUDITS.md,
 // 审计九): the Web runtime hotfixes. Each regression runs at the level the
 // audit's evidence was taken at -- the reactive-graph items run the real
 // `velar test` pipeline headless, and the two no-blank-page paths run in

@@ -10,7 +10,7 @@ import { standardModuleSources } from "../packages/cli/src/standard-modules.ts";
 import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
 
 // Wave Z1 closes the backlog wave N-3 dropped when it landed as documentation
-// only (docs/handoff/WAVE-CD-REPORT.md §6.1 and §6.5 item 1): every diagnostic
+// only (docs/decisions/archive/WAVE-CD-REPORT.md §6.1 and §6.5 item 1): every diagnostic
 // and message ticket assigned to that wave, including the three approved user
 // rulings D45-76/78/79, plus D38-47, D47-83/85, and the audit's own
 // documentation-only items. Each test here asserts the message text a reader

@@ -215,29 +215,32 @@ Visual unit suffixes are language syntax and require no import. `px`, `rem`,
 `fr` is TrackFraction; `ms` and `s` are Duration; `deg` and `turn` are Angle.
 They can be bound, exported, imported, and calculated outside a `look:` block.
 
-The builders live on the permanent `Look.` namespace and need no import.
+The builders are named imports from `velar/look`, so the import list at the
+top of a file names the visual vocabulary that file uses.
 `velar/look` remains importable only for its visual Type objects — `Length`,
 `LengthPercentage`, `Color`, and the rest of the published vocabulary:
 
 ```velar
+import {border, clamp, rgb, spacing} from "velar/look"
+
 export const compact = 40rem
-const accent = Look.rgb(45, 79, 190)
+const accent = rgb(45, 79, 190)
 const fluidWidth: LengthPercentage = 100% - 32px
 
 export const panelLook = look:
     width = fluidWidth
-    padding = Look.spacing(24px, 16px)
-    border = Look.border(1px, accent)
-    fontSize = Look.clamp(16px, 3vw, 24px)
+    padding = spacing(24px, 16px)
+    border = border(1px, accent)
+    fontSize = clamp(16px, 3vw, 24px)
 
     if viewport.width <= compact:
         padding = 12px
 ```
 
-The available `Look.` builders are `color`, `rgb`, `rgba`, `hsl`, `alpha`,
+The available `velar/look` builders are `color`, `rgb`, `rgba`, `hsl`, `alpha`,
 `lighten`, `darken`, `border`, `shadow`, `linearGradient`, `asset`, `minmax`,
 `repeat`, `tracks`, `transition`, `animate`, `spacing`, `min`, `max`, and
-`clamp`. Each is an ordinary value, so `const make = Look.rgb` aliases it and
+`clamp`. Each is an ordinary value, so `const make = rgb` aliases it and
 higher-order use retains the same checked signature. Importing one by name from
 `velar/look` is retired and teaches the namespace spelling.
 
@@ -290,13 +293,15 @@ Motion has two checked spellings:
 - `transition` (and `transitionProperty`, `transitionDuration`,
   `transitionDelay`, `transitionTimingFunction`) for state changes — a hover
   colour, an opening panel, a fading toast.
-- a module-level `keyframes:` value passed to the permanent `Look.animate(...)`
+- a module-level `keyframes:` value passed to `animate(...)` from `velar/look`
   for keyframe motion. The `animation` property accepts `Animation`,
   `List<Animation>`, or `null`; a raw CSS animation string is rejected, and the
   animation longhands (`animationName`, `animationDuration`, and the rest) stay
   outside Look because `animate` owns the checked contract.
 
 ```velar
+import {animate} from "velar/look"
+
 export const spin = keyframes:
     from:
         rotate = 0deg
@@ -305,7 +310,7 @@ export const spin = keyframes:
 
 const spinnerLook = look:
     if not motion.reduced:
-        animation = Look.animate(spin, 1s, easing="linear", loop=true)
+        animation = animate(spin, 1s, easing="linear", loop=true)
 
 export component Spinner:
     return <span look={spinnerLook} role="status" aria-label="Loading" />
@@ -313,7 +318,7 @@ export component Spinner:
 
 Equal keyframe structures share one generated CSS name and one emitted rule,
 including across module boundaries. Bind a changing animation on the element
-with `look:animation={active ? Look.animate(spin, 1s) : null}`; `null` removes the
+with `look:animation={active ? animate(spin, 1s) : null}`; `null` removes the
 native animation. The charter's appendix to section 17 defines the stop grammar
 and every `animate` option.
 

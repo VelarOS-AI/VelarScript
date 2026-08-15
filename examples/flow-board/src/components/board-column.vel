@@ -1,5 +1,6 @@
 import {Task, TaskIdHandler, TaskStatus} from "../domain.vel"
 import {TaskCard} from "./task-card.vel"
+import {border, rgb, spacing} from "velar/look"
 
 const columnLook = look:
     display = "grid"
@@ -8,17 +9,17 @@ const columnLook = look:
     minWidth = 0px
     padding = 12px
     borderRadius = 18px
-    background = Look.rgb(238, 242, 248)
+    background = rgb(238, 242, 248)
 
 const headingLook = look:
     display = "flex"
     alignItems = "center"
     justifyContent = "space-between"
-    padding = Look.spacing(3px, 4px, 7px, 4px)
+    padding = spacing(3px, 4px, 7px, 4px)
 
 const titleLook = look:
     margin = 0
-    color = Look.rgb(39, 49, 74)
+    color = rgb(39, 49, 74)
     fontSize = 15px
 
 const countLook = look:
@@ -27,17 +28,17 @@ const countLook = look:
     minWidth = 26px
     height = 26px
     borderRadius = 9999px
-    color = Look.rgb(82, 96, 120)
-    background = Look.rgb(255, 255, 255)
+    color = rgb(82, 96, 120)
+    background = rgb(255, 255, 255)
     fontSize = 12px
     fontWeight = 800
 
 const emptyLook = look:
     margin = 0
-    padding = Look.spacing(30px, 12px)
-    border = Look.border(1px, Look.rgb(199, 208, 223))
+    padding = spacing(30px, 12px)
+    border = border(1px, rgb(199, 208, 223))
     borderRadius = 13px
-    color = Look.rgb(124, 135, 155)
+    color = rgb(124, 135, 155)
     textAlign = "center"
     fontSize = 13px
 

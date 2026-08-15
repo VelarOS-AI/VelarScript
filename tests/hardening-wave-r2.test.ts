@@ -365,8 +365,6 @@ print(Json.parse("{\\"id\\": \\"b\\"}", User).id)
 
   const interfaces = standardModuleInterfaces();
   assert.equal(interfaces.get("velar/json")!.exports.has("deepEqual"), false);
-  assert.deepEqual([...interfaces.get("velar/json")!.permanentNamespace!.members].sort(),
-    [...interfaces.get("velar/json")!.exports.keys()].sort());
   assert.doesNotMatch(standardModuleSources().get("velar/json")!, /deepEqual/u);
 });
 
@@ -381,11 +379,12 @@ import {tryParse, deepEqual} from "velar/json"
 print(slug("a") + str(utf8Size("b")) + str(tryParse("{}")) + str(deepEqual(1, 1)))
 `.trimStart(), "utf8");
     const project = await compileProject(entry);
-    const failures = project.failures.map((failure) => failure.message);
+    const messages = project.modules.flatMap((module) => module.result.diagnostics).map((item) => item.message);
     for (const member of ["slug", "utf8Size"]) {
-      assert.ok(failures.includes(`Use Text.${member} directly; VelarScript's pure namespaces need no import`), member);
+      assert.ok(messages.includes(`Use Text.${member} directly; VelarScript's pure namespaces need no import`), member);
     }
-    assert.ok(failures.includes("Use Json.tryParse directly; VelarScript's pure namespaces need no import"));
+    assert.ok(messages.includes("Use Json.tryParse directly; VelarScript's pure namespaces need no import"));
+    const failures = project.failures.map((failure) => failure.message);
     assert.ok(failures.some((message) => message.includes("velar/json") && message.includes("deepEqual")), failures.join("\n"));
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -426,12 +425,22 @@ catch (error) { console.log(error.message); }
   ].join("\n"));
 });
 
-test("[D50-90] capability modules never became permanent", () => {
+test("[D50-90] capability modules never became permanent", async () => {
+  // D52 rules 114/116 moved the roster into Core, so the question is asked of
+  // the compiler rather than of a field on the module interface: importing
+  // from a permanent module is diagnosed, and importing a toolbox is not.
+  const permanent = ["velar/json", "velar/async", "velar/text", "velar/math"];
+  const imported = ["velar/collections", "velar/url", "velar/time", "velar/id", "velar/log", "velar/test"];
   const interfaces = standardModuleInterfaces();
-  const permanent = [...interfaces].filter(([, value]) => value.permanentNamespace).map(([name]) => name).sort();
-  assert.deepEqual(permanent, ["velar/async", "velar/json", "velar/text"]);
-  for (const name of ["velar/collections", "velar/math", "velar/url", "velar/time", "velar/id", "velar/log", "velar/test"]) {
-    assert.equal(interfaces.get(name)?.permanentNamespace, undefined, name);
+  for (const name of [...permanent, ...imported]) {
+    // `range` is the one prelude name inside velar/collections, so it retires
+    // on its own terms; the module itself stays an ordinary import.
+    const first = [...interfaces.get(name)!.exports.keys()].find((key) => key !== "range")!;
+    const entry = join(tmpdir(), `velar-r2-permanent-${name.replace("/", "-")}`, "main.vel");
+    const project = await compileProject(entry, new Map([[entry, `import {${first}} from ${JSON.stringify(name)}\n`]]));
+    const migrations = project.modules.flatMap((module) => module.result.diagnostics)
+      .filter((item) => /needs? no import/u.test(item.message));
+    assert.equal(migrations.length > 0, permanent.includes(name), `${name}.${first}`);
   }
 });
 

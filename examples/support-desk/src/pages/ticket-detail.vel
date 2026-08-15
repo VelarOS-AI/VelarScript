@@ -1,6 +1,7 @@
 import {Head, Link, RouteContext, announce} from "velar/web"
 import {closeDialog, dialogResult, focus, frame, showDialog} from "velar/browser"
 import {loadTickets, resolveTicket, ticketById} from "../store.vel"
+import {border, color, rgb, rgba, shadow, spacing} from "velar/look"
 
 const pageLook = look:
     display = "grid"
@@ -8,54 +9,54 @@ const pageLook = look:
     width = 100%
     maxWidth = 760px
     marginInline = "auto"
-    padding = Look.spacing(44px, 16px)
+    padding = spacing(44px, 16px)
 
 const linkLook = look:
-    color = Look.rgb(49, 87, 213)
+    color = rgb(49, 87, 213)
     fontWeight = 800
     textDecoration = "none"
 const surfaceLook = look:
     display = "grid"
     gap = 14px
     padding = 24px
-    border = Look.border(1px, Look.rgb(220, 227, 236))
+    border = border(1px, rgb(220, 227, 236))
     borderRadius = 18px
-    background = Look.rgb(255, 255, 255)
+    background = rgb(255, 255, 255)
 
 const titleLook = look:
     margin = 0
 
 const bodyLook = look:
     margin = 0
-    color = Look.rgb(102, 115, 137)
+    color = rgb(102, 115, 137)
     lineHeight = 1.6
 
 def buttonLook(secondary: bool = false) -> Look:
     return look:
         justifySelf = "start"
-        border = Look.border(0px, Look.color("transparent"))
+        border = border(0px, color("transparent"))
         borderRadius = 10px
-        padding = Look.spacing(10px, 14px)
-        color = secondary ? Look.rgb(66, 80, 106) : Look.rgb(255, 255, 255)
-        background = secondary ? Look.rgb(237, 241, 247) : Look.rgb(49, 87, 213)
+        padding = spacing(10px, 14px)
+        color = secondary ? rgb(66, 80, 106) : rgb(255, 255, 255)
+        background = secondary ? rgb(237, 241, 247) : rgb(49, 87, 213)
         fontWeight = 800
         cursor = "pointer"
 const dialogLook = look:
     width = 100%
     maxWidth = 420px
-    border = Look.border(1px, Look.rgb(211, 219, 234))
+    border = border(1px, rgb(211, 219, 234))
     borderRadius = 16px
     padding = 22px
-    color = Look.rgb(23, 32, 51)
-    background = Look.rgb(255, 255, 255)
-    boxShadow = Look.shadow(0px, 24px, 80px, Look.rgba(35, 48, 77, 0.28))
+    color = rgb(23, 32, 51)
+    background = rgb(255, 255, 255)
+    boxShadow = shadow(0px, 24px, 80px, rgba(35, 48, 77, 0.28))
 
     if @open:
         display = "grid"
         gap = 14px
 
     @backdrop:
-        background = Look.rgba(20, 28, 48, 0.42)
+        background = rgba(20, 28, 48, 0.42)
 
 const dialogActionsLook = look:
     display = "flex"
@@ -71,7 +72,7 @@ const visuallyHiddenLook = look:
     overflow = "hidden"
     clip = "rect(0, 0, 0, 0)"
     whiteSpace = "nowrap"
-    border = Look.border(0px, Look.color("transparent"))
+    border = border(0px, color("transparent"))
 
 export component TicketDetail(route: RouteContext):
     const routeId = route.params.get("id")

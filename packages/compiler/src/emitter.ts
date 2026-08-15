@@ -125,9 +125,9 @@ export class JavaScriptEmitter {
       helpers.push('import * as __velarTextNamespace from "velar/text";');
       this.requiredRuntimeModules.add("velar/text");
     }
-    if (builtinValues.has("Look")) {
-      helpers.push('import * as __velarLookNamespace from "velar/look";');
-      this.requiredRuntimeModules.add("velar/look");
+    if (builtinValues.has("Math")) {
+      helpers.push('import * as __velarMathNamespace from "velar/math";');
+      this.requiredRuntimeModules.add("velar/math");
     }
     if (builtinValues.has("range")) {
       helpers.push('import { range as __velarRange } from "velar/collections";');
@@ -1797,7 +1797,7 @@ export class JavaScriptEmitter {
           if (builtin === "Json") return "__velarJsonNamespace";
           if (builtin === "Promise") return "__velarPromiseNamespace";
           if (builtin === "Text") return "__velarTextNamespace";
-          if (builtin === "Look") return "__velarLookNamespace";
+          if (builtin === "Math") return "__velarMathNamespace";
           if (builtin === "range") return "__velarRange";
         }
         if (expression.name === "number") {

@@ -1,13 +1,15 @@
+import {border, minmax, repeat, rgb, tracks} from "velar/look"
+
 const metricLook = look:
     display = "grid"
     gap = 6px
     padding = 18px
-    border = Look.border(1px, Look.rgb(66, 82, 143))
+    border = border(1px, rgb(66, 82, 143))
     borderRadius = 14px
-    background = Look.rgb(21, 28, 54)
+    background = rgb(21, 28, 54)
 
 const labelLook = look:
-    color = Look.rgb(170, 181, 222)
+    color = rgb(170, 181, 222)
     fontSize = 0.82rem
     textTransform = "uppercase"
     letterSpacing = 0.08em
@@ -18,11 +20,11 @@ const valueLook = look:
 
 const metricsLook = look:
     display = "grid"
-    gridTemplateColumns = Look.repeat(3, Look.minmax(0px, 1fr))
+    gridTemplateColumns = repeat(3, minmax(0px, 1fr))
     gap = 14px
 
     if viewport.width <= 640px:
-        gridTemplateColumns = Look.tracks(1fr)
+        gridTemplateColumns = tracks(1fr)
 
 export component MetricCard(label: string, value: string):
     return <article class="metric" look={metricLook}>

@@ -1,4 +1,5 @@
 import {Head} from "velar/web"
+import {spacing} from "velar/look"
 
 const pageLook = look:
     display = "grid"
@@ -6,7 +7,7 @@ const pageLook = look:
     width = 100%
     maxWidth = 752px
     marginInline = "auto"
-    padding = Look.spacing(64px, 16px)
+    padding = spacing(64px, 16px)
 
 export component About:
     return <main class="page" look={pageLook}>

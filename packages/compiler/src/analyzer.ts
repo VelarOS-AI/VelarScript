@@ -23,9 +23,9 @@ import type {
   TypeSyntax,
   UsingDeclaration,
 } from "./ast.ts";
-import { diagnostic, mechanicalFix, type Diagnostic, type DiagnosticFix } from "./diagnostic.ts";
+import { diagnostic, mechanicalEdits, mechanicalFix, type Diagnostic, type DiagnosticEdit, type DiagnosticFix } from "./diagnostic.ts";
 import { VELAR_HOST_ERROR_NAMES, VELAR_HOST_ERROR_PATH_NAMES } from "./error-runtime.ts";
-import type { CompilerAnalysisExtension } from "./extension.ts";
+import type { CompilerAnalysisExtension, RetiredNamespace } from "./extension.ts";
 import { collectionMemberGuidance, removedGlobalFunctionGuidance, stringMemberGuidance, type CollectionKind } from "./language-guidance.ts";
 import { bindingNameRestriction } from "./source-names.ts";
 import { span, spanIdentity, type Span } from "./source.ts";
@@ -329,7 +329,7 @@ export interface LoweringHints {
   readonly extensionLiterals: ReadonlyMap<string, string>;
   readonly extensionCalls: ReadonlyMap<string, string>;
   /** Prelude and permanent-namespace reads, keyed by span so lexical shadows win. */
-  readonly builtinValueReferences: ReadonlyMap<string, "Json" | "Promise" | "Text" | "Look" | "range">;
+  readonly builtinValueReferences: ReadonlyMap<string, "Json" | "Promise" | "Text" | "Math" | "range">;
   readonly runtimeNarrowings: ReadonlyMap<string, RuntimeNarrowingGuard>;
   /**
    * Span identities of `==`/`!=` operations (and comparison-chain links)
@@ -490,7 +490,8 @@ const coreGlobalGuidance = new Map([
   ["JSON", "Use 'Json.parse(text)' or 'Json.stringify(value)'; VelarScript namespaces use PascalCase"],
   ["Object", "Use record fields directly or Record<T>.keys(); VelarScript does not expose the JavaScript Object namespace"],
   ["Array", "Use a '[]' List literal and List methods; VelarScript does not expose the JavaScript Array namespace"],
-  ["Math", "Use number methods such as value.abs(), value.round(), value.isFinite(), and value.isInteger(); VelarScript does not expose the JavaScript Math namespace"],
+  // D52 rule 116: `Math` is a permanent namespace of its own now, so it
+  // resolves as a value and never reaches this table.
   ["Date", "Use velar/time instead of the Date global"],
   ["Boolean", "Use an explicit boolean comparison; VelarScript does not expose JavaScript truthiness conversion"],
   ["Number", "Use number(text), typed forms, or validated data instead of JavaScript Number coercion"],
@@ -616,6 +617,73 @@ const promiseNamespaceType: ValueType = {
   ]),
   readonlyFields: new Set(["all", "race", "sleep", "timeout", "retry", "map", "series"]),
 };
+// D52 rule 116: `JSON`, `Promise`, and `Math` are the three namespace-shaped
+// globals every JavaScript author already has in muscle memory. We carried the
+// first two and made the third an import, which was an oversight rather than a
+// decision. What belongs on a number is already a number method (`abs`,
+// `round`, `floor`, `ceil`, `isFinite`, `isInteger`), so what remains here is
+// exactly what cannot be one: the constants, the multi-argument functions, and
+// the transcendentals.
+const numberFunction = (
+  parameterNames: readonly string[],
+  parameters: readonly ValueType[],
+  requiredParameters = parameters.length,
+): ValueType => ({ kind: "function", parameterNames, parameters, requiredParameters, result: numberType });
+const mathNamespaceMembers: ReadonlyMap<string, ValueType> = new Map<string, ValueType>([
+  ["pi", numberType], ["e", numberType], ["tau", numberType], ["infinity", numberType],
+  // min and max are pure rest calls and therefore have no named rest value.
+  ["min", { kind: "intrinsic", name: "math.min", parameters: [numberType], requiredParameters: 1, result: numberType }],
+  ["max", { kind: "intrinsic", name: "math.max", parameters: [numberType], requiredParameters: 1, result: numberType }],
+  ["clamp", numberFunction(["value", "minimum", "maximum"], [numberType, numberType, numberType])],
+  ["sign", numberFunction(["value"], [numberType])],
+  ["trunc", numberFunction(["value"], [numberType])],
+  ["sqrt", numberFunction(["value"], [numberType])],
+  ["cbrt", numberFunction(["value"], [numberType])],
+  ["pow", numberFunction(["base", "exponent"], [numberType, numberType])],
+  ["exp", numberFunction(["value"], [numberType])],
+  ["log", numberFunction(["value", "base"], [numberType, numberType], 1)],
+  ["log2", numberFunction(["value"], [numberType])],
+  ["log10", numberFunction(["value"], [numberType])],
+  ["sin", numberFunction(["value"], [numberType])],
+  ["cos", numberFunction(["value"], [numberType])],
+  ["tan", numberFunction(["value"], [numberType])],
+  ["asin", numberFunction(["value"], [numberType])],
+  ["acos", numberFunction(["value"], [numberType])],
+  ["atan", numberFunction(["value"], [numberType])],
+  ["atan2", numberFunction(["y", "x"], [numberType, numberType])],
+  ["degrees", numberFunction(["radians"], [numberType])],
+  ["radians", numberFunction(["degrees"], [numberType])],
+  ["hypot", numberFunction(["x", "y"], [numberType, numberType])],
+  ["random", numberFunction([], [])],
+  // randomInt has one-bound and minimum/maximum positional forms.
+  ["randomInt", { kind: "function", parameters: [numberType, numberType], requiredParameters: 1, result: numberType }],
+  ["gcd", numberFunction(["left", "right"], [numberType, numberType])],
+  ["lcm", numberFunction(["left", "right"], [numberType, numberType])],
+]);
+export const MATH_NAMESPACE_MEMBERS: readonly string[] = [...mathNamespaceMembers.keys()];
+const mathNamespaceType: ValueType = {
+  kind: "object",
+  fields: new Map(mathNamespaceMembers),
+  readonlyFields: new Set(mathNamespaceMembers.keys()),
+};
+
+/**
+ * D50 rule 90 / D52 rule 116: the modules whose named imports retired, and the
+ * prefix that replaced them. `velar/collections` is the odd one — `range` went
+ * to the Core prelude rather than to a namespace, so its migration drops the
+ * import and adds no prefix at all.
+ */
+const permanentNamespaceImportRosters: ReadonlyMap<string, { readonly namespace: string | null; readonly members: ReadonlySet<string> }> = new Map([
+  ["velar/json", { namespace: "Json", members: new Set(["parse", "tryParse", "stringify", "stableStringify", "clone", "isSerializable"]) }],
+  ["velar/async", { namespace: "Promise", members: new Set(["all", "race", "sleep", "timeout", "retry", "map", "series"]) }],
+  ["velar/text", { namespace: "Text", members: new Set(textNamespaceMembers.keys()) }],
+  ["velar/math", { namespace: "Math", members: new Set(mathNamespaceMembers.keys()) }],
+  ["velar/collections", { namespace: null, members: new Set(["range"]) }],
+]);
+
+function permanentNamespaceImportRoster(source: string): { readonly namespace: string | null; readonly members: ReadonlySet<string> } | null {
+  return permanentNamespaceImportRosters.get(source) ?? null;
+}
 
 function argumentNoun(expected: string): "argument" | "arguments" {
   return expected === "1" || expected === "at least 1" ? "argument" : "arguments";
@@ -768,7 +836,7 @@ export class Analyzer implements TypeEnvironment {
   private readonly namedArgumentOrders = new Map<string, readonly number[]>();
   protected readonly extensionLiterals = new Map<string, string>();
   protected readonly extensionCalls = new Map<string, string>();
-  private readonly builtinValueReferences = new Map<string, "Json" | "Promise" | "Text" | "Look" | "range">();
+  private readonly builtinValueReferences = new Map<string, "Json" | "Promise" | "Text" | "Math" | "range">();
   private readonly semanticBindingTypes = new Map<string, ValueType>();
   private readonly semanticBindingMembers = new Map<string, ReadonlyMap<string, ValueType>>();
   private readonly semanticMemberCache = new Map<string, ReadonlyMap<string, ValueType>>();
@@ -848,6 +916,19 @@ export class Analyzer implements TypeEnvironment {
   private readonly globalGuidance = new Map(coreGlobalGuidance);
   private readonly scopedGlobalGuidance = new Map<string, Map<string, string>>();
   private readonly analysisExtensions: readonly CompilerAnalysisExtension[];
+  // D52 rule 114: the namespace prefixes an extension has withdrawn, and the
+  // module their members went back to.
+  private readonly retiredNamespaces = new Map<string, RetiredNamespace>();
+  /** Every `Retired.member` read, collected so one migration can carry the whole rewrite. */
+  private readonly retiredNamespaceUses: { readonly namespace: string; readonly member: string | null; readonly span: Span; readonly memberEnd: number; readonly bare: boolean }[] = []; 
+  /** The property each member access asks for, keyed by the receiver's span. */
+  private readonly memberAccessProperties = new Map<string, { readonly property: string; readonly end: number }>();
+  /** Every name this module declares anywhere, so a rewrite can prove it collides with nothing. */
+  private readonly declaredNames = new Set<string>();
+  /** D52 rule 116: reads of a name imported from a module that has a permanent namespace. */
+  private readonly permanentNamespaceImportReads: { readonly local: string; readonly source: string; readonly imported: string; readonly span: Span }[] = [];
+  /** The import each such local came from, keyed by the local name. */
+  private readonly permanentNamespaceImportOrigins = new Map<string, { readonly source: string; readonly imported: string; readonly specifier: Span }>();
 
   constructor(context: AnalysisContext = {}, extensions: readonly CompilerAnalysisExtension[] = []) {
     this.analysisExtensions = extensions;
@@ -942,6 +1023,7 @@ export class Analyzer implements TypeEnvironment {
       for (const [name, type] of extension.globals ?? []) this.extensionGlobals.set(name, type);
       for (const name of extension.reservedBindings ?? []) this.extensionReservedBindings.add(name);
       for (const [name, guidance] of extension.globalGuidance ?? []) this.globalGuidance.set(name, guidance);
+      for (const [name, retired] of extension.retiredNamespaces ?? []) this.retiredNamespaces.set(name, retired);
       for (const [suffix, guidance] of extension.globalGuidanceByPathSuffix ?? []) {
         const collected = this.scopedGlobalGuidance.get(suffix) ?? new Map<string, string>();
         for (const [name, message] of guidance) collected.set(name, message);
@@ -993,10 +1075,17 @@ export class Analyzer implements TypeEnvironment {
     this.validateExternDeclarations(program);
     this.registerExternModules(program);
     this.validateReExports(program);
+    this.registerPermanentNamespaceImports(program);
     this.predeclareTopLevel(program);
     for (const statement of program.body) {
       this.analyzeStatement(statement);
     }
+    // D52 rules 114/116: both namespace migrations report last, because both
+    // rewrites need the whole module before they can be written down — one has
+    // to know every name the new import would have to clear, and the other has
+    // to know every read the retiring import leaves behind.
+    this.reportRetiredNamespaceUses(program);
+    this.reportPermanentNamespaceImports(program);
     return this.diagnostics;
   }
 
@@ -4429,11 +4518,54 @@ export class Analyzer implements TypeEnvironment {
             this.diagnostics.push(diagnostic("VEL3001", selfGuidance, expression.span));
             return invalidType;
           }
+          // D52 rule 114: a retired namespace prefix is reported once the whole
+          // module is known, so the one migration can carry the whole rewrite —
+          // the prefix comes off here and the import goes on at the top.
+          if (this.retiredNamespaces.has(expression.name)) {
+            const access = this.memberAccessProperties.get(spanIdentity(expression.span));
+            this.retiredNamespaceUses.push({
+              namespace: expression.name,
+              member: access?.property ?? null,
+              span: expression.span,
+              memberEnd: access?.end ?? expression.span.end,
+              bare: false,
+            });
+            return invalidType;
+          }
+          // The bare name is the other half of the same migration: once the
+          // prefix comes off, `spacing(...)` is a name this module has not
+          // imported yet, and the import it needs is the one the prefixed form
+          // would have added. Carrying the rewrite here too is what makes the
+          // answer survive whatever order the edits land in.
+          {
+            const owner = this.retiredNamespaceOwning(expression.name);
+            if (owner) {
+              this.retiredNamespaceUses.push({
+                namespace: owner,
+                member: expression.name,
+                span: expression.span,
+                memberEnd: expression.span.end,
+                bare: true,
+              });
+              return unknownType;
+            }
+          }
           const guidance = this.guidanceForGlobal(expression.name);
           this.diagnostics.push(diagnostic(guidance ? "VEL3008" : "VEL3001", guidance ?? `Unknown name '${expression.name}'`, expression.span));
           return unknownType;
         }
-        if (!lexical && (expression.name === "Json" || expression.name === "Promise" || expression.name === "Text" || expression.name === "Look" || expression.name === "range")) {
+        if (lexical) {
+          // D52 rule 116: a read of a name imported from a module that has a
+          // permanent namespace is part of that import's migration — the one
+          // rewrite moves the prefix onto every one of them. The span identity
+          // is what proves the read reached the import and not a local of the
+          // same name shadowing it, so a shadowed read is left alone.
+          const origin = this.permanentNamespaceImportOrigins.get(expression.name);
+          if (origin && lexical.span.start === origin.specifier.start && lexical.span.end === origin.specifier.end) {
+            this.permanentNamespaceImportReads.push({ local: expression.name, source: origin.source, imported: origin.imported, span: expression.span });
+          }
+        }
+        if (!lexical && (expression.name === "Json" || expression.name === "Promise" || expression.name === "Text" || expression.name === "Math" || expression.name === "range")) {
           this.builtinValueReferences.set(spanIdentity(expression.span), expression.name);
         }
         // D51 rule 101: every arrow frame this read sits inside captures the
@@ -5721,6 +5853,7 @@ export class Analyzer implements TypeEnvironment {
       // inferMember can sanction it, so a class-name receiver (`P.make(...)`)
       // is sanctioned here first (D45 rule 75).
       this.memberAccessReceivers.add(spanIdentity(calleeExpression.object.span));
+      this.recordMemberAccessProperty(calleeExpression);
       const primitiveResult = this.inferPrimitiveCall(calleeExpression, arguments_, argumentNames, callSpan);
       if (primitiveResult) return primitiveResult;
       const collectionResult = this.inferCollectionCall(calleeExpression, arguments_, argumentNames, callSpan);
@@ -7384,6 +7517,7 @@ export class Analyzer implements TypeEnvironment {
     }
     // A member access is a sanctioned class-name position (D45 rule 75).
     this.memberAccessReceivers.add(spanIdentity(objectExpression.span));
+    this.memberAccessProperties.set(spanIdentity(objectExpression.span), { property, end: memberSpan.end });
     const original = this.inferredOrAnalyze(objectExpression);
     this.semanticExpressionOwners.set(`${memberSpan.start}:${memberSpan.end}`, nonOptional(original));
     const resolvedOriginal = this.expandAliases(original);
@@ -9434,8 +9568,262 @@ export class Analyzer implements TypeEnvironment {
     return valid;
   }
 
+  /**
+   * The retired namespace whose module exports this bare name, when exactly one
+   * does and no permanent namespace claims the same spelling. `min`, `max`, and
+   * `clamp` are claimed by `Math.` as well, so those keep the guidance and lose
+   * only the automatic rewrite — a fix has to be provably the author's meaning,
+   * and there the meaning is genuinely ambiguous.
+   */
+  private retiredNamespaceOwning(name: string): string | null {
+    let owner: string | null = null;
+    for (const [namespace, retired] of this.retiredNamespaces) {
+      if (!retired.members.has(name)) continue;
+      if (owner) return null;
+      owner = namespace;
+    }
+    if (!owner) return null;
+    for (const roster of permanentNamespaceImportRosters.values()) if (roster.members.has(name)) return null;
+    return owner;
+  }
+
+  private recordMemberAccessProperty(expression: Extract<Expression, { kind: "MemberExpression" }>): void {
+    this.memberAccessProperties.set(spanIdentity(expression.object.span), { property: expression.property, end: expression.span.end });
+  }
+
+  /** The import line a migration writes, in the sorted shape every module here already uses. */
+  private renderNamedImport(source: string, specifiers: readonly { readonly imported: string; readonly local: string }[]): string {
+    const rendered = [...specifiers]
+      .sort((left, right) => (left.imported < right.imported ? -1 : left.imported > right.imported ? 1 : 0))
+      .map((specifier) => (specifier.imported === specifier.local ? specifier.imported : `${specifier.imported} as ${specifier.local}`));
+    return `import {${rendered.join(", ")}} from ${JSON.stringify(source)}`;
+  }
+
+  /** Where a module that has no import of `source` yet should grow one. */
+  private importInsertion(program: Program, line: string): DiagnosticEdit {
+    let lastImport: Span | null = null;
+    for (const statement of program.body) if (statement.kind === "ImportDeclaration") lastImport = statement.span;
+    if (lastImport) return { span: { start: lastImport.end, end: lastImport.end }, text: `\n${line}` };
+    const offset = program.body[0]?.span.start ?? 0;
+    return { span: { start: offset, end: offset }, text: `${line}\n\n` };
+  }
+
+  private registerPermanentNamespaceImports(program: Program): void {
+    for (const statement of program.body) {
+      if (statement.kind !== "ImportDeclaration" || statement.javascript) continue;
+      const roster = permanentNamespaceImportRoster(statement.source);
+      if (!roster) continue;
+      for (const specifier of statement.specifiers) {
+        if (specifier.namespace || !roster.members.has(specifier.imported)) continue;
+        this.permanentNamespaceImportOrigins.set(specifier.local, {
+          source: statement.source,
+          imported: specifier.imported,
+          specifier: specifier.span,
+        });
+      }
+    }
+  }
+
+  /**
+   * D52 rule 114: the migration off a namespace prefix the language withdrew.
+   * It is the mirror of the one below — that one takes an import away and puts
+   * a prefix on, this one takes the prefix off and puts an import back — and
+   * both answer in one step, because a migration that needs a second compile to
+   * find the working spelling has taught a loop rather than a spelling.
+   */
+  private reportRetiredNamespaceUses(program: Program): void {
+    if (this.retiredNamespaceUses.length === 0) return;
+    const grouped = new Map<string, typeof this.retiredNamespaceUses>();
+    for (const use of this.retiredNamespaceUses) {
+      const collected = grouped.get(use.namespace) ?? [];
+      collected.push(use);
+      grouped.set(use.namespace, collected);
+    }
+    for (const [namespace, uses] of grouped) {
+      const retired = this.retiredNamespaces.get(namespace);
+      if (!retired) continue;
+      const quoted = JSON.stringify(retired.module);
+      const example = [...retired.members][0] ?? "member";
+      const existing = program.body.find((statement) =>
+        statement.kind === "ImportDeclaration" && statement.source === retired.module
+        && !statement.javascript && statement.specifiers.every((specifier) => !specifier.namespace)) as
+        Extract<Statement, { kind: "ImportDeclaration" }> | undefined;
+      const bound = new Map<string, string>();
+      const taken = new Set<string>();
+      for (const specifier of existing?.specifiers ?? []) {
+        bound.set(specifier.imported, specifier.local);
+        taken.add(specifier.local);
+      }
+      const seen = new Set<string>();
+      const ordered = [...uses]
+        .sort((left, right) => left.span.start - right.span.start)
+        .filter((use) => {
+          const key = spanIdentity(use.span);
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+      const added: string[] = [];
+      const entries: { readonly span: Span; readonly message: string; readonly edit: DiagnosticEdit | null; readonly contributes: boolean }[] = [];
+      for (const use of ordered) {
+        const member = use.member;
+        if (member === null) {
+          entries.push({
+            span: use.span,
+            message: this.guidanceForGlobal(namespace)
+              ?? `'${namespace}' is not a value; import the names you need from ${quoted} and call them without a prefix`,
+            edit: null,
+            contributes: false,
+          });
+          continue;
+        }
+        if (!retired.members.has(member)) {
+          entries.push({
+            span: use.span,
+            message: `'${namespace}' is not a namespace; ${quoted} exports its names directly — import {${example}} from ${quoted}`,
+            edit: null,
+            contributes: false,
+          });
+          continue;
+        }
+        if (use.bare) {
+          // The prefix is already gone here; only the import is missing.
+          const free = !this.declaredNames.has(member) && !taken.has(member);
+          if (free && !added.includes(member)) added.push(member);
+          entries.push({
+            span: use.span,
+            message: this.guidanceForGlobal(member)
+              ?? `Import the builder — import {${member}} from ${quoted} — then call ${member}(...)`,
+            edit: null,
+            contributes: free,
+          });
+          continue;
+        }
+        const local = bound.get(member);
+        if (local !== undefined) {
+          entries.push({
+            span: use.span,
+            message: `Use ${local}(...); the '${namespace}.' prefix is retired, and this module already imports ${member} from ${quoted}`,
+            edit: { span: { start: use.span.start, end: use.memberEnd }, text: local },
+            contributes: false,
+          });
+          continue;
+        }
+        if (this.declaredNames.has(member) || taken.has(member)) {
+          entries.push({
+            span: use.span,
+            message: `The '${namespace}.' prefix is retired, and this module already binds '${member}' — import the builder under another name, 'import {${member} as other} from ${quoted}', and call other(...)`,
+            edit: null,
+            contributes: false,
+          });
+          continue;
+        }
+        if (!added.includes(member)) added.push(member);
+        entries.push({
+          span: use.span,
+          message: `Use ${member}(...); the '${namespace}.' prefix is retired — import {${member}} from ${quoted}`,
+          edit: { span: { start: use.span.start, end: use.memberEnd }, text: member },
+          contributes: true,
+        });
+      }
+      let importEdit: DiagnosticEdit | null = null;
+      if (added.length > 0) {
+        const specifiers = [
+          ...(existing?.specifiers ?? []).map((specifier) => ({ imported: specifier.imported, local: specifier.local })),
+          ...added.map((member) => ({ imported: member, local: member })),
+        ];
+        const line = this.renderNamedImport(retired.module, specifiers);
+        importEdit = existing ? { span: existing.span, text: line } : this.importInsertion(program, line);
+      }
+      let importAttached = importEdit === null;
+      for (const entry of entries) {
+        if (!importAttached && entry.contributes) {
+          importAttached = true;
+          this.diagnostics.push(diagnostic("VEL3008", entry.message, entry.span, mechanicalEdits(
+            entry.edit ? [importEdit!, entry.edit] : [importEdit!],
+            `Import ${added.join(", ")} from ${retired.module}`,
+          )));
+          continue;
+        }
+        if (!entry.edit) {
+          this.diagnostics.push(diagnostic("VEL3008", entry.message, entry.span));
+          continue;
+        }
+        this.diagnostics.push(diagnostic("VEL3008", entry.message, entry.span, mechanicalFix(
+          entry.edit.span,
+          entry.edit.text,
+          `Drop the retired '${namespace}.' prefix`,
+        )));
+      }
+    }
+  }
+
+  /**
+   * D52 rule 116 / D50 rule 90: a permanent namespace needs no import, so the
+   * import spelling retires. The rewrite is the import's own inverse — take the
+   * specifier out, put the prefix on every read it left behind — and it is
+   * carried whole so the author never sees a half-migrated module.
+   */
+  private reportPermanentNamespaceImports(program: Program): void {
+    for (const statement of program.body) {
+      if (statement.kind !== "ImportDeclaration" || statement.javascript) continue;
+      const roster = permanentNamespaceImportRoster(statement.source);
+      if (!roster) continue;
+      const retired = statement.specifiers.filter((specifier) => specifier.namespace
+        ? roster.namespace !== null
+        : roster.members.has(specifier.imported));
+      if (retired.length === 0) continue;
+      const survivors = statement.specifiers.filter((specifier) => !retired.includes(specifier));
+      const edits: DiagnosticEdit[] = [];
+      let rewritable = true;
+      for (const specifier of retired) {
+        if (specifier.namespace) {
+          // D50 rule 97.3: the namespace form reaches every retired member at
+          // once, so it retires with them. Which member each `local.member`
+          // read wanted is a rewrite this migration does not claim to know.
+          rewritable = false;
+          continue;
+        }
+        const replacement = roster.namespace === null ? specifier.imported : `${roster.namespace}.${specifier.imported}`;
+        for (const read of this.permanentNamespaceImportReads) {
+          if (read.span.start === statement.span.start) continue;
+          if (read.local !== specifier.local || read.source !== statement.source || read.imported !== specifier.imported) continue;
+          if (replacement === specifier.local) continue;
+          edits.push({ span: read.span, text: replacement });
+        }
+      }
+      if (rewritable) {
+        edits.push(survivors.length === 0
+          ? { span: { start: statement.span.start, end: statement.span.end + 1 }, text: "" }
+          : {
+            span: statement.span,
+            text: this.renderNamedImport(statement.source, survivors.map((specifier) => ({ imported: specifier.imported, local: specifier.local }))),
+          });
+      }
+      let fixAttached = !rewritable;
+      for (const specifier of retired) {
+        const message = specifier.namespace
+          ? `Use ${roster.namespace} directly; VelarScript's pure namespaces need no import`
+          : roster.namespace === null
+            ? `Use ${specifier.imported}(...) directly; the Core prelude needs no import`
+            : `Use ${roster.namespace}.${specifier.imported} directly; VelarScript's pure namespaces need no import`;
+        if (fixAttached) {
+          this.diagnostics.push(diagnostic("VEL3008", message, specifier.span));
+          continue;
+        }
+        fixAttached = true;
+        this.diagnostics.push(diagnostic("VEL3008", message, specifier.span, mechanicalEdits(
+          edits,
+          roster.namespace === null
+            ? "Drop the import; the Core prelude needs none"
+            : `Drop the import and read through ${roster.namespace}`,
+        )));
+      }
+    }
+  }
+
   /** A member name to show in the rule 106 guidance, so the fix is concrete. */
-  private firstNamespaceMember(namespace: "Json" | "Promise" | "Text" | "Look"): string {
+  private firstNamespaceMember(namespace: "Json" | "Promise" | "Text" | "Math"): string {
     const binding = this.builtin(namespace);
     const type = binding ? this.expandAliases(binding.type) : null;
     if (type?.kind === "object") {
@@ -9942,6 +10330,7 @@ export class Analyzer implements TypeEnvironment {
       ["Json", jsonNamespaceType],
       ["Promise", promiseNamespaceType],
       ["Text", textNamespaceType],
+      ["Math", mathNamespaceType],
     ]);
     const type = this.extensionGlobals.get(name) ?? functions.get(name)
       ?? (name === "Error" || name === "ValidationError" || name === "NarrowingError" || name === "IndexError"
@@ -10058,6 +10447,10 @@ export class Analyzer implements TypeEnvironment {
         this.diagnostics.push(diagnostic("VEL3007", message, declarationSpan));
       }
     }
+    // D52 rules 114/116: every name the module binds anywhere. A migration
+    // rewrite that would introduce an import only claims to be equivalent when
+    // the name it introduces collides with nothing in the module.
+    this.declaredNames.add(name);
     const scope = this.scopes.at(-1)!;
     if (scope.has(name)) {
       // MOD-I4: an import/local collision blames the declaration that comes
@@ -10589,7 +10982,7 @@ export class Analyzer implements TypeEnvironment {
     return null;
   }
 
-  protected isBuiltinValueReference(expression: Expression, name: "Json" | "Promise" | "Text" | "Look" | "range"): boolean {
+  protected isBuiltinValueReference(expression: Expression, name: "Json" | "Promise" | "Text" | "Math" | "range"): boolean {
     return this.builtinValueReferences.get(spanIdentity(expression.span)) === name;
   }
 

@@ -8,6 +8,7 @@ import {Newsletter} from "../components/newsletter.vel"
 import {Panel, StatusBadge} from "../components/package-widgets.vel"
 import {ProjectList} from "../components/project-list.vel"
 import {WebCapabilities} from "../components/web-capabilities.vel"
+import {animate, border, rgb, spacing} from "velar/look"
 
 type PreviewFeatures:
     recovery: bool
@@ -27,7 +28,7 @@ const pageLook = look:
     width = 100%
     maxWidth = 1072px
     marginInline = "auto"
-    padding = Look.spacing(40px, 16px, 64px, 16px)
+    padding = spacing(40px, 16px, 64px, 16px)
 
 const headerLook = look:
     display = "flex"
@@ -40,7 +41,7 @@ const titleLook = look:
 
 const eyebrowLook = look:
     margin = 0
-    color = Look.rgb(157, 172, 255)
+    color = rgb(157, 172, 255)
     fontWeight = 700
 
 const actionsLook = look:
@@ -58,17 +59,17 @@ const animationProbeLook = look:
     display = "inline-block"
     width = 12px
     height = 12px
-    background = Look.rgb(157, 172, 255)
+    background = rgb(157, 172, 255)
     if not motion.reduced:
-        animation = Look.animate(probeSpin, 2s, easing = "linear", loop = true)
+        animation = animate(probeSpin, 2s, easing = "linear", loop = true)
 
 const animationToggleLook = look:
     width = 12px
     height = 12px
     padding = 0
-    border = Look.border(1px, Look.rgb(157, 172, 255))
+    border = border(1px, rgb(157, 172, 255))
     borderRadius = 12px
-    background = Look.rgb(21, 28, 54)
+    background = rgb(21, 28, 54)
 
 component AnimationToggle():
     state active = true
@@ -80,7 +81,7 @@ component AnimationToggle():
         <span
             data-animation-toggle-probe
             aria-hidden="true"
-            look:animation={active ? Look.animate(probeSpin, 2s, easing = "linear", loop = true) : null}
+            look:animation={active ? animate(probeSpin, 2s, easing = "linear", loop = true) : null}
         >
             ↻
         </span>
@@ -88,11 +89,11 @@ component AnimationToggle():
 
 def themeButtonLook(active: bool) -> Look:
     return look:
-        padding = Look.spacing(9px, 12px)
-        border = Look.border(1px, active ? Look.rgb(157, 172, 255) : Look.rgb(82, 99, 165))
+        padding = spacing(9px, 12px)
+        border = border(1px, active ? rgb(157, 172, 255) : rgb(82, 99, 165))
         borderRadius = 9px
         color = "inherit"
-        background = Look.rgb(21, 28, 54)
+        background = rgb(21, 28, 54)
         cursor = "pointer"
 export component Home:
     return <main class="page" look={pageLook}>

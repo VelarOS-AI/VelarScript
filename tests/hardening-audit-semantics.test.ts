@@ -4,7 +4,7 @@ import test from "node:test";
 import { compile } from "@velarscript/compiler";
 
 // Wave N-2b-1 — the semantic core fixes from the completeness audits
-// (docs/handoff/COMPLETENESS-AUDITS.md; ledger ids in test names), plus the
+// (docs/decisions/archive/COMPLETENESS-AUDITS.md; ledger ids in test names), plus the
 // D47 rule 81 `equals` prelude function. Execution-level wherever the ledger
 // evidence was execution-level.
 

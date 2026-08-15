@@ -33,16 +33,22 @@ Do not invent workarounds for a diagnostic; it is the language telling you
 the canonical spelling.
 
 What a program can compute needs no import; what reaches outside the program
-must be imported. Four permanent namespaces carry the pure computation:
+must be imported. A prefix is permanent only when it mirrors a namespace-shaped
+JavaScript global, so there are exactly four and the list is closed:
 `Json.` (`parse`, `tryParse`, `stringify`, `stableStringify`, `clone`,
 `isSerializable`), `Promise.` (`all`, `race`, `sleep`, `timeout`, `retry`,
-`map`, `series`), `Text.` (`trimStart`, `trimEnd`, `capitalize`, `title`,
-`lines`, `lineStarts`, `chunks`, `words`, `slug`, `normalize`, `truncate`,
-`indent`, `dedent`, `normalizeWhitespace`, `utf8Size`, `escapeHtml`, `codePoint`,
-`fromCodePoint`, `matches`, `findMatch`, `findMatches`, `replaceMatches`,
-`splitPattern`), and Web visual builders under `Look.*`. A string method is a
-core operation; `Text.*` is the extension toolbox, and nothing moves between
-them. These names need no import and may be shadowed by a lexical binding.
+`map`, `series`), `Math.` (`pi`, `e`, `tau`, `infinity`, `min`, `max`, `clamp`,
+`sign`, `trunc`, `sqrt`, `cbrt`, `pow`, `exp`, `log`, `log2`, `log10`, `sin`,
+`cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `degrees`, `radians`, `hypot`,
+`random`, `randomInt`, `gcd`, `lcm`), and `Text.` (`trimStart`, `trimEnd`,
+`capitalize`, `title`, `lines`, `lineStarts`, `chunks`, `words`, `slug`,
+`normalize`, `truncate`, `indent`, `dedent`, `normalizeWhitespace`, `utf8Size`,
+`escapeHtml`, `codePoint`, `fromCodePoint`, `matches`, `findMatch`,
+`findMatches`, `replaceMatches`, `splitPattern`). A string method is a core
+operation; `Text.*` is the extension toolbox, and nothing moves between them.
+Web visual builders are named imports from `velar/look` — there is no `Look`
+global in JavaScript, so there is no `Look.` prefix here either. These names
+need no import and may be shadowed by a lexical binding.
 `print`, `str`, `equals`, and `range` are likewise in the Core prelude —
 `equals(a, b)` is the one spelling of content comparison. Capability modules
 such as `velar/http`, `velar/storage`, and `velar/browser` remain explicit
@@ -162,6 +168,8 @@ them; the first two are the **silent traps** in the list — read them twice.
 | `count++` | `count += 1` |
 | `call(name: value)` named argument | `call(name=value)` |
 | Importing `range` | `range(...)` is a Core prelude function and needs no import. |
+| `import {sqrt} from "velar/math"` | `Math.sqrt(x)`; `Math.` is permanent. `velar fix` performs the rewrite. |
+| `Look.spacing(16px)` | `spacing(16px)` with `import {spacing} from "velar/look"`; the `Look.` prefix is retired. `velar fix` performs the rewrite. |
 | `"""triple-quoted"""` for a block of text | A layout string: a double quote followed immediately by a newline opens it; a quote back at the opening line's indentation closes it. Backtick strings are real, but always single-line. |
 | Escaping `\"` through a JSON, HTML, or selector string | Use backticks: `` `{"name":"Nova"}` `` is the same `string` value, with `"` as ordinary text. Prefixes are orthogonal (`` f` ``, `` r` ``, `` rf` ``), and `velar format` picks the delimiter for you (`"` by default, backticks when the text contains `"`), so write whichever is convenient. |
 | `0xFF`, `0b1010`, `007`, `.5` | Decimal only: `255`, `10`, `7`, `0.5`. Group long digits with `_` — `1_000_000`. `Infinity` and `NaN` are not literals: write `1 / 0` and `0 / 0`. |
@@ -295,24 +303,28 @@ mount(<Counter label="Clicks" />, "#app")
 camelCase; units are literal:
 
 ```velar
+import {border, rgb, spacing} from "velar/look"
+
 
 
 const buttonLook = look:
-    border = Look.border(0px, Look.rgb(220, 224, 235))
+    border = border(0px, rgb(220, 224, 235))
     borderRadius = 10px
-    padding = Look.spacing(10px, 14px)
+    padding = spacing(10px, 14px)
     cursor = "pointer"
 
     if @hover:
-        background = Look.rgb(235, 240, 255)
+        background = rgb(235, 240, 255)
 
 component SaveButton(children: WebNode):
     return <button look={buttonLook} type="button">{children}</button>
 ```
 
-A `look:` literal is built once, so its conditions and values cannot read state; put a reactive visual on the element with `look={active ? a : b}` or `look:color={...}`. Declare checked motion as a module-level `keyframes:` value and pass it to `Look.animate`; disable nonessential motion at the CSS layer:
+A `look:` literal is built once, so its conditions and values cannot read state; put a reactive visual on the element with `look={active ? a : b}` or `look:color={...}`. Declare checked motion as a module-level `keyframes:` value and pass it to `animate` from `velar/look`; disable nonessential motion at the CSS layer:
 
 ```velar
+import {animate} from "velar/look"
+
 
 
 const spin = keyframes:
@@ -323,10 +335,10 @@ const spin = keyframes:
 
 const rotatingLook = look:
     if not motion.reduced:
-        animation = Look.animate(spin, 1s, easing="linear", loop=true)
+        animation = animate(spin, 1s, easing="linear", loop=true)
 ```
 
-The `animation` property accepts only `Animation`, `List<Animation>`, or `null`; a CSS animation string is rejected. Bind a changing animation on the element with `look:animation={active ? Look.animate(spin, 1s) : null}`. Native animation longhands remain outside Look because `Look.animate` owns the checked contract.
+The `animation` property accepts only `Animation`, `List<Animation>`, or `null`; a CSS animation string is rejected. Bind a changing animation on the element with `look:animation={active ? animate(spin, 1s) : null}`. Native animation longhands remain outside Look because `animate` owns the checked contract.
 
 Form state binds with `bind:value={name}` (also a writable path such as `bind:value={form.email}`), `bind:checked={flag}`, and `bind:group={choice}` — radio state holds the selected input's `value`, checkbox `List<string>` state holds the checked values; the event object has no `target`.
 

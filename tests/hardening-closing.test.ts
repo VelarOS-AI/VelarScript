@@ -154,26 +154,29 @@ test("[D50-97.3] a namespace import of a retired module earns the same migration
 import * as text from "velar/text"
 import * as json from "velar/json"
 import * as tasks from "velar/async"
-import * as look from "velar/look"
+import * as numbers from "velar/math"
 
 print(text.slug("a") + json.stringify(1))
 `.trimStart()]]), { extensions: [velarCompilerExtension] });
-  const failures = project.failures.map((item) => item.message);
+  const messages = project.modules.flatMap((module) => module.result.diagnostics).map((item) => item.message);
   for (const message of [
     "Use Text directly; VelarScript's pure namespaces need no import",
     "Use Json directly; VelarScript's pure namespaces need no import",
     "Use Promise directly; VelarScript's pure namespaces need no import",
-    "Use Look directly; VelarScript's pure namespaces need no import",
-  ]) assert.ok(failures.includes(message), failures.join("\n"));
+    // D52 rule 116: Math joined the roster, so its namespace import retires too.
+    "Use Math directly; VelarScript's pure namespaces need no import",
+  ]) assert.ok(messages.includes(message), messages.join("\n"));
 });
 
 test("[D50-97.3] a namespace import of a module that still needs importing stays legal", async () => {
   const entry = join(tmpdir(), "velar-closing-namespace-capability", "main.vel");
   const project = await compileProject(entry, new Map([[entry, `
-import * as math from "velar/math"
+import * as look from "velar/look"
 import * as url from "velar/url"
 
-print(str(math.sqrt(4)) + url.encode("a b"))
+print(look.rgb(1, 2, 3))
+print(url.encode("a b"))
 `.trimStart()]]), { extensions: [velarCompilerExtension] });
   assert.deepEqual(project.failures.map((item) => item.message), []);
+  assert.deepEqual(project.modules.flatMap((module) => module.result.diagnostics), []);
 });

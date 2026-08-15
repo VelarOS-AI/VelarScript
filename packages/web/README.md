@@ -22,9 +22,10 @@ Applications keep the language-level imports:
 
 import {Head, Link, Router, route} from "velar/web"
 import {http} from "velar/http"
+import {rgb, spacing} from "velar/look"
 
-const accent = Look.rgb(45, 79, 190)
-const pagePadding = Look.spacing(24px, 16px)
+const accent = rgb(45, 79, 190)
+const pagePadding = spacing(24px, 16px)
 ```
 
 One-off base properties use the same checked table through JSX directives, and

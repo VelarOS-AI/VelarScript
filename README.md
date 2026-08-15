@@ -94,6 +94,7 @@ velar update
 ```velar
 
 import {Head} from "velar/web"
+import {border, color, rgb, spacing} from "velar/look"
 
 type Task:
     id: string
@@ -105,19 +106,19 @@ const pageLook = look:
     gap = 16px
     maxWidth = 720px
     marginInline = "auto"
-    padding = Look.spacing(48px, 20px)
+    padding = spacing(48px, 20px)
 
     if viewport.width <= 640px:
-        padding = Look.spacing(24px, 16px)
+        padding = spacing(24px, 16px)
 
 const buttonLook = look:
-    border = Look.border(0px, Look.color("transparent"))
+    border = border(0px, color("transparent"))
     borderRadius = 10px
-    padding = Look.spacing(10px, 14px)
+    padding = spacing(10px, 14px)
     cursor = "pointer"
 
     if @hover:
-        background = Look.rgb(235, 240, 255)
+        background = rgb(235, 240, 255)
 
 export component App:
     state tasks: List<Task> = []
@@ -178,8 +179,10 @@ the explicit `@velarscript/web` package.
   owns it.
 - `try expression` turns an expected failure into an optional, so
   `try readPort() ?? 8080` needs no `try`/`catch` block.
-- `Json.`, `Promise.`, `Text.`, and (on Web) `Look.` are permanent namespaces
-  that need no import.
+- `Json.`, `Promise.`, `Math.`, and `Text.` are permanent namespaces that need
+  no import; each one mirrors a namespace-shaped JavaScript global, which is
+  what earns a prefix. Everything else pure — `velar/collections`, `velar/url`,
+  and Web's `velar/look` — is imported by name.
 - Tests are `test "a sentence the owner reads":` blocks in a `.test.vel` file.
 - Public collections are `List`, `Set`, and `Map` with direct APIs such as
   `append`, `add`, `set`, `remove`, `some`, and `every`.
@@ -268,10 +271,10 @@ velar lsp
 - [Standard library](docs/standard-library.md)
 - [Web framework API](docs/web-api.md)
 - [JavaScript boundary](docs/javascript-bridge.md)
-- [Runtime and JavaScript boundary ledger](docs/runtime-boundary.md)
+- [Runtime and JavaScript boundary ledger](docs/contributing/runtime-boundary.md)
 - [Project lifecycle](docs/project-lifecycle.md)
-- [Compiler architecture](docs/compiler-architecture.md)
-- [Workbench integration](docs/workbench-integration.md)
+- [Compiler architecture](docs/contributing/compiler-architecture.md)
+- [Workbench integration](docs/contributing/workbench-integration.md)
 
 ## Repository validation
 

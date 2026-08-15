@@ -13,7 +13,7 @@ after(removeTemporaryDirectories);
 
 const root = resolve(new URL("..", import.meta.url).pathname);
 
-// Fix wave 1 of the marathon defect ledger (docs/handoff/MARATHON-DEFECTS.md):
+// Fix wave 1 of the marathon defect ledger (docs/decisions/archive/MARATHON-DEFECTS.md):
 // the Core compiler and CLI items. Every test here is a regression probe for a
 // defect that was confirmed with execution evidence, kept at the same level as
 // that evidence -- execution where the ledger measured execution.

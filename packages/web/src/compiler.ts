@@ -93,14 +93,11 @@ const lookModuleExports = new Map<string, ValueType>([
   )],
 ]);
 
-// D35: Look's existing pure builders are also available through the permanent
-// Look namespace. The module interface remains the single roster; no builder
-// name is invented here.
-webGlobals.set("Look", {
-  kind: "object",
-  fields: new Map([...LOOK_BUILDERS].map((name) => [name, lookModuleExports.get(name)!])),
-  readonlyFields: new Set(LOOK_BUILDERS),
-});
+// D52 rule 114: `Look.` is gone. JavaScript has no `Look` global, so the
+// prefix was ours to invent and ours to withdraw — and a look block is the
+// densest run of calls in the language, which is the worst place to spend four
+// characters per call on a word that adds nothing. The builders are named
+// imports again; `Look` survives only as the type of a look value.
 
 const webTextFormTypes = new Set(LOOK_UNIT_TYPES.values());
 const webOwnedNamedTypes = new Set([
@@ -340,10 +337,7 @@ const browserTestNetworkControllerType = object({
 
 
 export const webModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map([
-  ["velar/look", {
-    ...moduleInterface(lookModuleExports),
-    permanentNamespace: { name: "Look", members: new Set(LOOK_BUILDERS) },
-  }],
+  ["velar/look", moduleInterface(lookModuleExports)],
   ["velar/app", moduleInterface(new Map([
     ["onError", namedFunction(["handler"], [functionType([appErrorType], unknownType)], cleanupType)],
     ["reportError", namedFunction(["error", "phase", "detail"], [errorType, stringType, stringType], nullType, 1)],
@@ -573,13 +567,20 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       ["CanvasElement", new Set(["width", "height"])],
     ]),
     globals: webGlobals,
+    // D52 rule 114: `Look.spacing(...)` still parses, so it still has to be
+    // answered — with the named import that replaced it, and with the rewrite
+    // that gets there in one step.
+    retiredNamespaces: new Map([["Look", { module: "velar/look", members: LOOK_BUILDERS }]]),
     // LOK-D4: the Look media subjects are matched by name inside a Look
     // condition, ahead of ordinary lexical resolution. A user binding of the
     // same name used to be reverse-shadowed with no diagnostic anywhere, so the
     // three names are reserved in a Web module.
     reservedBindings: new Set(["mount", "tick", "computed", ...LOOK_MEDIA_SUBJECTS.keys()]),
     globalGuidance: new Map([
-      ...[...LOOK_BUILDERS].map((name) => [name, `Use Look.${name}(...) directly; VelarScript's pure namespaces need no import`] as const),
+      // D52 rule 114: the destination is the spelling that survives, so the
+      // guidance names the import outright rather than a prefix the next
+      // compile would retire in turn.
+      ...[...LOOK_BUILDERS].map((name) => [name, `Import the builder — import {${name}} from "velar/look" — then call ${name}(...)`] as const),
       ["document", "Use JSX, refs, and velar/browser instead of the untyped document global"],
       ["window", "Use velar/browser or an explicit JavaScript boundary instead of the untyped window global"],
       ["navigator", "Use velar/browser instead of the navigator global"],
@@ -640,7 +641,6 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       { label: "mount", kind: 3, detail: "mount(node, target) -> null" },
       { label: "tick", kind: 3, detail: "tick() -> Promise<null>" },
       { label: "computed", kind: 3, detail: "computed(() => T) -> () -> T" },
-      { label: "Look", kind: 6, detail: "Permanent namespace for typed visual builders" },
       { label: "bind:value", kind: 10, detail: "Two-way string state binding" },
       { label: "bind:checked", kind: 10, detail: "Two-way boolean state binding" },
       { label: "bind:group", kind: 10, detail: "Two-way radio or checkbox group binding" },

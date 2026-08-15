@@ -9,7 +9,7 @@ import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
 
 const root = resolve(new URL("..", import.meta.url).pathname);
 
-// Fix wave 2 of the marathon defect ledger (docs/handoff/MARATHON-DEFECTS.md):
+// Fix wave 2 of the marathon defect ledger (docs/decisions/archive/MARATHON-DEFECTS.md):
 // the Web runtime items. Each probe stays at the level the ledger's evidence
 // was taken at -- the reactive graph is read directly where retention was
 // measured, and the two items whose symptom is a live page (a frozen flush, a

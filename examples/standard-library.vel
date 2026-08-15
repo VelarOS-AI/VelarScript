@@ -1,5 +1,4 @@
 import {groupBy} from "velar/collections"
-import {pi} from "velar/math"
 
 import {withQuery} from "velar/url"
 import {iso, utc} from "velar/time"
@@ -28,7 +27,7 @@ print(grouped.get("admin")?.size ?? 0)
 print(range(1, 5).sum())
 for name, score in scores:
     print(f"{name}: {score}")
-print(pi.toFixed(2))
+print(Math.pi.toFixed(2))
 print(parsed.name)
 print(banner)
 print(withQuery("/users", {role: "admin"}))

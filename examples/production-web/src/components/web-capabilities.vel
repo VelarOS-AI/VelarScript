@@ -9,6 +9,7 @@ import {logger, useSink} from "velar/log"
 
 import {formBody, http} from "velar/http"
 import {eventStream, socket} from "velar/realtime"
+import {border, rgb, spacing} from "velar/look"
 
 type CapabilityStatus:
     label: string
@@ -43,31 +44,31 @@ const capabilitiesLook = look:
     display = "grid"
     gap = 12px
     padding = 16px
-    border = Look.border(1px, Look.rgb(66, 82, 143))
+    border = border(1px, rgb(66, 82, 143))
     borderRadius = 12px
-    background = Look.rgb(17, 24, 46)
+    background = rgb(17, 24, 46)
 
 const capabilityRowLook = look:
     display = "flex"
     flexWrap = "wrap"
-    gap = Look.spacing(8px, 16px)
+    gap = spacing(8px, 16px)
 
 const summaryItemLook = look:
-    color = Look.rgb(189, 199, 255)
+    color = rgb(189, 199, 255)
 
 const actionButtonLook = look:
-    padding = Look.spacing(8px, 11px)
-    border = Look.border(1px, Look.rgb(82, 99, 165))
+    padding = spacing(8px, 11px)
+    border = border(1px, rgb(82, 99, 165))
     borderRadius = 8px
     color = "inherit"
-    background = Look.rgb(21, 28, 54)
+    background = rgb(21, 28, 54)
     cursor = "pointer"
 const eventInputLook = look:
-    padding = Look.spacing(8px, 11px)
-    border = Look.border(1px, Look.rgb(82, 99, 165))
+    padding = spacing(8px, 11px)
+    border = border(1px, rgb(82, 99, 165))
     borderRadius = 8px
     color = "inherit"
-    background = Look.rgb(21, 28, 54)
+    background = rgb(21, 28, 54)
 
 component RealtimeProbe(socketUrl: string, eventsUrl: string):
     state socketLabel = "connecting"

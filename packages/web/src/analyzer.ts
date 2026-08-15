@@ -1477,13 +1477,7 @@ export class VelarWebAnalyzer extends Analyzer {
   private checkLookBuilderCall(expression: Extract<Expression, { kind: "CallExpression" }>): void {
     const builder = expression.callee.kind === "IdentifierExpression"
       ? this.lookBuilderNames.get(expression.callee.name)
-      : expression.callee.kind === "MemberExpression"
-        && expression.callee.object.kind === "IdentifierExpression"
-        && expression.callee.object.name === "Look"
-        && this.isBuiltinValueReference(expression.callee.object, "Look")
-        && LOOK_BUILDERS.has(expression.callee.property)
-        ? expression.callee.property
-        : undefined;
+      : undefined;
     if (!builder) return;
     const key = spanIdentity(expression.span);
     if (this.checkedBuilderCalls.has(key)) return;

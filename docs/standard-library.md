@@ -106,29 +106,69 @@ installable library, even when it is implemented entirely in VelarScript.
   Map key remains valid at the ceiling, while growth fails with `RangeError`.
   Dynamic misuse fails before a native capability is invoked.
 
-## Two halves of the library
+## Three groups, and how to tell which one a module is in
 
-**Permanent pure computation — no import.** `Json.`, `Promise.`, `Text.`, and
-(on Web) `Look.` are always in scope, alongside the prelude names `print`,
-`str`, `number`, `equals`, and `range`. Both spellings that reach a permanent
-member are retired — the named import and the namespace import — and each
-receives a diagnostic that teaches the namespace spelling.
+Every module in this library is in exactly one of three groups. Two questions,
+asked in order, decide which — so you can predict where a new module lands
+before anyone tells you.
 
-**Everything else is imported**, for one of two reasons.
+**1. Does it compute, or does it reach outside the program?** Reading a clock,
+a disk, a network, or an entropy source is reaching outside. Anything that
+reaches outside is a capability and is always imported.
 
-*Pure, but not universal:* `velar/collections`, `velar/math`, `velar/url`, and
-`velar/test` compute and touch nothing, so they would be eligible; they keep
-their import line because they are toolboxes a program deliberately reaches
-for, not vocabulary every program already speaks. One import line says "I chose
-this toolbox", which is information worth keeping.
+**2. If it only computes: does its name mirror a namespace-shaped JavaScript
+global?** If it does, it is permanent and needs no import. If it does not, it
+is imported by name.
 
-*Not pure:* `velar/time` reads the clock, `velar/id` reads entropy, and
-`velar/log` writes to the outside world, so none is even eligible.
+### Group 1 — permanent namespaces (no import)
 
-*Capabilities:* `velar/fs`, `velar/path`, `velar/process`, `velar/env`,
-`velar/host`, `velar/serve`, `velar/terminal`, `velar/http`, and the Web
-modules documented in `web-api.md`. For a capability the import line is the
-audit signal, so it never becomes permanent for convenience.
+`Json.`, `Promise.`, `Math.`, and `Text.`, alongside the prelude names `print`,
+`str`, `number`, `equals`, and `range`.
+
+The second question is what makes this list short and closed. A prefix costs
+every reader four characters at every call, so it has to give something back,
+and what it gives back is recognition: `JSON.stringify`, `Promise.all`, and
+`Math.max` are spellings a JavaScript author already knows, and `Json.parse`
+tells you the format where a bare `parse` would not. A prefix we invented gives
+nothing back — which is why `Look.` was withdrawn after one release and its
+builders returned to `velar/look` as named imports. "It looks uniform" is not a
+reason.
+
+Every namespace-shaped JavaScript global has been checked against this list:
+`Object` is answered by record fields and `Record<T>`, `Array` by List methods,
+`Number` by number methods and `number(text)`, `String` by string methods and
+`Text.`, and `console` by `print`. `Date` is the one that computes-looking name
+that is not here on purpose — reading the clock reaches outside, so `velar/time`
+is a capability. A future addition must clear question 2 first.
+
+Both spellings that reach a permanent member are retired — the named import and
+the namespace import — and each earns a diagnostic that teaches the namespace
+spelling and a `velar fix` rewrite that performs it.
+
+### Group 2 — pure modules imported by name
+
+`velar/collections`, `velar/url`, `velar/test`, and, on Web, `velar/look`.
+
+These compute and touch nothing, so question 1 clears them; they are imported
+because question 2 does not — there is no `Collections`, `Url`, or `Look` in
+JavaScript to mirror. That is not a demotion. An import line is information: it
+says this program chose this toolbox, and for `velar/look` in particular the
+import list at the top of a file tells a reader exactly which visual vocabulary
+that file speaks.
+
+`velar/time`, `velar/id`, and `velar/log` sit here in spelling but fail
+question 1 — they read the clock, read entropy, and write to the outside world
+— so they could never move to group 1 whatever they were called.
+
+### Group 3 — capabilities
+
+`velar/fs`, `velar/path`, `velar/process`, `velar/env`, `velar/host`,
+`velar/serve`, `velar/terminal`, `velar/http`, and the Web modules documented in
+`web-api.md`.
+
+For a capability the import line is the audit signal — it is how a reader sees
+what a module touches — so no capability becomes permanent for convenience,
+however often it is used.
 
 ## `velar/collections`
 
@@ -307,20 +347,24 @@ const short = "VelarScript".slice(0, 5)
 print(f"{initial ?? "?"}:{short.size}")
 ```
 
-## `velar/math`
+## `Math.` (permanent, no import)
 
-The module exposes JavaScript Number mathematics without claiming Python
-integer or decimal behavior. Every public operation nevertheless requires an
-actual `number` at runtime; native `Math.*` coercion cannot turn `"2"`, `[]`,
-or another dynamic JavaScript value into a VelarScript number.
+The namespace exposes JavaScript Number mathematics without claiming Python
+integer or decimal behavior. Every operation nevertheless requires an actual
+`number` at runtime; the JavaScript `Math` global's coercion cannot turn `"2"`,
+`[]`, or another dynamic JavaScript value into a VelarScript number.
 
-| Group | Exports |
+What belongs on a number is a number method, so what is left here is exactly
+what cannot be one: the constants, the multi-argument functions, and the
+transcendentals.
+
+| Group | Members |
 | --- | --- |
 | Constants | `pi`, `e`, `tau`, `infinity` |
 | Bounds | `min`, `max`, `clamp`, `sign`, `trunc` |
 | Powers and logarithms | `sqrt`, `cbrt`, `pow`, `exp`, `log`, `log2`, `log10` |
 | Trigonometry | `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `degrees`, `radians` |
-| Numeric helpers | `hypot`, `random`, `randomInt`, `isFinite`, `isInteger`, `gcd`, `lcm` |
+| Numeric helpers | `hypot`, `random`, `randomInt`, `gcd`, `lcm` |
 
 The receiver-shaped operations are number members: `.abs()`, `.round()`,
 `.floor()`, `.ceil()`, `.toFixed(digits)`, and the predicates `.isInteger()`,

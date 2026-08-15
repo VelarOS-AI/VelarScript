@@ -1,6 +1,7 @@
 import {format} from "velar/time"
 
 import {Task, TaskIdHandler, TaskPriority, TaskStatus} from "../domain.vel"
+import {border, color, rgb, rgba, shadow, spacing} from "velar/look"
 
 def statusAction(status: TaskStatus) -> string:
     match status:
@@ -16,21 +17,21 @@ def cardLook(high: bool, done: bool) -> Look:
         display = "grid"
         gap = 12px
         padding = 16px
-        border = Look.border(1px, Look.rgb(224, 230, 240))
-        borderLeft = Look.border(high ? 4px : 1px, high ? Look.rgb(229, 72, 77) : Look.rgb(224, 230, 240))
+        border = border(1px, rgb(224, 230, 240))
+        borderLeft = border(high ? 4px : 1px, high ? rgb(229, 72, 77) : rgb(224, 230, 240))
         borderRadius = 15px
-        background = Look.rgb(255, 255, 255)
-        boxShadow = Look.shadow(0px, 8px, 24px, Look.rgba(38, 54, 88, 0.06))
+        background = rgb(255, 255, 255)
+        boxShadow = shadow(0px, 8px, 24px, rgba(38, 54, 88, 0.06))
         opacity = done ? 0.72 : 1
 
 const titleLook = look:
     margin = 0
-    color = Look.rgb(23, 32, 51)
+    color = rgb(23, 32, 51)
     fontSize = 16px
 
 const descriptionLook = look:
     margin = 0
-    color = Look.rgb(93, 104, 128)
+    color = rgb(93, 104, 128)
     fontSize = 14px
     lineHeight = 1.45
 
@@ -41,24 +42,24 @@ const rowLook = look:
     gap = 8px
 
 const priorityLook = look:
-    padding = Look.spacing(4px, 8px)
+    padding = spacing(4px, 8px)
     borderRadius = 9999px
-    color = Look.rgb(67, 80, 106)
-    background = Look.rgb(237, 241, 248)
+    color = rgb(67, 80, 106)
+    background = rgb(237, 241, 248)
     fontSize = 12px
     fontWeight = 700
     textTransform = "capitalize"
 const timeLook = look:
-    color = Look.rgb(125, 135, 156)
+    color = rgb(125, 135, 156)
     fontSize = 11px
 
 def actionLook(dangerous: bool = false) -> Look:
     return look:
-        border = Look.border(0px, Look.color("transparent"))
-        padding = Look.spacing(7px, 10px)
+        border = border(0px, color("transparent"))
+        padding = spacing(7px, 10px)
         borderRadius = 9px
-        color = dangerous ? Look.rgb(159, 45, 45) : Look.rgb(35, 69, 174)
-        background = dangerous ? "transparent" : Look.rgb(233, 239, 255)
+        color = dangerous ? rgb(159, 45, 45) : rgb(35, 69, 174)
+        background = dangerous ? "transparent" : rgb(233, 239, 255)
         fontSize = 13px
         fontWeight = 700
         cursor = "pointer"

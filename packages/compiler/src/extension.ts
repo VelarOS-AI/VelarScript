@@ -152,6 +152,14 @@ export interface CompilerAnalysisExtension {
    * refs, and inside a `.browser.test.vel` it means `velar/web-test`.
    */
   readonly globalGuidanceByPathSuffix?: ReadonlyMap<string, ReadonlyMap<string, string>>;
+  /**
+   * D52 rule 114: a namespace prefix the language invented and then withdrew,
+   * keyed by the retired name. It is `permanentNamespace` run backwards — that
+   * one turns an import into a prefix, this one turns a prefix back into the
+   * import — so the migration teaches the named import that replaced it and
+   * carries the mechanical rewrite (drop the prefix, add the import) with it.
+   */
+  readonly retiredNamespaces?: ReadonlyMap<string, RetiredNamespace>;
   /** Resolve target-owned type syntax without teaching Core the target's types. */
   readonly resolveTypeSyntax?: ExtensionTypeSyntaxResolver;
   /** Decide compatibility inside a target-owned type family. */
@@ -169,6 +177,12 @@ export interface CompilerAnalysisExtension {
    */
   readonly textForm?: (type: ValueType) => boolean | undefined;
   readonly inferIntrinsic?: (context: CompilerIntrinsicAnalysisContext) => ValueType | undefined;
+}
+
+/** The module a retired namespace's members moved back to, and which names moved. */
+export interface RetiredNamespace {
+  readonly module: string;
+  readonly members: ReadonlySet<string>;
 }
 
 export interface CompilerIntrinsicAnalysisContext {
@@ -308,8 +322,6 @@ export interface ModuleTest {
 
 export interface ModuleInterface {
   readonly exports: ReadonlyMap<string, ValueType>;
-  /** Pure exports retired from source imports and exposed through one permanent namespace. */
-  readonly permanentNamespace?: { readonly name: string; readonly members: ReadonlySet<string> };
   readonly mutableExports: ReadonlySet<string>;
   readonly reactiveExports: ReadonlyMap<string, "state">;
   /** Named re-exports (`export {name} from "source"`), keyed by the exported alias. */
