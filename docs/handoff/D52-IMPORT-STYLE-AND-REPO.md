@@ -14,11 +14,14 @@
 | 命名空间 | 处置 | 理由 |
 |---|---|---|
 | **`Look.`** | **取消** → `import {spacing, color, tracks, minmax, border, shadow, animate, …} from "velar/look"` | JS 里没有 `Look` 这个全局，前缀是我们发明的。且 look 块内是全语言最密集的调用位置，`Look.` 在那里纯粹是噪音 |
-| **`Text.`** | **取消** → `import {slug, dedent, truncate, …} from "velar/text"` | 同上，`Text` 无 JS 对应物；`slug(title)`、`dedent(block)` 自我说明，不需要前缀 |
+| **`Text.`** | **保留**（用户 2026-08-15 收窄范围：只改 Look） | 镜像规则本会判它取消，但用户明确只动 Look —— **这是所有者的取舍，不是从规则推出来的**，如实记录 |
 | **`Json.`** | **保留** | 镜像 `JSON.stringify` —— 去掉前缀后 `stringify(x)` 单看不知道是 JSON 还是别的格式，**前缀携带信息** |
 | **`Promise.`** | **保留** | `Promise.all` 就是全世界都认识的那个拼写；`all(...)` 更难读，且离母语言更远 |
 
-**分界线一句话**：**前缀镜像母语言的保留，前缀是我们发明的取消。**
+**分界线一句话**：**前缀镜像母语言的保留**（`Json.`≈`JSON.`、`Promise.`≈`Promise.`）。
+`Look.` 是我们发明且落在全语言最密集的调用位置，取消。`Text.` 按规则本该同去，
+**用户选择保留** —— 记录为所有者的取舍，将来若有人问「为什么 Text 不一样」，
+答案是「他觉得那样更好」，不是某条推导。
 
 ### 与既有裁决的关系（诚实标注）
 
@@ -33,15 +36,16 @@
 
 ### 落地要求
 
-1. `velar/look` 与 `velar/text` 恢复为**普通具名导入模块**；`Look`/`Text` 作为
-   常驻名字**退役**，并给出迁移诊断（`Look.spacing(...)` → 教
-   `import {spacing} from "velar/look"`）—— 与批次 K 当初反向退役的机制同一套。
+1. `velar/look` 恢复为**普通具名导入模块**；`Look` 作为常驻名字**退役**，
+   并给出迁移诊断（`Look.spacing(...)` → 教 `import {spacing} from "velar/look"`）
+   —— 与批次 K 当初反向退役的机制同一套。`Text`/`Json`/`Promise` 三个常驻
+   命名空间**完全不动**。
 2. 第 109 条的**保留类型名**中，`Text` 是否仍需保留？—— **仍需**：它是类型
    约束名（`<T: Text>`），与模块名无关。`Comparable`/`Data` 不变。
 3. 全仓迁移：examples、stdlib `.vel`、docs 围栏、charter、AI 简报（双份逐字节
    一致）、`velar create` 模板。
-4. 回归：具名导入可用、`Look.`/`Text.` 旧形态得到迁移诊断、`Json.`/`Promise.`
-   不回归、`velar fix` 能机械改写旧形态（前缀去除 + 补 import 是可证等价的）。
+4. 回归：具名导入可用、`Look.` 旧形态得到迁移诊断、`Text.`/`Json.`/`Promise.`
+   三者均不回归、`velar fix` 能机械改写旧形态（前缀去除 + 补 import 是可证等价的）。
 
 ---
 
