@@ -63,7 +63,7 @@ unsafe js`
 理由：文本插值等于**用字符串拼接生成代码** —— 注入风险，且读者要在脑内跑一遍
 拼接才知道最终代码长什么样。**值走契约，不走文本**，这正是契约存在的意义。
 
-### `css` 同规则
+### `css` 同规则 —— **但归 web 扩展所有，不进 Core**（用户 2026-08-15 更正）
 
 ```
 unsafe css`
@@ -74,6 +74,23 @@ unsafe css`
 内联 CSS 与外部 `import css unsafe "./x.css"` 同语义（`before`/`after look`
 的定位规则一并适用）。**它是真需求**：审计确认 keyframes 之外的动画今天只能靠
 原生 CSS，而唯一的路是引外部文件。CSS 无「契约」概念，故只有 `unsafe` 形态。
+
+**所有权边界（用户明确更正，最高约束）**：
+
+| 块 | 归属 | 理由 |
+|---|---|---|
+| `extern js` / `unsafe js` | **Core** | JavaScript 是母体运行时，Core 本来就发射并对接 JS —— `extern module` / `import js` 一直是 Core 的能力 |
+| `unsafe css` | **web 扩展** | **CSS 是 web 的概念，Core 不该认识它**。`import css unsafe` 今天就由 web 扩展拥有，内联形态必须落在同一处 |
+
+**通则（本条据此重申）**：**哪个模块该支持哪些东西的边界不能破坏。**
+Core 不认识 CSS、不认识 DOM、不认识能力模块 —— 这与 charter 规则 5 同源，
+也与 D51 第 96.2 条（能力可释放性用结构判定而非把 `FileWatcher`/`Server`
+写进 Core）是同一条纪律的两次应用。**在 Core 里放一个 `css` 关键字，等于为了
+少写一行扩展注册而破坏分层** —— 不接受。
+
+实施要求：`css` 块的词法/解析/发射全部由 `@velarscript/web` 注册（走既有的
+扩展协议，与 `import css unsafe`、`look:`、`keyframes:` 同一套）；Core 项目里
+写 `unsafe css` 得到 D37-45 那族的 web 扩展指引，而不是「未知关键字」。
 
 ### 明确不做（连同理由，供将来复核）
 
