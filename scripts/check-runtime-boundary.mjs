@@ -47,6 +47,10 @@ import {
   VELAR_TYPE_VALIDATION_MODULE,
   VELAR_TYPE_VALIDATION_MODULE_SOURCE,
 } from "../packages/compiler/src/type-validation-runtime.ts";
+import { standardModuleInterfaces, standardModuleSources } from "../packages/cli/src/standard-modules.ts";
+import { velarCompilerExtension as velarWebCompilerExtension } from "../packages/web/src/compiler.ts";
+import { velarNodeCompilerExtension } from "../packages/node/src/compiler.ts";
+import { velarCompilerExtension as velarDesktopCompilerExtension } from "../packages/desktop/src/compiler.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const failures = [];
@@ -1916,11 +1920,58 @@ for (const phrase of [
   }
 }
 
+// D57 rule 140: a standard module's runtime may not export a name its
+// interface does not declare. `import js unsafe {name} from "velar/fs"` reaches
+// the runtime module directly, so an export the interface never published is
+// still callable — which is how retiring D57 rule 137's Blob turned out to
+// need the runtime function deleted, not only the interface entry. Nothing
+// enforced that; this does. The `__velar` prefix carries its own protection
+// (VEL3007 refuses it at the import), so those are exempt by rule, not by list.
+// Audit one extension at a time. Merging them all into a single map makes a
+// later extension's module silently overwrite an earlier one's — Desktop ships
+// its own velar/fs alongside Node's, so the merged form checked one of the two
+// implementations and reported as though it had checked both.
+let standardModulesAudited = 0;
+const auditedSurfaces = new Set();
+for (const extensions of [[], [velarWebCompilerExtension], [velarNodeCompilerExtension], [velarDesktopCompilerExtension]]) {
+  const interfaces = standardModuleInterfaces(extensions);
+  const sources = standardModuleSources(extensions);
+  for (const [name, source] of sources) {
+    const contract = interfaces.get(name);
+    if (!contract) continue;
+    const surface = `${name} ${source.length}`;
+    if (auditedSurfaces.has(surface)) continue;
+    auditedSurfaces.add(surface);
+    standardModulesAudited += 1;
+    const declared = new Set();
+    for (const table of [contract.exports, contract.mutableExports, contract.reactiveExports, contract.reExports,
+      contract.namedTypes, contract.typeAliases, contract.enums, contract.classes, contract.extensionExports]) {
+      if (table instanceof Map) for (const key of table.keys()) declared.add(key);
+      else if (table && typeof table === "object") for (const key of Object.keys(table)) declared.add(key);
+    }
+    const published = new Set();
+    for (const match of source.matchAll(/^export\s+(?:async\s+)?(?:function|const|let|class)\s+([A-Za-z_$][\w$]*)/gmu)) {
+      published.add(match[1]);
+    }
+    for (const match of source.matchAll(/^export\s*\{([^}]*)\}/gmsu)) {
+      for (const clause of match[1].split(",")) {
+        const parts = clause.split(/\s+as\s+/u);
+        const exported = (parts[1] ?? parts[0]).trim();
+        if (exported !== "") published.add(exported);
+      }
+    }
+    for (const exported of published) {
+      if (exported.startsWith("__velar") || declared.has(exported)) continue;
+      failures.push(`${name}: runtime exports '${exported}', which the module interface does not declare — 'import js unsafe' can reach it`);
+    }
+  }
+}
+
 if (failures.length > 0) {
   console.error(failures.join("\n"));
   process.exitCode = 1;
 } else {
-  console.log(`Checked ${ids.size} runtime boundary operations and the shared registry, strict JSON, Web DOM, host-event, browser-platform, storage-host, and Desktop-host ABIs`);
+  console.log(`Checked ${ids.size} runtime boundary operations, ${standardModulesAudited} standard module surfaces, and the shared registry, strict JSON, Web DOM, host-event, browser-platform, storage-host, and Desktop-host ABIs`);
 }
 
 async function sourceFiles(directory) {
