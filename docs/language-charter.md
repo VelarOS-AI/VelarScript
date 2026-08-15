@@ -3655,7 +3655,7 @@ never grows.
 half. `Text.fromCodePoint(value)` is its inverse and refuses a surrogate half,
 so no call can build text that is not a sequence of characters.
 
-A lexical declaration may shadow any permanent namespace, and imports remain
+A lexical declaration may not shadow a permanent namespace, and imports remain
 the contract for capability-bearing modules. Both spellings that reach these
 permanent members are retired — the named import and the namespace import —
 and each receives a diagnostic that teaches the namespace spelling.
