@@ -706,10 +706,13 @@ function installBrowserRuntime(page: Page, origin: string, base: string, runtime
       const value = String(path);
       if (!value.startsWith("/")) throw new Error("browser.open requires an application-relative path starting with '/'");
       const target = base === "/" ? value : `${base.slice(0, -1)}${value}`;
-      await page.goto(new URL(target, origin).href, { waitUntil: "networkidle" });
+      // Navigation owns document loading, not application network quiescence.
+      // A product may poll or stream forever; tests establish readiness with
+      // the web-first waitFor/waitForText assertions exposed beside open().
+      await page.goto(new URL(target, origin).href, { waitUntil: "load" });
       return null;
     },
-    async reload() { await page.reload({ waitUntil: "networkidle" }); return null; },
+    async reload() { await page.reload({ waitUntil: "load" }); return null; },
     async click(selector: unknown) { await locator(selector).click(); return null; },
     async fill(selector: unknown, value: unknown) { await locator(selector).fill(String(value)); return null; },
     async select(selector: unknown, value: unknown) { await locator(selector).selectOption(String(value)); return null; },
