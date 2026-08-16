@@ -104,13 +104,20 @@ Vel itself ever becomes the obstacle, take the emitted output and keep
 shipping — an exit enforced by a
 [permanent acceptance gate](tests/package.acceptance.ts), not promised in prose.
 
-**It never promises backward compatibility.** The language absorbs evidence and
-breaks cleanly: removed spellings get teaching migration diagnostics, never
-silent aliases and never permanent compatibility debt. Pin your toolchain
-version; migrations are guided and `velar fix` applies the mechanical ones. Vel
-currently fits products that move fast — prototypes, internal tools, short
-lifecycles. A stable channel for long-lived products is a future milestone,
-earned by evidence rather than declared by a version number.
+**It never promises backward compatibility, and that is the point.** This
+language exists because its author could not live inside React's pile of
+constraints or Vue's template syntax, and the goal is that nobody using Vel
+ever has to design a replacement for the same reason. No single constraint
+makes anyone rewrite a language — React's are each defensible — it is the
+accumulation. And a language that promises compatibility can only add, so
+friction it discovers is friction it carries forever.
+
+Refusing the promise is what lets a friction be removed once it is found.
+Removed spellings get teaching migration diagnostics, never silent aliases and
+never permanent compatibility debt; `velar fix` applies the mechanical part.
+Pin your toolchain version. Vel currently fits products that move fast —
+prototypes, internal tools, short lifecycles — and a stable channel is a future
+milestone earned by evidence rather than declared by a version number.
 
 The full reasoning is in [Why VelarScript exists](docs/why-velarscript.md).
 

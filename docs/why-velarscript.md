@@ -16,6 +16,27 @@ though the product is theirs.
 
 VelarScript exists to solve that problem, not to be a nicer syntax.
 
+## Why it refuses to promise compatibility
+
+This language was designed by someone who could not live inside React's pile
+of constraints or Vue's template syntax. So the goal it holds itself to is
+that nobody using Vel should one day have to design a replacement for the same
+reason.
+
+No single constraint makes anyone rewrite a language. React's are each
+defensible, each documented, each justified when it was added — it is the
+accumulation nobody can stand. Which means the dangerous constraints are
+exactly the ones that look worth it individually.
+
+A language that promises backward compatibility can only add. Friction
+accumulates by addition, so a compatibility-promising language drifts toward
+being the thing this one was built to escape. **Refusing the promise is the
+mechanism that lets a friction be removed once it is found**, rather than
+carried forever because something depends on it. It is not a disclaimer about
+immaturity; it is the property that keeps the pile from forming.
+
+What that costs, and how the cost is paid, is under Honest boundaries below.
+
 ## The bet
 
 Vel is built from the bones of JavaScript and Python — the two languages
@@ -72,10 +93,11 @@ Vel maintains three exits, in order:
 
 ## Honest boundaries
 
-- **Vel does not promise backward compatibility.** The language absorbs
-  lessons and breaks cleanly; removed spellings get teaching diagnostics,
-  never silent aliases and never permanent compatibility debt. Pin your
-  toolchain version; migrations are guided.
+- **Breaking cleanly has a price, and you pay it.** The reason Vel refuses
+  the compatibility promise is above; here is what it costs. Removed spellings
+  get teaching diagnostics, never silent aliases and never permanent
+  compatibility debt, and `velar fix` applies the mechanical part — but you
+  pin your toolchain version, and you migrate when you move it.
 - **Vel is currently for products that move fast**: prototypes, internal
   tools, short-lifecycle applications — anything where validation speed
   matters more than a ten-year support horizon. A stable channel for
