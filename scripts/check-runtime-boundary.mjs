@@ -48,8 +48,9 @@ import {
   VELAR_TYPE_VALIDATION_MODULE_SOURCE,
 } from "../packages/compiler/src/type-validation-runtime.ts";
 import { standardModuleInterfaces, standardModuleSources } from "../packages/cli/src/standard-modules.ts";
+import { esModuleExports } from "./es-module-exports.mjs";
 import { velarCompilerExtension as velarWebCompilerExtension } from "../packages/web/src/compiler.ts";
-import { velarNodeCompilerExtension } from "../packages/node/src/compiler.ts";
+import { VELAR_NODE_HOST_MODULE, velarNodeCompilerExtension } from "../packages/node/src/compiler.ts";
 import { velarCompilerExtension as velarDesktopCompilerExtension } from "../packages/desktop/src/compiler.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -1943,39 +1944,94 @@ for (const phrase of [
 // later extension's module silently overwrite an earlier one's — Desktop ships
 // its own velar/fs alongside Node's, so the merged form checked one of the two
 // implementations and reported as though it had checked both.
-let standardModulesAudited = 0;
-const auditedSurfaces = new Set();
+//
+// Three repairs, each of which had let this pass green on something:
+//
+//  1. What a module publishes is read from its export syntax by
+//     `scripts/es-module-exports.mjs`, not matched with two regular
+//     expressions. Those patterns could not see `export var`,
+//     `export function*` (the spelling `packages/compiler/src/ast.ts` itself
+//     uses), `export const {a} = ...`, `export default`, `export * as ns`, or
+//     any export not flush against column zero, and every one of them would
+//     have published a name this gate reported as absent. An export form the
+//     scanner cannot read is a failure here, never a skip.
+//  2. A runtime module source with no published `ModuleInterface` used to be
+//     skipped in silence — ten of them per extension set, which is a tenth of
+//     the module sources this loop walks passing without a word. They are
+//     accounted for now instead. Rule 140 compares a runtime against its
+//     interface, and these have none because they are outside the checked
+//     standard-module namespace: a `import {narrow} from
+//     "velar/compiler-runtime-narrowing-v1"` is VEL6003 `Unknown standard
+//     module`, exactly as for a name nobody ever defined. What can be checked,
+//     and is, is that every one of them is a module identity the compiler
+//     declares. An eleventh source with no interface and no declared identity
+//     is a module surface nobody accounted for, and it fails here.
+//  3. A surface is identified by its whole source. The old key was the module
+//     name and the source's byte length, so two same-named modules of equal
+//     size counted as one surface: the second went unchecked while the total
+//     reported otherwise. That is the merged-map defect above, rebuilt inside
+//     its own repair.
+const declaredInternalModules = new Set([
+  VELAR_CLASS_FIELD_MODULE,
+  VELAR_COLLECTION_HOST_MODULE,
+  VELAR_COLLECTION_LOWERING_MODULE,
+  VELAR_ERROR_NORMALIZATION_MODULE,
+  VELAR_NARROWING_MODULE,
+  VELAR_NODE_HOST_MODULE,
+  VELAR_PRIMITIVE_METHOD_MODULE,
+  VELAR_PROMISE_NORMALIZATION_MODULE,
+  VELAR_REACTIVE_BRIDGE_MODULE,
+  VELAR_TYPE_VALIDATION_MODULE,
+]);
+let publicModuleSurfaces = 0;
+let internalModuleSurfaces = 0;
+const auditedSurfaces = new Map();
+const accountedInternalModules = new Set();
 for (const extensions of [[], [velarWebCompilerExtension], [velarNodeCompilerExtension], [velarDesktopCompilerExtension]]) {
   const interfaces = standardModuleInterfaces(extensions);
   const sources = standardModuleSources(extensions);
   for (const [name, source] of sources) {
+    const seenSources = auditedSurfaces.get(name) ?? new Set();
+    if (seenSources.has(source)) continue;
+    seenSources.add(source);
+    auditedSurfaces.set(name, seenSources);
     const contract = interfaces.get(name);
-    if (!contract) continue;
-    const surface = `${name} ${source.length}`;
-    if (auditedSurfaces.has(surface)) continue;
-    auditedSurfaces.add(surface);
-    standardModulesAudited += 1;
-    const declared = new Set();
-    for (const table of [contract.exports, contract.mutableExports, contract.reactiveExports, contract.reExports,
-      contract.namedTypes, contract.typeAliases, contract.enums, contract.classes, contract.extensionExports]) {
-      if (table instanceof Map) for (const key of table.keys()) declared.add(key);
-      else if (table && typeof table === "object") for (const key of Object.keys(table)) declared.add(key);
-    }
-    const published = new Set();
-    for (const match of source.matchAll(/^export\s+(?:async\s+)?(?:function|const|let|class)\s+([A-Za-z_$][\w$]*)/gmu)) {
-      published.add(match[1]);
-    }
-    for (const match of source.matchAll(/^export\s*\{([^}]*)\}/gmsu)) {
-      for (const clause of match[1].split(",")) {
-        const parts = clause.split(/\s+as\s+/u);
-        const exported = (parts[1] ?? parts[0]).trim();
-        if (exported !== "") published.add(exported);
+    if (contract) {
+      publicModuleSurfaces += 1;
+    } else {
+      internalModuleSurfaces += 1;
+      accountedInternalModules.add(name);
+      if (!declaredInternalModules.has(name)) {
+        failures.push(`${name}: this module source publishes no interface and is not one of the compiler's declared internal runtime`
+          + ` modules, so nothing here knows what it is allowed to export`);
       }
     }
+    const declared = new Set();
+    if (contract) {
+      for (const table of [contract.exports, contract.mutableExports, contract.reactiveExports, contract.reExports,
+        contract.namedTypes, contract.typeAliases, contract.enums, contract.classes, contract.extensionExports]) {
+        if (table instanceof Map) for (const key of table.keys()) declared.add(key);
+        else if (table && typeof table === "object") for (const key of Object.keys(table)) declared.add(key);
+      }
+    }
+    const { names: published, unreadable } = esModuleExports(source);
+    for (const problem of unreadable) {
+      failures.push(`${name}: this gate cannot read an export form in the runtime module, so the names it publishes are unknown`
+        + ` — ${problem.reason}: ${problem.text}`);
+    }
+    if (!contract) continue;
     for (const exported of published) {
       if (exported.startsWith("__velar") || declared.has(exported)) continue;
       failures.push(`${name}: runtime exports '${exported}', which the module interface does not declare — 'import js unsafe' can reach it`);
     }
+  }
+}
+// The other direction of the same accounting: a declared internal module whose
+// source stopped being emitted is a retired runtime this gate would otherwise
+// keep reporting as covered.
+for (const name of declaredInternalModules) {
+  if (!accountedInternalModules.has(name)) {
+    failures.push(`${name}: the compiler declares this internal runtime module, but no module source carries it`);
   }
 }
 
@@ -1983,7 +2039,18 @@ if (failures.length > 0) {
   console.error(failures.join("\n"));
   process.exitCode = 1;
 } else {
-  console.log(`Checked ${ids.size} runtime boundary operations, ${standardModulesAudited} standard module surfaces, and the shared registry, strict JSON, Web DOM, host-event, browser-platform, storage-host, and Desktop-host ABIs`);
+  // This line used to open with `Checked ${ids.size} runtime boundary
+  // operations`, counting rows of a Markdown table that no check in this file
+  // is connected to: appending a row to `docs/contributing/runtime-boundary.md`
+  // raised the number with nothing behind it. Binding each row to a check is
+  // not available from here — 73 of the 77 rows name their proof in prose that
+  // resolves to no artifact, and 50 are cited nowhere outside the ledger — so
+  // making that number mean something is a change to the ledger, not to this
+  // gate. Until it means something it is not reported: a number nothing
+  // supports claims more coverage than no number at all.
+  console.log(`Checked ${publicModuleSurfaces} standard module surfaces, ${internalModuleSurfaces} internal runtime module surfaces,`
+    + ` the boundary ledger's structure, and the shared registry, strict JSON, Web DOM, host-event, browser-platform, storage-host,`
+    + ` and Desktop-host ABIs`);
 }
 
 async function sourceFiles(directory) {

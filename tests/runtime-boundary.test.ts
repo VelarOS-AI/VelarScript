@@ -10,7 +10,11 @@ import {
   VELAR_TYPE_REGISTRY_RUNTIME,
   VELAR_UTF8_RUNTIME,
 } from "@velarscript/compiler/extension";
+import { standardModuleInterfaces, standardModuleSources } from "../packages/cli/src/standard-modules.ts";
+import { velarCompilerExtension as velarDesktopCompilerExtension } from "../packages/desktop/src/compiler.ts";
+import { velarNodeCompilerExtension } from "../packages/node/src/compiler.ts";
 import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
+import { esModuleExports } from "../scripts/es-module-exports.mjs";
 
 function executeModule(source: string) {
   // Passing generated programs through `--eval` is bounded by the host's
@@ -254,6 +258,87 @@ console.log(poisonCalls);
     "0",
     "",
   ].join("\n"));
+});
+
+test("the boundary gate reads a runtime module's exports as syntax, not as two patterns", () => {
+  // D57 rule 140 is enforced by comparing what a runtime module publishes
+  // against what its interface declares, and what it publishes used to be found
+  // with `^export (async )?(function|const|let|class) NAME` and `^export {...}`.
+  // Every form below is a name those two patterns never saw, so a runtime that
+  // used any of them published names the gate reported as absent. Compiled
+  // sources are generated, which is exactly why this is a defect and not a
+  // style note: `export function*` is already this repository's own spelling in
+  // `packages/compiler/src/ast.ts`, and nothing stops an emitter reaching for
+  // it or for `export var`.
+  for (const [source, expected] of [
+    ["export var counter = 0;", ["counter"]],
+    ["export function* walk() { yield 1; }", ["walk"]],
+    ["export async function* stream() { yield 1; }", ["stream"]],
+    ["export const {alpha, beta: renamed, ...rest} = host;", ["alpha", "renamed", "rest"]],
+    ["export const [first, , third = 2, ...tail] = host;", ["first", "third", "tail"]],
+    ["  export const indented = 1;", ["indented"]],
+    ["\texport const tabbed = 1;", ["tabbed"]],
+    ["export let first = 1, second = 2;", ["first", "second"]],
+    ["export default function () {}", ["default"]],
+    ["export * as everything from \"./other.js\";", ["everything"]],
+    ["export const outer = 1;\nfunction hide() { const inner = 2; return inner; }", ["outer"]],
+    ["export {local as published, plain};", ["published", "plain"]],
+    ["export {renamed as \"quoted name\"};", ["quoted name"]],
+  ] as const) {
+    const { names, unreadable } = esModuleExports(source);
+    assert.deepEqual(unreadable, [], source);
+    assert.deepEqual(names, [...expected], source);
+  }
+
+  // A name that only looks like an export publishes nothing.
+  for (const source of [
+    "const host = {export: 1};\nconst read = host.export;",
+    "// export const commented = 1;",
+    "const text = \"export const inString = 1\";",
+    "const pattern = /export const inRegex = 1/u;",
+    "const filled = `export const ${\"inTemplate\"} = 1`;",
+    "function body() { return 1; }",
+  ]) {
+    assert.deepEqual(esModuleExports(source).names, [], source);
+  }
+
+  // And a form outside the scanner's boundary is named, never skipped: a silent
+  // skip is what made the two patterns look like coverage in the first place.
+  for (const source of ["export * from \"./other.js\";", "export const unterminated = 1", "export interface Shape {}"]) {
+    assert.notEqual(esModuleExports(source).unreadable.length, 0, source);
+  }
+});
+
+test("the boundary gate reports no number it cannot support", () => {
+  // The summary used to open with `Checked ${ids.size} runtime boundary
+  // operations`, counting rows of the Markdown table in
+  // `docs/contributing/runtime-boundary.md` — a count connected to no check in
+  // that gate, which rose by one for every row appended. Pinned here is that
+  // every number the gate prints is a number this test can recompute: an
+  // unsupported count cannot be re-introduced without failing.
+  const surfaces = new Map<string, Set<string>>();
+  let publicSurfaces = 0;
+  let internalSurfaces = 0;
+  for (const extensions of [[], [velarCompilerExtension], [velarNodeCompilerExtension], [velarDesktopCompilerExtension]]) {
+    const interfaces = standardModuleInterfaces(extensions);
+    for (const [name, source] of standardModuleSources(extensions)) {
+      const seen = surfaces.get(name) ?? new Set<string>();
+      if (seen.has(source)) continue;
+      seen.add(source);
+      surfaces.set(name, seen);
+      if (interfaces.has(name)) publicSurfaces += 1;
+      else internalSurfaces += 1;
+    }
+  }
+  const gate = spawnSync(process.execPath, ["scripts/check-runtime-boundary.mjs"], { encoding: "utf8" });
+  assert.equal(gate.status, 0, `${gate.stdout}\n${gate.stderr}`);
+  const reported = String(gate.stdout).match(/\d+/gu) ?? [];
+  assert.deepEqual(reported, [String(publicSurfaces), String(internalSurfaces)], gate.stdout);
+
+  // Every internal runtime module is accounted for rather than skipped. Ten of
+  // them used to fall through a `continue` that said nothing, so a tenth of the
+  // module sources that loop walks passed without being looked at.
+  assert.notEqual(internalSurfaces, 0);
 });
 
 function escapeRegex(value: string): string {

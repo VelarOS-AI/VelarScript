@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { prepareExternalPreview } from "../scripts/prepare-external-preview.mjs";
+import { velarBuildOrder } from "../scripts/velar-packages.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 
@@ -135,7 +136,30 @@ test("external preview preparation emits a reproducible root Netlify build", asy
 });
 
 async function protectWorkspaceOutputs(label: string) {
-  const paths = ["compiler", "node", "web", "create", "cli", "desktop"].map((workspace) => join(root, "packages", workspace, "dist", `.workspace-${label}.sentinel`));
+  // A-024 again, one file further on. The six workspaces were spelled out here,
+  // which was correct and was a copy: the seventh compiled package would have
+  // been the one package release tooling could quietly overwrite. What has to
+  // be protected is every package that has a `dist` to lose, and that is what
+  // `velarBuildOrder` already answers.
+  const built = await velarBuildOrder(root);
+  const paths = built.map((package_) => join(package_.directory, "dist", `.workspace-${label}.sentinel`));
+  // Recomputed by a second route — the manifests themselves — so that replacing
+  // the derivation above with a literal list again fails here instead of
+  // silently protecting fewer packages than the workspace has.
+  const compiled = (await Promise.all((await readdir(join(root, "packages"), { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory())
+    .map(async (entry) => {
+      let manifest: { private?: boolean; scripts?: Record<string, string> };
+      try {
+        manifest = JSON.parse(await readFile(join(root, "packages", entry.name, "package.json"), "utf8"));
+      } catch {
+        return null;
+      }
+      return manifest.private === true || manifest.scripts?.build === undefined ? null : entry.name;
+    })))
+    .filter((name): name is string => name !== null)
+    .map((name) => join(root, "packages", name, "dist", `.workspace-${label}.sentinel`));
+  assert.deepEqual([...paths].sort(), compiled.sort(), "release tooling is not protected on every package that declares a build");
   const sourcePaths = [
     join(root, "packages", "compiler", "src", "analyzer.ts"),
     join(root, "packages", "web", "src", "analyzer.ts"),
