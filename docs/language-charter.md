@@ -6,11 +6,16 @@ not part of the language.
 
 ## 1. Design contract
 
-VelarScript exists so that AI can write and maintain code that the product's
-human owner can read and safely change: the human supplies intent, the model
-writes the VelarScript, and the compiler guards each change. Every rule in
-this contract serves that mission — uniform model output, diagnostics that
-teach, and a readable JavaScript exit — as recorded in
+VelarScript is an extensible programming language for the AI era, in which the
+framework is the language: one language covers markup, styling, state, tests,
+and the server side, and the compiler checks all of it. A model can write code
+faster than anyone can check it, so the bottleneck is trust rather than
+authorship — the human supplies intent, the model writes the VelarScript, and
+the compiler guards each change. Every rule below serves that: uniform output,
+diagnostics that teach, mistakes that stay silent elsewhere made loud here, and
+a readable JavaScript exit. Rule 5 is the other half of the positioning and not
+merely hygiene — unification is only affordable because capability lives in
+extensions rather than in Core. The full statement is in
 [Why VelarScript exists](why-velarscript.md).
 
 VelarScript is designed for people and AI systems that already understand
