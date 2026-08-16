@@ -1631,6 +1631,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
   // future application target cannot inherit hidden Web behavior via spread.
   lexical: webCompilerExtension.lexical!,
   parser: webCompilerExtension.parser!,
+  syntax: webCompilerExtension.syntax!,
   analyzer: webCompilerExtension.analyzer!,
   semantic: webCompilerExtension.semantic!,
   inspection: webCompilerExtension.inspection!,

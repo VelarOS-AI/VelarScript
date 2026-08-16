@@ -37,6 +37,60 @@ export type CoreStatement =
 export type Statement = CoreStatement | ExtensionStatement;
 
 /**
+ * D56 rule 129 — every statement form Core's grammar produces, keyed by the
+ * node kind the parser returns for it. The string is prose for a failure
+ * message; the *keys* are the data.
+ *
+ * The mapped type is both the derivation and the enforcement: a member added
+ * to `CoreStatement` above makes this object stop typechecking until its
+ * spelling is written here, so the roster cannot fall behind the union the
+ * parser returns. That is the whole reason it lives beside the union instead
+ * of in a gate script — D57 rule 134's failure family is the hand-kept copy,
+ * and a copy that `tsc` refuses to accept as incomplete is not one.
+ *
+ * The tour-coverage gate requires every key to be parsed out of
+ * `examples/tour/`, and this is the one category of that gate that names a
+ * *construct* rather than a *name*. It exists because names were not enough:
+ * `extern`, `js`, and `unsafe` were already covered as keywords by chapter 13's
+ * `extern module` and `import js unsafe`, so D53 rule 117's two inline blocks —
+ * spelled entirely out of keywords the tour already exercised — landed with no
+ * tour example at all and the gate stayed green.
+ *
+ * One key can still cover more than one spelling: `extern js(…)` and
+ * `unsafe js` are one node kind distinguished by a boolean, and no
+ * compiler-owned table enumerates *that* split. The gate prints that limit on
+ * every run rather than implying a completeness it does not have.
+ */
+export const CORE_STATEMENT_CONSTRUCTS = Object.freeze({
+  ImportDeclaration: 'import {name} from "./module.vel"',
+  ReExportDeclaration: 'export {name} from "./module.vel"',
+  ExternModuleDeclaration: 'extern module "node:crypto":',
+  EmbeddedJavaScriptDeclaration: "extern js(capture: T)`…`: — or unsafe js`…`",
+  TypeDeclaration: "type Name:",
+  TypeAliasDeclaration: "type Name = string",
+  EnumDeclaration: "enum Name:",
+  ClassDeclaration: "class Name:",
+  VariableDeclaration: "const name = value",
+  UsingDeclaration: "using name = open(path)",
+  TestDeclaration: 'test "a name":',
+  FunctionDeclaration: "def name() -> T:",
+  ReturnStatement: "return value",
+  ThrowStatement: "throw error",
+  AssertStatement: "assert condition",
+  IfStatement: "if condition:",
+  MatchStatement: "match value:",
+  ForStatement: "for item in values:",
+  WhileStatement: "while condition:",
+  BreakStatement: "break",
+  ContinueStatement: "continue",
+  TryStatement: "try:",
+  PassStatement: "pass",
+  AssignmentStatement: "name = value",
+  ExpressionStatement: "call()",
+  AsyncStatement: "async call()",
+} satisfies { readonly [Kind in CoreStatement["kind"]]: string });
+
+/**
  * Target and framework syntax travels through one opaque Core AST slot. The
  * template-literal discriminator keeps extension nodes disjoint from Core
  * node names while allowing an extension package to publish its own strongly

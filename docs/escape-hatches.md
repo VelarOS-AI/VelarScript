@@ -101,6 +101,45 @@ on("message", handleMessage)
   (`onMessage(listener)`, `onClose(listener)`), each declared precisely with
   `extern module`.
 
+## 1b. JavaScript with no package to import from → an inline block
+
+Both hatches above name a package. A global, a shim, or a handful of lines that
+exist only for one module has no package, and therefore no import spelling.
+Write the JavaScript inline instead, with its contract directly underneath:
+
+```velar
+const tokenBytes = 16
+
+extern js(tokenBytes: number)`
+    export function sessionToken() {
+        const buffer = new Uint8Array(tokenBytes)
+        globalThis.crypto.getRandomValues(buffer)
+        return Array.from(buffer, (byte) => byte.toString(16).padStart(2, "0")).join("")
+    }
+`:
+    export def sessionToken() -> string
+
+print(sessionToken())
+```
+
+The parenthesized list captures Vel bindings of the same name and passes them
+to the emitted module as checked arguments — not text substitution. Drop the
+contract and it becomes `unsafe js`, whose exports are `any` and carry every
+caveat of section 2.
+
+**This is the tighter hatch, not the looser one.** `import js unsafe` makes a
+whole module `any` from another file; a block puts the contract three lines
+under the source it governs, and the block compiles to a sibling `.js` with a
+source map back to these lines. If you were reaching for a
+`data:text/javascript,` import to inline a module, that spelling is now
+rejected with a mechanical rewrite into this one.
+
+**The honest limit:** captures are handed to a synchronous factory, so a block
+that takes them cannot use top-level `await`. Await on the Vel side and capture
+the result.
+
+The CSS counterpart is `unsafe css`, in section 3.
+
 ## 2. Quick raw access → `import js unsafe`
 
 When a checked declaration is not worth the ceremony yet, `import js unsafe`
@@ -134,6 +173,27 @@ import css unsafe "./overrides.css" after look
 
 `before look` and `after look` set source order only; specificity and
 `!important` remain the stylesheet author's responsibility.
+
+When the CSS is a few rules that belong to this module rather than a file worth
+keeping, write it inline. The placement is mandatory here too — there is no
+default order:
+
+```velar fragment
+unsafe css`
+    @media print {
+        article { break-inside: avoid; orphans: 3; widows: 3 }
+    }
+` after look
+```
+
+Paged media is the honest example: `print` is not a Look media subject and
+`break-inside`, `orphans`, and `widows` are excluded properties, because paged
+and fragmented media are outside the Web application target. So there is no
+Look spelling being avoided — this reaches something Look does not cover at
+all, which is what an escape hatch is for.
+
+`unsafe css` belongs to the Web extension rather than Core, for the same reason
+Core has no `look`: Core does not know what a stylesheet is.
 
 ### A stylesheet that ships inside an npm package
 

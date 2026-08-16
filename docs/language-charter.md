@@ -2395,8 +2395,9 @@ export def encode(value: unknown) -> string:
 ```
 
 The whole module-boundary family — `import`, every `export` form, re-exports,
-`import js`, and `extern module` — is module-top-level only, like `type`,
-`class`, and `enum` declarations; writing one inside a block or function body
+`import js`, `extern module`, and the inline foreign-source blocks below — is
+module-top-level only, like `type`, `class`, and `enum` declarations; writing
+one inside a block or function body
 is a compile error, never partially-working shadow state. A module cannot
 import from or re-export from itself: the self edge has no valid evaluation
 order, so the answer is to use (or declare) the binding directly. Each module
@@ -2591,6 +2592,54 @@ member declared as a field is a stable narrowing location, exactly like a local
 class field. Values that are not already guaranteed by their package should
 enter as `unknown` and be validated explicitly with the application's runtime
 `Type`.
+
+### Inline foreign source
+
+`extern module` declares what a *package* exports and `import js` names it, so
+JavaScript that has **no package to come from** — a global, a shim, a few lines
+that exist only for this module — has no import spelling. It gets a block:
+
+```velar
+const tokenBytes = 16
+
+extern js(tokenBytes: number)`
+    export function sessionToken() {
+        const buffer = new Uint8Array(tokenBytes)
+        globalThis.crypto.getRandomValues(buffer)
+        return Array.from(buffer, (byte) => byte.toString(16).padStart(2, "0")).join("")
+    }
+`:
+    export def sessionToken() -> string
+```
+
+The backtick body is the module source; the indented block after the colon is
+its contract, in exactly the `extern module` grammar. The parenthesized list is
+a **capture**: each name binds the Vel binding of that name and is passed to
+the emitted factory as a checked argument of the declared type, not substituted
+as text. Captures are handed to a synchronous factory, so a block that takes
+them cannot use top-level `await` — await on the Vel side and capture the
+result.
+
+`unsafe js` is the same block without a contract, for source whose shape cannot
+honestly be declared. Its exports are `any` and the rules under *What `any`
+means* apply unchanged:
+
+```velar
+unsafe js`
+export const engine = () => ({arch: globalThis.process.arch});
+`
+```
+
+An inline block is **more checked than the `import js unsafe` it replaces**,
+not less: an unsafe import makes a whole module `any` from a distance, while a
+block puts the contract three lines under the source it governs. The
+`data:text/javascript,` import that used to be the only way to write a module
+inline is now rejected with a mechanical rewrite to the block form, which is
+source-mapped where the data URL was not.
+
+Both forms belong to Core, because JavaScript is the runtime Core already emits
+into. The CSS counterpart, `unsafe css`, belongs to the Web extension and is
+specified in section 13 — Core does not know what a stylesheet is.
 
 ### What `any` means
 

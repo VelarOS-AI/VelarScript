@@ -1,6 +1,7 @@
 import { optionalOf as optional, type ClassInfo, type CompilerExtension, type EnumInfo, type ModuleInterface, type ValueType } from "@velarscript/compiler";
 import type { AnalysisContext, CompilerAnalysisExtension, CompilerEmitterOptions, CompilerLexicalExtension, LoweringHints, Token } from "@velarscript/compiler/extension";
 import { inferWebIntrinsic, routeContextIdentity, VelarWebAnalyzer } from "./analyzer.ts";
+import { WEB_STATEMENT_CONSTRUCTS, webStatementConstructKey } from "./ast.ts";
 import { BROWSER_TEST_MODULE, BROWSER_TEST_SOURCE_SUFFIX, browserTestDrivingGuidance } from "./browser-test.ts";
 import { WEB_VOID_ELEMENTS } from "./elements.ts";
 import { WebJavaScriptEmitter } from "./emitter.ts";
@@ -565,6 +566,13 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
     create(tokens: readonly Token[], lexicalExtensions: readonly CompilerLexicalExtension[]) {
       return new VelarWebParser(tokens, lexicalExtensions);
     },
+  }),
+  // D56 rule 129: the parser above adds eleven statement constructs to the
+  // language, and a coverage gate that only reads vocabulary tables cannot see
+  // one of them. This is how they are required of `examples/tour/`.
+  syntax: Object.freeze({
+    statementConstructs: WEB_STATEMENT_CONSTRUCTS,
+    statementConstructKey: webStatementConstructKey,
   }),
   analyzer: Object.freeze({
     create(context: AnalysisContext, extensions: readonly CompilerAnalysisExtension[]) {

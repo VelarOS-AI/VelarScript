@@ -14,6 +14,28 @@ import css unsafe "./before.css" before look
 import css unsafe "./after.css" after look
 import {rgb} from "velar/look"
 
+// The same escape hatch has an inline spelling, and it is the right one when
+// the CSS belongs to this module and is short: a sibling file would split one
+// idea across two places and add a file nothing in the module graph owns.
+// Everything else is unchanged — the payload is raw with no interpolation, and
+// `before look` / `after look` stays mandatory, because placement is source
+// order and the compiler will not guess it.
+//
+// Paged media is the case in point. `print` is not one of Look's media
+// subjects, and `break-inside`, `orphans`, and `widows` are three of the
+// properties checked Look leaves out on purpose — paged and fragmented media
+// are outside the Web application target. There is no Look spelling to prefer
+// here, so it is native CSS or nothing.
+unsafe css`
+    @media print {
+        .tour-cascade-counter {
+            break-inside: avoid;
+            orphans: 3;
+            widows: 3;
+        }
+    }
+` after look
+
 const ink = rgb(24, 31, 46)
 const accent = rgb(45, 79, 190)
 

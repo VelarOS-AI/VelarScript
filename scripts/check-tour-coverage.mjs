@@ -13,6 +13,7 @@ import { isNodeOnlyModule } from "@velarscript/node/compiler";
 import { resolveVelarProject } from "../packages/cli/src/config.ts";
 import { compileProject } from "../packages/cli/src/project.ts";
 import { standardModuleInterfaces } from "../packages/cli/src/standard-modules.ts";
+import { CORE_STATEMENT_CONSTRUCTS } from "../packages/compiler/src/ast.ts";
 import { Lexer } from "../packages/compiler/src/lexer.ts";
 import { forbiddenSourceIdentifiers } from "../packages/compiler/src/source-names.ts";
 import { keywordKinds } from "../packages/compiler/src/token.ts";
@@ -26,6 +27,18 @@ import { LOOK_ABSENT_MEDIA_SUBJECTS, LOOK_EXCLUDED_PROPERTIES, LOOK_HOOKS, LOOK_
  * This gate makes it checkable: it *reverse-queries the compiler's own closed
  * vocabulary tables* and asserts, name by name, that each one is exercised in
  * `examples/tour/`. A missing name is named in the failure.
+ *
+ * Seventeen of the eighteen categories below ask about a **name**. The
+ * eighteenth asks about a **construct**, and it exists because names turned out
+ * not to be enough: D53 rule 117 added `extern js(…)` and `unsafe js` out of
+ * `extern`, `js`, and `unsafe` — three keywords chapter 13 already exercised
+ * through `extern module` and `import js unsafe` — so two new declaration forms
+ * reached a release with no `.vel` file anywhere using them while this gate
+ * stayed green. A construct assembled from covered spellings is invisible to a
+ * spelling-by-spelling check. `statement-construct` reads the AST unions
+ * themselves (`CORE_STATEMENT_CONSTRUCTS`, and each extension's own roster
+ * through the protocol's `syntax` slot) so a form the parser can return has to
+ * appear in the tour.
  *
  * Two disciplines hold the whole thing up, and both are easy to lose:
  *
@@ -111,6 +124,12 @@ const FLOORS = Object.freeze({
   // D55 rule 120: `def` and `type`. A form removed from the roster without a
   // ruling drops this below its floor rather than quietly checking less.
   "generic-declaration": 2,
+  // The 26 members of `CoreStatement` plus the 11 the Web extension's parser
+  // adds — ten node kinds, and `unsafe css` twice because its `source` is a
+  // tagged union whose two spellings are separately required. Removing a
+  // statement form from the language is what may lower this; an extension that
+  // stops publishing `syntax` fails on its own terms above.
+  "statement-construct": 37,
   "look-property": 225,
   "look-hook": 9,
   "look-target": 7,
@@ -208,7 +227,17 @@ const exemptions = [
 // `core-vocabulary.ts` now, alongside every other required table. The list is
 // left in place rather than deleted: an empty list is the claim that today
 // there is no vocabulary this gate cannot reach, and the next hole goes here.
-const unreachableTables = [];
+const unreachableTables = [
+  {
+    label: "statement spellings that share one AST node kind",
+    reason: "`extern js(…)` and `unsafe js` are one EmbeddedJavaScriptDeclaration told apart by a boolean, "
+      + "and `const`/`let`, `def`/`async def`, `class`/`abstract class`, `for`/`async for` are the same shape. "
+      + "No compiler-owned table enumerates those splits, so this category requires the *kind*: the tour writes both "
+      + "inline blocks, but removing one would not turn this gate red. The Web extension's `unsafe css` is the "
+      + "exception and shows what closing it would take — its `source` is a tagged union, so both of its spellings "
+      + "are separately required. Closing the rest means giving those nodes a discriminated form in `packages/**`.",
+  },
+];
 
 const failures = [];
 const categories = new Map();
@@ -305,7 +334,15 @@ for (const projectRoot of projectRoots) {
       failures.push(`${display(path)}: no import reaches this module and it is not a '*.test.vel' root, so the compiler never checks it — import it from the tour entry`);
       continue;
     }
-    observeModule({ path, text, tokens: lexed.tokens, program: parsed.program, index, contextualKeywords });
+    observeModule({
+      path,
+      text,
+      tokens: lexed.tokens,
+      program: parsed.program,
+      index,
+      contextualKeywords,
+      syntaxExtensions: extensions.flatMap((extension) => extension.syntax ? [extension.syntax] : []),
+    });
   }
 }
 
@@ -420,6 +457,13 @@ function requireTargetVocabulary(config) {
   for (const suffix of CORE_NUMERIC_SUFFIXES) {
     require_("numeric-suffix", suffix, `1${suffix}`, "CORE_NUMERIC_SUFFIXES in packages/compiler/src/core-vocabulary.ts");
   }
+  // D53 rule 117's blind spot: the only category here that names a construct
+  // instead of a name. The roster is a mapped type over the `CoreStatement`
+  // union, so a declaration form the parser can return cannot be absent from
+  // it, and a form nothing in the tour writes is named below.
+  for (const [kind, spelling] of Object.entries(CORE_STATEMENT_CONSTRUCTS)) {
+    require_("statement-construct", kind, spelling, "CORE_STATEMENT_CONSTRUCTS in packages/compiler/src/ast.ts");
+  }
 
   for (const extension of extensions) {
     for (const word of extension.lexical?.contextualKeywords ?? []) {
@@ -433,6 +477,16 @@ function requireTargetVocabulary(config) {
     }
     for (const name of extension.analysis?.globals?.keys() ?? []) {
       require_("extension-global", name, name, `${extension.id} analysis.globals`);
+    }
+    // An extension's statements never join `CoreStatement`, so its own roster
+    // is the only table that can name them. Owning a parser and publishing no
+    // roster is the silent version of the hole this category closes, so it is
+    // a failure rather than an empty contribution.
+    if (extension.parser !== undefined && extension.syntax === undefined) {
+      failures.push(`Extension '${extension.id}' registers a parser but publishes no 'syntax.statementConstructs', so the statement forms it adds cannot be required of the tour`);
+    }
+    for (const [key, spelling] of Object.entries(extension.syntax?.statementConstructs ?? {})) {
+      require_("statement-construct", key, spelling, `${extension.id} syntax.statementConstructs`);
     }
   }
   // The standard modules this target admits, and every name each publishes.
@@ -486,7 +540,7 @@ function requireTargetVocabulary(config) {
 
 // ── What the tour actually contains, judged after lexing and parsing ───────
 
-function observeModule({ path, tokens, program, index, contextualKeywords }) {
+function observeModule({ path, tokens, program, index, contextualKeywords, syntaxExtensions }) {
   // (a) Hard keywords: the lexer's own verdict. A keyword inside a string or a
   //     comment never becomes a token, so this cannot be forged by prose.
   const keywordSpellings = new Map(Object.entries(keywordKinds).map(([spelling, kind]) => [kind, spelling]));
@@ -553,6 +607,18 @@ function observeModule({ path, tokens, program, index, contextualKeywords }) {
       observe("prelude-name", node.name);
       observe("extension-global", node.name);
       observe("reserved-binding", node.name);
+    }
+    // A construct counts when the *parser* built its node, which is the same
+    // standard the rest of this file holds names to: `unsafe js` written in a
+    // comment or a string never becomes a node. Core forms are keyed by node
+    // kind; an extension refines its own key, so an inline `unsafe css` block
+    // and the `import css unsafe` that shares its node kind stay two entries.
+    if (typeof node.kind === "string") {
+      observe("statement-construct", node.kind);
+      for (const syntax of syntaxExtensions) {
+        const key = syntax.statementConstructKey(node);
+        if (key !== null) observe("statement-construct", key);
+      }
     }
     if (node.kind === "LookProperty") observe("look-property", node.name);
     if (node.kind === "LookTarget") observe("look-target", node.name);
