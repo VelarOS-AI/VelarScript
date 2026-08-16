@@ -1,5 +1,4 @@
 import {
-  type CompilerDependencyContext,
   type CompilerInspectionExtension,
   type CompilerInterfaceContext,
   type Expression,
@@ -10,71 +9,8 @@ import {
 import { optionalOf } from "@velarscript/compiler";
 import { LOOK_UNIT_TYPES } from "./look.ts";
 import { exportedLookStaticValues, lookStaticIdentity } from "./look-static.ts";
-import { isWebExpression, isWebJsx, isWebKeyframes, isWebLook, isWebStatement, isWebUnit } from "./ast.ts";
+import { isWebJsx, isWebKeyframes, isWebLook, isWebStatement, isWebUnit } from "./ast.ts";
 import { isWebComponentConstructor, isWebComputedExport, WEB_COMPUTED_EXPORT, webComponentConstructor, webNodeType } from "./types.ts";
-
-function visitDependencyExpression(expression: Expression, context: CompilerDependencyContext): boolean {
-  if (isWebLook(expression)) {
-    const visit = (entries: typeof expression.entries): void => {
-      for (const entry of entries) {
-        if (entry.kind === "LookProperty" || entry.kind === "LookSpread") context.visitExpression(entry.value);
-        else if (entry.kind === "LookIf") {
-          context.visitExpression(entry.condition);
-          visit(entry.thenEntries);
-          visit(entry.elseEntries);
-        } else visit(entry.entries);
-      }
-    };
-    visit(expression.entries);
-    return true;
-  }
-  if (isWebKeyframes(expression)) {
-    for (const stop of expression.stops) for (const entry of stop.entries) context.visitExpression(entry.value);
-    return true;
-  }
-  if (isWebExpression(expression) && expression.kind === "ExtensionExpression:web:look-hook") return true;
-  if (isWebUnit(expression)) return true;
-  if (!isWebJsx(expression)) return false;
-  for (const attribute of expression.attributes) {
-    if (attribute.value && typeof attribute.value !== "string") context.visitExpression(attribute.value);
-  }
-  for (const child of expression.children) {
-    if (child.kind === "JSXExpressionChild") context.visitExpression(child.expression);
-    else if (child.kind === "ExtensionExpression:web:jsx") context.visitExpression(child);
-  }
-  return true;
-}
-
-function visitDependencyStatement(statement: Statement, context: CompilerDependencyContext): boolean {
-  if (!isWebStatement(statement)) return false;
-  switch (statement.kind) {
-    case "ExtensionStatement:web:component":
-      for (const parameter of statement.parameters) if (parameter.defaultValue) context.visitExpression(parameter.defaultValue);
-      for (const item of statement.body) {
-        if (item.kind === "ExtensionStatement:web:mounted" || item.kind === "ExtensionStatement:web:cleanup") context.visitBlock(item.body);
-        else if (item.kind === "ExtensionStatement:web:expose") context.visitExpression(item.value);
-        else context.visitStatement(item);
-      }
-      return true;
-    case "ExtensionStatement:web:state":
-    case "ExtensionStatement:web:computed":
-    case "ExtensionStatement:web:resource":
-      context.visitExpression(statement.initializer);
-      return true;
-    case "ExtensionStatement:web:action":
-      for (const parameter of statement.parameters) if (parameter.defaultValue) context.visitExpression(parameter.defaultValue);
-      context.visitBlock(statement.body);
-      return true;
-    case "ExtensionStatement:web:watch":
-      context.visitExpression(statement.expression);
-      context.visitBlock(statement.body);
-      return true;
-    case "ExtensionStatement:web:unsafe-css":
-      return true;
-    default:
-      return false;
-  }
-}
 
 function contributeInterface(statement: Statement, context: CompilerInterfaceContext): boolean {
   if (!isWebStatement(statement)) return false;
@@ -132,8 +68,6 @@ function contributeInterface(statement: Statement, context: CompilerInterfaceCon
 }
 
 export const velarWebInspectionExtension: CompilerInspectionExtension = Object.freeze({
-  visitDependencyExpression,
-  visitDependencyStatement,
   contributeInterface,
   exportAnnotations: exportedLookStaticValues,
   interfaceExportIdentity: (_name: string, value: unknown) => isWebComputedExport(value) ? "web:computed" : lookStaticIdentity(value),

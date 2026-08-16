@@ -302,12 +302,6 @@ export interface CompilerFormattingOpaqueSourceScan {
   readonly attachedToPrevious: boolean;
 }
 
-export interface CompilerDependencyContext {
-  readonly visitExpression: (expression: Expression) => void;
-  readonly visitStatement: (statement: Statement) => void;
-  readonly visitBlock: (body: readonly Statement[]) => void;
-}
-
 export interface CompilerInterfaceContext {
   readonly exports: Map<string, ValueType>;
   readonly reactiveExports: Map<string, "state">;
@@ -319,8 +313,11 @@ export interface CompilerInterfaceContext {
 }
 
 export interface CompilerInspectionExtension {
-  readonly visitDependencyExpression?: (expression: Expression, context: CompilerDependencyContext) => boolean;
-  readonly visitDependencyStatement?: (statement: Statement, context: CompilerDependencyContext) => boolean;
+  // An extension does not describe how to walk into its own nodes for
+  // dependency discovery: that walk is structural (`astNodes`), so an
+  // extension node holds a dynamic import the day it parses. A-010 is what
+  // the hooks that used to live here cost — a per-package hand-kept copy of
+  // the AST, one per extension, each free to drift on its own.
   readonly contributeInterface?: (statement: Statement, context: CompilerInterfaceContext) => boolean;
   /**
    * Whole-program annotations for exported names, merged into the module
