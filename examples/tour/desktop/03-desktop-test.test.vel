@@ -18,6 +18,7 @@
 
 import {appDataDirectory, makeDirectory, projectDirectory, readText, removeFile, writeText} from "velar/desktop-test"
 import {expect} from "velar/test"
+import {projectName} from "./01-desktop-host.vel"
 
 // A fixture path is ordinary text, so the helper that builds one is pure and
 // can be asserted directly.
@@ -55,3 +56,11 @@ test "a fixture round is described before it is run":
     expect(fixtureSteps()).toHaveLength(6)
     expect(fixtureSteps()).toContain("writeText")
     expect(fixtureSteps().join(" → ")).toMatch("appDataDirectory")
+
+// Chapter 01 imports `velar/desktop` and calls it. This test imports a pure
+// function out of that same module and runs it under a plain `velar test`,
+// which has no host bridge: importing a capability costs nothing until it is
+// called, so pure logic never has to move to its own file to stay testable.
+test "a pure function imported from a capability module runs without a host":
+    expect(projectName("/Users/ada/work/release-tool")).toBe("release-tool")
+    expect(projectName("/")).toBe("/")

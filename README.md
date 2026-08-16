@@ -4,6 +4,8 @@
 
 # VelarScript
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 [![VelarScript CI](https://github.com/VelarOS-AI/VelarScript/actions/workflows/ci.yml/badge.svg)](https://github.com/VelarOS-AI/VelarScript/actions/workflows/ci.yml)
 
 **A language AI writes and maintains, and humans read and own.**

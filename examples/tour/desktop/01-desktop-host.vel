@@ -55,6 +55,14 @@ export async def readSelectedProject() -> string:
 export async def askForProject() -> string:
     return await selectProjectDirectory() ?? "the picker was cancelled"
 
+// A capability fails where it is *called*, never where it is imported, so a
+// pure function may live in the same module as the host calls above and stay
+// unit-testable by a plain `velar test` in Node — chapter 03 asserts this one.
+// The language does not make an author split a file to keep it testable.
+export def projectName(path: string) -> string:
+    const parts = path.split("/").filter(part => part != "")
+    return parts.get(parts.size - 1) ?? "/"
+
 export component HostPanel:
     state summary = "not read"
     state directories = "not read"

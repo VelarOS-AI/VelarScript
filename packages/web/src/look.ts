@@ -83,11 +83,46 @@ export const LOOK_TARGETS = new Set([
   "before", "after", "backdrop", "placeholder", "selection", "marker", "fileSelectorButton",
 ]);
 
-export const LOOK_BUILDERS = new Set([
-  "color", "rgb", "rgba", "hsl", "alpha", "lighten", "darken",
-  "border", "shadow", "linearGradient", "asset",
-  "minmax", "repeat", "tracks", "transition", "spacing", "min", "max", "clamp", "animate",
+export interface LookBuilderSignature {
+  /** Parameter names, in declaration order. */
+  readonly parameters: readonly string[];
+  /** How many leading parameters a call must supply. */
+  readonly required: number;
+  /** Whether the final parameter collects the remaining arguments. */
+  readonly rest?: boolean;
+}
+
+/**
+ * Every velar/look builder and the shape of its call. Three consumers read this
+ * one table — the published module interface, the named-argument check, and the
+ * static lowering that has to put a named argument back at its position when a
+ * builder call appears inside a `keyframes:` stop. D57 rule 134: a list two
+ * places need is written once and derived from.
+ */
+export const LOOK_BUILDER_SIGNATURES: ReadonlyMap<string, LookBuilderSignature> = new Map<string, LookBuilderSignature>([
+  ["color", { parameters: ["value"], required: 1 }],
+  ["rgb", { parameters: ["red", "green", "blue"], required: 3 }],
+  ["rgba", { parameters: ["red", "green", "blue", "alpha"], required: 4 }],
+  ["hsl", { parameters: ["hue", "saturation", "lightness"], required: 3 }],
+  ["alpha", { parameters: ["color", "opacity"], required: 2 }],
+  ["lighten", { parameters: ["color", "amount"], required: 2 }],
+  ["darken", { parameters: ["color", "amount"], required: 2 }],
+  ["border", { parameters: ["width", "color", "style"], required: 2 }],
+  ["shadow", { parameters: ["x", "y", "blur", "color", "spread", "inset"], required: 4 }],
+  ["linearGradient", { parameters: ["angle", "start", "end"], required: 3 }],
+  ["asset", { parameters: ["path"], required: 1 }],
+  ["minmax", { parameters: ["minimum", "maximum"], required: 2 }],
+  ["repeat", { parameters: ["count", "size"], required: 2 }],
+  ["tracks", { parameters: ["first"], required: 1, rest: true }],
+  ["transition", { parameters: ["property", "duration", "easing", "delay"], required: 2 }],
+  ["spacing", { parameters: ["first", "second", "third", "fourth"], required: 1 }],
+  ["min", { parameters: ["first", "second"], required: 2 }],
+  ["max", { parameters: ["first", "second"], required: 2 }],
+  ["clamp", { parameters: ["minimum", "preferred", "maximum"], required: 3 }],
+  ["animate", { parameters: ["frames", "duration", "easing", "delay", "count", "loop", "direction", "fill"], required: 2 }],
 ]);
+
+export const LOOK_BUILDERS = new Set(LOOK_BUILDER_SIGNATURES.keys());
 
 export const LOOK_ANIMATION_EASINGS = new Set([
   "linear", "ease", "ease-in", "ease-out", "ease-in-out", "step-start", "step-end",
@@ -164,8 +199,28 @@ for (const property of LOOK_PROPERTIES) {
 const cssWideKeywords = ["inherit", "initial", "revert", "revert-layer", "unset"];
 const keywords = (...values: readonly string[]): ReadonlySet<string> => new Set([...cssWideKeywords, ...values]);
 
+/**
+ * D60 rule 150: `transitionProperty` published a name no author could reach —
+ * its only accepted values were the generic defaults, so no property name was
+ * writable. The vocabulary is derived from the Look property table rather than
+ * listed by hand (D57 rule 134): every animatable Look property, spelled the
+ * way CSS spells it, plus the two aggregate keywords. A property that does not
+ * participate in interpolation is excluded for the same reason `keyframes:`
+ * rejects it.
+ */
+const transitionPropertyKeywords = keywords("none", "all", ...[...LOOK_PROPERTIES]
+  .filter((property) => !LOOK_NON_ANIMATABLE_PROPERTIES.has(property))
+  .map(cssPropertyName));
+
 export const LOOK_PROPERTY_KEYWORDS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["display", keywords("none", "block", "inline", "inline-block", "flow-root", "flex", "inline-flex", "grid", "inline-grid", "contents")],
+  ["isolation", keywords("auto", "isolate")],
+  ["contain", keywords("none", "strict", "content", "size", "inline-size", "layout", "style", "paint")],
+  ["backgroundSize", keywords("auto", "cover", "contain")],
+  ["backgroundPosition", keywords("center", "top", "right", "bottom", "left")],
+  ["transformOrigin", keywords("center", "top", "right", "bottom", "left")],
+  ["transitionProperty", transitionPropertyKeywords],
+  ["transitionTimingFunction", keywords(...LOOK_ANIMATION_EASINGS)],
   ["position", keywords("static", "relative", "absolute", "fixed", "sticky")],
   ["boxSizing", keywords("content-box", "border-box")],
   ["visibility", keywords("visible", "hidden", "collapse")],

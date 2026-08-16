@@ -199,6 +199,23 @@ component Dialog(close: () -> null, submit: () -> null):
 have answered — "was this the element itself, or a descendant?" — which is what
 a backdrop-dismiss handler needs.
 
+An attribute value of `bool` follows the attribute's own convention. A native
+boolean attribute means by presence, so `true` writes it empty and `false`
+removes it. An `aria-*` state means by literal token, so `true` and `false`
+write the text `"true"` and `"false"` and the attribute stays on the element
+either way — an ARIA state that is absent reads as its default, which for
+`aria-busy`, `aria-pressed`, `aria-expanded`, `aria-checked`, `aria-selected`,
+`aria-hidden`, `aria-disabled`, and `aria-invalid` is false. `null` removes any
+attribute, which is how an author says the state does not apply here.
+
+```velar fragment
+component SaveButton(saving: bool, pressed: bool):
+    return <button type="button" disabled={saving} aria-busy={saving} aria-pressed={pressed}>Save</button>
+```
+
+While `saving` is false the button carries `aria-busy="false"` and no `disabled`
+attribute; while it is true it carries `aria-busy="true"` and `disabled=""`.
+
 JSX text is normalized before it becomes a text node. Every whitespace run
 inside a text child collapses to one space; whitespace that exists only because
 the source wrapped is then dropped, so a text run beginning at a line break
@@ -321,6 +338,35 @@ including across module boundaries. Bind a changing animation on the element
 with `look:animation={active ? animate(spin, 1s) : null}`; `null` removes the
 native animation. The charter's appendix to section 17 defines the stop grammar
 and every `animate` option.
+
+A stop reuses the Look value checker, so a design token holds its meaning inside
+an animation: a `const` bound to a builder result, a unit token, a number, or a
+keyword string reads in a stop exactly as it reads on a property, whether it was
+declared in this module or imported from a theme module, and a builder call in a
+stop may use named arguments. What a stop still needs is a value the compiler
+can resolve while it compiles — a stop becomes a real `@keyframes` rule, so a
+value that depends on run time, reactive state included, is rejected.
+
+```velar
+import {Color, Length, animate, rgb, shadow} from "velar/look"
+
+const glow: Color = rgb(120, 150, 255)
+const lift: Length = 12px
+const halo = shadow(0px, 0px, 18px, glow, spread=2px)
+
+export const emerge = keyframes:
+    from:
+        opacity = 0.4
+        translate = lift
+    to:
+        opacity = 1
+        translate = 0px
+        color = glow
+        boxShadow = halo
+
+export component Toast:
+    return <p look:animation={animate(emerge, 500ms, easing="ease-out")} role="status">Saved</p>
+```
 
 The CSS `@keyframes` at-rule itself is still not a Look target. A stylesheet
 that must own its own keyframes — one shipped by a design system, or a

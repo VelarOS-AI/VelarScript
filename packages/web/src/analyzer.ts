@@ -1597,7 +1597,7 @@ export class VelarWebAnalyzer extends Analyzer {
         const expected = LOOK_PROPERTY_TYPES.get(entry.name) ?? stringType;
         const actual = this.inferExpression(entry.value, expected);
         this.reportKeyframeSnapshotReads(entry.value);
-        if (keyframeCssValue(entry.value) === null) {
+        if (keyframeCssValue(entry.value, this.lookStaticValues) === null) {
           this.diagnostics.push(diagnostic(
             "VEL5060",
             "A keyframe value must resolve to static CSS from literals, unit values, arithmetic, or velar/look builders",
@@ -1700,7 +1700,12 @@ export class VelarWebAnalyzer extends Analyzer {
         return false;
       }
       let accepted: boolean;
-      if (kind === "metric") accepted = lookMetricKeywords.has(normalized);
+      // A metric property carries the shared length vocabulary and, when it has
+      // one, its own CSS keywords: `backgroundSize` takes lengths *and* cover
+      // and contain, and the position properties take the placement words
+      // (D60 rule 150). Reading both tables is what lets one property spell
+      // every value its CSS grammar has.
+      if (kind === "metric") accepted = lookMetricKeywords.has(normalized) || (LOOK_PROPERTY_KEYWORDS.get(name)?.has(normalized) ?? false);
       else if (kind === "color" || kind === "background") accepted = lookColorKeywords.has(normalized) || /^#[0-9a-f]{3,8}$/iu.test(normalized);
       else if (kind === "image" || kind === "border" || kind === "shadow") accepted = lookCssWideKeywords.has(normalized) || normalized === "none";
       else if (kind === "number-keyword" || kind === "line-height") accepted = lookDefaultKeywords.has(normalized);

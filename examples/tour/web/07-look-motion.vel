@@ -10,7 +10,8 @@
 // The CSS `@keyframes` at-rule and the animation longhands are not Look
 // spellings, and a raw CSS animation string is rejected.
 
-import {animate, rgb, transition} from "velar/look"
+import {animate, rgb, shadow, transition} from "velar/look"
+import {ink} from "./06-look.vel"
 
 // A stop is `from:`, `to:`, or an integer percentage from 1% through 99%.
 export const spin = keyframes:
@@ -43,6 +44,28 @@ export const slideIn = keyframes:
     to:
         translate = 0px
         color = rgb(24, 31, 46)
+
+// A stop reuses the Look value checker, so a design token reads in a keyframe
+// exactly as it reads in a Look: a `const` holding a builder result, a unit
+// token, or a plain number, declared here or imported from a theme module, and
+// a builder call written with named arguments — `ink` below is chapter 06's
+// token. Nothing has to be transcribed back into a literal to be animated.
+const glow: Color = rgb(120, 150, 255)
+const lift: Length = 12px
+const dim = 0.4
+const halo: Shadow = shadow(0px, 0px, 18px, glow, spread=2px)
+
+export const emerge = keyframes:
+    from:
+        opacity = dim
+        translate = lift
+        color = glow
+        boxShadow = shadow(0px, 0px, 0px, glow, spread=0px)
+    to:
+        opacity = 1
+        translate = 0px
+        color = ink
+        boxShadow = halo
 
 // `animate(frames, duration, easing?, delay?, count?, loop?, direction?, fill?)`
 // answers `Animation`. Duration must be positive, delay cannot be negative,
@@ -147,5 +170,6 @@ export component MotionPanel:
         <div data-toggled look:animation={active ? animate(pulse, 600ms, loop=true) : null}>toggled animation</div>
         <p data-easings>{f"{easings.size} easings, {directions.size} directions, {fills.size} fills"}</p>
         <div data-edges look:animation={animate(edges, 800ms)}>every stop form</div>
+        <div data-tokens look:animation={animate(emerge, 500ms, easing="ease-out")}>design tokens in a stop</div>
         <button type="button" data-toggle-animation on:click={toggle}>{active ? "Stop" : "Start"}</button>
     </section>

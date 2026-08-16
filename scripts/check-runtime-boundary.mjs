@@ -1884,7 +1884,10 @@ for (const phrase of [
 }
 for (const phrase of [
   'export async function selectProjectDirectory() { return optionalPath("selectProjectDirectory", 0); }',
-  'const desktopProjectDirectoryValue = __velarDesktopHostField("projectDirectoryValue")',
+  // Read per resolution rather than once at module load: D60 rule 153 moved
+  // capability failure to the call, and the grant a project selection changes
+  // is exactly the value that must not be frozen at import time.
+  'const provider = __velarDesktopHostField("projectDirectoryValue")',
 ]) {
   if (!desktopCompilerSource.includes(phrase)) {
     failures.push(`packages/desktop/src/compiler.ts: missing dynamic project grant operation '${phrase}'`);

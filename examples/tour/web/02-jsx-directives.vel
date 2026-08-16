@@ -116,6 +116,12 @@ component BindDirectives:
 // composes an existing Look, every `look:property` on the element forms one
 // anonymous base applied after it, and `style:property` is the inline-priority
 // compatibility override rather than a second visual language.
+//
+// A bool attribute value has two spellings because HTML does: a native boolean
+// attribute such as `hidden` or `disabled` means by presence, so `false`
+// removes it; an `aria-*` state is a literal token, so `false` renders the text
+// "false" and the attribute never leaves the element. Removing an ARIA state
+// would say "unspecified", which is not the same claim as "no".
 component StyleDirectives:
     state highlighted = false
     state tone: Tone = Tone.quiet
@@ -147,6 +153,24 @@ component StyleDirectives:
         >
             attribute values
         </p>
+        <p
+            data-aria
+            aria-busy={highlighted}
+            aria-expanded={highlighted}
+            aria-hidden={not highlighted}
+            aria-label="aria states"
+        >
+            aria states
+        </p>
+        <button
+            type="button"
+            data-aria-button
+            aria-pressed={highlighted}
+            disabled={not highlighted}
+            on:click={toggleHighlight}
+        >
+            aria and native bool
+        </button>
         <button type="button" data-toggle-highlight on:click={toggleHighlight}>Toggle highlight</button>
         <button type="button" data-toggle-tone on:click={switchTone}>Toggle tone</button>
     </div>

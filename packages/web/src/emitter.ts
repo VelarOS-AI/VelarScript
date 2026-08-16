@@ -350,7 +350,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
   protected override emitExpression(expression: Expression): string {
     if (isWebUnit(expression)) return JSON.stringify(expression.raw);
     if (isWebKeyframes(expression)) {
-      const name = this.keyframeNames.get(spanIdentity(expression.span)) ?? keyframesName(keyframesCanonical(expression));
+      const name = this.keyframeNames.get(spanIdentity(expression.span)) ?? keyframesName(keyframesCanonical(expression, this.lookStaticValues));
       return `__velarKeyframesValue(${JSON.stringify(name)})`;
     }
     if (expression.kind === "UnaryExpression" && (expression.operator === "+" || expression.operator === "-")
@@ -842,7 +842,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       }
       if (record.kind === "ExtensionExpression:web:keyframes") {
         const expression = record as unknown as KeyframesExpression;
-        const canonical = keyframesCanonical(expression);
+        const canonical = keyframesCanonical(expression, this.lookStaticValues);
         const name = keyframesName(canonical);
         this.keyframeNames.set(spanIdentity(expression.span), name);
         if (!keyframeRules.has(name)) {
@@ -853,7 +853,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
                 .map((offset) => offset === 0 ? "from" : offset === 100 ? "to" : `${offset}%`)
                 .join(",");
               const declarations = stop.entries.map((entry) => {
-                const css = keyframeCssValue(entry.value);
+                const css = keyframeCssValue(entry.value, this.lookStaticValues);
                 return css === null ? "" : `${cssPropertyName(entry.name)}:${css}`;
               }).filter(Boolean).join(";");
               return `${selectors}{${declarations}}`;
@@ -1872,7 +1872,18 @@ function __velarKeyed(parent, read, keyOf, render, scope) {
   });
 }
 
+// ARIA states are literal 'true'/'false' tokens, not HTML boolean attributes.
+// Presence/absence is how 'disabled' and 'checked' mean; an ARIA attribute set
+// to the empty string is an invalid token that the user agent reads as the
+// attribute's default -- which for aria-busy, aria-pressed, aria-expanded, and
+// their kin is false. So a false bool must stay on the element as the literal
+// text rather than being removed (D61 rule 155).
+function __velarAriaState(name) {
+  return name.length > 5 && name.charCodeAt(0) === 97 && name.slice(0, 5) === "aria-";
+}
+
 function __velarStaticAttr(element, name, value) {
+  if (value === false && __velarAriaState(name)) { __velarSetAttribute(element, name, "false"); return; }
   if (value === false || value == null) return;
   __velarSetAttribute(element, name, __velarAttributeValue(value, name));
 }
@@ -1880,13 +1891,14 @@ function __velarStaticAttr(element, name, value) {
 function __velarAttr(element, name, read, scope) {
   __velarObserver(() => {
     const value = read();
-    if (value == null || value === false) __velarRemoveAttribute(element, name);
+    if (value === false && __velarAriaState(name)) __velarSetAttribute(element, name, "false");
+    else if (value == null || value === false) __velarRemoveAttribute(element, name);
     else __velarSetAttribute(element, name, __velarAttributeValue(value, name));
   }, "dom", scope);
 }
 
 function __velarAttributeValue(value, name) {
-  if (value === true) return "";
+  if (value === true) return __velarAriaState(name) ? "true" : "";
   if (typeof value === "number") {
     if (!__velarDomIsFinite(value)) throw new TypeError("JSX attribute '" + name + "' requires a finite number");
     return __velarDomString(value);

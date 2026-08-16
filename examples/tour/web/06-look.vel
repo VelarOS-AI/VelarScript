@@ -15,8 +15,10 @@ import {Angle, Animation, Border, Color, Duration, Image, Keyframes, Length, Len
 
 // All 20 builders. `velar/look` exports them as ordinary named values: a
 // builder may be aliased, passed to another function, returned, and called
-// outside a Look block like any other value.
-const ink: Color = rgb(24, 31, 46)
+// outside a Look block like any other value. `ink` is exported because chapter
+// 07 animates it: a design token declared once travels across modules into a
+// `keyframes:` stop.
+export const ink: Color = rgb(24, 31, 46)
 const brand: Color = color("rebeccapurple")
 const veiled: Color = rgba(24, 31, 46, 0.55)
 const sky: Color = hsl(210, 70, 45)
@@ -199,8 +201,8 @@ const everyPropertyLook: Look = look:
     display = "none"
     position = "static"
     boxSizing = "content-box"
-    isolation = "none"
-    contain = "none"
+    isolation = "isolate"
+    contain = "layout"
     visibility = "visible"
     zIndex = 1
     overflow = "visible"
@@ -305,8 +307,8 @@ const everyPropertyLook: Look = look:
     background = wash
     backgroundColor = ink
     backgroundImage = mark
-    backgroundPosition = 4px
-    backgroundSize = 4px
+    backgroundPosition = "center"
+    backgroundSize = "cover"
     backgroundRepeat = "repeat"
     backgroundAttachment = "scroll"
     backgroundClip = "border-box"
@@ -412,12 +414,12 @@ const everyPropertyLook: Look = look:
     scale = 1
     rotate = 0deg
     transform = "translateZ(0)"
-    transformOrigin = 4px
+    transformOrigin = "center"
     transition = fade
-    transitionProperty = "none"
+    transitionProperty = "opacity"
     transitionDuration = 200ms
     transitionDelay = 200ms
-    transitionTimingFunction = "none"
+    transitionTimingFunction = "ease-in-out"
     animation = spinning
 
     // interaction and form theme
@@ -452,6 +454,22 @@ const everyPropertyLook: Look = look:
     scrollbarWidth = "auto"
 
 export const propertyVocabulary: Look = everyPropertyLook
+
+// Seven properties whose CSS keywords are part of the published vocabulary, not
+// only their unit values. `isolation` and `contain` have nothing but keywords;
+// the three position and size properties take a length, a percentage, or a
+// placement word; and the two transition longhands take a property name and an
+// easing from the same closed sets `transition(...)` and `animate(...)` use.
+export const keywordValueLook: Look = look:
+    isolation = "isolate"
+    contain = "content"
+    backgroundImage = mark
+    backgroundSize = "contain"
+    backgroundPosition = "top"
+    transformOrigin = "left"
+    transitionProperty = "background-color"
+    transitionDuration = quick
+    transitionTimingFunction = "ease-out"
 
 // The 9 element states and the 7 pseudo-element targets. Conditions may appear
 // inside a target and a target may appear inside a condition; a target may not
@@ -561,6 +579,7 @@ export component LookPanel:
         <h2>06 — Look</h2>
         <div data-vocabulary look={vocabularyLook}>every published family</div>
         <div data-property-vocabulary look={propertyVocabulary}></div>
+        <div data-keyword-values look={keywordValueLook}>keyword values, not only units</div>
         <div data-stateful look={statefulLook}>states and targets</div>
         <div data-responsive look={responsiveLook}>media conditions</div>
         <button type="button" data-control look={controlLook}>base control</button>

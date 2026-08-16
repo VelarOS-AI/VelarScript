@@ -10,7 +10,7 @@ import { VelarWebParser } from "./parser.ts";
 import { scanWebToken, WEB_CONTEXTUAL_KEYWORDS } from "./lexer.ts";
 import { webModuleSource, webModuleSources, type VelarWebRuntimeConfig } from "./runtime.ts";
 import { velarWebSemanticExtension } from "./semantic.ts";
-import { LOOK_BUILDERS, LOOK_MEDIA_SUBJECTS, LOOK_PUBLIC_TYPE_NAMES, LOOK_UNIT_TYPES } from "./look.ts";
+import { LOOK_BUILDER_SIGNATURES, LOOK_BUILDERS, LOOK_MEDIA_SUBJECTS, LOOK_PUBLIC_TYPE_NAMES, LOOK_UNIT_TYPES } from "./look.ts";
 import { isWebTypeAssignable, resolveWebTypeSyntax, webComponentConstructor, webNodeType } from "./types.ts";
 
 export const VELAR_WEB_API_VERSION = "0.10";
@@ -59,6 +59,31 @@ function namedFunction(parameterNames: readonly string[], parameters: readonly V
   return { kind: "function", parameterNames, parameters, requiredParameters, result };
 }
 
+/**
+ * A velar/look builder's published type, with its parameter names and required
+ * count read from LOOK_BUILDER_SIGNATURES rather than repeated here. The static
+ * keyframe lowering places named arguments from that same table, so the two
+ * cannot disagree about what `spread=0px` means.
+ */
+function lookBuilder(name: string, parameters: readonly ValueType[], result: ValueType, rest?: ValueType): ValueType {
+  const signature = LOOK_BUILDER_SIGNATURES.get(name);
+  if (!signature) throw new Error(`velar/look builder '${name}' has no declared signature`);
+  if (signature.parameters.length !== parameters.length) {
+    throw new Error(`velar/look builder '${name}' declares ${signature.parameters.length} parameters but types ${parameters.length}`);
+  }
+  if ((signature.rest ?? false) !== (rest !== undefined)) {
+    throw new Error(`velar/look builder '${name}' disagrees with its declared rest parameter`);
+  }
+  return {
+    kind: "function",
+    parameterNames: signature.parameters,
+    parameters,
+    requiredParameters: signature.required,
+    ...(rest ? { rest } : {}),
+    result,
+  };
+}
+
 const unknownType: ValueType = { kind: "unknown" };
 const webGlobals = new Map<string, ValueType>([
   ["mount", namedFunction(["node", "target"], [nodeType, mountTargetType], nullType)],
@@ -73,30 +98,29 @@ const webGlobals = new Map<string, ValueType>([
 
 const lookModuleExports = new Map<string, ValueType>([
   ...LOOK_PUBLIC_TYPE_NAMES.map((name) => [name, { kind: "typeObject", name, value: { kind: "named", name } } as ValueType] as const),
-  ["color", namedFunction(["value"], [stringType], colorType)],
-  ["rgb", namedFunction(["red", "green", "blue"], [numberType, numberType, numberType], colorType)],
-  ["rgba", namedFunction(["red", "green", "blue", "alpha"], [numberType, numberType, numberType, numberType], colorType)],
-  ["hsl", namedFunction(["hue", "saturation", "lightness"], [numberType, numberType, numberType], colorType)],
-  ["alpha", namedFunction(["color", "opacity"], [colorInputType, numberType], colorType)],
-  ["lighten", namedFunction(["color", "amount"], [colorInputType, numberType], colorType)],
-  ["darken", namedFunction(["color", "amount"], [colorInputType, numberType], colorType)],
-  ["border", namedFunction(["width", "color", "style"], [lengthType, colorInputType, stringType], borderType, 2)],
-  ["shadow", namedFunction(["x", "y", "blur", "color", "spread", "inset"], [lengthType, lengthType, lengthType, colorInputType, lengthType, boolType], shadowType, 4)],
-  ["linearGradient", namedFunction(["angle", "start", "end"], [angleType, colorInputType, colorInputType], imageType)],
-  ["asset", namedFunction(["path"], [stringType], imageType)],
-  ["minmax", namedFunction(["minimum", "maximum"], [trackInputType, trackInputType], trackType)],
-  ["repeat", namedFunction(["count", "size"], [repeatCountType, trackInputType], trackListType)],
-  ["tracks", { kind: "function", parameterNames: ["first"], parameters: [trackInputType], requiredParameters: 1, rest: trackInputType, result: trackListType }],
-  ["transition", namedFunction(["property", "duration", "easing", "delay"], [stringType, durationType, stringType, durationType], transitionType, 2)],
-  ["spacing", namedFunction(["first", "second", "third", "fourth"], [lookScalarType, lookScalarType, lookScalarType, lookScalarType], spacingType, 1)],
-  ["min", namedFunction(["first", "second"], [lengthType, lengthType], lengthType)],
-  ["max", namedFunction(["first", "second"], [lengthType, lengthType], lengthType)],
-  ["clamp", namedFunction(["minimum", "preferred", "maximum"], [lengthType, lengthType, lengthType], lengthType)],
-  ["animate", namedFunction(
-    ["frames", "duration", "easing", "delay", "count", "loop", "direction", "fill"],
+  ["color", lookBuilder("color", [stringType], colorType)],
+  ["rgb", lookBuilder("rgb", [numberType, numberType, numberType], colorType)],
+  ["rgba", lookBuilder("rgba", [numberType, numberType, numberType, numberType], colorType)],
+  ["hsl", lookBuilder("hsl", [numberType, numberType, numberType], colorType)],
+  ["alpha", lookBuilder("alpha", [colorInputType, numberType], colorType)],
+  ["lighten", lookBuilder("lighten", [colorInputType, numberType], colorType)],
+  ["darken", lookBuilder("darken", [colorInputType, numberType], colorType)],
+  ["border", lookBuilder("border", [lengthType, colorInputType, stringType], borderType)],
+  ["shadow", lookBuilder("shadow", [lengthType, lengthType, lengthType, colorInputType, lengthType, boolType], shadowType)],
+  ["linearGradient", lookBuilder("linearGradient", [angleType, colorInputType, colorInputType], imageType)],
+  ["asset", lookBuilder("asset", [stringType], imageType)],
+  ["minmax", lookBuilder("minmax", [trackInputType, trackInputType], trackType)],
+  ["repeat", lookBuilder("repeat", [repeatCountType, trackInputType], trackListType)],
+  ["tracks", lookBuilder("tracks", [trackInputType], trackListType, trackInputType)],
+  ["transition", lookBuilder("transition", [stringType, durationType, stringType, durationType], transitionType)],
+  ["spacing", lookBuilder("spacing", [lookScalarType, lookScalarType, lookScalarType, lookScalarType], spacingType)],
+  ["min", lookBuilder("min", [lengthType, lengthType], lengthType)],
+  ["max", lookBuilder("max", [lengthType, lengthType], lengthType)],
+  ["clamp", lookBuilder("clamp", [lengthType, lengthType, lengthType], lengthType)],
+  ["animate", lookBuilder(
+    "animate",
     [keyframesType, durationType, stringType, durationType, numberType, boolType, stringType, stringType],
     animationType,
-    2,
   )],
 ]);
 

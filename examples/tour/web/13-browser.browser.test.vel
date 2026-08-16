@@ -36,6 +36,27 @@ test "text, attributes, namespaces, counts, and visibility read the live DOM":
     expect(await browser.visible("[data-chapter='02'] h2")).toBe(true)
     expect(await browser.visible("[data-attributes]")).toBe(false)
 
+// A bool on an `aria-*` attribute is a literal token in the rendered DOM, and
+// `false` keeps the attribute rather than removing it. A native boolean
+// attribute keeps meaning by presence. Both halves are read here from the real
+// browser, because both are claims about what the page says to a screen reader
+// rather than about what the compiler emitted.
+test "a bool renders as an ARIA token and as a native boolean attribute":
+    await browser.open()
+    expect(await browser.attribute("[data-aria]", "aria-busy")).toBe("false")
+    expect(await browser.attribute("[data-aria]", "aria-expanded")).toBe("false")
+    expect(await browser.attribute("[data-aria]", "aria-hidden")).toBe("true")
+    expect(await browser.attribute("[data-aria]", "aria-label")).toBe("aria states")
+    expect(await browser.attribute("[data-aria-button]", "aria-pressed")).toBe("false")
+    expect(await browser.attribute("[data-aria-button]", "disabled")).toBe("")
+    await browser.click("[data-toggle-highlight]")
+    await browser.waitFor("[data-attributes]", "visible")
+    expect(await browser.attribute("[data-aria]", "aria-busy")).toBe("true")
+    expect(await browser.attribute("[data-aria]", "aria-expanded")).toBe("true")
+    expect(await browser.attribute("[data-aria]", "aria-hidden")).toBe("false")
+    expect(await browser.attribute("[data-aria-button]", "aria-pressed")).toBe("true")
+    expect(await browser.attribute("[data-aria-button]", "disabled")).toBe(null)
+
 test "clicking, filling, selecting, and pressing drive the reactive page":
     await browser.open()
     await browser.click("[data-count]")

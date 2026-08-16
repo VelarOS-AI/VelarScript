@@ -654,6 +654,36 @@ the contract needs parameter names, optional parameters, or a rest parameter.
 `Function` or `Promise` constructors as built-in callable values; the shorthand
 spellings exist only in type positions.
 
+A named parameter in a function type may end its name with `?`, which says the
+argument may be **omitted**. That is a statement about arity, and it is a
+different statement from `T?`, which is about the value: `prefix?: string`
+allows a one-argument call and still rejects `null`, while `prefix: string?`
+requires both arguments and accepts `null` as one of them. The two answer
+different questions — "must I pass this?" and "may this be absent?" — so a
+contract that means both writes both: `prefix?: string?`. Only a named
+parameter carries the marker, because `?` after a bare type is already `T?`;
+a positional function type has no way to say "omissible" and does not need one,
+since the name is what a caller omits by.
+
+```velar
+def label(name: string, prefix: string = "@") -> string:
+    return f"{prefix}{name}"
+
+def tag(name: string, prefix: string?) -> string:
+    return f"{prefix ?? "@"}{name}"
+
+const omissible: (name: string, prefix?: string) -> string = label
+print(omissible("ada"))
+print(omissible("ada", "#"))
+
+const nullable: (name: string, prefix: string?) -> string = tag
+print(nullable("ada", null))
+```
+
+This marker lives in a function type, not in a declaration: a `def`, a field,
+or a binding says the same thing with a default value or with `T?`. Section 19
+rejects `let name?: T` for that reason and not as a ban on the character.
+
 VelarScript does not provide TypeScript conditional types, mapped types,
 overload sets, declaration merging, or type assertions. Type parameters exist
 only on `def` functions; generic `type`, `class`, and `component` declarations
@@ -2655,6 +2685,19 @@ attribute value: format an object explicitly before rendering it. Raw HTML is
 an explicit string-only boundary, written as `unsafe:html={trustedMarkup}`; it
 cannot be combined with children.
 
+A `bool` reaches an attribute the way that attribute means. A native HTML
+boolean attribute — `disabled`, `checked`, `hidden`, `readonly` — means by
+presence, so `true` writes it with an empty value and `false` removes it. An
+`aria-*` state means by literal token, so `true` and `false` write the text
+`"true"` and `"false"` and the attribute is never removed. The distinction is
+the platform's, not the language's: removing an ARIA state says "unspecified",
+which assistive technology reads as that state's default — for `aria-busy`,
+`aria-pressed`, `aria-expanded`, `aria-checked`, `aria-selected`, and their
+kin, that default is *false*, so a removed attribute would assert the opposite
+of a `true` the author wrote. One spelling, `aria-busy={submit.pending}`, is
+therefore correct on both attribute families. `null` still removes any
+attribute, ARIA included: that is the author saying the state does not apply.
+
 Use ordinary conditional expressions or functions for conditional children:
 
 ```velar fragment
@@ -3037,6 +3080,16 @@ cursor = "pointer"
 This makes variable resolution unambiguous and lets the compiler report an
 undefined color or spacing token instead of guessing that it was a CSS word.
 
+A property that takes CSS keywords carries its own closed set, and a property
+that takes lengths carries both — `backgroundSize` accepts a unit value and
+`"cover"` and `"contain"`, and the position properties accept a unit value and
+the placement words. The two transition longhands take the vocabularies the
+matching builders take: `transitionProperty` names an animatable Look property
+in its CSS spelling (or `all`, or `none`), and `transitionTimingFunction` takes
+one of the same seven easings `animate(...)` accepts. A published property whose
+only writable value is its own default would be a name no author can reach,
+which section 17's appendix treats as worse than not publishing it.
+
 ### Builders
 
 Look builders are named imports from `velar/look`, and they are not magic names
@@ -3410,6 +3463,17 @@ Arming is asynchronous on every host the language targets, so a watcher that
 promised to catch a change racing its own creation would be promising
 something no filesystem delivers.
 
+**A capability fails where it is called, never where it is imported.** A module
+that imports `velar/desktop`, `velar/fs`, or `velar/storage` loads in a host
+that cannot provide them; the error arrives from the call that needed the host.
+Failing at import would punish code that never called the capability, and
+putting pure logic in the same module as the capability it supports is ordinary
+practice — so a `velar test` that has no host still runs the pure functions in
+such a module, and the language never makes testability a reason to split a
+file. The host binding is still captured while the module initializes, so
+nothing installed afterwards can substitute one; only the report of its absence
+waits for the call.
+
 ## 19. Deliberately absent source features
 
 The following are not part of VelarScript:
@@ -3442,7 +3506,10 @@ The following are not part of VelarScript:
   extern declaration
 - optional-field syntax. `let name?: T` marks the *field* optional in
   TypeScript; VelarScript puts the question in the type, where the readers of
-  every other declaration already look: `let name: T? = null`
+  every other declaration already look: `let name: T? = null`. A named
+  parameter *inside a function type* does take `name?: T` (section 5), because
+  there the question is arity rather than nullability — a declaration answers
+  that one with a default value instead
 - TypeScript-style interfaces, assertions, overloads, or type programming
 - generators, `yield`, or the JavaScript `Symbol.asyncIterator` protocol;
   incremental sources use checked `async for` pull contracts or producer
@@ -3530,10 +3597,13 @@ A module-level `keyframes:` expression is an ordinary exportable `Keyframes`
 value. A stop is `from:`, `to:`, or an integer percentage from `1%` through
 `99%`; comma-separated stops share a body. Stops may not repeat and declaration
 groups must progress in ascending order. A body contains direct, statically
-lowerable Look properties only. It reuses the Look property and value checker,
-rejects non-interpolating properties, and cannot read reactive state. Equal
-keyframe structures receive one stable generated CSS name and one emitted rule,
-including when used through another module's checked interface.
+lowerable Look properties only. It reuses the Look property and value checker —
+the same literals, unit values, arithmetic, builder calls with positional or
+named arguments, and `const` design tokens declared locally or imported through
+a checked interface — rejects non-interpolating properties, and cannot read
+reactive state. Equal keyframe structures receive one stable generated CSS name
+and one emitted rule, including when used through another module's checked
+interface.
 
 ```velar
 import {animate} from "velar/look"

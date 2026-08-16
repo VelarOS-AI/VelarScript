@@ -38,28 +38,43 @@ function moduleInterface(
   };
 }
 
+// D60 rule 153: a capability fails where it is *used*, never where it is
+// imported. The bridge is still captured while the module initializes, so a
+// later write to globalThis cannot substitute one -- only the report of its
+// absence moves to the call. Module initialization that threw punished code
+// that never called the capability: a pure function written beside a
+// `velar/desktop` import could not be loaded by a non-browser `velar test`,
+// which made the language demand a file split for testability. This mirrors
+// what velar/storage already does on the Web side.
 const DESKTOP_HOST_ABI_RUNTIME = String.raw`
 const __velarDesktopBridgeKey = Symbol.for("velar.desktop.bridge.v1");
 const __velarDesktopGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
 const __velarDesktopReflectApply = Reflect.apply;
 const __velarDesktopBridgeDescriptor = __velarDesktopGetOwnPropertyDescriptor(globalThis, __velarDesktopBridgeKey);
-if (!__velarDesktopBridgeDescriptor || !("value" in __velarDesktopBridgeDescriptor)
-  || !__velarDesktopBridgeDescriptor.value || typeof __velarDesktopBridgeDescriptor.value !== "object") {
-  throw new Error("VelarScript Desktop bridge is unavailable");
+const __velarDesktopBridge = __velarDesktopBridgeDescriptor && "value" in __velarDesktopBridgeDescriptor
+  && __velarDesktopBridgeDescriptor.value && typeof __velarDesktopBridgeDescriptor.value === "object"
+  ? __velarDesktopBridgeDescriptor.value
+  : null;
+const __velarDesktopInvokeDescriptor = __velarDesktopBridge === null
+  ? null
+  : __velarDesktopGetOwnPropertyDescriptor(__velarDesktopBridge, "invoke");
+const __velarDesktopInvoke = __velarDesktopInvokeDescriptor && "value" in __velarDesktopInvokeDescriptor
+  && typeof __velarDesktopInvokeDescriptor.value === "function"
+  ? __velarDesktopInvokeDescriptor.value
+  : null;
+function __velarDesktopRequireBridge() {
+  if (__velarDesktopBridge === null) throw new Error("VelarScript Desktop bridge is unavailable");
+  if (__velarDesktopInvoke === null) throw new TypeError("Desktop bridge invoke must be a function data value");
+  return __velarDesktopBridge;
 }
-const __velarDesktopBridge = __velarDesktopBridgeDescriptor.value;
-const __velarDesktopInvokeDescriptor = __velarDesktopGetOwnPropertyDescriptor(__velarDesktopBridge, "invoke");
-if (!__velarDesktopInvokeDescriptor || !("value" in __velarDesktopInvokeDescriptor) || typeof __velarDesktopInvokeDescriptor.value !== "function") {
-  throw new TypeError("Desktop bridge invoke must be a function data value");
-}
-const __velarDesktopInvoke = __velarDesktopInvokeDescriptor.value;
 function __velarDesktopHostField(name) {
-  const descriptor = __velarDesktopGetOwnPropertyDescriptor(__velarDesktopBridge, name);
+  const descriptor = __velarDesktopGetOwnPropertyDescriptor(__velarDesktopRequireBridge(), name);
   if (!descriptor || !("value" in descriptor)) throw new TypeError("Desktop bridge field '" + name + "' must be a data value");
   return descriptor.value;
 }
 function __velarDesktopHostCall(capability, operation, args, timeout = 30000) {
-  return __velarDesktopReflectApply(__velarDesktopInvoke, __velarDesktopBridge, [capability, operation, args, timeout]);
+  const bridge = __velarDesktopRequireBridge();
+  return __velarDesktopReflectApply(__velarDesktopInvoke, bridge, [capability, operation, args, timeout]);
 }
 `.trim();
 
@@ -158,18 +173,16 @@ ${DESKTOP_HOST_ABI_RUNTIME}
 ${VELAR_TYPE_REGISTRY_RUNTIME}
 ${VELAR_UTF8_RUNTIME}
 ${VELAR_PROCESS_HOST_RUNTIME}
-const desktopPlatform = __velarDesktopHostField("platform");
-const desktopPackaged = __velarDesktopHostField("packaged");
 const languageServerToken = Symbol("velar.desktop.language-server");
 const projectTaskToken = Symbol("velar.desktop.project-task");
 const terminalSessionToken = Symbol("velar.desktop.terminal-session");
 export function platform() {
-  const value = desktopPlatform;
+  const value = __velarDesktopHostField("platform");
   if (typeof value !== "string" || value.length === 0) throw new TypeError("Desktop host returned an invalid platform");
   return value;
 }
 export function packaged() {
-  const value = desktopPackaged;
+  const value = __velarDesktopHostField("packaged");
   if (typeof value !== "boolean") throw new TypeError("Desktop host returned an invalid packaged marker");
   return value;
 }
@@ -596,7 +609,6 @@ if (typeof pathURLProtocol !== "function" || typeof pathURLUsername !== "functio
   || typeof pathURLHostname !== "function" || typeof pathURLPathname !== "function") {
   throw new TypeError("Desktop path URL runtime is unavailable");
 }
-const desktopProjectDirectoryValue = __velarDesktopHostField("projectDirectoryValue");
 function stringIndexOf(value, search) { return pathApply(pathStringIndexOf, value, [search]); }
 function stringSlice(value, start, end) { return pathApply(pathStringSlice, value, end === undefined ? [start] : [start, end]); }
 function stringToLowerCase(value) { return pathApply(pathStringToLowerCase, value, []); }
@@ -706,8 +718,9 @@ function parts(value, operation) {
   return output;
 }
 function projectDirectory() {
-  if (typeof desktopProjectDirectoryValue !== "function") throw new TypeError("Desktop project directory provider must be a function data value");
-  const value = checked(pathApply(desktopProjectDirectoryValue, undefined, []), "resolve");
+  const provider = __velarDesktopHostField("projectDirectoryValue");
+  if (typeof provider !== "function") throw new TypeError("Desktop project directory provider must be a function data value");
+  const value = checked(pathApply(provider, undefined, []), "resolve");
   if (!value.startsWith("/")) throw new TypeError("Desktop project directory must be absolute");
   return value;
 }
@@ -1184,7 +1197,6 @@ export async function run(command, args = [], options = {}) {
 
 const DESKTOP_ENV_SOURCE = String.raw`
 ${DESKTOP_HOST_ABI_RUNTIME}
-const desktopEnvironment = __velarDesktopHostField("environment");
 let cachedSnapshot = null;
 function variableName(value) {
   if (typeof value !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(value) || value.length > 256) {
@@ -1194,6 +1206,7 @@ function variableName(value) {
 }
 function snapshot() {
   if (cachedSnapshot) return cachedSnapshot;
+  const desktopEnvironment = __velarDesktopHostField("environment");
   if (!desktopEnvironment || typeof desktopEnvironment !== "object" || Array.isArray(desktopEnvironment)) {
     throw new Error("VelarScript Desktop environment snapshot is unavailable");
   }
