@@ -211,15 +211,24 @@ How I resolved it:
 
 ## 5. The final exit: readable JavaScript
 
-`velar build` emits legible, source-mapped JavaScript — ordinary modules
-with your names in them, plus a generated `node_modules/velar` directory
-containing the standard-module runtime as plain readable JavaScript. That
-generated runtime is part of the build output, not part of the toolchain.
+For the Node target, `velar build` emits legible, source-mapped JavaScript —
+ordinary modules with your names in them, plus a generated
+`node_modules/velar` directory containing the standard-module runtime as
+plain readable JavaScript. That generated runtime is part of the build
+output, not part of the toolchain.
 
-If Vel itself becomes the obstacle, take the build output and keep shipping
-without us: the emitted program runs in a bare directory with nothing but
-Node — no `@velarscript/*` packages, no compiler, no CLI. This anti-lock-in
-property is enforced by a permanent acceptance gate
+A production web build additionally bundles and minifies its assets for
+deployment, so the deployed bundle is not the form you read. A web
+application's readable form is its module emission —
+`velar build <single.vel> --out <file.js>` produces the same legible,
+name-preserving JavaScript for any module — plus the source maps when the
+build is configured to keep them.
+
+If Vel itself becomes the obstacle, take the emitted output and keep
+shipping without us: an emitted Node program runs in a bare directory with
+nothing but Node — no `@velarscript/*` packages, no compiler, no CLI — and
+a built web `dist/` is self-contained static assets. The Node half of this
+anti-lock-in property is enforced by a permanent acceptance gate
 ([tests/package.acceptance.ts](../tests/package.acceptance.ts)) that builds
 a program, copies only the emitted output into an empty directory, and runs
 it with Node alone.
