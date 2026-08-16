@@ -6,6 +6,7 @@ import test, { after } from "node:test";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
 import { repositoryRoot } from "./repository-root.ts";
 import { DEFECT_REPORT_SECTIONS, reproductionHint } from "../packages/cli/src/reproduction.ts";
+import { portablePath } from "../packages/cli/src/test-output.ts";
 
 // ---------------------------------------------------------------------------
 // D66 rulings 7A, 7B and 7D — the minimal-repro doctrine gets an exit.
@@ -110,7 +111,11 @@ test("D66 7A velar repro writes a reproduction that reproduces, and prints where
   for (const section of DEFECT_REPORT_SECTIONS) assert.ok(readme.includes(`## ${section}`), `the README must carry '${section}'`);
   // "What the compiler said" is pre-filled from the real run, verbatim apart
   // from the absolute paths this machine would otherwise leak.
-  assert.ok(readme.includes(diagnostics.split(directory + sep).join("").trimEnd()),
+  const bundledDiagnostics = diagnostics
+    .split(directory + sep).join("")
+    .split(`${portablePath(directory)}/`).join("")
+    .trimEnd();
+  assert.ok(readme.includes(bundledDiagnostics),
     `the README must quote the diagnostics verbatim, got:\n${readme}`);
   assert.match(readme, /^Versions: velar \d+\.\d+\.\d+ · node v\d+\.\d+\.\d+ · \w+ \w+$/mu);
   assert.ok(readme.includes("npm install\nnpx velar check\n"), "the README must give the reproduce instructions");

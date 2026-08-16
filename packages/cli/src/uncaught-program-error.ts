@@ -34,6 +34,7 @@ const framePosition = /\\(?([^()]+):(\\d+):(\\d+)\\)?$/u;
 const launcherUrl = import.meta.url;
 
 const bounded = (value) => (value.length <= maximumTextLength ? value : \`\${value.slice(0, maximumTextLength)}…\`);
+const portableFrame = (frame) => frame.replaceAll("\\\\", "/");
 
 const describe = (error) => {
   if (error instanceof Error) {
@@ -79,7 +80,7 @@ const present = (error) => {
     if (depth > 0) output.push("caused by:");
     output.push(...trace.header);
     if (depth === 0 && trace.owned.length > 0) output.push(...codeFrame(trace.owned[0]));
-    output.push(...trace.owned);
+    output.push(...trace.owned.map(portableFrame));
     if (trace.hidden > 0) {
       output.push(\`  (\${trace.hidden} Node.js internal frame\${trace.hidden === 1 ? "" : "s"} hidden; rerun with 'velar run --stack' for the full trace)\`);
     }
