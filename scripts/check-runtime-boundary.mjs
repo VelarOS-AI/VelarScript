@@ -1,4 +1,4 @@
-import { readFile, readdir } from "node:fs/promises";
+import { readFile as readRawFile, readdir } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -1990,6 +1990,14 @@ async function sourceFiles(directory) {
     else if (entry.isFile() && path.endsWith(".ts")) files.push(path);
   }
   return files.sort();
+}
+
+async function readFile(path, encoding) {
+  const source = await readRawFile(path, encoding);
+  // This gate inspects source contracts, not a checkout's native line-ending
+  // convention. Normalize before matching multiline runtime templates so the
+  // same committed source answers identically on Windows, macOS, and Linux.
+  return typeof source === "string" ? source.replace(/\r\n?/gu, "\n") : source;
 }
 
 function escapeRegex(value) {
