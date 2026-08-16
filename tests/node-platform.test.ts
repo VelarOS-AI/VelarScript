@@ -1581,19 +1581,10 @@ test("Node process and HTTP runtimes preserve secret, cancellation, timeout, and
     const treeResult = await tree.wait();
     const descendantPid = Number(treeResult.stdout);
     assert.equal(Number.isSafeInteger(descendantPid), true);
-    // `stop()` kills the whole tree, but the host reaps it asynchronously, so the
-    // descendant can still be present the instant `wait()` resolves — observed
-    // under a loaded full-suite run, not when this file runs alone. The contract
-    // is that the descendant goes away with its owner, not that it is already
-    // gone on the first sample, so poll for ESRCH within a bounded window.
-    let descendantProbe: unknown = null;
-    for (let attempt = 0; attempt < 100; attempt += 1) {
-      try { process.kill(descendantPid, 0); await new Promise((resolveWait) => setTimeout(resolveWait, 20)); }
-      catch (error) { descendantProbe = error; break; }
-    }
-    assert.ok(
-      descendantProbe instanceof Error && "code" in descendantProbe && descendantProbe.code === "ESRCH",
-      "stopping a process must reap its descendant tree",
+    assert.throws(
+      () => process.kill(descendantPid, 0),
+      (error: unknown) => error instanceof Error && "code" in error && error.code === "ESRCH",
+      "a completed stop must have reaped its descendant tree",
     );
 
     if (process.platform !== "win32") {
