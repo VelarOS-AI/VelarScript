@@ -134,7 +134,59 @@ export class Bag:
 
 ---
 
+---
+
+## 实施后的更正（波 R3 上报，2026-08-16）
+
+### 我写错的三处
+
+**一、本文的例子 `@iterate:` / `return items` 不编译。**
+契约块里**裸字段名不在作用域内**（实测 `VEL3001 Unknown name 'items'`，
+`@dispose:` 同样如此）。正确写法是 `return self.items`。
+charter 与展示都用的 `self.`，只有本文的片段错了。
+
+**二、`readonly Bag` 不是一个拼写。** 语言拒绝对类使用 `readonly`
+（`'readonly' applies only to data records, structural objects, List, Set,
+Map, and Record values`）。所以第 6 项实施要求建立在一个不存在的形态上。
+实施波按唯一可能的含义落地：**只读性穿过答案传播** ——
+块返回 `readonly List<…>` 时元素是只读的。**这是正确的读法。**
+
+**三、第 3 项实施要求自相矛盾。** 我写「`for k, v in bag` 仅当返回 Map/Record，
+否则拒绝」—— 而**同一张表往上两行就写着 `for x, i in y ✓`**。
+`for a, b in y` 与 `for k, v in y` 是**同一个语法**：在 List 上第二格是索引。
+按我写的做会砸掉我自己那一行。
+
+实施波按**统辖规则**（「语义与直接写 `bag.items` 逐字相同」）落地 ——
+槽位含义随返回的集合走。**正确。** 我想要的「说明它返回的是什么」
+被放到了每个拒绝点的指引里，那是更好的位置。
+
+### 一条待裁决，我确认保留
+
+实施波加了一条本文没写的规则：**覆写必须保持基类的集合类型**，
+并问我要不要改成自由替换。
+
+**保留。** 本文写的「覆写即替换，只有一个答案」讲的是**不链式**
+（与 `@dispose:` 必须链式相对），**没有讲类型**。而不变性有独立理由：
+
+- 语言**已经**对 getter 覆写强制严格不变性（charter §10），这是同一条纪律
+- 它堵的是真洞：`Sorted extends Bag` 若能返回 `List<number>` 而基类是
+  `List<string>`，那么一个接受 `Bag` 的函数里 `for item in bag`
+  **静态看到 string、运行时拿到 number**
+
+**这不是新规则，是既有纪律用到了新位置。**
+
+### 顺带发现的同族缺陷（未修）
+
+`moduleInterfaceIdentity` **也不包含 `dispose`** ——
+所以增删一个 `@dispose:` 块**不会让依赖模块的缓存接口失效**。
+
+与 R3 修掉的那处（`renameClass` 逐字段重建 `ClassInfo` 时静默丢掉 `iterate`）
+是同一族：**一个结构在多处被逐字段重建，漏一处就静默失效**
+（批次 M 的 `typeParameterNames` 是第一例）。**排进队列。**
+
+---
+
 ## 归属
 
 第 176 条 → `packages/web`（web-test 控制器）+ `docs/web-api.md`。
-第 177 条 → `packages/compiler`（解析、分析、发射）+ charter §9/§10 + 展示。
+第 177 条 → **已实施**（波 R3）。
