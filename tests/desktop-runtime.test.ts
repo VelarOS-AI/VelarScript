@@ -29,6 +29,9 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
   const pendingRequests = new Map<number, { reject(error: Error): void }>();
   const pendingProcessRead = { resolve: null as ((value: unknown) => void) | null };
   const languageServerMessages = ['{"jsonrpc":"2.0","id":1,"result":null}'];
+  const projectChangeRecords = new Map<string, Record<string, unknown>>();
+  const projectChangeUpdates: unknown[] = [];
+  let hostileProjectChangeReads = 0;
   const stopWaitRace = { reject: null as ((error: Error) => void) | null };
   let pendingProcessReadDelivered = false;
   let hostileResponseReads = 0;
@@ -50,6 +53,25 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
     Object.defineProperty(error, "phase", { value: phase, enumerable: true });
     return error;
   };
+  const projectChangeRecord = (lifecycle: string, sequence: number): Record<string, unknown> => ({
+    transactionId: "tx-editor-1",
+    sequence,
+    lifecycle,
+    reason: null,
+    intents: [{type: "replace_text", path: "src/main.vel", from: null, to: null, targetId: null, reason: "test"}],
+    patches: [{patchId: "patch-1", strategyId: "text", path: "src/main.vel", baseRevision: null, diff: "-old\n+new", changedLines: 2, risk: "low", operation: "replace_text"}],
+    changedFiles: ["src/main.vel"],
+    diff: "-old\n+new",
+    changedLines: 2,
+    risk: "low",
+    revisions: [{path: "src/main.vel", before: "before", after: "after"}],
+    createdAt: 1,
+    updatedAt: sequence,
+    appliedAt: lifecycle === "applied" || lifecycle === "rolled_back" ? 2 : null,
+  });
+  const preparedProjectChange = projectChangeRecord("prepared", 1);
+  projectChangeRecords.set("tx-editor-1", preparedProjectChange);
+  projectChangeUpdates.push({changes: [preparedProjectChange], rescan: false});
   const bridge = Object.freeze({
     platform: "test",
     packaged: false,
@@ -88,6 +110,31 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
         result: { code: 143, signal: null, stdout: "", stderr: "" },
         error: null,
       };
+      if (capability === "project-changes") {
+        if (operation === "start") return 3_000_000_000;
+        if (operation === "list") {
+          const values = [...projectChangeRecords.values()];
+          return {changes: values.slice(0, args[1] as number), truncated: values.length > (args[1] as number)};
+        }
+        if (operation === "get") {
+          if (args[1] === "hostile") {
+            return Object.defineProperty({...preparedProjectChange}, "transactionId", {
+              enumerable: true,
+              get() { hostileProjectChangeReads += 1; return "hostile"; },
+            });
+          }
+          return projectChangeRecords.get(args[1] as string) ?? null;
+        }
+        if (operation === "subscribe") return projectChangeUpdates.shift() ?? null;
+        if (operation === "apply" || operation === "rollback") {
+          const transactionId = args[1] as string;
+          if (!projectChangeRecords.has(transactionId)) throw new Error("unknown project transaction");
+          const change = projectChangeRecord(operation === "apply" ? "applied" : "rolled_back", operation === "apply" ? 2 : 3);
+          projectChangeRecords.set(transactionId, change);
+          return change;
+        }
+        if (operation === "close") return null;
+      }
       if (capability === "terminal" && operation === "open") {
         const handle = nextTerminalHandle++;
         terminalChunks.set(handle, ["terminal output\n", null]);
@@ -661,12 +708,37 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
       languageServer(): Promise<{ send(message: string): Promise<null>; next(): Promise<string | null>; close(): Promise<null> }>;
       ProjectTask: { is(value: unknown): boolean; parse(value: unknown): unknown };
       ProjectTaskCommand: Readonly<{
-        check: "check"; test: "test"; build: "build"; fix: "fix"; package: "package"; run: "run";
+        check: "check"; test: "test"; browserTest: "browserTest"; build: "build"; fix: "fix"; package: "package"; run: "run";
         is(value: unknown): boolean; parse(value: unknown): unknown; values(): string[];
       }>;
       ProjectTaskOutputChannel: Readonly<{
         stdout: "stdout"; stderr: "stderr";
         is(value: unknown): boolean; parse(value: unknown): unknown; values(): string[];
+      }>;
+      ProjectChanges: { is(value: unknown): boolean; parse(value: unknown): unknown };
+      ProjectChangeLifecycle: Readonly<{
+        prepared: "prepared"; validationFailed: "validationFailed"; rolledBack: "rolledBack";
+        is(value: unknown): boolean; parse(value: unknown): unknown; values(): string[];
+      }>;
+      ProjectChangeRisk: Readonly<{
+        low: "low"; medium: "medium"; high: "high";
+        is(value: unknown): boolean; parse(value: unknown): unknown; values(): string[];
+      }>;
+      projectChanges(): Promise<{
+        list(limit?: number): Promise<{changes: Array<{
+          transactionId: string;
+          lifecycle: string;
+          diff: string;
+          intents: unknown[];
+          patches: unknown[];
+          changedFiles: string[];
+          revisions: unknown[];
+        }>; truncated: boolean}>;
+        get(transactionId: string): Promise<{transactionId: string; lifecycle: string; diff: string} | null>;
+        subscribe(): Promise<{changes: Array<{transactionId: string; lifecycle: string}>; rescan: boolean} | null>;
+        apply(transactionId: string): Promise<{lifecycle: string}>;
+        rollback(transactionId: string): Promise<{lifecycle: string}>;
+        close(): Promise<null>;
       }>;
       startProjectTask(command: "check" | "test" | "build" | "fix" | "package" | "run", args?: string[], options?: { timeout?: number; maxOutputBytes?: number }): Promise<{
         pid: number;
@@ -710,7 +782,8 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
     // D60 rule 149: the two Desktop enums answer all three names charter
     // section 6 reserves, not only their members. `values` was the gap, and it
     // threw `is not a function` from code that compiled clean.
-    assert.deepEqual(desktopRuntime.ProjectTaskCommand.values(), ["check", "test", "build", "fix", "package", "run"]);
+    assert.equal(desktopRuntime.ProjectTaskCommand.browserTest, "browserTest");
+    assert.deepEqual(desktopRuntime.ProjectTaskCommand.values(), ["check", "test", "browserTest", "build", "fix", "package", "run"]);
     assert.deepEqual(desktopRuntime.ProjectTaskOutputChannel.values(), ["stdout", "stderr"]);
     assert.notEqual(desktopRuntime.ProjectTaskCommand.values(), desktopRuntime.ProjectTaskCommand.values());
     assert.equal(desktopRuntime.ProjectTaskCommand.is("check"), true);
@@ -720,6 +793,35 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
     assert.equal(desktopRuntime.ProjectTaskOutputChannel.is("stderr"), true);
     assert.equal(desktopRuntime.ProjectTaskOutputChannel.parse("stdout"), "stdout");
     assert.throws(() => desktopRuntime.ProjectTaskOutputChannel.parse("both"));
+    assert.equal(desktopRuntime.ProjectChangeLifecycle.validationFailed, "validationFailed");
+    assert.equal(desktopRuntime.ProjectChangeLifecycle.rolledBack, "rolledBack");
+    assert.deepEqual(desktopRuntime.ProjectChangeLifecycle.values(), ["prepared", "amended", "validated", "validationFailed", "applied", "rolledBack", "discarded"]);
+    assert.equal(desktopRuntime.ProjectChangeRisk.high, "high");
+    assert.deepEqual(desktopRuntime.ProjectChangeRisk.values(), ["low", "medium", "high"]);
+    const projectChanges = await desktopRuntime.projectChanges();
+    assert.equal(desktopRuntime.ProjectChanges.is(projectChanges), true);
+    assert.equal(desktopRuntime.ProjectChanges.parse(projectChanges), projectChanges);
+    const changePage = await projectChanges.list();
+    assert.equal(changePage.truncated, false);
+    assert.equal(Object.isFrozen(changePage.changes), false);
+    assert.equal(Object.isFrozen(changePage.changes[0]?.intents), false);
+    assert.equal(Object.isFrozen(changePage.changes[0]?.patches), false);
+    assert.equal(Object.isFrozen(changePage.changes[0]?.changedFiles), false);
+    assert.equal(Object.isFrozen(changePage.changes[0]?.revisions), false);
+    assert.equal(changePage.changes[0]?.transactionId, "tx-editor-1");
+    assert.equal(changePage.changes[0]?.lifecycle, "prepared");
+    assert.equal(changePage.changes[0]?.diff, "-old\n+new");
+    assert.equal((await projectChanges.get("tx-editor-1"))?.lifecycle, "prepared");
+    assert.equal((await projectChanges.subscribe())?.changes[0]?.lifecycle, "prepared");
+    assert.equal(calls.find((call) => call.capability === "project-changes" && call.operation === "subscribe")?.timeout, 0);
+    assert.equal((await projectChanges.apply("tx-editor-1")).lifecycle, "applied");
+    assert.equal((await projectChanges.rollback("tx-editor-1")).lifecycle, "rolledBack");
+    await assert.rejects(projectChanges.get("hostile"), /enumerable data values/u);
+    assert.equal(hostileProjectChangeReads, 0);
+    await assert.rejects(projectChanges.list(101), /integer from 1 through 100/u);
+    assert.equal(await projectChanges.close(), null);
+    assert.equal(await projectChanges.close(), null);
+    await assert.rejects(projectChanges.get("tx-editor-1"), /closed/u);
     await assert.rejects(desktopRuntime.startProjectTask(desktopRuntime.ProjectTaskCommand.check, ["--unsafe"]), /Only a run project task accepts/u);
     const projectTask = await desktopRuntime.startProjectTask(desktopRuntime.ProjectTaskCommand.check, [], { timeout: 5000, maxOutputBytes: 65536 });
     assert.equal(projectTask.pid, 720);
@@ -1108,6 +1210,23 @@ test("Desktop CLI test host provides deterministic manifest-scoped process handl
     stdout: "[desktop-test] git --version\n",
     stderr: "",
   });
+  const projectChangesHandle = await bridge.invoke("project-changes", "start", []) as number;
+  const seededUpdate = bridge.invoke("project-changes", "subscribe", [projectChangesHandle]) as Promise<{changes: Array<{transactionId: string; lifecycle: string}>; rescan: boolean}>;
+  assert.equal(await bridge.invoke("project-change-test", "seed", ["tx-browser", "prepared", "-old\n+new"]), null);
+  const seeded = await seededUpdate;
+  assert.equal(seeded.rescan, false);
+  assert.equal(seeded.changes[0]?.transactionId, "tx-browser");
+  assert.equal(seeded.changes[0]?.lifecycle, "prepared");
+  const projectChangesPage = await bridge.invoke("project-changes", "list", [projectChangesHandle, 50]) as {changes: Array<{transactionId: string; lifecycle: string}>; truncated: boolean};
+  assert.equal(projectChangesPage.truncated, false);
+  assert.equal(projectChangesPage.changes[0]?.transactionId, "tx-browser");
+  const appliedUpdate = bridge.invoke("project-changes", "subscribe", [projectChangesHandle]) as Promise<{changes: Array<{lifecycle: string}>}>;
+  assert.equal((await bridge.invoke("project-changes", "apply", [projectChangesHandle, "tx-browser"]) as {lifecycle: string}).lifecycle, "applied");
+  assert.equal((await appliedUpdate).changes[0]?.lifecycle, "applied");
+  const rolledBackUpdate = bridge.invoke("project-changes", "subscribe", [projectChangesHandle]) as Promise<{changes: Array<{lifecycle: string}>}>;
+  assert.equal((await bridge.invoke("project-changes", "rollback", [projectChangesHandle, "tx-browser"]) as {lifecycle: string}).lifecycle, "rolled_back");
+  assert.equal((await rolledBackUpdate).changes[0]?.lifecycle, "rolled_back");
+  assert.equal(await bridge.invoke("project-changes", "close", [projectChangesHandle]), null);
   await assert.rejects(bridge.invoke("process", "start", ["sh", [], {}]), /not granted/u);
 });
 

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -10,6 +11,8 @@ import { pathToFileURL } from "node:url";
 import { buildLanguageServerTool } from "../packages/cli/src/language-server-tool.ts";
 import { buildProjectTaskTool } from "../packages/cli/src/project-task-tool.ts";
 import { buildBuildEngineTool } from "../packages/cli/src/build-engine-tool.ts";
+import { FileProjectChangeFeed } from "@velaros-ai/project/changes";
+import { createProjectKernel } from "@velaros-ai/project/runtime";
 
 const workerPath = resolve("packages/desktop/native/node/worker.js");
 const temporaryPrefix = join(tmpdir(), "velar-desktop-");
@@ -454,6 +457,86 @@ test("Desktop owns bounded packaged project tasks without executable grants", { 
     if (runningPid !== null) terminateProcessGroup(runningPid);
     await client.close();
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Desktop owns durable finite project changes across Worker restarts", { timeout: 120_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-desktop-project-changes-"));
+  const project = join(directory, "project");
+  const appData = join(directory, "app-data");
+  await Promise.all([mkdir(project), mkdir(appData)]);
+  const notePath = join(project, "note.txt");
+  await writeFile(notePath, "before\n", "utf8");
+  const canonicalProject = await realpath(project);
+  const privateDirectory = join(appData, "project-transactions", createHash("sha256").update(canonicalProject).digest("hex"));
+  const statePath = join(privateDirectory, "transactions.json");
+  const feedPath = join(privateDirectory, "changes.jsonl");
+  const feed = new FileProjectChangeFeed({path: feedPath});
+  let transactionId = "";
+  try {
+    const owner = await createProjectKernel({root: canonicalProject, changeFeed: feed, transactionStatePath: statePath});
+    const prepared = await owner.prepareEdit({
+      operations: [{
+        reason: "Desktop finite project change transport",
+        operation: {type: "replace_text", path: "note.txt", oldText: "before", newText: "after"},
+      }],
+    });
+    transactionId = prepared.transactionId;
+    const validation = await owner.validate({transactionId});
+    assert.equal(validation.ok, true);
+  } finally {
+    feed.close();
+  }
+
+  const configPath = join(directory, "desktop.json");
+  await writeFile(configPath, JSON.stringify({
+    protocolVersion: 1,
+    permissions: {files: ["project"], processes: [], terminal: false, network: [], environment: [], secrets: []},
+  }), "utf8");
+  const open = (): WorkerClient => new WorkerClient(spawn(process.execPath, [workerPath, configPath, appData, project], {stdio: ["pipe", "pipe", "pipe"]}));
+  let client = open();
+  try {
+    let handle = await client.call("project-changes", "start", []) as number;
+    assert.ok(handle >= 3_000_000_000 && handle <= 3_000_000_015);
+    const page = await client.call("project-changes", "list", [handle, 50]) as {
+      changes: Array<{transactionId: string; lifecycle: string; diff: string; changedFiles: string[]}>;
+      truncated: boolean;
+    };
+    assert.equal(page.truncated, false);
+    assert.equal(page.changes[0]?.transactionId, transactionId);
+    assert.equal(page.changes[0]?.lifecycle, "validated");
+    assert.deepEqual(page.changes[0]?.changedFiles, ["note.txt"]);
+    assert.match(page.changes[0]?.diff ?? "", /after/u);
+    assert.equal("root" in (page.changes[0] ?? {}), false);
+    assert.equal("transactionStatePath" in (page.changes[0] ?? {}), false);
+
+    const appliedUpdate = client.call("project-changes", "subscribe", [handle]) as Promise<{changes: Array<{lifecycle: string}>; rescan: boolean}>;
+    const applied = await client.call("project-changes", "apply", [handle, transactionId]) as {lifecycle: string};
+    assert.equal(applied.lifecycle, "applied");
+    let observedApplied = await appliedUpdate;
+    if (observedApplied.changes[0]?.lifecycle !== "applied") {
+      observedApplied = await client.call("project-changes", "subscribe", [handle]) as typeof observedApplied;
+    }
+    assert.equal(observedApplied.changes[0]?.lifecycle, "applied");
+    assert.equal(await readFile(notePath, "utf8"), "after\n");
+    assert.equal(await client.call("project-changes", "close", [handle]), null);
+    await client.close();
+
+    client = open();
+    handle = await client.call("project-changes", "start", []) as number;
+    const restored = await client.call("project-changes", "get", [handle, transactionId]) as {lifecycle: string};
+    assert.equal(restored.lifecycle, "applied");
+    const rolledBackUpdate = client.call("project-changes", "subscribe", [handle]) as Promise<{changes: Array<{lifecycle: string}>; rescan: boolean}>;
+    const rolledBack = await client.call("project-changes", "rollback", [handle, transactionId]) as {lifecycle: string};
+    assert.equal(rolledBack.lifecycle, "rolled_back");
+    assert.equal((await rolledBackUpdate).changes[0]?.lifecycle, "rolled_back");
+    assert.equal(await readFile(notePath, "utf8"), "before\n");
+    assert.equal(await client.call("project-changes", "close", [handle]), null);
+    assert.equal((await readdir(project)).some((name) => name.includes("transaction") || name.includes("change")), false);
+    assert.equal((await readdir(privateDirectory)).sort().join(","), "changes.jsonl,transactions.json");
+  } finally {
+    await client.close();
+    await rm(directory, {recursive: true, force: true});
   }
 });
 
@@ -1028,7 +1111,10 @@ test("Desktop capability host drains transferred process ownership before a fata
     protocolVersion: 1,
     permissions: { files: [], processes: [basename(process.execPath)], network: [] },
   }), "utf8");
-  const source = await readFile(workerPath, "utf8");
+  const source = (await readFile(workerPath, "utf8")).replace(
+    'from "./project-transactions.js"',
+    `from ${JSON.stringify(pathToFileURL(resolve("packages/desktop/native/node/project-transactions.js")).href)}`,
+  );
   const crashingSource = source.replace(
     'task.kind = "process";\n  processHandles.set(handle, task);\n  // The native shell becomes the crash-recovery owner before the renderer\n  // receives the public start/run result.\n  respond({ protocolVersion: 1, hostEvent: "process-owned", owner, handle, pid: task.pid });',
     'task.kind = "process";\n  processHandles.set(handle, task);\n  // The native shell becomes the crash-recovery owner before the renderer\n  // receives the public start/run result.\n  respond({ protocolVersion: 1, hostEvent: "process-owned", owner, handle, pid: task.pid }); setTimeout(() => { throw new Error("injected Desktop worker crash"); }, 100); await new Promise(() => {});',

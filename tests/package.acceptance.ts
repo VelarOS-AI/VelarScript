@@ -246,7 +246,7 @@ print(f"{str(script.analysis().diagnostics.size)}:{str(script.referencesAt(refer
   const desktopApi = await run(process.execPath, [
     "--input-type=module",
     "--eval",
-    "import {VELAR_DESKTOP_API_VERSION,VELAR_DESKTOP_MODULES,velarDesktopFramework} from '@velarscript/desktop'; import {velarCompilerExtension} from '@velarscript/desktop/compiler'; import {velarFrameworkHost} from '@velarscript/desktop/host'; const desktop=velarCompilerExtension.modules?.sources.get('velar/desktop') ?? ''; const fs=velarCompilerExtension.modules?.sources.get('velar/fs') ?? ''; const http=velarCompilerExtension.modules?.sources.get('velar/http') ?? ''; if (VELAR_DESKTOP_API_VERSION !== '0.10' || !VELAR_DESKTOP_MODULES.includes('velar/desktop') || velarDesktopFramework.programmingModel !== 'single-project' || velarCompilerExtension.contract?.kind !== 'application' || velarFrameworkHost.id !== '@velarscript/desktop' || !desktop.includes('export async function startProjectTask') || !desktop.includes('ProjectTaskCommand') || !desktop.includes('ProjectTaskOutputChannel') || !desktop.includes('export async function openTerminal') || !desktop.includes('TerminalSession') || !fs.includes('export async function createText') || !fs.includes('export async function replaceTextIfMatches') || !fs.includes('export async function watchFiles') || !fs.includes('invoke(\"watchNext\", [this.handle], 0)') || !http.includes('__velarAssertJson') || !http.includes('__velarJsonStringify') || !http.includes('HTTP options fields must be enumerable data values') || !http.includes('HttpTransportError') || !http.includes('HttpTransportPhase') || !http.includes('responseOf') || !http.includes('maxResponseChunks')) process.exit(1); console.log(velarDesktopFramework.name)",
+    "import {VELAR_DESKTOP_API_VERSION,VELAR_DESKTOP_MODULES,velarDesktopFramework} from '@velarscript/desktop'; import {velarCompilerExtension} from '@velarscript/desktop/compiler'; import {velarFrameworkHost} from '@velarscript/desktop/host'; const desktop=velarCompilerExtension.modules?.sources.get('velar/desktop') ?? ''; const fs=velarCompilerExtension.modules?.sources.get('velar/fs') ?? ''; const http=velarCompilerExtension.modules?.sources.get('velar/http') ?? ''; if (VELAR_DESKTOP_API_VERSION !== '0.10' || !VELAR_DESKTOP_MODULES.includes('velar/desktop') || velarDesktopFramework.programmingModel !== 'single-project' || velarCompilerExtension.contract?.kind !== 'application' || velarFrameworkHost.id !== '@velarscript/desktop' || !desktop.includes('export async function startProjectTask') || !desktop.includes('ProjectTaskCommand') || !desktop.includes('ProjectTaskOutputChannel') || !desktop.includes('export async function projectChanges') || !desktop.includes('ProjectChangeLifecycle') || !desktop.includes('ProjectChangeRisk') || !desktop.includes('export async function openTerminal') || !desktop.includes('TerminalSession') || !fs.includes('export async function createText') || !fs.includes('export async function replaceTextIfMatches') || !fs.includes('export async function watchFiles') || !fs.includes('invoke(\"watchNext\", [this.handle], 0)') || !http.includes('__velarAssertJson') || !http.includes('__velarJsonStringify') || !http.includes('HTTP options fields must be enumerable data values') || !http.includes('HttpTransportError') || !http.includes('HttpTransportPhase') || !http.includes('responseOf') || !http.includes('maxResponseChunks')) process.exit(1); console.log(velarDesktopFramework.name)",
   ], directory);
   assert.equal(desktopApi.stdout, "@velarscript/desktop\n");
 
@@ -260,7 +260,7 @@ print(f"{str(script.analysis().diagnostics.size)}:{str(script.referencesAt(refer
       outDir: "dist/renderer",
       publicDir: "public",
       extensions: ["@velarscript/desktop"],
-      desktop: { productName: "Packed Desktop", identifier: "dev.velarscript.packed" },
+      desktop: { productName: "Packed Desktop", identifier: "dev.velarscript.packed", build: {sizeBudgetBytes: 32 * 1024 * 1024} },
     }), "utf8");
     await writeFile(join(desktopProject, "src", "main.vel"), `
 import {platform} from "velar/desktop"
@@ -313,6 +313,8 @@ mount(<App />, "#app")
     assert.ok((await readFile(packagedLanguageServer)).byteLength > 1024 * 1024);
     assert.ok((await readFile(packagedTerminalHost)).byteLength > 32 * 1024);
     assert.ok((await readFile(join(application, "Contents", "Resources", "host", "project-task.js"))).byteLength > 1024 * 1024);
+    assert.equal(JSON.parse(await readFile(join(application, "Contents", "Resources", "host", "playwright-core", "package.json"), "utf8")).name, "playwright-core");
+    assert.ok(JSON.parse(await readFile(join(application, "Contents", "Resources", "host", "playwright-core", "browsers.json"), "utf8")).browsers.length >= 3);
     assert.ok((await readFile(join(application, "Contents", "Resources", "host", "build-engine"))).byteLength > 5 * 1024 * 1024);
     await probeLanguageServer(packagedLanguageServer, desktopProject);
     assert.equal(hostConfiguration.nodeExecutableHint, undefined);

@@ -4,6 +4,11 @@ import { createInterface } from "node:readline";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
+import {
+  createDesktopProjectTransactionOwner,
+  desktopProjectChangePage,
+  desktopProjectChangeView,
+} from "./project-transactions.js";
 
 const MAX_MESSAGE_BYTES = 128 * 1024 * 1024;
 const MAX_FILE_BYTES = 16 * 1024 * 1024;
@@ -19,6 +24,9 @@ const MAX_LANGUAGE_SERVER_MESSAGE_BYTES = 16 * 1024 * 1024;
 const MAX_LANGUAGE_SERVER_QUEUED_BYTES = 64 * 1024 * 1024;
 const MAX_LANGUAGE_SERVERS = 4;
 const MAX_PROJECT_TASKS = 4;
+const MAX_PROJECT_CHANGE_HANDLES = 16;
+const MAX_PROJECT_CHANGE_QUEUE_ITEMS = 100;
+const MAX_PROJECT_CHANGE_QUEUE_BYTES = 16 * 1024 * 1024;
 const MAX_TERMINALS = 4;
 const MAX_TERMINAL_CHUNK_BYTES = 1024 * 1024;
 const MAX_TERMINAL_QUEUED_BYTES = 4 * 1024 * 1024;
@@ -52,6 +60,8 @@ const fileWatchers = new Map();
 let nextFileWatcherHandle = 1;
 const languageServers = new Map();
 let nextLanguageServerHandle = 1_000_000_000;
+const projectChangeHandles = new Map();
+let nextProjectChangeHandle = 3_000_000_000;
 const terminals = new Map();
 let nextTerminalHandle = 2_000_000_000;
 let nextTextReplacementIdentity = 1;
@@ -64,6 +74,9 @@ let appDataLexicalRoot = null;
 let projectRoot = null;
 let projectLexicalRoot = null;
 let projectRootUpdate = Promise.resolve();
+let projectTransactionOwner = null;
+let projectTransactionOwnerPending = null;
+let projectTransactionGeneration = 0;
 let languageServerPath = null;
 let projectTaskPath = null;
 let buildEnginePath = null;
@@ -145,6 +158,7 @@ rebuildFileRoots();
 const reader = createInterface({ input: process.stdin, crlfDelay: Infinity, terminal: false });
 reader.once("close", () => {
   if (activeOwner !== null) retireOwner(activeOwner);
+  retireProjectTransactionOwner(new Error("Desktop capability host closed"));
   for (const task of fileWatchers.values()) releaseFileWatcher(task, new Error("Desktop capability host closed"));
   for (const task of languageServers.values()) releaseLanguageServer(task, new Error("Desktop capability host closed"));
   for (const task of terminals.values()) releaseTerminal(task, new Error("Desktop capability host closed"));
@@ -244,6 +258,7 @@ async function dispatch(capability, operation, args, owner, activity) {
   }
   if (capability === "language-server") return languageServerOperation(operation, args, owner, activity);
   if (capability === "project-task") return projectTaskOperation(operation, args, owner, activity);
+  if (capability === "project-changes") return projectChangeOperation(operation, args, owner, activity);
   if (capability === "terminal") return terminalOperation(operation, args, owner, activity);
   if (capability === "http") {
     if (operation === "request") return httpRequest(args, owner, activity);
@@ -273,6 +288,7 @@ async function replaceProjectRoot(path) {
   for (const task of fileWatchers.values()) releaseFileWatcher(task, new Error("Desktop project grant changed"));
   for (const task of languageServers.values()) releaseLanguageServer(task, new Error("Desktop project grant changed"));
   for (const task of terminals.values()) releaseTerminal(task, new Error("Desktop project grant changed"));
+  retireProjectTransactionOwner(new Error("Desktop project grant changed"));
   for (const activity of activeRequests.values()) cancelActivity(activity);
   for (const [handle, task] of processHandles) retainRetiredProcess(handle, task);
   for (const [handle, request] of httpHandles) {
@@ -283,6 +299,214 @@ async function replaceProjectRoot(path) {
   projectLexicalRoot = resolve(path);
   projectRoot = canonical;
   rebuildFileRoots();
+}
+
+function closeRetiredProjectTransactionOwner(owner) {
+  if (!owner.retired || owner.activeOperations > 0) return;
+  owner.close();
+}
+
+function retireProjectTransactionOwner(error) {
+  projectTransactionGeneration += 1;
+  const current = projectTransactionOwner;
+  projectTransactionOwner = null;
+  if (current !== null) {
+    current.retired = true;
+    closeRetiredProjectTransactionOwner(current);
+  }
+  for (const task of projectChangeHandles.values()) releaseProjectChangeHandle(task, error);
+}
+
+async function currentProjectTransactionOwner() {
+  if (projectRoot === null || !fileScopes.has("project")) {
+    throw new Error("Desktop project changes require the project file grant");
+  }
+  if (projectTransactionOwner?.root === projectRoot && !projectTransactionOwner.retired) return projectTransactionOwner;
+  const generation = projectTransactionGeneration;
+  if (projectTransactionOwnerPending?.root !== projectRoot || projectTransactionOwnerPending.generation !== generation) {
+    const root = projectRoot;
+    const pending = createDesktopProjectTransactionOwner(root, appDataRoot).then((created) => ({
+      ...created,
+      activeOperations: 0,
+      retired: false,
+    }));
+    projectTransactionOwnerPending = { root, generation, pending };
+  }
+  const pendingOwner = projectTransactionOwnerPending;
+  try {
+    const created = await pendingOwner.pending;
+    if (generation !== projectTransactionGeneration || projectRoot !== pendingOwner.root) {
+      created.retired = true;
+      closeRetiredProjectTransactionOwner(created);
+      throw new Error("Desktop project grant changed while project transactions were opening");
+    }
+    projectTransactionOwner = created;
+    return created;
+  } finally {
+    if (projectTransactionOwnerPending === pendingOwner) projectTransactionOwnerPending = null;
+  }
+}
+
+async function withProjectTransactionOperation(owner, action) {
+  owner.activeOperations += 1;
+  try {
+    return await action(owner.controller);
+  } finally {
+    owner.activeOperations -= 1;
+    closeRetiredProjectTransactionOwner(owner);
+  }
+}
+
+function allocateProjectChangeHandle() {
+  let candidate = nextProjectChangeHandle;
+  for (let attempts = 0; attempts <= MAX_PROJECT_CHANGE_HANDLES; attempts += 1) {
+    if (!projectChangeHandles.has(candidate)) {
+      nextProjectChangeHandle = candidate >= 3_000_000_015 ? 3_000_000_000 : candidate + 1;
+      return candidate;
+    }
+    candidate = candidate >= 3_000_000_015 ? 3_000_000_000 : candidate + 1;
+  }
+  throw new RangeError("Desktop project change handle space is unavailable");
+}
+
+function projectChangeUpdate(task) {
+  const changes = [...task.queue.values()];
+  const update = { changes, rescan: task.rescan };
+  task.queue.clear();
+  task.queuedBytes = 0;
+  task.rescan = false;
+  return update;
+}
+
+function settleProjectChangeSubscription(task) {
+  if (task.pending === null || !task.rescan && task.queue.size === 0) return;
+  const pending = task.pending;
+  task.pending = null;
+  pending.activity.cancel = null;
+  pending.resolve(projectChangeUpdate(task));
+}
+
+function enqueueProjectChange(task, value) {
+  if (task.closed || task.rescan) return;
+  try {
+    const change = desktopProjectChangeView(value);
+    const bytes = Buffer.byteLength(JSON.stringify(change), "utf8");
+    const previous = task.queue.get(change.transactionId);
+    if (previous !== undefined) task.queuedBytes -= Buffer.byteLength(JSON.stringify(previous), "utf8");
+    if (!task.queue.has(change.transactionId) && task.queue.size >= MAX_PROJECT_CHANGE_QUEUE_ITEMS
+      || task.queuedBytes + bytes > MAX_PROJECT_CHANGE_QUEUE_BYTES) {
+      task.queue.clear();
+      task.queuedBytes = 0;
+      task.rescan = true;
+    } else {
+      task.queue.set(change.transactionId, change);
+      task.queuedBytes += bytes;
+    }
+  } catch {
+    task.queue.clear();
+    task.queuedBytes = 0;
+    task.rescan = true;
+  }
+  settleProjectChangeSubscription(task);
+}
+
+function releaseProjectChangeHandle(task, error = null) {
+  if (task.closed) return false;
+  task.closed = true;
+  projectChangeHandles.delete(task.handle);
+  task.unsubscribe();
+  if (task.pending !== null) {
+    const pending = task.pending;
+    task.pending = null;
+    pending.activity.cancel = null;
+    if (error === null) pending.resolve(null);
+    else pending.reject(error);
+  }
+  return true;
+}
+
+function ownedProjectChangeHandle(value, owner) {
+  const handle = integer(value, 3_000_000_000, 3_000_000_015, "ProjectChanges handle");
+  const task = projectChangeHandles.get(handle);
+  if (!task || task.closed) throw new Error("Desktop ProjectChanges handle is unknown or already released");
+  if (task.owner !== owner) throw new Error("Desktop ProjectChanges handle belongs to another document generation");
+  return task;
+}
+
+async function startProjectChanges(args, owner) {
+  if (args.length !== 0) throw new TypeError("projectChanges start arguments are invalid");
+  if (projectChangeHandles.size >= MAX_PROJECT_CHANGE_HANDLES) throw new RangeError("Desktop cannot own more than 16 project change handles");
+  const transactionOwner = await currentProjectTransactionOwner();
+  const handle = allocateProjectChangeHandle();
+  const task = {
+    handle,
+    owner,
+    transactionOwner,
+    queue: new Map(),
+    queuedBytes: 0,
+    rescan: false,
+    pending: null,
+    closed: false,
+    unsubscribe: null,
+  };
+  task.unsubscribe = transactionOwner.controller.subscribe((change) => enqueueProjectChange(task, change));
+  projectChangeHandles.set(handle, task);
+  return handle;
+}
+
+function listProjectChanges(args, owner) {
+  if (args.length !== 2) throw new TypeError("ProjectChanges.list arguments are invalid");
+  const task = ownedProjectChangeHandle(args[0], owner);
+  const limit = integer(args[1], 1, 100, "ProjectChanges.list limit");
+  return desktopProjectChangePage(task.transactionOwner.controller.list({ limit: limit + 1 }), limit);
+}
+
+function getProjectChange(args, owner) {
+  if (args.length !== 2) throw new TypeError("ProjectChanges.get arguments are invalid");
+  const task = ownedProjectChangeHandle(args[0], owner);
+  const change = task.transactionOwner.controller.get(args[1]);
+  return change === undefined ? null : desktopProjectChangeView(change);
+}
+
+function subscribeProjectChanges(args, owner, activity) {
+  if (args.length !== 1) throw new TypeError("ProjectChanges.subscribe arguments are invalid");
+  const task = ownedProjectChangeHandle(args[0], owner);
+  if (task.pending !== null) throw new Error("ProjectChanges.subscribe already has an active pull");
+  if (task.rescan || task.queue.size > 0) return projectChangeUpdate(task);
+  return new Promise((resolveNext, rejectNext) => {
+    const pending = { resolve: resolveNext, reject: rejectNext, activity };
+    task.pending = pending;
+    activity.cancel = () => {
+      if (task.pending !== pending) return;
+      task.pending = null;
+      pending.reject(new Error("Desktop project change subscription was cancelled"));
+    };
+  });
+}
+
+async function mutateProjectChange(args, owner, operation) {
+  if (args.length !== 2) throw new TypeError(`ProjectChanges.${operation} arguments are invalid`);
+  const task = ownedProjectChangeHandle(args[0], owner);
+  const input = { transactionId: args[1] };
+  await withProjectTransactionOperation(task.transactionOwner, (controller) => controller[operation](input));
+  const change = task.transactionOwner.controller.get(args[1]);
+  if (change === undefined) throw new Error(`Project transaction disappeared after ${operation}`);
+  return desktopProjectChangeView(change);
+}
+
+function projectChangeOperation(operation, args, owner, activity) {
+  if (operation === "start") return startProjectChanges(args, owner);
+  if (operation === "list") return listProjectChanges(args, owner);
+  if (operation === "get") return getProjectChange(args, owner);
+  if (operation === "subscribe") return subscribeProjectChanges(args, owner, activity);
+  if (operation === "apply") return mutateProjectChange(args, owner, "apply");
+  if (operation === "rollback") return mutateProjectChange(args, owner, "rollback");
+  if (operation === "close") {
+    if (args.length !== 1) throw new TypeError("ProjectChanges.close arguments are invalid");
+    releaseProjectChangeHandle(ownedProjectChangeHandle(args[0], owner));
+    return null;
+  }
+  throw new Error(`Unknown project-changes operation '${operation}'`);
 }
 
 function allocateFileWatcherHandle() {
@@ -1222,7 +1446,7 @@ async function projectTaskStart(args, owner, activity) {
   if (projectRoot === null || !fileScopes.has("project")) throw new Error("Desktop project tasks require the project file grant");
   if (args.length !== 3) throw new TypeError("Project task start arguments are invalid");
   const [command, commandArgs, options] = args;
-  if (!["check", "test", "build", "fix", "package", "run"].includes(command)) throw new TypeError("Project task command is invalid");
+  if (!["check", "test", "browserTest", "build", "fix", "package", "run"].includes(command)) throw new TypeError("Project task command is invalid");
   if (!Array.isArray(commandArgs) || commandArgs.length > 1000 || command !== "run" && commandArgs.length > 0) {
     throw new TypeError("Only a run project task accepts a bounded List<string> of program arguments");
   }
@@ -1380,6 +1604,9 @@ function retireOwner(owner) {
   for (const task of languageServers.values()) {
     if (task.owner === owner) releaseLanguageServer(task, new Error("Desktop document generation retired"));
   }
+  for (const task of projectChangeHandles.values()) {
+    if (task.owner === owner) releaseProjectChangeHandle(task, new Error("Desktop document generation retired"));
+  }
   for (const task of terminals.values()) {
     if (task.owner === owner) releaseTerminal(task, new Error("Desktop document generation retired"));
   }
@@ -1401,6 +1628,7 @@ async function fatalDrain() {
   reader.close();
   for (const task of fileWatchers.values()) releaseFileWatcher(task, new Error("Desktop capability host failed"));
   for (const task of languageServers.values()) releaseLanguageServer(task, new Error("Desktop capability host failed"));
+  retireProjectTransactionOwner(new Error("Desktop capability host failed"));
   for (const task of terminals.values()) releaseTerminal(task, new Error("Desktop capability host failed"));
   const tasks = Array.from(processHandles.values());
   for (const task of tasks) task.stop();

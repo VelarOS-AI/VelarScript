@@ -1,9 +1,10 @@
-// Chapter 02 — the three long-lived Desktop handles.
+// Chapter 02 — the four long-lived Desktop handles.
 //
 // Authority: the `velar/desktop` module interface in
 // packages/desktop/src/compiler.ts — `ProjectTask` (4 members),
-// `TerminalSession` (6), and `LanguageServer` (3), plus the two enums
-// `ProjectTaskCommand` (check, test, build, fix, package, run) and `ProjectTaskOutputChannel`
+// `TerminalSession` (6), `LanguageServer` (3), and `ProjectChanges` (6), plus
+// the task, output, project-change lifecycle, and project-change risk enums
+// `ProjectTaskCommand` (check, test, browserTest, build, fix, package, run) and `ProjectTaskOutputChannel`
 // (stdout, stderr), and the three functions that open them.
 //
 // Every handle here publishes a release operation, so `using` supplies its
@@ -12,15 +13,16 @@
 // language server are all real actions, so every call below lives in a function
 // nothing calls.
 
-import {LanguageServer, ProjectTask, ProjectTaskCommand, ProjectTaskOutputChannel, TerminalSession, languageServer, openTerminal, startProjectTask} from "velar/desktop"
+import {LanguageServer, ProjectChangeLifecycle, ProjectChangeRisk, ProjectChanges, ProjectTask, ProjectTaskCommand, ProjectTaskOutputChannel, TerminalSession, languageServer, openTerminal, projectChanges, startProjectTask} from "velar/desktop"
 
 // `ProjectTaskCommand` is the closed set of toolchain commands a Desktop
 // application may start. Mechanical fixes and native packaging are first-class
-// finite capabilities rather than caller-controlled CLI flags. Browser tests
-// need a separately owned browser host and are intentionally absent here.
+// finite capabilities rather than caller-controlled CLI flags. `browserTest`
+// is the separately owned browser host and always covers all three engines.
 export const taskCommands: List<ProjectTaskCommand> = [
     ProjectTaskCommand.check,
     ProjectTaskCommand.test,
+    ProjectTaskCommand.browserTest,
     ProjectTaskCommand.build,
     ProjectTaskCommand.fix,
     ProjectTaskCommand.package,
@@ -33,6 +35,8 @@ export def commandLabel(command: ProjectTaskCommand) -> string:
             return "velar check"
         case ProjectTaskCommand.test:
             return "velar test"
+        case ProjectTaskCommand.browserTest:
+            return "velar test --browser=all"
         case ProjectTaskCommand.build:
             return "velar build"
         case ProjectTaskCommand.fix:
@@ -72,12 +76,76 @@ export async def runTestsAndReport() -> string:
     const result = await task.wait()
     return f"{result.code ?? -1}|{result.signal ?? "none"}|{result.stdout.size}|{result.stderr.size}|{task.pid}"
 
+export async def runBrowserTestsAndReport() -> number:
+    using task = await startProjectTask(ProjectTaskCommand.browserTest, [], {timeout: 600000, maxOutputBytes: 4194304})
+    async for output in task:
+        print(output.text)
+    return (await task.wait()).code ?? -1
+
 export async def stopBuild():
     using task = await startProjectTask(ProjectTaskCommand.build)
     await task.stop()
 
 def startProjectTaskHandle(command: ProjectTaskCommand) -> Promise<ProjectTask>:
     return startProjectTask(command)
+
+// `projectChanges()` opens the finite, project-scoped semantic transaction
+// owner. Lists are bounded projections; the renderer never receives the
+// owner's state path, provider, project root, or arbitrary file operations.
+export async def readProjectChanges() -> string:
+    using owner = await projectChanges()
+    return await describeProjectChanges(owner)
+
+async def describeProjectChanges(owner: ProjectChanges) -> string:
+    const page = await owner.list(10)
+    if page.changes.size == 0:
+        return "no governed project changes"
+    const change = await owner.get(page.changes[0].transactionId)
+    if change == null:
+        return "the projected transaction retired"
+    return f"{change.transactionId}|{lifecycleLabel(change.lifecycle)}|{riskLabel(change.risk)}|{change.changedLines}"
+
+export def lifecycleLabel(value: ProjectChangeLifecycle) -> string:
+    match value:
+        case ProjectChangeLifecycle.prepared:
+            return "prepared"
+        case ProjectChangeLifecycle.amended:
+            return "amended"
+        case ProjectChangeLifecycle.validated:
+            return "validated"
+        case ProjectChangeLifecycle.validationFailed:
+            return "validation failed"
+        case ProjectChangeLifecycle.applied:
+            return "applied"
+        case ProjectChangeLifecycle.rolledBack:
+            return "rolled back"
+        case ProjectChangeLifecycle.discarded:
+            return "discarded"
+
+export def riskLabel(value: ProjectChangeRisk) -> string:
+    match value:
+        case ProjectChangeRisk.low:
+            return "low"
+        case ProjectChangeRisk.medium:
+            return "medium"
+        case ProjectChangeRisk.high:
+            return "high"
+
+// Accept and rollback remain explicit user actions on the same durable owner.
+export async def acceptProjectChange(transactionId: string) -> ProjectChangeLifecycle:
+    using owner = await projectChanges()
+    return (await owner.apply(transactionId)).lifecycle
+
+export async def rollbackProjectChange(transactionId: string) -> ProjectChangeLifecycle:
+    using owner = await projectChanges()
+    return (await owner.rollback(transactionId)).lifecycle
+
+// `subscribe()` is pull-based: one pending read returns a bounded coalesced
+// update, or null when this handle is retired.
+export async def nextProjectChange() -> number:
+    using owner = await projectChanges()
+    const update = await owner.subscribe()
+    return update?.changes?.size ?? 0
 
 // `openTerminal(options?)` answers a `TerminalSession`: a real PTY with `pid`,
 // `write`, `resize`, `next`, `wait`, and `close`. It requires the manifest's
@@ -121,12 +189,15 @@ export async def streamDiagnostics() -> number:
 
     return messages
 
-// The three named types are ordinary type names, so a handle may be annotated,
+// The four named types are ordinary type names, so a handle may be annotated,
 // passed to a helper, and returned like any other value.
-export def describeHandles(task: ProjectTask, session: TerminalSession, server: LanguageServer) -> string:
-    return f"task {task.pid}, terminal {session.pid}, server {describeServer(server)}"
+export def describeHandles(task: ProjectTask, session: TerminalSession, server: LanguageServer, changes: ProjectChanges) -> string:
+    return f"task {task.pid}, terminal {session.pid}, server {describeServer(server)}, changes {describeChanges(changes)}"
 
 def describeServer(server: LanguageServer) -> string:
+    return "ready"
+
+def describeChanges(changes: ProjectChanges) -> string:
     return "ready"
 
 export component TaskPanel:

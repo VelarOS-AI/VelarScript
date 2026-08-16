@@ -1,5 +1,9 @@
 export const VELAR_DESKTOP_API_VERSION = "0.10";
-export const DEFAULT_DESKTOP_SIZE_BUDGET_BYTES = 20 * 1024 * 1024;
+// The complete Project transaction owner adds about 4.39 MiB to the mandatory
+// capability Worker. 32 MiB is the current default accounting threshold, not
+// an architectural ceiling: projects may raise it explicitly when their
+// measured application payload justifies the increase.
+export const DEFAULT_DESKTOP_SIZE_BUDGET_BYTES = 32 * 1024 * 1024;
 
 export interface DesktopWindowConfig {
   readonly title: string;

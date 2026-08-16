@@ -93,6 +93,10 @@ async function desktopNativeTemplate(): Promise<DesktopNativeTemplate | null> {
   return template;
 }
 
+function bundledCapabilityWorker(): string {
+  return fileURLToPath(new URL(import.meta.url.endsWith(".ts") ? "../dist/worker.js" : "./worker.js", import.meta.url));
+}
+
 function desktopSizeComponents(sizes: DesktopBuildSizes): readonly DesktopSizeComponent[] {
   return [
     { label: "build engine (velar-build-engine)", bytes: sizes.buildEngineBytes, mandatory: true },
@@ -169,7 +173,7 @@ export async function buildDesktopApplication(
     const hostResources = join(resources, "host");
     await mkdir(hostResources);
     const workerPath = join(hostResources, "worker.js");
-    await cp(nativeTemplate?.worker ?? fileURLToPath(new URL("../native/node/worker.js", import.meta.url)), workerPath);
+    await cp(nativeTemplate?.worker ?? bundledCapabilityWorker(), workerPath);
     const languageServerPath = join(hostResources, "language-server.js");
     const projectTaskPath = join(hostResources, "project-task.js");
     const buildEnginePath = join(hostResources, "build-engine");
@@ -211,7 +215,9 @@ export async function buildDesktopApplication(
     const rendererBytes = await treeSize(renderer);
     const capabilityHostBytes = (await stat(workerPath)).size;
     const languageServerBytes = (await stat(languageServerPath)).size;
-    const projectTaskBytes = (await stat(projectTaskPath)).size;
+    const projectTaskBytes = (await stat(projectTaskPath)).size
+      + (await stat(join(hostResources, "playwright-core", "package.json"))).size
+      + (await stat(join(hostResources, "playwright-core", "browsers.json"))).size;
     const buildEngineBytes = (await stat(buildEnginePath)).size;
     const terminalHostBytes = (await stat(terminalHostPath)).size;
     const toolchainBytes = languageServerBytes + projectTaskBytes + buildEngineBytes + terminalHostBytes;
