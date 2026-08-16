@@ -27,6 +27,7 @@ import {
   type ValueType,
 } from "@velarscript/compiler/extension";
 import { BROWSER_TEST_MODULE, BROWSER_TEST_SOURCE_SUFFIX, browserTestImportGuidance } from "./browser-test.ts";
+import { cssTokens } from "./css-tokens.ts";
 import {
   LOOK_ABSENT_MEDIA_SUBJECTS,
   LOOK_ARITHMETIC_HINT,
@@ -660,11 +661,13 @@ function lookConditionTermCount(expression: Expression, negated = false): number
 }
 
 function firstRelativeCssUrl(source: string): string | null {
-  const withoutComments = source.replace(/\/\*[\s\S]*?\*\//gu, "");
-  const pattern = /url\(\s*(["']?)([^"')]+)\1\s*\)/giu;
-  for (const match of withoutComments.matchAll(pattern)) {
-    const value = match[2]!.trim();
-    if (value.startsWith("/") || value.startsWith("#") || value.startsWith("//") || /^[a-z][a-z0-9+.-]*:/iu.test(value)) continue;
+  for (const token of cssTokens(source)) {
+    if (token.kind !== "url") continue;
+    // A URL parser drops leading and trailing spaces, and an empty url() names
+    // the document itself rather than an asset.
+    const value = token.value.trim();
+    if (value === "") continue;
+    if (value.startsWith("/") || value.startsWith("#") || /^[a-z][a-z0-9+.-]*:/iu.test(value)) continue;
     return value;
   }
   return null;
@@ -698,28 +701,10 @@ function lookAdditiveType(left: ValueType, right: ValueType): ValueType | null {
 }
 
 function containsCssImport(source: string): boolean {
-  let sanitized = "";
-  let quote = "";
-  let blockComment = false;
-  for (let index = 0; index < source.length; index += 1) {
-    const character = source[index]!;
-    const next = source[index + 1] ?? "";
-    if (blockComment) {
-      if (character === "*" && next === "/") { blockComment = false; sanitized += "  "; index += 1; }
-      else sanitized += character === "\n" ? "\n" : " ";
-      continue;
-    }
-    if (quote) {
-      if (character === "\\") { sanitized += "  "; index += 1; continue; }
-      if (character === quote) quote = "";
-      sanitized += " ";
-      continue;
-    }
-    if (character === "/" && next === "*") { blockComment = true; sanitized += "  "; index += 1; continue; }
-    if (character === "\"" || character === "'") { quote = character; sanitized += " "; continue; }
-    sanitized += character;
+  for (const token of cssTokens(source)) {
+    if (token.kind === "at-keyword" && token.name.toLowerCase() === "import") return true;
   }
-  return /(^|[;}\s])@import\b/iu.test(sanitized);
+  return false;
 }
 
 function checkRouteComponent(type: ValueType, sourceSpan: Span, subject: string, context: CompilerIntrinsicAnalysisContext): void {
