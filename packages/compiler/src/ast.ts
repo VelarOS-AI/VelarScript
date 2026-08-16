@@ -37,6 +37,60 @@ export type CoreStatement =
 export type Statement = CoreStatement | ExtensionStatement;
 
 /**
+ * D56 rule 129 — every statement form Core's grammar produces, keyed by the
+ * node kind the parser returns for it. The string is prose for a failure
+ * message; the *keys* are the data.
+ *
+ * The mapped type is both the derivation and the enforcement: a member added
+ * to `CoreStatement` above makes this object stop typechecking until its
+ * spelling is written here, so the roster cannot fall behind the union the
+ * parser returns. That is the whole reason it lives beside the union instead
+ * of in a gate script — D57 rule 134's failure family is the hand-kept copy,
+ * and a copy that `tsc` refuses to accept as incomplete is not one.
+ *
+ * The tour-coverage gate requires every key to be parsed out of
+ * `examples/tour/`, and this is the one category of that gate that names a
+ * *construct* rather than a *name*. It exists because names were not enough:
+ * `extern`, `js`, and `unsafe` were already covered as keywords by chapter 13's
+ * `extern module` and `import js unsafe`, so D53 rule 117's two inline blocks —
+ * spelled entirely out of keywords the tour already exercised — landed with no
+ * tour example at all and the gate stayed green.
+ *
+ * One key can still cover more than one spelling: `extern js(…)` and
+ * `unsafe js` are one node kind distinguished by a boolean, and no
+ * compiler-owned table enumerates *that* split. The gate prints that limit on
+ * every run rather than implying a completeness it does not have.
+ */
+export const CORE_STATEMENT_CONSTRUCTS = Object.freeze({
+  ImportDeclaration: 'import {name} from "./module.vel"',
+  ReExportDeclaration: 'export {name} from "./module.vel"',
+  ExternModuleDeclaration: 'extern module "node:crypto":',
+  EmbeddedJavaScriptDeclaration: "extern js(capture: T)`…`: — or unsafe js`…`",
+  TypeDeclaration: "type Name:",
+  TypeAliasDeclaration: "type Name = string",
+  EnumDeclaration: "enum Name:",
+  ClassDeclaration: "class Name:",
+  VariableDeclaration: "const name = value",
+  UsingDeclaration: "using name = open(path)",
+  TestDeclaration: 'test "a name":',
+  FunctionDeclaration: "def name() -> T:",
+  ReturnStatement: "return value",
+  ThrowStatement: "throw error",
+  AssertStatement: "assert condition",
+  IfStatement: "if condition:",
+  MatchStatement: "match value:",
+  ForStatement: "for item in values:",
+  WhileStatement: "while condition:",
+  BreakStatement: "break",
+  ContinueStatement: "continue",
+  TryStatement: "try:",
+  PassStatement: "pass",
+  AssignmentStatement: "name = value",
+  ExpressionStatement: "call()",
+  AsyncStatement: "async call()",
+} satisfies { readonly [Kind in CoreStatement["kind"]]: string });
+
+/**
  * Target and framework syntax travels through one opaque Core AST slot. The
  * template-literal discriminator keeps extension nodes disjoint from Core
  * node names while allowing an extension package to publish its own strongly
@@ -866,6 +920,53 @@ export interface IndexExpression {
   readonly index: Expression;
   readonly optional: boolean;
   readonly span: Span;
+}
+
+/** Anything the AST puts a `kind` on: a node, a pattern, an f-string part. */
+export interface AstNode {
+  readonly kind: string;
+}
+
+/**
+ * Every node under `root`, in source order, whatever shape it has.
+ *
+ * The walk is structural: it descends through arrays and objects without
+ * asking what they are, so it reaches a container the day the parser produces
+ * one — a new class member, a new statement form, an extension node this
+ * package has never heard of — with nothing here to update. Only nodes are
+ * reported, but the descent is unconditional, so an expression parked on a
+ * shape that carries no `kind` of its own (a `Parameter`, a `MatchCase`) is
+ * still reached through it.
+ *
+ * A pass that must not *miss* something walks with this instead of writing a
+ * second switch over the node kinds it happens to remember. A-010: dependency
+ * discovery kept such a switch, and `try`, `using`, `test "…":`, class
+ * getters, `@dispose:` and `@iterate:` were all outside the module graph —
+ * `@iterate:` from the day D68 added it, because a hand-kept copy of the AST
+ * starts drifting the moment the AST grows. That copy compiled, exited 0, and
+ * turned a module that exists and loads into `null`.
+ */
+export function* astNodes(root: unknown): Generator<AstNode> {
+  const pending: unknown[] = [root];
+  const seen = new Set<object>();
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (typeof value !== "object" || value === null) continue;
+    if (seen.has(value)) continue;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      for (let index = value.length - 1; index >= 0; index -= 1) pending.push(value[index]);
+      continue;
+    }
+    if (typeof (value as { kind?: unknown }).kind === "string") yield value as AstNode;
+    const children = Object.values(value);
+    for (let index = children.length - 1; index >= 0; index -= 1) pending.push(children[index]);
+  }
+}
+
+/** `astNodes` narrowed to one node kind, so a caller keeps the node's type. */
+export function* astNodesOfKind<Node extends AstNode>(root: unknown, kind: Node["kind"]): Generator<Node> {
+  for (const node of astNodes(root)) if (node.kind === kind) yield node as Node;
 }
 
 /**

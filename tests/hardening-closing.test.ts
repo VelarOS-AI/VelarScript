@@ -9,10 +9,11 @@ import { velarCompilerExtension } from "@velarscript/web/compiler";
 import { compileProject } from "../packages/cli/src/project.ts";
 import { standardModuleClosure, standardModuleSource, standardModuleSources } from "../packages/cli/src/standard-modules.ts";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
+import { repositoryRoot } from "./repository-root.ts";
 
 // Closing wave — D50 rules 97.2 and 97.3.
 
-const root = resolve(new URL("..", import.meta.url).pathname);
+const root = repositoryRoot;
 
 after(async () => {
   await removeTemporaryDirectories();

@@ -60,11 +60,15 @@ of hiding them from the application size budget.
 server, the bounded project-task launcher, the platform build engine, and the
 native PTY helper. They
 are stored under `Contents/Resources/host` and counted separately as language,
-task, build-engine, and terminal-host bytes. The generated tools contain the official
+task, build-engine, terminal-host, and capability-Worker bytes. The generated tools contain the official
 Core/Web/Desktop compiler extensions and source-backed standard assets, so the
 installed application neither searches `PATH` for `velar`, resolves project npm
 packages, nor depends on the build workspace. The default Desktop size budget
-is 20 MiB; every tool remains inside that budget and the application tree hash.
+is currently 32 MiB. It is an accounting threshold rather than an architecture
+ceiling: a project may set `desktop.build.sizeBudgetBytes` to a larger measured
+value when the bundle composition explains the growth. The package command
+still reports every component and the application tree hash; size pressure must
+not split a privileged owner across the renderer boundary.
 
 Desktop owns `velar/desktop` and permission-scoped target implementations of
 `velar/fs`, `velar/path`, `velar/process`, `velar/http`, and `velar/env`.
@@ -78,10 +82,35 @@ host shutdown reaps the corresponding process group. This exact official tool
 does not require a general process permission and cannot launch an arbitrary
 command.
 Applications with the `project` file grant may also call
+`projectChanges() -> Promise<ProjectChanges>`. Desktop binds the returned owner
+to the same durable `@velaros-ai/project` kernel that prepares and validates
+transactions. The public surface is intentionally finite: `list(limit)`,
+`get(transactionId)`, pull-based `subscribe()`, `apply(transactionId)`,
+`rollback(transactionId)`, and idempotent `close()`. It exposes reviewable
+intent, patch, diff, risk, revision, lifecycle, and timestamp projections, but
+never the project root, persistence paths, policies, providers, old/new full
+file contents, arbitrary metadata, or a caller-selected file operation.
+Transactions and their latest projections are committed under the app-data
+root before project mutation; a restarted Worker restores an interrupted
+apply/rollback to its prior durable state and fails closed if an external edit
+conflicts with that recovery. The JSONL change feed is fsynced before
+subscribers observe a row. Subscriptions coalesce the latest record per
+transaction and request a full `list()` rescan on bounded queue overflow.
+Changing the project grant retires existing handles; an already-running
+apply/rollback finishes against the original durable owner before that owner is
+closed. The complete owner is bundled into the existing Node capability Worker
+and adds about 4.39 MiB; there is still no Electron-style user main process,
+second source graph, local server, port, or renderer-accessible IPC design.
+
+Applications with the `project` file grant may also call
 `startProjectTask(ProjectTaskCommand, arguments, options)`. The finite command
-set is `check`, `test`, `build`, `fix`, `package`, and `run`; only `run`
-accepts program arguments. Browser testing is not a project-task flag: it
-requires a separately owned browser host and is intentionally absent here.
+set is `check`, `test`, `browserTest`, `build`, `fix`, `package`, and `run`;
+only `run` accepts program arguments. `browserTest` always runs all three
+engines through the packaged official browser-test supervisor and cannot
+accept a browser, output-directory, or CLI-flag override. The Playwright driver
+is counted in the application bundle; matching Chromium, Firefox, and WebKit
+binaries remain an explicit external Playwright cache and a missing engine
+fails the task instead of silently reducing coverage.
 The returned `ProjectTask` exposes its package-owned PID plus pull-based
 `next()`, terminal `wait()`, and bounded `stop()` operations. Desktop fixes the
 working directory to the current canonical project grant, injects only its
@@ -206,12 +235,13 @@ velar test . --browser=all
 ```
 
 `velar test --browser` runs `.browser.test.vel` files without opening a window.
-It installs a deterministic, permission-aware in-memory Desktop filesystem and
-deterministic handles for manifest-granted processes; the native worker keeps
-a separate integration suite for real filesystem, process, and network
-enforcement. Test modules may import the restricted `velar/desktop-test`
-helpers to inspect app-data/project text, seed or remove an external edit or
-recovery journal, and create a bounded test directory through the page's actual
+It installs a deterministic, permission-aware in-memory Desktop filesystem,
+finite ProjectChanges owner, and deterministic handles for manifest-granted
+processes; the native worker keeps a separate integration suite for real
+filesystem, process, network, and durable transaction enforcement. Test
+modules may import the restricted `velar/desktop-test` helpers to inspect
+app-data/project text, create a bounded test directory, and call
+`seedProjectChange(transactionId, lifecycle, diff)` through the page's actual
 capability bridge;
 ordinary `velar/fs` remains application-side and is not faked in the test
 controller process.

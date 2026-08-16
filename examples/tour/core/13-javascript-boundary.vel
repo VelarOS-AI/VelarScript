@@ -1,5 +1,5 @@
 /// Chapter 13 — the JavaScript boundary: `extern module`, `import js`,
-/// `import js unsafe`, and what `any` means.
+/// `import js unsafe`, the two inline `js` blocks, and what `any` means.
 ///
 /// Charter section 12's tail and section 18. The specifier is `node:crypto`
 /// so the four keywords `extern`, `module`, `js`, and `unsafe` need no
@@ -53,6 +53,55 @@ import js unsafe {webcrypto as rawWebcrypto} from "node:crypto"
 import js unsafe rawDefault from "node:crypto"
 
 // ---------------------------------------------------------------------------
+// Inline blocks — the JavaScript that has no module to come from
+// ---------------------------------------------------------------------------
+
+// Everything above names a package: `extern module` declares what one
+// exports and `import js` brings a name across. A JavaScript global has no
+// package, so there is nothing to declare and nothing to import — and
+// `globalThis.crypto.getRandomValues` is a global. That is what an inline
+// block is for. The JavaScript rides in a backtick string, so this file's
+// parser never has to know JavaScript; the compiler emits the block as a
+// sibling `.js` module whose source map points back at these lines.
+const tokenBytes = 16
+
+extern js(tokenBytes: number)`
+    export function randomToken() {
+        const buffer = new Uint8Array(tokenBytes)
+        globalThis.crypto.getRandomValues(buffer)
+        return Array.from(buffer, (byte) => byte.toString(16).padStart(2, "0")).join("")
+    }
+`:
+    export def randomToken() -> string
+
+// The block is the *more* checked way to reach raw JavaScript, not the looser
+// one. `import js unsafe` turns a whole module into `any`; here the contract is
+// the one line under the backticks, and `randomToken` is an ordinary checked
+// function from this line on — no import, because there is no other module to
+// name it from.
+
+// The parenthesised list is the injection channel, and it binds rather than
+// substitutes: `tokenBytes` becomes a real parameter of the emitted module and
+// is checked against `number` on this side. Nothing is interpolated — the
+// payload is raw bytes, so `${...}` and `{...}` inside a block are literal
+// JavaScript text. Values cross through the contract; they are never spliced
+// into source.
+//
+// Because captures are handed to a synchronous factory, a block that takes
+// them cannot use top-level `await`. Await on this side and capture the result.
+
+// A block with no contract is the other form, and it must say `unsafe` — the
+// same word as `import js unsafe` and `unsafe:html`, never a second one.
+// Everything it exports is `any`. It is still the more honest of the two:
+// undeclared JavaScript is readable right here, instead of behind a module
+// name that quietly means "no promises about anything inside".
+unsafe js`
+    export function engineReport() {
+        return { arch: globalThis.process.arch, node: globalThis.process.versions.node }
+    }
+`
+
+// ---------------------------------------------------------------------------
 // Using the checked side
 // ---------------------------------------------------------------------------
 
@@ -68,6 +117,12 @@ export def sameLength(left: unknown, right: unknown) -> bool:
 export def throughNamespace(text: string) -> string:
     // A namespace import of an extern module reads the same declared contract.
     return crypto.createHash("sha512").update(text).digest("hex")
+
+// A contracted block's export is checked like any other function: the result is
+// `string` because the contract says so, not because the JavaScript looked like
+// it returned one.
+export def sessionToken() -> string:
+    return digest(randomToken())
 
 // A declared `const` export has no VelarScript initializer, and an `unknown`
 // must be validated before use.
@@ -115,6 +170,17 @@ export def normalizedAtTheBoundary() -> bool:
 export def validatedAtTheEdge(candidate: unknown) -> number:
     const config = Config.parse(candidate)
     return config.retries
+
+// 4. A block without a contract lands in exactly the same place: `engineReport`
+//    was never declared, so its result is `any` and every field read below it
+//    is raw JavaScript. The edge is still the boundary, so validate here too.
+type EngineReport:
+    arch: string
+    node: string
+
+export def engineDescription() -> string:
+    const report = EngineReport.parse(engineReport())
+    return f"{report.arch} on Node {report.node}"
 
 // An `unknown` is the ordinary spelling for unvalidated dynamic input; `any`
 // is reserved for explicit unsafe JavaScript declarations.

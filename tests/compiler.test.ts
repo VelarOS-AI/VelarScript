@@ -143,7 +143,10 @@ function assertDevServerExit(exitCode: number | null, stderr: string): void {
 }
 
 async function stopDevServer(child: ReturnType<typeof spawn>): Promise<void> {
-  if (child.exitCode !== null) return;
+  // A signal-terminated ChildProcess keeps exitCode null. Windows reaps the
+  // server with SIGKILL because it has no POSIX SIGTERM lifecycle, so the
+  // after-hook must recognize signalCode as an already observed exit too.
+  if (child.exitCode !== null || child.signalCode !== null) return;
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
@@ -153,7 +156,10 @@ async function stopDevServer(child: ReturnType<typeof spawn>): Promise<void> {
       clearTimeout(timer);
       resolve();
     });
-    child.kill("SIGTERM");
+    // Windows has no POSIX SIGTERM lifecycle. Its CI contract is that the
+    // spawned server can be reaped, while graceful signal drainage remains
+    // covered on the two POSIX runners.
+    child.kill(process.platform === "win32" ? "SIGKILL" : "SIGTERM");
   });
 }
 
@@ -1760,8 +1766,8 @@ const target: Type<User> = Decoder()
   const arity = compile("type User:\n    name: string\n\nconst target: Type<User, string> = User\n");
   assert.ok(arity.diagnostics.some((item) => item.code === "VEL2012" && /expects 1 type argument/u.test(item.message)));
 
-  const libraryPath = "/tmp/velar-runtime-type-package/library.vel";
-  const consumerPath = "/tmp/velar-runtime-type-package/consumer.vel";
+  const libraryPath = join(tmpdir(), "velar-runtime-type-package", "library.vel");
+  const consumerPath = join(tmpdir(), "velar-runtime-type-package", "consumer.vel");
   const project = await compileProject(consumerPath, new Map([
     [libraryPath, `
 export def decode<T>(value: unknown, target: Type<T>) -> T:
@@ -1796,8 +1802,8 @@ const accepted: bool = accepts(user, User)
   assert.equal(symbols?.find((item) => item.name === "role")?.type, "Role");
   assert.equal(symbols?.find((item) => item.name === "accepted")?.type, "bool");
 
-  const renamedLibraryPath = "/tmp/velar-runtime-type-renamed-package/library.vel";
-  const renamedConsumerPath = "/tmp/velar-runtime-type-renamed-package/consumer.vel";
+  const renamedLibraryPath = join(tmpdir(), "velar-runtime-type-renamed-package", "library.vel");
+  const renamedConsumerPath = join(tmpdir(), "velar-runtime-type-renamed-package", "consumer.vel");
   const renamedProject = await compileProject(renamedConsumerPath, new Map([
     [renamedLibraryPath, `
 export type User:
@@ -1822,7 +1828,7 @@ const user: Person = target.parse({name: "Ada"})
   assert.ok(targetSymbol?.members.some((member) => member.name === "parse" && member.type === "(value: unknown) -> Person"));
   assert.equal(renamedSymbols?.find((item) => item.name === "user")?.type, "Person");
 
-  const namespaceConsumerPath = "/tmp/velar-runtime-type-renamed-package/namespace-consumer.vel";
+  const namespaceConsumerPath = join(tmpdir(), "velar-runtime-type-renamed-package", "namespace-consumer.vel");
   const namespaceProject = await compileProject(namespaceConsumerPath, new Map([
     [renamedLibraryPath, `
 export type User:
@@ -4422,8 +4428,8 @@ print(status)
   assert.equal(wideningExecution.status, 0, String(wideningExecution.stderr));
   assert.equal(wideningExecution.stdout, "2\ndone\n");
 
-  const libraryPath = "/tmp/velar-discriminated-events/protocol.vel";
-  const consumerPath = "/tmp/velar-discriminated-events/consumer.vel";
+  const libraryPath = join(tmpdir(), "velar-discriminated-events", "protocol.vel");
+  const consumerPath = join(tmpdir(), "velar-discriminated-events", "consumer.vel");
   const librarySource = `
 export enum EventKind:
     text
@@ -15412,7 +15418,7 @@ export const velarProjectExtension = Object.freeze({id: "shadow-extension", mani
 
   await assert.rejects(
     resolveVelarProject(project),
-    /project\/node_modules\/shadow-extension\/package\.json: installed package manifest must be an ordinary file/u,
+    /project[\\/]node_modules[\\/]shadow-extension[\\/]package\.json: installed package manifest must be an ordinary file/u,
   );
 });
 
@@ -20882,6 +20888,15 @@ test("CLI source maps lead runtime stacks back to .vel source", async () => {
   const execution = spawnSync(process.execPath, ["--enable-source-maps", outputPath], { encoding: "utf8" });
   assert.equal(execution.status, 1);
   assert.match(execution.stderr, new RegExp(`${sourcePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:2:`));
+});
+
+test("Windows source paths become valid source-map file URLs and portable diagnostics", () => {
+  const sourcePath = "C:\\Users\\author\\project\\main.vel";
+  const result = compileCore("const answer = 42\n", { path: sourcePath });
+  const map = JSON.parse(result.sourceMap ?? "{}") as { sources?: readonly string[] };
+  assert.deepEqual(map.sources, ["file:///C:/Users/author/project/main.vel"]);
+  const invalid = compileCore('const answer: number = "wrong"\n', { path: sourcePath });
+  assert.match(formatDiagnostic(invalid.source, invalid.diagnostics[0]!), /^C:\/Users\/author\/project\/main\.vel:1:/u);
 });
 
 test("source maps retain nested statement and expression columns", () => {

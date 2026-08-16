@@ -37,10 +37,11 @@ test("Desktop is one VelarScript project with Web syntax and no renderer/main so
           environment: ["LANG", "VELAR_DESKTOP_GENERATION_SMOKE"],
           secrets: ["OPENAI_API_KEY"],
         },
+        build: { sizeBudgetBytes: 32 * 1024 * 1024 },
       },
     }, null, 2), "utf8");
     await writeFile(join(projectRoot, "src", "main.vel"), `
-import {ProjectTaskCommand, ProjectTaskOutputChannel, appDataDirectory, openTerminal, platform, projectDirectory, selectedProjectDirectory, selectProjectDirectory, startProjectTask} from "velar/desktop"
+import {ProjectChangeLifecycle, ProjectTaskCommand, ProjectTaskOutputChannel, appDataDirectory, openTerminal, platform, projectChanges, projectDirectory, selectedProjectDirectory, selectProjectDirectory, startProjectTask} from "velar/desktop"
 import {createText, exists, readText, watchFiles, writeText} from "velar/fs"
 import {get} from "velar/env"
 import {ProcessOutputChannel, run, start} from "velar/process"
@@ -97,6 +98,14 @@ component App:
         const result = await task.wait()
         detail = output + result.stderr
 
+    action inspectChanges():
+        const changes = await projectChanges()
+        const page = await changes.list(10)
+        for change in page.changes:
+            if change.lifecycle == ProjectChangeLifecycle.applied:
+                detail = change.transactionId + ":" + change.diff
+        await changes.close()
+
     action openShell():
         const session = await openTerminal({columns: 100, rows: 30})
         await session.resize(120, 40)
@@ -109,6 +118,7 @@ component App:
         <h1>VelarScript Desktop</h1>
         <button on:click={inspectHost}>Inspect host</button>
         <button on:click={checkProject}>Check project</button>
+        <button on:click={inspectChanges}>Inspect changes</button>
         <button on:click={openShell}>Open shell</button>
         <p>{detail}</p>
     </main>
@@ -140,7 +150,14 @@ mount(<App />, "#app")
     assert.match(assets, /velar\.desktop\.bridge\.v1/u);
     assert.match(assets, /project-task/u);
     assert.match(assets, /startProjectTask/u);
+    assert.match(assets, /project-changes/u);
+    assert.match(assets, /ProjectChangeLifecycle/u);
     assert.match(assets, /openTerminal/u);
+
+    // The 0.10 native host is deliberately the macOS system-WebView host.
+    // Other platforms still prove the single-project compiler contract above;
+    // they must not pretend to package a host the product does not publish.
+    if (process.platform !== "darwin") return;
 
     const packaged = spawnSync(process.execPath, [cli, "package"], { cwd: projectRoot, encoding: "utf8" });
     assert.equal(packaged.status, 0, packaged.stderr);
@@ -151,6 +168,7 @@ mount(<App />, "#app")
       sizes: {
         hostBytes: number;
         rendererBytes: number;
+        capabilityHostBytes: number;
         languageServerBytes: number;
         projectTaskBytes: number;
         buildEngineBytes: number;
@@ -179,6 +197,7 @@ mount(<App />, "#app")
     assert.equal(desktopBuild.runtime.version, undefined);
     assert.equal(desktopBuild.runtime.executableHint, undefined);
     assert.ok(desktopBuild.sizes.hostBytes < 512 * 1024, JSON.stringify(desktopBuild.sizes));
+    assert.ok(desktopBuild.sizes.capabilityHostBytes > 4 * 1024 * 1024, JSON.stringify(desktopBuild.sizes));
     assert.ok(desktopBuild.sizes.languageServerBytes > 1024 * 1024, JSON.stringify(desktopBuild.sizes));
     assert.ok(desktopBuild.sizes.projectTaskBytes > 1024 * 1024, JSON.stringify(desktopBuild.sizes));
     assert.ok(desktopBuild.sizes.buildEngineBytes > 5 * 1024 * 1024, JSON.stringify(desktopBuild.sizes));
@@ -199,6 +218,8 @@ mount(<App />, "#app")
     assert.deepEqual(hostConfig.terminalHost, { path: "host/terminal-host" });
     assert.ok((await readFile(join(application, "Contents", "Resources", "host", "language-server.js"))).byteLength > 1024 * 1024);
     assert.ok((await readFile(join(application, "Contents", "Resources", "host", "project-task.js"))).byteLength > 1024 * 1024);
+    assert.equal(JSON.parse(await readFile(join(application, "Contents", "Resources", "host", "playwright-core", "package.json"), "utf8")).name, "playwright-core");
+    assert.ok(JSON.parse(await readFile(join(application, "Contents", "Resources", "host", "playwright-core", "browsers.json"), "utf8")).browsers.length >= 3);
     assert.ok((await readFile(join(application, "Contents", "Resources", "host", "build-engine"))).byteLength > 5 * 1024 * 1024);
     assert.ok((await readFile(join(application, "Contents", "Resources", "host", "terminal-host"))).byteLength > 32 * 1024);
     assert.equal(hostConfig.nodeExecutableHint, undefined);

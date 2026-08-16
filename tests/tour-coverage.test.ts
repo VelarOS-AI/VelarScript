@@ -4,8 +4,12 @@ import { cp, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import test, { after } from "node:test";
 import { fileURLToPath } from "node:url";
+import { CORE_STATEMENT_CONSTRUCTS } from "../packages/compiler/src/ast.ts";
 import { CORE_CONTEXTUAL_KEYWORD_WORDS, CORE_NUMERIC_SUFFIXES } from "../packages/compiler/src/core-vocabulary.ts";
 import { keywordKinds } from "../packages/compiler/src/token.ts";
+import { velarCompilerExtension as desktopCompilerExtension } from "../packages/desktop/src/compiler.ts";
+import { WEB_STATEMENT_CONSTRUCTS, webStatementConstructKey, type WebUnsafeCssDeclaration } from "../packages/web/src/ast.ts";
+import { velarCompilerExtension as webCompilerExtension } from "../packages/web/src/compiler.ts";
 import { LOOK_PROPERTIES, LOOK_TARGETS } from "../packages/web/src/look.ts";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
 
@@ -52,6 +56,7 @@ test("the coverage gate passes on the tour and reports what it examined", () => 
     "hard-keyword", "contextual-keyword", "reserved-binding", "numeric-suffix", "extension-global",
     "permanent-namespace", "prelude-name", "namespace-member", "module-export", "type-parameter-bound",
     "web-test-member", "look-property", "look-hook", "look-target", "look-media-feature",
+    "statement-construct",
   ]) {
     const line = output.split("\n").find((item) => item.trimStart().startsWith(`${category} `));
     assert.ok(line, `${category} is missing from the gate's report:\n${output}`);
@@ -93,10 +98,65 @@ test("[D62-157/158] the gate requires Core's own contextual keywords and numeric
     `the gate required fewer contextual keywords than Core alone declares:\n${output}`);
   assert.ok(required("numeric-suffix") >= CORE_NUMERIC_SUFFIXES.length,
     `the gate required fewer numeric suffixes than Core alone declares:\n${output}`);
-  // And the gate no longer prints either as a hole it cannot reach.
-  assert.match(output, /Not reverse-queryable \(holes, not exemptions\):\n\s+none\b/u);
+  // And the gate no longer prints either as a hole it cannot reach. The one
+  // hole it does print is not a vocabulary: it is the statement *spellings*
+  // that share a single AST node kind, which the construct category below
+  // requires by kind and cannot split.
+  assert.match(output, /Not reverse-queryable \(holes, not exemptions\):\n\s+statement spellings that share one AST node kind\b/u);
   assert.doesNotMatch(output, /Core's own contextual keywords/u);
   assert.doesNotMatch(output, /Core's built-in numeric suffixes/u);
+});
+
+test("[D53-117] the gate requires every statement construct the compiler can parse", () => {
+  // The blind spot this category closes: `extern js(…)` and `unsafe js` are
+  // assembled from `extern`, `js`, and `unsafe` — three keywords chapter 13
+  // already exercised through `extern module` and `import js unsafe` — so two
+  // declaration forms reached a release with no `.vel` file anywhere using
+  // them while seventeen name-by-name categories all stayed green. A construct
+  // spelled out of covered spellings is invisible to a spelling check.
+  const { status, output } = runGate(tour);
+  assert.equal(status, 0, output);
+  const line = output.split("\n").find((item) => item.trimStart().startsWith("statement-construct "));
+  assert.ok(line, `the gate reports no statement-construct category:\n${output}`);
+  const counts = /(?<covered>\d+)\/(?<required>\d+)/u.exec(line)?.groups;
+  assert.ok(counts, `statement-construct reports no counts:\n${line}`);
+  // Compared against the rosters themselves rather than against a number:
+  // Core's is a mapped type over the `CoreStatement` union, and the Web
+  // extension's over its own, so a construct added to either union raises both
+  // sides of this assertion together.
+  const required = Object.keys(CORE_STATEMENT_CONSTRUCTS).length + Object.keys(WEB_STATEMENT_CONSTRUCTS).length;
+  assert.equal(Number(counts.required), required, `the gate required ${counts.required} constructs; Core and Web declare ${required}:\n${output}`);
+  assert.equal(counts.covered, counts.required, `the tour does not write every construct:\n${line}`);
+});
+
+test("[D53-117] an extension that owns a parser publishes the constructs its parser adds", () => {
+  // An extension's statements never join `CoreStatement`, so its own roster is
+  // the only table that can name them, and the gate treats a parser without one
+  // as a failure rather than as an empty contribution.
+  for (const extension of [webCompilerExtension, desktopCompilerExtension]) {
+    assert.ok(extension.parser, `${extension.id} no longer registers a parser; retarget this test`);
+    assert.ok(extension.syntax, `${extension.id} owns a parser but publishes no statement-construct roster`);
+    assert.ok(Object.keys(extension.syntax.statementConstructs).length > 0, `${extension.id} publishes an empty roster`);
+  }
+  // `unsafe css` is the one statement whose node kind spells two constructs,
+  // and its `source` is a tagged union the Web extension already owns — so the
+  // inline block cannot be covered by the `import css unsafe` beside it.
+  const span = { start: 0, end: 1 };
+  const inline: WebUnsafeCssDeclaration = {
+    kind: "ExtensionStatement:web:unsafe-css",
+    source: { kind: "inline", css: ".inline {}", span },
+    placement: "after",
+    span,
+  };
+  const external: WebUnsafeCssDeclaration = {
+    kind: "ExtensionStatement:web:unsafe-css",
+    source: { kind: "external", path: "./external.css", span },
+    placement: "before",
+    span,
+  };
+  assert.equal(webStatementConstructKey(inline), "ExtensionStatement:web:unsafe-css/inline");
+  assert.equal(webStatementConstructKey(external), "ExtensionStatement:web:unsafe-css/external");
+  assert.equal(webStatementConstructKey({ kind: "VariableDeclaration" }), null);
 });
 
 test("removing one spelling from the tour turns the gate red and names it", async () => {
@@ -130,11 +190,28 @@ test("removing one spelling from the tour turns the gate red and names it", asyn
       ],
     },
     {
+      // Three sites now, not two: the inline block spells `css` as well, so
+      // deleting only the imports leaves the word covered. Deleting every site
+      // necessarily takes both `unsafe-css` constructs with it, and the gate
+      // names those too — the assertion is that it names *this*.
       family: "an extension's contextual keyword",
       expected: "contextual-keyword: css",
       edits: [
         { file: "web/08-look-escape.vel", replace: 'import css unsafe "./before.css" before look\n', replacement: "" },
         { file: "web/08-look-escape.vel", replace: 'import css unsafe "./after.css" after look\n', replacement: "" },
+        {
+          file: "web/08-look-escape.vel",
+          replace: "unsafe css`\n"
+            + "    @media print {\n"
+            + "        .tour-cascade-counter {\n"
+            + "            break-inside: avoid;\n"
+            + "            orphans: 3;\n"
+            + "            widows: 3;\n"
+            + "        }\n"
+            + "    }\n"
+            + "` after look\n\n",
+          replacement: "",
+        },
       ],
     },
     {
@@ -163,6 +240,76 @@ test("removing one spelling from the tour turns the gate red and names it", asyn
       ],
     },
     {
+      // Both spellings go in one edit because they share a node kind, which is
+      // the granularity limit the gate prints as a hole. Each replacement is an
+      // ordinary VelarScript declaration of the same name and type, so the
+      // chapter still compiles and the gate goes red for the construct alone.
+      family: "an inline JavaScript block",
+      expected: "statement-construct: extern js(capture: T)",
+      edits: [
+        {
+          file: "core/13-javascript-boundary.vel",
+          replace: "const tokenBytes = 16\n\nextern js(tokenBytes: number)`\n"
+            + "    export function randomToken() {\n"
+            + "        const buffer = new Uint8Array(tokenBytes)\n"
+            + "        globalThis.crypto.getRandomValues(buffer)\n"
+            + '        return Array.from(buffer, (byte) => byte.toString(16).padStart(2, "0")).join("")\n'
+            + "    }\n"
+            + "`:\n"
+            + "    export def randomToken() -> string\n",
+          replacement: "def randomToken() -> string:\n    return \"deadbeef\"\n",
+        },
+        {
+          file: "core/13-javascript-boundary.vel",
+          replace: "unsafe js`\n"
+            + "    export function engineReport() {\n"
+            + "        return { arch: globalThis.process.arch, node: globalThis.process.versions.node }\n"
+            + "    }\n"
+            + "`\n",
+          replacement: "def engineReport() -> unknown:\n    return {arch: \"arm64\", node: \"24\"}\n",
+        },
+      ],
+    },
+    {
+      // The two `import css unsafe` lines stay. They share this block's node
+      // kind and would satisfy a gate that required the kind, which is exactly
+      // how the inline form reached a release with no example.
+      family: "an inline CSS block whose external sibling remains",
+      expected: "statement-construct: unsafe css",
+      edits: [{
+        file: "web/08-look-escape.vel",
+        replace: "unsafe css`\n"
+          + "    @media print {\n"
+          + "        .tour-cascade-counter {\n"
+          + "            break-inside: avoid;\n"
+          + "            orphans: 3;\n"
+          + "            widows: 3;\n"
+          + "        }\n"
+          + "    }\n"
+          + "` after look\n\n",
+        replacement: "",
+      }],
+    },
+    {
+      // A-023: the `module-export` category had no red case at all. This is the
+      // ordinary direction — the name leaves the tour entirely — and the test
+      // below is its other half, where only the *usage* leaves.
+      family: "a standard-module export",
+      expected: 'module-export: import {watchVisibility} from "velar/browser"',
+      edits: [
+        {
+          file: "web/10-browser-forms-files.vel",
+          replace: "            watchVisibility(setVisible),\n",
+          replacement: '            watchMedia("(max-width: 719px)", setVisible),\n',
+        },
+        {
+          file: "web/10-browser-forms-files.vel",
+          replace: ', watchVisibility} from "velar/browser"',
+          replacement: '} from "velar/browser"',
+        },
+      ],
+    },
+    {
       family: "a velar/web-test computed-style control",
       expected: "web-test-member: browser.style",
       edits: [{
@@ -186,6 +333,68 @@ test("removing one spelling from the tour turns the gate red and names it", asyn
     assert.ok(output.includes(item.expected), `${item.family}: the gate did not name it:\n${output}`);
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("[A-023] an import is not a usage: the name stays imported and the gate still goes red", async () => {
+  // The other direction of the case above, and the one the gate was missing.
+  // `observeModule` waited for a real `MemberExpression` before crediting a
+  // namespace import, but credited every *named* import the moment it parsed —
+  // so deleting the only call to `watchVisibility` while leaving its specifier
+  // in the import list left `module-export` reporting 237/237 and exit 0.
+  //
+  // An import proves a name resolves. It shows no signature and no usage, and
+  // this gate's own failure text says a name is missing when "no module uses
+  // it". Testing only the deletion of imports is what let the two sentences
+  // drift apart: every red case here removed a spelling from the source, and
+  // none of them removed a *use* while the spelling stayed.
+  const directory = await copyOfTour();
+  await mutate(
+    directory,
+    "web/10-browser-forms-files.vel",
+    "            watchVisibility(setVisible),\n",
+    '            watchMedia("(max-width: 719px)", setVisible),\n',
+  );
+  const source = await readFile(join(directory, "web", "10-browser-forms-files.vel"), "utf8");
+  assert.ok(source.includes("watchVisibility}"), `the import specifier must survive this mutation:\n${source}`);
+  assert.equal(source.match(/watchVisibility/gu)?.length, 1, "watchVisibility must remain exactly once, as an import and nowhere else");
+  const { status, output } = runGate(directory);
+  assert.equal(status, 1, `the gate counted an unused import as coverage:\n${output}`);
+  assert.ok(output.includes('module-export: import {watchVisibility} from "velar/browser"'), `the gate did not name it:\n${output}`);
+  // And it says *why*, because "no module uses it" beside a visible import line
+  // is the one message a reader would disbelieve.
+  assert.match(output, /10-browser-forms-files\.vel imports the name and never references it — an import is not a usage/u);
+  await rm(directory, { recursive: true, force: true });
+});
+
+test("[A-023] a namespace member is credited to the namespace, not to its spelling", async () => {
+  // The other half of the same defect. The namespace branch did wait for a
+  // real member read — but it matched the read by the import's *local name*,
+  // so any binding spelled the same in any inner scope forged the module's
+  // exports out of a read of itself. That is the forgery this file's header
+  // says a text search would allow and a resolved judgment would not.
+  const directory = await copyOfTour();
+  // First make one export genuinely uncovered, so the gate has something to be
+  // wrong about: `velar/url`'s `encode` reaches the tour only through chapter
+  // 14's named import.
+  await mutate(directory, "core/14-files-and-host.vel", "import {decode, encode, isExternal,", "import {decode, isExternal,");
+  await mutate(directory, "core/14-files-and-host.vel", 'const encoded = encode("a b&c")', 'const encoded = decode("a%20b")');
+  const missing = runGate(directory);
+  assert.equal(missing.status, 1, missing.output);
+  assert.ok(missing.output.includes('module-export: import {encode} from "velar/url"'), missing.output);
+
+  // Now forge it: chapter 12 holds `import * as urls from "velar/url"`, and a
+  // local record named `urls` in a function body used to satisfy the whole
+  // module's inventory through `urls.encode`.
+  await mutate(
+    directory,
+    "core/12-modules.vel",
+    'const joinedUrl = urls.join("https://example.test", "api", "v1")',
+    'const joinedUrl = urls.join("https://example.test", "api", "v1")\n\ndef forgeCoverage() -> string:\n    const urls = {encode: "forged"}\n    return urls.encode\n',
+  );
+  const forged = runGate(directory);
+  assert.equal(forged.status, 1, `a shadowing local forged coverage of a module export:\n${forged.output}`);
+  assert.ok(forged.output.includes('module-export: import {encode} from "velar/url"'), forged.output);
+  await rm(directory, { recursive: true, force: true });
 });
 
 test("the gate refuses a chapter no import reaches", async () => {

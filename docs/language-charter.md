@@ -6,11 +6,16 @@ not part of the language.
 
 ## 1. Design contract
 
-VelarScript exists so that AI can write and maintain code that the product's
-human owner can read and safely change: the human supplies intent, the model
-writes the VelarScript, and the compiler guards each change. Every rule in
-this contract serves that mission — uniform model output, diagnostics that
-teach, and a readable JavaScript exit — as recorded in
+VelarScript is an extensible programming language for the AI era, in which the
+framework is the language: one language covers markup, styling, state, tests,
+and the server side, and the compiler checks all of it. A model can write code
+faster than anyone can check it, so the bottleneck is trust rather than
+authorship — the human supplies intent, the model writes the VelarScript, and
+the compiler guards each change. Every rule below serves that: uniform output,
+diagnostics that teach, mistakes that stay silent elsewhere made loud here, and
+a readable JavaScript exit. Rule 5 is the other half of the positioning and not
+merely hygiene — unification is only affordable because capability lives in
+extensions rather than in Core. The full statement is in
 [Why VelarScript exists](why-velarscript.md).
 
 VelarScript is designed for people and AI systems that already understand
@@ -198,8 +203,10 @@ attempts += 1
   `case`, `constructor`, `from`, `get`, `match`, `readonly`, `test`, `type`,
   and `using`; the compiler owns that roster as `CORE_CONTEXTUAL_KEYWORDS`, and
   this sentence quotes it rather than keeping a second copy of it. Every word
-  the Web extension adds — `component`, `state`, `resource`, `action`, `watch`,
-  `look`, `keyframes`, `css`, `expose`, `exposes` — belongs to the same family.
+  the Web extension adds — `component`, `state`, `computed`, `resource`,
+  `action`, `watch`, `look`, `keyframes`, `css`, `expose`, `exposes` — belongs
+  to the same family, and the compiler owns that roster as
+  `WEB_CONTEXTUAL_KEYWORDS`.
   All of them are ordinary names anywhere a name can stand: a binding, a
   parameter, a loop binding, a named argument, a record field, a member name,
   and a record shorthand. Each becomes a declaration only in the shape that
@@ -2390,8 +2397,9 @@ export def encode(value: unknown) -> string:
 ```
 
 The whole module-boundary family — `import`, every `export` form, re-exports,
-`import js`, and `extern module` — is module-top-level only, like `type`,
-`class`, and `enum` declarations; writing one inside a block or function body
+`import js`, `extern module`, and the inline foreign-source blocks below — is
+module-top-level only, like `type`, `class`, and `enum` declarations; writing
+one inside a block or function body
 is a compile error, never partially-working shadow state. A module cannot
 import from or re-export from itself: the self edge has no valid evaluation
 order, so the answer is to use (or declare) the binding directly. Each module
@@ -2587,6 +2595,54 @@ class field. Values that are not already guaranteed by their package should
 enter as `unknown` and be validated explicitly with the application's runtime
 `Type`.
 
+### Inline foreign source
+
+`extern module` declares what a *package* exports and `import js` names it, so
+JavaScript that has **no package to come from** — a global, a shim, a few lines
+that exist only for this module — has no import spelling. It gets a block:
+
+```velar
+const tokenBytes = 16
+
+extern js(tokenBytes: number)`
+    export function sessionToken() {
+        const buffer = new Uint8Array(tokenBytes)
+        globalThis.crypto.getRandomValues(buffer)
+        return Array.from(buffer, (byte) => byte.toString(16).padStart(2, "0")).join("")
+    }
+`:
+    export def sessionToken() -> string
+```
+
+The backtick body is the module source; the indented block after the colon is
+its contract, in exactly the `extern module` grammar. The parenthesized list is
+a **capture**: each name binds the Vel binding of that name and is passed to
+the emitted factory as a checked argument of the declared type, not substituted
+as text. Captures are handed to a synchronous factory, so a block that takes
+them cannot use top-level `await` — await on the Vel side and capture the
+result.
+
+`unsafe js` is the same block without a contract, for source whose shape cannot
+honestly be declared. Its exports are `any` and the rules under *What `any`
+means* apply unchanged:
+
+```velar
+unsafe js`
+export const engine = () => ({arch: globalThis.process.arch});
+`
+```
+
+An inline block is **more checked than the `import js unsafe` it replaces**,
+not less: an unsafe import makes a whole module `any` from a distance, while a
+block puts the contract three lines under the source it governs. The
+`data:text/javascript,` import that used to be the only way to write a module
+inline is now rejected with a mechanical rewrite to the block form, which is
+source-mapped where the data URL was not.
+
+Both forms belong to Core, because JavaScript is the runtime Core already emits
+into. The CSS counterpart, `unsafe css`, belongs to the Web extension and is
+specified in section 13 — Core does not know what a stylesheet is.
+
 ### What `any` means
 
 A value imported with `import js unsafe` has the type `any`, and `any` is the
@@ -2657,11 +2713,13 @@ right, then JSX children, then the component function. Native JSX remains an
 owned DOM construction rather than a hidden Core-language operation.
 
 The source package then exposes the following language extension. This list is
-the complete addition — ten contextual keywords, two lifecycle hooks, three
+the complete addition — eleven contextual keywords, two lifecycle hooks, three
 reserved global functions, and the unit literals; nothing else in a Web module
 is new syntax. Every *contextual keyword* here declares only in its own shape
-and remains available as an ordinary name (section 3). The three reserved
-globals are the exception: `computed`, `mount`, and `tick` are real runtime
+and remains available as an ordinary name (section 3), `computed` included: it
+declares a derived value in `computed name = expression` and is an ordinary
+name everywhere else. The three reserved
+globals are the exception: `cached`, `mount`, and `tick` are real runtime
 entry points, so a Web module refuses them as binding names, as it does the
 media subjects `viewport`, `scheme`, and `motion` (section 17). Those six words
 are the whole difference between what a Core module and a Web module accept:

@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { join, relative, resolve } from "node:path";
 import test from "node:test";
 import { velarProjects } from "../scripts/velar-projects.mjs";
+import { repositoryRoot } from "./repository-root.ts";
 
 /**
  * D56 rule 131 and D61 rule 156, applied to the other half of the tree.
@@ -19,7 +20,7 @@ import { velarProjects } from "../scripts/velar-projects.mjs";
  * proves is that all of them still check.
  */
 
-const root = resolve(new URL("..", import.meta.url).pathname);
+const root = repositoryRoot;
 const cli = join(root, "packages", "cli", "src", "cli.ts");
 
 test("[D61-156] every fixture project under tests/fixtures still checks", async () => {

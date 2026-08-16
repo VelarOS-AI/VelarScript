@@ -23,14 +23,142 @@ export function desktopBrowserTestInitScript(config: VelarDesktopConfig): string
   const nodes = new Map();
   const processHandles = new Map();
   const fileWatchers = new Map();
+  const projectChanges = new Map();
+  const projectChangeHandles = new Map();
   let nextProcessHandle = 1;
   let nextFileWatcherHandle = 1;
+  let nextProjectChangeHandle = 1;
+  let nextProjectChangeSequence = 1;
   const now = 0;
   const maxFileBytes = 16 * 1024 * 1024;
   const maxListItems = 100000;
   const maxListTextUnits = 2 * 1024 * 1024;
   const maxWatchPaths = 4096;
   const maxWatchTextUnits = 2 * 1024 * 1024;
+
+  function projectChangeLifecycle(value) {
+    if (value === "prepared" || value === "amended" || value === "validated" || value === "applied" || value === "discarded") return value;
+    if (value === "validationFailed" || value === "validation_failed") return "validation_failed";
+    if (value === "rolledBack" || value === "rolled_back") return "rolled_back";
+    throw new TypeError("Desktop test project change lifecycle is invalid");
+  }
+  function projectChangeId(value) {
+    if (typeof value !== "string" || value.length === 0 || value.length > 512 || value.includes("\0")) {
+      throw new TypeError("Desktop test project change id must be bounded text");
+    }
+    return value;
+  }
+  function projectChangeDiff(value) {
+    if (typeof value !== "string" || new TextEncoder().encode(value).byteLength > 16 * 1024 * 1024) {
+      throw new RangeError("Desktop test project change diff cannot exceed 16 MiB");
+    }
+    return value;
+  }
+  function changeLines(diff) {
+    if (diff.length === 0) return 0;
+    return diff.split("\n").filter(line => line.startsWith("+") || line.startsWith("-")).length;
+  }
+  function notifyProjectChanges(change) {
+    for (const handle of projectChangeHandles.values()) {
+      if (handle.closed) continue;
+      if (!handle.queue.has(change.transactionId) && handle.queue.size >= 100) {
+        handle.queue.clear();
+        handle.rescan = true;
+      } else if (!handle.rescan) handle.queue.set(change.transactionId, change);
+      if (handle.pending) {
+        const resolveNext = handle.pending;
+        handle.pending = null;
+        const changes = [...handle.queue.values()];
+        handle.queue.clear();
+        const rescan = handle.rescan;
+        handle.rescan = false;
+        resolveNext({changes, rescan});
+      }
+    }
+  }
+  function recordProjectChange(transactionId, lifecycle, diff, previous = null) {
+    const sequence = nextProjectChangeSequence++;
+    const changedLines = changeLines(diff);
+    const change = Object.freeze({
+      transactionId,
+      sequence,
+      lifecycle,
+      reason: null,
+      intents: Object.freeze([Object.freeze({type: "replace_text", path: "src/main.vel", from: null, to: null, targetId: null, reason: "desktop browser test"})]),
+      patches: Object.freeze([Object.freeze({
+        patchId: "desktop-test:" + transactionId,
+        strategyId: "desktop-test",
+        path: "src/main.vel",
+        baseRevision: null,
+        diff,
+        changedLines,
+        risk: "low",
+        operation: "replace_text",
+      })]),
+      changedFiles: Object.freeze(["src/main.vel"]),
+      diff,
+      changedLines,
+      risk: "low",
+      revisions: Object.freeze([Object.freeze({path: "src/main.vel", before: previous ? previous.revisions[0].before : "desktop-test:before", after: "desktop-test:" + sequence})]),
+      createdAt: previous ? previous.createdAt : sequence,
+      updatedAt: sequence,
+      appliedAt: lifecycle === "applied" ? sequence : previous?.appliedAt ?? null,
+    });
+    projectChanges.set(transactionId, change);
+    notifyProjectChanges(change);
+    return change;
+  }
+  async function projectChangeCapability(operation, args) {
+    if (!grants.has("project")) throw new Error("Desktop test project changes require the project file grant");
+    if (operation === "start") {
+      if (args.length !== 0) throw new TypeError("Desktop test projectChanges start arguments are invalid");
+      const handle = nextProjectChangeHandle++;
+      projectChangeHandles.set(handle, {queue: new Map(), rescan: false, pending: null, closed: false});
+      return handle;
+    }
+    const handle = projectChangeHandles.get(args[0]);
+    if (!handle || handle.closed) throw new Error("Desktop test ProjectChanges handle is unknown or already released");
+    if (operation === "list") {
+      const limit = args[1];
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new RangeError("Desktop test ProjectChanges list limit is invalid");
+      const values = [...projectChanges.values()].sort((left, right) => right.sequence - left.sequence);
+      return {changes: values.slice(0, limit), truncated: values.length > limit};
+    }
+    if (operation === "get") return projectChanges.get(projectChangeId(args[1])) ?? null;
+    if (operation === "subscribe") {
+      if (handle.pending) throw new Error("Desktop test ProjectChanges subscribe already has an active pull");
+      if (handle.rescan || handle.queue.size > 0) {
+        const changes = [...handle.queue.values()];
+        handle.queue.clear();
+        const rescan = handle.rescan;
+        handle.rescan = false;
+        return {changes, rescan};
+      }
+      return new Promise(resolveNext => { handle.pending = resolveNext; });
+    }
+    if (operation === "apply" || operation === "rollback") {
+      const transactionId = projectChangeId(args[1]);
+      const current = projectChanges.get(transactionId);
+      if (!current) throw new Error("Desktop test project transaction is unknown");
+      if (operation === "apply" && current.lifecycle === "applied") throw new Error("Desktop test project transaction is already applied");
+      if (operation === "rollback" && current.lifecycle !== "applied") throw new Error("Desktop test project transaction is not applied");
+      return recordProjectChange(transactionId, operation === "apply" ? "applied" : "rolled_back", current.diff, current);
+    }
+    if (operation === "close") {
+      handle.closed = true;
+      projectChangeHandles.delete(args[0]);
+      if (handle.pending) { const resolveNext = handle.pending; handle.pending = null; resolveNext(null); }
+      return null;
+    }
+    throw new Error("Unsupported Desktop test project change operation '" + operation + "'");
+  }
+  async function projectChangeTest(operation, args) {
+    if (operation !== "seed" || args.length !== 3) throw new TypeError("Desktop test project change seed arguments are invalid");
+    if (!grants.has("project")) throw new Error("Desktop test project change seed requires the project file grant");
+    const transactionId = projectChangeId(args[0]);
+    recordProjectChange(transactionId, projectChangeLifecycle(args[1]), projectChangeDiff(args[2]), projectChanges.get(transactionId) ?? null);
+    return null;
+  }
 
   function watchBatch(watcher) {
     if (watcher.rescan) {
@@ -311,6 +439,8 @@ export function desktopBrowserTestInitScript(config: VelarDesktopConfig): string
       }
       if (capability === "fs") return fs(operation, args);
       if (capability === "process") return processCapability(operation, args);
+      if (capability === "project-changes") return projectChangeCapability(operation, args);
+      if (capability === "project-change-test") return projectChangeTest(operation, args);
       throw new Error("Desktop test capability '" + capability + "' is not configured");
     },
   });

@@ -17,7 +17,7 @@ import {
 import type { VelarProjectConfig } from "./config.ts";
 import { compileProject } from "./project.ts";
 import { standardModuleSource, standardModuleSources } from "./standard-modules.ts";
-import { compiledTestModulePath, quoteReportedText, writeCompiledTestProject } from "./test-output.ts";
+import { compiledTestModulePath, portablePath, quoteReportedText, writeCompiledTestProject } from "./test-output.ts";
 import { verifyProductionBuild } from "./production-verifier.ts";
 import { startProductionPreview, type ProductionPreviewHandle } from "./preview-server.ts";
 import { hostErrorStack } from "./host-error.ts";
@@ -475,7 +475,7 @@ async function runBrowserTestsInWorker(
             } catch (error) {
               if (lifecycleFailure !== null) throw lifecycleFailure;
               failed += entry.tests.length;
-              process.stderr.write(`✗ ${engine} :: ${relative(config.root, entry.file)} failed to load\n${stackOf(error)}\n${browserTestHostGuidance}\n`);
+              process.stderr.write(`✗ ${engine} :: ${portablePath(relative(config.root, entry.file))} failed to load\n${stackOf(error)}\n${browserTestHostGuidance}\n`);
               await channel.drain();
               continue;
             }
@@ -486,7 +486,7 @@ async function runBrowserTestsInWorker(
             const loadTimeErrors = await channel.drain();
             if (loadTimeErrors.length > 0) {
               failed += entry.tests.length;
-              process.stderr.write(`✗ ${engine} :: ${relative(config.root, entry.file)} reported an unowned error while loading\n${loadTimeErrors.join("\n")}\n${browserTestHostGuidance}\n`);
+              process.stderr.write(`✗ ${engine} :: ${portablePath(relative(config.root, entry.file))} reported an unowned error while loading\n${loadTimeErrors.join("\n")}\n${browserTestHostGuidance}\n`);
               continue;
             }
             for (const declared of entry.tests) {
@@ -517,7 +517,7 @@ async function runBrowserTestsInWorker(
                 await boundedBrowserOperation(
                   Promise.resolve().then(() => test()),
                   limits.testTimeoutMs,
-                  `Browser test ${quoteReportedText(relative(config.root, entry.file))} :: ${name}`,
+                  `Browser test ${quoteReportedText(portablePath(relative(config.root, entry.file)))} :: ${name}`,
                   lifecycle,
                 );
                 if (runtimeFailures.length > 0) throw new Error(`Browser runtime failures:\n${runtimeFailures.join("\n")}`);
@@ -549,10 +549,10 @@ async function runBrowserTestsInWorker(
               if (testFailure instanceof BrowserTestInterrupted || testFailure instanceof BrowserTestRunTimedOut) throw testFailure;
               if (testFailure === null) {
                 passed += 1;
-                process.stdout.write(`✓ ${engine} :: ${quoteReportedText(relative(config.root, entry.file))} :: ${name}\n`);
+                process.stdout.write(`✓ ${engine} :: ${quoteReportedText(portablePath(relative(config.root, entry.file)))} :: ${name}\n`);
               } else {
                 failed += 1;
-                process.stderr.write(`✗ ${engine} :: ${quoteReportedText(relative(config.root, entry.file))} :: ${name}\n${stackOf(testFailure)}\n`);
+                process.stderr.write(`✗ ${engine} :: ${quoteReportedText(portablePath(relative(config.root, entry.file)))} :: ${name}\n${stackOf(testFailure)}\n`);
               }
               if (!engineUsable) {
                 process.stderr.write(`✗ ${engine} was retired after context cleanup failed\n`);
@@ -680,14 +680,14 @@ async function compileBrowserTest(
     ...project.modules.flatMap((module) => module.result.diagnostics.map((diagnostic) => formatDiagnostic(module.result.source, diagnostic))),
   ];
   if (errors.length > 0) {
-    process.stderr.write(`✗ ${relative(config.root, file)}\n${errors.join("\n\n")}\n`);
+    process.stderr.write(`✗ ${portablePath(relative(config.root, file))}\n${errors.join("\n\n")}\n`);
     return null;
   }
   await writeCompiledTestProject(project, outputRoot);
   const entry = project.modules.find((module) => module.inputPath === file);
   const tests = entry?.result.moduleInterface.tests ?? [];
   if (tests.length === 0) {
-    process.stderr.write(`✗ ${relative(config.root, file)} declares no tests\n`);
+    process.stderr.write(`✗ ${portablePath(relative(config.root, file))} declares no tests\n`);
     return null;
   }
   return { file, output: entry ? compiledTestModulePath(project, entry, outputRoot) : join(outputRoot, relative(config.root, file).replace(/\.vel$/u, ".js")), tests };
@@ -706,10 +706,13 @@ function installBrowserRuntime(page: Page, origin: string, base: string, runtime
       const value = String(path);
       if (!value.startsWith("/")) throw new Error("browser.open requires an application-relative path starting with '/'");
       const target = base === "/" ? value : `${base.slice(0, -1)}${value}`;
-      await page.goto(new URL(target, origin).href, { waitUntil: "networkidle" });
+      // Navigation owns document loading, not application network quiescence.
+      // A product may poll or stream forever; tests establish readiness with
+      // the web-first waitFor/waitForText assertions exposed beside open().
+      await page.goto(new URL(target, origin).href, { waitUntil: "load" });
       return null;
     },
-    async reload() { await page.reload({ waitUntil: "networkidle" }); return null; },
+    async reload() { await page.reload({ waitUntil: "load" }); return null; },
     async click(selector: unknown) { await locator(selector).click(); return null; },
     async fill(selector: unknown, value: unknown) { await locator(selector).fill(String(value)); return null; },
     async select(selector: unknown, value: unknown) { await locator(selector).selectOption(String(value)); return null; },

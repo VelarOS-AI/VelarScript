@@ -10,6 +10,7 @@ import { velarCompilerExtension as desktopExtension } from "../packages/desktop/
 import { velarNodeCompilerExtension as nodeExtension } from "../packages/node/src/compiler.ts";
 import { velarCompilerExtension as webExtension } from "../packages/web/src/compiler.ts";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
+import { repositoryRoot } from "./repository-root.ts";
 
 // ---------------------------------------------------------------------------
 // D60 rule 149 — the derived gate that pins a registration to its runtime.
@@ -124,6 +125,8 @@ test("[D60-149] the extensions still register the module-provided enums this gat
   // sweep. The list grows with the language; it may not silently shrink.
   const covered = enums.map((item) => `${item.label} ${item.specifier} ${item.name}`).sort();
   assert.deepEqual(covered, [
+    "@velarscript/desktop velar/desktop ProjectChangeLifecycle",
+    "@velarscript/desktop velar/desktop ProjectChangeRisk",
     "@velarscript/desktop velar/desktop ProjectTaskCommand",
     "@velarscript/desktop velar/desktop ProjectTaskOutputChannel",
     "@velarscript/desktop velar/http HttpTransportPhase",
@@ -172,8 +175,6 @@ for (const item of enums) {
 // only a browser run proves the three names survive into a real build and are
 // callable from VelarScript rather than from a Node import.
 // ---------------------------------------------------------------------------
-
-const repositoryRoot = resolve(new URL("..", import.meta.url).pathname);
 
 test("[D60-149] velar/http's enum answers all three names inside a built page", { timeout: 300_000 }, async () => {
   const directory = await makeTemporaryDirectory("velar-enum-browser-");

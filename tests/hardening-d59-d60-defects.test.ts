@@ -6,6 +6,7 @@ import test, { after } from "node:test";
 import { compile } from "@velarscript/compiler";
 import { velarCompilerExtension as webCompilerExtension } from "../packages/web/src/compiler.ts";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
+import { repositoryRoot } from "./repository-root.ts";
 
 // ---------------------------------------------------------------------------
 // D59 rule 141 and D60 rule 148 — the two defects whose shape is "compiles
@@ -13,7 +14,7 @@ import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-
 // so every probe here runs the toolchain rather than reading its output.
 // ---------------------------------------------------------------------------
 
-const root = resolve(new URL("..", import.meta.url).pathname);
+const root = repositoryRoot;
 const cli = join(root, "packages", "cli", "src", "cli.ts");
 
 after(async () => {

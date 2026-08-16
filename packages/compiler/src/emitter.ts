@@ -2960,7 +2960,13 @@ function sourceMapFor(code: string, generatedMappings: readonly GeneratedMapping
   }).join(";");
   return JSON.stringify({
     version: 3,
-    sources: [source.path],
+    // Source-map sources are URLs, not host path strings. A Windows drive path
+    // starts with what URL parsers treat as a scheme (`C:`), so Node cannot
+    // map the generated frame back to VelarScript unless the drive path is a
+    // real file URL. POSIX and project-relative paths keep their existing form.
+    sources: [/^[A-Za-z]:[\\/]/u.test(source.path)
+      ? `file:///${source.path.replaceAll("\\", "/")}`
+      : source.path.replaceAll("\\", "/")],
     sourcesContent: [source.text],
     names: [],
     mappings,

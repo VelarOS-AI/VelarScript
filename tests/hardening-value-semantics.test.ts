@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import test from "node:test";
+import { repositoryRoot } from "./repository-root.ts";
 import { join, resolve } from "node:path";
 import { compile } from "@velarscript/compiler";
 import { compileProject } from "../packages/cli/src/project.ts";
@@ -37,7 +39,7 @@ function rejects(source: string, pattern: RegExp): void {
   assert.ok(matched, `${source}\nexpected ${String(pattern)}, received ${JSON.stringify(result.diagnostics.map((item) => item.message))}`);
 }
 
-const projectRoot = "/velar-value-semantics-tests";
+const projectRoot = join(tmpdir(), "velar-value-semantics-tests");
 
 function projectSources(modules: Readonly<Record<string, string>>): Map<string, string> {
   return new Map(Object.entries(modules).map(([name, text]) => [join(projectRoot, name), text]));
@@ -332,7 +334,7 @@ print(str(rows.sorted(by=row => row.name).size))
 
 test("[D42 65] exactly one predicate answers \"is this ordered\"", async () => {
   const analyzer = await import("node:fs/promises")
-    .then((fs) => fs.readFile(resolve(new URL("..", import.meta.url).pathname, "packages/compiler/src/analyzer.ts"), "utf8"));
+    .then((fs) => fs.readFile(resolve(repositoryRoot, "packages/compiler/src/analyzer.ts"), "utf8"));
   // Four mechanisms giving three answers was the structural root of ORD-1/2/3.
   // The retired names must not come back.
   assert.ok(!/defaultSortableType/u.test(analyzer), "defaultSortableType came back");

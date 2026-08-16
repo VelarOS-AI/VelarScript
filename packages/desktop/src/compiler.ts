@@ -83,7 +83,7 @@ const languageServerType: ValueType = { kind: "named", name: "LanguageServer", i
 const projectTaskIdentity = "velar/desktop#type:ProjectTask";
 const projectTaskType: ValueType = { kind: "named", name: "ProjectTask", identity: projectTaskIdentity };
 const projectTaskCommandIdentity = "velar/desktop#enum:ProjectTaskCommand";
-const projectTaskCommands = new Set(["check", "test", "build", "fix", "package", "run"]);
+const projectTaskCommands = new Set(["check", "test", "browserTest", "build", "fix", "package", "run"]);
 const projectTaskCommandType: ValueType = { kind: "enum", name: "ProjectTaskCommand", identity: projectTaskCommandIdentity };
 const projectTaskOutputChannelIdentity = "velar/desktop#enum:ProjectTaskOutputChannel";
 const projectTaskOutputChannels = new Set(["stdout", "stderr"]);
@@ -103,6 +103,61 @@ const projectTaskOptionsType: ValueType = {
   fields: new Map<string, ValueType>([["timeout", numberType], ["maxOutputBytes", numberType]]),
   optionalFields: new Set(["timeout", "maxOutputBytes"]),
 };
+const projectChangesIdentity = "velar/desktop#type:ProjectChanges";
+const projectChangesType: ValueType = { kind: "named", name: "ProjectChanges", identity: projectChangesIdentity };
+const projectChangeLifecycleIdentity = "velar/desktop#enum:ProjectChangeLifecycle";
+const projectChangeLifecycles = new Set(["prepared", "amended", "validated", "validationFailed", "applied", "rolledBack", "discarded"]);
+const projectChangeLifecycleType: ValueType = { kind: "enum", name: "ProjectChangeLifecycle", identity: projectChangeLifecycleIdentity };
+const projectChangeRiskIdentity = "velar/desktop#enum:ProjectChangeRisk";
+const projectChangeRisks = new Set(["low", "medium", "high"]);
+const projectChangeRiskType: ValueType = { kind: "enum", name: "ProjectChangeRisk", identity: projectChangeRiskIdentity };
+const projectChangeIntentType: ValueType = { kind: "object", fields: new Map<string, ValueType>([
+  ["type", stringType],
+  ["path", optionalStringType],
+  ["from", optionalStringType],
+  ["to", optionalStringType],
+  ["targetId", optionalStringType],
+  ["reason", optionalStringType],
+]) };
+const projectChangePatchType: ValueType = { kind: "object", fields: new Map<string, ValueType>([
+  ["patchId", stringType],
+  ["strategyId", stringType],
+  ["path", stringType],
+  ["baseRevision", optionalStringType],
+  ["diff", stringType],
+  ["changedLines", numberType],
+  ["risk", projectChangeRiskType],
+  ["operation", optionalStringType],
+]) };
+const projectChangeRevisionType: ValueType = { kind: "object", fields: new Map<string, ValueType>([
+  ["path", stringType],
+  ["before", optionalStringType],
+  ["after", optionalStringType],
+]) };
+const projectChangeType: ValueType = { kind: "object", fields: new Map<string, ValueType>([
+  ["transactionId", stringType],
+  ["sequence", numberType],
+  ["lifecycle", projectChangeLifecycleType],
+  ["reason", optionalStringType],
+  ["intents", { kind: "list", element: projectChangeIntentType }],
+  ["patches", { kind: "list", element: projectChangePatchType }],
+  ["changedFiles", listStringType],
+  ["diff", stringType],
+  ["changedLines", numberType],
+  ["risk", projectChangeRiskType],
+  ["revisions", { kind: "list", element: projectChangeRevisionType }],
+  ["createdAt", numberType],
+  ["updatedAt", numberType],
+  ["appliedAt", optionalNumberType],
+]) };
+const projectChangePageType: ValueType = { kind: "object", fields: new Map<string, ValueType>([
+  ["changes", { kind: "list", element: projectChangeType }],
+  ["truncated", boolType],
+]) };
+const projectChangeUpdateType: ValueType = { kind: "object", fields: new Map<string, ValueType>([
+  ["changes", { kind: "list", element: projectChangeType }],
+  ["rescan", boolType],
+]) };
 const terminalSessionIdentity = "velar/desktop#type:TerminalSession";
 const terminalSessionType: ValueType = { kind: "named", name: "TerminalSession", identity: terminalSessionIdentity };
 const terminalResultType: ValueType = { kind: "object", fields: new Map<string, ValueType>([["code", numberType]]) };
@@ -116,6 +171,9 @@ const desktopModuleInterface = moduleInterface(new Map([
   ["ProjectTask", { kind: "typeObject", name: "ProjectTask" }],
   ["ProjectTaskCommand", { kind: "enumObject", name: "ProjectTaskCommand", identity: projectTaskCommandIdentity, members: projectTaskCommands }],
   ["ProjectTaskOutputChannel", { kind: "enumObject", name: "ProjectTaskOutputChannel", identity: projectTaskOutputChannelIdentity, members: projectTaskOutputChannels }],
+  ["ProjectChanges", { kind: "typeObject", name: "ProjectChanges" }],
+  ["ProjectChangeLifecycle", { kind: "enumObject", name: "ProjectChangeLifecycle", identity: projectChangeLifecycleIdentity, members: projectChangeLifecycles }],
+  ["ProjectChangeRisk", { kind: "enumObject", name: "ProjectChangeRisk", identity: projectChangeRiskIdentity, members: projectChangeRisks }],
   ["TerminalSession", { kind: "typeObject", name: "TerminalSession" }],
   ["platform", functionType([], stringType)],
   ["packaged", functionType([], boolType)],
@@ -125,6 +183,7 @@ const desktopModuleInterface = moduleInterface(new Map([
   ["selectedProjectDirectory", functionType([], { kind: "promise", value: optionalStringType })],
   ["selectProjectDirectory", functionType([], { kind: "promise", value: optionalStringType })],
   ["languageServer", functionType([], { kind: "promise", value: languageServerType })],
+  ["projectChanges", functionType([], { kind: "promise", value: projectChangesType })],
   ["startProjectTask", functionType([projectTaskCommandType, listStringType, projectTaskOptionsType], { kind: "promise", value: projectTaskType }, 1)],
   ["openTerminal", functionType([terminalOptionsType], { kind: "promise", value: terminalSessionType }, 0)],
 ]), new Map([
@@ -139,6 +198,14 @@ const desktopModuleInterface = moduleInterface(new Map([
     ["wait", functionType([], { kind: "promise", value: projectTaskResultType })],
     ["stop", functionType([], { kind: "promise", value: nullType })],
   ])],
+  ["ProjectChanges", new Map([
+    ["list", functionType([numberType], { kind: "promise", value: projectChangePageType }, 0)],
+    ["get", functionType([stringType], { kind: "promise", value: optionalOf(projectChangeType) })],
+    ["subscribe", functionType([], { kind: "promise", value: optionalOf(projectChangeUpdateType) })],
+    ["apply", functionType([stringType], { kind: "promise", value: projectChangeType })],
+    ["rollback", functionType([stringType], { kind: "promise", value: projectChangeType })],
+    ["close", functionType([], { kind: "promise", value: nullType })],
+  ])],
   ["TerminalSession", new Map([
     ["pid", numberType],
     ["write", functionType([stringType], { kind: "promise", value: nullType })],
@@ -150,15 +217,19 @@ const desktopModuleInterface = moduleInterface(new Map([
 ]), new Map([
   ["LanguageServer", languageServerIdentity],
   ["ProjectTask", projectTaskIdentity],
+  ["ProjectChanges", projectChangesIdentity],
   ["TerminalSession", terminalSessionIdentity],
 ]), new Map([
   ["ProjectTaskCommand", { identity: projectTaskCommandIdentity, members: projectTaskCommands }],
   ["ProjectTaskOutputChannel", { identity: projectTaskOutputChannelIdentity, members: projectTaskOutputChannels }],
+  ["ProjectChangeLifecycle", { identity: projectChangeLifecycleIdentity, members: projectChangeLifecycles }],
+  ["ProjectChangeRisk", { identity: projectChangeRiskIdentity, members: projectChangeRisks }],
 ]));
 
 const desktopTestModuleInterface = moduleInterface(new Map([
   ["appDataDirectory", functionType([], { kind: "promise", value: stringType })],
   ["projectDirectory", functionType([], { kind: "promise", value: stringType })],
+  ["seedProjectChange", functionType([stringType, stringType, stringType], { kind: "promise", value: nullType })],
   ["makeDirectory", functionType([stringType], { kind: "promise", value: nullType })],
   ["readText", functionType([stringType, { kind: "number" }], { kind: "promise", value: stringType })],
   ["writeText", functionType([stringType, stringType], { kind: "promise", value: nullType })],
@@ -175,6 +246,7 @@ ${VELAR_UTF8_RUNTIME}
 ${VELAR_PROCESS_HOST_RUNTIME}
 const languageServerToken = Symbol("velar.desktop.language-server");
 const projectTaskToken = Symbol("velar.desktop.project-task");
+const projectChangesToken = Symbol("velar.desktop.project-changes");
 const terminalSessionToken = Symbol("velar.desktop.terminal-session");
 export function platform() {
   const value = __velarDesktopHostField("platform");
@@ -245,6 +317,223 @@ export async function languageServer() {
   const handle = await __velarDesktopHostCall("language-server", "start", []);
   return new LanguageServerHandle(languageServerToken, handle);
 }
+const projectChangeIntentFields = new __velarProcessNativeSet(["type", "path", "from", "to", "targetId", "reason"]);
+const projectChangePatchFields = new __velarProcessNativeSet(["patchId", "strategyId", "path", "baseRevision", "diff", "changedLines", "risk", "operation"]);
+const projectChangeRevisionFields = new __velarProcessNativeSet(["path", "before", "after"]);
+const projectChangeFields = new __velarProcessNativeSet([
+  "transactionId", "sequence", "lifecycle", "reason", "intents", "patches", "changedFiles", "diff", "changedLines", "risk",
+  "revisions", "createdAt", "updatedAt", "appliedAt",
+]);
+const projectChangePageFields = new __velarProcessNativeSet(["changes", "truncated"]);
+const projectChangeUpdateFields = new __velarProcessNativeSet(["changes", "rescan"]);
+export const ProjectChangeLifecycle = __velarRegisterRuntimeType(__velarProcessFreeze({
+  prepared: "prepared", amended: "amended", validated: "validated", validationFailed: "validationFailed", applied: "applied", rolledBack: "rolledBack", discarded: "discarded",
+  is(value) {
+    return value === "prepared" || value === "amended" || value === "validated" || value === "validationFailed"
+      || value === "applied" || value === "rolledBack" || value === "discarded";
+  },
+  parse(value) {
+    if (!ProjectChangeLifecycle.is(value)) throw new __velarProcessNativeTypeError("Value does not match ProjectChangeLifecycle");
+    return value;
+  },
+  values() { return ["prepared", "amended", "validated", "validationFailed", "applied", "rolledBack", "discarded"]; },
+}));
+export const ProjectChangeRisk = __velarRegisterRuntimeType(__velarProcessFreeze({
+  low: "low", medium: "medium", high: "high",
+  is(value) { return value === "low" || value === "medium" || value === "high"; },
+  parse(value) {
+    if (!ProjectChangeRisk.is(value)) throw new __velarProcessNativeTypeError("Value does not match ProjectChangeRisk");
+    return value;
+  },
+  values() { return ["low", "medium", "high"]; },
+}));
+function projectChangeText(value, name, maximumBytes, allowEmpty = false) {
+  if (typeof value !== "string" || !allowEmpty && value.length === 0 || __velarProcessIncludes(value, "\0")) {
+    throw new __velarProcessNativeTypeError(name + " must be bounded text");
+  }
+  const bytes = __velarUtf8ByteLength(value);
+  if (bytes > maximumBytes) throw new __velarProcessNativeRangeError(name + " exceeds its supported bound");
+  return {value, bytes};
+}
+function projectChangeOptionalText(value, name, maximumBytes) {
+  return value == null ? {value: null, bytes: 0} : projectChangeText(value, name, maximumBytes);
+}
+function projectChangeInteger(value, name, minimum = 0) {
+  if (!__velarProcessIsSafeInteger(value) || value < minimum) throw new __velarProcessNativeTypeError(name + " must be a non-negative safe integer");
+  return value;
+}
+function projectChangeList(value, name, maximumItems, read) {
+  if (!__velarProcessIsArray(value) || value.length > maximumItems) throw new __velarProcessNativeTypeError(name + " must be a bounded List");
+  const output = new __velarProcessNativeArray(value.length);
+  let bytes = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = __velarProcessOwnDescriptor(value, __velarProcessNativeString(index));
+    if (!descriptor?.enumerable || !("value" in descriptor)) throw new __velarProcessNativeTypeError(name + " must contain enumerable data values");
+    const item = read(descriptor.value, index);
+    output[index] = item.value;
+    bytes += item.bytes;
+  }
+  // The hostile host value has already been descriptor-checked and copied.
+  // Keep the caller-owned copy as a normal VelarScript List: freezing this
+  // fresh array makes the language runtime correctly reject iteration even
+  // though no host alias remains to protect.
+  return {value: output, bytes};
+}
+function projectChangeIntent(value) {
+  value = __velarProcessRecord(value, "Project change intent", projectChangeIntentFields);
+  const type = projectChangeText(value.type, "Project change intent type", 128);
+  const path = projectChangeOptionalText(value.path, "Project change intent path", 4096);
+  const from = projectChangeOptionalText(value.from, "Project change intent source path", 4096);
+  const to = projectChangeOptionalText(value.to, "Project change intent target path", 4096);
+  const targetId = projectChangeOptionalText(value.targetId, "Project change target id", 512);
+  const reason = projectChangeOptionalText(value.reason, "Project change intent reason", 64 * 1024);
+  return {
+    value: __velarProcessFreeze({type: type.value, path: path.value, from: from.value, to: to.value, targetId: targetId.value, reason: reason.value}),
+    bytes: type.bytes + path.bytes + from.bytes + to.bytes + targetId.bytes + reason.bytes,
+  };
+}
+function projectChangePatch(value) {
+  value = __velarProcessRecord(value, "Project change patch", projectChangePatchFields);
+  const patchId = projectChangeText(value.patchId, "Project change patch id", 512);
+  const strategyId = projectChangeText(value.strategyId, "Project change strategy id", 512);
+  const path = projectChangeText(value.path, "Project change patch path", 4096);
+  const baseRevision = projectChangeOptionalText(value.baseRevision, "Project change patch base revision", 512);
+  const diff = projectChangeText(value.diff, "Project change patch diff", 16 * 1024 * 1024, true);
+  const operation = projectChangeOptionalText(value.operation, "Project change patch operation", 128);
+  const risk = ProjectChangeRisk.parse(value.risk);
+  const changedLines = projectChangeInteger(value.changedLines, "Project change patch changed lines");
+  return {
+    value: __velarProcessFreeze({patchId: patchId.value, strategyId: strategyId.value, path: path.value, baseRevision: baseRevision.value, diff: diff.value, changedLines, risk, operation: operation.value}),
+    bytes: patchId.bytes + strategyId.bytes + path.bytes + baseRevision.bytes + diff.bytes + operation.bytes,
+  };
+}
+function projectChangeRevision(value) {
+  value = __velarProcessRecord(value, "Project change revision", projectChangeRevisionFields);
+  const path = projectChangeText(value.path, "Project change revision path", 4096);
+  const before = projectChangeOptionalText(value.before, "Project change prior revision", 512);
+  const after = projectChangeOptionalText(value.after, "Project change next revision", 512);
+  return {
+    value: __velarProcessFreeze({path: path.value, before: before.value, after: after.value}),
+    bytes: path.bytes + before.bytes + after.bytes,
+  };
+}
+function projectChangeLifecycle(value) {
+  if (value === "prepared" || value === "amended" || value === "validated" || value === "applied" || value === "discarded") return value;
+  if (value === "validation_failed") return "validationFailed";
+  if (value === "rolled_back") return "rolledBack";
+  throw new __velarProcessNativeTypeError("Desktop host returned an invalid project change lifecycle");
+}
+function projectChangeValue(value) {
+  value = __velarProcessRecord(value, "Project change", projectChangeFields);
+  const transactionId = projectChangeText(value.transactionId, "Project change transaction id", 512);
+  const reason = projectChangeOptionalText(value.reason, "Project change reason", 64 * 1024);
+  const intents = projectChangeList(value.intents, "Project change intents", 1000, projectChangeIntent);
+  const patches = projectChangeList(value.patches, "Project change patches", 1000, projectChangePatch);
+  const changedFiles = projectChangeList(value.changedFiles, "Project change files", 1000, item => projectChangeText(item, "Project change file path", 4096));
+  const diff = projectChangeText(value.diff, "Project change diff", 16 * 1024 * 1024, true);
+  const revisions = projectChangeList(value.revisions, "Project change revisions", 1000, projectChangeRevision);
+  const bytes = transactionId.bytes + reason.bytes + intents.bytes + patches.bytes + changedFiles.bytes + diff.bytes + revisions.bytes;
+  if (bytes > 16 * 1024 * 1024) throw new __velarProcessNativeRangeError("Project change record exceeds 16 MiB");
+  const appliedAt = value.appliedAt == null ? null : projectChangeInteger(value.appliedAt, "Project change apply time");
+  return {
+    value: __velarProcessFreeze({
+      transactionId: transactionId.value,
+      sequence: projectChangeInteger(value.sequence, "Project change sequence", 1),
+      lifecycle: projectChangeLifecycle(value.lifecycle),
+      reason: reason.value,
+      intents: intents.value,
+      patches: patches.value,
+      changedFiles: changedFiles.value,
+      diff: diff.value,
+      changedLines: projectChangeInteger(value.changedLines, "Project change changed lines"),
+      risk: ProjectChangeRisk.parse(value.risk),
+      revisions: revisions.value,
+      createdAt: projectChangeInteger(value.createdAt, "Project change creation time"),
+      updatedAt: projectChangeInteger(value.updatedAt, "Project change update time"),
+      appliedAt,
+    }),
+    bytes,
+  };
+}
+function projectChangeValues(value, name, maximumItems) {
+  return projectChangeList(value, name, maximumItems, projectChangeValue);
+}
+function projectChangePage(value) {
+  value = __velarProcessRecord(value, "Project change page", projectChangePageFields);
+  const changes = projectChangeValues(value.changes, "Project change page", 100);
+  if (changes.bytes > 32 * 1024 * 1024 || typeof value.truncated !== "boolean") {
+    throw new __velarProcessNativeTypeError("Desktop host returned an invalid project change page");
+  }
+  return __velarProcessFreeze({changes: changes.value, truncated: value.truncated});
+}
+function projectChangeUpdate(value) {
+  value = __velarProcessRecord(value, "Project change update", projectChangeUpdateFields);
+  const changes = projectChangeValues(value.changes, "Project change update", 100);
+  if (changes.bytes > 16 * 1024 * 1024 || typeof value.rescan !== "boolean") {
+    throw new __velarProcessNativeTypeError("Desktop host returned an invalid project change update");
+  }
+  return __velarProcessFreeze({changes: changes.value, rescan: value.rescan});
+}
+function projectChangeId(value) {
+  return projectChangeText(value, "Project change transaction id", 512).value;
+}
+class ProjectChangesHandle {
+  constructor(token, handle) {
+    if (token !== projectChangesToken || !__velarProcessIsSafeInteger(handle) || handle < 1) {
+      throw new __velarProcessNativeTypeError("ProjectChanges values are created only by velar/desktop.projectChanges");
+    }
+    this.handle = handle;
+    this.closed = false;
+    this.reading = false;
+    __velarProcessSeal(this);
+  }
+  async list(limit = 50) {
+    if (this.closed) throw new __velarProcessNativeError("ProjectChanges is closed");
+    if (!__velarProcessIsSafeInteger(limit) || limit < 1 || limit > 100) throw new __velarProcessNativeRangeError("ProjectChanges.list limit must be an integer from 1 through 100");
+    return projectChangePage(await __velarDesktopHostCall("project-changes", "list", [this.handle, limit]));
+  }
+  async get(transactionId) {
+    if (this.closed) throw new __velarProcessNativeError("ProjectChanges is closed");
+    const value = await __velarDesktopHostCall("project-changes", "get", [this.handle, projectChangeId(transactionId)]);
+    return value === null ? null : projectChangeValue(value).value;
+  }
+  async subscribe() {
+    if (this.closed) return null;
+    if (this.reading) throw new __velarProcessNativeError("ProjectChanges.subscribe() allows only one active pull");
+    this.reading = true;
+    try {
+      const value = await __velarDesktopHostCall("project-changes", "subscribe", [this.handle], 0);
+      if (value === null) { this.closed = true; return null; }
+      return projectChangeUpdate(value);
+    } finally { this.reading = false; }
+  }
+  async apply(transactionId) {
+    if (this.closed) throw new __velarProcessNativeError("ProjectChanges is closed");
+    return projectChangeValue(await __velarDesktopHostCall("project-changes", "apply", [this.handle, projectChangeId(transactionId)], 0)).value;
+  }
+  async rollback(transactionId) {
+    if (this.closed) throw new __velarProcessNativeError("ProjectChanges is closed");
+    return projectChangeValue(await __velarDesktopHostCall("project-changes", "rollback", [this.handle, projectChangeId(transactionId)], 0)).value;
+  }
+  async close() {
+    if (this.closed) return null;
+    const value = await __velarDesktopHostCall("project-changes", "close", [this.handle], 10000);
+    if (value !== null) throw new __velarProcessNativeTypeError("Desktop host returned an invalid ProjectChanges close result");
+    this.closed = true;
+    return null;
+  }
+}
+export const ProjectChanges = __velarProcessFreeze({
+  is(value) { return value instanceof ProjectChangesHandle; },
+  parse(value) {
+    if (!(value instanceof ProjectChangesHandle)) throw new __velarProcessNativeTypeError("Value does not match ProjectChanges");
+    return value;
+  },
+});
+export async function projectChanges() {
+  const handle = await __velarDesktopHostCall("project-changes", "start", []);
+  return new ProjectChangesHandle(projectChangesToken, handle);
+}
 const projectTaskOptionFields = new __velarProcessNativeSet(["timeout", "maxOutputBytes"]);
 const projectTaskStartFields = new __velarProcessNativeSet(["handle", "pid"]);
 const projectTaskOutputFields = new __velarProcessNativeSet(["channel", "text"]);
@@ -253,15 +542,15 @@ const projectTaskErrorFields = new __velarProcessNativeSet(["name", "message"]);
 const projectTaskWaitFields = new __velarProcessNativeSet(["result", "error", "retained"]);
 const projectTaskStopFields = new __velarProcessNativeSet(["result", "error"]);
 export const ProjectTaskCommand = __velarRegisterRuntimeType(__velarProcessFreeze({
-  check: "check", test: "test", build: "build", fix: "fix", package: "package", run: "run",
-  is(value) { return value === "check" || value === "test" || value === "build" || value === "fix" || value === "package" || value === "run"; },
+  check: "check", test: "test", browserTest: "browserTest", build: "build", fix: "fix", package: "package", run: "run",
+  is(value) { return value === "check" || value === "test" || value === "browserTest" || value === "build" || value === "fix" || value === "package" || value === "run"; },
   parse(value) {
     if (!ProjectTaskCommand.is(value)) throw new __velarProcessNativeTypeError("Value does not match ProjectTaskCommand");
     return value;
   },
   // D60 rule 149: values() is the third name charter section 6 reserves on
   // every enum, and it returns a fresh mutable List in declaration order.
-  values() { return ["check", "test", "build", "fix", "package", "run"]; },
+  values() { return ["check", "test", "browserTest", "build", "fix", "package", "run"]; },
 }));
 export const ProjectTaskOutputChannel = __velarRegisterRuntimeType(__velarProcessFreeze({
   stdout: "stdout", stderr: "stderr",
@@ -554,6 +843,20 @@ export async function projectDirectory() {
   const value = await invoke("desktop", "projectDirectory", [], 30000);
   if (typeof value !== "string" || !value.startsWith("/") || value.length > 4096 || value.includes("\0")) throw new TypeError("Desktop test host returned an invalid absolute project path");
   return value;
+}
+export async function seedProjectChange(transactionId, lifecycle, diff) {
+  if (typeof transactionId !== "string" || transactionId.length === 0 || transactionId.length > 512 || transactionId.includes("\0")) {
+    throw new TypeError("Desktop test seedProjectChange requires a bounded transaction id");
+  }
+  if (typeof lifecycle !== "string" || lifecycle.length === 0 || lifecycle.length > 64) {
+    throw new TypeError("Desktop test seedProjectChange requires a lifecycle name");
+  }
+  if (typeof diff !== "string" || new TextEncoder().encode(diff).byteLength > 16 * 1024 * 1024) {
+    throw new RangeError("Desktop test seedProjectChange diff cannot exceed 16 MiB");
+  }
+  const value = await invoke("project-change-test", "seed", [transactionId, lifecycle, diff], 30000);
+  if (value !== null) throw new TypeError("Desktop test host returned an invalid project change seed result");
+  return null;
 }
 export async function makeDirectory(path) {
   if (typeof path !== "string" || path.length === 0 || path.length > 4096 || path.includes("\0")) throw new TypeError("Desktop test makeDirectory requires a bounded path");
@@ -1631,6 +1934,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
   // future application target cannot inherit hidden Web behavior via spread.
   lexical: webCompilerExtension.lexical!,
   parser: webCompilerExtension.parser!,
+  syntax: webCompilerExtension.syntax!,
   analyzer: webCompilerExtension.analyzer!,
   semantic: webCompilerExtension.semantic!,
   inspection: webCompilerExtension.inspection!,

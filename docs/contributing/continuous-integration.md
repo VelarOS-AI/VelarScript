@@ -12,9 +12,20 @@ The repository defines three GitHub Actions workflows:
   through the eight packed installed tarballs (compiler, Node, Web, Desktop,
   creator, CLI, text-buffer, and script-analysis). Browser-project execution
   first verifies the exact production asset inventory and uses the public
-  preview server.
+  preview server. That set is derived from `packages/*` rather than listed:
+  every publishable workspace package is built, packed, checked against what
+  its own manifest promises a consumer — LICENSE, README, and every path named
+  by `main`, `types`, `exports`, `bin` or `velar.entry` — installed into the
+  clean consumer, and imported through every specifier it publishes. A package
+  added to the workspace therefore enters all four steps on the day it exists.
 - The check gate extracts every `velar` fence from README, package guides, and
-  language/API documentation. Every block — complete or `fragment` — is compiled as a whole module under
+  language/API documentation. Fences are read by CommonMark's rules rather than
+  by a regular expression: up to three columns of indentation, backticks or
+  tildes, a closing fence at least as long as its opening, and the opening
+  indentation removed from the content. A fence the extractor cannot reach —
+  inside a block quote, or indented four or more columns by a nested list — is
+  named and fails the gate rather than being skipped, so the example count is
+  never larger than the set actually compiled. Every block — complete or `fragment` — is compiled as a whole module under
   full project analysis with the real Web extension and standard modules. A
   `fragment` is excused only from the surrounding context it deliberately
   omits; a type error or a Web-semantic rejection fails the gate in a fragment

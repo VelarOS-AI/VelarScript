@@ -181,6 +181,18 @@ function signalTree(child, signal) {
   catch { try { child.kill(signal); } catch {} }
 }
 
+async function waitForProcessGroupExit(child) {
+  if (process.platform === "win32" || !child.pid) return;
+  while (true) {
+    try { process.kill(-child.pid, 0); }
+    catch (error) {
+      if (error && typeof error === "object" && error.code === "ESRCH") return;
+      throw error;
+    }
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+}
+
 function launchProcess(command, commandArgs, options, settled) {
   const child = spawn(command, commandArgs, {
     cwd: options.cwd,
@@ -311,7 +323,12 @@ function launchProcess(command, commandArgs, options, settled) {
         task.exitTimer.unref();
       }
     });
-    child.once("close", (code, signal) => {
+    child.once("close", (code, signal) => { void (async () => {
+      // A POSIX root can close before all live descendants have stopped.
+      // stop() owns the whole detached process group, so its result is not
+      // terminal until that group has no live members. waitForTask() keeps this
+      // confirmation bounded and retains the handle when it cannot be proven.
+      if (task.stopping) await waitForProcessGroupExit(child);
       task.settled = true;
       if (task.timer) clearTimeout(task.timer);
       if (task.exitTimer) clearTimeout(task.exitTimer);
@@ -326,8 +343,23 @@ function launchProcess(command, commandArgs, options, settled) {
       }
       settled();
       if (task.failure) reject(task.failure);
-      else resolve(Object.freeze({code: code == null ? null : code, signal: signal == null ? null : signal, stdout: Buffer.concat(task.stdout).toString("utf8"), stderr: Buffer.concat(task.stderr).toString("utf8")}));
-    });
+      else resolve(Object.freeze({
+        code: code == null ? null : code,
+        // taskkill reports an exit code rather than a POSIX signal. The public
+        // Process contract reports the termination stop() requested, so callers
+        // get one portable answer instead of an OS implementation detail.
+        signal: signal == null && task.stopping && process.platform === "win32" ? "SIGTERM" : signal == null ? null : signal,
+        stdout: Buffer.concat(task.stdout).toString("utf8"),
+        stderr: Buffer.concat(task.stderr).toString("utf8"),
+      }));
+    })().catch((error) => {
+      if (!task.failure) task.failure = error instanceof Error ? error : new Error("Process group exit confirmation failed");
+      task.settled = true;
+      if (task.timer) clearTimeout(task.timer);
+      if (task.exitTimer) clearTimeout(task.exitTimer);
+      settled();
+      reject(task.failure);
+    }); });
   });
   task.timer = options.timeout === 0 ? null : setTimeout(() => {
     if (task.settled) return;

@@ -1,4 +1,4 @@
-import { readFile, readdir } from "node:fs/promises";
+import { readFile as readRawFile, readdir } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -591,7 +591,6 @@ if (/\bPromise\.(?:race|resolve)\s*\(/u.test(nodeHostRuntimeSource)
 }
 for (const phrase of [
   'import { EventEmitter as __VelarTerminalEventEmitter } from "node:events"',
-  'import { closeSync as __velarTerminalCloseSync, openSync as __velarTerminalOpenSync } from "node:fs"',
   'import { MessageChannel as __VelarTerminalMessageChannel, MessagePort as __VelarTerminalMessagePort, Worker as __VelarTerminalWorker } from "node:worker_threads"',
   "const __velarTerminalMaxPending = 256",
   "const __velarTerminalMessagePortPost =",
@@ -605,13 +604,16 @@ for (const phrase of [
   }
 }
 for (const phrase of [
-  'import { createReadStream, write } from "node:fs"',
+  'import { spawn } from "node:child_process"',
+  'import { write } from "node:fs"',
   'import { StringDecoder } from "node:string_decoder"',
   'import { workerData } from "node:worker_threads"',
+  "const inputHostSource =",
   "const maxQueuedLines = 256",
-  'function ensureInput()',
-  'input = createReadStream("", {fd: inputDescriptor, autoClose: false})',
-  'input.on("data", chunk =>',
+  'spawn(process.execPath, ["--input-type=module", "--eval", inputHostSource]',
+  'serialization: "advanced"',
+  'host.send({kind: "input-state", active})',
+  'process.once("exit", () => { if (inputHost !== null) inputHost.kill("SIGKILL"); })',
   "write(fd, data",
   "port.postMessage({kind: \"ready\", interactive: isatty(0) && isatty(1)})",
 ]) {
@@ -1911,6 +1913,8 @@ for (const phrase of [
   '"hostCommand": "request-cancel"',
   'const activeRequests = new Map()',
   'function cancelActivity(activity)',
+  'function setActivityCancellation(activity, cancel)',
+  'if (activity.cancelled) cancel()',
   'let hostProjectDirectory = __VELAR_PROJECT_DIRECTORY__',
   'private final class ProjectDirectoryGrant',
   'let panel = NSOpenPanel()',
@@ -1990,6 +1994,14 @@ async function sourceFiles(directory) {
     else if (entry.isFile() && path.endsWith(".ts")) files.push(path);
   }
   return files.sort();
+}
+
+async function readFile(path, encoding) {
+  const source = await readRawFile(path, encoding);
+  // This gate inspects source contracts, not a checkout's native line-ending
+  // convention. Normalize before matching multiline runtime templates so the
+  // same committed source answers identically on Windows, macOS, and Linux.
+  return typeof source === "string" ? source.replace(/\r\n?/gu, "\n") : source;
 }
 
 function escapeRegex(value) {

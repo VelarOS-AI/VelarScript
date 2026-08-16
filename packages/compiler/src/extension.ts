@@ -302,12 +302,6 @@ export interface CompilerFormattingOpaqueSourceScan {
   readonly attachedToPrevious: boolean;
 }
 
-export interface CompilerDependencyContext {
-  readonly visitExpression: (expression: Expression) => void;
-  readonly visitStatement: (statement: Statement) => void;
-  readonly visitBlock: (body: readonly Statement[]) => void;
-}
-
 export interface CompilerInterfaceContext {
   readonly exports: Map<string, ValueType>;
   readonly reactiveExports: Map<string, "state">;
@@ -319,8 +313,11 @@ export interface CompilerInterfaceContext {
 }
 
 export interface CompilerInspectionExtension {
-  readonly visitDependencyExpression?: (expression: Expression, context: CompilerDependencyContext) => boolean;
-  readonly visitDependencyStatement?: (statement: Statement, context: CompilerDependencyContext) => boolean;
+  // An extension does not describe how to walk into its own nodes for
+  // dependency discovery: that walk is structural (`astNodes`), so an
+  // extension node holds a dynamic import the day it parses. A-010 is what
+  // the hooks that used to live here cost — a per-package hand-kept copy of
+  // the AST, one per extension, each free to drift on its own.
   readonly contributeInterface?: (statement: Statement, context: CompilerInterfaceContext) => boolean;
   /**
    * Whole-program annotations for exported names, merged into the module
@@ -397,11 +394,35 @@ export interface ModuleInterface {
   readonly extensionData: ReadonlyMap<string, unknown>;
 }
 
+/**
+ * D56 rule 129 — the statement forms this extension's parser can produce.
+ *
+ * Core publishes its own roster as `CORE_STATEMENT_CONSTRUCTS`, derived from
+ * the `CoreStatement` union by a mapped type; an extension's statements never
+ * enter that union, so an extension that owns syntax has to hand its roster
+ * across. Without this slot the tour-coverage gate could only require *names* —
+ * keywords, exports, properties — and a construct spelled out of keywords the
+ * tour already covers is invisible to a name-by-name check. Registering a
+ * `parser` without a `syntax` is therefore a gate failure, not a default.
+ */
+export interface CompilerSyntaxExtension {
+  /** Construct key → the source spelling a reader would write, for failures. */
+  readonly statementConstructs: Readonly<Record<string, string>>;
+  /**
+   * The construct key of one parsed node, or null when this extension does not
+   * own it. A key may refine the node kind — the Web extension's `unsafe css`
+   * splits on the tagged union its `source` field already carries — so the
+   * roster above is keyed by what this returns, not by node kind.
+   */
+  statementConstructKey(node: { readonly kind: string }): string | null;
+}
+
 export interface CompilerExtension {
   readonly id: string;
   readonly contract?: VelarExtensionContract;
   readonly capabilities?: readonly string[];
   readonly lexical?: CompilerLexicalExtension;
+  readonly syntax?: CompilerSyntaxExtension;
   readonly analysis?: CompilerAnalysisExtension;
   readonly modules?: CompilerModuleExtension;
   readonly editor?: CompilerEditorExtension;

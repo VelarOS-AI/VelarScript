@@ -1,6 +1,6 @@
 import { Analyzer, inferredResultPlaceholderType, isCorePrimitiveName, type AnalysisContext, type ClassField, type ClassInfo, type InitializationImportRead } from "./analyzer.ts";
-import { blockContainsDirectAwait, testFunctionName } from "./ast.ts";
-import type { BindingPattern, Expression, FunctionDeclaration, MatchPattern, Program, Statement, TypeReference } from "./ast.ts";
+import { astNodesOfKind, blockContainsDirectAwait, testFunctionName } from "./ast.ts";
+import type { BindingPattern, DynamicImportExpression, Expression, FunctionDeclaration, Program, Statement, TypeReference } from "./ast.ts";
 import { diagnostic, type Diagnostic } from "./diagnostic.ts";
 import { JavaScriptEmitter } from "./emitter.ts";
 import { programWithEmbeddedJavaScriptImports } from "./embedded-module.ts";
@@ -43,7 +43,7 @@ export { VELAR_EXTENSION_PROTOCOL_VERSION } from "./extension.ts";
 // D62 rule 157: the editor's keyword list is the lexer's table plus Core's
 // contextual roster, so it is published rather than retyped downstream.
 export { keywordKinds } from "./token.ts";
-export type { CompilerAnalysisExtension, CompilerAnalyzerFactory, CompilerDependencyContext, CompilerEditorCompletion, CompilerEditorExtension, CompilerEmbeddedJavaScriptModule, CompilerEmitter, CompilerEmitterOptions, CompilerExtension, CompilerFormattingExtension, CompilerInspectionExtension, CompilerInterfaceContext, CompilerIntrinsicAnalysisContext, CompilerLexicalExtension, CompilerLexicalScanContext, CompilerLexicalScanResult, CompilerModuleExtension, CompilerParserFactory, CompilerProjectEditorCompletion, CompilerProjectEditorCompletionContext, CompilerProjectEditorCompletionResult, CompilerProjectEditorExtension, CompilerProjectEditorRenameContext, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface, ModuleTest, VelarExtensionContract, VelarExtensionKind } from "./extension.ts";
+export type { CompilerAnalysisExtension, CompilerAnalyzerFactory, CompilerEditorCompletion, CompilerEditorExtension, CompilerEmbeddedJavaScriptModule, CompilerEmitter, CompilerEmitterOptions, CompilerExtension, CompilerFormattingExtension, CompilerInspectionExtension, CompilerInterfaceContext, CompilerIntrinsicAnalysisContext, CompilerLexicalExtension, CompilerLexicalScanContext, CompilerLexicalScanResult, CompilerModuleExtension, CompilerParserFactory, CompilerProjectEditorCompletion, CompilerProjectEditorCompletionContext, CompilerProjectEditorCompletionResult, CompilerProjectEditorExtension, CompilerProjectEditorRenameContext, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface, ModuleTest, VelarExtensionContract, VelarExtensionKind } from "./extension.ts";
 export { semanticImportAt, semanticModuleReferenceAt, semanticSymbolAt, semanticVisibleSymbolsAt, type CompilerSemanticExtension, type SemanticDeclareOptions, type SemanticExpression, type SemanticExtensionContext, type SemanticFunctionLike, type SemanticImport, type SemanticIndex, type SemanticMember, type SemanticMemberReference, type SemanticModuleReference, type SemanticReference, type SemanticScope, type SemanticSymbol, type SemanticSymbolKind } from "./semantic.ts";
 export { analysisTypeIdentity, describeType, genericApplicationType, isReadonlyView, optionalOf, readonlyViewOf, semanticTypeIdentity, unionOf, type EnumInfo, type GenericApplication, type GenericTypeInfo, type ValueType } from "./types.ts";
 export { permanentNamespaceCoveringModule } from "./analyzer.ts";
@@ -129,7 +129,7 @@ export function inspectModule(text: string, options: Pick<CompileOptions, "path"
   return {
     diagnostics: parsed.diagnostics,
     source: parsed.source,
-    dependencies: dependenciesOf(parsed.program, extensions),
+    dependencies: dependenciesOf(parsed.program),
     resources: resourcesOf(parsed.program, extensions),
     moduleInterface: interfaceOf(semanticProgram, parsed.source.path, extensions),
     semanticIndex: buildSemanticIndex(semanticProgram, parsed.source, new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), extensions.flatMap((extension) => extension.semantic ? [extension.semantic] : [])),
@@ -246,7 +246,7 @@ function compileUnchecked(text: string, options: CompileOptions): CompileResult 
     extensions: extensions.map((extension) => extension.id),
     diagnostics,
     source: parsed.source,
-    dependencies: dependenciesOf(parsed.program, extensions),
+    dependencies: dependenciesOf(parsed.program),
     resources: resourcesOf(parsed.program, extensions),
     moduleInterface: interfaceOf(
       semanticProgram,
@@ -413,7 +413,8 @@ function normalizedExtensions(extensions: readonly CompilerExtension[]): readonl
   return extensions;
 }
 
-function dependenciesOf(program: Program, extensions: readonly CompilerExtension[]): readonly ModuleDependency[] {
+// No extension list: dependency discovery asks the AST and nothing else.
+function dependenciesOf(program: Program): readonly ModuleDependency[] {
   const externSources = new Set(program.body
     .filter((statement) => statement.kind === "ExternModuleDeclaration")
     .map((statement) => statement.source));
@@ -447,119 +448,27 @@ function dependenciesOf(program: Program, extensions: readonly CompilerExtension
     });
   }
 
+  // Dynamic imports are found by walking the AST structurally rather than by
+  // a second switch over the statement and expression kinds this function
+  // remembers. A-010: that switch existed, and it had no case for `try`,
+  // `using`, or `test "…":`, and descended into a class only through its
+  // fields, `constructor:` and methods — so a `import("./dep.vel")` in a
+  // getter, a `@dispose:`, or a `@iterate:` left the module out of the graph
+  // while `check` reported success. `@iterate:` was missing from the day D68
+  // added it: a hand-kept copy of the AST drifts the moment the AST grows,
+  // and every future container would have drifted the same way.
   const dynamicSources = new Set<string>();
-  const dependencyExtensions = extensions.flatMap((extension) => extension.inspection ? [extension.inspection] : []);
-  const dependencyContext = {
-    visitExpression: (expression: Expression) => visitExpression(expression),
-    visitStatement: (statement: Statement) => visitStatement(statement),
-    visitBlock: (body: readonly Statement[]) => visitBlock(body),
-  };
-  const visitExpression = (expression: Expression): void => {
-    for (const extension of dependencyExtensions) if (extension.visitDependencyExpression?.(expression, dependencyContext)) return;
-    switch (expression.kind) {
-      case "DynamicImportExpression":
-        if (!dynamicSources.has(expression.source)) {
-          dynamicSources.add(expression.source);
-          dependencies.push({
-            source: expression.source,
-            javascript: false,
-            unsafe: false,
-            dynamic: true,
-            specifiers: [],
-          });
-        }
-        break;
-      case "FStringExpression":
-        for (const part of expression.parts) if (part.kind === "expression") visitExpression(part.value);
-        break;
-      case "ListExpression":
-        for (const element of expression.elements) visitExpression(element);
-        break;
-      case "ObjectExpression":
-        for (const property of expression.properties) visitExpression(property.value);
-        break;
-      case "SpreadExpression": visitExpression(expression.value); break;
-      case "UnaryExpression": visitExpression(expression.operand); break;
-      case "BinaryExpression": visitExpression(expression.left); visitExpression(expression.right); break;
-      case "AssignmentExpression": visitExpression(expression.target); visitExpression(expression.value); break;
-      case "ComparisonChainExpression": for (const operand of expression.operands) visitExpression(operand); break;
-      case "ConditionalExpression": visitExpression(expression.condition); visitExpression(expression.thenValue); visitExpression(expression.elseValue); break;
-      case "IsExpression": visitExpression(expression.value); break;
-      case "ArrowFunctionExpression":
-        for (const parameter of expression.parameters) if (parameter.defaultValue) visitExpression(parameter.defaultValue);
-        visitExpression(expression.body);
-        break;
-      case "CallExpression": visitExpression(expression.callee); for (const argument of expression.arguments) visitExpression(argument); break;
-      case "MemberExpression": visitExpression(expression.object); break;
-      case "IndexExpression": visitExpression(expression.object); visitExpression(expression.index); break;
-      case "LiteralExpression":
-      case "IdentifierExpression":
-      case "SuperExpression":
-        break;
-    }
-  };
-  const visitBlock = (body: readonly Statement[]): void => { for (const statement of body) visitStatement(statement); };
-  const visitMatchPattern = (pattern: MatchPattern): void => {
-    switch (pattern.kind) {
-      case "MatchValuePattern": for (const value of pattern.values) visitExpression(value); break;
-      case "MatchAsPattern": visitMatchPattern(pattern.pattern); break;
-      case "MatchObjectPattern": for (const entry of pattern.entries) visitMatchPattern(entry.pattern); break;
-      case "MatchListPattern": for (const element of pattern.elements) visitMatchPattern(element); break;
-      case "MatchTypePattern":
-      case "MatchWildcardPattern":
-      case "MatchCapturePattern":
-        break;
-    }
-  };
-  const visitStatement = (statement: Statement): void => {
-    for (const extension of dependencyExtensions) if (extension.visitDependencyStatement?.(statement, dependencyContext)) return;
-    switch (statement.kind) {
-      case "ClassDeclaration":
-        if (statement.base) for (const argument of statement.base.arguments) visitExpression(argument);
-        for (const parameter of statement.parameters) if (parameter.defaultValue) visitExpression(parameter.defaultValue);
-        for (const field of statement.fields) if (field.initializer) visitExpression(field.initializer);
-        if (statement.initialization) visitBlock(statement.initialization.body);
-        for (const method of statement.methods) {
-          for (const parameter of method.parameters) if (parameter.defaultValue) visitExpression(parameter.defaultValue);
-          visitBlock(method.body);
-        }
-        break;
-      case "VariableDeclaration": visitExpression(statement.initializer); break;
-      case "FunctionDeclaration":
-        for (const parameter of statement.parameters) if (parameter.defaultValue) visitExpression(parameter.defaultValue);
-        visitBlock(statement.body);
-        break;
-      case "ReturnStatement": if (statement.value) visitExpression(statement.value); break;
-      case "ThrowStatement": visitExpression(statement.value); break;
-      case "AssertStatement": visitExpression(statement.condition); if (statement.message) visitExpression(statement.message); break;
-      case "IfStatement": visitExpression(statement.condition); visitBlock(statement.thenBody); if (statement.elseBody) visitBlock(statement.elseBody); break;
-      case "MatchStatement":
-        visitExpression(statement.value);
-        for (const branch of statement.cases) {
-          visitMatchPattern(branch.pattern);
-          if (branch.guard) visitExpression(branch.guard);
-          visitBlock(branch.body);
-        }
-        break;
-      case "ForStatement": visitExpression(statement.iterable); visitBlock(statement.body); break;
-      case "WhileStatement": visitExpression(statement.condition); visitBlock(statement.body); break;
-      case "TryStatement": visitBlock(statement.tryBody); if (statement.catchBody) visitBlock(statement.catchBody); if (statement.finallyBody) visitBlock(statement.finallyBody); break;
-      case "AssignmentStatement": visitExpression(statement.target); visitExpression(statement.value); break;
-      case "ExpressionStatement": visitExpression(statement.expression); break;
-      case "AsyncStatement": visitExpression(statement.expression); break;
-      case "ImportDeclaration":
-      case "ReExportDeclaration":
-      case "ExternModuleDeclaration":
-      case "TypeDeclaration":
-      case "TypeAliasDeclaration":
-      case "EnumDeclaration":
-      case "BreakStatement":
-      case "ContinueStatement":
-      case "PassStatement":
-        break;
-    }
-  };
-  visitBlock(program.body);
+  for (const expression of astNodesOfKind<DynamicImportExpression>(program, "DynamicImportExpression")) {
+    if (dynamicSources.has(expression.source)) continue;
+    dynamicSources.add(expression.source);
+    dependencies.push({
+      source: expression.source,
+      javascript: false,
+      unsafe: false,
+      dynamic: true,
+      specifiers: [],
+    });
+  }
   return dependencies;
 }
 

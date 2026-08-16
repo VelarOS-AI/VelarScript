@@ -13,6 +13,7 @@ import { isNodeOnlyModule } from "@velarscript/node/compiler";
 import { resolveVelarProject } from "../packages/cli/src/config.ts";
 import { compileProject } from "../packages/cli/src/project.ts";
 import { standardModuleInterfaces } from "../packages/cli/src/standard-modules.ts";
+import { CORE_STATEMENT_CONSTRUCTS } from "../packages/compiler/src/ast.ts";
 import { Lexer } from "../packages/compiler/src/lexer.ts";
 import { forbiddenSourceIdentifiers } from "../packages/compiler/src/source-names.ts";
 import { keywordKinds } from "../packages/compiler/src/token.ts";
@@ -26,6 +27,18 @@ import { LOOK_ABSENT_MEDIA_SUBJECTS, LOOK_EXCLUDED_PROPERTIES, LOOK_HOOKS, LOOK_
  * This gate makes it checkable: it *reverse-queries the compiler's own closed
  * vocabulary tables* and asserts, name by name, that each one is exercised in
  * `examples/tour/`. A missing name is named in the failure.
+ *
+ * Seventeen of the eighteen categories below ask about a **name**. The
+ * eighteenth asks about a **construct**, and it exists because names turned out
+ * not to be enough: D53 rule 117 added `extern js(…)` and `unsafe js` out of
+ * `extern`, `js`, and `unsafe` — three keywords chapter 13 already exercised
+ * through `extern module` and `import js unsafe` — so two new declaration forms
+ * reached a release with no `.vel` file anywhere using them while this gate
+ * stayed green. A construct assembled from covered spellings is invisible to a
+ * spelling-by-spelling check. `statement-construct` reads the AST unions
+ * themselves (`CORE_STATEMENT_CONSTRUCTS`, and each extension's own roster
+ * through the protocol's `syntax` slot) so a form the parser can return has to
+ * appear in the tour.
  *
  * Two disciplines hold the whole thing up, and both are easy to lose:
  *
@@ -111,6 +124,12 @@ const FLOORS = Object.freeze({
   // D55 rule 120: `def` and `type`. A form removed from the roster without a
   // ruling drops this below its floor rather than quietly checking less.
   "generic-declaration": 2,
+  // The 26 members of `CoreStatement` plus the 11 the Web extension's parser
+  // adds — ten node kinds, and `unsafe css` twice because its `source` is a
+  // tagged union whose two spellings are separately required. Removing a
+  // statement form from the language is what may lower this; an extension that
+  // stops publishing `syntax` fails on its own terms above.
+  "statement-construct": 37,
   "look-property": 225,
   "look-hook": 9,
   "look-target": 7,
@@ -181,7 +200,10 @@ const exemptions = [
     names: () => new Set(["velar/javascript", "velar/text-buffer"]),
     // Module categories are keyed '<source> <name>', so a whole module is
     // withheld by its source.
-    matches: (names, key) => names.has(key.slice(0, key.indexOf(" "))),
+    // module-export keys carry their module; namespace-member keys do not, so
+    // a whole module is withheld from the first by source and the second is
+    // matched by its `Namespace.member` spelling.
+    matches: (names, key) => names.has(moduleExportSource(key)),
   },
   {
     label: "`import js` naming a real third-party npm package",
@@ -208,10 +230,25 @@ const exemptions = [
 // `core-vocabulary.ts` now, alongside every other required table. The list is
 // left in place rather than deleted: an empty list is the claim that today
 // there is no vocabulary this gate cannot reach, and the next hole goes here.
-const unreachableTables = [];
+const unreachableTables = [
+  {
+    label: "statement spellings that share one AST node kind",
+    reason: "`extern js(…)` and `unsafe js` are one EmbeddedJavaScriptDeclaration told apart by a boolean, "
+      + "and `const`/`let`, `def`/`async def`, `class`/`abstract class`, `for`/`async for` are the same shape. "
+      + "No compiler-owned table enumerates those splits, so this category requires the *kind*: the tour writes both "
+      + "inline blocks, but removing one would not turn this gate red. The Web extension's `unsafe css` is the "
+      + "exception and shows what closing it would take — its `source` is a tagged union, so both of its spellings "
+      + "are separately required. Closing the rest means giving those nodes a discriminated form in `packages/**`.",
+  },
+];
 
 const failures = [];
 const categories = new Map();
+// Names a module imports and never references, keyed exactly as the required
+// inventory keys them. An unused import is not coverage (see observeModule),
+// but it is the most likely *reason* a name is missing, so the failure says
+// where the dead import stands instead of leaving the reader to grep.
+const unusedImports = new Map();
 
 function require_(category, key, spelling, table) {
   const entry = categories.get(category) ?? { required: new Map(), covered: new Set() };
@@ -228,6 +265,32 @@ function observe(category, key) {
   const entry = categories.get(category) ?? { required: new Map(), covered: new Set() };
   categories.set(category, entry);
   entry.covered.add(key);
+}
+
+/**
+ * Module categories are keyed by (module, name) rather than by name alone:
+ * `velar/http` publishes `secretHeader` on Node and `formBody` on the Web, and
+ * one target's table would otherwise overwrite the other's. The separator is a
+ * character no module source and no identifier can contain. It is built here
+ * rather than spelled at each site because the four places that write or read
+ * these keys have to agree, and a copy of a key format drifts as silently as a
+ * copy of a name list does.
+ */
+function moduleExportKey(source, name) {
+  return `${source}\u0000${name}`;
+}
+
+/** The module half of a `moduleExportKey`. */
+function moduleExportSource(key) {
+  const separator = key.indexOf("\u0000");
+  return separator < 0 ? key : key.slice(0, separator);
+}
+
+function recordUnusedImport(imported, path) {
+  const key = moduleExportKey(imported.source, imported.imported);
+  const where = unusedImports.get(key) ?? new Set();
+  unusedImports.set(key, where);
+  where.add(display(path));
 }
 
 // ── 1. Read the tour exactly as the compiler reads it ───────────────────────
@@ -305,7 +368,15 @@ for (const projectRoot of projectRoots) {
       failures.push(`${display(path)}: no import reaches this module and it is not a '*.test.vel' root, so the compiler never checks it — import it from the tour entry`);
       continue;
     }
-    observeModule({ path, text, tokens: lexed.tokens, program: parsed.program, index, contextualKeywords });
+    observeModule({
+      path,
+      text,
+      tokens: lexed.tokens,
+      program: parsed.program,
+      index,
+      contextualKeywords,
+      syntaxExtensions: extensions.flatMap((extension) => extension.syntax ? [extension.syntax] : []),
+    });
   }
 }
 
@@ -340,9 +411,7 @@ for (const exemption of exemptions) {
 let checked = 0;
 const summary = [];
 for (const [category, entry] of [...categories].sort()) {
-  const missing = [...entry.required]
-    .filter(([key]) => !entry.covered.has(key))
-    .map(([, item]) => item);
+  const missing = [...entry.required].filter(([key]) => !entry.covered.has(key));
   checked += entry.required.size;
   const floor = FLOORS[category];
   if (floor === undefined) {
@@ -351,8 +420,10 @@ for (const [category, entry] of [...categories].sort()) {
     failures.push(`Category '${category}' required only ${entry.required.size} names; expected at least ${floor}. A vocabulary table read short or empty.`);
   }
   summary.push(`  ${category.padEnd(22)} ${String(entry.required.size - missing.length).padStart(4)}/${String(entry.required.size).padEnd(4)} from ${entry.required.size === 0 ? "-" : tablesOf(entry)}`);
-  for (const item of missing.sort((left, right) => left.spelling.localeCompare(right.spelling))) {
-    failures.push(`${category}: ${item.spelling} — declared by ${[...item.tables].sort().join(", ")}, and no module in ${display(tourRoot)} uses it`);
+  for (const [key, item] of missing.sort((left, right) => left[1].spelling.localeCompare(right[1].spelling))) {
+    const imported = unusedImports.get(key);
+    failures.push(`${category}: ${item.spelling} — declared by ${[...item.tables].sort().join(", ")}, and no module in ${display(tourRoot)} uses it`
+      + (imported ? ` (${[...imported].sort().join(", ")} import${imported.size === 1 ? "s" : ""} the name and never reference${imported.size === 1 ? "s" : ""} it — an import is not a usage)` : ""));
   }
 }
 
@@ -420,6 +491,13 @@ function requireTargetVocabulary(config) {
   for (const suffix of CORE_NUMERIC_SUFFIXES) {
     require_("numeric-suffix", suffix, `1${suffix}`, "CORE_NUMERIC_SUFFIXES in packages/compiler/src/core-vocabulary.ts");
   }
+  // D53 rule 117's blind spot: the only category here that names a construct
+  // instead of a name. The roster is a mapped type over the `CoreStatement`
+  // union, so a declaration form the parser can return cannot be absent from
+  // it, and a form nothing in the tour writes is named below.
+  for (const [kind, spelling] of Object.entries(CORE_STATEMENT_CONSTRUCTS)) {
+    require_("statement-construct", kind, spelling, "CORE_STATEMENT_CONSTRUCTS in packages/compiler/src/ast.ts");
+  }
 
   for (const extension of extensions) {
     for (const word of extension.lexical?.contextualKeywords ?? []) {
@@ -433,6 +511,16 @@ function requireTargetVocabulary(config) {
     }
     for (const name of extension.analysis?.globals?.keys() ?? []) {
       require_("extension-global", name, name, `${extension.id} analysis.globals`);
+    }
+    // An extension's statements never join `CoreStatement`, so its own roster
+    // is the only table that can name them. Owning a parser and publishing no
+    // roster is the silent version of the hole this category closes, so it is
+    // a failure rather than an empty contribution.
+    if (extension.parser !== undefined && extension.syntax === undefined) {
+      failures.push(`Extension '${extension.id}' registers a parser but publishes no 'syntax.statementConstructs', so the statement forms it adds cannot be required of the tour`);
+    }
+    for (const [key, spelling] of Object.entries(extension.syntax?.statementConstructs ?? {})) {
+      require_("statement-construct", key, spelling, `${extension.id} syntax.statementConstructs`);
     }
   }
   // The standard modules this target admits, and every name each publishes.
@@ -471,7 +559,7 @@ function requireTargetVocabulary(config) {
     const namespace = permanentNamespaceCoveringModule(source, interface_.exports.keys());
     for (const name of names) {
       if (namespace) require_("namespace-member", `${namespace}.${name}`, `${namespace}.${name}`, `${source} (${target})`);
-      else require_("module-export", `${source}\u0000${name}`, `import {${name}} from "${source}"`, `${source} (${target})`);
+      else require_("module-export", moduleExportKey(source, name), `import {${name}} from "${source}"`, `${source} (${target})`);
     }
     if (source === BROWSER_TEST_MODULE) {
       for (const [controller, type] of interface_.exports) {
@@ -486,7 +574,7 @@ function requireTargetVocabulary(config) {
 
 // ── What the tour actually contains, judged after lexing and parsing ───────
 
-function observeModule({ path, tokens, program, index, contextualKeywords }) {
+function observeModule({ path, tokens, program, index, contextualKeywords, syntaxExtensions }) {
   // (a) Hard keywords: the lexer's own verdict. A keyword inside a string or a
   //     comment never becomes a token, so this cannot be forged by prose.
   const keywordSpellings = new Map(Object.entries(keywordKinds).map(([spelling, kind]) => [kind, spelling]));
@@ -512,13 +600,34 @@ function observeModule({ path, tokens, program, index, contextualKeywords }) {
   // (c) Standard-module exports: what the project driver resolved, not what
   //     the import line says. A namespace import counts for the members it is
   //     actually read through, so `collections.groupBy(...)` covers `groupBy`.
-  const namespaceLocals = new Map();
-  const webTestControllerLocals = new Map();
+  //
+  //     And not off the import line *at all*. An import proves a name
+  //     resolves; it shows no signature and no usage, while this gate's
+  //     contract — and its own failure text — is that every name is
+  //     *exercised*. The named branch counted the specifier itself, so
+  //     deleting the only call to `watchVisibility` and leaving its import
+  //     standing left this category reporting 237/237 (A-023). A named import
+  //     now waits for a resolved reference to its local binding.
+  //
+  //     Both branches are keyed by the import's *symbol*, never by its local
+  //     spelling. The namespace branch did wait for a real member read, but it
+  //     matched the read by name, so a local record named `urls` declared in
+  //     any inner scope forged `velar/url`'s exports from a read of itself —
+  //     the same forgery the header of this file says a text search would
+  //     allow and a resolved judgment would not.
+  const referencedSymbols = new Set(index.references.flatMap((reference) => reference.symbolId === null ? [] : [reference.symbolId]));
+  // Every identifier the analyzer resolved, by the offset it was written at. A
+  // member access records its object as a reference, so this is what tells
+  // `collections.groupBy(...)` from a shadowing local's member of the same name.
+  const symbolAt = new Map(index.references.map((reference) => [reference.span.start, reference.symbolId]));
+  const namespaceSources = new Map();
+  const webTestControllers = new Map();
   for (const imported of index.imports) {
-    if (imported.namespace) namespaceLocals.set(imported.local, imported.source);
+    if (imported.namespace) namespaceSources.set(imported.localSymbolId, imported.source);
     else {
-      observe("module-export", `${imported.source}\u0000${imported.imported}`);
-      if (imported.source === BROWSER_TEST_MODULE) webTestControllerLocals.set(imported.local, imported.imported);
+      if (!referencedSymbols.has(imported.localSymbolId)) recordUnusedImport(imported, path);
+      else observe("module-export", moduleExportKey(imported.source, imported.imported));
+      if (imported.source === BROWSER_TEST_MODULE) webTestControllers.set(imported.localSymbolId, imported.imported);
     }
   }
 
@@ -541,9 +650,12 @@ function observeModule({ path, tokens, program, index, contextualKeywords }) {
           observe("reserved-binding", base);
         }
       }
-      const source = namespaceLocals.get(base);
-      if (source !== undefined) observe("module-export", `${source}\u0000${node.property}`);
-      const controller = webTestControllerLocals.get(base);
+      // Which binding this member sits on, by the analyzer's verdict rather
+      // than by its spelling: a namespace import's own symbol, or nothing.
+      const object = symbolAt.get(node.object.span.start);
+      const source = namespaceSources.get(object);
+      if (source !== undefined) observe("module-export", moduleExportKey(source, node.property));
+      const controller = webTestControllers.get(object);
       if (controller !== undefined && path.endsWith(WEB_TEST_TOUR_CHAPTER)) {
         observe("web-test-member", `${BROWSER_TEST_MODULE}\u0000${controller}\u0000${node.property}`);
       }
@@ -553,6 +665,18 @@ function observeModule({ path, tokens, program, index, contextualKeywords }) {
       observe("prelude-name", node.name);
       observe("extension-global", node.name);
       observe("reserved-binding", node.name);
+    }
+    // A construct counts when the *parser* built its node, which is the same
+    // standard the rest of this file holds names to: `unsafe js` written in a
+    // comment or a string never becomes a node. Core forms are keyed by node
+    // kind; an extension refines its own key, so an inline `unsafe css` block
+    // and the `import css unsafe` that shares its node kind stay two entries.
+    if (typeof node.kind === "string") {
+      observe("statement-construct", node.kind);
+      for (const syntax of syntaxExtensions) {
+        const key = syntax.statementConstructKey(node);
+        if (key !== null) observe("statement-construct", key);
+      }
     }
     if (node.kind === "LookProperty") observe("look-property", node.name);
     if (node.kind === "LookTarget") observe("look-target", node.name);

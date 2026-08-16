@@ -13,6 +13,226 @@ language for people who already think in JavaScript and Python, shipped as one
 version-locked set of eight packages: compiler, Node runtime, Web and Desktop
 frameworks, project creator, CLI, text buffer, and script analysis.
 
+### The reactive grid: `computed` is a declaration, and the function is `cached`
+
+`computed name = expression` now stands beside `state name = value`, and the
+`computed(...)` **function is renamed `cached(...)`**. The function is not
+retired — it remains a way to cache a value rather than declare one — but a
+derived binding is declared, never assigned from a call.
+
+The reason is a defect the owner reported twice, from two directions, without
+knowing they were the same defect:
+
+- `const doubled = count * 2` in component setup compiled clean and then never
+  updated. `const` freezes, which is precisely what `const` means.
+- `const total = computed(() => …)` followed by `watch total:` compiled clean,
+  exited 0, emitted no diagnostic — and the watch body could never run. The
+  correct spelling was `watch total():`, and the language's own tests had the
+  parentheses while nothing said so.
+
+Both trace to one asymmetry: `state` was a declaration and `computed` was a
+function, so every derived value had to be parked in a `const` — and `const`
+is the thing that freezes reactive reads. The grid now has four cells that
+each mean one thing: `let`/`const` are not reactive, `state`/`computed` are,
+and within each pair one is written and one is derived. Fixing the spelling
+removed the diagnostics that would otherwise have been needed to teach around
+it, which is the order this project prefers: a design fix beats a diagnostic
+fix, because the diagnostic only teaches after the mistake.
+
+Migration is mechanical and `velar fix` carries it, including across module
+boundaries: `const x = computed(() => E)` becomes `computed x = E`, and reads
+lose their parentheses only when every read in the module is a plain `x()`.
+
+- **VEL5063** answers the three shapes that survive a half-migrated project:
+  `x()` on a computed value (*"it is read bare like state"*), assignment to a
+  computed value (which names the `state` spelling that is written instead),
+  and assignment to a computed value **imported** from another module, which
+  cannot name a local fix and so names the export that would work.
+- **VEL5064** refuses a `watch` subject that can never change, naming the
+  reactive sources that can: *"This watch subject never changes, so its body
+  can never run … watch a 'state', a 'computed', a prop, or a resource field,
+  or move these statements to where they should run."* A bare `5` was already
+  a compile error (VEL4030); `watch 5:` with a whole block behind it was the
+  same rule failing to reach one position. The subject is refused only where
+  the compile can *prove* nothing behind it moves, so a call whose reactivity
+  lives in another module is left alone.
+- The frozen snapshot itself is reported at development time by the runtime,
+  and it fires **when the source diverges from the snapshot, never when the
+  snapshot is taken** — taking a snapshot on purpose is legitimate, and a
+  warning that fires on correct code is one people learn to ignore. The whole
+  mechanism installs only when the development host publishes its hooks, so a
+  production build pays nothing: no map, no stack capture.
+
+### Component props are mutable by default
+
+A prop is a handle to reactive state, and refusing to write through it forced
+callers into ceremony that fought the way the rest of the language reads.
+Props now accept assignment; a component that needs the old guarantee writes
+`readonly` on the field, and only those props receive readonly-specific
+guidance. This aligns a prop with every other reactive value rather than
+making it the one exception, and the choice of which contract to offer now
+belongs to the component's author.
+
+### Generic types
+
+`type Box<T>`, `type Pair<A, B>`, `type Sorted<T: Comparable>`, and recursive
+forms like `type Tree<T>` are available on records and aliases. A readonly
+field is covariant and a mutable one is invariant, so variance follows from
+what the field already says rather than from a separate annotation.
+
+**Generic classes are deliberately not in this release.** The evaluation found
+that `Stack<number>()` has no spelling in today's grammar — five candidate
+paths were measured and all five are closed — and shipping a type that can be
+declared but not constructed is worse than shipping nothing. The decision that
+unblocks them is recorded, and it is larger than generic classes: annotations
+will flow into generic call-site inference, which also fixes
+`const names: List<string> = empty()`.
+
+### Inline foreign source
+
+JavaScript and CSS can be written inline against a checked contract:
+`extern js(captures)` with a backtick block declares a typed boundary, and
+`unsafe js` admits an unchecked one. `unsafe css` does the same for styling
+and is owned by the Web extension rather than Core — Core does not know what
+CSS is, and putting a `css` keyword in it to save a file would have spent that
+boundary for convenience.
+
+An inline block is **more checked** than the `import js unsafe` it replaces,
+not less: the contract sits three lines below the source, where an entire
+module going implicitly `any` is invisible. The data-URL spelling that used to
+be the only way to write a module inline now gets a mechanical rewrite to the
+block form, which is source-mapped.
+
+A block with captures does not support top-level `await`. That is a decision,
+not a gap, and the conditions under which it would be revisited are recorded.
+
+### Classes can say what iterating them means
+
+`@iterate:` gives a class a definition for iteration, so a user type takes part
+in the same loops the built-in collections do instead of exposing an internal
+list to be iterated on its behalf.
+
+### Web surface
+
+- Element geometry and computed styles are readable through a controlled
+  surface — `measure(panel)` and its siblings — rather than through an escape
+  hatch. The framing that settled it: this is a library surface, not the
+  language, so it does not carry the language's strictness burden.
+- `aria-*` booleans render as literal `true`/`false`, which is what ARIA
+  actually specifies; the previous rendering was silently wrong for assistive
+  technology.
+- **Every Look property that accepts keywords now carries its own closed set.**
+  A diagnostic used to say *"use one of the closed fontWeight keywords"* when
+  `fontWeight` had no closed set to point at — publishing an unreachable table
+  is the same defect as publishing an unreachable name. A refused Look value
+  now names the values that property really takes, leading with the property's
+  own vocabulary and keeping the five CSS-wide keywords separate. The
+  invariant is enforced for every value kind that closes over strings, not
+  only the one kind where it was first found, and `transitionProperty`'s
+  vocabulary is now derived from the Look property table rather than listed by
+  hand — it previously accepted only the generic defaults, so no property name
+  was writable.
+- **VEL5065**: a Web module publishes its own type names, and declaring one
+  used to be accepted at the declaration and then lose at every use — `type
+  Event:` compiled, and the first use was told it could not assign to `Event`,
+  naming a type the author had just written. The refusal now lands on the
+  declaration, which is the only place a rename is cheap.
+- A module no longer emits type checks against bindings it does not have.
+
+### Spelling
+
+- The `Look.` prefix is retired; `Math` joins the permanent namespaces, which
+  are vocabulary rather than values and are legal only as the head of a member
+  access.
+- Single quotes are retired in JSX attributes.
+- Imports return to the named form.
+- `-> null` is written only where it cannot be inferred; a body-backed
+  declaration that returns nothing omits it.
+- A type position that receives `=>` is taught `->` instead of being told the
+  syntax is wrong.
+- `velar fix` withholds a mechanical rewrite when the body returns a value,
+  because the rewrite would not be provably equivalent there.
+
+### Tests
+
+`toBe` and `toContain` use the language's own equality rather than
+JavaScript's, so a test agrees with the `==` the author would have written.
+
+### What an adversarial audit found
+
+A ten-track audit was run against the language before this release, briefed to
+attack rather than assess and to record for each finding *which gate should
+have caught it*. It produced 26 entries, five of them the highest-value kind:
+compiled clean, no diagnostic, wrong answer.
+
+- **A dynamic import inside `try`, `using`, a test body, a class getter,
+  `@dispose`, or `@iterate` was left out of the module graph.**
+  `try await import("./dep.vel")` answered `false` for a module that exists,
+  with a clean check and exit 0; the other positions surfaced as a runtime
+  module-not-found. Dependency discovery had a hand-written second walk over
+  node kinds, which had already drifted past `@iterate` on the day it shipped.
+  It is now a structural descent that never asks what a node is, the same
+  duplicated walk is gone from the extension protocol, and the regression is a
+  matrix of every expression position in the corpus rather than one example.
+- **A CSS filename containing a legal `)` walked past the relative-address
+  gate** and shipped a stylesheet whose address resolves one directory from the
+  asset — measured as a live 404. The same regex refused `content:
+  "url(./x.svg)"`, which is text. Both came from a regex standing in for CSS
+  grammar; the scanner now tokenizes, which surfaced twenty more wrong shapes
+  in both directions, and the `@import` check — a second scanner in the same
+  file with lower coverage — reads the same token stream.
+- **Three gates claimed more coverage than they had.** The documentation gate's
+  fence extractor was a regex rather than CommonMark, so legal fences were
+  silently skipped under a report that every block had compiled; the tour
+  coverage gate counted a named import as usage, so deleting the only call to a
+  name still reported full coverage; and the package gate derived its pack list
+  while leaving the content check and clean-install hand-written. A gate that
+  overstates its own reach is worse than a missing gate, because it is trusted.
+
+### Corpus, gates, and documentation
+
+- **`examples/` is retired.** Seven legacy directories and four loose files
+  are replaced by a 38-chapter usage tour (20 Core, 14 Web, 4 Desktop) and one
+  real application. The tour is not illustration: it is **gate corpus**, and
+  writing the Web and Desktop chapters alone produced ten findings — two of
+  them a class above the rest, because they are the tools breaking what the
+  tools promise. `velar format` turned compiling source into source that no
+  longer compiled, on the one-line reflow path the charter documents by name;
+  the regression now pins the invariant rather than the shape, so source that
+  compiles must still compile after formatting. And an exported
+  `type X = Component<Signature>` passed `velar check` on two modules and then
+  failed `velar build`, because the emitter wrote Vel type syntax into
+  JavaScript — a clean check is a contract, and passing check then failing
+  build is worse than failing check, because by then the author has believed
+  it.
+- A gate now requires the tour to cover the language surface, reading the
+  compiler's own tables at run time rather than a list maintained beside them.
+- A gate audits what each standard module's runtime actually exports against
+  what it declares. It audits **one extension at a time**, because merging
+  them let Desktop's `velar/fs` mask Node's — the merged form reported 30
+  surfaces where there were 36.
+- The publishable package set is derived from `packages/*`, reading each
+  manifest's own private flag, so a new package joins the toolchain the day it
+  exists. The two literal copies it replaces were both correct — the failure
+  happened outside the repository, where a brief transcribed a truncated view
+  of one of them and shipped six names instead of eight. A list somebody has
+  to read and retype is a list somebody eventually gets wrong. Wiring it up
+  also revealed that `test:packages` had been red since `velar/collections`
+  stopped exporting `range`, because that gate is in CI but was not in the
+  three-command sequence being run by hand.
+- `check:docs` now compiles every root README rather than only the English
+  one, and **prints what it could not fully check** instead of reporting a
+  clean pass over a partial scan.
+- Ten instances of one defect family — a name list maintained by hand beside
+  the authority it was copied from — were replaced by derivation. Core's
+  contextual keywords had four copies; they now have one original.
+- The user-facing documentation is rewritten for someone arriving rather than
+  for the marathon: a shorter README, a new getting-started guide, a new
+  language reference in reading order, a rewritten best-practices guide with
+  one complete program per rule, and a CLI reference grouped by task.
+- `docs/handoff/` becomes `docs/decisions/`, with process artifacts moved to
+  an archive and an index that says what each ruling settled.
+
 ### Final hardening and language surface
 
 - `IndexError` was unreachable from every CLI path — the class existed but

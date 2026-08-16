@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { repositoryRoot } from "./repository-root.ts";
 
 /**
  * D56 rule 131 — a fixture is not an example.
@@ -27,7 +28,7 @@ import test from "node:test";
  * three engines.
  */
 
-const root = resolve(new URL("..", import.meta.url).pathname);
+const root = repositoryRoot;
 const cli = join(root, "packages", "cli", "src", "cli.ts");
 const fixture = join(root, "tests", "fixtures", "web-error-paths");
 

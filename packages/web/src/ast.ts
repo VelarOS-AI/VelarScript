@@ -216,6 +216,49 @@ export type WebAwareExpression = CoreExpression | WebExpression;
 export type WebAwareStatement = CoreStatement | WebStatement;
 export type WebOwnedStatement = WebStatement | WebExposeDeclaration | WebMountedBlock | WebCleanupBlock;
 
+/**
+ * D56 rule 129 — the Web extension's half of the statement-construct roster
+ * Core publishes as `CORE_STATEMENT_CONSTRUCTS`, reached through the extension
+ * protocol's `syntax` slot so the tour-coverage gate can require an
+ * extension's constructs without being taught this package's node names.
+ *
+ * `unsafe-css` contributes two keys rather than one because its `source` is a
+ * tagged union this package already owns: the external import and the inline
+ * block are two spellings the AST tells apart on its own. Requiring only the
+ * kind would let D53 rule 117's inline block hide behind the `import css
+ * unsafe` that predates it, which is exactly how the block reached a release
+ * with no example anywhere in `examples/`.
+ */
+export type WebStatementConstructKey =
+  | Exclude<WebOwnedStatement["kind"], "ExtensionStatement:web:unsafe-css">
+  | `ExtensionStatement:web:unsafe-css/${WebUnsafeCssSource["kind"]}`;
+
+export const WEB_STATEMENT_CONSTRUCTS = Object.freeze({
+  "ExtensionStatement:web:component": "component Name:",
+  "ExtensionStatement:web:state": "state name = value",
+  "ExtensionStatement:web:computed": "computed name = value",
+  "ExtensionStatement:web:resource": "resource name = load()",
+  "ExtensionStatement:web:action": "action name():",
+  "ExtensionStatement:web:watch": "watch value as current:",
+  "ExtensionStatement:web:expose": "expose {member}",
+  "ExtensionStatement:web:mounted": "@mounted:",
+  "ExtensionStatement:web:cleanup": "@cleanup:",
+  "ExtensionStatement:web:unsafe-css/external": 'import css unsafe "./sheet.css" before look',
+  "ExtensionStatement:web:unsafe-css/inline": "unsafe css`…` after look",
+} satisfies { readonly [Key in WebStatementConstructKey]: string });
+
+/**
+ * The construct key of one parsed node, or null when this extension does not
+ * own it. The gate walks every node in a module and asks each installed
+ * extension, so this has to answer for Core nodes and for another extension's
+ * nodes without knowing them.
+ */
+export function webStatementConstructKey(node: { readonly kind: string }): WebStatementConstructKey | null {
+  if (!node.kind.startsWith("ExtensionStatement:web:")) return null;
+  if (node.kind !== "ExtensionStatement:web:unsafe-css") return node.kind as WebStatementConstructKey;
+  return `${node.kind}/${(node as WebUnsafeCssDeclaration).source.kind}`;
+}
+
 export function isWebStatement(statement: Statement | WebComponentItem): statement is WebOwnedStatement {
   return statement.kind.startsWith("ExtensionStatement:web:");
 }

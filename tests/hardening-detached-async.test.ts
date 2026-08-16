@@ -6,8 +6,9 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 import { compile } from "@velarscript/compiler";
 import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
+import { repositoryRoot } from "./repository-root.ts";
 
-const root = resolve(new URL("..", import.meta.url).pathname);
+const root = repositoryRoot;
 const FLOATING = "VEL4027";
 const DETACHED_TYPE = "VEL4028";
 

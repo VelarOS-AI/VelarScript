@@ -4,8 +4,9 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { repositoryRoot } from "./repository-root.ts";
 
-const root = resolve(new URL("..", import.meta.url).pathname);
+const root = repositoryRoot;
 
 // Wave N-2w of the Web surface audit (docs/decisions/archive/COMPLETENESS-AUDITS.md,
 // 审计九): the Web runtime hotfixes. Each regression runs at the level the

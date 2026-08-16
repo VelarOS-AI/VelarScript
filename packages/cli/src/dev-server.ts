@@ -2,6 +2,7 @@ import { createReadStream, readdirSync, statSync, watch } from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
 import { posix, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
+import { fileURLToPath } from "node:url";
 import { formatDiagnostic } from "@velarscript/compiler";
 import type { FrameworkHostArtifacts } from "@velarscript/compiler/framework-host";
 import { compileProject, type ProjectResult } from "./project.ts";
@@ -432,7 +433,8 @@ function mapSourcePosition(
       }
     }
     if (lineIndex === generatedLine - 1 && selected) {
-      const source = map.sources[selected.source] ?? module.inputPath;
+      const mappedSource = map.sources[selected.source] ?? module.inputPath;
+      const source = mappedSource.startsWith("file:") ? fileURLToPath(mappedSource) : mappedSource;
       const path = relativePath(project.projectRoot, source);
       return { path, line: selected.line, column: selected.column };
     }

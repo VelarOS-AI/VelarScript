@@ -1,9 +1,8 @@
-// Application-facing proxy for the isolated fd terminal host. It captures all
+// Application-facing proxy for the isolated terminal host. It captures all
 // validation, MessagePort and Worker operations before application code runs;
-// stdin decoding and fd writes live in terminal-worker-runtime.ts.
+// stdin ownership, decoding, and fd writes live in terminal-worker-runtime.ts.
 export const VELAR_NODE_TERMINAL_RUNTIME = String.raw`
 import { EventEmitter as __VelarTerminalEventEmitter } from "node:events";
-import { closeSync as __velarTerminalCloseSync, openSync as __velarTerminalOpenSync } from "node:fs";
 import { MessageChannel as __VelarTerminalMessageChannel, MessagePort as __VelarTerminalMessagePort, Worker as __VelarTerminalWorker } from "node:worker_threads";
 
 const __velarTerminalNativeArray = globalThis.Array;
@@ -155,10 +154,6 @@ function __velarTerminalFail(error) {
   __velarTerminalExpectedWorkerExit = true;
   const terminated = __velarTerminalCall(__velarTerminalWorkerTerminate, __velarTerminalWorker, []);
   __velarTerminalCall(__velarTerminalPromiseThen, terminated, [() => null, () => null]);
-  if (__velarTerminalInputDescriptor >= 0 && __velarTerminalProcess.platform !== "win32") {
-    try { __velarTerminalCloseSync(__velarTerminalInputDescriptor); } catch {}
-    __velarTerminalInputDescriptor = -1;
-  }
 }
 
 function __velarTerminalMessage(value) {
@@ -180,14 +175,6 @@ function __velarTerminalMessage(value) {
     }
     __velarTerminalClosing = false;
     __velarTerminalUpdateReference();
-    if (__velarTerminalInputDescriptor >= 0 && __velarTerminalProcess.platform !== "win32") {
-      try { __velarTerminalCloseSync(__velarTerminalInputDescriptor); }
-      catch (error) {
-        const code = error && typeof error === "object" ? __velarTerminalOwnDescriptor(error, "code") : null;
-        if (!code || !("value" in code) || code.value !== "EBADF") throw error;
-      }
-      __velarTerminalInputDescriptor = -1;
-    }
     __velarTerminalCall(__velarTerminalMessagePortClose, __velarTerminalPort, []);
     __velarTerminalExpectedWorkerExit = true;
     const terminated = __velarTerminalCall(__velarTerminalWorkerTerminate, __velarTerminalWorker, []);
@@ -221,15 +208,6 @@ const __velarTerminalReadyPromise = new __velarTerminalNativePromise((resolve, r
 });
 const __velarTerminalChannel = new __VelarTerminalMessageChannel();
 const __velarTerminalPort = __velarTerminalChannel.port1;
-let __velarTerminalInputDescriptor = 0;
-if (__velarTerminalProcess.platform !== "win32") {
-  try { __velarTerminalInputDescriptor = __velarTerminalOpenSync("/dev/fd/0", "r"); }
-  catch (error) {
-    const code = error && typeof error === "object" ? __velarTerminalOwnDescriptor(error, "code") : null;
-    if (!code || !("value" in code) || code.value !== "EACCES" && code.value !== "EBADF" && code.value !== "ENOENT") throw error;
-    __velarTerminalInputDescriptor = -1;
-  }
-}
 __velarTerminalPort.onmessage = event => {
   try { __velarTerminalMessage(__velarTerminalCall(__velarTerminalMessageData, event, [])); }
   catch (error) { __velarTerminalFail(error); }
@@ -238,7 +216,7 @@ __velarTerminalPort.onmessageerror = () => __velarTerminalFail(new __velarTermin
 __velarTerminalCall(__velarTerminalMessagePortStart, __velarTerminalPort, []);
 const __velarTerminalWorker = new __VelarTerminalWorker(WORKER_SOURCE, {
   eval: true,
-  workerData: {port: __velarTerminalChannel.port2, inputDescriptor: __velarTerminalInputDescriptor},
+  workerData: {port: __velarTerminalChannel.port2},
   transferList: [__velarTerminalChannel.port2],
 });
 __velarTerminalCall(__velarTerminalEventOn, __velarTerminalWorker, ["error", error => __velarTerminalFail(error)]);

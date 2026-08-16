@@ -8,15 +8,36 @@
 
 [![VelarScript CI](https://github.com/VelarOS-AI/VelarScript/actions/workflows/ci.yml/badge.svg)](https://github.com/VelarOS-AI/VelarScript/actions/workflows/ci.yml)
 
-**A language AI writes and maintains, and humans read and own.**
+**An extensible programming language for the AI era, where the framework is the
+language.**
 
-You supply the intent and read the result. The model writes the VelarScript
-and every later change to it. The compiler guards each change.
+A model can now write code faster than anyone can check it, so the bottleneck
+has moved from writing to trusting. Every existing stack was built for the era
+when a person wrote each line and held the whole context, where a silent
+mistake was affordable because the author knew what they had meant. That
+assumption is gone and the stacks have not moved. Vel answers with two things
+that are one thing: it shrinks what has to be verified down to a single
+language, and it makes the compiler the thing that verifies it. A wrong CSS
+value, a misspelled `aria-*`, a missed reactive dependency, a coercion, an
+unowned failure — silent everywhere else, compile errors here.
+
+`component`, `state`, `computed`, `watch`, `look`, and `keyframes` are
+keywords, not imports — there is no framework layered on top of the language,
+because the framework *is* the language. And Core itself knows none of those
+words: it does not know what a DOM, a stylesheet, a filesystem, or a window
+is. Every capability arrives as an extension that adds real syntax through a
+compiler protocol — `@velarscript/web` brings the words above and JSX,
+`@velarscript/desktop` runs that same source model on a system WebView with
+permission-scoped capabilities, and `@velarscript/node` adds the server side.
+Extensions add syntax, not only libraries, which is what makes the language
+extensible rather than merely configurable.
 
 Vel is built from the bones of JavaScript and Python — the two languages every
-model already knows best — so a model writes it on prior knowledge alone. And
-the language keeps **one obvious spelling per idea**, so model output stays
-uniform and any Vel codebase reads like any other.
+model already knows best — so a model writes it on prior knowledge alone, and
+the language keeps **one obvious spelling per idea** so that output stays
+uniform and any Vel codebase reads like any other. You supply the intent and
+read the result; the model writes the VelarScript and every later change to
+it; the compiler guards each change.
 
 ## Start
 

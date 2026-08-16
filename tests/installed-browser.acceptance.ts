@@ -4,52 +4,29 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { velarPackageNames } from "../scripts/velar-packages.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const directory = await mkdtemp(join(tmpdir(), "velar-installed-browser-"));
 
 try {
-  const compiler = await pack("@velarscript/compiler");
-  const node = await pack("@velarscript/node");
-  const web = await pack("@velarscript/web");
-  const create = await pack("create-velar");
-  const cli = await pack("@velarscript/cli");
-  const desktop = await pack("@velarscript/desktop");
-  const textBuffer = await pack("@velarscript/text-buffer");
-  const scriptAnalysis = await pack("@velarscript/script-analysis");
+  // A-024: this file held the fifth copy of the eight-package roster — one
+  // literal `pack()` list and four literal install lists — while
+  // `docs/contributing/continuous-integration.md` said the installed set is
+  // derived from `packages/*`. A publishable package added to the workspace
+  // was packed, content-checked and installed by `test:packages` on the day it
+  // existed, and never entered the installed-toolchain acceptance at all.
+  const tarballs: string[] = [];
+  for (const name of await velarPackageNames(root)) tarballs.push(join(directory, await pack(name)));
+  /** Every packed tarball, as one `npm install` takes them. */
+  const install = (extra: readonly string[], cwd: string) =>
+    runNpm(["install", ...extra, "--ignore-scripts", "--no-audit", "--no-fund", ...tarballs], cwd);
   await writeFile(join(directory, "package.json"), "{}\n", "utf8");
-  await runNpm([
-    "install",
-    "--ignore-scripts",
-    "--no-audit",
-    "--no-fund",
-    join(directory, compiler),
-    join(directory, node),
-    join(directory, web),
-    join(directory, create),
-    join(directory, cli),
-    join(directory, desktop),
-    join(directory, textBuffer),
-    join(directory, scriptAnalysis),
-  ], directory);
+  await install([], directory);
   const installedCli = join(directory, "node_modules", "@velarscript", "cli", "dist", "cli.js");
   const application = join(directory, "Team & App");
   await run(process.execPath, [installedCli, "create", application], directory);
-  await runNpm([
-    "install",
-    "--save-dev",
-    "--ignore-scripts",
-    "--no-audit",
-    "--no-fund",
-    join(directory, compiler),
-    join(directory, node),
-    join(directory, web),
-    join(directory, create),
-    join(directory, cli),
-    join(directory, desktop),
-    join(directory, textBuffer),
-    join(directory, scriptAnalysis),
-  ], application);
+  await install(["--save-dev"], application);
   await writeFile(join(application, "src", "web-contract.vel"), `
 import {onError} from "velar/app"
 import {environment} from "velar/browser"
@@ -95,21 +72,7 @@ mount(<App />, "#app")
 
   const documentation = join(directory, "Product Docs");
   await run(process.execPath, [installedCli, "create", documentation, "--template", "docs"], directory);
-  await runNpm([
-    "install",
-    "--save-dev",
-    "--ignore-scripts",
-    "--no-audit",
-    "--no-fund",
-    join(directory, compiler),
-    join(directory, node),
-    join(directory, web),
-    join(directory, create),
-    join(directory, cli),
-    join(directory, desktop),
-    join(directory, textBuffer),
-    join(directory, scriptAnalysis),
-  ], documentation);
+  await install(["--save-dev"], documentation);
   await runNpm(["run", "format:check"], documentation);
   await runNpm(["run", "check"], documentation);
   await runNpm(["test"], documentation);
@@ -121,21 +84,7 @@ mount(<App />, "#app")
 
   const component = join(directory, "Info Card");
   await run(process.execPath, [installedCli, "create", component, "--template", "component"], directory);
-  await runNpm([
-    "install",
-    "--save-dev",
-    "--ignore-scripts",
-    "--no-audit",
-    "--no-fund",
-    join(directory, compiler),
-    join(directory, node),
-    join(directory, web),
-    join(directory, create),
-    join(directory, cli),
-    join(directory, desktop),
-    join(directory, textBuffer),
-    join(directory, scriptAnalysis),
-  ], component);
+  await install(["--save-dev"], component);
   const componentManifest = JSON.parse(await readFile(join(component, "package.json"), "utf8")) as {
     files: string[];
     velar: { entry: string };

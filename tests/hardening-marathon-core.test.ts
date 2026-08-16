@@ -7,11 +7,12 @@ import { join, resolve } from "node:path";
 import { compile } from "@velarscript/compiler";
 import { compileProject, compileProjectEntries, type ProjectResult } from "../packages/cli/src/project.ts";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
+import { repositoryRoot } from "./repository-root.ts";
 
 after(removeTemporaryDirectories);
 
 
-const root = resolve(new URL("..", import.meta.url).pathname);
+const root = repositoryRoot;
 
 // Fix wave 1 of the marathon defect ledger (docs/decisions/archive/MARATHON-DEFECTS.md):
 // the Core compiler and CLI items. Every test here is a regression probe for a
@@ -33,7 +34,7 @@ function runClean(source: string): ReturnType<typeof spawnSync> {
   return execution;
 }
 
-const projectRoot = "/velar-marathon-core-tests";
+const projectRoot = join(tmpdir(), "velar-marathon-core-tests");
 
 function projectSources(modules: Readonly<Record<string, string>>): Map<string, string> {
   return new Map(Object.entries(modules).map(([name, text]) => [join(projectRoot, name), text]));

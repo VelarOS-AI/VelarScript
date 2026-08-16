@@ -10,7 +10,7 @@ import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
 const CYCLE = "VEL3019";
 const CYCLE_MESSAGE = /Move this read into a function, or extract the shared value into a third module; '\.\/[a-z-]+\.vel' has not initialized when this line runs/u;
 
-const projectRoot = "/velar-module-cycle-tests";
+const projectRoot = join(tmpdir(), "velar-module-cycle-tests");
 
 async function checkProject(
   modules: Readonly<Record<string, string>>,
