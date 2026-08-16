@@ -357,6 +357,12 @@ export interface ModuleTest {
 export interface ModuleInterface {
   readonly exports: ReadonlyMap<string, ValueType>;
   readonly mutableExports: ReadonlySet<string>;
+  /**
+   * Exports whose bare read lowers through `.get()` in the importing module.
+   * D71 rule 184 put both halves of the reactive row here, so `"state"` is a
+   * marker for *reactive*, not the word the author wrote — a derived `computed`
+   * carries the same marker. Never render it into a diagnostic as a noun.
+   */
   readonly reactiveExports: ReadonlyMap<string, "state">;
   /** Named re-exports (`export {name} from "source"`), keyed by the exported alias. */
   readonly reExports: ReadonlyMap<string, { readonly source: string; readonly imported: string }>;

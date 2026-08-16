@@ -703,6 +703,17 @@ function extensionOwnsStandardModule(source: string, extensions: readonly Compil
   return extensions.some((extension) => extension.id !== "@velarscript/node" && extension.modules?.interfaces.has(source));
 }
 
+/**
+ * D71 rule 184 widened what `reactiveExports` means without widening its marker:
+ * both an exported `state` and an exported `computed` are published as `"state"`
+ * so that an imported bare read lowers through `.get()`. The marker therefore
+ * says *reactive*, not which word the author wrote — printing it as a noun
+ * called an exported `computed` a "state binding" and offered it a mutator it
+ * can never have. The message names only what this map establishes, and points
+ * at `action`, which is the vocabulary the language actually has; the derived
+ * half gets its own sharper VEL5063 from the Web analyzer before it ever
+ * reaches here.
+ */
 function importedReactiveAssignmentDiagnostics(
   result: CompileResult,
   reactiveImports: ReadonlyMap<string, "state">,
@@ -720,7 +731,7 @@ function importedReactiveAssignmentDiagnostics(
     if (!kind) return item;
     return {
       ...item,
-      message: `Cannot assign to imported ${kind} binding '${imported!.local}'; it is read-only here. Export a mutator from the owning module and call it instead`,
+      message: `Cannot assign to imported reactive binding '${imported!.local}'; it is read-only here. Export an action from the owning module that changes it and call that instead`,
     };
   });
   return diagnostics.some((item, index) => item !== result.diagnostics[index])

@@ -2832,17 +2832,6 @@ export class Analyzer implements TypeEnvironment {
           ? this.lookup(statement.initializer.name)
           : null;
         const actual = this.inferExpression(statement.initializer, annotationValid ? annotated ?? unknownType : invalidType);
-        if (statement.exported && !statement.type && statement.pattern.kind === "NameBindingPattern"
-          && statement.initializer.kind === "CallExpression"
-          && statement.initializer.callee.kind === "IdentifierExpression"
-          && statement.initializer.callee.name === "computed"
-          && !this.lookup("computed")) {
-          this.diagnostics.push(diagnostic(
-            "VEL4025",
-            `Exported computed accessors need an explicit contract at the export boundary; write 'export const ${statement.pattern.name}: () -> T = computed(...)'`,
-            statement.span,
-          ));
-        }
         // D44 rule 71: an unannotated alias of an assignment-established fact
         // declares the source's domain and re-establishes the fact below, so
         // the alias keeps the declared question testable (`taken != null`

@@ -110,16 +110,17 @@ test("hardening #31 serves a real request through an IPv6 loopback binding", asy
   }
 });
 
-test("hardening #33 names imported reactive state and its owning-module mutator fix", async () => {
+test("hardening #33 names an imported reactive binding and the owning-module change that fixes it", async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-hardening-reactive-import-"));
   try {
     const store = join(directory, "store.vel");
     const entry = join(directory, "main.vel");
-    await writeFile(store, "export state limit = 1\n", "utf8");
+    await writeFile(store, "export state limit = 1\n\nexport computed doubled = limit * 2\n", "utf8");
     await writeFile(entry, `
-import {limit as importedLimit} from "./store.vel"
+import {limit as importedLimit, doubled} from "./store.vel"
 
 importedLimit = 2
+doubled = 9
 
 def local_control():
     const importedLimit = 3
@@ -129,8 +130,21 @@ def local_control():
     const project = await compileProject(entry, new Map(), { extensions: [velarCompilerExtension] });
     assert.deepEqual(project.failures, []);
     const diagnostics = project.modules.find((module) => module.inputPath === entry)?.result.diagnostics ?? [];
+    // D71 rule 184 publishes an exported `computed` through `reactiveExports`
+    // under the same `"state"` marker an exported `state` gets, so that marker
+    // cannot be rendered as a noun: doing so called a derived value a "state
+    // binding" and offered it a mutator it can never have. This message names
+    // only what the marker establishes.
     assert.ok(diagnostics.some((item) => item.code === "VEL3002"
-      && item.message === "Cannot assign to imported state binding 'importedLimit'; it is read-only here. Export a mutator from the owning module and call it instead"));
+      && item.message === "Cannot assign to imported reactive binding 'importedLimit'; it is read-only here. Export an action from the owning module that changes it and call that instead"),
+      JSON.stringify(diagnostics));
+    assert.ok(!diagnostics.some((item) => /state binding|mutator/u.test(item.message)),
+      "no diagnostic may print the reactive marker as a source-language noun");
+    // The derived half is answered by the Web analyzer, which knows which word
+    // was written and can be sharper than the module-graph rewrite ever could.
+    assert.ok(diagnostics.some((item) => item.code === "VEL5063"
+      && item.message.startsWith("'doubled' is a computed value derived in the module it comes from")),
+      JSON.stringify(diagnostics));
     assert.ok(diagnostics.some((item) => item.code === "VEL3002"
       && item.message === "Cannot assign to const binding 'importedLimit'"), "a shadowing local const must keep the ordinary diagnostic");
   } finally {

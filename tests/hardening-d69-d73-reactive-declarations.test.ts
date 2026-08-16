@@ -179,6 +179,31 @@ test("[D71-183] an exported cached reader still needs its contract at the bounda
   assert.deepEqual(messages(`export computed one = 1\n`), []);
 });
 
+test("[D71-183] the boundary contract is owned by the extension that owns the word", () => {
+  // The core analyzer used to key this rule on the literal name `computed`.
+  // After the rename that check could only fire on the retired spelling, where
+  // it contradicted the migration standing next to it — it told the author to
+  // annotate and keep writing `computed(...)` while the Web analyzer told them
+  // `computed` is a declaration keyword now. Core owns no reactive vocabulary
+  // at all, so the rule belongs to the extension that publishes `cached`.
+  assert.deepEqual(
+    messages(`export const one = computed(() => 1)\n`),
+    ["VEL5055 A derived value is declared, not called: write 'computed one = ...' and read 'one' bare."],
+  );
+  // With no extension there is no `computed` and no `cached`, so the only
+  // truthful answer is that the name is unknown.
+  assert.deepEqual(
+    compileCore(`export const one = computed(() => 1)\n`).diagnostics.map((item) => `${item.code} ${item.message}`),
+    ["VEL3001 Unknown name 'computed'"],
+  );
+  // A module that declares its own `computed` function keeps it, and gets no
+  // boundary complaint invented for a word core never owned.
+  assert.deepEqual(
+    compileCore(`def computed(read: () -> number) -> () -> number:\n    return read\n\nexport const one = computed(() => 1)\n`).diagnostics,
+    [],
+  );
+});
+
 test("[D71] velar fix carries a whole module from the retired spelling to the declaration", () => {
   let text = `
 export state tasks: List<string> = []
