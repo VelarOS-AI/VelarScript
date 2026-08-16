@@ -200,7 +200,10 @@ const exemptions = [
     names: () => new Set(["velar/javascript", "velar/text-buffer"]),
     // Module categories are keyed '<source> <name>', so a whole module is
     // withheld by its source.
-    matches: (names, key) => names.has(key.slice(0, key.indexOf(" "))),
+    // module-export keys carry their module; namespace-member keys do not, so
+    // a whole module is withheld from the first by source and the second is
+    // matched by its `Namespace.member` spelling.
+    matches: (names, key) => names.has(moduleExportSource(key)),
   },
   {
     label: "`import js` naming a real third-party npm package",
@@ -241,6 +244,11 @@ const unreachableTables = [
 
 const failures = [];
 const categories = new Map();
+// Names a module imports and never references, keyed exactly as the required
+// inventory keys them. An unused import is not coverage (see observeModule),
+// but it is the most likely *reason* a name is missing, so the failure says
+// where the dead import stands instead of leaving the reader to grep.
+const unusedImports = new Map();
 
 function require_(category, key, spelling, table) {
   const entry = categories.get(category) ?? { required: new Map(), covered: new Set() };
@@ -257,6 +265,32 @@ function observe(category, key) {
   const entry = categories.get(category) ?? { required: new Map(), covered: new Set() };
   categories.set(category, entry);
   entry.covered.add(key);
+}
+
+/**
+ * Module categories are keyed by (module, name) rather than by name alone:
+ * `velar/http` publishes `secretHeader` on Node and `formBody` on the Web, and
+ * one target's table would otherwise overwrite the other's. The separator is a
+ * character no module source and no identifier can contain. It is built here
+ * rather than spelled at each site because the four places that write or read
+ * these keys have to agree, and a copy of a key format drifts as silently as a
+ * copy of a name list does.
+ */
+function moduleExportKey(source, name) {
+  return `${source}\u0000${name}`;
+}
+
+/** The module half of a `moduleExportKey`. */
+function moduleExportSource(key) {
+  const separator = key.indexOf("\u0000");
+  return separator < 0 ? key : key.slice(0, separator);
+}
+
+function recordUnusedImport(imported, path) {
+  const key = moduleExportKey(imported.source, imported.imported);
+  const where = unusedImports.get(key) ?? new Set();
+  unusedImports.set(key, where);
+  where.add(display(path));
 }
 
 // ── 1. Read the tour exactly as the compiler reads it ───────────────────────
@@ -377,9 +411,7 @@ for (const exemption of exemptions) {
 let checked = 0;
 const summary = [];
 for (const [category, entry] of [...categories].sort()) {
-  const missing = [...entry.required]
-    .filter(([key]) => !entry.covered.has(key))
-    .map(([, item]) => item);
+  const missing = [...entry.required].filter(([key]) => !entry.covered.has(key));
   checked += entry.required.size;
   const floor = FLOORS[category];
   if (floor === undefined) {
@@ -388,8 +420,10 @@ for (const [category, entry] of [...categories].sort()) {
     failures.push(`Category '${category}' required only ${entry.required.size} names; expected at least ${floor}. A vocabulary table read short or empty.`);
   }
   summary.push(`  ${category.padEnd(22)} ${String(entry.required.size - missing.length).padStart(4)}/${String(entry.required.size).padEnd(4)} from ${entry.required.size === 0 ? "-" : tablesOf(entry)}`);
-  for (const item of missing.sort((left, right) => left.spelling.localeCompare(right.spelling))) {
-    failures.push(`${category}: ${item.spelling} — declared by ${[...item.tables].sort().join(", ")}, and no module in ${display(tourRoot)} uses it`);
+  for (const [key, item] of missing.sort((left, right) => left[1].spelling.localeCompare(right[1].spelling))) {
+    const imported = unusedImports.get(key);
+    failures.push(`${category}: ${item.spelling} — declared by ${[...item.tables].sort().join(", ")}, and no module in ${display(tourRoot)} uses it`
+      + (imported ? ` (${[...imported].sort().join(", ")} import${imported.size === 1 ? "s" : ""} the name and never reference${imported.size === 1 ? "s" : ""} it — an import is not a usage)` : ""));
   }
 }
 
@@ -525,7 +559,7 @@ function requireTargetVocabulary(config) {
     const namespace = permanentNamespaceCoveringModule(source, interface_.exports.keys());
     for (const name of names) {
       if (namespace) require_("namespace-member", `${namespace}.${name}`, `${namespace}.${name}`, `${source} (${target})`);
-      else require_("module-export", `${source}\u0000${name}`, `import {${name}} from "${source}"`, `${source} (${target})`);
+      else require_("module-export", moduleExportKey(source, name), `import {${name}} from "${source}"`, `${source} (${target})`);
     }
     if (source === BROWSER_TEST_MODULE) {
       for (const [controller, type] of interface_.exports) {
@@ -566,13 +600,34 @@ function observeModule({ path, tokens, program, index, contextualKeywords, synta
   // (c) Standard-module exports: what the project driver resolved, not what
   //     the import line says. A namespace import counts for the members it is
   //     actually read through, so `collections.groupBy(...)` covers `groupBy`.
-  const namespaceLocals = new Map();
-  const webTestControllerLocals = new Map();
+  //
+  //     And not off the import line *at all*. An import proves a name
+  //     resolves; it shows no signature and no usage, while this gate's
+  //     contract — and its own failure text — is that every name is
+  //     *exercised*. The named branch counted the specifier itself, so
+  //     deleting the only call to `watchVisibility` and leaving its import
+  //     standing left this category reporting 237/237 (A-023). A named import
+  //     now waits for a resolved reference to its local binding.
+  //
+  //     Both branches are keyed by the import's *symbol*, never by its local
+  //     spelling. The namespace branch did wait for a real member read, but it
+  //     matched the read by name, so a local record named `urls` declared in
+  //     any inner scope forged `velar/url`'s exports from a read of itself —
+  //     the same forgery the header of this file says a text search would
+  //     allow and a resolved judgment would not.
+  const referencedSymbols = new Set(index.references.flatMap((reference) => reference.symbolId === null ? [] : [reference.symbolId]));
+  // Every identifier the analyzer resolved, by the offset it was written at. A
+  // member access records its object as a reference, so this is what tells
+  // `collections.groupBy(...)` from a shadowing local's member of the same name.
+  const symbolAt = new Map(index.references.map((reference) => [reference.span.start, reference.symbolId]));
+  const namespaceSources = new Map();
+  const webTestControllers = new Map();
   for (const imported of index.imports) {
-    if (imported.namespace) namespaceLocals.set(imported.local, imported.source);
+    if (imported.namespace) namespaceSources.set(imported.localSymbolId, imported.source);
     else {
-      observe("module-export", `${imported.source}\u0000${imported.imported}`);
-      if (imported.source === BROWSER_TEST_MODULE) webTestControllerLocals.set(imported.local, imported.imported);
+      if (!referencedSymbols.has(imported.localSymbolId)) recordUnusedImport(imported, path);
+      else observe("module-export", moduleExportKey(imported.source, imported.imported));
+      if (imported.source === BROWSER_TEST_MODULE) webTestControllers.set(imported.localSymbolId, imported.imported);
     }
   }
 
@@ -595,9 +650,12 @@ function observeModule({ path, tokens, program, index, contextualKeywords, synta
           observe("reserved-binding", base);
         }
       }
-      const source = namespaceLocals.get(base);
-      if (source !== undefined) observe("module-export", `${source}\u0000${node.property}`);
-      const controller = webTestControllerLocals.get(base);
+      // Which binding this member sits on, by the analyzer's verdict rather
+      // than by its spelling: a namespace import's own symbol, or nothing.
+      const object = symbolAt.get(node.object.span.start);
+      const source = namespaceSources.get(object);
+      if (source !== undefined) observe("module-export", moduleExportKey(source, node.property));
+      const controller = webTestControllers.get(object);
       if (controller !== undefined && path.endsWith(WEB_TEST_TOUR_CHAPTER)) {
         observe("web-test-member", `${BROWSER_TEST_MODULE}\u0000${controller}\u0000${node.property}`);
       }

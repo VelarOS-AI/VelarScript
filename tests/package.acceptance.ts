@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { velarPackageNames } from "../scripts/velar-packages.mjs";
+import { velarPublishedPackages } from "../scripts/velar-packages.mjs";
+import { declaredEntryPaths, declaredImportSpecifiers, packageContentFailures, type PackedPackage } from "./package-contract.ts";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const directory = await mkdtemp(join(tmpdir(), "velar-packages-"));
@@ -15,8 +16,16 @@ try {
   // that has to be kept level with it. A package added to the workspace is
   // packed by this gate the day it exists, and an install that needs it cannot
   // silently go untested.
-  const packed = new Map<string, Awaited<ReturnType<typeof pack>>>();
-  for (const name of await velarPackageNames(root)) packed.set(name, await pack(name));
+  //
+  // A-024: the roster was derived and then immediately re-spelled by hand for
+  // everything that came after `pack()`. The content checks walked six of the
+  // eight names, the install listed all eight as literal tarball paths, and a
+  // package that had neither LICENSE, README, `dist`, nor the file its own
+  // `exports` pointed at sailed through both while a real consumer importing it
+  // failed with ERR_MODULE_NOT_FOUND. Everything below walks `published`.
+  const published = await velarPublishedPackages(root);
+  const packed = new Map<string, PackedPackage>();
+  for (const package_ of published) packed.set(package_.name, await pack(package_.name));
   const named = (name: string) => {
     const entry = packed.get(name);
     assert.ok(entry, `packages/* no longer publishes ${name}; this gate assumed it does`);
@@ -28,14 +37,17 @@ try {
   const create = named("create-velar");
   const cli = named("@velarscript/cli");
   const desktop = named("@velarscript/desktop");
-  const textBuffer = named("@velarscript/text-buffer");
-  const scriptAnalysis = named("@velarscript/script-analysis");
-  for (const package_ of [compiler, node, web, create, cli, desktop]) {
-    assert.ok(package_.files.some((file) => file.path === "LICENSE"));
-    assert.ok(package_.files.some((file) => file.path === "README.md"));
-    assert.ok(package_.files.some((file) => file.path.startsWith("dist/") && file.path.endsWith(".js")));
-    assert.ok(package_.files.some((file) => file.path.startsWith("dist/") && file.path.endsWith(".d.ts")));
-    assert.ok(!package_.files.some((file) => /(?:^|\/)tests?(?:\/|$)/u.test(file.path)));
+  // What every published package must contain, asked of each manifest rather
+  // than of a list: its licence, its README, and every file it points a
+  // consumer at through `main`, `types`, `exports`, `bin` or `velar.entry`.
+  const contentFailures = published.flatMap((package_) => packageContentFailures(package_.manifest, named(package_.name)));
+  assert.deepEqual(contentFailures, [], `packed packages do not contain what their manifests promise:\n${contentFailures.join("\n")}`);
+  // The compiled packages additionally publish types beside their JavaScript.
+  // Derived the same way: a package that promises a `.d.ts` anywhere in its
+  // manifest is one that must ship types.
+  for (const package_ of published) {
+    if (!declaredEntryPaths(package_.manifest).some((path) => path.endsWith(".d.ts"))) continue;
+    assert.ok(named(package_.name).files.some((file) => file.path.endsWith(".d.ts")), `${package_.name} promises types and packs none`);
   }
   assert.ok(cli.files.some((file) => file.path === "dist/browser-test-runner.js"));
   assert.ok(cli.files.some((file) => file.path === "dist/production-verifier.js"));
@@ -43,12 +55,6 @@ try {
   assert.ok(cli.files.some((file) => file.path === "dist/deployment-verifier.js"));
   assert.ok(!cli.files.some((file) => file.path.startsWith("stdlib/")));
   assert.ok(cli.files.some((file) => file.path === "skill/ai-skill.md"));
-  assert.ok(textBuffer.files.some((file) => file.path === "LICENSE"));
-  assert.ok(textBuffer.files.some((file) => file.path === "README.md"));
-  assert.ok(textBuffer.files.some((file) => file.path === "src/index.vel"));
-  assert.ok(scriptAnalysis.files.some((file) => file.path === "LICENSE"));
-  assert.ok(scriptAnalysis.files.some((file) => file.path === "README.md"));
-  assert.ok(scriptAnalysis.files.some((file) => file.path === "src/index.vel"));
   assert.ok(compiler.files.some((file) => file.path === "dist/framework-host.js"));
   assert.ok(compiler.files.some((file) => file.path === "dist/application-package-host.js"));
   assert.ok(node.files.some((file) => file.path === "dist/compiler.js"));
@@ -61,19 +67,33 @@ try {
   assert.ok(desktop.files.some((file) => file.path === "native/macos/VelarTerminalHost.swift"));
 
   await writeFile(join(directory, "package.json"), "{}\n", "utf8");
+  // The complete set, from the same derived roster that packed it. A tarball
+  // list written out here is a list that stops matching `packages/*`.
   await runNpm([
     "install",
     "--ignore-scripts",
     "--no-audit",
     "--no-fund",
-    join(directory, compiler.filename),
-    join(directory, node.filename),
-    join(directory, web.filename),
-    join(directory, create.filename),
-    join(directory, cli.filename),
-    join(directory, desktop.filename),
-    join(directory, textBuffer.filename),
-    join(directory, scriptAnalysis.filename),
+    ...published.map((package_) => join(directory, named(package_.name).filename)),
+  ], directory);
+
+  // What the installed set actually offers a consumer, asked of the manifests:
+  // every file each one points at must be on disk, and every specifier each one
+  // publishes must import. A package whose `exports` names a file that was
+  // never built installs without complaint and fails at the first `import`,
+  // which is exactly the release-day failure this gate exists to prevent.
+  for (const package_ of published) {
+    for (const path of declaredEntryPaths(package_.manifest)) {
+      if (path.includes("*")) continue;
+      await readFile(join(directory, "node_modules", ...package_.name.split("/"), path));
+    }
+  }
+  const specifiers = published.flatMap((package_) => declaredImportSpecifiers(package_.manifest));
+  assert.ok(specifiers.length >= published.length, `the installed set publishes only ${specifiers.length} import specifiers`);
+  await run(process.execPath, [
+    "--input-type=module",
+    "--eval",
+    `${specifiers.map((specifier) => `await import(${JSON.stringify(specifier)});`).join("\n")}\nconsole.log("resolved");`,
   ], directory);
 
   const installedCli = join(directory, "node_modules", "@velarscript", "cli", "dist", "cli.js");
@@ -453,11 +473,6 @@ for (const value of [
     rm(directory, { recursive: true, force: true }),
     rm(consumerDirectory, { recursive: true, force: true }),
   ]);
-}
-
-interface PackedPackage {
-  readonly filename: string;
-  readonly files: readonly { readonly path: string }[];
 }
 
 async function pack(workspace: string): Promise<PackedPackage> {

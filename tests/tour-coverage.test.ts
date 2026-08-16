@@ -291,6 +291,25 @@ test("removing one spelling from the tour turns the gate red and names it", asyn
       }],
     },
     {
+      // A-023: the `module-export` category had no red case at all. This is the
+      // ordinary direction — the name leaves the tour entirely — and the test
+      // below is its other half, where only the *usage* leaves.
+      family: "a standard-module export",
+      expected: 'module-export: import {watchVisibility} from "velar/browser"',
+      edits: [
+        {
+          file: "web/10-browser-forms-files.vel",
+          replace: "            watchVisibility(setVisible),\n",
+          replacement: '            watchMedia("(max-width: 719px)", setVisible),\n',
+        },
+        {
+          file: "web/10-browser-forms-files.vel",
+          replace: ', watchVisibility} from "velar/browser"',
+          replacement: '} from "velar/browser"',
+        },
+      ],
+    },
+    {
       family: "a velar/web-test computed-style control",
       expected: "web-test-member: browser.style",
       edits: [{
@@ -314,6 +333,68 @@ test("removing one spelling from the tour turns the gate red and names it", asyn
     assert.ok(output.includes(item.expected), `${item.family}: the gate did not name it:\n${output}`);
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("[A-023] an import is not a usage: the name stays imported and the gate still goes red", async () => {
+  // The other direction of the case above, and the one the gate was missing.
+  // `observeModule` waited for a real `MemberExpression` before crediting a
+  // namespace import, but credited every *named* import the moment it parsed —
+  // so deleting the only call to `watchVisibility` while leaving its specifier
+  // in the import list left `module-export` reporting 237/237 and exit 0.
+  //
+  // An import proves a name resolves. It shows no signature and no usage, and
+  // this gate's own failure text says a name is missing when "no module uses
+  // it". Testing only the deletion of imports is what let the two sentences
+  // drift apart: every red case here removed a spelling from the source, and
+  // none of them removed a *use* while the spelling stayed.
+  const directory = await copyOfTour();
+  await mutate(
+    directory,
+    "web/10-browser-forms-files.vel",
+    "            watchVisibility(setVisible),\n",
+    '            watchMedia("(max-width: 719px)", setVisible),\n',
+  );
+  const source = await readFile(join(directory, "web", "10-browser-forms-files.vel"), "utf8");
+  assert.ok(source.includes("watchVisibility}"), `the import specifier must survive this mutation:\n${source}`);
+  assert.equal(source.match(/watchVisibility/gu)?.length, 1, "watchVisibility must remain exactly once, as an import and nowhere else");
+  const { status, output } = runGate(directory);
+  assert.equal(status, 1, `the gate counted an unused import as coverage:\n${output}`);
+  assert.ok(output.includes('module-export: import {watchVisibility} from "velar/browser"'), `the gate did not name it:\n${output}`);
+  // And it says *why*, because "no module uses it" beside a visible import line
+  // is the one message a reader would disbelieve.
+  assert.match(output, /10-browser-forms-files\.vel imports the name and never references it — an import is not a usage/u);
+  await rm(directory, { recursive: true, force: true });
+});
+
+test("[A-023] a namespace member is credited to the namespace, not to its spelling", async () => {
+  // The other half of the same defect. The namespace branch did wait for a
+  // real member read — but it matched the read by the import's *local name*,
+  // so any binding spelled the same in any inner scope forged the module's
+  // exports out of a read of itself. That is the forgery this file's header
+  // says a text search would allow and a resolved judgment would not.
+  const directory = await copyOfTour();
+  // First make one export genuinely uncovered, so the gate has something to be
+  // wrong about: `velar/url`'s `encode` reaches the tour only through chapter
+  // 14's named import.
+  await mutate(directory, "core/14-files-and-host.vel", "import {decode, encode, isExternal,", "import {decode, isExternal,");
+  await mutate(directory, "core/14-files-and-host.vel", 'const encoded = encode("a b&c")', 'const encoded = decode("a%20b")');
+  const missing = runGate(directory);
+  assert.equal(missing.status, 1, missing.output);
+  assert.ok(missing.output.includes('module-export: import {encode} from "velar/url"'), missing.output);
+
+  // Now forge it: chapter 12 holds `import * as urls from "velar/url"`, and a
+  // local record named `urls` in a function body used to satisfy the whole
+  // module's inventory through `urls.encode`.
+  await mutate(
+    directory,
+    "core/12-modules.vel",
+    'const joinedUrl = urls.join("https://example.test", "api", "v1")',
+    'const joinedUrl = urls.join("https://example.test", "api", "v1")\n\ndef forgeCoverage() -> string:\n    const urls = {encode: "forged"}\n    return urls.encode\n',
+  );
+  const forged = runGate(directory);
+  assert.equal(forged.status, 1, `a shadowing local forged coverage of a module export:\n${forged.output}`);
+  assert.ok(forged.output.includes('module-export: import {encode} from "velar/url"'), forged.output);
+  await rm(directory, { recursive: true, force: true });
 });
 
 test("the gate refuses a chapter no import reaches", async () => {

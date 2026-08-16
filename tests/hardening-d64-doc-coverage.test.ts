@@ -226,6 +226,137 @@ test("a preamble that lost its fence is reported rather than ignored", async () 
   assert.match(complete.stderr, /already checked in full/u);
 });
 
+// ---------------------------------------------------------------------------
+// A-022 — the fence *extractor*. Everything above tests what the gate does with
+// an example once it has one; these test which examples it has at all.
+//
+// The extractor was a regex that fixed the opening backticks at column 0, that
+// required the closing fence to have exactly the opening fence's length, and
+// that knew only backticks. Every one of those is stricter than CommonMark, and
+// every one of them fails the same way: a legal fence goes unextracted,
+// uncompiled and uncounted, under a headline claiming every block was checked.
+// A gate that skips an example silently is worse than no gate, because its
+// number is read as an answer. The cases below are one per rule, each carrying
+// an example that must fail — a fence that is extracted but valid would pass
+// whether or not the extractor ever saw it.
+// ---------------------------------------------------------------------------
+
+const brokenExample = "const broken: string = 1";
+const brokenDiagnostic = /Cannot assign number to string/u;
+
+test("[A-022] a fence indented inside a list item is extracted, dedented and compiled", async () => {
+  const run = await checkMarkdown("indented", [
+    "- Nested example:",
+    "",
+    "   ```velar",
+    `   ${brokenExample}`,
+    "   print(broken)",
+    "   ```",
+    "",
+  ].join("\n"));
+  assert.equal(run.status, 1, run.output);
+  // The dedent is load-bearing rather than cosmetic: VelarScript is
+  // indentation-sensitive, so a fence whose three spaces were not removed would
+  // fail with an indentation error instead of the type error the example has.
+  assert.match(run.stderr, brokenDiagnostic, run.output);
+});
+
+test("[A-022] a closing fence longer than its opening closes the block", async () => {
+  const run = await checkMarkdown("long-close", [
+    "```velar",
+    brokenExample,
+    "print(broken)",
+    "````",
+    "",
+  ].join("\n"));
+  assert.equal(run.status, 1, run.output);
+  assert.match(run.stderr, brokenDiagnostic, run.output);
+});
+
+test("[A-022] a tilde fence is a fence", async () => {
+  const run = await checkMarkdown("tilde", [
+    "~~~velar",
+    brokenExample,
+    "print(broken)",
+    "~~~",
+    "",
+  ].join("\n"));
+  assert.equal(run.status, 1, run.output);
+  assert.match(run.stderr, brokenDiagnostic, run.output);
+});
+
+test("[A-022] the headline counts the legal fences a regex could not reach", async () => {
+  // The reproduction as it was filed: one ordinary fence, then a second in a
+  // shape the old extractor could not see. The gate answered "Checked 1 …" and
+  // exit 0 — the number was wrong and the defective example was never compiled.
+  for (const second of [
+    ["- Nested example:", "", "   ```velar", "   print(\"two\")", "   ```"],
+    ["```velar", "print(\"two\")", "````"],
+    ["~~~velar", "print(\"two\")", "~~~"],
+  ]) {
+    const run = await checkMarkdown("counted-shapes", [
+      "```velar",
+      "print(\"one\")",
+      "```",
+      "",
+      ...second,
+      "",
+    ].join("\n"));
+    assert.equal(run.status, 0, run.output);
+    assert.match(run.stdout, /Checked 2 VelarScript documentation examples \(2 complete, 0 fragments\)/u, run.output);
+  }
+});
+
+test("[A-022] a shorter fence inside a longer one stays content", async () => {
+  // The one thing the old regex got right, kept: a VelarScript example may show
+  // a Markdown fence as literal text, and CommonMark's "at least as long" rule
+  // preserves that because the inner fence is shorter than the opening one.
+  const run = await checkMarkdown("nested-fence", [
+    "````velar",
+    "const markdown = \"",
+    " ```",
+    "\"",
+    "print(markdown)",
+    "````",
+    "",
+  ].join("\n"));
+  assert.equal(run.status, 0, run.output);
+  assert.match(run.stdout, /Checked 1 VelarScript documentation examples/u, run.output);
+});
+
+test("[A-022] a velar fence the extractor cannot reach is named, not skipped", async () => {
+  // The scanner reads CommonMark's fenced-code-block rules and nothing else, so
+  // a fence whose indentation is measured from a block container is out of its
+  // reach. That is a boundary, not a licence to skip: the gate says where the
+  // example is and goes red, because an example nobody compiles under a
+  // headline that claims otherwise is the whole defect.
+  for (const container of [
+    ["> ```velar", "> print(\"quoted\")", "> ```"],
+    ["- Item:", "", "    - Nested item:", "", "        ```velar", "        print(\"deep\")", "        ```"],
+  ]) {
+    const run = await checkMarkdown("unreachable", [...container, ""].join("\n"));
+    assert.equal(run.status, 1, run.output);
+    assert.match(run.stderr, /opens a VelarScript fence inside a Markdown container this gate does not parse/u, run.output);
+  }
+});
+
+test("[A-022] a preamble attaches to an indented fence", async () => {
+  const run = await checkMarkdown("indented-preamble", [
+    "- Nested example:",
+    "",
+    "   <!-- velar-preamble",
+    "   def total(values: List<number>) -> string:",
+    "       return values.sum()",
+    "   -->",
+    "   ```velar fragment",
+    "   print(total([1, 2, 3]))",
+    "   ```",
+    "",
+  ].join("\n"));
+  assert.equal(run.status, 1, run.output);
+  assert.match(run.stderr, /Cannot (assign|return) number/u, run.output);
+});
+
 test("a preamble shown inside a code block is documentation, not a declaration", async () => {
   // D64 itself writes the mechanism out inside a fence; documentation about a
   // mechanism must not trip the mechanism.

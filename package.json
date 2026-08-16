@@ -22,7 +22,7 @@
     "release:verify": "node scripts/release-toolchain.mjs verify",
     "preview:prepare": "node scripts/prepare-external-preview.mjs",
     "velar": "node scripts/gate-lock.mjs npm run --silent gate:velar --",
-    "gate:build:packages": "npm run build --workspace @velarscript/compiler && npm run build --workspace @velarscript/node && npm run build --workspace @velarscript/web && npm run build --workspace create-velar && npm run build --workspace @velarscript/desktop && npm run build --workspace @velarscript/cli",
+    "gate:build:packages": "node scripts/build-packages.mjs",
     "gate:check": "npm run build:packages && npm run check:format && npm run check:docs && npm run check:boundaries && npm run check:projects && npm run check:tour-coverage && tsc -p tsconfig.json",
     "gate:test": "npm run build:packages && node --test --test-concurrency=1 --test-timeout=120000 tests/*.test.ts tests/ci.acceptance.ts tests/release.acceptance.ts && node scripts/run-project-gate.mjs unit",
     "gate:test:browser": "npm run build:packages && node tests/browser.acceptance.ts && node scripts/run-project-gate.mjs browser && node tests/installed-browser.acceptance.ts",
