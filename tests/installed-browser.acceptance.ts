@@ -5,9 +5,43 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { velarPackageNames } from "../scripts/velar-packages.mjs";
+import { BROWSER_TEST_MODULE, webModuleInterfaces } from "../packages/web/dist/compiler.js";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const directory = await mkdtemp(join(tmpdir(), "velar-installed-browser-"));
+
+/**
+ * Every Web module an application may import, read from the extension's own
+ * interface table rather than listed here, so a module published tomorrow
+ * fails this acceptance until the installed toolchain really serves it.
+ *
+ * `velar/web-test` is the one subtraction, and it is the compiler's own
+ * constant rather than a name matched by spelling: importing it from
+ * application source is refused outright (VEL5062 — it only has a runtime
+ * under `velar test --browser`), so it is exercised by the generated browser
+ * test instead, one layer below.
+ *
+ * Nothing else is subtracted. `velar/look` was missing from the hand-written
+ * list this replaces, on the belief that it is syntax with no importable value
+ * surface; its interface publishes 37 exports and the charter writes
+ * `import {alpha, border, rgb, spacing} from "velar/look"`, so the belief was
+ * simply wrong and the old count of nine was one short.
+ *
+ * The probe name per module is its first *function* export, because a value
+ * with a runtime behind it proves the installed package actually serves the
+ * module. A type name would prove only that the interface parsed.
+ */
+const applicationWebModules = [...webModuleInterfaces]
+  .filter(([specifier]) => specifier !== BROWSER_TEST_MODULE)
+  .map(([specifier, moduleInterface]) => {
+    const probe = [...moduleInterface.exports]
+      .filter(([, entry]) => entry?.kind === "function")
+      .map(([name]) => name)
+      .sort()[0];
+    assert.ok(probe, `${specifier} publishes no function export to probe the installed module with`);
+    return { specifier, probe };
+  })
+  .sort((left, right) => left.specifier.localeCompare(right.specifier));
 
 try {
   // A-024: this file held the fifth copy of the eight-package roster — one
@@ -27,34 +61,19 @@ try {
   const application = join(directory, "Team & App");
   await run(process.execPath, [installedCli, "create", application], directory);
   await install(["--save-dev"], application);
-  await writeFile(join(application, "src", "web-contract.vel"), `
-import {onError} from "velar/app"
-import {environment} from "velar/browser"
-import {has} from "velar/config"
-import {readText} from "velar/files"
-import {errors} from "velar/forms"
-import {http} from "velar/http"
-import {socket} from "velar/realtime"
-import {session} from "velar/storage"
-import {currentRoute} from "velar/web"
+  await writeFile(join(application, "src", "web-contract.vel"), `${applicationWebModules
+    .map(({ specifier, probe }) => `import {${probe}} from "${specifier}"`)
+    .join("\n")}
 
 export const installedWebModules = [
-    onError,
-    environment,
-    has,
-    readText,
-    errors,
-    http,
-    socket,
-    session,
-    currentRoute,
+${applicationWebModules.map(({ probe }) => `    ${probe},`).join("\n")}
 ].size
-`.trimStart(), "utf8");
+`, "utf8");
   await writeFile(join(application, "src", "main.vel"), `
 import {App} from "./app.vel"
 import {installedWebModules} from "./web-contract.vel"
 
-assert installedWebModules == 9 else "The installed Web package must expose all application modules"
+assert installedWebModules == ${applicationWebModules.length} else "The installed Web package must expose all application modules"
 mount(<App />, "#app")
 `.trimStart(), "utf8");
   const manifest = JSON.parse(await readFile(join(application, "package.json"), "utf8")) as { scripts: Record<string, string> };
