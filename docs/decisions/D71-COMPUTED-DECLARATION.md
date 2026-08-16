@@ -53,7 +53,7 @@ D70（setup 里的冻结读取）是同一个不对称的两个后果，
 用户的原话是「**`const` 声明的变量不应该和响应式挂钩，这是最膈应的地方**」，
 这比对称性准得多：
 
-```velar
+```text
 const frozen = locale.text("English", "中文")    // 冻住的
 const total  = computed(() => count * 2)         // 活的
 ```
@@ -77,7 +77,7 @@ D69 的规则仍然需要（`watch 5:` 还是死的），但它最可能命中�
 
 D70 那个 bug 里**根本没有 `computed`**：
 
-```velar
+```text
 const localized = items.map(...)      // 普通 const，冻结是因为读取发生在 setup
 ```
 
@@ -133,7 +133,7 @@ const localized = items.map(...)      // 普通 const，冻结是因为读取发
 
 ## 第 184 条 —— 最终形态
 
-```velar
+```text
 state    count   = 0              // 可写、反应式
 computed doubled = count * 2      // 只读、反应式、裸读 —— 声明派生值的唯一写法
 const    frozen  = count * 2      // 只读、非反应式，算一次

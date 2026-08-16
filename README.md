@@ -119,9 +119,10 @@ The full reasoning is in [Why VelarScript exists](docs/why-velarscript.md).
 **Using the language**
 
 - [Getting started](docs/getting-started.md) — install, create, run, test
-- [Best practices](docs/best-practices.md) — the house style, with runnable code
+- [The language](docs/language.md) — the whole language in reading order, with runnable code
+- [Best practices](docs/best-practices.md) — the house style, one complete program per rule
 - [CLI reference](docs/cli.md) — every command, grouped by what you are doing
-- [Language reference](docs/language-charter.md) — the full contract
+- [Language charter](docs/language-charter.md) — the full contract
 - [Standard library](docs/standard-library.md) · [Web framework](docs/web-api.md)
 - [AI skill brief](docs/ai-skill.md) — what `velar skill` prints
 - [Escape hatches](docs/escape-hatches.md) · [JavaScript boundary](docs/javascript-bridge.md)

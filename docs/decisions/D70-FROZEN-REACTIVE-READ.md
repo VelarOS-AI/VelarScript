@@ -9,7 +9,7 @@
 
 ### 事实链（我复验，编译干净）
 
-```velar
+```text
 // locale.vel
 export state siteLocale = "zh"
 export def useLocale() -> Composer:

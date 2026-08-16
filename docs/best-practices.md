@@ -9,6 +9,12 @@ this document names the one to use. The compiler enforces most of the canon;
 `velar format` settles everything about layout. What remains is judgment,
 and this page is that judgment, written down.
 
+**Every program on this page is complete and runs as written.** Copy one into
+`src/main.vel` and `velar run` it; the test module goes in a `*.test.vel` file
+and the component program in a Web project. Nothing here is a sketch with the
+hard parts elided — the code you are being asked to imitate is code that
+compiles.
+
 The meta-rule above all others: **run `velar check` and do what the
 diagnostic says**, then `velar fix` for the rewrites that are provably
 behavior-preserving. Diagnostics name the one current spelling; they are the
@@ -18,7 +24,11 @@ canon's enforcement arm, and they outrank any memory of this page.
 
 Give every finite state an enum, every shape a `type`, and let unions carry
 the alternatives. Data that is modeled precisely makes every function after
-it shorter.
+it shorter. Return multiple values as a named record with shorthand fields,
+never through an out-parameter or a class — the type name is free
+documentation. When an external protocol owns the wire spelling, map it in the
+enum instead of writing a conversion function: a string-backed member already
+satisfies `string` contracts directly.
 
 ```velar
 enum TicketStatus:
@@ -26,38 +36,37 @@ enum TicketStatus:
     pending
     resolved
 
+enum ProviderEventKind:
+    textDelta = "response.output_text.delta"
+    completed = "response.completed"
+
 type Ticket:
     id: string
     title: string
     status: TicketStatus
     assignee: string?
-```
 
-When an external protocol owns the wire spelling, map it in the enum instead
-of writing a conversion function — a string-backed member already satisfies
-`string` contracts directly:
+type Triage:
+    open: number
+    unassigned: number
 
-```velar
-enum ProviderEventKind:
-    textDelta = "response.output_text.delta"
-    completed = "response.completed"
+def triage(tickets: List<Ticket>) -> Triage:
+    const open = tickets.filter(ticket => ticket.status == TicketStatus.open).size
+    const unassigned = tickets.filter(ticket => ticket.assignee == null).size
+    return {open, unassigned}
 
 def wireName(kind: ProviderEventKind) -> string:
     return kind
-```
 
-Return multiple values as a named record with shorthand fields, never
-through an out-parameter or a class. The type name is free documentation:
+const board: List<Ticket> = [
+    {id: "t-1", title: "Crash on save", status: TicketStatus.open, assignee: null},
+    {id: "t-2", title: "Slow search", status: TicketStatus.pending, assignee: "ada"},
+    {id: "t-3", title: "Stale cache", status: TicketStatus.open, assignee: "lin"},
+]
 
-```velar
-type TextMeasure:
-    lines: number
-    words: number
-
-def measure(text: string) -> TextMeasure:
-    const lines = text.split("\n").size
-    const words = text.split(" ").size
-    return {lines, words}
+const counts = triage(board)
+print(f"{counts.open} open, {counts.unassigned} unassigned")
+print(wireName(ProviderEventKind.textDelta))
 ```
 
 ## 2. Null discipline
@@ -69,24 +78,64 @@ Equality requires the two sides to share possible values, so compare an
 enum against an enum — `Kind.parse(raw) == Kind.textDelta` — rather than
 against a raw string.
 
-```velar fragment
-if ticket.assignee != null:
-    notify(ticket.assignee)
-
-const label = ticket.assignee ?? "unassigned"
-const city = account?.profile?.city
-```
-
 Use `[]` when the index must exist (it throws on a bug) and `.get()` when
 absence is an expected answer. That difference is the reader's signal. The
 same split governs removal: `pop(index=-1)` throws on an empty List, so
 drain with `while items.size > 0:` rather than testing a result for null.
 
+```velar
+enum Channel:
+    email
+    push
+
+type Profile:
+    city: string?
+
+type Account:
+    profile: Profile?
+
+type Ticket:
+    title: string
+    assignee: string?
+
+def notify(name: string):
+    print(f"notifying {name}")
+
+def announce(ticket: Ticket, account: Account?, raw: string):
+    if ticket.assignee != null:
+        notify(ticket.assignee)
+    const label = ticket.assignee ?? "unassigned"
+    const city = account?.profile?.city ?? "unknown"
+    const channel = Channel.parse(raw) == Channel.push ? "push" : "mail"
+    print(f"{ticket.title}: {label} in {city} by {channel}")
+
+def drain(queue: List<Ticket>) -> number:
+    let handled = 0
+    while queue.size > 0:
+        const ticket = queue.pop(index=-1)
+        handled += 1
+        print(f"handled {ticket.title}")
+    return handled
+
+const queue: List<Ticket> = [
+    {title: "Crash on save", assignee: null},
+    {title: "Slow search", assignee: "ada"},
+]
+
+announce(queue[0], {profile: {city: "Delft"}}, "push")
+print(f"{drain(queue)} handled")
+```
+
 ## 3. Chains over cursors
 
 Collection work is method chains: `filter`, `map`, `sorted(by=...)`,
 `reduce`, `sum`. A hand-advanced index loop is the exception reserved for
-genuine cursor algorithms, not the default.
+genuine cursor algorithms, not the default. Need the position? Use the
+two-slot loop, never a shadow counter.
+
+Membership is `in`. Three or more `or value == ...` comparisons means the
+values wanted to be a `Set` constant. Mutate state directly — deep reactivity
+is the default, so rebuild-the-list spellings are noise.
 
 ```velar
 type Task:
@@ -94,37 +143,33 @@ type Task:
     priority: number
     done: bool
 
-const tasks: List<Task> = []
-const titles = tasks
-    .filter(task => not task.done)
-    .sorted(by=task => task.priority)
-    .map(task => task.title)
-```
-
-Need the position? Use the two-slot loop, never a shadow counter:
-
-```velar fragment
-for ticket, index in tickets:
-    print(f"{index}: {ticket.title}")
-```
-
-Membership is `in`. Three or more `or value == ...` comparisons means the
-values wanted to be a `Set` constant:
-
-```velar
 const closingWords = Set(["done", "closed", "resolved"])
 
 def isClosing(word: string) -> bool:
     return word in closingWords
-```
 
-Mutate state directly — deep reactivity is the default, so rebuild-the-list
-spellings are noise:
+def openTitles(tasks: List<Task>) -> List<string>:
+    return tasks
+        .filter(task => not task.done)
+        .sorted(by=task => task.priority)
+        .map(task => task.title)
 
-```velar fragment
-tickets.append(ticket)
-tickets[0].done = true
-tickets[0].pinned = not tickets[0].pinned
+const tasks: List<Task> = [
+    {title: "Ship the parser", priority: 2, done: false},
+    {title: "Write the tour", priority: 1, done: false},
+    {title: "Fix the gate", priority: 3, done: true},
+]
+
+for title, index in openTitles(tasks):
+    print(f"{index}: {title}")
+
+tasks.append({title: "Review the brief", priority: 4, done: false})
+tasks[0].done = true
+tasks[0].done = not tasks[0].done
+
+const weight = tasks.map(task => task.priority).sum()
+const closing = isClosing("resolved")
+print(f"{tasks.size} tasks, weight {weight}, closing {closing}")
 ```
 
 ## 4. Dispatch with match
@@ -147,6 +192,11 @@ def advance(status: Status) -> Status:
             return Status.done
         case _:
             return Status.todo
+
+let status = Status.todo
+for step in range(4):
+    status = advance(status)
+    print(f"{step}: {status}")
 ```
 
 ## 5. Small functions, guard first
@@ -155,42 +205,40 @@ Handle the empty and missing cases with early returns, then write the happy
 path unindented. Contracts are `assert condition else "message"` at the top
 of the function — one line per rule, message required.
 
-```velar
-def firstLine(text: string) -> string:
-    assert text.size <= 1000000 else "Text is beyond the supported size"
-    if text == "":
-        return ""
-    return text.split("\n")[0]
-```
-
 Callbacks stay arrows while they are one expression; the moment logic needs
 two statements, promote it to a named `def` — the name is documentation.
 Name arguments at call sites where a bare value would read as a mystery:
-`buttonLook(dangerous=true)`, never `buttonLook(true)`.
+`label(dangerous=true)`, never `label(true)`.
 
 A type parameter stays unbounded by default. Add a bound only when the body
 actually uses the capability — `<T: Text>` because it interpolates the value,
 `<T: Comparable>` because it orders it, `<T: Data>` because it serializes it.
 A bound the body does not need is a narrower contract for no gain, and it is
 the caller who pays. The chain runs `Comparable ⊂ Text ⊂ Data`, so one word
-always says it; reach for the weakest one that compiles:
+always says it; reach for the weakest one that compiles.
 
 ```velar
+def firstLine(text: string) -> string:
+    assert text.size <= 1000000 else "Text is beyond the supported size"
+    if text == "":
+        return ""
+    return text.split("\n")[0]
+
 def summarize<T: Text>(values: List<T>) -> string:
     return values.map(str).join(", ")
 
+def label(text: string, dangerous: bool = false) -> string:
+    return dangerous ? f"! {text}" : text
+
+print(firstLine("first\nsecond"))
 print(summarize([1, 2, 3]))
+print(label("Delete", dangerous=true))
 ```
 
 ## 6. Strings
 
 Text is built with f-strings — numbers, bools, and enums interpolate
-directly, and `+` chains or conversion ceremony are noise:
-
-```velar
-const count = 3
-const summary = f"{count} open tickets"
-```
+directly, and `+` chains or conversion ceremony are noise.
 
 Use double quotes for ordinary inline text and backticks when the text itself
 contains double quotes, especially JSON fixtures; `velar format` chooses the
@@ -202,13 +250,55 @@ Data becomes text through `Json.stringify`, never through
 interpolation of a record. Multi-line text is a layout string, not a stack
 of `\n` escapes.
 
+```velar
+type Report:
+    open: number
+    ready: bool
+
+const report: Report = {open: 3, ready: true}
+const summary = f"{report.open} open tickets, ready {report.ready}"
+const fixture = `{"open":3,"state":"ready"}`
+const usage = "
+    velar check
+    velar test
+"
+
+print(summary)
+print(fixture)
+print(usage)
+print(Json.stringify(report))
+```
+
 ## 7. Components: four cells, one job each
 
 `state` holds a fact. `computed` derives from facts. `resource` loads async
 data. `action` performs a user operation. Choosing the right one removes
-most component code:
+most component code.
 
-```velar fragment
+Read a resource as `value != null`; never wrap a plain field read in
+another `computed`. In JSX, call a computed once into a `const` if you need
+it three times. Render nothing with `null`. Accept children by declaring a
+`children: WebNode` prop. Extract every reused look into a named value and
+compose with `look={...}`.
+
+```velar
+import {spacing} from "velar/look"
+
+type Ticket:
+    id: string
+    title: string
+
+const panelLook = look:
+    display = "grid"
+    gap = 12px
+    padding = spacing(16px, 20px)
+
+async def loadTicket(id: string) -> Ticket:
+    return {id, title: f"Ticket {id}"}
+
+async def saveDraft(id: string, draft: string):
+    print(f"{id}: {draft}")
+
 component TicketPanel(id: string):
     state draft = ""
     resource ticket: Ticket = loadTicket(id)
@@ -217,18 +307,14 @@ component TicketPanel(id: string):
     action save():
         await saveDraft(id, draft)
 
-    return <section>
+    return <section look={panelLook}>
         <h2>{heading()}</h2>
         <textarea bind:value={draft}></textarea>
-        <button disabled={save.pending} on:click={save}>Save</button>
+        <button type="button" disabled={save.pending} on:click={save}>Save</button>
     </section>
-```
 
-Read a resource as `value != null`; never wrap a plain field read in
-another `computed`. In JSX, call a computed once into a `const` if you need
-it three times. Render nothing with `null`. Accept children by declaring a
-`children: WebNode` prop. Extract every reused look into a named value and
-compose with `look={...}`.
+mount(<TicketPanel id="t-1" />, "#app")
+```
 
 ## 8. Errors and async
 
@@ -238,31 +324,56 @@ the boundary with `Type.parse`, then trust the types inward. `await` every
 call whose result or completion you depend on — a dropped promise is a bug,
 and the compiler treats it as one.
 
-Every handle a scope opens, that scope owns: write `using` and delete the
-`try`/`finally` you were about to write. It covers the exits that are easy to
-forget — an early `return`, a `break` out of a pull loop, a throw from three
-frames down:
-
-```velar fragment
-async def tail(path: string):
-    using watcher = await watchFiles(path)
-    async for batch in watcher:
-        if batch.rescan:
-            return null
-```
-
-Give a class an `@dispose:` block only when it truly owns something a scope
-should release; delegate it to the `close()` or `stop()` the class already
-publishes rather than inventing a second verb, and keep it safe to run twice.
-
 Sort failures by whether the caller already expects them. An expected failure
 is an optional — `try` it and supply the fallback at the use site, where a
 reader can see the decision. An unexpected one is a `try`/`catch` block,
 because the details are what you need. Never hand-write the third shape, a
-`def tryParse` that wraps a parse in try/catch and returns null:
+`def tryParse` that wraps a parse in try/catch and returns null.
 
-```velar fragment
-const settings = try Settings.parse(raw) ?? defaultSettings()
+Every handle a scope opens, that scope owns: write `using` and delete the
+`try`/`finally` you were about to write. It covers the exits that are easy to
+forget — an early `return`, a `break` out of a pull loop, a throw from three
+frames down. Give a class an `@dispose:` block only when it truly owns
+something a scope should release; delegate it to the `close()` or `stop()` the
+class already publishes rather than inventing a second verb, and keep it safe
+to run twice.
+
+```velar
+type Settings:
+    retries: number
+
+class Session:
+    let open: bool = true
+
+    constructor(const name: string):
+        pass
+
+    def close():
+        self.open = false
+
+    @dispose:
+        self.close()
+
+def defaultSettings() -> Settings:
+    return {retries: 3}
+
+def load(raw: unknown) -> Settings:
+    const settings = try Settings.parse(raw) ?? defaultSettings()
+    if settings.retries < 0:
+        throw Error("Settings requires a non-negative retry count")
+    return settings
+
+async def replay(raw: unknown) -> string:
+    using session = Session("replay")
+    const settings = load(raw)
+    await Promise.sleep(1ms)
+    return f"{session.name}: {settings.retries} retries"
+
+async def main():
+    print(await replay({retries: 5}))
+    print(await replay("not a settings record"))
+
+async main()
 ```
 
 ## 9. Tests are the specification
@@ -271,23 +382,66 @@ A test name is a sentence the product owner can read: state what the code must
 do, not which function is under test. `test "an empty draft cannot be
 submitted":` earns its place in a report; `test "submit validation":` does not.
 One behaviour per test, and let the assertions read as the evidence for the
-name:
+name. Helpers in a test module stay ordinary `def`s with ordinary names; only
+the blocks are tests.
 
-```velar fragment
+```velar
+import {expect} from "velar/test"
+
+type Ticket:
+    id: string
+    open: bool
+
+def openIds(board: List<Ticket>) -> List<string>:
+    return board.filter(ticket => ticket.open).map(ticket => ticket.id)
+
+def resolve(board: List<Ticket>, id: string):
+    for ticket in board:
+        if ticket.id == id:
+            ticket.open = false
+
+def boardWithOneOpenTicket() -> List<Ticket>:
+    return [{id: "t-1", open: true}]
+
 test "a resolved ticket leaves the open queue":
-    const board = boardWith(openTicket)
-    resolve(board, openTicket.id)
+    const board = boardWithOneOpenTicket()
+    resolve(board, "t-1")
     expect(openIds(board)).toEqual([])
-```
 
-Helpers in a test module stay ordinary `def`s with ordinary names; only the
-blocks are tests.
+test "an unrelated resolution leaves the queue alone":
+    const board = boardWithOneOpenTicket()
+    resolve(board, "t-9")
+    expect(openIds(board)).toEqual(["t-1"])
+```
 
 ## 10. Modules
 
 Export and import by name. A package's public face is a barrel of explicit
-re-exports (`export {x} from "./x.vel"`). If two modules need each other's
-values at load time, the shared value wants a third module.
+re-exports (`export {measure} from "./text.vel"`). If two modules need each
+other's values at load time, the shared value wants a third module. There is
+no `import type`: Vel does not erase types, so a type carries its runtime
+validator and a type import is an ordinary import.
+
+```velar
+export type TextMeasure:
+    lines: number
+    words: number
+
+export def measure(text: string) -> TextMeasure:
+    const lines = text.split("\n").size
+    const words = text.split(" ").size
+    return {lines, words}
+
+export def firstLine(text: string) -> string:
+    return text.split("\n")[0]
+
+const sample = "
+    one two
+    three
+"
+const measured = measure(sample)
+print(f"{measured.lines} lines, {measured.words} words")
+```
 
 ## 11. What elegance means here
 
@@ -297,3 +451,42 @@ asserts, and not one comment explaining a workaround — because there is
 nothing to work around when data is modeled first. Elegant VelarScript is
 not clever; it is unsurprising, and it looks the same no matter who — or
 what — wrote it.
+
+```velar
+type Span:
+    start: number
+    end: number
+
+type Cursor:
+    line: number
+    column: number
+
+def lineStarts(text: string) -> List<number>:
+    let offsets: List<number> = [0]
+    let offset = 0
+    for line in text.split("\n"):
+        offset += line.size + 1
+        offsets.append(offset)
+    return offsets
+
+def cursorAt(text: string, offset: number) -> Cursor:
+    assert offset >= 0 else "A cursor offset is never negative"
+    const starts = lineStarts(text)
+    const line = starts.filter(start => start <= offset).size - 1
+    return {line, column: offset - starts[line]}
+
+def spanOfLine(text: string, line: number) -> Span:
+    const starts = lineStarts(text)
+    assert line >= 0 and line < starts.size - 1 else "That line is not in the text"
+    return {start: starts[line], end: starts[line + 1] - 1}
+
+const sample = "
+    first line
+    second line
+    third line
+"
+const cursor = cursorAt(sample, 14)
+const span = spanOfLine(sample, 1)
+print(f"line {cursor.line}, column {cursor.column}")
+print(f"span {span.start}..{span.end}")
+```

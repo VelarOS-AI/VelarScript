@@ -1,0 +1,636 @@
+# The VelarScript language
+
+This is the **reading path**: the whole language in the order it makes sense to
+learn it, with a runnable program at every step. It is not the contract. The
+contract is [the language charter](language-charter.md) — three thousand lines
+that answer *exactly* what happens in every corner, and that the compiler is
+tested against. This page gets you to the point where you can read the charter
+when you need it, and not before.
+
+Read it top to bottom once. Each section ends with **↳ charter §N**, which is
+where to go when you need the exact rule rather than the working idea.
+
+If you have not built anything yet, start with
+[Getting started](getting-started.md) — ten minutes to a running application.
+When you want the house style rather than the mechanics, that is
+[Best practices](best-practices.md).
+
+**Two parents.** Vel's behaviour comes from JavaScript and its spelling comes
+from Python. When you are unsure how something *behaves*, guess JavaScript;
+when you are unsure how something is *written*, guess Python. Where the two
+disagree about which of five spellings to keep, Vel keeps one — and the
+compiler names it when you write another.
+
+---
+
+## 1. The shape of a file
+
+A VelarScript file is a `.vel` file. A block opens with `:` and a newline and
+is carried by indentation, exactly as in Python — four spaces by convention,
+and `velar format` settles it either way. There are no semicolons and no braces
+around statement blocks. One statement per line; a line that begins with `.` or
+`?.` continues the previous line, which is what lets method chains break
+naturally.
+
+Comments are `//` for a line, `///` for documentation attached to the following
+declaration, and `/* */` for a region — the block form nests, and a multi-line
+one takes whole lines.
+
+A statement must *do* something. A line that only computes a value and drops it
+is a compile error, so a bare string is not a docstring.
+
+```velar
+/// Returns the greeting shown on the dashboard.
+def greeting(name: string) -> string:
+    // One statement per line; no semicolons.
+    return f"Hello, {name}"
+
+print(greeting("Ada"))
+```
+
+↳ charter [§2 Files, comments, and blocks](language-charter.md#2-files-comments-and-blocks)
+
+## 2. Bindings and literals
+
+`const` binds a name that cannot be reassigned; `let` binds one that can.
+There is no `var`. Numbers are decimal only — no `0x`, no `0b`, no leading-zero
+octal, no bare `.5` — and long digits group with `_`. `true`/`false`/`null` are
+the three keyword literals; there is no `undefined`.
+
+Strings come in three delimiters and two prefixes that combine. Double quotes
+are the default; backticks hold text that itself contains `"` (a JSON fixture, a
+CSS selector) without escaping; a quote followed immediately by a newline opens
+a **layout string**, closed by a quote back at the opening line's indentation.
+The prefixes are `f` (interpolation) and `r` (raw), and `rf` is both. Only an
+`f` prefix interpolates — `${value}` is ordinary text in every string.
+
+```velar
+const limit = 1_000_000
+let attempts = 0
+attempts += 1
+
+const name = "Ada"
+const greeting = f"Hello, {name}"
+const fixture = `{"name":"Ada"}`
+const pattern = r"\d+"
+const usage = "
+    velar check
+    velar test
+"
+
+print(f"{limit} {attempts} {greeting} {fixture} {pattern}")
+print(usage)
+```
+
+↳ charter [§3 Bindings and literals](language-charter.md#3-bindings-and-literals)
+
+## 3. Operators, and what a condition is
+
+Arithmetic and comparison read as you expect. The words are `and`, `or`, `not`
+— not `&&`, `||`, `!`. Equality is `==`/`!=` and it never coerces: the two
+sides must have overlapping possible values, so `1 == "1"` does not compile.
+Equality also never chains — write `a == b and b == c`. Ordered comparisons do
+chain, but must point one way: `0 < index <= size`.
+
+**A condition judges truth, not presence.** `if`, `while`, `and`, `or`, `not`,
+and `? :` accept `bool` and `bool?` only. There is no truthiness, so an
+optional is tested explicitly with `!= null`. The conditional expression is
+`cond ? a : b`; there is no `x if cond else y`.
+
+`??` supplies a default for an optional and `?.` reaches through one, but `??`
+never shares an unparenthesized chain with `and`/`or`.
+
+```velar
+type Account:
+    nickname: string?
+
+def title(account: Account, index: number) -> string:
+    const named = account.nickname != null and index > 0
+    const label = account.nickname ?? "anonymous"
+    return named ? f"{index}. {label}" : label
+
+print(title({nickname: "ada"}, 1))
+print(title({nickname: null}, 0))
+```
+
+↳ charter [§4 Operators](language-charter.md#4-operators)
+
+## 4. Types
+
+The core types are `string`, `number`, `bool`, `null`, and `unknown`. `T?` is
+an optional. Types are **not erased**: a Vel type carries a runtime validator,
+which is why there is no `import type` and why `Type.parse(value)` exists at
+every boundary.
+
+`unknown` is the honest type for data that has not been validated yet — you
+cannot use it until you narrow it. `any` is *not* a type you may write; it
+arrives only through an explicit unsafe JavaScript import, and the compiler
+says so if you try.
+
+Numbers and strings carry their operations as **methods**, not as free
+functions: `value.round()`, `value.isNaN()`, `text.isBlank()`,
+`text.split("\n")`.
+
+```velar
+type Reading:
+    label: string
+    celsius: number
+
+def describe(untrusted: unknown) -> string:
+    const reading = Reading.parse(untrusted)
+    const rounded = reading.celsius.round()
+    const blank = reading.label.isBlank()
+    return f"{reading.label}: {rounded} (blank {blank})"
+
+print(describe({label: "kitchen", celsius: 21.4}))
+```
+
+↳ charter [§5 Core types](language-charter.md#5-core-types)
+
+## 5. Records, aliases, and enums
+
+One keyword, `type`, declares both record shapes and aliases. A record type is
+structural — any value with the right fields satisfies it — and it carries
+`parse` and `is` for untrusted data. Fields may be optional (`name: string?`)
+and individually `readonly`.
+
+`enum` declares a finite, string-backed state. A member may carry an external
+wire spelling (`textDelta = "response.output_text.delta"`) without losing its
+nominal identity, and `Kind.values()` returns the members in declaration order.
+An enum member in type position discriminates a union.
+
+```velar
+enum Status:
+    pending
+    active
+    done
+
+type UserId = string
+
+type User:
+    id: UserId
+    name: string
+    avatar: string?
+    status: Status
+
+def line(user: User) -> string:
+    return f"{user.id} {user.name} {user.status}"
+
+const user: User = {id: "u-1", name: "Ada", avatar: null, status: Status.active}
+print(line(user))
+print(f"{Status.values().size} states")
+print(f"{Status.parse("done")}")
+```
+
+↳ charter [§6 Records, aliases, and enums](language-charter.md#6-records-aliases-and-enums)
+
+## 6. Functions and calls
+
+Functions are `def`, with typed parameters, optional defaults, and a result
+annotated after `->`. A call may name its arguments with `name=value` — not
+`name: value`. Lambdas use `=>` and are single expressions.
+
+**There are two arrows.** `=>` is the value-level arrow: it introduces a lambda
+body. `->` is the type-level arrow: it names a result. They meet on a callback,
+where the *type* is written with `->` and the *value* passed to it with `=>`.
+
+A generic function names a bound only when its body needs the capability:
+`<T: Comparable>` to order, `<T: Text>` to interpolate, `<T: Data>` to
+serialize.
+
+```velar
+type Transform = (value: number) -> number
+
+def apply(values: List<number>, using: Transform) -> List<number>:
+    return values.map(using)
+
+def scale(value: number, factor: number = 2) -> number:
+    return value * factor
+
+def join<T: Text>(values: List<T>) -> string:
+    return values.map(str).join(", ")
+
+const doubled = apply([1, 2, 3], value => scale(value))
+print(join(doubled))
+print(str(scale(10, factor=3)))
+```
+
+↳ charter [§7 Functions and calls](language-charter.md#7-functions-and-calls)
+
+## 7. Collections
+
+`List<T>`, `Set<T>`, `Map<K, V>`, and `Record<T>` are the four, and their
+methods are compiler-checked rather than inherited from JavaScript. Size is
+`.size` everywhere — on strings too. Appending is `.append(x)`; there is no
+`push`, `splice`, `shift`, or mutating `sort`. Sorting and reversing copy:
+`.sorted(by=...)`, `.reversed()`.
+
+`[index]` **throws** when the index is out of range, and `.get(index)` returns
+`T?`. Choose by whether absence is a bug or an expected answer — that choice is
+the signal the next reader gets. Membership is `in`.
+
+```velar
+type Task:
+    title: string
+    priority: number
+
+const tasks: List<Task> = [
+    {title: "Ship the parser", priority: 2},
+    {title: "Write the tour", priority: 1},
+]
+
+tasks.append({title: "Fix the gate", priority: 3})
+
+const ordered = tasks.sorted(by=task => task.priority).map(task => task.title)
+const total = tasks.map(task => task.priority).sum()
+const first = tasks[0].title
+const missing = tasks.get(99)?.title ?? "none"
+
+const owners = Map([["t-1", "ada"], ["t-2", "lin"]])
+const words = Set(["done", "closed"])
+
+print(ordered.join(" | "))
+print(f"{total} {first} {missing} {owners.get("t-1")} {"done" in words}")
+```
+
+↳ charter [§8 Collections](language-charter.md#8-collections)
+
+## 8. Control flow
+
+`if` / `else if` / `else`, `while`, and `for … in …`. The `for` loop takes a
+second slot for the position — `for value, index in values:` — so a shadow
+counter is never needed. `range(...)` is in the prelude and needs no import.
+
+`match` is the dispatcher: one subject, `case` branches that may destructure
+records and lists, an optional `if` guard, and `case _:` as the only fallback.
+An `else if` ladder over an enum is the shape `match` exists to replace.
+
+```velar
+enum Phase:
+    todo
+    doing
+    done
+
+type Charge:
+    kind: string
+    amount: number
+
+def advance(phase: Phase) -> Phase:
+    match phase:
+        case Phase.todo:
+            return Phase.doing
+        case Phase.doing:
+            return Phase.done
+        case _:
+            return Phase.todo
+
+def describe(event: Charge) -> string:
+    match event:
+        case {kind: "charge", amount} if amount > 100:
+            return f"large charge of {amount}"
+        case {kind: "charge", amount}:
+            return f"charge of {amount}"
+        case _:
+            return "other"
+
+let phase = Phase.todo
+for step in range(3):
+    phase = advance(phase)
+    print(f"{step}: {phase}")
+
+print(describe({kind: "charge", amount: 250}))
+```
+
+↳ charter [§9 Control flow](language-charter.md#9-control-flow)
+
+## 9. Classes, and who owns a handle
+
+Classes have typed body fields, **one** explicit constructor, and an explicit
+`self`. Instances are called directly — there is no `new`. A `const`/`let`
+prefix on a constructor parameter declares the field at the same time.
+
+Members whose names begin with `@` belong to the language and can never collide
+with yours. `@dispose:` is the release contract: `using name = expression` runs
+it on **every** exit from the owning scope — block end, `return`, `break`,
+`continue`, a throw three frames down — in reverse declaration order. An owned
+value may not leave its scope, so return the data you read from it rather than
+the handle.
+
+```velar
+class Session:
+    let open: bool = true
+
+    constructor(const name: string):
+        pass
+
+    def close():
+        self.open = false
+
+    @dispose:
+        self.close()
+
+def work(name: string) -> string:
+    using session = Session(name)
+    return f"{session.name} open: {session.open}"
+
+print(work("import"))
+```
+
+↳ charter [§10 Classes](language-charter.md#10-classes)
+
+## 10. Errors and assertions
+
+`assert condition else "message"` states a contract at the top of a function;
+the message is required and reads as a sentence. Failures that the caller does
+**not** expect are `try` / `catch` / `finally` blocks. Failures the caller
+*does* expect are the `try` **expression**, which produces `null` when anything
+in the chain throws — its result must be consumed, usually by `??`.
+
+An error's **class** is its classification: discriminate with
+`if error is FileNotFoundError:`. `error.code` is that same identity in string
+form, for when it must survive a log or a JSON boundary.
+
+```velar
+type Settings:
+    retries: number
+
+def defaultSettings() -> Settings:
+    return {retries: 3}
+
+def load(raw: unknown) -> Settings:
+    const settings = try Settings.parse(raw) ?? defaultSettings()
+    assert settings.retries >= 0 else "A retry count is never negative"
+    return settings
+
+def read(values: List<number>, index: number) -> string:
+    try:
+        return str(values[index])
+    catch error:
+        if error is IndexError:
+            return "out of range"
+        throw error
+
+print(str(load({retries: 5}).retries))
+print(str(load("not a settings record").retries))
+print(read([1, 2, 3], 99))
+```
+
+↳ charter [§11 Errors and assertions](language-charter.md#11-errors-and-assertions)
+
+## 11. Modules, and the JavaScript boundary
+
+Export and import by name. A package's public face is a barrel of explicit
+re-exports. A module's top level runs once, on first import.
+
+What a program can *compute* needs no import; what reaches *outside* the
+program must be imported. Four namespaces are permanent because they mirror a
+JavaScript global — `Json.`, `Promise.`, `Math.`, and `Text.` — and everything
+else, including `velar/http`, `velar/storage`, and `velar/look`, is an ordinary
+named import.
+
+Third-party JavaScript enters through a **checked** boundary: `extern module`
+declares the shape you are relying on, and `import js` then reads as ordinary
+Vel. Declare the extern block once, in an adapter module, and re-export a
+checked surface from it.
+
+```velar
+type Payload:
+    id: string
+
+extern module "some-sdk":
+    export def load() -> unknown
+
+import js {load} from "some-sdk"
+
+export def payload() -> Payload:
+    return Payload.parse(load())
+
+print(f"{Math.max(1, 2)} {Json.stringify({id: "p-1"})}")
+```
+
+↳ charter [§12 Modules and JavaScript boundaries](language-charter.md#12-modules-and-javascript-boundaries)
+· [Escape hatches](escape-hatches.md) · [JavaScript bridge](javascript-bridge.md)
+
+## 12. Tests
+
+A test lives in a `*.test.vel` module as a `test "name":` block. The name is a
+sentence about the behaviour, quoted verbatim by the reporter. The body may
+`await` directly and needs no `export`; `expect` comes from `velar/test`. A
+`*.browser.test.vel` module drives a real page instead, through `velar/web-test`.
+
+```velar
+import {expect} from "velar/test"
+
+def initials(name: string) -> string:
+    return name.split(" ").map(part => part.slice(0, 1)).join("")
+
+test "a full name becomes its initials":
+    expect(initials("Ada Lovelace")).toBe("AL")
+
+test "a single name keeps one initial":
+    expect(initials("Ada")).toBe("A")
+```
+
+↳ charter [§12 Modules and JavaScript boundaries](language-charter.md#12-modules-and-javascript-boundaries)
+· [CLI reference](cli.md)
+
+---
+
+The remaining sections belong to the **Web extension**, which a project turns
+on by naming `@velarscript/web` in `velar.json`. Without that line, `component`
+is an unknown declaration keyword and every JSX token is a parse error. A Core
+project — a CLI, a library, a Node service — stops reading here.
+
+## 13. Components and JSX
+
+`component` declares a component; props are its parameters; it returns JSX
+directly, with no `render` block. JSX is expression syntax, so conditional
+rendering is `cond ? a : b` and lists are `items.map(...)` with a `key` —
+there are no control-flow attributes.
+
+Event handlers are `on:click={handler}`, form bindings are
+`bind:value={state}`, and children arrive through a declared `children: WebNode`
+prop. **A prop is a readonly projection**, and readonly travels: a helper that
+receives one declares `readonly List<T>` rather than copying the data to widen it.
+
+```velar
+type Item:
+    id: string
+    title: string
+
+component Empty:
+    return <p>Nothing yet</p>
+
+component ItemList(items: readonly List<Item>, children: WebNode):
+    return <section>
+        {items.size == 0 ? <Empty /> : <ul>
+            {items.map(item => <li key={item.id}>{item.title}</li>)}
+        </ul>}
+        {children}
+    </section>
+
+mount(<ItemList items={[{id: "i-1", title: "Read the charter"}]}>
+    <footer>1 item</footer>
+</ItemList>, "#app")
+```
+
+↳ charter [§13 Web extension boundary](language-charter.md#13-web-extension-boundary)
+· [§14 Components and JSX](language-charter.md#14-components-and-jsx)
+· [Web framework reference](web-api.md)
+
+## 14. State, computed values, resources, and actions
+
+Four cells, one job each. `state` holds a fact. `computed(() => ...)` derives
+from facts. `resource` loads async data — it exposes `value`, `loading`,
+`error`, and `reload()`. `action` performs a user operation and exposes
+`pending` and `error`.
+
+Reactivity is deep, so you mutate state directly rather than rebuilding it.
+Two things surprise newcomers, both deliberate: **a resource loads once, at
+mount**, and does not refetch when its inputs change — `watch` the input and
+call `reload()`; and **an action does not queue**, so two clicks run two calls
+and you guard with `disabled={save.pending}`.
+
+<!-- velar-preamble
+type Ticket:
+    id: string
+    title: string
+
+async def loadTicket(id: string) -> Ticket:
+    return {id, title: f"Ticket {id}"}
+
+async def saveDraft(id: string, draft: string):
+    print(f"{id}: {draft}")
+-->
+```velar fragment
+component TicketPanel(id: string):
+    state draft = ""
+    resource ticket: Ticket = loadTicket(id)
+    const heading = computed(() => ticket.value?.title ?? "Loading")
+
+    action save():
+        await saveDraft(id, draft)
+
+    watch id:
+        async ticket.reload()
+
+    return <section>
+        <h2>{heading()}</h2>
+        <textarea bind:value={draft}></textarea>
+        <button type="button" disabled={save.pending} on:click={save}>Save</button>
+    </section>
+```
+
+(`Ticket`, `loadTicket`, and `saveDraft` are declared for the compiler in a
+Markdown comment above this fence, so the example shows only the four cells and
+the gate still checks it in full.)
+
+↳ charter [§15 State, computed values, resources, and actions](language-charter.md#15-state-computed-values-resources-and-actions)
+
+## 15. Lifecycle
+
+Two sibling blocks in the language's `@` namespace. `@mounted:` runs once after
+the DOM is inserted and may `await`. `@cleanup:` runs once before the component
+is destroyed and is synchronous. Because they live under `@`, a component can
+still declare its own ordinary `def mounted()`.
+
+```velar
+component Chart(points: readonly List<number>):
+    let canvas: CanvasElement? = null
+
+    @mounted:
+        if canvas != null:
+            print(f"drawing {points.size} points")
+
+    @cleanup:
+        print("releasing")
+
+    return <canvas ref={canvas}></canvas>
+
+mount(<Chart points={[1, 2, 3]} />, "#app")
+```
+
+↳ charter [§16 Lifecycle](language-charter.md#16-lifecycle)
+
+## 16. Look
+
+Look is the checked visual language, and it is a **value**: `look:` builds one,
+`look={...}` applies it to an element. Property names are real DOM camelCase,
+CSS keywords are quoted strings, and units are literal (`16px`, `1turn`, `1s`).
+Builders such as `spacing`, `border`, `rgb`, and `animate` are named imports
+from `velar/look`.
+
+A `look:` literal is built once, so its conditions cannot read state — put a
+reactive visual on the element (`look={active ? a : b}`) instead. Conditions
+inside a literal cover the static axes: `@hover`, `viewport.width <= 640px`,
+`motion.reduced`.
+
+```velar
+import {animate, border, rgb, spacing} from "velar/look"
+
+const spin = keyframes:
+    from:
+        rotate = 0deg
+    to:
+        rotate = 1turn
+
+const cardLook = look:
+    display = "grid"
+    gap = 12px
+    border = border(1px, rgb(220, 224, 235))
+    borderRadius = 10px
+    padding = spacing(16px, 20px)
+
+    if @hover:
+        background = rgb(245, 247, 255)
+
+    if viewport.width <= 640px:
+        padding = spacing(12px, 14px)
+
+const busyLook = look:
+    if not motion.reduced:
+        animation = animate(spin, 1s, easing="linear", loop=true)
+
+component Card(busy: bool, children: WebNode):
+    return <article look={cardLook}>
+        <span look={busy ? busyLook : null}>*</span>
+        {children}
+    </article>
+
+mount(<Card busy={true}><p>Loading</p></Card>, "#app")
+```
+
+↳ charter [§17 Look](language-charter.md#17-look-controlled-visual-language)
+· [appendix: the published visual vocabulary](language-charter.md#appendix-to-section-17-published-web-visual-vocabulary)
+
+---
+
+## What is deliberately not here
+
+Vel is small on purpose, and the charter lists the absences with the reason for
+each: no `switch`, no `var` or `undefined`, no `new` or `this`, no `typeof` /
+`instanceof` / `eval`, no `yield`, no user-defined decorators, no
+TypeScript-style type programming, no React-style `effect`. If you reach for
+one of these, the compiler names what to write instead — that is the design,
+not a gap.
+
+↳ charter [§19 Deliberately absent source features](language-charter.md#19-deliberately-absent-source-features)
+
+## What the compiler emits
+
+Readable, source-mapped JavaScript that runs without the toolchain, with stable
+CSS selectors and no framework runtime beyond the explicit `@velarscript/web`
+package. This is a product promise, not an implementation detail: if Vel itself
+ever becomes the obstacle, you take the emitted output and keep shipping.
+
+↳ charter [§18 Generated JavaScript semantics](language-charter.md#18-generated-javascript-semantics)
+· [Escape hatches](escape-hatches.md)
+
+## Where to go next
+
+- [Best practices](best-practices.md) — the house style, one complete program per rule
+- [Standard library](standard-library.md) — the permanent namespaces and the capability modules
+- [Web framework](web-api.md) — the full component, routing, and Look surface
+- [CLI reference](cli.md) — every command, grouped by what you are doing
+- [The language charter](language-charter.md) — the contract, when you need the exact rule
+- `examples/tour/` — every spelling exactly once, as projects you can run

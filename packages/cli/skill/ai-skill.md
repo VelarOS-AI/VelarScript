@@ -108,7 +108,10 @@ everything else in `public/` is copied through. `.velar/` is scratch; both belon
 `outDir` and `publicDir`) and runs its `test "name":` blocks. The name is a
 sentence about the code, quoted verbatim by the reporter and unique in its
 module; the body may `await` directly and needs no `export`. A file that declares no tests is a failure rather than a skip.
-`velar test --browser` runs `*.browser.test.vel` in a real browser.
+`velar test --browser` runs `*.browser.test.vel` in a real browser — and bare
+`--browser` is **Chromium only**. Three engines is `--browser=all` (or
+`--browser all`), which is what any cross-browser claim costs;
+`--browser=firefox` and `--browser=webkit` pick one.
 
 **Separate the mounted entrypoint from testable code.** A test runs in Node with
 no DOM, so a headless test that imports the module calling `mount` fails on
@@ -223,6 +226,29 @@ A generic body that must order, interpolate, or serialize its type parameter
 names a bound — `def label<T: Text>(value: T)`; the diagnostic names the one
 you need.
 
+**There are two arrows and they are not interchangeable.** `=>` is the
+value-level arrow: it introduces a lambda body. `->` is the type-level arrow:
+it names a result. They stand next to each other most often on a callback prop
+— the type is written with `->`, the value handed to it with `=>`:
+
+```velar
+type Transform = (value: number) -> number
+
+const double: Transform = value => value * 2
+
+component Stepper(step: number, onChange: (next: number) -> null):
+    return <button type="button" on:click={() => onChange(step + 1)}>+1</button>
+
+mount(<Stepper step={double(1)} onChange={next => print(next)} />, "#app")
+```
+
+Parameter names in a function type are optional but worth writing:
+`(title: string, author: string) -> Promise<null>` says at the call site what
+`(string, string) -> Promise<null>` makes you guess. An async callback's
+**type** names the Promise, while an `async def` **declaration** annotates the
+resolved value — `async def loadUser(id: string) -> User` satisfies
+`(id: string) -> Promise<User>`.
+
 `type` declares record shapes and aliases, `T?` is optional, and every record
 type carries a runtime validator for untrusted data:
 
@@ -316,8 +342,6 @@ camelCase; units are literal:
 ```velar
 import {border, rgb, spacing} from "velar/look"
 
-
-
 const buttonLook = look:
     border = border(0px, rgb(220, 224, 235))
     borderRadius = 10px
@@ -335,8 +359,6 @@ A `look:` literal is built once, so its conditions and values cannot read state;
 
 ```velar
 import {animate} from "velar/look"
-
-
 
 const spin = keyframes:
     from:
@@ -478,8 +500,6 @@ a layout string, not a stack of `\n` escapes. Text that contains `"` — a JSON
 fixture, a quoted selector — goes in backticks instead of being escaped:
 
 ```velar
-
-
 const count = 3
 const gap = 16px
 const summary = f"{count} open tickets"
@@ -711,6 +731,15 @@ leave the next reader to rediscover it.
 A word that reads wrong is worth the same trip. The spelling-objection template
 exists for it, no alternative word is required, and while there is no
 compatibility promise, changing a word costs nothing yet.
+
+## Where to look up what this brief leaves out
+
+The repository carries a **tour** that shows every spelling exactly once, as
+compiling projects you can run: `examples/tour/core/` (17 numbered chapters,
+values through testing), `examples/tour/web/` (13 — components, Look, routing,
+both kinds of test), `examples/tour/desktop/` (4). When you are about to guess
+at a spelling, open the chapter instead. `examples/app/` is the companion — one
+real application, showing how the pieces are put together.
 
 ## The meta-rule
 

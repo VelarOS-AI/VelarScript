@@ -7,13 +7,23 @@ import { BROWSER_TEST_MODULE, BROWSER_TEST_SOURCE_SUFFIX, velarCompilerExtension
 import { compileProject } from "../packages/cli/src/project.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const requested = process.argv.slice(2);
+// `--partial` names every fence the coverage summary counts. The summary alone
+// says how large the gap is; closing it needs the addresses, and a number
+// nobody can act on is halfway back to a silent gap.
+const detail = process.argv.includes("--partial");
+const requested = process.argv.slice(2).filter((argument) => argument !== "--partial");
 const files = requested.length > 0
   ? requested.map((file) => resolve(file))
   : [...await rootReadmes(root), ...await markdownFiles(join(root, "docs")), ...await packageReadmes(join(root, "packages"))];
 // Match the opening fence's exact backtick count so VelarScript layout-string
 // examples may contain shorter Markdown fences as literal text.
 const fence = /^(?<ticks>`{3,})velar(?:[ \t]+(?<metadata>[^\n]+))?[ \t]*\r?\n(?<source>[\s\S]*?)^\k<ticks>[ \t]*$/gmu;
+// A fragment may declare the names it borrows in a Markdown comment standing
+// immediately before its fence — invisible to a reader, compiled by this gate.
+// D64 rule 167: the context a fragment needs in order to be checked in full is
+// context the reader does not need to see, so it goes here rather than being
+// spelled into the prose example.
+const preambleComment = /^<!--[ \t]*velar-preamble[ \t]*\r?\n(?<source>[\s\S]*?)^-->[ \t]*\r?$/gmu;
 // The diagnostic families the fragment rule reasons about; that rule, and why
 // each family is inherent to a fragment, is written out above
 // significantFragmentDiagnostics below.
@@ -23,13 +33,24 @@ const MODULE_RESOLUTION_PREFIX = "VEL6";
 const failures = [];
 let examples = 0;
 let fragments = 0;
+let declared = 0;
+// D64 rule 167 — what this gate could *not* check. A suppressed diagnostic is
+// only half of the gap: an unresolved reference is typed `unknown` and the
+// analyzer stops checking downstream of it, so a defect standing after one
+// produces no diagnostic at all and reaches no suppression clause. Both halves
+// are counted here and both are printed, because a coverage gap nobody prints
+// is a coverage gap nobody closes (D56 rule 129).
+let partialFragments = 0;
+let suppressedDiagnostics = 0;
+const partialFiles = new Map();
+const partialFences = [];
 
 for (const file of files) {
   const markdown = await readFile(file, "utf8");
+  const preambles = preamblesIn(markdown, file);
   for (const match of markdown.matchAll(fence)) {
     examples += 1;
     const metadata = (match.groups?.metadata ?? "").trim();
-    const source = match.groups?.source ?? "";
     const line = lineAt(markdown, match.index ?? 0);
     if (metadata !== "" && metadata !== "fragment") {
       failures.push(`${display(file)}:${line}: unknown VelarScript fence annotation '${metadata}'`);
@@ -37,6 +58,17 @@ for (const file of files) {
     }
     const fragment = metadata === "fragment";
     if (fragment) fragments += 1;
+    const preamble = preambles.get(match.index ?? 0);
+    if (preamble !== undefined && !fragment) {
+      failures.push(`${display(file)}:${line}: a velar-preamble comment stands before a complete example, which is already checked in full — delete the comment or mark the fence 'fragment'`);
+      continue;
+    }
+    if (preamble !== undefined) declared += 1;
+    // A declared preamble is compiled ahead of the fence's own text, so the
+    // fragment resolves every name it borrows and is checked exactly as a
+    // complete example is: no suppression, nothing typed `unknown` by default.
+    const source = `${preamble ?? ""}${match.groups?.source ?? ""}`;
+    const suppress = fragment && preamble === undefined;
 
     // Every example — fragment or complete — is compiled as a whole module by
     // the project driver, so both get the same analysis, the same emitter, and
@@ -55,25 +87,89 @@ for (const file of files) {
       // installed here; the specifier-existence probe is a project check.
       resolveJavaScriptSpecifiers: false,
     });
+    let suppressed = 0;
     for (const failure of result.failures) {
-      if (fragment && inherentProjectFailure(failure.message)) continue;
+      if (suppress && inherentProjectFailure(failure.message)) {
+        suppressed += 1;
+        continue;
+      }
       failures.push(`${display(file)}:${line}: ${failure.message}`);
     }
     for (const module of result.modules) {
-      const diagnostics = fragment ? significantFragmentDiagnostics(module.result) : module.result.diagnostics;
+      const diagnostics = suppress ? significantFragmentDiagnostics(module.result) : module.result.diagnostics;
+      suppressed += module.result.diagnostics.length - diagnostics.length;
       for (const diagnostic of diagnostics) {
         failures.push(`${display(file)}:${line}: ${diagnostic.code} ${diagnostic.message}`);
       }
     }
+    if (suppressed === 0) continue;
+    partialFragments += 1;
+    suppressedDiagnostics += suppressed;
+    partialFiles.set(display(file), (partialFiles.get(display(file)) ?? 0) + 1);
+    partialFences.push(`  ${display(file)}:${line} — ${suppressed} suppressed`);
   }
 }
 
 if (examples === 0) failures.push("No ```velar documentation examples were found");
+const checked = `Checked ${examples} VelarScript documentation examples (${examples - fragments} complete, ${fragments} fragments`
+  + `${declared > 0 ? `, ${declared} of them with a declared preamble` : ""}), all under full project analysis`;
+for (const line of coverageReport()) console.log(line);
 if (failures.length > 0) {
   console.error(failures.join("\n"));
   process.exitCode = 1;
 } else {
-  console.log(`Checked ${examples} VelarScript documentation examples (${examples - fragments} complete, ${fragments} fragments), all under full project analysis`);
+  console.log(checked);
+}
+
+/**
+ * What the gate could not check, printed on every run — green or red. D64 rule
+ * 167 measured this gap at 73% of fragments while the gate's only number was
+ * "Checked N examples", and D56 rule 129 is the standing discipline: a coverage
+ * gap is reported as a number before anyone argues about reducing it.
+ */
+function coverageReport() {
+  if (fragments === 0) return [];
+  if (partialFragments === 0) return [`Coverage: all ${fragments} fragments were checked in full`];
+  const worst = [...partialFiles].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 5);
+  return [
+    `Coverage: ${partialFragments} of ${fragments} fragments were NOT checked in full — ${suppressedDiagnostics} diagnostic${suppressedDiagnostics === 1 ? " was" : "s were"} suppressed as inherent to a fragment,`,
+    "  and every unresolved reference also types itself `unknown` and stops the analyzer downstream, so defects after one are never reported at all.",
+    "  Declare the names a fragment borrows in a `<!-- velar-preamble ... -->` comment before its fence and that fragment is checked in full.",
+    ...(detail
+      ? partialFences
+      : [
+        `  Concentrated in: ${worst.map(([file, count]) => `${file} (${count})`).join(", ")}`,
+        "  Run `npm run check:docs -- --partial` to list every one of them by line.",
+      ]),
+  ];
+}
+
+/**
+ * The preamble declared for each fence, keyed by the fence's offset. A preamble
+ * belongs to the fence it stands immediately before — nothing but whitespace
+ * may separate them — so a comment that drifted away from its fence, or that
+ * was never followed by one, is reported rather than silently ignored.
+ */
+function preamblesIn(markdown, file) {
+  const byFence = new Map();
+  // A preamble inside a code block is a preamble being *shown*, not declared —
+  // this rule is written out in D64 itself, inside a fence, and documentation
+  // about a mechanism must not trip the mechanism.
+  const quoted = codeBlockRanges(markdown);
+  for (const match of markdown.matchAll(preambleComment)) {
+    if (quoted.some(([start, end]) => (match.index ?? 0) >= start && (match.index ?? 0) < end)) continue;
+    const after = (match.index ?? 0) + match[0].length;
+    const fenceStart = after + (markdown.slice(after).match(/^\s*/u)?.[0].length ?? 0);
+    const opensFence = (fenceStart === 0 || markdown[fenceStart - 1] === "\n")
+      && /^`{3,}velar(?:[ \t]|\r?\n)/u.test(markdown.slice(fenceStart));
+    if (!opensFence) {
+      failures.push(`${display(file)}:${lineAt(markdown, match.index ?? 0)}: a velar-preamble comment must stand immediately before a \`\`\`velar fence`);
+      continue;
+    }
+    const source = match.groups?.source ?? "";
+    byFence.set(fenceStart, source.endsWith("\n") ? source : `${source}\n`);
+  }
+  return byFence;
 }
 
 /**
@@ -234,6 +330,12 @@ async function packageReadmes(directory) {
     }
   }
   return files.sort();
+}
+
+/** Every fenced code block in a Markdown file, as `[start, end)` offsets. */
+function codeBlockRanges(markdown) {
+  const block = /^(?<ticks>`{3,}|~{3,})[^\n]*\r?\n[\s\S]*?^\k<ticks>[ \t]*$/gmu;
+  return [...markdown.matchAll(block)].map((match) => [match.index ?? 0, (match.index ?? 0) + match[0].length]);
 }
 
 function lineAt(text, offset) {
