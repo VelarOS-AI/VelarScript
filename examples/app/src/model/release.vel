@@ -6,9 +6,9 @@
 // ordinary test runner, with no page and no browser. Everything that has to
 // remember something across a click lives one directory over, in `state/`.
 //
-// Every function takes `readonly` parameters. A component prop arrives as a
-// transitive readonly view, so a helper that only reads its argument has to say
-// so or it cannot be called from the view layer at all.
+// Read-only helpers say so explicitly. The checklist components opt their props
+// into the same transitive `readonly` view, so these contracts compose without
+// copying data and make the domain layer's no-write promise visible.
 
 export enum Stage:
     planned

@@ -661,14 +661,14 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
       languageServer(): Promise<{ send(message: string): Promise<null>; next(): Promise<string | null>; close(): Promise<null> }>;
       ProjectTask: { is(value: unknown): boolean; parse(value: unknown): unknown };
       ProjectTaskCommand: Readonly<{
-        check: "check"; test: "test"; build: "build"; run: "run";
+        check: "check"; test: "test"; build: "build"; fix: "fix"; package: "package"; run: "run";
         is(value: unknown): boolean; parse(value: unknown): unknown; values(): string[];
       }>;
       ProjectTaskOutputChannel: Readonly<{
         stdout: "stdout"; stderr: "stderr";
         is(value: unknown): boolean; parse(value: unknown): unknown; values(): string[];
       }>;
-      startProjectTask(command: "check" | "test" | "build" | "run", args?: string[], options?: { timeout?: number; maxOutputBytes?: number }): Promise<{
+      startProjectTask(command: "check" | "test" | "build" | "fix" | "package" | "run", args?: string[], options?: { timeout?: number; maxOutputBytes?: number }): Promise<{
         pid: number;
         next(): Promise<{ channel: "stdout" | "stderr"; text: string } | null>;
         wait(): Promise<{ code: number | null; signal: string | null; stdout: string; stderr: string }>;
@@ -704,11 +704,13 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
     assert.equal(await languageServer.close(), null);
     assert.equal(await languageServer.next(), null);
     assert.equal(desktopRuntime.ProjectTaskCommand.check, "check");
+    assert.equal(desktopRuntime.ProjectTaskCommand.fix, "fix");
+    assert.equal(desktopRuntime.ProjectTaskCommand.package, "package");
     assert.equal(desktopRuntime.ProjectTaskOutputChannel.stderr, "stderr");
     // D60 rule 149: the two Desktop enums answer all three names charter
     // section 6 reserves, not only their members. `values` was the gap, and it
     // threw `is not a function` from code that compiled clean.
-    assert.deepEqual(desktopRuntime.ProjectTaskCommand.values(), ["check", "test", "build", "run"]);
+    assert.deepEqual(desktopRuntime.ProjectTaskCommand.values(), ["check", "test", "build", "fix", "package", "run"]);
     assert.deepEqual(desktopRuntime.ProjectTaskOutputChannel.values(), ["stdout", "stderr"]);
     assert.notEqual(desktopRuntime.ProjectTaskCommand.values(), desktopRuntime.ProjectTaskCommand.values());
     assert.equal(desktopRuntime.ProjectTaskCommand.is("check"), true);

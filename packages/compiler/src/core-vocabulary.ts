@@ -118,3 +118,20 @@ export const CORE_STATEMENT_HEAD_KEYWORDS: readonly CoreContextualKeywordWord[] 
  */
 export const CORE_NUMERIC_SUFFIXES = ["ms", "s"] as const;
 export type CoreNumericSuffix = (typeof CORE_NUMERIC_SUFFIXES)[number];
+
+/**
+ * D55 rule 120: the declaration forms that take `<T>`, as one roster. Every
+ * refusal aimed at a form that does not take one names this list rather than
+ * spelling its own copy — the copies are what made "only 'def' functions take
+ * '<T>'" outlive the ruling that stopped being true. The tour-coverage gate
+ * reads the same roster, so a form added here without an example goes red.
+ */
+export const TYPE_PARAMETER_DECLARATION_FORMS = ["def", "type"] as const;
+export type TypeParameterDeclarationForm = (typeof TYPE_PARAMETER_DECLARATION_FORMS)[number];
+
+/** "'def' functions and 'type' records" — the one phrasing of the roster above. */
+export function typeParameterDeclarationFormsPhrase(): string {
+  const described: Record<TypeParameterDeclarationForm, string> = { def: "'def' functions", type: "'type' records" };
+  const forms = TYPE_PARAMETER_DECLARATION_FORMS.map((form) => described[form]);
+  return forms.length <= 1 ? forms.join("") : `${forms.slice(0, -1).join(", ")} and ${forms.at(-1)}`;
+}

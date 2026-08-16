@@ -66,7 +66,7 @@ export component App:
     state tasks: List<Task> = []
     state draft = ""
 
-    const remaining = computed(() => tasks.filter(task => not task.done).size)
+    computed remaining = tasks.filter(task => not task.done).size
 
     def addTask():
         if draft == "":
@@ -79,7 +79,7 @@ export component App:
 
     return <main look={pageLook}>
         <Head title="Tasks · VelarScript" />
-        <h1>{remaining()} remaining</h1>
+        <h1>{remaining} remaining</h1>
         <input bind:value={draft} aria-label="Task title" />
         <button look={buttonLook} type="button" on:click={addTask}>Add task</button>
         <ul>

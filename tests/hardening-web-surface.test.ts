@@ -79,7 +79,7 @@ component App(active: bool):
     ["computed accessor", `
 component App:
     state count = 0
-    const hot = computed(() => count > 3)
+    const hot = cached(() => count > 3)
     const box = look:
         if hot():
             color = "red"
@@ -143,7 +143,7 @@ def toneLook(improving: bool) -> Look:
         color = improving ? warm : cool
 
 component Card(value: number):
-    const improving = computed(() => value >= 0)
+    const improving = cached(() => value >= 0)
     return <p look={toneLook(improving())}>x</p>
 `);
 });
@@ -158,7 +158,7 @@ component App:
     import css unsafe "./card.css" before look
     return <div>x</div>
 `);
-  assert.match(reported, /^VEL5037 CSS imports are module-level; move 'import css unsafe' to the top of the module/u);
+  assert.match(reported, /^VEL5037 Unsafe CSS is module-level; move the declaration to the top of the module/u);
 
   const nested = only(`
 def install():
@@ -166,7 +166,7 @@ def install():
 
 mount(<div>x</div>, "#app")
 `);
-  assert.match(nested, /^VEL5037 CSS imports are module-level/u);
+  assert.match(nested, /^VEL5037 Unsafe CSS is module-level/u);
 });
 
 test("[LOK-D5] animation text teaches checked keyframes and longhands name their boundary", () => {
@@ -574,7 +574,7 @@ component App:
     state count = 0
     state items: List<string> = []
     state form: Form = {name: ""}
-    const doubled = computed(() => count * 2)
+    const doubled = cached(() => count * 2)
     const label = "fixed"
 
     def read() -> string:

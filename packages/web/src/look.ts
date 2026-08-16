@@ -439,21 +439,86 @@ export const LOOK_PROPERTY_KEYWORDS: ReadonlyMap<string, ReadonlySet<string>> = 
   ["overscrollBehavior", keywords(...lookValueRepetitions(overscrollBehaviors))],
   ["overscrollBehaviorX", keywords(...overscrollBehaviors)],
   ["overscrollBehaviorY", keywords(...overscrollBehaviors)],
+
+  // ── D73 rule 187: the kinds outside `keyword` that also decide a string ────
+  // Each of these used to be answered by a 46-word list shared across every
+  // property that had no table of its own. That list both accepted values the
+  // property never had — `fontWeight = "circle"` compiled and reached CSS as a
+  // declaration the browser drops — and made the diagnostic promise "the closed
+  // fontWeight keywords", a table that did not exist. The sets below come from
+  // the CSS grammar of each property; what the grammar leaves open is recorded
+  // in LOOK_PARTIAL_KEYWORD_PROPERTIES rather than waved through.
+
+  // The shorthands whose non-keyword values are written with a builder. `none`
+  // is the whole of their keyword half.
+  ...(["border", "borderTop", "borderRight", "borderBottom", "borderLeft", "outline"] as const)
+    .map((property) => [property, keywords("none")] as const),
+  ["boxShadow", keywords("none")],
+  ["textShadow", keywords("none")],
+
+  // CSS Fonts 4: the four named weights. The numeric half is the `number` this
+  // property's type already accepts.
+  ["fontWeight", keywords("normal", "bold", "bolder", "lighter")],
+  ["aspectRatio", keywords("auto")],
+  ["scale", keywords("none")],
+  // CSS Flexbox 1: the single-token forms of the shorthand — `none`, and the
+  // `<'flex-basis'>` keywords, which are the sizing words.
+  ["flex", keywords("none", "auto", "content", "min-content", "max-content", "fit-content")],
+  ["lineHeight", keywords("normal")],
+  ["rotate", keywords("none")],
+
+  // CSS Transitions: `<time>#`. There is no keyword half at all, so the closed
+  // set is the CSS-wide words and nothing else — which is a truthful answer
+  // where "one of the closed keywords" was not.
+  ["transitionDuration", keywords()],
+  ["transitionDelay", keywords()],
+  ["transition", keywords("none")],
+
+  ["opacity", keywords()],
+  ["zIndex", keywords("auto")],
+  ["flexGrow", keywords()],
+  ["flexShrink", keywords()],
+  ["order", keywords()],
+  ["tabSize", keywords()],
+
+  // CSS Grid: a template is written with `tracks(...)`, so `none` is its only
+  // text. An implicit track takes the three `<track-size>` keywords.
+  ["gridTemplateColumns", keywords("none")],
+  ["gridTemplateRows", keywords("none")],
+  ["gridAutoColumns", keywords("auto", "min-content", "max-content")],
+  ["gridAutoRows", keywords("auto", "min-content", "max-content")],
 ]);
 
 /**
- * D65 rule 168 — a `keyword` property carries its own closed set or the module
- * refuses to load. The shared fallback vocabulary this replaces was worse than
- * a missing check: it decided values for a property it had never heard of, so
- * the same table that rejected `listStyleType = "upper-roman"` accepted
- * `colorScheme = "none"` and emitted it as a declaration the browser drops.
+ * D73 rule 187 — every kind whose string values are decided per property. D65
+ * rule 168 drew this line at `kind === "keyword"`, which was that wave's
+ * boundary rather than the principle: the principle is that publishing a
+ * surface which cannot be reached, or which swallows a false value, is worse
+ * than not publishing it (D50 rule 92), and that principle does not know about
+ * kinds. `metric` is absent because it answers with the sizing words when it
+ * has no table of its own, and `color`, `background` and `image` are absent
+ * because their diagnostics name a real vocabulary — a color keyword, a builder
+ * — rather than a table. `text`, `filter`, `transform` and `animation` accept
+ * arbitrary text by construction.
+ */
+export const LOOK_KEYWORD_DECIDED_KINDS: ReadonlySet<LookPropertyValueKind> = new Set<LookPropertyValueKind>([
+  "keyword", "border", "shadow", "number", "number-keyword", "line-height", "angle", "duration", "track", "transition",
+]);
+
+/**
+ * D65 rule 168, widened by D73 rule 187 — a property whose values are decided
+ * per property carries its own closed set or the module refuses to load. The
+ * shared fallback vocabulary this replaces was worse than a missing check: it
+ * decided values for a property it had never heard of, so the same table that
+ * rejected `listStyleType = "upper-roman"` accepted `colorScheme = "none"` and
+ * `fontWeight = "circle"` and emitted them as declarations the browser drops.
  * A published name whose values are decided by a table that does not know the
  * property is not a checked property, so this is a load-time fact rather than
  * a test — the same shape as the value-kind invariant above.
  */
 for (const [property, kind] of LOOK_PROPERTY_VALUE_KINDS) {
-  if (kind === "keyword" && !LOOK_PROPERTY_KEYWORDS.has(property)) {
-    throw new Error(`Look property '${property}' is a keyword property with no closed keyword set`);
+  if (LOOK_KEYWORD_DECIDED_KINDS.has(kind) && !LOOK_PROPERTY_KEYWORDS.has(property)) {
+    throw new Error(`Look property '${property}' accepts string keywords and has no closed keyword set`);
   }
 }
 
@@ -566,6 +631,24 @@ export const LOOK_PARTIAL_KEYWORD_PROPERTIES: ReadonlyMap<string, string> = new 
   // which is one design fact met in five places, so it is recorded in all five.
   ...["backgroundRepeat", "backgroundAttachment", "backgroundClip", "backgroundOrigin"]
     .map((property) => [property, "A comma-separated per-layer list is outside the closed set, because a checked Look background is one layer"] as const),
+
+  // ── D73 rule 187: what the newly closed kinds leave open ───────────────────
+  // Each of these has a real CSS value space that no set can hold, and each has
+  // a checked Look spelling that reaches it. Recording that is what keeps the
+  // closure legible rather than looking like a gap to fill.
+  ...["border", "borderTop", "borderRight", "borderBottom", "borderLeft", "outline"]
+    .map((property) => [property, "The width, style and color halves are outside the closed set; they are written with the border(width, color, style) builder"] as const),
+  ...["boxShadow", "textShadow"]
+    .map((property) => [property, "The offsets, blur, spread and color are outside the closed set; they are written with the shadow(x, y, blur, color) builder"] as const),
+  ["aspectRatio", "The <ratio> form such as 16 / 9 is outside the closed set; write the ratio as a number"],
+  ["scale", "The two- and three-axis forms are outside the closed set; a single number scales every axis"],
+  ["flex", "The multi-value form such as 1 1 auto is outside the closed set; write flexGrow, flexShrink and flexBasis separately"],
+  ["rotate", "The axis forms such as x 45deg are outside the closed set; a plain angle rotates in the plane"],
+  ["transition", "Every transition other than none is outside the closed set; it is written with the transition(property, duration, easing, delay) builder, for the same reason a multi-part border string is"],
+  ...["gridTemplateColumns", "gridTemplateRows"]
+    .map((property) => [property, "Track lists, subgrid and masonry are outside the closed set; a track list is written with the tracks(...) builder"] as const),
+  ...["gridAutoColumns", "gridAutoRows"]
+    .map((property) => [property, "The minmax() and fit-content() track functions are outside the closed set; they are written with the minmax(...) builder inside tracks(...)"] as const),
 ]);
 
 for (const [property] of LOOK_PARTIAL_KEYWORD_PROPERTIES) {

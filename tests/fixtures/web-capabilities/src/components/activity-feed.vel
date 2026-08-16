@@ -27,10 +27,10 @@ export component ActivityFeed:
         const activity = await http.get("data/activity.json").parse(ActivityPayload)
         message = activity.message
 
-    const failure = computed(() => refresh.error)
+    computed failure = refresh.error
 
     def activityMessage() -> string:
-        const current = failure()
+        const current = failure
         return current != null ? current.message : message
 
     return <section class="activity" look={activityLook} aria-live="polite">

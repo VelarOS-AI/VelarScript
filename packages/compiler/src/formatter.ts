@@ -1,7 +1,8 @@
 import { CORE_STATEMENT_HEAD_KEYWORDS } from "./core-vocabulary.ts";
+import { scanEmbeddedJavaScriptLiteral } from "./embedded-javascript.ts";
 import { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
 import { findInterpolatedExpressionEnd, scanStringEscape, scanStringLiteral, type StringLiteralScan } from "./interpolated-string.ts";
-import type { CompilerExtension } from "./extension.ts";
+import type { CompilerExtension, CompilerFormattingOpaqueSourceScan } from "./extension.ts";
 import { isSourceIdentifierPart, isSourceIdentifierStart } from "./source-names.ts";
 import { keywordKinds } from "./token.ts";
 
@@ -57,8 +58,11 @@ export function formatSource(text: string, options: FormatOptions = {}): string 
     : []);
   if (angleOwners.length > 1) throw new Error("Only one compiler extension may own angle-bracket formatting");
   const angleEmbedding = angleOwners[0] ?? null;
+  const opaqueSourceScanners = (options.extensions ?? []).flatMap((extension) => extension.formatting?.scanOpaqueSource
+    ? [extension.formatting.scanOpaqueSource]
+    : []);
 
-  const protectedStrings = protectMultilineStrings(text);
+  const protectedStrings = protectMultilineStrings(text, opaqueSourceScanners);
   const lines = protectedStrings.text.replaceAll("\r\n", "\n").replaceAll("\r", "\n").split("\n");
   const indentation = [0];
   const formatted: string[] = [];
@@ -112,7 +116,10 @@ export function formatSource(text: string, options: FormatOptions = {}): string 
   return protectedStrings.restore(`${formatted.join("\n")}\n`);
 }
 
-function protectMultilineStrings(source: string): { readonly text: string; readonly restore: (formatted: string) => string } {
+function protectMultilineStrings(
+  source: string,
+  opaqueSourceScanners: readonly ((source: string, start: number) => CompilerFormattingOpaqueSourceScan | null)[],
+): { readonly text: string; readonly restore: (formatted: string) => string } {
   const replacements: {
     readonly placeholder: string;
     readonly value: string;
@@ -145,6 +152,22 @@ function protectMultilineStrings(source: string): { readonly text: string; reado
       replacements.push({ placeholder, value, kind: "blockComment", originalIndent });
       output += placeholder;
       index = end;
+      continue;
+    }
+    const opaqueSource = scanFormattingOpaqueSource(source, index, opaqueSourceScanners);
+    if (opaqueSource) {
+      const start = index;
+      index = opaqueSource.end;
+      const value = source.slice(start, index);
+      let marker = opaqueSource.attachedToPrevious
+        ? `__velar_formatter_attached_opaque_source_${replacements.length}__`
+        : `__velar_formatter_opaque_source_${replacements.length}__`;
+      while (source.includes(marker)) marker += "_";
+      const placeholder = JSON.stringify(marker);
+      const lineStart = Math.max(source.lastIndexOf("\n", start - 1), source.lastIndexOf("\r", start - 1)) + 1;
+      const originalIndent = /^[ \t]*/u.exec(source.slice(lineStart, start))?.[0] ?? "";
+      replacements.push({ placeholder, value, kind: "opaqueString", originalIndent });
+      output += placeholder;
       continue;
     }
     const previous = source[index - 1];
@@ -184,6 +207,30 @@ function protectMultilineStrings(source: string): { readonly text: string; reado
       return `${current.slice(0, marker)}${value}${current.slice(marker + replacement.placeholder.length)}`;
     }, formatted),
   };
+}
+
+function scanFormattingOpaqueSource(
+  source: string,
+  start: number,
+  extensionScanners: readonly ((source: string, start: number) => CompilerFormattingOpaqueSourceScan | null)[],
+): CompilerFormattingOpaqueSourceScan | null {
+  const core = scanEmbeddedJavaScriptLiteral(source, start);
+  let claimed: CompilerFormattingOpaqueSourceScan | null = core
+    ? { end: core.end, attachedToPrevious: true }
+    : null;
+  for (const scan of extensionScanners) {
+    const candidate = scan(source, start);
+    if (!candidate) continue;
+    if (!Number.isSafeInteger(candidate.end) || candidate.end <= start || candidate.end > source.length
+      || typeof candidate.attachedToPrevious !== "boolean") {
+      throw new RangeError("A compiler formatting opaque-source scanner returned an invalid result");
+    }
+    if (claimed && (claimed.end !== candidate.end || claimed.attachedToPrevious !== candidate.attachedToPrevious)) {
+      throw new Error("Multiple compiler formatting owners claimed the same opaque source with different boundaries");
+    }
+    claimed = candidate;
+  }
+  return claimed;
 }
 
 function reindentBlockComment(value: string, originalIndent: string, formattedIndent: string): string {
@@ -997,6 +1044,7 @@ function needsSpace(
   index: number,
   preceding: InlineToken | undefined,
 ): boolean {
+  if (isAttachedOpaqueSourcePlaceholder(current)) return false;
   if (current.kind === "comment") return true;
   if (previous.kind === "comment") return !previous.text.startsWith("//");
   if (current.kind === "embedded" || current.kind === "markup") {
@@ -1016,6 +1064,7 @@ function needsSpace(
   if (previous.kind === "comma" || previous.kind === "colon") return true;
   if (previous.kind === "open") return false;
   if (current.kind === "open") {
+    if (current.text === "(" && previous.text === "js" && tokens[0]?.text === "extern") return false;
     // A named argument's value is written against its name whatever the value
     // is — `initial=0`, `combine=(total, value) => …`, `value={type: "bool"}`.
     if (previous.text === "=" && isNamedArgumentEquals(tokens, index - 1)) return false;
@@ -1047,6 +1096,10 @@ function needsSpace(
   if ((previous.kind === "word" && (binaryWords.has(previous.text) || prefixWords.has(previous.text)))
     || (current.kind === "word" && binaryWords.has(current.text))) return true;
   return true;
+}
+
+function isAttachedOpaqueSourcePlaceholder(token: InlineToken): boolean {
+  return token.kind === "string" && token.text.includes("__velar_formatter_attached_opaque_source_");
 }
 
 function isUnaryOperator(token: InlineToken, previous: InlineToken | undefined, statementHead = false): boolean {

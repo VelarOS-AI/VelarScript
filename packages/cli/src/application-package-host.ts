@@ -7,6 +7,7 @@ import {
   type ApplicationPackageResult,
 } from "@velarscript/compiler/application-package-host";
 import type { VelarProjectConfig } from "./config.ts";
+import { bundledApplicationPackageHost } from "./bundled-application-package-host-registry.ts";
 import { hostErrorCode, hostErrorMessage } from "./host-error.ts";
 
 export async function loadApplicationPackageHost(project: VelarProjectConfig): Promise<ApplicationPackageHost> {
@@ -14,6 +15,8 @@ export async function loadApplicationPackageHost(project: VelarProjectConfig): P
   if (!framework) throw new Error("this project does not enable an application target");
   const package_ = project.extensionGraph.find((item) => item.name === framework.host.id);
   if (!package_) throw new Error(`application target '${framework.host.id}' is absent from the resolved extension graph`);
+  const bundled = bundledApplicationPackageHost(package_.name);
+  if (bundled) return validateApplicationPackageHost(bundled, package_.name, framework.host.apiVersion);
   const require = createRequire(package_.manifestPath);
   const specifier = `${package_.name}/package-host`;
   let entry: string;

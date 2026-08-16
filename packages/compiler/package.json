@@ -21,6 +21,9 @@
     "url": "git+https://github.com/VelarOS-AI/VelarScript.git",
     "directory": "packages/compiler"
   },
+  "dependencies": {
+    "acorn": "^8.18.0"
+  },
   "publishConfig": {
     "access": "public"
   },

@@ -6,13 +6,15 @@ import type { Parser } from "./parser.ts";
 import type { SourceText, Span } from "./source.ts";
 import type { CompilerSemanticExtension, SemanticSymbol } from "./semantic.ts";
 import type { Token } from "./token.ts";
-import type { EnumInfo, ExtensionTypeSyntaxResolver, ExtensionValueType, ValueType } from "./types.ts";
+import type { EnumInfo, ExtensionTypeSyntaxResolver, ExtensionValueType, GenericTypeInfo, ValueType } from "./types.ts";
 
 export { expressionContainsDirectAwait } from "./ast.ts";
 export { VELAR_CLASS_FIELD_MODULE, VELAR_CLASS_FIELD_MODULE_SOURCE, VELAR_CLASS_FIELD_RUNTIME } from "./class-runtime.ts";
 export { VELAR_COLLECTION_HOST_EXPORTS, VELAR_COLLECTION_HOST_MODULE, VELAR_COLLECTION_HOST_MODULE_SOURCE, VELAR_COLLECTION_IDENTITY_RUNTIME, VELAR_COLLECTION_LIST_RUNTIME, VELAR_COLLECTION_RECORD_RUNTIME, VELAR_COLLECTION_SET_MAP_RUNTIME, VELAR_COLLECTION_TYPE_RUNTIME } from "./collection-runtime.ts";
 export { VELAR_COLLECTION_LOWERING_DEPENDENCIES, VELAR_COLLECTION_LOWERING_EXPORTS, VELAR_COLLECTION_LOWERING_MODULE, VELAR_COLLECTION_LOWERING_MODULE_SOURCE, VELAR_COLLECTION_LOWERING_RUNTIME } from "./collection-lowering-runtime.ts";
 export { JavaScriptEmitter } from "./emitter.ts";
+export { scanOpaqueEmbeddedSource } from "./embedded-source.ts";
+export type { OpaqueEmbeddedSourceScan } from "./embedded-source.ts";
 export { findInterpolatedExpressionEnd, scanStringLiteral } from "./interpolated-string.ts";
 export { VELAR_ERROR_NORMALIZATION_MODULE, VELAR_ERROR_NORMALIZATION_MODULE_SOURCE, VELAR_ERROR_NORMALIZATION_RUNTIME, VELAR_HOST_ERROR_NAMES, VELAR_HOST_ERROR_PATH_NAMES, VELAR_HOST_ERROR_RUNTIME } from "./error-runtime.ts";
 export { VELAR_STRICT_JSON_RUNTIME } from "./json-runtime.ts";
@@ -94,13 +96,29 @@ export interface VelarExtensionContract {
 export interface CompilerEmitter {
   emit(program: Program): string;
   sourceMap(source: SourceText): string;
+  /**
+   * Static JavaScript modules emitted beside the owning compiled `.vel`
+   * module. D53 uses this channel for embedded JavaScript: every block stays a
+   * real ESM file, so hosts can serve or bundle it without eval/data URLs and
+   * its own source map can point back into the authoring `.vel` file.
+   */
+  embeddedModules?(source: SourceText): readonly CompilerEmbeddedJavaScriptModule[];
   runtimeModules?(): readonly string[];
   css?(): string;
   styleSegments?(): CompilerStyleSegments;
 }
 
+export interface CompilerEmbeddedJavaScriptModule {
+  /** Relative ESM specifier written into the owning compiled module. */
+  readonly specifier: `./${string}.js`;
+  readonly code: string;
+  readonly sourceMap: string;
+}
+
 export interface CompilerEmitterOptions {
   readonly sharedRuntimeModules?: boolean;
+  /** Authoring module path, used to derive collision-free sibling artifacts. */
+  readonly sourcePath?: string;
 }
 
 export interface CompilerStyleSegments {
@@ -266,6 +284,22 @@ export interface CompilerFormattingExtension {
   readonly angleBracketEmbedding?: {
     readonly voidElements?: ReadonlySet<string>;
   };
+  /**
+   * Claim a target-owned opaque source region beginning at `start`. The
+   * formatter preserves every byte through `end`; recognizing the header and
+   * structural closing delimiter remains the owning extension's job.
+   */
+  readonly scanOpaqueSource?: (
+    source: string,
+    start: number,
+  ) => CompilerFormattingOpaqueSourceScan | null;
+}
+
+export interface CompilerFormattingOpaqueSourceScan {
+  /** Exclusive end offset of the complete opaque region. */
+  readonly end: number;
+  /** Whether the opening delimiter is written directly against its header. */
+  readonly attachedToPrevious: boolean;
 }
 
 export interface CompilerDependencyContext {
@@ -337,6 +371,13 @@ export interface ModuleInterface {
   readonly namedTypes: ReadonlyMap<string, ReadonlyMap<string, ValueType>>;
   readonly namedTypeReadonlyFields?: ReadonlyMap<string, ReadonlySet<string>>;
   readonly namedTypeIdentities: ReadonlyMap<string, string>;
+  /**
+   * D55 rule 120: the module's generic record declarations. A generic type has
+   * no field table of its own — it has one per instantiation — so it is
+   * published as a template a dependent applies to arguments the declaring
+   * module never saw, rather than through `namedTypes`.
+   */
+  readonly genericTypes?: ReadonlyMap<string, GenericTypeInfo>;
   readonly typeAliases: ReadonlyMap<string, ValueType>;
   readonly enums: ReadonlyMap<string, EnumInfo>;
   readonly classes: ReadonlyMap<string, ClassInfo>;

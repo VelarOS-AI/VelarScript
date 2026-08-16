@@ -101,6 +101,8 @@ export const velarWebSemanticExtension: CompilerSemanticExtension = Object.freez
     if (!isWebStatement(statement)) return false;
     switch (statement.kind) {
       case "ExtensionStatement:web:unsafe-css":
+        // Its payload is opaque CSS for editor language injection, never a
+        // VelarScript expression or reference graph.
         return true;
       case "ExtensionStatement:web:component":
         context.enterScope(statement.span);
@@ -130,6 +132,16 @@ export const velarWebSemanticExtension: CompilerSemanticExtension = Object.freez
         context.declare(statement, statement.name, "extension:variable:web-state", statement.span, context.nameSpan(statement.span, statement.name), {
           exported: statement.exported,
           mutable: true,
+          sourceTypeHint: true,
+        });
+        return true;
+      }
+      case "ExtensionStatement:web:computed": {
+        context.visitExpression(statement.initializer);
+        context.typeReferences(statement.type);
+        context.declare(statement, statement.name, "extension:variable:web-computed", statement.span, context.nameSpan(statement.span, statement.name), {
+          exported: statement.exported,
+          mutable: false,
           sourceTypeHint: true,
         });
         return true;

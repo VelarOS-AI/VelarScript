@@ -269,7 +269,8 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
   ): boolean {
     if (!isWebStatement(statement)) return false;
     if (statement.kind === "ExtensionStatement:web:unsafe-css") return true;
-    if (statement.kind === "ExtensionStatement:web:state" || statement.kind === "ExtensionStatement:web:resource") {
+    if (statement.kind === "ExtensionStatement:web:state" || statement.kind === "ExtensionStatement:web:computed"
+      || statement.kind === "ExtensionStatement:web:resource") {
       visitExpression(statement.initializer);
       return true;
     }
@@ -286,7 +287,8 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     if (statement.kind !== "ExtensionStatement:web:component") return false;
     statement.parameters.forEach((parameter) => { if (parameter.defaultValue) visitExpression(parameter.defaultValue); });
     statement.body.forEach((item) => {
-      if (item.kind === "ExtensionStatement:web:state" || item.kind === "ExtensionStatement:web:resource") visitExpression(item.initializer);
+      if (item.kind === "ExtensionStatement:web:state" || item.kind === "ExtensionStatement:web:computed"
+        || item.kind === "ExtensionStatement:web:resource") visitExpression(item.initializer);
       else if (item.kind === "ExtensionStatement:web:action") {
         item.parameters.forEach((parameter) => { if (parameter.defaultValue) visitExpression(parameter.defaultValue); });
         item.body.forEach(visitStatement);
@@ -320,6 +322,10 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       if (statement.kind === "ExtensionStatement:web:state") {
         const indentation = "  ".repeat(depth);
         return `${indentation}${statement.exported ? "export " : ""}const ${statement.name} = __velarState(${this.emitMappedExpression(statement.initializer)});`;
+      }
+      if (statement.kind === "ExtensionStatement:web:computed") {
+        const indentation = "  ".repeat(depth);
+        return `${indentation}${statement.exported ? "export " : ""}const ${statement.name} = __velarComputed(() => (${this.emitMappedExpression(statement.initializer)}));`;
       }
       if (statement.kind === "ExtensionStatement:web:resource") return "";
       if (statement.kind === "ExtensionStatement:web:action") {
@@ -375,7 +381,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       }
       if (expression.name === "mount") return "__velarMount";
       if (expression.name === "tick") return "__velarTick";
-      if (expression.name === "computed") return "__velarRuntime.computed";
+      if (expression.name === "cached") return "__velarRuntime.computed";
       const controlled = this.hints.extensionLiterals.get(spanIdentity(expression.span));
       if (controlled !== undefined) return JSON.stringify(controlled);
     }
@@ -477,6 +483,8 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     for (const item of statement.body) {
       if (item.kind === "ExtensionStatement:web:state") {
         lines.push(`${bodyIndent}const ${item.name} = __velarState(${this.emitMappedExpression(item.initializer)});`);
+      } else if (item.kind === "ExtensionStatement:web:computed") {
+        lines.push(`${bodyIndent}const ${item.name} = __velarComputed(() => (${this.emitMappedExpression(item.initializer)}));`);
       } else if (item.kind === "ExtensionStatement:web:resource") {
         lines.push(`${bodyIndent}const ${item.name} = __velarResource(() => ${this.emitMappedExpression(item.initializer)}, __velarComponentScope, ${JSON.stringify(item.name)});`);
       } else if (item.kind === "ExtensionStatement:web:action") {
@@ -534,13 +542,14 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     }).filter(Boolean).join("\n");
     const cleanupBodyText = `() => {${cleanup ? `\n${cleanup}\n${bodyIndent}` : ""}}`;
     const functionLines = [
-      `${outerIndent}const __velarComponentScope = __velarScope(${JSON.stringify(statement.name)});`,
+      `${outerIndent}const __velarComponentScope = __velarSetupBegin(__velarScope(${JSON.stringify(statement.name)}));`,
       `${outerIndent}let __velarConstructionCleanup = () => {};`,
       `${outerIndent}try {`,
       `${bodyIndent}__velarConstructionCleanup = ${cleanupBodyText};`,
       ...lines,
-      `${bodyIndent}return __velarComponent(__velarRoot, __velarComponentScope, async () => {${mounted ? `\n${mounted}\n${bodyIndent}` : ""}}, __velarConstructionCleanup, __velarHandle);`,
+      `${bodyIndent}return __velarSetupEnd(__velarComponent(__velarRoot, __velarComponentScope, async () => {${mounted ? `\n${mounted}\n${bodyIndent}` : ""}}, __velarConstructionCleanup, __velarHandle));`,
       `${outerIndent}} catch (__velarConstructionError) {`,
+      `${bodyIndent}__velarSetupEnd(null);`,
       `${bodyIndent}try { __velarConstructionCleanup(); } catch (__velarCleanupError) { __velarReport(__velarCleanupError, "cleanup", __velarComponentScope); }`,
       `${bodyIndent}__velarDestroyScope(__velarComponentScope);`,
       `${bodyIndent}throw __velarConstructionError;`,
@@ -883,7 +892,9 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     const after: string[] = [];
     for (const statement of program.body) {
       if (!isWebStatement(statement) || statement.kind !== "ExtensionStatement:web:unsafe-css") continue;
-      const source = this.resourceContents.get(statement.source) ?? "";
+      const source = statement.source.kind === "inline"
+        ? statement.source.css
+        : this.resourceContents.get(statement.source.path) ?? "";
       (statement.placement === "after" ? after : before).push(source.trim());
     }
     this.cssSegments = {
@@ -1122,8 +1133,8 @@ function containsWebSyntax(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
   if (record.kind === "ExtensionStatement:web:component" || record.kind === "ExtensionStatement:web:expose" || record.kind === "ExtensionStatement:web:unsafe-css" || record.kind === "ExtensionExpression:web:look" || record.kind === "ExtensionExpression:web:keyframes" || record.kind === "ExtensionExpression:web:jsx"
-    || record.kind === "ExtensionStatement:web:state" || record.kind === "ExtensionStatement:web:resource" || record.kind === "ExtensionStatement:web:action" || record.kind === "ExtensionStatement:web:watch") return true;
-  if (record.kind === "IdentifierExpression" && (record.name === "mount" || record.name === "tick" || record.name === "computed")) return true;
+    || record.kind === "ExtensionStatement:web:state" || record.kind === "ExtensionStatement:web:computed" || record.kind === "ExtensionStatement:web:resource" || record.kind === "ExtensionStatement:web:action" || record.kind === "ExtensionStatement:web:watch") return true;
+  if (record.kind === "IdentifierExpression" && (record.name === "mount" || record.name === "tick" || record.name === "cached")) return true;
   return Object.values(record).some((child) => Array.isArray(child) ? child.some(containsWebSyntax) : containsWebSyntax(child));
 }
 
@@ -1369,16 +1380,147 @@ function __velarObserver(read, mode, scope) {
   return observer;
 }
 
+// D70 rule 180: a reactive source read during component setup and stored in a
+// plain binding is frozen. That is what const means, and a snapshot is a
+// legitimate thing to want -- so the report fires when the source *diverges*
+// from the snapshot, never when the snapshot is taken. A warning that fires on
+// correct code is a warning people learn to ignore; one that fires only after
+// the value on screen has actually gone stale cannot be wrong about that.
+//
+// The whole mechanism is installed only when the development host published its
+// hooks, so a production build pays nothing for it: no map, no stack capture,
+// and one already-false constant on the read path.
+// One module's copy of this runtime cannot own the state: a component in one
+// module reads a cell created in another, so the setup stack and the recorded
+// reads live on the shared hooks object every copy sees.
+const __velarFrozenHooks = (() => {
+  const hooks = globalThis.__velarDevelopmentHooks;
+  if (!hooks || typeof hooks.frozenRead !== "function") return null;
+  if (hooks.setupScopes === undefined) {
+    hooks.setupScopes = [];
+    hooks.reads = __velarGraphCreateWeakMap();
+    hooks.derived = [];
+    hooks.internalDepth = 0;
+  }
+  return hooks;
+})();
+const __velarFrozenReadLimit = 32;
+
+function __velarSetupBegin(scope) {
+  if (__velarFrozenHooks) __velarAppendOwned(__velarFrozenHooks.setupScopes, scope);
+  return scope;
+}
+
+function __velarSetupEnd(value) {
+  if (__velarFrozenHooks && __velarFrozenHooks.setupScopes.length > 0) __velarFrozenHooks.setupScopes.length -= 1;
+  return value;
+}
+
+// The framework's own reads on the author's behalf -- checking a prop is
+// present, capturing the one-time snapshot a runtime component documents,
+// reading a handler thunk. None of them freezes anything the author wrote: the
+// prop handle behind them stays live. Reporting them would be the false-positive
+// flood D70 rule 180 rejected, in its most literal form.
+function __velarInternalRead(read) {
+  if (!__velarFrozenHooks) return __velarUntracked(read);
+  __velarFrozenHooks.internalDepth += 1;
+  try { return __velarUntracked(read); } finally { __velarFrozenHooks.internalDepth -= 1; }
+}
+
+function __velarRecordFrozenRead(cell, value) {
+  if (!__velarFrozenHooks) return;
+  if (__velarFrozenHooks.setupScopes.length === 0 || __velarFrozenHooks.internalDepth > 0) return;
+  if (__velarRuntime.activeObserver !== null) return;
+  // Only a value the reader can show is worth naming in the report; an object
+  // read out of setup is followed through the deep graph, not frozen by this
+  // read, so recording it would produce a report about the wrong thing.
+  if (value !== null && typeof value === "object") return;
+  const scope = __velarFrozenHooks.setupScopes[__velarFrozenHooks.setupScopes.length - 1];
+  const existing = __velarGraphWeakMapRead(__velarFrozenHooks.reads, cell);
+  if (existing) {
+    if (existing.length >= __velarFrozenReadLimit) return;
+    __velarAppendOwned(existing, { value, scope, site: new Error("velar frozen read") });
+    return;
+  }
+  __velarGraphWeakMapWrite(__velarFrozenHooks.reads, cell, [{ value, scope, site: new Error("velar frozen read") }]);
+}
+
+// A derived value frozen during setup has no cell to hang a report on, and a
+// read that left no subscriber is a read the cache never tells anything about.
+// So the entries are kept in one dev-mode list and re-read after a state write
+// -- the only thing that can move a derived value -- which is the same
+// "report on divergence" rule the cells follow, reached the only way it can be.
+function __velarRecordFrozenDerived(access, value) {
+  if (!__velarFrozenHooks) return;
+  if (__velarFrozenHooks.setupScopes.length === 0 || __velarFrozenHooks.internalDepth > 0) return;
+  if (__velarRuntime.activeObserver !== null) return;
+  if (value !== null && typeof value === "object") return;
+  if (__velarFrozenHooks.derived.length >= __velarFrozenReadLimit * 4) return;
+  const scope = __velarFrozenHooks.setupScopes[__velarFrozenHooks.setupScopes.length - 1];
+  __velarAppendOwned(__velarFrozenHooks.derived, { access, value, scope, site: new Error("velar frozen read") });
+}
+
+function __velarReportFrozenDerived() {
+  if (!__velarFrozenHooks || __velarFrozenHooks.derived.length === 0) return;
+  const entries = __velarFrozenHooks.derived;
+  const remaining = [];
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    let current = entry.value;
+    let failed = false;
+    try { current = __velarUntracked(entry.access); }
+    catch { failed = true; }
+    if (failed || __velarGraphSame(entry.value, current)) { remaining[remaining.length] = entry; continue; }
+    __velarPublishFrozenRead(entry, current);
+  }
+  __velarFrozenHooks.derived = remaining;
+}
+
+function __velarReportFrozenReads(cell, next) {
+  if (!__velarFrozenHooks) return;
+  __velarReportFrozenDerived();
+  const entries = __velarGraphWeakMapRead(__velarFrozenHooks.reads, cell);
+  if (!entries) return;
+  __velarGraphWeakMapRemove(__velarFrozenHooks.reads, cell);
+  for (let index = 0; index < entries.length; index += 1) {
+    if (__velarGraphSame(entries[index].value, next)) continue;
+    __velarPublishFrozenRead(entries[index], next);
+  }
+}
+
+function __velarPublishFrozenRead(entry, next) {
+  const component = entry.scope && entry.scope.component ? entry.scope.component : "a component";
+  __velarFrozenHooks.frozenRead({
+    message: "A reactive value read while " + component + " was being built was frozen at "
+      + __velarFrozenText(entry.value) + ", and the source has now changed to " + __velarFrozenText(next)
+      + ". Whatever was built from that read still shows the old value. If it is meant to follow, declare it with 'computed name = <expression>'; if the snapshot was intended, nothing here needs changing.",
+    stack: __velarDomString(entry.site && entry.site.stack ? entry.site.stack : ""),
+  });
+}
+
+function __velarFrozenText(value) {
+  return typeof value === "string" ? __velarQuotedText(value) : __velarDomString(value);
+}
+
 function __velarState(initial) {
   let value = __velarToRaw(initial);
   const subscribers = __velarGraphCreateSet();
   const cell = {
-    get() { __velarTrack(subscribers); return __velarReactive(value, cell); },
+    // Named rather than shorthand so a captured stack shows a compiler frame
+    // here: D70's report walks past its own frames to find the reading line,
+    // and every JavaScript engine spells an anonymous getter differently.
+    get: function __velarCellRead() {
+      __velarTrack(subscribers);
+      const current = __velarReactive(value, cell);
+      __velarRecordFrozenRead(cell, current);
+      return current;
+    },
     set(next) {
       next = __velarToRaw(next);
       if (__velarGraphSame(value, next)) return next;
       const previous = value;
       value = next;
+      __velarReportFrozenReads(cell, next);
       // Keep deep-change bubbling attached only to the value currently owned
       // by this cell. Otherwise every replaced object remains linked to the
       // state cell and continues to occupy the parent graph indefinitely.
@@ -1390,6 +1532,21 @@ function __velarState(initial) {
   };
   __velarReactive(value, cell);
   return cell;
+}
+
+// D71 rule 182: a declared derived value reads bare, so it presents the same
+// .get() face a state cell does. The cache underneath is the same one
+// the cached reader returns; only the way it is read differs.
+function __velarComputed(read) {
+  const access = __velarRuntime.computed(read);
+  if (!__velarFrozenHooks) return __velarGraphFreeze({ get: access });
+  return __velarGraphFreeze({
+    get: function __velarDerivedRead() {
+      const value = access();
+      __velarRecordFrozenDerived(access, value);
+      return value;
+    },
+  });
 }
 
 const __velarManagedAsyncNativePromise = globalThis.Promise;
@@ -2378,7 +2535,7 @@ function __velarHtml(element, read, scope) {
 }
 
 function __velarOn(element, event, read, scope, modifiers = []) {
-  if (typeof __velarUntracked(read) !== "function") throw new TypeError("Event '" + event + "' requires a function");
+  if (typeof __velarInternalRead(read) !== "function") throw new TypeError("Event '" + event + "' requires a function");
   const capture = __velarHasName(modifiers, "capture");
   const options = { capture, once: __velarHasName(modifiers, "once") };
   const listener = (value) => {
@@ -2392,7 +2549,7 @@ function __velarOn(element, event, read, scope, modifiers = []) {
       if (__velarHasName(modifiers, "stop")) __velarEventCall(value, "stopPropagation", __velarEventStopPropagation);
       // The handler expression is re-read per dispatch so handlers routed
       // through live props always see the current value.
-      const handler = __velarUntracked(read);
+      const handler = __velarInternalRead(read);
       if (typeof handler !== "function") throw new TypeError("Event '" + event + "' requires a function");
       const result = __velarUntracked(() => handler(value));
       __velarObservePromise(result, (error) => __velarReportEvent(error, scope, event));
@@ -2420,7 +2577,7 @@ function __velarBindValue(element, state, scope, numeric = false, parse = null) 
 }
 
 function __velarBindGroupValues(state, own) {
-  const value = __velarUntracked(() => state.get());
+  const value = __velarInternalRead(() => state.get());
   const values = __velarListSnapshot(value, "bind:group state");
   const output = new __velarDomNativeArray(values.length);
   let count = 0;
@@ -2476,7 +2633,7 @@ function __velarBindChecked(element, state, scope) {
 // component function still runs exactly once per instance; only reads race
 // ahead, so state initializers can never re-run on a prop update.
 function __velarRequiredProp(props, name, component) {
-  if (__velarUntracked(() => props[name]) === undefined) throw new TypeError("Component " + component + " requires prop " + name);
+  if (__velarInternalRead(() => props[name]) === undefined) throw new TypeError("Component " + component + " requires prop " + name);
   return __velarGraphFreeze({
     get() {
       const value = props[name];
@@ -2487,7 +2644,7 @@ function __velarRequiredProp(props, name, component) {
 }
 
 function __velarProp(props, name, fallback) {
-  const fallbackValue = __velarUntracked(() => props[name]) === undefined ? fallback() : undefined;
+  const fallbackValue = __velarInternalRead(() => props[name]) === undefined ? fallback() : undefined;
   return __velarGraphFreeze({
     get() {
       const value = props[name];
@@ -2515,9 +2672,9 @@ function __velarInstantiate(component, thunks, children, scope, namespace, setRe
     const styleRead = thunks.__velarStyle;
     const snapshotNames = __velarGraphOwnNames(thunks);
     for (let index = 0; index < snapshotNames.length; index += 1) {
-      if (snapshotNames[index] !== "__velarStyle") snapshot[snapshotNames[index]] = __velarUntracked(thunks[snapshotNames[index]]);
+      if (snapshotNames[index] !== "__velarStyle") snapshot[snapshotNames[index]] = __velarInternalRead(thunks[snapshotNames[index]]);
     }
-    if (children !== undefined) snapshot.children = __velarUntracked(children);
+    if (children !== undefined) snapshot.children = __velarInternalRead(children);
     const instance = __velarUntracked(() => component(snapshot, namespace));
     if (styleRead !== undefined) __velarStyleBindRoot(instance.node, styleRead, scope);
     return __velarBindComponentRef(instance, setRef);
@@ -2531,7 +2688,7 @@ function __velarInstantiate(component, thunks, children, scope, namespace, setRe
     __velarObserver(() => cell.set(read()), "dom", scope);
     __velarGraphDefine(props, name, { enumerable: true, get: () => cell.get() });
   }
-  if (children !== undefined) __velarGraphDefine(props, "children", { enumerable: true, value: __velarUntracked(children) });
+  if (children !== undefined) __velarGraphDefine(props, "children", { enumerable: true, value: __velarInternalRead(children) });
   return __velarBindComponentRef(__velarUntracked(() => component(props, namespace)), setRef);
 }
 

@@ -725,8 +725,8 @@ rejects `let name?: T` for that reason and not as a ban on the character.
 
 VelarScript does not provide TypeScript conditional types, mapped types,
 overload sets, declaration merging, or type assertions. Type parameters exist
-only on `def` functions; generic `type`, `class`, and `component` declarations
-are not part of the language.
+on `def` functions and on `type` records; generic `class` and `component`
+declarations are not part of the language.
 
 ### Read-only data views
 
@@ -1034,6 +1034,83 @@ are rejected. Call the concrete validator's `is(value)` method instead, and
 keep validator values in functions, classes, or ordinary variables when they
 must be stored.
 
+### Generic records
+
+A `type` record takes the same type-parameter list a `def` takes, bounds
+included. The parameters stand for field types, and each set of type arguments
+is its own type:
+
+```velar fragment
+type Box<T>:
+    value: T
+
+type Pair<A, B>:
+    left: A
+    right: B
+
+type Sorted<T: Comparable>:
+    items: List<T>
+
+const kept: Box<string> = {value: "kept"}
+const counted: Box<number> = {value: 1}
+const labelled: Pair<string, number> = {left: "count", right: 2}
+const ranked: Sorted<number> = {items: [3, 1, 2]}
+```
+
+`Box<string>` and `Box<number>` are two types: the type arguments are part of
+the type's identity, so assigning one to the other is refused, and each carries
+its own runtime validator that checks the field against the argument it was
+given. An alias inside a type argument is transparent — with `type Id = string`,
+`Box<Id>` and `Box<string>` are one type.
+
+Variance is decided field by field rather than declared on the parameter: a
+`readonly` field is covariant and a mutable field is invariant, exactly as
+`readonly List<T>` and `List<T>` already differ. There is no `in`/`out`
+annotation, because a per-field decision is strictly the more precise one — the
+same `Box<T>` can be covariant in a `readonly` field and invariant in a mutable
+one, which a declaration-site annotation cannot express.
+
+A generic record's reference to itself must pass its own type parameters
+through, which is what keeps a recursive shape finite:
+
+```velar fragment
+type Tree<T>:
+    label: T
+    kids: List<Tree<T>>
+
+const tree: Tree<string> = {label: "root", kids: [{label: "leaf", kids: []}]}
+```
+
+`Tree<string>` needs only `Tree<string>`, so it reaches a fixed point. A
+reference that changed the arguments with the depth — `type Bad<T>: next:
+Bad<List<T>>?` — would need `Bad<List<string>>`, `Bad<List<List<string>>>`,
+without end, and is refused on the line that declares it.
+
+A bare `Box` is not a type. It is a type constructor: without arguments it has
+no identity, no field table, and no validator, so writing it names the arity it
+is missing instead of quietly meaning `Box<unknown>` — which would accept
+everything, `unknown` being the one type no bound admits.
+
+Naming an instantiation is what turns it into a value, which is the move
+`type Scores = Map<string, number>` already makes for a built-in generic:
+
+```velar fragment
+type Box<T>:
+    value: T
+
+type StringBox = Box<string>
+
+const validated = StringBox.parse({value: "raw"})
+const matches = StringBox.is({value: 1})
+```
+
+The name *is* that instantiation's runtime validator, so `StringBox` is exactly
+the `Type<Box<string>>` value the `Type<T>` carrier above accepts, and
+`decode(untrusted, StringBox)` answers a `Box<string>`. There is no explicit
+instantiation in expression position: `Box<string>.parse(raw)` is not written,
+because `<` in an expression is a comparison. Type arguments are supplied where
+a type is written, and named when a value is wanted.
+
 Enums represent finite string-backed states:
 
 ```velar
@@ -1099,13 +1176,17 @@ type ToolEvent:
     kind: EventKind.tool
     toolId: string
 
-type Event = TextEvent | ToolEvent
+type StreamEvent = TextEvent | ToolEvent
 
-def describe(event: Event) -> string:
+def describe(event: StreamEvent) -> string:
     if event.kind == EventKind.text:
         return event.text
     return event.toolId
 ```
+
+(The alias is `StreamEvent` rather than `Event` because `Event` is a Web type
+name: in a Web module a user declaration of one is refused where it is written,
+since every use of it would resolve to the built-in instead.)
 
 `EventKind.text` is a nominal singleton below `EventKind`, not an open string.
 Reading a field shared by every union member produces the union of its field
@@ -1374,10 +1455,9 @@ instantiation syntax. Fixed arguments bind parameters first, then callback
 arrows are checked against those bindings and their results solve the rest.
 A parameter the call leaves unsolved becomes `unknown`. Type parameters are
 erased at runtime, so `is T`, `case T`, and every other runtime-checked
-position require a concrete type instead. Only `def` declarations — top-level,
-exported, extern, and class methods — take type parameters; generic `type`,
-`class`, and `component` declarations and variance are deliberately out of
-scope.
+position require a concrete type instead. `def` declarations — top-level,
+exported, extern, and class methods — and `type` records take type parameters;
+generic `class` and `component` declarations do not.
 
 #### Bounds
 
@@ -2597,7 +2677,8 @@ are the whole difference between what a Core module and a Web module accept:
 - `look`
 - `keyframes`
 - `import css unsafe "./file.css" before|after look`
-- the reserved globals `computed(() => value)`, `mount(node, target)`, and
+- `computed name = expression`
+- the reserved globals `cached(() => value)`, `mount(node, target)`, and
   `tick()`
 - unit literals such as `12px`, `1rem`, and `200ms`
 
@@ -2633,6 +2714,16 @@ inside `{...}` continues across physical lines without parentheses, exactly as
 it would inside a call's parentheses. An attribute is a typed position: a
 literal there is inferred against the declared prop type, so `items={[]}` needs
 no annotation.
+
+A prop uses exactly the type written on the component declaration. Record and
+collection data is mutable by default, so a child may assign a field or call a
+mutating collection method through that live input. An author who wants a
+read-only component contract writes it explicitly: `component Guarded(task:
+readonly Task)`. That existing Core view remains transitive and rejects writes;
+the refusal is the component author's choice, not a projection imposed on all
+props. The prop binding itself is still a live input slot rather than a
+child-owned state cell, so `task = other` is not a way to replace the parent's
+prop value.
 
 `velar format` owns the layout of an element that opens and closes on one
 line. Such an element is written on that line while it fits within 120
@@ -2742,8 +2833,8 @@ through every prop read — render positions, watches, computed accessors, and
 event handlers — and its local state, refs, and lifecycle are untouched. The
 component body still runs exactly once per instance, so a `state` initializer
 captures the construction-time prop value, and a body-level `const` derived
-from a prop does not follow later updates — derive with `computed(() => ...)` when it
-should. At a JSX position backed by a `Component` value, retaining the same
+from a prop does not follow later updates — derive with `computed name = ...` when
+it should. At a JSX position backed by a `Component` value, retaining the same
 constructor identity retains the instance and its live prop cells; changing
 the constructor identity destroys the old instance, runs its cleanup, and
 mounts a fresh instance. An instance is otherwise destroyed and recreated only
@@ -2754,9 +2845,9 @@ construction.
 
 ```velar fragment
 export component TicketBadge(count: number):
-    const label = computed(() => count == 1 ? "1 open ticket" : f"{count} open tickets")
+    computed label = count == 1 ? "1 open ticket" : f"{count} open tickets"
 
-    return <span class="badge">{label()}</span>
+    return <span class="badge">{label}</span>
 ```
 
 JSX children render strings, finite numbers, booleans, enums, `WebNode` values,
@@ -2883,7 +2974,7 @@ element in parentheses.
 ```velar fragment
 export component Profile(userId: string):
     state expanded = false
-    const label = computed(() => expanded ? "Hide" : "Show")
+    computed label = expanded ? "Hide" : "Show"
     resource profile: User = loadUser(userId)
 
     action save() -> User:
@@ -2893,7 +2984,7 @@ export component Profile(userId: string):
         expanded = not expanded
 
     return <section>
-        <button type="button" on:click={toggleExpanded}>{label()}</button>
+        <button type="button" on:click={toggleExpanded}>{label}</button>
         <button type="button" disabled={save.pending} on:click={save}>Save</button>
     </section>
 ```
@@ -2919,15 +3010,15 @@ retitle(tasks[0], "Ready")
 An initializer is evaluated once. It does not create a formula:
 
 ```velar fragment
-const currentTask = tasks[0]                   // one ordinary reference snapshot
-state selectedTask = tasks[0]                  // an independent writable cell
-const liveFirstTask = computed(() => tasks[0]) // a live positional query
+const currentTask = tasks[0]      // one ordinary reference snapshot
+state selectedTask = tasks[0]     // an independent writable cell
+computed liveFirstTask = tasks[0] // a live positional query
 ```
 
 The first two bindings initially refer to the same task object, so deep
 mutation of that object remains visible through either reference; neither one
 follows a later List insertion at index `0`. Reassigning `selectedTask` changes
-only that state cell. `liveFirstTask()` is the spelling that follows the current
+only that state cell. `liveFirstTask` is the spelling that follows the current
 first position.
 
 State does not copy, freeze, or claim linear ownership of a mutable value.
@@ -2949,13 +3040,19 @@ observable write. VelarScript intentionally does not pretend to have an
 ownership system by rejecting only some aliases or forcing product-layer
 copies.
 
-`computed` is a function, not a declaration keyword. The removed
-`computed name = expression` declaration has no compatibility alias; write
-`const name = computed(() => expression)`. The function accepts one
-synchronous zero-argument function and returns a read-only accessor
-`() -> T`. Calling that accessor tracks dynamic reactive dependencies. Its
-result is evaluated on first access and cached while observed. An invalidated
-observed result refreshes during the reactive flush; a synchronous access
+`computed name = expression` is the one spelling that declares a derived value.
+It parses where `state` parses, in all three scopes, and it is the read-only
+half of the same row: the name is read bare, and assigning it is an error that
+names the state to change instead. The expression tracks dynamic reactive
+dependencies; its result is evaluated on first access and cached while observed.
+
+`cached(() => expression)` is the same cache as an ordinary value rather than as
+a declaration — for when the reader itself has to be passed to something else.
+It accepts one synchronous zero-argument function and returns a read-only
+accessor `() -> T`, which is read by calling it. The retired `computed(...)`
+function has no compatibility alias.
+
+An invalidated observed result refreshes during the reactive flush; a synchronous access
 before that flush refreshes it immediately and still publishes a changed result
 to the other downstream observers. Downstream observers are notified only when
 the result changes by identity/value equality. Failure and recovery are also
@@ -2964,8 +3061,8 @@ and recovery wakes downstream caches even when it produces the same value as
 the last successful evaluation. When its last consumer is disposed it detaches
 from upstream dependencies. Asynchronous component data belongs in a
 `resource`. Record properties and collection keys are tracked
-independently,
-so changing `task.done` invalidates consumers of that property without
+independently, so
+changing `task.done` invalidates consumers of that property without
 invalidating unrelated `task.title` reads, and changing one `Map` entry does not
 invalidate consumers of other keys. There is no separate `memo` API and no
 manual batching API; `computed` is the one derived-cache abstraction, while
@@ -2975,17 +3072,21 @@ contracts owned by the Web API document.
 Reactive imports keep the same split as ordinary imports: assigning an imported
 binding is forbidden, while mutating the value inside an imported state binding
 is legal and publishes to every consumer. Component record and collection props
-enter the child through the same transitive Core `readonly` views used by
-ordinary functions and module interfaces. A helper that only reads a prop must
-declare a `readonly` parameter; a helper that requires a mutable parameter
-cannot receive the prop. A child may call a callback supplied by its parent to
-request a mutation, but it may not assign through the prop or invoke a mutating
-collection method on it. The readonly promise of props covers data props. A
-bare class prop is a behavioral value: it is visibly a class at the prop
-declaration, passes to the child as-is, and receives no readonly protection. A
-class buried inside a record or collection prop is rejected at the prop
-declaration exactly like explicit `readonly` (section 5) — lift the class into
-its own prop, or model it as a data record.
+use their declared type unchanged. By default, assigning through a prop or
+calling one of its mutating collection methods follows the same property-,
+index-, or key-granular publication path as writing through the source state;
+a helper that requires the mutable type can receive that prop directly.
+
+`readonly` on a prop is the component author's explicit owner-seam contract,
+not a Web-only projection. It uses the same transitive Core view as ordinary
+functions and module interfaces: a helper that receives it must accept the
+readonly type, deep writes and mutating collection methods are rejected, and no
+copy, proxy, or freeze is introduced. The Core pure-data boundary is unchanged,
+so classes and other behavioral values remain outside explicit `readonly`,
+whether they appear at the root or are buried inside its data. Keeping product
+store writes behind callbacks or store actions is an idiom that makes business
+rules easy to audit; the type system enforces that direction only where the
+component author opts in with `readonly`.
 
 A resource exposes `value`, `loading`, `ready`, `error`, and `reload`. It owns
 stale-result and component-destruction handling. Its Promise and Object host
@@ -3052,6 +3153,19 @@ that invalidates itself is stopped and reported after 100 rounds rather than
 freezing the page. Keep derivations pure anyway; a `computed` that writes is a
 side effect hiding in a cache, and `watch` is the spelling that says so.
 
+Reading a reactive source into an ordinary `const` freezes the value that was
+read. That is what `const` means, and a snapshot — the locale the reader opened
+the page in, the timestamp a session began — is a legitimate thing to want. It
+is also the quietest way to put stale text on a page, because the frozen and the
+following spellings read identically until the source first changes. A
+development build carries a runtime detector for exactly that: reactive sources
+read during component setup outside any observer are recorded, and a report is
+made **when one of them later changes** — never when it is read. A snapshot that
+never diverges is never reported, because nothing was ever wrong with it. The
+report names the value it froze at, the value the source now holds, the `.vel`
+line it was read on, and `computed name = expression` as the spelling that
+follows. A production build contains none of this.
+
 `watch expression:` runs an explicit side effect when the tracked value changes,
 and `watch expression as current, previous:` names the new and old values. Both
 names are required when `as` is present, so a body that needs only the new value
@@ -3066,6 +3180,17 @@ one. A component watch is disposed with its component. A module-scope watch is
 never disposed — it lives for the life of the page, like a module `action` — so
 a module watch is for application-wide facts, not for anything a component
 owns.
+
+A watch subject must be able to change. A literal, a plain `const` bound to a
+primitive, and an expression built only from those are refused: the body they
+carry could never run, and a statement that is silently never executed is the
+same defect a bare `5` is already refused for. A reader that was not called —
+`watch total:` where `total` is a `cached(...)` accessor — is refused with the
+call it needed, because that refusal has one correct spelling; a value that can
+never change is refused without one, because no spelling would fix it. The
+refusal is limited to what the compile can prove: a call whose reactivity lives
+in another module, and a field path rooted in an ordinary `const` bound to a
+reactive object, both stay legal, because both really do follow.
 
 ## 16. Lifecycle
 
@@ -3824,8 +3949,10 @@ subtraction, and numeric scaling preserve the unit-bearing value rather than
 exposing JavaScript milliseconds as an untyped number.
 
 `Kind.is(value)` and record `Type.is(value)` are first-class validators: a true
-branch narrows `value` to the validated type. An exported `computed` value must
-declare its public accessor result at the export site, for example
-`export const name: () -> T = computed(...)`. Numeric finiteness and integer
+branch narrows `value` to the validated type. An exported derived value is
+declared `export computed name = expression` and read bare by every importing
+module; an exported `cached(...)` accessor must declare its public accessor
+result at the export site, for example
+`export const name: () -> T = cached(...)`. Numeric finiteness and integer
 tests use `value.isFinite()` and `value.isInteger()`; the duplicate
 `Math.` spellings are not part of the namespace.

@@ -450,8 +450,11 @@ there are no control-flow attributes.
 
 Event handlers are `on:click={handler}`, form bindings are
 `bind:value={state}`, and children arrive through a declared `children: WebNode`
-prop. **A prop is a readonly projection**, and readonly travels: a helper that
-receives one declares `readonly List<T>` rather than copying the data to widen it.
+prop. Props are live reactive inputs, and their data is mutable by default:
+writing a field or using a collection's mutating method publishes through the
+same deep-reactive path as writing the source state. Declare `readonly T` on a
+prop when the component author deliberately wants a read-only contract; that
+explicit view travels into helpers and nested data without copying or freezing.
 
 ```velar
 type Item:
@@ -480,10 +483,22 @@ mount(<ItemList items={[{id: "i-1", title: "Read the charter"}]}>
 
 ## 14. State, computed values, resources, and actions
 
-Four cells, one job each. `state` holds a fact. `computed(() => ...)` derives
-from facts. `resource` loads async data — it exposes `value`, `loading`,
-`error`, and `reload()`. `action` performs a user operation and exposes
-`pending` and `error`.
+Four cells, one job each. `state` holds a fact. `computed name = ...` derives
+from facts and is read bare, like `state`. `resource` loads async data — it
+exposes `value`, `loading`, `error`, and `reload()`. `action` performs a user
+operation and exposes `pending` and `error`.
+
+The two synchronous ones complete a grid the whole language already had:
+
+|            | not reactive | reactive   |
+| ---------- | ------------ | ---------- |
+| writable   | `let`        | `state`    |
+| read-only  | `const`      | `computed` |
+
+`state` is to `let` what `computed` is to `const`. That is what makes `const`
+worth reading: it now promises the value never changes. `cached(() => ...)` is
+the same cache as an ordinary value, for when the reader itself has to be
+passed somewhere; you read it by calling it.
 
 Reactivity is deep, so you mutate state directly rather than rebuilding it.
 Two things surprise newcomers, both deliberate: **a resource loads once, at
@@ -506,7 +521,7 @@ async def saveDraft(id: string, draft: string):
 component TicketPanel(id: string):
     state draft = ""
     resource ticket: Ticket = loadTicket(id)
-    const heading = computed(() => ticket.value?.title ?? "Loading")
+    computed heading = ticket.value?.title ?? "Loading"
 
     action save():
         await saveDraft(id, draft)
@@ -515,7 +530,7 @@ component TicketPanel(id: string):
         async ticket.reload()
 
     return <section>
-        <h2>{heading()}</h2>
+        <h2>{heading}</h2>
         <textarea bind:value={draft}></textarea>
         <button type="button" disabled={save.pending} on:click={save}>Save</button>
     </section>

@@ -12,6 +12,7 @@ import { fileIdentity, MAX_PRODUCTION_ASSETS } from "./file-integrity.ts";
 import { hostErrorMessage } from "./host-error.ts";
 import { resolveBrowserNpmEntry } from "./npm.ts";
 import { isNodeOnlyModule, nodeModuleDiagnostic } from "@velarscript/node/compiler";
+import { assertUniqueEmbeddedModuleOutputs, embeddedModuleOutputPath } from "./embedded-modules.ts";
 
 export interface ProductionBuildResult {
   readonly framework: ProductionFrameworkIdentity;
@@ -218,12 +219,24 @@ function assetRole(path: string, build: ProductionBuildResult): ProductionBuildM
 
 function velarModules(project: ProjectResult): Plugin {
   const modulesByPath = new Map<string, ProjectResult["modules"][number]>();
+  const embeddedByPath = new Map<string, { readonly module: ProjectResult["modules"][number]; readonly code: string; readonly sourceMap: string }>();
+  assertUniqueEmbeddedModuleOutputs(project.modules.map((module) => ({
+    ownerPath: module.inputPath.replace(/\.vel$/u, ".js"),
+    embeddedModules: module.result.embeddedModules,
+  })));
   for (const module of project.modules) {
     modulesByPath.set(resolve(module.inputPath), module);
     try {
       modulesByPath.set(realpathSync(module.inputPath), module);
     } catch {
       // Compilation already reports missing source modules. Keep bundler lookup fail-closed.
+    }
+    for (const embedded of module.result.embeddedModules) {
+      embeddedByPath.set(resolve(embeddedModuleOutputPath(module.inputPath.replace(/\.vel$/u, ".js"), embedded.specifier)), {
+        module,
+        code: embedded.code,
+        sourceMap: embedded.sourceMap,
+      });
     }
   }
   const moduleAt = (path: string): ProjectResult["modules"][number] | undefined => modulesByPath.get(resolve(path));
@@ -242,6 +255,18 @@ function velarModules(project: ProjectResult): Plugin {
           resolveDir: dirname(module.inputPath),
         };
       });
+      context.onLoad({ filter: /.*/, namespace: "velar-embedded" }, (arguments_) => {
+        const embedded = embeddedByPath.get(resolve(arguments_.path));
+        if (!embedded) return { errors: [{ text: `Embedded JavaScript module '${arguments_.path}' was not compiled` }] };
+        const sourceMap = embedded.sourceMap
+          ? `\n//# sourceMappingURL=data:application/json;base64,${Buffer.from(embedded.sourceMap).toString("base64")}\n`
+          : "";
+        return {
+          contents: `${embedded.code}${sourceMap}`,
+          loader: "js",
+          resolveDir: dirname(embedded.module.inputPath),
+        };
+      });
       context.onResolve({ filter: /^velar\// }, (arguments_) => ({ path: arguments_.path, namespace: "velar-standard" }));
       context.onLoad({ filter: /.*/, namespace: "velar-standard" }, (arguments_) => {
         if (isNodeOnlyModule(arguments_.path)
@@ -254,6 +279,8 @@ function velarModules(project: ProjectResult): Plugin {
       context.onResolve({ filter: /^\.\.?\// }, (arguments_) => {
         const sourceModule = moduleAt(arguments_.importer);
         if (!sourceModule || !arguments_.path.endsWith(".js")) return null;
+        const embeddedPath = resolve(dirname(sourceModule.inputPath), arguments_.path);
+        if (embeddedByPath.has(embeddedPath)) return { path: embeddedPath, namespace: "velar-embedded" };
         const targetPath = resolve(dirname(sourceModule.inputPath), arguments_.path.replace(/\.js$/u, ".vel"));
         const targetModule = moduleAt(targetPath);
         return targetModule ? { path: targetModule.inputPath } : null;

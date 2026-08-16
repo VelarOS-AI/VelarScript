@@ -9,10 +9,10 @@
 // Everything that changes the board is a `def` exported from here. That is the
 // rule that makes the rest of the application readable: a component that wants
 // something to change calls one of these with identifiers, and never reaches
-// into the data itself. It could not do so anyway — a record that arrives as a
-// component prop is a transitive readonly view — and that refusal is the point:
-// the store is the only writer, so the list of ways the board can change is the
-// list of exports below.
+// into the data itself. Props are mutable by default, so the checklist opts into
+// `readonly` explicitly; that contract turns this house rule into a checked
+// owner seam. The store is the only writer, so the list of ways the board can
+// change is the list of exports below.
 
 import {uuid} from "velar/id"
 import {BoardSummary, Check, Release, Stage, mayAdvance, nextStage, summarize} from "../model/release.vel"
@@ -73,7 +73,7 @@ export def resetBoard():
 // An exported `computed` declares its accessor result at the export site. Every
 // reader of `summary()` recomputes together when the board changes, and the
 // arithmetic itself stays in `model/`.
-export const summary: () -> BoardSummary = computed(() => summarize(releases))
+export computed summary = summarize(releases)
 
 export def findRelease(id: string) -> Release?:
     return releases.find(release => release.id == id)

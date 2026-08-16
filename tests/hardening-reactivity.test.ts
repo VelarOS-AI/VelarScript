@@ -33,7 +33,7 @@ type Row:
     id: string
     title: string
 
-component Child(row: Row):
+component Child(row: readonly Row):
     const alias = row
     alias.title = "alias"
     overwrite(row)
@@ -50,7 +50,7 @@ def harmless(row: readonly Row):
 def mutateThroughArrow(items: List<string>):
     [0].map(_ => items.append("captured"))
 
-component ListChild(items: List<string>):
+component ListChild(items: readonly List<string>):
     const alias = items
     alias.append("forbidden")
     mutateThroughArrow(items)
@@ -110,35 +110,35 @@ def mutateDirectly(value: NestedRow):
 def identity(value: readonly NestedRow) -> readonly NestedRow:
     return value
 
-component TransitiveChild(row: NestedRow):
+component TransitiveChild(row: readonly NestedRow):
     mutateTransitively(row)
     return <span>{row.title}</span>
 
-component DestructuredChild(row: NestedRow):
+component DestructuredChild(row: readonly NestedRow):
     const {inner} = row
     inner.title = "destructured"
     return <span>{row.inner.title}</span>
 
-component ReturnedChild(row: NestedRow):
+component ReturnedChild(row: readonly NestedRow):
     identity(row).title = "returned"
     return <span>{row.title}</span>
 
-component CarrierChild(row: NestedRow):
+component CarrierChild(row: readonly NestedRow):
     const carrier = [row]
     carrier[0].title = "carried"
     return <span>{row.title}</span>
 
-component ConditionalChild(row: NestedRow, other: NestedRow, choose: bool):
+component ConditionalChild(row: readonly NestedRow, other: readonly NestedRow, choose: bool):
     const selected = choose ? row : other
     selected.title = "selected"
     return <span>{row.title}</span>
 
-component SpreadChild(row: NestedRow):
+component SpreadChild(row: readonly NestedRow):
     const copy = {...row}
     copy.inner.title = "shared"
     return <span>{row.inner.title}</span>
 
-component OwnedCopyControl(row: NestedRow):
+component OwnedCopyControl(row: readonly NestedRow):
     const copy = {...row}
     copy.title = "owned copy"
     const carrier = [row]
@@ -182,7 +182,7 @@ mount(<App />, "#app")
   assert.doesNotMatch(keyed.code, /__velarReactive\(value, source\)/u);
 });
 
-test("component readonly data protects data props while bare class and Promise props stay behavioral", () => {
+test("component props keep their declared mutable class and Promise boundaries", () => {
   const result = compile(`
 type User:
     name: string
@@ -217,15 +217,9 @@ component ClassChild(box: Box, boxes: List<Box>, pending: Promise<User>):
     return <span>{box.label()}</span>
 `.trimStart());
 
-  // D44 rule 72: the bare `box: Box` prop stays legal — it is visibly
-  // behavioral and passes through unprotected — while the class buried in
-  // the `boxes: List<Box>` data prop is rejected at the prop declaration.
-  // The Promise prop remains a capability boundary and resolves mutable data.
-  assert.equal(result.diagnostics.length, 2, result.diagnostics.map((diagnostic) => diagnostic.message).join("\n"));
-  assert.equal(result.diagnostics.filter((diagnostic) => diagnostic.code === "VEL3002").length, 0);
-  assert.equal(result.diagnostics.filter((diagnostic) => diagnostic.code === "VEL4001").length, 2);
-  assert.ok(result.diagnostics.some((diagnostic) => /A component prop is a readonly data view; 'boxes\[element\]' is class 'Box' — lift the class into its own prop, or model it as a data record/u.test(diagnostic.message)));
-  assert.ok(result.diagnostics.some((diagnostic) => /mutating method 'append' through readonly List<Box>/u.test(diagnostic.message)));
+  // D74: props keep the annotation the author wrote. Mutable data may contain
+  // classes and use collection methods; Promise remains a capability boundary.
+  assert.deepEqual(result.diagnostics, []);
 
   const hostAnnotation = compile(`
 def inspect(element: readonly CanvasElement):

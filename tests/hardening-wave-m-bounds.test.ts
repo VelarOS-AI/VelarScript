@@ -212,11 +212,23 @@ def label<T: User>(value: T) -> string:
   assert.match(userType[0]!, /never an arbitrary type/u);
 });
 
-test("[D41 61] a bound is only legal where a type parameter already is", () => {
+test("[D41 61 / D55 124] a bound is legal on both declaration forms that take a type parameter", () => {
+  // D55 rule 124: the 4x3 grant table is a pure function of the bound, so a
+  // `type` carries one with exactly the meaning a `def` gives it — and the
+  // forms that take no type parameter still refuse the whole list.
+  assert.deepEqual(diagnostics(`
+type Box<T: Text>:
+    value: T
+
+const box: Box<number> = { value: 1 }
+print(f"{box.value}")
+`), []);
   assert.ok(diagnostics(`
 type Box<T: Text>:
     value: T
-`).some((item) => item.startsWith("VEL2025")));
+
+type Bad = Box<Box<string>>
+`).some((item) => item.startsWith("VEL4031")));
   assert.ok(diagnostics(`
 class Box<T: Text>:
     let value: string = ""

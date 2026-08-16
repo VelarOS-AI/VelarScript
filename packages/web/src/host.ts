@@ -22,6 +22,40 @@ export function createWebArtifacts(input: FrameworkHostArtifactsInput): Framewor
       const mapUrl = ${JSON.stringify(withBase(config.base, "__velar/map"))}
       let revision = 0
       globalThis.__velarHotDisposers = []
+      // D70 rule 180: the runtime detects a frozen reactive read that has since
+      // diverged; the development host is what turns its capture site back into
+      // a .vel line, through the same map endpoint the error overlay uses. The
+      // hook is published before the entry module loads, and its absence is
+      // what makes a production build carry none of the detection.
+      //
+      // Only the reading line is mapped, and only the first frame that is the
+      // author's. An error overlay maps a whole stack because a whole stack is
+      // what the reader needs there; here the answer is one line, and asking the
+      // map endpoint about the compiler's own frames would answer nothing while
+      // filling the console with failed requests of its own.
+      const reportedFrozenReads = new Set()
+      const frozenReadSite = async (stack) => {
+        for (const line of String(stack).split("\\n")) {
+          if (line.includes("__velar")) continue
+          const frame = /https?:\\/\\/[^\\s)]+?\\.js(?:\\?[^:\\s)]*)?:(\\d+):(\\d+)/.exec(line)
+          if (!frame) continue
+          try {
+            const parsed = new URL(frame[0].replace(/:(\\d+):(\\d+)$/, ""))
+            const response = await fetch(mapUrl + "?file=" + encodeURIComponent(parsed.pathname) + "&line=" + frame[1] + "&column=" + frame[2])
+            if (!response.ok) return frame[0]
+            const source = await response.json()
+            return source.path + ":" + source.line + ":" + source.column
+          } catch { return frame[0] }
+        }
+        return "an unmapped position"
+      }
+      globalThis.__velarDevelopmentHooks = {
+        frozenRead: async (report) => {
+          if (reportedFrozenReads.has(report.stack)) return
+          reportedFrozenReads.add(report.stack)
+          console.warn("VelarScript: " + report.message + "\\n    read at " + (await frozenReadSite(report.stack)))
+        },
+      }
       const overlay = document.createElement("section")
       overlay.setAttribute("data-velar-error-overlay", "")
       overlay.style.cssText = "position:fixed;inset:0;z-index:2147483647;overflow:auto;background:rgba(15,15,18,.96);color:#fee2e2;padding:28px;font:14px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;display:none"
@@ -50,6 +84,7 @@ export function createWebArtifacts(input: FrameworkHostArtifactsInput): Framewor
         return mapped
       }
       const load = async () => {
+        reportedFrozenReads.clear()
         for (const dispose of globalThis.__velarHotDisposers.splice(0)) dispose()
         await import(entry + "?velar=" + revision)
       }

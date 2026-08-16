@@ -31,6 +31,12 @@ import { buildLanguageServerTool, VELAR_LANGUAGE_SERVER_TOOL_ID } from "./langua
 import { buildProjectTaskTool, VELAR_PROJECT_TASK_TOOL_ID } from "./project-task-tool.ts";
 import { buildBuildEngineTool, VELAR_BUILD_ENGINE_TOOL_ID } from "./build-engine-tool.ts";
 import { applyProjectMechanicalFixes } from "./mechanical-fixer.ts";
+import {
+  assertUniqueEmbeddedModuleOutputs,
+  embeddedModuleFileContents,
+  embeddedModuleOutputPath,
+  VELAR_EMBEDDED_MODULE_MARKER,
+} from "./embedded-modules.ts";
 
 
 interface CommandArguments {
@@ -557,6 +563,10 @@ async function main(arguments_: readonly string[]): Promise<number> {
   await mkdir(parent, { recursive: true });
   const staging = await mkdtemp(join(parent, `.velar-${basename(outputDirectory)}-`));
   try {
+    assertUniqueEmbeddedModuleOutputs(project.modules.map((module) => ({
+      ownerPath: join(staging, module.relativePath.replace(/\.vel$/, ".js")),
+      embeddedModules: module.result.embeddedModules,
+    })));
     for (const module of project.modules) {
       const outputPath = join(staging, module.relativePath.replace(/\.vel$/, ".js"));
       await mkdir(dirname(outputPath), { recursive: true });
@@ -736,15 +746,48 @@ async function generatedRuntimePackageOwnership(packageRoot: string): Promise<"a
 async function writeCompiled(outputPath: string, result: CompileResult, writeCss: boolean, codeOverride: string | null = null): Promise<void> {
   const mapPath = `${outputPath}.map`;
   const code = `${codeOverride ?? result.code ?? ""}//# sourceMappingURL=${basename(mapPath)}\n`;
+  assertUniqueEmbeddedModuleOutputs([{ ownerPath: outputPath, embeddedModules: result.embeddedModules }]);
+  for (const module of result.embeddedModules) {
+    const embeddedPath = embeddedModuleOutputPath(outputPath, module.specifier);
+    await assertEmbeddedModuleOutputWritable(embeddedPath);
+  }
   const writes = [
     writeFile(outputPath, code, "utf8"),
     writeFile(mapPath, result.sourceMap ?? "", "utf8"),
+    ...result.embeddedModules.flatMap((module) => {
+      const embeddedPath = embeddedModuleOutputPath(outputPath, module.specifier);
+      return [
+        writeFile(embeddedPath, embeddedModuleFileContents(embeddedPath, module), "utf8"),
+        writeFile(`${embeddedPath}.map`, module.sourceMap, "utf8"),
+      ];
+    }),
   ];
   if (writeCss) {
     const cssPath = outputPath.replace(/\.js$/u, ".css");
     writes.push(result.css ? writeFile(cssPath, result.css, "utf8") : rm(cssPath, { force: true }));
   }
   await Promise.all(writes);
+}
+
+async function assertEmbeddedModuleOutputWritable(path: string): Promise<void> {
+  try {
+    const metadata = await lstat(path);
+    if (!metadata.isFile() || metadata.isSymbolicLink()) {
+      throw new Error(`Refusing to replace non-generated embedded JavaScript output '${path}'`);
+    }
+    const existing = await readFile(path, "utf8");
+    if (!existing.includes(VELAR_EMBEDDED_MODULE_MARKER)) {
+      throw new Error(`Refusing to replace non-generated embedded JavaScript output '${path}'`);
+    }
+  } catch (error) {
+    if (!isHostErrorCode(error, "ENOENT")) throw error;
+    try {
+      await lstat(`${path}.map`);
+      throw new Error(`Refusing to replace source map '${path}.map' without its generated embedded JavaScript owner`);
+    } catch (mapError) {
+      if (!isHostErrorCode(mapError, "ENOENT")) throw mapError;
+    }
+  }
 }
 
 function rewriteVelarPackageImports(project: ProjectResult, module: ProjectModule): string | null {

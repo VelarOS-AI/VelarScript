@@ -34,7 +34,7 @@ test "the renderer is an ordinary Web page":
     await browser.open()
     expect(await browser.text("[data-chapter='01'] h2")).toBe("01 — the Desktop host")
     expect(await browser.text("[data-chapter='02'] h2")).toBe("02 — project tasks, terminals, and the language server")
-    expect(await browser.text("[data-commands]")).toBe("velar check, velar test, velar build, velar run")
+    expect(await browser.text("[data-commands]")).toBe("velar check, velar test, velar build, velar fix, velar package, velar run")
     expect(await browser.text("[data-channels]")).toBe("out/err")
     await browser.click("[data-read-summary]")
     await browser.waitForText("[data-summary]", "|")

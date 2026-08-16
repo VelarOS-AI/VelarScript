@@ -3,11 +3,13 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { officialToolModulesPlugin } from "./official-tool-assets.ts";
+import { copyPackagedOfficialTool } from "./packaged-official-tool.ts";
 
 export const VELAR_LANGUAGE_SERVER_TOOL_ID = "velar-language-server";
 
 export async function buildLanguageServerTool(outputFile: string): Promise<void> {
   outputFile = resolve(outputFile);
+  if (await copyPackagedOfficialTool(outputFile, "host/language-server.js", 0o644)) return;
   const sourceExtension = import.meta.url.endsWith(".ts") ? "ts" : "js";
   await mkdir(dirname(outputFile), { recursive: true });
   await build({

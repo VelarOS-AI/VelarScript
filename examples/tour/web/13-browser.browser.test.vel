@@ -1,7 +1,7 @@
 // Chapter 13 — the browser test: `velar/web-test`.
 //
 // Authority: the four controller tables in packages/web/src/compiler.ts —
-// `browser` (21 members), `localStorage` (4), `sessionStorage` (4), and
+// `browser` (23 members), `localStorage` (4), `sessionStorage` (4), and
 // `network` (2) — and D57 rule 138, which put the module's boundary on the
 // import line: `velar/web-test` only has a runtime under `velar test --browser`,
 // so importing it from any module that is not a `*.browser.test.vel` is
@@ -24,7 +24,7 @@ test "the page opens, reloads, and reports where it is":
     expect(await browser.currentPath()).toBe("/section/units")
     expect(await browser.text("[data-route-param]")).toBe("units")
 
-test "text, attributes, namespaces, counts, and visibility read the live DOM":
+test "text, attributes, geometry, styles, namespaces, counts, and visibility read the live DOM":
     await browser.open()
     expect(await browser.text("[data-chapter='01'] h2")).toBe("01 — components")
     expect(await browser.attribute("[data-task-list='plain'] li:first-child", "data-task")).toBe("parse")
@@ -35,6 +35,18 @@ test "text, attributes, namespaces, counts, and visibility read the live DOM":
     expect(await browser.count("[data-chapter='99']")).toBe(0)
     expect(await browser.visible("[data-chapter='02'] h2")).toBe(true)
     expect(await browser.visible("[data-attributes]")).toBe(false)
+
+    // Geometry assertions describe the box contract rather than pinning the
+    // tour to a design pixel. Computed style is where the causal 16px spacing
+    // token is asserted.
+    const vocabularyBox = await browser.box("[data-vocabulary]")
+    expect(vocabularyBox.x).toBe(vocabularyBox.left)
+    expect(vocabularyBox.y).toBe(vocabularyBox.top)
+    expect(vocabularyBox.width >= 0).toBe(true)
+    expect(vocabularyBox.height >= 0).toBe(true)
+    expect(vocabularyBox.right >= vocabularyBox.left).toBe(true)
+    expect(vocabularyBox.bottom >= vocabularyBox.top).toBe(true)
+    expect(await browser.style("[data-vocabulary]", "gap")).toBe("16px")
 
 // A bool on an `aria-*` attribute is a literal token in the rendered DOM, and
 // `false` keeps the attribute rather than removing it. A native boolean

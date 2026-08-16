@@ -1,4 +1,4 @@
-import type { Diagnostic, Span } from "@velarscript/compiler";
+import { typeParameterDeclarationFormsPhrase, type Diagnostic, type Span } from "@velarscript/compiler";
 import {
   Parser,
   type CompilerLexicalExtension,
@@ -12,24 +12,27 @@ import type {
   WebActionDeclaration as ActionDeclaration,
   WebComponentDeclaration as ComponentDeclaration,
   WebComponentItem as ComponentItem,
+  WebComputedDeclaration as ComputedDeclaration,
   WebExposeDeclaration as ExposeDeclaration,
   WebJsxElementExpression as JSXElementExpression,
   WebKeyframeStop,
   WebLookEntry as LookEntry,
   WebResourceDeclaration as ResourceDeclaration,
   WebStateDeclaration as StateDeclaration,
-  WebUnsafeCssImportDeclaration as UnsafeCssImportDeclaration,
+  WebUnsafeCssDeclaration as UnsafeCssDeclaration,
   WebWatchDeclaration as WatchDeclaration,
 } from "./ast.ts";
 import {
   WEB_JSX_TOKEN,
   WEB_KEYFRAMES_TOKEN,
   WEB_LOOK_TOKEN,
+  WEB_UNSAFE_CSS_TOKEN,
   type WebExpressionSource,
   type WebJsxElementSyntax,
   type WebKeyframesBlockSyntax,
   type WebLookBlockSyntax,
   type WebLookLineSyntax,
+  type WebUnsafeCssBlockSyntax,
 } from "./lexer.ts";
 
 const span = (start: number, end: number): Span => ({ start, end });
@@ -161,18 +164,6 @@ export class VelarWebParser extends Parser {
     start: number,
     modifiers: { readonly exported: boolean; readonly abstract: boolean; readonly asynchronous: boolean },
   ): Statement | null | undefined {
-    if (this.current().kind === "identifier" && this.current().value === "computed"
-      && this.peekKind(1) === "identifier" && (this.peekKind(2) === "assign" || this.peekKind(2) === "colon")) {
-      const keyword = this.advance();
-      const name = this.advance();
-      this.diagnostics.push(diagnostic(
-        "VEL5055",
-        `Use 'const ${name.value} = computed(() => ...)'; computed is a function that returns a derived accessor, not a declaration keyword`,
-        span(keyword.span.start, name.span.end),
-      ));
-      this.skipMistypedDeclaration();
-      return { kind: "PassStatement", span: span(keyword.span.start, name.span.end) };
-    }
     if (this.checkWord("look") && this.peekKind(1) === "identifier" && this.peekKind(2) === "colon") {
       const keyword = this.advance();
       const name = this.advance();
@@ -195,6 +186,10 @@ export class VelarWebParser extends Parser {
       this.advance();
       return this.parseStateDeclaration(start, modifiers.exported);
     }
+    if (this.namedDeclarationAhead("computed", reactiveBindingShapes)) {
+      this.advance();
+      return this.parseComputedDeclaration(start, modifiers.exported);
+    }
     if (this.namedDeclarationAhead("resource", reactiveBindingShapes)) {
       this.advance();
       if (modifiers.exported) this.diagnostics.push(diagnostic("VEL2018", "A resource is component-owned and cannot be exported", this.previous().span));
@@ -216,6 +211,26 @@ export class VelarWebParser extends Parser {
       return { kind: "PassStatement", span: span(start, value.span.end) };
     }
     return undefined;
+  }
+
+  protected override parseUnsafeExtensionStatement(start: number): Statement | null | undefined {
+    if (!this.checkWord("css") || this.peekKind(1) !== "extensionToken"
+      || this.peekValue(1) !== WEB_UNSAFE_CSS_TOKEN) return undefined;
+    this.advance();
+    const token = this.advance();
+    const payload = token.payload as WebUnsafeCssBlockSyntax | undefined;
+    if (!payload || payload.kind !== "WebUnsafeCssBlockSyntax") {
+      this.diagnostics.push(diagnostic("VEL5037", "The inline unsafe CSS token is missing its raw source", token.span));
+      return { kind: "PassStatement", span: token.span };
+    }
+    const placement = this.parseUnsafeCssPlacement();
+    const declaration: UnsafeCssDeclaration = {
+      kind: "ExtensionStatement:web:unsafe-css",
+      source: { kind: "inline", css: payload.css, span: payload.contentSpan },
+      placement,
+      span: span(start, this.previous().span.end),
+    };
+    return declaration;
   }
 
   /**
@@ -268,6 +283,20 @@ export class VelarWebParser extends Parser {
     this.advance();
     this.expect("unsafe", "Native CSS is an unsafe boundary; write 'import css unsafe'");
     const source = this.expect("string", "Expected a relative .css path after 'import css unsafe'");
+    const placement = this.parseUnsafeCssPlacement();
+    if ((!source.value.startsWith("./") && !source.value.startsWith("../")) || !source.value.endsWith(".css")) {
+      this.diagnostics.push(diagnostic("VEL5037", "Unsafe CSS imports require an explicit relative path ending in '.css'", source.span));
+    }
+    const declaration: UnsafeCssDeclaration = {
+      kind: "ExtensionStatement:web:unsafe-css",
+      source: { kind: "external", path: source.value, span: source.span },
+      placement,
+      span: span(start, this.previous().span.end),
+    };
+    return declaration;
+  }
+
+  private parseUnsafeCssPlacement(): "before" | "after" {
     let placement: "before" | "after" = "before";
     if (this.current().kind === "identifier" && this.current().value === "before") {
       this.expect("identifier", "Expected 'before'");
@@ -279,16 +308,7 @@ export class VelarWebParser extends Parser {
     if (!this.matchExtensionKeyword("look")) {
       this.diagnostics.push(diagnostic("VEL5037", "Unsafe CSS order must end with 'look'", this.current().span));
     }
-    if ((!source.value.startsWith("./") && !source.value.startsWith("../")) || !source.value.endsWith(".css")) {
-      this.diagnostics.push(diagnostic("VEL5037", "Unsafe CSS imports require an explicit relative path ending in '.css'", source.span));
-    }
-    const declaration: UnsafeCssImportDeclaration = {
-      kind: "ExtensionStatement:web:unsafe-css",
-      source: source.value,
-      placement,
-      span: span(start, this.previous().span.end),
-    };
-    return declaration;
+    return placement;
   }
 
   protected override parseExtensionExpression(token: Token): Expression | undefined {
@@ -433,6 +453,19 @@ export class VelarWebParser extends Parser {
     return { kind: "ExtensionStatement:web:state", exported, name: name.value, type, initializer, span: span(start, initializer.span.end) };
   }
 
+  /**
+   * D71 rule 182: `computed` parses exactly where `state` parses, through the
+   * same shape lookahead — the two halves of the reactive row differ in what
+   * they mean, not in how they are written.
+   */
+  private parseComputedDeclaration(start: number, exported: boolean): ComputedDeclaration {
+    const name = this.expect("identifier", "Expected a computed name");
+    const type = this.match("colon") ? this.parseTypeReference() : null;
+    this.expect("assign", "Expected '=' after computed name");
+    const initializer = this.parseExpression();
+    return { kind: "ExtensionStatement:web:computed", exported, name: name.value, type, initializer, span: span(start, initializer.span.end) };
+  }
+
   private parseResourceDeclaration(start: number, exported: boolean): ResourceDeclaration {
     const name = this.expect("identifier", "Expected a resource name");
     const type = this.match("colon") ? this.parseTypeReference() : null;
@@ -478,7 +511,7 @@ export class VelarWebParser extends Parser {
     const name = this.expect("identifier", "Expected a component name");
     if (this.check("less")) {
       this.parseTypeParameters();
-      this.diagnostics.push(diagnostic("VEL2025", `Component '${name.value}' cannot declare type parameters; only 'def' functions take '<T>'`, name.span));
+      this.diagnostics.push(diagnostic("VEL2025", `Component '${name.value}' cannot declare type parameters; ${typeParameterDeclarationFormsPhrase()} take '<T>'`, name.span));
     }
     this.insideComponentProps += 1;
     const parameters = this.check("leftParen") ? this.parseParameters() : [];
@@ -506,6 +539,9 @@ export class VelarWebParser extends Parser {
       } else if (this.namedDeclarationAhead("state", reactiveBindingShapes)) {
         this.advance();
         item = this.parseStateDeclaration(itemStart, false);
+      } else if (this.namedDeclarationAhead("computed", reactiveBindingShapes)) {
+        this.advance();
+        item = this.parseComputedDeclaration(itemStart, false);
       } else if (this.namedDeclarationAhead("resource", reactiveBindingShapes)) {
         this.advance();
         item = this.parseResourceDeclaration(itemStart, false);

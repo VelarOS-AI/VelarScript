@@ -51,7 +51,7 @@ test("the coverage gate passes on the tour and reports what it examined", () => 
   for (const category of [
     "hard-keyword", "contextual-keyword", "reserved-binding", "numeric-suffix", "extension-global",
     "permanent-namespace", "prelude-name", "namespace-member", "module-export", "type-parameter-bound",
-    "look-property", "look-hook", "look-target", "look-media-feature",
+    "web-test-member", "look-property", "look-hook", "look-target", "look-media-feature",
   ]) {
     const line = output.split("\n").find((item) => item.trimStart().startsWith(`${category} `));
     assert.ok(line, `${category} is missing from the gate's report:\n${output}`);
@@ -141,6 +141,35 @@ test("removing one spelling from the tour turns the gate red and names it", asyn
       family: "a type-parameter bound",
       expected: "type-parameter-bound: <T: Data>",
       edits: [{ file: "core/05-functions-and-calls.vel", replace: "<T: Data>", replacement: "<T: Comparable>" }],
+    },
+    {
+      family: "a velar/web-test browser control",
+      expected: "web-test-member: browser.box",
+      edits: [{
+        file: "web/13-browser.browser.test.vel",
+        replace: 'const vocabularyBox = await browser.box("[data-vocabulary]")',
+        replacement: "const vocabularyBox = {x: 0, y: 0, width: 0, height: 0, top: 0, right: 0, bottom: 0, left: 0}",
+      }],
+    },
+    {
+      // The Desktop browser chapter still uses browser.open. This only turns
+      // red if the gate really owns Web chapter 13 rather than accepting use
+      // anywhere in the tour as a substitute for that chapter's inventory.
+      family: "a velar/web-test control also used outside the full showcase",
+      expected: "web-test-member: browser.open",
+      edits: [
+        { file: "web/13-browser.browser.test.vel", replace: "    await browser.open()\n", replacement: "    pass\n" },
+        { file: "web/13-browser.browser.test.vel", replace: '    await browser.open("/section/units")\n', replacement: "    pass\n" },
+      ],
+    },
+    {
+      family: "a velar/web-test computed-style control",
+      expected: "web-test-member: browser.style",
+      edits: [{
+        file: "web/13-browser.browser.test.vel",
+        replace: 'expect(await browser.style("[data-vocabulary]", "gap")).toBe("16px")',
+        replacement: 'expect("16px").toBe("16px")',
+      }],
     },
   ];
 

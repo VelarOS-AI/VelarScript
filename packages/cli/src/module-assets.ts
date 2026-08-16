@@ -1,10 +1,23 @@
 import { lstat } from "node:fs/promises";
-import { extname, relative, resolve } from "node:path";
+import { extname, posix, relative, resolve } from "node:path";
 import { projectImportKey, type ProjectModule, type ProjectResult } from "./project.ts";
 import { frameworkBase } from "./framework-host.ts";
 
 export function moduleOutput(project: ProjectResult, pathname: string, revision: string | null = null): { readonly body: string; readonly contentType: string } | null {
   const normalized = pathname.replace(/^\//u, "");
+  for (const owner of project.modules) {
+    const ownerDirectory = posix.dirname(owner.relativePath.replaceAll("\\", "/"));
+    for (const embedded of owner.result.embeddedModules) {
+      const route = posix.normalize(posix.join(ownerDirectory, embedded.specifier));
+      if (normalized === `${route}.map`) return { body: embedded.sourceMap, contentType: "application/json; charset=utf-8" };
+      if (normalized !== route) continue;
+      const fileName = posix.basename(route);
+      // The owner imports this sibling with the revision query already. Never
+      // regexp-rewrite the raw foreign source: import-looking text can occur in
+      // a string, template, regex, or comment and must remain byte-for-byte JS.
+      return { body: `${embedded.code}//# sourceMappingURL=${fileName}.map\n`, contentType: "text/javascript; charset=utf-8" };
+    }
+  }
   const sourceRelative = normalized.replace(/\.js(?:\.map)?$/u, ".vel").replace(/\.vel\.map$/u, ".vel");
   const module = project.modules.find((item) => item.relativePath === sourceRelative);
   if (!module) return null;
@@ -19,7 +32,7 @@ export function moduleOutput(project: ProjectResult, pathname: string, revision:
 
 function addRevisionToImports(project: ProjectResult, module: ProjectModule, code: string, revision: string): string {
   const encoded = encodeURIComponent(revision);
-  const relativeImports = code.replace(/(\bfrom\s+["']|\bimport\s+["'])(\.[^"']+\.js)(["'])/gu, `$1$2?velar=${encoded}$3`);
+  const relativeImports = addRevisionToRelativeJavaScriptImports(code, revision);
   return relativeImports.replace(/(\bfrom\s+["']|\bimport\s+["'])([^."'][^"']*)(["'])/gu, (match, prefix: string, source: string, suffix: string) => {
     const targetPath = project.velarImports.get(projectImportKey(module.inputPath, source));
     if (!targetPath) return match;
@@ -28,6 +41,11 @@ function addRevisionToImports(project: ProjectResult, module: ProjectModule, cod
     const route = withBase(frameworkBase(project.framework), target.relativePath.replace(/\.vel$/u, ".js").replaceAll("\\", "/"));
     return `${prefix}${route}?velar=${encoded}${suffix}`;
   });
+}
+
+function addRevisionToRelativeJavaScriptImports(code: string, revision: string): string {
+  const encoded = encodeURIComponent(revision);
+  return code.replace(/(\bfrom\s+["']|\bimport\s+["'])(\.[^"']+\.js)(["'])/gu, `$1$2?velar=${encoded}$3`);
 }
 
 export async function publicAsset(publicRoot: string, pathname: string): Promise<{ readonly path: string; readonly sizeBytes: number; readonly contentType: string } | null> {

@@ -7,6 +7,7 @@ import { compile as compileCore } from "@velarscript/compiler";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
 import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
 import {
+  LOOK_KEYWORD_DECIDED_KINDS,
   LOOK_PARTIAL_KEYWORD_PROPERTIES,
   LOOK_PROPERTY_KEYWORDS,
   LOOK_PROPERTY_VALUE_KINDS,
@@ -136,14 +137,17 @@ test("[D65-168] the table refuses to load when a keyword property has no closed 
   await writeFile(broken, removed, "utf8");
   await assert.rejects(
     () => import(broken),
-    /Look property 'strokeLinecap' is a keyword property with no closed keyword set/u,
+    /Look property 'strokeLinecap' accepts string keywords and has no closed keyword set/u,
   );
 });
 
 test("[D65-169] a recorded partial exclusion names a property that publishes a set", () => {
   for (const [property, note] of LOOK_PARTIAL_KEYWORD_PROPERTIES) {
     assert.ok(LOOK_PROPERTY_KEYWORDS.has(property), property);
-    assert.equal(LOOK_PROPERTY_VALUE_KINDS.get(property), "keyword", property);
+    // D73 rule 187 took the record past the `keyword` kind: a property of any
+    // kind that decides a string keyword publishes a set, so it can also have a
+    // value space that set cannot hold.
+    assert.ok(LOOK_KEYWORD_DECIDED_KINDS.has(LOOK_PROPERTY_VALUE_KINDS.get(property)!), property);
     assert.ok(note.length > 0, property);
   }
   assert.ok(LOOK_PARTIAL_KEYWORD_PROPERTIES.size >= 9, String(LOOK_PARTIAL_KEYWORD_PROPERTIES.size));

@@ -52,6 +52,16 @@ including across live prop updates. Replacing it with a different constructor
 runs cleanup for the old instance and mounts the new one; host `class` and
 `look` forwarding follows the new root.
 
+Application prop data is mutable by default. A field assignment or mutating
+collection method through a prop uses the same deep-reactive publication path
+as the source state, so sibling and parent consumers update without replacing
+the object. Write `readonly T` in the component declaration when that component
+should promise not to write the data. This is the existing transitive Core
+read-only view: it is an author-selected contract with no runtime copy or
+freeze, and it does not change `readonly` semantics outside props. The live prop
+binding itself cannot be reassigned; mutate its declared data, or ask the parent
+to supply a new prop value.
+
 ## Component Handles and `ref`
 
 A component may expose a narrow imperative Handle without exposing its internal
@@ -478,7 +488,7 @@ accessor, sparse-List, or reactive-List handling. This is a runtime ownership
 rule, not a new source-level collection type: ordinary VelarScript records and
 Lists keep their documented identities.
 
-## Resources, actions, computed values, and watches
+## Resources, actions, derived values, and watches
 
 ### A resource loads once and reloads only when asked
 
@@ -543,20 +553,25 @@ When overlapping runs are wrong for an operation — a save, a submit — the
 application says so: `disabled={save.pending}` on the control, or an explicit
 `if not save.pending:` guard.
 
-### Computed callbacks are checked for shape, not for purity
+### Derived expressions are checked for shape, not for purity
 
-`computed` requires a synchronous zero-argument function, and that is the whole
-requirement. A callback may write state, and the write publishes like any other.
+`cached` requires a synchronous zero-argument function, and a `computed`
+declaration requires a synchronous expression — that is the whole requirement.
+The expression may write state, and the write publishes like any other.
 The compiler does not prove purity, so the runtime budget is what stands between
-an impure derivation and a frozen page: a computed, render, or watch that
+an impure derivation and a frozen page: a derived value, render, or watch that
 invalidates itself more than 100 times is stopped and reported through
-`velar/app`. Keep derived values pure regardless — a `computed` that mutates is a
+`velar/app`. Keep derived values pure regardless — a derivation that mutates is a
 side effect hiding inside a cache, and `watch` is the declaration that says so
 out loud.
 
 ### Watch forms and lifetime
 
-`watch expression:` runs its body when the tracked value changes.
+`watch expression:` runs its body when the tracked value changes. Its subject
+must be able to change: a literal, a plain `const` of a primitive, and a reader
+that was not called are refused rather than compiled into a body that never
+runs. The refusal for an uncalled reader names the call; the refusal for a value
+that can never change says so, because no spelling would fix it.
 `watch expression as current, previous:` names the new and old values; both names
 are required with `as`, so a body that needs only the new value writes
 `as current, _`. The expression is evaluated immediately to register the
@@ -576,13 +591,15 @@ selector string or an element. The root is constructed synchronously, so a direc
 `await` in the argument is rejected — await module-level preload work into a
 binding first. `tick()` answers `Promise<null>` that resolves after the pending
 reactive flush settles, and rejects if that flush reported a failure no handler
-claimed, so an awaited `tick()` cannot step over a broken update. Both names are
-reserved in a Web module and cannot be shadowed by a local binding.
+claimed, so an awaited `tick()` cannot step over a broken update. Those two
+names and `cached` are reserved in a Web module and cannot be shadowed by a
+local binding.
 
 ## Performance contracts
 
-`computed(() => value)` is the single derived-cache API. It returns a callable
-accessor; there is no second `memo` spelling and no manual batching API.
+`computed name = value` is the single spelling that declares a derived value,
+and `cached(() => value)` is the same cache as a passable accessor; there is no
+second `memo` spelling and no manual batching API.
 Repeated-computation and assignment-coalescing behavior below is a compiler and
 runtime contract rather than additional application controls. Removed
 experiments do not remain as aliases — `memo` and `batch` are ordinary
@@ -591,14 +608,14 @@ identifiers.
 ### Synchronous assignment bursts publish once
 
 Consecutive synchronous `state` assignments without an intervening read of an
-invalidated computed accessor publish once: every affected computed accessor,
+invalidated derived value publish once: every affected derived value,
 watch, and render observer re-runs a single time per burst, delivered on the
 microtask flush after the synchronous work completes. Reading an invalidated
-computed accessor synchronously refreshes it immediately; the pending flush
+derived value synchronously refreshes it immediately; the pending flush
 does not recompute it again, and changed results still reach other observers.
 Assignments still commit their values immediately — a read between two
-assignments always sees the latest value, and computed invalidation is
-synchronous through every downstream computed accessor, so a same-turn read of
+assignments always sees the latest value, and derived invalidation is
+synchronous through every downstream derived value, so a same-turn read of
 a derived chain cannot observe an intermediate stale cache and state never
 tears — and the burst may span ordinary function calls; the synchronous extent
 is what counts. Render and watch observers are still notified only after the
@@ -611,7 +628,7 @@ def commitSend(userMessage: Message, reply: Message):
     streamingMessageId = reply.id
 ```
 
-All three assignments above publish as one commit: a computed accessor reading
+All three assignments above publish as one commit: a derived value reading
 `messages` recomputes once, not twice, and a watch on it fires once. The
 boundary of the contract is the synchronous extent: a burst spread across
 `await` boundaries publishes per assignment, and a throw mid-burst does not
@@ -721,7 +738,7 @@ component RuntimeStatus:
   enclosing conditional/keyed render that happened to mount or destroy the
   component, and a synchronously dispatched event cannot inherit a framework
   observer. State writes still notify their actual render/watch consumers.
-- JSX rendering and `computed` callbacks are synchronous. Async component data
+- JSX rendering and derived expressions are synchronous. Async component data
   belongs in `resource`; explicit UI operations belong in `action`, declared in
   the component that triggers them or at module scope when a shared store owns
   the operation and its `pending`/`error` surface; setup that must finish after
@@ -736,11 +753,11 @@ component RuntimeStatus:
   observer of that same rejection skips the already-reported failure instead
   of reporting it a second time, and the caller still receives the thrown
   error.
-- A `computed` failure is cached as part of the derived result state and is
+- A derived-value failure is cached as part of the derived result state and is
   rethrown to its managed consumer. Recovery from failure to a value is a real
   result transition even when that value equals the last successful value, so
-  downstream computed chains wake and recover without publishing a duplicate
-  watch value. Once the last consumer is disposed, the computed detaches from
+  downstream derived chains wake and recover without publishing a duplicate
+  watch value. Once the last consumer is disposed, the derived value detaches from
   its upstream dependencies and recomputes only if read again.
 - `resource`, `action`, and `tick` use the Promise constructor plus
   `resolve`/`reject`/`then` operations captured when the generated Web module
@@ -1508,9 +1525,20 @@ test "the home page renders at the root route":
 ```
 
 The `browser` controller intentionally exposes a compact automation surface:
-`open`, `reload`, `click`, `fill`, `select`, `press`, `scroll`, `text`, `attribute`, `namespace`, `count`,
+`open`, `reload`, `click`, `fill`, `select`, `press`, `scroll`, `text`,
+`attribute`, `box`, `style`, `namespace`, `count`,
 `visible`, `waitFor`, `waitForText`, `currentPath`, `viewport`, `timings`,
 `animation`, `measureClick`, `measureFill`, and `measurePress`.
+`box(selector)` reads the matched element's
+`{x,y,width,height,top,right,bottom,left}` rectangle, and
+`style(selector, property)` reads one computed CSS property as text. Both are
+read-only controls; neither opens arbitrary JavaScript evaluation.
+
+Geometry and computed-style checks should assert the cause of a layout, not a
+coincidental pixel arrangement. Asserting a design token such as computed
+`gap == "16px"` is stable evidence; asserting that two unrelated blocks happen
+to sit 37 pixels apart couples the test to the rendering engine and makes an
+ordinary design change look like a regression.
 `animation(selector)` answers `{name, rotating}` for the element's running
 animation, so a keyframes declaration can be asserted without reading computed
 style. It is not a

@@ -1,6 +1,7 @@
 import type {
   ClassDeclaration,
   BindingPattern,
+  EmbeddedJavaScriptDeclaration,
   EnumDeclaration,
   Expression,
   ImportDeclaration,
@@ -10,6 +11,8 @@ import type {
   TypeAliasDeclaration,
   TestDeclaration,
   TypeDeclaration,
+  TypeField,
+  TypeSyntax,
   UsingDeclaration,
   TypeReference,
 } from "./ast.ts";
@@ -17,10 +20,11 @@ import { blockContainsDirectAwait, expressionContainsDirectAwait as containsDire
 import { VELAR_CLASS_FIELD_MODULE, VELAR_CLASS_FIELD_RUNTIME } from "./class-runtime.ts";
 import { VELAR_COLLECTION_HOST_EXPORTS, VELAR_COLLECTION_HOST_MODULE, VELAR_COLLECTION_IDENTITY_RUNTIME, VELAR_COLLECTION_LIST_RUNTIME, VELAR_COLLECTION_RECORD_RUNTIME, VELAR_COLLECTION_SET_MAP_RUNTIME, VELAR_COLLECTION_TYPE_RUNTIME } from "./collection-runtime.ts";
 import { VELAR_COLLECTION_LOWERING_EXPORTS, VELAR_COLLECTION_LOWERING_MODULE, VELAR_COLLECTION_LOWERING_RUNTIME } from "./collection-lowering-runtime.ts";
-import { describeType, formatTypeReference, resolveTypeReference, type ValueType } from "./types.ts";
+import { describeType, formatTypeReference, formatTypeSyntax, mapNestedTypes, resolveTypeReference, semanticTypeIdentity, typeContainsParameter, type GenericApplication, type ValueType } from "./types.ts";
 import { disposeMemberKey, iterateMemberKey, type LoweringHints } from "./analyzer.ts";
 import { VELAR_ERROR_NORMALIZATION_MODULE, VELAR_ERROR_NORMALIZATION_RUNTIME, VELAR_HOST_ERROR_NAMES, VELAR_HOST_ERROR_RUNTIME } from "./error-runtime.ts";
-import type { CompilerEmitterOptions } from "./extension.ts";
+import { embeddedJavaScriptSpecifier } from "./embedded-module.ts";
+import type { CompilerEmbeddedJavaScriptModule, CompilerEmitterOptions } from "./extension.ts";
 import { VELAR_NARROWING_MODULE, VELAR_NARROWING_RUNTIME } from "./narrowing-runtime.ts";
 import { VELAR_NUMBER_METHOD_RUNTIME } from "./number-runtime.ts";
 import { VELAR_PRIMITIVE_METHOD_MODULE } from "./primitive-runtime.ts";
@@ -47,6 +51,15 @@ interface GeneratedMapping {
   readonly sourceSpan: Span;
 }
 
+interface PreparedEmbeddedJavaScriptModule {
+  readonly statement: EmbeddedJavaScriptDeclaration;
+  readonly specifier: `./${string}.js`;
+  readonly factoryName: string | null;
+  readonly localFactoryName: string | null;
+  readonly code: string;
+  readonly mappings: readonly GeneratedMapping[];
+}
+
 const javaScriptNodeMarker = /\u0000VELAR_MAP_(\d+)\u0000/gu;
 
 // ENM-U4 + COL-U5: the compiler-raised error types are nameable in source;
@@ -62,6 +75,15 @@ export class JavaScriptEmitter {
   private readonly typeDeclarations = new Map<string, TypeDeclaration | TypeAliasDeclaration>();
   private readonly runtimeTypes = new Set<string>();
   private readonly expandedRuntimeTypes = new Set<string>();
+  /**
+   * D55 rule 121: the type parameters of the generic record currently being
+   * emitted. Inside that body a `T`-typed position is checked by the argument
+   * predicate the instantiation supplied, which is the only reading of `T` a
+   * validator can have once the type is erased.
+   */
+  private genericTypeParameters: readonly string[] | null = null;
+  /** Hoisted `function __velarTypeOf_N()` bodies for instantiations written outside a generic. */
+  private readonly hoistedGenericInstances = new Map<string, string>();
   private readonly externModuleExports = new Map<string, ReadonlySet<string>>();
   private needsExternExportHelper = false;
   protected readonly hints: LoweringHints;
@@ -89,11 +111,14 @@ export class JavaScriptEmitter {
   private readonly javaScriptNodeSpans = new Map<number, Span>();
   private generatedMappings: readonly GeneratedMapping[] = [];
   private generatedCode = "";
+  private readonly sourcePath: string;
+  private readonly embeddedJavaScript = new Map<EmbeddedJavaScriptDeclaration, PreparedEmbeddedJavaScriptModule>();
 
   constructor(hints: LoweringHints, forcedFunctionExports: ReadonlySet<string> = new Set(), options: CompilerEmitterOptions = {}) {
     this.hints = hints;
     this.forcedFunctionExports = forcedFunctionExports;
     this.sharedRuntimeModules = options.sharedRuntimeModules === true;
+    this.sourcePath = options.sourcePath ?? "<source>";
   }
 
   emit(program: Program): string {
@@ -101,6 +126,7 @@ export class JavaScriptEmitter {
     this.javaScriptNodeSpans.clear();
     this.requiredRuntimeModules.clear();
     this.requiredHostErrorClasses.clear();
+    this.prepareEmbeddedJavaScript(program);
     this.collectDeclarations(program);
     this.collectRuntimeUses(program);
     const statements = program.body
@@ -505,8 +531,14 @@ export class JavaScriptEmitter {
       ].join("\n"));
     }
 
+    // D55 rule 121: one memoized accessor per instantiation written outside a
+    // generic body. They are `function` declarations so that
+    // `type Boxed = Box<string>` above the declaration of `Box` still reads a
+    // hoisted name instead of a `const` in its temporal dead zone.
+    const instances = [...this.hoistedGenericInstances].map(([expression, name]) => `function ${name}() {\n  return ${expression};\n}`);
     const chunks: readonly { readonly code: string; readonly mappings: readonly GeneratedMapping[] }[] = [
       ...helpers.map((code) => ({ code, mappings: [] })),
+      ...instances.map((code) => ({ code, mappings: [] })),
       ...statements.map((node) => this.renderJavaScriptNode(node)),
     ];
     let output = "";
@@ -523,46 +555,15 @@ export class JavaScriptEmitter {
   }
 
   sourceMap(source: SourceText): string {
-    const lineStarts = [0];
-    for (let index = 0; index < this.generatedCode.length; index += 1) {
-      if (this.generatedCode[index] === "\n") lineStarts.push(index + 1);
-    }
-    const byLine = new Map<number, Array<{ column: number; span: Span }>>();
-    for (const mapping of this.generatedMappings) {
-      const line = generatedLineAt(lineStarts, mapping.offset);
-      const entries = byLine.get(line) ?? [];
-      entries.push({ column: mapping.offset - lineStarts[line]!, span: mapping.sourceSpan });
-      byLine.set(line, entries);
-    }
-    let previousSource = 0;
-    let previousLine = 0;
-    let previousColumn = 0;
-    const mappings = lineStarts.map((_, line) => {
-      let previousGeneratedColumn = 0;
-      return (byLine.get(line) ?? []).sort((left, right) => left.column - right.column).map((mapped) => {
-        const location = source.location(mapped.span.start);
-        const originalLine = location.line - 1;
-        const originalColumn = location.column - 1;
-        const segment = [
-          encodeVlq(mapped.column - previousGeneratedColumn),
-          encodeVlq(-previousSource),
-          encodeVlq(originalLine - previousLine),
-          encodeVlq(originalColumn - previousColumn),
-        ].join("");
-        previousGeneratedColumn = mapped.column;
-        previousSource = 0;
-        previousLine = originalLine;
-        previousColumn = originalColumn;
-        return segment;
-      }).join(",");
-    }).join(";");
-    return JSON.stringify({
-      version: 3,
-      sources: [source.path],
-      sourcesContent: [source.text],
-      names: [],
-      mappings,
-    });
+    return sourceMapFor(this.generatedCode, this.generatedMappings, source);
+  }
+
+  embeddedModules(source: SourceText): readonly CompilerEmbeddedJavaScriptModule[] {
+    return [...this.embeddedJavaScript.values()].map((module) => ({
+      specifier: module.specifier,
+      code: module.code,
+      sourceMap: sourceMapFor(module.code, module.mappings, source),
+    }));
   }
 
   runtimeModules(): readonly string[] {
@@ -894,6 +895,13 @@ export class JavaScriptEmitter {
           this.needsThrownValueHelper = true;
           visitExpression(statement.expression);
           break;
+        case "EmbeddedJavaScriptDeclaration":
+          statement.captures.forEach((capture) => visitExpression({
+            kind: "IdentifierExpression",
+            name: capture.name,
+            span: capture.nameSpan,
+          }));
+          break;
         case "ImportDeclaration":
         case "ReExportDeclaration":
         case "ExternModuleDeclaration":
@@ -926,6 +934,14 @@ export class JavaScriptEmitter {
   private markRuntimeType(type: ValueType): void {
     this.needsRuntimeTypeHelpers = true;
     const visit = (value: ValueType): void => {
+      // D55 rule 121: `Box<string>` needs `Box`'s factory emitted and every
+      // argument's own runtime types marked; the application's display name is
+      // not a declaration, so the walk asks the application which one it is.
+      if (value.kind === "named" && value.application) {
+        for (const argument of value.application.arguments) visit(argument);
+        visit({ kind: "named", name: value.application.name });
+        return;
+      }
       if (value.kind === "named" && this.typeDeclarations.has(value.name) && !this.runtimeTypes.has(value.name)) {
         this.runtimeTypes.add(value.name);
       }
@@ -1041,6 +1057,8 @@ export class JavaScriptEmitter {
       }
       case "ExternModuleDeclaration":
         return "";
+      case "EmbeddedJavaScriptDeclaration":
+        return this.emitEmbeddedJavaScript(statement, indentation);
       case "TypeDeclaration":
         return this.runtimeTypes.has(statement.name) ? this.emitTypeDeclaration(statement, depth) : "";
       case "TypeAliasDeclaration":
@@ -1330,13 +1348,89 @@ export class JavaScriptEmitter {
     return lines.join("\n");
   }
 
+  private prepareEmbeddedJavaScript(program: Program): void {
+    this.embeddedJavaScript.clear();
+    let ordinal = 0;
+    for (const statement of program.body) {
+      if (statement.kind !== "EmbeddedJavaScriptDeclaration") continue;
+      const specifier = embeddedJavaScriptSpecifier(this.sourcePath, ordinal);
+      const occupiedJavaScriptNames = new Set(statement.bindings.map((binding) => binding.name));
+      let factoryName = statement.contract ? `__velarEmbeddedFactory_${ordinal}` : null;
+      while (factoryName && occupiedJavaScriptNames.has(factoryName)) factoryName += "_";
+      const localFactoryName = statement.contract ? `__velarEmbeddedFactoryBinding_${ordinal}` : null;
+      const generated = statement.contract
+        ? emitCheckedEmbeddedJavaScript(statement, factoryName!)
+        : mappedSource(statement.source, statement.sourceSpan.start);
+      this.embeddedJavaScript.set(statement, {
+        statement,
+        specifier,
+        factoryName,
+        localFactoryName,
+        code: generated.code,
+        mappings: generated.mappings,
+      });
+      ordinal += 1;
+    }
+  }
+
+  private emitEmbeddedJavaScript(statement: EmbeddedJavaScriptDeclaration, indentation: string): string {
+    const prepared = this.embeddedJavaScript.get(statement);
+    if (!prepared) throw new Error("An embedded JavaScript declaration has no prepared sibling module");
+    if (!statement.contract) {
+      const imported: ImportDeclaration = {
+        kind: "ImportDeclaration",
+        source: prepared.specifier,
+        sourceSpan: statement.sourceSpan,
+        javascript: true,
+        unsafe: true,
+        specifiers: statement.exports.map((item) => ({
+          imported: item.name,
+          local: item.name,
+          namespace: false,
+          span: item.nameSpan,
+        })),
+        span: statement.span,
+      };
+      return this.emitImport(imported, indentation);
+    }
+    const names = [
+      ...statement.contract.functions.map((item) => item.name),
+      ...statement.contract.constants.map((item) => item.name),
+      ...statement.contract.classes.map((item) => item.name),
+    ];
+    const captureValues = statement.captures.map((capture) => this.emitMappedExpression({
+      kind: "IdentifierExpression",
+      name: capture.name,
+      span: capture.nameSpan,
+    })).join(", ");
+    const call = `${prepared.localFactoryName}(${captureValues})`;
+    return [
+      `${indentation}import { ${prepared.factoryName} as ${prepared.localFactoryName} } from ${JSON.stringify(prepared.specifier)};`,
+      names.length > 0
+        ? `${indentation}const { ${names.join(", ")} } = ${call};`
+        : `${indentation}${call};`,
+    ].join("\n");
+  }
+
   private emitTypeDeclaration(statement: TypeDeclaration, depth: number): string {
+    const parameters = statement.typeParameters?.map((parameter) => parameter.name) ?? null;
+    if (!parameters) return this.emitRecordTypeDeclaration(statement, depth);
+    this.genericTypeParameters = parameters;
+    try {
+      return this.emitRecordTypeDeclaration(statement, depth);
+    } finally {
+      this.genericTypeParameters = null;
+    }
+  }
+
+  private emitRecordTypeDeclaration(statement: TypeDeclaration, depth: number): string {
     const indentation = "  ".repeat(depth);
+    const generic = this.genericTypeParameters;
     const checkName = this.runtimeTypeCheckName(statement.name);
     const fields = statement.fields.map((field, index) => ({
       field,
       descriptor: `__velarField${index}`,
-      type: resolveTypeReference(field.type),
+      type: this.resolveDeclarationType(field.type),
     }));
     const checks = fields.map(({ descriptor, type }) => {
       const present = `${descriptor}?.enumerable && "value" in ${descriptor} && ${this.emitTypeCheck(type, `${descriptor}.value`, "__state")}`;
@@ -1348,14 +1442,24 @@ export class JavaScriptEmitter {
     // re-runs the per-field checks only on the failure path, so is() and the
     // success path stay exactly as cheap as before.
     const explainName = `__velarTypeExplain_${statement.name}`;
+    // D55 rule 121: a generic record's validator is the same validator with the
+    // erased positions supplied from outside — the arguments carry a predicate,
+    // a display text, and a key per type argument, so `parse` still names the
+    // type the author wrote and the memo still answers with one Type object per
+    // instantiation.
+    const argumentsParameter = generic ? ", __velarArguments" : "";
+    const displayName = generic ? "__velarArguments.name" : JSON.stringify(statement.name);
+    const pathText = (suffix: string): string => generic
+      ? (suffix === "" ? displayName : `${displayName} + ${JSON.stringify(suffix)}`)
+      : JSON.stringify(`${statement.name}${suffix}`);
     const explainLines = [
-      `${indentation}function ${explainName}(value) {`,
+      `${indentation}function ${explainName}(value${argumentsParameter}) {`,
       `${indentation}  if (value === null || typeof value !== "object" || __velarValidationIsArray(value) || !__velarValidationIsPlainObject(value)) {`,
-      `${indentation}    return { path: ${JSON.stringify(statement.name)}, field: null, reason: "the value is not a record" };`,
+      `${indentation}    return { path: ${pathText("")}, field: null, reason: "the value is not a record" };`,
       `${indentation}  }`,
       ...fields.flatMap(({ field, type }) => {
         const descriptor = "__velarExplainField";
-        const typeText = formatTypeReference(field.type);
+        const typeText = this.typeTextExpression(type, field.type.syntax);
         const lines = [
           `${indentation}  {`,
           `${indentation}    const ${descriptor} = __velarValidationOwnDescriptor(value, ${JSON.stringify(field.name)});`,
@@ -1364,57 +1468,109 @@ export class JavaScriptEmitter {
           lines.push(`${indentation}    if (${descriptor} !== undefined && !(${descriptor}.enumerable && "value" in ${descriptor} && ${this.emitTypeCheck(type, `${descriptor}.value`, "__velarValidationState()")})) {`);
         } else {
           lines.push(`${indentation}    if (${descriptor} === undefined) {`);
-          lines.push(`${indentation}      return { path: ${JSON.stringify(`${statement.name}.${field.name}`)}, field: ${JSON.stringify(field.name)}, reason: ${JSON.stringify(`field '${field.name}' is missing`)} };`);
+          lines.push(`${indentation}      return { path: ${pathText(`.${field.name}`)}, field: ${JSON.stringify(field.name)}, reason: ${JSON.stringify(`field '${field.name}' is missing`)} };`);
           lines.push(`${indentation}    }`);
           lines.push(`${indentation}    if (!(${descriptor}.enumerable && "value" in ${descriptor} && ${this.emitTypeCheck(type, `${descriptor}.value`, "__velarValidationState()")})) {`);
         }
-        lines.push(`${indentation}      return { path: ${JSON.stringify(`${statement.name}.${field.name}`)}, field: ${JSON.stringify(field.name)}, reason: ${JSON.stringify(`field '${field.name}' does not match ${typeText}`)} };`);
+        lines.push(`${indentation}      return { path: ${pathText(`.${field.name}`)}, field: ${JSON.stringify(field.name)}, reason: ${JSON.stringify(`field '${field.name}' does not match `)} + ${typeText} };`);
         lines.push(`${indentation}    }`);
         lines.push(`${indentation}  }`);
         return lines;
       }),
-      `${indentation}  return { path: ${JSON.stringify(statement.name)}, field: null, reason: null };`,
+      `${indentation}  return { path: ${pathText("")}, field: null, reason: null };`,
       `${indentation}}`,
       "",
     ];
+    const typeObject = [
+      `${indentation}  is(value, __state) {`,
+      `${indentation}    return ${checkName}(value, __state${generic ? ", __velarArguments" : ""});`,
+      `${indentation}  },`,
+      `${indentation}  parse(value) {`,
+      `${indentation}    if (!${checkName}(value, __velarValidationState()${generic ? ", __velarArguments" : ""})) {`,
+      `${indentation}      const __velarDetail = ${explainName}(value${generic ? ", __velarArguments" : ""});`,
+      `${indentation}      throw new __VelarValidationError(${generic ? `"Value does not match " + ${displayName}` : JSON.stringify(`Value does not match ${statement.name}`)} + (__velarDetail.reason ? " — " + __velarDetail.reason : "") + __velarValidationRejectionHint(value), __velarDetail);`,
+      `${indentation}    }`,
+      `${indentation}    return value;`,
+      `${indentation}  },`,
+    ];
+    if (generic) {
+      const instances = `__velarGenericInstances_${statement.name}`;
+      return [
+        ...explainLines,
+        ...this.recordCheckFunctionLines(statement, fields, predicate, checkName, indentation, argumentsParameter),
+        "",
+        `${indentation}const ${instances} = [];`,
+        // The instantiation memo: one frozen Type object per set of arguments,
+        // found by a key the emitter builds from the arguments' own identities.
+        // It is what makes `type Tree<T>: kids: List<Tree<T>>` terminate — the
+        // body's reference to its own instantiation is a lookup, not a rebuild.
+        `${indentation}${exportPrefix}const ${statement.name} = __velarValidationFreeze({`,
+        `${indentation}  of(__velarKeys, __velarTexts, __velarChecks) {`,
+        `${indentation}    let __velarKey = ${JSON.stringify(statement.name)};`,
+        `${indentation}    for (let __velarIndex = 0; __velarIndex < __velarKeys.length; __velarIndex += 1) __velarKey += "\\u0000" + __velarKeys[__velarIndex];`,
+        `${indentation}    for (let __velarIndex = 0; __velarIndex < ${instances}.length; __velarIndex += 1) {`,
+        `${indentation}      if (${instances}[__velarIndex].key === __velarKey) return ${instances}[__velarIndex].type;`,
+        `${indentation}    }`,
+        `${indentation}    let __velarName = ${JSON.stringify(`${statement.name}<`)};`,
+        `${indentation}    for (let __velarIndex = 0; __velarIndex < __velarTexts.length; __velarIndex += 1) __velarName += (__velarIndex === 0 ? "" : ", ") + __velarTexts[__velarIndex];`,
+        `${indentation}    __velarName += ">";`,
+        `${indentation}    const __velarArguments = { keys: __velarKeys, texts: __velarTexts, checks: __velarChecks, name: __velarName };`,
+        `${indentation}    const __velarType = __velarRegisterRuntimeType(__velarValidationFreeze({`,
+        ...typeObject.map((line) => `${indentation}  ${line}`),
+        `${indentation}    }));`,
+        `${indentation}    ${instances}[${instances}.length] = { key: __velarKey, type: __velarType };`,
+        `${indentation}    return __velarType;`,
+        `${indentation}  },`,
+        `${indentation}});`,
+      ].join("\n");
+    }
     return [
       ...explainLines,
-      `${indentation}function ${checkName}(value, __state = __velarValidationState()) {`,
+      ...this.recordCheckFunctionLines(statement, fields, predicate, checkName, indentation, ""),
+      "",
+      `${indentation}${exportPrefix}const ${statement.name} = __velarRegisterRuntimeType(__velarValidationFreeze({`,
+      ...typeObject,
+      `${indentation}}));`,
+    ].join("\n");
+  }
+
+  /** The record predicate itself: identical for a plain record and a generic one but for the arguments it carries. */
+  private recordCheckFunctionLines(
+    statement: TypeDeclaration,
+    fields: readonly { readonly field: TypeField; readonly descriptor: string }[],
+    predicate: string,
+    checkName: string,
+    indentation: string,
+    argumentsParameter: string,
+  ): readonly string[] {
+    // The per-value cycle guard is keyed by the *instantiation*, not by the
+    // function: `Tree<string>` and `Tree<number>` share one predicate, and a
+    // value reached under both in one traversal is two questions, not one.
+    const guard = argumentsParameter ? "__velarArguments" : checkName;
+    return [
+      `${indentation}function ${checkName}(value, __state = __velarValidationState()${argumentsParameter}) {`,
       // D44 rule 70: a record contract accepts only plain data objects, so a
       // class instance can never satisfy it — otherwise the validated record
       // view would alias the live instance and write through its const fields.
       `${indentation}  if (value === null || typeof value !== "object" || __velarValidationIsArray(value) || !__velarValidationIsPlainObject(value) || __state.depth >= 1000) return false;`,
       `${indentation}  let __active = __velarValidationWeakMapGet(__state.active, value);`,
-      `${indentation}  if (__active && __velarValidationSetHas(__active, ${checkName})) return false;`,
+      `${indentation}  if (__active && __velarValidationSetHas(__active, ${guard})) return false;`,
       `${indentation}  if (!__active) {`,
       `${indentation}    __active = __velarValidationSet();`,
       `${indentation}    __velarValidationWeakMapSet(__state.active, value, __active);`,
       `${indentation}  }`,
-      `${indentation}  __velarValidationSetAdd(__active, ${checkName});`,
+      `${indentation}  __velarValidationSetAdd(__active, ${guard});`,
       `${indentation}  __state.depth += 1;`,
       `${indentation}  try {`,
       ...fields.map(({ field, descriptor }) => `${indentation}    const ${descriptor} = __velarValidationOwnDescriptor(value, ${JSON.stringify(field.name)});`),
       `${indentation}    return !!(${predicate});`,
       `${indentation}  } finally {`,
       `${indentation}    __state.depth -= 1;`,
-      `${indentation}    __velarValidationSetDelete(__active, ${checkName});`,
+      `${indentation}    __velarValidationSetDelete(__active, ${guard});`,
       `${indentation}    if (__velarValidationSetSize(__active) === 0) __velarValidationWeakMapDelete(__state.active, value);`,
       `${indentation}  }`,
       `${indentation}}`,
-      "",
-      `${indentation}${exportPrefix}const ${statement.name} = __velarRegisterRuntimeType(__velarValidationFreeze({`,
-      `${indentation}  is(value, __state) {`,
-      `${indentation}    return ${checkName}(value, __state);`,
-      `${indentation}  },`,
-      `${indentation}  parse(value) {`,
-      `${indentation}    if (!${checkName}(value)) {`,
-      `${indentation}      const __velarDetail = ${explainName}(value);`,
-      `${indentation}      throw new __VelarValidationError(${JSON.stringify(`Value does not match ${statement.name}`)} + (__velarDetail.reason ? " — " + __velarDetail.reason : "") + __velarValidationRejectionHint(value), __velarDetail);`,
-      `${indentation}    }`,
-      `${indentation}    return value;`,
-      `${indentation}  },`,
-      `${indentation}}));`,
-    ].join("\n");
+    ];
   }
 
   private emitTypeAliasDeclaration(statement: TypeAliasDeclaration, depth: number): string {
@@ -1425,6 +1581,16 @@ export class JavaScriptEmitter {
     const enumTarget = this.enumAliasTarget(statement.name);
     if (enumTarget !== null) {
       return `${indentation}${statement.exported ? "export " : ""}const ${statement.name} = ${enumTarget};`;
+    }
+    // D55 rule 123 on ENM-I4's precedent: naming an instantiation is *the*
+    // idiom that gives a generic record a runtime Type object, so the name IS
+    // that instantiation's Type object rather than a wrapper around it. One
+    // object per instantiation program-wide, and `parse` answers with the
+    // record's own per-field explanation instead of a bare refusal.
+    const target = resolveTypeReference(statement.target);
+    if (target.kind === "named" && target.application && this.genericTypeBinding(target.application.name)) {
+      this.needsRuntimeTypeHelpers = true;
+      return `${indentation}${statement.exported ? "export " : ""}const ${statement.name} = ${this.genericInstanceExpression(target.application)};`;
     }
     const checkName = this.runtimeTypeCheckName(statement.name);
     const predicate = this.emitTypeCheck(resolveTypeReference(statement.target), "value", "__state");
@@ -1499,6 +1665,14 @@ export class JavaScriptEmitter {
       case "promise":
         return `__velarValidationIsPromise(${value})`;
       case "named":
+        // D55 rule 121: an instantiation's validator is the declaration's,
+        // supplied with this application's argument predicates. The factory
+        // memoizes, so the object is built once however many times it is asked
+        // for — and a recursive record's reference to itself is a memo hit.
+        if (type.application && this.genericTypeBinding(type.application.name)) {
+          this.needsRuntimeTypeHelpers = true;
+          return `${this.genericInstanceExpression(type.application)}.is(${value}, ${state})`;
+        }
         if (type.name === "Duration") return `typeof ${value} === "string" && /^[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:ms|s)$/.test(${value})`;
         if (this.hints.enumNames.has(type.name)) return `${type.name}.is(${value})`;
         if (this.hints.classNames.has(type.name)) {
@@ -1525,15 +1699,19 @@ export class JavaScriptEmitter {
       case "action":
       case "intrinsic":
         return `typeof ${value} === "function"`;
+      // D55 rule 121: inside a generic record's own validator a type parameter
+      // is not unknowable — the instantiation handed in the predicate for it.
+      case "parameter":
+        return this.genericTypeParameters?.length
+          ? `__velarArguments.checks[${type.index}](${value}, ${state === "undefined" ? "__velarValidationState()" : state})`
+          : "false";
       case "typeObject":
       case "runtimeType":
       case "enumObject":
       case "classConstructor":
       case "extension":
-      // Type parameters and static Type<T> carriers are erased; the analyzer
-      // rejects them in any recursively runtime-checked position before
-      // emission can happen.
-      case "parameter":
+        // Static Type<T> carriers are erased; the analyzer rejects them in any
+        // recursively runtime-checked position before emission can happen.
         return "false";
     }
   }
@@ -1569,6 +1747,7 @@ export class JavaScriptEmitter {
         // `is` tests already do. Only names with no runtime Type binding at
         // all — extension host types such as DOM interfaces — degrade to the
         // presence-only check.
+        if (type.application && this.genericTypeBinding(type.application.name)) return this.emitTypeCheck(type, value, state);
         if (!this.runtimeTypeBinding(type.name)) return `${value} != null`;
         return this.emitTypeCheck(type, value, state);
       case "parameter":
@@ -1585,6 +1764,106 @@ export class JavaScriptEmitter {
 
   private runtimeTypeCheckName(name: string): string {
     return `__velarTypeCheck_${name}`;
+  }
+
+  /**
+   * D55 rule 121: the name a module writes for a generic record is a JavaScript
+   * binding holding its instantiation factory — declared here, or imported from
+   * the module that declares it. Nothing else may be written into `.of(...)`.
+   */
+  protected genericTypeBinding(name: string): boolean {
+    if (this.hints.genericTypeNames.has(name)) return true;
+    const declaration = this.typeDeclarations.get(name);
+    return declaration?.kind === "TypeDeclaration" && (declaration.typeParameters?.length ?? 0) > 0;
+  }
+
+  /** The instantiation a `named` application stands for, as a JavaScript expression. */
+  private genericInstanceExpression(application: GenericApplication): string {
+    const keys = application.arguments.map((argument) => this.genericArgumentExpression(argument, "key"));
+    const texts = application.arguments.map((argument) => this.genericArgumentExpression(argument, "text"));
+    const checks = application.arguments.map((argument) => `(value, __state) => ${this.emitTypeCheck(argument, "value", "__state")}`);
+    const expression = `${application.name}.of([${keys.join(", ")}], [${texts.join(", ")}], [${checks.join(", ")}])`;
+    // Outside a generic body the arguments are closed, so the whole
+    // instantiation is hoisted into one memoized function: a `function`
+    // declaration, which hoists past the temporal dead zone a `const` would
+    // create for `type Boxed = Box<string>` written above the declaration.
+    if (this.genericTypeParameters?.length) return expression;
+    const hoisted = this.hoistedGenericInstances.get(expression)
+      ?? `__velarTypeOf${this.hoistedGenericInstances.size}`;
+    this.hoistedGenericInstances.set(expression, hoisted);
+    return `${hoisted}()`;
+  }
+
+  /**
+   * A type argument's memo key or display text. Both are plain strings when the
+   * argument is closed; inside a generic body a mention of the enclosing
+   * parameters reads them off the arguments the instantiation supplied, so
+   * `type Wrapper<T>: inner: Box<List<T>>` keys and prints correctly at every
+   * instantiation without the emitter having seen one.
+   */
+  private genericArgumentExpression(type: ValueType, mode: "key" | "text"): string {
+    const parameters = this.genericTypeParameters;
+    if (!parameters?.length || !typeContainsParameter(type)) {
+      return JSON.stringify(mode === "key" ? semanticTypeIdentity(type) : describeType(type));
+    }
+    const nested = (value: ValueType): string => this.genericArgumentExpression(value, mode);
+    const wrap = (prefix: string, parts: readonly string[], suffix: string): string =>
+      [JSON.stringify(prefix), ...parts.flatMap((part, index) => index === 0 ? [part] : [JSON.stringify(mode === "key" ? "," : ", "), part]), JSON.stringify(suffix)].join(" + ");
+    switch (type.kind) {
+      case "parameter":
+        return `__velarArguments.${mode === "key" ? "keys" : "texts"}[${type.index}]`;
+      case "optional":
+        return `${nested(type.inner)} + ${JSON.stringify("?")}`;
+      case "list":
+        return wrap("List<", [nested(type.element)], ">");
+      case "set":
+        return wrap("Set<", [nested(type.element)], ">");
+      case "map":
+        return wrap("Map<", [nested(type.key), nested(type.value)], ">");
+      case "record":
+        return wrap("Record<", [nested(type.value)], ">");
+      case "promise":
+        return wrap("Promise<", [nested(type.value)], ">");
+      case "named":
+        return type.application
+          ? wrap(`${type.application.name}<`, type.application.arguments.map(nested), ">")
+          : JSON.stringify(mode === "key" ? semanticTypeIdentity(type) : describeType(type));
+      case "union":
+        return type.members.map(nested).join(` + ${JSON.stringify(mode === "key" ? "|" : " | ")} + `);
+      default:
+        return JSON.stringify(mode === "key" ? semanticTypeIdentity(type) : describeType(type));
+    }
+  }
+
+  /**
+   * The display text of a field's declared type, as a JavaScript expression.
+   * A generic record's `parse` failure names the type the caller instantiated
+   * — `field 'value' does not match string`, not `does not match T`.
+   */
+  private typeTextExpression(type: ValueType, syntax: TypeSyntax): string {
+    return this.genericTypeParameters?.length
+      ? this.genericArgumentExpression(type, "text")
+      : JSON.stringify(formatTypeSyntax(syntax));
+  }
+
+  /**
+   * A declared type inside a generic record's body. The emitter has no analyzer
+   * frame, so the declaration's own parameter names are turned into `parameter`
+   * kinds here — the one place the emitter learns that `T` is erased rather
+   * than unknown.
+   */
+  private resolveDeclarationType(reference: TypeReference): ValueType {
+    const parameters = this.genericTypeParameters;
+    const resolved = resolveTypeReference(reference);
+    if (!parameters?.length) return resolved;
+    const bindParameters = (type: ValueType): ValueType => {
+      if (type.kind === "named" && !type.application) {
+        const index = parameters.indexOf(type.name);
+        if (index >= 0) return { kind: "parameter", name: type.name, index };
+      }
+      return mapNestedTypes(type, bindParameters);
+    };
+    return bindParameters(resolved);
   }
 
   /**
@@ -2643,4 +2922,99 @@ function generatedLineAt(lineStarts: readonly number[], offset: number): number 
     else high = middle - 1;
   }
   return Math.max(0, high);
+}
+
+function sourceMapFor(code: string, generatedMappings: readonly GeneratedMapping[], source: SourceText): string {
+  const lineStarts = [0];
+  for (let index = 0; index < code.length; index += 1) {
+    if (code[index] === "\n") lineStarts.push(index + 1);
+  }
+  const byLine = new Map<number, Array<{ column: number; span: Span }>>();
+  for (const mapping of generatedMappings) {
+    const line = generatedLineAt(lineStarts, mapping.offset);
+    const entries = byLine.get(line) ?? [];
+    entries.push({ column: mapping.offset - lineStarts[line]!, span: mapping.sourceSpan });
+    byLine.set(line, entries);
+  }
+  let previousSource = 0;
+  let previousLine = 0;
+  let previousColumn = 0;
+  const mappings = lineStarts.map((_, line) => {
+    let previousGeneratedColumn = 0;
+    return (byLine.get(line) ?? []).sort((left, right) => left.column - right.column).map((mapped) => {
+      const location = source.location(mapped.span.start);
+      const originalLine = location.line - 1;
+      const originalColumn = location.column - 1;
+      const segment = [
+        encodeVlq(mapped.column - previousGeneratedColumn),
+        encodeVlq(-previousSource),
+        encodeVlq(originalLine - previousLine),
+        encodeVlq(originalColumn - previousColumn),
+      ].join("");
+      previousGeneratedColumn = mapped.column;
+      previousSource = 0;
+      previousLine = originalLine;
+      previousColumn = originalColumn;
+      return segment;
+    }).join(",");
+  }).join(";");
+  return JSON.stringify({
+    version: 3,
+    sources: [source.path],
+    sourcesContent: [source.text],
+    names: [],
+    mappings,
+  });
+}
+
+function mappedSource(source: string, sourceStart: number): { readonly code: string; readonly mappings: readonly GeneratedMapping[] } {
+  const mappings: GeneratedMapping[] = source.length > 0
+    ? [{ offset: 0, sourceSpan: { start: sourceStart, end: sourceStart + 1 } }]
+    : [];
+  for (let index = 0; index < source.length; index += 1) {
+    if (source[index] !== "\n" || index + 1 >= source.length) continue;
+    mappings.push({
+      offset: index + 1,
+      sourceSpan: { start: sourceStart + index + 1, end: sourceStart + index + 2 },
+    });
+  }
+  return { code: source, mappings };
+}
+
+function emitCheckedEmbeddedJavaScript(
+  statement: EmbeddedJavaScriptDeclaration,
+  factoryName: string,
+): { readonly code: string; readonly mappings: readonly GeneratedMapping[] } {
+  const relative = (value: Span): Span => ({
+    start: value.start - statement.sourceSpan.start,
+    end: value.end - statement.sourceSpan.start,
+  });
+  const blank = (value: string): string => value.replace(/[^\r\n]/gu, " ");
+  const body = [...statement.factoryEdits]
+    .sort((left, right) => right.span.start - left.span.start)
+    .reduce((current, edit) => {
+      const target = relative(edit.span);
+      const replacement = edit.replacement + blank(current.slice(target.start + edit.replacement.length, target.end));
+      return `${current.slice(0, target.start)}${replacement}${current.slice(target.end)}`;
+    }, statement.source);
+
+  let code = "";
+  const mappings: GeneratedMapping[] = [];
+  const appendMapped = (value: string, absoluteStart: number): void => {
+    const mapped = mappedSource(value, absoluteStart);
+    const offset = code.length;
+    code += value;
+    mappings.push(...mapped.mappings.map((mapping) => ({ ...mapping, offset: offset + mapping.offset })));
+  };
+  for (const imported of statement.imports) {
+    const target = relative(imported.span);
+    appendMapped(statement.source.slice(target.start, target.end), imported.span.start);
+    if (!code.endsWith("\n") && !code.endsWith("\r")) code += "\n";
+  }
+  code += `export function ${factoryName}(${statement.captures.map((capture) => capture.name).join(", ")}) {\n`;
+  appendMapped(body, statement.sourceSpan.start);
+  if (code.length > 0 && !code.endsWith("\n") && !code.endsWith("\r")) code += "\n";
+  const entries = statement.exports.map((item) => `${JSON.stringify(item.name)}: ${item.local}`).join(", ");
+  code += `return { ${entries} };\n}\n`;
+  return { code, mappings };
 }

@@ -434,9 +434,9 @@ print(str(items.size))
   assert.equal(result.code, 0, result.output);
 });
 
-// ─── Item 4: a readonly projection names the signature that accepts it ──────
+// ─── Item 4: an explicit readonly prop names the signature that accepts it ─
 
-test("[BLIND2-4] a refused component prop names the helper's parameter and element types", async () => {
+test("[BLIND2-4] an explicit readonly prop names the helper's parameter and element types", async () => {
   const directory = await webProject("velar-blind2-readonly-", {
     "main.vel": `
 type Item:
@@ -445,8 +445,8 @@ type Item:
 def visible(items: List<Item>) -> List<Item>:
     return items.filter(item => item.title != "")
 
-export component ProjectList(items: List<Item>):
-    const shown = computed(() => visible(items))
+export component ProjectList(items: readonly List<Item>):
+    const shown = cached(() => visible(items))
     return <ul>{shown().map(item => <li key={item.title}>{item.title}</li>)}</ul>
 
 const empty: List<Item> = []
@@ -470,8 +470,8 @@ type Item:
 def visible(items: readonly List<Item>) -> List<readonly Item>:
     return items.filter(item => item.title != "")
 
-export component ProjectList(items: List<Item>):
-    const shown = computed(() => visible(items))
+export component ProjectList(items: readonly List<Item>):
+    const shown = cached(() => visible(items))
     return <ul>{shown().map(item => <li key={item.title}>{item.title}</li>)}</ul>
 
 const empty: List<Item> = []

@@ -1,9 +1,20 @@
 // Chapter 03 — synchronous reactivity: `state`, `computed`, and `watch`.
 //
-// Authority: charter section 15, first half. `state` and `watch` are two of the
-// ten contextual keywords in packages/web/src/lexer.ts; `computed` is one of the
-// three reserved Web globals in `webGlobals`
+// Authority: charter section 15, first half. `state`, `computed` and `watch`
+// are three of the contextual keywords in packages/web/src/lexer.ts; `cached`
+// is one of the reserved Web globals in `webGlobals`
 // (packages/web/src/compiler.ts) and therefore cannot be shadowed.
+//
+// The four declaration words are one grid, and the whole chapter is an
+// elaboration of it:
+//
+//                 not reactive        reactive
+//     writable    let                 state
+//     read-only   const               computed
+//
+// `state` is to `let` what `computed` is to `const`. Reading that grid is the
+// point: `const` promises the value never changes, and `computed` is the word
+// for a value that is derived and therefore does.
 //
 // Asynchronous data — `resource` and `action` — is chapter 04.
 
@@ -21,10 +32,10 @@ export state tasks: List<Task> = [
     {id: "write", title: "Write a module", done: false},
 ]
 
-// An exported `computed` declares its public accessor result at the export
-// site. `computed` is a function, not a declaration keyword: there is no
-// `computed name = expression` spelling.
-export const openTasks: () -> number = computed(() => tasks.filter(task => not task.done).size)
+// An exported `computed` crosses the module boundary as a live value, exactly
+// as an exported `state` does: importers read `openTasks` bare and recompute
+// together, and none of them can assign it.
+export computed openTasks = tasks.filter(task => not task.done).size
 
 // A module-scope watch is never disposed, so it is for application-wide facts
 // rather than anything a component owns.
@@ -45,21 +56,26 @@ export def completeFirst():
 export def appendTask(task: Task):
     tasks.append(task)
 
-// The three spellings that differ only slightly, side by side. The first is one
-// ordinary reference snapshot, the second an independent writable cell, and the
-// third a live positional query.
-component SnapshotVersusFormula:
-    const currentTask = tasks[0]
+// The four cells of the grid, side by side, over one fact. `counted` is a plain
+// number computed once; `draft` is the same number in a cell nobody watches;
+// `selectedTask` is a watched cell; `liveFirstTask` is a formula that recomputes
+// whenever the tasks change. Only the last two move on their own, and only the
+// two on the writable column can be assigned.
+component TheFourCells:
+    let draft = tasks.size
+    const counted = tasks.size
     state selectedTask = tasks[0]
-    const liveFirstTask = computed(() => tasks[0])
+    computed liveFirstTask = tasks[0]
 
     def selectSecond():
         selectedTask = tasks[1]
+        draft += 1
 
     return <div data-snapshots>
-        <p data-const-task>{currentTask.title}</p>
+        <p data-let-count>{draft}</p>
+        <p data-const-count>{counted}</p>
         <p data-state-task>{selectedTask.title}</p>
-        <p data-computed-task>{liveFirstTask().title}</p>
+        <p data-computed-task>{liveFirstTask.title}</p>
         <button type="button" data-select-second on:click={selectSecond}>Select the second task</button>
     </div>
 
@@ -68,7 +84,7 @@ component SnapshotVersusFormula:
 // normally.
 component ScopedState:
     state expanded = false
-    const label = computed(() => expanded ? "Hide" : "Show")
+    computed label = expanded ? "Hide" : "Show"
 
     def counterFromBlock() -> () -> number:
         state local = 0
@@ -89,10 +105,10 @@ component ScopedState:
         bumped = bump()
 
     return <div data-scoped-state>
-        <p data-label>{label()}</p>
+        <p data-label>{label}</p>
         <p data-expanded>{expanded ? "expanded" : "collapsed"}</p>
         <p data-bumped>{bumped}</p>
-        <button type="button" data-toggle-expanded on:click={toggle}>{label()}</button>
+        <button type="button" data-toggle-expanded on:click={toggle}>{label}</button>
         <button type="button" data-bump-local on:click={bumpLocal}>Bump the block cell</button>
     </div>
 
@@ -125,28 +141,57 @@ component WatchSpellings:
         <p data-history>{history.join(",")}</p>
     </div>
 
-// A `computed` may write state — the compiler does not enforce purity — but a
-// derived value that also mutates is a side effect hiding in a cache, and
+// A derived value that also mutates is a side effect hiding in a cache, and
 // `watch` is the spelling that says so. These two stand side by side for
 // exactly that comparison.
+//
+// The subjects that are refused, against the ones here that are not:
+//
+//     watch trimmed:        // accepted — a computed changes
+//     watch term:           // accepted — a state changes
+//     watch 5:              // refused — a literal never changes
+//     watch effectLabel:    // refused — a plain const never changes
+//     watch doubler:        // refused — that is the reader, write doubler()
+//
+// The refused three used to compile clean and carry a body that could never
+// run. The first two of them have no correct spelling and say so; the third
+// has exactly one, and the diagnostic names it.
 component DerivationVersusEffect:
     state term = ""
     state effectRuns = 0
-    const trimmed = computed(() => term.trim())
-    const shouted = computed(() => trimmed().upper())
+    const effectLabel = "runs"
 
-    watch trimmed():
+    computed trimmed = term.trim()
+    computed shouted = trimmed.upper()
+
+    watch trimmed:
         effectRuns += 1
 
     return <div data-derivation>
         <input data-term type="text" bind:value={term} />
-        <p data-trimmed>{trimmed()}</p>
-        <p data-shouted>{shouted()}</p>
-        <p data-effect-runs>{effectRuns}</p>
+        <p data-trimmed>{trimmed}</p>
+        <p data-shouted>{shouted}</p>
+        <p data-effect-runs>{effectLabel}: {effectRuns}</p>
+    </div>
+
+// `cached(...)` is the same cache as a value rather than as a declaration: it
+// is what you reach for when the reader itself has to be handed to something
+// else. Reading it is a call, and the call is visible at the reading site.
+component PassableReader:
+    state amount = 1
+    const doubler = cached(() => amount * 2)
+    const readers = {doubled: doubler}
+
+    def raise():
+        amount += 1
+
+    return <div data-passable>
+        <p data-doubled>{readers.doubled()}</p>
+        <button type="button" data-raise on:click={raise}>Raise</button>
     </div>
 
 export component ReactivePanel:
-    const summary = computed(() => f"{openTasks()} of {tasks.size} open")
+    computed summary = f"{openTasks} of {tasks.size} open"
 
     def complete():
         completeFirst()
@@ -159,14 +204,15 @@ export component ReactivePanel:
 
     return <section data-chapter="03">
         <h2>03 — state and derived values</h2>
-        <p data-summary>{summary()}</p>
+        <p data-summary>{summary}</p>
         <p data-visits>{visits}</p>
         <button type="button" data-record-visit on:click={recordVisit}>Record a visit</button>
         <button type="button" data-complete-first on:click={complete}>Complete the first task</button>
         <button type="button" data-retitle on:click={rename}>Retitle through a helper</button>
         <button type="button" data-append on:click={add}>Append a task</button>
-        <SnapshotVersusFormula />
+        <TheFourCells />
         <ScopedState />
         <WatchSpellings />
         <DerivationVersusEffect />
+        <PassableReader />
     </section>

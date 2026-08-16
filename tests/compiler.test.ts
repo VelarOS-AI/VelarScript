@@ -1881,8 +1881,11 @@ test("type parameter declarations fail closed", () => {
     ["type User:\n    name: string\n\ndef load<User>(value: User) -> User:\n    return value\n", "VEL4021", /shadows an existing type name/u],
     ["def outer<T>(value: T) -> T:\n    def inner(other: T) -> T:\n        return other\n    return value\n", "VEL4021", /belongs to the enclosing function; declare '<T>' on this def/u],
     ["def broken<>():\n    return null\n", "VEL2025", /requires at least one name/u],
-    ["type Pair<T>:\n    left: number\n", "VEL2025", /only 'def' functions take '<T>'/u],
-    ["class Holder<T>:\n    pass\n", "VEL2025", /only 'def' functions take '<T>'/u],
+    // D55 rule 120 admits `type Box<T>`; the two forms that still refuse one
+    // name the roster rather than the single form that used to be the answer.
+    ["type Pair<T> = List<T>\n", "VEL2025", /an alias names one instantiation/u],
+    ["class Holder<T>:\n    pass\n", "VEL2025", /'def' functions and 'type' records take '<T>'/u],
+    ["enum Color<T>:\n    red\n", "VEL2025", /'def' functions and 'type' records take '<T>'/u],
     ["class Panel:\n    get title<T>() -> string:\n        return \"top\"\n", "VEL2023", /cannot declare type parameters/u],
   ] as const) {
     const result = compile(source);
@@ -1902,7 +1905,7 @@ test("component headers cannot declare type parameters", () => {
   const result = compile("component Card<T>(title: string):\n    return <p>{title}</p>\n");
   assert.equal(result.code, null);
   assert.deepEqual(result.diagnostics.map((item) => item.code), ["VEL2025"], JSON.stringify(result.diagnostics));
-  assert.match(result.diagnostics[0]?.message ?? "", /Component 'Card' cannot declare type parameters; only 'def' functions take '<T>'/u);
+  assert.match(result.diagnostics[0]?.message ?? "", /Component 'Card' cannot declare type parameters; 'def' functions and 'type' records take '<T>'/u);
 });
 
 test("type parameters are erased and fenced out of runtime checks before emission", () => {
@@ -4287,16 +4290,16 @@ type FailedEvent:
     kind: EventKind.failed
     message: string
 
-type Event = TextEvent | ToolEvent | FailedEvent
+type DiscriminatedEvent = TextEvent | ToolEvent | FailedEvent
 
-def describeWithIf(event: Event) -> string:
+def describeWithIf(event: DiscriminatedEvent) -> string:
     if event.kind == EventKind.text:
         return event.text
     if event.kind == EventKind.tool:
         return event.toolId
     return event.message
 
-def describeWithMatch(event: Event) -> string:
+def describeWithMatch(event: DiscriminatedEvent) -> string:
     match event.kind:
         case EventKind.text:
             return event.text
@@ -4305,7 +4308,7 @@ def describeWithMatch(event: Event) -> string:
         case EventKind.failed:
             return event.message
 
-def describeObjectMatch(event: Event) -> string:
+def describeObjectMatch(event: DiscriminatedEvent) -> string:
     match event:
         case {kind: EventKind.text}:
             return event.text
@@ -4314,19 +4317,19 @@ def describeObjectMatch(event: Event) -> string:
         case {kind: EventKind.failed}:
             return event.message
 
-def batch() -> List<Event>:
+def batch() -> List<DiscriminatedEvent>:
     return [
         {kind: EventKind.text, text: "one"},
         {kind: EventKind.tool, toolId: "two"},
     ]
 
-const parsed = Event.parse({kind: EventKind.tool, toolId: "shell:run"})
+const parsed = DiscriminatedEvent.parse({kind: EventKind.tool, toolId: "shell:run"})
 print(describeWithIf({kind: EventKind.text, text: "hello"}))
 print(describeWithMatch(parsed))
 print(describeObjectMatch({kind: EventKind.failed, message: "broken"}))
 print(batch().size)
 try:
-    Event.parse({kind: EventKind.text, toolId: "wrong-shape"})
+    DiscriminatedEvent.parse({kind: EventKind.text, toolId: "wrong-shape"})
 catch error:
     print(error.message)
 `.trimStart());
@@ -4336,7 +4339,7 @@ catch error:
   assert.match(result.code ?? "", /value === EventKind\.text/u);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "hello\nshell:run\nbroken\n2\nValue does not match Event\n");
+  assert.equal(execution.stdout, "hello\nshell:run\nbroken\n2\nValue does not match DiscriminatedEvent\n");
   assert.equal(formatSource("type TextEvent:\n kind: EventKind . text\n"), "type TextEvent:\n    kind: EventKind.text\n");
 
   const invalid = compile(`
@@ -4377,13 +4380,13 @@ type ToolEvent:
     kind: EventKind.tool
     toolId: string
 
-type Event = TextEvent | ToolEvent
+type DiscriminatedEvent = TextEvent | ToolEvent
 
-def flip(event: Event):
+def flip(event: DiscriminatedEvent):
     event.kind = EventKind.tool
     return null
 
-let known: Event = {kind: EventKind.text, text: "hello"}
+let known: DiscriminatedEvent = {kind: EventKind.text, text: "hello"}
 known.kind = EventKind.tool
 `.trimStart());
   assert.ok(unsafeMutation.diagnostics.some((item) => /Cannot assign field 'kind' through.*variants require different field types/u.test(item.message)));
@@ -4472,8 +4475,9 @@ print(describe(event))
 });
 
 test("throws only Error values, normalizes JavaScript failures, and preserves remainder semantics", () => {
+  const explodeSource = Buffer.from("export function explode(){throw 'raw failure'}", "utf8").toString("base64");
   const result = compile(`
-import js unsafe {explode} from "data:text/javascript,export function explode(){throw 'raw failure'}"
+import js unsafe {explode} from "data:text/javascript;base64,${explodeSource}"
 
 class BucketError extends Error:
     const bucket: string
@@ -4556,8 +4560,9 @@ catch error:
 });
 
 test("caught JavaScript failures retain initialization-time Error and String operations", () => {
+  const explodeSource = Buffer.from("export function explode(){throw 42}", "utf8").toString("base64");
   const result = compile(`
-import js unsafe {explode} from "data:text/javascript,export function explode(){throw 42}"
+import js unsafe {explode} from "data:text/javascript;base64,${explodeSource}"
 
 export def exercise() -> string:
     try:
@@ -6349,7 +6354,7 @@ mount(<App />, "#app")
 test("module state, computed values, and watches form a reactive module", () => {
   const result = compile(`
 export state count: number = 0
-export const doubled: () -> number = computed(() => count * 2)
+export const doubled: () -> number = cached(() => count * 2)
 
 export def increment():
     count += 1
@@ -6395,7 +6400,7 @@ watch await later():
 async def later() -> number:
     return 1
 
-const value = computed(() => await later())
+const value = cached(() => await later())
 `.trimStart());
   assert.equal(asynchronousComputed.code, null);
   assert.ok(asynchronousComputed.diagnostics.some((item) => item.code === "VEL4007" || /computed cannot cache a Promise/u.test(item.message)));
@@ -6459,19 +6464,31 @@ mount(target="#app", node=<App />)
   assert.match(reorderedMount.code ?? "", /__velarNamedArguments\[1\], __velarNamedArguments\[0\]/u);
 });
 
-test("computed alone installs its runtime and retired declaration syntax has one migration diagnostic", () => {
-  const result = compile("export const one: () -> number = computed(() => 1)\n");
+test("[D71-183] cached alone installs its runtime, and the retired computed function has one migration diagnostic", () => {
+  const result = compile("export const one: () -> number = cached(() => 1)\n");
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /const __velarRuntimeKey/u);
   const execution = executeModule(`${result.code ?? ""}\nconsole.log(one());\n`);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "1\n");
 
-  const retired = compile("state count = 1\ncomputed doubled = count * 2\n");
+  // D71 rule 184 reverses W-124: the declaration is the spelling, and the
+  // function keeps the cache under the name that says what it does. The old
+  // function spelling gets exactly one message -- not an unknown name, and not
+  // a second diagnostic from the call around it.
+  const retired = compile("state count = 1\nconst doubled = computed(() => count * 2)\nprint(doubled())\n");
   assert.equal(retired.code, null);
-  assert.equal(retired.diagnostics.filter((item) => item.code === "VEL5055").length, 1);
-  assert.match(retired.diagnostics.find((item) => item.code === "VEL5055")?.message ?? "", /const doubled = computed\(\(\) => \.\.\.\)/u);
-  assert.doesNotMatch(retired.diagnostics.map((item) => item.message).join("\n"), /Unknown name 'doubled'/u);
+  assert.equal(retired.diagnostics.length, 1, JSON.stringify(retired.diagnostics));
+  assert.equal(retired.diagnostics[0]?.code, "VEL5055");
+  assert.match(retired.diagnostics[0]?.message ?? "", /write 'computed doubled = \.\.\.' and read 'doubled' bare/u);
+  assert.doesNotMatch(retired.diagnostics.map((item) => item.message).join("\n"), /Unknown name 'computed'/u);
+
+  // Passing the accessor on is the one shape `velar fix` must not decide, so it
+  // carries the message and no edit -- D71's migration discipline verbatim.
+  const passed = compile("state count = 1\nconst doubled = computed(() => count * 2)\nprint([doubled].size)\n");
+  assert.equal(passed.diagnostics.length, 1, JSON.stringify(passed.diagnostics));
+  assert.equal(passed.diagnostics[0]?.fix, undefined);
+  assert.match(passed.diagnostics[0]?.message ?? "", /keep it a value with 'cached\(\.\.\.\)'/u);
 });
 
 test("deep reactivity retires identity memo caches without changing derivation results", () => {
@@ -6506,7 +6523,7 @@ def latestFor(list: List<Message>, sessionId: string) -> Message?:
 def buildEntries(sessionList: List<Session>, messageList: List<Message>) -> List<string>:
     return sessionList.map(session => previewOf(latestFor(messageList, session.id)))
 
-const previews = computed(() => buildEntries(sessions, messages))
+const previews = cached(() => buildEntries(sessions, messages))
 
 watch previews() as current, previous:
     print(f"previews:{current.join("|")}")
@@ -6565,7 +6582,7 @@ def previewOf(message: Message) -> string:
     return textOf(message)
 
 state items: List<Message> = [{id: "m1", text: "alpha"}, {id: "m2", text: "beta"}]
-const previews = computed(() => items.map(previewOf))
+const previews = cached(() => items.map(previewOf))
 
 watch previews() as current, previous:
     print(f"previews:{current.join("|")}")
@@ -6617,7 +6634,7 @@ def decorate(value: string) -> string:
     return shout(value) + suffix
 
 state items: List<string> = []
-const labels = computed(() => items.map(decorate))
+const labels = cached(() => items.map(decorate))
 `.trimStart(), "reactive read");
 
   // (b) Capturing a mutable module binding.
@@ -6631,7 +6648,7 @@ def label(value: string) -> string:
     return shout(value) + str(counter)
 
 state items: List<string> = []
-const labels = computed(() => items.map(label))
+const labels = cached(() => items.map(label))
 `.trimStart(), "mutable capture");
 
   // (c) Calling anything unproved — an async def here.
@@ -6647,7 +6664,7 @@ def label(value: string) -> string:
     return shout(value)
 
 state items: List<string> = []
-const labels = computed(() => items.map(label))
+const labels = cached(() => items.map(label))
 `.trimStart(), "unproved callee");
 
   // (d) Mutating the argument through member assignment.
@@ -6663,7 +6680,7 @@ def bump(box: Box) -> number:
     return helperOf(box)
 
 state boxes: List<Box> = []
-const values = computed(() => boxes.map(bump))
+const values = cached(() => boxes.map(bump))
 `.trimStart(), "argument mutation");
 
   // (e) A trivial non-delegating callback is cheaper than its cache entry.
@@ -6672,7 +6689,7 @@ def double(value: number) -> number:
     return value * 2
 
 state items: List<number> = []
-const doubled = computed(() => items.map(double))
+const doubled = cached(() => items.map(double))
 `.trimStart(), "non-delegating callback");
 
   // (f) Actions and event handlers are not derivation contexts.
@@ -6729,7 +6746,7 @@ state latestById: Map<string, Message> = Map()
 def buildPreviews(sessionList: List<Session>, latest: Map<string, Message>) -> List<string>:
     return sessionList.map(session => messagePreview(latest.get(session.id)))
 
-const previews = computed(() => buildPreviews(sessions, latestById))
+const previews = cached(() => buildPreviews(sessions, latestById))
 
 mount(<main>{previews().join("|")}</main>, "#app")
 `.trimStart(), "utf8");
@@ -6762,7 +6779,7 @@ def sumOf(a: number, b: number) -> number:
     print(f"sum:{a}:{b}")
     return a + b
 
-const total = computed(() => sumOf(left, right))
+const total = cached(() => sumOf(left, right))
 
 watch total() as current, previous:
     print(f"total:{current}")
@@ -6849,7 +6866,7 @@ state byTask: Map<Task, string> = Map()
 state selected: Set<string> = Set()
 state selectedTasks: Set<Task> = Set()
 state session: Session = {title: "old", meta: {count: 0}}
-const doneCount = computed(() => tasks.filter(task => task.done).size)
+const doneCount = cached(() => tasks.filter(task => task.done).size)
 
 watch tasks as current, previous:
     print("tasks:" + str(current.size) + ":same=" + str(current == previous))
@@ -6909,8 +6926,7 @@ component Child(task: Task, tasks: List<Task>):
   const propMessages = propMutation.diagnostics
     .filter((item) => item.code === "VEL3002" || item.code === "VEL4001")
     .map((item) => item.message);
-  assert.equal(propMessages.length, 2, JSON.stringify(propMutation.diagnostics));
-  assert.ok(propMessages.every((message) => /read-only view/u.test(message)), propMessages.join("\n"));
+  assert.deepEqual(propMessages, [], JSON.stringify(propMutation.diagnostics));
 });
 
 test("deep reactivity isolates record properties and Map keys", () => {
@@ -6934,10 +6950,10 @@ def readScore(key: string) -> number?:
     print("derive:" + key)
     return scores.get(key)
 
-const leftValue = computed(() => readLeft())
-const rightValue = computed(() => readRight())
-const alpha = computed(() => readScore("alpha"))
-const beta = computed(() => readScore("beta"))
+const leftValue = cached(() => readLeft())
+const rightValue = cached(() => readRight())
+const alpha = cached(() => readScore("alpha"))
+const beta = cached(() => readScore("beta"))
 
 watch leftValue() as current, previous:
     print("left:" + str(current))
@@ -7020,10 +7036,10 @@ type Model:
 
 state count = 0
 state model: Model = {value: 0}
-const total = computed(() => count + model.value)
+const total = cached(() => count + model.value)
 
 export def makeTotal() -> () -> number:
-    return computed(() => count + model.value)
+    return cached(() => count + model.value)
 
 watch total() as current, previous:
     print("total:" + str(current))
@@ -7094,7 +7110,7 @@ type Task:
 state tasks: List<Task> = [{label: "first"}, {label: "second"}]
 const snapshot = tasks[0]
 state selected = tasks[0]
-const liveFirst = computed(() => tasks[0])
+const liveFirst = cached(() => tasks[0])
 state price = 2
 state quantity = 3
 state capturedTotal = price * quantity
@@ -7155,7 +7171,7 @@ def selectValue() -> number:
     print("derive:" + str(useLeft ? left : right))
     return useLeft ? left % 2 : right % 2
 
-const selected = computed(selectValue)
+const selected = cached(selectValue)
 
 watch selected() as current, previous:
     print("watch:" + str(current))
@@ -7187,7 +7203,7 @@ export async def exercise():
 test("a synchronous computed read before flush still publishes a changed result", () => {
   const result = compile(`
 state count = 1
-const parity = computed(() => count % 2)
+const parity = cached(() => count % 2)
 
 watch parity() as current, previous:
     print("watch:" + str(current))
@@ -7207,8 +7223,8 @@ test("computed invalidation reaches a synchronously read downstream computed", (
   const result = compile(`
 state items: List<number> = []
 state page = 2
-const count = computed(() => items.size)
-const pages = computed(() => count() > 1 ? count() : 1)
+const count = cached(() => items.size)
+const pages = cached(() => count() > 1 ? count() : 1)
 
 watch pages() as current, previous:
     print("watch:" + str(current))
@@ -7236,8 +7252,8 @@ def derive() -> number:
         throw Error("derived failed")
     return count
 
-const base = computed(derive)
-const doubled = computed(() => base() * 2)
+const base = cached(derive)
+const doubled = cached(() => base() * 2)
 
 watch doubled() as current, previous:
     print("watch:" + str(current))
@@ -7288,7 +7304,7 @@ test("dynamic reactive keys release empty dependency slots", () => {
   const result = compile(`
 export state active = "a"
 export state scores: Map<string, number> = Map([["a", 1], ["b", 2]])
-const selected = computed(() => scores.get(active))
+const selected = cached(() => scores.get(active))
 
 watch selected() as current, previous:
     print(str(current))
@@ -7323,8 +7339,8 @@ def readKeys() -> string:
     print("derive:keys")
     return lookup.keys().join(",")
 
-const second = computed(readSecond)
-const keys = computed(readKeys)
+const second = cached(readSecond)
+const keys = cached(readKeys)
 
 watch second() as current, previous:
     print("second:" + str(current))
@@ -7359,9 +7375,9 @@ state lookup: Map<string, number> = Map([["a", 1]])
 state selected: Set<string> = Set(["a"])
 state fields: Record<number> = {a: 1}
 
-const mapValue = computed(() => lookup.get("a"))
-const hasValue = computed(() => "a" in selected)
-const recordValue = computed(() => fields.get("a"))
+const mapValue = cached(() => lookup.get("a"))
+const hasValue = cached(() => "a" in selected)
+const recordValue = cached(() => fields.get("a"))
 
 watch mapValue() as current, previous:
     print("map:" + str(current))
@@ -7413,7 +7429,7 @@ test("reactive module imports lower reads and reject ambiguous access", async ()
   const mainPath = join(directory, "main.vel");
   await writeFile(storePath, `
 export state count = 0
-export const doubled = computed(() => count * 2)
+export const doubled = cached(() => count * 2)
 export def increment():
     count += 1
 `.trimStart(), "utf8");
@@ -8003,7 +8019,7 @@ test("0.10 Web APIs have one versioned typed compiler/runtime contract", async (
   assert.equal(browserTestController?.kind, "object");
   if (browserTestController?.kind === "object") {
     assert.deepEqual([...browserTestController.fields.keys()].sort(), [
-      "animation", "attribute", "click", "count", "currentPath", "fill", "measureClick", "measureFill", "measurePress", "namespace", "open", "press", "reload", "scroll", "select", "text", "timings", "viewport", "visible", "waitFor", "waitForText",
+      "animation", "attribute", "box", "click", "count", "currentPath", "fill", "measureClick", "measureFill", "measurePress", "namespace", "open", "press", "reload", "scroll", "select", "style", "text", "timings", "viewport", "visible", "waitFor", "waitForText",
     ]);
   }
   const webRuntime = standardModuleSource("velar/web", { base: "/studio/" }) ?? "";
@@ -8133,7 +8149,7 @@ const stopErrors = onError(report => print(report.error.message))
 reportError(Error("reported"), "manual", "contract")
 const local = storage.scope("app")
 const stopStorage = local.watch("item", Item, (next, previous) => print(next?.name ?? "null"))
-const cached = await database("app").get("item", Item)
+const stored = await database("app").get("item", Item)
 const stopSession = session.watch("item", Item, (next, previous) => print(previous?.name ?? "null"))
 const stopMedia = watchMedia("(prefers-color-scheme: dark)", matches => print(matches))
 const stopOnline = watchOnline(online => print(online))
@@ -14402,7 +14418,7 @@ mount(<App />, "#app")
   const component = compile(`
 component App:
     state open = false
-    const title = computed(() => open ? "open" : "closed")
+    const title = cached(() => open ? "open" : "closed")
 
     def describe(open: bool) -> string:
         return open ? "yes" : "no"
@@ -14797,10 +14813,10 @@ component App:
 mount(<App />, "#app")
 `, initializerDirective("count"));
   reports(`
-const title = computed(() => "outer")
+const title = cached(() => "outer")
 
 component App:
-    const title = computed(() => title())
+    const title = cached(() => title())
     return <p>{title()}</p>
 
 mount(<App />, "#app")
@@ -19206,8 +19222,9 @@ const copied = {...payload}
   assert.equal(nullishExecution.status, 0, String(nullishExecution.stderr));
   assert.equal(nullishExecution.stdout, "true\n");
 
+  const promiseSource = Buffer.from("export const promise=Promise.resolve(5)", "utf8").toString("base64");
   const asynchronous = compile(`
-import js unsafe {promise} from "data:text/javascript,export const promise=Promise.resolve(5)"
+import js unsafe {promise} from "data:text/javascript;base64,${promiseSource}"
 
 type Payload:
     name: string
@@ -24216,7 +24233,7 @@ def label(box: Box) -> string:
     return box.user.name
 `.trimStart());
   assert.equal(componentInvocation.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
-  assert.ok(componentInvocation.diagnostics.some((item) => item.code === "VEL3002" && /through readonly Box/u.test(item.message)));
+  assert.deepEqual(componentInvocation.diagnostics, []);
 
   // Prop expressions are evaluated before children. A call in a prop may make
   // the child fact stale, so the child read carries a runtime guard.
@@ -24259,7 +24276,7 @@ def label(box: Box) -> string:
     return user.name
 `.trimStart());
   assert.equal(stableLocal.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
-  assert.ok(stableLocal.diagnostics.some((item) => item.code === "VEL3002" && /through readonly Box/u.test(item.message)));
+  assert.deepEqual(stableLocal.diagnostics, []);
 });
 
 test("await preserves narrowing facts across suspension", () => {
@@ -24557,7 +24574,7 @@ const counterLook = look:
 
 component Counter(start: number = 0):
     state count = start
-    const doubled = computed(() => count * 2)
+    const doubled = cached(() => count * 2)
 
     def increment():
         count += 1
@@ -24637,7 +24654,7 @@ component App:
   const result = compile(source, { path: "/tmp/component-contract.vel" });
   assert.deepEqual(result.diagnostics, []);
   assert.equal(result.semanticIndex.symbols.find((symbol) => symbol.kind === "parameter" && symbol.name === "View")?.type,
-    "Component<(row: readonly Row, compact?: bool) -> WebNode>");
+    "Component<(row: Row, compact?: bool) -> WebNode>");
   const tagStart = source.indexOf("<View") + 1;
   assert.ok(result.semanticIndex.references.some((reference) => reference.name === "View"
     && reference.span.start === tagStart && reference.span.end === tagStart + "View".length));
@@ -25636,9 +25653,10 @@ const broken = look:
   assert.notEqual(rangeExecution.status, 0);
   assert.match(String(rangeExecution.stderr), /RGB alpha must be from 0 through 1/u);
 
+  const unsafeValueSource = Buffer.from("export const unsafeValue={toString(){console.log('coerced');return '0.5'}}", "utf8").toString("base64");
   const dynamic = compile(`
 import {color} from "velar/look"
-import js unsafe {unsafeValue} from "data:text/javascript,export const unsafeValue={toString(){console.log('coerced');return '0.5'}}"
+import js unsafe {unsafeValue} from "data:text/javascript;base64,${unsafeValueSource}"
 
 const broken = look:
     color = color(unsafeValue)
@@ -25992,7 +26010,7 @@ component App:
         catch error:
             label = error.message
 
-    const failure = computed(() => refresh.error)
+    const failure = cached(() => refresh.error)
 
     return <main><button type="button" disabled={refresh.pending} on:click={runRefresh}>Refresh</button>{failure() != null ? <p role="alert">{failure()?.message}</p> : null}</main>
 `.trimStart());
@@ -26078,7 +26096,7 @@ def prepare():
 component App:
     action save() -> string:
         return 1
-    const unsupported = computed(() => save.reload)
+    const unsupported = cached(() => save.reload)
     return <main>Invalid</main>
 `.trimStart());
   assert.ok(invalid.diagnostics.some((item) => /Cannot assign number to string/u.test(item.message)));
@@ -27394,7 +27412,7 @@ test("language server publishes diagnostics, hover, and completion", async (cont
     "    return \"remote\"",
     "component Summary:",
     "    state count = 1",
-    "    const doubled = computed(() => count * 2)",
+    "    const doubled = cached(() => count * 2)",
     "    resource remote = loadLabel()",
     "    return <><p host>{remote.loading ? \"Loading\" : doubled()}</p><button type=\"button\" on:click={() => remote.reload()}>Reload</button></>",
     "",
@@ -27472,13 +27490,13 @@ test("language server publishes diagnostics, hover, and completion", async (cont
       semanticTokensProvider: { legend: { tokenTypes: string[]; tokenModifiers: string[] }; full: boolean };
       codeActionProvider: { codeActionKinds: string[] };
       workspaceSymbolProvider: boolean;
-      experimental: { velar: { protocolVersion: number; incrementalSessions: boolean; watchedFiles: boolean; workspaceRescan: boolean; cancellation: boolean; scriptLanguages: string[]; scriptImplementation: string; incrementalScriptLexing: boolean; workspaceSearch: boolean; workspaceTextExtensions: string[]; workspaceTextFileLimit: number; workspaceSearchResultLimit: number; workspaceWatchPathLimit: number; workspaceWatchPathCodeUnitLimit: number; workspaceWatchTextCodeUnitLimit: number } };
+      experimental: { velar: { protocolVersion: number; incrementalSessions: boolean; watchedFiles: boolean; workspaceRescan: boolean; cancellation: boolean; scriptLanguages: string[]; scriptImplementation: string; incrementalScriptLexing: boolean; workspaceSearch: boolean; workspaceTextExtensions: string[]; workspaceTextFileLimit: number; workspaceSearchResultLimit: number; workspaceWatchPathLimit: number; workspaceWatchPathCodeUnitLimit: number; workspaceWatchTextCodeUnitLimit: number; ownershipGraph: boolean; ownershipGraphNodeLimit: number; ownershipGraphEdgeLimit: number; emittedJavaScript: boolean; emittedJavaScriptCodeUnitLimit: number } };
     };
     serverInfo: { name: string };
   };
   assert.equal(initializeResult.serverInfo.name, "VelarScript Language Server");
   assert.equal(initializeResult.capabilities.positionEncoding, "utf-32");
-  assert.equal(initializeResult.capabilities.experimental.velar.protocolVersion, 3);
+  assert.equal(initializeResult.capabilities.experimental.velar.protocolVersion, 4);
   assert.equal(initializeResult.capabilities.experimental.velar.incrementalSessions, true);
   assert.equal(initializeResult.capabilities.experimental.velar.watchedFiles, true);
   assert.equal(initializeResult.capabilities.experimental.velar.workspaceRescan, true);
@@ -27494,6 +27512,11 @@ test("language server publishes diagnostics, hover, and completion", async (cont
   assert.equal(initializeResult.capabilities.experimental.velar.workspaceWatchPathLimit, 4_096);
   assert.equal(initializeResult.capabilities.experimental.velar.workspaceWatchPathCodeUnitLimit, 4_096);
   assert.equal(initializeResult.capabilities.experimental.velar.workspaceWatchTextCodeUnitLimit, 2 * 1024 * 1024);
+  assert.equal(initializeResult.capabilities.experimental.velar.ownershipGraph, true);
+  assert.equal(initializeResult.capabilities.experimental.velar.ownershipGraphNodeLimit, 20_000);
+  assert.equal(initializeResult.capabilities.experimental.velar.ownershipGraphEdgeLimit, 40_000);
+  assert.equal(initializeResult.capabilities.experimental.velar.emittedJavaScript, true);
+  assert.equal(initializeResult.capabilities.experimental.velar.emittedJavaScriptCodeUnitLimit, 4 * 1024 * 1024);
   assert.equal(initializeResult.capabilities.workspaceSymbolProvider, true);
   assert.equal(initializeResult.capabilities.definitionProvider, true);
   assert.deepEqual(initializeResult.capabilities.completionProvider.triggerCharacters, [".", "<", " ", "{", ",", ":"]);

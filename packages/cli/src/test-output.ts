@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, rm, rmdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import type { ProjectModule, ProjectResult, VelarSourcePackage } from "./project.ts";
+import { assertUniqueEmbeddedModuleOutputs, embeddedModuleFileContents, embeddedModuleOutputPath } from "./embedded-modules.ts";
 
 /**
  * D51 rule 105: the verdict line is the last link in the trust chain, so what
@@ -56,11 +57,20 @@ export async function removeCompiledSandbox(sandbox: string): Promise<void> {
 
 export async function writeCompiledTestProject(project: ProjectResult, outputRoot: string): Promise<void> {
   for (const package_ of project.velarPackages) await writePackageManifest(package_, outputRoot);
+  assertUniqueEmbeddedModuleOutputs(project.modules.map((module) => ({
+    ownerPath: compiledTestModulePath(project, module, outputRoot),
+    embeddedModules: module.result.embeddedModules,
+  })));
   for (const module of project.modules) {
     const output = compiledTestModulePath(project, module, outputRoot);
     await mkdir(dirname(output), { recursive: true });
     await writeFile(output, `${module.result.code ?? ""}//# sourceMappingURL=${output.split("/").at(-1)}.map\n`, "utf8");
     await writeFile(`${output}.map`, module.result.sourceMap ?? "", "utf8");
+    for (const embedded of module.result.embeddedModules) {
+      const embeddedPath = embeddedModuleOutputPath(output, embedded.specifier);
+      await writeFile(embeddedPath, embeddedModuleFileContents(embeddedPath, embedded), "utf8");
+      await writeFile(`${embeddedPath}.map`, embedded.sourceMap, "utf8");
+    }
   }
 }
 

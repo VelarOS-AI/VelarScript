@@ -76,6 +76,8 @@ export interface SemanticReference {
   readonly span: Span;
   readonly symbolId: string | null;
   readonly write: boolean;
+  /** The reference is the direct callee of a parsed CallExpression. */
+  readonly call?: true;
 }
 
 export interface SemanticMemberReference {
@@ -288,8 +290,8 @@ export function buildSemanticIndex(
     declarations.set(owner, symbol);
     return symbol;
   };
-  const reference = (name: string, valueSpan: Span, write = false): void => {
-    references.push({ name, path: source.path, span: valueSpan, symbolId: lookup(name)?.id ?? null, write });
+  const reference = (name: string, valueSpan: Span, write = false, call = false): void => {
+    references.push({ name, path: source.path, span: valueSpan, symbolId: lookup(name)?.id ?? null, write, ...(call ? { call: true as const } : {}) });
   };
   const typeSyntaxReferences = (syntax: TypeSyntax): void => {
     switch (syntax.kind) {
@@ -615,7 +617,11 @@ export function buildSemanticIndex(
         visitExpression(expression.body);
         exitScope();
         break;
-      case "CallExpression": visitExpression(expression.callee); for (const argument of expression.arguments) visitExpression(argument); break;
+      case "CallExpression":
+        if (expression.callee.kind === "IdentifierExpression") reference(expression.callee.name, expression.callee.span, false, true);
+        else visitExpression(expression.callee);
+        for (const argument of expression.arguments) visitExpression(argument);
+        break;
       case "MemberExpression": {
         if (expressionOwner) {
           recordMemberReference(
@@ -689,6 +695,12 @@ export function buildSemanticIndex(
     switch (statement.kind) {
       case "ImportDeclaration": break;
       case "ReExportDeclaration": break;
+      case "EmbeddedJavaScriptDeclaration":
+        for (const capture of statement.captures) {
+          typeReferences(capture.type);
+          reference(capture.name, capture.nameSpan);
+        }
+        break;
       case "ExternModuleDeclaration":
         for (const declaration of statement.functions) {
           const selection = nameSpan(declaration.span, declaration.name);

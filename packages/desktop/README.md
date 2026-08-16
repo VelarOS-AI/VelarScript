@@ -79,12 +79,18 @@ does not require a general process permission and cannot launch an arbitrary
 command.
 Applications with the `project` file grant may also call
 `startProjectTask(ProjectTaskCommand, arguments, options)`. The finite command
-set is `check`, `test`, `build`, and `run`; only `run` accepts program arguments.
+set is `check`, `test`, `build`, `fix`, `package`, and `run`; only `run`
+accepts program arguments. Browser testing is not a project-task flag: it
+requires a separately owned browser host and is intentionally absent here.
 The returned `ProjectTask` exposes its package-owned PID plus pull-based
 `next()`, terminal `wait()`, and bounded `stop()` operations. Desktop fixes the
 working directory to the current canonical project grant, injects only its
-counted build-engine path, and exposes no executable, shell, working-directory,
-environment, package-manager, or browser-test option. Output is incrementally
+counted build-engine path, and for `package` only, the Worker-validated current
+application Resources template. The package host rebuilds the target renderer
+and copies the same versioned official tools and native system-WebView assets;
+it does not resolve project `node_modules`, a source checkout, or `PATH`.
+Desktop exposes no executable, shell, working-directory, environment,
+package-manager, or caller-controlled browser-test option. Output is incrementally
 decoded and tagged by `ProjectTaskOutputChannel`, only one pull may be active,
 at most four tasks may live, output and timeout are bounded, and callers must
 consume output before waiting. Explicit stop, timeout, document retirement,

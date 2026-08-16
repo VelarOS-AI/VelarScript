@@ -324,13 +324,15 @@ test("[wave G] a reserved parameter name reports once instead of cascading", () 
 });
 
 // ---------------------------------------------------------------------------
-// Grid item: '{computed}' silently captured the builtin.
+// Grid item: '{cached}' silently captured the builtin. D71 rule 183 moved the
+// reserved global from `computed` to `cached`; `computed` is a contextual
+// keyword now, so it is exercised below as a softened word instead.
 // ---------------------------------------------------------------------------
 
 test("[wave G] a record shorthand naming a reserved binding is refused instead of capturing the builtin", () => {
   assert.deepEqual(
-    messages(`component Panel:\n    const holder = {computed}\n    return <p>x</p>\n`, true),
-    ["VEL3007 Write 'computed: value'; 'computed' is a reserved extension binding, so the shorthand has no binding of that name to read"],
+    messages(`component Panel:\n    const holder = {cached}\n    return <p>x</p>\n`, true),
+    ["VEL3007 Write 'cached: value'; 'cached' is a reserved extension binding, so the shorthand has no binding of that name to read"],
   );
   assert.deepEqual(
     messages(`const holder = {print}\n`, false),
@@ -342,7 +344,14 @@ test("[wave G] a record shorthand naming a reserved binding is refused instead o
     messages(`component Panel:\n    const holder = {state}\n    return <p>x</p>\n`, true),
     ["VEL3001 Unknown name 'state'"],
   );
-  clean(`const computed = 1\nconst holder = {computed}\nprint(str(holder.computed))\n`, false, "computed is an ordinary Core name");
+  // D71 rule 183: `computed` is a softened word too now, but a value position
+  // still reaches the retired global, so it answers with its migration rather
+  // than with an unknown name.
+  assert.deepEqual(
+    messages(`component Panel:\n    const holder = {computed}\n    return <p>x</p>\n`, true),
+    ["VEL5055 'computed' is the keyword that declares a derived value — 'computed name = expression'. The function that returns a cached reader is now 'cached'"],
+  );
+  clean(`const cached = 1\nconst holder = {cached}\nprint(str(holder.cached))\n`, false, "cached is an ordinary Core name");
 });
 
 // ---------------------------------------------------------------------------

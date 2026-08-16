@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { chmod, cp, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { VelarDesktopConfig } from "./config.ts";
@@ -54,6 +54,43 @@ interface DesktopSizeComponent {
    * application code and cannot be removed by changing the project.
    */
   readonly mandatory: boolean;
+}
+
+interface DesktopNativeTemplate {
+  readonly host: string;
+  readonly worker: string;
+  readonly terminalHost: string;
+  readonly icon: string;
+}
+
+const desktopPackageTemplateEnvironment = "VELAR_DESKTOP_PACKAGE_TEMPLATE_ROOT";
+
+/**
+ * A packaged Desktop task has no TypeScript checkout or Swift sources. The
+ * native host already running it is the exact signed-architecture template it
+ * may reuse; renderer and all JavaScript tools are still rebuilt from the
+ * checked target project. The Worker supplies this path from its validated
+ * bundle config, never from renderer input.
+ */
+async function desktopNativeTemplate(): Promise<DesktopNativeTemplate | null> {
+  const value = process.env[desktopPackageTemplateEnvironment];
+  if (value === undefined) return null;
+  if (!isAbsolute(value) || value.length > 4096 || value.includes("\0")) {
+    throw new Error(`${desktopPackageTemplateEnvironment} must be a bounded absolute Desktop Resources path`);
+  }
+  const resources = await realpath(value);
+  const contents = dirname(resources);
+  const template: DesktopNativeTemplate = {
+    host: join(contents, "MacOS", "VelarDesktopHost"),
+    worker: join(resources, "host", "worker.js"),
+    terminalHost: join(resources, "host", "terminal-host"),
+    icon: join(resources, "VelarScript.icns"),
+  };
+  for (const candidate of Object.values(template)) {
+    const information = await stat(candidate);
+    if (!information.isFile()) throw new Error(`Desktop package template asset is not an ordinary file: ${candidate}`);
+  }
+  return template;
 }
 
 function desktopSizeComponents(sizes: DesktopBuildSizes): readonly DesktopSizeComponent[] {
@@ -127,11 +164,12 @@ export async function buildDesktopApplication(
   const renderer = join(resources, "renderer");
   try {
     await Promise.all([mkdir(executableDirectory, { recursive: true }), mkdir(resources, { recursive: true })]);
+    const nativeTemplate = await desktopNativeTemplate();
     await buildRenderer(renderer);
     const hostResources = join(resources, "host");
     await mkdir(hostResources);
     const workerPath = join(hostResources, "worker.js");
-    await cp(fileURLToPath(new URL("../native/node/worker.js", import.meta.url)), workerPath);
+    await cp(nativeTemplate?.worker ?? fileURLToPath(new URL("../native/node/worker.js", import.meta.url)), workerPath);
     const languageServerPath = join(hostResources, "language-server.js");
     const projectTaskPath = join(hostResources, "project-task.js");
     const buildEnginePath = join(hostResources, "build-engine");
@@ -141,10 +179,20 @@ export async function buildDesktopApplication(
       buildTool({ id: "velar-project-task", outputFile: projectTaskPath }),
       buildTool({ id: "velar-build-engine", outputFile: buildEnginePath }),
     ]);
-    await compileMacTerminalHost(terminalHostPath);
-    await cp(fileURLToPath(new URL("../native/macos/VelarScript.icns", import.meta.url)), join(resources, "VelarScript.icns"));
+    if (nativeTemplate) {
+      await cp(nativeTemplate.terminalHost, terminalHostPath);
+      await chmod(terminalHostPath, 0o755);
+    } else {
+      await compileMacTerminalHost(terminalHostPath);
+    }
+    await cp(nativeTemplate?.icon ?? fileURLToPath(new URL("../native/macos/VelarScript.icns", import.meta.url)), join(resources, "VelarScript.icns"));
     const hostPath = join(executableDirectory, "VelarDesktopHost");
-    await compileMacHost(hostPath);
+    if (nativeTemplate) {
+      await cp(nativeTemplate.host, hostPath);
+      await chmod(hostPath, 0o755);
+    } else {
+      await compileMacHost(hostPath);
+    }
     await writeFile(join(contents, "Info.plist"), infoPlist(config, version), "utf8");
     await writeFile(join(resources, "desktop.json"), `${JSON.stringify({
       protocolVersion: 1,

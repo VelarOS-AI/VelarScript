@@ -211,6 +211,21 @@ mount(<App />, "#app")
       protocolVersion: 1,
       identifier: "dev.velarscript.fixture",
     });
+    const packagedTask = spawnSync(process.execPath, [
+      join(application, "Contents", "Resources", "host", "project-task.js"),
+      "package",
+      projectRoot,
+    ], {
+      cwd: projectRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        ESBUILD_BINARY_PATH: join(application, "Contents", "Resources", "host", "build-engine"),
+        VELAR_DESKTOP_PACKAGE_TEMPLATE_ROOT: join(application, "Contents", "Resources"),
+      },
+    });
+    assert.equal(packagedTask.status, 0, packagedTask.stderr);
+    assert.match(packagedTask.stdout, /Packaged Desktop application/u);
     const invalidRootSmoke = spawnSync(join(application, "Contents", "MacOS", "VelarDesktopHost"), ["--smoke"], {
       encoding: "utf8",
       env: { ...smokeEnvironment, VELAR_DESKTOP_PROJECT_ROOT: "relative-project" },

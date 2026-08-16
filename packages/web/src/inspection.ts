@@ -11,7 +11,7 @@ import { optionalOf } from "@velarscript/compiler";
 import { LOOK_UNIT_TYPES } from "./look.ts";
 import { exportedLookStaticValues, lookStaticIdentity } from "./look-static.ts";
 import { isWebExpression, isWebJsx, isWebKeyframes, isWebLook, isWebStatement, isWebUnit } from "./ast.ts";
-import { isWebComponentConstructor, webComponentConstructor, webNodeType } from "./types.ts";
+import { isWebComponentConstructor, isWebComputedExport, WEB_COMPUTED_EXPORT, webComponentConstructor, webNodeType } from "./types.ts";
 
 function visitDependencyExpression(expression: Expression, context: CompilerDependencyContext): boolean {
   if (isWebLook(expression)) {
@@ -57,6 +57,7 @@ function visitDependencyStatement(statement: Statement, context: CompilerDepende
       }
       return true;
     case "ExtensionStatement:web:state":
+    case "ExtensionStatement:web:computed":
     case "ExtensionStatement:web:resource":
       context.visitExpression(statement.initializer);
       return true;
@@ -97,13 +98,17 @@ function contributeInterface(statement: Statement, context: CompilerInterfaceCon
     );
     return true;
   }
-  if (statement.kind === "ExtensionStatement:web:state") {
+  if (statement.kind === "ExtensionStatement:web:state" || statement.kind === "ExtensionStatement:web:computed") {
     context.exports.set(
       statement.name,
       context.bindingType(statement.name, statement.span.start)
         ?? (statement.type ? context.resolve(statement.type) : context.inferPublicExpression(statement.initializer)),
     );
+    // D71 rule 184: both halves of the reactive row cross the module boundary
+    // as live values, so both lower an imported bare read through .get(). The
+    // annotation below is what keeps the derived one read-only there.
     context.reactiveExports.set(statement.name, "state");
+    if (statement.kind === "ExtensionStatement:web:computed") context.extensionExports.set(statement.name, WEB_COMPUTED_EXPORT);
     return true;
   }
   if (statement.kind === "ExtensionStatement:web:component") {
@@ -131,12 +136,12 @@ export const velarWebInspectionExtension: CompilerInspectionExtension = Object.f
   visitDependencyStatement,
   contributeInterface,
   exportAnnotations: exportedLookStaticValues,
-  interfaceExportIdentity: (_name: string, value: unknown) => lookStaticIdentity(value),
+  interfaceExportIdentity: (_name: string, value: unknown) => isWebComputedExport(value) ? "web:computed" : lookStaticIdentity(value),
   resources(program: Program) {
     const resources: { source: string; kind: string }[] = [];
     for (const statement of program.body) {
       if (isWebStatement(statement) && statement.kind === "ExtensionStatement:web:unsafe-css") {
-        resources.push({ source: statement.source, kind: "unsafe CSS" });
+        if (statement.source.kind === "external") resources.push({ source: statement.source.path, kind: "unsafe CSS" });
       }
     }
     return resources;

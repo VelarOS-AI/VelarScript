@@ -573,7 +573,7 @@ type Form:
 
 state counter = 0
 state form: Form = {fields: {one: "", two: "", three: "", four: "", five: "", six: "", seven: "", eight: ""}}
-const doubled = computed(() => counter * 2)
+const doubled = cached(() => counter * 2)
 let notifications = 0
 
 watch doubled():

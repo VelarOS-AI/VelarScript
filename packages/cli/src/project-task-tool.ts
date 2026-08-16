@@ -3,11 +3,13 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { officialToolModulesPlugin } from "./official-tool-assets.ts";
+import { copyPackagedOfficialTool } from "./packaged-official-tool.ts";
 
 export const VELAR_PROJECT_TASK_TOOL_ID = "velar-project-task";
 
 export async function buildProjectTaskTool(outputFile: string): Promise<void> {
   outputFile = resolve(outputFile);
+  if (await copyPackagedOfficialTool(outputFile, "host/project-task.js", 0o644)) return;
   const sourceExtension = import.meta.url.endsWith(".ts") ? "ts" : "js";
   await mkdir(dirname(outputFile), { recursive: true });
   await build({

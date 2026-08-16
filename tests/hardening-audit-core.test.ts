@@ -690,8 +690,9 @@ print(str(instance.read()))
 });
 
 test("[D44 70] Error instances and nested field positions are rejected; parsed JSON passes", () => {
+  const fromJsonSource = Buffer.from("export const fromJson = JSON.parse('{\"x\": 3}');", "utf8").toString("base64");
   const output = run(`
-import js unsafe {fromJson} from "data:text/javascript,export const fromJson = JSON.parse('{\\"x\\": 3}');"
+import js unsafe {fromJson} from "data:text/javascript;base64,${fromJsonSource}"
 
 type Point:
     x: number
@@ -717,8 +718,9 @@ test("[D44 70] a plain object from another realm still validates", () => {
   // The check is structural (prototype null, or prototype whose own
   // prototype is null), never an identity comparison against this realm's
   // Object.prototype.
+  const foreignSource = Buffer.from("import vm from 'node:vm'; export const foreign = vm.runInNewContext('({x: 3})');", "utf8").toString("base64");
   const output = run(`
-import js unsafe {foreign} from "data:text/javascript,import vm from 'node:vm'; export const foreign = vm.runInNewContext('({x: 3})');"
+import js unsafe {foreign} from "data:text/javascript;base64,${foreignSource}"
 
 type Point:
     x: number

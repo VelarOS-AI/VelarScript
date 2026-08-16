@@ -582,8 +582,9 @@ class Derived extends Base:
 });
 
 test("[CLS-U8] the injected field-read guard raises, and it raises a host TypeError", () => {
+  const missingSource = Buffer.from("export const missing = undefined", "utf8").toString("base64");
   assert.equal(run(`
-import js unsafe {missing} from "data:text/javascript,export const missing = undefined"
+import js unsafe {missing} from "data:text/javascript;base64,${missingSource}"
 
 class Box:
     let value: string = missing

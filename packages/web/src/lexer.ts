@@ -1,6 +1,6 @@
 import type { Diagnostic, Span } from "@velarscript/compiler";
-import { findInterpolatedExpressionEnd } from "@velarscript/compiler/extension";
-import type { CompilerLexicalScanContext, CompilerLexicalScanResult, Token } from "@velarscript/compiler/extension";
+import { findInterpolatedExpressionEnd, scanOpaqueEmbeddedSource } from "@velarscript/compiler/extension";
+import type { CompilerFormattingOpaqueSourceScan, CompilerLexicalScanContext, CompilerLexicalScanResult, OpaqueEmbeddedSourceScan, Token } from "@velarscript/compiler/extension";
 import { WEB_VOID_ELEMENTS } from "./elements.ts";
 
 /**
@@ -12,12 +12,21 @@ import { WEB_VOID_ELEMENTS } from "./elements.ts";
  * '@mounted:' and '@cleanup:' spellings, which cannot collide at all.
  */
 export const WEB_CONTEXTUAL_KEYWORDS: ReadonlySet<string> = new Set([
-  "component", "state", "resource", "action", "watch", "exposes", "expose", "look", "keyframes", "css",
+  "component", "state", "computed", "resource", "action", "watch", "exposes", "expose", "look", "keyframes", "css",
 ]);
 
 export const WEB_JSX_TOKEN = "@velarscript/web:jsx";
 export const WEB_LOOK_TOKEN = "@velarscript/web:look";
 export const WEB_KEYFRAMES_TOKEN = "@velarscript/web:keyframes";
+export const WEB_UNSAFE_CSS_TOKEN = "@velarscript/web:unsafe-css";
+
+/** Raw CSS carried only by the Web lexical extension; Core never names CSS. */
+export interface WebUnsafeCssBlockSyntax {
+  readonly kind: "WebUnsafeCssBlockSyntax";
+  readonly css: string;
+  readonly contentSpan: Span;
+  readonly span: Span;
+}
 
 export interface WebExpressionSource {
   readonly source: string;
@@ -75,6 +84,8 @@ export interface WebKeyframesBlockSyntax {
 }
 
 export function scanWebToken(context: CompilerLexicalScanContext): CompilerLexicalScanResult | null {
+  const unsafeCss = scanUnsafeCssBlock(context);
+  if (unsafeCss) return unsafeCss;
   const visualBlock = visualBlockKeyword(context.tokens);
   if (visualBlock) return scanVisualBlock(context, visualBlock);
   if (context.source[context.offset] !== "<" || !shouldStartJsx(context)) return null;
@@ -85,6 +96,64 @@ export function scanWebToken(context: CompilerLexicalScanContext): CompilerLexic
     nextOffset: syntax.span.end,
     diagnostics: scanner.diagnostics,
   };
+}
+
+function scanUnsafeCssBlock(context: CompilerLexicalScanContext): CompilerLexicalScanResult | null {
+  if (context.source[context.offset] !== "`") return null;
+  const css = context.tokens.at(-1);
+  const unsafe = context.tokens.at(-2);
+  if (css?.kind !== "identifier" || css.value !== "css" || unsafe?.kind !== "unsafe") return null;
+  if (!/^[ \t]+$/u.test(context.source.slice(unsafe.span.end, css.span.start))) return null;
+  if (!/^[ \t]*$/u.test(context.source.slice(css.span.end, context.offset))) return null;
+  const lineStart = previousPhysicalLineStart(context.source, unsafe.span.start);
+  const declarationIndentation = context.source.slice(lineStart, unsafe.span.start);
+  if (!/^[ \t]*$/u.test(declarationIndentation)) return null;
+
+  const scanned = scanWebUnsafeCssLiteral(context.source, context.offset);
+  if (!scanned) return null;
+  const tokenSpan = { start: context.offset, end: scanned.end };
+  const diagnostics: Diagnostic[] = [];
+  if (!scanned.openingLineBreak) {
+    diagnostics.push(diagnostic("VEL5037", "Inline unsafe CSS is a multiline raw block; put the source on the line after the opening backtick", tokenSpan));
+  }
+  if (!scanned.closed) {
+    diagnostics.push(diagnostic("VEL5037", "Unterminated inline unsafe CSS block; close it with an aligned backtick followed by 'before look' or 'after look'", tokenSpan));
+  }
+  const payload: WebUnsafeCssBlockSyntax = {
+    kind: "WebUnsafeCssBlockSyntax",
+    css: context.source.slice(scanned.sourceStart, scanned.sourceEnd),
+    contentSpan: { start: scanned.sourceStart, end: scanned.sourceEnd },
+    span: tokenSpan,
+  };
+  return {
+    token: extensionToken(WEB_UNSAFE_CSS_TOKEN, tokenSpan, payload),
+    nextOffset: scanned.end,
+    diagnostics,
+  };
+}
+
+/**
+ * Recognizes the Web-owned raw block without teaching Core's formatter or
+ * lexer the `css` word. Both Web consumers share this wrapper so its header
+ * and closing-tail rules cannot drift.
+ */
+export function scanWebUnsafeCssLiteral(
+  source: string,
+  start: number,
+): (OpaqueEmbeddedSourceScan & CompilerFormattingOpaqueSourceScan) | null {
+  if (source[start] !== "`") return null;
+  const lineStart = previousPhysicalLineStart(source, start);
+  const header = /^([ \t]*)unsafe[ \t]+css[ \t]*$/u.exec(source.slice(lineStart, start));
+  if (!header) return null;
+  // The neutral scanner owns only the raw, aligned backtick boundary. Web
+  // alone recognizes the closing-line vocabulary.
+  const scanned = scanOpaqueEmbeddedSource(
+    source,
+    start,
+    header[1] ?? "",
+    (tail) => /^[ \t]+(?:before|after)[ \t]+look[ \t]*$/u.test(tail),
+  );
+  return { ...scanned, attachedToPrevious: true };
 }
 
 /**

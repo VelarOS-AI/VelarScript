@@ -30,6 +30,7 @@ import {
   type ScriptSpan,
   type ScriptSymbolKind,
 } from "./script-language-service.ts";
+import { buildOwnershipGraph, ownershipGraphRevision } from "./ownership-graph.ts";
 import {
   type ProjectSemanticToken,
   projectDefinitionAt,
@@ -88,7 +89,7 @@ interface ContentChange {
   readonly text: string;
 }
 
-export const VELAR_LANGUAGE_SERVER_PROTOCOL_VERSION = 3;
+export const VELAR_LANGUAGE_SERVER_PROTOCOL_VERSION = 4;
 type PositionEncoding = "utf-16" | "utf-32";
 let activePositionEncoding: PositionEncoding = "utf-16";
 let confinedWorkspaceRoot: string | null = null;
@@ -96,6 +97,9 @@ let confinedCanonicalRoot: string | null = null;
 const MAX_LSP_MESSAGE_BYTES = 16 * 1024 * 1024;
 const MAX_LSP_RESULT_ITEMS = 10_000;
 const MAX_LSP_TEXT_CHARS = 64 * 1024;
+const MAX_EMITTED_JAVASCRIPT_CHARS = 4 * 1024 * 1024;
+const MAX_OWNERSHIP_GRAPH_NODES = 20_000;
+const MAX_OWNERSHIP_GRAPH_EDGES = 40_000;
 const semanticTokenTypes = [
   "type", "class", "enum", "enumMember", "function", "method", "property", "variable", "parameter",
   "interface", "comment", "string", "keyword", "number", "regexp", "operator",
@@ -459,6 +463,11 @@ export async function runLanguageServer(): Promise<void> {
                 workspaceWatchPathLimit: MAX_WORKSPACE_CHANGE_PATHS,
                 workspaceWatchPathCodeUnitLimit: MAX_WORKSPACE_CHANGE_PATH_CODE_UNITS,
                 workspaceWatchTextCodeUnitLimit: MAX_WORKSPACE_CHANGE_TEXT_CODE_UNITS,
+                ownershipGraph: true,
+                ownershipGraphNodeLimit: MAX_OWNERSHIP_GRAPH_NODES,
+                ownershipGraphEdgeLimit: MAX_OWNERSHIP_GRAPH_EDGES,
+                emittedJavaScript: true,
+                emittedJavaScriptCodeUnitLimit: MAX_EMITTED_JAVASCRIPT_CHARS,
               },
             },
           },
@@ -629,6 +638,124 @@ export async function runLanguageServer(): Promise<void> {
           revision: result.revision,
           durationMs: result.durationMs,
           coverageComplete: result.coverageComplete,
+        });
+        break;
+      }
+      case "velar/ownershipGraph": {
+        const descriptor = params?.textDocument as Pick<TextDocument, "uri"> | undefined;
+        const requestedVersionValue = params?.version;
+        const maximumNodesValue = params?.maximumNodes;
+        const maximumEdgesValue = params?.maximumEdges;
+        if (!descriptor || typeof descriptor.uri !== "string"
+          || (requestedVersionValue !== undefined && (typeof requestedVersionValue !== "number" || !Number.isSafeInteger(requestedVersionValue)))
+          || (maximumNodesValue !== undefined && (typeof maximumNodesValue !== "number" || !Number.isSafeInteger(maximumNodesValue)))
+          || (maximumEdgesValue !== undefined && (typeof maximumEdgesValue !== "number" || !Number.isSafeInteger(maximumEdgesValue)))) {
+          respondError(message.id, "velar/ownershipGraph requires textDocument.uri and optional integer version, maximumNodes, and maximumEdges", -32602);
+          break;
+        }
+        const requestedVersion = requestedVersionValue as number | undefined;
+        const maximumNodes = maximumNodesValue as number | undefined;
+        const maximumEdges = maximumEdgesValue as number | undefined;
+        if ((maximumNodes !== undefined && (maximumNodes < 1 || maximumNodes > MAX_OWNERSHIP_GRAPH_NODES))
+          || (maximumEdges !== undefined && (maximumEdges < 1 || maximumEdges > MAX_OWNERSHIP_GRAPH_EDGES))) {
+          respondError(message.id, `velar/ownershipGraph bounds are 1..${MAX_OWNERSHIP_GRAPH_NODES} nodes and 1..${MAX_OWNERSHIP_GRAPH_EDGES} edges`, -32602);
+          break;
+        }
+        const document = documents.get(descriptor.uri);
+        if (!document || scriptDocuments.has(descriptor.uri)) {
+          respondError(message.id, "velar/ownershipGraph requires an open VelarScript document", -32602);
+          break;
+        }
+        if (requestedVersion !== undefined && requestedVersion !== document.version) {
+          respondError(message.id, `Document version ${requestedVersion} is no longer current`, -32801);
+          break;
+        }
+        const project = await projectFor(document);
+        if (!project) {
+          respondError(message.id, "VelarScript project is unavailable for this document");
+          break;
+        }
+        const graph = await buildOwnershipGraph(project, {
+          ...(maximumNodes === undefined ? {} : { maximumNodes }),
+          ...(maximumEdges === undefined ? {} : { maximumEdges }),
+          cancelled: () => message.id !== undefined && cancelledRequests.has(requestKey(message.id)),
+        });
+        respond(message.id, {
+          protocolVersion: 1,
+          rootUri: pathToFileURL(project.projectRoot).href,
+          document: { uri: descriptor.uri, version: document.version },
+          compilerVersion: VELAR_VERSION,
+          revision: graph.revision,
+          nodes: graph.nodes.map((node) => ({
+            id: node.id,
+            kind: node.kind,
+            name: clipLspText(node.name),
+            ...(node.type ? { type: clipLspText(node.type) } : {}),
+            ...(node.exported === undefined ? {} : { exported: node.exported }),
+            ...(node.mutable === undefined ? {} : { mutable: node.mutable }),
+            ...(node.path && node.span ? { uri: pathToFileURL(node.path).href, range: lspRange(sourceFor(project, node.path), node.span) } : {}),
+            ...(node.path && node.selectionSpan ? { selectionRange: lspRange(sourceFor(project, node.path), node.selectionSpan) } : {}),
+          })),
+          edges: graph.edges.map((edge) => ({
+            id: edge.id,
+            kind: edge.kind,
+            from: edge.from,
+            to: edge.to,
+            ...(edge.path && edge.span ? { uri: pathToFileURL(edge.path).href, range: lspRange(sourceFor(project, edge.path), edge.span) } : {}),
+          })),
+          coverage: graph.coverage,
+          limitReached: graph.limitReached,
+          durationMs: graph.durationMs,
+        });
+        break;
+      }
+      case "velar/emittedJavaScript": {
+        const descriptor = params?.textDocument as Pick<TextDocument, "uri"> | undefined;
+        const requestedVersionValue = params?.version;
+        const maximumCharsValue = params?.maximumChars;
+        if (!descriptor || typeof descriptor.uri !== "string"
+          || (requestedVersionValue !== undefined && (typeof requestedVersionValue !== "number" || !Number.isSafeInteger(requestedVersionValue)))
+          || (maximumCharsValue !== undefined && (typeof maximumCharsValue !== "number" || !Number.isSafeInteger(maximumCharsValue)))) {
+          respondError(message.id, "velar/emittedJavaScript requires textDocument.uri and optional integer version and maximumChars", -32602);
+          break;
+        }
+        const requestedVersion = requestedVersionValue as number | undefined;
+        const maximumChars = maximumCharsValue as number | undefined;
+        if (maximumChars !== undefined && (maximumChars < 1 || maximumChars > MAX_EMITTED_JAVASCRIPT_CHARS)) {
+          respondError(message.id, `velar/emittedJavaScript maximumChars must be 1 through ${MAX_EMITTED_JAVASCRIPT_CHARS}`, -32602);
+          break;
+        }
+        const document = documents.get(descriptor.uri);
+        if (!document || scriptDocuments.has(descriptor.uri)) {
+          respondError(message.id, "velar/emittedJavaScript requires an open VelarScript document", -32602);
+          break;
+        }
+        if (requestedVersion !== undefined && requestedVersion !== document.version) {
+          respondError(message.id, `Document version ${requestedVersion} is no longer current`, -32801);
+          break;
+        }
+        const path = pathOf(descriptor.uri);
+        const project = path ? await projectFor(document) : null;
+        const module = path && project ? project.modules.find((item) => item.inputPath === path) : null;
+        if (!project || !module) {
+          respondError(message.id, "VelarScript project module is unavailable for this document");
+          break;
+        }
+        const limit = maximumChars ?? MAX_EMITTED_JAVASCRIPT_CHARS;
+        const code = module.result.code;
+        const sourceMap = module.result.sourceMap;
+        respond(message.id, {
+          protocolVersion: 1,
+          uri: descriptor.uri,
+          version: document.version,
+          compilerVersion: VELAR_VERSION,
+          revision: ownershipGraphRevision(project),
+          javascript: code === null ? null : code.slice(0, limit),
+          sourceMap: sourceMap === null ? null : sourceMap.slice(0, limit),
+          generatedChars: code?.length ?? 0,
+          sourceMapChars: sourceMap?.length ?? 0,
+          limitReached: (code?.length ?? 0) > limit || (sourceMap?.length ?? 0) > limit,
+          diagnostics: boundedDiagnostics(module.result.source, module.result.diagnostics, []),
         });
         break;
       }

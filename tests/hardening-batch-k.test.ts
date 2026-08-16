@@ -270,9 +270,9 @@ print(describeUser({name: "Ada"}))
 });
 
 test("[MIG-2] an untyped exported computed is diagnosed at its export boundary", () => {
-  const missing = compile("export const title = computed(() => \"ready\")\n", { extensions: [velarCompilerExtension] });
+  const missing = compile("export const title = cached(() => \"ready\")\n", { extensions: [velarCompilerExtension] });
   assert.ok(missing.diagnostics.some((item) => item.code === "VEL4025"
-    && item.message.includes("export const title: () -> T = computed(...)")), JSON.stringify(missing.diagnostics));
-  const explicit = compile("export const title: () -> string = computed(() => \"ready\")\n", { extensions: [velarCompilerExtension] });
+    && item.message.includes("export const title: () -> T = cached(...)")), JSON.stringify(missing.diagnostics));
+  const explicit = compile("export const title: () -> string = cached(() => \"ready\")\n", { extensions: [velarCompilerExtension] });
   assert.deepEqual(explicit.diagnostics, []);
 });

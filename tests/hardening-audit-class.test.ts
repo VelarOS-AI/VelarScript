@@ -224,7 +224,7 @@ def look(l: readonly Left):
 `, "VEL4001", /'Left\.right\.scale' is class 'Scale'/u);
 });
 
-test("[D44-72] a bare class prop stays legal while a class buried in a data prop rejects", () => {
+test("[D44-72/D74] mutable props admit classes while explicit readonly keeps the pure-data boundary", () => {
   // The bare class prop is visibly behavioral: passed as-is, methods callable.
   const bare = compileWeb(`
 class ChartScale:
@@ -241,8 +241,9 @@ component Chart(scale: ChartScale):
 `);
   assert.deepEqual(bare.diagnostics, []);
 
-  // The same class buried inside a record prop rejects like explicit readonly.
-  const buried = compileWeb(`
+  // D74: the same class buried inside a mutable data prop is legal because the
+  // Web extension no longer adds an implicit readonly projection.
+  const mutableBuried = compileWeb(`
 class ChartScale:
     let domain: number
 
@@ -255,8 +256,25 @@ type Config:
 component Chart(config: Config):
     return <span>ready</span>
 `);
-  assert.deepEqual(buried.diagnostics.map((item) => item.message), [
-    "A component prop is a readonly data view; 'config.scale' is class 'ChartScale' — lift the class into its own prop, or model it as a data record",
+  assert.deepEqual(mutableBuried.diagnostics, []);
+
+  // An author who explicitly chooses readonly still gets Core's pure-data
+  // boundary, including at nested fields.
+  const readonlyBuried = compileWeb(`
+class ChartScale:
+    let domain: number
+
+    constructor(domain: number):
+        self.domain = domain
+
+type Config:
+    scale: ChartScale
+
+component Chart(config: readonly Config):
+    return <span>ready</span>
+`);
+  assert.deepEqual(readonlyBuried.diagnostics.map((item) => item.message), [
+    "'readonly' accepts only pure data at every depth; 'Config.scale' is class 'ChartScale' — model it as a data record, or drop 'readonly'",
   ]);
 });
 

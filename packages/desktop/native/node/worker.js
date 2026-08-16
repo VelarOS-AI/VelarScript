@@ -1222,7 +1222,7 @@ async function projectTaskStart(args, owner, activity) {
   if (projectRoot === null || !fileScopes.has("project")) throw new Error("Desktop project tasks require the project file grant");
   if (args.length !== 3) throw new TypeError("Project task start arguments are invalid");
   const [command, commandArgs, options] = args;
-  if (!["check", "test", "build", "run"].includes(command)) throw new TypeError("Project task command is invalid");
+  if (!["check", "test", "build", "fix", "package", "run"].includes(command)) throw new TypeError("Project task command is invalid");
   if (!Array.isArray(commandArgs) || commandArgs.length > 1000 || command !== "run" && commandArgs.length > 0) {
     throw new TypeError("Only a run project task accepts a bounded List<string> of program arguments");
   }
@@ -1245,6 +1245,7 @@ async function projectTaskStart(args, owner, activity) {
   const environment = Object.create(null);
   for (const name of ["HOME", "LANG", "LC_ALL", "TMPDIR"]) if (typeof process.env[name] === "string") environment[name] = process.env[name];
   environment.ESBUILD_BINARY_PATH = buildEnginePath;
+  if (command === "package") environment.VELAR_DESKTOP_PACKAGE_TEMPLATE_ROOT = await realpath(dirname(configPath));
   const toolArguments = [projectTaskPath, command, projectLexicalRoot ?? projectRoot];
   if (command === "run" && commandArgs.length > 0) toolArguments.push("--", ...commandArgs);
   let task = null;

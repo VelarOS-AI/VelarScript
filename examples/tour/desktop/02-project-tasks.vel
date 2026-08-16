@@ -3,7 +3,7 @@
 // Authority: the `velar/desktop` module interface in
 // packages/desktop/src/compiler.ts — `ProjectTask` (4 members),
 // `TerminalSession` (6), and `LanguageServer` (3), plus the two enums
-// `ProjectTaskCommand` (check, test, build, run) and `ProjectTaskOutputChannel`
+// `ProjectTaskCommand` (check, test, build, fix, package, run) and `ProjectTaskOutputChannel`
 // (stdout, stderr), and the three functions that open them.
 //
 // Every handle here publishes a release operation, so `using` supplies its
@@ -15,11 +15,15 @@
 import {LanguageServer, ProjectTask, ProjectTaskCommand, ProjectTaskOutputChannel, TerminalSession, languageServer, openTerminal, startProjectTask} from "velar/desktop"
 
 // `ProjectTaskCommand` is the closed set of toolchain commands a Desktop
-// application may start: check, test, build, and run.
+// application may start. Mechanical fixes and native packaging are first-class
+// finite capabilities rather than caller-controlled CLI flags. Browser tests
+// need a separately owned browser host and are intentionally absent here.
 export const taskCommands: List<ProjectTaskCommand> = [
     ProjectTaskCommand.check,
     ProjectTaskCommand.test,
     ProjectTaskCommand.build,
+    ProjectTaskCommand.fix,
+    ProjectTaskCommand.package,
     ProjectTaskCommand.run,
 ]
 
@@ -31,6 +35,10 @@ export def commandLabel(command: ProjectTaskCommand) -> string:
             return "velar test"
         case ProjectTaskCommand.build:
             return "velar build"
+        case ProjectTaskCommand.fix:
+            return "velar fix"
+        case ProjectTaskCommand.package:
+            return "velar package"
         case ProjectTaskCommand.run:
             return "velar run"
 
@@ -54,7 +62,7 @@ export async def runCheck() -> string:
 // The same three spellings, written without `async for`, so the polling shape
 // and the streaming shape stand side by side.
 export async def runTestsAndReport() -> string:
-    using task = await startProjectTask(ProjectTaskCommand.test, ["--reporter", "compact"], {timeout: 120000, maxOutputBytes: 1048576})
+    using task = await startProjectTask(ProjectTaskCommand.test, [], {timeout: 120000, maxOutputBytes: 1048576})
     let line = await task.next()
 
     while line != null:
@@ -65,11 +73,11 @@ export async def runTestsAndReport() -> string:
     return f"{result.code ?? -1}|{result.signal ?? "none"}|{result.stdout.size}|{result.stderr.size}|{task.pid}"
 
 export async def stopBuild():
-    using task = await startProjectTask(ProjectTaskCommand.build, ["--sourcemaps"])
+    using task = await startProjectTask(ProjectTaskCommand.build)
     await task.stop()
 
 def startProjectTaskHandle(command: ProjectTaskCommand) -> Promise<ProjectTask>:
-    return startProjectTask(command, ["--quiet"])
+    return startProjectTask(command)
 
 // `openTerminal(options?)` answers a `TerminalSession`: a real PTY with `pid`,
 // `write`, `resize`, `next`, `wait`, and `close`. It requires the manifest's

@@ -8,6 +8,7 @@ import {
   invalidType,
   isInvalidType,
   isAssignable,
+  isReadonlyView,
   nullType,
   nonOptional,
   numberType,
@@ -68,6 +69,7 @@ import {
   isWebUnit,
   type WebActionDeclaration as ActionDeclaration,
   type WebComponentDeclaration as ComponentDeclaration,
+  type WebComputedDeclaration as ComputedDeclaration,
   type WebJsxAttribute as JSXAttribute,
   type WebJsxElementExpression as JSXElementExpression,
   type WebKeyframesExpression,
@@ -75,8 +77,10 @@ import {
   type WebResourceDeclaration as ResourceDeclaration,
 } from "./ast.ts";
 import {
+  CACHED_INTRINSIC_TYPE,
   isWebComponentConstructor,
   isWebComponentType,
+  isWebComputedExport,
   isWebNodeType,
   normalizeWebComponentType,
   webComponentConstructor,
@@ -84,6 +88,8 @@ import {
   webComponentIntrinsic,
   webComponentName,
   webNodeType,
+  WEB_EVENT_TYPE_NAMES,
+  WEB_OWNED_TYPE_NAMES,
   type WebComponentType,
 } from "./types.ts";
 
@@ -104,7 +110,8 @@ const nativeDomEventNames = new Set([
   "copy", "cut", "paste", "load", "error", "transitionend", "animationend", "play", "pause", "ended",
 ]);
 const textualWebPrimitiveNames = new Set(["Length", "Percentage", "LengthPercentage", "TrackFraction", "Color", "Duration", "Angle"]);
-const webEventTypeNames = new Set(["Event", "KeyboardEvent", "PointerEvent", "InputEvent", "CompositionEvent", "ClipboardEvent"]);
+// D72 rule 186: derived from the published table, not restated beside it.
+const webEventTypeNames = WEB_EVENT_TYPE_NAMES;
 const webEventDeadFields = new Set(["target", "currentTarget", "value", "checked"]);
 const diagnostic = (code: string, message: string, sourceSpan: Span): Diagnostic => ({ code, message, span: sourceSpan });
 const bindTargetGuidance = (directive: string): string =>
@@ -134,15 +141,21 @@ const lookMetricOrSpacing: ValueType = { kind: "union", members: [lookMetric, lo
 const lookPropertyType = (kind: LookPropertyValueKind): ValueType => {
   switch (kind) {
     case "animation": return { kind: "union", members: [lookAnimation, { kind: "list", element: lookAnimation }] };
-    case "angle": return lookAngle;
+    // D73 rule 187: a published keyword must be reachable. These three kinds
+    // used to type-refuse every string, so `zIndex = "auto"` -- the CSS initial
+    // value -- and the five CSS-wide keywords every other property takes were
+    // refused by the type before the closed set could answer. Accepting the
+    // string is what makes the set they now publish a surface rather than a
+    // promise (D50 rule 92); a value outside the set is still refused, by name.
+    case "angle": return { kind: "union", members: [lookAngle, stringType] };
     case "background": return { kind: "union", members: [lookColor, lookImage, stringType] };
     case "border": return { kind: "union", members: [lookBorder, stringType] };
     case "color": return { kind: "union", members: [lookColor, stringType] };
-    case "duration": return lookDuration;
+    case "duration": return { kind: "union", members: [lookDuration, stringType] };
     case "image": return { kind: "union", members: [lookImage, stringType] };
     case "line-height": return { kind: "union", members: [numberType, lookLength, stringType] };
     case "metric": return { kind: "union", members: [lookMetricOrSpacing, stringType] };
-    case "number": return numberType;
+    case "number": return { kind: "union", members: [numberType, stringType] };
     case "number-keyword": return { kind: "union", members: [numberType, lookSpacing, stringType] };
     case "shadow": return { kind: "union", members: [lookShadow, stringType] };
     case "track": return { kind: "union", members: [lookTrackList, stringType] };
@@ -177,12 +190,12 @@ export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): Va
       const callback = callbackAt(0, [], unknownType);
       if (callback.kind === "any") return { kind: "function", parameters: [], requiredParameters: 0, result: anyType };
       if (callback.kind !== "function" && callback.kind !== "intrinsic") {
-        context.typeError("computed requires a synchronous zero-argument function", argumentAt(0)?.span ?? callSpan);
+        context.typeError("cached requires a synchronous zero-argument function", argumentAt(0)?.span ?? callSpan);
         return { kind: "function", parameters: [], requiredParameters: 0, result: unknownType };
       }
       const result = callback.result;
       if (context.expandAliases(result).kind === "promise") {
-        context.typeError("computed cannot cache a Promise; load asynchronous data with a resource", argumentAt(0)?.span ?? callSpan);
+        context.typeError("cached cannot hold a Promise; load asynchronous data with a resource", argumentAt(0)?.span ?? callSpan);
       }
       return { kind: "function", parameters: [], requiredParameters: 0, result };
     }
@@ -456,12 +469,25 @@ function lookShorthandStringGuidance(name: string, value: Expression): string | 
 const lookCssWideKeywords = new Set(LOOK_CSS_WIDE_KEYWORDS);
 const lookSharedMetricKeywords = ["auto", "none", "normal", "min-content", "max-content", "fit-content", "stretch"];
 const lookMetricKeywords = new Set([...lookCssWideKeywords, ...lookSharedMetricKeywords]);
-const lookDefaultKeywords = new Set([
-  ...lookCssWideKeywords, "auto", "none", "normal", "start", "end", "center", "left", "right", "top", "bottom",
-  "solid", "dashed", "dotted", "double", "hidden", "visible", "round", "square", "butt", "miter", "bevel",
-  "row", "column", "dense", "both", "mandatory", "proximity", "always", "smooth", "thin", "light", "dark",
-  "disc", "circle", "decimal", "inside", "outside", "bold", "bolder", "lighter", "small-caps",
-]);
+/**
+ * D73 rule 187: what a refusal says the property's *other* half is, so the
+ * keyword list it goes on to print reads as the keyword half of a real value
+ * space rather than as the whole of it.
+ */
+function lookVocabularyLead(kind: LookPropertyValueKind): string {
+  switch (kind) {
+    case "border": return "use the border(width, color, style) builder, or one of";
+    case "shadow": return "use the shadow(x, y, blur, color) builder, or one of";
+    case "angle": return "write an angle such as 45deg or 0.25turn, or one of";
+    case "duration": return "write a duration such as 200ms or 0.3s, or one of";
+    case "line-height": return "write a number or a length such as 1.5 or 24px, or one of";
+    case "number": return "write a number, or one of";
+    case "number-keyword": return "write a number, or one of";
+    case "track": return "use the tracks(...) builder, or one of";
+    case "transition": return "use the transition(property, duration, easing, delay) builder, or one of";
+    default: return "write one of";
+  }
+}
 const lookColorKeywords = new Set([
   ...lookCssWideKeywords, "transparent", "currentColor", "black", "silver", "gray", "white", "maroon", "red", "purple",
   "fuchsia", "green", "lime", "olive", "yellow", "navy", "blue", "teal", "aqua", "orange", "aliceblue", "rebeccapurple",
@@ -595,7 +621,7 @@ function collectDerivedReactiveNames(program: Program): ReadonlySet<string> {
     for (const statement of statements) {
       if (statement.kind === "VariableDeclaration" && statement.pattern.kind === "NameBindingPattern"
         && statement.initializer.kind === "CallExpression" && statement.initializer.callee.kind === "IdentifierExpression"
-        && statement.initializer.callee.name === "computed") {
+        && (statement.initializer.callee.name === "cached" || statement.initializer.callee.name === "computed")) {
         names.add(statement.pattern.name);
         continue;
       }
@@ -765,6 +791,15 @@ function hasAccessibleSvgName(expression: JSXElementExpression): boolean {
     && child.tag === "title" && hasAccessibleJsxContent(child));
 }
 
+interface RetiredAccessorDeclaration {
+  readonly name: string;
+  readonly exported: boolean;
+  readonly declarationSpan: Span;
+  readonly callSpan: Span;
+  /** The `() => E` body span, or null when the argument is not that shape. */
+  readonly bodySpan: Span | null;
+}
+
 export class VelarWebAnalyzer extends Analyzer {
   private componentStates: Set<string> | null = null;
   private mountedDepth = 0;
@@ -786,16 +821,38 @@ export class VelarWebAnalyzer extends Analyzer {
   private readonly reportedJsxKeys = new Set<JSXElementExpression>();
   private lookBuilderNames: ReadonlyMap<string, string> = new Map();
   private lookLiteralDepth = 0;
+  /**
+   * D71 rule 182: the declaration spans of every `computed` binding in scope.
+   * A binding's span survives narrowing, so it identifies the declaration a
+   * name resolves to even where a narrowed copy answers the lookup.
+   */
+  private readonly computedBindingSpans = new Set<string>();
+  /** Local names bound to an imported `export computed`, from the Web interface. */
+  private readonly importedComputedNames: ReadonlySet<string>;
+  /** The resolved spans of those imports, so a local shadow of the name is not one. */
+  private readonly importedComputedSpans = new Set<string>();
+  /** D71 migration state: retired `const x = computed(...)` sites, their reads, and every other `computed` reference. */
+  private readonly retiredAccessorDeclarations = new Map<string, RetiredAccessorDeclaration>();
+  private readonly retiredAccessorReads = new Map<string, Span[]>();
+  private readonly retiredComputedReferences = new Map<string, Span>();
+  private readonly migratedComputedCallees = new Set<string>();
+  /** Callee span identity -> call span, for every zero-argument call of a plain name. */
+  private readonly plainCallSpans = new Map<string, Span>();
   /** D57 rule 138: `velar/web-test` is legal only where the browser runner looks. */
   private readonly webModulePath: string | null;
+  /** D74: only props whose authors wrote a readonly contract receive prop-specific guidance. */
+  private explicitReadonlyPropBindings: ReadonlyMap<string, number> = new Map();
 
   constructor(context: AnalysisContext = {}, extensions: readonly CompilerAnalysisExtension[] = []) {
     super(context, extensions);
     this.webModulePath = context.path ?? null;
     this.resources = context.resources ?? new Map();
+    const webImports = [...(context.extensionImports?.get("@velarscript/web") ?? [])];
     this.importedLookStaticValues = new Map(
-      [...(context.extensionImports?.get("@velarscript/web") ?? [])]
-        .filter((entry): entry is [string, LookStaticValue] => isLookStaticValue(entry[1])),
+      webImports.filter((entry): entry is [string, LookStaticValue] => isLookStaticValue(entry[1])),
+    );
+    this.importedComputedNames = new Set(
+      webImports.filter(([, value]) => isWebComputedExport(value)).map(([name]) => name),
     );
   }
 
@@ -804,8 +861,10 @@ export class VelarWebAnalyzer extends Analyzer {
     this.lookBuilderNames = collectLookBuilderNames(program);
     for (const name of collectDerivedReactiveNames(program)) this.derivedReactiveNames.add(name);
     this.reportBrowserTestImports(program);
+    this.rejectWebOwnedTypeNames(program);
     super.analyze(program);
     this.reportStaticJsxKeys();
+    this.reportRetiredComputedFunction();
     return this.diagnostics;
   }
 
@@ -822,6 +881,64 @@ export class VelarWebAnalyzer extends Analyzer {
       if (statement.kind !== "ImportDeclaration" && statement.kind !== "ReExportDeclaration") continue;
       if (statement.source !== BROWSER_TEST_MODULE) continue;
       this.diagnostics.push(diagnostic("VEL5062", browserTestImportGuidance(), statement.sourceSpan));
+    }
+  }
+
+  /**
+   * D72 rule 186: a Web module publishes its own type names, and a user
+   * declaration of one used to be accepted at the declaration and then lose at
+   * every use — `type Event:` compiled, and `describe({kind: "charge"})` was
+   * told it could not assign to `Event`, naming a type the author had just
+   * written. D51 rule 109 already settled where that refusal belongs: at the
+   * declaration, which is the only place a rename is cheap.
+   *
+   * The names come from the extension's own published table, so adding a type
+   * to `WEB_OWNED_TYPE_NAMES` extends this protection with it. The last time
+   * this family was repaired by listing names instead of deriving them, the
+   * list drifted; D57 rule 135 is the same repair on the Core roster.
+   */
+  private rejectWebOwnedTypeNames(program: Program): void {
+    const reject = (name: string, errorSpan: Span, noun: string): void => {
+      if (!WEB_OWNED_TYPE_NAMES.has(name)) return;
+      this.diagnostics.push(diagnostic(
+        "VEL5065",
+        `'${name}' is a Web type name, so it cannot also name ${/^[aeiou]/iu.test(noun) ? "an" : "a"} ${noun}; every use of it in a Web module resolves to the built-in. Rename this declaration`,
+        errorSpan,
+      ));
+    };
+    for (const statement of program.body) {
+      switch (statement.kind) {
+        case "TypeDeclaration":
+        case "TypeAliasDeclaration":
+          reject(statement.name, statement.span, "type");
+          break;
+        case "ClassDeclaration":
+          reject(statement.name, statement.span, "class");
+          break;
+        case "EnumDeclaration":
+          reject(statement.name, statement.span, "enum");
+          break;
+        case "ExternModuleDeclaration":
+          for (const declaration of statement.classes) reject(declaration.name, declaration.span, "extern class");
+          break;
+        case "ImportDeclaration":
+          // A standard-module import of the name under itself *is* the built-in
+          // — `import {Color, Length} from "velar/look"` is how a module names
+          // the published types — so only a binding that would make the name
+          // mean something else is refused.
+          if (statement.source.startsWith("velar/")) {
+            for (const specifier of statement.specifiers) {
+              if (specifier.local !== specifier.imported) reject(specifier.local, statement.span, "import alias");
+            }
+            break;
+          }
+          for (const specifier of statement.specifiers) {
+            reject(specifier.local, statement.span, specifier.local === specifier.imported ? "imported name" : "import alias");
+          }
+          break;
+        default:
+          break;
+      }
     }
   }
 
@@ -851,6 +968,15 @@ export class VelarWebAnalyzer extends Analyzer {
   }
 
   protected override analyzeExtensionStatement(statement: Statement): boolean {
+    // Two core statement shapes are answered here before the core sees them:
+    // a write to a derived name, which the const message would describe wrongly,
+    // and a `const x = computed(...)` declaration, whose migration needs the
+    // declaration recorded before its reads are walked.
+    if (statement.kind === "AssignmentStatement" && this.rejectComputedAssignment(statement)) return true;
+    if (statement.kind === "VariableDeclaration") {
+      this.recordRetiredAccessorDeclaration(statement);
+      this.reportExportedCachedContract(statement);
+    }
     if (!isWebStatement(statement)) return false;
     switch (statement.kind) {
       case "ExtensionStatement:web:component":
@@ -874,6 +1000,9 @@ export class VelarWebAnalyzer extends Analyzer {
         this.markDeclaredBindingReactive(statement.name, "state");
         return true;
       }
+      case "ExtensionStatement:web:computed":
+        this.analyzeComputedDeclaration(statement);
+        return true;
       case "ExtensionStatement:web:resource":
         this.diagnostics.push(diagnostic("VEL3012", "'resource' is only valid at component scope; a module-scope async operation belongs in a module 'action'", statement.span));
         this.analyzeResourceDeclaration(statement);
@@ -899,6 +1028,7 @@ export class VelarWebAnalyzer extends Analyzer {
           // the body only runs on a later change, so its reads are deferred
           // for the module-initialization-cycle classification.
           const watched = this.inferExpression(statement.expression);
+          this.rejectFrozenWatchSubject(statement.expression, watched);
           this.enterScope();
           if (statement.currentName) this.declareBinding(statement.currentName, false, watched, statement.span);
           if (statement.previousName) this.declareBinding(statement.previousName, false, watched, statement.span);
@@ -914,24 +1044,26 @@ export class VelarWebAnalyzer extends Analyzer {
         this.flowFrameDepth -= 1;
         return true;
       case "ExtensionStatement:web:unsafe-css": {
-        // LOK-D2: a stylesheet import is a module-level ordering declaration.
+        // LOK-D2 / D53: unsafe CSS is a module-level ordering declaration,
+        // whether its source is an external resource or an inline raw block.
         // Nested inside a component or a function it used to pass every check,
         // build, and then appear in no output at all.
         if (!this.isTopLevelScope()) {
-          this.diagnostics.push(diagnostic("VEL5037", "CSS imports are module-level; move 'import css unsafe' to the top of the module so its order against Look stays visible", statement.span));
+          this.diagnostics.push(diagnostic("VEL5037", "Unsafe CSS is module-level; move the declaration to the top of the module so its order against Look stays visible", statement.span));
           return true;
         }
-        if (this.unsafeCssImports.has(statement.source)) {
-          this.diagnostics.push(diagnostic("VEL5037", `Unsafe CSS '${statement.source}' is imported more than once; each stylesheet must have one explicit order position`, statement.span));
+        if (statement.source.kind === "external" && this.unsafeCssImports.has(statement.source.path)) {
+          this.diagnostics.push(diagnostic("VEL5037", `Unsafe CSS '${statement.source.path}' is imported more than once; each stylesheet must have one explicit order position`, statement.span));
         }
-        this.unsafeCssImports.add(statement.source);
-        const source = this.resources.get(statement.source);
+        if (statement.source.kind === "external") this.unsafeCssImports.add(statement.source.path);
+        const source = statement.source.kind === "inline" ? statement.source.css : this.resources.get(statement.source.path);
+        const subject = statement.source.kind === "inline" ? "Inline unsafe CSS" : `Unsafe CSS '${statement.source.path}'`;
         if (source && containsCssImport(source)) {
-          this.diagnostics.push(diagnostic("VEL5037", `Unsafe CSS '${statement.source}' contains @import; declare every stylesheet with 'import css unsafe' so project order remains visible`, statement.span));
+          this.diagnostics.push(diagnostic("VEL5037", `${subject} contains @import; declare every stylesheet with 'import css unsafe' so project order remains visible`, statement.source.span));
         }
         if (source) {
           const relativeUrl = firstRelativeCssUrl(source);
-          if (relativeUrl) this.diagnostics.push(diagnostic("VEL5037", `Unsafe CSS '${statement.source}' uses relative url(${JSON.stringify(relativeUrl)}); use a project-public /path, data URL, fragment, or absolute URL so extracted asset ownership stays explicit`, statement.span));
+          if (relativeUrl) this.diagnostics.push(diagnostic("VEL5037", `${subject} uses relative url(${JSON.stringify(relativeUrl)}); use a project-public /path, data URL, fragment, or absolute URL so extracted asset ownership stays explicit`, statement.source.span));
         }
         return true;
       }
@@ -940,11 +1072,113 @@ export class VelarWebAnalyzer extends Analyzer {
     }
   }
 
+  protected override analyzeStatement(statement: Statement): void {
+    const readonlyProp = this.directReadonlyPropMutation(statement);
+    const firstDiagnostic = this.diagnostics.length;
+    super.analyzeStatement(statement);
+    if (!readonlyProp) return;
+    for (let index = firstDiagnostic; index < this.diagnostics.length; index += 1) {
+      const item = this.diagnostics[index]!;
+      if ((item.code !== "VEL3002" && item.code !== "VEL4001") || !/read-?only|readonly/iu.test(item.message)) continue;
+      this.diagnostics[index] = {
+        ...item,
+        message: `Cannot mutate prop '${readonlyProp}': this component's author explicitly declared it 'readonly'. ${item.message}`,
+      };
+    }
+  }
+
+  private directReadonlyPropMutation(statement: Statement): string | null {
+    let target: Expression | null = null;
+    if (statement.kind === "AssignmentStatement" && statement.target.kind !== "IdentifierExpression") {
+      target = statement.target;
+    } else if (statement.kind === "ExpressionStatement" && statement.expression.kind === "CallExpression"
+      && statement.expression.callee.kind === "MemberExpression") {
+      target = statement.expression.callee.object;
+    }
+    if (!target) return null;
+    const name = this.rootBindingName(target);
+    if (!name) return null;
+    const binding = this.lookup(name);
+    return binding && this.explicitReadonlyPropBindings.get(name) === binding.span.start ? name : null;
+  }
+
+  private rootBindingName(expression: Expression): string | null {
+    if (expression.kind === "IdentifierExpression") return expression.name;
+    if (expression.kind === "MemberExpression" || expression.kind === "IndexExpression") {
+      return this.rootBindingName(expression.object);
+    }
+    if (expression.kind === "CallExpression" && expression.callee.kind === "MemberExpression") {
+      return this.rootBindingName(expression.callee.object);
+    }
+    return null;
+  }
+
   protected override prescanExtensionScopeDeclaration(statement: Statement): { readonly name: string; readonly span: Span } | null {
     if (!isWebStatement(statement)) return null;
-    return statement.kind === "ExtensionStatement:web:state" || statement.kind === "ExtensionStatement:web:resource"
+    return statement.kind === "ExtensionStatement:web:state" || statement.kind === "ExtensionStatement:web:computed"
+      || statement.kind === "ExtensionStatement:web:resource"
       ? { name: statement.name, span: statement.span }
       : null;
+  }
+
+  /**
+   * D71 rule 182: a derived value is reactive and read-only, which is exactly
+   * the reactive identity a component prop already carries — a bare read lowers
+   * through `.get()`, and nothing may write it. Registering that identity
+   * rather than `state` is what keeps `bind={doubled}` and every other writable
+   * position refusing a derived name for free.
+   */
+  private analyzeComputedDeclaration(statement: ComputedDeclaration): void {
+    const annotationValid = statement.type ? this.validateTypeReference(statement.type) : true;
+    const annotationContext = statement.type ? this.resolveValidatedAnnotation(statement.type) : null;
+    // The initializer re-runs on every dependency change, so it is a deferred
+    // read for the module-initialization-cycle classification, exactly like a
+    // watch subject.
+    this.synchronousReactiveDepth += 1;
+    const actual = this.inferExpression(statement.initializer, annotationContext ?? unknownType);
+    this.synchronousReactiveDepth -= 1;
+    const declared = annotationContext ?? actual;
+    if (annotationValid) this.requireAssignable(actual, declared, statement.initializer.span);
+    this.declareBinding(statement.name, false, declared, statement.span);
+    this.markDeclaredBindingReactive(statement.name, "prop");
+    this.computedBindingSpans.add(spanIdentity(statement.span));
+  }
+
+  /**
+   * True when `name` resolves to a `computed` declaration or to an imported one.
+   * The question is asked of the *binding* the name resolves to, never of the
+   * spelling: a local `state` may shadow an imported derived name, and that
+   * shadow is writable state.
+   */
+  private isComputedBinding(name: string): boolean {
+    const binding = this.lookup(name);
+    return binding !== null && this.computedBindingSpans.has(spanIdentity(binding.span));
+  }
+
+  private isImportedComputedBinding(name: string): boolean {
+    const binding = this.lookup(name);
+    return binding !== null && this.importedComputedSpans.has(spanIdentity(binding.span));
+  }
+
+  /**
+   * D71 rule 184: a cross-module `computed` travels through `reactiveExports`
+   * so its bare read lowers through `.get()` like an exported `state` — but it
+   * is not writable, and the imported binding must not inherit the writable
+   * identity that carries `bind={...}` and `event => name = ...`. The Web
+   * extension publishes which exported names are derived, so the import is
+   * demoted to the read-only reactive identity here.
+   */
+  protected override markDeclaredBindingReactive(name: string, kind: "state" | "prop" = "state"): void {
+    // Only the import itself is demoted. A local `state` of the same name in a
+    // component or a block is a shadow that really is writable, and demoting it
+    // would compile its assignment as a plain store into the handle.
+    const imported = kind === "state" && this.isTopLevelScope() && this.importedComputedNames.has(name);
+    super.markDeclaredBindingReactive(name, imported ? "prop" : kind);
+    if (!imported) return;
+    const binding = this.lookup(name);
+    if (!binding) return;
+    this.computedBindingSpans.add(spanIdentity(binding.span));
+    this.importedComputedSpans.add(spanIdentity(binding.span));
   }
 
   protected override inferExtensionExpression(expression: Expression, _contextualType: ValueType): ValueType | undefined {
@@ -1066,6 +1300,19 @@ export class VelarWebAnalyzer extends Analyzer {
       this.probedOperandTypes.delete(key);
       return probed;
     }
+    if (expression.kind === "CallExpression" && expression.arguments.length === 0
+      && expression.callee.kind === "IdentifierExpression") {
+      this.plainCallSpans.set(spanIdentity(expression.callee.span), expression.span);
+      const called = this.calledComputedBinding(expression);
+      if (called) return called;
+    }
+    if (expression.kind === "IdentifierExpression") {
+      const retired = this.recordRetiredAccessorRead(expression);
+      // The retired name is answered here rather than left to fall through as an
+      // unknown one: the author gets its migration and nothing else, and the
+      // call around it still type-checks against the signature it always had.
+      if (retired) return CACHED_INTRINSIC_TYPE;
+    }
     const result = super.inferExpression(expression, contextualType);
     if (expression.kind === "CallExpression") this.checkLookBuilderCall(expression);
     return result;
@@ -1075,6 +1322,237 @@ export class VelarWebAnalyzer extends Analyzer {
   // still resolves it to the state binding; a shadowing local wins instead.
   private writableStateName(name: string): boolean {
     return this.reactiveBindingKind(name) === "state";
+  }
+
+  /**
+   * D71 rule 182: a declared derived value is read bare, exactly like state.
+   * Calling one is the habit the retired `computed(...)` accessor taught, and it
+   * is also what a half-migrated project looks like from the importing side — so
+   * the answer names the one spelling and carries the edit that reaches it,
+   * which is what lets `velar fix` finish a migration that crosses modules.
+   */
+  private calledComputedBinding(expression: Extract<Expression, { readonly kind: "CallExpression" }>): ValueType | null {
+    if (expression.callee.kind !== "IdentifierExpression") return null;
+    const name = expression.callee.name;
+    if (!this.isComputedBinding(name)) return null;
+    const type = this.inferExpression(expression.callee);
+    // A derived value that *is* a function is called on purpose; only a
+    // non-callable one makes the parentheses a mistake.
+    const expanded = this.expandAliases(type);
+    if (expanded.kind === "function" || expanded.kind === "intrinsic" || expanded.kind === "any" || isInvalidType(expanded)) return null;
+    this.diagnostics.push({
+      code: "VEL5063",
+      message: `'${name}' is a computed value, not a reader: it is read bare like state, so write '${name}' rather than '${name}()'`,
+      span: expression.span,
+      fix: {
+        title: `Read '${name}' bare`,
+        edits: [{ span: { start: expression.callee.span.end, end: expression.span.end }, text: "" }],
+      },
+    });
+    return type;
+  }
+
+  /**
+   * D69 rule 178: a `watch` body that can never run is a block of statements
+   * the compile silently drops — the same defect a bare `5` is already rejected
+   * for (VEL4030), reached from a position the rule could not see. The subject
+   * is refused only where the compile can *prove* nothing behind it moves, so a
+   * call whose reactivity lives inside another module is left alone: a rule that
+   * rejected those would be worse than the hole it closes.
+   *
+   * The two refusals are separate because their causes are: a reader that was
+   * not called has one correct spelling to name, and a frozen value has none.
+   */
+  private rejectFrozenWatchSubject(expression: Expression, watched: ValueType): void {
+    const name = expression.kind === "IdentifierExpression" ? expression.name : null;
+    if (name !== null && this.reactiveBindingKind(name) === null && this.zeroArgumentReader(watched)) {
+      this.diagnostics.push(diagnostic(
+        "VEL5064",
+        `'${name}' is the reader itself, so watching it watches a value that never changes; write 'watch ${name}():' to watch what it reads`,
+        expression.span,
+      ));
+      return;
+    }
+    if (!this.frozenWatchSubject(expression)) return;
+    this.diagnostics.push(diagnostic(
+      "VEL5064",
+      `This watch subject never changes, so its body can never run${name === null ? "" : ` — '${name}' is not a reactive source`}; watch a 'state', a 'computed', a prop, or a resource field, or move these statements to where they should run`,
+      expression.span,
+    ));
+  }
+
+  /** A value that is read by calling it and takes no arguments to do so. */
+  private zeroArgumentReader(type: ValueType): boolean {
+    const expanded = this.expandAliases(type);
+    return (expanded.kind === "function" || expanded.kind === "intrinsic") && expanded.requiredParameters === 0;
+  }
+
+  /**
+   * True only for subjects built entirely from values the compile can see are
+   * frozen: literals, and non-reactive bindings whose type is a primitive, so no
+   * deep-reactive object can be hiding behind the name. Every member access,
+   * index, and call is excluded on purpose — `alias.done` on a const bound to a
+   * reactive element does track, and a call can read anything.
+   */
+  private frozenWatchSubject(expression: Expression): boolean {
+    switch (expression.kind) {
+      case "LiteralExpression":
+        return true;
+      case "FStringExpression":
+        return expression.parts.every((part) => part.kind === "text" || this.frozenWatchSubject(part.value));
+      case "IdentifierExpression":
+        return this.reactiveBindingKind(expression.name) === null
+          && !this.derivedReactiveNames.has(expression.name)
+          && this.frozenValueType(this.lookup(expression.name)?.type ?? unknownType);
+      case "UnaryExpression":
+        return expression.operator !== "await" && this.frozenWatchSubject(expression.operand);
+      case "BinaryExpression":
+        return this.frozenWatchSubject(expression.left) && this.frozenWatchSubject(expression.right);
+      case "ComparisonChainExpression":
+        return expression.operands.every((operand) => this.frozenWatchSubject(operand));
+      case "ConditionalExpression":
+        return this.frozenWatchSubject(expression.condition) && this.frozenWatchSubject(expression.thenValue)
+          && this.frozenWatchSubject(expression.elseValue);
+      case "IsExpression":
+        return this.frozenWatchSubject(expression.value);
+      default:
+        return false;
+    }
+  }
+
+  /** A primitive holds no reactive identity, so a non-reactive binding of one is a snapshot. */
+  private frozenValueType(type: ValueType): boolean {
+    const expanded = this.expandAliases(type);
+    if (expanded.kind === "optional") return this.frozenValueType(expanded.inner);
+    if (expanded.kind === "union") return expanded.members.every((member) => this.frozenValueType(member));
+    return expanded.kind === "number" || expanded.kind === "string" || expanded.kind === "bool"
+      || expanded.kind === "null" || expanded.kind === "enum";
+  }
+
+  /**
+   * D71 rule 182: a derived value has no writable location behind it, so the
+   * const message ("cannot assign to const binding") would name the wrong
+   * reason. Answering here means the reader is told what a derived value is and
+   * which spelling holds a value that is written.
+   */
+  private rejectComputedAssignment(statement: Extract<Statement, { readonly kind: "AssignmentStatement" }>): boolean {
+    if (statement.target.kind !== "IdentifierExpression") return false;
+    const name = statement.target.name;
+    if (!this.isComputedBinding(name)) return false;
+    this.diagnostics.push(diagnostic(
+      "VEL5063",
+      this.isImportedComputedBinding(name)
+        ? `'${name}' is a computed value derived in the module it comes from, so it has no location here to assign. Export a 'state' — or an action that writes one — and change that instead`
+        : `'${name}' is a computed value: it is recomputed from what it reads and is never assigned. Assign the state it reads, or declare it 'state ${name} = ...' if this value is written directly`,
+      statement.target.span,
+    ));
+    this.inferExpression(statement.value);
+    return true;
+  }
+
+  /**
+   * D71 rule 183: `computed(...)` the function is retired in favour of
+   * `cached(...)`, and `const x = computed(() => E)` is retired in favour of the
+   * declaration. The declaration is recorded before the core walks the module so
+   * its reads can be matched against it — the rewrite that removes the call
+   * parentheses is only offered when every read is a plain `x()`.
+   */
+  private recordRetiredAccessorDeclaration(statement: Extract<Statement, { readonly kind: "VariableDeclaration" }>): void {
+    const initializer = statement.initializer;
+    if (initializer.kind !== "CallExpression" || initializer.callee.kind !== "IdentifierExpression"
+      || initializer.callee.name !== "computed" || this.lookup("computed") !== null) return;
+    if (statement.binding !== "const" || statement.pattern.kind !== "NameBindingPattern") return;
+    const read = initializer.arguments.length === 1 && initializer.argumentNames === undefined
+      ? initializer.arguments[0]! : null;
+    // Only the `() => E` shape has a body that becomes the declaration's
+    // initializer verbatim. Every other argument — a named function, a partial
+    // application — would need the rewriter to invent an expression, so it is
+    // left to the author with the rename as its only mechanical answer.
+    const body = read?.kind === "ArrowFunctionExpression" && !read.asynchronous && read.parameters.length === 0
+      ? read.body : null;
+    this.retiredAccessorDeclarations.set(spanIdentity(statement.pattern.span), {
+      name: statement.pattern.name,
+      exported: statement.exported,
+      declarationSpan: statement.span,
+      callSpan: initializer.span,
+      bodySpan: body ? body.span : null,
+    });
+    this.migratedComputedCallees.add(spanIdentity(initializer.callee.span));
+  }
+
+  /** Returns true when the name is the retired `computed` global this pass owns. */
+  private recordRetiredAccessorRead(expression: Extract<Expression, { readonly kind: "IdentifierExpression" }>): boolean {
+    if (expression.name === "computed") {
+      if (this.lookup("computed") !== null) return false;
+      if (!this.migratedComputedCallees.has(spanIdentity(expression.span))) {
+        this.retiredComputedReferences.set(spanIdentity(expression.span), expression.span);
+      }
+      return true;
+    }
+    const binding = this.lookup(expression.name);
+    if (!binding) return false;
+    const key = spanIdentity(binding.span);
+    if (!this.retiredAccessorDeclarations.has(key)) return false;
+    const reads = this.retiredAccessorReads.get(key);
+    if (reads) reads.push(expression.span);
+    else this.retiredAccessorReads.set(key, [expression.span]);
+    return false;
+  }
+
+  /**
+   * D71 migration: one message per retired site, and a mechanical rewrite only
+   * where the compile can prove the rewrite. Where the accessor is used as a
+   * value the choice between `computed x = E` and `cached(...)` turns on whether
+   * the caller wants the cache, which is the author's decision — so that site
+   * gets the message and no edit.
+   */
+  private reportRetiredComputedFunction(): void {
+    for (const [key, accessor] of this.retiredAccessorDeclarations) {
+      const reads = this.retiredAccessorReads.get(key) ?? [];
+      const calls = reads.map((span) => this.plainCallSpans.get(spanIdentity(span)) ?? null);
+      const rewritable = accessor.bodySpan !== null && calls.every((call) => call !== null);
+      const edits = rewritable
+        ? [
+          { span: { start: accessor.declarationSpan.start, end: accessor.bodySpan!.start }, text: `${accessor.exported ? "export " : ""}computed ${accessor.name} = ` },
+          { span: { start: accessor.bodySpan!.end, end: accessor.callSpan.end }, text: "" },
+          ...reads.map((span, index) => ({ span: { start: span.end, end: calls[index]!.end }, text: "" })),
+        ]
+        : null;
+      const alternative = accessor.bodySpan === null
+        ? ` Where the argument is a function rather than an expression, write the call — 'computed ${accessor.name} = read()' — or keep a passable cached reader with 'cached(...)'`
+        : ` Where the reader itself is passed on rather than read here, keep it a value with 'cached(...)'`;
+      this.diagnostics.push({
+        code: "VEL5055",
+        message: `A derived value is declared, not called: write 'computed ${accessor.name} = ...' and read '${accessor.name}' bare.${rewritable ? "" : alternative}`,
+        span: accessor.declarationSpan,
+        ...(edits ? { fix: { title: `Declare '${accessor.name}' with computed`, edits } } : {}),
+      });
+    }
+    for (const span of this.retiredComputedReferences.values()) {
+      this.diagnostics.push({
+        code: "VEL5055",
+        message: "'computed' is the keyword that declares a derived value — 'computed name = expression'. The function that returns a cached reader is now 'cached'",
+        span,
+        fix: { title: "Rename computed to cached", edits: [{ span, text: "cached" }] },
+      });
+    }
+  }
+
+  /**
+   * D71 rule 183 keeps the export-boundary contract the retired spelling had:
+   * an exported cached reader has no inferable public type, so the annotation
+   * is required at the boundary rather than discovered by the importer.
+   */
+  private reportExportedCachedContract(statement: Extract<Statement, { readonly kind: "VariableDeclaration" }>): void {
+    if (!statement.exported || statement.type || statement.pattern.kind !== "NameBindingPattern") return;
+    const initializer = statement.initializer;
+    if (initializer.kind !== "CallExpression" || initializer.callee.kind !== "IdentifierExpression"
+      || initializer.callee.name !== "cached" || this.lookup("cached") !== null) return;
+    this.diagnostics.push(diagnostic(
+      "VEL4025",
+      `Exported cached readers need an explicit contract at the export boundary; write 'export const ${statement.pattern.name}: () -> T = cached(...)', or declare the derived value itself with 'export computed ${statement.pattern.name} = ...'`,
+      statement.span,
+    ));
   }
 
   protected override extensionFieldsOf(name: string): ReadonlyMap<string, ValueType> | null {
@@ -1175,7 +1653,7 @@ export class VelarWebAnalyzer extends Analyzer {
   }
 
   private componentType(statement: ComponentDeclaration): ValueType {
-    const props = new Map(statement.parameters.map((parameter) => [parameter.name, this.readonlyPropType(this.resolveValidatedAnnotation(parameter.type))]));
+    const props = new Map(statement.parameters.map((parameter) => [parameter.name, this.resolveValidatedAnnotation(parameter.type)]));
     if (!props.has("class")) props.set("class", optionalOf(stringType));
     if (!props.has("look")) props.set("look", optionalOf({ kind: "named", name: "Look" }));
     return webComponentConstructor(
@@ -1236,6 +1714,8 @@ export class VelarWebAnalyzer extends Analyzer {
     this.flowFrameDepth += 1;
     const previousStates = this.componentStates;
     this.componentStates = new Set(statement.body.filter((item) => item.kind === "ExtensionStatement:web:state").map((item) => item.name));
+    const previousExplicitReadonlyProps = this.explicitReadonlyPropBindings;
+    const explicitReadonlyProps = new Map<string, number>();
     // Component items are analyzed one by one rather than through
     // analyzeStatements, so the shadow prescan runs here — before the
     // parameters, whose defaults are emitted as closures inside the component
@@ -1246,23 +1726,13 @@ export class VelarWebAnalyzer extends Analyzer {
       const type = this.resolveAnnotation(parameter.type);
       const valid = parameter.type ? this.validateTypeReference(parameter.type) : true;
       if (parameter.defaultValue && valid) this.requireAssignable(this.inferParameterDefault(parameter.defaultValue, type), type, parameter.defaultValue.span);
-      // D44 rule 72: props are readonly data views. A bare class prop stays
-      // legal — it is visibly behavioral and passes through unprotected — but
-      // a class buried inside a data prop is rejected like explicit readonly.
-      if (valid) {
-        const buried = this.buriedClassInPropData(type);
-        if (buried) {
-          this.diagnostics.push(diagnostic(
-            "VEL4001",
-            `A component prop is a readonly data view; '${parameter.name}${buried.suffix}' is class '${buried.className}' — lift the class into its own prop, or model it as a data record`,
-            parameter.span,
-          ));
-        }
-      }
-      this.declareBinding(parameter.name, false, this.readonlyPropType(valid ? type : this.resolveValidatedAnnotation(parameter.type)), parameter.span);
+      const declared = valid ? type : this.resolveValidatedAnnotation(parameter.type);
+      this.declareBinding(parameter.name, false, declared, parameter.span);
+      if (valid && this.containsReadonlyView(declared)) explicitReadonlyProps.set(parameter.name, parameter.span.start);
       this.markDeclaredBindingReactive(parameter.name, "prop");
       if (parameter.name === "ref") this.diagnostics.push(diagnostic("VEL5056", "'ref' is a compiler-owned JSX directive and cannot be declared as a component prop", parameter.span));
     }
+    this.explicitReadonlyPropBindings = explicitReadonlyProps;
     const handleType = statement.handleType ? this.resolveAnnotation(statement.handleType) : null;
     const handleTypeValid = statement.handleType ? this.validateTypeReference(statement.handleType) : true;
     if (handleType && handleTypeValid) this.validateComponentHandleType(handleType, statement.handleType!.span);
@@ -1281,6 +1751,10 @@ export class VelarWebAnalyzer extends Analyzer {
         if (annotationValid) this.requireAssignable(actual, declared, item.initializer.span);
         this.declareBinding(item.name, true, declared, item.span);
         this.markDeclaredBindingReactive(item.name, "state");
+      } else if (item.kind === "ExtensionStatement:web:computed") {
+        this.flowFrameDepth += 1;
+        this.analyzeComputedDeclaration(item);
+        this.flowFrameDepth -= 1;
       } else if (item.kind === "ExtensionStatement:web:resource") {
         this.flowFrameDepth += 1;
         this.analyzeResourceDeclaration(item);
@@ -1291,6 +1765,7 @@ export class VelarWebAnalyzer extends Analyzer {
         this.flowFrameDepth += 1;
         this.synchronousReactiveDepth += 1;
         const watched = this.inferExpression(item.expression);
+        this.rejectFrozenWatchSubject(item.expression, watched);
         this.enterScope();
         if (item.currentName) this.declareBinding(item.currentName, false, watched, item.span);
         if (item.previousName) this.declareBinding(item.previousName, false, watched, item.span);
@@ -1346,32 +1821,17 @@ export class VelarWebAnalyzer extends Analyzer {
     if (statement.handleType && exposes === 0) this.diagnostics.push(diagnostic("VEL5056", `Component '${statement.name}' declares an exposed Handle but does not provide an expose value`, statement.handleType.span));
     if (renderValue && isWebJsx(renderValue)) this.validateComponentHost(renderValue, statement);
     this.componentStates = previousStates;
+    this.explicitReadonlyPropBindings = previousExplicitReadonlyProps;
     this.flowFrameDepth -= 1;
     this.exitScope();
     this.constructorDepth = outerConstructorDepth;
   }
 
-  private readonlyPropType(type: ValueType): ValueType {
-    return this.readonlyDataViewOf(type);
-  }
-
-  /**
-   * A class visible at the top of a prop annotation (through optionals and
-   * unions) is a behavioral value the reader can see; a class below a data
-   * node hides behind the readonly promise and is rejected (D44 rule 72).
-   */
-  private buriedClassInPropData(type: ValueType): { readonly suffix: string; readonly className: string } | null {
+  private containsReadonlyView(type: ValueType): boolean {
     const resolved = this.expandAliases(type);
-    if (resolved.kind === "class" || resolved.kind === "classConstructor") return null;
-    if (resolved.kind === "optional") return this.buriedClassInPropData(resolved.inner);
-    if (resolved.kind === "union") {
-      for (const member of resolved.members) {
-        const found = this.buriedClassInPropData(member);
-        if (found) return found;
-      }
-      return null;
-    }
-    return this.findClassInReadonlyData(resolved);
+    if (resolved.kind === "optional") return this.containsReadonlyView(resolved.inner);
+    if (resolved.kind === "union") return resolved.members.some((member) => this.containsReadonlyView(member));
+    return isReadonlyView(resolved);
   }
 
   private validateComponentHandleType(type: ValueType, sourceSpan: Span): void {
@@ -1403,7 +1863,7 @@ export class VelarWebAnalyzer extends Analyzer {
     if (!isWebComponentType(type)) return type;
     return normalizeWebComponentType(
       type,
-      (value) => this.readonlyPropType(this.normalizeComponentContracts(value)),
+      (value) => this.normalizeComponentContracts(value),
       (value) => this.normalizeComponentContracts(value),
     );
   }
@@ -1758,32 +2218,28 @@ export class VelarWebAnalyzer extends Analyzer {
       const metricKeywords = LOOK_PROPERTY_KEYWORDS.get(name);
       if (kind === "metric") accepted = metricKeywords === undefined ? lookMetricKeywords.has(normalized) : metricKeywords.has(normalized);
       else if (kind === "color" || kind === "background") accepted = lookColorKeywords.has(normalized) || /^#[0-9a-f]{3,8}$/iu.test(normalized);
-      else if (kind === "image" || kind === "border" || kind === "shadow") accepted = lookCssWideKeywords.has(normalized) || normalized === "none";
-      else if (kind === "number-keyword" || kind === "line-height") accepted = lookDefaultKeywords.has(normalized);
-      // D65 rule 168: a keyword property always carries its own closed set --
-      // look.ts refuses to load otherwise -- so the shared fallback never gets
-      // to decide a keyword property's vocabulary. It is still the vocabulary
-      // for the kinds that have no per-property table at all.
-      else if (kind === "keyword") accepted = LOOK_PROPERTY_KEYWORDS.get(name)?.has(normalized) === true;
-      else {
-        const propertyKeywords = LOOK_PROPERTY_KEYWORDS.get(name);
-        accepted = propertyKeywords?.has(normalized) ?? lookDefaultKeywords.has(normalized);
-      }
+      else if (kind === "image") accepted = lookCssWideKeywords.has(normalized) || normalized === "none";
+      // D73 rule 187: every kind that decides a string keyword reads the
+      // property's own closed set, and look.ts refuses to load if one is
+      // missing. The 46-word shared list this replaces both admitted values the
+      // property never had and made the refusal describe a table that did not
+      // exist.
+      else accepted = LOOK_PROPERTY_KEYWORDS.get(name)?.has(normalized) === true;
       if (!accepted) {
-        // D67 rule 174: the two kinds that carry a per-property vocabulary name
-        // it. The rest keep the shape they had, because their values come from
-        // a shared list rather than from the property.
+        // D67 rule 174, widened by D73 rule 187: every refusal now names the
+        // property's own values, because every one of these kinds has them. The
+        // lead says what the non-keyword half of the property is, so a reader
+        // who wanted a length, an angle or a builder is not sent looking through
+        // a keyword list for it.
         const expected: LookValueGuidance = kind === "metric"
           ? lookVocabularyGuidance(name, normalized,
             metricKeywords === undefined ? lookSharedMetricKeywords : lookOwnKeywords(name),
             "write a unit value such as 16px, 1rem or 50%, or one of")
-          : kind === "keyword" ? lookVocabularyGuidance(name, normalized, lookOwnKeywords(name), "write one of")
-            : {
-              text: `use ${kind === "color" || kind === "background" ? "a checked color() or color keyword"
-                : kind === "image" ? "a checked image builder such as linearGradient() or asset()"
-                  : `one of the closed ${name} keywords`}`,
-              named: false,
-            };
+          : kind === "color" || kind === "background"
+            ? { text: "use a checked color() or color keyword", named: false }
+            : kind === "image"
+              ? { text: "use a checked image builder such as linearGradient() or asset()", named: false }
+              : lookVocabularyGuidance(name, normalized, lookOwnKeywords(name), lookVocabularyLead(kind));
         // D65 rule 169: a property whose CSS value space no set can hold says
         // what it left out, so the boundary is legible where it is met.
         const partial = expected.named ? undefined : LOOK_PARTIAL_KEYWORD_PROPERTIES.get(name);

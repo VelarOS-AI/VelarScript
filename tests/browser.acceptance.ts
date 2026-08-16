@@ -240,7 +240,16 @@ async function acceptBrowser(
       });
     });
     page.on("pageerror", (error) => failures.push(error.stack ?? error.message));
+    // D70 rule 180: the frozen-read report is a development-mode warning, and it
+    // is the one warning this page is supposed to produce. It is collected
+    // rather than counted as a failure so the assertions below can check that it
+    // fired, when it fired, and what it said.
+    const frozenReadWarnings: string[] = [];
     page.on("console", (message) => {
+      if (message.type() === "warning" && message.text().includes("was being built was frozen at")) {
+        frozenReadWarnings.push(message.text());
+        return;
+      }
       if (message.type() === "error" || message.type() === "warning") failures.push(`${message.type()}: ${message.text()}`);
     });
 
@@ -323,9 +332,39 @@ async function acceptBrowser(
     await page.getByRole("button", { name: "Refresh activity" }).click();
     await page.waitForFunction(() => document.querySelector("[data-activity]")?.textContent?.includes("contracts are aligned"));
 
+    // D70 rules 179/180. Before the theme changes, both readings agree and the
+    // detector has said nothing: a snapshot that never diverges is never worth a
+    // warning, which is the whole reason the report fires on divergence rather
+    // than on the read.
+    assert.equal(await page.locator("[data-frozen-theme]").textContent(), "day");
+    assert.equal(await page.locator("[data-live-theme]").textContent(), "day");
+    await page.waitForTimeout(50);
+    assert.deepEqual(frozenReadWarnings, [], `frozen-read warning before any change: ${frozenReadWarnings.join("\n")}`);
+
     await page.getByRole("button", { name: "Toggle theme" }).click();
     await page.waitForFunction(() => document.querySelector(".status-badge")?.textContent === "Theme: dark");
     assert.equal(await page.getByRole("button", { name: "Toggle theme" }).evaluate((element) => element.classList.contains("active")), true);
+
+    // Now the source really has changed: the live reading follows, the frozen one
+    // does not -- the behaviour D70 rule 179 accepted as correct -- and the
+    // detector reports the divergence rather than leaving the page silently
+    // wrong. The detection is development-mode only, so the production run of
+    // this same page must stay silent.
+    await page.waitForFunction(() => document.querySelector("[data-live-theme]")?.textContent === "night");
+    assert.equal(await page.locator("[data-frozen-theme]").textContent(), "day");
+    for (let attempt = 0; attempt < 40 && frozenReadWarnings.length === 0 && !production; attempt += 1) {
+      await page.waitForTimeout(50);
+    }
+    if (production) {
+      assert.deepEqual(frozenReadWarnings, [], `a production build reported a frozen read: ${frozenReadWarnings.join("\n")}`);
+    } else {
+      assert.ok(frozenReadWarnings.length >= 1, "the frozen reactive read was not reported after the source diverged");
+      assert.match(frozenReadWarnings[0] ?? "", /read while FrozenVersusLive was being built was frozen at false, and the source has now changed to true/u);
+      assert.match(frozenReadWarnings[0] ?? "", /declare it with 'computed name = <expression>'/u);
+      // The capture site is mapped back to the module the author wrote, not
+      // left as a position in generated JavaScript.
+      assert.match(frozenReadWarnings[0] ?? "", /read at src\/pages\/home\.vel:\d+:\d+/u);
+    }
 
     await page.getByRole("button", { name: "Subscribe" }).click();
     await page.locator('[data-velar-field-error="email"]').waitFor();

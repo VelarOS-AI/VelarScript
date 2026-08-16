@@ -1,10 +1,10 @@
 // The checklist — and the one shape worth reading closely in this application.
 //
-// `release` arrives as a component prop, which makes it a *transitive readonly
-// view*: `check.done = not check.done` inside this module is a compile error,
-// and so is `release.checks.append(...)`. That is not an obstacle to work
-// around with a copy; it is the design. A view renders, and asks the store to
-// change things by identifier:
+// This presentation component deliberately declares `release` and `check`
+// `readonly`: `check.done = not check.done` inside this module is a compile
+// error, and so is `release.checks.append(...)`. Props are mutable by default;
+// this author-selected owner seam says that this view renders and asks the
+// store to change things by identifier:
 //
 //     toggleCheck(release.id, check.id)
 //

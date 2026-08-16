@@ -87,9 +87,9 @@ ${web.code ?? ""}
 });
 
 test("the JavaScript raw bridge retries a missing runtime and caches a valid immutable provider", () => {
-  const identitySource = "data:text/javascript,export function identity(value){return value}";
+  const identitySource = Buffer.from("export function identity(value){return value}", "utf8").toString("base64");
   const core = compileCore(`
-import js unsafe {identity} from ${JSON.stringify(identitySource)}
+import js unsafe {identity} from "data:text/javascript;base64,${identitySource}"
 
 export def cross(value: unknown) -> unknown:
     return identity(value)
@@ -131,9 +131,9 @@ console.log(first + "|" + second + "|" + third);
 });
 
 test("the JavaScript raw bridge rejects accessor-backed runtime operations without invoking them", () => {
-  const identitySource = "data:text/javascript,export function identity(value){return value}";
+  const identitySource = Buffer.from("export function identity(value){return value}", "utf8").toString("base64");
   const core = compileCore(`
-import js unsafe {identity} from ${JSON.stringify(identitySource)}
+import js unsafe {identity} from "data:text/javascript;base64,${identitySource}"
 identity({})
 `.trimStart());
   assert.deepEqual(core.diagnostics, []);

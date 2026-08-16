@@ -313,13 +313,13 @@ to the scope that really owns it. A JavaScript handle is owned by composition:
 hold it in a field of a class whose `@dispose:` releases it.
 
 Components (Web extension) return JSX directly — there is no `render` block.
-`state` holds a fact, `computed(() => ...)` derives, `action` performs a
-user operation with reactive `pending`/`error`:
+`state` holds a fact, `computed name = ...` derives and is read bare, `action`
+performs a user operation with reactive `pending`/`error`:
 
 ```velar
 component Counter(label: string):
     state count = 0
-    const caption = computed(() => f"{label}: {count}")
+    computed caption = f"{label}: {count}"
 
     action reset():
         count = 0
@@ -328,7 +328,7 @@ component Counter(label: string):
         count += 1
 
     return <section>
-        <button type="button" on:click={bump}>{caption()}</button>
+        <button type="button" on:click={bump}>{caption}</button>
         <button type="button" disabled={reset.pending} on:click={reset}>Reset</button>
     </section>
 
@@ -526,7 +526,7 @@ data. `action` performs a user operation. Read a resource as
 component TicketPanel(id: string):
     state draft = ""
     resource ticket: Ticket = loadTicket(id)
-    const heading = computed(() => ticket.value?.title ?? "Loading")
+    computed heading = ticket.value?.title ?? "Loading"
 
     action save():
         await saveDraft(id, draft)
@@ -535,7 +535,7 @@ component TicketPanel(id: string):
         async ticket.reload()
 
     return <section>
-        <h2>{heading()}</h2>
+        <h2>{heading}</h2>
         <textarea bind:value={draft}></textarea>
         <button disabled={save.pending} on:click={save}>Save</button>
     </section>
@@ -581,11 +581,11 @@ component Panel:
     </section>
 ```
 
-**A component prop is a readonly projection**, and readonly travels: inside
-`component ProjectList(items: List<Item>)` the body sees `readonly List<Item>`,
-so a helper it calls takes `items: readonly List<Item>`, and a `List` that
-helper builds is `List<readonly Item>`. Declare the helper that way once rather
-than copying the data to widen it.
+Component props are live reactive inputs and their data is mutable by default.
+Writing `item.title = next` through a prop publishes through the same deep
+reactive path as writing the source state. Write `items: readonly List<Item>`
+when the component author deliberately wants a read-only contract; that
+explicit view travels into helpers and nested data without copying or freezing.
 
 `velar/storage` persists JSON and validates on the way back in, so a read needs
 a **named** runtime type — a primitive or generic spelling is a type, not a

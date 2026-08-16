@@ -120,7 +120,7 @@ export component WebCapabilities:
     const capabilityNames = Set(["http", "storage", "files"])
     capabilityNames.add("realtime")
     resource recoveryResource = loadResourceLabel()
-    const resourceFailure = computed(() => recoveryResource.error)
+    computed resourceFailure = recoveryResource.error
     state online = initialEnvironment.online
     state visible = initialEnvironment.visible
     state darkScheme = media("(prefers-color-scheme: dark)")
@@ -200,14 +200,14 @@ export component WebCapabilities:
             throw CapabilityError("Action recovery ready")
         actionLabel = "action-ready"
 
-    const actionFailure = computed(() => recoverAction.error)
+    computed actionFailure = recoverAction.error
 
     def resourceStatus() -> string:
-        const current = resourceFailure()
+        const current = resourceFailure
         return current != null ? current.message : recoveryResource.value ?? (recoveryResource.loading ? "resource-loading" : "resource-empty")
 
     def actionStatus() -> string:
-        const current = actionFailure()
+        const current = actionFailure
         return current != null ? current.message : recoverAction.pending ? "action-pending" : actionLabel
 
     const stopOnline = watchOnline(onlineChanged)

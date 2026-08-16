@@ -14,6 +14,9 @@ import type {
   ComparisonChainExpression,
   EnumDeclaration,
   Expression,
+  EmbeddedJavaScriptCapture,
+  EmbeddedJavaScriptDeclaration,
+  ExternModuleContract,
   ExternClassDeclaration,
   ExternClassFieldDeclaration,
   ExternClassGetterDeclaration,
@@ -45,8 +48,9 @@ import type {
   UsingDeclaration,
   VariableDeclaration,
 } from "./ast.ts";
-import { CORE_STATEMENT_HEAD_KEYWORDS, CORE_WORDS } from "./core-vocabulary.ts";
+import { CORE_STATEMENT_HEAD_KEYWORDS, CORE_WORDS, TYPE_PARAMETER_DECLARATION_FORMS, typeParameterDeclarationFormsPhrase } from "./core-vocabulary.ts";
 import { diagnostic, mechanicalEdits, mechanicalFix, recoveredDiagnostic, type Diagnostic } from "./diagnostic.ts";
+import { inspectEmbeddedJavaScript, isEmbeddedJavaScriptTokenPayload } from "./embedded-javascript.ts";
 import type { CompilerLexicalExtension } from "./extension.ts";
 import { findInterpolatedExpressionEnd, scanStringEscape, scanStringLiteral, type StringTokenPayload } from "./interpolated-string.ts";
 import { declarationKeywordGuidance, sourceTypeNameGuidance, REST_PARAMETER_ELEMENT_TYPE_MESSAGE } from "./language-guidance.ts";
@@ -240,7 +244,15 @@ export class Parser {
     }
 
     if (this.match("extern")) {
+      if (this.match("js")) return this.parseEmbeddedJavaScript(start, false);
       return this.parseExternModule(start);
+    }
+
+    if (this.match("unsafe")) {
+      const extensionStatement = this.parseUnsafeExtensionStatement(start);
+      if (extensionStatement !== undefined) return extensionStatement;
+      this.expect("js", "Expected 'js' after 'unsafe', or an unsafe block owned by an installed extension");
+      return this.parseEmbeddedJavaScript(start, true);
     }
 
     const exported = this.match("export");
@@ -731,7 +743,42 @@ export class Parser {
       this.reportSideEffectImport(span(start, source.span.end), source.value);
       return null;
     }
+    this.reportInlineDataJavaScriptMigration(start, source, javascript, unsafe, specifiers);
     return { kind: "ImportDeclaration", source: source.value, sourceSpan: source.span, javascript, unsafe, specifiers, span: span(start, source.span.end) };
+  }
+
+  /** D53 rule 117: only an export-exact data URL has a semantics-preserving block rewrite. */
+  private reportInlineDataJavaScriptMigration(
+    start: number,
+    source: Token,
+    javascript: boolean,
+    unsafe: boolean,
+    specifiers: readonly ImportSpecifier[],
+  ): void {
+    const prefix = "data:text/javascript,";
+    if (!javascript || !unsafe || !source.value.startsWith(prefix)) return;
+    if (specifiers.some((specifier) => specifier.namespace || specifier.imported === "default" || specifier.imported !== specifier.local)) return;
+    let embedded: string;
+    try {
+      embedded = decodeURIComponent(source.value.slice(prefix.length));
+    } catch {
+      return;
+    }
+    const inspected = inspectEmbeddedJavaScript(embedded, 0, false);
+    if (inspected.issues.length > 0) return;
+    const imported = [...new Set(specifiers.map((specifier) => specifier.imported))].sort();
+    const exported = [...new Set(inspected.exports.map((item) => item.name))].sort();
+    if (imported.length !== exported.length || imported.some((name, index) => name !== exported[index])) return;
+    // A source line indistinguishable from the new structural delimiter cannot
+    // be rewritten without inventing an escape rule D53 deliberately lacks.
+    if (embedded.split(/\r\n|\r|\n/u).some((line) => /^`[ \t]*$/u.test(line))) return;
+    const replacement = `unsafe js\`\n${embedded}${embedded.endsWith("\n") || embedded.endsWith("\r") ? "" : "\n"}\``;
+    this.diagnostics.push(recoveredDiagnostic(
+      "VEL2029",
+      "Inline JavaScript data URLs have a source-mapped block spelling; move the exact module source into 'unsafe js`...`'",
+      span(start, source.span.end),
+      mechanicalFix(span(start, source.span.end), replacement, "Rewrite the export-exact data URL as an unsafe JavaScript block"),
+    ));
   }
 
   /**
@@ -796,6 +843,141 @@ export class Parser {
     this.expect("module", "Expected 'module' after 'extern'");
     const source = this.expect("string", "Expected a module name string");
     this.expect("colon", "Expected ':' after extern module name");
+    const contract = this.parseExternContract(source.span.end);
+    return {
+      kind: "ExternModuleDeclaration",
+      source: source.value,
+      functions: contract.functions,
+      constants: contract.constants,
+      classes: contract.classes,
+      span: span(start, contract.span.end),
+    };
+  }
+
+  private parseEmbeddedJavaScript(start: number, unsafe: boolean): EmbeddedJavaScriptDeclaration {
+    const captures = unsafe ? [] : this.parseEmbeddedJavaScriptCaptures();
+    const sourceToken = this.expect("string", "Expected a multiline raw JavaScript source block after 'js'");
+    const payload = isEmbeddedJavaScriptTokenPayload(sourceToken.payload) ? sourceToken.payload : null;
+    if (!payload) {
+      this.diagnostics.push(diagnostic(
+        "VEL2037",
+        "Inline JavaScript source uses a multiline raw backtick block whose closing backtick is alone at the declaration's indentation",
+        sourceToken.span,
+      ));
+    }
+    const sourceSpan = payload?.sourceSpan ?? sourceToken.span;
+    const source = payload ? sourceToken.value : "";
+    const inspected = inspectEmbeddedJavaScript(source, sourceSpan.start, !unsafe);
+    for (const issue of inspected.issues) this.diagnostics.push(diagnostic("VEL2037", issue.message, issue.span));
+    const capturesByName = new Map(captures.map((capture) => [capture.name, capture]));
+    for (const binding of inspected.bindings) {
+      const capture = capturesByName.get(binding.name);
+      if (!capture) continue;
+      this.diagnostics.push(diagnostic(
+        "VEL2037",
+        `Capture '${capture.name}' conflicts with a top-level JavaScript binding of the same name; rename one so the factory parameter cannot shadow module state`,
+        binding.nameSpan,
+      ));
+    }
+    for (const exported of inspected.exports) {
+      const capture = capturesByName.get(exported.name);
+      if (!capture) continue;
+      this.diagnostics.push(diagnostic(
+        "VEL2037",
+        `Capture '${capture.name}' conflicts with a JavaScript export of the same name; rename one so the generated VelarScript binding cannot hide the captured value`,
+        exported.nameSpan,
+      ));
+    }
+    const contract = unsafe ? null : (() => {
+      this.expect("colon", "Expected ':' after a checked inline JavaScript source block");
+      return this.parseExternContract(sourceToken.span.end);
+    })();
+    if (contract) this.reportEmbeddedJavaScriptContract(inspected.exports, contract);
+    return {
+      kind: "EmbeddedJavaScriptDeclaration",
+      unsafe,
+      captures,
+      source,
+      sourceSpan,
+      exports: inspected.exports,
+      imports: inspected.imports,
+      bindings: inspected.bindings,
+      factoryEdits: inspected.factoryEdits,
+      contract,
+      span: span(start, contract?.span.end ?? sourceToken.span.end),
+    };
+  }
+
+  private parseEmbeddedJavaScriptCaptures(): readonly EmbeddedJavaScriptCapture[] {
+    this.expect("leftParen", "Expected '(' after 'extern js'; checked inline JavaScript declares every captured value and its type");
+    const captures: EmbeddedJavaScriptCapture[] = [];
+    if (!this.check("rightParen")) {
+      do {
+        const start = this.current().span.start;
+        const rest = this.match("ellipsis");
+        if (rest) {
+          this.diagnostics.push(diagnostic(
+            "VEL2037",
+            "Inline JavaScript captures are one value per named factory parameter; rest captures are not supported",
+            this.previous().span,
+          ));
+        }
+        const name = this.expectBindingName("Expected a capture name", "capture name");
+        let type: TypeReference;
+        if (this.match("colon")) {
+          type = this.parseTypeReference();
+        } else {
+          this.diagnostics.push(diagnostic(
+            "VEL2037",
+            `Capture '${name.value}' requires an explicit type; captured values cross the VelarScript/JavaScript boundary through this contract`,
+            name.span,
+          ));
+          type = { syntax: { kind: "NamedTypeSyntax", name: "unknown", span: name.span }, span: name.span };
+        }
+        let end = type.span.end;
+        if (this.match("assign")) {
+          const assign = this.previous();
+          const defaultValue = this.parseExpression();
+          end = defaultValue.span.end;
+          this.diagnostics.push(diagnostic(
+            "VEL2037",
+            "Inline JavaScript captures cannot declare defaults; pass the value explicitly at the declaration site",
+            span(assign.span.start, defaultValue.span.end),
+          ));
+        }
+        captures.push({ name: name.value, nameSpan: name.span, type, span: span(start, end) });
+      } while (this.match("comma") && !this.check("rightParen"));
+    }
+    this.expect("rightParen", "Expected ')' after inline JavaScript captures");
+    return captures;
+  }
+
+  private reportEmbeddedJavaScriptContract(
+    exports: readonly { readonly name: string; readonly nameSpan: Span }[],
+    contract: ExternModuleContract,
+  ): void {
+    const exported = new Map(exports.map((item) => [item.name, item]));
+    const declared = new Map<string, Span>();
+    for (const declaration of [...contract.functions, ...contract.constants, ...contract.classes]) {
+      declared.set(declaration.name, declaration.span);
+      if (exported.has(declaration.name)) continue;
+      this.diagnostics.push(diagnostic(
+        "VEL2037",
+        `Inline JavaScript contract declares '${declaration.name}', but the source has no named ESM export '${declaration.name}'`,
+        declaration.span,
+      ));
+    }
+    for (const item of exports) {
+      if (declared.has(item.name)) continue;
+      this.diagnostics.push(diagnostic(
+        "VEL2037",
+        `JavaScript export '${item.name}' has no checked contract declaration; add an 'export def', 'export const', or 'export class' entry below the block`,
+        item.nameSpan,
+      ));
+    }
+  }
+
+  private parseExternContract(start: number): ExternModuleContract {
     this.expect("newline", "Expected a newline before extern declarations");
     this.consumeNewlines();
     this.expect("indent", "Expected indented extern declarations");
@@ -858,8 +1040,6 @@ export class Parser {
     }
     const close = this.expect("dedent", "Expected the end of extern declarations");
     return {
-      kind: "ExternModuleDeclaration",
-      source: source.value,
       functions,
       constants,
       classes,
@@ -1003,6 +1183,11 @@ export class Parser {
     _start: number,
     _modifiers: { readonly exported: boolean; readonly abstract: boolean; readonly asynchronous: boolean },
   ): Statement | null | undefined {
+    return undefined;
+  }
+
+  /** Lets an extension claim its own `unsafe <shape>` before Core requires `js`. */
+  protected parseUnsafeExtensionStatement(_start: number): Statement | null | undefined {
     return undefined;
   }
 
@@ -1281,12 +1466,20 @@ export class Parser {
 
   private parseTypeDefinition(start: number, exported: boolean): TypeDeclaration | TypeAliasDeclaration {
     const name = this.expect("identifier", "Expected a type name");
-    if (this.check("less")) {
-      this.parseTypeParameters();
-      this.diagnostics.push(diagnostic("VEL2025", `Type '${name.value}' cannot declare type parameters; only 'def' functions take '<T>'`, name.span));
-    }
+    const typeParameters = this.parseTypeParameters();
     if (this.match("assign")) {
       const target = this.parseTypeReference();
+      // D55 rule 120 admits the generic *record*. An alias names an
+      // instantiation — `type Boxed = Box<string>` — which is rule 123's whole
+      // idiom, so a parameter list here has nothing to bind and the refusal
+      // says what to write instead.
+      if (typeParameters) {
+        this.diagnostics.push(diagnostic(
+          "VEL2025",
+          `Type alias '${name.value}' cannot declare type parameters; an alias names one instantiation with concrete arguments, while '<T>' belongs to a '${TYPE_PARAMETER_DECLARATION_FORMS.join("' or a '")}' declaration`,
+          name.span,
+        ));
+      }
       return { kind: "TypeAliasDeclaration", exported, name: name.value, target, span: span(start, target.span.end) };
     }
     this.expect("colon", "Expected ':' after type name");
@@ -1325,11 +1518,18 @@ export class Parser {
       this.consumeNewlines();
     }
     const close = this.expect("dedent", "Expected the end of type fields");
-    return { kind: "TypeDeclaration", exported, name: name.value, fields, span: span(start, fields.at(-1)?.span.end ?? close.span.end) };
+    return { kind: "TypeDeclaration", exported, name: name.value, ...(typeParameters ? { typeParameters } : {}), fields, span: span(start, fields.at(-1)?.span.end ?? close.span.end) };
   }
 
   private parseEnumDeclaration(start: number, exported: boolean): EnumDeclaration {
     const name = this.expect("identifier", "Expected an enum name");
+    // D55 rule 127.1: `enum` was the one declaration in this family with no
+    // `parseTypeParameters` call at all, so `enum Color<T>:` cascaded into six
+    // parse errors instead of saying the one thing that is wrong.
+    if (this.check("less")) {
+      this.parseTypeParameters();
+      this.diagnostics.push(diagnostic("VEL2025", `Enum '${name.value}' cannot declare type parameters; ${typeParameterDeclarationFormsPhrase()} take '<T>'`, name.span));
+    }
     this.expect("colon", "Expected ':' after enum name");
     this.expect("newline", "Expected a newline before enum members");
     this.consumeNewlines();
@@ -1398,7 +1598,7 @@ export class Parser {
     const name = this.expect("identifier", "Expected a class name");
     if (this.check("less")) {
       this.parseTypeParameters();
-      this.diagnostics.push(diagnostic("VEL2025", `Class '${name.value}' cannot declare type parameters; only 'def' functions take '<T>'`, name.span));
+      this.diagnostics.push(diagnostic("VEL2025", `Class '${name.value}' cannot declare type parameters; ${typeParameterDeclarationFormsPhrase()} take '<T>'`, name.span));
     }
     let parameters: ClassParameter[] = [];
     if (this.match("leftParen")) {

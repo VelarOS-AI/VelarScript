@@ -23,13 +23,13 @@ test "a module state write is visible after the reactive flush settles":
     expect(visits).toBe(before + 1)
 
 test "a computed follows the collection it reads":
-    const before = openTasks()
+    const before = openTasks
     tasks.append({id: "tick", title: "Observe one flush", done: false})
     await tick()
-    expect(openTasks()).toBe(before + 1)
+    expect(openTasks).toBe(before + 1)
     tasks[tasks.size - 1].done = true
     await tick()
-    expect(openTasks()).toBe(before)
+    expect(openTasks).toBe(before)
 
 test "a helper may mutate the value a state binding owns":
     retitle(tasks[0], "Read the chapter twice")

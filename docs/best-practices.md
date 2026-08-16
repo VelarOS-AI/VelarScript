@@ -271,13 +271,25 @@ print(Json.stringify(report))
 
 ## 7. Components: four cells, one job each
 
-`state` holds a fact. `computed` derives from facts. `resource` loads async
-data. `action` performs a user operation. Choosing the right one removes
+`state` holds a fact. `computed name = ...` derives from facts. `resource` loads
+async data. `action` performs a user operation. Choosing the right one removes
 most component code.
 
+The first two are one half of a grid, and reading it that way is what makes the
+choice obvious:
+
+|            | not reactive | reactive   |
+| ---------- | ------------ | ---------- |
+| writable   | `let`        | `state`    |
+| read-only  | `const`      | `computed` |
+
+Reach for `const` when you mean *this never changes* — that is now a promise the
+word keeps — and for `computed` when the value is derived and therefore does.
+
 Read a resource as `value != null`; never wrap a plain field read in
-another `computed`. In JSX, call a computed once into a `const` if you need
-it three times. Render nothing with `null`. Accept children by declaring a
+another `computed`. A `computed` is read bare, like state, so there is nothing
+to hoist into a `const` when you use it three times. Render nothing with
+`null`. Accept children by declaring a
 `children: WebNode` prop. Extract every reused look into a named value and
 compose with `look={...}`.
 
@@ -302,13 +314,13 @@ async def saveDraft(id: string, draft: string):
 component TicketPanel(id: string):
     state draft = ""
     resource ticket: Ticket = loadTicket(id)
-    const heading = computed(() => ticket.value?.title ?? "Loading")
+    computed heading = ticket.value?.title ?? "Loading"
 
     action save():
         await saveDraft(id, draft)
 
     return <section look={panelLook}>
-        <h2>{heading()}</h2>
+        <h2>{heading}</h2>
         <textarea bind:value={draft}></textarea>
         <button type="button" disabled={save.pending} on:click={save}>Save</button>
     </section>
@@ -316,7 +328,51 @@ component TicketPanel(id: string):
 mount(<TicketPanel id="t-1" />, "#app")
 ```
 
-## 8. Errors and async
+## 8. Keep store writes easy to find
+
+Props are live reactive inputs and their data is mutable by default. Use that
+when a component genuinely owns the edit. For shared product state, keep the
+writes in store actions and pass a `readonly` prop to presentation components:
+one writer list makes validation, telemetry, and business rules easy to audit.
+The qualifier is a deliberate component contract, not ceremony to put on every
+prop — add it when the component should render or request a change, and leave it
+off when direct editing is the component's job.
+
+```velar
+type Task:
+    id: string
+    title: string
+    done: bool
+
+state tasks: List<Task> = [
+    {id: "ship", title: "Ship the compiler", done: false},
+    {id: "docs", title: "Publish the guide", done: false},
+]
+
+def toggleTask(id: string):
+    const task = tasks.find(item => item.id == id)
+    if task != null:
+        task.done = not task.done
+
+component TaskRow(task: readonly Task, onToggle: (id: string) -> null):
+    def choose():
+        onToggle(task.id)
+
+    return <li>
+        <button type="button" on:click={choose}>{task.done ? "Reopen" : "Complete"}</button>
+        <span>{task.title}</span>
+    </li>
+
+component App:
+    return <main>
+        <h1>Release tasks</h1>
+        <ul>{tasks.map(task => <TaskRow key={task.id} task={task} onToggle={toggleTask} />)}</ul>
+    </main>
+
+mount(<App />, "#app")
+```
+
+## 9. Errors and async
 
 Throw `Error` (or a subclass) with a message that names the rule that was
 broken, in the same voice as the assert messages. Validate untrusted data at
@@ -376,7 +432,7 @@ async def main():
 async main()
 ```
 
-## 9. Tests are the specification
+## 10. Tests are the specification
 
 A test name is a sentence the product owner can read: state what the code must
 do, not which function is under test. `test "an empty draft cannot be
@@ -414,7 +470,30 @@ test "an unrelated resolution leaves the queue alone":
     expect(openIds(board)).toEqual(["t-1"])
 ```
 
-## 10. Modules
+### Change every reactive source at least once
+
+A reactive source that a test only ever reads at its default value is a source
+whose reactivity is untested, and the failure this hides is specific: a value
+frozen at construction and a value that follows are **textually identical** at
+the default. The site bug that produced this rule shipped a sidebar frozen at
+the first language it loaded; the suite asserted the sidebar's text, the first
+load was the language the authors used, and every assertion was green.
+
+So the rule is not "test the reactive parts". It is: for every `state` the
+program owns, some test changes it and then asserts. One test that flips a
+theme, switches a locale, and re-sorts a list is worth more than three that read
+each of them once.
+
+```velar fragment
+test "the summary follows the board rather than snapshotting it":
+    const board = boardWithOneOpenTicket()
+    expect(openIds(board)).toEqual(["t-1"])
+    resolve(board, "t-1")
+    // The second assertion is the whole test: the first one passes either way.
+    expect(openIds(board)).toEqual([])
+```
+
+## 11. Modules
 
 Export and import by name. A package's public face is a barrel of explicit
 re-exports (`export {measure} from "./text.vel"`). If two modules need each
@@ -443,7 +522,7 @@ const measured = measure(sample)
 print(f"{measured.lines} lines, {measured.words} words")
 ```
 
-## 11. What elegance means here
+## 12. What elegance means here
 
 The `@velarscript/text-buffer` package is the reference specimen: small pure
 functions, structural record returns, one job per function, contracts as

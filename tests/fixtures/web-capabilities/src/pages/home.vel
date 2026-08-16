@@ -95,6 +95,23 @@ def themeButtonLook(active: bool) -> Look:
         color = "inherit"
         background = rgb(21, 28, 54)
         cursor = "pointer"
+// D70 rules 179/180: the same reactive source read two ways, on purpose. The
+// `const` freezes what it read during setup -- which is what `const` means, and
+// which the compiler cannot see through a call it does not analyze -- while the
+// JSX position follows. Both are here so the development-mode detector has a
+// source that really diverges and a snapshot that does too: the report fires on
+// divergence, never on the read, so a page that never changes its theme reports
+// nothing at all.
+component FrozenVersusLive:
+    const frozenTheme = describeTheme()
+    return <span class="theme-readings">
+        <span data-frozen-theme>{frozenTheme}</span>
+        <span data-live-theme>{describeTheme()}</span>
+    </span>
+
+def describeTheme() -> string:
+    return dark ? "night" : "day"
+
 export component Home:
     return <main class="page" look={pageLook}>
         <Head
@@ -114,7 +131,8 @@ export component Home:
                 <span data-animation-probe aria-hidden="true" look={animationProbeLook}></span>
                 <AnimationToggle />
                 <StatusBadge theme={theme} />
-                <button class={dark() ? "active" : null} look={themeButtonLook(dark())} on:click={toggleTheme}>
+                <FrozenVersusLive />
+                <button class={dark ? "active" : null} look={themeButtonLook(dark)} on:click={toggleTheme}>
                     Toggle theme
                 </button>
             </nav>

@@ -7,11 +7,11 @@ import { WebJavaScriptEmitter } from "./emitter.ts";
 import { velarWebProjectEditorExtension } from "./editor.ts";
 import { velarWebInspectionExtension } from "./inspection.ts";
 import { VelarWebParser } from "./parser.ts";
-import { scanWebToken, WEB_CONTEXTUAL_KEYWORDS } from "./lexer.ts";
+import { scanWebToken, scanWebUnsafeCssLiteral, WEB_CONTEXTUAL_KEYWORDS } from "./lexer.ts";
 import { webModuleSource, webModuleSources, type VelarWebRuntimeConfig } from "./runtime.ts";
 import { velarWebSemanticExtension } from "./semantic.ts";
 import { LOOK_BUILDER_SIGNATURES, LOOK_BUILDERS, LOOK_MEDIA_SUBJECTS, LOOK_PUBLIC_TYPE_NAMES, LOOK_UNIT_TYPES } from "./look.ts";
-import { isWebTypeAssignable, resolveWebTypeSyntax, webComponentConstructor, webNodeType } from "./types.ts";
+import { CACHED_INTRINSIC_TYPE, isWebTypeAssignable, resolveWebTypeSyntax, WEB_OWNED_TYPE_NAMES, webComponentConstructor, webNodeType } from "./types.ts";
 
 export const VELAR_WEB_API_VERSION = "0.10";
 
@@ -88,12 +88,11 @@ const unknownType: ValueType = { kind: "unknown" };
 const webGlobals = new Map<string, ValueType>([
   ["mount", namedFunction(["node", "target"], [nodeType, mountTargetType], nullType)],
   ["tick", namedFunction([], [], { kind: "promise", value: nullType })],
-  ["computed", namedIntrinsic(
-    "reactive.computed",
-    ["read"],
-    [{ kind: "function", parameters: [], requiredParameters: 0, result: unknownType }],
-    { kind: "function", parameters: [], requiredParameters: 0, result: unknownType },
-  )],
+  // D71 rule 183: the word `computed` names the declaration; the function that
+  // returns a passable cached reader is `cached`. `computed` is a contextual
+  // keyword now rather than a global, exactly as `state` is — the Web analyzer
+  // answers a leftover `computed(...)` with its migration on the way past.
+  ["cached", CACHED_INTRINSIC_TYPE],
 ]);
 
 const lookModuleExports = new Map<string, ValueType>([
@@ -131,11 +130,11 @@ const lookModuleExports = new Map<string, ValueType>([
 // imports again; `Look` survives only as the type of a look value.
 
 const webTextFormTypes = new Set(LOOK_UNIT_TYPES.values());
-const webOwnedNamedTypes = new Set([
-  "WebNode", "Element", "InputElement", "TextAreaElement", "CanvasElement", "DialogElement",
-  "Blob", "File", "Event", "KeyboardEvent", "PointerEvent", "InputEvent", "CompositionEvent", "ClipboardEvent",
-  ...LOOK_PUBLIC_TYPE_NAMES,
-]);
+// D72 rule 186: derived from the one published table. `Component` is the only
+// name that answers `textForm` differently — it is a constructor contract
+// rather than a value type — so it is subtracted here rather than kept in a
+// second list.
+const webOwnedNamedTypes = new Set([...WEB_OWNED_TYPE_NAMES].filter((name) => name !== "Component"));
 
 function functionType(parameters: readonly ValueType[], result: ValueType, requiredParameters = parameters.length): ValueType {
   return { kind: "function", parameters, requiredParameters, result };
@@ -342,6 +341,8 @@ const browserTestControllerType = object({
   scroll: namedFunction(["selector", "x", "y"], [stringType, numberType, numberType], promise(nullType)),
   text: namedFunction(["selector"], [stringType], promise(stringType)),
   attribute: namedFunction(["selector", "name"], [stringType, stringType], promise(optional(stringType))),
+  box: namedFunction(["selector"], [stringType], promise(rectType)),
+  style: namedFunction(["selector", "property"], [stringType, stringType], promise(stringType)),
   namespace: namedFunction(["selector"], [stringType], promise(stringType)),
   count: namedFunction(["selector"], [stringType], promise(numberType)),
   visible: namedFunction(["selector"], [stringType], promise(boolType)),
@@ -544,6 +545,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
   capabilities: Object.freeze(["web"]),
   formatting: Object.freeze({
     angleBracketEmbedding: Object.freeze({ voidElements: WEB_VOID_ELEMENTS }),
+    scanOpaqueSource: scanWebUnsafeCssLiteral,
   }),
   lexical: Object.freeze({
     // D30 item 16: every word the Web extension adds is contextual. Each is an
@@ -572,7 +574,9 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
   semantic: velarWebSemanticExtension,
   inspection: velarWebInspectionExtension,
   analysis: Object.freeze({
-    primitiveTypes: new Set(["WebNode", "Component", "Element", "InputElement", "TextAreaElement", "CanvasElement", "DialogElement", "Blob", "File", "Event", "KeyboardEvent", "PointerEvent", "InputEvent", "CompositionEvent", "ClipboardEvent", ...LOOK_PUBLIC_TYPE_NAMES.filter((name) => name !== "Duration")]),
+    // `Duration` is Core's own primitive; the Web extension reads it but does
+    // not register it a second time.
+    primitiveTypes: new Set([...WEB_OWNED_TYPE_NAMES].filter((name) => name !== "Duration")),
     primitiveParents: new Map([
       ["InputElement", new Set(["Element"])],
       ["TextAreaElement", new Set(["InputElement"])],
@@ -597,7 +601,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
     // condition, ahead of ordinary lexical resolution. A user binding of the
     // same name used to be reverse-shadowed with no diagnostic anywhere, so the
     // three names are reserved in a Web module.
-    reservedBindings: new Set(["mount", "tick", "computed", ...LOOK_MEDIA_SUBJECTS.keys()]),
+    reservedBindings: new Set(["mount", "tick", "cached", ...LOOK_MEDIA_SUBJECTS.keys()]),
     globalGuidance: new Map([
       // D52 rule 114: the destination is the spelling that survives, so the
       // guidance names the import outright rather than a prefix the next
@@ -636,6 +640,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
     keywordDocumentation: Object.freeze({
       component: "Declares a compiler-managed Web component that initializes once.",
       state: "Declares writable reactive state in the current lexical scope.",
+      computed: "Declares a read-only reactive value derived from what its expression reads.",
       resource: "Declares component-owned asynchronous data with reactive value, loading, ready, error, and reload fields.",
       action: "Declares an asynchronous operation with reactive pending and error fields at module or component scope.",
       watch: "Runs a block after a watched expression changes and DOM updates commit.",
@@ -645,6 +650,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       expose: "Provides the component Handle value declared by exposes.",
       look: "Builds a typed, composable Web appearance value.",
       keyframes: "Builds checked CSS animation stops as a first-class Keyframes value.",
+      css: "Marks an unsafe native CSS resource or inline raw block whose order against Look is explicit.",
     }),
     typeDocumentation: Object.freeze({
       WebNode: "A value that can be rendered as component or JSX children.",
@@ -659,10 +665,10 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       Look: "A typed, composable Web appearance value applied through JSX look={...}.",
     }),
     completions: Object.freeze([
-      ...["component", "state", "resource", "action", "watch", "@mounted", "@cleanup", "exposes", "expose", "look", "keyframes"].map((label) => ({ label, kind: 14 })),
+      ...["component", "state", "computed", "resource", "action", "watch", "@mounted", "@cleanup", "exposes", "expose", "look", "keyframes"].map((label) => ({ label, kind: 14 })),
       { label: "mount", kind: 3, detail: "mount(node, target) -> null" },
       { label: "tick", kind: 3, detail: "tick() -> Promise<null>" },
-      { label: "computed", kind: 3, detail: "computed(() => T) -> () -> T" },
+      { label: "cached", kind: 3, detail: "cached(() => T) -> () -> T" },
       { label: "bind:value", kind: 10, detail: "Two-way string state binding" },
       { label: "bind:checked", kind: 10, detail: "Two-way boolean state binding" },
       { label: "bind:group", kind: 10, detail: "Two-way radio or checkbox group binding" },
@@ -672,6 +678,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       { label: "look={value}", kind: 10, detail: "Apply a typed Look value" },
       { label: "style:color={value}", kind: 10, detail: "High-priority checked inline Style compatibility override" },
       { label: "import css unsafe", kind: 14, detail: "Import native CSS before Look output" },
+      { label: "unsafe css", kind: 14, detail: "Embed multiline raw CSS before or after Look output" },
       { label: "after look", kind: 14, detail: "Place an unsafe CSS import after Look output" },
       { label: "velar/look", kind: 9, detail: "Named visual builders and visual value Type objects" },
       { label: "velar/app", kind: 9, detail: "Application error reports and explicit handler ownership" },

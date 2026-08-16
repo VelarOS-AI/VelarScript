@@ -16,7 +16,9 @@ import { standardModuleInterfaces } from "../packages/cli/src/standard-modules.t
 import { Lexer } from "../packages/compiler/src/lexer.ts";
 import { forbiddenSourceIdentifiers } from "../packages/compiler/src/source-names.ts";
 import { keywordKinds } from "../packages/compiler/src/token.ts";
+import { TYPE_PARAMETER_DECLARATION_FORMS } from "../packages/compiler/src/core-vocabulary.ts";
 import { typeParameterBoundNames } from "../packages/compiler/src/types.ts";
+import { BROWSER_TEST_MODULE } from "../packages/web/src/browser-test.ts";
 import { LOOK_ABSENT_MEDIA_SUBJECTS, LOOK_EXCLUDED_PROPERTIES, LOOK_HOOKS, LOOK_MEDIA_SUBJECTS, LOOK_PROPERTIES, LOOK_TARGETS } from "../packages/web/src/look.ts";
 
 /**
@@ -74,6 +76,10 @@ import { LOOK_ABSENT_MEDIA_SUBJECTS, LOOK_EXCLUDED_PROPERTIES, LOOK_HOOKS, LOOK_
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const tourRoot = process.argv[2] ? resolve(process.argv[2]) : join(root, "examples", "tour");
+// D68 rule 176 names this chapter as the complete controller showcase. Keeping
+// coverage scoped to it prevents a small Desktop smoke test from accidentally
+// satisfying a member chapter 13 stopped teaching.
+const WEB_TEST_TOUR_CHAPTER = join("web", "13-browser.browser.test.vel");
 
 // ── Vacuity floors ──────────────────────────────────────────────────────────
 // The worst failure of a coverage gate is not a red build, it is a green one
@@ -97,7 +103,14 @@ const FLOORS = Object.freeze({
   "prelude-name": 5,
   "namespace-member": 66,
   "module-export": 236,
+  // D68 rule 176: all four velar/web-test controllers are tour-owned. Read the
+  // object fields out of the compiler interface so a newly published control
+  // cannot land without chapter 13 demonstrating it.
+  "web-test-member": 33,
   "type-parameter-bound": 3,
+  // D55 rule 120: `def` and `type`. A form removed from the roster without a
+  // ruling drops this below its floor rather than quietly checking less.
+  "generic-declaration": 2,
   "look-property": 225,
   "look-hook": 9,
   "look-target": 7,
@@ -384,6 +397,12 @@ function requireTargetVocabulary(config) {
   for (const name of typeParameterBoundNames) {
     require_("type-parameter-bound", name, `<T: ${name}>`, "typeParameterBoundNames in packages/compiler/src/types.ts");
   }
+  // D55 rule 120: which declaration forms take `<T>` is a compiler-owned
+  // roster — the same one every refusal aimed at a form that does not take one
+  // is worded from. A form added there without a tour example goes red here.
+  for (const form of TYPE_PARAMETER_DECLARATION_FORMS) {
+    require_("generic-declaration", form, `${form} Name<T>`, "TYPE_PARAMETER_DECLARATION_FORMS in packages/compiler/src/core-vocabulary.ts");
+  }
   for (const name of PERMANENT_NAMESPACE_NAMES) {
     require_("permanent-namespace", name, name, "PERMANENT_NAMESPACE_NAMES in packages/compiler/src/core-vocabulary.ts");
   }
@@ -452,14 +471,22 @@ function requireTargetVocabulary(config) {
     const namespace = permanentNamespaceCoveringModule(source, interface_.exports.keys());
     for (const name of names) {
       if (namespace) require_("namespace-member", `${namespace}.${name}`, `${namespace}.${name}`, `${source} (${target})`);
-      else require_("module-export", `${source} ${name}`, `import {${name}} from "${source}"`, `${source} (${target})`);
+      else require_("module-export", `${source}\u0000${name}`, `import {${name}} from "${source}"`, `${source} (${target})`);
+    }
+    if (source === BROWSER_TEST_MODULE) {
+      for (const [controller, type] of interface_.exports) {
+        if (type.kind !== "object") continue;
+        for (const member of type.fields.keys()) {
+          require_("web-test-member", `${source}\u0000${controller}\u0000${member}`, `${controller}.${member} in ${WEB_TEST_TOUR_CHAPTER}`, `${source} ${controller} object fields (${target})`);
+        }
+      }
     }
   }
 }
 
 // ── What the tour actually contains, judged after lexing and parsing ───────
 
-function observeModule({ tokens, program, index, contextualKeywords }) {
+function observeModule({ path, tokens, program, index, contextualKeywords }) {
   // (a) Hard keywords: the lexer's own verdict. A keyword inside a string or a
   //     comment never becomes a token, so this cannot be forged by prose.
   const keywordSpellings = new Map(Object.entries(keywordKinds).map(([spelling, kind]) => [kind, spelling]));
@@ -486,9 +513,13 @@ function observeModule({ tokens, program, index, contextualKeywords }) {
   //     the import line says. A namespace import counts for the members it is
   //     actually read through, so `collections.groupBy(...)` covers `groupBy`.
   const namespaceLocals = new Map();
+  const webTestControllerLocals = new Map();
   for (const imported of index.imports) {
     if (imported.namespace) namespaceLocals.set(imported.local, imported.source);
-    else observe("module-export", `${imported.source} ${imported.imported}`);
+    else {
+      observe("module-export", `${imported.source}\u0000${imported.imported}`);
+      if (imported.source === BROWSER_TEST_MODULE) webTestControllerLocals.set(imported.local, imported.imported);
+    }
   }
 
   // (d) Everything the parse tree owns. The walk is generic: it reads the node
@@ -511,7 +542,11 @@ function observeModule({ tokens, program, index, contextualKeywords }) {
         }
       }
       const source = namespaceLocals.get(base);
-      if (source !== undefined) observe("module-export", `${source} ${node.property}`);
+      if (source !== undefined) observe("module-export", `${source}\u0000${node.property}`);
+      const controller = webTestControllerLocals.get(base);
+      if (controller !== undefined && path.endsWith(WEB_TEST_TOUR_CHAPTER)) {
+        observe("web-test-member", `${BROWSER_TEST_MODULE}\u0000${controller}\u0000${node.property}`);
+      }
     }
     if (node.kind === "IdentifierExpression" && unbound.has(node.span.start)) {
       observe("permanent-namespace", node.name);
@@ -529,6 +564,13 @@ function observeModule({ tokens, program, index, contextualKeywords }) {
     // which is why the walk below visits every object rather than only tagged
     // nodes — the three bounds live nowhere else in the tree.
     if (typeof node.bound === "string") observe("type-parameter-bound", node.bound);
+    // D55 rule 120: a declaration that actually carries a parameter list, by
+    // the parser's verdict — the AST node kind names the form, and a prose
+    // mention of `type Box<T>` in a comment never becomes one.
+    if (Array.isArray(node.typeParameters) && node.typeParameters.length > 0) {
+      if (node.kind === "FunctionDeclaration") observe("generic-declaration", "def");
+      if (node.kind === "TypeDeclaration") observe("generic-declaration", "type");
+    }
   });
 
 }

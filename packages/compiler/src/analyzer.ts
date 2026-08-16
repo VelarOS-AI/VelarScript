@@ -37,7 +37,9 @@ import {
   boolType,
   boundGrants,
   collectGenericBoundViolations,
+  collectTypeArgumentBoundViolations,
   describeType,
+  genericApplicationType,
   instantiateGenericCallable,
   invalidType,
   isInvalidType,
@@ -68,7 +70,9 @@ import {
   unknownType,
   type EnumInfo,
   type ExtensionValueType,
+  type GenericApplication,
   type GenericBoundViolation,
+  type GenericTypeInfo,
   type TypeEnvironment,
   type TypeParameterBound,
   type ValueType,
@@ -317,6 +321,13 @@ export interface LoweringHints {
    * such binding and keep the presence-only recheck.
    */
   readonly runtimeTypeObjectNames: ReadonlySet<string>;
+  /**
+   * D55 rule 121: module-scope names bound to a generic record's instantiation
+   * factory, local or imported. A generic name is *not* a Type object — it
+   * answers `.of(...)`, never `.is(...)` — so the emitter has to tell the two
+   * apart before it writes either into the output.
+   */
+  readonly genericTypeNames: ReadonlySet<string>;
   readonly optionalMembers: ReadonlySet<string>;
   readonly optionalCalls: ReadonlySet<string>;
   readonly optionalIndexes: ReadonlySet<string>;
@@ -419,6 +430,8 @@ export interface AnalysisContext {
   readonly namedTypes?: ReadonlyMap<string, ReadonlyMap<string, ValueType>>;
   readonly namedTypeReadonlyFields?: ReadonlyMap<string, ReadonlySet<string>>;
   readonly namedTypeIdentities?: ReadonlyMap<string, string>;
+  /** D55: imported generic record declarations, by the name this module writes. */
+  readonly genericTypes?: ReadonlyMap<string, GenericTypeInfo>;
   readonly typeAliases?: ReadonlyMap<string, ValueType>;
   readonly enums?: ReadonlyMap<string, EnumInfo>;
   readonly classes?: ReadonlyMap<string, ClassInfo>;
@@ -851,6 +864,14 @@ export class Analyzer implements TypeEnvironment {
   private readonly namedTypes = new Map<string, ReadonlyMap<string, ValueType>>();
   private readonly namedTypeReadonlyFields = new Map<string, ReadonlySet<string>>();
   private readonly namedTypeIdentities = new Map<string, string>();
+  /** D55: generic record declarations in scope, by the name this module writes. */
+  private readonly genericTypes = new Map<string, GenericTypeInfo>();
+  /** The same declarations by identity, so a substituted application can be re-instantiated. */
+  private readonly genericTypesByIdentity = new Map<string, GenericTypeInfo>();
+  /** Every instantiation seen, by identity, waiting for its field table to be asked for. */
+  private readonly genericApplications = new Map<string, GenericApplication>();
+  /** One canonical object per instantiation, so identity-keyed cycle guards still cut. */
+  private readonly canonicalGenericApplications = new Map<string, ValueType>();
   private readonly typeAliases = new Map<string, ValueType>();
   private readonly invalidDeclaredTypes = new Set<string>();
   private readonly typeReferenceValidity = new WeakMap<TypeReference, boolean>();
@@ -1110,9 +1131,30 @@ export class Analyzer implements TypeEnvironment {
     for (const [name, fields] of context.namedTypes ?? []) this.namedTypes.set(name, fields);
     for (const [name, fields] of context.namedTypeReadonlyFields ?? []) this.namedTypeReadonlyFields.set(name, fields);
     for (const [name, identity] of context.namedTypeIdentities ?? []) this.namedTypeIdentities.set(name, identity);
+    for (const [name, info] of context.genericTypes ?? []) {
+      // The context carries each template twice — under the name this module
+      // writes, and under its identity for the modules reached without an
+      // import line. Only the first is a name; keeping identities out of the
+      // by-name map is what lets `genericTypeNames` mean what it says.
+      this.genericTypesByIdentity.set(info.identity, info);
+      if (name !== info.identity) this.genericTypes.set(name, info);
+    }
     for (const [name, type] of context.typeAliases ?? []) this.typeAliases.set(name, type);
     for (const [name, members] of context.enums ?? []) this.enums.set(name, members);
     for (const [name, info] of context.classes ?? []) this.classes.set(name, info);
+    // D55: an instantiation can arrive already built — in an imported
+    // signature, an imported record's field, an alias. Noting them here is what
+    // lets `fieldsOf` answer for `Box<string>` in a module that never wrote it.
+    for (const type of this.importBindings.values()) this.noteGenericApplications(type);
+    for (const type of this.dynamicImports.values()) this.noteGenericApplications(type);
+    for (const type of this.typeAliases.values()) this.noteGenericApplications(type);
+    for (const fields of this.namedTypes.values()) for (const type of fields.values()) this.noteGenericApplications(type);
+    for (const info of this.classes.values()) {
+      for (const field of info.fields.values()) this.noteGenericApplications(field.type);
+      for (const type of info.methods.values()) this.noteGenericApplications(type);
+      for (const field of info.staticFields.values()) this.noteGenericApplications(field.type);
+      for (const type of info.staticMethods.values()) this.noteGenericApplications(type);
+    }
     for (const extension of extensions) {
       for (const name of extension.primitiveTypes ?? []) this.primitiveNames.add(name);
       for (const [name, parents] of extension.primitiveParents ?? []) {
@@ -1166,6 +1208,7 @@ export class Analyzer implements TypeEnvironment {
     this.registerClassNames(program);
     this.registerExternTypeImports(program);
     this.registerTypeShapes(program);
+    this.rejectPolymorphicRecursion(program);
     this.validateDataTypeDeclarations(program);
     for (const statement of program.body) {
       if (statement.kind !== "ImportDeclaration") continue;
@@ -1219,36 +1262,46 @@ export class Analyzer implements TypeEnvironment {
     const declarations = program.body.filter((statement): statement is TypeDeclaration | TypeAliasDeclaration =>
       statement.kind === "TypeDeclaration" || statement.kind === "TypeAliasDeclaration");
     for (const declaration of declarations) {
-      let valid = declaration.kind === "TypeAliasDeclaration"
+      // D55 rule 120: a generic record's own parameters are in scope for every
+      // rule that reads its field annotations, exactly as a `def`'s are inside
+      // its signature.
+      const withParameters = <T>(action: () => T): T => declaration.kind === "TypeDeclaration" && declaration.typeParameters?.length
+        ? this.withTypeParameterFrame(this.typeParameterFrame(declaration.typeParameters), action)
+        : action();
+      let valid = withParameters(() => declaration.kind === "TypeAliasDeclaration"
         ? this.validateTypeReference(declaration.target)
-        : declaration.fields.map((field) => this.validateTypeReference(field.type)).every(Boolean);
+        : declaration.fields.map((field) => this.validateTypeReference(field.type)).every(Boolean));
       if (valid) {
-        const runtimeCheckedReferences = declaration.kind === "TypeAliasDeclaration"
-          ? [declaration.target]
-          : declaration.fields.map((field) => field.type);
-        for (const reference of runtimeCheckedReferences) {
-          if (!typeContainsRuntimeTypeCheck(this.resolveAnnotation(reference))) continue;
-          this.diagnostics.push(diagnostic(
-            "VEL4022",
-            "Type<T> is a static runtime-Type carrier and cannot be embedded in a runtime-validated 'type'; keep it in a function, class, or ordinary value instead",
-            reference.span,
-          ));
-          valid = false;
-        }
+        withParameters(() => {
+          const runtimeCheckedReferences = declaration.kind === "TypeAliasDeclaration"
+            ? [declaration.target]
+            : declaration.fields.map((field) => field.type);
+          for (const reference of runtimeCheckedReferences) {
+            if (!typeContainsRuntimeTypeCheck(this.resolveAnnotation(reference))) continue;
+            this.diagnostics.push(diagnostic(
+              "VEL4022",
+              "Type<T> is a static runtime-Type carrier and cannot be embedded in a runtime-validated 'type'; keep it in a function, class, or ordinary value instead",
+              reference.span,
+            ));
+            valid = false;
+          }
+        });
       }
       // D44 rule 72: a `readonly` field modifier makes the same deep promise
       // as a `readonly T` annotation, so it obeys the same pure-data rule.
       if (valid && declaration.kind === "TypeDeclaration") {
-        for (const field of declaration.fields) {
-          if (!field.readonly) continue;
-          const violation = this.findClassInReadonlyData(this.resolveAnnotation(field.type));
-          if (!violation) continue;
-          this.typeError(
-            `'readonly' accepts only pure data at every depth; '${declaration.name}.${field.name}${violation.suffix}' is class '${violation.className}' — model it as a data record, or drop 'readonly'`,
-            field.span,
-          );
-          valid = false;
-        }
+        withParameters(() => {
+          for (const field of declaration.fields) {
+            if (!field.readonly) continue;
+            const violation = this.findClassInReadonlyData(this.resolveAnnotation(field.type));
+            if (!violation) continue;
+            this.typeError(
+              `'readonly' accepts only pure data at every depth; '${declaration.name}.${field.name}${violation.suffix}' is class '${violation.className}' — model it as a data record, or drop 'readonly'`,
+              field.span,
+            );
+            valid = false;
+          }
+        });
       }
       if (!valid) this.invalidDeclaredTypes.add(declaration.name);
     }
@@ -1319,6 +1372,13 @@ export class Analyzer implements TypeEnvironment {
     const productive = new Set<string>();
     const typeIsProductive = (source: ValueType): boolean => {
       const type = this.expandAliases(source);
+      // D55: an instantiation stands for its declaration here — `Tree<T>` is
+      // productive exactly when `Tree` is, and the finite-value question is the
+      // same question for every argument it could be applied to.
+      if (type.kind === "named" && type.application) {
+        const name = type.application.name;
+        return !declarations.has(name) || productive.has(name);
+      }
       if (type.kind === "named") return !declarations.has(type.name) || productive.has(type.name);
       if (type.kind === "union") return type.members.some(typeIsProductive);
       if (type.kind === "object") return [...type.fields.values()].every(typeIsProductive);
@@ -1330,7 +1390,7 @@ export class Analyzer implements TypeEnvironment {
       changed = false;
       for (const [name] of declarations) {
         if (productive.has(name)) continue;
-        const fields = this.namedTypes.get(name);
+        const fields = this.namedTypes.get(name) ?? this.genericTypes.get(name)?.fields;
         if (fields && [...fields.values()].every(typeIsProductive)) {
           productive.add(name);
           changed = true;
@@ -1585,6 +1645,7 @@ export class Analyzer implements TypeEnvironment {
       errorSubclassNames: new Set([...this.classes.keys()].filter((name) => name !== "Error" && this.isSubclassOf(name, "Error"))),
       enumNames: new Set(this.enums.keys()),
       runtimeTypeObjectNames: this.runtimeTypeObjectNames,
+      genericTypeNames: new Set(this.genericTypes.keys()),
       optionalMembers: this.optionalMembers,
       optionalCalls: this.optionalCalls,
       optionalIndexes: this.optionalIndexes,
@@ -1673,7 +1734,278 @@ export class Analyzer implements TypeEnvironment {
   }
 
   fieldsOf(identity: string): ReadonlyMap<string, ValueType> | null {
-    return this.namedTypes.get(identity) ?? this.extensionFieldsOf(identity);
+    const known = this.namedTypes.get(identity);
+    if (known) return known;
+    const instantiated = this.instantiateGenericFields(identity);
+    if (instantiated) return instantiated;
+    return this.extensionFieldsOf(identity);
+  }
+
+  /**
+   * D55 rule 121: an instantiation's field table is the declaration's fields
+   * with the arguments substituted, registered under the instantiation's own
+   * identity. Computing it on demand rather than at the point the application
+   * was written is what makes `type Tree<T>: kids: List<Tree<T>>` terminate:
+   * the application is *noted* while the declaration is still being read, and
+   * substituted only once someone asks, by which time the template is whole.
+   * Substitution rebuilds nested applications through the same constructor, so
+   * each one is noted in turn and the walk is finite in the number of distinct
+   * instantiations — homogeneous recursion reaches its fixed point, and rule
+   * 125's declaration-site rule is what stops a polymorphic one from existing.
+   */
+  private instantiateGenericFields(identity: string): ReadonlyMap<string, ValueType> | null {
+    if (this.namedTypes.has(identity)) return this.namedTypes.get(identity)!;
+    const application = this.genericApplications.get(identity);
+    if (!application) return null;
+    const info = this.genericTypesByIdentity.get(application.declaration);
+    if (!info) return null;
+    const bindings = info.parameterNames.map((_, index) => application.arguments[index] ?? unknownType);
+    const fields = new Map<string, ValueType>();
+    // Registered before the field types are walked: a field that mentions this
+    // very instantiation finds the entry instead of recurring into it.
+    this.namedTypes.set(identity, fields);
+    for (const [name, type] of info.fields) {
+      const substituted = substituteTypeParameters(type, bindings);
+      this.noteGenericApplications(substituted);
+      fields.set(name, substituted);
+    }
+    if (info.readonlyFields?.size) this.namedTypeReadonlyFields.set(identity, info.readonlyFields);
+    return fields;
+  }
+
+  /**
+   * Records every generic application inside a type so its field table can be
+   * built on demand. Called wherever an application can first become visible —
+   * a resolved annotation, an imported binding, a substituted field — because a
+   * missed site is an instantiation whose fields silently read as "not a
+   * record" (the batch M failure shape, one layer out).
+   */
+  private noteGenericApplications(type: ValueType, seen = new Set<string>()): void {
+    switch (type.kind) {
+      case "named": {
+        const application = type.application;
+        if (!application || !type.identity || seen.has(type.identity)) return;
+        seen.add(type.identity);
+        if (this.genericTypesByIdentity.has(application.declaration)) this.genericApplications.set(type.identity, application);
+        for (const argument of application.arguments) this.noteGenericApplications(argument, seen);
+        return;
+      }
+      case "optional":
+        return this.noteGenericApplications(type.inner, seen);
+      case "list":
+      case "set":
+        return this.noteGenericApplications(type.element, seen);
+      case "map":
+        this.noteGenericApplications(type.key, seen);
+        return this.noteGenericApplications(type.value, seen);
+      case "record":
+      case "promise":
+      case "runtimeType":
+        return this.noteGenericApplications(type.value, seen);
+      case "typeObject":
+        if (type.value) this.noteGenericApplications(type.value, seen);
+        return;
+      case "object":
+        for (const field of type.fields.values()) this.noteGenericApplications(field, seen);
+        return;
+      case "extension":
+        for (const property of type.properties.values()) this.noteGenericApplications(property, seen);
+        for (const argument of type.arguments) this.noteGenericApplications(argument, seen);
+        return;
+      case "function":
+      case "action":
+      case "intrinsic":
+        for (const parameter of type.parameters) this.noteGenericApplications(parameter, seen);
+        if (type.rest) this.noteGenericApplications(type.rest, seen);
+        return this.noteGenericApplications(type.result, seen);
+      case "union":
+        for (const member of type.members) this.noteGenericApplications(member, seen);
+        return;
+      default:
+        return;
+    }
+  }
+
+  /** The generic record a name in this module refers to, local or imported. */
+  protected genericTypeInfo(name: string): GenericTypeInfo | null {
+    return this.genericTypes.get(name) ?? null;
+  }
+
+  /**
+   * D55 rule 121: the one place an application written in this module becomes
+   * canonical — declaration identity, display text, instantiation identity, and
+   * the note that lets its field table be built. Every path that can be the
+   * first to see an application calls this, so none of them can produce a
+   * half-resolved one.
+   */
+  private resolveGenericApplication(
+    type: Extract<ValueType, { kind: "named" }>,
+    resolveArgument: (argument: ValueType) => ValueType = (argument) => this.resolveNamedClasses(argument),
+  ): ValueType | null {
+    const application = type.application;
+    if (!application || type.identity) return null;
+    const info = this.genericTypes.get(application.name);
+    if (!info) return null;
+    const built = genericApplicationType(
+      info.identity,
+      info.name,
+      application.arguments.map(resolveArgument),
+      type.readonlyView === true,
+    );
+    // One object per instantiation, not one per resolution. Several traversals
+    // cut their cycles by object identity (`freezeEscapedCollectionInference`
+    // keys a WeakMap by the expanded type), and a recursive generic re-enters
+    // them; handing back a fresh equal object each time would defeat the guard
+    // and recur without end.
+    const key = `${built.identity}${built.readonlyView ? "\u0000readonly" : ""}`;
+    const cached = this.canonicalGenericApplications.get(key);
+    if (cached) return cached;
+    this.canonicalGenericApplications.set(key, built);
+    this.noteGenericApplications(built);
+    return built;
+  }
+
+  /**
+   * D55 rules 124 and 126: everything an instantiation has to answer for at the
+   * place it is written — arity, the declared bounds, and the one argument
+   * shape a runtime-validated record can never hold.
+   */
+  private validateGenericApplication(info: GenericTypeInfo, syntax: Extract<TypeSyntax, { kind: "GenericTypeSyntax" }>): boolean {
+    const arity = info.parameterNames.length;
+    if (syntax.arguments.length !== arity) {
+      this.typeError(
+        `Generic type '${info.name}' takes ${arity === 1 ? "1 type argument" : `${arity} type arguments`}, not ${syntax.arguments.length}; write '${info.name}<${info.parameterNames.join(", ")}>'`,
+        syntax.span,
+      );
+      return false;
+    }
+    const arguments_ = syntax.arguments.map((argument) => this.resolveAnnotation({ syntax: argument, span: argument.span }));
+    let valid = true;
+    for (const [index, argument] of arguments_.entries()) {
+      // D55 rule 124: `Box<Type<User>>` puts a static carrier in a field the
+      // record validates at runtime, which is the existing VEL4022 refusal
+      // reaching the position that actually caused it.
+      if (!typeContainsRuntimeTypeCheck(argument)) continue;
+      this.diagnostics.push(diagnostic(
+        "VEL4022",
+        `Type<T> is a static runtime-Type carrier and cannot be a type argument of '${info.name}', whose fields are validated at runtime; keep it in a function, class, or ordinary value instead`,
+        syntax.arguments[index]!.span,
+      ));
+      valid = false;
+    }
+    if (!valid) return false;
+    // D44 rule 72 reaching the instantiation: a bare `T` under `readonly` is
+    // legal at the declaration — opacity is as good as immutability there — but
+    // the argument is what decides whether the promise holds, and only this
+    // site knows it. Without this, `type Held<T>: readonly value: T` applied to
+    // a class kept a `readonly` view that could be written through.
+    if (info.readonlyFields?.size) {
+      const instantiated = this.resolveAnnotation({ syntax, span: syntax.span });
+      const fields = instantiated.kind === "named" && instantiated.identity ? this.fieldsOf(instantiated.identity) : null;
+      for (const name of info.readonlyFields) {
+        const field = fields?.get(name);
+        const violation = field ? this.findClassInReadonlyData(this.readonlyDataViewOf(field)) : null;
+        if (!violation) continue;
+        this.typeError(
+          `'readonly' accepts only pure data at every depth; '${describeType(instantiated)}.${name}${violation.suffix}' is class '${violation.className}' — model it as a data record, or drop 'readonly'`,
+          syntax.span,
+        );
+        valid = false;
+      }
+    }
+    if (!valid) return false;
+    // D55 rule 124: the same grant table, the same decision procedure, the same
+    // violation shape a call site reports — only the declaration form differs.
+    const violations = collectTypeArgumentBoundViolations(
+      info.parameterNames,
+      info.parameterBounds,
+      arguments_,
+      (type, bound) => this.satisfiesBound(type, bound),
+    );
+    for (const violation of violations) {
+      this.diagnostics.push(diagnostic(
+        "VEL4031",
+        `Type parameter '${violation.name}' of '${info.name}' is bound by ${violation.bound}, so this argument cannot be ${describeType(violation.solved)}; ${boundVocabularyGuidance[violation.bound]}`,
+        syntax.arguments[violation.index]?.span ?? syntax.span,
+      ));
+    }
+    return violations.length === 0;
+  }
+
+  /**
+   * D55 rule 125: a generic record's reference to a declaration in its own
+   * recursive group must pass that group's parameters straight through.
+   * `type Tree<T>: kids: List<Tree<T>>` is homogeneous — `Tree<string>` needs
+   * only `Tree<string>`, and monomorphization reaches its fixed point. The
+   * refused shape, `type Bad<T>: next: Bad<List<T>>?`, demands
+   * `Bad<List<string>>`, `Bad<List<List<string>>>`, without end. The rule is
+   * checked here, on the line that declares it, because an instantiation-depth
+   * limit could only say "too deep" at some later call — the undirected
+   * diagnostic family D42 spent its length removing.
+   */
+  private rejectPolymorphicRecursion(program: Program): void {
+    const declarations = program.body.filter((statement): statement is TypeDeclaration =>
+      statement.kind === "TypeDeclaration" && (statement.typeParameters?.length ?? 0) > 0);
+    if (declarations.length === 0) return;
+    const local = new Set(declarations.map((statement) => statement.name));
+    const applications = (statement: TypeDeclaration): Extract<TypeSyntax, { kind: "GenericTypeSyntax" }>[] => {
+      const found: Extract<TypeSyntax, { kind: "GenericTypeSyntax" }>[] = [];
+      const visit = (syntax: TypeSyntax): void => {
+        switch (syntax.kind) {
+          case "GenericTypeSyntax":
+            if (local.has(syntax.name)) found.push(syntax);
+            syntax.arguments.forEach(visit);
+            return;
+          case "ReadonlyTypeSyntax":
+          case "OptionalTypeSyntax":
+            return visit(syntax.inner);
+          case "UnionTypeSyntax":
+            return syntax.members.forEach(visit);
+          case "FunctionTypeSyntax":
+            syntax.parameters.forEach((parameter) => visit(parameter.type));
+            return visit(syntax.result);
+          default:
+            return;
+        }
+      };
+      for (const field of statement.fields) visit(field.type.syntax);
+      return found;
+    };
+    const mentions = new Map(declarations.map((statement) =>
+      [statement.name, new Set(applications(statement).map((syntax) => syntax.name))] as const));
+    // The reachable set, to a fixed point: a group is every declaration that
+    // reaches this one and is reached by it, which is what makes the rule catch
+    // `A<T>` -> `B<List<T>>` -> `A<T>` as surely as it catches direct self-use.
+    const reaches = new Map([...mentions].map(([name, direct]) => [name, new Set(direct)] as const));
+    for (let changed = true; changed;) {
+      changed = false;
+      for (const [, reachable] of reaches) {
+        for (const name of [...reachable]) {
+          for (const next of reaches.get(name) ?? []) {
+            if (reachable.has(next)) continue;
+            reachable.add(next);
+            changed = true;
+          }
+        }
+      }
+    }
+    for (const statement of declarations) {
+      const group = new Set([...reaches.get(statement.name) ?? []]
+        .filter((name) => name === statement.name || reaches.get(name)?.has(statement.name)));
+      const parameters = statement.typeParameters!.map((parameter) => parameter.name);
+      for (const syntax of applications(statement)) {
+        if (!group.has(syntax.name)) continue;
+        const passesThrough = syntax.arguments.length === parameters.length
+          && syntax.arguments.every((argument, index) =>
+            argument.kind === "NamedTypeSyntax" && argument.name === parameters[index]);
+        if (passesThrough) continue;
+        this.diagnostics.push(diagnostic(
+          "VEL4021",
+          `Recursive generic type '${statement.name}' must use its own type parameters where it refers to '${syntax.name}'; write '${syntax.name}<${parameters.join(", ")}>' — arguments that change with the depth would need a new instantiation at every depth, without end`,
+          syntax.span,
+        ));
+      }
+    }
   }
 
   isExtensionTypeAssignable(
@@ -1704,7 +2036,17 @@ export class Analyzer implements TypeEnvironment {
   }
 
   readonlyFieldsOf(identity: string): ReadonlySet<string> | null {
-    return this.namedTypeReadonlyFields.get(identity) ?? null;
+    const known = this.namedTypeReadonlyFields.get(identity);
+    if (known) return known;
+    // D55 rule 122: an instantiation's readonly fields are its declaration's,
+    // and they are registered alongside the substituted field table. Asking for
+    // them first — variance is decided per field, so a caller may — must build
+    // it, or the covariant reading would silently become the invariant one.
+    if (this.genericApplications.has(identity)) {
+      this.instantiateGenericFields(identity);
+      return this.namedTypeReadonlyFields.get(identity) ?? null;
+    }
+    return null;
   }
 
   /**
@@ -1989,6 +2331,19 @@ export class Analyzer implements TypeEnvironment {
       const expanded = this.expandAliases(this.typeAliases.get(type.name)!, new Set([...seen, type.name]));
       return type.readonlyView ? this.readonlyDataViewOf(expanded) : expanded;
     }
+    // D55 rule 121: an alias is transparent inside a type argument too, so
+    // `Box<Id>` and `Box<string>` reach the identity step already agreeing.
+    // Expansion also canonicalizes: an alias registered before the generic
+    // declarations were read — `type Boxed = Box<string>` above `type Box<T>` —
+    // stored an application with no identity, and every reader of an alias goes
+    // through here.
+    if (type.kind === "named" && type.application) {
+      const arguments_ = type.application.arguments.map((argument) => this.expandAliases(argument, seen));
+      const changed = arguments_.some((argument, index) => argument !== type.application!.arguments[index]);
+      if (!changed && type.identity) return type;
+      const expanded = changed ? { ...type, application: { ...type.application, arguments: arguments_ } } : type;
+      return this.resolveGenericApplication(expanded) ?? expanded;
+    }
     if (type.kind === "optional") {
       const inner = this.expandAliases(type.inner, seen);
       return inner === type.inner ? type : optionalOf(inner);
@@ -2053,9 +2408,43 @@ export class Analyzer implements TypeEnvironment {
     return type;
   }
 
-  private registerTypeShapes(program: Program): void {
+  /**
+   * D55 rule 120: generic record declarations are registered in two steps —
+   * every name and parameter list first, then the field types. A field type may
+   * apply another generic record, or this one, and neither could be resolved if
+   * the declarations were read one at a time.
+   */
+  private registerGenericTypeShapes(program: Program): void {
+    const declarations: { readonly statement: TypeDeclaration; readonly fields: Map<string, ValueType> }[] = [];
     for (const statement of program.body) {
-      if (statement.kind !== "TypeDeclaration") {
+      if (statement.kind !== "TypeDeclaration" || !statement.typeParameters?.length) continue;
+      if (this.genericTypes.has(statement.name)) continue;
+      const fields = new Map<string, ValueType>();
+      const readonlyFields = new Set(statement.fields.filter((field) => field.readonly).map((field) => field.name));
+      const info: GenericTypeInfo = {
+        identity: this.namedTypeIdentities.get(statement.name) ?? statement.name,
+        name: statement.name,
+        parameterNames: statement.typeParameters.map((parameter) => parameter.name),
+        parameterBounds: statement.typeParameters.map((parameter) =>
+          parameter.bound && isTypeParameterBound(parameter.bound) ? parameter.bound : null),
+        fields,
+        ...(readonlyFields.size > 0 ? { readonlyFields } : {}),
+      };
+      this.genericTypes.set(statement.name, info);
+      this.genericTypesByIdentity.set(info.identity, info);
+      declarations.push({ statement, fields });
+    }
+    for (const { statement, fields } of declarations) {
+      this.withTypeParameterFrame(this.typeParameterFrame(statement.typeParameters), () => {
+        for (const field of statement.fields) fields.set(field.name, this.resolveAnnotation(field.type));
+      });
+    }
+  }
+
+  private registerTypeShapes(program: Program): void {
+    this.registerGenericTypeShapes(program);
+    for (const statement of program.body) {
+      if (statement.kind !== "TypeDeclaration" || statement.typeParameters?.length) {
         continue;
       }
       const fields = new Map<string, ValueType>();
@@ -2355,6 +2744,27 @@ export class Analyzer implements TypeEnvironment {
           });
         }
         break;
+      case "EmbeddedJavaScriptDeclaration": {
+        if (this.scopes.length !== 1) {
+          this.diagnostics.push(diagnostic(
+            "VEL3011",
+            "Inline JavaScript blocks can only be declared at module scope",
+            statement.span,
+          ));
+        }
+        for (const capture of statement.captures) {
+          const annotationValid = this.validateTypeReference(capture.type);
+          const declared = this.resolveValidatedAnnotation(capture.type);
+          const value: Expression = {
+            kind: "IdentifierExpression",
+            name: capture.name,
+            span: capture.nameSpan,
+          };
+          const actual = this.inferExpression(value, declared);
+          if (annotationValid) this.requireAssignable(actual, declared, capture.nameSpan);
+        }
+        break;
+      }
       case "TypeDeclaration":
         // Shapes are only registered from module scope (registerTypeShapes
         // walks program.body), so a nested declaration would analyze against
@@ -3216,6 +3626,11 @@ export class Analyzer implements TypeEnvironment {
 
   private analyzeTypeDeclaration(statement: TypeDeclaration): void {
     if (!this.predeclared.has(statement)) this.declareBinding(statement.name, false, { kind: "typeObject", name: statement.name }, statement.span);
+    // D55 rule 124: the parameter-list rules — duplicate names, a reserved
+    // bound name used as a parameter, shadowing a declared type, an unknown
+    // bound — are about the list and not about which declaration carries it,
+    // so a `type` is judged by the same procedure a `def` is.
+    this.checkTypeParameterDeclarations(statement.typeParameters);
     const seen = new Set<string>();
     for (const field of statement.fields) {
       if (seen.has(field.name)) {
@@ -4939,6 +5354,17 @@ export class Analyzer implements TypeEnvironment {
           });
         }
         if (binding.type.kind === "typeObject" && !binding.type.value) {
+          // D55 rule 126: a generic record has no Type object of its own — it
+          // has one per instantiation. Rule 123's idiom is the answer, and it
+          // is one this language already teaches for `List<Item>`.
+          const generic = this.genericTypes.get(expression.name);
+          if (generic) {
+            this.typeError(
+              `'${expression.name}' is a generic type, not a value; name one instantiation first — type ${expression.name}Of${generic.parameterNames[0] ?? "T"} = ${expression.name}<${generic.parameterNames.join(", ")}> with concrete types — and read that`,
+              expression.span,
+            );
+            return invalidType;
+          }
           return {
             ...binding.type,
             value: this.runtimeTypeObjectValue(binding.type),
@@ -6388,7 +6814,15 @@ export class Analyzer implements TypeEnvironment {
     // `unknown` still never poisons a merge with a concrete argument.
     const unknownParameters = new Set<number>();
     const fieldsOf = (identity: string): ReadonlyMap<string, ValueType> | null => this.fieldsOf(identity);
-    const substitute = (declared: ValueType): ValueType => substituteTypeParameters(declared, bindings);
+    // D55 rule 121: substituting into `Box<T>` produces an instantiation this
+    // module may never have written down, and it still has to have a field
+    // table — otherwise `def unwrap<T>(box: Box<T>)` would solve T correctly
+    // and then fail to accept the very record that solved it.
+    const substitute = (declared: ValueType): ValueType => {
+      const substituted = substituteTypeParameters(declared, bindings);
+      this.noteGenericApplications(substituted);
+      return substituted;
+    };
     const solvedContext = (declared: ValueType): ValueType =>
       typeContainsParameter(declared, (parameter) => bindings[parameter.index] == null) ? unknownType : substitute(declared);
 
@@ -6521,13 +6955,19 @@ export class Analyzer implements TypeEnvironment {
    * erased silently, so the wrapper re-asks the bound question and turns the
    * rejection into a directed message at the value's own span.
    */
+  private instantiateCallable<T extends Extract<ValueType, { kind: "function" | "action" | "intrinsic" }>>(actual: T, expected: T, violations?: GenericBoundViolation[]): T {
+    const instantiated = instantiateGenericCallable(actual, expected, this, violations) as T;
+    this.noteGenericApplications(instantiated);
+    return instantiated;
+  }
+
   private genericBoundViolation(actual: ValueType, expected: ValueType): GenericBoundViolation | null {
     if (actual.kind !== "function" && actual.kind !== "action" && actual.kind !== "intrinsic") return null;
     if (!actual.typeParameterBounds?.some((bound) => bound !== null)) return null;
     if (expected.kind !== "function" && expected.kind !== "action" && expected.kind !== "intrinsic") return null;
     if (expected.typeParameterNames?.length) return null;
     const violations: GenericBoundViolation[] = [];
-    instantiateGenericCallable(actual, expected, this, violations);
+    this.instantiateCallable(actual, expected, violations);
     return violations[0] ?? null;
   }
 
@@ -6541,7 +6981,7 @@ export class Analyzer implements TypeEnvironment {
     // The erasure happens here, so this is the last place a rejected bound is
     // still visible; without the report the callback would silently compile.
     if (errorSpan) this.reportFirstClassBoundViolation(actual, expected, errorSpan);
-    return instantiateGenericCallable(actual, expected, this);
+    return this.instantiateCallable(actual, expected);
   }
 
   /** One diagnostic per site, whichever of the two value paths reaches it first. */
@@ -8723,6 +9163,7 @@ export class Analyzer implements TypeEnvironment {
   private crossBlockExternClassType(name: string): ValueType | null {
     if (this.typeParameterFrames.at(-1)?.has(name)) return null;
     if (this.namedTypes.has(name)
+      || this.genericTypes.has(name)
       || this.namedTypeIdentities.has(name)
       || this.typeAliases.has(name)
       || this.classes.has(name)
@@ -9687,6 +10128,7 @@ export class Analyzer implements TypeEnvironment {
     return builtinTypeNames.has(name)
       || this.primitiveNames.has(name)
       || this.namedTypes.has(name)
+      || this.genericTypes.has(name)
       || this.namedTypeIdentities.has(name)
       || this.typeAliases.has(name)
       || this.classes.has(name)
@@ -9740,6 +10182,15 @@ export class Analyzer implements TypeEnvironment {
   }
 
   private resolveNamedClasses(type: ValueType): ValueType {
+    // D55 rule 121: an application written in this module arrives carrying the
+    // source name and unresolved arguments. Canonicalizing it here — the one
+    // step that already turns names into identities — is what makes `Box<Id>`
+    // and `Box<string>` one identity when `Id` is an alias, and what notes the
+    // instantiation so its field table can be built when asked for.
+    if (type.kind === "named" && type.application) {
+      const resolved = this.resolveGenericApplication(type, (argument) => this.resolveNamedClasses(argument));
+      if (resolved) return resolved;
+    }
     if (type.kind === "named" && !type.identity) {
       const parameter = this.typeParameterFrames.at(-1)?.get(type.name);
       if (parameter) return parameter;
@@ -9850,6 +10301,19 @@ export class Analyzer implements TypeEnvironment {
           if (this.invalidDeclaredTypes.has(syntax.name)) return false;
           if (syntax.name === "Promise" || syntax.name === "Function") return true;
           if (this.typeParameterFrames.at(-1)?.has(syntax.name)) return true;
+          // D55 rule 126: a bare generic record has no identity, no field
+          // table, and no validator — it is a type constructor. The refusal
+          // teaches the arity rather than quietly reading it as
+          // `Box<unknown>`, which would hand back a validator that accepts
+          // everything the author forgot to describe.
+          if (this.genericTypes.has(syntax.name)) {
+            const info = this.genericTypes.get(syntax.name)!;
+            this.typeError(
+              `Generic type '${syntax.name}' needs ${info.parameterNames.length === 1 ? "a type argument" : `${info.parameterNames.length} type arguments`}; write '${syntax.name}<${info.parameterNames.join(", ")}>' with concrete types`,
+              syntax.span,
+            );
+            return false;
+          }
           if (this.primitiveNames.has(syntax.name)
             || this.namedTypes.has(syntax.name)
             || this.namedTypeIdentities.has(syntax.name)
@@ -9900,6 +10364,11 @@ export class Analyzer implements TypeEnvironment {
         }
         case "GenericTypeSyntax": {
           let valid = true;
+          const generic = this.genericTypes.get(syntax.name);
+          if (generic) {
+            const argumentsValid = syntax.arguments.map(validate).every(Boolean);
+            return argumentsValid && this.validateGenericApplication(generic, syntax);
+          }
           if (syntax.name !== "List" && syntax.name !== "Set" && syntax.name !== "Map" && syntax.name !== "Record" && syntax.name !== "Promise" && syntax.name !== "Function" && syntax.name !== "Type") {
             const resolved = resolver({ syntax, span: syntax.span });
             if (resolved.kind === "named") {

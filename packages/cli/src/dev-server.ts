@@ -1,6 +1,6 @@
 import { createReadStream, readdirSync, statSync, watch } from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
-import { resolve } from "node:path";
+import { posix, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { formatDiagnostic } from "@velarscript/compiler";
 import type { FrameworkHostArtifacts } from "@velarscript/compiler/framework-host";
@@ -11,6 +11,7 @@ import { npmAsset, resolveBrowserNpm, type BrowserNpmPackage } from "./npm.ts";
 import type { VelarProjectConfig } from "./config.ts";
 import { standardModuleAsset } from "./standard-modules.ts";
 import { asHostError, hostErrorMessage } from "./host-error.ts";
+import { assertUniqueEmbeddedModuleOutputs } from "./embedded-modules.ts";
 
 interface Snapshot {
   readonly project: ProjectResult;
@@ -321,10 +322,20 @@ async function compileSnapshot(
     changedPaths,
   );
   const npm = await resolveBrowserNpm(project, staleNpmRoots);
+  const artifactErrors: string[] = [];
+  try {
+    assertUniqueEmbeddedModuleOutputs(project.modules.map((module) => ({
+      ownerPath: module.relativePath.replace(/\.vel$/u, ".js"),
+      embeddedModules: module.result.embeddedModules,
+    })));
+  } catch (error) {
+    artifactErrors.push(hostErrorMessage(error));
+  }
   const errors = [
     ...project.failures.map((failure) => `${failure.path}: ${failure.message}`),
     ...project.modules.flatMap((module) => module.result.diagnostics.map((item) => formatDiagnostic(module.result.source, item))),
     ...npm.failures,
+    ...artifactErrors,
   ];
   const notices = project.notices.map((notice) => `${notice.path}: ${notice.message}`);
   return {
@@ -380,12 +391,25 @@ function mapSourcePosition(
   generatedLine: number,
   generatedColumn: number,
 ): { readonly path: string; readonly line: number; readonly column: number } | null {
-  const normalized = pathname.replace(/^\/+/, "").replace(/\.js$/u, ".vel");
-  const module = project.modules.find((item) => item.relativePath.replaceAll("\\", "/") === normalized);
-  if (!module?.result.sourceMap || generatedLine < 1 || generatedColumn < 1) return null;
+  const route = pathname.replace(/^\/+/, "");
+  const normalized = route.replace(/\.js$/u, ".vel");
+  let module = project.modules.find((item) => item.relativePath.replaceAll("\\", "/") === normalized);
+  let sourceMap = module?.result.sourceMap ?? null;
+  if (!module) {
+    for (const candidate of project.modules) {
+      const directory = posix.dirname(candidate.relativePath.replaceAll("\\", "/"));
+      const embedded = candidate.result.embeddedModules.find((item) =>
+        posix.normalize(posix.join(directory, item.specifier)) === route);
+      if (!embedded) continue;
+      module = candidate;
+      sourceMap = embedded.sourceMap;
+      break;
+    }
+  }
+  if (!module || !sourceMap || generatedLine < 1 || generatedColumn < 1) return null;
   let map: SourceMapShape;
   try {
-    map = JSON.parse(module.result.sourceMap) as SourceMapShape;
+    map = JSON.parse(sourceMap) as SourceMapShape;
   } catch {
     return null;
   }

@@ -45,10 +45,10 @@ export component Newsletter:
                 clearError(currentForm, "email")
                 announce("Subscription ready")
 
-    const submitFailure = computed(() => submit.error)
+    computed submitFailure = submit.error
 
     def failureView() -> WebNode:
-        const current = submitFailure()
+        const current = submitFailure
         return current != null ? <p role="alert">{current.message}</p> : <></>
 
     return <form look={formLook} ref={form} on:submit.prevent={submit} aria-busy={submit.pending}>

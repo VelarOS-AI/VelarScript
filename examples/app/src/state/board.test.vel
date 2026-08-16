@@ -35,7 +35,7 @@ test "the seeded board is what the summary reports":
     resetBoard()
     await tick()
     expect(releases).toHaveLength(3)
-    expect(summary()).toEqual({tracked: 3, shipped: 1, blocked: 2, readiness: 69})
+    expect(summary).toEqual({tracked: 3, shipped: 1, blocked: 2, readiness: 69})
 
 test "toggling a check moves both the release and the board":
     resetBoard()
@@ -44,7 +44,7 @@ test "toggling a check moves both the release and the board":
     toggleCheck("web-0-11", "web-4")
     await tick()
     expect(readinessOf("web-0-11")).toBe(100)
-    expect(summary().blocked).toBe(1)
+    expect(summary.blocked).toBe(1)
 
 test "an unknown identifier changes nothing":
     resetBoard()
@@ -53,7 +53,7 @@ test "an unknown identifier changes nothing":
     toggleCheck("web-0-11", "no-such-check")
     expect(advance("no-such-release")).toBe(false)
     await tick()
-    expect(summary()).toEqual({tracked: 3, shipped: 1, blocked: 2, readiness: 69})
+    expect(summary).toEqual({tracked: 3, shipped: 1, blocked: 2, readiness: 69})
 
 test "a check added through the store belongs to its release":
     resetBoard()
@@ -79,4 +79,4 @@ test "a release leaves verifying only after its checklist is clear":
     expect(stageOf("web-0-11")).toBe(Stage.released)
     expect(advance("web-0-11")).toBe(false)
     await tick()
-    expect(summary().shipped).toBe(2)
+    expect(summary.shipped).toBe(2)

@@ -66,6 +66,59 @@ const isUser = accepts(untrusted, User)
 const decodedThroughAlias: UserId = decode("u-2", UserId)
 
 // ---------------------------------------------------------------------------
+// Generic records: a record whose field types are supplied where it is used
+// ---------------------------------------------------------------------------
+
+// `<T>` on a `type` is the same parameter list a `def` takes, bounds included.
+export type Box<T>:
+    value: T
+
+export type Pair<A, B>:
+    left: A
+    right: B
+
+// A bound says what the body may do with the parameter, exactly as on a `def`.
+export type Sorted<T: Comparable>:
+    items: List<T>
+
+const stringBox: Box<string> = {value: "kept"}
+const numberBox: Box<number> = {value: 1}
+const userBox: Box<User> = {value: {id: "u-4", name: "Mei", avatar: null}}
+const labelled: Pair<string, number> = {left: "count", right: 2}
+const ranked: Sorted<number> = {items: [3, 1, 2]}
+
+// Every instantiation is its own type: `Box<string>` and `Box<number>` are two
+// types, and assigning one to the other is refused.
+export def unwrap<T>(box: Box<T>) -> T:
+    return box.value
+
+const unwrapped: string = unwrap(stringBox)
+
+// A generic record refers to itself with its own parameters, which is what
+// makes a recursive shape finite: `Tree<string>` needs only `Tree<string>`.
+export type Tree<T>:
+    label: T
+    kids: List<Tree<T>>
+
+const tree: Tree<string> = {label: "root", kids: [{label: "leaf", kids: []}]}
+
+// Naming an instantiation is what turns it into a value — the same move
+// `type Scores = Map<string, number>` makes above. The name *is* that
+// instantiation's runtime validator.
+export type StringBox = Box<string>
+export type StringTree = Tree<string>
+
+const validatedBox = StringBox.parse({value: "raw"})
+const treeMatches = StringTree.is(tree)
+
+// A readonly field is covariant, a mutable one is invariant — variance is
+// decided field by field rather than declared on the parameter.
+type Held<T>:
+    readonly value: T
+
+const heldUser: Held<User> = {value: {id: "u-5", name: "Ana", avatar: null}}
+
+// ---------------------------------------------------------------------------
 // Enums
 // ---------------------------------------------------------------------------
 
@@ -174,4 +227,6 @@ export const chapterFour = {
     identifier, handler, scores, maybe, readonlyUsers, decoded, isUser,
     decodedThroughAlias, status, parsed, members, isStatus, spreadMembers,
     wireValue, throughAlias, throughAliasParsed, throughAliasMembers,
+    stringBox, numberBox, userBox, labelled, ranked, unwrapped, tree,
+    validatedBox, treeMatches, heldUser,
 }

@@ -3,7 +3,8 @@ import { blockContainsDirectAwait, testFunctionName } from "./ast.ts";
 import type { BindingPattern, Expression, FunctionDeclaration, MatchPattern, Program, Statement, TypeReference } from "./ast.ts";
 import { diagnostic, type Diagnostic } from "./diagnostic.ts";
 import { JavaScriptEmitter } from "./emitter.ts";
-import type { CompilerEmitter, CompilerEmitterOptions, CompilerExtension, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface, ModuleTest } from "./extension.ts";
+import { programWithEmbeddedJavaScriptImports } from "./embedded-module.ts";
+import type { CompilerEmbeddedJavaScriptModule, CompilerEmitter, CompilerEmitterOptions, CompilerExtension, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface, ModuleTest } from "./extension.ts";
 import { Lexer } from "./lexer.ts";
 import { isParserComplexityFailure, Parser } from "./parser.ts";
 import { SourceText } from "./source.ts";
@@ -13,6 +14,7 @@ import { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
 import {
   bindNamedTypeParameters,
   boolType,
+  genericApplicationType,
   invalidType,
   isTypeParameterBound,
   mergeTypes,
@@ -25,6 +27,7 @@ import {
   stringType,
   unknownType,
   type EnumInfo,
+  type GenericTypeInfo,
   type TypeParameterBound,
   type ValueType,
 } from "./types.ts";
@@ -40,9 +43,9 @@ export { VELAR_EXTENSION_PROTOCOL_VERSION } from "./extension.ts";
 // D62 rule 157: the editor's keyword list is the lexer's table plus Core's
 // contextual roster, so it is published rather than retyped downstream.
 export { keywordKinds } from "./token.ts";
-export type { CompilerAnalysisExtension, CompilerAnalyzerFactory, CompilerDependencyContext, CompilerEditorCompletion, CompilerEditorExtension, CompilerEmitter, CompilerEmitterOptions, CompilerExtension, CompilerFormattingExtension, CompilerInspectionExtension, CompilerInterfaceContext, CompilerIntrinsicAnalysisContext, CompilerLexicalExtension, CompilerLexicalScanContext, CompilerLexicalScanResult, CompilerModuleExtension, CompilerParserFactory, CompilerProjectEditorCompletion, CompilerProjectEditorCompletionContext, CompilerProjectEditorCompletionResult, CompilerProjectEditorExtension, CompilerProjectEditorRenameContext, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface, ModuleTest, VelarExtensionContract, VelarExtensionKind } from "./extension.ts";
+export type { CompilerAnalysisExtension, CompilerAnalyzerFactory, CompilerDependencyContext, CompilerEditorCompletion, CompilerEditorExtension, CompilerEmbeddedJavaScriptModule, CompilerEmitter, CompilerEmitterOptions, CompilerExtension, CompilerFormattingExtension, CompilerInspectionExtension, CompilerInterfaceContext, CompilerIntrinsicAnalysisContext, CompilerLexicalExtension, CompilerLexicalScanContext, CompilerLexicalScanResult, CompilerModuleExtension, CompilerParserFactory, CompilerProjectEditorCompletion, CompilerProjectEditorCompletionContext, CompilerProjectEditorCompletionResult, CompilerProjectEditorExtension, CompilerProjectEditorRenameContext, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface, ModuleTest, VelarExtensionContract, VelarExtensionKind } from "./extension.ts";
 export { semanticImportAt, semanticModuleReferenceAt, semanticSymbolAt, semanticVisibleSymbolsAt, type CompilerSemanticExtension, type SemanticDeclareOptions, type SemanticExpression, type SemanticExtensionContext, type SemanticFunctionLike, type SemanticImport, type SemanticIndex, type SemanticMember, type SemanticMemberReference, type SemanticModuleReference, type SemanticReference, type SemanticScope, type SemanticSymbol, type SemanticSymbolKind } from "./semantic.ts";
-export { analysisTypeIdentity, describeType, isReadonlyView, optionalOf, readonlyViewOf, semanticTypeIdentity, unionOf, type EnumInfo, type ValueType } from "./types.ts";
+export { analysisTypeIdentity, describeType, genericApplicationType, isReadonlyView, optionalOf, readonlyViewOf, semanticTypeIdentity, unionOf, type EnumInfo, type GenericApplication, type GenericTypeInfo, type ValueType } from "./types.ts";
 export { permanentNamespaceCoveringModule } from "./analyzer.ts";
 export type { AnalysisContext, ClassField, ClassInfo, InitializationImportRead } from "./analyzer.ts";
 export {
@@ -54,12 +57,15 @@ export {
   CORE_VOCABULARY_NAMES,
   CORE_WORDS,
   PERMANENT_NAMESPACE_NAMES,
+  TYPE_PARAMETER_DECLARATION_FORMS,
+  typeParameterDeclarationFormsPhrase,
   type CoreContextualKeyword,
   type CoreContextualKeywordWord,
   type CoreNumericSuffix,
   type CorePreludeName,
   type CoreVocabularyName,
   type PermanentNamespaceName,
+  type TypeParameterDeclarationForm,
 } from "./core-vocabulary.ts";
 
 export interface CompileOptions {
@@ -74,6 +80,7 @@ export interface CompileOptions {
 export interface CompileResult {
   readonly code: string | null;
   readonly sourceMap: string | null;
+  readonly embeddedModules: readonly CompilerEmbeddedJavaScriptModule[];
   readonly css: string | null;
   readonly styleSegments: CompilerStyleSegments | null;
   readonly runtimeModules: readonly string[];
@@ -118,13 +125,14 @@ export interface ModuleInspection {
 export function inspectModule(text: string, options: Pick<CompileOptions, "path" | "extensions"> = {}): ModuleInspection {
   const extensions = normalizedExtensions(options.extensions ?? []);
   const parsed = parseModule(text, options.path ?? "<source>", extensions);
+  const semanticProgram = programWithEmbeddedJavaScriptImports(parsed.program, parsed.source.path);
   return {
     diagnostics: parsed.diagnostics,
     source: parsed.source,
     dependencies: dependenciesOf(parsed.program, extensions),
     resources: resourcesOf(parsed.program, extensions),
-    moduleInterface: interfaceOf(parsed.program, parsed.source.path, extensions),
-    semanticIndex: buildSemanticIndex(parsed.program, parsed.source, new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), extensions.flatMap((extension) => extension.semantic ? [extension.semantic] : [])),
+    moduleInterface: interfaceOf(semanticProgram, parsed.source.path, extensions),
+    semanticIndex: buildSemanticIndex(semanticProgram, parsed.source, new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), extensions.flatMap((extension) => extension.semantic ? [extension.semantic] : [])),
   };
 }
 
@@ -140,6 +148,7 @@ export function compile(text: string, options: CompileOptions = {}): CompileResu
 function compileUnchecked(text: string, options: CompileOptions): CompileResult {
   const extensions = normalizedExtensions(options.extensions ?? []);
   const parsed = parseModule(text, options.path ?? "<source>", extensions);
+  const semanticProgram = programWithEmbeddedJavaScriptImports(parsed.program, parsed.source.path);
   const diagnostics = [...parsed.diagnostics];
   const analysisExtensions = extensions.flatMap((extension) => extension.analysis ? [extension.analysis] : []);
   const analyzerExtensions = extensions.filter((extension) => extension.analyzer);
@@ -171,7 +180,7 @@ function compileUnchecked(text: string, options: CompileOptions): CompileResult 
     // Omitted results use isolated semantic passes so forward and recursive
     // calls converge before the one authoritative diagnostic/lowering pass.
     // Intermediate diagnostics are intentionally discarded.
-    const initialDiagnostics = analyzer.analyze(parsed.program);
+    const initialDiagnostics = analyzer.analyze(semanticProgram);
     let inferredResults = analyzer.inferredFunctionResults();
     if (inferredResults.size === 0) {
       diagnostics.push(...initialDiagnostics);
@@ -179,23 +188,24 @@ function compileUnchecked(text: string, options: CompileOptions): CompileResult 
       const maximumPasses = Math.min(Math.max(inferredResults.size + 2, 4), 256);
       for (let pass = 0; pass < maximumPasses; pass += 1) {
         const probe = createAnalyzer(inferredResults);
-        probe.analyze(parsed.program);
+        probe.analyze(semanticProgram);
         const next = probe.inferredFunctionResults();
         const stable = Analyzer.inferredFunctionResultsMatch(inferredResults, next);
         inferredResults = next;
         if (stable) break;
       }
       analyzer = createAnalyzer(inferredResults, true);
-      diagnostics.push(...analyzer.analyze(parsed.program));
+      diagnostics.push(...analyzer.analyze(semanticProgram));
     }
   }
 
   diagnostics.sort((left, right) => left.span.start - right.span.start || left.code.localeCompare(right.code));
   const emitterExtensions = extensions.filter((extension) => extension.createEmitter);
   if (emitterExtensions.length > 1) throw new Error("Only one compiler extension may own JavaScript emission");
-  const emitterOptions: CompilerEmitterOptions = options.sharedRuntimeModules === undefined
-    ? {}
-    : { sharedRuntimeModules: options.sharedRuntimeModules };
+  const emitterOptions: CompilerEmitterOptions = {
+    sourcePath: parsed.source.path,
+    ...(options.sharedRuntimeModules === undefined ? {} : { sharedRuntimeModules: options.sharedRuntimeModules }),
+  };
   const emitter: CompilerEmitter = emitterExtensions[0]?.createEmitter?.(
     analyzer.loweringHints(),
     options.exportFunctions ?? new Set(),
@@ -206,12 +216,13 @@ function compileUnchecked(text: string, options: CompileOptions): CompileResult 
     ?? new JavaScriptEmitter(analyzer.loweringHints(), options.exportFunctions, emitterOptions);
   const code = diagnostics.length === 0 ? emitter.emit(parsed.program) : null;
   const sourceMap = code === null ? null : emitter.sourceMap(parsed.source);
+  const embeddedModules = code === null ? [] : emitter.embeddedModules?.(parsed.source) ?? [];
   const css = code === null ? null : emitter.css?.() ?? null;
   const styleSegments = code === null ? null : emitter.styleSegments?.() ?? null;
   const runtimeModules = code === null ? [] : emitter.runtimeModules?.() ?? [];
   const semanticExpressions = analyzer.semanticExpressions();
   const semanticIndex = buildSemanticIndex(
-    parsed.program,
+    semanticProgram,
     parsed.source,
     analyzer.semanticTypes(),
     analyzer.semanticMembers(),
@@ -228,6 +239,7 @@ function compileUnchecked(text: string, options: CompileOptions): CompileResult 
   return {
     code,
     sourceMap,
+    embeddedModules,
     css,
     styleSegments,
     runtimeModules,
@@ -237,7 +249,7 @@ function compileUnchecked(text: string, options: CompileOptions): CompileResult 
     dependencies: dependenciesOf(parsed.program, extensions),
     resources: resourcesOf(parsed.program, extensions),
     moduleInterface: interfaceOf(
-      parsed.program,
+      semanticProgram,
       parsed.source.path,
       extensions,
       analyzer.semanticTypes(),
@@ -256,6 +268,7 @@ function complexityFailureResult(text: string, options: CompileOptions): Compile
   return {
     code: null,
     sourceMap: null,
+    embeddedModules: [],
     css: null,
     styleSegments: null,
     runtimeModules: [],
@@ -599,6 +612,12 @@ function interfaceOf(
       aliasCache.set(type.name, expanded);
       return type.readonlyView ? readonlyViewOf(expanded) : expanded;
     }
+    // D55 rule 121: an alias inside a type argument is transparent here too,
+    // so the interface publishes the same instantiation identity the analyzer
+    // computed for the body.
+    if (type.kind === "named" && type.application) {
+      return { ...type, application: { ...type.application, arguments: type.application.arguments.map((argument) => expandAliases(argument, seen)) } };
+    }
     if (type.kind === "optional") return optionalOf(expandAliases(type.inner, seen));
     if (type.kind === "list") return { ...type, element: expandAliases(type.element, seen) };
     if (type.kind === "set") return { ...type, element: expandAliases(type.element, seen) };
@@ -630,6 +649,7 @@ function interfaceOf(
     .map(([name, type]) => [name, resolveNominals(expandAliases(type), classIdentities, enumNames, namedTypeIdentities)]));
   const namedTypes = new Map<string, ReadonlyMap<string, ValueType>>();
   const namedTypeReadonlyFields = new Map<string, ReadonlySet<string>>();
+  const genericTypes = new Map<string, GenericTypeInfo>();
   const typeAliases = new Map<string, ValueType>();
   const enums = new Map<string, EnumInfo>();
   const classes = new Map<string, ClassInfo>();
@@ -655,8 +675,25 @@ function interfaceOf(
 
   for (const statement of program.body) {
     if (statement.kind === "TypeDeclaration") {
-      namedTypes.set(statement.name, new Map(statement.fields.map((field) => [field.name, resolve(field.type)])));
       const readonlyFields = new Set(statement.fields.filter((field) => field.readonly).map((field) => field.name));
+      // D55 rule 120: a generic record crosses the boundary as a template. Its
+      // field table still has the `parameter` kinds in it, which is what lets a
+      // dependent instantiate it with an argument this module never named.
+      if (statement.typeParameters?.length) {
+        const frame = new Map<string, ValueType>(statement.typeParameters
+          .map((parameter, index) => [parameter.name, { kind: "parameter", name: parameter.name, index }] as const));
+        genericTypes.set(statement.name, {
+          identity: namedTypeIdentities.get(statement.name)!,
+          name: statement.name,
+          parameterNames: statement.typeParameters.map((parameter) => parameter.name),
+          parameterBounds: statement.typeParameters.map((parameter) =>
+            parameter.bound && isTypeParameterBound(parameter.bound) ? parameter.bound : null),
+          fields: new Map(statement.fields.map((field) => [field.name, bindNamedTypeParameters(resolve(field.type), frame)])),
+          ...(readonlyFields.size > 0 ? { readonlyFields } : {}),
+        });
+        continue;
+      }
+      namedTypes.set(statement.name, new Map(statement.fields.map((field) => [field.name, resolve(field.type)])));
       if (readonlyFields.size > 0) namedTypeReadonlyFields.set(statement.name, readonlyFields);
     } else if (statement.kind === "EnumDeclaration") {
       enums.set(statement.name, enumNames.get(statement.name)!);
@@ -783,15 +820,20 @@ function interfaceOf(
   for (const statement of program.body) {
     if (!("exported" in statement) || !statement.exported) continue;
     if (statement.kind === "TypeDeclaration") {
-      exports.set(statement.name, {
-        kind: "typeObject",
-        name: statement.name,
-        value: {
-          kind: "named",
+      // D55 rule 126: a generic record's export is the instantiation factory,
+      // not a Type object — it has no `is` of its own, so it carries no value
+      // shape and the analyzer refuses to read it as one.
+      exports.set(statement.name, statement.typeParameters?.length
+        ? { kind: "typeObject", name: statement.name }
+        : {
+          kind: "typeObject",
           name: statement.name,
-          identity: namedTypeIdentities.get(statement.name)!,
-        },
-      });
+          value: {
+            kind: "named",
+            name: statement.name,
+            identity: namedTypeIdentities.get(statement.name)!,
+          },
+        });
     } else if (statement.kind === "TypeAliasDeclaration") {
       exports.set(statement.name, { kind: "typeObject", name: statement.name, value: typeAliases.get(statement.name)! });
     } else if (statement.kind === "EnumDeclaration") {
@@ -849,6 +891,7 @@ function interfaceOf(
     namedTypes,
     namedTypeReadonlyFields,
     namedTypeIdentities,
+    ...(genericTypes.size > 0 ? { genericTypes } : {}),
     typeAliases,
     enums,
     classes,
@@ -896,6 +939,15 @@ function resolveNominals(
   enumNames: ReadonlyMap<string, EnumInfo>,
   namedTypeIdentities: ReadonlyMap<string, string>,
 ): ValueType {
+  // D55 rule 121: the interface is where a module's local names become the
+  // identities its dependents see, and an application has to make that crossing
+  // whole — the declaration *and* every argument — or the two sides of the
+  // boundary would compute two different instantiation identities for one type.
+  if (type.kind === "named" && type.application) {
+    const arguments_ = type.application.arguments.map((argument) => resolveNominals(argument, classIdentities, enumNames, namedTypeIdentities));
+    const declaration = namedTypeIdentities.get(type.application.name) ?? type.application.declaration;
+    return genericApplicationType(declaration, type.application.name, arguments_, type.readonlyView === true);
+  }
   if (type.kind === "named" && classIdentities.has(type.name)) {
     const identity = classIdentities.get(type.name)!;
     return {

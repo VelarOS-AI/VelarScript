@@ -441,7 +441,7 @@ import {onError} from "velar/app"
 
 component App:
     state count = 0
-    const label = computed(() => f"count is {count}")
+    const label = cached(() => f"count is {count}")
 
     def bump():
         count += 1

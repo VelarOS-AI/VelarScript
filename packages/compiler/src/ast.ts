@@ -10,6 +10,7 @@ export type CoreStatement =
   | ImportDeclaration
   | ReExportDeclaration
   | ExternModuleDeclaration
+  | EmbeddedJavaScriptDeclaration
   | TypeDeclaration
   | TypeAliasDeclaration
   | EnumDeclaration
@@ -86,6 +87,64 @@ export interface ExternModuleDeclaration {
   readonly span: Span;
 }
 
+/** The declaration-shaped half shared by external-module and embedded-JS contracts. */
+export interface ExternModuleContract {
+  readonly functions: readonly ExternFunctionDeclaration[];
+  readonly constants: readonly ExternConstantDeclaration[];
+  readonly classes: readonly ExternClassDeclaration[];
+  readonly span: Span;
+}
+
+/** D53 rule 117: one Core-owned raw JavaScript module embedded in a `.vel` module. */
+export interface EmbeddedJavaScriptDeclaration {
+  readonly kind: "EmbeddedJavaScriptDeclaration";
+  readonly unsafe: boolean;
+  /** Checked blocks receive these values as real synchronous factory parameters. */
+  readonly captures: readonly EmbeddedJavaScriptCapture[];
+  /** Exact, contiguous source slice: `source[i] === moduleText[sourceSpan.start + i]`. */
+  readonly source: string;
+  readonly sourceSpan: Span;
+  /** Every statically named ESM export and the local binding that supplies it. */
+  readonly exports: readonly EmbeddedJavaScriptExport[];
+  /** Imports stay at sibling-module top level when a checked block becomes a factory. */
+  readonly imports: readonly EmbeddedJavaScriptImport[];
+  /** All module-level JS bindings; capture parameters may not shadow them. */
+  readonly bindings: readonly EmbeddedJavaScriptBinding[];
+  /** Acorn-derived source edits; no JavaScript is rediscovered with text matching. */
+  readonly factoryEdits: readonly EmbeddedJavaScriptFactoryEdit[];
+  /** Present for `extern js(...)`, absent for `unsafe js`. */
+  readonly contract: ExternModuleContract | null;
+  readonly span: Span;
+}
+
+export interface EmbeddedJavaScriptCapture {
+  readonly name: string;
+  readonly nameSpan: Span;
+  readonly type: TypeReference;
+  readonly span: Span;
+}
+
+export interface EmbeddedJavaScriptExport {
+  readonly name: string;
+  readonly nameSpan: Span;
+  readonly local: string;
+  readonly localSpan: Span;
+}
+
+export interface EmbeddedJavaScriptImport {
+  readonly span: Span;
+}
+
+export interface EmbeddedJavaScriptBinding {
+  readonly name: string;
+  readonly nameSpan: Span;
+}
+
+export interface EmbeddedJavaScriptFactoryEdit {
+  readonly span: Span;
+  readonly replacement: string;
+}
+
 export interface ExternFunctionDeclaration {
   readonly asynchronous: boolean;
   readonly name: string;
@@ -142,6 +201,8 @@ export interface TypeDeclaration {
   readonly kind: "TypeDeclaration";
   readonly exported: boolean;
   readonly name: string;
+  /** D55 rule 120: `type Box<T>` / `type Box<T: Data>`, the same list `def` takes. */
+  readonly typeParameters?: readonly TypeParameterDeclaration[];
   readonly fields: readonly TypeField[];
   readonly span: Span;
 }

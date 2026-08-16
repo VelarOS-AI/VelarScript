@@ -76,6 +76,9 @@ const browserPerformanceInitScript = String.raw`
   const nativeEventTarget = globalThis.EventTarget;
   const nativeEvent = globalThis.Event;
   const nativeElement = globalThis.Element;
+  const nativeDOMRectReadOnly = globalThis.DOMRectReadOnly;
+  const nativeCSSStyleDeclaration = globalThis.CSSStyleDeclaration;
+  const getComputedStyle_ = globalThis.getComputedStyle;
   const getOwnPropertyDescriptor = nativeObject.getOwnPropertyDescriptor;
   const defineProperty = nativeObject.defineProperty;
   const freeze = nativeObject.freeze;
@@ -94,6 +97,18 @@ const browserPerformanceInitScript = String.raw`
   const eventTarget = getOwnPropertyDescriptor(nativeEvent.prototype, "target")?.get;
   const eventTimeStamp = getOwnPropertyDescriptor(nativeEvent.prototype, "timeStamp")?.get;
   const elementScrollTo = getOwnPropertyDescriptor(nativeElement.prototype, "scrollTo")?.value;
+  const elementBoundingClientRect = getOwnPropertyDescriptor(nativeElement.prototype, "getBoundingClientRect")?.value;
+  const domRectPrototype = getOwnPropertyDescriptor(nativeDOMRectReadOnly, "prototype")?.value;
+  const rectX = getOwnPropertyDescriptor(domRectPrototype, "x")?.get;
+  const rectY = getOwnPropertyDescriptor(domRectPrototype, "y")?.get;
+  const rectWidth = getOwnPropertyDescriptor(domRectPrototype, "width")?.get;
+  const rectHeight = getOwnPropertyDescriptor(domRectPrototype, "height")?.get;
+  const rectTop = getOwnPropertyDescriptor(domRectPrototype, "top")?.get;
+  const rectRight = getOwnPropertyDescriptor(domRectPrototype, "right")?.get;
+  const rectBottom = getOwnPropertyDescriptor(domRectPrototype, "bottom")?.get;
+  const rectLeft = getOwnPropertyDescriptor(domRectPrototype, "left")?.get;
+  const cssStylePrototype = getOwnPropertyDescriptor(nativeCSSStyleDeclaration, "prototype")?.value;
+  const cssGetPropertyValue = getOwnPropertyDescriptor(cssStylePrototype, "getPropertyValue")?.value;
   const performancePrototype = callPrototype(nativePerformance);
   const performanceNow = getOwnPropertyDescriptor(performancePrototype, "now")?.value;
   const performanceEntriesByType = getOwnPropertyDescriptor(performancePrototype, "getEntriesByType")?.value;
@@ -157,6 +172,35 @@ const browserPerformanceInitScript = String.raw`
     }
     call(elementScrollTo, element, [{ left: x, top: y, behavior: "auto" }], "Element.scrollTo");
     return null;
+  }
+  function rectangleNumber(rectangle, getter, name) {
+    const value = call(getter, rectangle, [], "DOMRect." + name);
+    if (typeof value !== "number" || !call(numberFinite, nativeNumber, [value], "Number.isFinite")) {
+      throw new TypeError("Browser test rectangle " + name + " is not finite");
+    }
+    return value;
+  }
+  function box(element) {
+    if (!(element instanceof nativeElement)) throw new TypeError("browser.box target must be an Element");
+    const rectangle = call(elementBoundingClientRect, element, [], "Element.getBoundingClientRect");
+    return freeze({
+      x: rectangleNumber(rectangle, rectX, "x"),
+      y: rectangleNumber(rectangle, rectY, "y"),
+      width: rectangleNumber(rectangle, rectWidth, "width"),
+      height: rectangleNumber(rectangle, rectHeight, "height"),
+      top: rectangleNumber(rectangle, rectTop, "top"),
+      right: rectangleNumber(rectangle, rectRight, "right"),
+      bottom: rectangleNumber(rectangle, rectBottom, "bottom"),
+      left: rectangleNumber(rectangle, rectLeft, "left"),
+    });
+  }
+  function style(element, property) {
+    if (!(element instanceof nativeElement)) throw new TypeError("browser.style target must be an Element");
+    if (typeof property !== "string") throw new TypeError("browser.style property must be text");
+    const declaration = call(getComputedStyle_, globalThis, [element], "getComputedStyle");
+    const value = call(cssGetPropertyValue, declaration, [property], "CSSStyleDeclaration.getPropertyValue");
+    if (typeof value !== "string") throw new TypeError("browser.style result must be text");
+    return value;
   }
   function prepare(element, eventName) {
     if (eventName !== "click" && eventName !== "input" && eventName !== "beforeinput-or-input") {
@@ -222,7 +266,7 @@ const browserPerformanceInitScript = String.raw`
     call(mapDelete, measurements, [id], "Map.delete");
     return null;
   }
-  defineProperty(globalThis, key, { value: freeze({ timings, scroll, prepare, finish: finishMeasurement, cancel }), enumerable: false, configurable: false, writable: false });
+  defineProperty(globalThis, key, { value: freeze({ timings, scroll, box, style, prepare, finish: finishMeasurement, cancel }), enumerable: false, configurable: false, writable: false });
 })();
 `;
 
@@ -686,6 +730,24 @@ function installBrowserRuntime(page: Page, origin: string, base: string, runtime
     },
     async text(selector: unknown) { return await locator(selector).textContent() ?? ""; },
     async attribute(selector: unknown, name: unknown) { return locator(selector).getAttribute(String(name)); },
+    async box(selector: unknown) {
+      return locator(selector).evaluate((element, key) => {
+        const runtime = Object.getOwnPropertyDescriptor(globalThis, Symbol.for(key))?.value as {
+          box?: (target: Element) => unknown;
+        } | undefined;
+        if (!runtime || typeof runtime.box !== "function") throw new Error("Browser test geometry runtime is unavailable");
+        return runtime.box(element);
+      }, browserPerformanceRuntimeKey);
+    },
+    async style(selector: unknown, property: unknown) {
+      return locator(selector).evaluate((element, input) => {
+        const runtime = Object.getOwnPropertyDescriptor(globalThis, Symbol.for(input.key))?.value as {
+          style?: (target: Element, property: string) => unknown;
+        } | undefined;
+        if (!runtime || typeof runtime.style !== "function") throw new Error("Browser test computed-style runtime is unavailable");
+        return runtime.style(element, input.property);
+      }, { key: browserPerformanceRuntimeKey, property: String(property) });
+    },
     async namespace(selector: unknown) {
       return locator(selector).evaluate((element) => element.namespaceURI ?? "");
     },

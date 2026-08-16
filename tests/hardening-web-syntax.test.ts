@@ -87,13 +87,13 @@ type Message:
 def preview(message: Message?) -> string:
     return message?.text ?? ""
 
-component Probe(messages: Map<string, Message>):
+component Probe(messages: readonly Map<string, Message>):
     return <main>{[1].map(item => <p>{preview(messages.get("id"))}</p>)}</main>
 `.trimStart();
   const result = compile(source);
   const argument = 'messages.get("id")';
   const start = source.indexOf(argument);
-  const diagnostic = result.diagnostics.find((item) => item.message.startsWith("Cannot assign readonly Message? to Message?"));
+  const diagnostic = result.diagnostics.find((item) => item.message.includes("Cannot assign readonly Message? to Message?"));
 
   assert.deepEqual(diagnostic?.span, { start, end: start + argument.length });
   assert.ok(result.semanticIndex.expressions.some((expression) => expression.span.start === start

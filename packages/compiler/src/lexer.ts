@@ -1,5 +1,6 @@
 import { CORE_NUMERIC_SUFFIXES } from "./core-vocabulary.ts";
 import { diagnostic, mechanicalFix, recoveredDiagnostic, type Diagnostic, type DiagnosticFix } from "./diagnostic.ts";
+import { scanEmbeddedJavaScriptLiteral, type EmbeddedJavaScriptTokenPayload } from "./embedded-javascript.ts";
 import type { CompilerLexicalExtension } from "./extension.ts";
 import { findInterpolatedExpressionEnd, scanStringEscape, scanStringLiteral, type StringLiteralScan, type StringTokenPayload } from "./interpolated-string.ts";
 import { webNumericUnitOwner } from "./language-guidance.ts";
@@ -122,6 +123,15 @@ export class Lexer {
       }
 
       if (this.readExtensionToken()) continue;
+
+      // D53 rule 117: only the two complete statement-head shapes claim a
+      // multiline backtick. Ordinary backtick strings keep their existing
+      // inline-only scanner and diagnostics everywhere else.
+      const embeddedJavaScript = scanEmbeddedJavaScriptLiteral(this.text, start);
+      if (embeddedJavaScript) {
+        this.readEmbeddedJavaScript(embeddedJavaScript);
+        continue;
+      }
 
       // A raw inline string may legally start with a doubled delimiter:
       // r"""quoted"" text". Prefer that unambiguous current spelling over
@@ -700,6 +710,37 @@ export class Lexer {
       this.atLineStart = true;
       this.tokens.push({ kind: "newline", value: "", span: span(this.index, this.index) });
     }
+  }
+
+  private readEmbeddedJavaScript(scanned: NonNullable<ReturnType<typeof scanEmbeddedJavaScriptLiteral>>): void {
+    this.index = scanned.end;
+    if (!scanned.openingLineBreak) {
+      this.diagnostics.push(diagnostic(
+        "VEL1003",
+        "An inline JavaScript source block begins on the line after its opening backtick",
+        span(scanned.start, Math.min(this.text.length, scanned.start + 1)),
+      ));
+    }
+    if (!scanned.closed) {
+      this.diagnostics.push(diagnostic(
+        "VEL1003",
+        scanned.kind === "checked"
+          ? "Unterminated checked JavaScript source block; close it with '`:' alone at the declaration's indentation"
+          : "Unterminated unsafe JavaScript source block; close it with '`' alone at the declaration's indentation",
+        span(scanned.start, scanned.end),
+      ));
+    }
+    const sourceSpan = span(scanned.sourceStart, scanned.sourceEnd);
+    this.tokens.push({
+      kind: "string",
+      value: this.text.slice(sourceSpan.start, sourceSpan.end),
+      span: span(scanned.start, scanned.end),
+      payload: {
+        embeddedJavaScript: true,
+        kind: scanned.kind,
+        sourceSpan,
+      } satisfies EmbeddedJavaScriptTokenPayload,
+    });
   }
 
   private diagnoseStringContents(scanned: StringLiteralScan): void {

@@ -102,12 +102,12 @@ def readA() -> number:
         return base + f()
     return base
 
-const a = computed(readA)
+const a = cached(readA)
 
 def readB() -> number:
     return base + a()
 
-const b = computed(readB)
+const b = cached(readB)
 bRef = b
 
 test "cycle yields the owned error and the flush survives":
@@ -159,7 +159,7 @@ def noisy() -> number:
         step += 1
     return counter
 
-const loud = computed(noisy)
+const loud = cached(noisy)
 
 watch loud() as current, previous:
     reports.append(f"watched {current}")

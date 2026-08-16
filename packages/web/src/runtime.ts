@@ -3313,6 +3313,8 @@ export const browser = Object.freeze({
   scroll(selector, x, y) { return browserRuntime().scroll(selector, x, y); },
   text(selector) { return browserRuntime().text(selector); },
   attribute(selector, name) { return browserRuntime().attribute(selector, name); },
+  box(selector) { return browserRuntime().box(selector); },
+  style(selector, property) { return browserRuntime().style(selector, property); },
   namespace(selector) { return browserRuntime().namespace(selector); },
   count(selector) { return browserRuntime().count(selector); },
   visible(selector) { return browserRuntime().visible(selector); },

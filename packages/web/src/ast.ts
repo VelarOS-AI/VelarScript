@@ -13,6 +13,7 @@ export interface WebComponentDeclaration {
 export type WebComponentItem =
   | CoreStatement
   | WebStateDeclaration
+  | WebComputedDeclaration
   | WebResourceDeclaration
   | WebActionDeclaration
   | WebWatchDeclaration
@@ -28,6 +29,21 @@ export interface WebExposeDeclaration {
 
 export interface WebStateDeclaration {
   readonly kind: "ExtensionStatement:web:state";
+  readonly exported: boolean;
+  readonly name: string;
+  readonly type: TypeReference | null;
+  readonly initializer: Expression;
+  readonly span: Span;
+}
+
+/**
+ * D71 rule 182: the reactive half of `const`. `computed name = expression` is
+ * the one spelling for a derived value — read bare like `state`, never
+ * assigned. It shares `WebStateDeclaration`'s shape because it shares its
+ * declaration grammar; only the reactivity it registers differs.
+ */
+export interface WebComputedDeclaration {
+  readonly kind: "ExtensionStatement:web:computed";
   readonly exported: boolean;
   readonly name: string;
   readonly type: TypeReference | null;
@@ -78,9 +94,13 @@ export interface WebCleanupBlock {
   readonly span: Span;
 }
 
-export interface WebUnsafeCssImportDeclaration {
+export type WebUnsafeCssSource =
+  | { readonly kind: "external"; readonly path: string; readonly span: Span }
+  | { readonly kind: "inline"; readonly css: string; readonly span: Span };
+
+export interface WebUnsafeCssDeclaration {
   readonly kind: "ExtensionStatement:web:unsafe-css";
-  readonly source: string;
+  readonly source: WebUnsafeCssSource;
   readonly placement: "before" | "after";
   readonly span: Span;
 }
@@ -88,10 +108,11 @@ export interface WebUnsafeCssImportDeclaration {
 export type WebStatement =
   | WebComponentDeclaration
   | WebStateDeclaration
+  | WebComputedDeclaration
   | WebResourceDeclaration
   | WebActionDeclaration
   | WebWatchDeclaration
-  | WebUnsafeCssImportDeclaration;
+  | WebUnsafeCssDeclaration;
 
 export interface WebUnitLiteralExpression {
   readonly kind: "ExtensionExpression:web:unit";

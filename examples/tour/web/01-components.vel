@@ -38,9 +38,9 @@ export component TaskRow(task: Task, compact: bool = false):
 component DetailedTaskRow(task: Task, compact: bool = false, tracking: string = "row"):
     return <li data-task={task.id} data-tracking={tracking}>{task.title}{compact ? "" : " (detailed)"}</li>
 
-// Record and collection props enter as transitive readonly views, so a helper
-// that only reads them declares `readonly`. A bare class prop is a behavioral
-// value and passes through as-is.
+// Props keep their declared types. `tasks` opts into a transitive readonly view,
+// `index` keeps the mutable default, and the class prop passes through as the
+// behavioral value it declares.
 export class TaskClock:
     constructor(private const started: number):
         pass

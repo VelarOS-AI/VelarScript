@@ -83,7 +83,7 @@ const languageServerType: ValueType = { kind: "named", name: "LanguageServer", i
 const projectTaskIdentity = "velar/desktop#type:ProjectTask";
 const projectTaskType: ValueType = { kind: "named", name: "ProjectTask", identity: projectTaskIdentity };
 const projectTaskCommandIdentity = "velar/desktop#enum:ProjectTaskCommand";
-const projectTaskCommands = new Set(["check", "test", "build", "run"]);
+const projectTaskCommands = new Set(["check", "test", "build", "fix", "package", "run"]);
 const projectTaskCommandType: ValueType = { kind: "enum", name: "ProjectTaskCommand", identity: projectTaskCommandIdentity };
 const projectTaskOutputChannelIdentity = "velar/desktop#enum:ProjectTaskOutputChannel";
 const projectTaskOutputChannels = new Set(["stdout", "stderr"]);
@@ -253,15 +253,15 @@ const projectTaskErrorFields = new __velarProcessNativeSet(["name", "message"]);
 const projectTaskWaitFields = new __velarProcessNativeSet(["result", "error", "retained"]);
 const projectTaskStopFields = new __velarProcessNativeSet(["result", "error"]);
 export const ProjectTaskCommand = __velarRegisterRuntimeType(__velarProcessFreeze({
-  check: "check", test: "test", build: "build", run: "run",
-  is(value) { return value === "check" || value === "test" || value === "build" || value === "run"; },
+  check: "check", test: "test", build: "build", fix: "fix", package: "package", run: "run",
+  is(value) { return value === "check" || value === "test" || value === "build" || value === "fix" || value === "package" || value === "run"; },
   parse(value) {
     if (!ProjectTaskCommand.is(value)) throw new __velarProcessNativeTypeError("Value does not match ProjectTaskCommand");
     return value;
   },
   // D60 rule 149: values() is the third name charter section 6 reserves on
   // every enum, and it returns a fresh mutable List in declaration order.
-  values() { return ["check", "test", "build", "run"]; },
+  values() { return ["check", "test", "build", "fix", "package", "run"]; },
 }));
 export const ProjectTaskOutputChannel = __velarRegisterRuntimeType(__velarProcessFreeze({
   stdout: "stdout", stderr: "stderr",

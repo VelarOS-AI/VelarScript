@@ -5,8 +5,68 @@ import {
   type ExtensionValueType,
   type ValueType,
 } from "@velarscript/compiler/extension";
+import { LOOK_PUBLIC_TYPE_NAMES } from "./look.ts";
 
 export const VELAR_WEB_TYPE_EXTENSION_ID = "@velarscript/web";
+
+/**
+ * D72 rule 186: every type name the Web extension publishes, in one table.
+ *
+ * It is the single source for three things that used to be written out
+ * separately and therefore drifted: the analysis contract's `primitiveTypes`,
+ * the `textForm` question, and the refusal of a user declaration that would
+ * shadow one of these names. D51 rule 109 settled that such a name is refused
+ * where it is introduced rather than where it is used — the use site can only
+ * report an ambiguity nobody can act on — and this is what makes that refusal
+ * follow the table instead of a hand-copied list of six event types.
+ *
+ * `Component` and `WebNode` belong here for the same reason the rest do: a user
+ * `type Component:` loses to the extension's reading at every use.
+ */
+export const WEB_OWNED_TYPE_NAMES: ReadonlySet<string> = new Set<string>([
+  "WebNode", "Component",
+  "Element", "InputElement", "TextAreaElement", "CanvasElement", "DialogElement",
+  "Blob", "File",
+  "Event", "KeyboardEvent", "PointerEvent", "InputEvent", "CompositionEvent", "ClipboardEvent",
+  ...LOOK_PUBLIC_TYPE_NAMES,
+]);
+
+/** The Web event hierarchy, derived from the published table rather than restated. */
+export const WEB_EVENT_TYPE_NAMES: ReadonlySet<string> = new Set(
+  [...WEB_OWNED_TYPE_NAMES].filter((name) => name === "Event" || name.endsWith("Event")),
+);
+
+/**
+ * D71 rule 184: the interface annotation that says an export is a `computed`
+ * declaration rather than a `state` one. Both travel through `reactiveExports`
+ * so an imported bare read lowers through `.get()`, and this is what tells the
+ * importing module that the derived one is read-only — without it, `bind={...}`
+ * on an imported derived value would compile to a write nothing receives.
+ */
+export const WEB_COMPUTED_EXPORT = Object.freeze({ velarWebExport: "computed" as const });
+
+export function isWebComputedExport(value: unknown): boolean {
+  return typeof value === "object" && value !== null
+    && (value as { readonly velarWebExport?: unknown }).velarWebExport === "computed";
+}
+
+/**
+ * D71 rule 183: `cached(read)` returns the reader it caches. The retired
+ * `computed(...)` spelling is inferred as the same intrinsic while its
+ * migration diagnostic is produced, so the rest of the module still type-checks
+ * against one truthful signature rather than against an unknown name.
+ */
+const cachedUnknownType: ValueType = Object.freeze({ kind: "unknown" });
+const cachedReaderType: ValueType = Object.freeze({ kind: "function", parameters: [], requiredParameters: 0, result: cachedUnknownType });
+
+export const CACHED_INTRINSIC_TYPE: ValueType = Object.freeze({
+  kind: "intrinsic",
+  name: "reactive.computed",
+  parameterNames: ["read"],
+  parameters: [cachedReaderType],
+  requiredParameters: 1,
+  result: cachedReaderType,
+});
 
 export type WebExtensionType = ExtensionValueType & { readonly extensionId: typeof VELAR_WEB_TYPE_EXTENSION_ID };
 export type WebNodeType = WebExtensionType & { readonly family: "node"; readonly role: "value" };

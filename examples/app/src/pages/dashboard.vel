@@ -22,7 +22,7 @@ const headingLook: Look = look:
 // A plain function that reads reactive state is reactive where it is called:
 // `summary()` is read during the render, so the tiles follow the board.
 def metrics() -> List<Metric>:
-    const current = summary()
+    const current = summary
     return [
         {label: "Tracked", value: str(current.tracked)},
         {label: "Shipped", value: str(current.shipped)},
@@ -44,8 +44,8 @@ export component Dashboard:
         </header>
         <MetricGrid items={metrics()} label="Board metrics" />
         <section look={cardLook} aria-label="Overall readiness">
-            <strong data-board-readiness>{f"{summary().readiness}% ready overall"}</strong>
-            <ReadinessBar percent={summary().readiness} label="Overall readiness" />
+            <strong data-board-readiness>{f"{summary.readiness}% ready overall"}</strong>
+            <ReadinessBar percent={summary.readiness} label="Overall readiness" />
         </section>
         <ReleaseList releases={releases} />
         <ActivityFeed />

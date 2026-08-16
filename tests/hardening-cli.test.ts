@@ -62,7 +62,7 @@ print(answer())
     assert.match(checkedCommand.stderr, /Relative JavaScript import target '\.\/helper\.js' cannot be emitted/u);
 
     const inlineEntry = join(directory, "inline.vel");
-    await writeFile(inlineEntry, 'import js unsafe {answer} from "data:text/javascript,export function answer(){return 42}"\nprint(answer())\n', "utf8");
+    await writeFile(inlineEntry, 'unsafe js`\nexport function answer(){return 42}\n`\nprint(answer())\n', "utf8");
     const inline = await compileProject(inlineEntry);
     assert.deepEqual(inline.failures, []);
     assert.deepEqual(inline.modules.flatMap((module) => module.result.diagnostics), []);

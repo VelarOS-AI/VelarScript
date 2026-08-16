@@ -5,6 +5,23 @@ export interface EnumInfo {
   readonly members: ReadonlySet<string>;
 }
 
+/**
+ * D55 rule 120: a generic record declaration, in the form every later stage
+ * needs it — the identity its instantiations are keyed under, the parameter
+ * names and their bounds, and the field table with the `parameter` types still
+ * standing in it. This is the shape that crosses a module interface, so a
+ * dependent can write `Box<its own record>` without the declaring module ever
+ * having anticipated that argument.
+ */
+export interface GenericTypeInfo {
+  readonly identity: string;
+  readonly name: string;
+  readonly parameterNames: readonly string[];
+  readonly parameterBounds: readonly (TypeParameterBound | null)[];
+  readonly fields: ReadonlyMap<string, ValueType>;
+  readonly readonlyFields?: ReadonlySet<string>;
+}
+
 export type ExtensionTypeDisplay =
   | { readonly kind: "named"; readonly name: string }
   | { readonly kind: "constructor"; readonly prefix: string; readonly name: string }
@@ -32,6 +49,26 @@ export interface ExtensionValueType {
   readonly arguments: readonly ValueType[];
   readonly metadata?: Readonly<Record<string, string>>;
   readonly display: ExtensionTypeDisplay;
+}
+
+/**
+ * D55 rule 121: a generic record applied to arguments — `Box<string>`. The
+ * arguments ride on the application rather than inside the `parameter` kind,
+ * which keeps that kind's De Bruijn contract literal; this is D41 item 61's own
+ * precedent for bounds, applied to the other piece of discriminating
+ * information. The canonical instantiation identity is a pure function of
+ * `declaration` and `arguments` (`genericApplicationIdentity`), so every stage
+ * that rebuilds an application — the analyzer, a module interface, generic
+ * `def` substitution — computes the same string without agreeing on anything
+ * else. `fieldsOf` is untouched: the identity keys an already-substituted field
+ * table, so no call site of it ever substitutes.
+ */
+export interface GenericApplication {
+  /** The declaration's identity once nominals are resolved; its source name before that. */
+  readonly declaration: string;
+  /** The declaration's display name (`Box`), so substitution can rebuild the display text. */
+  readonly name: string;
+  readonly arguments: readonly ValueType[];
 }
 
 export type ValueType =
@@ -69,7 +106,7 @@ export type ValueType =
       readonly capabilityHandle?: true;
     }
   | { readonly kind: "parameter"; readonly name: string; readonly index: number }
-  | { readonly kind: "named"; readonly name: string; readonly identity?: string; readonly readonlyView?: true }
+  | { readonly kind: "named"; readonly name: string; readonly identity?: string; readonly readonlyView?: true; readonly application?: GenericApplication }
   | { readonly kind: "class"; readonly name: string; readonly identity?: string }
   | { readonly kind: "enum"; readonly name: string; readonly identity: string }
   | { readonly kind: "enumMember"; readonly name: string; readonly identity: string; readonly member: string }
@@ -238,7 +275,12 @@ export function typeFromSyntax(syntax: TypeSyntax, extension?: ExtensionTypeSynt
         const parameters = arguments_.slice(0, -1);
         return { kind: "function", parameters, requiredParameters: parameters.length, result };
       }
-      return { kind: "named", name: formatTypeSyntax(syntax) };
+      // D55 rule 121: a name core does not own is either an extension family
+      // (claimed above) or a user generic record. The arguments ride along
+      // unresolved so the one stage that knows the declarations — the analyzer,
+      // or a module interface being built — can canonicalize the application;
+      // until then the display name stays exactly the source text it always was.
+      return { kind: "named", name: formatTypeSyntax(syntax), application: { declaration: syntax.name, name: syntax.name, arguments: arguments_ } };
     }
     case "ReadonlyTypeSyntax":
       return readonlyViewOf(nested(syntax.inner));
@@ -258,6 +300,89 @@ export function typeFromSyntax(syntax: TypeSyntax, extension?: ExtensionTypeSynt
         result: nested(syntax.result),
       };
     }
+  }
+}
+
+/**
+ * The canonical identity of one instantiation. D55 rule 121 puts the arguments
+ * in the identity string rather than adding a field `typeIdentity` would have
+ * to learn, so `Box<string>` and `Box<number>` are two identities and
+ * `typeIdentity`'s `named` branch is unchanged. Arguments are keyed by their
+ * own identities, which is what makes `Box<Id>` and `Box<string>` one type when
+ * `Id` is an alias of `string`.
+ */
+export function genericApplicationIdentity(declaration: string, arguments_: readonly ValueType[]): string {
+  return `${declaration}<${arguments_.map((argument) => semanticTypeIdentity(argument)).join(",")}>`;
+}
+
+/** The display text of one instantiation — `Box<string>`. */
+export function genericApplicationName(name: string, arguments_: readonly ValueType[]): string {
+  return `${name}<${arguments_.map(describeType).join(", ")}>`;
+}
+
+/** The one constructor for a resolved application, so identity and text never diverge. */
+export function genericApplicationType(
+  declaration: string,
+  name: string,
+  arguments_: readonly ValueType[],
+  readonlyView = false,
+): Extract<ValueType, { kind: "named" }> {
+  return {
+    kind: "named",
+    name: genericApplicationName(name, arguments_),
+    identity: genericApplicationIdentity(declaration, arguments_),
+    application: { declaration, name, arguments: arguments_ },
+    ...(readonlyView ? { readonlyView: true as const } : {}),
+  };
+}
+
+/**
+ * Rebuilds a type with `map` applied to each type it directly contains. The
+ * nested positions are exactly the ones `substituteTypeParameters` walks, kept
+ * in one place so a traversal added by a caller cannot miss one of them.
+ */
+export function mapNestedTypes(type: ValueType, map: (nested: ValueType) => ValueType): ValueType {
+  switch (type.kind) {
+    case "optional":
+      return optionalOf(map(type.inner));
+    case "list":
+    case "set":
+      return { ...type, element: map(type.element) };
+    case "map":
+      return { ...type, key: map(type.key), value: map(type.value) };
+    case "record":
+      return { ...type, value: map(type.value) };
+    case "promise":
+      return { kind: "promise", value: map(type.value) };
+    case "runtimeType":
+      return { kind: "runtimeType", value: map(type.value) };
+    case "typeObject":
+      return type.value ? { ...type, value: map(type.value) } : type;
+    case "object":
+      return { ...type, fields: new Map([...type.fields].map(([name, value]) => [name, map(value)])) };
+    case "named":
+      return type.application
+        ? { ...type, application: { ...type.application, arguments: type.application.arguments.map(map) } }
+        : type;
+    case "extension":
+      return {
+        ...type,
+        properties: new Map([...type.properties].map(([name, value]) => [name, map(value)])),
+        arguments: type.arguments.map(map),
+      };
+    case "function":
+    case "action":
+    case "intrinsic":
+      return {
+        ...type,
+        parameters: type.parameters.map(map),
+        ...(type.rest ? { rest: map(type.rest) } : {}),
+        result: map(type.result),
+      };
+    case "union":
+      return unionOf(type.members.map(map));
+    default:
+      return type;
   }
 }
 
@@ -301,7 +426,7 @@ export function mutableViewOf(type: ValueType): ValueType {
   if (type.kind === "map") return { kind: "map", key: type.key, value: type.value };
   if (type.kind === "record") return { kind: "record", value: type.value };
   if (type.kind === "object") return { kind: "object", fields: type.fields, ...(type.readonlyFields ? { readonlyFields: type.readonlyFields } : {}), ...(type.optionalFields ? { optionalFields: type.optionalFields } : {}) };
-  if (type.kind === "named") return { kind: "named", name: type.name, ...(type.identity ? { identity: type.identity } : {}) };
+  if (type.kind === "named") return { kind: "named", name: type.name, ...(type.identity ? { identity: type.identity } : {}), ...(type.application ? { application: type.application } : {}) };
   return type;
 }
 
@@ -773,6 +898,11 @@ export function typeContainsParameter(
       return typeContainsParameter(type.value, matches);
     case "object":
       return [...type.fields.values()].some((field) => typeContainsParameter(field, matches));
+    // D55 rule 121: `Box<T>` mentions T as surely as `List<T>` does, so every
+    // rule phrased over "does this type still mention a parameter" — erasure
+    // refusals, generic-callable unification — sees it without being told.
+    case "named":
+      return (type.application?.arguments ?? []).some((argument) => typeContainsParameter(argument, matches));
     case "extension":
       return [...type.properties.values(), ...type.arguments].some((value) => typeContainsParameter(value, matches));
     case "function":
@@ -809,6 +939,11 @@ export function typeContainsRuntimeTypeCheck(type: ValueType): boolean {
       return typeContainsRuntimeTypeCheck(type.value);
     case "object":
       return [...type.fields.values()].some(typeContainsRuntimeTypeCheck);
+    // D55 rule 124: `Box<Type<User>>` puts the carrier in a runtime-validated
+    // field just as `type Holder: t: Type<User>` does, and is refused by the
+    // same VEL4022 at the position that wrote it — no new mechanism.
+    case "named":
+      return (type.application?.arguments ?? []).some(typeContainsRuntimeTypeCheck);
     case "union":
       return type.members.some(typeContainsRuntimeTypeCheck);
     default:
@@ -848,6 +983,16 @@ export function substituteTypeParameters(type: ValueType, bindings: readonly (Va
     }
     case "object":
       return { ...type, fields: new Map([...type.fields].map(([name, value]) => [name, substituteTypeParameters(value, bindings)])) };
+    // D55 rule 121: substituting inside an application rebuilds it through the
+    // one constructor, so the identity a generic `def` produces for `Box<T>`
+    // with `T := string` is the identity the analyzer registered for a written
+    // `Box<string>`. Two spellings of one instantiation cannot drift apart.
+    case "named": {
+      if (!type.application) return type;
+      const arguments_ = type.application.arguments.map((argument) => substituteTypeParameters(argument, bindings));
+      if (arguments_.every((argument, index) => argument === type.application!.arguments[index])) return type;
+      return genericApplicationType(type.application.declaration, type.application.name, arguments_, type.readonlyView === true);
+    }
     case "extension":
       return {
         ...type,
@@ -875,7 +1020,13 @@ export function bindNamedTypeParameters(type: ValueType, parameters: ReadonlyMap
   switch (type.kind) {
     case "named": {
       const bound = !type.identity ? parameters.get(type.name) : undefined;
-      return bound ?? type;
+      if (bound) return bound;
+      // D55 rule 121: `Box<T>` inside a signature binds T exactly as a bare `T`
+      // does; without this the argument stayed a free name and the interface
+      // published a different type than the body was checked against.
+      return type.application
+        ? { ...type, application: { ...type.application, arguments: type.application.arguments.map((argument) => bindNamedTypeParameters(argument, parameters)) } }
+        : type;
     }
     case "optional":
       return optionalOf(bindNamedTypeParameters(type.inner, parameters));
@@ -992,6 +1143,31 @@ function unifyInto(
     const value = runtimeTypeValue(actual);
     if (value) return unifyTypeParameters(pattern.value, value);
   }
+  // D55 rule 121: `def unwrap<T>(box: Box<T>) -> T` solves T from the applied
+  // argument. Two applications unify only when they apply the same declaration,
+  // which is the nominal rule records already follow.
+  if (pattern.kind === "named" && pattern.application) {
+    if (actual.kind === "named" && actual.application
+      && pattern.application.declaration === actual.application.declaration) {
+      for (let index = 0; index < pattern.application.arguments.length; index += 1) {
+        const provided = actual.application.arguments[index];
+        if (provided) unifyTypeParameters(pattern.application.arguments[index]!, provided);
+      }
+      return;
+    }
+    // A record literal is the argument a call most often actually passes, and
+    // it carries no application to pair with. The instantiation's own field
+    // table still names where each parameter stands, so the literal's fields
+    // solve them the same way an `object` pattern's do.
+    const fields = actual.kind === "object" ? actual.fields : null;
+    const declared = pattern.identity ? fieldsOf(pattern.identity) : null;
+    if (!fields || !declared) return;
+    for (const [name, field] of declared) {
+      const provided = fields.get(name);
+      if (provided) unifyTypeParameters(field, provided);
+    }
+    return;
+  }
   if (pattern.kind === "object") {
     const fields = actual.kind === "object" ? actual.fields
       : actual.kind === "named" ? fieldsOf(actual.identity ?? actual.name)
@@ -1056,7 +1232,28 @@ export function collectGenericBoundViolations(
   satisfiesBound: (type: ValueType, bound: TypeParameterBound) => boolean,
   unknownParameters?: ReadonlySet<number>,
 ): readonly GenericBoundViolation[] {
-  const bounds = callable.typeParameterBounds;
+  return collectTypeArgumentBoundViolations(
+    callable.typeParameterNames,
+    callable.typeParameterBounds,
+    bindings,
+    satisfiesBound,
+    unknownParameters,
+  );
+}
+
+/**
+ * D55 rule 124: the same judgment for a declaration that is not a callable —
+ * `type Box<T: Data>` applied to an argument. The callable form above is now a
+ * thin caller, so a bound is decided in exactly one place no matter which
+ * declaration form carries it.
+ */
+export function collectTypeArgumentBoundViolations(
+  names: readonly string[] | undefined,
+  bounds: readonly (TypeParameterBound | null)[] | undefined,
+  bindings: readonly (ValueType | null)[],
+  satisfiesBound: (type: ValueType, bound: TypeParameterBound) => boolean,
+  unknownParameters?: ReadonlySet<number>,
+): readonly GenericBoundViolation[] {
   if (!bounds?.some((bound) => bound !== null)) return [];
   const violations: GenericBoundViolation[] = [];
   for (let index = 0; index < bounds.length; index += 1) {
@@ -1069,7 +1266,7 @@ export function collectGenericBoundViolations(
     const solved = bindings[index] ?? (unknownParameters?.has(index) ? unknownType : null);
     if (solved == null) continue;
     if (!satisfiesBound(solved, bound)) {
-      violations.push({ index, name: callable.typeParameterNames?.[index] ?? `#${index + 1}`, bound, solved });
+      violations.push({ index, name: names?.[index] ?? `#${index + 1}`, bound, solved });
     }
   }
   return violations;
