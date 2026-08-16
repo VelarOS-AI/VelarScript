@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
   id-token: write
   attestations: write
   artifact-metadata: write
@@ -25,6 +26,8 @@ jobs:
           node-version: "24.x"
           cache: npm
       - run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
       - run: npm run check
       - name: Prepare the exact root Netlify preview
         run: node scripts/prepare-external-preview.mjs --output-dir release/external-preview/site

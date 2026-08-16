@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 jobs:
   toolchain:
@@ -22,6 +23,8 @@ jobs:
           node-version: "24.x"
           cache: npm
       - run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
       - run: npm run check
       - run: npm test
       - run: npm run test:packages
@@ -37,5 +40,7 @@ jobs:
           node-version: "24.x"
           cache: npm
       - run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
       - run: npx playwright install --with-deps chromium firefox webkit
       - run: npm run test:browser

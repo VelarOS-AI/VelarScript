@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
   id-token: write
   attestations: write
   artifact-metadata: write
@@ -26,6 +27,8 @@ jobs:
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
       - run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
       - run: npm run check
       - run: npm test
       - name: Create non-publishing rehearsal
