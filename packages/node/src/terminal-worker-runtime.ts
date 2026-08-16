@@ -1,6 +1,11 @@
 const VELAR_NODE_TERMINAL_INPUT_SOURCE = String.raw`
 process.stdin.pause();
-const send = value => { if (process.connected && typeof process.send === "function") process.send(value); };
+process.on("error", () => process.exit(0));
+const send = value => {
+  if (process.connected && typeof process.send === "function") {
+    process.send(value, error => { if (error) process.exit(0); });
+  }
+};
 process.stdin.on("data", data => send({kind: "input-data", data}));
 process.stdin.on("end", () => { send({kind: "input-end"}); process.disconnect(); });
 process.stdin.on("error", () => { send({kind: "input-error"}); process.disconnect(); });
