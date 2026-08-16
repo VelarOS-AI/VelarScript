@@ -203,8 +203,10 @@ attempts += 1
   `case`, `constructor`, `from`, `get`, `match`, `readonly`, `test`, `type`,
   and `using`; the compiler owns that roster as `CORE_CONTEXTUAL_KEYWORDS`, and
   this sentence quotes it rather than keeping a second copy of it. Every word
-  the Web extension adds — `component`, `state`, `resource`, `action`, `watch`,
-  `look`, `keyframes`, `css`, `expose`, `exposes` — belongs to the same family.
+  the Web extension adds — `component`, `state`, `computed`, `resource`,
+  `action`, `watch`, `look`, `keyframes`, `css`, `expose`, `exposes` — belongs
+  to the same family, and the compiler owns that roster as
+  `WEB_CONTEXTUAL_KEYWORDS`.
   All of them are ordinary names anywhere a name can stand: a binding, a
   parameter, a loop binding, a named argument, a record field, a member name,
   and a record shorthand. Each becomes a declaration only in the shape that
@@ -2711,11 +2713,13 @@ right, then JSX children, then the component function. Native JSX remains an
 owned DOM construction rather than a hidden Core-language operation.
 
 The source package then exposes the following language extension. This list is
-the complete addition — ten contextual keywords, two lifecycle hooks, three
+the complete addition — eleven contextual keywords, two lifecycle hooks, three
 reserved global functions, and the unit literals; nothing else in a Web module
 is new syntax. Every *contextual keyword* here declares only in its own shape
-and remains available as an ordinary name (section 3). The three reserved
-globals are the exception: `computed`, `mount`, and `tick` are real runtime
+and remains available as an ordinary name (section 3), `computed` included: it
+declares a derived value in `computed name = expression` and is an ordinary
+name everywhere else. The three reserved
+globals are the exception: `cached`, `mount`, and `tick` are real runtime
 entry points, so a Web module refuses them as binding names, as it does the
 media subjects `viewport`, `scheme`, and `motion` (section 17). Those six words
 are the whole difference between what a Core module and a Web module accept:
