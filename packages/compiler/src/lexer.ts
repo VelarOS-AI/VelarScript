@@ -1,3 +1,4 @@
+import { CORE_NUMERIC_SUFFIXES } from "./core-vocabulary.ts";
 import { diagnostic, mechanicalFix, recoveredDiagnostic, type Diagnostic, type DiagnosticFix } from "./diagnostic.ts";
 import type { CompilerLexicalExtension } from "./extension.ts";
 import { findInterpolatedExpressionEnd, scanStringEscape, scanStringLiteral, type StringLiteralScan, type StringTokenPayload } from "./interpolated-string.ts";
@@ -40,8 +41,11 @@ export class Lexer {
   private readonly extensionForbiddenIdentifiers = new Map<string, string>();
   private readonly extensionScanners: NonNullable<CompilerLexicalExtension["scan"]>[] = [];
   // D39-52: milliseconds and seconds are Core duration literals. Extensions
-  // may add visual units, but Core owns these two spellings.
-  private readonly numericSuffixes = new Set<string>(["ms", "s"]);
+  // may add visual units, but Core owns these two spellings. D62 rule 158:
+  // the pair is read from Core's roster rather than spelled here, so a gate
+  // that reverse-queries the language surface can see them without an
+  // extension republishing them.
+  private readonly numericSuffixes = new Set<string>(CORE_NUMERIC_SUFFIXES);
   private readonly tokens: Token[] = [];
   private readonly diagnostics: Diagnostic[] = [];
   private readonly diagnosedBidirectionalOffsets = new Set<number>();

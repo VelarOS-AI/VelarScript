@@ -913,7 +913,13 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
       get() { projectDirectoryReads += 1; return () => directory; },
     });
     Object.defineProperty(globalThis, bridgeKey, { value: hostilePathBridge, configurable: true });
-    await assert.rejects(runtime(directory, "path-hostile", "velar/path"), /data value/u);
+    // D60 rule 153 moved the failure from the import to the call, so the module
+    // loads and `resolve` is what refuses -- the same shape `velar/env` below
+    // has always had. What the accessor bridge is here to prove is unchanged:
+    // the field is read through its descriptor, so a getter planted on the
+    // bridge never runs.
+    const hostilePathRuntime = await runtime<{ resolve(values: readonly string[]): string }>(directory, "path-hostile", "velar/path");
+    assert.throws(() => hostilePathRuntime.resolve(["captured"]), /data value/u);
     assert.equal(projectDirectoryReads, 0);
 
     let environmentReads = 0;
@@ -986,7 +992,10 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
       get() { platformReads += 1; return "unsafe"; },
     });
     Object.defineProperty(globalThis, bridgeKey, { value: hostileDesktopBridge, configurable: true });
-    await assert.rejects(runtime(directory, "desktop-accessor", "velar/desktop"), /data value/u);
+    // Same migration as `velar/path` above (D60 rule 153): the module loads and
+    // `platform()` refuses. The accessor still never runs.
+    const hostileDesktopRuntime = await runtime<{ platform(): string }>(directory, "desktop-accessor", "velar/desktop");
+    assert.throws(() => hostileDesktopRuntime.platform(), /data value/u);
     assert.equal(platformReads, 0);
 
     const invalidDesktopBridge = {
@@ -1017,7 +1026,11 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
       },
     });
     Object.defineProperty(globalThis, bridgeKey, { value: accessorInvokeBridge, configurable: true });
-    await assert.rejects(runtime(directory, "fs-invoke-accessor", "velar/fs"), /function data value/u);
+    // The bridge's own `invoke` is captured through its descriptor while the
+    // module initializes, so an accessor is never invoked; D60 rule 153 only
+    // moved the refusal to the first capability call.
+    const accessorInvokeRuntime = await runtime<{ exists(path: string): Promise<boolean> }>(directory, "fs-invoke-accessor", "velar/fs");
+    await assert.rejects(accessorInvokeRuntime.exists("captured.txt"), /function data value/u);
     assert.equal(invokeReads, 0);
   } finally {
     delete (globalThis as { [key: symbol]: unknown })[bridgeKey];

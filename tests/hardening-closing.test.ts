@@ -148,7 +148,13 @@ test("[D50-97.2] velar/test carries no second comparison implementation", () => 
   assert.doesNotMatch(source, /__velarDeepEqual|__velarEqualValue/u);
   assert.doesNotMatch(source, /actual !== expected/u);
   assert.equal(source.split("__velarEquals").length - 1, 2);
-  assert.equal(source.split("__velarSameValueZero").length - 1, 2);
+  // Three, not two: D59 rule 141.1 gave `toContain`'s List branch the same
+  // comparison, so the one implementation now has one import and two call
+  // sites. What this count guards is that each is a *use*, never a restatement
+  // -- a second copy would show up as a definition, which the two
+  // `doesNotMatch` assertions above refuse by name and by shape.
+  assert.equal(source.split("__velarSameValueZero").length - 1, 3);
+  assert.doesNotMatch(source, /\.value === expected/u);
   // An unbundled target must still materialize what the assertion reaches for.
   assert.ok(standardModuleClosure(["velar/test"]).has(VELAR_COLLECTION_LOWERING_MODULE));
 });

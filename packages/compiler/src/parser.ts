@@ -44,6 +44,7 @@ import type {
   UsingDeclaration,
   VariableDeclaration,
 } from "./ast.ts";
+import { CORE_STATEMENT_HEAD_KEYWORDS, CORE_WORDS } from "./core-vocabulary.ts";
 import { diagnostic, mechanicalEdits, mechanicalFix, recoveredDiagnostic, type Diagnostic } from "./diagnostic.ts";
 import type { CompilerLexicalExtension } from "./extension.ts";
 import { findInterpolatedExpressionEnd, scanStringEscape, scanStringLiteral, type StringTokenPayload } from "./interpolated-string.ts";
@@ -60,9 +61,11 @@ const memberNameKinds = new Set<TokenKind>(["identifier", ...Object.values(keywo
 const statementStarterKinds = new Set<TokenKind>([
   "const", "let", "def", "return", "throw", "assert", "if", "for", "while", "break", "continue", "try", "pass",
 ]);
-// D30 item 16: `match` is a contextual keyword, so statement evidence for it is
-// carried by the word rather than by a token kind.
-const statementStarterWords = new Set(["match"]);
+// D30 item 16: `match` and `case` are contextual keywords, so statement
+// evidence for them is carried by the word rather than by a token kind. D62
+// rule 157: the pair is derived from Core's roster — the words whose statement
+// shape takes a subject — rather than kept as a second one-word copy of it.
+const statementStarterWords = new Set<string>(CORE_STATEMENT_HEAD_KEYWORDS);
 // Token kinds that legally appear at the top level of a record literal's
 // field list: field names, shorthand entries, and their separators.
 const recordFieldLevelKinds = new Set<TokenKind>(["identifier", "string", "comma", ...Object.values(keywordKinds)]);
@@ -236,7 +239,7 @@ export class Parser {
     // TypeScript habit, recognized so it can be taught; `export type Name:` is
     // still an ordinary exported type declaration.
     if (exported && (this.check("leftBrace") || this.check("star")
-      || (this.checkWord("type") && (this.peekKind(1) === "leftBrace" || this.peekKind(1) === "star")))) {
+      || (this.checkWord(CORE_WORDS.type) && (this.peekKind(1) === "leftBrace" || this.peekKind(1) === "star")))) {
       return this.parseReExport(start);
     }
     // MOD-U2: `export default` is the JavaScript habit; VelarScript modules
@@ -320,7 +323,7 @@ export class Parser {
     // D39 item 53: `test "name":` is a contextual keyword — statement head, a
     // string literal, then a block. `test` stays an ordinary name everywhere
     // else, including `test(...)` and `const test = ...`.
-    if (this.check("identifier") && this.current().value === "test"
+    if (this.checkWord(CORE_WORDS.test)
       && this.peekKind(1) === "string" && this.peekKind(2) === "colon") {
       const keyword = this.advance();
       if (exported) this.diagnostics.push(diagnostic("VEL2001", "A test is discovered by the runner and is not exported", keyword.span));
@@ -337,7 +340,7 @@ export class Parser {
 
     // D43 item 69: `using` is a contextual keyword — statement head, an
     // identifier, then `=`. Everywhere else `using` stays an ordinary name.
-    if (this.check("identifier") && this.current().value === "using" && this.peekKind(1) === "identifier") {
+    if (this.checkWord(CORE_WORDS.using) && this.peekKind(1) === "identifier") {
       if (this.peekKind(2) === "assign") {
         const keyword = this.advance();
         if (exported) this.diagnostics.push(diagnostic("VEL2001", "A 'using' binding cannot be exported; it is released when its scope ends", keyword.span));
@@ -405,7 +408,7 @@ export class Parser {
         // the sentence a report prints, so it is a string, not an identifier.
         this.diagnostics.push(diagnostic(
           "VEL2026",
-          first.value === "test" && following === "colon"
+          first.value === CORE_WORDS.test && following === "colon"
             ? `A test name is the sentence a report prints, so it is written as a string — 'test "${this.peekValue(1)}":'`
             : `Unknown declaration keyword '${first.value}'; VelarScript declarations start with 'def', 'type', 'enum', 'class', 'const', or 'let'`,
           first.span,
@@ -549,7 +552,7 @@ export class Parser {
    * `type(value)`, and `type.field` all keep the identifier reading.
    */
   private typeDeclarationAhead(): boolean {
-    if (!this.checkWord("type") || this.peekKind(1) !== "identifier") return false;
+    if (!this.checkWord(CORE_WORDS.type) || this.peekKind(1) !== "identifier") return false;
     const shape = this.peekKind(2);
     return shape === "colon" || shape === "assign" || shape === "less";
   }
@@ -564,7 +567,7 @@ export class Parser {
    * teaching instead of falling back to a bare-name reading.
    */
   private matchStatementAhead(): boolean {
-    if (!this.checkWord("match")) return false;
+    if (!this.checkWord(CORE_WORDS.match)) return false;
     let depth = 0;
     let offset = 1;
     for (; this.index + offset < this.tokens.length; offset += 1) {
@@ -585,7 +588,7 @@ export class Parser {
    * the existing directed message without claiming the word anywhere else.
    */
   private orphanCaseClauseAhead(): boolean {
-    if (!this.checkWord("case") || this.peekKind(1) === "colon") return false;
+    if (!this.checkWord(CORE_WORDS.case) || this.peekKind(1) === "colon") return false;
     let depth = 0;
     for (let offset = 1; this.index + offset < this.tokens.length; offset += 1) {
       const kind = this.tokens[this.index + offset]!.kind;
@@ -623,11 +626,11 @@ export class Parser {
    * that it can be taught rather than met with a generic parse error.
    */
   private typeImportMarkerAhead(): boolean {
-    if (!this.checkWord("type")) return false;
+    if (!this.checkWord(CORE_WORDS.type)) return false;
     const next = this.tokens[this.index + 1];
     if (!next) return false;
     return next.kind === "leftBrace" || next.kind === "star"
-      || (next.kind === "identifier" && next.value !== "from");
+      || (next.kind === "identifier" && next.value !== CORE_WORDS.from);
   }
 
   /**
@@ -674,7 +677,7 @@ export class Parser {
     let emptyBraces: Span | null = null;
     if (this.match("star")) {
       const star = this.previous();
-      this.expectWord("as", "Expected 'as' after namespace import");
+      this.expectWord(CORE_WORDS.as, "Expected 'as' after namespace import");
       const local = this.expect("identifier", "Expected a namespace name");
       specifiers.push({ imported: "*", local: local.value, namespace: true, span: span(star.span.start, local.span.end) });
     } else if (this.match("leftBrace")) {
@@ -682,11 +685,11 @@ export class Parser {
       if (!this.check("rightBrace")) {
         do {
           // The inline marker is the same habit written per name.
-          if (this.checkWord("type") && this.peekKind(1) === "identifier") {
+          if (this.checkWord(CORE_WORDS.type) && this.peekKind(1) === "identifier") {
             this.rejectTypeImportMarker(this.advance(), "import");
           }
           const imported = this.expect("identifier", "Expected an imported name");
-          const local = this.matchWord("as") ? this.expect("identifier", "Expected a local import name") : imported;
+          const local = this.matchWord(CORE_WORDS.as) ? this.expect("identifier", "Expected a local import name") : imported;
           specifiers.push({ imported: imported.value, local: local.value, namespace: false, span: span(imported.span.start, local.span.end) });
         } while (this.match("comma") && !this.check("rightBrace"));
       } else {
@@ -698,7 +701,7 @@ export class Parser {
       specifiers.push({ imported: "default", local: local.value, namespace: false, span: local.span });
     }
 
-    this.expectWord("from", "Expected 'from' after imports");
+    this.expectWord(CORE_WORDS.from, "Expected 'from' after imports");
     // MOD-I1 / BRG-D1: a recovered import must never fabricate a dependency.
     // The synthesized empty-source token used to flow into module resolution
     // as `''`, whose nonsense "invalid package name" failure buried this
@@ -736,11 +739,11 @@ export class Parser {
   }
 
   private parseReExport(start: number): ReExportDeclaration | null {
-    if (this.checkWord("type")) this.rejectTypeImportMarker(this.advance(), "export");
+    if (this.checkWord(CORE_WORDS.type)) this.rejectTypeImportMarker(this.advance(), "export");
     if (this.match("star")) {
       const star = this.previous();
-      if (this.matchWord("as")) this.match("identifier");
-      if (this.matchWord("from")) this.match("string");
+      if (this.matchWord(CORE_WORDS.as)) this.match("identifier");
+      if (this.matchWord(CORE_WORDS.from)) this.match("string");
       this.diagnostics.push(diagnostic(
         "VEL2029",
         "Namespace re-export 'export * from' is not supported; re-export each name explicitly with export {name, other as alias} from \"./module.vel\"",
@@ -752,16 +755,16 @@ export class Parser {
     const specifiers: ReExportSpecifier[] = [];
     if (!this.check("rightBrace")) {
       do {
-        if (this.checkWord("type") && this.peekKind(1) === "identifier") {
+        if (this.checkWord(CORE_WORDS.type) && this.peekKind(1) === "identifier") {
           this.rejectTypeImportMarker(this.advance(), "export");
         }
         const imported = this.expect("identifier", "Expected a re-exported name");
-        const alias = this.matchWord("as") ? this.expect("identifier", "Expected a re-export alias") : imported;
+        const alias = this.matchWord(CORE_WORDS.as) ? this.expect("identifier", "Expected a re-export alias") : imported;
         specifiers.push({ imported: imported.value, exported: alias.value, span: span(imported.span.start, alias.span.end) });
       } while (this.match("comma") && !this.check("rightBrace"));
     }
     this.expect("rightBrace", "Expected '}' after re-exported names");
-    this.expectWord("from", "Expected 'from' after re-exported names; VelarScript modules export declarations directly and re-export other modules' names with export {name} from \"./module.vel\"");
+    this.expectWord(CORE_WORDS.from, "Expected 'from' after re-exported names; VelarScript modules export declarations directly and re-export other modules' names with export {name} from \"./module.vel\"");
     // MOD-I1 / BRG-D1: like parseImport, a recovered re-export never
     // fabricates an empty-source dependency.
     const hadSource = this.check("string");
@@ -891,7 +894,7 @@ export class Parser {
         this.consumeNewlines();
         continue;
       }
-      if (this.check("identifier") && this.current().value === "constructor") {
+      if (this.checkWord(CORE_WORDS.constructor)) {
         this.advance();
         const constructorParameters = this.parseParameters();
         this.reportUntypedExternParameters(constructorParameters);
@@ -914,7 +917,7 @@ export class Parser {
       while (scanningModifiers) {
         if (this.match("static")) static_ = true;
         else if (this.match("async")) asynchronous = true;
-        else if (this.check("identifier") && this.current().value === "readonly") readonlyModifier = this.advance();
+        else if (this.checkWord(CORE_WORDS.readonly)) readonlyModifier = this.advance();
         else scanningModifiers = false;
       }
       const mutable = this.match("let");
@@ -930,7 +933,7 @@ export class Parser {
         this.consumeNewlines();
         continue;
       }
-      if (this.check("identifier") && this.current().value === "get") {
+      if (this.checkWord(CORE_WORDS.get)) {
         this.advance();
         this.reportClassMemberReadonly(readonlyModifier, "executable", "VEL2010");
         const getterName = this.expectMemberName("Expected an extern class getter name");
@@ -1278,7 +1281,7 @@ export class Parser {
     this.consumeNewlines();
 
     while (!this.check("dedent") && !this.check("eof")) {
-      const readonly = this.check("identifier") && this.current().value === "readonly";
+      const readonly = this.checkWord(CORE_WORDS.readonly);
       const fieldStart = readonly ? this.advance().span.start : this.current().span.start;
       const fieldName = this.expectMemberName("Expected a field name");
       this.expect("colon", "Expected ':' after field name");
@@ -1481,11 +1484,14 @@ export class Parser {
         else if (this.match("override")) methodOverride = true;
         else if (this.match("static")) methodStatic = true;
         else if (this.match("private")) methodPrivate = true;
-        else if (this.check("identifier") && this.current().value === "readonly") readonlyModifier = this.advance();
+        else if (this.checkWord(CORE_WORDS.readonly)) readonlyModifier = this.advance();
         else if (this.match("async")) asynchronous = true;
         else scanningModifiers = false;
       }
-      if (this.check("identifier") && (this.current().value === "constructor" || this.current().value === "init")) {
+      // D62 rule 157: `constructor` comes from Core's roster. `init` stays a
+      // literal on purpose — it is the removed `init:` block, recognized only
+      // to teach its replacement, so it is not a spelling the language has.
+      if (this.checkWord(CORE_WORDS.constructor) || (this.check("identifier") && this.current().value === "init")) {
         const constructorName = this.current();
         this.advance();
         this.reportClassMemberReadonly(readonlyModifier, "executable", "VEL2021");
@@ -1495,7 +1501,7 @@ export class Parser {
         if (methodAbstract || methodOverride || methodStatic || methodPrivate || asynchronous) {
           this.diagnostics.push(diagnostic("VEL2022", "A constructor does not accept method modifiers", span(methodStart, this.previous().span.end)));
         }
-        parameters = constructorName.value === "constructor" ? [...this.parseClassConstructorParameters()] : [];
+        parameters = constructorName.value === CORE_WORDS.constructor ? [...this.parseClassConstructorParameters()] : [];
         const initBody = this.parseBlock();
         const block = {
           kind: "ClassInitBlock",
@@ -1554,7 +1560,7 @@ export class Parser {
         this.consumeNewlines();
         continue;
       }
-      if (this.check("identifier") && this.current().value === "get") {
+      if (this.checkWord(CORE_WORDS.get)) {
         this.advance();
         this.reportClassMemberReadonly(readonlyModifier, "executable", "VEL2021");
         getters.push(this.parseClassGetter(methodStart, methodAbstract, methodOverride, methodStatic, methodPrivate, asynchronous));
@@ -1900,7 +1906,7 @@ export class Parser {
       do {
         const value = this.parseMatchValue();
         if (value) values.push(value);
-      } while (root && this.match("comma") && !this.checkWord("as") && !this.check("if") && !this.check("colon"));
+      } while (root && this.match("comma") && !this.checkWord(CORE_WORDS.as) && !this.check("if") && !this.check("colon"));
       pattern = {
         kind: "MatchValuePattern",
         values,
@@ -1934,7 +1940,7 @@ export class Parser {
       }
     }
 
-    if (this.matchWord("as")) {
+    if (this.matchWord(CORE_WORDS.as)) {
       const binding = this.expect("identifier", "Expected a binding name after 'as'");
       pattern = {
         kind: "MatchAsPattern",
@@ -2062,7 +2068,7 @@ export class Parser {
   }
 
   private parseSingleTypeReference(allowTrailingOptional = true): TypeSyntax {
-    if (this.check("identifier") && this.current().value === "readonly") {
+    if (this.checkWord(CORE_WORDS.readonly)) {
       const keyword = this.advance();
       const inner = this.parseSingleTypeReference(allowTrailingOptional);
       return { kind: "ReadonlyTypeSyntax", inner, span: span(keyword.span.start, inner.span.end) };

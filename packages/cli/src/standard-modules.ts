@@ -1984,12 +1984,18 @@ export function expect(actual) {
     toEqual(expected) { if (!__velarEquals(actual, expected)) throw new __velarTestNativeError("Expected " + display(actual) + " to deeply equal " + display(expected)); },
     toBeTruthy() { if (actual !== true) throw new __velarTestNativeError("Expected bool true but received " + display(actual)); },
     toBeFalsy() { if (actual !== false) throw new __velarTestNativeError("Expected bool false but received " + display(actual)); },
+    // D59 rule 141.1: the List branch asks the language too, so 'toContain'
+    // and 'values.has(item)' can never give different answers. Native '==='
+    // made this the last comparison in the language that disagreed with the
+    // language once 'toBe' was repaired, and NaN was again where it showed.
+    // The text branch stays 'String.includes': code-point identity is what
+    // containment in text means, not a value comparison.
     toContain(expected) {
       let contains = typeof actual === "string" && typeof expected === "string" && __velarDeepCall(__velarTestStringIncludes, actual, [expected]);
       if (__velarDeepCall(__velarDeepArrayIsArray, __velarDeepNativeArray, [actual]) && __velarDenseList(actual)) {
         contains = false;
         for (let index = 0; index < actual.length; index += 1) {
-          if (__velarDeepGetOwnPropertyDescriptor(actual, index).value === expected) { contains = true; break; }
+          if (__velarSameValueZero(__velarDeepGetOwnPropertyDescriptor(actual, index).value, expected)) { contains = true; break; }
         }
       }
       if (!contains) throw new __velarTestNativeError("Expected " + display(actual) + " to contain " + display(expected));

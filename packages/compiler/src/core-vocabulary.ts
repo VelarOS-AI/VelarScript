@@ -1,6 +1,7 @@
 /**
- * D57 rules 134/135: the one roster of Core's own vocabulary — the permanent
- * (resident) namespaces and the prelude names that need no import.
+ * D57 rules 134/135 and D62 rules 157/158: the one roster of Core's own
+ * vocabulary — the permanent (resident) namespaces, the prelude names that
+ * need no import, the contextual keywords, and the numeric suffixes.
  *
  * Every place that has to know the whole vocabulary derives it from here: the
  * analyzer's builtin table is keyed by these names, and `source-names.ts`
@@ -11,9 +12,16 @@
  * `range` were not protected at all. Adding a namespace or a prelude name
  * here is now the whole change; nothing downstream can stay behind.
  *
- * This module deliberately holds names only — no types, no imports — so the
- * lexer-facing `source-names.ts` and the analyzer can both read it without a
- * cycle between them.
+ * The contextual keywords arrived the same way and worse: D62 rule 157 found
+ * four partial copies (`parser.ts` knew one word by table and the rest as
+ * inline literals, `formatter.ts` knew two, `language-server.ts` knew six) and
+ * **no original at all**, so charter §3's cross-cutting claim — that each of
+ * these words is an ordinary name in seven positions — named a set nothing
+ * could enumerate. It is enumerable here now.
+ *
+ * This module deliberately holds names and plain data — no imports — so the
+ * lexer-facing `source-names.ts`, the lexer, the parser, the formatter and the
+ * analyzer can all read it without a cycle between them.
  */
 
 /** The namespaces that are always in scope and are not values (D51 rule 106). */
@@ -35,3 +43,78 @@ export const CORE_VOCABULARY_NAMES: readonly CoreVocabularyName[] = [
 export function isPermanentNamespaceName(name: string): name is PermanentNamespaceName {
   return (PERMANENT_NAMESPACE_NAMES as readonly string[]).includes(name);
 }
+
+/**
+ * D62 rule 157: one entry per word the lexer emits as an ordinary identifier
+ * and the Core parser claims as syntax in one shape and nowhere else.
+ *
+ * Membership is decided by *live* syntax. A word the parser recognizes only in
+ * order to reject it is not here: `init` (the removed `init:` block), `set`
+ * (VelarScript has no setters), `default` (no default export), and `invert`
+ * (the removed toggle statement) are spellings the language does not have, and
+ * requiring a tour or an editor to offer them would resurrect them. `dispose`
+ * is not here either — it is only ever read after `@`, which is the separate
+ * closed `@name` vocabulary of D43 item 67.
+ */
+export interface CoreContextualKeyword {
+  /** The spelling, as the lexer emits it. */
+  readonly word: string;
+  /** The one shape the parser claims it in, for the reader of this file. */
+  readonly shape: string;
+  /**
+   * Whether, at the head of a statement line, what follows the word opens a
+   * fresh expression rather than being applied to it. This is the question the
+   * formatter's spacing and the arrow-brace statement scan both ask, and the
+   * answer is not "is it a keyword": `constructor(name: string):` occupies a
+   * declaration's *name* slot, so its `(` binds tight exactly as `def f(`
+   * does, while `match (value):` and `case -1:` keep the separating space.
+   */
+  readonly statementSubjectFollows: boolean;
+}
+
+export const CORE_CONTEXTUAL_KEYWORDS = [
+  { word: "as", shape: "an import alias and a match binding: 'import {a as b}', 'case Shape.circle as c:'", statementSubjectFollows: false },
+  { word: "case", shape: "a match branch: 'case Status.done:'", statementSubjectFollows: true },
+  { word: "constructor", shape: "a class's construction member: 'constructor(name: string):'", statementSubjectFollows: false },
+  { word: "from", shape: "the module an import or a re-export reads: 'import {a} from \"./m.vel\"'", statementSubjectFollows: false },
+  { word: "get", shape: "a class getter: 'get empty() -> bool:'", statementSubjectFollows: false },
+  { word: "match", shape: "a match statement: 'match value:'", statementSubjectFollows: true },
+  { word: "readonly", shape: "a read-only record field or type: 'readonly tags: List<string>'", statementSubjectFollows: false },
+  { word: "test", shape: "a test declaration: 'test \"a name\":'", statementSubjectFollows: false },
+  { word: "type", shape: "a record type or a type alias: 'type User:', 'type Id = string'", statementSubjectFollows: false },
+  { word: "using", shape: "a scoped resource binding: 'using file = open(path)'", statementSubjectFollows: false },
+] as const satisfies readonly CoreContextualKeyword[];
+
+export type CoreContextualKeywordWord = (typeof CORE_CONTEXTUAL_KEYWORDS)[number]["word"];
+
+/**
+ * The roster keyed by its own spellings, so a consumer names a word instead of
+ * restating it: `CORE_WORDS.type` stops compiling the moment `type` leaves the
+ * roster, which is what makes the derivation hold in both directions.
+ */
+export const CORE_WORDS: { readonly [Word in CoreContextualKeywordWord]: Word } = Object.freeze(
+  Object.fromEntries(CORE_CONTEXTUAL_KEYWORDS.map((entry) => [entry.word, entry.word])),
+) as { readonly [Word in CoreContextualKeywordWord]: Word };
+
+/** The roster as bare spellings, for the consumers that need only the set. */
+export const CORE_CONTEXTUAL_KEYWORD_WORDS: readonly CoreContextualKeywordWord[] =
+  CORE_CONTEXTUAL_KEYWORDS.map((entry) => entry.word);
+
+/**
+ * The words that stand where a keyword stands at the head of a statement line.
+ * The formatter's spacing and the parser's arrow-brace scan both read this,
+ * rather than each keeping the two-word copy D62 rule 157 found in them.
+ */
+export const CORE_STATEMENT_HEAD_KEYWORDS: readonly CoreContextualKeywordWord[] = CORE_CONTEXTUAL_KEYWORDS
+  .filter((entry) => entry.statementSubjectFollows)
+  .map((entry) => entry.word);
+
+/**
+ * D39-52 and D62 rule 158: the numeric suffixes Core owns on its own. Both are
+ * Duration literals — `250ms`, `3s`. Extensions add visual units on top, and
+ * the Web extension happens to republish these two through `LOOK_UNIT_TYPES`,
+ * which is the only reason the coverage gate could see them at all before this
+ * roster existed; a Core-only checkout checked neither.
+ */
+export const CORE_NUMERIC_SUFFIXES = ["ms", "s"] as const;
+export type CoreNumericSuffix = (typeof CORE_NUMERIC_SUFFIXES)[number];

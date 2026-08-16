@@ -156,6 +156,13 @@ interface LoopFlowContext {
 interface ReturnContext {
   readonly expected: ValueType;
   readonly inferredReturns: ValueType[] | null;
+  /**
+   * D58 correction 2: the results a body returns while an annotation is
+   * written, collected only where that annotation is the `-> null` rule 139
+   * refuses. `inferredReturns` is null in that case — the declared result is
+   * the contract — so the deletion's precondition needs its own observation.
+   */
+  readonly observedReturns: ValueType[] | null;
   readonly declarationKind: string;
 }
 
@@ -2465,10 +2472,8 @@ export class Analyzer implements TypeEnvironment {
             this.asyncResolvedValues.add(spanIdentity(statement.value.span));
           }
         }
-        if (inferredReturns) {
-          if (this.unreachableDiagnosticDepth === 0) inferredReturns.push(returned);
-          break;
-        }
+        if (this.unreachableDiagnosticDepth === 0) (inferredReturns ?? returnContext?.observedReturns)?.push(returned);
+        if (inferredReturns) break;
         this.requireAssignable(returned, expected, statement.value?.span ?? statement.span);
         break;
       }
@@ -3511,7 +3516,7 @@ export class Analyzer implements TypeEnvironment {
     this.currentClass = statement.name;
     this.superMemberContext = "instance";
     this.asynchronousFunctions.push(false);
-    this.returnContexts.push({ expected: nullType, inferredReturns: null, declarationKind: "Function" });
+    this.returnContexts.push({ expected: nullType, inferredReturns: null, observedReturns: null, declarationKind: "Function" });
     this.constructorDepth += 1;
     const outerAllowedSuperCall = this.allowedSuperCall;
     const first = initialization.body[0];
@@ -3571,7 +3576,7 @@ export class Analyzer implements TypeEnvironment {
     const previousFinallyLoopDepths = this.finallyLoopDepths;
     this.finallyLoopDepths = [];
     this.asynchronousFunctions.push(true);
-    this.returnContexts.push({ expected: nullType, inferredReturns: null, declarationKind: "Function" });
+    this.returnContexts.push({ expected: nullType, inferredReturns: null, observedReturns: null, declarationKind: "Function" });
     this.analyzeStatements(statement.body);
     this.returnContexts.pop();
     this.asynchronousFunctions.pop();
@@ -3818,7 +3823,7 @@ export class Analyzer implements TypeEnvironment {
     this.currentClass = statement.name;
     this.superMemberContext = "instance";
     this.asynchronousFunctions.push(true);
-    this.returnContexts.push({ expected: nullType, inferredReturns: null, declarationKind: "Function" });
+    this.returnContexts.push({ expected: nullType, inferredReturns: null, observedReturns: null, declarationKind: "Function" });
     this.declareBinding("self", false, { kind: "class", name: statement.name }, block.span, true);
     this.analyzeStatements(block.body);
     this.returnContexts.pop();
@@ -4094,18 +4099,33 @@ export class Analyzer implements TypeEnvironment {
    * type, which the parser requires outright (VEL2023).
    *
    * Deleting an annotation the compiler would infer identically is provably
-   * equivalent, so it is a mechanical fix under D50 rule 95.
+   * equivalent, so it is a mechanical fix under D50 rule 95 — but only there.
+   * D58 correction 2: where the body returns a value, the deletion is not
+   * equivalent, it widens the signature and takes VEL4001 down with it, so the
+   * refusal is reported without a fix and the author decides whether the body
+   * or the intent was wrong. `velar fix` runs unattended because it never does
+   * the second kind of thing.
    */
-  private reportInferredNullResult(statement: AnalyzableFunctionDeclaration, declarationKind: string): void {
+  private inferredNullResultAnnotation(statement: AnalyzableFunctionDeclaration): TypeReference | null {
     const reference = statement.returnType;
-    if (!reference || reference.syntax.kind !== "NamedTypeSyntax" || reference.syntax.name !== "null") return;
-    if ("accessor" in statement) return;
+    if (!reference || reference.syntax.kind !== "NamedTypeSyntax" || reference.syntax.name !== "null") return null;
+    if ("accessor" in statement) return null;
+    return reference;
+  }
+
+  private reportInferredNullResult(
+    statement: AnalyzableFunctionDeclaration,
+    declarationKind: string,
+    bodyInfersNull: boolean,
+  ): void {
+    const reference = this.inferredNullResultAnnotation(statement);
+    if (!reference) return;
     const deletion = statement.resultAnnotationSpan;
     this.diagnostics.push(diagnostic(
       "VEL4037",
       `${declarationKind} '${statement.name}' infers '-> null' from its body; delete the annotation, and write it only where 'extern', 'abstract', or a function type leaves no body to infer`,
       reference.span,
-      deletion ? mechanicalFix(deletion, "", "Delete the inferred '-> null'") : undefined,
+      deletion && bodyInfersNull ? mechanicalFix(deletion, "", "Delete the inferred '-> null'") : undefined,
     ));
   }
 
@@ -4149,13 +4169,18 @@ export class Analyzer implements TypeEnvironment {
       if (asynchronous) this.reportPromiseResolutionHazard(declaredReturn, statement.returnType.span);
       else this.reportPromiseCarrierHazard(declaredReturn, statement.returnType.span);
     }
-    this.reportInferredNullResult(statement, declarationKind);
+    // D58 correction 2: whether the deletion is provably equivalent is a fact
+    // about the body, so the refusal waits until the body has been read.
+    const observedReturns: ValueType[] | null = inferredReturns === null && this.inferredNullResultAnnotation(statement)
+      ? []
+      : null;
     const expectedReturn = returnValid
       ? asynchronous ? this.resolvedAsyncResult(declaredReturn) : declaredReturn
       : invalidType;
     const returnContext: ReturnContext = {
       expected: expectedReturn,
       inferredReturns,
+      observedReturns,
       declarationKind,
     };
     this.returnContexts.push(returnContext);
@@ -4174,6 +4199,10 @@ export class Analyzer implements TypeEnvironment {
     }
     this.constructorDepth = 0;
     this.analyzeStatements(statement.body);
+    if (observedReturns) {
+      const inferred = this.inferCollectedFunctionResult(observedReturns, !this.blockAlwaysReturns(statement.body));
+      this.reportInferredNullResult(statement, declarationKind, inferred.kind === "null");
+    }
     const resultKey = this.functionResultKey(statement as FunctionDeclaration);
     if (inferredReturns) {
       const inferred = this.inferCollectedFunctionResult(inferredReturns, !this.blockAlwaysReturns(statement.body));

@@ -37,12 +37,30 @@ export { SourceText, type Span } from "./source.ts";
 export { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
 export { bindingNameRestriction, isCoreReservedBinding, isForbiddenPrototypeMember, isJavaScriptReservedBinding, isSourceIdentifierPart, isSourceIdentifierStart, isValidSourceIdentifier, memberNameRestriction, type BindingNameRestriction, type MemberNameRestriction } from "./source-names.ts";
 export { VELAR_EXTENSION_PROTOCOL_VERSION } from "./extension.ts";
+// D62 rule 157: the editor's keyword list is the lexer's table plus Core's
+// contextual roster, so it is published rather than retyped downstream.
+export { keywordKinds } from "./token.ts";
 export type { CompilerAnalysisExtension, CompilerAnalyzerFactory, CompilerDependencyContext, CompilerEditorCompletion, CompilerEditorExtension, CompilerEmitter, CompilerEmitterOptions, CompilerExtension, CompilerFormattingExtension, CompilerInspectionExtension, CompilerInterfaceContext, CompilerIntrinsicAnalysisContext, CompilerLexicalExtension, CompilerLexicalScanContext, CompilerLexicalScanResult, CompilerModuleExtension, CompilerParserFactory, CompilerProjectEditorCompletion, CompilerProjectEditorCompletionContext, CompilerProjectEditorCompletionResult, CompilerProjectEditorExtension, CompilerProjectEditorRenameContext, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface, ModuleTest, VelarExtensionContract, VelarExtensionKind } from "./extension.ts";
 export { semanticImportAt, semanticModuleReferenceAt, semanticSymbolAt, semanticVisibleSymbolsAt, type CompilerSemanticExtension, type SemanticDeclareOptions, type SemanticExpression, type SemanticExtensionContext, type SemanticFunctionLike, type SemanticImport, type SemanticIndex, type SemanticMember, type SemanticMemberReference, type SemanticModuleReference, type SemanticReference, type SemanticScope, type SemanticSymbol, type SemanticSymbolKind } from "./semantic.ts";
 export { analysisTypeIdentity, describeType, isReadonlyView, optionalOf, readonlyViewOf, semanticTypeIdentity, unionOf, type EnumInfo, type ValueType } from "./types.ts";
 export { permanentNamespaceCoveringModule } from "./analyzer.ts";
 export type { AnalysisContext, ClassField, ClassInfo, InitializationImportRead } from "./analyzer.ts";
-export { CORE_PRELUDE_NAMES, CORE_VOCABULARY_NAMES, PERMANENT_NAMESPACE_NAMES, type CorePreludeName, type CoreVocabularyName, type PermanentNamespaceName } from "./core-vocabulary.ts";
+export {
+  CORE_CONTEXTUAL_KEYWORD_WORDS,
+  CORE_CONTEXTUAL_KEYWORDS,
+  CORE_NUMERIC_SUFFIXES,
+  CORE_PRELUDE_NAMES,
+  CORE_STATEMENT_HEAD_KEYWORDS,
+  CORE_VOCABULARY_NAMES,
+  CORE_WORDS,
+  PERMANENT_NAMESPACE_NAMES,
+  type CoreContextualKeyword,
+  type CoreContextualKeywordWord,
+  type CoreNumericSuffix,
+  type CorePreludeName,
+  type CoreVocabularyName,
+  type PermanentNamespaceName,
+} from "./core-vocabulary.ts";
 
 export interface CompileOptions {
   readonly path?: string;

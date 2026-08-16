@@ -10,9 +10,12 @@ import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
 // a caller that ignores a result already knows as much. Both spellings used to
 // compile, which is the two-spellings split this project keeps removing, so
 // the written one is now refused wherever a body infers it and `velar fix`
-// deletes it. The three positions with nothing to infer from — `extern`,
-// `abstract`, and a function type — keep requiring it, and each is pinned
-// here so a later change cannot quietly move the line.
+// deletes it — but only there. D58 correction 2: where the body returns a
+// value the deletion is not provably equivalent, so the refusal carries no
+// mechanical fix and VEL4001 keeps reporting the contract violation. The three
+// positions with nothing to infer from — `extern`, `abstract`, and a function
+// type — keep requiring it, and each is pinned here so a later change cannot
+// quietly move the line.
 //
 // The evidence in the ledger was compile-level (a source that reported
 // `clean`), so these probes are compile-level too.
@@ -246,21 +249,64 @@ test("[D58-139] the redundant 'null?' spelling still converges to no annotation"
 });
 
 // ---------------------------------------------------------------------------
-// The accepted cost, recorded so it stays deliberate
+// D58 correction 2 — `velar fix` does not resolve a contract violation by
+// deleting the contract
 // ---------------------------------------------------------------------------
 
-test("[D58-139] '-> null' no longer forbids a body from returning a value", () => {
-  // D58 records this cost in the open: `-> null` was a real contract that
-  // rejected `return 2`, and after the rule the signature follows the body to
-  // `-> number` instead. The charter already accepts that property for every
-  // other annotation an author omits, so `-> null` is not special in it.
+test("[D58-139.2] the annotation is still refused where the body returns a value, and the contract still fails", () => {
+  // The cost D58 first recorded — that the signature would silently widen to
+  // `-> number` — never existed at the diagnostic level: VEL4001 reports the
+  // violation next to the refusal. Both are here so neither can go quiet.
   assert.deepEqual(coreMessages("def f() -> null:\n    return 2\n"), [
     REJECTION("Function", "f"),
     "VEL4001 Cannot assign number to null",
   ]);
-  const settled = fixToFixpoint("export def f() -> null:\n    return 2\n");
-  assert.equal(settled.text, "export def f():\n    return 2\n");
-  assert.deepEqual(compile(settled.text).moduleInterface.exports.get("f")?.kind, "function");
+});
+
+test("[D58-139.2] velar fix carries the deletion only where the body infers 'null'", () => {
+  // D50 rule 95's boundary is *provable equivalence*, and deleting `-> null`
+  // is equivalent exactly where the body infers `null` too. Where it does not,
+  // deleting is the one edit that would make VEL4001 disappear along with the
+  // contract it was reporting — `velar fix` would have resolved a contract
+  // violation by deleting the contract. It carries no fix there instead, and
+  // the author decides whether the body or the intent was wrong.
+  const withFix = (source: string) => compile(source).diagnostics
+    .filter((item) => item.code === "VEL4037")
+    .map((item) => item.fix?.title ?? null);
+
+  // Provably equivalent — the fix is offered, and applying it is clean.
+  for (const body of ["    print(\"x\")\n", "    return null\n", "    throw Error(\"x\")\n"]) {
+    const source = `export def f() -> null:\n${body}`;
+    assert.deepEqual(withFix(source), ["Delete the inferred '-> null'"], source);
+    assert.deepEqual(compile(fixToFixpoint(source).text).diagnostics, [], source);
+  }
+
+  // Not equivalent — no fix, and `velar fix` leaves the source byte-identical
+  // rather than widening the signature.
+  for (const body of ["    return 2\n", "    return \"x\"\n", "    if true:\n        return 2\n"]) {
+    const source = `export def f() -> null:\n${body}`;
+    assert.deepEqual(withFix(source), [null], source);
+    const settled = fixToFixpoint(source);
+    assert.equal(settled.text, source, source);
+    assert.equal(settled.passes, 1, source);
+    // The annotation survives, so the contract it declares is still enforced.
+    assert.ok(compile(settled.text).diagnostics.some((item) => item.code === "VEL4001"), source);
+  }
+
+  // A method and an async `def` are the same position and answer the same way.
+  assert.deepEqual(withFix("class C:\n    def bump() -> null:\n        return 1\n"), [null]);
+  assert.deepEqual(withFix("class C:\n    def bump() -> null:\n        print(1)\n"), ["Delete the inferred '-> null'"]);
+  assert.deepEqual(withFix("async def go() -> null:\n    return 1\n"), [null]);
+  assert.deepEqual(withFix("async def go() -> null:\n    print(1)\n"), ["Delete the inferred '-> null'"]);
+});
+
+test("[D58-139.2] a Web action answers the same way", () => {
+  const refused = compile("export action save() -> null:\n    return 2\n", { path: "app.vel", extensions: [velarCompilerExtension] });
+  assert.deepEqual(refused.diagnostics.filter((item) => item.code === "VEL4037").map((item) => item.fix?.title ?? null), [null]);
+  assert.ok(refused.diagnostics.some((item) => item.code === "VEL4001"), webMessages("export action save() -> null:\n    return 2\n").join("\n"));
+  const mechanical = compile("export action save() -> null:\n    print(\"x\")\n", { path: "app.vel", extensions: [velarCompilerExtension] });
+  assert.deepEqual(mechanical.diagnostics.filter((item) => item.code === "VEL4037").map((item) => item.fix?.title ?? null),
+    ["Delete the inferred '-> null'"]);
 });
 
 // ---------------------------------------------------------------------------

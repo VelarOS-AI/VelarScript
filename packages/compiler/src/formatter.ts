@@ -1,3 +1,4 @@
+import { CORE_STATEMENT_HEAD_KEYWORDS } from "./core-vocabulary.ts";
 import { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
 import { findInterpolatedExpressionEnd, scanStringEscape, scanStringLiteral, type StringLiteralScan } from "./interpolated-string.ts";
 import type { CompilerExtension } from "./extension.ts";
@@ -24,8 +25,10 @@ const binaryWords = new Set(["and", "or", "in", "is"]);
 const prefixWords = new Set(["not", "await"]);
 // D30 item 16: `match` and `case` are contextual keywords, so `match(value)` is
 // a call and must not gain a keyword's space. They keep it only where a
-// keyword can stand — the head of a statement line.
-const statementHeadKeywordWords = new Set(["match", "case"]);
+// keyword can stand — the head of a statement line. D62 rule 157: which words
+// those are is Core's roster to answer, not this file's — the copy that stood
+// here knew two of the ten and could not have learned about an eleventh.
+const statementHeadKeywordWords = new Set<string>(CORE_STATEMENT_HEAD_KEYWORDS);
 /**
  * The reserved words that stand in expression position: `super` and `import`
  * name one directly — `super(id)`, `import("./page.vel")` — and the formatter

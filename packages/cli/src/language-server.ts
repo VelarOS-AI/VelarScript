@@ -2,9 +2,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { isAbsolute, relative, resolve } from "node:path";
 import {
   compile,
+  CORE_CONTEXTUAL_KEYWORD_WORDS,
   CORE_PRELUDE_NAMES,
   formatSource,
   isSourceIdentifierPart,
+  keywordKinds,
   PERMANENT_NAMESPACE_NAMES,
   permanentNamespaceCoveringModule,
   type CorePreludeName,
@@ -175,8 +177,16 @@ function importableStandardModules(): readonly { readonly label: string; readonl
     .map(([label, detail]) => ({ label, kind: 9, detail }));
 }
 
+/**
+ * D62 rule 157: the editor's keyword list is the lexer's hard-keyword table
+ * plus Core's contextual roster, read rather than retyped. The hand-kept copy
+ * this replaced held thirty-nine labels and was a partial copy of both: it had
+ * never learned `js`, `unsafe`, `extern`, `module`, `break`, `continue` or
+ * `is`, and it knew six of the ten contextual words. Neither omission could
+ * have been noticed by anything but a reader counting two lists by hand.
+ */
 const coreCompletionItems = [
-  ...["const", "let", "readonly", "def", "async", "await", "type", "enum", "abstract", "class", "constructor", "extends", "override", "private", "static", "get", "super", "pass", "return", "throw", "assert", "if", "else", "match", "case", "for", "in", "while", "try", "catch", "finally", "import", "export", "null", "true", "false", "and", "or", "not"].map((label) => ({ label, kind: 14 })),
+  ...[...Object.keys(keywordKinds), ...CORE_CONTEXTUAL_KEYWORD_WORDS].map((label) => ({ label, kind: 14 })),
   ...[...builtinTypeDocumentation].map(([label, detail]) => ({ label, kind: 7, detail })),
   ...CORE_PRELUDE_NAMES.map((label) => ({ label, kind: 3, detail: corePreludeCompletionDetail[label] })),
   ...PERMANENT_NAMESPACE_NAMES.map((label) => ({ label, kind: 6, detail: permanentNamespaceCompletionDetail[label] })),

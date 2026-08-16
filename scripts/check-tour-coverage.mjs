@@ -1,7 +1,13 @@
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CORE_PRELUDE_NAMES, PERMANENT_NAMESPACE_NAMES, permanentNamespaceCoveringModule } from "@velarscript/compiler";
+import {
+  CORE_CONTEXTUAL_KEYWORD_WORDS,
+  CORE_NUMERIC_SUFFIXES,
+  CORE_PRELUDE_NAMES,
+  PERMANENT_NAMESPACE_NAMES,
+  permanentNamespaceCoveringModule,
+} from "@velarscript/compiler";
 import { Parser } from "@velarscript/compiler/extension";
 import { isNodeOnlyModule } from "@velarscript/node/compiler";
 import { resolveVelarProject } from "../packages/cli/src/config.ts";
@@ -80,7 +86,10 @@ const FLOORS = Object.freeze({
   projects: 3,
   modules: 41,
   "hard-keyword": 40,
-  "contextual-keyword": 10,
+  // Ten from the Web extension's `lexical.contextualKeywords` and ten from
+  // Core's own roster (D62 rule 157). Before that roster existed the floor was
+  // 10, and a Core-only checkout required none of Core's own words.
+  "contextual-keyword": 20,
   "reserved-binding": 6,
   "numeric-suffix": 13,
   "extension-global": 3,
@@ -180,16 +189,13 @@ const exemptions = [
 // printed on every run so they stay visible instead of being mistaken for
 // coverage. Closing one means giving the compiler a readable table, which is a
 // change to `packages/**` and therefore somebody's decision to make.
-const unreachableTables = [
-  {
-    label: "Core's own contextual keywords (`type`, `match`, `case`, `from`, `as`, `test`, `using`, …)",
-    reason: "no enumerable table exists: `parser.ts` keeps `statementStarterWords` (one word, `match`) module-private and recognizes the rest as inline literals at each shape. D56 rule 129 lists this as a source; the code does not provide one. Extension contextual keywords ARE checked — they come from `lexical.contextualKeywords`.",
-  },
-  {
-    label: "Core's built-in numeric suffixes `ms` and `s`",
-    reason: "`Lexer` holds them in a private field. They are required here only because the Web extension republishes both through LOOK_UNIT_TYPES; a Core-only checkout would check neither.",
-  },
-];
+//
+// D62 rules 157/158 closed the two this gate shipped with — Core's contextual
+// keywords and Core's numeric suffixes are both read from
+// `core-vocabulary.ts` now, alongside every other required table. The list is
+// left in place rather than deleted: an empty list is the claim that today
+// there is no vocabulary this gate cannot reach, and the next hole goes here.
+const unreachableTables = [];
 
 const failures = [];
 const categories = new Map();
@@ -259,7 +265,14 @@ for (const projectRoot of projectRoots) {
   }
 
   const lexicalExtensions = extensions.flatMap((extension) => extension.lexical ? [extension.lexical] : []);
-  const contextualKeywords = new Set(lexicalExtensions.flatMap((extension) => [...extension.contextualKeywords ?? []]));
+  // D62 rule 157: Core's roster joins the extensions' own, so the parser's
+  // verdict is read for `type`, `match`, `case`, `from`, `as`, `test`,
+  // `using`, `get`, `readonly` and `constructor` the same way it already was
+  // for `component` and `look`.
+  const contextualKeywords = new Set([
+    ...CORE_CONTEXTUAL_KEYWORD_WORDS,
+    ...lexicalExtensions.flatMap((extension) => [...extension.contextualKeywords ?? []]),
+  ]);
   const parserExtension = extensions.find((extension) => extension.parser);
 
   for (const path of sources) {
@@ -339,7 +352,9 @@ const report = [
     `      ${exemption.reason}`,
   ]),
   "Not reverse-queryable (holes, not exemptions):",
-  ...unreachableTables.flatMap((table) => [`  ${table.label}`, `      ${table.reason}`]),
+  ...unreachableTables.length === 0
+    ? ["  none — every vocabulary this gate names is read from a compiler-owned table"]
+    : unreachableTables.flatMap((table) => [`  ${table.label}`, `      ${table.reason}`]),
 ].join("\n");
 
 if (failures.length > 0) {
@@ -375,6 +390,17 @@ function requireTargetVocabulary(config) {
   for (const name of CORE_PRELUDE_NAMES) {
     require_("prelude-name", name, name, "CORE_PRELUDE_NAMES in packages/compiler/src/core-vocabulary.ts");
   }
+  // D62 rules 157/158: Core's own contextual keywords and numeric suffixes.
+  // Both were holes this gate could only print — one had no enumerable table
+  // at all, and the other was reachable only because the Web extension
+  // republishes `ms` and `s` through LOOK_UNIT_TYPES, so a Core-only checkout
+  // checked neither. They are required from Core's roster now, on every target.
+  for (const word of CORE_CONTEXTUAL_KEYWORD_WORDS) {
+    require_("contextual-keyword", word, word, "CORE_CONTEXTUAL_KEYWORDS in packages/compiler/src/core-vocabulary.ts");
+  }
+  for (const suffix of CORE_NUMERIC_SUFFIXES) {
+    require_("numeric-suffix", suffix, `1${suffix}`, "CORE_NUMERIC_SUFFIXES in packages/compiler/src/core-vocabulary.ts");
+  }
 
   for (const extension of extensions) {
     for (const word of extension.lexical?.contextualKeywords ?? []) {
@@ -390,11 +416,6 @@ function requireTargetVocabulary(config) {
       require_("extension-global", name, name, `${extension.id} analysis.globals`);
     }
   }
-  // Core owns `ms` and `s` with or without an extension (D39-52). The Lexer
-  // keeps that pair private, so it is required through the Duration unit type
-  // an extension publishes rather than restated; a Core-only checkout would
-  // not see them at all, which is recorded in this gate's report.
-
   // The standard modules this target admits, and every name each publishes.
   const capabilities = new Set(extensions.flatMap((extension) => extension.capabilities ?? []));
   const web = capabilities.has("web") || config.framework?.host?.target === "browser";

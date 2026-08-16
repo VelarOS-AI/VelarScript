@@ -236,4 +236,59 @@ test("[D59-141] the test module reaches for the Core comparison instead of resta
   assert.match(source, /import \{ __velarEquals, __velarSameValueZero \}/u);
   assert.match(source, /toBe\(expected\) \{ if \(!__velarSameValueZero\(actual, expected\)\)/u);
   assert.doesNotMatch(source, /toBe\(expected\) \{ if \(actual !== expected\)/u);
+  // D59 rule 141.1: the List branch of `toContain` is the same comparison, and
+  // the native `===` that used to stand here is gone.
+  assert.match(source, /if \(__velarSameValueZero\(__velarDeepGetOwnPropertyDescriptor\(actual, index\)\.value, expected\)\)/u);
+  assert.doesNotMatch(source, /__velarDeepGetOwnPropertyDescriptor\(actual, index\)\.value === expected/u);
+});
+
+// ---------------------------------------------------------------------------
+// D59 rule 141.1 — `toContain` is the language's own `==` too.
+// ---------------------------------------------------------------------------
+
+test("[D59-141.1] toContain agrees with List.has, 'in', and == on NaN", { timeout: 300_000 }, async () => {
+  // Repairing `toBe` left `toContain` as the last comparison in the language
+  // that disagreed with the language: `values.has(nan)` was true while
+  // `expect(values).toContain(nan)` was false, from the same List and the same
+  // value. The ledger's evidence was execution-level, so this probe runs the
+  // real runner rather than reading the emitted module.
+  const directory = await makeTemporaryDirectory("velar-d59-141-1-");
+  await mkdir(join(directory, "src"), { recursive: true });
+  await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "src/main.vel" }), "utf8");
+  await writeFile(join(directory, "src", "main.vel"), "export const zero = 0\n", "utf8");
+  await writeFile(join(directory, "src", "main.test.vel"), `import {expect} from "velar/test"
+
+const nan = 0 / 0
+const values = [nan]
+
+test "the List itself says it holds NaN":
+    expect(values.has(nan)).toBeTruthy()
+    expect(nan in values).toBeTruthy()
+
+test "toContain agrees":
+    expect(values).toContain(nan)
+
+test "toContain keeps every answer == already gave":
+    expect([-0]).toContain(0)
+    expect([0]).toContain(-0)
+    expect(["a", "b"]).toContain("b")
+    expect([true]).toContain(true)
+    expect([null]).toContain(null)
+
+test "toContain still refuses a value the List does not hold":
+    expect(() => expect(values).toContain(1)).toThrow()
+    expect(() => expect([1, 2]).toContain(3)).toThrow()
+
+test "toContain stays reference identity for values the language compares by reference":
+    const inner = [1, 2]
+    expect([inner]).toContain(inner)
+    expect(() => expect([inner]).toContain([1, 2])).toThrow()
+
+test "text containment is unchanged: it is code-point identity, not a value comparison":
+    expect("VelarScript").toContain("Script")
+    expect(() => expect("VelarScript").toContain("script")).toThrow()
+`, "utf8");
+  const execution = velar(["test", directory]);
+  assert.equal(execution.status, 0, execution.output);
+  assert.match(execution.output, /6 passed/u);
 });

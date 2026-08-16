@@ -4,6 +4,7 @@ import { cp, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import test, { after } from "node:test";
 import { fileURLToPath } from "node:url";
+import { CORE_CONTEXTUAL_KEYWORD_WORDS, CORE_NUMERIC_SUFFIXES } from "../packages/compiler/src/core-vocabulary.ts";
 import { keywordKinds } from "../packages/compiler/src/token.ts";
 import { LOOK_PROPERTIES, LOOK_TARGETS } from "../packages/web/src/look.ts";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
@@ -67,6 +68,35 @@ test("the coverage gate passes on the tour and reports what it examined", () => 
     checked >= Object.keys(keywordKinds).length + LOOK_PROPERTIES.size + LOOK_TARGETS.size,
     `the gate reported only ${checked} names:\n${output}`,
   );
+});
+
+test("[D62-157/158] the gate requires Core's own contextual keywords and numeric suffixes", () => {
+  // Both tables were holes this gate could only print: one had no enumerable
+  // source at all, and the other was reachable only because the Web extension
+  // republishes `ms` and `s` through LOOK_UNIT_TYPES, so a Core-only checkout
+  // required neither. This test is the reverse direction of the roster — it
+  // fails if the gate ever stops *requiring* Core's words, which the "covered
+  // equals required" assertion above cannot notice on its own, because a table
+  // that requires nothing is trivially fully covered.
+  const { status, output } = runGate(tour);
+  assert.equal(status, 0, output);
+  const required = (category: string) => {
+    const line = output.split("\n").find((item) => item.trimStart().startsWith(`${category} `));
+    assert.ok(line, `${category} is missing from the gate's report:\n${output}`);
+    return Number(/\d+\/(?<required>\d+)/u.exec(line)?.groups?.required);
+  };
+  // The Web extension publishes ten contextual keywords and thirteen numeric
+  // suffixes; Core's ten words are disjoint from those, and its two suffixes
+  // are the pair the Web extension republishes. Requiring *at least* Core's own
+  // counts is what a Core-only checkout must also satisfy.
+  assert.ok(required("contextual-keyword") >= CORE_CONTEXTUAL_KEYWORD_WORDS.length,
+    `the gate required fewer contextual keywords than Core alone declares:\n${output}`);
+  assert.ok(required("numeric-suffix") >= CORE_NUMERIC_SUFFIXES.length,
+    `the gate required fewer numeric suffixes than Core alone declares:\n${output}`);
+  // And the gate no longer prints either as a hole it cannot reach.
+  assert.match(output, /Not reverse-queryable \(holes, not exemptions\):\n\s+none\b/u);
+  assert.doesNotMatch(output, /Core's own contextual keywords/u);
+  assert.doesNotMatch(output, /Core's built-in numeric suffixes/u);
 });
 
 test("removing one spelling from the tour turns the gate red and names it", async () => {
