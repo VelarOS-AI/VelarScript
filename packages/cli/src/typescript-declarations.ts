@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describeType, optionalOf, readonlyViewOf, semanticTypeIdentity, unionOf, type ClassInfo, type ValueType } from "@velarscript/compiler";
+import { resolveInstalledPackageRoot } from "./installed-package.ts";
 
 export interface TypeScriptDeclarationBridge {
   readonly path: string;
@@ -42,15 +43,19 @@ export async function loadTypeScriptDeclarations(source: string, importerPath: s
   if (source.startsWith(".") || source.startsWith("/") || source.startsWith("#")) return null;
   const packageName = packageNameOf(source);
   const subpath = source === packageName ? "." : `.${source.slice(packageName.length)}`;
-  let entry: string;
+  const require = createRequire(pathToFileURL(join(dirname(importerPath), "__velar_types__.js")));
+  let root: string;
   try {
-    const require = createRequire(pathToFileURL(join(dirname(importerPath), "__velar_types__.js")));
-    entry = require.resolve(source);
+    root = await resolveInstalledPackageRoot(packageName, source, require);
   } catch {
     return null;
   }
-  const root = await findPackageRoot(entry, packageName);
-  if (!root) return null;
+  let runtimeEntry: string | null = null;
+  try {
+    runtimeEntry = require.resolve(source);
+  } catch {
+    // An ESM-only package can still publish a complete `types` condition.
+  }
   const manifestPath = join(root, "package.json");
   let manifest: {
     readonly name?: unknown;
@@ -66,7 +71,7 @@ export async function loadTypeScriptDeclarations(source: string, importerPath: s
   if (manifest.name !== undefined && manifest.name !== packageName) return null;
   const declared = exportedTypes(manifest.exports, subpath)
     ?? (subpath === "." ? stringValue(manifest.types) ?? stringValue(manifest.typings) : null);
-  const path = await firstDeclarationEntry(root, declared, entry, subpath === ".");
+  const path = await firstDeclarationEntry(root, declared, runtimeEntry, subpath === ".");
   if (!path) {
     // BRG-U3: a declared types path that cannot be read fires the polite
     // degradation notice instead of degrading in silence.
@@ -86,14 +91,14 @@ export async function loadTypeScriptDeclarations(source: string, importerPath: s
   }
 }
 
-async function firstDeclarationEntry(root: string, declared: string | null, runtimeEntry: string, rootFallback: boolean): Promise<string | null> {
+async function firstDeclarationEntry(root: string, declared: string | null, runtimeEntry: string | null, rootFallback: boolean): Promise<string | null> {
   const rootPath = await realpath(root);
   const candidates: string[] = [];
   if (declared && !isAbsolute(declared)) {
     const target = resolve(root, declared);
     if (insideRoot(root, target)) candidates.push(...declarationFileCandidates(target));
   }
-  candidates.push(...declarationFileCandidates(runtimeEntry));
+  if (runtimeEntry) candidates.push(...declarationFileCandidates(runtimeEntry));
   if (rootFallback) candidates.push(join(root, "index.d.ts"), join(root, "index.d.mts"), join(root, "index.d.cts"));
   for (const candidate of unique(candidates)) {
     try {
@@ -1459,24 +1464,6 @@ function firstStringTarget(value: unknown, wildcard: string | null): string | nu
     if (found) return found;
   }
   return null;
-}
-
-async function findPackageRoot(entry: string, packageName: string): Promise<string | null> {
-  let directory = dirname(entry);
-  while (true) {
-    const manifestPath = join(directory, "package.json");
-    if (await exists(manifestPath)) {
-      try {
-        const manifest = JSON.parse(await readLimitedText(manifestPath, MAX_PACKAGE_MANIFEST_BYTES, "package manifest")) as { readonly name?: unknown };
-        if (manifest.name === packageName) return directory;
-      } catch {
-        // A nested module-format manifest is not package-root authority.
-      }
-    }
-    const parent = dirname(directory);
-    if (parent === directory) return null;
-    directory = parent;
-  }
 }
 
 async function exists(path: string): Promise<boolean> {

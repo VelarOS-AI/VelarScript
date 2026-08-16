@@ -616,11 +616,14 @@ Structured logging replaces direct source-level access to `console` while
 remaining on the existing JavaScript runtime.
 
 ```velar fragment
-import {logger, setLevel, useSink} from "velar/log"
+import {LogRecord, logger, setLevel, useSink} from "velar/log"
+
+def sendRecord(record: LogRecord):
+    postToCollector(record.scope, record.level, record.message)
 
 component BuildStatus:
     const buildLog = logger("build")
-    const stopCapture = useSink(record => sendRecord(record.message))
+    const stopCapture = useSink(sendRecord)
 
     @mounted:
         setLevel("debug")
@@ -641,9 +644,17 @@ component BuildStatus:
   additional fields.
 - `setLevel` accepts `debug`, `info`, `warn`, `error`, or `silent`; `level`
   returns the current threshold.
-- `useSink(callback)` redirects records while at least one custom sink exists
-  and returns an explicit cleanup function. A record contains timestamp, level,
-  scope, message, fields, and optional error.
+- `useSink(sink)` redirects records while at least one custom sink exists and
+  returns an explicit cleanup function. The record it hands a sink is
+  `LogRecord`, a published type name: `timestamp`, `level`, `scope`, `message`,
+  `fields`, and an optional `error`. A sink is therefore either a named `def`
+  with an annotated parameter, as above, or an arrow that `useSink` types
+  contextually — the same choice `velar/serve` gives a handler through
+  `ServeRequest`.
+- `LogRecord` is a runtime value as well as a type name, so `LogRecord.is(value)`
+  answers whether a value is a record and `LogRecord.parse(value)` validates one
+  at a dynamic boundary. That is the surface `velar/fs` publishes for
+  `FileWatchBatch`.
 - Each sink receives its own fields snapshot, so mutation inside one callback
   cannot rewrite what another sink observes. The optional error is either an
   actual `Error` or `null`. Rejections from an actual Promise returned by a sink

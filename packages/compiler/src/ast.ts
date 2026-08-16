@@ -190,6 +190,8 @@ export interface ClassDeclaration {
   readonly methods: readonly ClassMethodDeclaration[];
   /** D43 item 69: the compiler-known `@dispose:` release contract, if declared. */
   readonly dispose: ClassDisposeBlock | null;
+  /** D68 rule 177: the compiler-known `@iterate:` iteration contract, if declared. */
+  readonly iterate: ClassIterateBlock | null;
   readonly span: Span;
 }
 
@@ -200,6 +202,21 @@ export interface ClassDeclaration {
  */
 export interface ClassDisposeBlock {
   readonly kind: "ClassDisposeBlock";
+  readonly body: readonly Statement[];
+  readonly keywordSpan: Span;
+  readonly span: Span;
+}
+
+/**
+ * D68 rule 177: `@iterate:` is the second compiler-known class member, and it
+ * carries `@dispose:`'s shape for the same reason — it is a question the
+ * language asks the type ("what does iterating you mean?"), not a method the
+ * author publishes, so it cannot be called from source either. It answers with
+ * a List, Set, Map, or Record the language already knows how to iterate; no
+ * iterator protocol enters the language (charter section 19 stands).
+ */
+export interface ClassIterateBlock {
+  readonly kind: "ClassIterateBlock";
   readonly body: readonly Statement[];
   readonly keywordSpan: Span;
   readonly span: Span;

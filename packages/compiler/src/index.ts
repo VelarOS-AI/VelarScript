@@ -707,6 +707,10 @@ function interfaceOf(
           identity,
           parameters: analyzed.parameters.map(resolveAnalyzed),
           ...(analyzed.constructorRest ? { constructorRest: resolveAnalyzed(analyzed.constructorRest) } : {}),
+          // D68 rule 177: the iteration contract crosses the module boundary
+          // with the class, so an imported Bag iterates in the importing module
+          // exactly as it does in its own.
+          ...(analyzed.iterate ? { iterate: resolveAnalyzed(analyzed.iterate) } : {}),
           base: analyzed.base ? classIdentities.get(analyzed.base) ?? analyzed.base : null,
           fields: new Map([...analyzed.fields].map(([name, field]) => [name, { ...field, type: resolveAnalyzed(field.type) }])),
           methods: new Map([...analyzed.methods].map(([name, type]) => [name, resolveAnalyzed(type)])),

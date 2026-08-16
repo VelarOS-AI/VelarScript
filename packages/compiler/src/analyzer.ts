@@ -6,6 +6,7 @@ import type {
   BindingPattern,
   ClassDeclaration,
   ClassDisposeBlock,
+  ClassIterateBlock,
   Expression,
   ExternClassDeclaration,
   ExternFunctionDeclaration,
@@ -209,6 +210,13 @@ export interface ClassInfo {
   readonly identity?: string;
   /** D43 item 69: the class declares `@dispose:`, and whether releasing awaits. */
   readonly dispose?: "sync" | "async";
+  /**
+   * D68 rule 177: the collection the class's own `@iterate:` block answers
+   * with. Absent when the class declares no block — a derived class reads its
+   * base's answer instead of copying it, because overriding replaces rather
+   * than composes.
+   */
+  readonly iterate?: ValueType;
   readonly parameters: readonly ValueType[];
   readonly parameterNames?: readonly string[];
   readonly requiredParameters: number;
@@ -382,6 +390,14 @@ export interface LoweringHints {
    */
   readonly classDisposeChains: ReadonlyMap<string, "sync" | "async">;
   /**
+   * D68 rule 177: span identities of the expressions a consumer iterates
+   * through a class's `@iterate:` contract — the eight sites that consume an
+   * iterable. The emitter projects each one through the contract member, so
+   * what the runtime receives is the List, Set, Map, or Record the block
+   * returns and every consumer keeps the lowering it already had.
+   */
+  readonly iterationContracts: ReadonlySet<string>;
+  /**
    * Span identities of JavaScript-boundary calls in synchronous
    * module-initialization position. A non-Error value thrown there would
    * reach the host uncaught and unnormalized — the last unowned failure
@@ -491,6 +507,13 @@ const memberNarrowingPrefix = "\u0000member:";
  * `@dispose` is the language's name, not a name in the author's namespace.
  */
 export const disposeMemberKey = "__velar:dispose";
+/**
+ * D68 rule 177: the emitted member behind a class's `@iterate:` block, under
+ * the same kind of key and for the same reason — `@iterate` is the language's
+ * name for the question, so no author member can answer it by accident and no
+ * author call can reach it.
+ */
+export const iterateMemberKey = "__velar:iterate";
 
 /** How a `using` binding releases its value at scope exit. */
 export interface DisposalContract {
@@ -853,6 +876,14 @@ export class Analyzer implements TypeEnvironment {
   private readonly reportedBoundViolations = new Set<string>();
   private readonly usingDisposals = new Map<string, DisposalContract>();
   private readonly classDisposeChains = new Map<string, "sync" | "async">();
+  /** D68 rule 177: expression spans a consumer iterates through `@iterate:`. */
+  private readonly iterationContracts = new Set<string>();
+  /**
+   * D68 rule 177: the function depth of each `@iterate:` body being analyzed.
+   * A nested arrow inside the block is an ordinary callable and keeps the
+   * ordinary advice, so the contract's own message needs the exact depth.
+   */
+  private readonly iterateContractDepths: number[] = [];
   /** D51 rule 101: arrows that read a `using`-owned binding, by arrow span. */
   private readonly arrowOwnedCaptures = new Map<string, { readonly handle: string; readonly depth: number }>();
   private readonly arrowCaptureFrames: { captured: { readonly handle: string; readonly depth: number } | null }[] = [];
@@ -1586,6 +1617,7 @@ export class Analyzer implements TypeEnvironment {
       dynamicOrderings: this.dynamicOrderings,
       usingDisposals: this.usingDisposals,
       classDisposeChains: this.classDisposeChains,
+      iterationContracts: this.iterationContracts,
       moduleTopLevelHostCalls: this.moduleTopLevelHostCalls,
     };
   }
@@ -2131,6 +2163,12 @@ export class Analyzer implements TypeEnvironment {
         ...(statement.dispose
           ? { dispose: blockContainsDirectAwait(statement.dispose.body) ? "async" : "sync" }
           : {}),
+        // D68 rule 177: `@iterate:` carries no annotation, so its answer comes
+        // from the body — the same shape as an omitted function result, and it
+        // rides the same seeded convergence passes. The shape pre-pass seeds
+        // what the previous pass learned so a use written above the class sees
+        // the real collection instead of the placeholder.
+        ...(statement.iterate ? { iterate: this.seededIterationSource(statement.iterate) } : {}),
         parameters: statement.parameters.map((parameter) => this.resolveValidatedAnnotation(parameter.type)),
         parameterNames: statement.parameters.map((parameter) => parameter.name),
         requiredParameters: statement.parameters.filter((parameter) => !parameter.defaultValue).length,
@@ -2791,7 +2829,13 @@ export class Analyzer implements TypeEnvironment {
             });
           }
         }
-        const iterable = this.inferExpression(statement.iterable);
+        const inferredIterable = this.inferExpression(statement.iterable);
+        // D68 rule 177: `async for` is deliberately outside the contract. It
+        // pulls a capability handle — a resource with a lifetime that `using`
+        // owns — and a class that answered it would make "does this need
+        // releasing?" undecidable, so the projection happens on the
+        // synchronous side only and `async for` keeps refusing user types.
+        const iterable = statement.asynchronous ? inferredIterable : this.iterationSource(statement.iterable, inferredIterable);
         for (const name of pendingLoopNames) this.pendingScopeDeclarations.at(-1)!.delete(name);
         let first: ValueType;
         let second: ValueType;
@@ -2825,7 +2869,7 @@ export class Analyzer implements TypeEnvironment {
           if (iterable.kind !== "list" && iterable.kind !== "set" && iterable.kind !== "map" && iterable.kind !== "record" && iterable.kind !== "string" && iterable.kind !== "any") {
             this.typeError(iterable.kind === "enumObject"
               ? `Cannot iterate over the enum itself; ${iterable.name}.values() returns the members as a List — for member in ${iterable.name}.values():`
-              : `Cannot iterate over ${describeType(iterable)}`, statement.iterable.span);
+              : `Cannot iterate over ${describeType(iterable)}${this.iterationGuidance(iterable)}`, statement.iterable.span);
           }
         }
         const baseline = this.snapshotFlowFacts();
@@ -3272,6 +3316,7 @@ export class Analyzer implements TypeEnvironment {
       this.analyzeClassDispose(statement, statement.dispose);
       this.checkDisposalChain(statement, baseName);
     }
+    if (statement.iterate) this.analyzeClassIterate(statement, statement.iterate, baseName);
     this.superMemberContext = null;
     this.flowFrameDepth -= 1;
     this.exitScope();
@@ -3849,6 +3894,157 @@ export class Analyzer implements TypeEnvironment {
     this.exitScope();
   }
 
+  /** D68 rule 177: the convergence key of one `@iterate:` block. */
+  private iterationResultKey(block: ClassIterateBlock): string {
+    return spanIdentity(block.keywordSpan);
+  }
+
+  /**
+   * D68 rule 177: `@iterate:` carries no result annotation — the block *is* the
+   * answer — so the class shape pre-pass reads what the previous convergence
+   * pass learned. Without the seed, a use written above the class would see an
+   * unresolved placeholder, which is the same problem an omitted function
+   * result has and gets the same solution.
+   */
+  private seededIterationSource(block: ClassIterateBlock): ValueType {
+    return this.inferredFunctionResultSeeds.get(this.iterationResultKey(block)) ?? inferredResultPlaceholderType;
+  }
+
+  /**
+   * D68 rule 177: `@iterate:` answers the language's question "what does
+   * iterating you mean?" with a collection the language already iterates. It
+   * shares `@dispose:`'s path because it is the same kind of member — a
+   * contract, not a method — and it differs in exactly two ways, both forced:
+   * it produces a value, and it may not `await`, because every one of the eight
+   * consumers reads it synchronously.
+   */
+  private analyzeClassIterate(statement: ClassDeclaration, block: ClassIterateBlock, baseName: string | null): void {
+    this.enterScope();
+    this.flowFrameDepth += 1;
+    this.functionDepth += 1;
+    const previousLoopDepth = this.loopDepth;
+    this.loopDepth = 0;
+    const previousFinallyLoopDepths = this.finallyLoopDepths;
+    this.finallyLoopDepths = [];
+    const previousClass = this.currentClass;
+    const previousSuperMemberContext = this.superMemberContext;
+    this.currentClass = statement.name;
+    this.superMemberContext = "instance";
+    this.asynchronousFunctions.push(false);
+    this.iterateContractDepths.push(this.functionDepth);
+    const inferredReturns: ValueType[] = [];
+    this.returnContexts.push({ expected: unknownType, inferredReturns, observedReturns: null, declarationKind: "Iteration contract" });
+    this.declareBinding("self", false, { kind: "class", name: statement.name }, block.span, true);
+    this.analyzeStatements(block.body);
+    this.iterateContractDepths.pop();
+    this.returnContexts.pop();
+    this.asynchronousFunctions.pop();
+    this.currentClass = previousClass;
+    this.superMemberContext = previousSuperMemberContext;
+    this.loopDepth = previousLoopDepth;
+    this.finallyLoopDepths = previousFinallyLoopDepths;
+    this.functionDepth -= 1;
+    this.flowFrameDepth -= 1;
+    this.exitScope();
+    const answered = this.inferCollectedFunctionResult(inferredReturns, !this.blockAlwaysReturns(block.body));
+    const source = this.validatedIterationSource(statement, block, answered, baseName);
+    this.inferredFunctionResultTypes.set(this.iterationResultKey(block), source);
+    const info = this.classes.get(statement.name);
+    if (info) this.classes.set(statement.name, { ...info, iterate: source });
+  }
+
+  /**
+   * The four collections are the whole answer space: the block says "iterating
+   * me is iterating this", and the language already fixed what iterating a
+   * List, Set, Map, or Record means. Anything else would be a second iteration
+   * semantics, which is the thing charter section 19 keeps out.
+   */
+  private validatedIterationSource(
+    statement: ClassDeclaration,
+    block: ClassIterateBlock,
+    answered: ValueType,
+    baseName: string | null,
+  ): ValueType {
+    if (isInvalidType(answered) || containsInferredResultPlaceholder(answered)) return invalidType;
+    const expanded = this.expandAliases(answered);
+    if (expanded.kind !== "list" && expanded.kind !== "set" && expanded.kind !== "map" && expanded.kind !== "record") {
+      this.diagnostics.push(diagnostic(
+        "VEL4038",
+        `'@iterate' says which collection iterating '${statement.name}' means, so it returns a List, Set, Map, or Record — those are the shapes the language already knows how to iterate; this block returns ${describeType(answered)}`,
+        block.keywordSpan,
+      ));
+      return invalidType;
+    }
+    // The override rule every other member already carries (a getter or method
+    // override keeps the base result). `@iterate:` replaces rather than chains,
+    // but the answer still has to be the one a base-typed binding was promised:
+    // `for item in bag` inside a function taking the base would otherwise walk
+    // a different element type at runtime.
+    const inherited = baseName ? this.inheritedIterationSource(baseName) : null;
+    if (inherited && !isInvalidType(inherited) && !sameType(expanded, this.expandAliases(inherited))) {
+      this.diagnostics.push(diagnostic(
+        "VEL4038",
+        `'@iterate' override in '${statement.name}' must keep the base answer ${describeType(inherited)}; '${baseName}' already promised every caller that iterating one of these walks ${describeType(inherited)}, and a derived value is still one of those`,
+        block.keywordSpan,
+      ));
+      return inherited;
+    }
+    return expanded;
+  }
+
+  /** The `@iterate:` answer a class inherits, most derived ancestor first. */
+  private inheritedIterationSource(className: string): ValueType | null {
+    let current: string | null = className;
+    const visited = new Set<string>();
+    while (current && !visited.has(current)) {
+      visited.add(current);
+      const info: ClassInfo | undefined = this.classes.get(current);
+      if (info?.iterate) return info.iterate;
+      current = info?.base ?? null;
+    }
+    return null;
+  }
+
+  /**
+   * D68 rule 177: what iterating this value means. A class answers through
+   * `@iterate:` — its own, or the one it inherits, because overriding replaces
+   * a single answer instead of composing a chain the way `@dispose:` does.
+   */
+  private iterationContract(type: ValueType): ValueType | null {
+    const resolved = this.resolveNamedClasses(this.expandAliases(type));
+    if (resolved.kind !== "class") return null;
+    return this.inheritedIterationSource(resolved.identity ?? resolved.name);
+  }
+
+  /**
+   * Projects one consumer's operand through `@iterate:` and records the span so
+   * the emitter projects it too. Every consumer of an iterable calls this, so
+   * `for item in bag` and `item in bag` can never disagree about whether a
+   * class participates — D68 names that split as the trap this design exists to
+   * avoid.
+   */
+  private iterationSource(expression: Expression, type: ValueType): ValueType {
+    const contract = this.iterationContract(type);
+    if (contract === null || isInvalidType(contract)) return type;
+    this.iterationContracts.add(spanIdentity(expression.span));
+    return contract;
+  }
+
+  /**
+   * The one sentence that teaches the contract, appended wherever a consumer
+   * refuses a class. A class that already declares `@iterate:` gets nothing:
+   * its own block carries the precise diagnostic.
+   */
+  private iterationGuidance(type: ValueType): string {
+    const resolved = this.resolveNamedClasses(this.expandAliases(type));
+    if (resolved.kind !== "class") return "";
+    if (isExternClassIdentity(resolved.identity ?? null)) {
+      return "; an extern class declares the foreign shape and cannot declare '@iterate:' — read the collection out of it and iterate that";
+    }
+    if (this.iterationContract(resolved) !== null) return "";
+    return "; declare an '@iterate:' block on the class to say which List, Set, Map, or Record iterating it means";
+  }
+
   private validateConstructorShape(statement: ClassDeclaration): void {
     const body = statement.initialization?.body ?? [];
     const isSuperCall = (item: Statement | undefined): boolean => item?.kind === "ExpressionStatement"
@@ -3983,8 +4179,15 @@ export class Analyzer implements TypeEnvironment {
 
     const callable = next ? this.expandAliases(next) : null;
     if (!callable || callable.kind !== "function" || callable.requiredParameters > 0 || (callable.typeParameterNames?.length ?? 0) > 0) {
+      // D68 rule 177 drew this line deliberately: `@iterate:` answers the
+      // synchronous question. An asynchronous stream is a resource — it has a
+      // lifetime, it fails, it needs releasing — so letting an ordinary class
+      // pose as one would make "does this need `using`?" undecidable.
+      const contractNote = this.iterationContract(source) === null
+        ? ""
+        : "; '@iterate' answers the plain 'for', not 'async for' — an async stream is a resource, so pull it from the capability handle that owns the lifetime";
       this.typeError(
-        `async for requires next() -> Promise<T?>; ${describeType(source)} does not expose that pull contract`,
+        `async for requires next() -> Promise<T?>; ${describeType(source)} does not expose that pull contract${contractNote}`,
         sourceSpan,
       );
       return unknownType;
@@ -4756,7 +4959,11 @@ export class Analyzer implements TypeEnvironment {
         const expectedElement = collectionContext?.kind === "list" ? collectionContext.element : unknownType;
         let matchesContext = collectionContext?.kind === "list";
         for (const item of expression.elements) {
-          const itemType = this.inferExpression(item, expectedElement);
+          const inferredItem = this.inferExpression(item, expectedElement);
+          // D68 rule 177: `[...bag]` spreads what `@iterate:` answers, exactly
+          // as `[...bag.items]` would — including the refusal when the answer
+          // is not a List, which is the same refusal the field would get.
+          const itemType = item.kind === "SpreadExpression" ? this.iterationSource(item.value, inferredItem) : inferredItem;
           if (item.kind === "SpreadExpression") {
             if (itemType.kind === "list") {
               const spreadElement = itemType.readonlyView ? this.readonlyDataViewOf(itemType.element) : itemType.element;
@@ -4767,7 +4974,7 @@ export class Analyzer implements TypeEnvironment {
               }
             }
             else if (itemType.kind === "enumObject") this.typeError(`Cannot spread the enum itself; spread its member List instead — [...${itemType.name}.values()]`, item.span);
-            else if (itemType.kind !== "any") this.typeError(`Cannot spread ${describeType(itemType)} into a list`, item.span);
+            else if (itemType.kind !== "any") this.typeError(`Cannot spread ${describeType(itemType)} into a list${this.iterationGuidance(itemType)}`, item.span);
           } else {
             element = mergeTypes(element, expectedElement.kind === "unknown" ? this.widenAggregateSingleton(itemType) : itemType);
             if (expectedElement.kind !== "unknown") {
@@ -4882,7 +5089,13 @@ export class Analyzer implements TypeEnvironment {
           if (this.parameterDefaultDepth === 0 && this.constructorDepth === 0 && (invalidFunctionAwait || invalidExtensionAwait)) {
             this.diagnostics.push(diagnostic(
               "VEL4007",
-              invalidExtensionAwait
+              // D68 rule 177: a contract block takes no `async`, so the generic
+              // advice would name a fix that cannot be written. All eight
+              // consumers read `@iterate:` synchronously — `for item in bag`
+              // is a plain loop — so the awaiting work belongs on the way in.
+              this.iterateContractDepths.at(-1) === this.functionDepth
+                ? "'await' cannot be used in an '@iterate' block; iterating is a synchronous question — await the work before construction and hold the finished collection"
+                : invalidExtensionAwait
                 ? this.invalidExtensionAwaitMessage() ?? "'await' is not valid in this synchronous extension context"
                 : "'await' can only be used in an async function or at module scope",
               expression.span,
@@ -5196,16 +5409,23 @@ export class Analyzer implements TypeEnvironment {
     const right = this.inferExpression(rightExpression);
     if (isInvalidType(left) || isInvalidType(right)) return invalidType;
     if (operator === "in" || operator === "not in") {
-      if (right.kind === "list" || right.kind === "set") {
-        this.requireMembershipIntersection(left, this.readonlyDataViewOf(right.element), leftExpression.span, operator);
-      } else if (right.kind === "map") {
-        this.requireMembershipIntersection(left, this.readonlyDataViewOf(right.key), leftExpression.span, operator);
-      } else if (right.kind === "record") {
+      // D68 rule 177: `item in bag` and `for item in bag` consume the same
+      // contract. Letting one work while the other refused is the trap the
+      // ruling names — the author would have no way to see where the line is.
+      const container = this.iterationSource(rightExpression, right);
+      if (container.kind === "list" || container.kind === "set") {
+        this.requireMembershipIntersection(left, this.readonlyDataViewOf(container.element), leftExpression.span, operator);
+      } else if (container.kind === "map") {
+        this.requireMembershipIntersection(left, this.readonlyDataViewOf(container.key), leftExpression.span, operator);
+      } else if (container.kind === "record") {
         this.requireMembershipIntersection(left, stringType, leftExpression.span, operator);
-      } else if (right.kind === "string") {
+      } else if (container.kind === "string") {
         this.requireMembershipIntersection(left, stringType, leftExpression.span, operator);
-      } else if (right.kind !== "any") {
-        this.typeError(`Membership requires a List, Set, Map, Record, or string, received ${describeType(right)}`, rightExpression.span);
+      } else if (container.kind !== "any") {
+        this.typeError(
+          `Membership requires a List, Set, Map, Record, or string, received ${describeType(container)}${this.iterationGuidance(container)}`,
+          rightExpression.span,
+        );
       }
       return boolType;
     }
@@ -5937,7 +6157,9 @@ export class Analyzer implements TypeEnvironment {
         if (argument.elements.length > 0) this.rejectCollidingKeyDomain(key, argument.span, "Map key type");
         return argument.elements.length === 0 && expectedMap ? expectedMap : { kind: "map", key, value };
       }
-      const source = this.inferExpression(argument, expectedMap ?? unknownType);
+      // D68 rule 177: `Map(bag)` reads what `@iterate:` answers, so a class
+      // that iterates as a Map converts like the Map it names.
+      const source = this.iterationSource(argument, this.inferExpression(argument, expectedMap ?? unknownType));
       for (const extra of ordered.slice(1)) this.inferExpression(extra);
       if (source.kind === "map") return {
         kind: "map",
@@ -5964,7 +6186,7 @@ export class Analyzer implements TypeEnvironment {
         return source.fields.size === 0 && expectedMap ? expectedMap : { kind: "map", key: stringType, value };
       }
       if (source.kind === "any") return { kind: "map", key: anyType, value: anyType };
-      this.typeError(`Map construction requires a Map, a List of [key, value] Lists, or a record, received ${describeType(source)}`, argument.span);
+      this.typeError(`Map construction requires a Map, a List of [key, value] Lists, or a record, received ${describeType(source)}${this.iterationGuidance(source)}`, argument.span);
       return { kind: "map", key: unknownType, value: unknownType };
     }
     if (calleeExpression.kind === "IdentifierExpression" && calleeExpression.name === "Set") {
@@ -5980,7 +6202,12 @@ export class Analyzer implements TypeEnvironment {
       if (!argument || (argument.kind === "IdentifierExpression" && argument.name === "\u0000omitted-named-argument")) {
         return collectionContext?.kind === "set" ? collectionContext : { kind: "set", element: unknownType };
       }
-      const source = this.inferExpression(argument, collectionContext?.kind === "set" ? { kind: "list", element: collectionContext.element } : unknownType);
+      // D68 rule 177: `Set(bag)` reads the same contract every other consumer
+      // reads, so the eight sites never disagree about what a class iterates as.
+      const source = this.iterationSource(
+        argument,
+        this.inferExpression(argument, collectionContext?.kind === "set" ? { kind: "list", element: collectionContext.element } : unknownType),
+      );
       for (const extra of ordered.slice(1)) this.inferExpression(extra);
       if (source.kind === "list" || source.kind === "set") {
         const element = source.readonlyView ? this.readonlyDataViewOf(source.element) : source.element;
@@ -5988,7 +6215,7 @@ export class Analyzer implements TypeEnvironment {
         return { kind: "set", element };
       }
       if (source.kind === "any") return { kind: "set", element: anyType };
-      this.typeError(`Set construction requires a List or Set, received ${describeType(source)}`, argument.span);
+      this.typeError(`Set construction requires a List or Set, received ${describeType(source)}${this.iterationGuidance(source)}`, argument.span);
       return { kind: "set", element: unknownType };
     }
 
@@ -6220,7 +6447,11 @@ export class Analyzer implements TypeEnvironment {
       const context = item.declared
         ? solvedContext(item.spreadList ? { kind: "list", element: item.declared } : item.declared)
         : unknownType;
-      const actual = this.inferExpression(item.value, context);
+      // D68 rule 177: a call spread consumes an iterable, so it reads the
+      // `@iterate:` answer — `f(...bag)` is `f(...bag.items)`, refusal included.
+      const actual = item.spreadList
+        ? this.iterationSource(item.value, this.inferExpression(item.value, context))
+        : this.inferExpression(item.value, context);
       actuals.set(item, actual);
       if (!item.declared) continue;
       if (item.spreadList) {
@@ -6243,7 +6474,7 @@ export class Analyzer implements TypeEnvironment {
       if (item.spreadList) {
         const expanded = this.expandAliases(actual);
         if (expanded.kind === "list") this.requireAssignable(expanded.element, substitute(item.declared), item.errorSpan);
-        else if (expanded.kind !== "any") this.typeError(`Call spread requires a List, received ${describeType(actual)}`, item.errorSpan);
+        else if (expanded.kind !== "any") this.typeError(`Call spread requires a List, received ${describeType(actual)}${this.iterationGuidance(actual)}`, item.errorSpan);
         continue;
       }
       this.requireAssignable(actual, substitute(item.declared), item.errorSpan);
@@ -8272,13 +8503,13 @@ export class Analyzer implements TypeEnvironment {
       for (const argument of arguments_) {
         if (argument.kind === "SpreadExpression") {
           sawSpread = true;
-          const type = this.inferExpression(argument.value);
+          const type = this.iterationSource(argument.value, this.inferExpression(argument.value));
           if (!rest) this.typeError("Call spread requires a callable with a rest parameter", argument.span);
           else if (fixedIndex < parameters.length) {
             this.typeError(`Provide all ${parameters.length} fixed argument${parameters.length === 1 ? "" : "s"} before a call spread`, argument.span);
           } else if (type.kind === "list") this.requireAssignable(type.element, rest, argument.span);
           if (type.kind !== "list" && type.kind !== "any") {
-            this.typeError(`Call spread requires a List, received ${describeType(type)}`, argument.span);
+            this.typeError(`Call spread requires a List, received ${describeType(type)}${this.iterationGuidance(type)}`, argument.span);
           }
           fixedIndex = parameters.length;
           continue;
@@ -8667,9 +8898,12 @@ export class Analyzer implements TypeEnvironment {
 
   /** What one element of a membership probe's container is, matching the `in` operand rules. */
   private membershipElementType(container: ValueType): ValueType | null {
-    if (container.kind === "list" || container.kind === "set") return container.element;
-    if (container.kind === "map") return container.key;
-    if (container.kind === "record" || container.kind === "string") return stringType;
+    // D68 rule 177: the narrowing a membership test proves must read the same
+    // container the test itself read, so it walks `@iterate:` too.
+    const source = this.iterationContract(container) ?? container;
+    if (source.kind === "list" || source.kind === "set") return source.element;
+    if (source.kind === "map") return source.key;
+    if (source.kind === "record" || source.kind === "string") return stringType;
     return null;
   }
 

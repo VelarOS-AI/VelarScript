@@ -197,7 +197,104 @@ export def lendsWithoutGivingAway() -> bool:
     using handle = Terminal()
     return borrow(handle)
 
+// ---------------------------------------------------------------------------
+// `@iterate:` — what iterating this class means
+// ---------------------------------------------------------------------------
+
+// The second compiler-known member. It answers with a List, Set, Map, or
+// Record — a shape the language already iterates — so no iterator protocol
+// enters the language. Iterating the class is iterating that collection, word
+// for word.
+export class Basket:
+    let items: List<string> = ["apple", "pear", "fig"]
+
+    // Like `@dispose:`, it is a contract rather than a method: `self` is in
+    // scope, it may not `await`, and `basket.iterate()` names nothing.
+    @iterate:
+        return self.items
+
+// The answer may be a Map, and then the two-slot loop means key/value.
+export class Prices:
+    let byName: Map<string, number> = Map([["apple", 2], ["pear", 3]])
+
+    @iterate:
+        return self.byName
+
+// Or a Record, whose keys are its field names.
+export class Limits:
+    let bounds: Record<number> = {small: 1, large: 9}
+
+    @iterate:
+        return self.bounds
+
+// A List of Lists is destructured one item at a time, exactly as a plain List
+// of Lists would be.
+class Pairs:
+    let rows: List<List<string>> = [["apple", "2"], ["pear", "3"]]
+
+    @iterate:
+        return self.rows
+
+// A derived class inherits the block; overriding *replaces* the answer rather
+// than chaining, and the replacement keeps the base's collection type.
+export class SortedBasket extends Basket:
+    @iterate:
+        return self.items.sorted()
+
+const basket = Basket()
+
+def joinWith(separator: string, ...parts: string) -> string:
+    return parts.join(separator)
+
+// Every consumer of an iterable reads the one contract — a class participates
+// in all eight or in none, so there is no line for a reader to discover.
+export def iterateOneSlot() -> string:
+    let seen = ""
+    for item in basket:
+        seen += item
+    return seen
+
+export def iterateTwoSlots() -> string:
+    let seen = ""
+    for item, index in basket:
+        seen += f"{index}:{item} "
+    return seen.trim()
+
+export def iterateDestructured() -> string:
+    let seen = ""
+    // Brackets destructure one item, exactly as they do over a plain List.
+    for [name, price] in Pairs():
+        seen += f"{name}={price} "
+    return seen.trim()
+
+export def iterateKeyAndValue() -> string:
+    let seen = ""
+    for name, price in Prices():
+        seen += f"{name}={price} "
+    for name, bound in Limits():
+        seen += f"{name}={bound} "
+    return seen.trim()
+
+export def membership() -> bool:
+    return ("apple" in basket) and ("durian" not in basket)
+
+export def listSpread() -> List<string>:
+    return [...basket, "quince"]
+
+export def callSpread() -> string:
+    return joinWith("-", ...basket)
+
+export def setAndMapConstruction() -> number:
+    return Set(basket).size + Map(Prices()).size
+
+// `async for` stays outside the contract: it pulls a capability handle, whose
+// lifetime `using` owns, so an ordinary class never becomes an async stream.
+
 export const chapterTen = {
     session, openSession, connection, address, scheme, described, closeSession,
     champion, championDescription,
+    // Evaluating the summary runs every consumption point above, so the
+    // chapter is executed by `velar run`, not merely compiled.
+    iterated: f"{iterateOneSlot()} {iterateTwoSlots()} {iterateDestructured()} {iterateKeyAndValue()}",
+    consumed: f"{membership()} {listSpread().size} {callSpread()} {setAndMapConstruction()}",
 }

@@ -784,6 +784,7 @@ export function buildSemanticIndex(
         }
         if (statement.initialization) visitBlock(statement.initialization.body, statement.initialization.span);
         if (statement.dispose) visitBlock(statement.dispose.body, statement.dispose.span);
+        if (statement.iterate) visitBlock(statement.iterate.body, statement.iterate.span);
         exitScope();
         for (const field of statement.fields) if (field.static && field.initializer) visitExpression(field.initializer);
         for (const getter of statement.getters) visitFunction(getter, true, statement.name, "field", getter.returnType ? formatTypeReference(getter.returnType) : undefined);

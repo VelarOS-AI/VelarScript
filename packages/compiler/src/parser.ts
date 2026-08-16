@@ -8,6 +8,7 @@ import type {
   ClassGetterDeclaration,
   ClassDisposeBlock,
   ClassInitBlock,
+  ClassIterateBlock,
   ClassMethodDeclaration,
   ClassParameter,
   ComparisonChainExpression,
@@ -1454,34 +1455,41 @@ export class Parser {
     const fields: ClassFieldDeclaration[] = [];
     let initialization: ClassInitBlock | null = null;
     let dispose: ClassDisposeBlock | null = null;
+    let iterate: ClassIterateBlock | null = null;
     const getters: ClassGetterDeclaration[] = [];
     const methods: ClassMethodDeclaration[] = [];
     this.consumeNewlines();
 
     while (!this.check("dedent") && !this.check("eof")) {
       const methodStart = this.current().span.start;
-      // D43 item 67/69: an `@name` member belongs to the language. `@dispose:`
-      // is the only one a class declares today; anything else gets the closed
-      // vocabulary named back.
+      // D43 item 67/69 + D68 rule 177: an `@name` member belongs to the
+      // language. `@dispose:` and `@iterate:` are the two a class declares;
+      // anything else gets the closed vocabulary named back. Both are parsed
+      // and validated on one path because they are one idea — a question the
+      // language asks the type, answered in a block that is not a method.
       if (this.check("at")) {
         const marker = this.advance();
         const memberName = this.expect("identifier", "Expected a compiler-known class member name after '@'");
         const keywordSpan = span(marker.span.start, memberName.span.end);
-        if (memberName.value !== "dispose") {
+        const known = memberName.value === "dispose" || memberName.value === "iterate";
+        if (!known) {
           this.diagnostics.push(diagnostic(
             "VEL2022",
-            `Unknown language member '@${memberName.value}'; a class declares '@dispose:' as its only '@' member`,
+            `Unknown language member '@${memberName.value}'; a class declares '@dispose:' and '@iterate:', and no other '@' member`,
             keywordSpan,
           ));
         }
         const body = this.parseBlock();
-        const block = {
-          kind: "ClassDisposeBlock",
-          body,
-          keywordSpan,
-          span: span(methodStart, body.at(-1)?.span.end ?? this.previous().span.end),
-        } satisfies ClassDisposeBlock;
-        if (memberName.value === "dispose") {
+        const blockSpan = span(methodStart, body.at(-1)?.span.end ?? this.previous().span.end);
+        if (memberName.value === "iterate") {
+          const block = { kind: "ClassIterateBlock", body, keywordSpan, span: blockSpan } satisfies ClassIterateBlock;
+          if (iterate) {
+            this.diagnostics.push(diagnostic("VEL2022", `Class '${name.value}' has more than one '@iterate' block`, block.span));
+          } else {
+            iterate = block;
+          }
+        } else if (memberName.value === "dispose") {
+          const block = { kind: "ClassDisposeBlock", body, keywordSpan, span: blockSpan } satisfies ClassDisposeBlock;
           if (dispose) {
             this.diagnostics.push(diagnostic("VEL2022", `Class '${name.value}' has more than one '@dispose' block`, block.span));
           } else {
@@ -1658,7 +1666,8 @@ export class Parser {
       getters,
       methods,
       dispose,
-      span: span(start, Math.max(methods.at(-1)?.span.end ?? 0, getters.at(-1)?.span.end ?? 0, fields.at(-1)?.span.end ?? 0, initialization?.span.end ?? 0, dispose?.span.end ?? 0, close.span.end)),
+      iterate,
+      span: span(start, Math.max(methods.at(-1)?.span.end ?? 0, getters.at(-1)?.span.end ?? 0, fields.at(-1)?.span.end ?? 0, initialization?.span.end ?? 0, dispose?.span.end ?? 0, iterate?.span.end ?? 0, close.span.end)),
     };
   }
 

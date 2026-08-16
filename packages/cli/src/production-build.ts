@@ -1,9 +1,7 @@
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
-import { createRequire } from "node:module";
 import { dirname, join, relative, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import { build, type Plugin } from "esbuild";
 import { projectStyles } from "./framework-host.ts";
 import { projectImportKey, type ProjectResult } from "./project.ts";
@@ -12,6 +10,7 @@ import { VELAR_VERSION } from "./version.ts";
 import type { StaticDeploymentSummary } from "./static-deployment.ts";
 import { fileIdentity, MAX_PRODUCTION_ASSETS } from "./file-integrity.ts";
 import { hostErrorMessage } from "./host-error.ts";
+import { resolveBrowserNpmEntry } from "./npm.ts";
 import { isNodeOnlyModule, nodeModuleDiagnostic } from "@velarscript/node/compiler";
 
 export interface ProductionBuildResult {
@@ -259,8 +258,12 @@ function velarModules(project: ProjectResult): Plugin {
         const targetModule = moduleAt(targetPath);
         return targetModule ? { path: targetModule.inputPath } : null;
       });
-      context.onResolve({ filter: /^[^./]/ }, (arguments_) => {
+      context.onResolve({ filter: /^[^./]/ }, async (arguments_) => {
         if (arguments_.path.startsWith("velar/")) return null;
+        // Package-internal `imports` aliases belong to the importing package's
+        // manifest. esbuild already resolves them with browser/import
+        // conditions; they are not installed package names.
+        if (arguments_.path.startsWith("#")) return null;
         if (arguments_.path.startsWith("node:")) {
           return { errors: [{ text: `Node builtin '${arguments_.path}' cannot run in a browser build` }] };
         }
@@ -275,8 +278,7 @@ function velarModules(project: ProjectResult): Plugin {
             }
           }
           const base = sourceModule ? dirname(sourceModule.inputPath) : arguments_.resolveDir || project.projectRoot;
-          const require = createRequire(pathToFileURL(join(base, "__velar_resolve__.js")));
-          return { path: require.resolve(arguments_.path) };
+          return { path: await resolveBrowserNpmEntry(arguments_.path, base) };
         } catch (error) {
           return { errors: [{ text: `Cannot resolve browser import '${arguments_.path}': ${hostErrorMessage(error)}` }] };
         }

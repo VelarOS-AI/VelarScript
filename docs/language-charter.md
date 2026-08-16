@@ -1829,6 +1829,15 @@ Both slots accept the complete binding-pattern grammar. Brackets continue to
 mean destructuring one item, so `for [left, right] in pairs` is not a two-slot
 loop; three slots are rejected.
 
+A class joins these loops by declaring `@iterate:` (section 10), which answers
+with a List, Set, Map, or Record. Iterating the class then means iterating that
+collection, word for word — the same slots, the same order, the same element
+types. So does every other consumer of an iterable: `value in bag`, the list
+spread `[...bag]`, the call spread `f(...bag)`, and `Set(bag)` / `Map(bag)` all
+read the one contract, and a class either participates in all of them or in
+none. `async for` is outside it deliberately, and refuses a class that declares
+`@iterate:` as clearly as one that does not.
+
 `async for value in source` consumes one explicit Velar pull contract:
 `source.next()` must have the checked type `() -> Promise<T?>`. The source and
 its data-valued `next` method are captured once; the capture reads a plain
@@ -2029,10 +2038,35 @@ class Session:
 - Instances are called directly: `Session("session-1")`.
 - `self` is explicit in method bodies.
 - Getters read as ordinary properties.
-- `@dispose:` is the one compiler-known class member. It declares the release
-  contract `using` runs (section 9, *Owned resources*), it is not callable from
-  source, and a class may declare at most one. `@` marks names the language
-  owns, so a member the author declares can never collide with one.
+- `@dispose:` and `@iterate:` are the compiler-known class members. `@dispose:`
+  declares the release contract `using` runs (section 9, *Owned resources*).
+  `@iterate:` declares what iterating the class means (section 9, *Loops*).
+  Neither is callable from source, a class may declare at most one of each, and
+  `@` marks names the language owns, so a member the author declares can never
+  collide with one.
+
+`@iterate:` returns the collection the class iterates as:
+
+```velar
+class Bag:
+    let items: List<string> = []
+
+    @iterate:
+        return self.items
+```
+
+The block runs with `self` in scope and must return a `List`, `Set`, `Map`, or
+`Record` — the shapes the language already knows how to iterate. That is the
+whole mechanism: no iterator object, no `next()`, no generator. `for item in
+bag` means what `for item in bag.items` means, including the element type, the
+two-slot meaning, and the `readonly` projection of a read-only answer. It is a
+question the language asks, so it may not `await` — every consumer reads it
+synchronously — and it may not be called as `bag.iterate()`.
+
+A derived class inherits the block. Overriding it *replaces* the answer rather
+than composing a chain, because there is only one answer to give; the
+replacement must still be the same collection type the base promised, by the
+same invariance rule every other override follows.
 
 Inheritance is explicit:
 
@@ -3564,7 +3598,10 @@ The following are not part of VelarScript:
 - TypeScript-style interfaces, assertions, overloads, or type programming
 - generators, `yield`, or the JavaScript `Symbol.asyncIterator` protocol;
   incremental sources use checked `async for` pull contracts or producer
-  callbacks, and JavaScript `for await` is guided to `async for`
+  callbacks, and JavaScript `for await` is guided to `async for`. A class that
+  declares `@iterate:` (section 10) does not reopen this: it names a collection
+  the language already iterates rather than producing values on demand, so no
+  iteration protocol enters the language
 - JavaScript `splice`, `push`, `shift`, `unshift`, mutating `sort`, or mutating
   `reverse`
 - user-defined decorators or declaration annotations. VelarScript's decorators

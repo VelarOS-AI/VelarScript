@@ -1,4 +1,4 @@
-import { access, mkdir, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -7,6 +7,7 @@ import type { ProjectResult } from "./project.ts";
 import { readBoundedText } from "./bounded-text.ts";
 import { frameworkBase } from "./framework-host.ts";
 import { hostErrorMessage } from "./host-error.ts";
+import { resolveInstalledPackageRoot } from "./installed-package.ts";
 import { VELAR_VERSION } from "./version.ts";
 
 const MAX_BROWSER_NPM_PACKAGES = 4096;
@@ -72,6 +73,20 @@ interface PackageState {
   failure: string | null;
 }
 
+interface InstalledBrowserImport {
+  readonly requestedName: string;
+  readonly subpath: string;
+  readonly root: string;
+  readonly manifest: PackageManifest;
+  readonly entry: string;
+}
+
+/** Resolve one bare package import exactly as a browser ESM import. */
+export async function resolveBrowserNpmEntry(specifier: string, baseDirectory: string): Promise<string> {
+  const require = createRequire(pathToFileURL(join(baseDirectory, "__velar_browser_import__.js")));
+  return (await resolveInstalledBrowserImport(specifier, require)).entry;
+}
+
 // Native browser ESM cannot load CommonJS, and many npm packages either
 // publish only CommonJS internals behind a thin ESM wrapper (the dual-package
 // pattern Node's own documentation recommends) or depend on packages that do.
@@ -115,15 +130,8 @@ export async function resolveBrowserNpm(
         continue;
       }
       try {
-        const requestedName = packageNameOf(specifier);
-        const subpath = specifier === requestedName ? "." : `.${specifier.slice(requestedName.length)}`;
-        if (subpath.split("/").includes("..")) throw new Error(`the subpath '${subpath}' escapes the package directory`);
-        const root = await findInstalledPackageRoot(requestedName, specifier, require);
-        const manifest = JSON.parse(await readBoundedText(
-          join(root, "package.json"),
-          MAX_PACKAGE_MANIFEST_BYTES,
-          `Package manifest for '${specifier}'`,
-        )) as PackageManifest;
+        const resolvedImport = await resolveInstalledBrowserImport(specifier, require);
+        const { requestedName, subpath, root, manifest, entry } = resolvedImport;
         const name = manifest.name ?? requestedName;
         let state = states.get(name);
         if (!state) {
@@ -143,7 +151,6 @@ export async function resolveBrowserNpm(
           states.set(name, state);
         }
         if (!state.entries.has(subpath)) {
-          const entry = await selectBrowserEntry(specifier, state.root, state.manifest, subpath);
           const entryFromRoot = relative(state.root, entry);
           if (!entryFromRoot || entryFromRoot.startsWith("..") || isAbsolute(entryFromRoot)) {
             throw new Error(`the resolved entry '${entryFromRoot}' escapes the package directory`);
@@ -221,17 +228,18 @@ export async function npmAsset(packages: readonly BrowserNpmPackage[], pathname:
   }
 }
 
-async function findInstalledPackageRoot(name: string, specifier: string, require: NodeJS.Require): Promise<string> {
-  for (const directory of require.resolve.paths(specifier) ?? []) {
-    const root = join(directory, name);
-    try {
-      await access(join(root, "package.json"));
-      return await realpath(root);
-    } catch {
-      // Keep walking the node_modules chain.
-    }
-  }
-  throw new Error(`package '${name}' is not installed in node_modules`);
+async function resolveInstalledBrowserImport(specifier: string, require: NodeJS.Require): Promise<InstalledBrowserImport> {
+  const requestedName = packageNameOf(specifier);
+  const subpath = specifier === requestedName ? "." : `.${specifier.slice(requestedName.length)}`;
+  if (subpath.split("/").includes("..")) throw new Error(`the subpath '${subpath}' escapes the package directory`);
+  const root = await resolveInstalledPackageRoot(requestedName, specifier, require);
+  const manifest = JSON.parse(await readBoundedText(
+    join(root, "package.json"),
+    MAX_PACKAGE_MANIFEST_BYTES,
+    `Package manifest for '${specifier}'`,
+  )) as PackageManifest;
+  const entry = await selectBrowserEntry(specifier, root, manifest, subpath);
+  return { requestedName, subpath, root, manifest, entry };
 }
 
 async function selectBrowserEntry(specifier: string, root: string, manifest: PackageManifest, subpath: string): Promise<string> {
@@ -240,7 +248,7 @@ async function selectBrowserEntry(specifier: string, root: string, manifest: Pac
     if (target === null) {
       const requireTarget = resolveExportsTarget(manifest.exports, subpath, NODE_REQUIRE_CONDITIONS);
       if (requireTarget !== null) {
-        throw new Error(`the package only publishes a CommonJS entry for '${subpath}' (its "exports" map has no "import", "browser", or "default" condition there); 'velar dev' serves packages to the browser as native ES modules, so the package needs an ESM build ('velar build' can still bundle CommonJS)`);
+        throw new Error(`the package only publishes a CommonJS entry for '${subpath}' (its "exports" map has no "import", "browser", or "default" condition there); browser targets require an ESM export for that subpath`);
       }
       throw new Error(`the package does not export '${subpath}' for browser import conditions`);
     }

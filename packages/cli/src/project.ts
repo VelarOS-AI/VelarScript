@@ -1103,6 +1103,9 @@ export function moduleInterfaceIdentity(
       String(info.requiredParameters),
       types(info.parameters),
       info.constructorRest ? analysisTypeIdentity(info.constructorRest) : "",
+      // D68 rule 177: the iteration contract is part of what a dependent
+      // compiled against, so changing it has to invalidate the dependent.
+      info.iterate ? analysisTypeIdentity(info.iterate) : "",
       names(info.getters),
       names(info.abstractGetters),
       names(info.abstractMethods),
@@ -1418,6 +1421,7 @@ function resolvedModuleInterface(
     classes.set(name, {
       ...info,
       base: info.base ? classes.get(info.base)?.identity ?? info.base : null,
+      ...(info.iterate ? { iterate: resolveType(info.iterate) } : {}),
       parameters: info.parameters.map(resolveType),
       fields: new Map([...info.fields].map(([field, value]) => [field, { ...value, type: resolveType(value.type) }])),
       methods: new Map([...info.methods].map(([method, type]) => [method, resolveType(type)])),
@@ -1605,6 +1609,10 @@ function renameClass(info: ClassInfo, aliases: ReadonlyMap<string, string>): Cla
   return {
     ...(info.identity ? { identity: info.identity } : {}),
     ...(info.dispose ? { dispose: info.dispose } : {}),
+    // D68 rule 177: the iteration contract is part of the class, so it travels
+    // with it — an imported Bag iterates in the importing module exactly as it
+    // does in its own, and its element type is renamed like every other type.
+    ...(info.iterate ? { iterate: renameType(info.iterate, aliases) } : {}),
     parameters: info.parameters.map((type) => renameType(type, aliases)),
     ...(info.parameterNames ? { parameterNames: info.parameterNames } : {}),
     requiredParameters: info.requiredParameters,

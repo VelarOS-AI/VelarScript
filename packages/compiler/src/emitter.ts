@@ -18,7 +18,7 @@ import { VELAR_CLASS_FIELD_MODULE, VELAR_CLASS_FIELD_RUNTIME } from "./class-run
 import { VELAR_COLLECTION_HOST_EXPORTS, VELAR_COLLECTION_HOST_MODULE, VELAR_COLLECTION_IDENTITY_RUNTIME, VELAR_COLLECTION_LIST_RUNTIME, VELAR_COLLECTION_RECORD_RUNTIME, VELAR_COLLECTION_SET_MAP_RUNTIME, VELAR_COLLECTION_TYPE_RUNTIME } from "./collection-runtime.ts";
 import { VELAR_COLLECTION_LOWERING_EXPORTS, VELAR_COLLECTION_LOWERING_MODULE, VELAR_COLLECTION_LOWERING_RUNTIME } from "./collection-lowering-runtime.ts";
 import { describeType, formatTypeReference, resolveTypeReference, type ValueType } from "./types.ts";
-import { disposeMemberKey, type LoweringHints } from "./analyzer.ts";
+import { disposeMemberKey, iterateMemberKey, type LoweringHints } from "./analyzer.ts";
 import { VELAR_ERROR_NORMALIZATION_MODULE, VELAR_ERROR_NORMALIZATION_RUNTIME, VELAR_HOST_ERROR_NAMES, VELAR_HOST_ERROR_RUNTIME } from "./error-runtime.ts";
 import type { CompilerEmitterOptions } from "./extension.ts";
 import { VELAR_NARROWING_MODULE, VELAR_NARROWING_RUNTIME } from "./narrowing-runtime.ts";
@@ -868,6 +868,7 @@ export class JavaScriptEmitter {
           statement.getters.forEach(visitStatement);
           statement.methods.forEach(visitStatement);
           statement.dispose?.body.forEach(visitStatement);
+          statement.iterate?.body.forEach(visitStatement);
           break;
         case "ReturnStatement": if (statement.value) visitExpression(statement.value); break;
         case "ThrowStatement": visitExpression(statement.value); break;
@@ -1718,8 +1719,22 @@ export class JavaScriptEmitter {
       const lines = chained ? this.chainedDisposeLines(body, chained, statement.span.start, depth + 2) : body;
       dispose.push(`${indentation}  ${asynchronous ? "async " : ""}[${JSON.stringify(disposeMemberKey)}]() {\n${lines.join("\n")}\n${indentation}  }`);
     }
+    // D68 rule 177: `@iterate:` lands the same way, under its own unspellable
+    // key. It is a plain prototype member, so a derived block simply shadows
+    // the base's — overriding replaces, which is what "one answer" means.
+    const iterate: string[] = [];
+    if (statement.iterate) {
+      const iterateDepth = depth + 2;
+      const indent = "  ".repeat(iterateDepth);
+      const body = [
+        `${indent}const self = this;`,
+        ...this.emitStatementLines(statement.iterate.body, iterateDepth),
+        `${indent}return null;`,
+      ];
+      iterate.push(`${indentation}  [${JSON.stringify(iterateMemberKey)}]() {\n${body.join("\n")}\n${indentation}  }`);
+    }
     const extension = statement.base ? ` extends ${statement.base.name}` : "";
-    return `${indentation}${statement.exported ? "export " : ""}class ${statement.name}${extension} {\n${[...privateFields, ...staticFields, constructor, ...getters, ...methods, ...dispose].join("\n\n")}\n${indentation}}`;
+    return `${indentation}${statement.exported ? "export " : ""}class ${statement.name}${extension} {\n${[...privateFields, ...staticFields, constructor, ...getters, ...methods, ...dispose, ...iterate].join("\n\n")}\n${indentation}}`;
   }
 
   /**
@@ -1777,6 +1792,12 @@ export class JavaScriptEmitter {
       if (narrowing) {
         emitted = `(__velarValue => __velarNarrow(__velarValue, ${this.emitNarrowingCheck(narrowing.expected, "__velarValue")}, ${JSON.stringify(describeType(narrowing.expected))}, ${JSON.stringify(narrowing.description)}, ${expression.span.start}))(${emitted})`;
       }
+      // D68 rule 177: the projection lives here rather than in each of the
+      // eight consumers, because "iterating a class means iterating what
+      // `@iterate:` answers" is one fact about the operand, and the consumers'
+      // own lowerings then receive the List, Set, Map, or Record they already
+      // knew how to handle.
+      if (this.hints.iterationContracts.has(key)) emitted = `(${emitted})[${JSON.stringify(iterateMemberKey)}]()`;
       if (!normalizeNull) return emitted;
       if (normalizePromise) return `__velarNormalizePromiseValue(${emitted})`;
       if (this.hints.normalizedNullResults.has(key)) return `(${emitted}, null)`;
