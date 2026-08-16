@@ -1,6 +1,6 @@
 # VelarScript Toolchain Release Process
 
-Status: VelarScript 0.10.0 release candidate; registry publication deferred
+Status: VelarScript 0.10.0 public source release; registry publication deferred
 
 VelarScript ships the compiler, official Node runtime, official Web and Desktop frameworks, project creator, CLI, and the
 two domain libraries as eight

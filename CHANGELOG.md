@@ -6,6 +6,15 @@ truth for acceptance status.
 
 ## Unreleased
 
+## 0.10.0 — 2026-08-16
+
+VelarScript 0.10.0 is the first public source release: a checked, Web-first
+language for people who already think in JavaScript and Python, shipped as one
+version-locked set of eight packages: compiler, Node runtime, Web and Desktop
+frameworks, project creator, CLI, text buffer, and script analysis.
+
+### Final hardening and language surface
+
 - `IndexError` was unreachable from every CLI path — the class existed but
   was missing from the shared-runtime export list, so `error.code` read
   `Error` while the program's own `catch` swallowed a `ReferenceError` and
@@ -529,12 +538,6 @@ truth for acceptance status.
   and `x is not null` are removed spellings with parse-level guidance to the
   equality forms. `x is not Error` (type test) and `x not in list`
   (membership) are unaffected.
-
-## 0.10.0 — 2026-08-09
-
-VelarScript 0.10.0 is the first public toolchain release: a checked, Web-first
-language for people who already think in JavaScript and Python, shipped as the
-version-locked compiler, Web framework, project creator, and CLI package set.
 
 ### Release highlights
 
