@@ -10,7 +10,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const requested = process.argv.slice(2);
 const files = requested.length > 0
   ? requested.map((file) => resolve(file))
-  : [join(root, "README.md"), ...await markdownFiles(join(root, "docs")), ...await packageReadmes(join(root, "packages"))];
+  : [...await rootReadmes(root), ...await markdownFiles(join(root, "docs")), ...await packageReadmes(join(root, "packages"))];
 // Match the opening fence's exact backtick count so VelarScript layout-string
 // examples may contain shorter Markdown fences as literal text.
 const fence = /^(?<ticks>`{3,})velar(?:[ \t]+(?<metadata>[^\n]+))?[ \t]*\r?\n(?<source>[\s\S]*?)^\k<ticks>[ \t]*$/gmu;
@@ -205,6 +205,20 @@ async function markdownFiles(directory) {
     else if (entry.isFile() && entry.name.endsWith(".md")) files.push(path);
   }
   return files.sort();
+}
+
+// Every root README, not only the English one. A translated README carries the
+// same VelarScript fences, and naming just README.md left those uncompiled —
+// the shape D56 rule 130 exists to prevent, where a gate looks like it covers
+// something it never reads.
+async function rootReadmes(directory) {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const readmes = entries
+    .filter((entry) => entry.isFile() && /^README(\.[\w-]+)?\.md$/u.test(entry.name))
+    .map((entry) => join(directory, entry.name))
+    .sort();
+  if (readmes.length === 0) failures.push("no root README.md was found to check");
+  return readmes;
 }
 
 async function packageReadmes(directory) {
