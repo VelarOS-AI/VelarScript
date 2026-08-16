@@ -25,6 +25,9 @@ jobs:
       - run: npm ci
         env:
           NODE_AUTH_TOKEN: ${{ github.token }}
+      # `npm test` includes Chromium-backed lifecycle and runtime probes. The
+      # separate browser matrix expands that coverage to all three engines.
+      - run: npx playwright install --with-deps chromium
       - run: npm run check
       - run: npm test
       - run: npm run test:packages

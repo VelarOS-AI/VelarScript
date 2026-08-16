@@ -591,12 +591,15 @@ if (/\bPromise\.(?:race|resolve)\s*\(/u.test(nodeHostRuntimeSource)
 }
 for (const phrase of [
   'import { EventEmitter as __VelarTerminalEventEmitter } from "node:events"',
-  'import { closeSync as __velarTerminalCloseSync, openSync as __velarTerminalOpenSync } from "node:fs"',
+  'import { closeSync as __velarTerminalCloseSync, fstatSync as __velarTerminalFstatSync, openSync as __velarTerminalOpenSync } from "node:fs"',
   'import { MessageChannel as __VelarTerminalMessageChannel, MessagePort as __VelarTerminalMessagePort, Worker as __VelarTerminalWorker } from "node:worker_threads"',
   "const __velarTerminalMaxPending = 256",
   "const __velarTerminalMessagePortPost =",
   "const __velarTerminalWorkerTerminate =",
   "let __velarTerminalFailure = null",
+  "let __velarTerminalOwnsInputDescriptor = false",
+  '__velarTerminalFstatSync(0)',
+  '"ENXIO"',
   "Node terminal worker did not become ready",
   "readLine(prompt = \"\")",
 ]) {

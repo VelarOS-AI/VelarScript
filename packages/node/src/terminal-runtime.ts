@@ -3,7 +3,7 @@
 // stdin decoding and fd writes live in terminal-worker-runtime.ts.
 export const VELAR_NODE_TERMINAL_RUNTIME = String.raw`
 import { EventEmitter as __VelarTerminalEventEmitter } from "node:events";
-import { closeSync as __velarTerminalCloseSync, openSync as __velarTerminalOpenSync } from "node:fs";
+import { closeSync as __velarTerminalCloseSync, fstatSync as __velarTerminalFstatSync, openSync as __velarTerminalOpenSync } from "node:fs";
 import { MessageChannel as __VelarTerminalMessageChannel, MessagePort as __VelarTerminalMessagePort, Worker as __VelarTerminalWorker } from "node:worker_threads";
 
 const __velarTerminalNativeArray = globalThis.Array;
@@ -155,9 +155,10 @@ function __velarTerminalFail(error) {
   __velarTerminalExpectedWorkerExit = true;
   const terminated = __velarTerminalCall(__velarTerminalWorkerTerminate, __velarTerminalWorker, []);
   __velarTerminalCall(__velarTerminalPromiseThen, terminated, [() => null, () => null]);
-  if (__velarTerminalInputDescriptor >= 0 && __velarTerminalProcess.platform !== "win32") {
+  if (__velarTerminalOwnsInputDescriptor) {
     try { __velarTerminalCloseSync(__velarTerminalInputDescriptor); } catch {}
     __velarTerminalInputDescriptor = -1;
+    __velarTerminalOwnsInputDescriptor = false;
   }
 }
 
@@ -180,13 +181,14 @@ function __velarTerminalMessage(value) {
     }
     __velarTerminalClosing = false;
     __velarTerminalUpdateReference();
-    if (__velarTerminalInputDescriptor >= 0 && __velarTerminalProcess.platform !== "win32") {
+    if (__velarTerminalOwnsInputDescriptor) {
       try { __velarTerminalCloseSync(__velarTerminalInputDescriptor); }
       catch (error) {
         const code = error && typeof error === "object" ? __velarTerminalOwnDescriptor(error, "code") : null;
         if (!code || !("value" in code) || code.value !== "EBADF") throw error;
       }
       __velarTerminalInputDescriptor = -1;
+      __velarTerminalOwnsInputDescriptor = false;
     }
     __velarTerminalCall(__velarTerminalMessagePortClose, __velarTerminalPort, []);
     __velarTerminalExpectedWorkerExit = true;
@@ -222,12 +224,22 @@ const __velarTerminalReadyPromise = new __velarTerminalNativePromise((resolve, r
 const __velarTerminalChannel = new __VelarTerminalMessageChannel();
 const __velarTerminalPort = __velarTerminalChannel.port1;
 let __velarTerminalInputDescriptor = 0;
+let __velarTerminalOwnsInputDescriptor = false;
 if (__velarTerminalProcess.platform !== "win32") {
-  try { __velarTerminalInputDescriptor = __velarTerminalOpenSync("/dev/fd/0", "r"); }
+  try {
+    __velarTerminalInputDescriptor = __velarTerminalOpenSync("/dev/fd/0", "r");
+    __velarTerminalOwnsInputDescriptor = true;
+  }
   catch (error) {
     const code = error && typeof error === "object" ? __velarTerminalOwnDescriptor(error, "code") : null;
-    if (!code || !("value" in code) || code.value !== "EACCES" && code.value !== "EBADF" && code.value !== "ENOENT") throw error;
-    __velarTerminalInputDescriptor = -1;
+    if (!code || !("value" in code) || code.value !== "EACCES" && code.value !== "EBADF"
+      && code.value !== "ENOENT" && code.value !== "ENXIO") throw error;
+    try {
+      __velarTerminalFstatSync(0);
+      __velarTerminalInputDescriptor = 0;
+    } catch {
+      __velarTerminalInputDescriptor = -1;
+    }
   }
 }
 __velarTerminalPort.onmessage = event => {

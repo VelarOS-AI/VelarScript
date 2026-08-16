@@ -123,9 +123,21 @@ test("D66 7A velar repro writes a reproduction that reproduces, and prints where
 
 test("D66 7A a reproduction carries no absolute host path and no environment data", async () => {
   // Discipline 2 of the ruling. The marker is in the project's own path, so a
-  // single leaked absolute path anywhere in the bundle fails this.
+  // single leaked absolute path anywhere in the bundle fails this. A dedicated
+  // environment sentinel proves the second half without treating a static
+  // product string such as the GitHub repository name as collected host data.
+  const environmentSentinel = "velar-d66-environment-sentinel-7d2b91c4";
+  const previousSentinel = process.env.VELAR_D66_ENVIRONMENT_SENTINEL;
+  process.env.VELAR_D66_ENVIRONMENT_SENTINEL = environmentSentinel;
   const directory = await project("velar-d66-repro-nothing-collected-", failingProject);
-  const produced = run(["repro", directory]);
+  const produced = (() => {
+    try {
+      return run(["repro", directory]);
+    } finally {
+      if (previousSentinel === undefined) delete process.env.VELAR_D66_ENVIRONMENT_SENTINEL;
+      else process.env.VELAR_D66_ENVIRONMENT_SENTINEL = previousSentinel;
+    }
+  })();
   assert.equal(produced.status, 0, produced.stderr);
 
   const bundle = join(directory, ".velar", "repro");
@@ -135,9 +147,7 @@ test("D66 7A a reproduction carries no absolute host path and no environment dat
     await realpath(directory),
     root,
     process.execPath,
-    ...Object.entries(process.env)
-      .filter(([name, value]) => value && value.length > 8 && !["PWD", "OLDPWD", "_"].includes(name))
-      .map(([, value]) => value!),
+    environmentSentinel,
   ];
   for (const file of await filesUnder(bundle)) {
     const content = await readFile(join(bundle, file), "utf8");
