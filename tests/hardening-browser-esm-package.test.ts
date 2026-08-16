@@ -4,8 +4,17 @@ import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { isAbsoluteBrowserImportPath } from "../packages/cli/src/production-build.ts";
 
 const cli = resolve("packages/cli/src/cli.ts");
+
+test("production import resolution keeps absolute host paths out of npm lookup", () => {
+  assert.equal(isAbsoluteBrowserImportPath("/workspace/src/main.vel"), true);
+  assert.equal(isAbsoluteBrowserImportPath("D:\\workspace\\src\\main.vel"), true);
+  assert.equal(isAbsoluteBrowserImportPath("\\\\server\\share\\src\\main.vel"), true);
+  assert.equal(isAbsoluteBrowserImportPath("browser-sdk"), false);
+  assert.equal(isAbsoluteBrowserImportPath("@scope/browser-sdk"), false);
+});
 
 test("Desktop checks and bundles import-only ESM package roots and subpaths", async () => {
   const projectRoot = await mkdtemp(join(tmpdir(), "velar-desktop-import-only-"));

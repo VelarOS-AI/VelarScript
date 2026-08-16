@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, win32 } from "node:path";
 import { build, type Plugin } from "esbuild";
 import { projectStyles } from "./framework-host.ts";
 import { projectImportKey, type ProjectResult } from "./project.ts";
@@ -47,6 +47,14 @@ export interface ProductionModuleSummary {
 }
 
 export const PRODUCTION_MANIFEST_NAME = "velar-build.json";
+
+export function isAbsoluteBrowserImportPath(specifier: string): boolean {
+  // esbuild reports entry points in the host path syntax. `path.isAbsolute`
+  // covers the running host; the explicit Windows check keeps the classifier
+  // testable on Unix and prevents a drive or UNC path ever becoming a package
+  // request when a build graph crosses a host boundary.
+  return isAbsolute(specifier) || win32.isAbsolute(specifier);
+}
 
 export interface ProductionBuildManifest {
   readonly formatVersion: 3;
@@ -286,6 +294,7 @@ function velarModules(project: ProjectResult): Plugin {
         return targetModule ? { path: targetModule.inputPath } : null;
       });
       context.onResolve({ filter: /^[^./]/ }, async (arguments_) => {
+        if (isAbsoluteBrowserImportPath(arguments_.path)) return null;
         if (arguments_.path.startsWith("velar/")) return null;
         // Package-internal `imports` aliases belong to the importing package's
         // manifest. esbuild already resolves them with browser/import
