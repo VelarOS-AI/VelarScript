@@ -199,3 +199,44 @@ test("[A-024] every acceptance script that installs the toolchain derives its se
     );
   }
 });
+
+test("no tracked text file carries a NUL byte that hides it from every text tool", async () => {
+  // `scripts/check-runtime-boundary.mjs` held a literal NUL inside a template
+  // literal — a deduplication key written as the character rather than the `\0`
+  // escape — and `packages/compiler/src/mechanical-fix.ts` held two more. One
+  // byte is enough: `grep` classifies the whole file as binary and reports
+  // nothing from it, so `grep -rn standardModuleSources scripts/` came back
+  // empty while the gate script imported and called it on the next line. The
+  // largest gate in the repository was invisible to every plain text search
+  // anybody would run over it, which is the quietest possible way for a file to
+  // stop being reviewed.
+  //
+  // Which files are text is decided without reference to the byte under test:
+  // a file counts as text when, ignoring NULs, it decodes as UTF-8 and carries
+  // no other control characters. Deciding it by the NUL — which is how git and
+  // grep themselves decide — would make this assertion vacuous.
+  const listed = spawnSync("git", ["ls-files"], { cwd: root, encoding: "utf8" });
+  assert.equal(listed.status, 0, listed.stderr);
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const offenders: string[] = [];
+  let checked = 0;
+  for (const file of listed.stdout.split("\n").filter((name) => name !== "")) {
+    let bytes: Buffer;
+    try {
+      bytes = await readFile(join(root, file));
+    } catch {
+      continue;
+    }
+    const withoutNul = bytes.filter((byte) => byte !== 0);
+    try {
+      decoder.decode(withoutNul);
+    } catch {
+      continue;
+    }
+    if (withoutNul.some((byte) => byte < 9 || (byte > 13 && byte < 32) || byte === 127)) continue;
+    checked += 1;
+    if (bytes.includes(0)) offenders.push(file);
+  }
+  assert.ok(checked > 100, `only ${checked} tracked text files were read`);
+  assert.deepEqual(offenders, [], "these text files carry a NUL byte, so grep and diff treat them as binary");
+});

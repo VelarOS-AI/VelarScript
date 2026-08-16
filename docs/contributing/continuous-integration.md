@@ -39,9 +39,12 @@ The repository defines three GitHub Actions workflows:
   cleanup. Host-side tests do not bypass that source contract by importing the
   generated realtime JavaScript module directly.
 - Packed-browser acceptance independently creates an application from the eight
-  installed tarballs. Its application graph imports all nine browser
-  application modules before mounting, while its generated browser test loads
-  the tenth module, `velar/web-test`; the installed CLI then checks, tests,
+  installed tarballs. Its application graph imports every browser application
+  module the Web extension publishes — ten today, derived from the extension's
+  own interface table rather than listed, so an eleventh fails this acceptance
+  until the installed toolchain serves it — while its generated browser test
+  loads `velar/web-test`, which application source may not import at all; the
+  installed CLI then checks, tests,
   builds, verifies, and executes that project.
 - Hosted-deployment acceptance runs the public remote verifier against root and
   subpath product servers and proves that byte tampering, wrong cache headers,
