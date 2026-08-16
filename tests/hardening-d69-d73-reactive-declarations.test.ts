@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import test, { after } from "node:test";
 import { applyMechanicalFixes, compile as compileCore } from "@velarscript/compiler";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
+import { repositoryRoot } from "./repository-root.ts";
 import { compileProject } from "../packages/cli/src/project.ts";
 import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
 import {
@@ -31,7 +32,7 @@ import { WEB_OWNED_TYPE_NAMES } from "../packages/web/src/types.ts";
 // tests/browser.acceptance.ts, whose fixture project this file's siblings feed.
 // ---------------------------------------------------------------------------
 
-const root = resolve(new URL("..", import.meta.url).pathname);
+const root = repositoryRoot;
 const cli = join(root, "packages", "cli", "src", "cli.ts");
 
 after(removeTemporaryDirectories);

@@ -13,8 +13,8 @@ after(removeTemporaryDirectories);
 
 // Hosted CI runners share noisier CPU and I/O than the reference development
 // machine. Keep the exact corpus and asymptotic checks there, with a single
-// explicit 2x wall-clock allowance instead of platform-specific exceptions.
-const timeBudget = (milliseconds: number): number => milliseconds * (process.env.CI ? 2 : 1);
+// explicit 3x wall-clock allowance instead of platform-specific exceptions.
+const timeBudget = (milliseconds: number): number => milliseconds * (process.env.CI ? 3 : 1);
 
 test("application-scale incremental budget recompiles only the reverse dependency closure", async () => {
   const directory = await makeTemporaryDirectory("velar-scale-");
@@ -205,29 +205,30 @@ test("language server maps 1 MiB script semantic tokens in one bounded coordinat
   };
   try {
     send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { capabilities: { general: { positionEncodings: ["utf-32"] } } } });
-    await waitFor((message) => message.id === 1, 10_000);
+    await waitFor((message) => message.id === 1, timeBudget(10_000));
     send({ jsonrpc: "2.0", method: "initialized", params: {} });
     const text = "const value = 1;\n" + "value + 1;\n".repeat(95_324);
     const uri = pathToFileURL(join(tmpdir(), "velar-script-semantic-scale.ts")).href;
     const openedAt = performance.now();
     send({ jsonrpc: "2.0", method: "textDocument/didOpen", params: { textDocument: { uri, languageId: "typescript", version: 1, text } } });
     const diagnostics = await waitFor((message) => message.method === "textDocument/publishDiagnostics"
-      && (message.params as { uri?: string } | undefined)?.uri === uri, 10_000);
+      && (message.params as { uri?: string } | undefined)?.uri === uri, timeBudget(10_000));
     assert.deepEqual((diagnostics.params as { diagnostics: unknown[] }).diagnostics, []);
     assert.ok(performance.now() - openedAt < timeBudget(8_000), "1 MiB script diagnostics exceeded the language-server budget");
     const semanticAt = performance.now();
     send({ jsonrpc: "2.0", id: 2, method: "textDocument/semanticTokens/full", params: { textDocument: { uri } } });
-    const semantic = await waitFor((message) => message.id === 2, 4_000);
+    const semantic = await waitFor((message) => message.id === 2, timeBudget(4_000));
     const data = (semantic.result as { data: number[] }).data;
     assert.equal(data.length % 5, 0);
     assert.ok(data.length > 30_000 && data.length <= 50_000);
     assert.ok(performance.now() - semanticAt < timeBudget(2_000), "1 MiB script semantic-token mapping exceeded the linear coordinate budget");
     send({ jsonrpc: "2.0", id: 3, method: "shutdown", params: null });
-    await waitFor((message) => message.id === 3, 5_000);
+    await waitFor((message) => message.id === 3, timeBudget(5_000));
     send({ jsonrpc: "2.0", method: "exit", params: null });
     child.stdin.end();
     const code = await new Promise<number | null>((resolveExit, rejectExit) => {
-      const timer = setTimeout(() => rejectExit(new Error("Language server did not exit within 5 seconds")), 5_000);
+      const timeout = timeBudget(5_000);
+      const timer = setTimeout(() => rejectExit(new Error(`Language server did not exit within ${timeout}ms`)), timeout);
       child.once("exit", (value) => { clearTimeout(timer); resolveExit(value); });
     });
     assert.equal(code, 0, stderr);

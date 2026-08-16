@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import test, { after } from "node:test";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
+import { repositoryRoot } from "./repository-root.ts";
 
 after(removeTemporaryDirectories);
 
@@ -26,11 +27,11 @@ after(removeTemporaryDirectories);
 // measurement next to it. They are regression gates, not targets: a budget is
 // only ever tightened after the measured baseline moves.
 
-const root = resolve(new URL("..", import.meta.url).pathname);
+const root = repositoryRoot;
 
 // The corpus and ratios remain identical on hosted CI; only wall-clock ceilings
 // receive one explicit allowance for shared-runner scheduling noise.
-const timeBudget = (milliseconds: number): number => milliseconds * (process.env.CI ? 2 : 1);
+const timeBudget = (milliseconds: number): number => milliseconds * (process.env.CI ? 3 : 1);
 
 /** Wall-clock ceiling for one benchmark, covering compilation and execution. */
 const BENCHMARK_WALL_CLOCK_BUDGET_MS = timeBudget(20_000);

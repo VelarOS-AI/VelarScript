@@ -1,24 +1,48 @@
-// Isolated fd-based terminal host. The worker never loads application code or
-// packages; it owns stdin decoding and stdout/stderr writes below Node's shared
-// Readable/Writable/EventEmitter prototypes.
+const VELAR_NODE_TERMINAL_INPUT_SOURCE = String.raw`
+process.stdin.pause();
+const send = value => { if (process.connected && typeof process.send === "function") process.send(value); };
+process.stdin.on("data", data => send({kind: "input-data", data}));
+process.stdin.on("end", () => { send({kind: "input-end"}); process.disconnect(); });
+process.stdin.on("error", () => { send({kind: "input-error"}); process.disconnect(); });
+process.on("message", value => {
+  if (!value || typeof value !== "object") return;
+  if (value.kind === "input-state" && typeof value.active === "boolean") {
+    if (value.active) process.stdin.resume();
+    else process.stdin.pause();
+  } else if (value.kind === "close") {
+    process.stdin.pause();
+    process.exit(0);
+  }
+});
+process.on("disconnect", () => process.exit(0));
+send({kind: "ready"});
+`.trimStart();
+
+// Isolated terminal host. The Worker never loads application code or packages;
+// an on-demand child owns the inherited stdin handle so a blocking pipe read is
+// cancellable without exposing application-Realm stream prototypes.
 export const VELAR_NODE_TERMINAL_WORKER_SOURCE = String.raw`
 import { Buffer } from "node:buffer";
-import { createReadStream, write } from "node:fs";
+import { spawn } from "node:child_process";
+import { write } from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 import { isatty } from "node:tty";
 import { workerData } from "node:worker_threads";
 
 const port = workerData.port;
+const inputHostSource = ${JSON.stringify(VELAR_NODE_TERMINAL_INPUT_SOURCE)};
 const maxTextBytes = 1024 * 1024;
 const maxQueuedLines = 256;
 const decoder = new StringDecoder("utf8");
-const inputDescriptor = workerData.inputDescriptor;
 const waiting = [];
 const queued = [];
-let input = null;
 let queuedBytes = 0;
 let queueOverflowed = false;
-let closed = inputDescriptor < 0;
+let closed = false;
+let inputHost = null;
+let inputHostReady = false;
+let inputHostEnded = false;
+let inputHostActive = false;
 let failure = null;
 let lineParts = [];
 let lineBytes = 0;
@@ -36,6 +60,53 @@ function errorRecord(error) {
 
 function respond(id, ok, value, error = null) {
   port.postMessage({kind: "response", id, ok, value, error});
+}
+
+function referenceInputHost(active) {
+  if (inputHost === null) return;
+  if (active) {
+    inputHost.ref();
+    inputHost.channel?.ref();
+  } else {
+    inputHost.channel?.unref();
+    inputHost.unref();
+  }
+}
+
+function ensureInputHost() {
+  if (inputHost !== null || closed) return inputHost;
+  inputHost = spawn(process.execPath, ["--input-type=module", "--eval", inputHostSource], {
+    stdio: ["inherit", "ignore", "inherit", "ipc"],
+    serialization: "advanced",
+    windowsHide: true,
+  });
+  inputHost.on("message", value => {
+    try {
+      if (!value || typeof value !== "object") throw new TypeError("Node terminal input host returned an invalid message");
+      if (value.kind === "ready") {
+        inputHostReady = true;
+        inputHost.send({kind: "input-state", active: inputHostActive});
+      } else if (value.kind === "input-data") acceptForwardedData(value);
+      else if (value.kind === "input-end") { inputHostEnded = true; endForwardedInput(); }
+      else if (value.kind === "input-error") { inputHostEnded = true; endForwardedInput(new Error("Terminal input failed")); }
+      else throw new TypeError("Node terminal input host returned an invalid message");
+    } catch (error) { settleInput(error); }
+  });
+  inputHost.on("error", error => settleInput(error));
+  inputHost.on("exit", code => {
+    if (!closed && !inputHostEnded) settleInput(new Error("Node terminal input host exited unexpectedly with code " + code));
+  });
+  referenceInputHost(false);
+  return inputHost;
+}
+
+function requestForwardedInput(active) {
+  if (closed || inputHostActive === active) return;
+  inputHostActive = active;
+  const host = active ? ensureInputHost() : inputHost;
+  if (host === null) return;
+  referenceInputHost(active);
+  if (inputHostReady) host.send({kind: "input-state", active});
 }
 
 function requestOf(value) {
@@ -79,6 +150,7 @@ function deliver(entry) {
   if (request) {
     if (entry.error) respond(request.id, false, null, errorRecord(entry.error));
     else respond(request.id, true, entry.value);
+    if (waiting.length === 0) requestForwardedInput(false);
     return;
   }
   if (queueOverflowed) return;
@@ -94,7 +166,7 @@ function deliver(entry) {
   }
   queued.push(entry);
   queuedBytes += entry.bytes;
-  input?.pause();
+  requestForwardedInput(false);
 }
 
 function appendLine(text, start, end) {
@@ -148,34 +220,12 @@ function settleInput(error = null) {
   if (closed) return;
   closed = true;
   failure = error;
+  requestForwardedInput(false);
   while (waiting.length > 0) {
     const request = waiting.shift();
     if (error) respond(request.id, false, null, errorRecord(error));
     else respond(request.id, true, null);
   }
-}
-
-function ensureInput() {
-  if (input !== null || closed) return input;
-  input = createReadStream("", {fd: inputDescriptor, autoClose: false});
-  input.on("data", chunk => {
-    if (closed) return;
-    try { consume(decoder.write(chunk)); }
-    catch (error) { settleInput(error); input?.destroy(); return; }
-    if (waiting.length === 0) input?.pause();
-  });
-  input.on("error", error => settleInput(error));
-  input.on("end", () => {
-    if (closed) return;
-    try {
-      const tail = decoder.end();
-      if (tail) consume(tail);
-      if (lineParts.length > 0 || lineOverflowed) completeLine();
-      settleInput();
-    } catch (error) { settleInput(error); }
-  });
-  input.pause();
-  return input;
 }
 
 function acceptRead(id) {
@@ -189,10 +239,26 @@ function acceptRead(id) {
   }
   if (failure) { respond(id, false, null, errorRecord(failure)); return; }
   if (closed) { respond(id, true, null); return; }
-  const stream = ensureInput();
-  if (stream === null) { respond(id, true, null); return; }
   waiting.push({id});
-  stream.resume();
+  requestForwardedInput(true);
+}
+
+function acceptForwardedData(value) {
+  if (closed || !value || typeof value !== "object" || !(value.data instanceof Uint8Array)
+    || value.data.byteLength > maxTextBytes) {
+    throw new TypeError("Node terminal host received invalid forwarded input");
+  }
+  consume(decoder.write(value.data));
+  if (waiting.length === 0) requestForwardedInput(false);
+}
+
+function endForwardedInput(error = null) {
+  if (closed) return;
+  if (error !== null) { settleInput(error); return; }
+  const tail = decoder.end();
+  if (tail) consume(tail);
+  if (lineParts.length > 0 || lineOverflowed) completeLine();
+  settleInput();
 }
 
 async function dispatch(value) {
@@ -218,11 +284,10 @@ function closeInput() {
   while (waiting.length > 0) waiting.shift();
   while (queued.length > 0) queued.shift();
   queuedBytes = 0;
-  if (input === null || input.closed || input.destroyed) {
-    port.postMessage({kind: "closed", error: null});
-    return;
+  requestForwardedInput(false);
+  if (inputHost !== null) {
+    try { inputHost.send({kind: "close"}); } catch {}
   }
-  input.destroy();
   port.postMessage({kind: "closed", error: null});
 }
 
@@ -236,5 +301,6 @@ port.on("message", value => {
 });
 port.on("messageerror", () => { throw new Error("Node terminal host received an unreadable request"); });
 port.start();
+process.once("exit", () => { if (inputHost !== null) inputHost.kill("SIGKILL"); });
 port.postMessage({kind: "ready", interactive: isatty(0) && isatty(1)});
 `.trimStart();

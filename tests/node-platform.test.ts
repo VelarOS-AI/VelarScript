@@ -428,6 +428,7 @@ test("Node terminal worker releases idle imports and close cancels a pending fd 
   try {
     const source = nodeModuleSources.get("velar/terminal");
     assert.ok(source);
+    assert.match(source, /spawn\(process\.execPath/u);
     await writeFile(join(directory, "terminal.mjs"), source, "utf8");
     await writeFile(join(directory, "idle.mjs"), `
 import {terminal} from "./terminal.mjs";

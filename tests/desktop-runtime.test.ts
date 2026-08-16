@@ -18,7 +18,9 @@ function registerRuntimeType<T extends object>(value: T): T {
   return value;
 }
 
-test("Desktop renderer proxies preserve pull-based process and HTTP streaming", async () => {
+test("Desktop renderer proxies preserve pull-based process and HTTP streaming", {
+  skip: process.platform === "win32" ? "the 0.10 Desktop host publishes POSIX paths on macOS" : false,
+}, async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-desktop-runtime-"));
   const calls: Array<{ capability: string; operation: string; args: readonly unknown[]; timeout: number }> = [];
   const processChunks = new Map<number, unknown[]>();

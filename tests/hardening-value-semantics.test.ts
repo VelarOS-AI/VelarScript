@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
+import { repositoryRoot } from "./repository-root.ts";
 import { join, resolve } from "node:path";
 import { compile } from "@velarscript/compiler";
 import { compileProject } from "../packages/cli/src/project.ts";
@@ -332,7 +333,7 @@ print(str(rows.sorted(by=row => row.name).size))
 
 test("[D42 65] exactly one predicate answers \"is this ordered\"", async () => {
   const analyzer = await import("node:fs/promises")
-    .then((fs) => fs.readFile(resolve(new URL("..", import.meta.url).pathname, "packages/compiler/src/analyzer.ts"), "utf8"));
+    .then((fs) => fs.readFile(resolve(repositoryRoot, "packages/compiler/src/analyzer.ts"), "utf8"));
   // Four mechanisms giving three answers was the structural root of ORD-1/2/3.
   // The retired names must not come back.
   assert.ok(!/defaultSortableType/u.test(analyzer), "defaultSortableType came back");

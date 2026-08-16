@@ -16,6 +16,7 @@ import { createProjectKernel } from "@velaros-ai/project/runtime";
 
 const workerPath = resolve("packages/desktop/native/node/worker.js");
 const temporaryPrefix = join(tmpdir(), "velar-desktop-");
+const desktopWorkerTest = process.platform === "win32" ? test.skip : test;
 
 // Every wait in this suite is bounded. The worker speaks over stdio pipes and
 // drives real child processes, PTYs and OS file watchers, so a single reply
@@ -151,7 +152,7 @@ async function runBoundedCommand(executable: string, args: readonly string[], ti
   return output;
 }
 
-test("Desktop owns one packaged official language-server lifecycle without process grants", { timeout: 90_000 }, async () => {
+desktopWorkerTest("Desktop owns one packaged official language-server lifecycle without process grants", { timeout: 90_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-desktop-language-server-"));
   const project = join(directory, "project");
   const appData = join(directory, "app-data");
@@ -234,9 +235,14 @@ test("Desktop owns one packaged official language-server lifecycle without proce
     assert.equal(escapedLinkLog.method, "window/logMessage");
     assert.match(escapedLinkLog.params.message, /outside the Desktop project grant/u);
 
-    const cancelledPull = client.beginCall("language-server", "next", [handle]);
-    client.cancelRequest(cancelledPull.id);
-    await assert.rejects(cancelledPull.result, /pull was cancelled|request was cancelled/u);
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const cancelledPull = client.beginCall("language-server", "next", [handle]);
+      client.cancelRequest(cancelledPull.id);
+      await assert.rejects(
+        withDeadline(cancelledPull.result, "cancelled language-server pull", 5_000),
+        /pull was cancelled|request was cancelled/u,
+      );
+    }
     assert.equal(await client.call("language-server", "send", [handle, JSON.stringify({
       jsonrpc: "2.0",
       method: "textDocument/didOpen",
@@ -300,7 +306,10 @@ test("Desktop owns one packaged official language-server lifecycle without proce
   }
 });
 
-test("Desktop owns permission-scoped PTY terminals with resize and crash reaping", { timeout: 240_000 }, async () => {
+desktopWorkerTest("Desktop owns permission-scoped PTY terminals with resize and crash reaping", {
+  timeout: 240_000,
+  skip: process.platform !== "darwin" ? "the 0.10 PTY host is the macOS Swift host" : false,
+}, async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-desktop-terminal-"));
   const project = join(directory, "project");
   const appData = join(directory, "app-data");
@@ -383,7 +392,7 @@ test("Desktop owns permission-scoped PTY terminals with resize and crash reaping
   }
 });
 
-test("Desktop owns bounded packaged project tasks without executable grants", { timeout: 240_000 }, async () => {
+desktopWorkerTest("Desktop owns bounded packaged project tasks without executable grants", { timeout: 240_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-desktop-project-task-"));
   const project = join(directory, "project");
   const appData = join(directory, "app-data");
@@ -460,7 +469,7 @@ test("Desktop owns bounded packaged project tasks without executable grants", { 
   }
 });
 
-test("Desktop owns durable finite project changes across Worker restarts", { timeout: 120_000 }, async () => {
+desktopWorkerTest("Desktop owns durable finite project changes across Worker restarts", { timeout: 120_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-desktop-project-changes-"));
   const project = join(directory, "project");
   const appData = join(directory, "app-data");
@@ -540,7 +549,7 @@ test("Desktop owns durable finite project changes across Worker restarts", { tim
   }
 });
 
-test("Desktop Node capability host enforces filesystem, process, and network grants", { timeout: 120_000 }, async () => {
+desktopWorkerTest("Desktop Node capability host enforces filesystem, process, and network grants", { timeout: 120_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-desktop-worker-"));
   const project = join(directory, "project");
   const appData = join(directory, "app-data");
@@ -938,7 +947,7 @@ test("Desktop Node capability host enforces filesystem, process, and network gra
   }
 });
 
-test("Desktop process grants work independently from filesystem grants and keep wire bounds", { timeout: 120_000 }, async () => {
+desktopWorkerTest("Desktop process grants work independently from filesystem grants and keep wire bounds", { timeout: 120_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-desktop-process-only-"));
   const project = join(directory, "project");
   const appData = join(directory, "app-data");
@@ -1100,7 +1109,7 @@ setInterval(() => {}, 1000);
   }
 });
 
-test("Desktop capability host drains transferred process ownership before a fatal exit", { timeout: 90_000 }, async () => {
+desktopWorkerTest("Desktop capability host drains transferred process ownership before a fatal exit", { timeout: 90_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-desktop-worker-crash-"));
   const project = join(directory, "project");
   const appData = join(directory, "app-data");

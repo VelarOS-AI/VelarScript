@@ -7,11 +7,12 @@ import { join, resolve } from "node:path";
 import { compile } from "@velarscript/compiler";
 import { compileProject, compileProjectEntries, type ProjectResult } from "../packages/cli/src/project.ts";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
+import { repositoryRoot } from "./repository-root.ts";
 
 after(removeTemporaryDirectories);
 
 
-const root = resolve(new URL("..", import.meta.url).pathname);
+const root = repositoryRoot;
 
 // Fix wave 1 of the marathon defect ledger (docs/decisions/archive/MARATHON-DEFECTS.md):
 // the Core compiler and CLI items. Every test here is a regression probe for a

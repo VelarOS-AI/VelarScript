@@ -154,6 +154,11 @@ mount(<App />, "#app")
     assert.match(assets, /ProjectChangeLifecycle/u);
     assert.match(assets, /openTerminal/u);
 
+    // The 0.10 native host is deliberately the macOS system-WebView host.
+    // Other platforms still prove the single-project compiler contract above;
+    // they must not pretend to package a host the product does not publish.
+    if (process.platform !== "darwin") return;
+
     const packaged = spawnSync(process.execPath, [cli, "package"], { cwd: projectRoot, encoding: "utf8" });
     assert.equal(packaged.status, 0, packaged.stderr);
     const desktopBuild = JSON.parse(await readFile(join(projectRoot, "dist", "desktop", "velar-desktop-build.json"), "utf8")) as {

@@ -4,6 +4,7 @@ import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import test, { after } from "node:test";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
+import { repositoryRoot } from "./repository-root.ts";
 
 // ---------------------------------------------------------------------------
 // The four surface defects an author walks straight into: D61 rule 155 (a bool
@@ -19,7 +20,7 @@ import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-
 // and load-time facts and run the toolchain headless.
 // ---------------------------------------------------------------------------
 
-const root = resolve(new URL("..", import.meta.url).pathname);
+const root = repositoryRoot;
 const cli = join(root, "packages", "cli", "src", "cli.ts");
 
 after(removeTemporaryDirectories);

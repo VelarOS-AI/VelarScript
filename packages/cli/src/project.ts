@@ -1,5 +1,5 @@
 import { findPackageJSON, isBuiltin } from "node:module";
-import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { readdir } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import {
@@ -635,7 +635,7 @@ async function nearestModuleName(targetPath: string): Promise<string | null> {
   try {
     const entries = await readdir(dirname(targetPath), { withFileTypes: true });
     const names = entries.filter((entry) => entry.isFile() && entry.name.endsWith(".vel")).map((entry) => entry.name);
-    const wanted = targetPath.slice(targetPath.lastIndexOf("/") + 1);
+    const wanted = basename(targetPath);
     return nearestName(wanted, names);
   } catch {
     return null;

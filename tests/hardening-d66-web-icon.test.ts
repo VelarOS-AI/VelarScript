@@ -4,6 +4,7 @@ import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import test, { after } from "node:test";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
+import { repositoryRoot } from "./repository-root.ts";
 import { createWebArtifacts } from "../packages/web/src/host.ts";
 import { velarProjectExtension, webIconType, WEB_ICON_TYPES } from "../packages/web/src/project-config.ts";
 
@@ -24,7 +25,7 @@ import { velarProjectExtension, webIconType, WEB_ICON_TYPES } from "../packages/
 // document it wrote.
 // ---------------------------------------------------------------------------
 
-const root = resolve(new URL("..", import.meta.url).pathname);
+const root = repositoryRoot;
 const cli = join(root, "packages", "cli", "src", "cli.ts");
 const markSvg = join(root, "assets", "brand", "velarscript-mark.svg");
 

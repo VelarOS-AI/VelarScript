@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 import { compile as compileCore } from "@velarscript/compiler";
 import { velarCompilerExtension, webModuleInterfaces } from "../packages/web/src/compiler.ts";
+import { repositoryRoot } from "./repository-root.ts";
 
 // Wave N-2c: the Web surface items of completeness audits nine, ten, and eleven
 // (docs/decisions/archive/COMPLETENESS-AUDITS.md) plus D47 rule 84. Each probe sits at the
@@ -14,7 +15,7 @@ import { velarCompilerExtension, webModuleInterfaces } from "../packages/web/src
 // two Look forms that stay reactive, real computed layout from Look lengths,
 // bind member paths, and bind:group -- run in Chromium.
 
-const root = resolve(new URL("..", import.meta.url).pathname);
+const root = repositoryRoot;
 
 function compile(text: string) {
   const imports = new Map<string, unknown>();

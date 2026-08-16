@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import test, { after } from "node:test";
 import { compile as compileCore } from "@velarscript/compiler";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
+import { repositoryRoot } from "./repository-root.ts";
 import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
 import {
   LOOK_KEYWORD_DECIDED_KINDS,
@@ -33,7 +34,7 @@ import {
 // and asserts the module itself refuses to come up.
 // ---------------------------------------------------------------------------
 
-const root = resolve(new URL("..", import.meta.url).pathname);
+const root = repositoryRoot;
 const cli = join(root, "packages", "cli", "src", "cli.ts");
 const lookTable = join(root, "packages", "web", "src", "look.ts");
 

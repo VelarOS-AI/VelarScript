@@ -242,6 +242,11 @@ function cancelActivity(activity) {
   try { activity.cancel?.(); } catch {}
 }
 
+function setActivityCancellation(activity, cancel) {
+  activity.cancel = cancel;
+  if (activity.cancelled) cancel();
+}
+
 function validOwner(value) {
   return typeof value === "string" && /^[0-9a-f]{32}$/u.test(value);
 }
@@ -476,11 +481,11 @@ function subscribeProjectChanges(args, owner, activity) {
   return new Promise((resolveNext, rejectNext) => {
     const pending = { resolve: resolveNext, reject: rejectNext, activity };
     task.pending = pending;
-    activity.cancel = () => {
+    setActivityCancellation(activity, () => {
       if (task.pending !== pending) return;
       task.pending = null;
       pending.reject(new Error("Desktop project change subscription was cancelled"));
-    };
+    });
   });
 }
 
@@ -640,9 +645,9 @@ function nextFileWatch(args, owner, activity) {
   return new Promise((resolveNext, rejectNext) => {
     const pending = { resolve: resolveNext, reject: rejectNext, activity };
     task.pending = pending;
-    activity.cancel = () => {
+    setActivityCancellation(activity, () => {
       if (task.pending === pending) releaseFileWatcher(task, new Error("Desktop file watcher pull was cancelled"));
-    };
+    });
   });
 }
 
@@ -771,7 +776,7 @@ async function startLanguageServer(args, owner, activity) {
   const closed = new Promise(resolve => { resolveClosed = resolve; });
   const task = { handle, owner, child, buffer: Buffer.alloc(0), queue: [], queuedBytes: 0, waiter: null, stderr: "", settled: false, failure: null, ownershipPublished: false, closed, resolveClosed };
   languageServers.set(handle, task);
-  activity.cancel = () => releaseLanguageServer(task, new Error("Desktop language-server start was cancelled"));
+  setActivityCancellation(activity, () => releaseLanguageServer(task, new Error("Desktop language-server start was cancelled")));
   child.stdout.on("data", chunk => parseLanguageServerOutput(task, chunk));
   child.stderr.on("data", chunk => {
     if (task.stderr.length < 64 * 1024) task.stderr += chunk.toString("utf8").slice(0, 64 * 1024 - task.stderr.length);
@@ -842,11 +847,11 @@ function nextLanguageServer(args, owner, activity) {
   return new Promise((resolveNext, rejectNext) => {
     const waiter = { resolve: resolveNext, reject: rejectNext, activity };
     task.waiter = waiter;
-    activity.cancel = () => {
+    setActivityCancellation(activity, () => {
       if (task.waiter !== waiter) return;
       task.waiter = null;
       waiter.reject(new Error("Desktop language-server pull was cancelled"));
-    };
+    });
   });
 }
 
@@ -1317,7 +1322,7 @@ async function terminalOpen(args, owner, activity) {
     result, resolveResult, rejectResult, stderr: "",
   };
   terminals.set(handle, task);
-  activity.cancel = () => releaseTerminal(task, new Error("Desktop terminal start was cancelled"));
+  setActivityCancellation(activity, () => releaseTerminal(task, new Error("Desktop terminal start was cancelled")));
   child.stdout.on("data", chunk => enqueueTerminalText(task, task.decoder.write(chunk)));
   child.stderr.on("data", chunk => {
     if (task.stderr.length < 64 * 1024) task.stderr += chunk.toString("utf8").slice(0, 64 * 1024 - task.stderr.length);
@@ -1387,11 +1392,11 @@ function terminalNext(args, owner, activity) {
   return new Promise((resolveNext, rejectNext) => {
     const waiter = {resolve: resolveNext, reject: rejectNext, activity};
     task.waiter = waiter;
-    activity.cancel = () => {
+    setActivityCancellation(activity, () => {
       if (task.waiter !== waiter) return;
       task.waiter = null;
       waiter.reject(new Error("Desktop terminal pull was cancelled"));
-    };
+    });
   });
 }
 
@@ -1473,7 +1478,7 @@ async function projectTaskStart(args, owner, activity) {
   const toolArguments = [projectTaskPath, command, projectLexicalRoot ?? projectRoot];
   if (command === "run" && commandArgs.length > 0) toolArguments.push("--", ...commandArgs);
   let task = null;
-  activity.cancel = () => { if (task !== null) retainRetiredProcess(handle, task); };
+  setActivityCancellation(activity, () => { if (task !== null) retainRetiredProcess(handle, task); });
   task = await launchChild(process.execPath, toolArguments, {
     cwd: projectRoot,
     environment,
@@ -1524,7 +1529,7 @@ async function processStart(args, owner, activity) {
   if (activity.cancelled) throw new Error("Desktop host request was cancelled");
   const handle = nextProcessHandle++;
   let task = null;
-  activity.cancel = () => { if (task !== null) retainRetiredProcess(handle, task); };
+  setActivityCancellation(activity, () => { if (task !== null) retainRetiredProcess(handle, task); });
   task = await launchProcess(args, () => respond({ protocolVersion: 1, hostEvent: "process-settled", owner, handle }));
   task.owner = owner;
   task.kind = "process";
@@ -1962,7 +1967,7 @@ async function httpRequest(args, owner, activity) {
   if (body !== null && Buffer.byteLength(body, "utf8") > MAX_FILE_BYTES) throw new RangeError("HTTP body cannot exceed 16 MiB");
   if ((method === "GET" || method === "HEAD") && body !== null) throw new TypeError(`${method} requests cannot have a body`);
   const controller = new AbortController();
-  activity.cancel = () => controller.abort(new Error("Desktop host request was cancelled"));
+  setActivityCancellation(activity, () => controller.abort(new Error("Desktop host request was cancelled")));
   const request = {
     owner,
     controller,

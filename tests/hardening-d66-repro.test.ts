@@ -4,6 +4,7 @@ import { mkdir, readFile, readdir, realpath, writeFile } from "node:fs/promises"
 import { join, relative, resolve, sep } from "node:path";
 import test, { after } from "node:test";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
+import { repositoryRoot } from "./repository-root.ts";
 import { DEFECT_REPORT_SECTIONS, reproductionHint } from "../packages/cli/src/reproduction.ts";
 
 // ---------------------------------------------------------------------------
@@ -22,7 +23,7 @@ import { DEFECT_REPORT_SECTIONS, reproductionHint } from "../packages/cli/src/re
 // over a real project and reads the real bundle.
 // ---------------------------------------------------------------------------
 
-const root = resolve(new URL("..", import.meta.url).pathname);
+const root = repositoryRoot;
 const cli = join(root, "packages", "cli", "src", "cli.ts");
 
 after(removeTemporaryDirectories);

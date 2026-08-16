@@ -591,15 +591,11 @@ if (/\bPromise\.(?:race|resolve)\s*\(/u.test(nodeHostRuntimeSource)
 }
 for (const phrase of [
   'import { EventEmitter as __VelarTerminalEventEmitter } from "node:events"',
-  'import { closeSync as __velarTerminalCloseSync, fstatSync as __velarTerminalFstatSync, openSync as __velarTerminalOpenSync } from "node:fs"',
   'import { MessageChannel as __VelarTerminalMessageChannel, MessagePort as __VelarTerminalMessagePort, Worker as __VelarTerminalWorker } from "node:worker_threads"',
   "const __velarTerminalMaxPending = 256",
   "const __velarTerminalMessagePortPost =",
   "const __velarTerminalWorkerTerminate =",
   "let __velarTerminalFailure = null",
-  "let __velarTerminalOwnsInputDescriptor = false",
-  '__velarTerminalFstatSync(0)',
-  '"ENXIO"',
   "Node terminal worker did not become ready",
   "readLine(prompt = \"\")",
 ]) {
@@ -608,13 +604,16 @@ for (const phrase of [
   }
 }
 for (const phrase of [
-  'import { createReadStream, write } from "node:fs"',
+  'import { spawn } from "node:child_process"',
+  'import { write } from "node:fs"',
   'import { StringDecoder } from "node:string_decoder"',
   'import { workerData } from "node:worker_threads"',
+  "const inputHostSource =",
   "const maxQueuedLines = 256",
-  'function ensureInput()',
-  'input = createReadStream("", {fd: inputDescriptor, autoClose: false})',
-  'input.on("data", chunk =>',
+  'spawn(process.execPath, ["--input-type=module", "--eval", inputHostSource]',
+  'serialization: "advanced"',
+  'host.send({kind: "input-state", active})',
+  'process.once("exit", () => { if (inputHost !== null) inputHost.kill("SIGKILL"); })',
   "write(fd, data",
   "port.postMessage({kind: \"ready\", interactive: isatty(0) && isatty(1)})",
 ]) {
@@ -1914,6 +1913,8 @@ for (const phrase of [
   '"hostCommand": "request-cancel"',
   'const activeRequests = new Map()',
   'function cancelActivity(activity)',
+  'function setActivityCancellation(activity, cancel)',
+  'if (activity.cancelled) cancel()',
   'let hostProjectDirectory = __VELAR_PROJECT_DIRECTORY__',
   'private final class ProjectDirectoryGrant',
   'let panel = NSOpenPanel()',
