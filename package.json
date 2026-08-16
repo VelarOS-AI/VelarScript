@@ -37,6 +37,7 @@
     "url": "git+https://github.com/VelarOS-AI/VelarScript.git"
   },
   "devDependencies": {
+    "@velaros-ai/project": "2.0.1",
     "@types/node": "^26.1.2",
     "playwright": "^1.58.2",
     "typescript": "^7.0.2"
