@@ -324,9 +324,9 @@ function launchProcess(command, commandArgs, options, settled) {
       }
     });
     child.once("close", (code, signal) => { void (async () => {
-      // A POSIX root can close before its killed descendants have been reaped.
+      // A POSIX root can close before all live descendants have stopped.
       // stop() owns the whole detached process group, so its result is not
-      // terminal until that group itself is gone. waitForTask() keeps this
+      // terminal until that group has no live members. waitForTask() keeps this
       // confirmation bounded and retains the handle when it cannot be proven.
       if (task.stopping) await waitForProcessGroupExit(child);
       task.settled = true;

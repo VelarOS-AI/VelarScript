@@ -4,6 +4,7 @@ import { ChildProcess, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { createServer } from "node:http";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -69,6 +70,26 @@ async function materializeNodeRuntimeDependencies(
 
 const WATCHED_CHANGE_RETRIGGER_MS = 250;
 const WATCHED_CHANGE_TIMEOUT_MS = 30_000;
+
+function receivesTcpToken(port: number, token: string): Promise<boolean> {
+  return new Promise((resolveProbe) => {
+    const socket = createConnection({ host: "127.0.0.1", port });
+    let received = "";
+    let settled = false;
+    const finish = (result: boolean): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      resolveProbe(result);
+    };
+    const timer = setTimeout(() => finish(false), 1000);
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => { received += chunk; });
+    socket.once("end", () => finish(received === token));
+    socket.once("error", () => finish(false));
+  });
+}
 
 /**
  * Awaits one reported filesystem change, re-triggering it while the pull is
@@ -1575,17 +1596,21 @@ test("Node process and HTTP runtimes preserve secret, cancellation, timeout, and
     const running = await processRuntime.start(process.execPath, ["-e", "setTimeout(() => {}, 10000)"], { timeout: 0 });
     await running.stop();
     assert.equal((await running.wait()).signal, "SIGTERM");
-    const tree = await processRuntime.start(process.execPath, ["-e", "const {spawn}=require('node:child_process'); const child=spawn(process.execPath,['-e','setTimeout(()=>{},10000)'],{stdio:['ignore','inherit','inherit']}); process.stdout.write(String(child.pid)); setTimeout(()=>{},10000)"], { timeout: 0 });
-    await new Promise(resolve => setTimeout(resolve, 50));
+    const descendantToken = `velar-descendant-${process.pid}-${Date.now()}`;
+    const descendantSource = `const {createServer}=require("node:net"); const server=createServer(socket=>socket.end(${JSON.stringify(descendantToken)})); server.listen(0,"127.0.0.1",()=>process.stdout.write(String(server.address().port)+"\\n"));`;
+    const tree = await processRuntime.start(process.execPath, ["-e", `const {spawn}=require("node:child_process"); const child=spawn(process.execPath,["-e",${JSON.stringify(descendantSource)}],{stdio:["ignore","pipe","inherit"]}); child.stdout.on("data",chunk=>process.stdout.write(chunk)); setTimeout(()=>{},10000);`], { timeout: 0 });
+    let descendantPortText = "";
+    while (!descendantPortText.includes("\n")) {
+      const output = await tree.next();
+      assert.ok(output);
+      if (output.channel === "stdout") descendantPortText += output.text;
+    }
+    const descendantPort = Number(descendantPortText.trim());
+    assert.equal(Number.isSafeInteger(descendantPort), true);
+    assert.equal(await receivesTcpToken(descendantPort, descendantToken), true, "the descendant capability must be live before stop");
     await tree.stop();
-    const treeResult = await tree.wait();
-    const descendantPid = Number(treeResult.stdout);
-    assert.equal(Number.isSafeInteger(descendantPid), true);
-    assert.throws(
-      () => process.kill(descendantPid, 0),
-      (error: unknown) => error instanceof Error && "code" in error && error.code === "ESRCH",
-      "a completed stop must have reaped its descendant tree",
-    );
+    await tree.wait();
+    assert.equal(await receivesTcpToken(descendantPort, descendantToken), false, "a completed stop must retire descendant capabilities");
 
     if (process.platform !== "win32") {
       const timeoutDirectory = await mkdtemp(join(tmpdir(), "velar-process-timeout-"));
