@@ -12,6 +12,16 @@ import {
 } from "@velarscript/compiler/extension";
 import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
 
+function executeModule(source: string) {
+  // Passing generated programs through `--eval` is bounded by the host's
+  // command-line size (notably Linux ARG_MAX). stdin is the portable module
+  // source boundary and keeps this test about the runtime ABI it owns.
+  return spawnSync(process.execPath, ["--input-type=module"], {
+    input: source,
+    encoding: "utf8",
+  });
+}
+
 test("compiler-owned UTF-8 sizing matches transport encoding semantics", () => {
   const runtime = new Function(`${VELAR_UTF8_RUNTIME}\nreturn { byteLength: __velarUtf8ByteLength, declaredLength: __velarDeclaredLength };`)() as {
     byteLength(value: string): number;
@@ -73,7 +83,7 @@ test("Desktop capability worker independently enforces shared HTTP response meta
 test("an incompatible pre-existing runtime registry fails closed", () => {
   const web = compileCore("component App:\n    return <main>Ready</main>\n", { extensions: [velarCompilerExtension] });
   assert.deepEqual(web.diagnostics, []);
-  const execution = spawnSync(process.execPath, ["--input-type=module", "--eval", `
+  const execution = executeModule(`
 Object.defineProperty(globalThis, Symbol.for(${JSON.stringify(VELAR_RUNTIME_REGISTRY_KEY)}), {
   value: Object.freeze({ version: "incompatible" }),
   enumerable: false,
@@ -81,7 +91,7 @@ Object.defineProperty(globalThis, Symbol.for(${JSON.stringify(VELAR_RUNTIME_REGI
   writable: false,
 });
 ${web.code ?? ""}
-`], { encoding: "utf8" });
+`);
   assert.notEqual(execution.status, 0);
   assert.match(String(execution.stderr), /VelarScript Web runtime (?:ownership|values) is invalid/u);
 });
@@ -95,7 +105,7 @@ export def cross(value: unknown) -> unknown:
     return identity(value)
 `.trimStart());
   assert.deepEqual(core.diagnostics, []);
-  const execution = spawnSync(process.execPath, ["--input-type=module", "--eval", `
+  const execution = executeModule(`
 ${core.code ?? ""}
 const plain = {};
 const first = cross(plain) === plain;
@@ -125,7 +135,7 @@ const original = runtime.toRaw;
 Object.defineProperty(globalThis.Object, "getOwnPropertyDescriptor", { value() { throw new Error("late ambient lookup"); } });
 const third = cross(proxy) === raw && runtime.toRaw === original;
 console.log(first + "|" + second + "|" + third);
-`], { encoding: "utf8" });
+`);
   assert.equal(execution.status, 0, execution.stderr);
   assert.equal(execution.stdout.trim(), "true|true|true");
 });
@@ -138,7 +148,7 @@ identity({})
 `.trimStart());
   assert.deepEqual(core.diagnostics, []);
   const appUrl = `data:text/javascript;base64,${Buffer.from(core.code ?? "").toString("base64")}`;
-  const execution = spawnSync(process.execPath, ["--input-type=module", "--eval", `
+  const execution = executeModule(`
 let reads = 0;
 const runtime = Object.create(null);
 Object.defineProperty(runtime, "version", { value: ${JSON.stringify(VELAR_RUNTIME_SCHEMA_VERSION)}, enumerable: false, configurable: false, writable: false });
@@ -149,7 +159,7 @@ Object.defineProperty(globalThis, Symbol.for(${JSON.stringify(VELAR_RUNTIME_REGI
 });
 try { await import(${JSON.stringify(appUrl)}); }
 catch (error) { console.log(reads + "|" + error.message); }
-`], { encoding: "utf8" });
+`);
   assert.equal(execution.status, 0, execution.stderr);
   assert.equal(execution.stdout.trim(), "0|VelarScript reactive runtime field 'toRaw' is invalid");
 });
@@ -165,7 +175,7 @@ const valid = User.parse({name: "Ada"})
   assert.match(core.code ?? "", /const __velarTypeSymbolFor = globalThis\.Symbol\.for;/u);
   assert.match(core.code ?? "", new RegExp(escapeRegex(JSON.stringify(VELAR_TYPE_REGISTRY_KEY)), "u"));
 
-  const accessor = spawnSync(process.execPath, ["--input-type=module", "--eval", `
+  const accessor = executeModule(`
 let reads = 0;
 Object.defineProperty(globalThis, Symbol.for(${JSON.stringify(VELAR_TYPE_REGISTRY_KEY)}), {
   get() { reads += 1; return new WeakSet(); },
@@ -177,11 +187,11 @@ ${core.code ?? ""}
 } catch (error) {
   console.log(reads + "|" + error.message);
 }
-`], { encoding: "utf8" });
+`);
   assert.equal(accessor.status, 0, accessor.stderr);
   assert.equal(accessor.stdout.trim(), "0|VelarScript runtime type registry descriptor is invalid");
 
-  const mutable = spawnSync(process.execPath, ["--input-type=module", "--eval", `
+  const mutable = executeModule(`
 Object.defineProperty(globalThis, Symbol.for(${JSON.stringify(VELAR_TYPE_REGISTRY_KEY)}), {
   value: new WeakSet(),
   enumerable: false,
@@ -193,11 +203,11 @@ ${core.code ?? ""}
 } catch (error) {
   console.log(error.message);
 }
-`], { encoding: "utf8" });
+`);
   assert.equal(mutable.status, 0, mutable.stderr);
   assert.equal(mutable.stdout.trim(), "VelarScript runtime type registry descriptor is invalid");
 
-  const poisonedMethod = spawnSync(process.execPath, ["--input-type=module", "--eval", `
+  const poisonedMethod = executeModule(`
 const registry = new WeakSet();
 let reads = 0;
 Object.defineProperty(registry, "add", { get() { reads += 1; throw new Error("poisoned add"); } });
@@ -209,11 +219,11 @@ Object.defineProperty(globalThis, Symbol.for(${JSON.stringify(VELAR_TYPE_REGISTR
 });
 ${core.code ?? ""}
 console.log(reads);
-`], { encoding: "utf8" });
+`);
   assert.equal(poisonedMethod.status, 0, poisonedMethod.stderr);
   assert.equal(poisonedMethod.stdout.trim(), "0");
 
-  const capturedHosts = spawnSync(process.execPath, ["--input-type=module", "--eval", `
+  const capturedHosts = executeModule(`
 ${VELAR_TYPE_REGISTRY_RUNTIME}
 const NativeTypeError = TypeError;
 const known = __velarRegisterRuntimeType(Object.freeze({ name: "known" }));
@@ -235,7 +245,7 @@ console.log(__velarRequireRuntimeType(__velarRegisterRuntimeType(later), "verify
 try { __velarRequireRuntimeType(forged, "verify"); }
 catch (error) { console.log(error instanceof NativeTypeError, error.message); }
 console.log(poisonCalls);
-`], { encoding: "utf8" });
+`);
   assert.equal(capturedHosts.status, 0, capturedHosts.stderr);
   assert.equal(capturedHosts.stdout, [
     "true",
