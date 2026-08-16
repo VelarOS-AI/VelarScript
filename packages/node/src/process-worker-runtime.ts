@@ -326,7 +326,15 @@ function launchProcess(command, commandArgs, options, settled) {
       }
       settled();
       if (task.failure) reject(task.failure);
-      else resolve(Object.freeze({code: code == null ? null : code, signal: signal == null ? null : signal, stdout: Buffer.concat(task.stdout).toString("utf8"), stderr: Buffer.concat(task.stderr).toString("utf8")}));
+      else resolve(Object.freeze({
+        code: code == null ? null : code,
+        // taskkill reports an exit code rather than a POSIX signal. The public
+        // Process contract reports the termination stop() requested, so callers
+        // get one portable answer instead of an OS implementation detail.
+        signal: signal == null && task.stopping && process.platform === "win32" ? "SIGTERM" : signal == null ? null : signal,
+        stdout: Buffer.concat(task.stdout).toString("utf8"),
+        stderr: Buffer.concat(task.stderr).toString("utf8"),
+      }));
     });
   });
   task.timer = options.timeout === 0 ? null : setTimeout(() => {

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { compile } from "@velarscript/compiler";
@@ -534,7 +535,7 @@ def each(source: Handle):
 });
 
 test("[D68 177] the contract crosses the module boundary with the class", async () => {
-  const root = "/velar-iterate-cross-module";
+  const root = join(tmpdir(), "velar-iterate-cross-module");
   const modules = new Map(Object.entries({
     "bag.vel": [
       "export class Bag:",

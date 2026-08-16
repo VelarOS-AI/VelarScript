@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import test, { after } from "node:test";
+import { pathToFileURL } from "node:url";
 import { compile as compileCore } from "@velarscript/compiler";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
 import { repositoryRoot } from "./repository-root.ts";
@@ -129,7 +130,7 @@ test("[D65-168] the table refuses to load when a keyword property has no closed 
   // copy that failed to load for some unrelated reason.
   const control = join(directory, "control.mts");
   await writeFile(control, source, "utf8");
-  const loaded = await import(control) as { readonly LOOK_PROPERTY_KEYWORDS: ReadonlyMap<string, ReadonlySet<string>> };
+  const loaded = await import(pathToFileURL(control).href) as { readonly LOOK_PROPERTY_KEYWORDS: ReadonlyMap<string, ReadonlySet<string>> };
   assert.ok(loaded.LOOK_PROPERTY_KEYWORDS.get("strokeLinecap")?.has("butt"));
 
   const removed = source.replace(/^ {2}\["strokeLinecap".*\n/mu, "");
@@ -137,7 +138,7 @@ test("[D65-168] the table refuses to load when a keyword property has no closed 
   const broken = join(directory, "broken.mts");
   await writeFile(broken, removed, "utf8");
   await assert.rejects(
-    () => import(broken),
+    () => import(pathToFileURL(broken).href),
     /Look property 'strokeLinecap' accepts string keywords and has no closed keyword set/u,
   );
 });

@@ -178,7 +178,7 @@ print(childOutput)
 });
 
 test("Node HTTP and serve typed parsing reject Promise-assimilated result shapes", async () => {
-  const entry = "/tmp/velar-node-http-parse-hazard/main.vel";
+  const entry = join(tmpdir(), "velar-node-http-parse-hazard", "main.vel");
   const source = `
 import {http} from "velar/http"
 import {ServeRequest} from "velar/serve"

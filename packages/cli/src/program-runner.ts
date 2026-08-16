@@ -58,7 +58,7 @@ export async function runProgram(
     const launcher = join(temporary, ".velar-run-entry.mjs");
     await writeFile(launcher, uncaughtProgramEntrySource({
       entryUrl: pathToFileURL(compiledTestModulePath(project, entry, temporary)).href,
-      sourcePath: entry.inputPath,
+      sourcePath: entry.inputPath.replaceAll("\\", "/"),
       fullStack: options.fullStack === true,
     }), "utf8");
     return await executeNodeProgram(launcher, programArguments);

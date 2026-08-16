@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import test from "node:test";
 import { repositoryRoot } from "./repository-root.ts";
 import { join, resolve } from "node:path";
@@ -38,7 +39,7 @@ function rejects(source: string, pattern: RegExp): void {
   assert.ok(matched, `${source}\nexpected ${String(pattern)}, received ${JSON.stringify(result.diagnostics.map((item) => item.message))}`);
 }
 
-const projectRoot = "/velar-value-semantics-tests";
+const projectRoot = join(tmpdir(), "velar-value-semantics-tests");
 
 function projectSources(modules: Readonly<Record<string, string>>): Map<string, string> {
   return new Map(Object.entries(modules).map(([name, text]) => [join(projectRoot, name), text]));

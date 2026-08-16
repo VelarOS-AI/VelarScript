@@ -34,7 +34,7 @@ function runClean(source: string): ReturnType<typeof spawnSync> {
   return execution;
 }
 
-const projectRoot = "/velar-marathon-core-tests";
+const projectRoot = join(tmpdir(), "velar-marathon-core-tests");
 
 function projectSources(modules: Readonly<Record<string, string>>): Map<string, string> {
   return new Map(Object.entries(modules).map(([name, text]) => [join(projectRoot, name), text]));

@@ -143,7 +143,10 @@ function assertDevServerExit(exitCode: number | null, stderr: string): void {
 }
 
 async function stopDevServer(child: ReturnType<typeof spawn>): Promise<void> {
-  if (child.exitCode !== null) return;
+  // A signal-terminated ChildProcess keeps exitCode null. Windows reaps the
+  // server with SIGKILL because it has no POSIX SIGTERM lifecycle, so the
+  // after-hook must recognize signalCode as an already observed exit too.
+  if (child.exitCode !== null || child.signalCode !== null) return;
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
@@ -20885,6 +20888,15 @@ test("CLI source maps lead runtime stacks back to .vel source", async () => {
   const execution = spawnSync(process.execPath, ["--enable-source-maps", outputPath], { encoding: "utf8" });
   assert.equal(execution.status, 1);
   assert.match(execution.stderr, new RegExp(`${sourcePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:2:`));
+});
+
+test("Windows source paths become valid source-map file URLs and portable diagnostics", () => {
+  const sourcePath = "C:\\Users\\author\\project\\main.vel";
+  const result = compileCore("const answer = 42\n", { path: sourcePath });
+  const map = JSON.parse(result.sourceMap ?? "{}") as { sources?: readonly string[] };
+  assert.deepEqual(map.sources, ["file:///C:/Users/author/project/main.vel"]);
+  const invalid = compileCore('const answer: number = "wrong"\n', { path: sourcePath });
+  assert.match(formatDiagnostic(invalid.source, invalid.diagnostics[0]!), /^C:\/Users\/author\/project\/main\.vel:1:/u);
 });
 
 test("source maps retain nested statement and expression columns", () => {

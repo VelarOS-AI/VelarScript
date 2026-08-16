@@ -5,7 +5,7 @@ import { formatDiagnostic } from "@velarscript/compiler";
 import type { VelarProjectConfig } from "./config.ts";
 import { compileProject } from "./project.ts";
 import { standardModuleSource, standardModuleSources } from "./standard-modules.ts";
-import { compiledTestModulePath, createCompiledSandbox, quoteReportedText, removeCompiledSandbox, writeCompiledTestProject } from "./test-output.ts";
+import { compiledTestModulePath, createCompiledSandbox, portablePath, quoteReportedText, removeCompiledSandbox, writeCompiledTestProject } from "./test-output.ts";
 import { hostErrorStack } from "./host-error.ts";
 import { captureUnownedErrors, flushOutput, mapCompiledStacksToSources } from "./unowned-errors.ts";
 
@@ -97,7 +97,7 @@ export async function runTests(
       ];
       if (errors.length > 0) {
         failed += 1;
-        process.stderr.write(`✗ ${relative(config.root, file)}\n${errors.join("\n\n")}\n`);
+        process.stderr.write(`✗ ${portablePath(relative(config.root, file))}\n${errors.join("\n\n")}\n`);
         continue;
       }
 
@@ -107,7 +107,7 @@ export async function runTests(
       const tests = entry?.result.moduleInterface.tests ?? [];
       if (tests.length === 0) {
         failed += 1;
-        process.stderr.write(`✗ ${relative(config.root, file)} declares no tests\n`);
+        process.stderr.write(`✗ ${portablePath(relative(config.root, file))} declares no tests\n`);
         continue;
       }
       const outputEntry = entry ? compiledTestModulePath(project, entry, temporary) : join(temporary, relative(config.root, file).replace(/\.vel$/u, ".js"));
@@ -116,7 +116,7 @@ export async function runTests(
         namespace = await import(`${pathToFileURL(outputEntry).href}?run=${Date.now()}`) as Record<string, unknown>;
       } catch (error) {
         failed += tests.length;
-        process.stderr.write(`✗ ${relative(config.root, file)} failed to load\n${stackOf(error)}\n`);
+        process.stderr.write(`✗ ${portablePath(relative(config.root, file))} failed to load\n${stackOf(error)}\n`);
         await drainUnowned();
         continue;
       }
@@ -126,7 +126,7 @@ export async function runTests(
       const loadTimeErrors = await drainUnowned();
       if (loadTimeErrors.length > 0) {
         failed += tests.length;
-        process.stderr.write(`✗ ${relative(config.root, file)} reported an unowned error while loading\n${loadTimeErrors.join("\n")}\n`);
+        process.stderr.write(`✗ ${portablePath(relative(config.root, file))} reported an unowned error while loading\n${loadTimeErrors.join("\n")}\n`);
         continue;
       }
       for (const declared of tests) {
@@ -146,11 +146,11 @@ export async function runTests(
           }
           if (leftover !== null) throw new Error(leftover);
           passed += 1;
-          process.stdout.write(`✓ ${quoteReportedText(relative(config.root, file))} :: ${name}\n`);
+          process.stdout.write(`✓ ${quoteReportedText(portablePath(relative(config.root, file)))} :: ${name}\n`);
         } catch (error) {
           failed += 1;
           await drainUnowned();
-          process.stderr.write(`✗ ${quoteReportedText(relative(config.root, file))} :: ${name}\n${stackOf(error)}\n`);
+          process.stderr.write(`✗ ${quoteReportedText(portablePath(relative(config.root, file)))} :: ${name}\n${stackOf(error)}\n`);
         }
       }
     }

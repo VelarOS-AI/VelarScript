@@ -74,7 +74,7 @@ test("[D61-156] the test gates discover example projects instead of naming them"
   // ...and that the discovery reaches the projects a list would have to be
   // told about, `examples/app` first among them.
   const root = repositoryRoot;
-  const discovered = (await velarProjects(resolve(root, "examples"))).map((project: string) => relative(root, project));
+  const discovered = (await velarProjects(resolve(root, "examples"))).map((project: string) => relative(root, project).replaceAll("\\", "/"));
   for (const project of ["examples/app", "examples/tour/core", "examples/tour/desktop", "examples/tour/web"]) {
     assert.ok(discovered.includes(project), `${project} is not discovered by the project gates; found ${discovered.join(", ")}`);
   }

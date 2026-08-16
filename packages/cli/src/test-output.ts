@@ -1,5 +1,5 @@
 import { mkdir, mkdtemp, rm, rmdir, writeFile } from "node:fs/promises";
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import type { ProjectModule, ProjectResult, VelarSourcePackage } from "./project.ts";
 import { assertUniqueEmbeddedModuleOutputs, embeddedModuleFileContents, embeddedModuleOutputPath } from "./embedded-modules.ts";
 
@@ -23,6 +23,11 @@ export function quoteReportedText(value: string): string {
     bidirectionalControls,
     (character) => `\\u${character.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}`,
   );
+}
+
+/** Paths printed by VelarScript are a portable author-facing protocol. */
+export function portablePath(value: string): string {
+  return value.replaceAll("\\", "/");
 }
 
 /**
@@ -64,7 +69,7 @@ export async function writeCompiledTestProject(project: ProjectResult, outputRoo
   for (const module of project.modules) {
     const output = compiledTestModulePath(project, module, outputRoot);
     await mkdir(dirname(output), { recursive: true });
-    await writeFile(output, `${module.result.code ?? ""}//# sourceMappingURL=${output.split("/").at(-1)}.map\n`, "utf8");
+    await writeFile(output, `${module.result.code ?? ""}//# sourceMappingURL=${basename(output)}.map\n`, "utf8");
     await writeFile(`${output}.map`, module.result.sourceMap ?? "", "utf8");
     for (const embedded of module.result.embeddedModules) {
       const embeddedPath = embeddedModuleOutputPath(output, embedded.specifier);

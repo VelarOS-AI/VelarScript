@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import test, { after } from "node:test";
+import { pathToFileURL } from "node:url";
 import { applyMechanicalFixes, compile as compileCore } from "@velarscript/compiler";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
 import { repositoryRoot } from "./repository-root.ts";
@@ -673,7 +674,7 @@ test("[D73-187] the load-time invariant is what holds the table, not a test", as
   const broken = join(await makeTemporaryDirectory("velar-d73-187-broken-"), "broken.mts");
   await write(broken, removed, "utf8");
   await assert.rejects(
-    () => import(broken),
+    () => import(pathToFileURL(broken).href),
     /Look property 'fontWeight' accepts string keywords and has no closed keyword set/u,
   );
 });

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { applyMechanicalFixes, compile } from "@velarscript/compiler";
@@ -7,7 +8,7 @@ import { TEXT_NAMESPACE_MEMBERS } from "@velarscript/compiler/extension";
 import { compileProject, type ProjectResult } from "../packages/cli/src/project.ts";
 import { standardModuleInterfaces, standardModuleSources } from "../packages/cli/src/standard-modules.ts";
 
-const projectRoot = "/velar-wave-z2-modules";
+const projectRoot = join(tmpdir(), "velar-wave-z2-modules");
 
 async function checkProject(modules: Readonly<Record<string, string>>, entry: string): Promise<ProjectResult> {
   const overrides = new Map(Object.entries(modules).map(([name, text]) => [join(projectRoot, name), text]));

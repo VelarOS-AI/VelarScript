@@ -71,7 +71,7 @@ export function formatDiagnostic(source: SourceText, item: Diagnostic): string {
   const marker = `${" ".repeat(displayColumn - 1)}${"^".repeat(markerLength)}`;
 
   return [
-    `${source.path}:${location.line}:${location.column} error ${item.code}: ${item.message}`,
+    `${source.path.replaceAll("\\", "/")}:${location.line}:${location.column} error ${item.code}: ${item.message}`,
     line,
     marker,
   ].join("\n");

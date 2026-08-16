@@ -1028,7 +1028,7 @@ function displayInput(input: string | null, config: VelarProjectConfig): string 
 
 function displayPath(path: string): string {
   const value = relative(process.cwd(), path);
-  return value && !value.startsWith("..") ? value : path;
+  return (value && !value.startsWith("..") ? value : path).replaceAll("\\", "/");
 }
 
 function printHelp(output: NodeJS.WritableStream = process.stdout): void {

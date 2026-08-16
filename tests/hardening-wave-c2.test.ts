@@ -421,7 +421,11 @@ class TimeoutError extends Error:
 // NEW-D8 — `velar fix` reports what it changed
 // ---------------------------------------------------------------------------
 
-test("[NEW-D8] a failed write is named and the rewrites that already landed are still reported", async () => {
+test("[NEW-D8] a failed write is named and the rewrites that already landed are still reported", {
+  // chmod does not make a file unwritable on Windows; the contract is covered
+  // on both POSIX CI hosts while the rest of `velar fix` remains cross-platform.
+  skip: process.platform === "win32",
+}, async () => {
   const project = await cliProject({
     "src/other.vel": "export const c: Array<number> = [3]\n",
     "src/main.vel": `
