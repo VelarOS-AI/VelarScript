@@ -16,21 +16,16 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createIsolatedToolchainBuild } from "./isolated-toolchain-build.mjs";
+import { velarPackageNames } from "./velar-packages.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const defaultOutput = join(root, "release", "rehearsal");
 const manifestName = "velar-toolchain-release.json";
 const checksumName = "SHA256SUMS";
-const workspaces = [
-  "@velarscript/compiler",
-  "@velarscript/node",
-  "@velarscript/web",
-  "create-velar",
-  "@velarscript/cli",
-  "@velarscript/desktop",
-  "@velarscript/text-buffer",
-  "@velarscript/script-analysis",
-];
+// D63 rule 159: derived from packages/*, never restated here. A release that
+// omits a package produces a toolchain that cannot install, and a hand-kept
+// list is how a package gets omitted.
+const workspaces = await velarPackageNames(root);
 const excludedTreeNames = new Set([".git", "node_modules", "dist", "release", "coverage"]);
 
 async function main(arguments_) {

@@ -4,20 +4,32 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { velarPackageNames } from "../scripts/velar-packages.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const directory = await mkdtemp(join(tmpdir(), "velar-packages-"));
 const consumerDirectory = await mkdtemp(join(tmpdir(), "velar-zero-npm-consumer-"));
 
 try {
-  const compiler = await pack("@velarscript/compiler");
-  const node = await pack("@velarscript/node");
-  const web = await pack("@velarscript/web");
-  const create = await pack("create-velar");
-  const cli = await pack("@velarscript/cli");
-  const desktop = await pack("@velarscript/desktop");
-  const textBuffer = await pack("@velarscript/text-buffer");
-  const scriptAnalysis = await pack("@velarscript/script-analysis");
+  // D63 rule 159: pack whatever packages/* publishes, rather than a list here
+  // that has to be kept level with it. A package added to the workspace is
+  // packed by this gate the day it exists, and an install that needs it cannot
+  // silently go untested.
+  const packed = new Map<string, Awaited<ReturnType<typeof pack>>>();
+  for (const name of await velarPackageNames(root)) packed.set(name, await pack(name));
+  const named = (name: string) => {
+    const entry = packed.get(name);
+    assert.ok(entry, `packages/* no longer publishes ${name}; this gate assumed it does`);
+    return entry;
+  };
+  const compiler = named("@velarscript/compiler");
+  const node = named("@velarscript/node");
+  const web = named("@velarscript/web");
+  const create = named("create-velar");
+  const cli = named("@velarscript/cli");
+  const desktop = named("@velarscript/desktop");
+  const textBuffer = named("@velarscript/text-buffer");
+  const scriptAnalysis = named("@velarscript/script-analysis");
   for (const package_ of [compiler, node, web, create, cli, desktop]) {
     assert.ok(package_.files.some((file) => file.path === "LICENSE"));
     assert.ok(package_.files.some((file) => file.path === "README.md"));
@@ -140,7 +152,7 @@ try {
   );
 
   await writeFile(join(directory, "main.vel"), `
-import {range, sum} from "velar/collections"
+import {sum} from "velar/collections"
 import {TextBuffer} from "@velarscript/text-buffer"
 import {ScriptDocument, ScriptLanguage} from "@velarscript/script-analysis"
 

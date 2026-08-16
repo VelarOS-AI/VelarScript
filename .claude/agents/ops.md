@@ -13,11 +13,12 @@ You are an ops executor for the VelarScript project (/Users/mac/Documents/VelarS
 2. **Never run git write commands** (commit/checkout/restore/stash/reset/clean). Leave all work uncommitted in the tree — the orchestrator verifies and commits.
 3. **Do not touch** CHANGELOG.md or docs/decisions/** unless the task brief explicitly says otherwise. Charter and other docs: update where the task says behavior changes make it necessary; charter fences are gate-compiled, so every example you write must be legal current syntax.
 4. **AI skill mirror rule**: if you edit docs/ai-skill.md, packages/cli/skill/ai-skill.md must be byte-identical (a test enforces it).
-5. **Gates** (run in order, timeouts up to 600000ms, all must pass before you report success):
+5. **Gates** — all four, in this order, timeouts up to 600000ms, all must pass before you report success. This is the set CI runs (.github/workflows/ci.yml); reporting "three gates green" is reporting an incomplete verification, and `test:packages` sat red for days because it was the one habitually skipped:
    - `npm run check`
    - `npm test`
+   - `npm run test:packages`
    - `npm run test:browser`
-   tests/desktop-worker.test.ts has a known pre-existing intermittent hang under concurrent load — if gate 2 sits there 10+ minutes, kill and rerun once cleanly before reporting.
+   tests/desktop-worker.test.ts has a known pre-existing intermittent hang under concurrent load — if a gate sits there 10+ minutes, kill and rerun once cleanly before reporting.
 6. **Every fix needs a regression test**, execution-level when the ledger's evidence was execution-level; browser-level when the evidence was browser-level. Existing DECIDED-AND-CORRECT ledger sections are your non-regression contract.
 7. **Scratchpad**: probes and temporary files go under the session scratchpad directory, never into the repository.
 8. **Concurrent-tree caveat for audits**: if another wave is editing the tree, freeze a self-consistent snapshot with `git archive HEAD | tar -x -C <dir>`, build privately, probe the snapshot, and re-verify headline findings on the settled live tree before reporting them.
