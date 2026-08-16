@@ -158,6 +158,37 @@ list to be iterated on its behalf.
 `toBe` and `toContain` use the language's own equality rather than
 JavaScript's, so a test agrees with the `==` the author would have written.
 
+### What an adversarial audit found
+
+A ten-track audit was run against the language before this release, briefed to
+attack rather than assess and to record for each finding *which gate should
+have caught it*. It produced 26 entries, five of them the highest-value kind:
+compiled clean, no diagnostic, wrong answer.
+
+- **A dynamic import inside `try`, `using`, a test body, a class getter,
+  `@dispose`, or `@iterate` was left out of the module graph.**
+  `try await import("./dep.vel")` answered `false` for a module that exists,
+  with a clean check and exit 0; the other positions surfaced as a runtime
+  module-not-found. Dependency discovery had a hand-written second walk over
+  node kinds, which had already drifted past `@iterate` on the day it shipped.
+  It is now a structural descent that never asks what a node is, the same
+  duplicated walk is gone from the extension protocol, and the regression is a
+  matrix of every expression position in the corpus rather than one example.
+- **A CSS filename containing a legal `)` walked past the relative-address
+  gate** and shipped a stylesheet whose address resolves one directory from the
+  asset — measured as a live 404. The same regex refused `content:
+  "url(./x.svg)"`, which is text. Both came from a regex standing in for CSS
+  grammar; the scanner now tokenizes, which surfaced twenty more wrong shapes
+  in both directions, and the `@import` check — a second scanner in the same
+  file with lower coverage — reads the same token stream.
+- **Three gates claimed more coverage than they had.** The documentation gate's
+  fence extractor was a regex rather than CommonMark, so legal fences were
+  silently skipped under a report that every block had compiled; the tour
+  coverage gate counted a named import as usage, so deleting the only call to a
+  name still reported full coverage; and the package gate derived its pack list
+  while leaving the content check and clean-install hand-written. A gate that
+  overstates its own reach is worse than a missing gate, because it is trusted.
+
 ### Corpus, gates, and documentation
 
 - **`examples/` is retired.** Seven legacy directories and four loose files
