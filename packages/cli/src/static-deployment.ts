@@ -1,6 +1,6 @@
 import { cp, lstat, mkdir, readdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
-import type { FrameworkStaticDeployment } from "@velarscript/compiler/framework-host";
+import type { FrameworkRequiredPublicAsset, FrameworkStaticDeployment } from "@velarscript/compiler/framework-host";
 import { MAX_PRODUCTION_ASSETS } from "./file-integrity.ts";
 import { VELAR_VERSION } from "./version.ts";
 import type { ProductionFrameworkIdentity } from "./production-build.ts";
@@ -45,6 +45,33 @@ export interface StaticDeploymentManifest {
     readonly name: "netlify";
     readonly files: readonly (typeof NETLIFY_HEADERS_NAME | typeof NETLIFY_REDIRECTS_NAME)[];
   } | null;
+}
+
+/**
+ * A manifest field may name a public file the emitted document points at —
+ * `web.icon` is the first. The build fails when that file is absent rather
+ * than shipping a document whose own reference resolves to nothing, matching
+ * the boundary already enforced for reserved names and symbolic links.
+ */
+export async function assertRequiredPublicAssets(
+  publicRoot: string,
+  projectRoot: string,
+  required: readonly FrameworkRequiredPublicAsset[],
+): Promise<void> {
+  for (const asset of required) {
+    const path = join(publicRoot, asset.path);
+    const expected = relative(projectRoot, path).replaceAll("\\", "/");
+    let metadata;
+    try {
+      metadata = await lstat(path);
+    } catch (error) {
+      if (!isHostErrorCode(error, "ENOENT") && !isHostErrorCode(error, "ENOTDIR")) throw error;
+      throw new Error(`'${asset.field}' names public asset '${asset.path}', but '${expected}' does not exist`);
+    }
+    if (!metadata.isFile() || metadata.isSymbolicLink()) {
+      throw new Error(`'${asset.field}' names public asset '${asset.path}', but '${expected}' is not a regular file`);
+    }
+  }
 }
 
 export async function copyPublicAssets(publicRoot: string, outputDirectory: string): Promise<void> {

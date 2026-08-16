@@ -110,6 +110,13 @@ const summed = total(1, 2, 3)
 const spreadInto = total(...values)
 const fixedThenSpread = totalWithBase(10, ...values)
 
+// A declaration writes the element type because it has nothing to take one
+// from. An arrow takes it from the function type it is assigned to, exactly as
+// its fixed parameters do.
+const contextualRest: (...amounts: number) -> number = (...amounts) => amounts.sum()
+const contextualFixedAndRest: (base: number, ...amounts: number) -> number = (base, ...amounts) => base + amounts.sum()
+const restFromContext = contextualRest(1, 2, 3) + contextualFixedAndRest(10, 1, 2)
+
 // ---------------------------------------------------------------------------
 // Async functions
 // ---------------------------------------------------------------------------
@@ -120,9 +127,15 @@ def apiUser(id: string) -> User:
 export async def loadUser(id: string) -> User:
     return apiUser(id)
 
-// Its call type is `Promise<User>`; the declaration annotates the resolved
+// Its call type is `Promise<User>`; the *declaration* annotates the resolved
 // value, never `-> Promise<User>`.
 const pending: Promise<User> = loadUser("u-1")
+
+// A function *type* is the other position and takes the opposite spelling: it
+// carries no `async`, so it describes the value the call hands back, which is
+// the Promise. The two sit side by side because either one alone makes the
+// other look wrong.
+const asyncDeclarationType: (id: string) -> Promise<User> = loadUser
 
 export async def inferredAsyncResult():
     print("an async declaration with no value result infers -> null")

@@ -187,6 +187,15 @@ export function removedGlobalFunctionGuidance(name: string): string | null {
   return null;
 }
 
+/**
+ * D65 rule 170: one sentence, two stages. A rest parameter without an element
+ * type is refused by the parser in every declaration, and by the analyzer in
+ * an arrow, where the contextual function type gets its chance to supply one
+ * first — exactly as a fixed parameter's type already arrives. Both stages say
+ * the same thing because it is the same refusal.
+ */
+export const REST_PARAMETER_ELEMENT_TYPE_MESSAGE = "A rest parameter requires an element type";
+
 export function sourceTypeNameGuidance(name: string): SourceTypeGuidance | null {
   return sourceTypeGuidance.get(name) ?? null;
 }

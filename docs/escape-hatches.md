@@ -186,9 +186,14 @@ blindly. The path:
 1. **Reduce to a minimal repro.** Cut the program down to the smallest
    `.vel` file that still shows the behavior. Most "compiler bugs" resolve
    into a teaching diagnostic during this step; the rest become perfect
-   reports.
+   reports. When it still fails, `velar repro` bundles what is left: it writes
+   a self-contained directory — the source the diagnostic touches, `velar.json`,
+   the verbatim output, the versions, and a `README.md` already laid out in the
+   three sections below — then prints the path. It uploads nothing and collects
+   nothing about your machine; sending it is your decision.
 2. **File the issue with three sections** (the same structure the project's
-   blind-test ledger uses):
+   blind-test ledger uses, and the fields the repository's defect template
+   asks for):
 
 ```text
 What I wrote (or wanted to write):

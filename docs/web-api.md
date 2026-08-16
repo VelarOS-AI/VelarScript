@@ -289,6 +289,26 @@ identity, not declarations, so two identical `look:` literals are not equal even
 though they compile to one shared rule. Choose between named Look values, or
 compare the inputs that produced them.
 
+Every property whose value is a CSS keyword carries its own closed set of
+keywords; a keyword property with no set of its own fails at module load rather
+than falling back to a shared list of common words. `strokeLinecap` accepts
+`butt`, `round`, and `square` and nothing else, so a plausible `strokeLinecap =
+"none"` is a compile error instead of a declaration the browser discards, and
+`borderStyle = "groove"` and `listStyleType = "upper-roman"` are accepted
+because that property really has them.
+
+A closed set holds whole CSS values, not tokens of one. `scrollSnapType = "y
+mandatory"`, `gridAutoFlow = "row dense"`, `colorScheme = "light dark"`, and
+`objectPosition = "top left"` are written exactly as CSS writes them; there is
+no builder and no token grammar for a multi-part keyword value. A few
+properties reach into a value space no set can hold — lengths in
+`objectPosition`, percentages in `fontStretch`, a custom `@counter-style` name
+in `listStyleType`, a combination of feature groups in `fontVariant`, and the
+non-keyword parts of the `borderStyle`, `contain`, `textDecoration`,
+`listStyle`, and `backgroundBlendMode` shorthands. Each publishes the subset it
+can close and names what it left out in its own diagnostic, alongside the
+`import css unsafe` boundary that reaches the rest.
+
 `content` is written as CSS text. A string value is emitted quoted — `content =
 "•"` produces `content: "•"` — and only the bare keywords `none` and `normal`
 pass through unquoted. `attr(...)`, `counter(...)`, `url(...)`, and `open-quote`
@@ -900,7 +920,8 @@ const Reports = lazy(() => import("./pages/reports.vel"), "Reports", PageLoading
   later global replacement or instance shadowing cannot redirect navigation.
 - `Head` owns `title`, `description`, `canonical`, `robots`, `image`,
   `themeColor`, and the document `language` tag for its component lifetime and
-  restores prior values on cleanup.
+  restores prior values on cleanup. The favicon is not among them: it is a
+  build-time document fact and belongs to `web.icon` in the project manifest.
 - `announce(message, priority="polite")` writes to a compiler-owned live
   region; priority is `polite` or `assertive`.
 - `domId(prefix="velar")` returns an application-local, monotonically unique DOM ID

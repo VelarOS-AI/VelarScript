@@ -1,0 +1,78 @@
+name: Defect / 缺陷
+description: The compiler, runtime, or CLI did something wrong. / 编译器、运行时或 CLI 做错了事。
+title: "defect: "
+labels: ["defect"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The three fields below are the project's standing report format — the same
+        structure the blind-test ledger uses. Filling them in is the whole report;
+        there is nothing else you need to write.
+
+        下面三个字段是本项目固定的报告格式，与盲测台账同构。填完就是一份完整报告，
+        不需要另外写什么。
+
+        **Fastest path / 最快的方式**: run `velar repro` at the failure. It writes a
+        self-contained reproduction and prints its path — paste that directory's
+        `README.md` into the fields below. It never uploads anything; sending it is
+        your decision. / 在失败处跑 `velar repro`，它会写出一个自足的复现包并打印路径，
+        把该目录的 `README.md` 贴进下面即可。它不会上传任何东西，发不发由你决定。
+
+  - type: textarea
+    id: wrote
+    attributes:
+      label: What I wrote (or wanted to write) / 我写了什么（或想写什么）
+      description: >-
+        The smallest .vel source that still shows the behavior. If you could not
+        get the compiler to accept something, show what you wanted to write. /
+        仍能复现该行为的最小 .vel 源码。如果是某个写法编译器不接受，就写出你本想写的东西。
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: said
+    attributes:
+      label: What the compiler said / 编译器说了什么
+      description: >-
+        Verbatim. Do not trim the diagnostic — the code, the caret line, and the
+        wording all matter. If the compile succeeded and the behavior was wrong at
+        run time, put the wrong output here instead. /
+        逐字粘贴，不要裁剪诊断 —— VEL 码、插入符那一行、措辞都重要。
+        如果编译通过而运行结果不对，就在这里放错误的运行输出。
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: resolved
+    attributes:
+      label: How I resolved it / 我怎么绕过的
+      description: >-
+        The workaround that unblocked you, or the single word "blocked". Both are
+        useful: a workaround tells us the severity, and "blocked" tells us the
+        priority. / 让你继续下去的绕行办法，或者就写 "blocked"。两者都有用：
+        绕行办法说明严重程度，"blocked" 说明优先级。
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: versions
+    attributes:
+      label: Versions / 版本
+      description: Output of `npx velar --version`, plus `node --version` and your OS. / `npx velar --version` 的输出，加上 `node --version` 与操作系统。
+      placeholder: "velar 0.10.0 · node v24.15.0 · macOS 15"
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        VelarScript makes no backward-compatibility promise yet, but **a defect with
+        a repro is treated as a gate failure, not as folklore** — it becomes a test
+        that stays in the suite.
+
+        VelarScript 目前不做向后兼容承诺，但**带复现的缺陷会被当作门禁失败处理，而不是当作传说** ——
+        它会变成一条留在测试套件里的测试。

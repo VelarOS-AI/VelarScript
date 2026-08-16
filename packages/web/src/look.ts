@@ -212,6 +212,80 @@ const transitionPropertyKeywords = keywords("none", "all", ...[...LOOK_PROPERTIE
   .filter((property) => !LOOK_NON_ANIMATABLE_PROPERTIES.has(property))
   .map(cssPropertyName));
 
+/**
+ * Every `left right` value of a grammar that takes one token from each of two
+ * positions — `y mandatory`, `left top`. D65 rule 169: a closed set holds the
+ * complete value the author writes, so a multi-token CSS value is written out
+ * here rather than turned into a builder or a token grammar of its own.
+ */
+function lookValuePairs(left: Iterable<string>, right: Iterable<string>): readonly string[] {
+  const second = [...right];
+  return [...left].flatMap((first) => second.map((last) => `${first} ${last}`));
+}
+
+/**
+ * Every value of a CSS `||` combination: each non-empty selection of the tokens
+ * in every order the combinator accepts, so `dense row` is the same value as
+ * `row dense` to the author and to the browser.
+ */
+function lookValueOrderings(tokens: readonly string[]): readonly string[] {
+  return tokens.flatMap((token, index) => {
+    const rest = [...tokens.slice(0, index), ...tokens.slice(index + 1)];
+    return [token, ...lookValueOrderings(rest).map((tail) => `${token} ${tail}`)];
+  });
+}
+
+/** Every value of a `[ … ]{1,2}` repetition — `scrollSnapAlign: start end`. */
+function lookValueRepetitions(tokens: readonly string[]): readonly string[] {
+  return [...tokens, ...lookValuePairs(tokens, tokens)];
+}
+
+// `<position>`'s keyword grid: one placement word, or one from each axis in
+// either order. The length and percentage forms are the part no closed set
+// holds; LOOK_PARTIAL_KEYWORD_PROPERTIES records that.
+const horizontalPositions = ["left", "center", "right"];
+const verticalPositions = ["top", "center", "bottom"];
+const positionKeywords = [
+  ...horizontalPositions, ...verticalPositions,
+  ...lookValuePairs(horizontalPositions, verticalPositions),
+  ...lookValuePairs(verticalPositions, horizontalPositions),
+];
+
+// The line part of the text-decoration family, written once: `textDecoration`
+// is the shorthand whose only closed part is this one (D57 rule 134).
+const textDecorationLineKeywords = ["none", ...lookValueOrderings(["underline", "overline", "line-through"])];
+
+// The predefined counter styles of CSS Counter Styles 3 §6, by its own
+// grouping. A `<string>` marker and a custom `@counter-style` name are the open
+// part and are recorded as excluded.
+const listStyleTypeKeywords = [
+  "none",
+  // §6.1 numeric
+  "decimal", "decimal-leading-zero", "arabic-indic", "armenian", "upper-armenian", "lower-armenian", "bengali",
+  "cambodian", "khmer", "cjk-decimal", "devanagari", "georgian", "gujarati", "gurmukhi", "hebrew", "kannada", "lao",
+  "malayalam", "mongolian", "myanmar", "oriya", "persian", "lower-roman", "upper-roman", "tamil", "telugu", "thai", "tibetan",
+  // §6.2 alphabetic
+  "lower-alpha", "lower-latin", "upper-alpha", "upper-latin", "lower-greek",
+  "hiragana", "hiragana-iroha", "katakana", "katakana-iroha",
+  // §6.3 symbolic
+  "disc", "circle", "square", "disclosure-open", "disclosure-closed",
+  // §6.4 fixed
+  "cjk-earthly-branch", "cjk-heavenly-stem",
+  // §6.5 complex, and the two aliases CSS 2.1 shipped
+  "japanese-informal", "japanese-formal", "korean-hangul-formal", "korean-hanja-informal", "korean-hanja-formal",
+  "simp-chinese-informal", "simp-chinese-formal", "trad-chinese-informal", "trad-chinese-formal",
+  "cjk-ideographic", "ethiopic-numeric",
+];
+const listStylePositionKeywords = ["inside", "outside"];
+
+// `color-scheme` names the same two schemes `if scheme.dark:` conditions on, so
+// it reads that table rather than restating it. `only` may lead or trail the
+// scheme list.
+const colorSchemeOrderings = lookValueOrderings([...LOOK_MEDIA_SUBJECTS.get("scheme") ?? []]);
+
+const scrollSnapAxes = ["x", "y", "block", "inline", "both"];
+const overscrollBehaviors = ["auto", "contain", "none"];
+
 export const LOOK_PROPERTY_KEYWORDS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["display", keywords("none", "block", "inline", "inline-block", "flow-root", "flex", "inline-flex", "grid", "inline-grid", "contents")],
   ["isolation", keywords("auto", "isolate")],
@@ -242,14 +316,14 @@ export const LOOK_PROPERTY_KEYWORDS: ReadonlyMap<string, ReadonlySet<string>> = 
   ["cursor", keywords("auto", "default", "none", "context-menu", "help", "pointer", "progress", "wait", "cell", "crosshair", "text", "vertical-text", "alias", "copy", "move", "no-drop", "not-allowed", "grab", "grabbing", "col-resize", "row-resize", "n-resize", "e-resize", "s-resize", "w-resize", "ne-resize", "nw-resize", "se-resize", "sw-resize", "ew-resize", "ns-resize", "nesw-resize", "nwse-resize", "zoom-in", "zoom-out")],
   ["textAlign", keywords("start", "end", "left", "right", "center", "justify", "match-parent")],
   ["textTransform", keywords("none", "capitalize", "uppercase", "lowercase", "full-width", "full-size-kana")],
-  ["textDecoration", keywords("none", "underline", "overline", "line-through")],
+  ["textDecoration", keywords(...textDecorationLineKeywords)],
   ["whiteSpace", keywords("normal", "pre", "nowrap", "pre-wrap", "pre-line", "break-spaces")],
   ["textOverflow", keywords("clip", "ellipsis")],
   ["textWrap", keywords("wrap", "nowrap", "balance", "pretty", "stable")],
   ["overflowWrap", keywords("normal", "break-word", "anywhere")],
   ["wordBreak", keywords("normal", "break-all", "keep-all", "break-word")],
   ["hyphens", keywords("none", "manual", "auto")],
-  ["listStyle", keywords("none", "disc", "circle", "square", "decimal")],
+  ["listStyle", keywords(...listStyleTypeKeywords, ...listStylePositionKeywords)],
   ["resize", keywords("none", "both", "horizontal", "vertical", "block", "inline")],
   ["pointerEvents", keywords("auto", "none", "visiblePainted", "visibleFill", "visibleStroke", "visible", "painted", "fill", "stroke", "all")],
   ["userSelect", keywords("auto", "text", "none", "contain", "all")],
@@ -268,7 +342,98 @@ export const LOOK_PROPERTY_KEYWORDS: ReadonlyMap<string, ReadonlySet<string>> = 
   ["textOrientation", keywords("mixed", "upright", "sideways")],
   ["direction", keywords("ltr", "rtl")],
   ["unicodeBidi", keywords("normal", "embed", "isolate", "bidi-override", "isolate-override", "plaintext")],
+
+  // ── D65 rule 168 ────────────────────────────────────────────────────────
+  // Every entry below used to be absent, and a keyword property with no
+  // vocabulary of its own fell back to a shared list that knew nothing about
+  // it: it refused `borderStyle = "groove"` and accepted `strokeLinecap =
+  // "none"`, which reaches the browser as a declaration it discards. A value
+  // set that already exists in another table is read from that table rather
+  // than restated (D57 rule 134).
+  ["objectPosition", keywords(...positionKeywords)],
+  ["gridAutoFlow", keywords(...lookValueOrderings(["row", "dense"]), ...lookValueOrderings(["column", "dense"]))],
+  ["backgroundBlendMode", keywords("normal", "multiply", "screen", "overlay", "darken", "lighten", "color-dodge", "color-burn", "hard-light", "soft-light", "difference", "exclusion", "hue", "saturation", "color", "luminosity")],
+  // The five border-style properties and the border() builder's style argument
+  // are one vocabulary, so they are one table.
+  ...["borderStyle", "borderTopStyle", "borderRightStyle", "borderBottomStyle", "borderLeftStyle"]
+    .map((property) => [property, keywords(...LOOK_BORDER_STYLE_NAMES)] as const),
+  // An outline takes the border styles plus `auto`, minus `hidden`: CSS Basic
+  // UI says `hidden` is not a legal outline style, and a border table read
+  // straight through would have published a twenty-seventh dead value.
+  ["outlineStyle", keywords(...[...LOOK_BORDER_STYLE_NAMES].filter((style) => style !== "hidden"), "auto")],
+  ["fontStretch", keywords("normal", "ultra-condensed", "extra-condensed", "condensed", "semi-condensed", "semi-expanded", "expanded", "extra-expanded", "ultra-expanded")],
+  // Every single-token value of the shorthand's six sub-properties: position,
+  // caps, numeric, alternates, ligatures, and East Asian.
+  ["fontVariant", keywords(
+    "normal", "none", "sub", "super",
+    "small-caps", "all-small-caps", "petite-caps", "all-petite-caps", "titling-caps", "unicase",
+    "lining-nums", "oldstyle-nums", "proportional-nums", "tabular-nums", "diagonal-fractions", "stacked-fractions", "ordinal", "slashed-zero",
+    "historical-forms",
+    "common-ligatures", "no-common-ligatures", "discretionary-ligatures", "no-discretionary-ligatures",
+    "historical-ligatures", "no-historical-ligatures", "contextual", "no-contextual",
+    "jis78", "jis83", "jis90", "jis04", "simplified", "traditional", "full-width", "proportional-width", "ruby",
+  )],
+  ["textDecorationLine", keywords(...textDecorationLineKeywords)],
+  ["textDecorationStyle", keywords("solid", "double", "dotted", "dashed", "wavy")],
+  ["textUnderlinePosition", keywords("auto", "from-font", ...lookValueOrderings(["under", "left"]), ...lookValueOrderings(["under", "right"]))],
+  ["textRendering", keywords("auto", "optimizeSpeed", "optimizeLegibility", "geometricPrecision")],
+  ["listStyleType", keywords(...listStyleTypeKeywords)],
+  ["listStylePosition", keywords(...listStylePositionKeywords)],
+  ["strokeLinecap", keywords("butt", "round", "square")],
+  ["strokeLinejoin", keywords("miter", "round", "bevel")],
+  ["colorScheme", keywords("normal", ...colorSchemeOrderings.flatMap((schemes) => [schemes, `only ${schemes}`, `${schemes} only`]))],
+  ["scrollSnapAlign", keywords(...lookValueRepetitions(["none", "start", "end", "center"]))],
+  ["scrollSnapStop", keywords("normal", "always")],
+  ["scrollSnapType", keywords("none", ...scrollSnapAxes, ...lookValuePairs(scrollSnapAxes, ["mandatory", "proximity"]))],
+  ["overscrollBehavior", keywords(...lookValueRepetitions(overscrollBehaviors))],
+  ["overscrollBehaviorX", keywords(...overscrollBehaviors)],
+  ["overscrollBehaviorY", keywords(...overscrollBehaviors)],
 ]);
+
+/**
+ * D65 rule 168 — a `keyword` property carries its own closed set or the module
+ * refuses to load. The shared fallback vocabulary this replaces was worse than
+ * a missing check: it decided values for a property it had never heard of, so
+ * the same table that rejected `listStyleType = "upper-roman"` accepted
+ * `colorScheme = "none"` and emitted it as a declaration the browser drops.
+ * A published name whose values are decided by a table that does not know the
+ * property is not a checked property, so this is a load-time fact rather than
+ * a test — the same shape as the value-kind invariant above.
+ */
+for (const [property, kind] of LOOK_PROPERTY_VALUE_KINDS) {
+  if (kind === "keyword" && !LOOK_PROPERTY_KEYWORDS.has(property)) {
+    throw new Error(`Look property '${property}' is a keyword property with no closed keyword set`);
+  }
+}
+
+/**
+ * D65 rule 169 — what a partly closable property leaves out, and why.
+ *
+ * Some CSS value spaces cannot be written as a set: `objectPosition` reaches
+ * into lengths, `listStyleType` into `@counter-style` names, `fontVariant` into
+ * a combination of six feature groups. Such a property publishes the subset it
+ * can close and records the remainder here, so the boundary is visible in the
+ * table and in the diagnostic instead of being waved through by a fallback
+ * vocabulary. This is the per-value sibling of LOOK_EXCLUDED_PROPERTIES, which
+ * records the properties left out whole.
+ */
+export const LOOK_PARTIAL_KEYWORD_PROPERTIES: ReadonlyMap<string, string> = new Map([
+  ["objectPosition", "Positions written as a length or percentage are outside the closed set, which holds the placement keywords"],
+  ["contain", "Combinations of size, layout, style and paint are outside the closed set, which holds the single tokens plus the named strict and content shorthands"],
+  ["backgroundBlendMode", "A comma-separated per-layer blend list is outside the closed set, because a checked Look background is one layer"],
+  ["borderStyle", "The one-to-four value per-side form is outside the closed set; borderTopStyle, borderRightStyle, borderBottomStyle and borderLeftStyle write it"],
+  ["fontStretch", "Percentage font widths are outside the closed set, which holds the named widths"],
+  ["fontVariant", "Combining feature groups in one value is outside the closed set, which holds each group's single-token values; fontFeatureSettings carries a combination"],
+  ["textDecorationLine", "The blink line is outside the closed set: browsers parse it and draw nothing, so it is a declaration with no effect"],
+  ["strokeLinejoin", "The SVG2 arcs and miter-clip joins are outside the closed set, because no browser implements them"],
+  ["textDecoration", "The style, color and thickness parts of the shorthand are outside the closed set; textDecorationStyle, textDecorationColor and textDecorationThickness write them"],
+  ["listStyle", "The image part and multi-part combinations of the shorthand are outside the closed set; listStyleType, listStylePosition and listStyleImage write them"],
+  ["listStyleType", "A literal string marker and a custom @counter-style name are outside the closed set, which holds the predefined counter styles"],
+]);
+
+for (const [property] of LOOK_PARTIAL_KEYWORD_PROPERTIES) {
+  if (!LOOK_PROPERTY_KEYWORDS.has(property)) throw new Error(`Look property '${property}' records an excluded value space but publishes no keyword set`);
+}
 
 /** Real CSS properties deliberately outside the checked Look domain. */
 export const LOOK_EXCLUDED_PROPERTIES: ReadonlyMap<string, string> = new Map([

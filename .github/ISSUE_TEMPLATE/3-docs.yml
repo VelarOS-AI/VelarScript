@@ -1,0 +1,47 @@
+name: Documentation or website / 文档或网站
+description: A page is wrong, missing, unclear, or hard to read. / 某一页是错的、缺失的、说不清的，或读起来费劲。
+title: "docs: "
+labels: ["docs"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        "I had to read this twice" is a valid report. So is "the English is fine but
+        the Chinese reads like a translation" — the Chinese on this project is meant
+        to be written in Chinese, not translated into it.
+
+        「我得读两遍」是有效的报告。「英文没问题但中文读着像翻译」也是 ——
+        本项目的中文应当是用中文写的，而不是翻译过来的。
+
+  - type: input
+    id: where
+    attributes:
+      label: Where / 在哪里
+      description: The page URL, or the file path in the repository. / 页面 URL，或仓库里的文件路径。
+      placeholder: "https://velarscript.velaros.cn/guide/web/state  ·  docs/web-api.md"
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is wrong / 哪里不对
+      description: >-
+        Wrong, missing, unclear, or hard work to read — say which, and quote the part
+        that stopped you. / 错误、缺失、说不清、还是读起来费劲 —— 说明是哪一种，
+        并引用把你卡住的那一段。
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Which kind / 属于哪一种
+      options:
+        - It states something false / 它说了不对的事
+        - It is missing something I needed / 它缺了我需要的东西
+        - It is accurate but I could not follow it / 它是对的，但我跟不下来
+        - It does not explain why, only what / 它只说了是什么，没说为什么
+        - The Chinese reads like a translation / 中文读起来像译文
+    validations:
+      required: true

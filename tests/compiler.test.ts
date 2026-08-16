@@ -10540,10 +10540,12 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
   ]);
   // Text gained codePoint/fromCodePoint, velar/json retired deepEqual, and
   // velar/look retired the unreachable Opacity name; TXT-U3 then added
-  // Text.normalize, and D57 rule 137 retired velar/fs's Blob and readBlob —
-  // the same unreachable-name judgment Opacity was deleted under.
-  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 280);
-  assert.equal(Object.values(api.modules).slice(0, 9).reduce((total, exports_) => total + exports_.length, 0), 119);
+  // Text.normalize, D57 rule 137 retired velar/fs's Blob and readBlob — the
+  // same unreachable-name judgment Opacity was deleted under — and D65 rule
+  // 171 published velar/log's LogRecord, which is the record useSink already
+  // handed over and had no name for.
+  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 281);
+  assert.equal(Object.values(api.modules).slice(0, 9).reduce((total, exports_) => total + exports_.length, 0), 120);
   assert.equal(api.modules["velar/collections"]?.length, 28);
   assert.equal(api.modules["velar/text"]?.length, 23);
   assert.equal(api.modules["velar/math"]?.length, 30);
@@ -10552,7 +10554,7 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
   assert.deepEqual(api.modules["velar/url"], ["decode", "encode", "isExternal", "join", "normalize", "parse", "parseQuery", "query", "withHash", "withQuery"]);
   assert.deepEqual(api.modules["velar/time"], ["date", "format", "iso", "monotonic", "now", "parse", "parts", "utc"]);
   assert.deepEqual(api.modules["velar/id"], ["isUuid", "uuid"]);
-  assert.deepEqual(api.modules["velar/log"], ["level", "log", "logger", "setLevel", "useSink"]);
+  assert.deepEqual(api.modules["velar/log"], ["LogRecord", "level", "log", "logger", "setLevel", "useSink"]);
   assert.deepEqual(api.modules["velar/serve"], ["RequestBodyTooLargeError", "ServeRequest", "ServeResponse", "Server", "fileResponse", "serve"]);
   assert.deepEqual(api.modules["velar/fs"], ["FileWatchBatch", "FileWatcher", "appendText", "canonical", "copyFile", "createText", "exists", "info", "list", "makeDirectory", "move", "readText", "removeFile", "replaceTextIfMatches", "watchFiles", "writeText"]);
   assert.deepEqual(api.modules["velar/env"], ["get", "require"]);

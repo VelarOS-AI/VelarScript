@@ -34,6 +34,17 @@ const REJECTION = (kind: string, name: string) =>
   `VEL4037 ${kind} '${name}' infers '-> null' from its body; delete the annotation, `
   + "and write it only where 'extern', 'abstract', or a function type leaves no body to infer";
 
+/**
+ * D64 rule 162: the other half of D58 correction 2. Dropping the mechanical
+ * fix where the body returns a value left the *message* still saying "delete
+ * the annotation" — the one move the correction had just refused to make — so
+ * the diagnostic taught an exit it rejects on the next step. The two cases
+ * carry two messages now, and this one never says "delete".
+ */
+const DISAGREEMENT = (kind: string, name: string, result: string) =>
+  `VEL4037 ${kind} '${name}' takes its result from its body, which returns ${result}, not null; `
+  + "change the body or the result you meant — deleting the annotation would widen the signature";
+
 // ---------------------------------------------------------------------------
 // The three positions that must keep writing it
 // ---------------------------------------------------------------------------
@@ -258,9 +269,45 @@ test("[D58-139.2] the annotation is still refused where the body returns a value
   // `-> number` — never existed at the diagnostic level: VEL4001 reports the
   // violation next to the refusal. Both are here so neither can go quiet.
   assert.deepEqual(coreMessages("def f() -> null:\n    return 2\n"), [
-    REJECTION("Function", "f"),
+    DISAGREEMENT("Function", "f", "number"),
     "VEL4001 Cannot assign number to null",
   ]);
+});
+
+test("[D64-162] the refusal that carries no fix does not tell the author to delete either", () => {
+  // The two cases are two messages. Where the body infers `null`, deleting is
+  // the answer and the message says so; where it does not, deleting is the one
+  // edit the ruling refuses, so the message names the disagreement instead and
+  // says what deleting would cost. A message that teaches an exit the next
+  // step rejects is D57 rule 136's shape, and this is that shape removed.
+  const deleteTaught = (source: string) => coreMessages(source)
+    .filter((item) => item.startsWith("VEL4037"))
+    .some((item) => item.includes("delete the annotation"));
+
+  assert.ok(deleteTaught("export def f() -> null:\n    print(\"x\")\n"));
+  for (const body of ["    return 2\n", "    return \"x\"\n", "    if true:\n        return 2\n"]) {
+    const source = `export def f() -> null:\n${body}`;
+    assert.ok(!deleteTaught(source), source);
+  }
+
+  // The message names what the body actually returns, so the author can see
+  // which of the two — body or annotation — is the one that is wrong.
+  assert.deepEqual(coreMessages("export def f() -> null:\n    return \"x\"\n"), [
+    DISAGREEMENT("Function", "f", "string"),
+    "VEL4001 Cannot assign string to null",
+  ]);
+  // A partial return infers `T?`, and the message says `T?` rather than `T`.
+  assert.deepEqual(coreMessages("export def f(n: number) -> null:\n    if n > 0:\n        return 2\n")
+    .filter((item) => item.startsWith("VEL4037")), [DISAGREEMENT("Function", "f", "number?")]);
+
+  // Methods, getters' siblings, async declarations, and Web actions all reach
+  // the same reporter, so the split holds for every declaration kind.
+  assert.deepEqual(coreMessages("class C:\n    def bump() -> null:\n        return 1\n")
+    .filter((item) => item.startsWith("VEL4037")), [DISAGREEMENT("Method", "bump", "number")]);
+  assert.deepEqual(coreMessages("async def go() -> null:\n    return 1\n")
+    .filter((item) => item.startsWith("VEL4037")), [DISAGREEMENT("Function", "go", "number")]);
+  assert.deepEqual(webMessages("export action save() -> null:\n    return 2\n")
+    .filter((item) => item.startsWith("VEL4037")), [DISAGREEMENT("Action", "save", "number")]);
 });
 
 test("[D58-139.2] velar fix carries the deletion only where the body infers 'null'", () => {

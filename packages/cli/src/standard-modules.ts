@@ -96,14 +96,23 @@ const timePartsType = object({
   hour: numberType, minute: numberType, second: numberType, millisecond: numberType,
 });
 const logFieldsType = mapString(unknownType);
-const logRecordType = object({
+/**
+ * D59 rule 145.3 and D65 rule 171: `useSink` hands a record to the sink, so a
+ * sink written as a named `def` needs a name for that record's type. The
+ * fields are registered as `velar/log`'s `LogRecord` and the name is exported,
+ * the way `velar/serve` publishes `ServeRequest` and `velar/fs` publishes
+ * `FileWatchBatch`. One field map, read as the parameter type and as the
+ * module's named type, so the two cannot drift.
+ */
+const logRecordFields: Readonly<Record<string, ValueType>> = {
   timestamp: numberType,
   level: stringType,
   scope: stringType,
   message: stringType,
   fields: logFieldsType,
   error: optional(errorType),
-});
+};
+const logRecordType = object(logRecordFields);
 const loggerType = object({
   debug: apiFunction(["message", "fields"], [stringType, logFieldsType], nullType, 1),
   info: apiFunction(["message", "fields"], [stringType, logFieldsType], nullType, 1),
@@ -242,13 +251,19 @@ const coreModuleInterfaces = new Map<string, ModuleInterface>([
     ["uuid", apiFunction([], [], stringType)],
     ["isUuid", apiFunction(["value"], [stringType], boolType)],
   ]))],
-  ["velar/log", moduleInterface(new Map([
-    ["log", loggerType],
-    ["logger", apiFunction(["scope", "fields"], [stringType, logFieldsType], loggerType, 1)],
-    ["level", apiFunction([], [], stringType)],
-    ["setLevel", apiFunction(["value"], [stringType], nullType)],
-    ["useSink", apiFunction(["sink"], [functionType([logRecordType], unknownType)], cleanupType)],
-  ]))],
+  ["velar/log", moduleInterface(
+    new Map([
+      ["LogRecord", { kind: "typeObject", name: "LogRecord" }],
+      ["log", loggerType],
+      ["logger", apiFunction(["scope", "fields"], [stringType, logFieldsType], loggerType, 1)],
+      ["level", apiFunction([], [], stringType)],
+      ["setLevel", apiFunction(["value"], [stringType], nullType)],
+      ["useSink", apiFunction(["sink"], [functionType([logRecordType], unknownType)], cleanupType)],
+    ]),
+    new Map(),
+    new Map(),
+    new Map([["LogRecord", logRecordType]]),
+  )],
   ["velar/test", moduleInterface(new Map([
     ["expect", apiIntrinsic("test.expect", ["actual"], [anyType], anyType)],
   ]))],
@@ -258,8 +273,9 @@ function moduleInterface(
   exports: ReadonlyMap<string, ValueType>,
   classes: ReadonlyMap<string, ClassInfo> = new Map(),
   namedTypes: ReadonlyMap<string, ReadonlyMap<string, ValueType>> = new Map(),
+  typeAliases: ReadonlyMap<string, ValueType> = new Map(),
 ): ModuleInterface {
-  return { exports, mutableExports: new Set(), reactiveExports: new Map(), reExports: new Map(), namedTypes, namedTypeIdentities: new Map(), typeAliases: new Map(), enums: new Map(), classes, tests: [], extensionExports: new Map(), extensionData: new Map() };
+  return { exports, mutableExports: new Set(), reactiveExports: new Map(), reExports: new Map(), namedTypes, namedTypeIdentities: new Map(), typeAliases, enums: new Map(), classes, tests: [], extensionExports: new Map(), extensionData: new Map() };
 }
 
 export function standardModuleInterfaces(extensions: readonly CompilerExtension[] = []): ReadonlyMap<string, ModuleInterface> {
@@ -1857,6 +1873,45 @@ function createLogger(scope, base = null) {
     error(message, error = null, fields = null) { return emit(scope, "error", message, merged(fields), error); },
   });
 }
+
+function __velarLogRecordField(value, name) {
+  const descriptor = __velarLogGetOwnPropertyDescriptor(value, name);
+  if (!descriptor?.enumerable || !("value" in descriptor)) throw new __velarLogNativeTypeError("Value does not match LogRecord");
+  return descriptor.value;
+}
+function __velarLogRecordValue(value) {
+  if (!value || typeof value !== "object" || __velarLogGetPrototypeOf(value) !== __velarLogObjectPrototype) {
+    throw new __velarLogNativeTypeError("Value does not match LogRecord");
+  }
+  const timestamp = __velarLogRecordField(value, "timestamp");
+  if (typeof timestamp !== "number"
+    || !__velarLogApply(__velarLogNumberIsFinite, __velarLogNativeNumber, [timestamp], "Number.isFinite")
+    || __velarLogApply(__velarLogMathAbs, __velarLogNativeMath, [timestamp], "Math.abs") > maximumLogTimestamp) {
+    throw new __velarLogNativeTypeError("Value does not match LogRecord");
+  }
+  const level = __velarLogRecordField(value, "level");
+  if (level !== "debug" && level !== "info" && level !== "warn" && level !== "error") {
+    throw new __velarLogNativeTypeError("Value does not match LogRecord");
+  }
+  logText(__velarLogRecordField(value, "scope"), "LogRecord scope", 1024);
+  logText(__velarLogRecordField(value, "message"), "LogRecord message");
+  const error = __velarLogRecordField(value, "error");
+  if (error !== null && !__velarIsError(error)) throw new __velarLogNativeTypeError("Value does not match LogRecord");
+  const fields = __velarLogRecordField(value, "fields");
+  if (fields == null) throw new __velarLogNativeTypeError("Value does not match LogRecord");
+  fieldsOf(fields);
+  return value;
+}
+
+// D59 rule 145.3 and D65 rule 171: the record 'useSink' hands to a sink now
+// has a published name, so a sink can be a named 'def' with an annotated
+// parameter. An exported type name is a runtime value in VelarScript — the
+// emitter proves it for every 'export type' — so the name ships the same
+// frozen 'is'/'parse' pair 'velar/fs' publishes for FileWatchBatch.
+export const LogRecord = __velarLogFreezeValue({
+  is(value) { try { __velarLogRecordValue(value); return true; } catch { return false; } },
+  parse(value) { return __velarLogRecordValue(value); },
+});
 
 export const log = createLogger("");
 export function logger(scope, fields = null) {

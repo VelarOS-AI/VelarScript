@@ -98,6 +98,8 @@ document title. Anything else in `velar.json` is rejected by name.
 
 **Files the toolchain owns.** `dist/` is build output, and in a Web build the
 toolchain writes `dist/index.html` itself — the title comes from `web.title`, the
+favicon from `web.icon` (a `publicDir`-relative `.svg`/`.png`/`.ico` path; the
+build fails if no such file exists), the
 mount host is `<div id="app"></div>`, and assets are content-hashed. Never author
 that file; a `public/index.html` is overwritten by the generated one, while
 everything else in `public/` is copied through. `.velar/` is scratch; both belong in `.gitignore`.
@@ -680,12 +682,35 @@ data and assign the result on the Vel side.
    value touches typed code.
 3. **Styling beyond Look** — `import css unsafe "./file.css" before look`
    (or `after look`); trusted markup renders through `unsafe:html`.
-4. **A suspected compiler defect blocking you** — build a minimal repro,
+4. **A suspected compiler defect blocking you** — run `velar repro` (below),
    then take the final exit: `velar build` output is readable, source-mapped
    JavaScript that runs without the toolchain.
 
 The full decision tree, including the honest limits of each hatch, is
 [docs/escape-hatches.md](https://github.com/VelarOS-AI/VelarScript/blob/main/docs/escape-hatches.md).
+
+## When you hit a compiler wall
+
+A diagnostic that cannot be satisfied, an emit that misbehaves, a check that
+contradicts this brief: you are this language's reporter as much as its author,
+and the channel is the one a human uses. Do not quietly work around a defect and
+leave the next reader to rediscover it.
+
+1. **Run `velar repro`.** It writes a self-contained minimal reproduction to
+   disk and prints the path — the source the diagnostic touches, `velar.json`,
+   the verbatim output, and the versions. It uploads nothing and collects
+   nothing about the machine; whether to send it is the human's decision.
+2. **Fill in the produced `README.md`.** Two of its three sections are blanks:
+   *What I wrote (or wanted to write)* and *How I resolved it* — the workaround,
+   or the single word `blocked`. *What the compiler said* is already filled in
+   verbatim; do not trim it.
+3. **File it** with the repository's defect template
+   (`.github/ISSUE_TEMPLATE/`), which asks for exactly those three sections.
+   Paste the README.
+
+A word that reads wrong is worth the same trip. The spelling-objection template
+exists for it, no alternative word is required, and while there is no
+compatibility promise, changing a word costs nothing yet.
 
 ## The meta-rule
 

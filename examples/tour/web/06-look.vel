@@ -5,7 +5,8 @@
 // `LOOK_BUILDERS` (20), `LOOK_PUBLIC_TYPE_NAMES` (17), `LOOK_UNIT_TYPES` (13
 // suffixes), `LOOK_HOOKS` (9), `LOOK_TARGETS` (7), `LOOK_MEDIA_SUBJECTS` (3
 // subjects, 5 conditions), `LOOK_PROPERTY_GROUPS` (14 families, 225 properties),
-// `LOOK_PROPERTY_VALUE_KINDS` (18 value kinds), and `LOOK_UNITLESS_PROPERTIES`.
+// `LOOK_PROPERTY_VALUE_KINDS` (18 value kinds), `LOOK_PROPERTY_KEYWORDS` (a
+// closed set per keyword property, 78 of them), and `LOOK_UNITLESS_PROPERTIES`.
 //
 // `keyframes:` and `animate(...)` are chapter 07; the CSS escape hatch is
 // chapter 08.
@@ -212,7 +213,7 @@ const everyPropertyLook: Look = look:
     clip = "auto"
     clipPath = "inset(0)"
     objectFit = "fill"
-    objectPosition = "none"
+    objectPosition = "center"
     aspectRatio = 1
 
     // grid
@@ -224,7 +225,7 @@ const everyPropertyLook: Look = look:
     "
     gridAutoColumns = threeUp
     gridAutoRows = threeUp
-    gridAutoFlow = "none"
+    gridAutoFlow = "column"
     gridColumn = "1 / -1"
     gridColumnStart = "1"
     gridColumnEnd = "-1"
@@ -313,7 +314,7 @@ const everyPropertyLook: Look = look:
     backgroundAttachment = "scroll"
     backgroundClip = "border-box"
     backgroundOrigin = "border-box"
-    backgroundBlendMode = "none"
+    backgroundBlendMode = "normal"
 
     // border and outline
     border = hairline
@@ -362,7 +363,7 @@ const everyPropertyLook: Look = look:
     fontSize = 4px
     fontWeight = 1
     fontStyle = "normal"
-    fontStretch = "none"
+    fontStretch = "normal"
     fontVariant = "none"
     fontKerning = "auto"
     fontOpticalSizing = "auto"
@@ -376,12 +377,12 @@ const everyPropertyLook: Look = look:
     textDecoration = "none"
     textDecorationColor = ink
     textDecorationLine = "none"
-    textDecorationStyle = "none"
+    textDecorationStyle = "solid"
     textDecorationThickness = 4px
     textUnderlineOffset = 4px
-    textUnderlinePosition = "none"
+    textUnderlinePosition = "auto"
     textTransform = "none"
-    textRendering = "none"
+    textRendering = "auto"
     whiteSpace = "normal"
     textOverflow = "clip"
     textWrap = "wrap"
@@ -397,15 +398,15 @@ const everyPropertyLook: Look = look:
     // lists
     listStyle = "none"
     listStyleType = "none"
-    listStylePosition = "none"
+    listStylePosition = "outside"
     listStyleImage = mark
 
     // SVG paint
     fill = ink
     stroke = ink
     strokeWidth = 4px
-    strokeLinecap = "none"
-    strokeLinejoin = "none"
+    strokeLinecap = "butt"
+    strokeLinejoin = "miter"
     strokeDasharray = "4 2"
     strokeDashoffset = 4px
 
@@ -430,7 +431,7 @@ const everyPropertyLook: Look = look:
     appearance = "none"
     accentColor = ink
     caretColor = ink
-    colorScheme = "none"
+    colorScheme = "normal"
 
     // scroll
     scrollBehavior = "auto"
@@ -445,7 +446,7 @@ const everyPropertyLook: Look = look:
     scrollPaddingBottom = 4px
     scrollPaddingLeft = 4px
     scrollSnapAlign = "none"
-    scrollSnapStop = "none"
+    scrollSnapStop = "normal"
     scrollSnapType = "none"
     overscrollBehavior = "none"
     overscrollBehaviorX = "none"
@@ -470,6 +471,47 @@ export const keywordValueLook: Look = look:
     transitionProperty = "background-color"
     transitionDuration = quick
     transitionTimingFunction = "ease-out"
+
+// Every keyword property carries its own closed set, so the vocabulary above is
+// each property's real CSS vocabulary rather than a shared list of common
+// words. These spellings are the evidence: a shared list has no reason to hold
+// `groove`, `upper-roman` or `optimizeLegibility`, and it would just as happily
+// have taken `strokeLinecap = "none"` — a declaration the browser discards.
+export const closedKeywordLook: Look = look:
+    borderStyle = "groove"
+    borderTopStyle = "ridge"
+    borderRightStyle = "inset"
+    borderBottomStyle = "outset"
+    borderLeftStyle = "double"
+    outlineStyle = "auto"
+    backgroundBlendMode = "multiply"
+    fontStretch = "semi-condensed"
+    fontVariant = "tabular-nums"
+    textDecorationStyle = "wavy"
+    textRendering = "optimizeLegibility"
+    listStyleType = "upper-roman"
+    listStylePosition = "inside"
+    strokeLinecap = "round"
+    strokeLinejoin = "bevel"
+    scrollSnapStop = "always"
+    overscrollBehaviorX = "contain"
+    overscrollBehaviorY = "auto"
+
+// A closed set holds the whole CSS value, not a token of one: `y mandatory` is
+// what an author knows this value as, so it is what he writes. Nothing here is
+// a new syntax or a new builder — every value below is one string, and one CSS
+// declaration.
+export const multiTokenKeywordLook: Look = look:
+    objectPosition = "top left"
+    gridAutoFlow = "column dense"
+    textDecoration = "underline overline"
+    textDecorationLine = "underline line-through"
+    textUnderlinePosition = "under left"
+    listStyle = "lower-alpha"
+    colorScheme = "light dark"
+    scrollSnapType = "y mandatory"
+    scrollSnapAlign = "start end"
+    overscrollBehavior = "contain none"
 
 // The 9 element states and the 7 pseudo-element targets. Conditions may appear
 // inside a target and a target may appear inside a condition; a target may not
@@ -580,6 +622,8 @@ export component LookPanel:
         <div data-vocabulary look={vocabularyLook}>every published family</div>
         <div data-property-vocabulary look={propertyVocabulary}></div>
         <div data-keyword-values look={keywordValueLook}>keyword values, not only units</div>
+        <div data-closed-keywords look={closedKeywordLook}>each property's own closed set</div>
+        <div data-multi-token-keywords look={multiTokenKeywordLook}>whole CSS values, not tokens</div>
         <div data-stateful look={statefulLook}>states and targets</div>
         <div data-responsive look={responsiveLook}>media conditions</div>
         <button type="button" data-control look={controlLook}>base control</button>

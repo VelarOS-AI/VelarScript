@@ -34,6 +34,20 @@ export interface FrameworkBrowserTestContract {
   readonly initScript?: (config: unknown) => string;
 }
 
+/**
+ * A file the built application's own documents point at, named by the project
+ * manifest and expected to exist under `publicDir`. The host owns the manifest
+ * field that named it; the host cannot read files, so its host process resolves
+ * the path and fails the build when the asset is absent rather than shipping a
+ * document that references nothing.
+ */
+export interface FrameworkRequiredPublicAsset {
+  /** Manifest field that named the asset, for the missing-asset diagnostic. */
+  readonly field: string;
+  /** Path relative to the project's `publicDir`. */
+  readonly path: string;
+}
+
 export interface FrameworkHostProjectValidationInput {
   readonly config: unknown;
   readonly modules: readonly {
@@ -61,6 +75,7 @@ export interface FrameworkHostExtension {
   readonly createArtifacts: (input: FrameworkHostArtifactsInput) => FrameworkHostArtifacts;
   readonly createErrorDocument: (input: FrameworkHostErrorDocumentInput) => string;
   readonly staticDeployment: (config: unknown) => FrameworkStaticDeployment;
+  readonly requiredPublicAssets?: (config: unknown) => readonly FrameworkRequiredPublicAsset[];
   readonly browserTests?: FrameworkBrowserTestContract;
   readonly validateProject?: (input: FrameworkHostProjectValidationInput) => readonly string[];
 }

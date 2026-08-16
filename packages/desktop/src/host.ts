@@ -67,6 +67,9 @@ function webConfig(value: unknown) {
   return {
     title: config.window.title,
     base: "/",
+    // A desktop window has no browser tab; its icon is the packaged
+    // application icon, not a document `rel="icon"`.
+    icon: null,
     publicConfig: Object.freeze({ desktop: Object.freeze({ identifier: config.identifier }) }),
     build: Object.freeze({ sourceMaps: false }),
     security: Object.freeze({ contentSecurityPolicy: true, connectSources: Object.freeze([]), imageSources: Object.freeze([]) }),

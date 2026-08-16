@@ -12,6 +12,7 @@ Inside a project, npm scripts wrap most of these — `npm run dev`, `npm test`,
 velar check [entry.vel | project-directory]
 velar format [file.vel | project-directory] [--check]
 velar fix [entry.vel | project-directory]
+velar repro [entry.vel | project-directory] [--out-dir <directory>]
 velar lsp
 ```
 
@@ -21,6 +22,19 @@ would be a second spelling. `fix` applies the rewrites that are **provably**
 equivalent, which is why it is safe to run unattended; anything requiring a
 judgment call stays a diagnostic for you to answer. `lsp` speaks the Language
 Server Protocol for editors.
+
+`repro` is for the case where the compiler itself looks wrong. It writes a
+self-contained minimal reproduction — the source the diagnostic touches,
+`velar.json`, the verbatim output, and the toolchain, Node, and platform
+versions — into `.velar/repro`, then prints the path. Its `README.md` arrives
+already laid out in the three sections a defect report carries, with *What the
+compiler said* filled in for you. It writes to disk and does nothing else: no
+upload, no network call, nothing collected about your machine, and every
+absolute path rewritten to a project-relative one. Before it finishes it
+extracts the bundle to a temporary directory and re-checks it there, and if the
+copy stops reproducing it says so rather than handing you a false lead. A
+failing `velar check` ends with the one line that names it. The doctrine it
+mechanizes is [escape hatches](escape-hatches.md#4-a-suspected-compiler-defect).
 
 ## Running and testing
 

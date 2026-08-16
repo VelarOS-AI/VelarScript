@@ -194,25 +194,34 @@ attempts += 1
 - Binding names beginning with `__velar`, case-insensitively, are
   reserved for hygienic generated helpers. Object fields and JavaScript
   property names are unaffected because they cannot capture a lexical helper.
-- Most declaration words are **contextual**, not reserved. `type`, `match`,
-  `from`, `as`, `using`, `test`, and every word the Web extension adds —
-  `component`, `state`, `resource`, `action`, `watch`, `look`, `keyframes`,
-  `css`, `expose`, `exposes` — are ordinary names anywhere a name can stand: a
-  binding, a parameter, a loop binding, a named argument, a record field, a
-  member name, and a record shorthand. Each becomes a declaration only in the
-  shape that declaration has, and nothing else can take that shape. Where the
-  two readings could compete, the name wins: `match(value)` calls a function,
-  `state = 1` assigns a binding, and `look.brand` reads a field. `case` is
-  softened the same way everywhere a name is not being *bound* — a record
-  field, a member name, a `match` branch — but it cannot be a binding, because
-  JavaScript reserves it and the emitted module would not parse.
+- Most declaration words are **contextual**, not reserved. Core's ten are `as`,
+  `case`, `constructor`, `from`, `get`, `match`, `readonly`, `test`, `type`,
+  and `using`; the compiler owns that roster as `CORE_CONTEXTUAL_KEYWORDS`, and
+  this sentence quotes it rather than keeping a second copy of it. Every word
+  the Web extension adds — `component`, `state`, `resource`, `action`, `watch`,
+  `look`, `keyframes`, `css`, `expose`, `exposes` — belongs to the same family.
+  All of them are ordinary names anywhere a name can stand: a binding, a
+  parameter, a loop binding, a named argument, a record field, a member name,
+  and a record shorthand. Each becomes a declaration only in the shape that
+  declaration has, and nothing else can take that shape. Where the two readings
+  could compete, the name wins: `match(value)` calls a function, `state = 1`
+  assigns a binding, `look.brand` reads a field, `readonly: number` declares a
+  field named `readonly`, and `{match}` is the record shorthand for a binding
+  of that name.
+- `case` is the one word with a shorter reach, and only in the three positions
+  that **bind**: JavaScript reserves it, so a binding, a parameter, or a loop
+  binding named `case` would not parse in the emitted module. As a record
+  field, a member name, a named argument, a record shorthand, and a `match`
+  branch it reads as a name like the rest.
 - The words that stay reserved are the ones JavaScript reserves — including
   `enum` and `case` — the operator words `in`, `is`, `and`, `or`, `not`, and the
   structural words `def`, `class`, `if`, `else`, `while`, `for`, `return`,
   `import`, `export`, `const`, `let`, `try`, `catch`, `finally`, `throw`,
   `async`, `await`, `assert`, `abstract`, `override`, `static`, `private`,
-  `extern`, `unsafe`, `pass`, `break`, `continue`, `extends`, `super`, `self`,
-  `constructor`, and `get`. Using one as a name is reported by name.
+  `extern`, `unsafe`, `pass`, `break`, `continue`, `extends`, `super`, and
+  `self`. Using one as a name is reported by name. `constructor` and `get` are
+  **not** among them: both name a class member in their own shape and are
+  ordinary names everywhere else, which is what puts them on the roster above.
 - `@name` is the language's own namespace for members that stand where your
   names stand: a component's `@mounted:` and `@cleanup:` blocks, a class's
   `@dispose:` block, and a Look block's `@hover`. `@` is not an identifier
@@ -223,13 +232,19 @@ attempts += 1
 const event = {type: "ping", from: "worker"}
 const {type, from} = event          // ordinary names
 const state = "ready"               // an ordinary binding, in a Web module too
+const match = "ping"                // and so is a word with a statement shape
 
 type Payload:                       // a name and ':' — the declaration
     type: string
+    readonly: number                // a field named 'readonly', not a modifier
+    readonly get: string            // the modifier, over a field named 'get'
+
+const shorthand = () => {match}     // a record built from the binding above
+const constructor = shorthand().match
 
 match type:                         // a header ending in ':' above a block
     case "ping":
-        print(state + from)
+        print(state + from + constructor)
     case _:
         pass
 ```
@@ -653,6 +668,30 @@ the contract needs parameter names, optional parameters, or a rest parameter.
 `Function<>` and `Promise<>` are invalid. This does not expose JavaScript's
 `Function` or `Promise` constructors as built-in callable values; the shorthand
 spellings exist only in type positions.
+
+#### The two arrows, and the two async positions
+
+The language writes two arrows and they never trade places. `=>` introduces a
+lambda **body** and appears only in a value; `->` introduces a **result type**
+and appears only in a type. A function type written with `=>` is refused with
+the rewrite named.
+
+The same pair of positions asks for opposite async spellings, and both are
+right. A *declaration* carries `async`, so its result annotation names the
+resolved value. A function *type* carries no `async` and describes the value
+the call hands back, which is a Promise. They are written side by side here
+because seeing only one of them makes the other look like a mistake:
+
+```velar fragment
+async def loadUser(id: string) -> User:                  // declaration: '-> User'
+    return await api.user(id)
+
+const named: (id: string) -> Promise<User> = loadUser    // type: '-> Promise<User>'
+const inline: (id: string) -> Promise<User> = async (id: string) => await api.user(id)
+
+const titles = users.map(user => user.name)              // '=>' opens a body
+const project: (user: User) -> string = user => user.name
+```
 
 A named parameter in a function type may end its name with `?`, which says the
 argument may be **omitted**. That is a statement about arity, and it is a
@@ -1253,7 +1292,16 @@ its receiver. An expression statement that calls one and discards the result
 is a compile error — there is nothing the call could have accomplished.
 
 Rest parameters use `...values`. A rest parameter is always final and may
-follow defaulted fixed parameters.
+follow defaulted fixed parameters. A declaration writes its element type, since
+there is nothing to take one from; a contextually typed arrow takes it from the
+surrounding function type's own rest, exactly as its fixed parameters take
+theirs, and is refused only where no context supplied one.
+
+```velar
+const total: (...values: number) -> number = (...values) => values.sum()
+print(str(total(1, 2, 3)))
+```
+
 Call spread uses the same boundary in reverse: it targets a declared rest
 parameter after every fixed argument has been written explicitly. The spread
 value must be a checked dense List; instance iterator overrides are ignored.
@@ -1268,8 +1316,11 @@ async def loadUser(id: string) -> User:
 ```
 
 Its call type is `Promise<User>`. Do not write `-> Promise<User>` on an async
-function. JavaScript Promise adoption and the JavaScript event loop remain the
-runtime behavior. Because the JavaScript Promise representation reserves a
+*declaration* — the `async` is already standing there. A function **type** is
+the other position and takes the opposite spelling, because it has no `async`
+on it and describes the value the call hands back: `(id: string) ->
+Promise<User>`. Section 5 writes the two side by side. JavaScript Promise
+adoption and the JavaScript event loop remain the runtime behavior. Because the JavaScript Promise representation reserves a
 resolved value's top-level `then` member, a checked Promise cannot resolve
 directly to a record or class with a callable `then` data member, or to a class
 with any `then` getter. The compiler reports that conflict on explicit Promise

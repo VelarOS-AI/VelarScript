@@ -103,26 +103,31 @@ const namePositions: Readonly<Record<string, (word: string) => string>> = {
   "record field": (word) => `type Holder:\n    ${word}: number\n\nconst holder: Holder = {${word}: 1}\nprint(holder.${word})\n`,
   "member name": (word) => `const holder = {${word}: 1}\nprint(holder.${word})\n`,
   "record shorthand": (word) => `const ${word} = 1\nconst holder = {${word}}\nprint(holder.${word})\n`,
+  // D64 rule 165: the shorthand again, inside an arrow body. `{` after `=>`
+  // opens a record, so this is the same position — but the brace scan that
+  // decides record-versus-statements reads the word rather than the shape, and
+  // it used to answer "statements" for `{match}` because the next token is `}`
+  // rather than ':'. Charter §3's claim covers this spelling too.
+  "record shorthand in an arrow body": (word) =>
+    `const ${word} = 1\nconst build = () => {${word}}\nprint(build().${word})\n`,
 };
 
 /**
  * The positions each roster word is refused in today. Charter §3 asserts the
- * empty entry for `type`, `match`, `from`, `as`, `using` and `test`, and names
- * `case`'s exception itself: JavaScript reserves the spelling, so it can be a
- * name only where a name is not being *bound*.
+ * empty entry for every word but one, and names `case`'s exception itself:
+ * JavaScript reserves the spelling, so it can be a name only where a name is
+ * not being *bound*.
  *
- * `readonly` is a third answer, and it is **reported to the owner as a defect
- * rather than endorsed here**: `type Holder:` + `readonly: number` is refused
- * because the field-line parse reads the word as the modifier before it looks
- * at what follows, while every other contextual keyword is claimed only by its
- * own shape and a keyword followed by ':' is a keyword-named field everywhere
- * else in the language — including in the record *literal* one line below,
- * which accepts `{readonly: 1}`. The entry records today's behaviour so a
- * change to it is deliberate; it is not a decision that the behaviour is right.
+ * D64 rules 164 and 165 emptied the other two entries this map used to hold.
+ * `readonly: number` as a record field was refused because the field-line
+ * parse read the word as the modifier before looking at what followed it, and
+ * `{match}` in an arrow body was refused because the brace scan took the word
+ * as statement evidence. Both are now claimed by their own shape and by
+ * nothing else, which is what the rest of the roster already did — so the map
+ * states `case` alone, and any regression puts a word back into it.
  */
 const refusedPositions = new Map<string, readonly string[]>([
-  ["case", ["binding", "parameter", "loop binding", "named argument", "record shorthand"]],
-  ["readonly", ["record field"]],
+  ["case", ["binding", "parameter", "loop binding", "named argument", "record shorthand", "record shorthand in an arrow body"]],
 ]);
 
 test("[D62-157] every roster word is an ordinary name in charter §3's seven positions", () => {

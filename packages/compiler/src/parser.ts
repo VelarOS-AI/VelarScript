@@ -48,7 +48,7 @@ import { CORE_STATEMENT_HEAD_KEYWORDS, CORE_WORDS } from "./core-vocabulary.ts";
 import { diagnostic, mechanicalEdits, mechanicalFix, recoveredDiagnostic, type Diagnostic } from "./diagnostic.ts";
 import type { CompilerLexicalExtension } from "./extension.ts";
 import { findInterpolatedExpressionEnd, scanStringEscape, scanStringLiteral, type StringTokenPayload } from "./interpolated-string.ts";
-import { declarationKeywordGuidance, sourceTypeNameGuidance } from "./language-guidance.ts";
+import { declarationKeywordGuidance, sourceTypeNameGuidance, REST_PARAMETER_ELEMENT_TYPE_MESSAGE } from "./language-guidance.ts";
 import { Lexer } from "./lexer.ts";
 import { span, type Span } from "./source.ts";
 import { keywordKinds, type Token, type TokenKind } from "./token.ts";
@@ -147,6 +147,14 @@ export class Parser {
   protected readonly contextualKeywords: ReadonlySet<string>;
   private index = 0;
   private parseDepth = 0;
+  /**
+   * D65 rule 170: non-zero while `parseParameters` is reading an arrow's
+   * parameter list — the one list a contextual function type can still type.
+   * It is a field rather than an argument because `packages/web` overrides
+   * `parseParameters()` and forwards to `super.parseParameters()`, so an added
+   * argument would be silently dropped for every arrow inside a web module.
+   */
+  private contextualParameterDepth = 0;
 
   constructor(tokens: readonly Token[], lexicalExtensions: readonly CompilerLexicalExtension[] = []) {
     this.tokens = tokens;
@@ -1166,8 +1174,15 @@ export class Parser {
         if (sawRest) {
           this.diagnostics.push(diagnostic("VEL2016", "A rest parameter must be the final parameter", parameterSpan));
         }
-        if (rest && !type) {
-          this.diagnostics.push(diagnostic("VEL2016", "A rest parameter requires an element type", parameterSpan));
+        // D65 rule 170: in a parameter list that can be contextually typed —
+        // an arrow's — the missing element type may still arrive from the
+        // contextual function type's own rest, exactly as a fixed parameter's
+        // type does, so the refusal waits for the analyzer, which is the only
+        // place that knows whether the context supplied one. Every other
+        // parameter list is a declaration with no context by construction, and
+        // is refused here where it always was.
+        if (rest && !type && this.contextualParameterDepth === 0) {
+          this.diagnostics.push(diagnostic("VEL2016", REST_PARAMETER_ELEMENT_TYPE_MESSAGE, parameterSpan));
         }
         if (rest && defaultValue) {
           this.diagnostics.push(diagnostic("VEL2016", "A rest parameter cannot have a default value", parameterSpan));
@@ -1248,7 +1263,7 @@ export class Parser {
         const defaultValue = this.match("assign") ? this.parseExpression() : null;
         const parameterSpan = span(name.span.start, defaultValue?.span.end ?? type?.span.end ?? name.span.end);
         if (sawRest) this.diagnostics.push(diagnostic("VEL2016", "A rest parameter must be the final parameter", parameterSpan));
-        if (rest && !type) this.diagnostics.push(diagnostic("VEL2016", "A rest parameter requires an element type", parameterSpan));
+        if (rest && !type) this.diagnostics.push(diagnostic("VEL2016", REST_PARAMETER_ELEMENT_TYPE_MESSAGE, parameterSpan));
         if (rest && defaultValue) this.diagnostics.push(diagnostic("VEL2016", "A rest parameter cannot have a default value", parameterSpan));
         if (rest && binding) this.diagnostics.push(diagnostic("VEL2016", "A rest parameter cannot declare a class field", parameterSpan));
         if (!rest && !defaultValue && sawDefault && !sawRest) {
@@ -1281,7 +1296,14 @@ export class Parser {
     this.consumeNewlines();
 
     while (!this.check("dedent") && !this.check("eof")) {
-      const readonly = this.checkWord(CORE_WORDS.readonly);
+      // D64 rule 164: `readonly` is a contextual keyword, so it is claimed by
+      // its own shape and by nothing else. `readonly: number` is a field named
+      // `readonly` — every other contextual keyword already reads that way in
+      // this position, `{readonly: 1}` already builds that record on the value
+      // side, and charter §3 promises the word is an ordinary name here.
+      // `readonly readonly: number` still declares a read-only field of that
+      // name, because the modifier shape is `readonly` followed by a name.
+      const readonly = this.checkWord(CORE_WORDS.readonly) && this.peekKind(1) !== "colon";
       const fieldStart = readonly ? this.advance().span.start : this.current().span.start;
       const fieldName = this.expectMemberName("Expected a field name");
       this.expect("colon", "Expected ':' after field name");
@@ -2106,7 +2128,8 @@ export class Parser {
         } while (this.match("comma") && !this.check("rightParen"));
       }
       this.expect("rightParen", "Expected ')' after function type parameters");
-      this.expect("arrow", "Expected '->' after function type parameters");
+      if (this.check("fatArrow")) this.reportTypePositionFatArrow(this.advance());
+      else this.expect("arrow", "Expected '->' after function type parameters");
       const result = this.parseTypeReference();
       return { kind: "FunctionTypeSyntax", parameters, result: result.syntax, span: span(open.span.start, result.span.end) };
     }
@@ -2204,15 +2227,38 @@ export class Parser {
     return { kind: "OptionalTypeSyntax", inner, span: optionalSpan };
   }
 
+  /**
+   * D63 rule 161: `=>` counts as evidence here even though it is the wrong
+   * spelling. VelarScript writes the value-level arrow `=>` and the type-level
+   * arrow `->`, and a TypeScript reader writes `(string, string) => T` in a
+   * type position on the first try. Reading that as a *grouped* type produced
+   * `Expected ')' after grouped type` plus five cascades, none of which said
+   * `->` — a pile of cascades with no right answer in it is no diagnostic
+   * (D42's standing criterion). Claiming the parenthesis as a function type
+   * lets `reportTypePositionFatArrow` say the one thing worth saying, and the
+   * rest of the annotation parses normally, so the cascade never starts.
+   */
   private isFunctionTypeParenthesis(): boolean {
     let depth = 0;
     for (let offset = 0; this.index + offset < this.tokens.length; offset += 1) {
       const kind = this.tokens[this.index + offset]!.kind;
       if (kind === "leftParen") depth += 1;
-      else if (kind === "rightParen" && --depth === 0) return this.tokens[this.index + offset + 1]?.kind === "arrow";
-      else if (kind === "newline" || kind === "eof") return false;
+      else if (kind === "rightParen" && --depth === 0) {
+        const next = this.tokens[this.index + offset + 1]?.kind;
+        return next === "arrow" || next === "fatArrow";
+      } else if (kind === "newline" || kind === "eof") return false;
     }
     return false;
+  }
+
+  /** The one diagnostic a `=>` in a type position gets, with its rewrite. */
+  private reportTypePositionFatArrow(token: Token): void {
+    this.diagnostics.push(recoveredDiagnostic(
+      "VEL2012",
+      "A function type writes its result after '->'; '=>' is the value-level arrow that introduces a lambda body",
+      token.span,
+      mechanicalFix(token.span, "->", "Use '->' in a function type"),
+    ));
   }
 
   protected parseExpression(minimumPrecedence = 0): Expression {
@@ -2455,7 +2501,9 @@ export class Parser {
 
   private parseArrowExpression(start: number, asynchronous: boolean): ArrowFunctionExpression {
     if (this.check("leftParen")) {
+      this.contextualParameterDepth += 1;
       const parameters = this.parseParameters();
+      this.contextualParameterDepth -= 1;
       this.expect("fatArrow", "Expected '=>' after arrow parameters");
       const body = this.parseArrowBody();
       return { kind: "ArrowFunctionExpression", asynchronous, parameters, body, span: span(start, body.span.end) };
@@ -2516,9 +2564,18 @@ export class Parser {
         continue;
       }
       if (depth !== 1) continue;
+      const next = this.tokens[this.index + offset + 1]?.kind;
+      // D64 rule 165: a contextual keyword is only statement evidence in the
+      // shape that claims it, and `{match}` is not that shape — it is the
+      // record shorthand for a binding named `match`, which charter §3
+      // promises. The word branch therefore stands down wherever the entry
+      // ends: `}` closes the record and `,` starts the next field, exactly as
+      // `:` already meant a keyword-named field below. Only the word branch
+      // needs this — `statementStarterKinds` holds reserved token kinds, which
+      // can never be a field name in the first place.
       const starter = statementStarterKinds.has(kind)
-        || (kind === "identifier" && statementStarterWords.has(token.value));
-      if (starter && this.tokens[this.index + offset + 1]?.kind !== "colon") return true;
+        || (kind === "identifier" && statementStarterWords.has(token.value) && next !== "rightBrace" && next !== "comma");
+      if (starter && next !== "colon") return true;
       if (kind === "colon" || kind === "ellipsis") return false;
       if (!recordFieldLevelKinds.has(kind)) sawNonRecordToken = true;
     }

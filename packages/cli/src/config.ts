@@ -299,6 +299,7 @@ function validateFrameworkHost(value: unknown, compiler: CompilerExtension, name
     || typeof host.base !== "function" || typeof host.sourceMaps !== "function"
     || typeof host.createArtifacts !== "function" || typeof host.createErrorDocument !== "function"
     || typeof host.staticDeployment !== "function"
+    || (host.requiredPublicAssets !== undefined && typeof host.requiredPublicAssets !== "function")
     || (host.validateProject !== undefined && typeof host.validateProject !== "function")) {
     throw new Error(`'${name}/host' exports an invalid framework host contract`);
   }

@@ -141,7 +141,7 @@ const expanded = look:
     paddingInlineStart = 12px
     borderTopColor = color("red")
     scrollPaddingTop = 20px
-    scrollSnapType = "mandatory"
+    scrollSnapType = "y mandatory"
     accentColor = color("blue")
     writingMode = "vertical-rl"
 `);

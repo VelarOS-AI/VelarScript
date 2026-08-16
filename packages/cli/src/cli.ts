@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 
-import { lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { pathToFileURL } from "node:url";
-import { formatDiagnostic, formatSource } from "@velarscript/compiler";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { formatSource } from "@velarscript/compiler";
 import type { CompileResult, CompilerExtension } from "@velarscript/compiler";
 import { createVelarProject, parseCreateArguments } from "create-velar";
-import { compileProject, projectImportKey, type ProjectModule, type ProjectResult } from "./project.ts";
+import { projectImportKey, type ProjectModule, type ProjectResult } from "./project.ts";
+import { checkResolvedProject, discoverVelarSources, formatCheckOutput, projectTestModules } from "./project-check.ts";
+import { reproductionHint, writeReproduction } from "./reproduction.ts";
 import { runDevServer } from "./dev-server.ts";
 import { createFrameworkArtifacts } from "./framework-host.ts";
 import { resolveVelarProject, type VelarProjectConfig } from "./config.ts";
@@ -17,11 +19,11 @@ import { runProgram } from "./program-runner.ts";
 import type { BrowserEngineSelection } from "./browser-test-runner.ts";
 import { buildProductionFramework, writeProductionManifest } from "./production-build.ts";
 import { VELAR_VERSION } from "./version.ts";
-import { copyPublicAssets, writeStaticDeployment } from "./static-deployment.ts";
+import { assertRequiredPublicAssets, copyPublicAssets, writeStaticDeployment } from "./static-deployment.ts";
 import { verifyProductionBuild } from "./production-verifier.ts";
 import { runProductionPreview } from "./preview-server.ts";
 import { createDeploymentVerificationReport, verifyRemoteDeployment } from "./deployment-verifier.ts";
-import { MAX_VELAR_PROJECT_MODULES, readVelarSourceFile } from "./source-limits.ts";
+import { readVelarSourceFile } from "./source-limits.ts";
 import { parseDependencyArguments, runDependencyCommand, type DependencyAction } from "./package-manager.ts";
 import { hostErrorMessage, isHostErrorCode } from "./host-error.ts";
 import { loadApplicationPackageHost, validateApplicationPackageResult } from "./application-package-host.ts";
@@ -61,6 +63,11 @@ interface RunArguments {
   readonly input: string | null;
   readonly programArguments: readonly string[];
   readonly fullStack: boolean;
+}
+
+interface ReproArguments {
+  readonly input: string | null;
+  readonly outputDirectory: string | null;
 }
 
 interface DeploymentVerificationArguments {
@@ -287,6 +294,46 @@ async function main(arguments_: readonly string[]): Promise<number> {
     return report.remainingDiagnostics.length > 0 || report.writeFailures.length > 0 ? 1 : 0;
   }
 
+  if (command === "repro") {
+    const parsed = parseReproArguments(rest);
+    if (typeof parsed === "string") {
+      process.stderr.write(`velar repro: ${parsed}\n`);
+      return 2;
+    }
+    let reproConfig: VelarProjectConfig;
+    try {
+      reproConfig = await resolveVelarProject(parsed.input);
+    } catch (error) {
+      process.stderr.write(`velar repro: ${hostErrorMessage(error)}\n`);
+      return 1;
+    }
+    try {
+      const checked = await checkResolvedProject(reproConfig, parsed.input);
+      if (checked.errors.length === 0) {
+        process.stderr.write(`velar repro: ${displayInput(parsed.input, reproConfig)} checks without errors; there is no failure to reproduce\n`);
+        return 1;
+      }
+      const reproduction = await writeReproduction({
+        config: reproConfig,
+        input: parsed.input,
+        checked,
+        outputDirectory: parsed.outputDirectory,
+        toolchainEntry: fileURLToPath(import.meta.url),
+      });
+      process.stdout.write(`Wrote a minimal reproduction of ${checked.errors.length} diagnostic${checked.errors.length === 1 ? "" : "s"} -> ${reproduction.directory}\n`);
+      // Discipline 3: the bundle was re-checked in an extracted copy, and a
+      // bundle that stopped reproducing says so instead of being handed over
+      // as a clean report.
+      process.stdout.write(reproduction.reproduced
+        ? "The extracted bundle produces the same diagnostics.\n"
+        : "Reproduces on this machine but not in the extracted bundle; the README says what the copy reported instead.\n");
+      return 0;
+    } catch (error) {
+      process.stderr.write(`velar repro: ${hostErrorMessage(error)}\n`);
+      return 1;
+    }
+  }
+
   if (command !== "check" && command !== "build" && command !== "package" && command !== "format" && command !== "dev" && command !== "test") {
     process.stderr.write(`Unknown command '${command}'.\n\n`);
     printHelp(process.stderr);
@@ -411,49 +458,21 @@ async function main(arguments_: readonly string[]): Promise<number> {
     return 1;
   }
 
-  const project = await compileConfiguredProject(projectConfig);
-  for (const notice of project.notices) process.stderr.write(`${notice.path}: notice: ${notice.message}\n`);
-  // A `*.test.vel` module is not reachable from the entry, so the module-graph
-  // walk never saw one: `const n: number = "not a number"` inside a test passed
-  // `check` and `build` (audit 12). Test source is source the author owns and
-  // answers to the same compiler; it stays out of the build *output*, because
-  // checking is not emitting.
-  const testModules = parsed.input?.endsWith(".vel") ? [] : await projectTestModules(projectConfig);
-  const compiled = new Set(project.modules.map((module) => module.inputPath));
-  const testProjects: ProjectResult[] = [];
-  for (const file of testModules) {
-    testProjects.push(await compileProject(file, new Map(), {
-      sourceRoot: projectConfig.root,
-      projectRoot: projectConfig.root,
-      publicRoot: projectConfig.publicDir,
-      extensions: projectConfig.compilerExtensions,
-      extensionConfig: projectConfig.extensionConfig,
-      framework: projectConfig.framework,
-      exportTestFunctions: true,
-    }));
-  }
-  // MOD-I1: resolution failures and module diagnostics print together —
-  // exactly as `velar run` reports them — so one unresolved import can never
-  // bury the compiler's own diagnostics for everything else.
-  const errors = [
-    ...project.failures.map((failure) => `${failure.path}: ${failure.message}`),
-    ...project.modules.flatMap((module) => module.result.diagnostics.map((item) => formatDiagnostic(module.result.source, item))),
-  ];
-  for (const testProject of testProjects) {
-    for (const failure of testProject.failures) errors.push(`${failure.path}: ${failure.message}`);
-    for (const module of testProject.modules) {
-      if (compiled.has(module.inputPath)) continue;
-      compiled.add(module.inputPath);
-      errors.push(...module.result.diagnostics.map((item) => formatDiagnostic(module.result.source, item)));
-    }
-  }
-  if (errors.length > 0) {
-    process.stderr.write(`${errors.join("\n\n")}\n`);
+  const checked = await checkResolvedProject(projectConfig, parsed.input);
+  const project = checked.project;
+  process.stderr.write(formatCheckOutput(checked));
+  if (checked.errors.length > 0) {
+    // D66 ruling 7B: a failing check ends with the command that bundles the
+    // failure — one line, no persuasion, and nothing about data leaving the
+    // machine, because `velar repro` never sends any. `build` and `package`
+    // reach this same exit, and the ruling names `check`: it is the command the
+    // reproduction's own README tells a reader to run.
+    if (command === "check") process.stderr.write(`${reproductionHint(parsed.input)}\n`);
     return 1;
   }
 
   if (command === "check") {
-    const count = compiled.size;
+    const count = checked.compiled.size;
     process.stdout.write(`Checked ${count} module${count === 1 ? "" : "s"} from ${displayInput(parsed.input, projectConfig)}\n`);
     return 0;
   }
@@ -556,6 +575,12 @@ async function main(arguments_: readonly string[]): Promise<number> {
 
 async function writeFrameworkProductionApplication(project: ProjectResult, outputDirectory: string): Promise<void> {
   if (!project.framework) throw new Error("the checked project has no framework host");
+  const framework = project.framework;
+  await assertRequiredPublicAssets(
+    project.publicRoot,
+    project.projectRoot,
+    framework.host.requiredPublicAssets?.(framework.config) ?? [],
+  );
   const parent = dirname(outputDirectory);
   await mkdir(parent, { recursive: true });
   const staging = await mkdtemp(join(parent, `.velar-${basename(outputDirectory)}-`));
@@ -783,6 +808,32 @@ function parseCommandArguments(arguments_: readonly string[]): CommandArguments 
   return { input, output, outputDirectory };
 }
 
+function parseReproArguments(arguments_: readonly string[]): ReproArguments | string {
+  let input: string | null = null;
+  let outputDirectory: string | null = null;
+  for (let index = 0; index < arguments_.length; index += 1) {
+    const argument = arguments_[index]!;
+    if (argument === "--out-dir") {
+      const value = arguments_[index + 1];
+      if (!value || value.startsWith("--")) return "--out-dir requires a path";
+      if (outputDirectory) return "--out-dir may be provided only once";
+      outputDirectory = value;
+      index += 1;
+    } else if (argument.startsWith("--out-dir=")) {
+      if (outputDirectory) return "--out-dir may be provided only once";
+      outputDirectory = argument.slice("--out-dir=".length);
+      if (!outputDirectory) return "--out-dir requires a path";
+    } else if (argument.startsWith("--")) {
+      return `unknown option '${argument}'`;
+    } else if (input) {
+      return `unexpected extra input '${argument}'`;
+    } else {
+      input = argument;
+    }
+  }
+  return { input, outputDirectory };
+}
+
 function parsePackageArguments(arguments_: readonly string[]): CommandArguments | string {
   if (arguments_.length > 1) return `unexpected extra input '${arguments_[1]}'`;
   if (arguments_[0]?.startsWith("-")) return `unknown option '${arguments_[0]}'`;
@@ -928,44 +979,8 @@ function parseDeploymentVerificationArguments(arguments_: readonly string[]): De
   return { input, url, json };
 }
 
-function compileConfiguredProject(config: VelarProjectConfig) {
-  return compileProject(config.entryPath, new Map(), {
-    projectRoot: config.root,
-    publicRoot: config.publicDir,
-    extensions: config.compilerExtensions,
-    extensionConfig: config.extensionConfig,
-    framework: config.framework,
-  });
-}
-
 function displayInput(input: string | null, config: VelarProjectConfig): string {
   return input ?? config.manifestPath ?? config.entryPath;
-}
-
-/** Every `*.test.vel` root in the project — the modules no import reaches. */
-async function projectTestModules(config: VelarProjectConfig): Promise<string[]> {
-  return (await discoverVelarSources(config)).filter((path) => path.endsWith(".test.vel"));
-}
-
-async function discoverVelarSources(config: VelarProjectConfig): Promise<string[]> {
-  const output: string[] = [];
-  const excluded = new Set([config.outDir, config.publicDir]);
-  const visit = async (directory: string): Promise<void> => {
-    for (const entry of await readdir(directory, { withFileTypes: true })) {
-      const path = join(directory, entry.name);
-      if (entry.isDirectory()) {
-        if (entry.name === ".git" || entry.name === "node_modules" || entry.name === ".velar" || excluded.has(path)) continue;
-        await visit(path);
-      } else if (entry.isFile() && entry.name.endsWith(".vel")) {
-        output.push(path);
-        if (output.length > MAX_VELAR_PROJECT_MODULES) {
-          throw new RangeError(`A VelarScript project cannot contain more than ${MAX_VELAR_PROJECT_MODULES} source modules`);
-        }
-      }
-    }
-  };
-  await visit(config.root);
-  return output.sort();
 }
 
 function displayPath(path: string): string {
@@ -996,6 +1011,7 @@ function printHelp(output: NodeJS.WritableStream = process.stdout): void {
     "  velar package [project-directory]",
     "  velar format [file.vel | project-directory] [--check]",
     "  velar fix [entry.vel | project-directory]",
+    "  velar repro [entry.vel | project-directory] [--out-dir <directory>]",
     "  velar skill",
     "  velar lsp",
     "  velar --version",
@@ -1005,7 +1021,7 @@ function printHelp(output: NodeJS.WritableStream = process.stdout): void {
 
 const commandNames = new Set([
   "check", "create", "install", "add", "remove", "update", "dev", "build", "package", "run", "verify", "preview",
-  "verify-deployment", "test", "format", "fix", "skill", "lsp",
+  "verify-deployment", "test", "format", "fix", "repro", "skill", "lsp",
 ]);
 
 function printCommandHelp(command: string, output: NodeJS.WritableStream = process.stdout): void {
@@ -1029,6 +1045,13 @@ function printCommandHelp(command: string, output: NodeJS.WritableStream = proce
       "Usage: velar fix [entry.vel | project-directory]",
       "Applies every mechanical rewrite the compiler's own diagnostics name — retired spellings with one named successor, line-ending semicolons, and the rest of that family — then reports the diagnostics that are left.",
       "Nothing that needs a decision is rewritten, and a second run changes nothing.",
+    ],
+    repro: [
+      "Usage: velar repro [entry.vel | project-directory] [--out-dir <directory>]",
+      "Writes a self-contained minimal reproduction of a failing check — the entry's modules and the test modules that failed, velar.json, the verbatim diagnostics, and the toolchain, Node, and platform versions — then prints where it went.",
+      "It writes to disk and nothing else: no upload, no network call, no environment or account data, and every absolute path rewritten to a project-relative one.",
+      "The bundle is extracted to a temporary directory and re-checked first; if the copy stops reproducing, the command says so rather than reporting a clean reproduction.",
+      "The default location is .velar/repro inside the project, replaced on each run; a directory named with --out-dir must be empty.",
     ],
     skill: ["Usage: velar skill", "Prints the packaged VelarScript AI skill brief verbatim to stdout for any coding agent."],
     lsp: ["Usage: velar lsp", "Runs the stdio language server for an editor host."],

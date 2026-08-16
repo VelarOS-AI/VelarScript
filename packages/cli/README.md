@@ -83,6 +83,18 @@ origin. CI may provide the same target with `VELAR_DEPLOYMENT_URL`.
 `--json` emits the versioned verification report used as external-preview
 evidence.
 
+`velar repro` is for the case where the compiler itself looks wrong. It writes
+a self-contained minimal reproduction — the source the diagnostic touches,
+`velar.json`, the verbatim output, and the toolchain, Node, and platform
+versions — into `.velar/repro`, then prints the path. Its `README.md` arrives
+laid out in the three sections a defect report carries, with *What the compiler
+said* already filled in. Nothing is uploaded, nothing about the machine is
+collected, and every absolute path is rewritten to a project-relative one. The
+bundle is extracted to a temporary directory and re-checked before the command
+returns; a copy that stops reproducing is reported as such rather than handed
+over as a clean report. A failing `velar check` ends with the one line naming
+the command.
+
 The distribution also carries the VelarScript AI skill brief
 (`skill/ai-skill.md`, kept byte-identical to the repository's
 `docs/ai-skill.md` by a permanent gate). `velar skill` prints it verbatim to

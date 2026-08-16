@@ -4,11 +4,12 @@ import {
   type FrameworkHostArtifactsInput,
   type FrameworkHostErrorDocumentInput,
   type FrameworkHostExtension,
+  type FrameworkRequiredPublicAsset,
   type FrameworkStaticDeployment,
 } from "@velarscript/compiler/framework-host";
 import { BROWSER_TEST_SOURCE_SUFFIX } from "./browser-test.ts";
 import { VELAR_WEB_API_VERSION } from "./compiler.ts";
-import type { VelarWebConfig } from "./project-config.ts";
+import { WEB_ICON_TYPES, webIconType, type VelarWebConfig } from "./project-config.ts";
 
 export function createWebArtifacts(input: FrameworkHostArtifactsInput): FrameworkHostArtifacts {
   const config = webConfig(input.config);
@@ -82,6 +83,7 @@ export function createWebArtifacts(input: FrameworkHostArtifactsInput): Framewor
   const security = !input.development && config.security.contentSecurityPolicy
     ? `\n    <meta http-equiv="Content-Security-Policy" content="${escapeHtml(contentSecurityPolicy(config))}">\n    <meta name="referrer" content="no-referrer">`
     : "";
+  const icon = iconLink(config);
   return {
     entryModule,
     css: styles,
@@ -90,7 +92,7 @@ export function createWebArtifacts(input: FrameworkHostArtifactsInput): Framewor
   <head>
     <meta charset="UTF-8">${security}
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="icon" href="data:,">
+    ${icon}
     <title>${escapeHtml(config.title)}</title>${stylesheet}${importMap}
   </head>
   <body>
@@ -100,6 +102,23 @@ export function createWebArtifacts(input: FrameworkHostArtifactsInput): Framewor
 </html>
 `,
   };
+}
+
+/**
+ * `web.icon` names a file under `publicDir`; the CLI fails the build when that
+ * file is absent, so the emitted href always resolves. Without the setting the
+ * document keeps `data:,` — an empty inline icon, not an oversight: it stops the
+ * browser from requesting `/favicon.ico` on its own, which is the right default
+ * offline and under a strict Content-Security-Policy.
+ */
+function iconLink(config: VelarWebConfig): string {
+  if (!config.icon) return `<link rel="icon" href="data:,">`;
+  const type = webIconType(config.icon);
+  // Manifest validation closes the extension set, so an icon with no media type
+  // means the configuration never went through it. Refuse rather than write
+  // type="undefined" into a document nobody would think to re-read.
+  if (!type) throw new TypeError(`@velarscript/web host cannot type the icon '${config.icon}'; 'web.icon' accepts ${[...WEB_ICON_TYPES.keys()].join(", ")}`);
+  return `<link rel="icon" type="${type}" href="${escapeHtml(withBase(config.base, config.icon))}">`;
 }
 
 const WEB_STRUCTURAL_STYLES = ":where(*,*::before,*::after){box-sizing:border-box}\n:where(html,body,#app){min-block-size:100%}\n:where(body){margin:0}\n:where(button,input,textarea,select){font:inherit}";
@@ -112,6 +131,11 @@ export function webStaticDeployment(config: unknown): FrameworkStaticDeployment 
     adapter: web.deployment.adapter,
     contentSecurityPolicy: web.security.contentSecurityPolicy ? contentSecurityPolicy(web, true) : null,
   });
+}
+
+export function webRequiredPublicAssets(config: unknown): readonly FrameworkRequiredPublicAsset[] {
+  const icon = webConfig(config).icon;
+  return Object.freeze(icon ? [Object.freeze({ field: "web.icon", path: icon })] : []);
 }
 
 export function createWebErrorDocument(input: FrameworkHostErrorDocumentInput): string {
@@ -141,6 +165,7 @@ export const velarFrameworkHost: FrameworkHostExtension = Object.freeze({
   createArtifacts: createWebArtifacts,
   createErrorDocument: createWebErrorDocument,
   staticDeployment: webStaticDeployment,
+  requiredPublicAssets: webRequiredPublicAssets,
   browserTests: Object.freeze({
     sourceSuffix: BROWSER_TEST_SOURCE_SUFFIX,
     runtimeKey: "velar.browser.test.v1",

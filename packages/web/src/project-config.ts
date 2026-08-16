@@ -1,6 +1,26 @@
+/** Closed icon vocabulary: the formats a browser accepts as `rel="icon"`. */
+export const WEB_ICON_TYPES: ReadonlyMap<string, string> = new Map([
+  [".svg", "image/svg+xml"],
+  [".png", "image/png"],
+  [".ico", "image/x-icon"],
+]);
+
+/**
+ * The media type of a `web.icon` path, or null when its extension is outside
+ * the closed set. Manifest validation and the emitted `<link rel="icon">` read
+ * an icon's type through this one function, so the two can never disagree.
+ */
+export function webIconType(icon: string): string | null {
+  const name = icon.slice(icon.lastIndexOf("/") + 1);
+  const dot = name.lastIndexOf(".");
+  return dot < 1 ? null : WEB_ICON_TYPES.get(name.slice(dot)) ?? null;
+}
+
 export interface VelarWebConfig {
   readonly title: string;
   readonly base: string;
+  /** A `publicDir`-relative icon path, or null to emit the blank default. */
+  readonly icon: string | null;
   readonly publicConfig: Readonly<Record<string, unknown>>;
   readonly build: { readonly sourceMaps: boolean };
   readonly security: {
@@ -29,12 +49,13 @@ function webConfig(value: unknown, manifestPath: string): VelarWebConfig {
   const web = value as {
     readonly title?: unknown;
     readonly base?: unknown;
+    readonly icon?: unknown;
     readonly publicConfig?: unknown;
     readonly build?: unknown;
     readonly security?: unknown;
     readonly deployment?: unknown;
   } | undefined;
-  if (web) knownFields(web as Record<string, unknown>, new Set(["title", "base", "publicConfig", "build", "security", "deployment"]), "web", manifestPath);
+  if (web) knownFields(web as Record<string, unknown>, new Set(["title", "base", "icon", "publicConfig", "build", "security", "deployment"]), "web", manifestPath);
   const title = stringField(web?.title, "web.title", "VelarScript App");
   let base = stringField(web?.base, "web.base", "/");
   if (!base.startsWith("/")) throw new Error(`${manifestPath}: 'web.base' must start with '/'`);
@@ -47,11 +68,30 @@ function webConfig(value: unknown, manifestPath: string): VelarWebConfig {
   return {
     title,
     base,
+    icon: iconField(web?.icon, manifestPath),
     publicConfig: publicConfigField(web?.publicConfig, manifestPath),
     build: buildConfig(web?.build, manifestPath),
     security: securityConfig(web?.security, manifestPath),
     deployment,
   };
+}
+
+function iconField(value: unknown, manifestPath: string): string | null {
+  if (value === undefined) return null;
+  if (typeof value !== "string" || value.trim().length === 0 || value.includes("\0")) {
+    throw new Error(`${manifestPath}: 'web.icon' must be a non-empty string without NUL bytes`);
+  }
+  if (value.startsWith("/") || value.includes("\\") || value.includes("?") || value.includes("#")) {
+    throw new Error(`${manifestPath}: 'web.icon' must be a relative path inside 'publicDir'`);
+  }
+  const segments = value.split("/");
+  if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
+    throw new Error(`${manifestPath}: 'web.icon' must use canonical path segments inside 'publicDir'`);
+  }
+  if (!webIconType(value)) {
+    throw new Error(`${manifestPath}: 'web.icon' must name a ${[...WEB_ICON_TYPES.keys()].join(", ")} file`);
+  }
+  return value;
 }
 
 function buildConfig(value: unknown, manifestPath: string): VelarWebConfig["build"] {

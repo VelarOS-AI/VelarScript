@@ -59,6 +59,7 @@ Format 2 makes the language/framework boundary explicit:
   "web": {
     "title": "My VelarScript App",
     "base": "/",
+    "icon": "velarscript-mark.svg",
     "publicConfig": {},
     "build": { "sourceMaps": false },
     "security": { "contentSecurityPolicy": true },
@@ -66,6 +67,16 @@ Format 2 makes the language/framework boundary explicit:
   }
 }
 ```
+
+`web.icon` names the document favicon as a path relative to `publicDir`. The
+framework host emits `<link rel="icon">` with `web.base` applied and the media
+type derived from a closed extension set: `.svg`, `.png`, `.ico`. Naming a file
+that `publicDir` does not contain fails the build. Leaving the key out emits
+`<link rel="icon" href="data:,">`, an empty inline icon that stops the browser
+from requesting `/favicon.ico` on its own — the right default offline and under
+the production Content Security Policy. The favicon is a build-time document
+fact like `web.title`, so it belongs to the manifest rather than to the `Head`
+component, which owns what changes during a component's lifetime.
 
 `extensions` is required. A Core library uses `"extensions": []` and does not
 install `@velarscript/web`. A Web application installs and declares

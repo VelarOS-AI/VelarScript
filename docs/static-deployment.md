@@ -147,4 +147,7 @@ The framework/CLI production pipeline reserves `index.html`, `404.html`,
 `velar-build.json`, `velar-deploy.json`, `_headers`, and `_redirects`. Files with those names in
 `publicDir` fail the build rather than overriding the security boundary. Public
 symbolic links are also rejected so a build cannot copy files outside the
-declared asset root.
+declared asset root. The same boundary runs in the other direction: a manifest
+key that names a public file the document will point at — `web.icon` — fails
+the build when `publicDir` holds no such regular file, instead of shipping a
+document whose own reference resolves to nothing.

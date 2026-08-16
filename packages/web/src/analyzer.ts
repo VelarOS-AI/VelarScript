@@ -42,6 +42,7 @@ import {
   LOOK_MEDIA_SUBJECTS,
   LOOK_NUMERIC_TYPE_NAMES,
   LOOK_NON_ANIMATABLE_PROPERTIES,
+  LOOK_PARTIAL_KEYWORD_PROPERTIES,
   LOOK_PROPERTIES,
   LOOK_PROPERTY_KEYWORDS,
   LOOK_PROPERTY_VALUE_KINDS,
@@ -359,7 +360,9 @@ export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): Va
 const lookSpacingFamily = /^(?:margin|padding|inset)/u;
 const lookSpacingProperties = new Set(["borderRadius", "borderWidth"]);
 const lookBorderProperties = new Set(["border", "borderTop", "borderRight", "borderBottom", "borderLeft", "outline"]);
-const lookBorderStyles = new Set(["solid", "dashed", "dotted", "double", "groove", "ridge", "inset", "outset", "none", "hidden"]);
+// The border() builder's guard, the five border-style properties and this
+// shorthand reader are one vocabulary, so they read one table (D57 rule 134).
+const lookBorderStyles = LOOK_BORDER_STYLE_NAMES;
 
 function lookBuilderToken(token: string): string {
   if (/^[+-]?\d+(?:\.\d+)?$/u.test(token)) return `${token}px`;
@@ -1709,6 +1712,11 @@ export class VelarWebAnalyzer extends Analyzer {
       else if (kind === "color" || kind === "background") accepted = lookColorKeywords.has(normalized) || /^#[0-9a-f]{3,8}$/iu.test(normalized);
       else if (kind === "image" || kind === "border" || kind === "shadow") accepted = lookCssWideKeywords.has(normalized) || normalized === "none";
       else if (kind === "number-keyword" || kind === "line-height") accepted = lookDefaultKeywords.has(normalized);
+      // D65 rule 168: a keyword property always carries its own closed set --
+      // look.ts refuses to load otherwise -- so the shared fallback never gets
+      // to decide a keyword property's vocabulary. It is still the vocabulary
+      // for the kinds that have no per-property table at all.
+      else if (kind === "keyword") accepted = LOOK_PROPERTY_KEYWORDS.get(name)?.has(normalized) === true;
       else {
         const propertyKeywords = LOOK_PROPERTY_KEYWORDS.get(name);
         accepted = propertyKeywords?.has(normalized) ?? lookDefaultKeywords.has(normalized);
@@ -1718,7 +1726,12 @@ export class VelarWebAnalyzer extends Analyzer {
           : kind === "image" ? "a checked image builder such as linearGradient() or asset()"
             : kind === "metric" ? "a unit value or one of the property's CSS keywords"
               : `one of the closed ${name} keywords`;
-        this.diagnostics.push(diagnostic("VEL5038", `Look property '${name}' does not accept '${normalized}'; use ${expected}`, value.span));
+        // D65 rule 169: a property whose CSS value space no set can hold says
+        // what it left out, so the boundary is legible where it is met.
+        const partial = LOOK_PARTIAL_KEYWORD_PROPERTIES.get(name);
+        this.diagnostics.push(diagnostic("VEL5038", `Look property '${name}' does not accept '${normalized}'; use ${expected}${partial
+          ? `. ${partial}; use a module-level 'import css unsafe "./styles.css" before look' when that boundary is intentional`
+          : ""}`, value.span));
         return false;
       }
     }

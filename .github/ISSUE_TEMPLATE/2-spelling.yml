@@ -1,0 +1,73 @@
+name: Spelling objection / 拼写异议
+description: A word, syntax, or diagnostic reads wrong. You do not need an alternative. / 某个词、语法或诊断读起来不对。你不需要先想出替代方案。
+title: "spelling: "
+labels: ["spelling"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **This is the most valuable kind of issue right now, and it is the one people
+        file least.** VelarScript has made no backward-compatibility promise yet, so
+        changing a word today costs nothing and changing it after 1.0 costs everyone.
+        This window closes.
+
+        You do not need to be an expert, and you do not need to propose a better
+        word. "I read this three times and still guessed wrong" is a complete report.
+        The language's whole premise is that a person who did not write the code can
+        read it — if you could not, that is a defect in the language, not in you.
+
+        **现在这是最有价值的一类 issue，也是最少人提的一类。** VelarScript 尚未做出任何
+        向后兼容承诺，所以今天改一个词是免费的，1.0 之后再改则所有人买单。这扇窗会关上。
+
+        你不需要是专家，也不需要先想出更好的词。「我读了三遍还是猜错了」就是一份完整的报告。
+        这门语言的全部前提是：没写过这段代码的人也能读懂它 —— 如果你读不懂，
+        那是语言的缺陷，不是你的。
+
+  - type: textarea
+    id: spelling
+    attributes:
+      label: The spelling / 那个拼写
+      description: The word, syntax, or diagnostic text, with enough code around it to see it in place. / 那个词、语法或诊断原文，并带上足够的上下文代码。
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you thought it meant / 你以为它是什么意思
+      description: >-
+        What you expected before you found out — including a wrong guess. The wrong
+        guess is the useful part; it shows where the word points. /
+        在弄清楚之前你以为它是什么意思 —— 包括猜错的那个意思。**猜错的那个才是有用的部分**，
+        它说明这个词把人指向了哪里。
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternative
+    attributes:
+      label: A better word, if one comes to mind / 如果想到了更好的词
+      description: Optional. Leave it empty — naming it badly is still worth reporting. / 可选。留空也行 —— 说不出更好的词，不妨碍这个词有问题。
+      render: text
+    validations:
+      required: false
+
+  - type: dropdown
+    id: background
+    attributes:
+      label: Where you are coming from / 你的背景
+      description: >-
+        This changes how we read your report — a word that reads clearly to a Python
+        developer and wrong to a JavaScript developer is exactly the kind of thing we
+        need to know. / 这会影响我们如何理解你的报告 —— 一个词对 Python 开发者清楚、
+        对 JavaScript 开发者却是误导，正是我们最需要知道的那类事实。
+      options:
+        - JavaScript / TypeScript
+        - Python
+        - Both / 两者都熟
+        - Neither — I mostly read code others (or a model) wrote / 都不熟，我主要读别人或模型写的代码
+        - I am a model, or I am filing on a model's behalf / 我是模型，或代模型提交
+    validations:
+      required: true

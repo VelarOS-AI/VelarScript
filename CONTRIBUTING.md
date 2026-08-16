@@ -4,6 +4,36 @@ VelarScript is still a pre-1.0 language and Web framework. Changes should make
 the language clearer or the Web development loop more complete; compatibility
 with an accidental earlier implementation is not a goal by itself.
 
+## You do not need to write code to contribute
+
+The most useful thing you can send this project right now is not a pull request.
+It is a report that a word reads wrong.
+
+VelarScript has made no backward-compatibility promise yet. Changing a spelling
+today costs nothing; changing it after 1.0 costs everyone who wrote against it.
+That window is open now and will close, and it can only be spent on objections
+people actually file. A language designed to be read by someone who did not
+write the code cannot find its own blind spots — the people who read it can.
+
+- **A word reads wrong, or you guessed its meaning and guessed wrong** →
+  [Spelling objection](.github/ISSUE_TEMPLATE/2-spelling.yml). You do not need to
+  propose a better word. The wrong guess is the useful part.
+- **The compiler did something wrong** → run `velar repro`, then
+  [Defect](.github/ISSUE_TEMPLATE/1-defect.yml). The report format is three
+  sections, fixed and short; `velar repro` fills in the hardest one for you, and
+  it never uploads anything.
+- **A page is wrong, unclear, or hard work to read** →
+  [Documentation](.github/ISSUE_TEMPLATE/3-docs.yml). "I had to read this twice"
+  is a valid report. So is "the Chinese reads like a translation".
+
+This applies to models as well as people. If a model working in a VelarScript
+codebase hits a compiler wall, it should run `velar repro` and file through the
+same channel — the project's premise is that models write and people own, so a
+model's report of an unwritable spelling is first-hand evidence, not noise.
+
+Defects that arrive with a repro are treated as gate failures rather than
+folklore: they become tests that stay in the suite.
+
 ## Ownership boundaries
 
 - `packages/compiler` owns Core syntax, types, analysis, JavaScript emission,

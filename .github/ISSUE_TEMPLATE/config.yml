@@ -1,0 +1,22 @@
+blank_issues_enabled: true
+contact_links:
+  - name: How to build a minimal repro / 如何做最小复现
+    url: https://github.com/VelarOS-AI/VelarScript/blob/main/docs/escape-hatches.md#4-a-suspected-compiler-defect
+    about: >-
+      The five-minute version: cut the program down to the smallest .vel file that
+      still shows the behavior, then run `velar repro`. /
+      五分钟版本：把程序削到仍能复现的最小 .vel 文件，然后跑 velar repro。
+  - name: Escape hatches / 逃生通道
+    url: https://github.com/VelarOS-AI/VelarScript/blob/main/docs/escape-hatches.md
+    about: >-
+      Blocked right now? Every documented way out, including taking the compiled
+      JavaScript and shipping without us. /
+      现在就被挡住了？这里是每一条有文档的出路，包括带着编译产物离开。
+  - name: Language charter / 语言章程
+    url: https://github.com/VelarOS-AI/VelarScript/blob/main/docs/language-charter.md
+    about: >-
+      Before reporting a spelling as a bug, check whether it is a ruling. If it is
+      a ruling you disagree with, that is still worth filing — use "Spelling
+      objection". /
+      在把某个拼写当作缺陷报告之前，先看它是不是一条裁决。如果那是一条你不同意的裁决，
+      它依然值得提 —— 用「拼写异议」。

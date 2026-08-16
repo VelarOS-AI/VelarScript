@@ -27,7 +27,7 @@ import { isPermanentNamespaceName, type CoreVocabularyName, type PermanentNamesp
 import { diagnostic, mechanicalEdits, mechanicalFix, type Diagnostic, type DiagnosticEdit, type DiagnosticFix } from "./diagnostic.ts";
 import { VELAR_HOST_ERROR_NAMES, VELAR_HOST_ERROR_PATH_NAMES } from "./error-runtime.ts";
 import type { CompilerAnalysisExtension, RetiredNamespace } from "./extension.ts";
-import { collectionMemberGuidance, removedGlobalFunctionGuidance, stringMemberGuidance, type CollectionKind } from "./language-guidance.ts";
+import { collectionMemberGuidance, removedGlobalFunctionGuidance, stringMemberGuidance, REST_PARAMETER_ELEMENT_TYPE_MESSAGE, type CollectionKind } from "./language-guidance.ts";
 import { bindingNameRestriction } from "./source-names.ts";
 import { span, spanIdentity, type Span } from "./source.ts";
 import {
@@ -472,6 +472,18 @@ function sameInferredResult(left: ValueType, right: ValueType): boolean {
 
 const corePrimitiveNames = new Set(["string", "number", "bool", "null", "unknown", "Duration"]);
 const builtinTypeNames = new Set(["string", "number", "bool", "null", "unknown", "any", "List", "Set", "Map", "Record", "Promise", "Function", "Type", "Duration"]);
+/**
+ * D64 rule 163: the scope in this sentence is load-bearing, and it is also why
+ * the sentence is written once instead of in each of the four declaration
+ * positions that report it. A *declaration* carries `async`, so its result
+ * annotation names the resolved value; a function *type* carries no `async`
+ * and describes the value the call hands back, which is a Promise. Stated
+ * without "in a declaration" this reads as a rule about the whole language,
+ * and an author who obeys it in a function type is refused by VEL4001 for
+ * doing what it said — `asyncResultSpellingGuidance` is the other half.
+ */
+const asyncResultAnnotationMessage =
+  "An async result annotation in a declaration names the resolved value; write '-> T', not '-> Promise<T>'";
 const memberNarrowingPrefix = "\u0000member:";
 /**
  * D43 item 69: the emitted member behind a class's `@dispose:` block. The key
@@ -2226,7 +2238,7 @@ export class Analyzer implements TypeEnvironment {
                 if (method.returnType) {
                   const result = this.resolveValidatedExternAnnotation(method.returnType, statement.source, classNames);
                   if (!this.invalidExternTypeReferences.has(method.returnType) && method.asynchronous && this.asyncResultContainsPromise(result)) {
-                    this.diagnostics.push(diagnostic("VEL4018", "An async result annotation names the resolved value; write '-> T', not '-> Promise<T>'", method.returnType.span));
+                    this.diagnostics.push(diagnostic("VEL4018", asyncResultAnnotationMessage, method.returnType.span));
                   } else if (!this.invalidExternTypeReferences.has(method.returnType)) {
                     if (method.asynchronous) this.reportPromiseResolutionHazard(result, method.returnType.span);
                     else this.reportPromiseCarrierHazard(result, method.returnType.span);
@@ -2296,7 +2308,7 @@ export class Analyzer implements TypeEnvironment {
             if (declaration.returnType) {
               const valid = !this.invalidExternTypeReferences.has(declaration.returnType);
               if (valid && declaration.asynchronous && this.asyncResultContainsPromise(result)) {
-                this.diagnostics.push(diagnostic("VEL4018", "An async result annotation names the resolved value; write '-> T', not '-> Promise<T>'", declaration.returnType.span));
+                this.diagnostics.push(diagnostic("VEL4018", asyncResultAnnotationMessage, declaration.returnType.span));
               } else if (valid) {
                 if (declaration.asynchronous) this.reportPromiseResolutionHazard(result, declaration.returnType.span);
                 else this.reportPromiseCarrierHazard(result, declaration.returnType.span);
@@ -3899,7 +3911,7 @@ export class Analyzer implements TypeEnvironment {
         const result = this.resolveAnnotation(method.returnType);
         const valid = this.validateTypeReference(method.returnType);
         if (valid && method.asynchronous && this.asyncResultContainsPromise(result)) {
-          this.diagnostics.push(diagnostic("VEL4018", "An async result annotation names the resolved value; write '-> T', not '-> Promise<T>'", method.returnType.span));
+          this.diagnostics.push(diagnostic("VEL4018", asyncResultAnnotationMessage, method.returnType.span));
         } else if (valid) {
           if (method.asynchronous) this.reportPromiseResolutionHazard(result, method.returnType.span);
           else this.reportPromiseCarrierHazard(result, method.returnType.span);
@@ -4105,6 +4117,14 @@ export class Analyzer implements TypeEnvironment {
    * refusal is reported without a fix and the author decides whether the body
    * or the intent was wrong. `velar fix` runs unattended because it never does
    * the second kind of thing.
+   *
+   * D64 rule 162: dropping the fix was only half of that correction. The
+   * message still said "delete the annotation" — the one move the ruling had
+   * just refused to make — so the diagnostic taught an exit it rejects on the
+   * next step, which is the D57 rule 136 shape. The two cases now carry two
+   * messages: where the body does infer null the deletion is the answer, and
+   * where it does not, the disagreement between the body and the annotation is
+   * the answer, and deleting would only widen the signature to hide it.
    */
   private inferredNullResultAnnotation(statement: AnalyzableFunctionDeclaration): TypeReference | null {
     const reference = statement.returnType;
@@ -4116,16 +4136,24 @@ export class Analyzer implements TypeEnvironment {
   private reportInferredNullResult(
     statement: AnalyzableFunctionDeclaration,
     declarationKind: string,
-    bodyInfersNull: boolean,
+    inferred: ValueType,
   ): void {
     const reference = this.inferredNullResultAnnotation(statement);
     if (!reference) return;
+    if (inferred.kind !== "null") {
+      this.diagnostics.push(diagnostic(
+        "VEL4037",
+        `${declarationKind} '${statement.name}' takes its result from its body, which returns ${describeType(inferred)}, not null; change the body or the result you meant — deleting the annotation would widen the signature`,
+        reference.span,
+      ));
+      return;
+    }
     const deletion = statement.resultAnnotationSpan;
     this.diagnostics.push(diagnostic(
       "VEL4037",
       `${declarationKind} '${statement.name}' infers '-> null' from its body; delete the annotation, and write it only where 'extern', 'abstract', or a function type leaves no body to infer`,
       reference.span,
-      deletion && bodyInfersNull ? mechanicalFix(deletion, "", "Delete the inferred '-> null'") : undefined,
+      deletion ? mechanicalFix(deletion, "", "Delete the inferred '-> null'") : undefined,
     ));
   }
 
@@ -4164,7 +4192,7 @@ export class Analyzer implements TypeEnvironment {
     const declaredReturn = statement.returnType ? this.resolveResult(statement.returnType) : unknownType;
     const returnValid = statement.returnType ? this.validateTypeReference(statement.returnType) : true;
     if (asynchronous && statement.returnType && returnValid && this.asyncResultContainsPromise(declaredReturn)) {
-      this.diagnostics.push(diagnostic("VEL4018", "An async result annotation names the resolved value; write '-> T', not '-> Promise<T>'", statement.returnType.span));
+      this.diagnostics.push(diagnostic("VEL4018", asyncResultAnnotationMessage, statement.returnType.span));
     } else if (statement.returnType && returnValid) {
       if (asynchronous) this.reportPromiseResolutionHazard(declaredReturn, statement.returnType.span);
       else this.reportPromiseCarrierHazard(declaredReturn, statement.returnType.span);
@@ -4201,7 +4229,7 @@ export class Analyzer implements TypeEnvironment {
     this.analyzeStatements(statement.body);
     if (observedReturns) {
       const inferred = this.inferCollectedFunctionResult(observedReturns, !this.blockAlwaysReturns(statement.body));
-      this.reportInferredNullResult(statement, declarationKind, inferred.kind === "null");
+      this.reportInferredNullResult(statement, declarationKind, inferred);
     }
     const resultKey = this.functionResultKey(statement as FunctionDeclaration);
     if (inferredReturns) {
@@ -5740,6 +5768,12 @@ export class Analyzer implements TypeEnvironment {
         ? this.inferParameterDefault(parameter.defaultValue)
         : null;
       const type = annotationValid ? annotated ?? contextualParameter ?? defaultType ?? unknownType : invalidType;
+      // D65 rule 170: the parser let an unannotated rest through so the
+      // context could type it the way it types the fixed parameters beside it.
+      // If no context arrived, the refusal it deferred is due now.
+      if (parameter.rest && !parameter.type && !contextualParameter) {
+        this.diagnostics.push(diagnostic("VEL2016", REST_PARAMETER_ELEMENT_TYPE_MESSAGE, parameter.span));
+      }
       if (parameter.defaultValue && !defaultType && annotationValid) {
         const actualDefault = this.inferParameterDefault(parameter.defaultValue, type);
         this.requireAssignable(actualDefault, type, parameter.defaultValue.span);
@@ -8991,6 +9025,12 @@ export class Analyzer implements TypeEnvironment {
         this.typeError(`Cannot assign ${actualDescription} to ${expectedDescription}; ${projection}`, valueSpan);
         return;
       }
+      // D64 rule 163: the one mismatch an author reaches by obeying VEL4018.
+      const asyncResult = this.asyncResultSpellingGuidance(expandedActual, expectedCore);
+      if (asyncResult !== null) {
+        this.typeError(`Cannot assign ${actualDescription} to ${expectedDescription}; ${asyncResult}`, valueSpan);
+        return;
+      }
       // COL-U10: a value of one collection family in another family's
       // position gets the bridge spelling, not a bare mismatch.
       const bridge = this.collectionBridgeGuidance(expandedActual, expectedCore);
@@ -9033,6 +9073,34 @@ export class Analyzer implements TypeEnvironment {
       if (projected !== element) built = `, and a ${family} built from it is '${family}<${projected}>'`;
     }
     return `a readonly projection stays readonly through every hop, so the value never widens — declare the receiving parameter as '${parameter}'${built}`;
+  }
+
+  /**
+   * D64 rule 163: the async result annotation is spelled two ways in two
+   * positions, and both are right. A *declaration* annotates the resolved
+   * value — `async def load(id: string) -> string` — because the `async` is
+   * standing right there; VEL4018 refuses `-> Promise<T>` for that reason. A
+   * function *type* has no `async` on it and describes the value the call
+   * hands back, which is a Promise, so `-> Promise<T>` is the spelling there.
+   *
+   * An author who has just been taught VEL4018 therefore writes `-> string` in
+   * the type position and is refused for obeying it. Naming only the mismatch
+   * leaves that author with two diagnostics that contradict each other, so the
+   * refusal names the spelling the type position wants. The check is exact:
+   * the mismatch has to disappear when the result is wrapped, which is what
+   * makes the named spelling a fact rather than a guess.
+   */
+  private asyncResultSpellingGuidance(actual: ValueType, expectedCore: ValueType): string | null {
+    if (actual.kind !== "function" && actual.kind !== "action" && actual.kind !== "intrinsic") return null;
+    if (expectedCore.kind !== "function" && expectedCore.kind !== "action" && expectedCore.kind !== "intrinsic") return null;
+    if (this.expandAliases(actual.result).kind !== "promise") return null;
+    const expectedResult = this.expandAliases(expectedCore.result);
+    if (expectedResult.kind === "promise" || expectedResult.kind === "unknown" || expectedResult.kind === "any") return null;
+    const wrapped: ValueType = { ...expectedCore, result: { kind: "promise", value: expectedCore.result } };
+    // The guidance is only true when the result spelling is the whole quarrel,
+    // so the wrapped target has to accept the value outright.
+    if (!isAssignable(actual, wrapped, this)) return null;
+    return `an async function's type describes the value the call produces, so its result is a Promise — write '-> ${describeType(wrapped.result)}' here, and '-> ${describeType(expectedCore.result)}' on the 'async def' declaration itself`;
   }
 
   // COL-U10: the collection families never assign across each other; each

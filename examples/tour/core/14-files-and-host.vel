@@ -16,7 +16,7 @@ import {exit, onShutdown} from "velar/host"
 import {isUuid, uuid} from "velar/id"
 import {date, format, iso, monotonic, now, parse as parseTimestamp, parts, utc} from "velar/time"
 import {decode, encode, isExternal, join as joinUrl, normalize as normalizeUrl, parse as parseUrl, parseQuery, query, withHash, withQuery} from "velar/url"
-import {level, log, logger, setLevel, useSink} from "velar/log"
+import {level, log, logger, setLevel, useSink, LogRecord} from "velar/log"
 
 // ---------------------------------------------------------------------------
 // velar/path — pure lexical path operations
@@ -125,17 +125,25 @@ export def logging() -> string:
 
 let sinkCharacters = 0
 
-def countRecord(timestamp: number, recordLevel: string, scope: string, message: string, fields: Map<string, unknown>, error: Error?) -> number:
-    sinkCharacters += message.size + scope.size + recordLevel.size + fields.size + str(timestamp).size
-    if error != null:
-        sinkCharacters += error.message.size
+// `velar/log` publishes `LogRecord`, so a sink can be a named `def` with an
+// annotated parameter instead of an arrow whose shape is only inferred.
+def countRecord(record: LogRecord) -> number:
+    sinkCharacters += record.message.size + record.scope.size + record.level.size
+    sinkCharacters += record.fields.size + str(record.timestamp).size
+    if record.error != null:
+        sinkCharacters += record.error.message.size
     return sinkCharacters
 
 export def collectLogRecords() -> number:
-    // `velar/log` publishes no name for the sink record, so the sink is
-    // written as an arrow and its fields are read at the call.
-    const stop = useSink(record => countRecord(record.timestamp, record.level, record.scope, record.message, record.fields, record.error))
+    const stop = useSink(countRecord)
     log.info("counted")
+    stop()
+    return sinkCharacters
+
+// An arrow sink still works and is contextually typed by `useSink`.
+export def collectLogRecordsInline() -> number:
+    const stop = useSink(record => countRecord(record))
+    log.info("counted inline")
     stop()
     return sinkCharacters
 
