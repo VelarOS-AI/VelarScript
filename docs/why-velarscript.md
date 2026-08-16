@@ -1,122 +1,166 @@
 # Why VelarScript exists
 
-VelarScript is a language AI writes and maintains, and humans read and own.
+**An extensible programming language for the AI era, where the framework is
+the language.**
 
-## The problem
+## What it is for
 
-In the AI era, writing code is no longer the bottleneck — models write it.
-The bottleneck is what happens next: the person who owns the product cannot
-maintain what the model wrote. JavaScript makes this worse in three specific
-ways. It permits a thousand spellings for every idea, so model output varies
-wildly between prompts, sessions, and models. It hides traps — coercion,
-floating promises, `undefined`, prototype surprises — that only experienced
-engineers recognize. And it therefore produces codebases that a product
-person, a designer, or a founder can neither read nor safely change, even
-though the product is theirs.
+A model can now write code faster than anyone can check it. The bottleneck
+moved from writing to trusting.
 
-VelarScript exists to solve that problem, not to be a nicer syntax.
+Every stack in use today was built for the other era — the one where a person
+wrote each line and held the whole context in their head. That era could
+afford silent mistakes, because the author knew what they had meant. The
+assumption is gone. The stacks have not moved.
 
-## Why it refuses to promise compatibility
+VelarScript exists so that code a person did not write can still be owned by
+that person: verified by a compiler rather than by reading every line.
 
-This language was designed by someone who could not live inside React's pile
-of constraints or Vue's template syntax. So the goal it holds itself to is
-that nobody using Vel should one day have to design a replacement for the same
-reason.
+## What problem it solves
+
+Two things break when a model writes the code, and neither is "the model
+cannot program".
+
+**The seams.** One feature in a conventional web stack has to be
+simultaneously correct against JavaScript semantics, JSX, some CSS approach,
+a state library, a router, a build configuration, and a test runner. Most
+failures land in the joints between those ecosystems rather than inside any
+one of them. Vel removes the joints: styling is syntax, state is syntax, tests
+are syntax. The task shrinks from *compose six ecosystems correctly* to *write
+one language correctly*.
+
+**The silence.** In JavaScript most mistakes compile and pass — a misspelled
+CSS property, a wrong `aria-*` value, a missing reactive dependency, a
+coercion, a floating promise. The person who owns the product, who often
+cannot read the code, has no way to know whether the model got it right.
+Vel makes those loud: every Look property that takes keywords carries its own
+closed set, ARIA is checked, reactive dependencies are discovered rather than
+declared, and there is no coercion, no truthiness, no silently dropped
+statement, and no unowned failure. The compiler is the reviewer.
+
+There is a third, quieter one. Model output varies between prompts, sessions,
+and models, so a codebase written across many sessions reads like several
+codebases. **One obvious spelling per idea** is what makes any Vel codebase
+read like any other — which is what makes it maintainable by whoever, or
+whatever, picks it up next.
+
+## Why it appeared now
+
+Its author could not live inside React's pile of constraints or Vue's template
+syntax. That is where it started, but it is not why it could be built.
 
 No single constraint makes anyone rewrite a language. React's are each
-defensible, each documented, each justified when it was added — it is the
-accumulation nobody can stand. Which means the dangerous constraints are
-exactly the ones that look worth it individually.
+defensible, each documented, each justified when it was added. It is the
+accumulation nobody can stand — which means the dangerous constraints are
+exactly the ones that look worth it individually. A language that promises
+backward compatibility can only add, so the friction it discovers is friction
+it carries forever, and it drifts toward being the thing you wanted to escape.
 
-A language that promises backward compatibility can only add. Friction
-accumulates by addition, so a compatibility-promising language drifts toward
-being the thing this one was built to escape. **Refusing the promise is the
-mechanism that lets a friction be removed once it is found**, rather than
-carried forever because something depends on it. It is not a disclaimer about
-immaturity; it is the property that keeps the pile from forming.
+The only way out is to be able to *remove*. Removal has always been possible
+in principle and unaffordable in practice, because migration was human labour
+and someone always depended on the old spelling.
 
-What that costs, and how the cost is paid, is under Honest boundaries below.
+**That is what changed.** When the model is the author, a breaking change
+costs a rewrite the model performs and a diagnostic that teaches it in one
+round. Vel could not have been built before this moment — not because the
+syntax needed models, but because its central mechanism did.
 
-## The bet
+## Design tenets
 
-Vel is built from the bones of JavaScript and Python — the two languages
-every model already knows best. JavaScript is the mother: the program lives
-and runs inside her, so behavior defers to her — the runtime is the womb.
-Python is the father: the visible surface carries his name — spelling and
-readability follow him. A semantic question asks the mother; a spelling
-question follows the father — and where an inherited behavior is a trap,
-Vel removes it rather than documents it. A model can write Vel on prior
-knowledge alone, and the compiler owns the rest:
+Two parents. **JavaScript is the mother**: the program lives and runs inside
+her, so behaviour defers to her. **Python is the father**: the visible surface
+carries his name, so spelling and readability follow him. A semantic question
+asks the mother; a spelling question follows the father. Where an inherited
+behaviour is a trap, Vel removes it instead of documenting it.
 
-- **One obvious spelling.** Where JS offers five ways, Vel keeps one. Model
-  output becomes uniform: any Vel codebase reads like any other, which is
-  what makes it maintainable by someone who didn't write it.
-- **Diagnostics teach.** Every removed or mistaken spelling gets an error
-  that names the one current spelling. A model self-corrects in one round
-  without documentation; a person learns the language from the compiler.
-  This is measured, not claimed: the release gate includes blind tests where
-  an AI that has never seen Vel must produce working programs with no
-  documentation, guided only by diagnostics.
-- **Traps are removed, not documented.** No coercion, no truthiness, no
-  silently dropped statements, no unowned promise failures. The owner of the
-  product should never need to debug a category of bug they cannot see.
-- **The compiler is the safety net.** Checks, bounded runtimes, validated
-  boundaries, and gates stand between model output and production. Trust is
-  placed in the gate, not in human review of every line.
+Every proposal is tested against these, in order:
 
-The intended division of labor: **the human supplies intent and reads the
-result; the model writes the Vel and every later change to it; the compiler
-guards each change.** Maintenance is AI work too — which is why uniformity
-matters twice: the next session, or the next model, must be able to pick up
-any Vel codebase and modify it safely. For a non-programmer owner, reading
-matters more than writing:
-Vel's surface is close enough to plain structured English (indentation
-blocks, `and`/`or`/`not`, `is not`, `await`/`async`, one spelling per idea)
-that the owner can verify the code says what they meant.
-
-## No dead ends
-
-A language for real products must never strand a project mid-development.
-Vel maintains three exits, in order:
-
-1. **The diagnostic teaches the fix.** Most walls end here, in one round.
-2. **Checked escape hatches to JavaScript.** When Vel or its standard
-   surface lacks something, `extern module` declares a typed boundary to any
-   npm package, `import js unsafe` admits a value as unchecked `any` to
-   validate at the edge, `import css unsafe` and `unsafe:html` cover the
-   styling and markup boundaries. The escape playbook is part of the
-   documentation, not folklore.
-3. **The final exit: readable JavaScript.** Vel compiles to legible,
-   source-mapped JS. If Vel itself becomes the obstacle, take the emitted
-   JavaScript and keep shipping without us. This anti-lock-in property is
-   gate-tested, not promised.
-
-## Honest boundaries
-
-- **Breaking cleanly has a price, and you pay it.** The reason Vel refuses
-  the compatibility promise is above; here is what it costs. Removed spellings
-  get teaching diagnostics, never silent aliases and never permanent
-  compatibility debt, and `velar fix` applies the mechanical part — but you
-  pin your toolchain version, and you migrate when you move it.
-- **Vel is currently for products that move fast**: prototypes, internal
-  tools, short-lifecycle applications — anything where validation speed
-  matters more than a ten-year support horizon. A stable channel for
-  long-lived products is a future milestone, earned by evidence, not
-  declared by a version number.
-- Vel keeps the JavaScript runtime it stands on: objects, references,
-  Promises, the event loop, the browser. It replaces the source surface, not
-  the world.
-
-## How this document binds the project
-
-Every language decision is tested against this mission, in order:
-
-1. Normal-language usage — would a person or model fluent in JS/Python write
-   it that way without reading docs?
-2. One obvious spelling — does the change keep model output uniform?
-3. Teaching diagnostics — does every rejection name the current spelling?
-4. Evidence over taste — blind tests and the real-application wall ledger
+1. **Normal-language usage.** Would someone fluent in JS and Python write it
+   that way without reading documentation?
+2. **One obvious spelling.** Does the change keep output uniform?
+3. **Teaching diagnostics.** Does every rejection name the current spelling?
+4. **Evidence over taste.** Blind tests and the real-application wall ledger
    decide, not preference.
 
-If a proposal serves engineers but costs the owner's ability to read the
-code, it loses.
+Three more that decide the hard cases:
+
+- **A design fix beats a diagnostic fix.** A diagnostic teaches after the
+  mistake; the right spelling prevents it. When a defect can be repaired by
+  changing what the language looks like, that is the repair.
+- **Core knows nothing.** Core does not know what a DOM, a stylesheet, a
+  filesystem, or a window is. Every capability arrives as an extension that
+  adds real syntax through a compiler protocol. This is what keeps
+  unification from becoming a kitchen sink: the surface being verified stays
+  one language, and Core stays small.
+- **A published name must be reachable.** Publishing a name, or a table of
+  values, that no author can reach is worse than publishing nothing.
+
+If a proposal serves engineers but costs the owner's ability to read the code,
+it loses.
+
+## Why you would choose it
+
+- You want a model to build and maintain a real product, and you want to read
+  and own the result without reading every line.
+- You want the compiler to be the reviewer.
+- You are building something that is still moving — a prototype, an internal
+  tool, a product still finding its shape.
+- You do not want to be trapped: the emitted JavaScript is legible and
+  source-mapped, and the exit is enforced by a permanent gate rather than
+  promised in prose.
+
+**Why you would not.** If you need a ten-year support horizon, Vel does not
+have one yet. If you have a large JavaScript codebase you cannot rewrite, Vel
+replaces the source surface rather than adopting it incrementally. If your
+project's value is in ecosystem breadth, npm is reachable here through
+declared boundaries rather than by default, and that boundary is work.
+
+## What it is good at
+
+- **One language for the whole application** — markup, styling, state, tests,
+  and the server side.
+- **Surfaces others leave as strings are checked**: Look property values, ARIA,
+  DOM attributes.
+- **No dependency arrays.** A reactive computation subscribes to the reads it
+  performs while it runs, so dependencies are discovered rather than declared,
+  and cannot be forgotten.
+- **Diagnostics name the one correct spelling**, so a model self-corrects in a
+  single round and a person learns the language from the compiler. This is
+  measured by blind tests in which a model that has never seen Vel must
+  produce working programs with no documentation.
+- **Readable, source-mapped output**, with no framework runtime in the browser
+  beyond the explicit package.
+- **No coercion, no truthiness, no silently dropped statements, no unowned
+  failures.**
+- **Extensions add syntax**, which is what makes the language extensible
+  rather than merely configurable.
+
+## What it promises
+
+- Every removed or mistaken spelling gets a diagnostic that names the one
+  current spelling — never a silent alias, never permanent compatibility debt.
+  `velar fix` applies the mechanical part, and only where the rewrite is
+  provably equivalent.
+- **No dead ends**, in three exits, in order: the diagnostic teaches the fix;
+  checked escape hatches reach JavaScript (`extern module`, inline
+  `extern js` and `unsafe js` blocks, `import js unsafe`, `unsafe css`,
+  `unsafe:html`); and the final exit is the emitted JavaScript itself — if Vel
+  becomes the obstacle, take the output and keep shipping without us.
+- Traps are removed rather than documented.
+- The claims above are gates, not prose: the anti-lock-in exit, the blind
+  tests, and the language's own usage tour are all things CI can fail on.
+
+## What it does not promise
+
+- **Backward compatibility. Ever.** This is the mechanism, not a caveat about
+  immaturity: refusing the promise is what lets a friction be removed once it
+  is found. You pin your toolchain version, and you migrate when you move it.
+- **A stable channel for long-lived products.** That is a future milestone, to
+  be earned by evidence rather than declared by a version number.
+- **Ecosystem breadth by default.** The npm ecosystem is reachable, through
+  declared boundaries that cost you something to write.
+- **A new runtime.** Vel keeps the JavaScript it stands on — objects,
+  references, Promises, the event loop, the browser. It replaces the source
+  surface, not the world.
+- **That migration is free.** It is not. The cost is real, and it is the price
+  of being able to remove.

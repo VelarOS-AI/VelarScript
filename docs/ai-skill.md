@@ -8,8 +8,16 @@ from the language.
 
 ## What VelarScript is
 
-VelarScript (Vel) is a language AI writes and maintains, and humans read and
-own. The owner supplies intent and reads the result; you write the Vel and
+VelarScript (Vel) is an extensible programming language for the AI era, where
+the framework is the language: `component`, `state`, `computed`, `watch`,
+`look`, and `keyframes` are keywords rather than imports, and Core itself
+knows nothing of the DOM, stylesheets, the filesystem, or windows — every
+capability arrives as an extension that adds real syntax. So one language
+covers markup, styling, state, tests, and the server side, and the compiler
+checks all of it: a wrong Look value, a misspelled `aria-*`, a missed reactive
+dependency, and a coercion are compile errors here rather than silent.
+
+The owner supplies intent and reads the result; you write the Vel and
 every later change to it; the compiler guards each change. Vel's parents are
 JavaScript and Python. JavaScript is the mother: the program runs inside her,
 so behavior defers to JS. Python is the father: the visible spelling follows
