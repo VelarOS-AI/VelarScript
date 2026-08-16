@@ -177,7 +177,7 @@ const propertyKinds: readonly (readonly [LookPropertyValueKind, readonly string[
   ["filter", ["filter", "backdropFilter"]],
   ["image", ["backgroundImage", "listStyleImage"]],
   ["line-height", ["lineHeight"]],
-  ["metric", ["gap", "rowGap", "columnGap", "width", "height", "minWidth", "maxWidth", "minHeight", "maxHeight", "inlineSize", "blockSize", "minInlineSize", "maxInlineSize", "minBlockSize", "maxBlockSize", "inset", "top", "right", "bottom", "left", "insetInline", "insetBlock", "insetInlineStart", "insetInlineEnd", "insetBlockStart", "insetBlockEnd", "padding", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "paddingInline", "paddingBlock", "paddingInlineStart", "paddingInlineEnd", "paddingBlockStart", "paddingBlockEnd", "margin", "marginTop", "marginRight", "marginBottom", "marginLeft", "marginInline", "marginBlock", "marginInlineStart", "marginInlineEnd", "marginBlockStart", "marginBlockEnd", "flexBasis", "borderWidth", "borderTopWidth", "borderRightWidth", "borderBottomWidth", "borderLeftWidth", "borderRadius", "borderTopLeftRadius", "borderTopRightRadius", "borderBottomRightRadius", "borderBottomLeftRadius", "outlineWidth", "outlineOffset", "fontSize", "letterSpacing", "wordSpacing", "textIndent", "textDecorationThickness", "textUnderlineOffset", "strokeWidth", "strokeDashoffset", "scrollMargin", "scrollMarginTop", "scrollMarginRight", "scrollMarginBottom", "scrollMarginLeft", "scrollPadding", "scrollPaddingTop", "scrollPaddingRight", "scrollPaddingBottom", "scrollPaddingLeft", "translate", "transformOrigin", "backgroundPosition", "backgroundSize"]],
+  ["metric", ["gap", "rowGap", "columnGap", "width", "height", "minWidth", "maxWidth", "minHeight", "maxHeight", "inlineSize", "blockSize", "minInlineSize", "maxInlineSize", "minBlockSize", "maxBlockSize", "inset", "top", "right", "bottom", "left", "insetInline", "insetBlock", "insetInlineStart", "insetInlineEnd", "insetBlockStart", "insetBlockEnd", "padding", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "paddingInline", "paddingBlock", "paddingInlineStart", "paddingInlineEnd", "paddingBlockStart", "paddingBlockEnd", "margin", "marginTop", "marginRight", "marginBottom", "marginLeft", "marginInline", "marginBlock", "marginInlineStart", "marginInlineEnd", "marginBlockStart", "marginBlockEnd", "flexBasis", "borderWidth", "borderTopWidth", "borderRightWidth", "borderBottomWidth", "borderLeftWidth", "borderRadius", "borderTopLeftRadius", "borderTopRightRadius", "borderBottomRightRadius", "borderBottomLeftRadius", "outlineWidth", "outlineOffset", "fontSize", "letterSpacing", "wordSpacing", "textIndent", "textDecorationThickness", "textUnderlineOffset", "strokeWidth", "strokeDashoffset", "scrollMargin", "scrollMarginTop", "scrollMarginRight", "scrollMarginBottom", "scrollMarginLeft", "scrollPadding", "scrollPaddingTop", "scrollPaddingRight", "scrollPaddingBottom", "scrollPaddingLeft", "translate", "transformOrigin", "backgroundPosition", "objectPosition", "backgroundSize"]],
   ["number", ["opacity", "zIndex", "flexGrow", "flexShrink", "order", "tabSize"]],
   ["number-keyword", ["fontWeight", "aspectRatio", "scale", "flex"]],
   ["shadow", ["boxShadow", "textShadow"]],
@@ -185,7 +185,7 @@ const propertyKinds: readonly (readonly [LookPropertyValueKind, readonly string[
   ["track", ["gridTemplateColumns", "gridTemplateRows", "gridAutoColumns", "gridAutoRows"]],
   ["transform", ["transform"]],
   ["transition", ["transition"]],
-  ["keyword", ["display", "position", "boxSizing", "isolation", "contain", "visibility", "overflow", "overflowX", "overflowY", "resize", "objectFit", "objectPosition", "gridAutoFlow", "flexDirection", "flexWrap", "alignItems", "justifyItems", "justifyContent", "alignContent", "alignSelf", "justifySelf", "placeItems", "placeContent", "placeSelf", "backgroundRepeat", "backgroundAttachment", "backgroundClip", "backgroundOrigin", "backgroundBlendMode", "borderStyle", "borderTopStyle", "borderRightStyle", "borderBottomStyle", "borderLeftStyle", "outlineStyle", "fontStyle", "fontStretch", "fontVariant", "fontKerning", "fontOpticalSizing", "textAlign", "textDecoration", "textDecorationLine", "textDecorationStyle", "textUnderlinePosition", "textTransform", "textRendering", "whiteSpace", "textOverflow", "textWrap", "overflowWrap", "wordBreak", "hyphens", "writingMode", "textOrientation", "direction", "unicodeBidi", "listStyle", "listStyleType", "listStylePosition", "strokeLinecap", "strokeLinejoin", "transitionProperty", "transitionTimingFunction", "cursor", "pointerEvents", "userSelect", "touchAction", "appearance", "colorScheme", "scrollBehavior", "scrollSnapAlign", "scrollSnapStop", "scrollSnapType", "overscrollBehavior", "overscrollBehaviorX", "overscrollBehaviorY", "scrollbarWidth"]],
+  ["keyword", ["display", "position", "boxSizing", "isolation", "contain", "visibility", "overflow", "overflowX", "overflowY", "resize", "objectFit", "gridAutoFlow", "flexDirection", "flexWrap", "alignItems", "justifyItems", "justifyContent", "alignContent", "alignSelf", "justifySelf", "placeItems", "placeContent", "placeSelf", "backgroundRepeat", "backgroundAttachment", "backgroundClip", "backgroundOrigin", "backgroundBlendMode", "borderStyle", "borderTopStyle", "borderRightStyle", "borderBottomStyle", "borderLeftStyle", "outlineStyle", "fontStyle", "fontStretch", "fontVariant", "fontKerning", "fontOpticalSizing", "textAlign", "textDecoration", "textDecorationLine", "textDecorationStyle", "textUnderlinePosition", "textTransform", "textRendering", "whiteSpace", "textOverflow", "textWrap", "overflowWrap", "wordBreak", "hyphens", "writingMode", "textOrientation", "direction", "unicodeBidi", "listStyle", "listStyleType", "listStylePosition", "strokeLinecap", "strokeLinejoin", "transitionProperty", "transitionTimingFunction", "cursor", "pointerEvents", "userSelect", "touchAction", "appearance", "colorScheme", "scrollBehavior", "scrollSnapAlign", "scrollSnapStop", "scrollSnapType", "overscrollBehavior", "overscrollBehaviorX", "overscrollBehaviorY", "scrollbarWidth"]],
 ];
 
 export const LOOK_PROPERTY_VALUE_KINDS: ReadonlyMap<string, LookPropertyValueKind> = new Map(
@@ -198,6 +198,14 @@ for (const property of LOOK_PROPERTIES) {
 
 const cssWideKeywords = ["inherit", "initial", "revert", "revert-layer", "unset"];
 const keywords = (...values: readonly string[]): ReadonlySet<string> => new Set([...cssWideKeywords, ...values]);
+
+/**
+ * The five keywords every CSS property accepts. They are kept apart from a
+ * property's own vocabulary so a diagnostic can lead with the values that
+ * belong to the property being written (D67 rule 174).
+ */
+export const LOOK_CSS_WIDE_KEYWORDS: readonly string[] = Object.freeze([...cssWideKeywords]);
+const cssWideKeywordSet: ReadonlySet<string> = new Set(cssWideKeywords);
 
 /**
  * D60 rule 150: `transitionProperty` published a name no author could reach —
@@ -241,8 +249,9 @@ function lookValueRepetitions(tokens: readonly string[]): readonly string[] {
 }
 
 // `<position>`'s keyword grid: one placement word, or one from each axis in
-// either order. The length and percentage forms are the part no closed set
-// holds; LOOK_PARTIAL_KEYWORD_PROPERTIES records that.
+// either order. D67 rule 172: the three properties that take a `<position>` are
+// all `metric`, so the length and percentage forms are the unit half of that
+// kind rather than a value space anyone has to record as excluded.
 const horizontalPositions = ["left", "center", "right"];
 const verticalPositions = ["top", "center", "bottom"];
 const positionKeywords = [
@@ -286,13 +295,50 @@ const colorSchemeOrderings = lookValueOrderings([...LOOK_MEDIA_SUBJECTS.get("sch
 const scrollSnapAxes = ["x", "y", "block", "inline", "both"];
 const overscrollBehaviors = ["auto", "contain", "none"];
 
+// CSS Box Alignment 3's shared value groups. Nine Look properties select from
+// them, and each selects a different combination, so the groups are written
+// once and the nine read them (D57 rule 134). The `<overflow-position>` safe
+// and unsafe prefixes are the part no set holds, and every one of the nine
+// records it. D67 rule 173: `self-start`, `self-end` and the baseline
+// positions are real values all nine used to refuse.
+const alignBaselinePositions = ["baseline", "first baseline", "last baseline"];
+const alignSelfPositions = ["center", "start", "end", "self-start", "self-end", "flex-start", "flex-end"];
+const alignContentPositions = ["center", "start", "end", "flex-start", "flex-end"];
+const alignContentDistributions = ["space-between", "space-around", "space-evenly", "stretch"];
+
+// `touch-action`'s single tokens, including the four one-way pans and the pinch
+// gesture. D67 rule 173: the property published five of these ten, so
+// `pan-left` and `pinch-zoom` -- values a scroll container really takes -- were
+// refused. The `||` combinations of a horizontal pan, a vertical pan and
+// pinch-zoom are the part no set holds and are recorded as excluded.
+const touchActionKeywords = [
+  "auto", "none", "pan-x", "pan-left", "pan-right", "pan-y", "pan-up", "pan-down", "pinch-zoom", "manipulation",
+];
+
+// `background-repeat`'s `<repeat-style>`: the two one-axis shorthands, or one
+// token per axis. D67 rule 173: `backgroundRepeat = "repeat no-repeat"` is the
+// ordinary way to repeat on one axis only, and the set used to hold six of the
+// twenty-two values that spell it.
+const backgroundRepeatKeywords = [
+  "repeat-x", "repeat-y", ...lookValueRepetitions(["repeat", "space", "round", "no-repeat"]),
+];
+
 export const LOOK_PROPERTY_KEYWORDS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
-  ["display", keywords("none", "block", "inline", "inline-block", "flow-root", "flex", "inline-flex", "grid", "inline-grid", "contents")],
+  // D67 rule 173: `list-item` is a real display type with no other spelling, so
+  // it joins the set. The two-keyword form does not: every pair it writes has a
+  // single-keyword name already here, and the table and ruby display types stay
+  // out with the table formatting properties LOOK_EXCLUDED_PROPERTIES excludes.
+  ["display", keywords("none", "block", "inline", "inline-block", "flow-root", "flex", "inline-flex", "grid", "inline-grid", "contents", "list-item")],
   ["isolation", keywords("auto", "isolate")],
   ["contain", keywords("none", "strict", "content", "size", "inline-size", "layout", "style", "paint")],
   ["backgroundSize", keywords("auto", "cover", "contain")],
-  ["backgroundPosition", keywords("center", "top", "right", "bottom", "left")],
-  ["transformOrigin", keywords("center", "top", "right", "bottom", "left")],
+  // D67 rule 172: `backgroundPosition`, `transformOrigin` and `objectPosition`
+  // are one CSS grammar, so they are one `metric` kind reading one table. The
+  // two that used to hold five of the twenty-two placements refused
+  // `backgroundPosition = "top left"`, a value the property really has.
+  ["backgroundPosition", keywords(...positionKeywords)],
+  ["transformOrigin", keywords(...positionKeywords)],
+  ["objectPosition", keywords(...positionKeywords)],
   ["transitionProperty", transitionPropertyKeywords],
   ["transitionTimingFunction", keywords(...LOOK_ANIMATION_EASINGS)],
   ["position", keywords("static", "relative", "absolute", "fixed", "sticky")],
@@ -304,16 +350,22 @@ export const LOOK_PROPERTY_KEYWORDS: ReadonlyMap<string, ReadonlySet<string>> = 
   ["objectFit", keywords("fill", "contain", "cover", "none", "scale-down")],
   ["flexDirection", keywords("row", "row-reverse", "column", "column-reverse")],
   ["flexWrap", keywords("nowrap", "wrap", "wrap-reverse")],
-  ["alignItems", keywords("normal", "stretch", "center", "start", "end", "flex-start", "flex-end", "baseline")],
-  ["alignContent", keywords("normal", "stretch", "center", "start", "end", "flex-start", "flex-end", "space-between", "space-around", "space-evenly")],
-  ["alignSelf", keywords("auto", "normal", "stretch", "center", "start", "end", "flex-start", "flex-end", "baseline")],
-  ["justifyItems", keywords("normal", "stretch", "center", "start", "end", "left", "right")],
-  ["justifyContent", keywords("normal", "stretch", "center", "start", "end", "flex-start", "flex-end", "left", "right", "space-between", "space-around", "space-evenly")],
-  ["justifySelf", keywords("auto", "normal", "stretch", "center", "start", "end", "left", "right")],
-  ["placeItems", keywords("normal", "stretch", "center", "start", "end")],
-  ["placeContent", keywords("normal", "stretch", "center", "start", "end", "space-between", "space-around", "space-evenly")],
-  ["placeSelf", keywords("auto", "normal", "stretch", "center", "start", "end")],
-  ["cursor", keywords("auto", "default", "none", "context-menu", "help", "pointer", "progress", "wait", "cell", "crosshair", "text", "vertical-text", "alias", "copy", "move", "no-drop", "not-allowed", "grab", "grabbing", "col-resize", "row-resize", "n-resize", "e-resize", "s-resize", "w-resize", "ne-resize", "nw-resize", "se-resize", "sw-resize", "ew-resize", "ns-resize", "nesw-resize", "nwse-resize", "zoom-in", "zoom-out")],
+  // Each of the nine takes a different selection of the alignment groups, and
+  // the differences are the property's own grammar rather than an oversight:
+  // `justifyContent` has no baseline position, `alignContent` has no
+  // self-position, and the three `place*` shorthands take only what both of
+  // their halves take.
+  ["alignItems", keywords("normal", "stretch", ...alignBaselinePositions, ...alignSelfPositions)],
+  ["alignContent", keywords("normal", ...alignBaselinePositions, ...alignContentDistributions, ...alignContentPositions)],
+  ["alignSelf", keywords("auto", "normal", "stretch", ...alignBaselinePositions, ...alignSelfPositions)],
+  ["justifyItems", keywords("normal", "stretch", ...alignBaselinePositions, ...alignSelfPositions, "left", "right")],
+  ["justifyContent", keywords("normal", ...alignContentDistributions, ...alignContentPositions, "left", "right")],
+  ["justifySelf", keywords("auto", "normal", "stretch", ...alignBaselinePositions, ...alignSelfPositions, "left", "right")],
+  ["placeItems", keywords("normal", "stretch", ...alignBaselinePositions, ...alignSelfPositions)],
+  ["placeContent", keywords("normal", ...alignContentDistributions, ...alignContentPositions)],
+  ["placeSelf", keywords("auto", "normal", "stretch", ...alignBaselinePositions, ...alignSelfPositions)],
+  // D67 rule 173: `all-scroll` was the one CSS Basic UI cursor keyword missing.
+  ["cursor", keywords("auto", "default", "none", "context-menu", "help", "pointer", "progress", "wait", "cell", "crosshair", "text", "vertical-text", "alias", "copy", "move", "no-drop", "not-allowed", "grab", "grabbing", "all-scroll", "col-resize", "row-resize", "n-resize", "e-resize", "s-resize", "w-resize", "ne-resize", "nw-resize", "se-resize", "sw-resize", "ew-resize", "ns-resize", "nesw-resize", "nwse-resize", "zoom-in", "zoom-out")],
   ["textAlign", keywords("start", "end", "left", "right", "center", "justify", "match-parent")],
   ["textTransform", keywords("none", "capitalize", "uppercase", "lowercase", "full-width", "full-size-kana")],
   ["textDecoration", keywords(...textDecorationLineKeywords)],
@@ -327,11 +379,11 @@ export const LOOK_PROPERTY_KEYWORDS: ReadonlyMap<string, ReadonlySet<string>> = 
   ["resize", keywords("none", "both", "horizontal", "vertical", "block", "inline")],
   ["pointerEvents", keywords("auto", "none", "visiblePainted", "visibleFill", "visibleStroke", "visible", "painted", "fill", "stroke", "all")],
   ["userSelect", keywords("auto", "text", "none", "contain", "all")],
-  ["touchAction", keywords("auto", "none", "pan-x", "pan-y", "manipulation")],
+  ["touchAction", keywords(...touchActionKeywords)],
   ["appearance", keywords("none", "auto", "textfield", "menulist-button")],
   ["scrollBehavior", keywords("auto", "smooth")],
   ["scrollbarWidth", keywords("auto", "thin", "none")],
-  ["backgroundRepeat", keywords("repeat", "repeat-x", "repeat-y", "space", "round", "no-repeat")],
+  ["backgroundRepeat", keywords(...backgroundRepeatKeywords)],
   ["backgroundAttachment", keywords("scroll", "fixed", "local")],
   ["backgroundClip", keywords("border-box", "padding-box", "content-box", "text")],
   ["backgroundOrigin", keywords("border-box", "padding-box", "content-box")],
@@ -350,7 +402,6 @@ export const LOOK_PROPERTY_KEYWORDS: ReadonlyMap<string, ReadonlySet<string>> = 
   // "none"`, which reaches the browser as a declaration it discards. A value
   // set that already exists in another table is read from that table rather
   // than restated (D57 rule 134).
-  ["objectPosition", keywords(...positionKeywords)],
   ["gridAutoFlow", keywords(...lookValueOrderings(["row", "dense"]), ...lookValueOrderings(["column", "dense"]))],
   ["backgroundBlendMode", keywords("normal", "multiply", "screen", "overlay", "darken", "lighten", "color-dodge", "color-burn", "hard-light", "soft-light", "difference", "exclusion", "hue", "saturation", "color", "luminosity")],
   // The five border-style properties and the border() builder's style argument
@@ -406,29 +457,115 @@ for (const [property, kind] of LOOK_PROPERTY_VALUE_KINDS) {
   }
 }
 
+/** A property's own closed values, without the CSS-wide keywords every property shares. */
+export function lookOwnKeywords(property: string): readonly string[] {
+  const values = LOOK_PROPERTY_KEYWORDS.get(property);
+  return values === undefined ? [] : [...values].filter((value) => !cssWideKeywordSet.has(value));
+}
+
+/**
+ * D67 rule 174 — how many of a property's own values a diagnostic writes out
+ * before it names the shape of the set instead.
+ *
+ * The number is not load-bearing at its exact value: the published tables fall
+ * into two clumps with nothing between them, the largest single-grammar set
+ * holding twenty-two values and the next set up holding thirty-five. Anything
+ * in that gap draws the same line. What matters is that a set on the far side
+ * of it still says something an author can act on, which is what
+ * LOOK_LARGE_KEYWORD_SETS below is for.
+ */
+export const LOOK_KEYWORD_LISTING_LIMIT = 24;
+
+/**
+ * What a vocabulary too long to write out holds, in the terms the author would
+ * look it up by. A diagnostic reads this when the value it rejected is not a
+ * near miss of anything, so that "one of the closed keywords" is never the
+ * whole of the answer (D67 rule 174).
+ */
+export const LOOK_LARGE_KEYWORD_SETS: ReadonlyMap<string, string> = new Map([
+  ["cursor", "the CSS Basic UI cursor keywords, including the eight directional and four bidirectional resize cursors"],
+  ["fontVariant", "the single-token values of the six font-variant feature groups: position, caps, numeric, alternates, ligatures, and East Asian"],
+  ["listStyleType", "the predefined counter styles of CSS Counter Styles 3, by numeric, alphabetic, symbolic, fixed, and complex system"],
+  ["listStyle", "the predefined counter styles of CSS Counter Styles 3 plus the inside and outside marker positions"],
+  ["transitionProperty", "none, all, and the CSS spelling of every animatable Look property"],
+]);
+
+for (const [property] of LOOK_PROPERTY_KEYWORDS) {
+  const own = lookOwnKeywords(property);
+  if (own.length > LOOK_KEYWORD_LISTING_LIMIT && !LOOK_LARGE_KEYWORD_SETS.has(property)) {
+    throw new Error(`Look property '${property}' publishes ${own.length} keywords, more than a diagnostic writes out, and records no description of what the set holds`);
+  }
+}
+
+for (const [property] of LOOK_LARGE_KEYWORD_SETS) {
+  if (lookOwnKeywords(property).length <= LOOK_KEYWORD_LISTING_LIMIT) {
+    throw new Error(`Look property '${property}' describes its keyword set but is small enough to write out, so the description would never be read`);
+  }
+}
+
 /**
  * D65 rule 169 — what a partly closable property leaves out, and why.
  *
- * Some CSS value spaces cannot be written as a set: `objectPosition` reaches
- * into lengths, `listStyleType` into `@counter-style` names, `fontVariant` into
- * a combination of six feature groups. Such a property publishes the subset it
+ * Some CSS value spaces cannot be written as a set: `listStyleType` reaches
+ * into `@counter-style` names, `fontVariant` into a combination of six feature
+ * groups, `fontStretch` into percentages. Such a property publishes the subset it
  * can close and records the remainder here, so the boundary is visible in the
  * table and in the diagnostic instead of being waved through by a fallback
  * vocabulary. This is the per-value sibling of LOOK_EXCLUDED_PROPERTIES, which
  * records the properties left out whole.
  */
 export const LOOK_PARTIAL_KEYWORD_PROPERTIES: ReadonlyMap<string, string> = new Map([
-  ["objectPosition", "Positions written as a length or percentage are outside the closed set, which holds the placement keywords"],
-  ["contain", "Combinations of size, layout, style and paint are outside the closed set, which holds the single tokens plus the named strict and content shorthands"],
+  // D67 rule 172 revoked `objectPosition`'s record: the lengths it named as
+  // excluded are the unit half of the `metric` kind it now shares with the
+  // other two `<position>` properties, so nothing is left out to record.
+  ["contain","Combinations of size, layout, style and paint are outside the closed set, which holds the single tokens plus the named strict and content shorthands"],
   ["backgroundBlendMode", "A comma-separated per-layer blend list is outside the closed set, because a checked Look background is one layer"],
   ["borderStyle", "The one-to-four value per-side form is outside the closed set; borderTopStyle, borderRightStyle, borderBottomStyle and borderLeftStyle write it"],
   ["fontStretch", "Percentage font widths are outside the closed set, which holds the named widths"],
-  ["fontVariant", "Combining feature groups in one value is outside the closed set, which holds each group's single-token values; fontFeatureSettings carries a combination"],
-  ["textDecorationLine", "The blink line is outside the closed set: browsers parse it and draw nothing, so it is a declaration with no effect"],
+  ["fontVariant", "Combining feature groups in one value, and the annotation(), character-variant(), ornaments(), styleset() and swash() notations, are outside the closed set, which holds each group's single-token values; fontFeatureSettings carries a combination"],
+  ["textDecorationLine", "The blink line is outside the closed set: browsers parse it and draw nothing, so it is a declaration with no effect. The spelling-error and grammar-error lines are outside it too, because a document cannot ask for them the way a spell checker does"],
   ["strokeLinejoin", "The SVG2 arcs and miter-clip joins are outside the closed set, because no browser implements them"],
   ["textDecoration", "The style, color and thickness parts of the shorthand are outside the closed set; textDecorationStyle, textDecorationColor and textDecorationThickness write them"],
   ["listStyle", "The image part and multi-part combinations of the shorthand are outside the closed set; listStyleType, listStylePosition and listStyleImage write them"],
   ["listStyleType", "A literal string marker and a custom @counter-style name are outside the closed set, which holds the predefined counter styles"],
+
+  // ── D67 rule 173 ────────────────────────────────────────────────────────
+  // The rest of the seventy-seven, recorded rather than completed. Rule 173's
+  // deliverable is the boundary, not the value count: a property may publish a
+  // subset of its CSS grammar as long as the subset's edge is written down here
+  // and the diagnostic reads it out. Each entry below names a value space that
+  // is open (a string, an angle, a custom ident), redundant with a spelling the
+  // set already holds, owned by another property, or unimplemented.
+  ["display", "The two-keyword <display-outside> <display-inside> form is outside the closed set, and writes nothing the single-keyword names here do not: block flow is block, inline flow-root is inline-block. The table, ruby and run-in display types are outside it too, with the table formatting properties and for the same reason"],
+  ["overflow", "The two-value x y form is outside the closed set; overflowX and overflowY write it"],
+  ["fontStyle", "An oblique slant angle such as 'oblique 14deg' is outside the closed set, which holds the named slants"],
+  ["textOverflow", "A literal ellipsis string, and the two-value start end form, are outside the closed set, which holds clip and ellipsis"],
+  ["textAlign", "The justify-all keyword is outside the closed set, because no browser justifies the last line for it"],
+  ["textTransform", "Combining a case transform with full-width or full-size-kana in one value is outside the closed set, which holds each of them alone"],
+  ["writingMode", "The sideways-rl and sideways-lr modes are outside the closed set, because only one browser engine implements them"],
+  ["touchAction", "Combining a horizontal pan, a vertical pan and pinch-zoom in one value is outside the closed set, which holds each of them alone"],
+  ["appearance", "The compat-auto aliases such as button, checkbox and menulist are outside the closed set, because each of them renders exactly as auto"],
+  ["colorScheme", "A custom scheme ident is outside the closed set, which holds the two schemes 'if scheme.dark:' conditions on"],
+  ["cursor", "A url() cursor image and its fallback list are outside the closed set, which holds the keyword cursors"],
+  // D49 gave `animate(easing=)` and this property one easing table, so the
+  // functions absent from it are absent on purpose. Recording that is how the
+  // closure stays legible without being mistaken for a gap to fill.
+  ["transitionTimingFunction", "The cubic-bezier(), steps() and linear() easing functions are outside the closed set, which is the same easing table animate(easing=) reads"],
+  // D60 rule 150 derived this set from the Look property table minus the
+  // properties that do not interpolate. The subtraction is the boundary.
+  ["transitionProperty", "A property whose value does not interpolate is outside the closed set, for the same reason a 'keyframes:' stop rejects it"],
+  // The nine Box Alignment properties. Each records the overflow-position
+  // prefixes; the three shorthands also record the two-value form, the way
+  // borderStyle records its per-side form.
+  ...["alignItems", "alignContent", "alignSelf", "justifyItems", "justifyContent", "justifySelf"]
+    .map((property) => [property, "The safe and unsafe overflow-position prefixes are outside the closed set, which holds the alignments themselves"] as const),
+  ["placeItems", "The two-value form and the safe and unsafe overflow-position prefixes are outside the closed set; alignItems and justifyItems write the two halves separately"],
+  ["placeContent", "The two-value form and the safe and unsafe overflow-position prefixes are outside the closed set; alignContent and justifyContent write the two halves separately"],
+  ["placeSelf", "The two-value form and the safe and unsafe overflow-position prefixes are outside the closed set; alignSelf and justifySelf write the two halves separately"],
+  // The background layer properties. A checked Look background is one layer,
+  // which is one design fact met in five places, so it is recorded in all five.
+  ...["backgroundRepeat", "backgroundAttachment", "backgroundClip", "backgroundOrigin"]
+    .map((property) => [property, "A comma-separated per-layer list is outside the closed set, because a checked Look background is one layer"] as const),
 ]);
 
 for (const [property] of LOOK_PARTIAL_KEYWORD_PROPERTIES) {

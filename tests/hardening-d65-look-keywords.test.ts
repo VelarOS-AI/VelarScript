@@ -113,9 +113,11 @@ test("[D65-168] every keyword property carries its own closed set", () => {
     .map(([property]) => property);
   assert.deepEqual(missing, []);
   // A vacuity floor: this assertion is worthless if the kind table ever reads
-  // empty, and the count only ever grows with the published vocabulary.
+  // empty. D67 rule 172 moved `objectPosition` to `metric`, so the floor is 77
+  // rather than the 78 this test was written with; it only ever grows with the
+  // published vocabulary from here.
   const keywordProperties = [...LOOK_PROPERTY_VALUE_KINDS].filter(([, kind]) => kind === "keyword");
-  assert.ok(keywordProperties.length >= 78, String(keywordProperties.length));
+  assert.ok(keywordProperties.length >= 77, String(keywordProperties.length));
 });
 
 test("[D65-168] the table refuses to load when a keyword property has no closed set", async () => {
@@ -214,7 +216,9 @@ mount(<div look={whole} />, "#app")
 
 test("[D65-169] a partly closable property names the value space it left out", { timeout: 300_000 }, async () => {
   const probes: readonly (readonly [string, string])[] = [
-    ["objectPosition", "12px"],
+    // D67 rule 172 revoked `objectPosition`'s record when it became `metric`,
+    // so this probe stands in its place among rule 169's own records.
+    ["strokeLinejoin", "arcs"],
     ["contain", "layout paint"],
     ["backgroundBlendMode", "multiply, screen"],
     ["borderStyle", "solid dashed"],

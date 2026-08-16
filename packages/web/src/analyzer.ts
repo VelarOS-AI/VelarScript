@@ -37,6 +37,8 @@ import {
   LOOK_BUILDERS,
   LOOK_EXCLUDED_PROPERTIES,
   LOOK_HOOKS,
+  LOOK_CSS_WIDE_KEYWORDS,
+  LOOK_LARGE_KEYWORD_SETS,
   LOOK_LENGTH_BUILDERS,
   LOOK_MEDIA_LENGTH_UNITS,
   LOOK_MEDIA_SUBJECTS,
@@ -49,6 +51,7 @@ import {
   LOOK_TARGETS,
   LOOK_UNIT_TYPES,
   LOOK_UNITLESS_PROPERTIES,
+  lookOwnKeywords,
   nearestLookName,
   type LookPropertyValueKind,
 } from "./look.ts";
@@ -450,8 +453,9 @@ function lookShorthandStringGuidance(name: string, value: Expression): string | 
   return null;
 }
 
-const lookCssWideKeywords = new Set(["inherit", "initial", "revert", "revert-layer", "unset"]);
-const lookMetricKeywords = new Set([...lookCssWideKeywords, "auto", "none", "normal", "min-content", "max-content", "fit-content", "stretch"]);
+const lookCssWideKeywords = new Set(LOOK_CSS_WIDE_KEYWORDS);
+const lookSharedMetricKeywords = ["auto", "none", "normal", "min-content", "max-content", "fit-content", "stretch"];
+const lookMetricKeywords = new Set([...lookCssWideKeywords, ...lookSharedMetricKeywords]);
 const lookDefaultKeywords = new Set([
   ...lookCssWideKeywords, "auto", "none", "normal", "start", "end", "center", "left", "right", "top", "bottom",
   "solid", "dashed", "dotted", "double", "hidden", "visible", "round", "square", "butt", "miter", "bevel",
@@ -462,6 +466,45 @@ const lookColorKeywords = new Set([
   ...lookCssWideKeywords, "transparent", "currentColor", "black", "silver", "gray", "white", "maroon", "red", "purple",
   "fuchsia", "green", "lime", "olive", "yellow", "navy", "blue", "teal", "aqua", "orange", "aliceblue", "rebeccapurple",
 ]);
+
+/**
+ * D67 rule 174 — what a rejected Look string could have been.
+ *
+ * The message this replaces said "use one of the closed `name` keywords" and
+ * stopped there, so the answer to "which ones?" lived only in the source of the
+ * table. The evidence that this is not a hypothetical reader problem is that
+ * the usage tour — written by someone who knew the design intent — shipped
+ * twelve values no property had, and this diagnostic could not have told him.
+ *
+ * A near miss gets the one spelling meant, because naming the single correct
+ * word is the strongest form of the promise. Otherwise a set small enough to
+ * read is written out whole, and a larger one says what it holds. The CSS-wide
+ * keywords join the search either way, so a misspelled `inherit` is caught the
+ * same as a misspelled `groove`.
+ */
+function lookVocabularyGuidance(property: string, written: string, own: readonly string[], lead: string): LookValueGuidance {
+  const vocabulary = [...new Set([...own, ...LOOK_CSS_WIDE_KEYWORDS])];
+  const nearest = nearestLookName(written, vocabulary);
+  if (nearest !== null) return { text: `did you mean '${nearest}'?`, named: true };
+  const shape = LOOK_LARGE_KEYWORD_SETS.get(property);
+  return {
+    text: shape === undefined
+      ? `${lead} ${vocabulary.join(", ")}`
+      : `${lead} ${shape}, and none of them is spelled close to '${written}'`,
+    named: false,
+  };
+}
+
+interface LookValueGuidance {
+  /** The clause that follows "does not accept 'value';". */
+  readonly text: string;
+  /**
+   * Whether the clause named the one spelling the author meant. When it did,
+   * the property's recorded exclusion is left off: the record answers "why is
+   * my value not here?", and that question is not the one a misspelling asks.
+   */
+  readonly named: boolean;
+}
 
 function literalLookStrings(expression: Expression): readonly string[] | null {
   if (expression.kind === "LiteralExpression") return typeof expression.value === "string" ? [expression.value] : [];
@@ -1703,12 +1746,17 @@ export class VelarWebAnalyzer extends Analyzer {
         return false;
       }
       let accepted: boolean;
-      // A metric property carries the shared length vocabulary and, when it has
-      // one, its own CSS keywords: `backgroundSize` takes lengths *and* cover
-      // and contain, and the position properties take the placement words
-      // (D60 rule 150). Reading both tables is what lets one property spell
-      // every value its CSS grammar has.
-      if (kind === "metric") accepted = lookMetricKeywords.has(normalized) || (LOOK_PROPERTY_KEYWORDS.get(name)?.has(normalized) ?? false);
+      // A metric property is a unit value plus a keyword half: its own CSS
+      // keywords when it has a table -- `backgroundSize` takes lengths *and*
+      // cover and contain, the `<position>` properties take the placement words
+      // (D60 rule 150, D67 rule 172) -- and the shared sizing words when it has
+      // none. The two are alternatives rather than a union, for the reason D65
+      // rule 168 gave for the keyword kind: a shared list added on top of a
+      // real table decides values for a property it has never heard of, so
+      // `objectPosition = "min-content"` would compile and reach the browser as
+      // a declaration it discards.
+      const metricKeywords = LOOK_PROPERTY_KEYWORDS.get(name);
+      if (kind === "metric") accepted = metricKeywords === undefined ? lookMetricKeywords.has(normalized) : metricKeywords.has(normalized);
       else if (kind === "color" || kind === "background") accepted = lookColorKeywords.has(normalized) || /^#[0-9a-f]{3,8}$/iu.test(normalized);
       else if (kind === "image" || kind === "border" || kind === "shadow") accepted = lookCssWideKeywords.has(normalized) || normalized === "none";
       else if (kind === "number-keyword" || kind === "line-height") accepted = lookDefaultKeywords.has(normalized);
@@ -1722,14 +1770,24 @@ export class VelarWebAnalyzer extends Analyzer {
         accepted = propertyKeywords?.has(normalized) ?? lookDefaultKeywords.has(normalized);
       }
       if (!accepted) {
-        const expected = kind === "color" || kind === "background" ? "a checked color() or color keyword"
-          : kind === "image" ? "a checked image builder such as linearGradient() or asset()"
-            : kind === "metric" ? "a unit value or one of the property's CSS keywords"
-              : `one of the closed ${name} keywords`;
+        // D67 rule 174: the two kinds that carry a per-property vocabulary name
+        // it. The rest keep the shape they had, because their values come from
+        // a shared list rather than from the property.
+        const expected: LookValueGuidance = kind === "metric"
+          ? lookVocabularyGuidance(name, normalized,
+            metricKeywords === undefined ? lookSharedMetricKeywords : lookOwnKeywords(name),
+            "write a unit value such as 16px, 1rem or 50%, or one of")
+          : kind === "keyword" ? lookVocabularyGuidance(name, normalized, lookOwnKeywords(name), "write one of")
+            : {
+              text: `use ${kind === "color" || kind === "background" ? "a checked color() or color keyword"
+                : kind === "image" ? "a checked image builder such as linearGradient() or asset()"
+                  : `one of the closed ${name} keywords`}`,
+              named: false,
+            };
         // D65 rule 169: a property whose CSS value space no set can hold says
         // what it left out, so the boundary is legible where it is met.
-        const partial = LOOK_PARTIAL_KEYWORD_PROPERTIES.get(name);
-        this.diagnostics.push(diagnostic("VEL5038", `Look property '${name}' does not accept '${normalized}'; use ${expected}${partial
+        const partial = expected.named ? undefined : LOOK_PARTIAL_KEYWORD_PROPERTIES.get(name);
+        this.diagnostics.push(diagnostic("VEL5038", `Look property '${name}' does not accept '${normalized}'; ${expected.text}${partial
           ? `. ${partial}; use a module-level 'import css unsafe "./styles.css" before look' when that boundary is intentional`
           : ""}`, value.span));
         return false;

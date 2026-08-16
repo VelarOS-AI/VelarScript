@@ -513,6 +513,35 @@ export const multiTokenKeywordLook: Look = look:
     scrollSnapAlign = "start end"
     overscrollBehavior = "contain none"
 
+// A property publishes its whole CSS vocabulary, and where it publishes only a
+// part, the part it left out is named in the diagnostic that rejects it. These
+// are the values that used to be refused: the one-way pans a scroll container
+// really takes, the alignment positions that resolve against the box's own
+// axis, the display type a list marker needs, the one-axis background repeat,
+// and the resize cursor a pannable canvas uses.
+export const wholeVocabularyLook: Look = look:
+    touchAction = "pan-left"
+    alignItems = "self-start"
+    alignSelf = "first baseline"
+    alignContent = "last baseline"
+    justifyItems = "self-end"
+    justifySelf = "baseline"
+    placeItems = "self-start"
+    placeContent = "flex-end"
+    placeSelf = "self-end"
+    display = "list-item"
+    backgroundRepeat = "repeat no-repeat"
+    cursor = "all-scroll"
+
+// The three properties whose CSS grammar is `<position>` read one table and
+// take one kind of value: a length, a percentage, or any of the twenty-two
+// placements. `backgroundPosition = "top left"` is the same value in the same
+// spelling as `objectPosition = "top left"`.
+export const positionLook: Look = look:
+    objectPosition = 25%
+    backgroundPosition = "top left"
+    transformOrigin = "bottom right"
+
 // The 9 element states and the 7 pseudo-element targets. Conditions may appear
 // inside a target and a target may appear inside a condition; a target may not
 // appear inside another target.
@@ -624,6 +653,8 @@ export component LookPanel:
         <div data-keyword-values look={keywordValueLook}>keyword values, not only units</div>
         <div data-closed-keywords look={closedKeywordLook}>each property's own closed set</div>
         <div data-multi-token-keywords look={multiTokenKeywordLook}>whole CSS values, not tokens</div>
+        <div data-whole-vocabulary look={wholeVocabularyLook}>the whole vocabulary, or a named part of it</div>
+        <div data-position look={positionLook}>one grammar, one kind, one table</div>
         <div data-stateful look={statefulLook}>states and targets</div>
         <div data-responsive look={responsiveLook}>media conditions</div>
         <button type="button" data-control look={controlLook}>base control</button>

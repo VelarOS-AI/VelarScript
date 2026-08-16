@@ -298,16 +298,31 @@ than falling back to a shared list of common words. `strokeLinecap` accepts
 because that property really has them.
 
 A closed set holds whole CSS values, not tokens of one. `scrollSnapType = "y
-mandatory"`, `gridAutoFlow = "row dense"`, `colorScheme = "light dark"`, and
-`objectPosition = "top left"` are written exactly as CSS writes them; there is
-no builder and no token grammar for a multi-part keyword value. A few
-properties reach into a value space no set can hold — lengths in
-`objectPosition`, percentages in `fontStretch`, a custom `@counter-style` name
-in `listStyleType`, a combination of feature groups in `fontVariant`, and the
-non-keyword parts of the `borderStyle`, `contain`, `textDecoration`,
-`listStyle`, and `backgroundBlendMode` shorthands. Each publishes the subset it
-can close and names what it left out in its own diagnostic, alongside the
-`import css unsafe` boundary that reaches the rest.
+mandatory"`, `gridAutoFlow = "row dense"`, `colorScheme = "light dark"`,
+`touchAction = "pan-left"`, and `backgroundRepeat = "repeat no-repeat"` are
+written exactly as CSS writes them; there is no builder and no token grammar for
+a multi-part keyword value.
+
+A property may publish part of its CSS grammar rather than all of it, and where
+it does, the part it left out is named in the diagnostic that rejects it, next
+to the `import css unsafe` boundary that reaches the rest. `fontStyle` holds the
+named slants and not an `oblique 14deg` angle; `textOverflow` holds `clip` and
+`ellipsis` and not a literal marker string; `cursor` holds the keyword cursors
+and not a `url()` image; `overflow` holds the single values and leaves the
+`x y` pair to `overflowX` and `overflowY`; the nine Box Alignment properties
+hold the alignments and not the `safe` and `unsafe` prefixes;
+`transitionTimingFunction` holds the same easing table `animate(easing=)` reads
+and not `cubic-bezier()`. Reading the boundary is never a matter of finding the
+table: a rejected value gets the nearest spelling when it is a near miss, the
+whole set written out when the set is small, and a description of what the set
+holds when it is not.
+
+The three properties whose CSS grammar is `<position>` — `backgroundPosition`,
+`transformOrigin`, and `objectPosition` — are one kind reading one table, so
+each takes a length, a percentage, or any of the twenty-two placement values:
+`objectPosition = 50%` and `objectPosition = "top left"` are both ordinary. A
+two-axis length position is written the way a two-axis length is written
+anywhere else, with `spacing(50%, 20%)`.
 
 `content` is written as CSS text. A string value is emitted quoted — `content =
 "•"` produces `content: "•"` — and only the bare keywords `none` and `normal`
