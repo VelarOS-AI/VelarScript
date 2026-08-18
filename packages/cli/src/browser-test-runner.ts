@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatDiagnostic, type ModuleTest } from "@velarscript/compiler";
+import type { FrameworkBrowserTestController } from "@velarscript/compiler/framework-host";
 import {
   chromium,
   firefox,
@@ -510,8 +511,22 @@ async function runBrowserTestsInWorker(
               });
               try {
                 await installBrowserPerformanceRuntime(page);
-                await installFrameworkRuntime(page, contract.initScript?.(config.framework.config));
-                installBrowserRuntime(page, origin, verified.deployment.base, runtimeKey);
+                const frameworkConfig = config.framework.config;
+                const frameworkController = contract.createController?.(frameworkConfig);
+                if (frameworkController !== undefined
+                  && (typeof frameworkController !== "object" || frameworkController === null
+                    || typeof frameworkController.initScript !== "function"
+                    || typeof frameworkController.invoke !== "function")) {
+                  throw new Error("Framework browser-test controller is invalid");
+                }
+                installBrowserRuntime(
+                  page,
+                  origin,
+                  verified.deployment.base,
+                  runtimeKey,
+                  frameworkController,
+                  contract.initScript === undefined ? undefined : () => contract.initScript!(frameworkConfig),
+                );
                 if (typeof test !== "function") throw new Error(`Test ${name} was not emitted`);
                 if (test.length !== 0) throw new Error(`Browser test ${name} cannot declare parameters`);
                 await boundedBrowserOperation(
@@ -693,7 +708,14 @@ async function compileBrowserTest(
   return { file, output: entry ? compiledTestModulePath(project, entry, outputRoot) : join(outputRoot, relative(config.root, file).replace(/\.vel$/u, ".js")), tests };
 }
 
-function installBrowserRuntime(page: Page, origin: string, base: string, runtimeKey: symbol): void {
+function installBrowserRuntime(
+  page: Page,
+  origin: string,
+  base: string,
+  runtimeKey: symbol,
+  frameworkController: FrameworkBrowserTestController | undefined = undefined,
+  frameworkInitScript: (() => string) | undefined = undefined,
+): void {
   const locator = (selector: unknown) => page.locator(String(selector));
   const storageArea = (area: unknown): "local" | "session" => {
     const value = String(area);
@@ -701,11 +723,17 @@ function installBrowserRuntime(page: Page, origin: string, base: string, runtime
     return value;
   };
   const mockedRoutes = new Set<string>();
+  let frameworkRuntime: Promise<void> | null = null;
+  const installFrameworkBeforeOpen = (): Promise<void> => {
+    frameworkRuntime ??= installFrameworkRuntime(page, frameworkController?.initScript() ?? frameworkInitScript?.());
+    return frameworkRuntime;
+  };
   const runtime = Object.freeze({
     async open(path = "/") {
       const value = String(path);
       if (!value.startsWith("/")) throw new Error("browser.open requires an application-relative path starting with '/'");
       const target = base === "/" ? value : `${base.slice(0, -1)}${value}`;
+      await installFrameworkBeforeOpen();
       // Navigation owns document loading, not application network quiescence.
       // A product may poll or stream forever; tests establish readiness with
       // the web-first waitFor/waitForText assertions exposed beside open().
@@ -883,6 +911,13 @@ function installBrowserRuntime(page: Page, origin: string, base: string, runtime
       }
       if (!Number.isSafeInteger(input.timeout) || input.timeout < 0 || input.timeout > 600000) {
         throw new RangeError("Framework test invoke timeout is outside its supported bounds");
+      }
+      if (frameworkController !== undefined) {
+        const result = await frameworkController.invoke(input.capability, input.operation, input.args, input.timeout);
+        if (typeof result !== "object" || result === null || typeof result.handled !== "boolean") {
+          throw new TypeError("Framework browser-test controller returned an invalid result");
+        }
+        if (result.handled) return result.value;
       }
       return page.evaluate(async (request) => {
         const bridge = Object.getOwnPropertyDescriptor(globalThis, Symbol.for("velar.desktop.bridge.v1"))?.value as {

@@ -660,15 +660,15 @@ function lookConditionTermCount(expression: Expression, negated = false): number
   return 1;
 }
 
-function firstRelativeCssUrl(source: string): string | null {
+function firstRelativeCssAssetAddress(source: string): { readonly value: string; readonly syntax: string } | null {
   for (const token of cssTokens(source)) {
-    if (token.kind !== "url") continue;
+    if (token.kind !== "url" && token.kind !== "asset-address") continue;
     // A URL parser drops leading and trailing spaces, and an empty url() names
     // the document itself rather than an asset.
     const value = token.value.trim();
     if (value === "") continue;
     if (value.startsWith("/") || value.startsWith("#") || /^[a-z][a-z0-9+.-]*:/iu.test(value)) continue;
-    return value;
+    return { value, syntax: token.kind === "url" ? "url" : token.syntax };
   }
   return null;
 }
@@ -1047,8 +1047,8 @@ export class VelarWebAnalyzer extends Analyzer {
           this.diagnostics.push(diagnostic("VEL5037", `${subject} contains @import; declare every stylesheet with 'import css unsafe' so project order remains visible`, statement.source.span));
         }
         if (source) {
-          const relativeUrl = firstRelativeCssUrl(source);
-          if (relativeUrl) this.diagnostics.push(diagnostic("VEL5037", `${subject} uses relative url(${JSON.stringify(relativeUrl)}); use a project-public /path, data URL, fragment, or absolute URL so extracted asset ownership stays explicit`, statement.source.span));
+          const relativeAddress = firstRelativeCssAssetAddress(source);
+          if (relativeAddress) this.diagnostics.push(diagnostic("VEL5037", `${subject} uses relative asset address ${relativeAddress.syntax}(${JSON.stringify(relativeAddress.value)}); use a project-public /path, data URL, fragment, or absolute URL so extracted asset ownership stays explicit`, statement.source.span));
         }
         return true;
       }

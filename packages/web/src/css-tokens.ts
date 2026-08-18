@@ -25,7 +25,9 @@ export type CssToken =
   /** `@import`, `@media`, … — the at-rule name, escapes already decoded. */
   | { readonly kind: "at-keyword"; readonly name: string }
   /** A `url()` address, escapes decoded, exactly what a browser resolves. */
-  | { readonly kind: "url"; readonly value: string };
+  | { readonly kind: "url"; readonly value: string }
+  /** A bare string that the image-set grammar defines as a URL. */
+  | { readonly kind: "asset-address"; readonly value: string; readonly syntax: "image-set" | "-webkit-image-set" };
 
 const REPLACEMENT = "�";
 const MAXIMUM_CODE_POINT = 0x10_ff_ff;
@@ -94,8 +96,7 @@ class CssScanner {
         continue;
       }
       if (this.startsIdentSequence(this.index)) {
-        const url = this.consumeIdentLike();
-        if (url !== null) yield { kind: "url", value: url };
+        for (const token of this.consumeIdentLike()) yield token;
         continue;
       }
       this.index += 1;
@@ -211,12 +212,21 @@ class CssScanner {
     else if (this.source[this.index] === "%") this.index += 1;
   }
 
-  /** The address when this is a url token, null for every other ident. */
-  private consumeIdentLike(): string | null {
+  /** The addresses when this function carries URL-valued tokens. */
+  private consumeIdentLike(): readonly CssToken[] {
     const name = this.consumeIdentSequence();
-    if (this.source[this.index] !== "(") return null;
+    if (this.source[this.index] !== "(") return [];
     this.index += 1;
-    if (name.toLowerCase() !== "url") return null;
+    const normalizedName = name.toLowerCase();
+    if (normalizedName === "image-set" || normalizedName === "-webkit-image-set") {
+      return this.consumeImageSet(normalizedName);
+    }
+    if (normalizedName !== "url") return [];
+    const value = this.consumeUrlFunctionValue();
+    return value === null ? [] : [{ kind: "url", value }];
+  }
+
+  private consumeUrlFunctionValue(): string | null {
     let probe = this.index;
     while (probe < this.source.length && isWhitespace(this.source[probe]!)) probe += 1;
     const quote = this.source[probe];
@@ -231,6 +241,66 @@ class CssScanner {
       return value;
     }
     return this.consumeUrlToken();
+  }
+
+  /**
+   * CSS Images 4 makes a top-level string at the start of each image-set
+   * option a URL. Strings inside type(), gradients, and other nested
+   * functions remain ordinary strings and are deliberately ignored.
+   */
+  private consumeImageSet(syntax: "image-set" | "-webkit-image-set"): readonly CssToken[] {
+    const tokens: CssToken[] = [];
+    let depth = 0;
+    let optionStart = true;
+    while (this.index < this.source.length) {
+      const character = this.source[this.index]!;
+      if (character === "/" && this.source[this.index + 1] === "*") {
+        this.consumeComment();
+        continue;
+      }
+      if (isWhitespace(character)) {
+        this.index += 1;
+        continue;
+      }
+      if (character === ")") {
+        this.index += 1;
+        if (depth === 0) return tokens;
+        depth -= 1;
+        continue;
+      }
+      if (character === "," && depth === 0) {
+        this.index += 1;
+        optionStart = true;
+        continue;
+      }
+      if (character === "\"" || character === "'") {
+        const value = this.consumeString(character);
+        if (depth === 0 && optionStart && value !== null) {
+          tokens.push({ kind: "asset-address", value, syntax });
+          optionStart = false;
+        }
+        continue;
+      }
+      if (this.startsIdentSequence(this.index)) {
+        const functionName = this.consumeIdentSequence().toLowerCase();
+        if (this.source[this.index] === "(") {
+          this.index += 1;
+          if (functionName === "url") {
+            const value = this.consumeUrlFunctionValue();
+            if (value !== null) tokens.push({ kind: "url", value });
+          } else {
+            depth += 1;
+          }
+          if (depth <= 1 && optionStart) optionStart = false;
+        } else if (depth === 0 && optionStart) {
+          optionStart = false;
+        }
+        continue;
+      }
+      if (depth === 0 && optionStart) optionStart = false;
+      this.index += 1;
+    }
+    return tokens;
   }
 
   /** The unquoted url token's address, or null when it is a bad-url. */

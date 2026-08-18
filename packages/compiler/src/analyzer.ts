@@ -25,7 +25,7 @@ import type {
   UsingDeclaration,
 } from "./ast.ts";
 import { isPermanentNamespaceName, type CoreVocabularyName, type PermanentNamespaceName } from "./core-vocabulary.ts";
-import { diagnostic, mechanicalEdits, mechanicalFix, type Diagnostic, type DiagnosticEdit, type DiagnosticFix } from "./diagnostic.ts";
+import { diagnostic, mechanicalEdits, mechanicalFix, recoveredDiagnostic, type Diagnostic, type DiagnosticEdit, type DiagnosticFix } from "./diagnostic.ts";
 import { VELAR_HOST_ERROR_NAMES, VELAR_HOST_ERROR_PATH_NAMES } from "./error-runtime.ts";
 import type { CompilerAnalysisExtension, RetiredNamespace } from "./extension.ts";
 import { collectionMemberGuidance, removedGlobalFunctionGuidance, stringMemberGuidance, REST_PARAMETER_ELEMENT_TYPE_MESSAGE, type CollectionKind } from "./language-guidance.ts";
@@ -497,6 +497,40 @@ function containsInferredResultPlaceholder(type: ValueType): boolean {
 function sameInferredResult(left: ValueType, right: ValueType): boolean {
   if (containsInferredResultPlaceholder(left) !== containsInferredResultPlaceholder(right)) return false;
   return sameType(left, right);
+}
+
+/** Returns the sole nearest spelling within two edits, never an ambiguous guess. */
+function uniqueNearestName(requested: string, candidates: Iterable<string>): string | null {
+  const distance = (left: string, right: string): number => {
+    let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+    for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+      const current = [leftIndex];
+      for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+        current[rightIndex] = Math.min(
+          previous[rightIndex]! + 1,
+          current[rightIndex - 1]! + 1,
+          previous[rightIndex - 1]! + (left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1),
+        );
+      }
+      previous = current;
+    }
+    return previous[right.length]!;
+  };
+  let best: string | null = null;
+  let bestDistance = 3;
+  let tied = false;
+  for (const candidate of new Set(candidates)) {
+    if (candidate === requested || Math.abs(candidate.length - requested.length) > 2) continue;
+    const candidateDistance = distance(requested, candidate);
+    if (candidateDistance < bestDistance) {
+      best = candidate;
+      bestDistance = candidateDistance;
+      tied = false;
+    } else if (candidateDistance === bestDistance) {
+      tied = true;
+    }
+  }
+  return bestDistance <= 2 && !tied ? best : null;
 }
 
 const corePrimitiveNames = new Set(["string", "number", "bool", "null", "unknown", "Duration"]);
@@ -1051,6 +1085,8 @@ export class Analyzer implements TypeEnvironment {
   private readonly memberAccessProperties = new Map<string, { readonly property: string; readonly end: number }>();
   /** Every name this module declares anywhere, so a rewrite can prove it collides with nothing. */
   private readonly declaredNames = new Set<string>();
+  private readonly promiseInitializerBindings = new WeakSet<Binding>();
+  private readonly testExpectOperands = new Map<string, ValueType>();
   /** D52 rule 116: reads of a name imported from a module that has a permanent namespace. */
   private readonly permanentNamespaceImportReads: { readonly local: string; readonly source: string; readonly imported: string; readonly span: Span }[] = [];
   /** The import each such local came from, keyed by the local name. */
@@ -1193,6 +1229,18 @@ export class Analyzer implements TypeEnvironment {
       }
     }
     return this.globalGuidance.get(name);
+  }
+
+  private nearestVisibleBindingName(name: string): string | null {
+    const candidates = new Set<string>([
+      ...Object.keys(coreVocabularyTypes),
+      ...this.extensionGlobals.keys(),
+      ...this.importBindings.keys(),
+      "Map", "Set", "Error", "ValidationError", "NarrowingError", "IndexError",
+      ...VELAR_HOST_ERROR_NAMES,
+    ]);
+    for (const scope of this.scopes) for (const candidate of scope.keys()) candidates.add(candidate);
+    return uniqueNearestName(name, candidates);
   }
 
   private readonly modulePath: string | null;
@@ -2142,6 +2190,29 @@ export class Analyzer implements TypeEnvironment {
     return false;
   }
 
+  protected extensionExpressionContainsDirectAwait(
+    expression: Expression,
+    contains: (expression: Expression) => boolean,
+  ): boolean | undefined {
+    for (const extension of this.analysisExtensions) {
+      const result = extension.directAwaitExpression?.(expression, contains);
+      if (result !== undefined) return result;
+    }
+    return undefined;
+  }
+
+  protected extensionStatementContainsDirectAwait(
+    statement: Statement,
+    containsExpression: (expression: Expression) => boolean,
+    containsBlock: (statements: readonly Statement[]) => boolean,
+  ): boolean | undefined {
+    for (const extension of this.analysisExtensions) {
+      const result = extension.directAwaitStatement?.(statement, containsExpression, containsBlock);
+      if (result !== undefined) return result;
+    }
+    return undefined;
+  }
+
   protected prescanExtensionScopeDeclaration(_statement: Statement): { readonly name: string; readonly span: Span } | null {
     return null;
   }
@@ -2550,7 +2621,13 @@ export class Analyzer implements TypeEnvironment {
       this.privateStaticMethods.set(statement.name, privateStaticMethods);
       this.classes.set(statement.name, {
         ...(statement.dispose
-          ? { dispose: blockContainsDirectAwait(statement.dispose.body) ? "async" : "sync" }
+          ? {
+            dispose: blockContainsDirectAwait(
+              statement.dispose.body,
+              (expression, contains) => this.extensionExpressionContainsDirectAwait(expression, contains),
+              (owned, containsExpression, containsBlock) => this.extensionStatementContainsDirectAwait(owned, containsExpression, containsBlock),
+            ) ? "async" : "sync",
+          }
           : {}),
         // D68 rule 177: `@iterate:` carries no annotation, so its answer comes
         // from the body — the same shape as an omitted function result, and it
@@ -2860,6 +2937,7 @@ export class Analyzer implements TypeEnvironment {
         if (statement.pattern.kind === "NameBindingPattern") {
           const binding = this.scopes.at(-1)?.get(statement.pattern.name);
           if (binding?.span.start === statement.pattern.span.start && binding.span.end === statement.pattern.span.end) {
+            if (this.expandAliases(actual).kind === "promise") this.promiseInitializerBindings.add(binding);
             if (!annotated) {
               const aliasedGroup = aliasedBinding ? this.collectionInferenceGroups.get(aliasedBinding) : null;
               if (aliasedGroup) this.joinCollectionInference(statement.pattern.name, binding, aliasedGroup);
@@ -5296,7 +5374,12 @@ export class Analyzer implements TypeEnvironment {
             }
           }
           const guidance = this.guidanceForGlobal(expression.name);
-          this.diagnostics.push(diagnostic(guidance ? "VEL3008" : "VEL3001", guidance ?? `Unknown name '${expression.name}'`, expression.span));
+          const nearest = guidance ? null : this.nearestVisibleBindingName(expression.name);
+          this.diagnostics.push(diagnostic(
+            guidance ? "VEL3008" : "VEL3001",
+            guidance ?? `Unknown name '${expression.name}'${nearest ? `; did you mean '${nearest}'?` : ""}`,
+            expression.span,
+          ));
           return unknownType;
         }
         if (lexical) {
@@ -5719,7 +5802,11 @@ export class Analyzer implements TypeEnvironment {
         }
         if (object.kind === "map") {
           this.typeError("Use Map.get(key) instead of bracket access", expression.span);
-          return object.value;
+          // The rejected bracket form has no trustworthy result type. Giving
+          // it the Map value type made `owners[key] ?? fallback` claim the
+          // fallback was unnecessary, contradicting the very `.get()` rewrite
+          // whose result is optional.
+          return invalidType;
         }
         if (object.kind === "record") {
           this.requireAssignable(index, stringType, expression.index.span);
@@ -7383,6 +7470,7 @@ export class Analyzer implements TypeEnvironment {
         arity(1, 1);
         const actual = inferAt(0);
         const matched = this.expandAliases(actual);
+        this.testExpectOperands.set(spanIdentity(callSpan), matched);
         const dynamic = matched.kind === "any" || matched.kind === "unknown";
         const fields = new Map<string, ValueType>([
           ["toBe", { kind: "function", parameterNames: ["expected"], parameters: [actual], requiredParameters: 1, result: nullType }],
@@ -8367,19 +8455,49 @@ export class Analyzer implements TypeEnvironment {
     } else if (object.kind === "list") {
       result = this.listMember(object, property) ?? unknownType;
       if (property === "size") this.collectionSizes.add(memberSpan.end);
-      if (result.kind === "unknown") this.typeError(this.collectionMemberError("List", property), memberSpan, this.collectionMemberFix("List", property, memberSpan));
+      if (result.kind === "unknown") {
+        const guidance = collectionMemberGuidance("List", property);
+        const recovered = guidance?.replacement ? this.listMember(object, guidance.replacement) : null;
+        const nearest = guidance ? null : uniqueNearestName(property, this.semanticMembersOf(object).keys());
+        const message = `${this.collectionMemberError("List", property)}${nearest ? `; did you mean '${nearest}'?` : ""}`;
+        if (recovered) {
+          this.recoveredTypeError(message, memberSpan, this.collectionMemberFix("List", property, memberSpan));
+          result = recovered;
+        } else this.typeError(message, memberSpan, this.collectionMemberFix("List", property, memberSpan));
+      }
     } else if (object.kind === "set") {
       result = this.setMember(object, property) ?? unknownType;
       if (property === "size") this.collectionSizes.add(memberSpan.end);
-      if (result.kind === "unknown") this.typeError(this.collectionMemberError("Set", property), memberSpan, this.collectionMemberFix("Set", property, memberSpan));
+      if (result.kind === "unknown") {
+        const nearest = collectionMemberGuidance("Set", property) ? null : uniqueNearestName(property, this.semanticMembersOf(object).keys());
+        this.typeError(`${this.collectionMemberError("Set", property)}${nearest ? `; did you mean '${nearest}'?` : ""}`, memberSpan, this.collectionMemberFix("Set", property, memberSpan));
+      }
     } else if (object.kind === "map") {
       result = this.mapMember(object, property) ?? unknownType;
       if (property === "size") this.collectionSizes.add(memberSpan.end);
-      if (result.kind === "unknown") this.typeError(this.collectionMemberError("Map", property), memberSpan, this.collectionMemberFix("Map", property, memberSpan));
+      if (result.kind === "unknown") {
+        const nearest = collectionMemberGuidance("Map", property) ? null : uniqueNearestName(property, this.semanticMembersOf(object).keys());
+        this.typeError(`${this.collectionMemberError("Map", property)}${nearest ? `; did you mean '${nearest}'?` : ""}`, memberSpan, this.collectionMemberFix("Map", property, memberSpan));
+      }
     } else if (object.kind === "record") {
       result = this.recordMember(object, property) ?? unknownType;
       if (property === "size") this.collectionSizes.add(memberSpan.end);
       if (result.kind === "unknown") this.typeError(`Record fields are dynamic; use ${describeType(object)}[${JSON.stringify(property)}]`, memberSpan);
+    } else if (object.kind === "promise") {
+      const awaited = this.expandAliases(object.value);
+      const memberAfterAwait = this.semanticMembersOf(awaited).get(property);
+      const receiverName = objectExpression.kind === "IdentifierExpression" ? objectExpression.name : null;
+      const binding = receiverName ? this.lookup(receiverName) : null;
+      const canAwait = this.functionDepth === 0 || this.asynchronousFunctions.at(-1) === true;
+      if (memberAfterAwait && receiverName && binding && this.promiseInitializerBindings.has(binding) && canAwait) {
+        this.typeError(
+          `${describeType(object)} has no member '${property}'; add 'await' at the initializer — 'const ${receiverName} = await ...' — then read '${receiverName}.${property}'`,
+          memberSpan,
+        );
+      } else {
+        this.typeError(`${describeType(object)} has no member '${property}'`, memberSpan);
+      }
+      result = invalidType;
     } else if (object.kind === "action") {
       if (property === "pending") result = boolType;
       else if (property === "error") result = optionalOf({ kind: "class", name: "Error" });
@@ -8404,7 +8522,15 @@ export class Analyzer implements TypeEnvironment {
       if (object.optionalFields?.has(property) && result.kind !== "unknown") result = optionalOf(result);
       if (object.readonlyFields?.has(property) && result.kind !== "unknown") result = this.readonlyDataViewOf(result);
       if (!object.fields.has(property)) {
-        this.typeError(`Object has no field '${property}'`, memberSpan);
+        const expectOperand = objectExpression.kind === "CallExpression"
+          ? this.testExpectOperands.get(spanIdentity(objectExpression.span))
+          : undefined;
+        if (property === "toHaveLength" && expectOperand?.kind === "set") {
+          this.typeError("Set has no length matcher; write 'expect(set.size).toBe(expected)'", memberSpan);
+        } else {
+          const nearest = uniqueNearestName(property, object.fields.keys());
+          this.typeError(`Object has no field '${property}'${nearest ? `; did you mean '${nearest}'?` : ""}`, memberSpan);
+        }
       }
     } else if (object.kind === "extension") {
       let owned = false;
@@ -10704,6 +10830,10 @@ export class Analyzer implements TypeEnvironment {
 
   protected typeError(message: string, errorSpan: Span, fix?: DiagnosticFix): void {
     this.diagnostics.push(diagnostic("VEL4001", message, errorSpan, fix));
+  }
+
+  protected recoveredTypeError(message: string, errorSpan: Span, fix?: DiagnosticFix): void {
+    this.diagnostics.push(recoveredDiagnostic("VEL4001", message, errorSpan, fix));
   }
 
   private analyzeMatchPattern(

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -31,6 +31,8 @@ import { buildLanguageServerTool, VELAR_LANGUAGE_SERVER_TOOL_ID } from "./langua
 import { buildProjectTaskTool, VELAR_PROJECT_TASK_TOOL_ID } from "./project-task-tool.ts";
 import { buildBuildEngineTool, VELAR_BUILD_ENGINE_TOOL_ID } from "./build-engine-tool.ts";
 import { applyProjectMechanicalFixes } from "./mechanical-fixer.ts";
+import { bundleStandaloneJavaScript, needsStandaloneJavaScriptBundle } from "./standalone-build.ts";
+import { BUILD_STAGING_MARKER } from "./build-staging.ts";
 import {
   assertUniqueEmbeddedModuleOutputs,
   embeddedModuleFileContents,
@@ -538,7 +540,13 @@ async function main(arguments_: readonly string[]): Promise<number> {
     try {
       await assertNodeStandardModuleOutputAvailable(dirname(outputPath), project);
       await mkdir(dirname(outputPath), { recursive: true });
-      await writeCompiled(outputPath, project.modules[0]!.result, true);
+      const result = project.modules[0]!.result;
+      if (needsStandaloneJavaScriptBundle(result)) {
+        const bundled = await bundleStandaloneJavaScript(outputPath, result);
+        await writeCompiled(outputPath, result, true, bundled.code, bundled.sourceMap, false);
+      } else {
+        await writeCompiled(outputPath, result, true);
+      }
       await writeNodeStandardModules(dirname(outputPath), project, true);
     } catch (error) {
       process.stderr.write(`velar build: ${hostErrorMessage(error)}\n`);
@@ -559,9 +567,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
     process.stdout.write(`Built production ${project.framework.host.displayName} app -> ${outputDirectory}\n`);
     return 0;
   }
-  const parent = dirname(outputDirectory);
-  await mkdir(parent, { recursive: true });
-  const staging = await mkdtemp(join(parent, `.velar-${basename(outputDirectory)}-`));
+  const staging = await prepareBuildStaging(outputDirectory);
   try {
     assertUniqueEmbeddedModuleOutputs(project.modules.map((module) => ({
       ownerPath: join(staging, module.relativePath.replace(/\.vel$/, ".js")),
@@ -591,9 +597,7 @@ async function writeFrameworkProductionApplication(project: ProjectResult, outpu
     project.projectRoot,
     framework.host.requiredPublicAssets?.(framework.config) ?? [],
   );
-  const parent = dirname(outputDirectory);
-  await mkdir(parent, { recursive: true });
-  const staging = await mkdtemp(join(parent, `.velar-${basename(outputDirectory)}-`));
+  const staging = await prepareBuildStaging(outputDirectory);
   try {
     await copyPublicAssets(project.publicRoot, staging);
     const production = await buildProductionFramework(project, staging);
@@ -628,6 +632,104 @@ function packageFrameworkOutput(root: string, input: string): string {
   return output;
 }
 
+interface BuildStagingOwnership {
+  readonly formatVersion: 1;
+  readonly kind: "velar-build-staging";
+  readonly outputDirectory: string;
+  readonly stagingDirectory: string;
+  readonly ownerPid: number;
+}
+
+/**
+ * Reclaims only staging directories carrying a marker that names this exact
+ * output. A process cut can happen before or after either rename, so recovery
+ * also finishes restoring the previous output when installation never began.
+ */
+async function prepareBuildStaging(outputDirectory: string): Promise<string> {
+  const normalizedOutput = resolve(outputDirectory);
+  const parent = dirname(normalizedOutput);
+  await mkdir(parent, { recursive: true });
+  await recoverInterruptedBuilds(normalizedOutput);
+  const staging = await mkdtemp(join(parent, `.velar-${basename(normalizedOutput)}-`));
+  const ownership: BuildStagingOwnership = {
+    formatVersion: 1,
+    kind: "velar-build-staging",
+    outputDirectory: normalizedOutput,
+    stagingDirectory: resolve(staging),
+    ownerPid: process.pid,
+  };
+  await writeFile(join(staging, BUILD_STAGING_MARKER), `${JSON.stringify(ownership, null, 2)}\n`, "utf8");
+  return staging;
+}
+
+async function recoverInterruptedBuilds(outputDirectory: string): Promise<void> {
+  const parent = dirname(outputDirectory);
+  const prefix = `.velar-${basename(outputDirectory)}-`;
+
+  const installed = await buildStagingOwnership(outputDirectory, outputDirectory, null);
+  if (installed && !processIsAlive(installed.ownerPid)) {
+    await rm(`${installed.stagingDirectory}-previous`, { recursive: true, force: true });
+    await rm(join(outputDirectory, BUILD_STAGING_MARKER), { force: true });
+  }
+
+  for (const entry of await readdir(parent, { withFileTypes: true })) {
+    if (!entry.name.startsWith(prefix) || entry.name.endsWith("-previous") || !entry.isDirectory()) continue;
+    const staging = resolve(parent, entry.name);
+    const ownership = await buildStagingOwnership(staging, outputDirectory, staging);
+    if (!ownership || processIsAlive(ownership.ownerPid)) continue;
+    const previous = `${staging}-previous`;
+    try {
+      await lstat(outputDirectory);
+      await rm(previous, { recursive: true, force: true });
+    } catch (error) {
+      if (!isHostErrorCode(error, "ENOENT")) throw error;
+      try {
+        await rename(previous, outputDirectory);
+      } catch (restoreError) {
+        if (!isHostErrorCode(restoreError, "ENOENT")) throw restoreError;
+      }
+    }
+    await rm(staging, { recursive: true, force: true });
+  }
+}
+
+async function buildStagingOwnership(
+  directory: string,
+  outputDirectory: string,
+  expectedStaging: string | null,
+): Promise<BuildStagingOwnership | null> {
+  try {
+    const directoryMetadata = await lstat(directory);
+    if (!directoryMetadata.isDirectory() || directoryMetadata.isSymbolicLink()) return null;
+    const markerPath = join(directory, BUILD_STAGING_MARKER);
+    const markerMetadata = await lstat(markerPath);
+    if (!markerMetadata.isFile() || markerMetadata.isSymbolicLink()) return null;
+    const parsed = JSON.parse(await readFile(markerPath, "utf8")) as Partial<BuildStagingOwnership>;
+    if (parsed.formatVersion !== 1
+      || parsed.kind !== "velar-build-staging"
+      || parsed.outputDirectory !== outputDirectory
+      || typeof parsed.stagingDirectory !== "string"
+      || dirname(parsed.stagingDirectory) !== dirname(outputDirectory)
+      || !basename(parsed.stagingDirectory).startsWith(`.velar-${basename(outputDirectory)}-`)
+      || (expectedStaging !== null && parsed.stagingDirectory !== expectedStaging)
+      || !Number.isSafeInteger(parsed.ownerPid)
+      || (parsed.ownerPid ?? 0) <= 0) return null;
+    return parsed as BuildStagingOwnership;
+  } catch (error) {
+    if (isHostErrorCode(error, "ENOENT") || error instanceof SyntaxError) return null;
+    throw error;
+  }
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return isHostErrorCode(error, "EPERM");
+  }
+}
+
 async function replaceOutputDirectory(staging: string, outputDirectory: string): Promise<void> {
   const previous = `${staging}-previous`;
   let movedPrevious = false;
@@ -642,6 +744,7 @@ async function replaceOutputDirectory(staging: string, outputDirectory: string):
     await rename(staging, outputDirectory);
     installed = true;
     if (movedPrevious) await rm(previous, { recursive: true, force: true });
+    await rm(join(outputDirectory, BUILD_STAGING_MARKER), { force: true });
   } catch (error) {
     if (!installed && movedPrevious) {
       try {
@@ -743,18 +846,30 @@ async function generatedRuntimePackageOwnership(packageRoot: string): Promise<"a
   }
 }
 
-async function writeCompiled(outputPath: string, result: CompileResult, writeCss: boolean, codeOverride: string | null = null): Promise<void> {
+async function writeCompiled(
+  outputPath: string,
+  result: CompileResult,
+  writeCss: boolean,
+  codeOverride: string | null = null,
+  sourceMapOverride: string | null = null,
+  writeEmbedded = true,
+): Promise<void> {
   const mapPath = `${outputPath}.map`;
-  const code = `${codeOverride ?? result.code ?? ""}//# sourceMappingURL=${basename(mapPath)}\n`;
-  assertUniqueEmbeddedModuleOutputs([{ ownerPath: outputPath, embeddedModules: result.embeddedModules }]);
-  for (const module of result.embeddedModules) {
-    const embeddedPath = embeddedModuleOutputPath(outputPath, module.specifier);
-    await assertEmbeddedModuleOutputWritable(embeddedPath);
+  const rawCode = codeOverride ?? result.code ?? "";
+  const code = rawCode.includes(`//# sourceMappingURL=${basename(mapPath)}`)
+    ? rawCode
+    : `${rawCode}//# sourceMappingURL=${basename(mapPath)}\n`;
+  if (writeEmbedded) {
+    assertUniqueEmbeddedModuleOutputs([{ ownerPath: outputPath, embeddedModules: result.embeddedModules }]);
+    for (const module of result.embeddedModules) {
+      const embeddedPath = embeddedModuleOutputPath(outputPath, module.specifier);
+      await assertEmbeddedModuleOutputWritable(embeddedPath);
+    }
   }
   const writes = [
     writeFile(outputPath, code, "utf8"),
-    writeFile(mapPath, result.sourceMap ?? "", "utf8"),
-    ...result.embeddedModules.flatMap((module) => {
+    writeFile(mapPath, sourceMapOverride ?? result.sourceMap ?? "", "utf8"),
+    ...(writeEmbedded ? result.embeddedModules : []).flatMap((module) => {
       const embeddedPath = embeddedModuleOutputPath(outputPath, module.specifier);
       return [
         writeFile(embeddedPath, embeddedModuleFileContents(embeddedPath, module), "utf8"),

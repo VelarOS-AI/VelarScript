@@ -43,6 +43,12 @@ export interface InspectedEmbeddedJavaScriptImport {
   readonly span: Span;
 }
 
+export interface InspectedEmbeddedJavaScriptDependency {
+  readonly source: string;
+  readonly span: Span;
+  readonly dynamic: boolean;
+}
+
 export interface InspectedEmbeddedJavaScriptBinding {
   readonly name: string;
   readonly nameSpan: Span;
@@ -61,6 +67,7 @@ export interface EmbeddedJavaScriptIssue {
 export interface EmbeddedJavaScriptInspection {
   readonly exports: readonly InspectedEmbeddedJavaScriptExport[];
   readonly imports: readonly InspectedEmbeddedJavaScriptImport[];
+  readonly dependencies: readonly InspectedEmbeddedJavaScriptDependency[];
   readonly bindings: readonly InspectedEmbeddedJavaScriptBinding[];
   /**
    * AST-derived edits that turn a checked module body into a factory body:
@@ -153,6 +160,7 @@ export function inspectEmbeddedJavaScript(
     return {
       exports: [],
       imports: [],
+      dependencies: [],
       bindings: [],
       factoryEdits: [],
       issues: [{
@@ -164,6 +172,7 @@ export function inspectEmbeddedJavaScript(
 
   const exports: InspectedEmbeddedJavaScriptExport[] = [];
   const imports: InspectedEmbeddedJavaScriptImport[] = [];
+  const dependencies: InspectedEmbeddedJavaScriptDependency[] = [];
   const bindings: InspectedEmbeddedJavaScriptBinding[] = [];
   const factoryEdits: EmbeddedJavaScriptFactoryEdit[] = [];
   const issues: EmbeddedJavaScriptIssue[] = [];
@@ -194,6 +203,9 @@ export function inspectEmbeddedJavaScript(
     if (statement.type === "ImportDeclaration") {
       rejectRelativeEmbeddedModuleSource(statement.source, issue);
       imports.push({ span: absolute(statement) });
+      if (typeof statement.source.value === "string" && !statement.source.value.startsWith(".")) {
+        dependencies.push({ source: statement.source.value, span: absolute(statement.source), dynamic: false });
+      }
       for (const specifier of statement.specifiers) {
         bindings.push({ name: specifier.local.name, nameSpan: absolute(specifier.local) });
       }
@@ -209,11 +221,19 @@ export function inspectEmbeddedJavaScript(
     }
     if (statement.type === "ExportAllDeclaration") {
       rejectRelativeEmbeddedModuleSource(statement.source, issue);
+      if (typeof statement.source.value === "string" && !statement.source.value.startsWith(".")) {
+        dependencies.push({ source: statement.source.value, span: absolute(statement.source), dynamic: false });
+      }
       inspectExportAll(statement, checked, addExport, issue);
       continue;
     }
     if (statement.type !== "ExportNamedDeclaration") continue;
-    if (statement.source) rejectRelativeEmbeddedModuleSource(statement.source, issue);
+    if (statement.source) {
+      rejectRelativeEmbeddedModuleSource(statement.source, issue);
+      if (typeof statement.source.value === "string" && !statement.source.value.startsWith(".")) {
+        dependencies.push({ source: statement.source.value, span: absolute(statement.source), dynamic: false });
+      }
+    }
     inspectNamedExport(statement, checked, addExport, issue, factoryEdits, absolute);
   }
 
@@ -222,6 +242,8 @@ export function inspectEmbeddedJavaScript(
       issue("A dynamic import inside inline JavaScript must use a literal package specifier; computed paths cannot be emitted consistently by run and production builds", imported.node);
     } else if (imported.value.startsWith(".")) {
       issue(`Relative JavaScript import target '${imported.value}' cannot be emitted from an inline block; combine the source into this block or move it into a package`, imported.node);
+    } else {
+      dependencies.push({ source: imported.value, span: absolute(imported.node), dynamic: true });
     }
   }
 
@@ -229,7 +251,7 @@ export function inspectEmbeddedJavaScript(
     issue("A captured inline JavaScript block cannot use top-level await; captures are passed to a synchronous factory, and an async factory has not been specified", firstTopLevelAwait(program) ?? program);
   }
 
-  return { exports, imports, bindings, factoryEdits, issues };
+  return { exports, imports, dependencies, bindings, factoryEdits, issues };
 }
 
 function rejectRelativeEmbeddedModuleSource(

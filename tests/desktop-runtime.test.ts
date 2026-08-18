@@ -7,7 +7,7 @@ import test from "node:test";
 import vm from "node:vm";
 import { velarCompilerExtension } from "../packages/desktop/src/compiler.ts";
 import { VELAR_TYPE_REGISTRY_KEY } from "../packages/compiler/src/runtime-abi.ts";
-import { desktopBrowserTestInitScript } from "../packages/desktop/src/test-runtime.ts";
+import { desktopBrowserTestController, desktopBrowserTestInitScript } from "../packages/desktop/src/test-runtime.ts";
 
 const bridgeKey = Symbol.for("velar.desktop.bridge.v1");
 
@@ -703,6 +703,10 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
       homeDirectory(): Promise<string>;
       packaged(): boolean;
       platform(): string;
+      DesktopPlatform: Readonly<{
+        macos: "macos"; test: "test";
+        is(value: unknown): boolean; parse(value: unknown): unknown; values(): string[];
+      }>;
       projectDirectory(): Promise<string>;
       selectedProjectDirectory(): Promise<string | null>;
       selectProjectDirectory(): Promise<string | null>;
@@ -759,6 +763,9 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
       }>;
     }>(directory, "desktop", "velar/desktop");
     assert.equal(desktopRuntime.platform(), "test");
+    assert.equal(desktopRuntime.DesktopPlatform.macos, "macos");
+    assert.equal(desktopRuntime.DesktopPlatform.test, "test");
+    assert.deepEqual(desktopRuntime.DesktopPlatform.values(), ["macos", "test"]);
     assert.equal(desktopRuntime.packaged(), false);
     assert.equal(await desktopRuntime.homeDirectory(), "/home/test");
     assert.equal(await desktopRuntime.appDataDirectory(), "/app-data/test");
@@ -1104,6 +1111,13 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
     assert.throws(() => hostileDesktopRuntime.platform(), /data value/u);
     assert.equal(platformReads, 0);
 
+    Object.defineProperty(globalThis, bridgeKey, {
+      value: { ...bridge, platform: "windows" },
+      configurable: true,
+    });
+    const unknownPlatformRuntime = await runtime<{ platform(): string }>(directory, "desktop-unknown-platform", "velar/desktop");
+    assert.throws(() => unknownPlatformRuntime.platform(), /does not match DesktopPlatform/u);
+
     const invalidDesktopBridge = {
       platform: "test",
       packaged: false,
@@ -1156,8 +1170,9 @@ test("Desktop CLI test host provides deterministic manifest-scoped process handl
     .replace("const maxListTextUnits = 2 * 1024 * 1024;", "const maxListTextUnits = 8;")
     .replace("const maxWatchPaths = 4096;", "const maxWatchPaths = 1;");
   vm.runInContext(`${initScript}\nglobalThis.__bridgeUnderTest = globalThis[Symbol.for("velar.desktop.bridge.v1")]`, context);
-  const bridge = (context as { __bridgeUnderTest?: { environment: Readonly<Record<string, string>>; invoke(capability: string, operation: string, args: unknown[]): Promise<unknown> } }).__bridgeUnderTest;
+  const bridge = (context as { __bridgeUnderTest?: { platform: string; environment: Readonly<Record<string, string>>; invoke(capability: string, operation: string, args: unknown[]): Promise<unknown> } }).__bridgeUnderTest;
   assert.ok(bridge);
+  assert.equal(bridge.platform, "test");
   assert.equal(Object.prototype.hasOwnProperty.call(bridge.environment, "PRODUCTION_MODE"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(bridge.environment, "PROVIDER_KEY"), false);
   await assert.rejects(bridge.invoke("fs", "readText", ["README.md", 4]), /exceeds maxBytes/u);
@@ -1230,6 +1245,27 @@ test("Desktop CLI test host provides deterministic manifest-scoped process handl
   assert.equal((await rolledBackUpdate).changes[0]?.lifecycle, "rolled_back");
   assert.equal(await bridge.invoke("project-changes", "close", [projectChangesHandle]), null);
   await assert.rejects(bridge.invoke("process", "start", ["sh", [], {}]), /not granted/u);
+});
+
+test("Desktop browser-test platform is selected before the first open and then sealed", async () => {
+  const config = {
+    productName: "Test",
+    identifier: "dev.velarscript.test",
+    window: { title: "Test", width: 800, height: 600, minWidth: 480, minHeight: 320 },
+    permissions: { files: ["project"], processes: [], terminal: false, network: [], environment: [], secrets: [] },
+    build: { outDir: "dist/desktop", sizeBudgetBytes: 10 * 1024 * 1024 },
+  } as const;
+  const controller = desktopBrowserTestController(config);
+  assert.deepEqual(await controller.invoke("unowned", "operation", [], 30_000), { handled: false });
+  assert.deepEqual(await controller.invoke("desktop-test", "setPlatform", ["macos"], 30_000), { handled: true, value: null });
+
+  const context = vm.createContext({ TextEncoder, btoa });
+  vm.runInContext(`${controller.initScript()}\nglobalThis.__platform = globalThis[Symbol.for("velar.desktop.bridge.v1")].platform`, context);
+  assert.equal((context as { __platform?: string }).__platform, "macos");
+  assert.throws(
+    () => controller.invoke("desktop-test", "setPlatform", ["test"], 30_000),
+    /before the first browser\.open/u,
+  );
 });
 
 async function runtime<T>(directory: string, file: string, moduleName: string, transform: (source: string) => string = (source) => source): Promise<T> {

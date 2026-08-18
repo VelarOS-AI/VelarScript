@@ -7,7 +7,7 @@ import { programWithEmbeddedJavaScriptImports } from "./embedded-module.ts";
 import type { CompilerEmbeddedJavaScriptModule, CompilerEmitter, CompilerEmitterOptions, CompilerExtension, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface, ModuleTest } from "./extension.ts";
 import { Lexer } from "./lexer.ts";
 import { isParserComplexityFailure, Parser } from "./parser.ts";
-import { SourceText } from "./source.ts";
+import { SourceText, type Span } from "./source.ts";
 import { bindingNameRestriction, memberNameRestriction } from "./source-names.ts";
 import { buildSemanticIndex, type SemanticIndex } from "./semantic.ts";
 import { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
@@ -40,6 +40,7 @@ export { SourceText, type Span } from "./source.ts";
 export { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
 export { bindingNameRestriction, isCoreReservedBinding, isForbiddenPrototypeMember, isJavaScriptReservedBinding, isSourceIdentifierPart, isSourceIdentifierStart, isValidSourceIdentifier, memberNameRestriction, type BindingNameRestriction, type MemberNameRestriction } from "./source-names.ts";
 export { VELAR_EXTENSION_PROTOCOL_VERSION } from "./extension.ts";
+export { CORE_EXPRESSION_CONSTRUCTS, CORE_STATEMENT_CONSTRUCTS, coreStatementConstructKey } from "./ast.ts";
 // D62 rule 157: the editor's keyword list is the lexer's table plus Core's
 // contextual roster, so it is published rather than retyped downstream.
 export { keywordKinds } from "./token.ts";
@@ -103,6 +104,8 @@ export interface ModuleDependencySpecifier {
 
 export interface ModuleDependency {
   readonly source: string;
+  /** Author source span of the literal module specifier. */
+  readonly span: Span;
   readonly javascript: boolean;
   readonly unsafe: boolean;
   readonly dynamic: boolean;
@@ -422,6 +425,7 @@ function dependenciesOf(program: Program): readonly ModuleDependency[] {
     .filter((statement) => statement.kind === "ImportDeclaration")
     .map((statement) => ({
       source: statement.source,
+      span: statement.sourceSpan,
       javascript: statement.javascript,
       unsafe: statement.unsafe,
       dynamic: false,
@@ -436,6 +440,7 @@ function dependenciesOf(program: Program): readonly ModuleDependency[] {
     if (statement.kind !== "ReExportDeclaration") continue;
     dependencies.push({
       source: statement.source,
+      span: statement.sourceSpan,
       javascript: false,
       unsafe: false,
       dynamic: false,
@@ -446,6 +451,24 @@ function dependenciesOf(program: Program): readonly ModuleDependency[] {
         namespace: false,
       })),
     });
+  }
+
+  // Inline JavaScript is still part of the project's JavaScript dependency
+  // graph. The source spelling no longer decides whether check can see it:
+  // Acorn's module parse above supplies the same literal specifiers that the
+  // sibling module will execute after emission.
+  for (const statement of program.body) {
+    if (statement.kind !== "EmbeddedJavaScriptDeclaration") continue;
+    for (const dependency of statement.dependencies) {
+      dependencies.push({
+        source: dependency.source,
+        span: dependency.span,
+        javascript: true,
+        unsafe: statement.unsafe,
+        dynamic: dependency.dynamic,
+        specifiers: [],
+      });
+    }
   }
 
   // Dynamic imports are found by walking the AST structurally rather than by
@@ -463,6 +486,7 @@ function dependenciesOf(program: Program): readonly ModuleDependency[] {
     dynamicSources.add(expression.source);
     dependencies.push({
       source: expression.source,
+      span: expression.span,
       javascript: false,
       unsafe: false,
       dynamic: true,
@@ -503,6 +527,27 @@ function interfaceOf(
     if (statement.kind === "TypeAliasDeclaration") aliasDeclarations.set(statement.name, statement);
   }
   const analysisExtensions = extensions.flatMap((extension) => extension.analysis ? [extension.analysis] : []);
+  const directAwaitExpression = (
+    expression: Expression,
+    contains: (expression: Expression) => boolean,
+  ): boolean | undefined => {
+    for (const extension of analysisExtensions) {
+      const result = extension.directAwaitExpression?.(expression, contains);
+      if (result !== undefined) return result;
+    }
+    return undefined;
+  };
+  const directAwaitStatement = (
+    statement: Statement,
+    containsExpression: (expression: Expression) => boolean,
+    containsBlock: (statements: readonly Statement[]) => boolean,
+  ): boolean | undefined => {
+    for (const extension of analysisExtensions) {
+      const result = extension.directAwaitStatement?.(statement, containsExpression, containsBlock);
+      if (result !== undefined) return result;
+    }
+    return undefined;
+  };
   const resolveRaw = (reference: TypeReference): ValueType => resolveTypeReference(reference, (syntax, nested) => {
     for (const extension of analysisExtensions) {
       const resolved = extension.resolveTypeSyntax?.(syntax, nested);
@@ -631,7 +676,9 @@ function interfaceOf(
         identity,
         // D43 item 69: the release contract crosses the module boundary with
         // the class, so an imported handle stays usable with `using`.
-        ...(statement.dispose ? { dispose: blockContainsDirectAwait(statement.dispose.body) ? "async" : "sync" } as const : {}),
+        ...(statement.dispose ? {
+          dispose: blockContainsDirectAwait(statement.dispose.body, directAwaitExpression, directAwaitStatement) ? "async" : "sync",
+        } as const : {}),
         parameters: statement.parameters.map((parameter) => resolve(parameter.type)),
         parameterNames: statement.parameters.map((parameter) => parameter.name),
         requiredParameters: statement.parameters.filter((parameter) => !parameter.defaultValue).length,

@@ -308,7 +308,9 @@ function validateFrameworkHost(value: unknown, compiler: CompilerExtension, name
   }
   if (host.browserTests && (typeof host.browserTests.runtimeKey !== "string" || !host.browserTests.runtimeKey
     || typeof host.browserTests.sourceSuffix !== "string" || !host.browserTests.sourceSuffix.endsWith(".test.vel")
-    || (host.browserTests.initScript !== undefined && typeof host.browserTests.initScript !== "function"))) {
+    || (host.browserTests.initScript !== undefined && typeof host.browserTests.initScript !== "function")
+    || (host.browserTests.createController !== undefined && typeof host.browserTests.createController !== "function")
+    || (host.browserTests.initScript !== undefined && host.browserTests.createController !== undefined))) {
     throw new Error(`'${name}/host' exports an invalid browser-test contract`);
   }
   return Object.freeze(host as FrameworkHostExtension);

@@ -113,6 +113,8 @@ export interface CompilerEmbeddedJavaScriptModule {
   readonly specifier: `./${string}.js`;
   readonly code: string;
   readonly sourceMap: string;
+  /** Authoring range of the raw JavaScript body in the owning `.vel` file. */
+  readonly sourceSpan: Span;
 }
 
 export interface CompilerEmitterOptions {
@@ -195,6 +197,17 @@ export interface CompilerAnalysisExtension {
    */
   readonly textForm?: (type: ValueType) => boolean | undefined;
   readonly inferIntrinsic?: (context: CompilerIntrinsicAnalysisContext) => ValueType | undefined;
+  /** Frame-aware traversal for expression nodes owned by this extension. */
+  readonly directAwaitExpression?: (
+    expression: Expression,
+    contains: (expression: Expression) => boolean,
+  ) => boolean | undefined;
+  /** Frame-aware traversal for statement nodes owned by this extension. */
+  readonly directAwaitStatement?: (
+    statement: Statement,
+    containsExpression: (expression: Expression) => boolean,
+    containsBlock: (statements: readonly Statement[]) => boolean,
+  ) => boolean | undefined;
 }
 
 /** The module a retired namespace's members moved back to, and which names moved. */

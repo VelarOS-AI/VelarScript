@@ -410,7 +410,11 @@ for (const phrase of [
   if (!cliSource.includes(phrase)) failures.push(`packages/cli/src/cli.ts: Node build does not materialize compiler runtime requirements '${phrase}'`);
 }
 for (const phrase of [
-  "const staging = await mkdtemp(join(parent, `.velar-${basename(outputDirectory)}-`))",
+  "const staging = await prepareBuildStaging(outputDirectory)",
+  "import { BUILD_STAGING_MARKER } from \"./build-staging.ts\"",
+  "await recoverInterruptedBuilds(normalizedOutput)",
+  "!processIsAlive(installed.ownerPid)",
+  "await rm(staging, { recursive: true, force: true })",
   "await writeNodeStandardModules(staging, project)",
   "await replaceOutputDirectory(staging, outputDirectory)",
   "await rename(outputDirectory, previous)",

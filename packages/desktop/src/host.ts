@@ -7,7 +7,7 @@ import {
 } from "@velarscript/compiler/framework-host";
 import { createWebArtifacts, createWebErrorDocument, velarFrameworkHost as webHost, webStaticDeployment } from "@velarscript/web/host";
 import { VELAR_DESKTOP_API_VERSION, type VelarDesktopConfig } from "./config.ts";
-import { desktopBrowserTestInitScript } from "./test-runtime.ts";
+import { desktopBrowserTestController } from "./test-runtime.ts";
 
 export const velarFrameworkHost: FrameworkHostExtension = Object.freeze({
   protocolVersion: VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION,
@@ -38,8 +38,8 @@ export const velarFrameworkHost: FrameworkHostExtension = Object.freeze({
   browserTests: Object.freeze({
     sourceSuffix: ".browser.test.vel",
     runtimeKey: "velar.browser.test.v1",
-    initScript(config: unknown) {
-      return desktopBrowserTestInitScript(config as VelarDesktopConfig);
+    createController(config: unknown) {
+      return desktopBrowserTestController(config as VelarDesktopConfig);
     },
   }),
   validateProject(input: FrameworkHostProjectValidationInput) {

@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { astNodes, CORE_STATEMENT_CONSTRUCTS } from "../packages/compiler/src/ast.ts";
+import { astNodes, CORE_EXPRESSION_CONSTRUCTS, CORE_STATEMENT_CONSTRUCTS } from "../packages/compiler/src/ast.ts";
 import { Lexer } from "../packages/compiler/src/lexer.ts";
 import { Parser } from "../packages/compiler/src/parser.ts";
 // Inspection and the extension type come from the built package, because that
@@ -40,14 +40,11 @@ const examples = fileURLToPath(new URL("../examples", import.meta.url));
  * roster is `CORE_STATEMENT_CONSTRUCTS`, which `tsc` refuses to accept as
  * incomplete.
  */
-const CORE_EXPRESSION_KINDS: ReadonlySet<string> = new Set([
-  "LiteralExpression", "FStringExpression", "IdentifierExpression", "SuperExpression", "DynamicImportExpression",
-  "ListExpression", "ObjectExpression", "SpreadExpression", "UnaryExpression", "TryExpression", "BinaryExpression",
-  "AssignmentExpression", "ComparisonChainExpression", "ConditionalExpression", "IsExpression",
-  "ArrowFunctionExpression", "CallExpression", "MemberExpression", "IndexExpression",
-]);
+const CORE_EXPRESSION_KINDS: ReadonlySet<string> = new Set(Object.keys(CORE_EXPRESSION_CONSTRUCTS));
+const CORE_STATEMENT_KINDS: ReadonlySet<string> = new Set(Object.keys(CORE_STATEMENT_CONSTRUCTS)
+  .map((key) => key.split(":", 1)[0]!));
 const isExpressionKind = (kind: string): boolean => CORE_EXPRESSION_KINDS.has(kind) || kind.startsWith("ExtensionExpression:");
-const isStatementKind = (kind: string): boolean => Object.hasOwn(CORE_STATEMENT_CONSTRUCTS, kind) || kind.startsWith("ExtensionStatement:");
+const isStatementKind = (kind: string): boolean => CORE_STATEMENT_KINDS.has(kind) || kind.startsWith("ExtensionStatement:");
 
 interface PlacedNode {
   readonly node: { readonly kind: string; readonly span: { start: number; end: number } };

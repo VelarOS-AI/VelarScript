@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, rmdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, rmdir, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative } from "node:path";
 import type { ProjectModule, ProjectResult, VelarSourcePackage } from "./project.ts";
 import { assertUniqueEmbeddedModuleOutputs, embeddedModuleFileContents, embeddedModuleOutputPath } from "./embedded-modules.ts";
@@ -46,8 +46,25 @@ export async function createCompiledSandbox(projectRoot: string, prefix: "test" 
   const sandbox = await mkdtemp(join(velarRoot, `${prefix}-`));
   // The compiled tree is always ES modules, regardless of the project's own
   // package.json "type" field.
-  await writeFile(join(sandbox, "package.json"), JSON.stringify({ name: `velar-${prefix}`, private: true, type: "module" }), "utf8");
+  const imports = await projectPackageImports(projectRoot);
+  await writeFile(join(sandbox, "package.json"), JSON.stringify({
+    name: `velar-${prefix}`,
+    private: true,
+    type: "module",
+    ...(imports ? { imports } : {}),
+  }), "utf8");
   return sandbox;
+}
+
+async function projectPackageImports(projectRoot: string): Promise<Record<string, unknown> | null> {
+  try {
+    const manifest = JSON.parse(await readFile(join(projectRoot, "package.json"), "utf8")) as { readonly imports?: unknown };
+    return manifest.imports !== null && typeof manifest.imports === "object" && !Array.isArray(manifest.imports)
+      ? manifest.imports as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Removes a compiled sandbox and prunes `.velar/` when it becomes empty. */

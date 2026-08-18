@@ -90,7 +90,7 @@ test("[D53] inline and external unsafe CSS share placement and analyzer policy",
   ].join("\n"));
   const messages = hiddenDependencies.diagnostics.map((item) => `${item.code} ${item.message}`);
   assert.ok(messages.some((message) => /VEL5037 Inline unsafe CSS contains @import/u.test(message)), messages.join("\n"));
-  assert.ok(messages.some((message) => /VEL5037 Inline unsafe CSS uses relative url/u.test(message)), messages.join("\n"));
+  assert.ok(messages.some((message) => /VEL5037 Inline unsafe CSS uses relative asset address url/u.test(message)), messages.join("\n"));
 });
 
 test("[D53] inline CSS is not a project resource, while the external form remains one", () => {
@@ -174,7 +174,7 @@ function refusedCssUrls(css: string): readonly string[] {
   const external = compileWeb('import css unsafe "./sheet.css" before look\n', new Map([["./sheet.css", css]]));
   const addresses = (diagnostics: readonly { readonly code: string; readonly message: string }[]): string[] => diagnostics
     .filter((item) => item.code === "VEL5037")
-    .map((item) => / uses relative url\((.*?)\); use a project-public /su.exec(item.message)?.[1])
+    .map((item) => / uses relative asset address [^(]+\((.*?)\); use a project-public /su.exec(item.message)?.[1])
     .filter((address): address is string => address !== undefined)
     .map((address) => JSON.parse(address) as string);
   assert.deepEqual(addresses(inline.diagnostics), addresses(external.diagnostics), css);
@@ -276,6 +276,23 @@ test("[D53] the CSS scanner reports url and at-keyword tokens over the CSS token
   assert.deepEqual(tokensOf('a { background: url(   "./padded.svg"   ); }'), [{ kind: "url", value: "./padded.svg" }]);
   assert.deepEqual(tokensOf("a { background: url(  ./padded.svg  ); }"), [{ kind: "url", value: "./padded.svg" }]);
   assert.deepEqual(tokensOf('a { background: url("./\u{1F600}.svg"); }'), [{ kind: "url", value: "./\u{1F600}.svg" }]);
+  // CSS Images 4 defines each top-level bare string option as a URL, and the
+  // compatibility alias has identical arguments. Strings nested in type() or
+  // a generated image are metadata/content rather than addresses.
+  assert.deepEqual(tokensOf('a { background: image-set("./one.png" 1x, "./two.png" 2x type("image/png")); }'), [
+    { kind: "asset-address", value: "./one.png", syntax: "image-set" },
+    { kind: "asset-address", value: "./two.png", syntax: "image-set" },
+  ]);
+  assert.deepEqual(tokensOf('a { background: -webkit-image-set("./one.png" 1x); }'), [
+    { kind: "asset-address", value: "./one.png", syntax: "-webkit-image-set" },
+  ]);
+  assert.deepEqual(tokensOf('a { background: image-set(linear-gradient(red, blue) 1x, "/root.png" 2x type("image/png")); }'), [
+    { kind: "asset-address", value: "/root.png", syntax: "image-set" },
+  ]);
+  // src() is specified as URL syntax, but Chromium, Firefox, and WebKit do not
+  // currently accept it as a background image or issue its request. D81's
+  // browser-observation gate therefore keeps it out of this rule for now.
+  assert.deepEqual(tokensOf('a { background: src("./not-requested.png"); }'), []);
   // A bad-url and a bad-string are dropped declarations, not references.
   assert.deepEqual(tokensOf('a { background: url(./bad url.svg); }'), []);
   assert.deepEqual(tokensOf('a { background: url("./bad\n.svg"); }'), []);
@@ -290,6 +307,13 @@ test("[D53] the CSS scanner reports url and at-keyword tokens over the CSS token
     { kind: "at-keyword", name: "import" },
   ]);
   assert.deepEqual(tokensOf('a { background: url(/a@import.svg); }'), [{ kind: "url", value: "/a@import.svg" }]);
+});
+
+test("[D81-202] browser-requesting image-set strings share the relative asset-address gate", () => {
+  assert.deepEqual(refusedCssUrls('.a { background: image-set("./one.png" 1x, "/two.png" 2x); }'), ["./one.png"]);
+  assert.deepEqual(refusedCssUrls('.a { background: -webkit-image-set("../one.png" 1x); }'), ["../one.png"]);
+  assert.deepEqual(refusedCssUrls('.a { background: image-set("/root.png" 1x, "data:image/png;base64,AA" 2x); }'), []);
+  assert.deepEqual(refusedCssUrls('.a { background: src("./not-requested.png"); }'), []);
 });
 
 const cliPath = resolve("packages/cli/src/cli.ts");
@@ -336,7 +360,7 @@ test("[D53/A-002] the extracted production stylesheet carries no address that wo
   const refusedBuild = buildProject(refused);
   assert.equal(refusedBuild.status, 1, refusedBuild.output);
   assert.match(refusedBuild.output, /VEL5037/u);
-  assert.match(refusedBuild.output, /uses relative url\("\.\/mark\)\.svg"\)/u);
+  assert.match(refusedBuild.output, /uses relative asset address url\("\.\/mark\)\.svg"\)/u);
   assert.deepEqual(await readdir(join(refused, "dist")).catch(() => []), [], "a refused stylesheet leaves no build product");
 
   // The same file named the way the ruling asks builds, and every address in

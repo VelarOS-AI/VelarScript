@@ -13,6 +13,7 @@ import { hostErrorMessage } from "./host-error.ts";
 import { resolveBrowserNpmEntry } from "./npm.ts";
 import { isNodeOnlyModule, nodeModuleDiagnostic } from "@velarscript/node/compiler";
 import { assertUniqueEmbeddedModuleOutputs, embeddedModuleOutputPath } from "./embedded-modules.ts";
+import { BUILD_STAGING_MARKER } from "./build-staging.ts";
 
 export interface ProductionBuildResult {
   readonly framework: ProductionFrameworkIdentity;
@@ -143,7 +144,7 @@ export async function writeProductionManifest(
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       const path = join(directory, entry.name);
       if (entry.isDirectory()) await visit(path);
-      else if (entry.isFile() && entry.name !== PRODUCTION_MANIFEST_NAME) {
+      else if (entry.isFile() && entry.name !== PRODUCTION_MANIFEST_NAME && entry.name !== BUILD_STAGING_MARKER) {
         paths.push(path);
         if (paths.length > MAX_PRODUCTION_ASSETS) throw new RangeError(`A production build cannot contain more than ${MAX_PRODUCTION_ASSETS} assets`);
       }
@@ -227,7 +228,12 @@ function assetRole(path: string, build: ProductionBuildResult): ProductionBuildM
 
 function velarModules(project: ProjectResult): Plugin {
   const modulesByPath = new Map<string, ProjectResult["modules"][number]>();
-  const embeddedByPath = new Map<string, { readonly module: ProjectResult["modules"][number]; readonly code: string; readonly sourceMap: string }>();
+  const embeddedByPath = new Map<string, {
+    readonly module: ProjectResult["modules"][number];
+    readonly code: string;
+    readonly sourceMap: string;
+    readonly sourceSpan: { readonly start: number; readonly end: number };
+  }>();
   assertUniqueEmbeddedModuleOutputs(project.modules.map((module) => ({
     ownerPath: module.inputPath.replace(/\.vel$/u, ".js"),
     embeddedModules: module.result.embeddedModules,
@@ -244,6 +250,7 @@ function velarModules(project: ProjectResult): Plugin {
         module,
         code: embedded.code,
         sourceMap: embedded.sourceMap,
+        sourceSpan: embedded.sourceSpan,
       });
     }
   }
@@ -300,11 +307,11 @@ function velarModules(project: ProjectResult): Plugin {
         // manifest. esbuild already resolves them with browser/import
         // conditions; they are not installed package names.
         if (arguments_.path.startsWith("#")) return null;
+        const sourceModule = moduleAt(arguments_.importer) ?? embeddedByPath.get(resolve(arguments_.importer))?.module ?? null;
         if (arguments_.path.startsWith("node:")) {
-          return { errors: [{ text: `Node builtin '${arguments_.path}' cannot run in a browser build` }] };
+          return { errors: [buildImportError(sourceModule ?? undefined, arguments_.path, `Node builtin '${arguments_.path}' cannot run in a browser build`, embeddedByPath.get(resolve(arguments_.importer))?.sourceSpan)] };
         }
         try {
-          const sourceModule = moduleAt(arguments_.importer) ?? null;
           if (sourceModule) {
             const velarTarget = project.velarImports.get(projectImportKey(sourceModule.inputPath, arguments_.path));
             if (velarTarget) {
@@ -316,9 +323,33 @@ function velarModules(project: ProjectResult): Plugin {
           const base = sourceModule ? dirname(sourceModule.inputPath) : arguments_.resolveDir || project.projectRoot;
           return { path: await resolveBrowserNpmEntry(arguments_.path, base) };
         } catch (error) {
-          return { errors: [{ text: `Cannot resolve browser import '${arguments_.path}': ${hostErrorMessage(error)}` }] };
+          return { errors: [buildImportError(sourceModule ?? undefined, arguments_.path, `Cannot resolve browser import '${arguments_.path}': ${hostErrorMessage(error)}`, embeddedByPath.get(resolve(arguments_.importer))?.sourceSpan)] };
         }
       });
+    },
+  };
+}
+
+function buildImportError(
+  module: ProjectResult["modules"][number] | undefined,
+  specifier: string,
+  text: string,
+  within?: { readonly start: number; readonly end: number },
+): { readonly text: string; readonly location?: { readonly file: string; readonly line: number; readonly column: number; readonly length: number; readonly lineText: string } } {
+  if (!module) return { text };
+  const dependency = module.result.dependencies.find((candidate) => candidate.javascript
+    && candidate.source === specifier
+    && (!within || (candidate.span.start >= within.start && candidate.span.end <= within.end)));
+  if (!dependency) return { text };
+  const start = module.result.source.location(dependency.span.start);
+  return {
+    text,
+    location: {
+      file: module.inputPath,
+      line: start.line,
+      column: start.column - 1,
+      length: Math.max(1, dependency.span.end - dependency.span.start),
+      lineText: module.result.source.lineText(start.line),
     },
   };
 }

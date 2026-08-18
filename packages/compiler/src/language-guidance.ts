@@ -46,6 +46,7 @@ const collectionGuidance = new Map<CollectionKind, ReadonlyMap<string, Collectio
     ["first", memberGuidance("Use 'get(0)'")],
     ["last", memberGuidance("Use 'get(-1)'")],
     ["findIndex", memberGuidance("Use 'find(test)' when you need the matching value, or 'index(value)' when locating a known value")],
+    ["forEach", memberGuidance("Use a structured loop for side effects — 'for value in values:' followed by the effect in its indented body")],
     ["indexOf", memberReplacement("Use 'index(value)'", "index", "Use List.index")],
     ["any", memberReplacement("Use 'some(test)'", "some", "Use List.some")],
     ["all", memberReplacement("Use 'every(test)'", "every", "Use List.every")],

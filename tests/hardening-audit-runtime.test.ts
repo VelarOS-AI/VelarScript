@@ -160,6 +160,7 @@ test("[MOD-I1 + BRG-D1] a recovered import never fabricates an empty-source depe
   const compiled = compile("import type {User} from \"./lib.vel\"\nprint(\"k\")\n");
   assert.deepEqual(compiled.dependencies, [{
     source: "./lib.vel",
+    span: { start: 24, end: 35 },
     javascript: false,
     unsafe: false,
     dynamic: false,

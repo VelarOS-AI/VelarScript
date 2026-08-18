@@ -1,7 +1,12 @@
 import { optionalOf as optional, type ClassInfo, type CompilerExtension, type EnumInfo, type ModuleInterface, type ValueType } from "@velarscript/compiler";
 import type { AnalysisContext, CompilerAnalysisExtension, CompilerEmitterOptions, CompilerLexicalExtension, LoweringHints, Token } from "@velarscript/compiler/extension";
 import { inferWebIntrinsic, routeContextIdentity, VelarWebAnalyzer } from "./analyzer.ts";
-import { WEB_STATEMENT_CONSTRUCTS, webStatementConstructKey } from "./ast.ts";
+import {
+  WEB_STATEMENT_CONSTRUCTS,
+  webExpressionContainsDirectAwait,
+  webStatementConstructKey,
+  webStatementContainsDirectAwait,
+} from "./ast.ts";
 import { BROWSER_TEST_MODULE, BROWSER_TEST_SOURCE_SUFFIX, browserTestDrivingGuidance } from "./browser-test.ts";
 import { WEB_VOID_ELEMENTS } from "./elements.ts";
 import { WebJavaScriptEmitter } from "./emitter.ts";
@@ -582,6 +587,8 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
   semantic: velarWebSemanticExtension,
   inspection: velarWebInspectionExtension,
   analysis: Object.freeze({
+    directAwaitExpression: webExpressionContainsDirectAwait,
+    directAwaitStatement: webStatementContainsDirectAwait,
     // `Duration` is Core's own primitive; the Web extension reads it but does
     // not register it a second time.
     primitiveTypes: new Set([...WEB_OWNED_TYPE_NAMES].filter((name) => name !== "Duration")),

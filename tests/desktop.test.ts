@@ -71,7 +71,7 @@ component GenerationProbe:
     return <span data-generation-probe></span>
 
 component App:
-    state detail = platform()
+    state detail: string = f"{platform()}"
 
     action inspectHost():
         const selected = await selectedProjectDirectory()

@@ -56,30 +56,46 @@ export type Statement = CoreStatement | ExtensionStatement;
  * spelled entirely out of keywords the tour already exercised — landed with no
  * tour example at all and the gate stayed green.
  *
- * One key can still cover more than one spelling: `extern js(…)` and
- * `unsafe js` are one node kind distinguished by a boolean, and no
- * compiler-owned table enumerates *that* split. The gate prints that limit on
- * every run rather than implying a completeness it does not have.
+ * A node kind that deliberately carries multiple grammar forms contributes a
+ * projected key for each form. The AST keeps its semantic fields instead of
+ * acquiring redundant tags solely for coverage; this function is the one
+ * compiler-owned projection the tour gate reads.
  */
+export type CoreStatementConstructKey = Exclude<
+  CoreStatement,
+  EmbeddedJavaScriptDeclaration | VariableDeclaration | FunctionDeclaration | ClassDeclaration | ForStatement
+>["kind"]
+  | "EmbeddedJavaScriptDeclaration:checked"
+  | "EmbeddedJavaScriptDeclaration:unsafe"
+  | `VariableDeclaration:${VariableDeclaration["binding"]}`
+  | `FunctionDeclaration:${"def" | "async-def"}`
+  | `ClassDeclaration:${"class" | "abstract-class"}`
+  | `ForStatement:${"for" | "async-for"}`;
+
 export const CORE_STATEMENT_CONSTRUCTS = Object.freeze({
   ImportDeclaration: 'import {name} from "./module.vel"',
   ReExportDeclaration: 'export {name} from "./module.vel"',
   ExternModuleDeclaration: 'extern module "node:crypto":',
-  EmbeddedJavaScriptDeclaration: "extern js(capture: T)`…`: — or unsafe js`…`",
+  "EmbeddedJavaScriptDeclaration:checked": "extern js(capture: T)`…`:",
+  "EmbeddedJavaScriptDeclaration:unsafe": "unsafe js`…`",
   TypeDeclaration: "type Name:",
   TypeAliasDeclaration: "type Name = string",
   EnumDeclaration: "enum Name:",
-  ClassDeclaration: "class Name:",
-  VariableDeclaration: "const name = value",
+  "ClassDeclaration:class": "class Name:",
+  "ClassDeclaration:abstract-class": "abstract class Name:",
+  "VariableDeclaration:const": "const name = value",
+  "VariableDeclaration:let": "let name = value",
   UsingDeclaration: "using name = open(path)",
   TestDeclaration: 'test "a name":',
-  FunctionDeclaration: "def name() -> T:",
+  "FunctionDeclaration:def": "def name() -> T:",
+  "FunctionDeclaration:async-def": "async def name() -> T:",
   ReturnStatement: "return value",
   ThrowStatement: "throw error",
   AssertStatement: "assert condition",
   IfStatement: "if condition:",
   MatchStatement: "match value:",
-  ForStatement: "for item in values:",
+  "ForStatement:for": "for item in values:",
+  "ForStatement:async-for": "async for item in values:",
   WhileStatement: "while condition:",
   BreakStatement: "break",
   ContinueStatement: "continue",
@@ -88,7 +104,25 @@ export const CORE_STATEMENT_CONSTRUCTS = Object.freeze({
   AssignmentStatement: "name = value",
   ExpressionStatement: "call()",
   AsyncStatement: "async call()",
-} satisfies { readonly [Kind in CoreStatement["kind"]]: string });
+} satisfies { readonly [Kind in CoreStatementConstructKey]: string });
+
+/** The tour key for one Core statement, including every multi-form projection. */
+export function coreStatementConstructKey(statement: CoreStatement): CoreStatementConstructKey {
+  switch (statement.kind) {
+    case "EmbeddedJavaScriptDeclaration":
+      return `EmbeddedJavaScriptDeclaration:${statement.form}`;
+    case "VariableDeclaration":
+      return `VariableDeclaration:${statement.binding}`;
+    case "FunctionDeclaration":
+      return `FunctionDeclaration:${statement.asynchronous ? "async-def" : "def"}`;
+    case "ClassDeclaration":
+      return `ClassDeclaration:${statement.abstract ? "abstract-class" : "class"}`;
+    case "ForStatement":
+      return `ForStatement:${statement.asynchronous ? "async-for" : "for"}`;
+    default:
+      return statement.kind;
+  }
+}
 
 /**
  * Target and framework syntax travels through one opaque Core AST slot. The
@@ -150,9 +184,8 @@ export interface ExternModuleContract {
 }
 
 /** D53 rule 117: one Core-owned raw JavaScript module embedded in a `.vel` module. */
-export interface EmbeddedJavaScriptDeclaration {
+interface EmbeddedJavaScriptDeclarationBase {
   readonly kind: "EmbeddedJavaScriptDeclaration";
-  readonly unsafe: boolean;
   /** Checked blocks receive these values as real synchronous factory parameters. */
   readonly captures: readonly EmbeddedJavaScriptCapture[];
   /** Exact, contiguous source slice: `source[i] === moduleText[sourceSpan.start + i]`. */
@@ -162,14 +195,28 @@ export interface EmbeddedJavaScriptDeclaration {
   readonly exports: readonly EmbeddedJavaScriptExport[];
   /** Imports stay at sibling-module top level when a checked block becomes a factory. */
   readonly imports: readonly EmbeddedJavaScriptImport[];
+  /** Literal ESM sources the project resolver must validate before emission. */
+  readonly dependencies: readonly EmbeddedJavaScriptDependency[];
   /** All module-level JS bindings; capture parameters may not shadow them. */
   readonly bindings: readonly EmbeddedJavaScriptBinding[];
   /** Acorn-derived source edits; no JavaScript is rediscovered with text matching. */
   readonly factoryEdits: readonly EmbeddedJavaScriptFactoryEdit[];
-  /** Present for `extern js(...)`, absent for `unsafe js`. */
-  readonly contract: ExternModuleContract | null;
   readonly span: Span;
 }
+
+export interface CheckedEmbeddedJavaScriptDeclaration extends EmbeddedJavaScriptDeclarationBase {
+  readonly form: "checked";
+  readonly unsafe: false;
+  readonly contract: ExternModuleContract;
+}
+
+export interface UnsafeEmbeddedJavaScriptDeclaration extends EmbeddedJavaScriptDeclarationBase {
+  readonly form: "unsafe";
+  readonly unsafe: true;
+  readonly contract: null;
+}
+
+export type EmbeddedJavaScriptDeclaration = CheckedEmbeddedJavaScriptDeclaration | UnsafeEmbeddedJavaScriptDeclaration;
 
 export interface EmbeddedJavaScriptCapture {
   readonly name: string;
@@ -187,6 +234,12 @@ export interface EmbeddedJavaScriptExport {
 
 export interface EmbeddedJavaScriptImport {
   readonly span: Span;
+}
+
+export interface EmbeddedJavaScriptDependency {
+  readonly source: string;
+  readonly span: Span;
+  readonly dynamic: boolean;
 }
 
 export interface EmbeddedJavaScriptBinding {
@@ -737,7 +790,41 @@ export type CoreExpression =
   | ArrowFunctionExpression
   | CallExpression
   | MemberExpression
-  | IndexExpression;
+  | IndexExpression
+  | CoreDurationExpression;
+
+/** D79 rule 199: Core's duration literal is a declared AST node, not a cast. */
+export interface CoreDurationExpression {
+  readonly kind: "ExtensionExpression:core:duration";
+  readonly value: number;
+  readonly unit: "ms" | "s";
+  readonly raw: string;
+  readonly span: Span;
+}
+
+/** D82 rule 203: a mapped roster makes every Core expression kind explicit. */
+export const CORE_EXPRESSION_CONSTRUCTS = Object.freeze({
+  LiteralExpression: "literal",
+  FStringExpression: "f-string",
+  IdentifierExpression: "name",
+  SuperExpression: "super",
+  DynamicImportExpression: "import(\"./module.vel\")",
+  ListExpression: "[value]",
+  ObjectExpression: "{field: value}",
+  SpreadExpression: "...value",
+  UnaryExpression: "not value — or await value",
+  TryExpression: "try value",
+  BinaryExpression: "left + right",
+  AssignmentExpression: "recovery node for assignment in expression position",
+  ComparisonChainExpression: "minimum <= value < maximum",
+  ConditionalExpression: "value if condition else fallback",
+  IsExpression: "value is Type",
+  ArrowFunctionExpression: "value => result",
+  CallExpression: "call()",
+  MemberExpression: "value.member",
+  IndexExpression: "value[index]",
+  "ExtensionExpression:core:duration": "250ms",
+} satisfies { readonly [Kind in CoreExpression["kind"]]: string });
 
 export type Expression = CoreExpression | ExtensionExpression;
 
@@ -969,6 +1056,17 @@ export function* astNodesOfKind<Node extends AstNode>(root: unknown, kind: Node[
   for (const node of astNodes(root)) if (node.kind === kind) yield node as Node;
 }
 
+export type DirectAwaitExpressionExtension = (
+  expression: Expression,
+  contains: (expression: Expression) => boolean,
+) => boolean | undefined;
+
+export type DirectAwaitStatementExtension = (
+  statement: Statement,
+  containsExpression: (expression: Expression) => boolean,
+  containsBlock: (statements: readonly Statement[]) => boolean,
+) => boolean | undefined;
+
 /**
  * Whether a block awaits in its own frame. A nested function or arrow owns its
  * awaits, so the walk stops at every declaration boundary. D43 item 69 uses
@@ -976,106 +1074,127 @@ export function* astNodesOfKind<Node extends AstNode>(root: unknown, kind: Node[
  */
 export function blockContainsDirectAwait(
   statements: readonly Statement[],
-  extension: (value: Expression) => boolean | undefined = () => undefined,
+  expressionExtension: DirectAwaitExpressionExtension = () => undefined,
+  statementExtension: DirectAwaitStatementExtension = () => undefined,
 ): boolean {
-  return statements.some((statement) => statementContainsDirectAwait(statement, extension));
+  return statements.some((statement) => statementContainsDirectAwait(statement, expressionExtension, statementExtension));
 }
 
 export function statementContainsDirectAwait(
   statement: Statement,
-  extension: (value: Expression) => boolean | undefined = () => undefined,
+  expressionExtension: DirectAwaitExpressionExtension = () => undefined,
+  statementExtension: DirectAwaitStatementExtension = () => undefined,
 ): boolean {
-  const expression = (value: Expression): boolean => expressionContainsDirectAwait(value, extension);
-  const block = (values: readonly Statement[]): boolean => blockContainsDirectAwait(values, extension);
-  switch (statement.kind) {
+  const expression = (value: Expression): boolean => expressionContainsDirectAwait(value, expressionExtension);
+  const block = (values: readonly Statement[]): boolean => blockContainsDirectAwait(values, expressionExtension, statementExtension);
+  if (statement.kind.startsWith("ExtensionStatement:")) {
+    const result = statementExtension(statement, expression, block);
+    if (result !== undefined) return result;
+    throw new Error(`Direct-await traversal has no owner for extension statement '${statement.kind}'`);
+  }
+  const core = statement as CoreStatement;
+  switch (core.kind) {
     case "VariableDeclaration":
-      return expression(statement.initializer);
+      return expression(core.initializer);
     case "UsingDeclaration":
-      return expression(statement.initializer);
+      return expression(core.initializer);
     case "TestDeclaration":
       // A test body is its own async frame.
       return false;
     case "ReturnStatement":
-      return statement.value !== null && expression(statement.value);
+      return core.value !== null && expression(core.value);
     case "ThrowStatement":
-      return expression(statement.value);
+      return expression(core.value);
     case "AssertStatement":
-      return expression(statement.condition) || (statement.message !== null && expression(statement.message));
+      return expression(core.condition) || (core.message !== null && expression(core.message));
     case "IfStatement":
-      return expression(statement.condition) || block(statement.thenBody) || (statement.elseBody !== null && block(statement.elseBody));
+      return expression(core.condition) || block(core.thenBody) || (core.elseBody !== null && block(core.elseBody));
     case "MatchStatement":
-      return expression(statement.value)
-        || statement.cases.some((branch) => (branch.guard !== null && expression(branch.guard)) || block(branch.body));
+      return expression(core.value)
+        || core.cases.some((branch) => (branch.guard !== null && expression(branch.guard)) || block(branch.body));
     case "ForStatement":
       // An `async for` awaits its own pulls even when the body does not.
-      return statement.asynchronous || expression(statement.iterable) || block(statement.body);
+      return core.asynchronous || expression(core.iterable) || block(core.body);
     case "WhileStatement":
-      return expression(statement.condition) || block(statement.body);
+      return expression(core.condition) || block(core.body);
     case "TryStatement":
-      return block(statement.tryBody)
-        || (statement.catchBody !== null && block(statement.catchBody))
-        || (statement.finallyBody !== null && block(statement.finallyBody));
+      return block(core.tryBody)
+        || (core.catchBody !== null && block(core.catchBody))
+        || (core.finallyBody !== null && block(core.finallyBody));
     case "AssignmentStatement":
-      return expression(statement.target) || expression(statement.value);
+      return expression(core.target) || expression(core.value);
     case "ExpressionStatement":
-      return expression(statement.expression);
+      return expression(core.expression);
     case "AsyncStatement":
       // Detached execution does not wait, so it never makes its frame async.
       return false;
-    default:
+    case "ImportDeclaration":
+    case "ReExportDeclaration":
+    case "ExternModuleDeclaration":
+    case "EmbeddedJavaScriptDeclaration":
+    case "TypeDeclaration":
+    case "TypeAliasDeclaration":
+    case "EnumDeclaration":
+    case "ClassDeclaration":
+    case "FunctionDeclaration":
+    case "BreakStatement":
+    case "ContinueStatement":
+    case "PassStatement":
+      // Declarations either carry no runtime expression or establish their own
+      // execution frame. Control-only statements cannot await.
       return false;
   }
 }
 
 export function expressionContainsDirectAwait(
   expression: Expression,
-  extension: (value: Expression) => boolean | undefined = () => undefined,
+  extension: DirectAwaitExpressionExtension = () => undefined,
 ): boolean {
-  const extensionResult = extension(expression);
+  const contains = (value: Expression): boolean => expressionContainsDirectAwait(value, extension);
+  const extensionResult = extension(expression, contains);
   if (extensionResult !== undefined) return extensionResult;
-  switch (expression.kind) {
+  if (expression.kind.startsWith("ExtensionExpression:") && expression.kind !== "ExtensionExpression:core:duration") {
+    throw new Error(`Direct-await traversal has no owner for extension expression '${expression.kind}'`);
+  }
+  const core = expression as CoreExpression;
+  switch (core.kind) {
     case "UnaryExpression":
-      return expression.operator === "await" || expressionContainsDirectAwait(expression.operand, extension);
+      return core.operator === "await" || contains(core.operand);
     case "TryExpression":
       // The wrapper is emitted as an async immediately-invoked function only
       // when its own body awaits, and that await belongs to the frame around
       // it either way.
-      return expressionContainsDirectAwait(expression.value, extension);
+      return contains(core.value);
     case "FStringExpression":
-      return expression.parts.some((part) => part.kind === "expression" && expressionContainsDirectAwait(part.value, extension));
+      return core.parts.some((part) => part.kind === "expression" && contains(part.value));
     case "ListExpression":
-      return expression.elements.some((element) => expressionContainsDirectAwait(element, extension));
+      return core.elements.some(contains);
     case "ObjectExpression":
-      return expression.properties.some((property) => expressionContainsDirectAwait(property.value, extension));
+      return core.properties.some((property) => contains(property.value));
     case "SpreadExpression":
-      return expressionContainsDirectAwait(expression.value, extension);
+      return contains(core.value);
     case "BinaryExpression":
-      return expressionContainsDirectAwait(expression.left, extension) || expressionContainsDirectAwait(expression.right, extension);
+      return contains(core.left) || contains(core.right);
     case "AssignmentExpression":
-      return expressionContainsDirectAwait(expression.target, extension) || expressionContainsDirectAwait(expression.value, extension);
+      return contains(core.target) || contains(core.value);
     case "ComparisonChainExpression":
-      return expression.operands.some((operand) => expressionContainsDirectAwait(operand, extension));
+      return core.operands.some(contains);
     case "ConditionalExpression":
-      return expressionContainsDirectAwait(expression.condition, extension)
-        || expressionContainsDirectAwait(expression.thenValue, extension)
-        || expressionContainsDirectAwait(expression.elseValue, extension);
+      return contains(core.condition) || contains(core.thenValue) || contains(core.elseValue);
     case "IsExpression":
-      return expressionContainsDirectAwait(expression.value, extension);
+      return contains(core.value);
     case "CallExpression":
-      return expressionContainsDirectAwait(expression.callee, extension)
-        || expression.arguments.some((argument) => expressionContainsDirectAwait(argument, extension));
+      return contains(core.callee) || core.arguments.some(contains);
     case "MemberExpression":
-      return expressionContainsDirectAwait(expression.object, extension);
+      return contains(core.object);
     case "IndexExpression":
-      return expressionContainsDirectAwait(expression.object, extension)
-        || expressionContainsDirectAwait(expression.index, extension);
+      return contains(core.object) || contains(core.index);
     case "ArrowFunctionExpression":
     case "DynamicImportExpression":
+    case "ExtensionExpression:core:duration":
     case "LiteralExpression":
     case "IdentifierExpression":
     case "SuperExpression":
-      return false;
-    default:
       return false;
   }
 }

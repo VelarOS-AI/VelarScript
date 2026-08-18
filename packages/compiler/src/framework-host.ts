@@ -32,6 +32,26 @@ export interface FrameworkBrowserTestContract {
   readonly runtimeKey: string;
   /** Deterministic target runtime installed before the test document starts. */
   readonly initScript?: (config: unknown) => string;
+  /** Per-test host control for state that must be fixed before first navigation. */
+  readonly createController?: (config: unknown) => FrameworkBrowserTestController;
+}
+
+export interface FrameworkBrowserTestControlResult {
+  readonly handled: boolean;
+  readonly value?: unknown;
+}
+
+/** Host-owned control plane; it has no browser authority of its own. */
+export interface FrameworkBrowserTestController {
+  /** Called exactly once, immediately before the test's first `browser.open`. */
+  readonly initScript: () => string;
+  /** Handles target-specific test setup without requiring a loaded document. */
+  readonly invoke: (
+    capability: string,
+    operation: string,
+    args: readonly unknown[],
+    timeout: number,
+  ) => FrameworkBrowserTestControlResult | Promise<FrameworkBrowserTestControlResult>;
 }
 
 /**

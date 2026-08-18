@@ -1,8 +1,8 @@
 // Chapter 01 — the Desktop host surface.
 //
 // Authority: the `velar/desktop` module interface in
-// packages/desktop/src/compiler.ts (15 exports; the seven host functions are
-// here and the three handle families are chapter 02), and charter section 1
+// packages/desktop/src/compiler.ts (the host reads are here and the handle
+// families are chapter 02), and charter section 1
 // rule 5, which makes Desktop a first-class target rather than a Web project
 // with extras.
 //
@@ -15,7 +15,7 @@
 // `velar/desktop` reaches the machine, so every call below runs from a control
 // the reader presses rather than while the page builds.
 
-import {appDataDirectory, homeDirectory, packaged, platform, projectDirectory, selectProjectDirectory, selectedProjectDirectory} from "velar/desktop"
+import {DesktopPlatform, appDataDirectory, homeDirectory, packaged, platform, projectDirectory, selectProjectDirectory, selectedProjectDirectory} from "velar/desktop"
 import {border, rgb, spacing} from "velar/look"
 
 const ink = rgb(24, 24, 24)
@@ -30,11 +30,20 @@ const panelLook = look:
     color = ink
     background = paper
 
-// `platform()` and `packaged()` are the two synchronous host reads: the host
-// operating system name, and whether this build is running from a packaged
-// application rather than from `velar dev`.
+// `platform()` returns the closed DesktopPlatform enum, not an arbitrary host
+// string. `test` names the deterministic browser-test host; `macos` names the
+// native host that ships today. A future member appears only with a real host.
+export def platformName(value: DesktopPlatform) -> string:
+    if value == DesktopPlatform.macos:
+        return "macos"
+    if value == DesktopPlatform.test:
+        return "test"
+    return "test"
+
+// `packaged()` is the other synchronous host read: whether this build is
+// running from a packaged application rather than from `velar dev`.
 export def hostSummary() -> string:
-    return f"{platform()}|{packaged()}"
+    return f"{platformName(platform())}|{packaged()}"
 
 // The three directories every Desktop application eventually needs, each an
 // absolute path validated by the module before it becomes VelarScript text.

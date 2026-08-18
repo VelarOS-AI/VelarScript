@@ -13,7 +13,7 @@ import { isNodeOnlyModule } from "@velarscript/node/compiler";
 import { resolveVelarProject } from "../packages/cli/src/config.ts";
 import { compileProject } from "../packages/cli/src/project.ts";
 import { standardModuleInterfaces } from "../packages/cli/src/standard-modules.ts";
-import { CORE_STATEMENT_CONSTRUCTS } from "../packages/compiler/src/ast.ts";
+import { CORE_STATEMENT_CONSTRUCTS, coreStatementConstructKey } from "../packages/compiler/src/ast.ts";
 import { Lexer } from "../packages/compiler/src/lexer.ts";
 import { forbiddenSourceIdentifiers } from "../packages/compiler/src/source-names.ts";
 import { keywordKinds } from "../packages/compiler/src/token.ts";
@@ -21,6 +21,8 @@ import { TYPE_PARAMETER_DECLARATION_FORMS } from "../packages/compiler/src/core-
 import { typeParameterBoundNames } from "../packages/compiler/src/types.ts";
 import { BROWSER_TEST_MODULE } from "../packages/web/src/browser-test.ts";
 import { LOOK_ABSENT_MEDIA_SUBJECTS, LOOK_EXCLUDED_PROPERTIES, LOOK_HOOKS, LOOK_MEDIA_SUBJECTS, LOOK_PROPERTIES, LOOK_TARGETS } from "../packages/web/src/look.ts";
+
+const CORE_STATEMENT_KINDS = new Set(Object.keys(CORE_STATEMENT_CONSTRUCTS).map((key) => key.split(":", 1)[0]));
 
 /**
  * D56 rule 129 — "the tour shows every usage" is a sentence anyone can write.
@@ -225,22 +227,12 @@ const exemptions = [
 // coverage. Closing one means giving the compiler a readable table, which is a
 // change to `packages/**` and therefore somebody's decision to make.
 //
-// D62 rules 157/158 closed the two this gate shipped with — Core's contextual
-// keywords and Core's numeric suffixes are both read from
-// `core-vocabulary.ts` now, alongside every other required table. The list is
-// left in place rather than deleted: an empty list is the claim that today
-// there is no vocabulary this gate cannot reach, and the next hole goes here.
-const unreachableTables = [
-  {
-    label: "statement spellings that share one AST node kind",
-    reason: "`extern js(…)` and `unsafe js` are one EmbeddedJavaScriptDeclaration told apart by a boolean, "
-      + "and `const`/`let`, `def`/`async def`, `class`/`abstract class`, `for`/`async for` are the same shape. "
-      + "No compiler-owned table enumerates those splits, so this category requires the *kind*: the tour writes both "
-      + "inline blocks, but removing one would not turn this gate red. The Web extension's `unsafe css` is the "
-      + "exception and shows what closing it would take — its `source` is a tagged union, so both of its spellings "
-      + "are separately required. Closing the rest means giving those nodes a discriminated form in `packages/**`.",
-  },
-];
+// D62 rules 157/158 closed the contextual-keyword and numeric-suffix holes;
+// D79 closes the remaining four Core statement-form pairs through the
+// compiler-owned `coreStatementConstructKey` projection. An empty list is the
+// claim that today there is no vocabulary this gate cannot reach, and the next
+// real hole belongs here.
+const unreachableTables = [];
 
 const failures = [];
 const categories = new Map();
@@ -669,10 +661,11 @@ function observeModule({ path, tokens, program, index, contextualKeywords, synta
     // A construct counts when the *parser* built its node, which is the same
     // standard the rest of this file holds names to: `unsafe js` written in a
     // comment or a string never becomes a node. Core forms are keyed by node
-    // kind; an extension refines its own key, so an inline `unsafe css` block
-    // and the `import css unsafe` that shares its node kind stay two entries.
+    // Core's projection refines the four same-kind form pairs and inline JS;
+    // an extension refines its own key, so an inline `unsafe css` block and the
+    // `import css unsafe` that shares its node kind stay two entries.
     if (typeof node.kind === "string") {
-      observe("statement-construct", node.kind);
+      observe("statement-construct", CORE_STATEMENT_KINDS.has(node.kind) ? coreStatementConstructKey(node) : node.kind);
       for (const syntax of syntaxExtensions) {
         const key = syntax.statementConstructKey(node);
         if (key !== null) observe("statement-construct", key);

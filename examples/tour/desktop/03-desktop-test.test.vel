@@ -1,9 +1,9 @@
 // Chapter 03 — `velar/desktop-test`.
 //
 // Authority: the `velar/desktop-test` module interface in
-// packages/desktop/src/compiler.ts — seven exports, all asynchronous:
-// `appDataDirectory`, `projectDirectory`, `makeDirectory`, `readText`,
-// `writeText`, `removeFile`, and `seedProjectChange`.
+// packages/desktop/src/compiler.ts — eight exports, all asynchronous:
+// `setPlatform`, `appDataDirectory`, `projectDirectory`, `makeDirectory`,
+// `readText`, `writeText`, `removeFile`, and `seedProjectChange`.
 //
 // The module is the test-process door into the Desktop host, the way
 // `velar/web-test` is the door into the running page. Its runtime only exists
@@ -16,7 +16,8 @@
 // (VEL3019), which is why this chapter carries that suffix instead of being
 // imported by name from `main.vel` the way chapters 01 and 02 are.
 
-import {appDataDirectory, makeDirectory, projectDirectory, readText, removeFile, seedProjectChange, writeText} from "velar/desktop-test"
+import {DesktopPlatform} from "velar/desktop"
+import {appDataDirectory, makeDirectory, projectDirectory, readText, removeFile, seedProjectChange, setPlatform, writeText} from "velar/desktop-test"
 import {expect} from "velar/test"
 import {projectName} from "./01-desktop-host.vel"
 
@@ -45,20 +46,26 @@ export async def fixtureRound() -> string:
 export async def seedChangeFixture():
     await seedProjectChange("tour-change", "prepared", "+const toured = true\n")
 
-// The seven export names in the order the fixture helpers use them. A Desktop
+// A browser test may select the native branch it wants to prove before its
+// first browser.open(). The simulation proves source branching; only the
+// native integration suite proves actual operating-system behavior.
+export async def selectMacosBranch():
+    await setPlatform(DesktopPlatform.macos)
+
+// The eight export names in the order the fixture helpers use them. A Desktop
 // project's `velar test` runs in Node, where no host bridge exists, so a test
 // module here asserts what it can compute rather than what it would have to
 // call — the calls themselves belong to `velar test --browser`, where the
 // framework host answers them.
 export def fixtureSteps() -> List<string>:
-    return ["appDataDirectory", "projectDirectory", "makeDirectory", "writeText", "readText", "removeFile", "seedProjectChange"]
+    return ["setPlatform", "appDataDirectory", "projectDirectory", "makeDirectory", "writeText", "readText", "removeFile", "seedProjectChange"]
 
 test "a fixture path is built from the host directory and the file name":
     expect(fixturePath("/tmp/app-data", "round")).toBe("/tmp/app-data/tour-fixtures/round")
     expect(fixturePath("/tmp/app-data", "note.txt")).toBe("/tmp/app-data/tour-fixtures/note.txt")
 
 test "a fixture round is described before it is run":
-    expect(fixtureSteps()).toHaveLength(7)
+    expect(fixtureSteps()).toHaveLength(8)
     expect(fixtureSteps()).toContain("writeText")
     expect(fixtureSteps().join(" → ")).toMatch("appDataDirectory")
 

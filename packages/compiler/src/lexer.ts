@@ -1006,7 +1006,13 @@ export class Lexer {
   private invalidCharacter(character: string, start: number): void {
     this.advance();
     if (this.diagnosedBidirectionalOffsets.has(start) || this.isBidirectionalControl(character.codePointAt(0)!)) return;
-    this.diagnostics.push(diagnostic("VEL1001", `Unexpected character '${character}'`, span(start, this.index)));
+    this.diagnostics.push(diagnostic(
+      "VEL1001",
+      character === "\uFEFF"
+        ? "Unexpected UTF-8 BOM (U+FEFF); remove the BOM or save the file as UTF-8 without BOM"
+        : `Unexpected character '${character}'`,
+      span(start, this.index),
+    ));
   }
 
   private isAtEnd(): boolean {

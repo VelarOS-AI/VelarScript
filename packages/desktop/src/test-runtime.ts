@@ -1,11 +1,39 @@
 import type { VelarDesktopConfig } from "./config.ts";
+import type { FrameworkBrowserTestController } from "@velarscript/compiler/framework-host";
+
+export type DesktopTestPlatform = "macos" | "test";
+
+/**
+ * Owns the one pre-navigation choice a Desktop browser test may make. Each
+ * test receives a fresh controller, and the choice is sealed when its first
+ * `browser.open()` requests the application init script.
+ */
+export function desktopBrowserTestController(config: VelarDesktopConfig): FrameworkBrowserTestController {
+  let platform: DesktopTestPlatform = "test";
+  let opened = false;
+  return Object.freeze({
+    initScript() {
+      opened = true;
+      return desktopBrowserTestInitScript(config, platform);
+    },
+    invoke(capability: string, operation: string, args: readonly unknown[]) {
+      if (capability !== "desktop-test" || operation !== "setPlatform") return { handled: false };
+      if (opened) throw new Error("Desktop test platform must be set before the first browser.open()");
+      if (args.length !== 1 || args[0] !== "macos" && args[0] !== "test") {
+        throw new TypeError("Desktop test platform must be DesktopPlatform.macos or DesktopPlatform.test");
+      }
+      platform = args[0];
+      return { handled: true, value: null };
+    },
+  });
+}
 
 /**
  * Creates the deterministic capability host used by `velar test --browser`.
  * It is intentionally an in-memory filesystem, not a browser polyfill for the
  * operating system. The native worker has a separate integration suite.
  */
-export function desktopBrowserTestInitScript(config: VelarDesktopConfig): string {
+export function desktopBrowserTestInitScript(config: VelarDesktopConfig, platform: DesktopTestPlatform = "test"): string {
   const files = JSON.stringify(config.permissions.files);
   const processes = JSON.stringify(config.permissions.processes);
   return String.raw`
@@ -419,7 +447,7 @@ export function desktopBrowserTestInitScript(config: VelarDesktopConfig): string
   }
 
   const bridge = Object.freeze({
-    platform: "test",
+    platform: ${JSON.stringify(platform)},
     packaged: false,
     projectDirectory: projectRoot,
     projectDirectoryValue() { return projectRoot; },

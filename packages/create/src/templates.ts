@@ -290,7 +290,8 @@ function libraryTemplate(name: string, displayName: string, version: string, for
       "format:check": "velar format --check",
       test: "velar test",
       build: "velar build",
-      validate: "npm run format:check && npm run check && npm test && npm run build",
+      "pack:check": "npm pack --dry-run --json",
+      validate: "npm run format:check && npm run check && npm test && npm run build && npm run pack:check",
     },
     devDependencies: {
       "@velarscript/cli": version,
@@ -329,7 +330,8 @@ function componentTemplate(name: string, displayName: string, version: string, f
       "test:browser": "velar test --browser",
       build: "velar build",
       verify: "velar verify",
-      validate: "npm run format:check && npm run check && npm test && npm run build && npm run verify",
+      "pack:check": "npm pack --dry-run --json",
+      validate: "npm run format:check && npm run check && npm test && npm run build && npm run verify && npm run pack:check",
     },
     peerDependencies: {
       "@velarscript/web": version,

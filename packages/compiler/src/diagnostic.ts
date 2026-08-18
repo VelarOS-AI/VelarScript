@@ -66,13 +66,47 @@ export function formatDiagnostic(source: SourceText, item: Diagnostic): string {
   const prefix = start > 0 ? "…" : "";
   const suffix = start + maximumLine < rawLength ? "…" : "";
   const line = `${prefix}${clipped}${suffix}`;
-  const displayColumn = Math.max(1, location.column - start + (prefix ? 1 : 0));
-  const markerLength = Math.max(1, Math.min(item.span.end - item.span.start, Math.max(1, line.length - displayColumn + 1)));
-  const marker = `${" ".repeat(displayColumn - 1)}${"^".repeat(markerLength)}`;
+  const localColumn = Math.max(0, location.column - 1 - start);
+  const markerSource = clipped.slice(localColumn, localColumn + Math.max(1, item.span.end - item.span.start));
+  const marker = `${" ".repeat(terminalTextWidth(prefix + clipped.slice(0, localColumn)))}${"^".repeat(Math.max(1, terminalTextWidth(markerSource)))}`;
 
   return [
     `${source.path.replaceAll("\\", "/")}:${location.line}:${location.column} error ${item.code}: ${item.message}`,
     line,
     marker,
   ].join("\n");
+}
+
+const graphemeSegmenter = typeof Intl.Segmenter === "function"
+  ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+  : null;
+
+/** Terminal-cell width, distinct from the UTF-16 columns used by LSP. */
+function terminalTextWidth(value: string): number {
+  const graphemes = graphemeSegmenter
+    ? [...graphemeSegmenter.segment(value)].map((entry) => entry.segment)
+    : [...value];
+  let width = 0;
+  for (const grapheme of graphemes) {
+    if (/^[\p{Mark}\p{Cf}]*$/u.test(grapheme)) continue;
+    const codePoint = grapheme.codePointAt(0) ?? 0;
+    width += /\p{Extended_Pictographic}/u.test(grapheme) || isWideCodePoint(codePoint) ? 2 : 1;
+  }
+  return width;
+}
+
+function isWideCodePoint(value: number): boolean {
+  return value >= 0x1100 && (
+    value <= 0x115f
+    || value === 0x2329 || value === 0x232a
+    || (value >= 0x2e80 && value <= 0xa4cf && value !== 0x303f)
+    || (value >= 0xac00 && value <= 0xd7a3)
+    || (value >= 0xf900 && value <= 0xfaff)
+    || (value >= 0xfe10 && value <= 0xfe19)
+    || (value >= 0xfe30 && value <= 0xfe6f)
+    || (value >= 0xff00 && value <= 0xff60)
+    || (value >= 0xffe0 && value <= 0xffe6)
+    || (value >= 0x1b000 && value <= 0x1ffff)
+    || (value >= 0x20000 && value <= 0x3fffd)
+  );
 }

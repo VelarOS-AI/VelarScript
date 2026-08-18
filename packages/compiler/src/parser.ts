@@ -152,6 +152,7 @@ export class Parser {
   protected readonly contextualKeywords: ReadonlySet<string>;
   private index = 0;
   private parseDepth = 0;
+  private recoveredImportDelimiterBoundary = false;
   /**
    * D65 rule 170: non-zero while `parseParameters` is reading an arrow's
    * parameter list — the one list a contextual function type can still type.
@@ -188,7 +189,7 @@ export class Parser {
       } else {
         this.synchronize();
       }
-      if (this.previous().kind !== "dedent") this.expectStatementBoundary();
+      this.finishStatementBoundary();
       this.consumeNewlines();
     }
 
@@ -716,7 +717,13 @@ export class Parser {
       } else {
         emptyBraces = span(brace.span.start, this.current().span.end);
       }
+      const closed = this.check("rightBrace");
       this.expect("rightBrace", "Expected '}' after imports");
+      // An unmatched `{` makes the lexer suppress the physical newline. Once
+      // the parser has recovered the rest of the import, the next statement
+      // is nevertheless already on its own source line; do not tell the
+      // author to move it there again.
+      if (!closed) this.recoveredImportDelimiterBoundary = true;
     } else {
       const local = this.expect("identifier", "Expected a default import name");
       specifiers.push({ imported: "default", local: local.value, namespace: false, span: local.span });
@@ -895,17 +902,19 @@ export class Parser {
     if (contract) this.reportEmbeddedJavaScriptContract(inspected.exports, contract);
     return {
       kind: "EmbeddedJavaScriptDeclaration",
+      form: unsafe ? "unsafe" : "checked",
       unsafe,
       captures,
       source,
       sourceSpan,
       exports: inspected.exports,
       imports: inspected.imports,
+      dependencies: inspected.dependencies,
       bindings: inspected.bindings,
       factoryEdits: inspected.factoryEdits,
       contract,
       span: span(start, contract?.span.end ?? sourceToken.span.end),
-    };
+    } as EmbeddedJavaScriptDeclaration;
   }
 
   private parseEmbeddedJavaScriptCaptures(): readonly EmbeddedJavaScriptCapture[] {
@@ -2274,7 +2283,7 @@ export class Parser {
       } else {
         this.synchronize();
       }
-      if (this.previous().kind !== "dedent") this.expectStatementBoundary();
+      this.finishStatementBoundary();
       this.consumeNewlines();
     }
     this.expect("dedent", "Expected the end of an indented block");
@@ -3488,7 +3497,7 @@ export class Parser {
       unit,
       raw: token.value,
       span: token.span,
-    } as Expression;
+    };
   }
 
   // An extension-owned bracket fragment lexes with insignificant
@@ -3619,6 +3628,14 @@ export class Parser {
     const token = this.current();
     this.diagnostics.push(diagnostic("VEL2032", this.statementBoundaryMessage(token), token.span));
     this.synchronize();
+  }
+
+  private finishStatementBoundary(): void {
+    if (this.recoveredImportDelimiterBoundary) {
+      this.recoveredImportDelimiterBoundary = false;
+      return;
+    }
+    if (this.previous().kind !== "dedent") this.expectStatementBoundary();
   }
 
   // A numeric unit suffix binds tighter than any operator, so '10%3' lexes as

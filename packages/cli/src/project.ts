@@ -1,4 +1,4 @@
-import { findPackageJSON, isBuiltin } from "node:module";
+import { createRequire, findPackageJSON, isBuiltin } from "node:module";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { readdir } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
@@ -360,7 +360,7 @@ export async function compileProjectEntries(
         // VelarScript package imported through `import js` crashed the same
         // way while the mirror mistake had teaching.
         if (options.resolveJavaScriptSpecifiers !== false
-          && !dependency.source.startsWith("node:") && !dependency.source.startsWith("data:") && !dependency.source.startsWith("#") && !isBuiltin(dependency.source)) {
+          && !dependency.source.startsWith("data:") && !isBuiltin(dependency.source)) {
           const key = projectImportKey(inputPath, dependency.source);
           let verdict = javascriptSpecifierVerdicts.get(key);
           if (verdict === undefined) {
@@ -512,7 +512,13 @@ export async function compileProjectEntries(
     let previousIdentity = "";
     let passResults = new Map<string, ProjectModule>();
     for (let pass = 0; pass < maximumPasses; pass += 1) {
-      interfaceCache.clear();
+      // Dependency-first compilation makes every interface outside this SCC
+      // stable. Retain those resolved entries: clearing the whole cache made
+      // each parent recursively rebuild the complete transitive chain, so a
+      // legal 3000-module line still consumed 3000 host stack frames after
+      // the graph algorithms themselves had become iterative. Members of the
+      // current SCC are the only entries whose pass can change them.
+      for (const module of group) interfaceCache.delete(module.inputPath);
       const nextResults = new Map<string, ProjectModule>();
       for (const module of group) {
         const analysis = await createAnalysisContext(
@@ -646,6 +652,32 @@ async function nearestModuleName(targetPath: string): Promise<string | null> {
 // exist next to the importer, and a VelarScript package reached through
 // `import js` gets the reverse-direction teaching.
 async function judgeJavaScriptSpecifier(source: string, importerPath: string): Promise<ModuleResolutionDiagnostic | null> {
+  if (source.startsWith("velar/compiler-runtime-") && source.endsWith("-v1")) {
+    return {
+      code: "VEL6006",
+      message: `JavaScript import ${JSON.stringify(source)} names a compiler-internal runtime module; it is emitted only as generated implementation support and cannot be imported from VelarScript source`,
+      source,
+    };
+  }
+  if (source.startsWith("node:")) {
+    return {
+      code: "VEL6006",
+      message: `JavaScript builtin import ${JSON.stringify(source)} is not a Node builtin; fix the specifier`,
+      source,
+    };
+  }
+  if (source.startsWith("#")) {
+    try {
+      createRequire(pathToFileURL(importerPath)).resolve(source);
+      return null;
+    } catch (error) {
+      return {
+        code: "VEL6006",
+        message: `JavaScript package import ${JSON.stringify(source)} is not defined by the importing project's package.json#imports map, or its target does not resolve: ${hostErrorMessage(error)}`,
+        source,
+      };
+    }
+  }
   let manifestPath: string | undefined;
   try {
     manifestPath = findPackageJSON(source, pathToFileURL(importerPath)) ?? undefined;
@@ -799,43 +831,72 @@ function dependencyFirstCompilationGroups(
   velarImports: ReadonlyMap<string, string>,
   compilerExtensions: readonly CompilerExtension[],
 ): readonly (readonly LoadedModule[])[] {
+  return stronglyConnectedPaths(
+    loaded.keys(),
+    (path) => moduleDependencies(loaded.get(path)!, loaded, velarImports, compilerExtensions),
+  ).map((group) => group
+    .map((path) => loaded.get(path)!)
+    .sort((left, right) => left.inputPath.localeCompare(right.inputPath)));
+}
+
+/** Iterative Tarjan: the public 4096-module bound must not depend on host stack depth. */
+function stronglyConnectedPaths(
+  paths: Iterable<string>,
+  dependencies: (path: string) => readonly string[],
+): readonly (readonly string[])[] {
+  interface Frame {
+    readonly path: string;
+    readonly parent: string | null;
+    readonly dependencies: readonly string[];
+    next: number;
+  }
   let nextIndex = 0;
   const indexes = new Map<string, number>();
   const lowLinks = new Map<string, number>();
-  const stack: string[] = [];
+  const componentStack: string[] = [];
   const active = new Set<string>();
-  const groups: LoadedModule[][] = [];
-
-  const visit = (path: string): void => {
+  const groups: string[][] = [];
+  const frames: Frame[] = [];
+  const begin = (path: string, parent: string | null): void => {
     const index = nextIndex++;
     indexes.set(path, index);
     lowLinks.set(path, index);
-    stack.push(path);
+    componentStack.push(path);
     active.add(path);
-
-    const module = loaded.get(path)!;
-    for (const dependency of moduleDependencies(module, loaded, velarImports, compilerExtensions)) {
-      if (!indexes.has(dependency)) {
-        visit(dependency);
-        lowLinks.set(path, Math.min(lowLinks.get(path)!, lowLinks.get(dependency)!));
-      } else if (active.has(dependency)) {
-        lowLinks.set(path, Math.min(lowLinks.get(path)!, indexes.get(dependency)!));
-      }
-    }
-
-    if (lowLinks.get(path) !== index) return;
-    const group: LoadedModule[] = [];
-    while (stack.length > 0) {
-      const member = stack.pop()!;
-      active.delete(member);
-      group.push(loaded.get(member)!);
-      if (member === path) break;
-    }
-    group.sort((left, right) => left.inputPath.localeCompare(right.inputPath));
-    groups.push(group);
+    frames.push({ path, parent, dependencies: dependencies(path), next: 0 });
   };
 
-  for (const path of loaded.keys()) if (!indexes.has(path)) visit(path);
+  for (const root of paths) {
+    if (indexes.has(root)) continue;
+    begin(root, null);
+    while (frames.length > 0) {
+      const frame = frames.at(-1)!;
+      const dependency = frame.dependencies[frame.next];
+      if (dependency !== undefined) {
+        frame.next += 1;
+        if (!indexes.has(dependency)) {
+          begin(dependency, frame.path);
+        } else if (active.has(dependency)) {
+          lowLinks.set(frame.path, Math.min(lowLinks.get(frame.path)!, indexes.get(dependency)!));
+        }
+        continue;
+      }
+
+      frames.pop();
+      if (frame.parent !== null) {
+        lowLinks.set(frame.parent, Math.min(lowLinks.get(frame.parent)!, lowLinks.get(frame.path)!));
+      }
+      if (lowLinks.get(frame.path) !== indexes.get(frame.path)) continue;
+      const group: string[] = [];
+      while (componentStack.length > 0) {
+        const member = componentStack.pop()!;
+        active.delete(member);
+        group.push(member);
+        if (member === frame.path) break;
+      }
+      groups.push(group);
+    }
+  }
   return groups;
 }
 
@@ -930,36 +991,10 @@ function appendInitializationCycleDiagnostics(
   // later-evaluating module, so everything else is skipped immediately.
   const componentOf = new Map<string, number>();
   if (cycleRelevant) {
-    let nextIndex = 0;
-    let componentCount = 0;
-    const indexes = new Map<string, number>();
-    const lowLinks = new Map<string, number>();
-    const stack: string[] = [];
-    const active = new Set<string>();
-    const visit = (path: string): void => {
-      const index = nextIndex++;
-      indexes.set(path, index);
-      lowLinks.set(path, index);
-      stack.push(path);
-      active.add(path);
-      for (const dependency of staticDependencies.get(path) ?? []) {
-        if (!indexes.has(dependency)) {
-          visit(dependency);
-          lowLinks.set(path, Math.min(lowLinks.get(path)!, lowLinks.get(dependency)!));
-        } else if (active.has(dependency)) {
-          lowLinks.set(path, Math.min(lowLinks.get(path)!, indexes.get(dependency)!));
-        }
-      }
-      if (lowLinks.get(path) !== index) return;
-      const component = componentCount++;
-      while (stack.length > 0) {
-        const member = stack.pop()!;
-        active.delete(member);
-        componentOf.set(member, component);
-        if (member === path) break;
-      }
-    };
-    for (const path of loaded.keys()) if (!indexes.has(path)) visit(path);
+    stronglyConnectedPaths(loaded.keys(), (path) => staticDependencies.get(path) ?? [])
+      .forEach((members, component) => {
+        for (const member of members) componentOf.set(member, component);
+      });
   }
   const componentSizes = new Map<number, number>();
   for (const component of componentOf.values()) componentSizes.set(component, (componentSizes.get(component) ?? 0) + 1);
@@ -973,15 +1008,28 @@ function appendInitializationCycleDiagnostics(
   const order = new Map<string, number>();
   if (cyclic) {
     const visiting = new Set<string>();
-    const visit = (path: string): void => {
-      if (order.has(path) || visiting.has(path)) return;
-      visiting.add(path);
-      for (const dependency of staticDependencies.get(path) ?? []) visit(dependency);
-      visiting.delete(path);
-      order.set(path, order.size);
-    };
     const roots = [entryPath, ...[...new Set(dynamicRoots)].sort(), ...[...loaded.keys()].sort()];
-    for (const root of roots) if (loaded.has(root)) visit(root);
+    for (const root of roots) {
+      if (!loaded.has(root) || order.has(root)) continue;
+      const frames: { readonly path: string; readonly dependencies: readonly string[]; next: number }[] = [];
+      const begin = (path: string): void => {
+        visiting.add(path);
+        frames.push({ path, dependencies: staticDependencies.get(path) ?? [], next: 0 });
+      };
+      begin(root);
+      while (frames.length > 0) {
+        const frame = frames.at(-1)!;
+        const dependency = frame.dependencies[frame.next];
+        if (dependency !== undefined) {
+          frame.next += 1;
+          if (!order.has(dependency) && !visiting.has(dependency)) begin(dependency);
+          continue;
+        }
+        frames.pop();
+        visiting.delete(frame.path);
+        if (!order.has(frame.path)) order.set(frame.path, order.size);
+      }
+    }
   }
 
   for (let index = 0; index < modules.length; index += 1) {

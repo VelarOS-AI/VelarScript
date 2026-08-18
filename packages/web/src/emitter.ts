@@ -19,6 +19,8 @@ import {
   isWebLook,
   isWebStatement,
   isWebUnit,
+  webExpressionContainsDirectAwait,
+  webStatementContainsDirectAwait,
   type WebComponentDeclaration as ComponentDeclaration,
   type WebJsxAttribute as JSXAttribute,
   type WebJsxElementExpression as JSXElementExpression,
@@ -302,17 +304,19 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     return true;
   }
 
-  protected override extensionExpressionContainsDirectAwait(expression: Expression): boolean | undefined {
-    if (isWebUnit(expression)) return false;
-    if (isWebKeyframes(expression)) return expression.stops.some((stop) => stop.entries.some((entry) => this.expressionContainsDirectAwait(entry.value)));
-    if (isWebLook(expression)) return lookExpressions(expression.entries).some((value) => this.expressionContainsDirectAwait(value));
-    if (!isWebJsx(expression)) return undefined;
-    return expression.attributes.some((attribute) => typeof attribute.value !== "string"
-      && attribute.value !== null
-      && this.expressionContainsDirectAwait(attribute.value))
-      || expression.children.some((child) => child.kind === "JSXExpressionChild"
-        ? this.expressionContainsDirectAwait(child.expression)
-        : child.kind === "ExtensionExpression:web:jsx" && this.expressionContainsDirectAwait(child));
+  protected override extensionExpressionContainsDirectAwait(
+    expression: Expression,
+    contains: (expression: Expression) => boolean,
+  ): boolean | undefined {
+    return webExpressionContainsDirectAwait(expression, contains);
+  }
+
+  protected override extensionStatementContainsDirectAwait(
+    statement: Statement,
+    containsExpression: (expression: Expression) => boolean,
+    containsBlock: (statements: readonly Statement[]) => boolean,
+  ): boolean | undefined {
+    return webStatementContainsDirectAwait(statement, containsExpression, containsBlock);
   }
 
   protected override emitStatement(statement: Statement, depth: number): string {
@@ -1109,12 +1113,6 @@ function visitLookExpressions(entries: readonly LookEntry[], visit: (expression:
       visitLookExpressions(entry.elseEntries, visit);
     } else visitLookExpressions(entry.entries, visit);
   }
-}
-
-function lookExpressions(entries: readonly LookEntry[]): readonly Expression[] {
-  const output: Expression[] = [];
-  visitLookExpressions(entries, (expression) => output.push(expression));
-  return output;
 }
 
 function containsUnitLiteral(value: unknown): boolean {

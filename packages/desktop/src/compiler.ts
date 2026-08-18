@@ -80,6 +80,9 @@ function __velarDesktopHostCall(capability, operation, args, timeout = 30000) {
 
 const languageServerIdentity = "velar/desktop#type:LanguageServer";
 const languageServerType: ValueType = { kind: "named", name: "LanguageServer", identity: languageServerIdentity };
+const desktopPlatformIdentity = "velar/desktop#enum:DesktopPlatform";
+const desktopPlatforms = new Set(["macos", "test"]);
+const desktopPlatformType: ValueType = { kind: "enum", name: "DesktopPlatform", identity: desktopPlatformIdentity };
 const projectTaskIdentity = "velar/desktop#type:ProjectTask";
 const projectTaskType: ValueType = { kind: "named", name: "ProjectTask", identity: projectTaskIdentity };
 const projectTaskCommandIdentity = "velar/desktop#enum:ProjectTaskCommand";
@@ -168,6 +171,7 @@ const terminalOptionsType: ValueType = {
 };
 const desktopModuleInterface = moduleInterface(new Map([
   ["LanguageServer", { kind: "typeObject", name: "LanguageServer" }],
+  ["DesktopPlatform", { kind: "enumObject", name: "DesktopPlatform", identity: desktopPlatformIdentity, members: desktopPlatforms }],
   ["ProjectTask", { kind: "typeObject", name: "ProjectTask" }],
   ["ProjectTaskCommand", { kind: "enumObject", name: "ProjectTaskCommand", identity: projectTaskCommandIdentity, members: projectTaskCommands }],
   ["ProjectTaskOutputChannel", { kind: "enumObject", name: "ProjectTaskOutputChannel", identity: projectTaskOutputChannelIdentity, members: projectTaskOutputChannels }],
@@ -175,7 +179,7 @@ const desktopModuleInterface = moduleInterface(new Map([
   ["ProjectChangeLifecycle", { kind: "enumObject", name: "ProjectChangeLifecycle", identity: projectChangeLifecycleIdentity, members: projectChangeLifecycles }],
   ["ProjectChangeRisk", { kind: "enumObject", name: "ProjectChangeRisk", identity: projectChangeRiskIdentity, members: projectChangeRisks }],
   ["TerminalSession", { kind: "typeObject", name: "TerminalSession" }],
-  ["platform", functionType([], stringType)],
+  ["platform", functionType([], desktopPlatformType)],
   ["packaged", functionType([], boolType)],
   ["homeDirectory", functionType([], { kind: "promise", value: stringType })],
   ["appDataDirectory", functionType([], { kind: "promise", value: stringType })],
@@ -220,6 +224,7 @@ const desktopModuleInterface = moduleInterface(new Map([
   ["ProjectChanges", projectChangesIdentity],
   ["TerminalSession", terminalSessionIdentity],
 ]), new Map([
+  ["DesktopPlatform", { identity: desktopPlatformIdentity, members: desktopPlatforms }],
   ["ProjectTaskCommand", { identity: projectTaskCommandIdentity, members: projectTaskCommands }],
   ["ProjectTaskOutputChannel", { identity: projectTaskOutputChannelIdentity, members: projectTaskOutputChannels }],
   ["ProjectChangeLifecycle", { identity: projectChangeLifecycleIdentity, members: projectChangeLifecycles }],
@@ -227,6 +232,7 @@ const desktopModuleInterface = moduleInterface(new Map([
 ]));
 
 const desktopTestModuleInterface = moduleInterface(new Map([
+  ["setPlatform", functionType([desktopPlatformType], { kind: "promise", value: nullType })],
   ["appDataDirectory", functionType([], { kind: "promise", value: stringType })],
   ["projectDirectory", functionType([], { kind: "promise", value: stringType })],
   ["seedProjectChange", functionType([stringType, stringType, stringType], { kind: "promise", value: nullType })],
@@ -248,10 +254,17 @@ const languageServerToken = Symbol("velar.desktop.language-server");
 const projectTaskToken = Symbol("velar.desktop.project-task");
 const projectChangesToken = Symbol("velar.desktop.project-changes");
 const terminalSessionToken = Symbol("velar.desktop.terminal-session");
+export const DesktopPlatform = __velarRegisterRuntimeType(__velarProcessFreeze({
+  macos: "macos", test: "test",
+  is(value) { return value === "macos" || value === "test"; },
+  parse(value) {
+    if (!DesktopPlatform.is(value)) throw new __velarProcessNativeTypeError("Value does not match DesktopPlatform");
+    return value;
+  },
+  values() { return ["macos", "test"]; },
+}));
 export function platform() {
-  const value = __velarDesktopHostField("platform");
-  if (typeof value !== "string" || value.length === 0) throw new TypeError("Desktop host returned an invalid platform");
-  return value;
+  return DesktopPlatform.parse(__velarDesktopHostField("platform"));
 }
 export function packaged() {
   const value = __velarDesktopHostField("packaged");
@@ -833,6 +846,12 @@ function invoke(capability, operation, args, timeout) {
     throw new Error("velar/desktop-test requires 'velar test --browser'");
   }
   return reflectApply(invokeDescriptor.value, runtime, [capability, operation, args, timeout]);
+}
+export async function setPlatform(value) {
+  if (value !== "macos" && value !== "test") throw new TypeError("Desktop test setPlatform requires a DesktopPlatform value");
+  const result = await invoke("desktop-test", "setPlatform", [value], 30000);
+  if (result !== null) throw new TypeError("Desktop test host returned an invalid platform setup result");
+  return null;
 }
 export async function appDataDirectory() {
   const value = await invoke("desktop", "appDataDirectory", [], 30000);

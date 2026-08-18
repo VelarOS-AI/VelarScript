@@ -50,6 +50,13 @@ after(removeTemporaryDirectories);
 
 const webCompilerExtensions = Object.freeze([velarCompilerExtension]);
 const webFormatOptions = Object.freeze({ extensions: webCompilerExtensions });
+
+function runNpmSync(arguments_: readonly string[], cwd: string): ReturnType<typeof spawnSync> {
+  const npmEntry = process.env.npm_execpath;
+  return npmEntry
+    ? spawnSync(process.execPath, [npmEntry, ...arguments_], { cwd, encoding: "utf8", timeout: 300_000 })
+    : spawnSync(process.platform === "win32" ? "npm.cmd" : "npm", arguments_, { cwd, encoding: "utf8", timeout: 300_000 });
+}
 // D30 item 16: an extension's contextual keywords are ordinary names, so a
 // signature may use them; only hard-reserved and forbidden spellings are
 // unwritable at a call site.
@@ -15792,10 +15799,13 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   const libraryPackage = JSON.parse(await readFile(join(libraryRoot, "package.json"), "utf8")) as {
     files: string[];
     velar: { entry: string };
+    scripts: Record<string, string>;
     devDependencies: Record<string, string>;
   };
   assert.deepEqual(libraryPackage.files, ["src"]);
   assert.equal(libraryPackage.velar.entry, "src/index.vel");
+  assert.equal(libraryPackage.scripts["pack:check"], "npm pack --dry-run --json");
+  assert.match(libraryPackage.scripts.validate ?? "", /npm run pack:check$/u);
   assert.equal(libraryPackage.devDependencies["@velarscript/web"], undefined);
   assert.deepEqual(JSON.parse(await readFile(join(libraryRoot, "velar.json"), "utf8")).extensions, []);
   const libraryCheck = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "check", libraryRoot], { cwd: directory, encoding: "utf8" });
@@ -15808,6 +15818,10 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   const libraryBuild = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "build", libraryRoot], { cwd: directory, encoding: "utf8" });
   assert.equal(libraryBuild.status, 0, libraryBuild.stderr);
   assert.match(await readFile(join(libraryRoot, "dist", "index.js"), "utf8"), /function greet/u);
+  const libraryPack = runNpmSync(["pack", "--dry-run", "--json"], libraryRoot);
+  assert.equal(libraryPack.status, 0, String(libraryPack.stderr));
+  const libraryReceipt = JSON.parse(String(libraryPack.stdout)) as Array<{ files: Array<{ path: string }> }>;
+  assert.ok(libraryReceipt[0]?.files.some((file) => file.path === "src/index.vel"), String(libraryPack.stdout));
 
   const componentRoot = join(directory, "info-card");
   const componentCreate = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "create", componentRoot, "--template", "component"], { cwd: directory, encoding: "utf8" });
@@ -15816,11 +15830,14 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   const componentPackage = JSON.parse(await readFile(join(componentRoot, "package.json"), "utf8")) as {
     files: string[];
     velar: { entry: string };
+    scripts: Record<string, string>;
     peerDependencies: Record<string, string>;
     devDependencies: Record<string, string>;
   };
   assert.deepEqual(componentPackage.files, ["src/index.vel", "README.md"]);
   assert.equal(componentPackage.velar.entry, "src/index.vel");
+  assert.equal(componentPackage.scripts["pack:check"], "npm pack --dry-run --json");
+  assert.match(componentPackage.scripts.validate ?? "", /npm run pack:check$/u);
   assert.equal(componentPackage.peerDependencies["@velarscript/web"], "^0.10.0");
   assert.equal(componentPackage.devDependencies["@velarscript/web"], "^0.10.0");
   assert.match(await readFile(join(componentRoot, "src", "index.vel"), "utf8"), /export component InfoCard/u);
@@ -15834,6 +15851,10 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   const componentBuild = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "build", componentRoot], { cwd: directory, encoding: "utf8" });
   assert.equal(componentBuild.status, 0, componentBuild.stderr);
   await verifyProductionBuild(join(componentRoot, "dist"));
+  const componentPack = runNpmSync(["pack", "--dry-run", "--json"], componentRoot);
+  assert.equal(componentPack.status, 0, String(componentPack.stderr));
+  const componentReceipt = JSON.parse(String(componentPack.stdout)) as Array<{ files: Array<{ path: string }> }>;
+  assert.ok(componentReceipt[0]?.files.some((file) => file.path === "src/index.vel"), String(componentPack.stdout));
 
   const nodeRoot = join(directory, "hello-node");
   const nodeCreate = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "create", nodeRoot, "--template", "node"], { cwd: directory, encoding: "utf8" });
@@ -25546,7 +25567,7 @@ component Card:
   });
   const messages = hiddenDependency.diagnostics.map((item) => item.message).join("\n");
   assert.match(messages, /contains @import/u);
-  assert.match(messages, /uses relative url/u);
+  assert.match(messages, /uses relative asset address url/u);
 });
 
 test("Look composition uses ordinary functions and named arguments", () => {

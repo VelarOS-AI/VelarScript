@@ -98,11 +98,9 @@ test("[D62-157/158] the gate requires Core's own contextual keywords and numeric
     `the gate required fewer contextual keywords than Core alone declares:\n${output}`);
   assert.ok(required("numeric-suffix") >= CORE_NUMERIC_SUFFIXES.length,
     `the gate required fewer numeric suffixes than Core alone declares:\n${output}`);
-  // And the gate no longer prints either as a hole it cannot reach. The one
-  // hole it does print is not a vocabulary: it is the statement *spellings*
-  // that share a single AST node kind, which the construct category below
-  // requires by kind and cannot split.
-  assert.match(output, /Not reverse-queryable \(holes, not exemptions\):\n\s+statement spellings that share one AST node kind\b/u);
+  // D79 closes the last four same-node-kind statement pairs through Core's
+  // explicit construct projection, so the report now has no known hole.
+  assert.match(output, /Not reverse-queryable \(holes, not exemptions\):\n\s+none — every vocabulary this gate names is read from a compiler-owned table\b/u);
   assert.doesNotMatch(output, /Core's own contextual keywords/u);
   assert.doesNotMatch(output, /Core's built-in numeric suffixes/u);
 });
@@ -218,6 +216,17 @@ test("removing one spelling from the tour turns the gate red and names it", asyn
       family: "a type-parameter bound",
       expected: "type-parameter-bound: <T: Data>",
       edits: [{ file: "core/05-functions-and-calls.vel", replace: "<T: Data>", replacement: "<T: Comparable>" }],
+    },
+    {
+      // D79: the ordinary class declarations remain, so this turns red only
+      // when the construct projection distinguishes the abstract form.
+      family: "an abstract class while its ordinary sibling remains",
+      expected: "statement-construct: abstract class Name:",
+      edits: [
+        { file: "core/10-classes-and-ownership.vel", replace: "abstract class Entity:\n", replacement: "class Entity:\n" },
+        { file: "core/10-classes-and-ownership.vel", replace: "    abstract def describe() -> string\n", replacement: "    def describe() -> string:\n        return \"entity\"\n" },
+        { file: "core/10-classes-and-ownership.vel", replace: "    abstract get shortName() -> string\n", replacement: "    get shortName() -> string:\n        return self.id\n" },
+      ],
     },
     {
       family: "a velar/web-test browser control",

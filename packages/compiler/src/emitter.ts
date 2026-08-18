@@ -563,6 +563,7 @@ export class JavaScriptEmitter {
       specifier: module.specifier,
       code: module.code,
       sourceMap: sourceMapFor(module.code, module.mappings, source),
+      sourceSpan: module.statement.sourceSpan,
     }));
   }
 
@@ -745,7 +746,18 @@ export class JavaScriptEmitter {
     return false;
   }
 
-  protected extensionExpressionContainsDirectAwait(_expression: Expression): boolean | undefined {
+  protected extensionExpressionContainsDirectAwait(
+    _expression: Expression,
+    _contains: (expression: Expression) => boolean,
+  ): boolean | undefined {
+    return undefined;
+  }
+
+  protected extensionStatementContainsDirectAwait(
+    _statement: Statement,
+    _containsExpression: (expression: Expression) => boolean,
+    _containsBlock: (statements: readonly Statement[]) => boolean,
+  ): boolean | undefined {
     return undefined;
   }
 
@@ -1317,7 +1329,17 @@ export class JavaScriptEmitter {
     const emittedSource = source.endsWith(".vel") ? `${source.slice(0, -4)}.js` : source;
     const first = statement.specifiers[0];
     if (first?.namespace) {
-      return `${indentation}import * as ${first.local} from ${JSON.stringify(emittedSource)};`;
+      const declared = statement.javascript && !statement.unsafe
+        ? this.externModuleExports.get(source)
+        : undefined;
+      if (!declared) return `${indentation}import * as ${first.local} from ${JSON.stringify(emittedSource)};`;
+      this.needsExternExportHelper = true;
+      return [
+        `${indentation}import * as ${first.local} from ${JSON.stringify(emittedSource)};`,
+        ...[...declared].sort().map((name) => (
+          `${indentation}__velarExternExport(${first.local}, ${JSON.stringify(name)}, ${JSON.stringify(source)});`
+        )),
+      ].join("\n");
     }
     // W-22: names governed by an extern module declaration import through the
     // module namespace so a declared-but-missing export fails at this import
@@ -1989,7 +2011,11 @@ export class JavaScriptEmitter {
       const disposeDepth = depth + (chained ? 3 : 2);
       const indent = "  ".repeat(disposeDepth);
       const asynchronous = chained === "async"
-        || blockContainsDirectAwait(statement.dispose.body, (value) => this.extensionExpressionContainsDirectAwait(value));
+        || blockContainsDirectAwait(
+          statement.dispose.body,
+          (value, contains) => this.extensionExpressionContainsDirectAwait(value, contains),
+          (owned, containsExpression, containsBlock) => this.extensionStatementContainsDirectAwait(owned, containsExpression, containsBlock),
+        );
       const body = [
         `${indent}const self = this;`,
         ...this.emitStatementLines(statement.dispose.body, disposeDepth),
@@ -2530,7 +2556,7 @@ export class JavaScriptEmitter {
   }
 
   protected expressionContainsDirectAwait(expression: Expression): boolean {
-    return containsDirectAwait(expression, (value) => this.extensionExpressionContainsDirectAwait(value));
+    return containsDirectAwait(expression, (value, contains) => this.extensionExpressionContainsDirectAwait(value, contains));
   }
 
   private typeRuntimeName(reference: TypeReference): string {

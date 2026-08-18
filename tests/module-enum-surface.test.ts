@@ -125,6 +125,7 @@ test("[D60-149] the extensions still register the module-provided enums this gat
   // sweep. The list grows with the language; it may not silently shrink.
   const covered = enums.map((item) => `${item.label} ${item.specifier} ${item.name}`).sort();
   assert.deepEqual(covered, [
+    "@velarscript/desktop velar/desktop DesktopPlatform",
     "@velarscript/desktop velar/desktop ProjectChangeLifecycle",
     "@velarscript/desktop velar/desktop ProjectChangeRisk",
     "@velarscript/desktop velar/desktop ProjectTaskCommand",

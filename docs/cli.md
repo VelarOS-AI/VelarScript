@@ -64,8 +64,11 @@ velar package [project-directory]
 
 `verify` checks that a build is actually deployable rather than merely present.
 `verify-deployment` runs the same checks against a live origin. `package`
-prepares a library or component package for publication — see
-[package distribution](package-distribution.md) and
+builds the target-owned native application package for a project whose
+framework host implements that operation. Reusable library and component
+source packages are published through npm; their generated `validate` script
+runs `npm pack --dry-run --json` so the package receipt is checked before
+publication. See [package distribution](package-distribution.md) and
 [static deployment](static-deployment.md).
 
 ## Projects and dependencies

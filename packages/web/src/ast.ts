@@ -279,6 +279,65 @@ export function isWebLook(expression: Expression | WebAwareExpression): expressi
   return expression.kind === "ExtensionExpression:web:look";
 }
 
+function webLookContainsDirectAwait(entries: readonly WebLookEntry[], contains: (expression: Expression) => boolean): boolean {
+  return entries.some((entry) => {
+    if (entry.kind === "LookProperty" || entry.kind === "LookSpread") return contains(entry.value);
+    if (entry.kind === "LookIf") {
+      return contains(entry.condition)
+        || webLookContainsDirectAwait(entry.thenEntries, contains)
+        || webLookContainsDirectAwait(entry.elseEntries, contains);
+    }
+    return webLookContainsDirectAwait(entry.entries, contains);
+  });
+}
+
+/** Web owns the frame semantics of every expression node its parser adds. */
+export function webExpressionContainsDirectAwait(
+  expression: Expression,
+  contains: (expression: Expression) => boolean,
+): boolean | undefined {
+  if (!isWebExpression(expression)) return undefined;
+  if (isWebUnit(expression) || expression.kind === "ExtensionExpression:web:look-hook") return false;
+  if (isWebKeyframes(expression)) {
+    return expression.stops.some((stop) => stop.entries.some((entry) => contains(entry.value)));
+  }
+  if (isWebLook(expression)) return webLookContainsDirectAwait(expression.entries, contains);
+  return expression.attributes.some((attribute) => typeof attribute.value !== "string"
+    && attribute.value !== null
+    && contains(attribute.value))
+    || expression.children.some((child) => child.kind === "JSXExpressionChild"
+      ? contains(child.expression)
+      : child.kind === "ExtensionExpression:web:jsx" && contains(child));
+}
+
+/** Web owns whether each statement form executes in this frame or a child. */
+export function webStatementContainsDirectAwait(
+  statement: Statement,
+  containsExpression: (expression: Expression) => boolean,
+  _containsBlock: (statements: readonly Statement[]) => boolean,
+): boolean | undefined {
+  if (!isWebStatement(statement)) return undefined;
+  switch (statement.kind) {
+    case "ExtensionStatement:web:state":
+      // State initialization is emitted directly in its containing frame.
+      return containsExpression(statement.initializer);
+    case "ExtensionStatement:web:expose":
+      // A component handle is assembled during component setup.
+      return containsExpression(statement.value);
+    case "ExtensionStatement:web:component":
+    case "ExtensionStatement:web:computed":
+    case "ExtensionStatement:web:resource":
+    case "ExtensionStatement:web:action":
+    case "ExtensionStatement:web:watch":
+    case "ExtensionStatement:web:mounted":
+    case "ExtensionStatement:web:cleanup":
+    case "ExtensionStatement:web:unsafe-css":
+      // Each executable child is emitted behind its own callback/frame; unsafe
+      // CSS has no runtime expression.
+      return false;
+  }
+}
+
 export function isWebKeyframes(expression: Expression | WebAwareExpression): expression is WebKeyframesExpression {
   return expression.kind === "ExtensionExpression:web:keyframes";
 }

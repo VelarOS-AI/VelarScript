@@ -662,11 +662,9 @@ export function parseTypeScriptDeclarations(
     setLocalValue(local, type, "function");
   }
 
-  const constants = /(export\s+)?(?:declare\s+)?const\s+([A-Za-z_$][\w$]*)\s*:\s*([^;]+);/gu;
-  for (const match of text.matchAll(constants)) {
-    const local = match[2]!;
-    if (match[1]) directRuntimeExports.push({ local, exported: local });
-    setLocalValue(local, parse(match[3] ?? "unknown"), "const");
+  for (const declaration of constantDeclarations(text)) {
+    if (declaration.exported) directRuntimeExports.push({ local: declaration.name, exported: declaration.name });
+    setLocalValue(declaration.name, parse(declaration.type), "const");
   }
 
   const setTypeExport = (exported: string, type: ValueType): void => {
@@ -718,6 +716,53 @@ export function parseTypeScriptDeclarations(
     warnings.push("TypeScript re-export requires the package declaration graph loader");
   }
   return { path, dependencies: [path], exports, typeExports, classes, classRegistry, warnings: unique(warnings) };
+}
+
+interface ConstantDeclaration {
+  readonly name: string;
+  readonly type: string;
+  readonly exported: boolean;
+}
+
+/**
+ * Reads a declaration type to its real top-level terminator. A semicolon and
+ * an ASI newline are equivalent here; nested object/function/generic syntax
+ * may contain either without ending the `const` declaration.
+ */
+function constantDeclarations(source: string): readonly ConstantDeclaration[] {
+  const output: ConstantDeclaration[] = [];
+  const heads = /(?:^|[;\r\n])[\t ]*(export\s+)?(?:declare\s+)?const\s+([A-Za-z_$][\w$]*)\s*:\s*/gmu;
+  for (const match of source.matchAll(heads)) {
+    const start = match.index + match[0].length;
+    let round = 0;
+    let square = 0;
+    let brace = 0;
+    let angle = 0;
+    let quote = "";
+    let end = start;
+    for (; end < source.length; end += 1) {
+      const character = source[end]!;
+      if (quote) {
+        if (character === "\\") end += 1;
+        else if (character === quote) quote = "";
+        continue;
+      }
+      if (character === "\"" || character === "'" || character === "`") quote = character;
+      else if (character === "(") round += 1;
+      else if (character === ")") round = Math.max(0, round - 1);
+      else if (character === "[") square += 1;
+      else if (character === "]") square = Math.max(0, square - 1);
+      else if (character === "{") brace += 1;
+      else if (character === "}") brace = Math.max(0, brace - 1);
+      else if (character === "<") angle += 1;
+      else if (character === ">") angle = Math.max(0, angle - 1);
+      else if ((character === ";" || character === "\n" || character === "\r")
+        && round === 0 && square === 0 && brace === 0 && angle === 0) break;
+    }
+    const type = source.slice(start, end).trim();
+    if (type) output.push({ name: match[2]!, type, exported: Boolean(match[1]) });
+  }
+  return output;
 }
 
 interface TypeScriptClassDeclaration {

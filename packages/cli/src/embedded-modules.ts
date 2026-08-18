@@ -1,9 +1,11 @@
 import { basename, dirname, join, resolve } from "node:path";
+import type { Span } from "@velarscript/compiler";
 
 export interface EmbeddedModuleArtifact {
   readonly specifier: string;
   readonly code: string;
   readonly sourceMap: string;
+  readonly sourceSpan?: Span;
 }
 
 export interface CompiledModuleArtifactSet {
