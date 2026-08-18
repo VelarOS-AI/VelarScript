@@ -34,6 +34,7 @@ import { span, spanIdentity, type Span } from "./source.ts";
 import {
   analysisTypeIdentity,
   anyType,
+  binaryStorageKind,
   boolType,
   boundGrants,
   collectGenericBoundViolations,
@@ -69,6 +70,7 @@ import {
   unionOf,
   unknownType,
   type EnumInfo,
+  type BinaryStorageKind,
   type ExtensionValueType,
   type GenericApplication,
   type GenericBoundViolation,
@@ -302,6 +304,10 @@ export interface FormReadField {
 export interface LoweringHints {
   readonly collectionCalls: ReadonlyMap<number, CollectionOperation>;
   readonly collectionSizes: ReadonlySet<number>;
+  /** Binary members and indexes lower directly against their typed-array storage. */
+  readonly binaryCalls: ReadonlyMap<number, "uint16ToBytes">;
+  readonly binarySizes: ReadonlyMap<number, BinaryStorageKind>;
+  readonly binaryIndexes: ReadonlyMap<string, BinaryStorageKind>;
   readonly primitiveCalls: ReadonlyMap<number, PrimitiveOperation>;
   readonly stringSizes: ReadonlySet<number>;
   readonly constructorCalls: ReadonlySet<string>;
@@ -337,6 +343,8 @@ export interface LoweringHints {
   readonly normalizedPromiseValues: ReadonlySet<string>;
   readonly asyncResolvedValues: ReadonlySet<string>;
   readonly asyncForStatements: ReadonlySet<number>;
+  /** Direct, unshadowed `for name in range(...)` loops that can use a counted loop. */
+  readonly nativeRangeForStatements: ReadonlySet<number>;
   readonly normalizedUndefinedExpressions: ReadonlySet<string>;
   readonly instanceFieldReads: ReadonlySet<string>;
   readonly errorCodeReads: ReadonlySet<string>;
@@ -922,6 +930,9 @@ export class Analyzer implements TypeEnvironment {
   private readonly asynchronousFunctions: boolean[] = [];
   private readonly collectionCalls = new Map<number, CollectionOperation>();
   private readonly collectionSizes = new Set<number>();
+  private readonly binaryCalls = new Map<number, "uint16ToBytes">();
+  private readonly binarySizes = new Map<number, BinaryStorageKind>();
+  private readonly binaryIndexes = new Map<string, BinaryStorageKind>();
   private readonly primitiveCalls = new Map<number, PrimitiveOperation>();
   private readonly sameValueZeroEqualities = new Set<string>();
   private readonly sameValueZeroMatchValues = new Set<string>();
@@ -960,6 +971,7 @@ export class Analyzer implements TypeEnvironment {
   private readonly normalizedPromiseValues = new Set<string>();
   private readonly asyncResolvedValues = new Set<string>();
   private readonly asyncForStatements = new Set<number>();
+  private readonly nativeRangeForStatements = new Set<number>();
   // A literal-true loop with no reachable break is a synchronization boundary:
   // control cannot continue after it even when the body itself can iterate.
   private readonly nonFallthroughWhileStatements = new Set<number>();
@@ -1683,6 +1695,9 @@ export class Analyzer implements TypeEnvironment {
     return {
       collectionCalls: this.collectionCalls,
       collectionSizes: this.collectionSizes,
+      binaryCalls: this.binaryCalls,
+      binarySizes: this.binarySizes,
+      binaryIndexes: this.binaryIndexes,
       primitiveCalls: this.primitiveCalls,
       stringSizes: this.stringSizes,
       constructorCalls: this.constructorCalls,
@@ -1703,6 +1718,7 @@ export class Analyzer implements TypeEnvironment {
       normalizedPromiseValues: this.normalizedPromiseValues,
       asyncResolvedValues: this.asyncResolvedValues,
       asyncForStatements: this.asyncForStatements,
+      nativeRangeForStatements: this.nativeRangeForStatements,
       normalizedUndefinedExpressions: this.normalizedUndefinedExpressions,
       instanceFieldReads: this.instanceFieldReads,
       errorCodeReads: this.errorCodeReads,
@@ -3307,6 +3323,14 @@ export class Analyzer implements TypeEnvironment {
           }
         }
         const inferredIterable = this.inferExpression(statement.iterable);
+        if (!statement.asynchronous
+          && statement.secondPattern === null
+          && statement.pattern.kind === "NameBindingPattern"
+          && statement.iterable.kind === "CallExpression"
+          && statement.iterable.callee.kind === "IdentifierExpression"
+          && this.builtinValueReferences.get(spanIdentity(statement.iterable.callee.span)) === "range") {
+          this.nativeRangeForStatements.add(statement.span.start);
+        }
         // D68 rule 177: `async for` is deliberately outside the contract. It
         // pulls a capability handle — a resource with a lifetime that `using`
         // owns — and a class that answered it would make "does this need
@@ -5117,9 +5141,22 @@ export class Analyzer implements TypeEnvironment {
         targetType = owner.fields.get(statement.target.property) ?? targetType;
       }
     } else {
-      const objectType = this.inferExpression(statement.target.object);
+      const objectType = this.expandAliases(this.inferExpression(statement.target.object));
       const indexType = this.inferExpression(statement.target.index);
-      if (objectType.kind === "list") {
+      const binaryKind = binaryStorageKind(objectType);
+      if (binaryKind) {
+        this.requireAssignable(indexType, numberType, statement.target.index.span);
+        targetType = numberType;
+        this.binaryIndexes.set(spanIdentity(statement.target.span), binaryKind);
+        if (binaryKind === "bytes") {
+          this.diagnostics.push(diagnostic(
+            "VEL3002",
+            "Cannot index-assign Bytes; it is a read-only binary snapshot",
+            statement.target.span,
+          ));
+          targetWritable = false;
+        }
+      } else if (objectType.kind === "list") {
         this.requireAssignable(indexType, numberType, statement.target.index.span);
         targetType = objectType.element;
         if (objectType.readonlyView) {
@@ -5791,6 +5828,16 @@ export class Analyzer implements TypeEnvironment {
           )
           : this.inferExpression(expression.index);
         if (isInvalidType(object)) return invalidType;
+        const binaryKind = binaryStorageKind(object);
+        if (binaryKind) {
+          this.requireAssignable(index, numberType, expression.index.span);
+          this.binaryIndexes.set(spanIdentity(expression.span), binaryKind);
+          if (guarded) {
+            this.optionalIndexes.add(spanIdentity(expression.span));
+            return optionalOf(numberType);
+          }
+          return numberType;
+        }
         if (object.kind === "list") {
           this.requireAssignable(index, numberType, expression.index.span);
           const element = object.readonlyView ? this.readonlyDataViewOf(object.element) : object.element;
@@ -8414,6 +8461,9 @@ export class Analyzer implements TypeEnvironment {
     this.semanticExpressionOwners.set(`${memberSpan.start}:${memberSpan.end}`, nonOptional(original));
     const resolvedOriginal = this.expandAliases(original);
     const object = nonOptional(resolvedOriginal);
+    const binaryKind = binaryStorageKind(object);
+    if (binaryKind && property === "size") this.binarySizes.set(memberSpan.end, binaryKind);
+    if (binaryKind === "uint16" && property === "toBytes") this.binaryCalls.set(memberSpan.end, "uint16ToBytes");
     const guardedCollectionOperation = object.kind === "list"
       ? listCollectionOperations.get(property) ?? null
       : object.kind === "map"

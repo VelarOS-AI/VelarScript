@@ -209,7 +209,7 @@ const exemptions = [
   },
   {
     label: "`import js` naming a real third-party npm package",
-    reason: "the repository carries no third-party runtime dependency; `node:crypto` already exercises js/unsafe/extern/module",
+    reason: "official third-party dependencies are exposed only behind checked velar/msgpack, velar/compression, velar/noise, and velar/websocket modules; `node:crypto` remains the deliberate raw js/unsafe/extern/module example",
     withheldFrom: [],
     names: () => new Set(),
   },

@@ -1,4 +1,5 @@
 import type {
+  AssignmentStatement,
   ClassDeclaration,
   BindingPattern,
   EmbeddedJavaScriptDeclaration,
@@ -91,6 +92,8 @@ export class JavaScriptEmitter {
   private readonly sharedRuntimeModules: boolean;
   private readonly requiredRuntimeModules = new Set<string>();
   private needsIndexHelpers = false;
+  private needsBinaryHelpers = false;
+  private needsBitwiseHelpers = false;
   private needsCollectionHelpers = false;
   private needsPrimitiveHelpers = false;
   private needsRecordHelpers = false;
@@ -158,6 +161,39 @@ export class JavaScriptEmitter {
     if (builtinValues.has("range")) {
       helpers.push('import { range as __velarRange } from "velar/collections";');
       this.requiredRuntimeModules.add("velar/collections");
+    }
+    if (this.hints.nativeRangeForStatements.size > 0) {
+      helpers.push('import { range as __velarCountedRangeOwner } from "velar/collections";');
+      this.requiredRuntimeModules.add("velar/collections");
+    }
+    if (this.needsBinaryHelpers) {
+      helpers.push('import { Bytes as __velarBinaryRuntime } from "velar/binary";');
+      this.requiredRuntimeModules.add("velar/binary");
+    }
+    if (this.needsBitwiseHelpers) {
+      helpers.push([
+        "const __velarBitwiseApply = Reflect.apply;",
+        "const __velarBitwiseNumber = Number;",
+        "const __velarBitwiseNumberIsInteger = Number.isInteger;",
+        "const __velarBitwiseTypeError = TypeError;",
+        "const __velarBitwiseRangeError = RangeError;",
+        "function __velarBitwiseOperand(value, operator) {",
+        "  if (typeof value !== \"number\" || !__velarBitwiseApply(__velarBitwiseNumberIsInteger, __velarBitwiseNumber, [value])) throw new __velarBitwiseTypeError(\"Bitwise '\" + operator + \"' requires integer operands\");",
+        "  if (value < -2147483648 || value > 4294967295) throw new __velarBitwiseRangeError(\"Bitwise '\" + operator + \"' requires 32-bit integer operands\");",
+        "  return value;",
+        "}",
+        "function __velarBitwiseUnary(value) { value = __velarBitwiseOperand(value, \"~\"); return ~value; }",
+        "function __velarBitwiseBinary(left, operator, right) {",
+        "  left = __velarBitwiseOperand(left, operator);",
+        "  if (operator === \"<<\" || operator === \">>\" || operator === \">>>\") {",
+        "    if (typeof right !== \"number\" || !__velarBitwiseApply(__velarBitwiseNumberIsInteger, __velarBitwiseNumber, [right])) throw new __velarBitwiseTypeError(\"Bitwise '\" + operator + \"' requires an integer shift count\");",
+        "    if (right < 0 || right > 31) throw new __velarBitwiseRangeError(\"Bitwise '\" + operator + \"' requires a shift count from 0 to 31\");",
+        "    return operator === \"<<\" ? left << right : operator === \">>\" ? left >> right : left >>> right;",
+        "  }",
+        "  right = __velarBitwiseOperand(right, operator);",
+        "  return operator === \"&\" ? left & right : operator === \"|\" ? left | right : left ^ right;",
+        "}",
+      ].join("\n"));
     }
     if ([...this.hints.extensionCalls.values()].includes("core.duration-arithmetic")) helpers.push([
       "const __velarDurationApply = Reflect.apply;",
@@ -836,14 +872,22 @@ export class JavaScriptEmitter {
             && this.collectionHelper(expression.callee)) {
             this.needsCollectionHelpers = true;
           }
+          if (expression.callee.kind === "MemberExpression"
+            && this.binaryHelper(expression.callee)) {
+            this.needsBinaryHelpers = true;
+          }
           visitExpression(expression.callee);
           expression.arguments.forEach(visitExpression);
           break;
         case "MemberExpression":
+          if (this.binaryHelper(expression) || this.hints.binarySizes.has(expression.span.end)) {
+            this.needsBinaryHelpers = true;
+          }
           visitExpression(expression.object);
           break;
         case "IndexExpression":
-          this.needsIndexHelpers = true;
+          if (this.hints.binaryIndexes.has(spanIdentity(expression.span))) this.needsBinaryHelpers = true;
+          else this.needsIndexHelpers = true;
           visitExpression(expression.object);
           visitExpression(expression.index);
           break;
@@ -1209,6 +1253,29 @@ export class JavaScriptEmitter {
           ];
           return lines.join("\n");
         }
+        if (this.hints.nativeRangeForStatements.has(statement.span.start)
+          && statement.iterable.kind === "CallExpression"
+          && statement.pattern.kind === "NameBindingPattern") {
+          const call = statement.iterable;
+          const sourceArguments = call.arguments.map((argument) => this.emitMappedExpression(argument));
+          const namedOrder = this.hints.namedArgumentOrders.get(spanIdentity(call.span));
+          const arguments_ = namedOrder
+            ? namedOrder.map((source) => source === -1 ? "undefined" : `__velarNamedArguments[${source}]`)
+            : sourceArguments;
+          const emittedArguments = namedOrder
+            ? `...((__velarNamedArguments) => [${arguments_.join(", ")}])([${sourceArguments.join(", ")}])`
+            : arguments_.join(", ");
+          const suffix = statement.span.start;
+          const boundsName = `__velarRangeBounds${suffix}`;
+          const indexName = `__velarRangeIndex${suffix}`;
+          const valueName = statement.pattern.name;
+          const body = this.emitStatementLines(statement.body, depth + 1).join("\n");
+          return [
+            `${indentation}for (let ${boundsName} = __velarCountedRangeOwner.__velarCounted(${emittedArguments}), ${valueName} = ${boundsName}[0], ${indexName} = 0;`,
+            `${indentation}  ${boundsName}[2] > 0 ? ${valueName} < ${boundsName}[1] : ${valueName} > ${boundsName}[1];`,
+            `${indentation}  ${valueName} += ${boundsName}[2], ${indexName} += 1) {${body.length > 0 ? `\n${body}\n${indentation}` : ""}}`,
+          ].join("\n");
+        }
         this.needsCollectionHelpers = true;
         const iterable = this.emitMappedExpression(statement.iterable);
         if (!statement.secondPattern && statement.pattern.kind === "NameBindingPattern") {
@@ -1259,10 +1326,33 @@ export class JavaScriptEmitter {
       }
       case "AssignmentStatement":
         if (statement.target.kind === "IndexExpression") {
-          this.needsIndexHelpers = true;
-          this.needsCollectionHelpers = true;
+          const binaryKind = this.hints.binaryIndexes.get(spanIdentity(statement.target.span));
+          if (binaryKind) this.needsBinaryHelpers = true;
+          else {
+            this.needsIndexHelpers = true;
+            this.needsCollectionHelpers = true;
+          }
           const object = this.emitMappedExpression(statement.target.object);
           const index = this.emitMappedExpression(statement.target.index);
+          if (binaryKind === "bytes") {
+            return `${indentation}__velarBinaryRuntime.__velarSetIndex(${object}, ${index}, ${this.emitMappedExpression(statement.value)});`;
+          }
+          if (binaryKind === "uint16") {
+            if (statement.operator === "=") {
+              return `${indentation}__velarBinaryRuntime.__velarUInt16SetIndex(${object}, ${index}, ${this.emitMappedExpression(statement.value)});`;
+            }
+            const suffix = statement.span.start;
+            const objectName = `__velarIndexObject${suffix}`;
+            const keyName = `__velarIndexKey${suffix}`;
+            const value = this.emitMappedExpression(statement.value);
+            return [
+              `${indentation}{`,
+              `${indentation}  const ${objectName} = ${object};`,
+              `${indentation}  const ${keyName} = ${index};`,
+              `${indentation}  __velarBinaryRuntime.__velarUInt16SetIndex(${objectName}, ${keyName}, ${this.emitCompoundOperation(`__velarBinaryRuntime.__velarUInt16Index(${objectName}, ${keyName})`, statement.operator, value)});`,
+              `${indentation}}`,
+            ].join("\n");
+          }
           if (statement.operator === "=") {
             return `${indentation}__velarSetIndex(${object}, ${index}, ${this.emitMappedExpression(statement.value)});`;
           }
@@ -1274,7 +1364,7 @@ export class JavaScriptEmitter {
             `${indentation}{`,
             `${indentation}  const ${objectName} = ${object};`,
             `${indentation}  const ${keyName} = ${index};`,
-            `${indentation}  __velarSetIndex(${objectName}, ${keyName}, __velarIndex(${objectName}, ${keyName}) ${statement.operator.slice(0, -1)} ${value});`,
+            `${indentation}  __velarSetIndex(${objectName}, ${keyName}, ${this.emitCompoundOperation(`__velarIndex(${objectName}, ${keyName})`, statement.operator, value)});`,
             `${indentation}}`,
           ].join("\n");
         }
@@ -1293,7 +1383,7 @@ export class JavaScriptEmitter {
               : guardedPrivateField
                 ? `__velarReadPrivateField(${objectName}.${property}, ${JSON.stringify(statement.target.property)})`
                 : `__velarReadInstanceField(${objectName}, ${JSON.stringify(statement.target.property)})`;
-            const operation = `${read} ${statement.operator.slice(0, -1)} ${this.emitMappedExpression(statement.value)}`;
+            const operation = this.emitCompoundOperation(read, statement.operator, this.emitMappedExpression(statement.value));
             return [
               `${indentation}{`,
               `${indentation}  const ${objectName} = ${this.emitMappedExpression(statement.target.object)};`,
@@ -1301,10 +1391,26 @@ export class JavaScriptEmitter {
               `${indentation}}`,
             ].join("\n");
           }
+          if (this.bitwiseAssignmentOperator(statement.operator)) {
+            const suffix = statement.span.start;
+            const objectName = `__velarMemberObject${suffix}`;
+            const privateProperty = this.hints.privateMembers.has(key);
+            const property = `${privateProperty ? "#" : ""}${statement.target.property}`;
+            const value = this.emitMappedExpression(statement.value);
+            return [
+              `${indentation}{`,
+              `${indentation}  const ${objectName} = ${this.emitMappedExpression(statement.target.object)};`,
+              `${indentation}  ${objectName}.${property} = ${this.emitCompoundOperation(`${objectName}.${property}`, statement.operator, value)};`,
+              `${indentation}}`,
+            ].join("\n");
+          }
         }
         {
           const target = this.emitMappedAssignmentTarget(statement.target);
           const value = this.emitMappedExpression(statement.value);
+          if (statement.operator !== "=" && this.bitwiseAssignmentOperator(statement.operator)) {
+            return `${indentation}${target} = ${this.emitCompoundOperation(target, statement.operator, value)};`;
+          }
           return `${indentation}${target} ${statement.operator} ${value};`;
         }
       case "ExpressionStatement":
@@ -2119,6 +2225,21 @@ export class JavaScriptEmitter {
     });
   }
 
+  private bitwiseAssignmentOperator(operator: AssignmentStatement["operator"]): "&" | "|" | "^" | "<<" | ">>" | ">>>" | null {
+    return operator === "&=" || operator === "|=" || operator === "^=" || operator === "<<=" || operator === ">>=" || operator === ">>>="
+      ? operator.slice(0, -1) as "&" | "|" | "^" | "<<" | ">>" | ">>>"
+      : null;
+  }
+
+  private emitCompoundOperation(read: string, operator: AssignmentStatement["operator"], value: string): string {
+    const bitwise = this.bitwiseAssignmentOperator(operator);
+    if (bitwise) {
+      this.needsBitwiseHelpers = true;
+      return `__velarBitwiseBinary(${read}, ${JSON.stringify(bitwise)}, ${value})`;
+    }
+    return `${read} ${operator.slice(0, -1)} ${value}`;
+  }
+
   protected emitExpression(expression: Expression): string {
     if (expression.kind === "ExtensionExpression:core:duration") {
       return JSON.stringify((expression as Expression & { readonly raw: string }).raw);
@@ -2215,6 +2336,10 @@ export class JavaScriptEmitter {
         if (expression.operator === "await") {
           return `await ${this.emitMappedExpression(expression.operand)}`;
         }
+        if (expression.operator === "~") {
+          this.needsBitwiseHelpers = true;
+          return `__velarBitwiseUnary(${this.emitMappedExpression(expression.operand)})`;
+        }
         return expression.operator === "not"
           ? `!(${this.emitCondition(expression.operand)})`
           : `${expression.operator}(${this.emitMappedExpression(expression.operand)})`;
@@ -2227,6 +2352,10 @@ export class JavaScriptEmitter {
           this.needsCollectionHelpers = true;
           const membership = `__velarContains(${this.emitMappedExpression(expression.left)}, ${this.emitMappedExpression(expression.right)})`;
           return expression.operator === "not in" ? `!(${membership})` : membership;
+        }
+        if (["&", "|", "^", "<<", ">>", ">>>"].includes(expression.operator)) {
+          this.needsBitwiseHelpers = true;
+          return `__velarBitwiseBinary(${this.emitMappedExpression(expression.left)}, ${JSON.stringify(expression.operator)}, ${this.emitMappedExpression(expression.right)})`;
         }
         // D36 item 41: `==`/`!=` are SameValueZero. The analyzer proves which
         // comparisons can actually meet two NaN operands; everything else
@@ -2298,6 +2427,24 @@ export class JavaScriptEmitter {
       }
       case "CallExpression": {
         if (expression.callee.kind === "MemberExpression") {
+          const binaryHelper = this.binaryHelper(expression.callee);
+          if (binaryHelper) {
+            this.needsBinaryHelpers = true;
+            const object = this.emitMappedExpression(expression.callee.object);
+            const sourceArguments = expression.arguments.map((argument) => this.emitMappedExpression(argument));
+            const namedOrder = this.hints.namedArgumentOrders.get(spanIdentity(expression.span));
+            const arguments_ = namedOrder
+              ? namedOrder.map((source) => source === -1 ? "undefined" : `__velarNamedArguments[${source}]`)
+              : sourceArguments;
+            const emittedArguments = namedOrder
+              ? `...((__velarNamedArguments) => [${arguments_.join(", ")}])([${sourceArguments.join(", ")}])`
+              : arguments_.join(", ");
+            const suffix = arguments_.length > 0 ? `, ${emittedArguments}` : "";
+            const invocation = `${binaryHelper}(__velarValue${suffix})`;
+            return this.hints.optionalCallees.has(spanIdentity(expression.span))
+              ? `(__velarValue => __velarValue == null ? null : ${invocation})(${object})`
+              : `${binaryHelper}(${object}${suffix})`;
+          }
           const primitiveHelper = this.primitiveHelper(expression.callee);
           if (primitiveHelper) {
             this.needsPrimitiveHelpers = true;
@@ -2399,6 +2546,22 @@ export class JavaScriptEmitter {
         return result;
       }
       case "MemberExpression": {
+        const binaryHelper = this.binaryHelper(expression);
+        if (binaryHelper) {
+          this.needsBinaryHelpers = true;
+          const object = this.emitMappedExpression(expression.object);
+          const bound = `(...__velarArguments) => ${binaryHelper}(__velarValue, ...__velarArguments)`;
+          return expression.optional
+            ? `(__velarValue => __velarValue == null ? null : ${bound})(${object})`
+            : `(__velarValue => ${bound})(${object})`;
+        }
+        if (this.hints.binarySizes.has(expression.span.end)) {
+          this.needsBinaryHelpers = true;
+          const object = this.emitMappedExpression(expression.object);
+          return expression.optional
+            ? `(__velarValue => __velarValue == null ? null : __velarBinaryRuntime.__velarSize(__velarValue))(${object})`
+            : `__velarBinaryRuntime.__velarSize(${object})`;
+        }
         const primitiveHelper = this.primitiveHelper(expression);
         if (primitiveHelper) {
           this.needsPrimitiveHelpers = true;
@@ -2482,6 +2645,18 @@ export class JavaScriptEmitter {
         return this.hints.optionalMembers.has(spanIdentity(expression.span)) ? `(${access} ?? null)` : access;
       }
       case "IndexExpression":
+        {
+          const binaryKind = this.hints.binaryIndexes.get(spanIdentity(expression.span));
+          if (binaryKind) {
+            this.needsBinaryHelpers = true;
+            const helper = binaryKind === "bytes" ? "__velarIndex" : "__velarUInt16Index";
+            const object = this.emitMappedExpression(expression.object);
+            if (this.hints.optionalIndexes.has(spanIdentity(expression.span))) {
+              return `(__velarValue => __velarValue == null ? null : __velarBinaryRuntime.${helper}(__velarValue, ${this.emitMappedExpression(expression.index)}))(${object})`;
+            }
+            return `__velarBinaryRuntime.${helper}(${object}, ${this.emitMappedExpression(expression.index)})`;
+          }
+        }
         this.needsIndexHelpers = true;
         this.needsCollectionHelpers = true;
         return this.hints.optionalIndexes.has(spanIdentity(expression.span))
@@ -2609,6 +2784,12 @@ export class JavaScriptEmitter {
       case "entries": return "__velarCollectionEntries";
       default: return null;
     }
+  }
+
+  private binaryHelper(expression: Extract<Expression, { kind: "MemberExpression" }>): string | null {
+    return this.hints.binaryCalls.get(expression.span.end) === "uint16ToBytes"
+      ? "__velarBinaryRuntime.__velarUInt16ToBytes"
+      : null;
   }
 
   private primitiveHelper(expression: Extract<Expression, { kind: "MemberExpression" }>): string | null {

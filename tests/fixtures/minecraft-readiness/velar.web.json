@@ -1,0 +1,16 @@
+{
+  "formatVersion": 2,
+  "entry": "src/web-main.vel",
+  "workers": {
+    "terrain": "src/terrain-worker.vel"
+  },
+  "extensions": ["@velarscript/web"],
+  "web": {
+    "title": "Minecraft readiness acceptance",
+    "base": "/",
+    "publicConfig": {"socketUrl": "ws://127.0.0.1:1"},
+    "build": {"sourceMaps": true},
+    "security": {"contentSecurityPolicy": true, "connectSources": [], "imageSources": []},
+    "deployment": {"spaFallback": true}
+  }
+}

@@ -8,6 +8,8 @@ import {
   VELAR_UTF8_RUNTIME,
 } from "@velarscript/compiler/extension";
 import { WEB_DOM_HOST_RUNTIME, WEB_ERROR_HOST_RUNTIME, WEB_RUNTIME_FOUNDATION } from "./runtime-foundation.ts";
+import { VELAR_WEB_WORKER_RUNTIME } from "./worker-runtime.ts";
+import { VELAR_WEB_WEBSOCKET_RUNTIME } from "./websocket-runtime.ts";
 
 const ownedCallbackRuntime = String.raw`
 ${WEB_ERROR_HOST_RUNTIME}
@@ -1880,6 +1882,23 @@ const nativeTypedArrayTag = nativeTypedArrayPrototype ? Object.getOwnPropertyDes
 const nativeTypedArrayByteLength = nativeTypedArrayPrototype ? Object.getOwnPropertyDescriptor(nativeTypedArrayPrototype, "byteLength")?.get : null;
 const nativeUint8ArraySet = Object.getOwnPropertyDescriptor(nativeTypedArrayPrototype, "set")?.value;
 
+function httpBytesKind(value) {
+  if (typeof nativeReflectApply !== "function" || typeof nativeTypedArrayTag !== "function") return null;
+  try { return nativeReflectApply(nativeTypedArrayTag, value, []); } catch { return null; }
+}
+const __velarHttpBytes = Object.freeze({
+  is(value) { return httpBytesKind(value) === "Uint8Array"; },
+  parse(value) {
+    if (httpBytesKind(value) !== "Uint8Array" || typeof NativeUint8Array !== "function"
+      || typeof nativeTypedArrayByteLength !== "function" || typeof nativeUint8ArraySet !== "function") {
+      throw new TypeError("Bytes requires Uint8Array");
+    }
+    const output = new NativeUint8Array(nativeReflectApply(nativeTypedArrayByteLength, value, []));
+    nativeReflectApply(nativeUint8ArraySet, output, [value]);
+    return output;
+  },
+});
+
 function runtimeHttpType(Type) { return __velarRequireRuntimeType(Type, "HTTP parsing"); }
 
 function requireHttpHost() {
@@ -1989,7 +2008,9 @@ function optionsOf(value) {
   const multipart = body && typeof body === "object" ? nativeReflectApply(nativeWeakMapGet, formBodies, [body]) : null;
   const nativeForm = typeof NativeFormData === "function" && body instanceof NativeFormData;
   const nativeBlob = typeof NativeBlob === "function" && body instanceof NativeBlob;
-  if (body != null && typeof body !== "string" && !multipart && !nativeForm && !nativeBlob) {
+  const bytes = body != null && __velarHttpBytes.is(body);
+  if (bytes) body = __velarHttpBytes.parse(body);
+  else if (body != null && typeof body !== "string" && !multipart && !nativeForm && !nativeBlob) {
     if (typeof body !== "object") throw new TypeError("HTTP body must be text, JSON data, a Blob, or a VelarScript form body");
     body = __velarJsonStringify(body);
     let hasContentType = false;
@@ -2184,7 +2205,7 @@ class HttpResponse {
           nativeReflectApply(nativeUint8ArraySet, output, [chunk, offset]);
           offset += nativeReflectApply(nativeTypedArrayByteLength, chunk, []);
         }
-        return output;
+        return __velarHttpBytes.parse(output);
       } catch (error) {
         if (reader !== null) {
           try { await nativeReflectApply(nativeReaderCancel, reader, [error]); } catch {}
@@ -2348,6 +2369,7 @@ class Request {
   }
   async json() { return (await this.response()).json(); }
   async text() { return (await this.response()).text(); }
+  async bytes() { return (await this.response()).bytes(); }
   async streamText(consume) { return (await this.response()).streamText(consume); }
   async blob() { return (await this.response()).blob(); }
   async parse(Type) { Type = runtimeHttpType(Type); return Type.parse(await this.json()); }
@@ -2375,6 +2397,37 @@ const storageNumberIsSafeInteger = Object.getOwnPropertyDescriptor(Number, "isSa
 const storageStringSlice = Object.getOwnPropertyDescriptor(String.prototype, "slice").value;
 const storageListSort = Object.getOwnPropertyDescriptor(Array.prototype, "sort").value;
 const storageMissingField = __velarBrowserMissingField;
+const storageNativeUint8Array = typeof globalThis.Uint8Array === "function" ? globalThis.Uint8Array : null;
+const storageTypedArrayPrototype = storageNativeUint8Array ? Object.getPrototypeOf(storageNativeUint8Array.prototype) : null;
+const storageTypedArrayTag = storageTypedArrayPrototype ? Object.getOwnPropertyDescriptor(storageTypedArrayPrototype, Symbol.toStringTag)?.get : null;
+const storageTypedArrayLength = storageTypedArrayPrototype ? Object.getOwnPropertyDescriptor(storageTypedArrayPrototype, "length")?.get : null;
+const storageTypedArraySet = storageTypedArrayPrototype ? Object.getOwnPropertyDescriptor(storageTypedArrayPrototype, "set")?.value : null;
+function storageBytesKind(value) {
+  if (typeof storageTypedArrayTag !== "function") return null;
+  try { return __velarBrowserReflectApply(storageTypedArrayTag, value, []); } catch { return null; }
+}
+const __velarStorageBytes = Object.freeze({
+  is(value) { return storageBytesKind(value) === "Uint8Array"; },
+  parse(value) {
+    if (storageBytesKind(value) !== "Uint8Array" || typeof storageNativeUint8Array !== "function"
+      || typeof storageTypedArrayLength !== "function" || typeof storageTypedArraySet !== "function") {
+      throw new TypeError("Bytes requires Uint8Array");
+    }
+    const output = new storageNativeUint8Array(__velarBrowserReflectApply(storageTypedArrayLength, value, []));
+    __velarBrowserReflectApply(storageTypedArraySet, output, [value]);
+    return output;
+  },
+});
+
+export class StorageQuotaError extends Error { constructor(message = "Browser storage quota was exceeded") { super(message); this.name = "StorageQuotaError"; } }
+export class StorageTransactionError extends Error { constructor(message = "Browser storage transaction failed") { super(message); this.name = "StorageTransactionError"; } }
+export class StorageUpgradeError extends Error { constructor(message = "Browser storage upgrade failed") { super(message); this.name = "StorageUpgradeError"; } }
+function storageFailure(error, phase = "transaction") {
+  if (error instanceof StorageQuotaError || error instanceof StorageTransactionError || error instanceof StorageUpgradeError) return error;
+  if (error && typeof error === "object" && error.name === "QuotaExceededError") return new StorageQuotaError(error.message || undefined);
+  const message = error && typeof error === "object" && typeof error.message === "string" ? error.message : undefined;
+  return phase === "upgrade" ? new StorageUpgradeError(message) : new StorageTransactionError(message);
+}
 
 function storageType(Type) { return __velarRequireRuntimeType(Type, "Storage reads"); }
 function storageText(value, name) { if (typeof value !== "string") throw new TypeError(name + " must be a string"); if (value.length > storageMaxKeyCodeUnits) throw new RangeError(name + " cannot exceed 4096 characters"); return value; }
@@ -2553,9 +2606,9 @@ export function database(name) {
           storageListen(result, "close", () => { if (opened === pending) opened = null; }, { once: true });
           resolve(result);
         }), { once: true });
-        storageListen(request, "error", guarded(() => reject(requestError(request))), { once: true });
-        storageListen(request, "blocked", () => reject(new Error("VelarScript database upgrade is blocked by another open page")), { once: true });
-      } catch (error) { reject(error); }
+        storageListen(request, "error", guarded(() => reject(storageFailure(requestError(request), "upgrade"))), { once: true });
+        storageListen(request, "blocked", () => reject(new StorageUpgradeError("VelarScript database upgrade is blocked by another open page")), { once: true });
+      } catch (error) { reject(storageFailure(error, "upgrade")); }
     });
     opened = pending;
     void pending.catch(() => { if (opened === pending) opened = null; });
@@ -2572,7 +2625,7 @@ export function database(name) {
           opened = null;
           try { closeConnection(db); } catch {}
         }
-        reject(error);
+        reject(storageFailure(error));
         return;
       }
       let value;
@@ -2582,14 +2635,16 @@ export function database(name) {
       try {
         const store = storageHostCall(transaction, "objectStore", storageIdbTransactionObjectStore, storageNativeIdbTransaction, ["values"]);
         const result = operation(store);
-        storageListen(result, "success", guarded(() => { value = requestResult(result); }), { once: true });
-        storageListen(result, "error", guarded(() => fail(requestError(result))), { once: true });
-        storageListen(transaction, "abort", guarded(() => fail(storageHostField(transaction, "error", storageIdbTransactionError, storageNativeIdbTransaction))), { once: true });
-        storageListen(transaction, "error", guarded(() => fail(storageHostField(transaction, "error", storageIdbTransactionError, storageNativeIdbTransaction))), { once: true });
+        if (result !== null) {
+          storageListen(result, "success", guarded(() => { value = requestResult(result); }), { once: true });
+          storageListen(result, "error", guarded(() => fail(storageFailure(requestError(result)))), { once: true });
+        }
+        storageListen(transaction, "abort", guarded(() => fail(storageFailure(storageHostField(transaction, "error", storageIdbTransactionError, storageNativeIdbTransaction)))), { once: true });
+        storageListen(transaction, "error", guarded(() => fail(storageFailure(storageHostField(transaction, "error", storageIdbTransactionError, storageNativeIdbTransaction)))), { once: true });
         storageListen(transaction, "complete", guarded(() => { if (!settled) { settled = true; resolve(value); } }), { once: true });
       } catch (error) {
         try { storageHostCall(transaction, "abort", storageIdbTransactionAbort, storageNativeIdbTransaction); } catch {}
-        fail(error);
+        fail(storageFailure(error));
       }
     });
   };
@@ -2602,6 +2657,48 @@ export function database(name) {
       const encoded = __velarJsonStringify(value);
       if (__velarUtf8ByteLength(encoded) > maxBytes) throw new RangeError("Stored JSON exceeds maxBytes");
       await request("readwrite", (store) => objectOperation(store, "put", [encoded, name]));
+      return null;
+    },
+    async getBytes(key, fallback = null, maxBytes = storageMaxValueBytes) {
+      const name = keyOf(key);
+      maxBytes = storageByteBudget(maxBytes);
+      const value = await request("readonly", (store) => objectOperation(store, "get", [name]));
+      if (value === undefined) return fallback === null ? null : __velarStorageBytes.parse(fallback);
+      let bytes;
+      try { bytes = __velarStorageBytes.parse(value); } catch { throw new StorageTransactionError("Stored value is not Bytes"); }
+      if (bytes.byteLength > maxBytes) throw new StorageTransactionError("Stored Bytes exceeds maxBytes");
+      return bytes;
+    },
+    async setBytes(key, value, maxBytes = storageMaxValueBytes) {
+      const name = keyOf(key);
+      maxBytes = storageByteBudget(maxBytes);
+      const bytes = __velarStorageBytes.parse(value);
+      if (bytes.byteLength > maxBytes) throw new RangeError("Stored Bytes exceeds maxBytes");
+      await request("readwrite", (store) => objectOperation(store, "put", [bytes, name]));
+      return null;
+    },
+    async batch(changes) {
+      changes = __velarRequireList(changes, "Database batch changes");
+      if (changes.length > 10000) throw new RangeError("Database batches cannot exceed 10000 changes");
+      const checked = [];
+      let totalBytes = 0;
+      for (let index = 0; index < changes.length; index += 1) {
+        const change = changes[index];
+        if (!change || typeof change !== "object" || Array.isArray(change)) throw new TypeError("Database batch changes must be records");
+        const keys = Object.keys(change);
+        if (keys.length !== 2 || !keys.includes("key") || !keys.includes("bytes")) throw new TypeError("Database batch changes require exactly key and bytes");
+        const key = keyOf(change.key);
+        const bytes = change.bytes === null ? null : __velarStorageBytes.parse(change.bytes);
+        totalBytes += bytes?.byteLength ?? 0;
+        if (totalBytes > 64 * 1024 * 1024) throw new RangeError("Database batch Bytes cannot exceed 64 MiB");
+        checked.push({key, bytes});
+      }
+      await request("readwrite", (store) => {
+        for (const change of checked) {
+          objectOperation(store, change.bytes === null ? "delete" : "put", change.bytes === null ? [change.key] : [change.bytes, change.key]);
+        }
+        return null;
+      });
       return null;
     },
     async has(key) { const name = keyOf(key); return (await request("readonly", (store) => objectOperation(store, "getKey", [name]))) !== undefined; },
@@ -3353,6 +3450,8 @@ export interface VelarWebRuntimeConfig {
 }
 
 export function webModuleSource(source: string, web: VelarWebRuntimeConfig = { base: "/" }): string | null {
+  if (source === "velar/websocket") return VELAR_WEB_WEBSOCKET_RUNTIME;
+  if (source === "velar/worker") return VELAR_WEB_WORKER_RUNTIME;
   const value = webModuleSources.get(source);
   if (!value) return null;
   if (source === "velar/web") return value.replace(JSON.stringify("__VELAR_WEB_BASE__"), JSON.stringify(web.base));

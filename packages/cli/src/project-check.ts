@@ -2,7 +2,7 @@ import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { formatDiagnostic } from "@velarscript/compiler";
 import type { VelarProjectConfig } from "./config.ts";
-import { compileProject, type ProjectResult } from "./project.ts";
+import { compileProject, compileProjectEntries, type ProjectResult } from "./project.ts";
 import { MAX_VELAR_PROJECT_MODULES } from "./source-limits.ts";
 
 /**
@@ -30,7 +30,7 @@ export interface CheckedProject {
  * than the one the author saw.
  */
 export async function checkResolvedProject(config: VelarProjectConfig, input: string | null): Promise<CheckedProject> {
-  const project = await compileProject(config.entryPath, new Map(), {
+  const project = await compileProjectEntries([config.entryPath, ...config.workerEntries.values()], config.entryPath, new Map(), {
     projectRoot: config.root,
     publicRoot: config.publicDir,
     extensions: config.compilerExtensions,

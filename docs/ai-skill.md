@@ -50,13 +50,13 @@ Web visual builders are named imports from `velar/look` — there is no `Look`
 global in JavaScript, so there is no `Look.` prefix here either. These names
 need no import and cannot be shadowed: `const Text = 1` is rejected. `print`,
 `str`, `number`, `equals`, and `range` are likewise in the Core prelude —
-`equals(a, b)` is the one spelling of content comparison. One roster both
-grants these nine names and protects them, so the protection is never a stale
-copy: adding a name to Core refuses it as a binding with no list to edit, and
-protecting a name the compiler has no type for fails the build. Capability
-modules such as `velar/http`, `velar/storage`, and `velar/browser` remain
-explicit imports. Core durations use `ms` or `s`, so write
-`await Promise.sleep(250ms)`, not a bare number.
+`equals(a, b)` is the one content-comparison spelling. One roster grants and
+protects these names. Capabilities stay explicit imports. Durations use `ms` or
+`s`, so write `await Promise.sleep(250ms)`, not a bare number.
+
+Use checked binary/random/task, manifest Workers, pull WebSockets, Node SQLite,
+Web binary IndexedDB, and official codec/noise adapters. A direct
+`for index in range(...):` is a native counter; range as a value is a List.
 
 ## Project setup
 
@@ -186,7 +186,7 @@ them; the first two are the **silent traps** in the list — read them twice.
 | `Look.spacing(16px)` | `spacing(16px)` with `import {spacing} from "velar/look"`; the `Look.` prefix is retired. `velar fix` performs the rewrite. |
 | `"""triple-quoted"""` for a block of text | A layout string: a double quote followed immediately by a newline opens it; a quote back at the opening line's indentation closes it. Backtick strings are real, but always single-line. |
 | Escaping `\"` through a JSON, HTML, or selector string | Use backticks: `` `{"name":"Nova"}` `` is the same `string` value, with `"` as ordinary text. Prefixes are orthogonal (`` f` ``, `` r` ``, `` rf` ``), and `velar format` picks the delimiter for you (`"` by default, backticks when the text contains `"`), so write whichever is convenient. |
-| `0xFF`, `0b1010`, `007`, `.5` | Decimal only: `255`, `10`, `7`, `0.5`. Group long digits with `_` — `1_000_000`. `Infinity` and `NaN` are not literals: write `1 / 0` and `0 / 0`. |
+| `007`, `.5` | Write `7`, `0.5`. Explicit `0xFF`, `0b1010`, and `0o17` integers are supported; legacy leading-zero octal is not. Group long digits with `_` — `1_000_000`. `Infinity` and `NaN` are not literals: write `1 / 0` and `0 / 0`. |
 | `a == b == c` | Equality never chains: `a == b and b == c`. Ordered chains work but must point one way — `0 < index <= size` is fine, `a < b > c` is not. An `in` or `is` test inside a comparison needs parentheses. |
 | A line that is only a value — `x == 5`, `items[0]`, `"a note"` | A statement must do something: call, assign, `await`, or `async`. A computed-and-discarded value is a compile error, and a bare string is not a docstring — use `//`. |
 | A block comment that starts or ends beside code on a multi-line span | `/* */` exists and nests — commenting out a region that already holds a comment works — but a multi-line one takes whole lines: only `/*` on its opening line, only `*/` on its closing line. Within a single line it can sit anywhere: `call(/* why */ value)`. |

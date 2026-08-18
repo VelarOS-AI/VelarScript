@@ -1,4 +1,13 @@
-import { optionalOf as optional, type ClassInfo, type CompilerExtension, type ModuleInterface, type ValueType } from "@velarscript/compiler";
+import {
+  optionalOf as optional,
+  VELAR_BYTES_TYPE_IDENTITY,
+  VELAR_UINT16_BUFFER_TYPE_IDENTITY,
+  type ClassInfo,
+  type CompilerExtension,
+  type GenericTypeInfo,
+  type ModuleInterface,
+  type ValueType,
+} from "@velarscript/compiler";
 import {
   VELAR_CLASS_FIELD_MODULE,
   VELAR_CLASS_FIELD_MODULE_SOURCE,
@@ -28,7 +37,10 @@ import {
   VELAR_UTF8_RUNTIME,
 } from "@velarscript/compiler/extension";
 import { velarNodeCompilerExtension } from "@velarscript/node/compiler";
+import { CORE_WORKER_CONFIG_KEY } from "./project-format.ts";
 import { VELAR_STANDARD_API_VERSION } from "./version.ts";
+
+export const VELAR_WORKER_MANIFEST_MODULE = "velar/worker-manifest";
 
 const anyType: ValueType = { kind: "any" };
 const nullType: ValueType = { kind: "null" };
@@ -119,6 +131,138 @@ const loggerType = object({
   warn: apiFunction(["message", "fields"], [stringType, logFieldsType], nullType, 1),
   error: apiFunction(["message", "error", "fields"], [stringType, errorType, logFieldsType], nullType, 1),
 });
+const byteOrderIdentity = "velar/binary#enum:ByteOrder";
+const byteOrderMembers = new Set(["little", "big"]);
+const byteOrderType: ValueType = { kind: "enum", name: "ByteOrder", identity: byteOrderIdentity };
+const bytesType: ValueType = { kind: "named", name: "Bytes", identity: VELAR_BYTES_TYPE_IDENTITY };
+const uint16BufferType: ValueType = { kind: "named", name: "UInt16Buffer", identity: VELAR_UINT16_BUFFER_TYPE_IDENTITY };
+const binaryNamedTypes = new Map([
+  ["Bytes", new Map([
+    ["size", numberType],
+  ])],
+  ["UInt16Buffer", new Map([
+    ["size", numberType],
+    ["toBytes", apiFunction(["order"], [byteOrderType], bytesType)],
+  ])],
+]);
+const binaryReadonlyFields = new Map([
+  ["Bytes", new Set(["size"])],
+  ["UInt16Buffer", new Set(["size", "toBytes"])],
+]);
+const randomIdentity = "velar/random#type:Random";
+const randomType: ValueType = { kind: "named", name: "Random", identity: randomIdentity };
+const randomSeedType: ValueType = { kind: "union", members: [stringType, numberType] };
+const randomElementType: ValueType = { kind: "parameter", name: "T", index: 0 };
+const adapterElementType: ValueType = { kind: "parameter", name: "T", index: 0 };
+const noise2Type = apiFunction(["x", "y"], [numberType, numberType], numberType);
+const noise3Type = apiFunction(["x", "y", "z"], [numberType, numberType, numberType], numberType);
+const noise4Type = apiFunction(["x", "y", "z", "w"], [numberType, numberType, numberType, numberType], numberType);
+const randomNamedTypes = new Map([
+  ["Random", new Map([
+    ["number", apiFunction([], [], numberType)],
+    ["int", apiFunction(["start", "end"], [numberType, numberType], numberType, 1)],
+    ["bool", apiFunction(["probability"], [numberType], boolType, 0)],
+    ["pick", { kind: "function", typeParameterNames: ["T"], parameters: [{ kind: "list", element: randomElementType }], parameterNames: ["values"], requiredParameters: 1, result: randomElementType } satisfies ValueType],
+    ["shuffle", { kind: "function", typeParameterNames: ["T"], parameters: [{ kind: "list", element: randomElementType }], parameterNames: ["values"], requiredParameters: 1, result: { kind: "list", element: randomElementType } } satisfies ValueType],
+    ["fork", apiFunction(["label"], [stringType], randomType)],
+  ])],
+]);
+const randomReadonlyFields = new Map([["Random", new Set(["number", "int", "bool", "pick", "shuffle", "fork"])]]);
+const cancellationIdentity = "velar/task#type:Cancellation";
+const taskIdentity = "velar/task#type:Task";
+const cancellationType: ValueType = { kind: "named", name: "Cancellation", identity: cancellationIdentity };
+const taskElementType: ValueType = { kind: "parameter", name: "T", index: 0 };
+const taskOf = (value: ValueType): ValueType => ({
+  kind: "named",
+  name: `Task<${value.kind === "parameter" ? value.name : "T"}>`,
+  identity: taskIdentity,
+  application: { declaration: taskIdentity, name: "Task", arguments: [value] },
+});
+const taskTemplate: GenericTypeInfo = {
+  identity: taskIdentity,
+  name: "Task",
+  parameterNames: ["T"],
+  parameterBounds: [null],
+  fields: new Map([
+    ["result", apiFunction([], [], promise(taskElementType))],
+    ["cancel", apiFunction(["reason"], [stringType], promise(nullType), 0)],
+    ["close", apiFunction([], [], promise(nullType))],
+  ]),
+  readonlyFields: new Set(["result", "cancel", "close"]),
+};
+const cancellationFields = new Map([
+  ["cancelled", boolType],
+  ["reason", optional(stringType)],
+  ["checkpoint", apiFunction([], [], promise(nullType))],
+]);
+const taskErrorClass = (identity: string): ClassInfo => ({
+  identity,
+  parameters: [stringType], parameterNames: ["message"], requiredParameters: 0,
+  base: "Error", abstract: false,
+  fields: new Map(), getters: new Set(), abstractGetters: new Set(), methods: new Map(), abstractMethods: new Set(),
+  staticFields: new Map(), staticGetters: new Set(), staticMethods: new Map(),
+});
+const cancellationErrorIdentity = "velar/task#class:CancellationError";
+const taskTimeoutErrorIdentity = "velar/task#class:TaskTimeoutError";
+const workerIdentity = "velar/worker#type:Worker";
+const workerPoolIdentity = "velar/worker#type:WorkerPool";
+const workerRequestType: ValueType = { kind: "parameter", name: "Request", index: 0 };
+const workerResponseType: ValueType = { kind: "parameter", name: "Response", index: 1 };
+const workerApplication = (identity: string, name: string, request: ValueType, response: ValueType): ValueType => ({
+  kind: "named", name: `${name}<Request, Response>`, identity,
+  application: { declaration: identity, name, arguments: [request, response] },
+});
+const workerCallFields = new Map<string, ValueType>([
+  ["call", { kind: "function", parameterNames: ["request", "cancellation", "timeout"], parameters: [workerRequestType, optional(cancellationType), optional(durationType)], requiredParameters: 1, result: promise(workerResponseType) }],
+  ["close", apiFunction([], [], promise(nullType))],
+]);
+const workerTemplate = (identity: string, name: string): GenericTypeInfo => ({
+  identity, name, parameterNames: ["Request", "Response"], parameterBounds: [null, null], fields: workerCallFields,
+  readonlyFields: new Set(["call", "close"]),
+});
+const workerErrorIdentities = new Map([
+  ["WorkerBackpressureError", "velar/worker#class:WorkerBackpressureError"],
+  ["WorkerCallError", "velar/worker#class:WorkerCallError"],
+  ["WorkerCrashedError", "velar/worker#class:WorkerCrashedError"],
+  ["WorkerClosedError", "velar/worker#class:WorkerClosedError"],
+]);
+const webSocketConnectionIdentity = "velar/websocket#type:WebSocketConnection";
+const webSocketServerIdentity = "velar/websocket#type:WebSocketServer";
+const webSocketMessageType: ValueType = { kind: "union", members: [stringType, bytesType] };
+const webSocketConnectionType: ValueType = { kind: "named", name: "WebSocketConnection", identity: webSocketConnectionIdentity };
+const webSocketServerType: ValueType = { kind: "named", name: "WebSocketServer", identity: webSocketServerIdentity };
+const webSocketConnectionFields = new Map([
+  ["state", apiFunction([], [], stringType)],
+  ["send", apiFunction(["message"], [webSocketMessageType], promise(nullType))],
+  ["next", apiFunction([], [], promise(optional(webSocketMessageType)))],
+  ["close", apiFunction(["code", "reason"], [numberType, stringType], promise(nullType), 0)],
+]);
+const webSocketServerFields = new Map([
+  ["port", numberType],
+  ["next", apiFunction([], [], promise(optional(webSocketConnectionType)))],
+  ["stop", apiFunction([], [], promise(nullType))],
+]);
+const webSocketConnectOptions = object({
+  timeout: optional(durationType), maxMessageBytes: optional(numberType), maxQueuedMessages: optional(numberType), maxPendingSendBytes: optional(numberType),
+});
+const webSocketServeRequestType: ValueType = { kind: "named", name: "ServeRequest", identity: "velar/serve#type:ServeRequest" };
+const webSocketResponseHeadersType = mapString(stringType);
+const webSocketStreamWriterType = apiFunction(["chunk"], [stringType], promise(nullType));
+const webSocketServeResponseType: ValueType = { kind: "union", members: [
+  { kind: "object", fields: new Map([["status", numberType], ["json", anyType], ["headers", webSocketResponseHeadersType]]), optionalFields: new Set(["headers"]) },
+  { kind: "object", fields: new Map([["status", numberType], ["text", stringType], ["contentType", stringType], ["headers", webSocketResponseHeadersType]]), optionalFields: new Set(["contentType", "headers"]) },
+  { kind: "object", fields: new Map([["status", numberType], ["stream", apiFunction(["write"], [webSocketStreamWriterType], promise(nullType))], ["headers", webSocketResponseHeadersType]]), optionalFields: new Set(["headers"]) },
+] };
+const webSocketHttpHandlerType = apiFunction(["request"], [webSocketServeRequestType], promise(webSocketServeResponseType));
+const webSocketListenOptions = object({
+  port: numberType, host: optional(stringType), path: optional(stringType), http: optional(webSocketHttpHandlerType), maxMessageBytes: optional(numberType), maxQueuedMessages: optional(numberType), maxPendingSendBytes: optional(numberType), maxConnections: optional(numberType), maxPendingConnections: optional(numberType),
+});
+const webSocketErrorIdentities = new Map([
+  ["WebSocketBackpressureError", "velar/websocket#class:WebSocketBackpressureError"],
+  ["WebSocketClosedError", "velar/websocket#class:WebSocketClosedError"],
+  ["WebSocketProtocolError", "velar/websocket#class:WebSocketProtocolError"],
+  ["WebSocketTimeoutError", "velar/websocket#class:WebSocketTimeoutError"],
+]);
 
 const coreModuleInterfaces = new Map<string, ModuleInterface>([
   ["velar/collections", moduleInterface(new Map([
@@ -207,6 +351,116 @@ const coreModuleInterfaces = new Map<string, ModuleInterface>([
     ["gcd", apiFunction(["left", "right"], [numberType, numberType], numberType)],
     ["lcm", apiFunction(["left", "right"], [numberType, numberType], numberType)],
   ]))],
+  ["velar/binary", moduleInterface(
+    new Map([
+      ["ByteOrder", { kind: "enumObject", name: "ByteOrder", identity: byteOrderIdentity, members: byteOrderMembers }],
+      ["Bytes", { kind: "typeObject", name: "Bytes", value: bytesType }],
+      ["UInt16Buffer", { kind: "typeObject", name: "UInt16Buffer", value: uint16BufferType }],
+      ["uint16Buffer", apiFunction(["size"], [numberType], uint16BufferType)],
+      ["uint16FromBytes", apiFunction(["snapshot", "order"], [bytesType, byteOrderType], uint16BufferType)],
+    ]),
+    new Map(),
+    binaryNamedTypes,
+    new Map(),
+    binaryReadonlyFields,
+    new Map([
+      ["Bytes", VELAR_BYTES_TYPE_IDENTITY],
+      ["UInt16Buffer", VELAR_UINT16_BUFFER_TYPE_IDENTITY],
+    ]),
+    new Map([["ByteOrder", { identity: byteOrderIdentity, members: byteOrderMembers }]]),
+  )],
+  ["velar/random", moduleInterface(
+    new Map([
+      ["Random", { kind: "typeObject", name: "Random", value: randomType }],
+      ["random", apiFunction(["seed"], [randomSeedType], randomType)],
+    ]),
+    new Map(),
+    randomNamedTypes,
+    new Map(),
+    randomReadonlyFields,
+    new Map([["Random", randomIdentity]]),
+  )],
+  ["velar/task", moduleInterface(
+    new Map([
+      ["Cancellation", { kind: "typeObject", name: "Cancellation", value: cancellationType }],
+      ["Task", { kind: "typeObject", name: "Task" }],
+      ["CancellationError", { kind: "classConstructor", name: "CancellationError", identity: cancellationErrorIdentity }],
+      ["TaskTimeoutError", { kind: "classConstructor", name: "TaskTimeoutError", identity: taskTimeoutErrorIdentity }],
+      ["task", { kind: "function", typeParameterNames: ["T"], parameterNames: ["work", "parent"], parameters: [
+        { kind: "function", parameterNames: ["cancellation"], parameters: [cancellationType], requiredParameters: 1, result: promise(taskElementType) },
+        optional(cancellationType),
+      ], requiredParameters: 1, result: taskOf(taskElementType) }],
+      ["withTimeout", { kind: "function", typeParameterNames: ["T"], parameterNames: ["source", "duration"], parameters: [taskOf(taskElementType), durationType], requiredParameters: 2, result: promise(taskElementType) }],
+    ]),
+    new Map([
+      ["CancellationError", taskErrorClass(cancellationErrorIdentity)],
+      ["TaskTimeoutError", taskErrorClass(taskTimeoutErrorIdentity)],
+    ]),
+    new Map([["Cancellation", cancellationFields]]),
+    new Map(),
+    new Map([["Cancellation", new Set(["cancelled", "reason", "checkpoint"])]]),
+    new Map([["Cancellation", cancellationIdentity]]),
+    new Map(),
+    new Map([["Task", taskTemplate], [taskIdentity, taskTemplate]]),
+  )],
+  ["velar/worker", moduleInterface(
+    new Map([
+      ["Worker", { kind: "typeObject", name: "Worker" }],
+      ["WorkerPool", { kind: "typeObject", name: "WorkerPool" }],
+      ...[...workerErrorIdentities].map(([name, identity]) => [name, { kind: "classConstructor", name, identity } as ValueType] as const),
+      ["worker", { kind: "function", typeParameterNames: ["Request", "Response"], parameterNames: ["name", "RequestType", "ResponseType", "capacity"], parameters: [stringType, { kind: "runtimeType", value: workerRequestType }, { kind: "runtimeType", value: workerResponseType }, numberType], requiredParameters: 3, result: workerApplication(workerIdentity, "Worker", workerRequestType, workerResponseType) }],
+      ["workerPool", { kind: "function", typeParameterNames: ["Request", "Response"], parameterNames: ["name", "RequestType", "ResponseType", "size", "capacity"], parameters: [stringType, { kind: "runtimeType", value: workerRequestType }, { kind: "runtimeType", value: workerResponseType }, numberType, numberType], requiredParameters: 4, result: workerApplication(workerPoolIdentity, "WorkerPool", workerRequestType, workerResponseType) }],
+      ["serveWorker", { kind: "function", typeParameterNames: ["Request", "Response"], parameterNames: ["RequestType", "ResponseType", "handler", "capacity"], parameters: [
+        { kind: "runtimeType", value: workerRequestType }, { kind: "runtimeType", value: workerResponseType },
+        { kind: "function", parameterNames: ["request", "cancellation"], parameters: [workerRequestType, cancellationType], requiredParameters: 2, result: promise(workerResponseType) }, numberType,
+      ], requiredParameters: 3, result: nullType }],
+    ]),
+    new Map([...workerErrorIdentities].map(([name, identity]) => [name, taskErrorClass(identity)])),
+    new Map(), new Map(), new Map(), new Map(), new Map(),
+    new Map([
+      ["Worker", workerTemplate(workerIdentity, "Worker")], [workerIdentity, workerTemplate(workerIdentity, "Worker")],
+      ["WorkerPool", workerTemplate(workerPoolIdentity, "WorkerPool")], [workerPoolIdentity, workerTemplate(workerPoolIdentity, "WorkerPool")],
+    ]),
+  )],
+  ["velar/websocket", moduleInterface(
+    new Map([
+      ["WebSocketConnection", { kind: "typeObject", name: "WebSocketConnection", value: webSocketConnectionType }],
+      ["WebSocketServer", { kind: "typeObject", name: "WebSocketServer", value: webSocketServerType }],
+      ...[...webSocketErrorIdentities].map(([name, identity]) => [name, { kind: "classConstructor", name, identity } as ValueType] as const),
+      ["connect", apiFunction(["url", "options"], [stringType, webSocketConnectOptions], promise(webSocketConnectionType), 1)],
+      ["listen", apiFunction(["options"], [webSocketListenOptions], promise(webSocketServerType))],
+    ]),
+    new Map([...webSocketErrorIdentities].map(([name, identity]) => [name, taskErrorClass(identity)])),
+    new Map([
+      ["WebSocketConnection", webSocketConnectionFields],
+      ["WebSocketServer", webSocketServerFields],
+    ]),
+    new Map(),
+    new Map([
+      ["WebSocketConnection", new Set(webSocketConnectionFields.keys())],
+      ["WebSocketServer", new Set(webSocketServerFields.keys())],
+    ]),
+    new Map([
+      ["WebSocketConnection", webSocketConnectionIdentity],
+      ["WebSocketServer", webSocketServerIdentity],
+    ]),
+  )],
+  ["velar/msgpack", moduleInterface(new Map([
+    ["encode", apiFunction(["value"], [unknownType], bytesType)],
+    ["decode", apiFunction(["value"], [bytesType], unknownType)],
+    ["parse", { kind: "function", typeParameterNames: ["T"], parameterNames: ["value", "Type"], parameters: [bytesType, { kind: "runtimeType", value: adapterElementType }], requiredParameters: 2, result: adapterElementType }],
+  ]))],
+  ["velar/compression", moduleInterface(new Map([
+    ["deflate", apiFunction(["value", "level"], [bytesType, numberType], bytesType, 1)],
+    ["inflate", apiFunction(["value", "maxBytes"], [bytesType, numberType], bytesType, 1)],
+    ["gzip", apiFunction(["value", "level"], [bytesType, numberType], bytesType, 1)],
+    ["gunzip", apiFunction(["value", "maxBytes"], [bytesType, numberType], bytesType, 1)],
+  ]))],
+  ["velar/noise", moduleInterface(new Map([
+    ["simplex2", apiFunction(["seed"], [randomSeedType], noise2Type)],
+    ["simplex3", apiFunction(["seed"], [randomSeedType], noise3Type)],
+    ["simplex4", apiFunction(["seed"], [randomSeedType], noise4Type)],
+  ]))],
   ["velar/json", moduleInterface(new Map([
     ["parse", apiIntrinsic("json.parse", ["text", "target"], [stringType, anyType], unknownType, 1)],
     ["tryParse", apiIntrinsic("json.tryParse", ["text", "target", "fallback"], [stringType, anyType, anyType], unknownType, 1)],
@@ -274,8 +528,12 @@ function moduleInterface(
   classes: ReadonlyMap<string, ClassInfo> = new Map(),
   namedTypes: ReadonlyMap<string, ReadonlyMap<string, ValueType>> = new Map(),
   typeAliases: ReadonlyMap<string, ValueType> = new Map(),
+  namedTypeReadonlyFields: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
+  namedTypeIdentities: ReadonlyMap<string, string> = new Map(),
+  enums: ModuleInterface["enums"] = new Map(),
+  genericTypes: NonNullable<ModuleInterface["genericTypes"]> = new Map(),
 ): ModuleInterface {
-  return { exports, mutableExports: new Set(), reactiveExports: new Map(), reExports: new Map(), namedTypes, namedTypeIdentities: new Map(), typeAliases, enums: new Map(), classes, tests: [], extensionExports: new Map(), extensionData: new Map() };
+  return { exports, mutableExports: new Set(), reactiveExports: new Map(), reExports: new Map(), namedTypes, namedTypeReadonlyFields, namedTypeIdentities, genericTypes, typeAliases, enums, classes, tests: [], extensionExports: new Map(), extensionData: new Map() };
 }
 
 export function standardModuleInterfaces(extensions: readonly CompilerExtension[] = []): ReadonlyMap<string, ModuleInterface> {
@@ -414,6 +672,7 @@ function __velarRequireList(value, name) {
 const runtimeTypeRuntime = VELAR_TYPE_REGISTRY_RUNTIME;
 
 const coreModuleSources: ReadonlyMap<string, string> = new Map([
+  [VELAR_WORKER_MANIFEST_MODULE, "export const workerEntries = Object.freeze({});\n"],
   [VELAR_CLASS_FIELD_MODULE, VELAR_CLASS_FIELD_MODULE_SOURCE],
   [VELAR_COLLECTION_HOST_MODULE, VELAR_COLLECTION_HOST_MODULE_SOURCE],
   [VELAR_COLLECTION_LOWERING_MODULE, VELAR_COLLECTION_LOWERING_MODULE_SOURCE],
@@ -446,6 +705,7 @@ const __velarCollectionsMapGet = __velarCollectionsHostOperation(__velarCollecti
 const __velarCollectionsMapSet = __velarCollectionsHostOperation(__velarCollectionsMapPrototype, "set");
 const __velarCollectionsSetHas = __velarCollectionsHostOperation(__velarCollectionsSetPrototype, "has");
 const __velarCollectionsSetAdd = __velarCollectionsHostOperation(__velarCollectionsSetPrototype, "add");
+const __velarCollectionsObjectDefineProperty = __velarCollectionsHostOperation(__velarCollectionsNativeObject, "defineProperty");
 const __velarCollectionsObjectFreeze = __velarCollectionsHostOperation(__velarCollectionsNativeObject, "freeze");
 const __velarCollectionsObjectIs = __velarCollectionsHostOperation(__velarCollectionsNativeObject, "is");
 const __velarCollectionsNumberIsFinite = __velarCollectionsHostOperation(__velarCollectionsNativeNumber, "isFinite");
@@ -544,6 +804,33 @@ export function range(start, stop = null, step = 1) {
   }
   return output;
 }
+
+// Compiler-only entry point for a direct counted range loop. Validation
+// deliberately completes before the loop body starts, matching range()'s
+// eager errors without allocating the produced List.
+function __velarCountedRange(start, stop = null, step = 1) {
+  if (stop === null) { stop = start; start = 0; }
+  if (!__velarCollectionsCall(__velarCollectionsNumberIsFinite, __velarCollectionsNativeNumber, [start]) || !__velarCollectionsCall(__velarCollectionsNumberIsFinite, __velarCollectionsNativeNumber, [stop]) || !__velarCollectionsCall(__velarCollectionsNumberIsFinite, __velarCollectionsNativeNumber, [step]) || step === 0) throw new __velarCollectionsNativeRangeError("range requires finite numbers and a non-zero step");
+  let count = 0;
+  if (step > 0) for (let value = start; value < stop;) {
+    if (count >= __velarMaxListItems) throw new __velarCollectionsNativeRangeError("range cannot produce more than " + __velarMaxListItems + " items");
+    count += 1; const next = value + step;
+    if (next === value) throw new __velarCollectionsNativeRangeError("range step is too small to advance at this magnitude");
+    value = next;
+  } else for (let value = start; value > stop;) {
+    if (count >= __velarMaxListItems) throw new __velarCollectionsNativeRangeError("range cannot produce more than " + __velarMaxListItems + " items");
+    count += 1; const next = value + step;
+    if (next === value) throw new __velarCollectionsNativeRangeError("range step is too small to advance at this magnitude");
+    value = next;
+  }
+  return __velarCollectionsFreeze([start, stop, step]);
+}
+__velarCollectionsCall(__velarCollectionsObjectDefineProperty, __velarCollectionsNativeObject, [range, "__velarCounted", {
+  value: __velarCountedRange,
+  enumerable: false,
+  configurable: false,
+  writable: false,
+}]);
 
 export function enumerate(values, start = 0) {
   values = requireList(values, "enumerate");
@@ -1041,6 +1328,492 @@ export function random() { const value = __velarMathCall(__velarMathRandom, []);
 export function randomInt(minimum, maximum = null) { if (maximum === null) { maximum = minimum; minimum = 0; } const width = maximum - minimum; if (!__velarMathCall(__velarMathNumberIsSafeInteger, [minimum]) || !__velarMathCall(__velarMathNumberIsSafeInteger, [maximum]) || !__velarMathCall(__velarMathNumberIsSafeInteger, [width]) || width <= 0) throw new __velarMathNativeRangeError("randomInt requires an increasing safe-integer range"); return __velarMathCall(__velarMathFloor, [random() * width]) + minimum; }
 export function gcd(left, right) { if (!__velarMathCall(__velarMathNumberIsSafeInteger, [left]) || !__velarMathCall(__velarMathNumberIsSafeInteger, [right])) throw new __velarMathNativeTypeError("gcd requires safe integers"); left = __velarMathCall(__velarMathAbs, [left]); right = __velarMathCall(__velarMathAbs, [right]); while (right) [left, right] = [right, left % right]; return left; }
 export function lcm(left, right) { if (!__velarMathCall(__velarMathNumberIsSafeInteger, [left]) || !__velarMathCall(__velarMathNumberIsSafeInteger, [right])) throw new __velarMathNativeTypeError("lcm requires safe integers"); if (left === 0 || right === 0) return 0; const result = __velarMathCall(__velarMathAbs, [(left / gcd(left, right)) * right]); if (!__velarMathCall(__velarMathNumberIsSafeInteger, [result])) throw new __velarMathNativeRangeError("lcm result is outside the safe-integer range"); return result; }
+`.trimStart()],
+  ["velar/binary", String.raw`
+import { __VelarIndexError } from ${JSON.stringify(VELAR_COLLECTION_LOWERING_MODULE)};
+${VELAR_TYPE_REGISTRY_RUNTIME}
+
+const __velarBinaryNativeObject = globalThis.Object;
+const __velarBinaryNativeNumber = globalThis.Number;
+const __velarBinaryNativeUint8Array = globalThis.Uint8Array;
+const __velarBinaryNativeUint16Array = globalThis.Uint16Array;
+const __velarBinaryNativeTypeError = globalThis.TypeError;
+const __velarBinaryNativeRangeError = globalThis.RangeError;
+const __velarBinaryGetOwnPropertyDescriptor = __velarBinaryNativeObject.getOwnPropertyDescriptor;
+const __velarBinaryGetPrototypeOf = __velarBinaryNativeObject.getPrototypeOf;
+const __velarBinaryFreeze = __velarBinaryNativeObject.freeze;
+const __velarBinaryApply = __velarBinaryGetOwnPropertyDescriptor(globalThis.Reflect, "apply")?.value;
+const __velarBinaryNumberIsInteger = __velarBinaryGetOwnPropertyDescriptor(__velarBinaryNativeNumber, "isInteger")?.value;
+const __velarBinaryNumberIsSafeInteger = __velarBinaryGetOwnPropertyDescriptor(__velarBinaryNativeNumber, "isSafeInteger")?.value;
+const __velarBinaryTypedArrayPrototype = __velarBinaryGetPrototypeOf(__velarBinaryNativeUint8Array.prototype);
+const __velarBinaryTypedArrayTag = __velarBinaryGetOwnPropertyDescriptor(__velarBinaryTypedArrayPrototype, globalThis.Symbol.toStringTag)?.get;
+const __velarBinaryTypedArrayLength = __velarBinaryGetOwnPropertyDescriptor(__velarBinaryTypedArrayPrototype, "length")?.get;
+const __velarBinaryTypedArraySet = __velarBinaryGetOwnPropertyDescriptor(__velarBinaryTypedArrayPrototype, "set")?.value;
+if (typeof __velarBinaryApply !== "function" || typeof __velarBinaryNumberIsInteger !== "function"
+  || typeof __velarBinaryNumberIsSafeInteger !== "function" || typeof __velarBinaryTypedArrayTag !== "function"
+  || typeof __velarBinaryTypedArrayLength !== "function" || typeof __velarBinaryTypedArraySet !== "function") {
+  throw new __velarBinaryNativeTypeError("The JavaScript typed-array runtime is unavailable");
+}
+function __velarBinaryCall(operation, receiver, arguments_) { return __velarBinaryApply(operation, receiver, arguments_); }
+function __velarBinaryKind(value) {
+  try { return __velarBinaryCall(__velarBinaryTypedArrayTag, value, []); }
+  catch { return null; }
+}
+function __velarBinaryLength(value, expected, name) {
+  if (__velarBinaryKind(value) !== expected) throw new __velarBinaryNativeTypeError(name + " requires " + expected);
+  return __velarBinaryCall(__velarBinaryTypedArrayLength, value, []);
+}
+function __velarBinaryOrder(order) {
+  if (order !== "little" && order !== "big") throw new __velarBinaryNativeTypeError("Byte order must be ByteOrder.little or ByteOrder.big");
+  return order;
+}
+function __velarBinaryCheckedIndex(value, index, expected, name) {
+  const length = __velarBinaryLength(value, expected, name);
+  if (!__velarBinaryCall(__velarBinaryNumberIsInteger, __velarBinaryNativeNumber, [index]) || index < 0 || index >= length) {
+    throw new __VelarIndexError(name + " index must be an integer from 0 up to but excluding size");
+  }
+  return index;
+}
+function __velarBinaryBytesSnapshot(value, name) {
+  const length = __velarBinaryLength(value, "Uint8Array", name);
+  const output = new __velarBinaryNativeUint8Array(length);
+  __velarBinaryCall(__velarBinaryTypedArraySet, output, [value]);
+  return output;
+}
+function __velarBinaryUInt16Snapshot(value, name) {
+  const length = __velarBinaryLength(value, "Uint16Array", name);
+  const output = new __velarBinaryNativeUint16Array(length);
+  __velarBinaryCall(__velarBinaryTypedArraySet, output, [value]);
+  return output;
+}
+
+export const ByteOrder = __velarRegisterRuntimeType(__velarBinaryFreeze({
+  little: "little",
+  big: "big",
+  is(value) { return value === "little" || value === "big"; },
+  parse(value) {
+    if (!ByteOrder.is(value)) throw new __velarBinaryNativeTypeError("Value does not match ByteOrder");
+    return value;
+  },
+  values() { return ["little", "big"]; },
+}));
+export const Bytes = __velarRegisterRuntimeType(__velarBinaryFreeze({
+  is(value) { return __velarBinaryKind(value) === "Uint8Array"; },
+  parse(value) { return __velarBinaryBytesSnapshot(value, "Bytes.parse"); },
+  __velarSize(value) { return __velarBinarySize(value); },
+  __velarIndex(value, index) { return __velarBytesIndex(value, index); },
+  __velarSetIndex(value, index, next) { return __velarBytesSetIndex(value, index, next); },
+  __velarUInt16Index(value, index) { return __velarUInt16Index(value, index); },
+  __velarUInt16SetIndex(value, index, next) { return __velarUInt16SetIndex(value, index, next); },
+  __velarUInt16ToBytes(value, order) { return __velarUInt16ToBytes(value, order); },
+}));
+export const UInt16Buffer = __velarRegisterRuntimeType(__velarBinaryFreeze({
+  is(value) { return __velarBinaryKind(value) === "Uint16Array"; },
+  parse(value) { return __velarBinaryUInt16Snapshot(value, "UInt16Buffer.parse"); },
+}));
+
+export function uint16Buffer(size) {
+  if (!__velarBinaryCall(__velarBinaryNumberIsSafeInteger, __velarBinaryNativeNumber, [size]) || size < 0) {
+    throw new __velarBinaryNativeRangeError("uint16Buffer size must be a non-negative safe integer");
+  }
+  return new __velarBinaryNativeUint16Array(size);
+}
+export function uint16FromBytes(snapshot, order) {
+  const length = __velarBinaryLength(snapshot, "Uint8Array", "uint16FromBytes");
+  order = __velarBinaryOrder(order);
+  if (length % 2 !== 0) throw new __velarBinaryNativeRangeError("uint16FromBytes requires an even number of bytes");
+  const output = new __velarBinaryNativeUint16Array(length / 2);
+  for (let index = 0; index < output.length; index += 1) {
+    const first = snapshot[index * 2];
+    const second = snapshot[index * 2 + 1];
+    output[index] = order === "little" ? first + second * 256 : first * 256 + second;
+  }
+  return output;
+}
+function __velarBinarySize(value) {
+  const kind = __velarBinaryKind(value);
+  if (kind !== "Uint8Array" && kind !== "Uint16Array") throw new __velarBinaryNativeTypeError("Binary size requires Bytes or UInt16Buffer");
+  return __velarBinaryCall(__velarBinaryTypedArrayLength, value, []);
+}
+function __velarBytesIndex(value, index) {
+  return value[__velarBinaryCheckedIndex(value, index, "Uint8Array", "Bytes")];
+}
+function __velarBytesSetIndex() {
+  throw new __velarBinaryNativeTypeError("Bytes is a read-only binary snapshot");
+}
+function __velarUInt16Index(value, index) {
+  return value[__velarBinaryCheckedIndex(value, index, "Uint16Array", "UInt16Buffer")];
+}
+function __velarUInt16SetIndex(value, index, next) {
+  index = __velarBinaryCheckedIndex(value, index, "Uint16Array", "UInt16Buffer");
+  if (!__velarBinaryCall(__velarBinaryNumberIsInteger, __velarBinaryNativeNumber, [next]) || next < 0 || next > 65535) {
+    throw new __velarBinaryNativeRangeError("UInt16Buffer values must be integers from 0 through 65535");
+  }
+  value[index] = next;
+  return next;
+}
+function __velarUInt16ToBytes(value, order) {
+  const length = __velarBinaryLength(value, "Uint16Array", "UInt16Buffer.toBytes");
+  order = __velarBinaryOrder(order);
+  const output = new __velarBinaryNativeUint8Array(length * 2);
+  for (let index = 0; index < length; index += 1) {
+    const item = value[index];
+    const low = item % 256;
+    const high = (item - low) / 256;
+    if (order === "little") { output[index * 2] = low; output[index * 2 + 1] = high; }
+    else { output[index * 2] = high; output[index * 2 + 1] = low; }
+  }
+  return output;
+}
+`.trimStart()],
+  ["velar/msgpack", String.raw`
+import { pack as __velarMsgpackPack, unpack as __velarMsgpackUnpack } from "msgpackr";
+import { Bytes as __velarMsgpackBytes } from "velar/binary";
+const __velarMsgpackMaxInputBytes = 64 * 1024 * 1024;
+const __velarMsgpackMaxOutputBytes = 64 * 1024 * 1024;
+function __velarMsgpackInput(value) { const bytes = __velarMsgpackBytes.parse(value); if (bytes.byteLength > __velarMsgpackMaxInputBytes) throw new RangeError("MessagePack input cannot exceed 64 MiB"); return bytes; }
+export function encode(value) { const output = __velarMsgpackPack(value, { useRecords: false, structuredClone: false }); if (!__velarMsgpackBytes.is(output)) throw new TypeError("msgpackr returned invalid bytes"); if (output.byteLength > __velarMsgpackMaxOutputBytes) throw new RangeError("MessagePack output cannot exceed 64 MiB"); return __velarMsgpackBytes.parse(output); }
+export function decode(value) { return __velarMsgpackUnpack(__velarMsgpackInput(value), { useRecords: false, mapsAsObjects: false }); }
+export function parse(value, Type) { if (!Type || typeof Type.parse !== "function") throw new TypeError("MessagePack parsing requires a runtime Type"); return Type.parse(decode(value)); }
+`.trimStart()],
+  ["velar/compression", String.raw`
+import { gzipSync as __velarGzip, gunzipSync as __velarGunzip, zlibSync as __velarDeflate, unzlibSync as __velarInflate } from "fflate";
+import { Bytes as __velarCompressionBytes } from "velar/binary";
+const __velarCompressionMaximum = 64 * 1024 * 1024;
+function __velarCompressionInput(value) { const bytes = __velarCompressionBytes.parse(value); if (bytes.byteLength > __velarCompressionMaximum) throw new RangeError("Compression input cannot exceed 64 MiB"); return bytes; }
+function __velarCompressionLevel(value) { if (value === null || value === undefined) return 6; if (!Number.isInteger(value) || value < 0 || value > 9) throw new RangeError("Compression level must be an integer from 0 through 9"); return value; }
+function __velarCompressionLimit(value) { if (value === null || value === undefined) return __velarCompressionMaximum; if (!Number.isSafeInteger(value) || value < 1 || value > __velarCompressionMaximum) throw new RangeError("Decompression maxBytes must be an integer from 1 through 67108864"); return value; }
+function __velarCompressionOutput(value, maximum) { if (!__velarCompressionBytes.is(value)) throw new TypeError("fflate returned invalid bytes"); if (value.byteLength > maximum) throw new RangeError("Decompressed output exceeds maxBytes"); return __velarCompressionBytes.parse(value); }
+export function deflate(value, level = 6) { return __velarCompressionOutput(__velarDeflate(__velarCompressionInput(value), { level: __velarCompressionLevel(level) }), __velarCompressionMaximum); }
+export function inflate(value, maxBytes = __velarCompressionMaximum) { maxBytes = __velarCompressionLimit(maxBytes); return __velarCompressionOutput(__velarInflate(__velarCompressionInput(value)), maxBytes); }
+export function gzip(value, level = 6) { return __velarCompressionOutput(__velarGzip(__velarCompressionInput(value), { level: __velarCompressionLevel(level) }), __velarCompressionMaximum); }
+export function gunzip(value, maxBytes = __velarCompressionMaximum) { maxBytes = __velarCompressionLimit(maxBytes); return __velarCompressionOutput(__velarGunzip(__velarCompressionInput(value)), maxBytes); }
+`.trimStart()],
+  ["velar/noise", String.raw`
+import { createNoise2D as __velarCreateNoise2D, createNoise3D as __velarCreateNoise3D, createNoise4D as __velarCreateNoise4D } from "simplex-noise";
+import { random as __velarNoiseRandom } from "velar/random";
+function __velarNoiseCoordinate(value) { if (typeof value !== "number" || !Number.isFinite(value)) throw new TypeError("Simplex noise coordinates must be finite numbers"); return value; }
+function __velarNoiseSource(seed, label) { const source = __velarNoiseRandom(seed).fork(label); return () => source.number(); }
+export function simplex2(seed) { const sample = __velarCreateNoise2D(__velarNoiseSource(seed, "simplex2")); return (x, y) => sample(__velarNoiseCoordinate(x), __velarNoiseCoordinate(y)); }
+export function simplex3(seed) { const sample = __velarCreateNoise3D(__velarNoiseSource(seed, "simplex3")); return (x, y, z) => sample(__velarNoiseCoordinate(x), __velarNoiseCoordinate(y), __velarNoiseCoordinate(z)); }
+export function simplex4(seed) { const sample = __velarCreateNoise4D(__velarNoiseSource(seed, "simplex4")); return (x, y, z, w) => sample(__velarNoiseCoordinate(x), __velarNoiseCoordinate(y), __velarNoiseCoordinate(z), __velarNoiseCoordinate(w)); }
+`.trimStart()],
+  ["velar/random", String.raw`
+${VELAR_TYPE_REGISTRY_RUNTIME}
+const __velarRandomNativeObject = globalThis.Object;
+const __velarRandomNativeNumber = globalThis.Number;
+const __velarRandomNativeArray = globalThis.Array;
+const __velarRandomNativeWeakMap = globalThis.WeakMap;
+const __velarRandomNativeTypeError = globalThis.TypeError;
+const __velarRandomNativeRangeError = globalThis.RangeError;
+const __velarRandomNativeMath = globalThis.Math;
+const __velarRandomGetOwnPropertyDescriptor = __velarRandomNativeObject.getOwnPropertyDescriptor;
+const __velarRandomFreeze = __velarRandomGetOwnPropertyDescriptor(__velarRandomNativeObject, "freeze")?.value;
+const __velarRandomCreate = __velarRandomGetOwnPropertyDescriptor(__velarRandomNativeObject, "create")?.value;
+const __velarRandomApply = __velarRandomGetOwnPropertyDescriptor(globalThis.Reflect, "apply")?.value;
+const __velarRandomNumberIsSafeInteger = __velarRandomGetOwnPropertyDescriptor(__velarRandomNativeNumber, "isSafeInteger")?.value;
+const __velarRandomArrayIsArray = __velarRandomGetOwnPropertyDescriptor(__velarRandomNativeArray, "isArray")?.value;
+const __velarRandomMathImul = __velarRandomGetOwnPropertyDescriptor(__velarRandomNativeMath, "imul")?.value;
+const __velarRandomMathFloor = __velarRandomGetOwnPropertyDescriptor(__velarRandomNativeMath, "floor")?.value;
+const __velarRandomStringPrototype = __velarRandomGetOwnPropertyDescriptor(globalThis.String, "prototype")?.value;
+const __velarRandomStringCharCodeAt = __velarRandomGetOwnPropertyDescriptor(__velarRandomStringPrototype, "charCodeAt")?.value;
+const __velarRandomWeakMapPrototype = __velarRandomGetOwnPropertyDescriptor(__velarRandomNativeWeakMap, "prototype")?.value;
+const __velarRandomWeakMapGet = __velarRandomGetOwnPropertyDescriptor(__velarRandomWeakMapPrototype, "get")?.value;
+const __velarRandomWeakMapHas = __velarRandomGetOwnPropertyDescriptor(__velarRandomWeakMapPrototype, "has")?.value;
+const __velarRandomWeakMapSet = __velarRandomGetOwnPropertyDescriptor(__velarRandomWeakMapPrototype, "set")?.value;
+if (typeof __velarRandomFreeze !== "function" || typeof __velarRandomCreate !== "function" || typeof __velarRandomApply !== "function"
+  || typeof __velarRandomNumberIsSafeInteger !== "function" || typeof __velarRandomArrayIsArray !== "function"
+  || typeof __velarRandomMathImul !== "function" || typeof __velarRandomMathFloor !== "function"
+  || typeof __velarRandomStringCharCodeAt !== "function" || typeof __velarRandomWeakMapGet !== "function"
+  || typeof __velarRandomWeakMapHas !== "function" || typeof __velarRandomWeakMapSet !== "function") {
+  throw new __velarRandomNativeTypeError("The deterministic random runtime is unavailable");
+}
+function __velarRandomCall(operation, receiver, arguments_) { return __velarRandomApply(operation, receiver, arguments_); }
+function __velarRandomImul(left, right) { return __velarRandomCall(__velarRandomMathImul, __velarRandomNativeMath, [left, right]); }
+function __velarRandomRotl(value, count) { return (value << count | value >>> (32 - count)) >>> 0; }
+function __velarRandomHash(text) {
+  let value = (1779033703 ^ text.length) >>> 0;
+  for (let index = 0; index < text.length; index += 1) {
+    value = __velarRandomImul(value ^ __velarRandomCall(__velarRandomStringCharCodeAt, text, [index]), 3432918353);
+    value = __velarRandomRotl(value, 13);
+  }
+  const output = new __velarRandomNativeArray(4);
+  for (let index = 0; index < 4; index += 1) {
+    value = __velarRandomImul(value ^ value >>> 16, 2246822507);
+    value = __velarRandomImul(value ^ value >>> 13, 3266489909);
+    value = (value ^ value >>> 16) >>> 0;
+    output[index] = value;
+  }
+  if ((output[0] | output[1] | output[2] | output[3]) === 0) output[0] = 1;
+  return output;
+}
+function __velarRandomSeed(seed) {
+  if (typeof seed === "string") return __velarRandomHash("s:" + seed);
+  if (typeof seed !== "number" || !__velarRandomCall(__velarRandomNumberIsSafeInteger, __velarRandomNativeNumber, [seed])) {
+    throw new __velarRandomNativeTypeError("random seed must be a string or safe integer");
+  }
+  return __velarRandomHash("n:" + seed);
+}
+const __velarRandomStates = new __velarRandomNativeWeakMap();
+function __velarRandomState(value) {
+  const state = __velarRandomCall(__velarRandomWeakMapGet, __velarRandomStates, [value]);
+  if (state === undefined) throw new __velarRandomNativeTypeError("Random method requires a Random receiver");
+  return state;
+}
+function __velarRandomNext(receiver) {
+  const state = __velarRandomState(receiver).state;
+  const result = __velarRandomImul(__velarRandomRotl(__velarRandomImul(state[1], 5) >>> 0, 7), 9) >>> 0;
+  const temporary = state[1] << 9;
+  state[2] ^= state[0]; state[3] ^= state[1]; state[1] ^= state[2]; state[0] ^= state[3]; state[2] ^= temporary;
+  state[3] = __velarRandomRotl(state[3], 11);
+  state[0] >>>= 0; state[1] >>>= 0; state[2] >>>= 0;
+  return result;
+}
+function __velarRandomRange(start, end) {
+  if (end === null) { end = start; start = 0; }
+  const width = end - start;
+  if (!__velarRandomCall(__velarRandomNumberIsSafeInteger, __velarRandomNativeNumber, [start])
+    || !__velarRandomCall(__velarRandomNumberIsSafeInteger, __velarRandomNativeNumber, [end])
+    || !__velarRandomCall(__velarRandomNumberIsSafeInteger, __velarRandomNativeNumber, [width])
+    || width <= 0 || width > 4294967296) {
+    throw new __velarRandomNativeRangeError("Random.int requires an increasing safe-integer range no wider than 2^32");
+  }
+  return [start, width];
+}
+const __velarRandomPrototype = {
+  number() { return __velarRandomNext(this) / 4294967296; },
+  int(start, end = null) {
+    const range = __velarRandomRange(start, end);
+    const limit = __velarRandomCall(__velarRandomMathFloor, __velarRandomNativeMath, [4294967296 / range[1]]) * range[1];
+    let value; do { value = __velarRandomNext(this); } while (value >= limit);
+    return range[0] + value % range[1];
+  },
+  bool(probability = 0.5) {
+    if (typeof probability !== "number" || probability < 0 || probability > 1 || probability !== probability) throw new __velarRandomNativeRangeError("Random.bool probability must be a number from 0 through 1");
+    if (probability === 0) return false;
+    if (probability === 1) return true;
+    return this.number() < probability;
+  },
+  pick(values) {
+    if (!__velarRandomCall(__velarRandomArrayIsArray, __velarRandomNativeArray, [values])) throw new __velarRandomNativeTypeError("Random.pick requires a List");
+    if (values.length === 0) throw new __velarRandomNativeRangeError("Random.pick requires a non-empty List");
+    return values[this.int(values.length)];
+  },
+  shuffle(values) {
+    if (!__velarRandomCall(__velarRandomArrayIsArray, __velarRandomNativeArray, [values])) throw new __velarRandomNativeTypeError("Random.shuffle requires a List");
+    const output = new __velarRandomNativeArray(values.length);
+    for (let index = 0; index < values.length; index += 1) output[index] = values[index];
+    for (let index = output.length - 1; index > 0; index -= 1) { const other = this.int(index + 1); const value = output[index]; output[index] = output[other]; output[other] = value; }
+    return output;
+  },
+  fork(label) {
+    if (typeof label !== "string") throw new __velarRandomNativeTypeError("Random.fork label must be a string");
+    const key = __velarRandomState(this).key;
+    return __velarRandomMake(__velarRandomHash("f:" + key[0] + ":" + key[1] + ":" + key[2] + ":" + key[3] + ":" + label));
+  },
+};
+__velarRandomFreeze(__velarRandomPrototype);
+function __velarRandomMake(key) {
+  const value = __velarRandomCreate(__velarRandomPrototype);
+  __velarRandomCall(__velarRandomWeakMapSet, __velarRandomStates, [value, { key: [key[0], key[1], key[2], key[3]], state: [key[0], key[1], key[2], key[3]] }]);
+  return __velarRandomFreeze(value);
+}
+export const Random = __velarRegisterRuntimeType(__velarRandomFreeze({
+  is(value) { return (typeof value === "object" || typeof value === "function") && value !== null && __velarRandomCall(__velarRandomWeakMapHas, __velarRandomStates, [value]); },
+  parse(value) { if (!Random.is(value)) throw new __velarRandomNativeTypeError("Value does not match Random"); return value; },
+}));
+export function random(seed) { return __velarRandomMake(__velarRandomSeed(seed)); }
+`.trimStart()],
+  ["velar/task", String.raw`
+${VELAR_TYPE_REGISTRY_RUNTIME}
+const __velarTaskNativeObject = globalThis.Object;
+const __velarTaskNativeNumber = globalThis.Number;
+const __velarTaskNativePromise = globalThis.Promise;
+const __velarTaskNativeWeakMap = globalThis.WeakMap;
+const __velarTaskNativeSet = globalThis.Set;
+const __velarTaskNativeError = globalThis.Error;
+const __velarTaskNativeTypeError = globalThis.TypeError;
+const __velarTaskNativeRangeError = globalThis.RangeError;
+const __velarTaskGlobal = globalThis;
+const __velarTaskSetTimeout = globalThis.setTimeout;
+const __velarTaskClearTimeout = globalThis.clearTimeout;
+const __velarTaskGetOwnPropertyDescriptor = __velarTaskNativeObject.getOwnPropertyDescriptor;
+const __velarTaskFreeze = __velarTaskGetOwnPropertyDescriptor(__velarTaskNativeObject, "freeze")?.value;
+const __velarTaskCreate = __velarTaskGetOwnPropertyDescriptor(__velarTaskNativeObject, "create")?.value;
+const __velarTaskDefineProperties = __velarTaskGetOwnPropertyDescriptor(__velarTaskNativeObject, "defineProperties")?.value;
+const __velarTaskApply = __velarTaskGetOwnPropertyDescriptor(globalThis.Reflect, "apply")?.value;
+const __velarTaskNumberIsFinite = __velarTaskGetOwnPropertyDescriptor(__velarTaskNativeNumber, "isFinite")?.value;
+const __velarTaskPromiseThen = __velarTaskGetOwnPropertyDescriptor(__velarTaskNativePromise.prototype, "then")?.value;
+const __velarTaskWeakMapPrototype = __velarTaskGetOwnPropertyDescriptor(__velarTaskNativeWeakMap, "prototype")?.value;
+const __velarTaskWeakMapGet = __velarTaskGetOwnPropertyDescriptor(__velarTaskWeakMapPrototype, "get")?.value;
+const __velarTaskWeakMapHas = __velarTaskGetOwnPropertyDescriptor(__velarTaskWeakMapPrototype, "has")?.value;
+const __velarTaskWeakMapSet = __velarTaskGetOwnPropertyDescriptor(__velarTaskWeakMapPrototype, "set")?.value;
+const __velarTaskSetPrototype = __velarTaskGetOwnPropertyDescriptor(__velarTaskNativeSet, "prototype")?.value;
+const __velarTaskSetAdd = __velarTaskGetOwnPropertyDescriptor(__velarTaskSetPrototype, "add")?.value;
+const __velarTaskSetDelete = __velarTaskGetOwnPropertyDescriptor(__velarTaskSetPrototype, "delete")?.value;
+const __velarTaskSetValues = __velarTaskGetOwnPropertyDescriptor(__velarTaskSetPrototype, "values")?.value;
+const __velarTaskSetIterator = __velarTaskApply(__velarTaskSetValues, new __velarTaskNativeSet(), []);
+const __velarTaskSetIteratorNext = __velarTaskGetOwnPropertyDescriptor(__velarTaskNativeObject.getPrototypeOf(__velarTaskSetIterator), "next")?.value;
+const __velarTaskRegExpExec = __velarTaskGetOwnPropertyDescriptor(globalThis.RegExp.prototype, "exec")?.value;
+const __velarTaskDurationPattern = /^([+-]?(?:\d+(?:\.\d+)?|\.\d+))(ms|s)$/;
+if (typeof __velarTaskFreeze !== "function" || typeof __velarTaskCreate !== "function" || typeof __velarTaskDefineProperties !== "function"
+  || typeof __velarTaskApply !== "function" || typeof __velarTaskPromiseThen !== "function" || typeof __velarTaskSetTimeout !== "function"
+  || typeof __velarTaskClearTimeout !== "function" || typeof __velarTaskWeakMapGet !== "function" || typeof __velarTaskWeakMapHas !== "function"
+  || typeof __velarTaskWeakMapSet !== "function" || typeof __velarTaskSetAdd !== "function" || typeof __velarTaskSetDelete !== "function"
+  || typeof __velarTaskSetValues !== "function" || typeof __velarTaskSetIteratorNext !== "function" || typeof __velarTaskRegExpExec !== "function") {
+  throw new __velarTaskNativeTypeError("The structured task runtime is unavailable");
+}
+function __velarTaskCall(operation, receiver, arguments_) { return __velarTaskApply(operation, receiver, arguments_); }
+export class CancellationError extends __velarTaskNativeError {
+  constructor(message = "Task cancelled") { super(message); this.name = "CancellationError"; }
+}
+export class TaskTimeoutError extends __velarTaskNativeError {
+  constructor(message = "Task timed out") { super(message); this.name = "TaskTimeoutError"; }
+}
+const __velarCancellationStates = new __velarTaskNativeWeakMap();
+const __velarTaskStates = new __velarTaskNativeWeakMap();
+function __velarCancellationState(value) {
+  const state = __velarTaskCall(__velarTaskWeakMapGet, __velarCancellationStates, [value]);
+  if (state === undefined) throw new __velarTaskNativeTypeError("Cancellation method requires a Cancellation receiver");
+  return state;
+}
+function __velarOwnedTaskState(value) {
+  const state = __velarTaskCall(__velarTaskWeakMapGet, __velarTaskStates, [value]);
+  if (state === undefined) throw new __velarTaskNativeTypeError("Task method requires a Task receiver");
+  return state;
+}
+function __velarCancelToken(token, reason) {
+  const state = __velarCancellationState(token);
+  if (state.cancelled) return;
+  state.cancelled = true;
+  state.reason = reason;
+  const iterator = __velarTaskCall(__velarTaskSetValues, state.children, []);
+  while (true) {
+    const next = __velarTaskCall(__velarTaskSetIteratorNext, iterator, []);
+    if (next.done) break;
+    __velarCancelToken(next.value, reason);
+  }
+  const listeners = __velarTaskCall(__velarTaskSetValues, state.listeners, []);
+  while (true) { const next = __velarTaskCall(__velarTaskSetIteratorNext, listeners, []); if (next.done) break; next.value(reason); }
+}
+const __velarCancellationPrototype = {};
+__velarTaskDefineProperties(__velarCancellationPrototype, {
+  cancelled: { enumerable: true, get() { return __velarCancellationState(this).cancelled; } },
+  reason: { enumerable: true, get() { return __velarCancellationState(this).reason; } },
+  checkpoint: { enumerable: true, value() {
+    const receiver = this;
+    __velarCancellationState(receiver);
+    return new __velarTaskNativePromise((resolve, reject) => {
+      __velarTaskCall(__velarTaskSetTimeout, __velarTaskGlobal, [() => {
+        const state = __velarCancellationState(receiver);
+        if (state.cancelled) reject(new CancellationError(state.reason ?? "Task cancelled"));
+        else resolve(null);
+      }, 0]);
+    });
+  } },
+});
+__velarTaskFreeze(__velarCancellationPrototype);
+function __velarMakeCancellation(parent) {
+  if (parent !== null && !Cancellation.is(parent)) throw new __velarTaskNativeTypeError("task parent must be a Cancellation value or null");
+  const value = __velarTaskCreate(__velarCancellationPrototype);
+  const state = { cancelled: false, reason: null, parent, children: new __velarTaskNativeSet(), listeners: new __velarTaskNativeSet() };
+  __velarTaskCall(__velarTaskWeakMapSet, __velarCancellationStates, [value, state]);
+  if (parent !== null) {
+    const parentState = __velarCancellationState(parent);
+    __velarTaskCall(__velarTaskSetAdd, parentState.children, [value]);
+    if (parentState.cancelled) __velarCancelToken(value, parentState.reason);
+  }
+  return __velarTaskFreeze(value);
+}
+function __velarDetachCancellation(token) {
+  const state = __velarCancellationState(token);
+  if (state.parent !== null) __velarTaskCall(__velarTaskSetDelete, __velarCancellationState(state.parent).children, [token]);
+}
+function __velarCreateCancellation(parent = null) { return __velarMakeCancellation(parent); }
+function __velarCancelCancellation(token, reason = "Task cancelled") {
+  if (typeof reason !== "string") throw new __velarTaskNativeTypeError("Cancellation reason must be a string");
+  __velarCancelToken(token, reason);
+  return null;
+}
+function __velarOnCancellation(token, callback) {
+  const state = __velarCancellationState(token);
+  if (typeof callback !== "function") throw new __velarTaskNativeTypeError("Cancellation listener must be a function");
+  if (state.cancelled) { callback(state.reason); return () => null; }
+  __velarTaskCall(__velarTaskSetAdd, state.listeners, [callback]);
+  return () => { __velarTaskCall(__velarTaskSetDelete, state.listeners, [callback]); return null; };
+}
+function __velarSettleCancellation(token, callback, value) { __velarDetachCancellation(token); return callback(value); }
+function __velarAwaitStop(state) {
+  return new __velarTaskNativePromise((resolve, reject) => {
+    __velarTaskCall(__velarTaskPromiseThen, state.promise, [() => resolve(null), failure => failure instanceof CancellationError ? resolve(null) : reject(failure)]);
+  });
+}
+const __velarTaskPrototype = {
+  result() { return __velarOwnedTaskState(this).promise; },
+  cancel(reason = "Task cancelled") {
+    if (typeof reason !== "string") throw new __velarTaskNativeTypeError("Task.cancel reason must be a string");
+    const state = __velarOwnedTaskState(this); __velarCancelToken(state.cancellation, reason); return __velarAwaitStop(state);
+  },
+  close() { const state = __velarOwnedTaskState(this); __velarCancelToken(state.cancellation, "Task scope ended"); return __velarAwaitStop(state); },
+};
+__velarTaskFreeze(__velarTaskPrototype);
+function __velarMakeTask(work, parent) {
+  if (typeof work !== "function") throw new __velarTaskNativeTypeError("task requires an async function");
+  const cancellation = __velarMakeCancellation(parent);
+  const value = __velarTaskCreate(__velarTaskPrototype);
+  let startResolve;
+  const start = new __velarTaskNativePromise(resolve => { startResolve = resolve; });
+  const state = { cancellation, promise: null };
+  __velarTaskCall(__velarTaskWeakMapSet, __velarTaskStates, [value, state]);
+  state.promise = __velarTaskCall(__velarTaskPromiseThen, start, [() => work(cancellation)]);
+  state.promise = __velarTaskCall(__velarTaskPromiseThen, state.promise, [
+    result => __velarSettleCancellation(cancellation, value => value, result === undefined ? null : result),
+    failure => __velarSettleCancellation(cancellation, value => { throw value; }, failure),
+  ]);
+  startResolve(null);
+  return __velarTaskFreeze(value);
+}
+function __velarTaskDuration(value) {
+  if (typeof value !== "string") throw new __velarTaskNativeTypeError("withTimeout requires Duration; write a value such as 200ms or 2s");
+  const match = __velarTaskCall(__velarTaskRegExpExec, __velarTaskDurationPattern, [value]);
+  if (!match) throw new __velarTaskNativeTypeError("withTimeout requires Duration; write a value such as 200ms or 2s");
+  const milliseconds = __velarTaskNativeNumber(match[1]) * (match[2] === "s" ? 1000 : 1);
+  if (!__velarTaskCall(__velarTaskNumberIsFinite, __velarTaskNativeNumber, [milliseconds]) || milliseconds < 0 || milliseconds > 2147483647) throw new __velarTaskNativeRangeError("withTimeout duration must be from 0ms through 2147483647ms");
+  return milliseconds;
+}
+export const Cancellation = __velarRegisterRuntimeType(__velarTaskFreeze({
+  is(value) { return value !== null && (typeof value === "object" || typeof value === "function") && __velarTaskCall(__velarTaskWeakMapHas, __velarCancellationStates, [value]); },
+  parse(value) { if (!Cancellation.is(value)) throw new __velarTaskNativeTypeError("Value does not match Cancellation"); return value; },
+  __velarCreate(parent = null) { return __velarCreateCancellation(parent); },
+  __velarCancel(token, reason = "Task cancelled") { return __velarCancelCancellation(token, reason); },
+  __velarOn(token, callback) { return __velarOnCancellation(token, callback); },
+}));
+const __velarTaskType = __velarTaskFreeze({
+  is(value) { return value !== null && (typeof value === "object" || typeof value === "function") && __velarTaskCall(__velarTaskWeakMapHas, __velarTaskStates, [value]); },
+  parse(value) { if (!__velarTaskType.is(value)) throw new __velarTaskNativeTypeError("Value does not match Task"); return value; },
+});
+export const Task = __velarRegisterRuntimeType(__velarTaskFreeze({ ...__velarTaskType, of() { return __velarTaskType; } }));
+export function task(work, parent = null) { return __velarMakeTask(work, parent); }
+export function withTimeout(source, duration) {
+  const state = __velarOwnedTaskState(source);
+  const milliseconds = __velarTaskDuration(duration);
+  return new __velarTaskNativePromise((resolve, reject) => {
+    let settled = false;
+    const timer = __velarTaskCall(__velarTaskSetTimeout, __velarTaskGlobal, [() => {
+      if (settled) return;
+      settled = true;
+      __velarCancelToken(state.cancellation, "Task timed out");
+      __velarTaskCall(__velarTaskPromiseThen, state.promise, [
+        () => reject(new TaskTimeoutError("Task timed out after " + duration)),
+        () => reject(new TaskTimeoutError("Task timed out after " + duration)),
+      ]);
+    }, milliseconds]);
+    __velarTaskCall(__velarTaskPromiseThen, state.promise, [
+      value => { if (!settled) { settled = true; __velarTaskCall(__velarTaskClearTimeout, __velarTaskGlobal, [timer]); resolve(value); } },
+      failure => { if (!settled) { settled = true; __velarTaskCall(__velarTaskClearTimeout, __velarTaskGlobal, [timer]); reject(failure); } },
+    ]);
+  });
+}
 `.trimStart()],
   ["velar/json", String.raw`
 ${VELAR_STRICT_JSON_RUNTIME}
@@ -2100,8 +2873,18 @@ export function expect(actual) {
  */
 const coreModuleDependencies: ReadonlyMap<string, readonly string[]> = new Map([
   [VELAR_COLLECTION_LOWERING_MODULE, VELAR_COLLECTION_LOWERING_DEPENDENCIES],
+  ["velar/binary", [VELAR_COLLECTION_LOWERING_MODULE]],
+  ["velar/msgpack", ["velar/binary"]],
+  ["velar/compression", ["velar/binary"]],
+  ["velar/noise", ["velar/random"]],
   // D50 rule 97.2: 'toEqual' is the language's own equals(a, b).
   ["velar/test", [VELAR_COLLECTION_LOWERING_MODULE] as readonly string[]],
+]);
+
+export const STANDARD_MODULE_ADAPTER_DEPENDENCIES: ReadonlyMap<string, { readonly packageName: string; readonly version: string }> = new Map([
+  ["velar/msgpack", { packageName: "msgpackr", version: "2.0.5" }],
+  ["velar/compression", { packageName: "fflate", version: "0.8.3" }],
+  ["velar/noise", { packageName: "simplex-noise", version: "4.0.3" }],
 ]);
 
 export function standardModuleSources(extensions: readonly CompilerExtension[] = []): ReadonlyMap<string, string> {
@@ -2137,6 +2920,15 @@ export function standardModuleSource(
   projectConfig: unknown = { base: "/" },
   extensions: readonly CompilerExtension[] = [],
 ): string | null {
+  if (source === VELAR_WORKER_MANIFEST_MODULE) {
+    const configured = projectConfig instanceof Map ? projectConfig.get(CORE_WORKER_CONFIG_KEY) : undefined;
+    const entries = configured && typeof configured === "object" && !Array.isArray(configured)
+      ? Object.fromEntries(Object.entries(configured as Record<string, unknown>)
+        .filter(([name, path]) => /^[a-z][a-z0-9_-]{0,63}$/u.test(name) && typeof path === "string")
+        .map(([name, path]) => [name, path]))
+      : {};
+    return `export const workerEntries = Object.freeze(${JSON.stringify(entries)});\n`;
+  }
   for (const extension of standardExtensions(extensions)) {
     const extensionConfig = projectConfig instanceof Map ? projectConfig.get(extension.id) : projectConfig;
     const framework = extension.modules?.source?.(source, extensionConfig) ?? extension.modules?.sources.get(source) ?? null;

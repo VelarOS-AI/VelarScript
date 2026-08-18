@@ -746,7 +746,7 @@ export interface PassStatement {
 export interface AssignmentStatement {
   readonly kind: "AssignmentStatement";
   readonly target: AssignmentTarget;
-  readonly operator: "=" | "+=" | "-=" | "*=" | "/=" | "%=";
+  readonly operator: "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "|=" | "&=" | "^=" | "<<=" | ">>=" | ">>>=";
   readonly value: Expression;
   readonly span: Span;
 }
@@ -906,7 +906,7 @@ export interface SpreadExpression {
 
 export interface UnaryExpression {
   readonly kind: "UnaryExpression";
-  readonly operator: "not" | "+" | "-" | "await";
+  readonly operator: "not" | "+" | "-" | "~" | "await";
   readonly operand: Expression;
   readonly span: Span;
 }
@@ -926,7 +926,7 @@ export interface TryExpression {
 export interface BinaryExpression {
   readonly kind: "BinaryExpression";
   readonly left: Expression;
-  readonly operator: "??" | "or" | "and" | "in" | "not in" | "==" | "!=" | "<" | "<=" | ">" | ">=" | "+" | "-" | "*" | "**" | "/" | "%";
+  readonly operator: "??" | "or" | "and" | "in" | "not in" | "==" | "!=" | "<" | "<=" | ">" | ">=" | "|" | "^" | "&" | "<<" | ">>" | ">>>" | "+" | "-" | "*" | "**" | "/" | "%";
   readonly right: Expression;
   /**
    * Present when the author wrote explicit parentheses around this binary
@@ -946,7 +946,7 @@ export interface BinaryExpression {
 export interface AssignmentExpression {
   readonly kind: "AssignmentExpression";
   readonly target: Expression;
-  readonly operator: "=" | "+=" | "-=" | "*=" | "/=" | "%=";
+  readonly operator: AssignmentStatement["operator"];
   readonly value: Expression;
   readonly span: Span;
 }

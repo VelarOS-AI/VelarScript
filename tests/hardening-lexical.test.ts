@@ -144,17 +144,18 @@ test("[D47 82] literal controls are visible escapes while emoji joiners and sele
   assert.equal(run('print("👨‍👩‍👧 ❤️")\n'), "👨‍👩‍👧 ❤️\n");
 });
 
-test("[D30 18/T-6] separated decimal literals execute and invalid literal reflexes are directed", () => {
+test("[D30 18/T-6/D83] separated and radix literals execute while invalid literal reflexes are directed", () => {
   assert.equal(run("print(1_000.5)\nprint(1e1_0)\n"), "1000.5\n10000000000\n");
+  assert.equal(run("print(0xFF)\nprint(0b101)\nprint(0o17)\n"), "255\n5\n15\n");
   assert.equal(formatSource("const value=1_000.5+1e1_0\n"), "const value = 1_000.5 + 1e1_0\n");
   for (const source of ["print(1__000)\n", "print(1_)\n", "print(1_.0)\n", "print(1._0)\n", "print(1e_2)\n"]) {
     assert.ok(messages(source).includes("Numeric separators must appear only between digits"), source);
   }
   const exact = new Map([
     ["print(007)\n", "Remove the leading zeros; octal literals are not part of VelarScript"],
-    ["print(0xFF)\n", "Hexadecimal literals are not part of VelarScript; write the decimal value"],
-    ["print(0b101)\n", "Binary literals are not part of VelarScript; write the decimal value"],
-    ["print(0o17)\n", "Octal literals are not part of VelarScript; write the decimal value"],
+    ["print(0x1G)\n", "Invalid digit in hexadecimal integer literal"],
+    ["print(0b102)\n", "Invalid digit in binary integer literal"],
+    ["print(0o178)\n", "Invalid digit in octal integer literal"],
     ["print(.5)\n", "Write '0.5'; decimal literals require a digit before the point"],
     ["print(5.)\n", "Write '5.0'; decimal literals require a digit after the point"],
     ["print(Infinity)\n", "Infinity is not a literal in VelarScript; produce it with arithmetic such as 1 / 0"],

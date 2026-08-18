@@ -31,7 +31,7 @@ import {
 import { resolveVelarProject } from "../packages/cli/src/config.ts";
 import { moduleOutput } from "../packages/cli/src/module-assets.ts";
 import { npmAsset } from "../packages/cli/src/npm.ts";
-import { standardModuleApi as standardModuleApiCore, standardModuleAsset as standardModuleAssetCore, standardModuleClosure, standardModuleDependencies, standardModuleInterface as standardModuleInterfaceCore, standardModuleSource as standardModuleSourceCore } from "../packages/cli/src/standard-modules.ts";
+import { STANDARD_MODULE_ADAPTER_DEPENDENCIES, standardModuleApi as standardModuleApiCore, standardModuleAsset as standardModuleAssetCore, standardModuleClosure, standardModuleDependencies, standardModuleInterface as standardModuleInterfaceCore, standardModuleSource as standardModuleSourceCore } from "../packages/cli/src/standard-modules.ts";
 import { VELAR_WEB_API_VERSION, VELAR_WEB_MODULES, velarWebFramework } from "../packages/web/src/index.ts";
 import { velarCompilerExtension, webModuleInterfaces, webModuleSource, webModuleSources } from "../packages/web/src/compiler.ts";
 import { velarFrameworkHost } from "../packages/web/src/host.ts";
@@ -4880,8 +4880,6 @@ test("keeps JavaScript-only operations and private identifiers out of the Velar 
   for (const source of [
     "let value = 1\nvalue++\n",
     "let value = 1\nvalue--\n",
-    "const value = 1 & 2\n",
-    "const value = 1 ^ 2\n",
     "const pattern = /abc/\n",
   ]) {
     const result = compileCore(source);
@@ -8022,7 +8020,7 @@ test("0.10 Web APIs have one versioned typed compiler/runtime contract", async (
   assert.deepEqual(api.modules["velar/web"], ["Head", "Link", "NavLink", "RouteContext", "Router", "announce", "back", "currentRoute", "domId", "forward", "lazy", "navigate", "redirect", "reload", "route"]);
   assert.deepEqual(api.modules["velar/forms"], ["checkedValue", "clearError", "clearErrors", "errors", "fieldValue", "fieldValues", "focusFirstError", "numberValue", "read", "reset", "setError", "setPending", "textValue", "values"]);
   assert.deepEqual(api.modules["velar/http"], ["HttpAbortError", "HttpError", "HttpTransportError", "HttpTransportPhase", "formBody", "http"]);
-  assert.deepEqual(api.modules["velar/storage"], ["database", "session", "storage"]);
+  assert.deepEqual(api.modules["velar/storage"], ["StorageQuotaError", "StorageTransactionError", "StorageUpgradeError", "database", "session", "storage"]);
   assert.deepEqual(api.modules["velar/browser"], ["after", "blur", "capturePointer", "clipboardText", "closeDialog", "copyText", "dialogResult", "environment", "every", "focus", "frame", "location", "measure", "media", "open", "readClipboardText", "releasePointer", "scrollElementTo", "scrollIntoView", "scrollMetrics", "scrollTo", "setClipboardText", "setTextSelection", "showDialog", "textSelection", "watchMedia", "watchOnline", "watchVisibility"]);
   assert.deepEqual(api.modules["velar/files"], ["download", "pick", "readDataUrl", "readText"]);
   assert.deepEqual(api.modules["velar/realtime"], ["eventStream", "socket"]);
@@ -10564,8 +10562,8 @@ const wrongMember = wrongValue.count
 test("0.5 Core standard library combines typed ergonomics with explicit platform boundaries", async () => {
   const api = standardModuleApi();
   assert.deepEqual(Object.keys(api.modules), [
-    "velar/collections", "velar/text", "velar/math", "velar/json", "velar/async", "velar/url", "velar/time", "velar/id", "velar/log",
-    "velar/test", "velar/serve", "velar/fs", "velar/env", "velar/host", "velar/terminal", "velar/path", "velar/process", "velar/look", "velar/app", "velar/config", "velar/web", "velar/http", "velar/storage", "velar/forms", "velar/browser", "velar/files", "velar/realtime", "velar/web-test",
+    "velar/collections", "velar/text", "velar/math", "velar/binary", "velar/random", "velar/task", "velar/worker", "velar/websocket", "velar/msgpack", "velar/compression", "velar/noise", "velar/json", "velar/async", "velar/url", "velar/time", "velar/id", "velar/log",
+    "velar/test", "velar/sqlite", "velar/serve", "velar/fs", "velar/env", "velar/host", "velar/terminal", "velar/path", "velar/process", "velar/look", "velar/app", "velar/config", "velar/web", "velar/http", "velar/storage", "velar/forms", "velar/browser", "velar/files", "velar/realtime", "velar/web-test",
   ]);
   // Text gained codePoint/fromCodePoint, velar/json retired deepEqual, and
   // velar/look retired the unreachable Opacity name; TXT-U3 then added
@@ -10573,8 +10571,8 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
   // same unreachable-name judgment Opacity was deleted under — and D65 rule
   // 171 published velar/log's LogRecord, which is the record useSink already
   // handed over and had no name for.
-  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 281);
-  assert.equal(Object.values(api.modules).slice(0, 9).reduce((total, exports_) => total + exports_.length, 0), 120);
+  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 333);
+  assert.equal(Object.values(api.modules).slice(0, 17).reduce((total, exports_) => total + exports_.length, 0), 160);
   assert.equal(api.modules["velar/collections"]?.length, 28);
   assert.equal(api.modules["velar/text"]?.length, 23);
   assert.equal(api.modules["velar/math"]?.length, 30);
@@ -10585,7 +10583,7 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
   assert.deepEqual(api.modules["velar/id"], ["isUuid", "uuid"]);
   assert.deepEqual(api.modules["velar/log"], ["LogRecord", "level", "log", "logger", "setLevel", "useSink"]);
   assert.deepEqual(api.modules["velar/serve"], ["RequestBodyTooLargeError", "ServeRequest", "ServeResponse", "Server", "fileResponse", "serve"]);
-  assert.deepEqual(api.modules["velar/fs"], ["FileWatchBatch", "FileWatcher", "appendText", "canonical", "copyFile", "createText", "exists", "info", "list", "makeDirectory", "move", "readText", "removeFile", "replaceTextIfMatches", "watchFiles", "writeText"]);
+  assert.deepEqual(api.modules["velar/fs"], ["FileWatchBatch", "FileWatcher", "appendText", "canonical", "copyFile", "createBytes", "createText", "exists", "info", "list", "makeDirectory", "move", "readBytes", "readText", "removeFile", "replaceTextIfMatches", "watchFiles", "writeBytes", "writeText"]);
   assert.deepEqual(api.modules["velar/env"], ["get", "require"]);
   assert.deepEqual(api.modules["velar/host"], ["exit", "onShutdown"]);
   assert.deepEqual(api.modules["velar/terminal"], ["terminal"]);
@@ -11072,7 +11070,7 @@ test("Core builtins and standard modules share one named-argument ABI", async ()
     if (type.kind === "union") for (const member of type.members) assertNamedSurface(member, `${path} member`);
   };
   for (const source of [
-    "velar/collections", "velar/text", "velar/math", "velar/json", "velar/async",
+    "velar/collections", "velar/text", "velar/math", "velar/binary", "velar/random", "velar/task", "velar/worker", "velar/websocket", "velar/msgpack", "velar/compression", "velar/noise", "velar/json", "velar/async",
     "velar/url", "velar/time", "velar/id", "velar/log", "velar/test",
   ]) {
     for (const [name, type] of standardModuleInterface(source)!.exports) {
@@ -11413,6 +11411,14 @@ test("every declared standard-module export exists in the shipped runtime", asyn
       try {
         const packageRoot = join(directory, "node_modules", "velar");
         await mkdir(packageRoot, {recursive: true});
+        const adapter = STANDARD_MODULE_ADAPTER_DEPENDENCIES.get(source);
+        if (adapter) {
+          await symlink(
+            await realpath(resolve("node_modules", adapter.packageName)),
+            join(directory, "node_modules", adapter.packageName),
+            "dir",
+          );
+        }
         const exports_: Record<string, string> = {};
         for (const dependency of standardModuleClosure([source])) {
           if (dependency === source) continue;
@@ -15135,6 +15141,12 @@ test("project configuration rejects destructive output layouts and unsafe CSP or
   }), "utf8");
   await assert.rejects(resolveVelarProject(directory), /unsupported origin/u);
 
+  await writeFile(manifestPath, manifest({ entry: "main.vel", web: { security: { connectSources: ["ws://example.com"] } } }), "utf8");
+  await assert.rejects(resolveVelarProject(directory), /unsupported origin/u);
+
+  await writeFile(manifestPath, manifest({ entry: "main.vel", web: { security: { connectSources: ["ws://127.0.0.1:8080"] } } }), "utf8");
+  assert.deepEqual(((await resolveVelarProject(directory)).extensionConfig.get("@velarscript/web") as VelarWebConfig).security.connectSources, ["ws://127.0.0.1:8080"]);
+
   await writeFile(manifestPath, manifest({ entry: "main.vel", web: { publicConfig: ["not", "an", "object"] } }), "utf8");
   await assert.rejects(resolveVelarProject(directory), /web\.publicConfig.*JSON object/u);
 
@@ -18766,6 +18778,9 @@ export declare function consume(values: readonly string[]): void;
 export declare function supply(handler: (values: readonly string[]) => void): void;
 export declare function createValues(): readonly string[];
 export declare function mutableValues(): string[];
+export declare function bytes(): Uint8Array;
+export declare function nodeBytes(): Buffer<ArrayBuffer>;
+export declare function words(): Uint16Array<ArrayBuffer>;
 export declare function acceptValues(values: string[]): void;
 export declare function dictionary(): Record<string, number>;
 export declare function setMode(value: "fast" | "safe"): void;
@@ -18814,6 +18829,9 @@ export declare class InvalidOrder {
   assert.equal(describeType(declarations.exports.get("supply")!), "((readonly List<string>) -> null) -> null");
   assert.equal(describeType(declarations.exports.get("createValues")!), "() -> readonly List<string>");
   assert.equal(describeType(declarations.exports.get("mutableValues")!), "() -> List<string>");
+  assert.equal(describeType(declarations.exports.get("bytes")!), "() -> Bytes");
+  assert.equal(describeType(declarations.exports.get("nodeBytes")!), "() -> Bytes");
+  assert.equal(describeType(declarations.exports.get("words")!), "() -> UInt16Buffer");
   assert.equal(describeType(declarations.exports.get("dictionary")!), "() -> unknown");
   assert.equal(describeType(declarations.exports.get("setMode")!), "(unknown) -> null");
   assert.equal(describeType(declarations.exports.get("visit")!), "((string) -> null) -> null");

@@ -3,7 +3,8 @@
 The official Web framework for VelarScript. This package is the versioned
 authority for the `velar/look`, `velar/app`, `velar/config`, `velar/web`, `velar/forms`,
 `velar/http`, `velar/storage`, `velar/browser`, `velar/files`,
-`velar/realtime`, and `velar/web-test` language modules. It also owns the
+`velar/realtime`, `velar/worker`, `velar/websocket`, and `velar/web-test`
+language modules. It also owns the
 component/JSX, reactive, lifecycle, Look, DOM/CSS lowering, project-manifest,
 and editor contributions that a Core-only VelarScript project does not load. Its
 compiler entry owns the Web parser, analyzer, semantic index contribution,
@@ -60,6 +61,15 @@ activation without teaching the CLI this package's name.
 `@velarscript/web` requires the exact matching `@velarscript/compiler`
 version. It has no dependency on VelarOS Workbench and does not define the
 future Canvas-oriented `velar/game` framework.
+
+Browser HTTP responses expose `.bytes()`, IndexedDB databases expose
+`getBytes`, `setBytes`, and atomic `batch`, and the same immutable `Bytes`
+contract crosses WebSocket and Worker boundaries. Worker source entries come
+from the project manifest, so application source does not construct bundle URLs.
+Requests and responses are checked with runtime `Type` values; pools, call
+queues, message queues, transfers, cancellation, timeout, and crash convergence
+are bounded by the shared Core contracts. The existing `velar/realtime` text
+surface remains available unchanged.
 
 The package also owns Look, the checked visual language integrated with VelarScript
 values and JSX. `look:` values, ordinary functions, imports/exports, named

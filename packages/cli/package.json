@@ -37,6 +37,9 @@
     "@velarscript/web": "0.10.0",
     "create-velar": "0.10.0",
     "esbuild": "^0.28.1",
-    "playwright": "^1.58.2"
+    "fflate": "^0.8.3",
+    "msgpackr": "^2.0.5",
+    "playwright": "^1.58.2",
+    "simplex-noise": "^4.0.3"
   }
 }

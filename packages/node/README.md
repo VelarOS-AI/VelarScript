@@ -1,9 +1,10 @@
 # @velarscript/node
 
 The official Node.js runtime boundary for VelarScript. It owns the typed module
-contracts and zero-runtime-dependency implementations for `velar/fs`,
-`velar/env`, `velar/host`, `velar/serve`, `velar/path`, `velar/process`, and
-`velar/terminal`, plus the Node target of `velar/http`.
+contracts and implementations for `velar/fs`, `velar/env`, `velar/host`,
+`velar/serve`, `velar/path`, `velar/process`, `velar/terminal`,
+`velar/sqlite`, `velar/worker`, and `velar/websocket`, plus the Node target of
+`velar/http`.
 
 The API exposes VelarScript contracts rather than Node objects. Filesystem
 operations are bounded, process execution is shell-free and starts with a
@@ -93,6 +94,25 @@ number, decoder/encoder, typed-byte, reflection, and immutable-result
 operations; filesystem effects are delegated to the isolated shared Worker,
 so neither callback `node:fs` nor `node:fs/promises` is part of the
 application-Realm contract.
+
+Binary filesystem and HTTP operations use the target-neutral `Bytes` contract:
+`readBytes`, `writeBytes`, `createBytes`, Bytes request bodies, and response
+`.bytes()`. Node `Buffer` is confined to the isolated implementation and never
+becomes a VelarScript type or API.
+
+`velar/sqlite` owns a dedicated database Worker. It provides parameterized
+`execute`, runtime-Type checked `one`/`all`, prepared statements, bounded queues
+and results, `Bytes` BLOB values, and explicit transaction handles. Closing an
+uncommitted transaction rolls it back. Synchronous `node:sqlite` work never runs
+on the application thread.
+
+`velar/worker` resolves only entries declared in `velar.json`, validates each
+request and response, transfers `Bytes`, and provides single-worker and bounded
+pool owners with per-call cancellation and timeout. `velar/websocket` provides
+bounded pull connections and a Node server; `listen({http: handler, ...})`
+serves the same typed HTTP contract as `velar/serve` on the upgrade port. Its
+only external transport dependency is the pinned `ws` package; native socket
+objects remain private.
 
 `velar/terminal` supplies bounded program arguments, backpressure-aware stdout
 and stderr writes, line input, interactive-terminal detection, and explicit

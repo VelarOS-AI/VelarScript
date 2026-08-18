@@ -2,6 +2,7 @@ import { VELAR_STRICT_JSON_RUNTIME, VELAR_TYPE_REGISTRY_RUNTIME, VELAR_UTF8_RUNT
 
 export const VELAR_NODE_HTTP_RUNTIME = String.raw`
 import { __velarNodeHostHttpTransportError, __velarNodeHostInvoke } from "velar/node-host-v1";
+import { Bytes as __velarHttpBytes } from "velar/binary";
 
 ${VELAR_STRICT_JSON_RUNTIME}
 ${VELAR_TYPE_REGISTRY_RUNTIME}
@@ -19,6 +20,7 @@ const NativeRegExp = globalThis.RegExp;
 const NativeString = globalThis.String;
 const NativeTypeError = globalThis.TypeError;
 const NativeWeakSet = globalThis.WeakSet;
+const NativeUint8Array = globalThis.Uint8Array;
 const NativeURL = typeof globalThis.URL === "function" ? globalThis.URL : null;
 const NativeMap = typeof globalThis.Map === "function" ? globalThis.Map : null;
 const NativeSet = typeof globalThis.Set === "function" ? globalThis.Set : null;
@@ -27,6 +29,8 @@ const nativeReflectOwnKeys = Object.getOwnPropertyDescriptor(Reflect, "ownKeys")
 const nativeArrayIsArray = Object.getOwnPropertyDescriptor(NativeArray, "isArray")?.value;
 const nativeArrayJoin = Object.getOwnPropertyDescriptor(NativeArray.prototype, "join")?.value;
 const nativeArrayPush = Object.getOwnPropertyDescriptor(NativeArray.prototype, "push")?.value;
+const nativeTypedArrayPrototype = Object.getPrototypeOf(NativeUint8Array.prototype);
+const nativeUint8ArraySet = Object.getOwnPropertyDescriptor(nativeTypedArrayPrototype, "set")?.value;
 const nativePromiseThen = Object.getOwnPropertyDescriptor(NativePromise.prototype, "then")?.value;
 const nativeNumberIsInteger = Object.getOwnPropertyDescriptor(NativeNumber, "isInteger")?.value;
 const nativeNumberIsSafeInteger = Object.getOwnPropertyDescriptor(NativeNumber, "isSafeInteger")?.value;
@@ -88,7 +92,7 @@ function requireHttpHost() {
     || typeof NativeURL !== "function" || typeof NativeMap !== "function" || typeof NativeSet !== "function"
     || typeof nativeReflectApply !== "function" || typeof nativeReflectOwnKeys !== "function"
     || typeof nativeArrayIsArray !== "function" || typeof nativeArrayJoin !== "function"
-    || typeof nativeArrayPush !== "function" || typeof nativePromiseThen !== "function"
+    || typeof nativeArrayPush !== "function" || typeof nativeUint8ArraySet !== "function" || typeof nativePromiseThen !== "function"
     || typeof nativeNumberIsInteger !== "function" || typeof nativeNumberIsSafeInteger !== "function"
     || typeof nativeObjectCreate !== "function" || typeof nativeObjectFreeze !== "function"
     || typeof nativeObjectGetOwnPropertyDescriptor !== "function" || typeof nativeObjectGetPrototypeOf !== "function"
@@ -249,14 +253,16 @@ function optionsOf(value) {
   let headers = headersOf(value.headers);
   const secretHeaders = secretHeadersOf(value.secretHeaders);
   let body = value.body ?? null;
-  if (body !== null && typeof body !== "string") {
+  if (body !== null && __velarHttpBytes.is(body)) {
+    body = __velarHttpBytes.parse(body);
+  } else if (body !== null && typeof body !== "string") {
     body = jsonBody(body);
     let hasContentType = false;
     call(nativeMapForEach, headers, [(_item, name) => { if (stringLower(name) === "content-type") hasContentType = true; }]);
     if (!hasContentType) call(nativeMapSet, headers, ["content-type", "application/json"]);
     headers = headersOf(headers);
   }
-  if (typeof body === "string" && __velarUtf8ByteLength(body) > maxBodyBytes) throw new NativeRangeError("HTTP body cannot exceed 16 MiB");
+  if (typeof body === "string" && __velarUtf8ByteLength(body) > maxBodyBytes || __velarHttpBytes.is(body) && body.byteLength > maxBodyBytes) throw new NativeRangeError("HTTP body cannot exceed 16 MiB");
   return { headers, secretHeaders, body, timeout, maxBytes };
 }
 
@@ -411,6 +417,7 @@ class HttpResponse {
     this.headers = response.headers;
     this.declaredLength = call(nativeMapGet, response.headers, ["content-length"]) ?? null;
     this.cachedText = null;
+    this.cachedBytes = null;
     this.textPending = null;
     this.consuming = false;
     if (!this.body) request.finish();
@@ -482,6 +489,32 @@ class HttpResponse {
     } finally {
       if (this.textPending === pending) this.textPending = null;
     }
+  }
+  async bytes() {
+    if (this.cachedBytes !== null) return this.cachedBytes;
+    if (this.cachedText !== null) throw new NativeError("HTTP response body was already consumed as text");
+    if (this.consuming) throw new NativeError("HTTP response body is already being consumed");
+    const declared = __velarDeclaredLength(this.declaredLength);
+    if (this.body && declared !== null && declared > this.request.options.maxBytes) { this.request.finish(); throw new NativeRangeError("HTTP response exceeds maxBytes"); }
+    this.consuming = true;
+    const chunks = [];
+    let total = 0;
+    try {
+      if (this.body) {
+        while (true) {
+          let wire;
+          try { wire = await __velarNodeHostInvoke("http.readBytes", [this.request.handle]); }
+          catch (error) { if (this.request.abortError) throw this.request.abortError; if (error instanceof __velarNodeHostHttpTransportError && error.phase === "response") throw new HttpTransportError(error.message, HttpTransportPhase.response); throw error; }
+          if (!wire || typeof wire !== "object" || typeof wire.done !== "boolean" || !__velarHttpBytes.is(wire.bytes)) throw new NativeTypeError("Node host returned an invalid HTTP byte chunk");
+          if (wire.bytes.byteLength) { total += wire.bytes.byteLength; if (total > this.request.options.maxBytes || chunks.length >= maxResponseChunks) throw new NativeRangeError("HTTP response exceeds its byte or chunk bound"); arrayPush(chunks, wire.bytes); }
+          if (wire.done) break;
+        }
+      }
+      const output = new NativeUint8Array(total); let offset = 0;
+      for (let index = 0; index < chunks.length; index += 1) { call(nativeUint8ArraySet, output, [chunks[index], offset]); offset += chunks[index].byteLength; }
+      this.cachedBytes = __velarHttpBytes.parse(output);
+      return this.cachedBytes;
+    } finally { this.request.finish(); }
   }
   async json() {
     const text = await this.text();
@@ -564,6 +597,7 @@ class Request {
     return this.pending;
   }
   async text() { return (await this.response()).text(); }
+  async bytes() { return (await this.response()).bytes(); }
   async json() { return (await this.response()).json(); }
   async streamText(consumer) { return (await this.response()).streamText(consumer); }
   async parse(Type) { Type = runtimeHttpType(Type); return Type.parse(await this.json()); }

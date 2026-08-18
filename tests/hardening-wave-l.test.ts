@@ -122,7 +122,7 @@ test("[D38 §48] velar fix applies every mechanical rewrite the diagnostics name
   assert.equal(await readFile(entry, "utf8"), source);
 });
 
-test("[D38 §48] velar fix leaves every spelling that needs a decision to its diagnostic", async () => {
+test("[D38 §48] velar fix preserves supported bitwise code and leaves := to its diagnostic", async () => {
   const root = await makeProject("velar-wave-l-fix-judgment-", {
     "main.vel": `let counter = 0
 const mask = 5 & 3
@@ -133,10 +133,9 @@ print(str(counter) + str(mask) + str(power))
     "walrus.vel": "def start() -> number:\n    total := 1\n    return total\n",
   });
   const fixed = runCli(root, "fix");
-  assert.equal(fixed.status, 1, fixed.stdout);
+  assert.equal(fixed.status, 0, fixed.stderr);
   assert.equal(fixed.stdout.includes("fixed"), false, fixed.stdout);
-  assert.match(fixed.stderr, /VelarScript has no bitwise '&'/u, fixed.stderr);
-  assert.match(fixed.stderr, /VelarScript has no bitwise '\^'/u, fixed.stderr);
+  assert.equal(fixed.stderr, "");
   assert.equal(await readFile(join(root, "src", "main.vel"), "utf8"), `let counter = 0
 const mask = 5 & 3
 const power = 2 ^ 3

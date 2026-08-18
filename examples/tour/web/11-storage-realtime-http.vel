@@ -17,13 +17,22 @@
 
 import {HttpAbortError, HttpError, HttpTransportError, HttpTransportPhase, formBody, http} from "velar/http"
 import {eventStream, socket} from "velar/realtime"
-import {database, session, storage} from "velar/storage"
+import {StorageQuotaError, StorageTransactionError, StorageUpgradeError, database, session, storage} from "velar/storage"
 
 export type Draft:
     title: string
     body: string
 
 const emptyDraft: Draft = {title: "", body: ""}
+
+export def storageFailure(error: Error) -> string:
+    if error is StorageQuotaError:
+        return "quota"
+    if error is StorageTransactionError:
+        return "transaction"
+    if error is StorageUpgradeError:
+        return "upgrade"
+    return "other"
 
 // `storage` and `session` publish the same seven members, and `storage.scope`
 // answers a namespaced view with the same seven. A typed `get` validates the

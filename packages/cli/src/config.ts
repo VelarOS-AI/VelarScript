@@ -16,6 +16,7 @@ import {
   type ResolvedExtensionPackage,
 } from "./extension-metadata.ts";
 import {
+  CORE_WORKER_CONFIG_KEY,
   CORE_PROJECT_MANIFEST_FIELDS,
   CURRENT_PROJECT_FORMAT_VERSION,
 } from "./project-format.ts";
@@ -54,6 +55,7 @@ export interface VelarProjectConfig {
   readonly compilerExtensions: readonly CompilerExtension[];
   readonly extensionConfig: ReadonlyMap<string, unknown>;
   readonly framework: ResolvedFrameworkHost | null;
+  readonly workerEntries: ReadonlyMap<string, string>;
 }
 
 interface ProjectExtension {
@@ -75,6 +77,7 @@ interface ManifestShape {
   readonly outDir?: unknown;
   readonly publicDir?: unknown;
   readonly extensions?: unknown;
+  readonly workers?: unknown;
 }
 
 export async function resolveVelarProject(input: string | null, cwd = process.cwd()): Promise<VelarProjectConfig> {
@@ -129,6 +132,7 @@ async function loadManifest(manifestPath: string, entryOverride: string | null =
   if (extname(entry) !== ".vel") throw new Error(`${manifestPath}: 'entry' must point to a .vel file`);
   const outDir = resolveProjectPath(root, stringField(manifest.outDir, "outDir", "dist"), "outDir");
   const publicDir = resolveProjectPath(root, stringField(manifest.publicDir, "publicDir", "public"), "publicDir");
+  const workerEntries = workerEntryMap(manifest.workers, root, manifestPath);
   const extensions = extensionList(manifest.extensions, manifestPath);
   const loadedExtensions = await loadExtensions(root, extensions, manifestPath);
   knownFields(
@@ -137,12 +141,23 @@ async function loadManifest(manifestPath: string, entryOverride: string | null =
     "project",
     manifestPath,
   );
-  const extensionConfig = new Map(loadedExtensions.project.map((extension) => [
+  const extensionConfig = new Map<string, unknown>(loadedExtensions.project.map((extension) => [
     extension.id,
     extension.parse((manifest as Record<string, unknown>)[extension.manifestKey], manifestPath),
   ]));
+  for (const [name, path] of workerEntries) {
+    const fromSourceRoot = relative(dirname(entry), path);
+    if (fromSourceRoot === ".." || fromSourceRoot.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute(fromSourceRoot)) {
+      throw new Error(`${manifestPath}: 'workers.${name}' must stay inside the entry source directory ${dirname(entry)}`);
+    }
+  }
+  extensionConfig.set(CORE_WORKER_CONFIG_KEY, Object.freeze(Object.fromEntries([...workerEntries].map(([name, path]) => [
+    name,
+    relative(dirname(entry), path).replaceAll("\\", "/").replace(/\.vel$/u, ".js"),
+  ]))));
   const framework = resolveFrameworkHost(loadedExtensions, extensionConfig, manifestPath);
   assertProjectPaths(root, entry, outDir, publicDir, manifestPath);
+  for (const workerEntry of workerEntries.values()) assertProjectPaths(root, workerEntry, outDir, publicDir, manifestPath);
   return {
     formatVersion,
     root,
@@ -156,6 +171,7 @@ async function loadManifest(manifestPath: string, entryOverride: string | null =
     compilerExtensions: loadedExtensions.compiler,
     extensionConfig,
     framework,
+    workerEntries,
   };
 }
 
@@ -174,7 +190,25 @@ function standaloneProject(entryPath: string): VelarProjectConfig {
     compilerExtensions: [],
     extensionConfig: new Map(),
     framework: null,
+    workerEntries: new Map(),
   };
+}
+
+function workerEntryMap(value: unknown, root: string, manifestPath: string): ReadonlyMap<string, string> {
+  if (value === undefined) return new Map();
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${manifestPath}: 'workers' must be an object mapping logical names to relative .vel entry paths`);
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length > 32) throw new Error(`${manifestPath}: 'workers' cannot declare more than 32 entries`);
+  const workers = new Map<string, string>();
+  for (const [name, candidate] of entries) {
+    if (!/^[a-z][a-z0-9_-]{0,63}$/u.test(name)) throw new Error(`${manifestPath}: worker names must start with a lowercase letter and contain only lowercase letters, digits, '_' or '-'`);
+    const path = resolveProjectPath(root, stringField(candidate, `workers.${name}`, ""), `workers.${name}`);
+    if (extname(path) !== ".vel") throw new Error(`${manifestPath}: 'workers.${name}' must point to a .vel file`);
+    workers.set(name, path);
+  }
+  return workers;
 }
 
 function extensionList(value: unknown, manifestPath: string): readonly string[] {

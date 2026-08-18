@@ -53,8 +53,9 @@ print(greeting("Ada"))
 ## 2. Bindings and literals
 
 `const` binds a name that cannot be reassigned; `let` binds one that can.
-There is no `var`. Numbers are decimal only — no `0x`, no `0b`, no leading-zero
-octal, no bare `.5` — and long digits group with `_`. `true`/`false`/`null` are
+There is no `var`. Integers may use explicit `0x`, `0b`, or `0o` radix prefixes;
+legacy leading-zero octal and bare `.5` remain invalid, and long digits group
+with `_`. `true`/`false`/`null` are
 the three keyword literals; there is no `undefined`.
 
 Strings come in three delimiters and two prefixes that combine. Double quotes
@@ -99,6 +100,10 @@ optional is tested explicitly with `!= null`. The conditional expression is
 
 `??` supplies a default for an optional and `?.` reaches through one, but `??`
 never shares an unparenthesized chain with `and`/`or`.
+
+Integer literals may use `0x`, `0b`, or `0o`. Bitwise `~`, `&`, `|`, `^`,
+`<<`, `>>`, and `>>>` (and their compound assignments) accept only checked
+32-bit integers; shift counts outside `0..31` fail instead of wrapping.
 
 ```velar
 type Account:
@@ -259,7 +264,10 @@ print(f"{total} {first} {missing} {owners.get("t-1")} {"done" in words}")
 
 `if` / `else if` / `else`, `while`, and `for … in …`. The `for` loop takes a
 second slot for the position — `for value, index in values:` — so a shadow
-counter is never needed. `range(...)` is in the prelude and needs no import.
+counter is never needed. `range(...)` is in the prelude and needs no import. A
+direct one-slot `for value in range(...):` is compiled as a checked native
+counter loop; using `range(...)` as a value still returns the ordinary bounded
+`List<number>`.
 
 `match` is the dispatcher: one subject, `case` branches that may destructure
 records and lists, an optional `if` guard, and `case _:` as the only fallback.

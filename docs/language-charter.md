@@ -378,11 +378,13 @@ Number literals accept `_` as a digit-group separator between digits, in the
 integer part, the fraction, and the exponent alike: `1_000`, `1_000.5`, and
 `1e1_0` are all legal, and the separator is not part of the value. A separator
 that is not between two digits — leading, trailing, or doubled — is rejected.
-Every other numeric spelling a JavaScript or Python author might reach for is
-rejected with the decimal spelling it should have been: a leading zero (`007`),
-the radix forms `0xFF`, `0b101`, and `0o17`, a point with no digit on one side
-(`.5`, `5.`), and bare `Infinity` or `NaN`, which are produced by arithmetic
-(`1 / 0`, `0 / 0`) and detected with `value.isNaN()` rather than written.
+Integer literals also accept the explicit radix prefixes `0x`, `0b`, and `0o`:
+`0xff`, `0b1010`, and `0o17`. Their digits are checked for the selected base,
+their value must remain finite like every other number literal, and formatting
+preserves the author's explicit radix. A legacy leading zero
+(`007`), a point with no digit on one side (`.5`, `5.`), and bare `Infinity` or
+`NaN` remain rejected. The last two values are produced by arithmetic (`1 / 0`,
+`0 / 0`) and detected with `value.isNaN()` rather than written.
 
 A bare `return` returns `null`, including at JavaScript and asynchronous
 boundaries. Falling through a function without another result has the same
@@ -595,11 +597,18 @@ is always a concrete runtime type; `null` is a value, so a null test is
 spelled `== null` or `!= null`, and the removed `is null` / `is not null`
 spellings receive guidance to the equality form.
 
+Bitwise computation uses `~`, `&`, `|`, `^`, `<<`, `>>`, and `>>>`, with the
+matching compound assignments. It is a strict 32-bit integer boundary rather
+than JavaScript coercion: each data operand must be an integer in
+`[-2147483648, 4294967295]`, and a shift count must be an integer from 0 through
+31. A fraction, `NaN`, infinity, a wider integer, or a wrapped shift count throws
+before the host operator runs. Results follow the familiar signed result for
+`~`, `&`, `|`, `^`, `<<`, and `>>`; `>>>` produces the unsigned 32-bit result.
+
 ### Precedence and associativity
 
-This is the complete table, loosest binding first. Nothing else participates:
-assignment is a statement rather than an expression, and there are no bitwise
-or comma operators to place.
+This is the complete table, loosest binding first. Assignment is a statement
+rather than an expression, and there is no comma operator.
 
 | Level | Operators | Associativity and notes |
 | --- | --- | --- |
@@ -608,13 +617,17 @@ or comma operators to place.
 | 3 | `??` | Left to right. Never shares a bare chain with `and`/`or`. |
 | 4 | `or` | Left to right, short-circuit. |
 | 5 | `and` | Left to right, short-circuit. |
-| 6 | `== != < <= > >=`, `is`, `in` | The comparison layer. `<`/`<=` chain with each other and `>`/`>=` chain with each other; `==`/`!=` never chain, and a mixed-direction chain is rejected. `is` and `in` are not chain links: inside another comparison they must be parenthesized. |
-| 7 | `+ -` (binary) | Left to right. |
-| 8 | `* / %` | Left to right. `%` keeps JavaScript's sign, so `-3 % 2` is `-1`. |
-| 9 | `not`, unary `+ -` | Binds *looser* than `**`. |
-| 10 | `**` | Right to left, so `2 ** 3 ** 2` is `512`. |
-| 11 | `await`, `try` | Prefix, tighter than every operator above. `try` reaches exactly as far as `await` does — over the whole postfix chain that follows it, and no further. |
-| 12 | `()`, `.`, `?.`, `[]` | Postfix, left to right; the tightest level. |
+| 6 | `|` | Left to right. |
+| 7 | `^` | Left to right. |
+| 8 | `&` | Left to right. |
+| 9 | `== != < <= > >=`, `is`, `in` | The comparison layer. `<`/`<=` chain with each other and `>`/`>=` chain with each other; `==`/`!=` never chain, and a mixed-direction chain is rejected. `is` and `in` are not chain links: inside another comparison they must be parenthesized. |
+| 10 | `<< >> >>>` | Left to right. Shift counts are checked integers from 0 through 31. |
+| 11 | `+ -` (binary) | Left to right. |
+| 12 | `* / %` | Left to right. `%` keeps JavaScript's sign, so `-3 % 2` is `-1`. |
+| 13 | `not`, `~`, unary `+ -` | Binds *looser* than `**`. |
+| 14 | `**` | Right to left, so `2 ** 3 ** 2` is `512`. |
+| 15 | `await`, `try` | Prefix, tighter than every operator above. `try` reaches exactly as far as `await` does — over the whole postfix chain that follows it, and no further. |
+| 16 | `()`, `.`, `?.`, `[]` | Postfix, left to right; the tightest level. |
 
 Two rows have consequences worth stating outright.
 
@@ -1950,7 +1963,11 @@ marker before the Velar loop.
 names that need no import; they produce a stop-exclusive bounded `List<number>`
 for loops and ordinary List use. Negative steps count down and zero steps fail. Named
 forms are `range(end=...)`, `range(start=..., end=...)`, and the same with
-`step=...`.
+`step=...`. A direct loop head `for item in range(...):` evaluates every
+argument once, performs the same complete range validation, and then lowers to
+a native counter without materializing the List. Saving the range in a value,
+passing it through another expression, or using the loop's two-slot
+`for value, index in ...` form keeps the ordinary List path.
 
 A `while` body receives the successful condition's facts on every
 iteration; assigning a narrowed optional back to `null` invalidates that fact
@@ -3749,15 +3766,14 @@ The following are not part of VelarScript:
 - `var`, `undefined`, `none`, or `None`
 - coercive equality
 - single-quoted or triple-quoted strings; the delimiters are `"` and `` ` ``
-- `${...}` interpolation, hexadecimal, binary, or octal number literals, and
-  `Infinity` or `NaN` as literals
+- `${...}` interpolation, and `Infinity` or `NaN` as literals
 - equality chains (`a == b == c`) and mixed-direction comparison chains
 - expression statements that only compute a value
 - `switch`
 - `new`
 - `this` in VelarScript class methods
 - JavaScript `delete`, `typeof`, `instanceof`, `eval`, regular-expression
-  literals, increment/decrement operators, or bitwise operators
+  literals, or increment/decrement operators
 - direct JavaScript private identifiers such as `#field`; use the `private`
   class modifier and ordinary `self.field` access
 - source-level `prototype` or `__proto__` manipulation

@@ -2,7 +2,17 @@ import { access, readFile, realpath, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { describeType, optionalOf, readonlyViewOf, semanticTypeIdentity, unionOf, type ClassInfo, type ValueType } from "@velarscript/compiler";
+import {
+  describeType,
+  optionalOf,
+  readonlyViewOf,
+  semanticTypeIdentity,
+  unionOf,
+  VELAR_BYTES_TYPE_IDENTITY,
+  VELAR_UINT16_BUFFER_TYPE_IDENTITY,
+  type ClassInfo,
+  type ValueType,
+} from "@velarscript/compiler";
 import { resolveInstalledPackageRoot } from "./installed-package.ts";
 
 export interface TypeScriptDeclarationBridge {
@@ -34,6 +44,8 @@ const nullType: ValueType = { kind: "null" };
 const stringType: ValueType = { kind: "string" };
 const numberType: ValueType = { kind: "number" };
 const boolType: ValueType = { kind: "bool" };
+const bytesType: ValueType = { kind: "named", name: "Bytes", identity: VELAR_BYTES_TYPE_IDENTITY };
+const uint16BufferType: ValueType = { kind: "named", name: "UInt16Buffer", identity: VELAR_UINT16_BUFFER_TYPE_IDENTITY };
 const MAX_PACKAGE_MANIFEST_BYTES = 1024 * 1024;
 const MAX_TYPESCRIPT_DECLARATION_BYTES = 2 * 1024 * 1024;
 const MAX_TYPESCRIPT_DECLARATION_FILES = 64;
@@ -1143,9 +1155,16 @@ function parseTsType(
     kind: "list",
     element: parseTsType(value.slice(0, -2), aliases, warnings, stack, classTypes, "invariant"),
   };
+  // The safe bridge maps storage semantics, not the host's incidental API.
+  // Node Buffer is a Uint8Array representation and therefore enters source as
+  // read-only Bytes; no Buffer-only member is exposed.
+  if (value === "Uint8Array" || value === "Buffer") return bytesType;
+  if (value === "Uint16Array") return uint16BufferType;
   const generic = /^([A-Za-z_$][\w$]*)\s*<([\s\S]+)>$/u.exec(value);
   if (generic) {
     const arguments_ = splitTopLevel(generic[2] ?? "", ",");
+    if (generic[1] === "Uint8Array" || generic[1] === "Buffer") return bytesType;
+    if (generic[1] === "Uint16Array") return uint16BufferType;
     if (generic[1] === "Array") return {
       kind: "list",
       element: parseTsType(arguments_[0] ?? "unknown", aliases, warnings, stack, classTypes, "invariant"),

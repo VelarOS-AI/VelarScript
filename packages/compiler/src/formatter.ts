@@ -21,7 +21,7 @@ interface InlineToken {
   readonly element?: MarkupElement;
 }
 
-const multiCharacterOperators = ["...", "?.", "??", "->", "=>", "==", "!=", "<=", ">=", "**", "+=", "-=", "*=", "/=", "%="] as const;
+const multiCharacterOperators = [">>>=", "<<=", ">>=", ">>>", "<<", ">>", "...", "?.", "??", "->", "=>", "==", "!=", "<=", ">=", "**", "+=", "-=", "*=", "/=", "%=", "|=", "&=", "^="] as const;
 const binaryWords = new Set(["and", "or", "in", "is"]);
 const prefixWords = new Set(["not", "await"]);
 // D30 item 16: `match` and `case` are contextual keywords, so `match(value)` is
@@ -477,6 +477,12 @@ function tokenizeInline(
     }
     if (/[0-9]/u.test(character)) {
       const start = index++;
+      if (character === "0" && /[xXbBoO]/u.test(source[index] ?? "")) {
+        index += 1;
+        while (index < source.length && /[A-Za-z0-9_]/u.test(source[index]!)) index += 1;
+        tokens.push({ kind: "literal", text: source.slice(start, index) });
+        continue;
+      }
       while (index < source.length && /[0-9_]/u.test(source[index]!)) index += 1;
       if (source[index] === "." && /[0-9_]/u.test(source[index + 1] ?? "")) {
         index += 1;
@@ -1104,6 +1110,7 @@ function isAttachedOpaqueSourcePlaceholder(token: InlineToken): boolean {
 
 function isUnaryOperator(token: InlineToken, previous: InlineToken | undefined, statementHead = false): boolean {
   if (prefixWords.has(token.text)) return true;
+  if (token.text === "~") return true;
   if (token.text !== "+" && token.text !== "-") return false;
   return !endsExpression(previous, statementHead);
 }

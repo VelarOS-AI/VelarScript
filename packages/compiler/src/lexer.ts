@@ -289,29 +289,29 @@ export class Lexer {
             this.diagnostics.push(recoveredDiagnostic("VEL1005", "Use 'and'; VelarScript uses readable logical operators", span(start, start + 2),
               this.wordOperatorFix(start, start + 2, "and", "Use readable 'and'")));
             this.simple("and", start, 2);
-          } else {
-            this.diagnostics.push(recoveredDiagnostic("VEL1005", "Combine conditions with 'and'; VelarScript has no bitwise '&'", span(start, start + 1)));
-            this.simple("and", start, 1);
-          }
+          } else this.operator("amp", "bitAndAssign", start);
           break;
         case "^":
-          this.diagnostics.push(recoveredDiagnostic("VEL1005", "Write '**' for exponentiation; VelarScript has no bitwise '^'", span(start, start + 1)));
-          this.simple("starStar", start, 1);
+          this.operator("caret", "bitXorAssign", start);
+          break;
+        case "~":
+          this.simple("tilde", start, 1);
           break;
         case "<":
-          this.simple(this.peek(1) === "=" ? "lessEqual" : "less", start, this.peek(1) === "=" ? 2 : 1);
+          if (this.peek(1) === "<") this.simple(this.peek(2) === "=" ? "leftShiftAssign" : "leftShift", start, this.peek(2) === "=" ? 3 : 2);
+          else this.simple(this.peek(1) === "=" ? "lessEqual" : "less", start, this.peek(1) === "=" ? 2 : 1);
           break;
         case ">":
-          this.simple(this.peek(1) === "=" ? "greaterEqual" : "greater", start, this.peek(1) === "=" ? 2 : 1);
+          if (this.peek(1) === ">" && this.peek(2) === ">") this.simple(this.peek(3) === "=" ? "unsignedRightShiftAssign" : "unsignedRightShift", start, this.peek(3) === "=" ? 4 : 3);
+          else if (this.peek(1) === ">") this.simple(this.peek(2) === "=" ? "rightShiftAssign" : "rightShift", start, this.peek(2) === "=" ? 3 : 2);
+          else this.simple(this.peek(1) === "=" ? "greaterEqual" : "greater", start, this.peek(1) === "=" ? 2 : 1);
           break;
         case "|":
           if (this.peek(1) === "|") {
             this.diagnostics.push(recoveredDiagnostic("VEL1005", "Use 'or'; VelarScript uses readable logical operators", span(start, start + 2),
               this.wordOperatorFix(start, start + 2, "or", "Use readable 'or'")));
             this.simple("or", start, 2);
-          } else {
-            this.simple("pipe", start, 1);
-          }
+          } else this.operator("pipe", "bitOrAssign", start);
           break;
         // D43 item 67: `@name` is the one spelling for a name the language
         // owns in a position where an author's own name may also appear. '@'
@@ -498,9 +498,13 @@ export class Lexer {
       this.advance();
     }
     const value = this.text.slice(start, this.index);
-    const rule = forbiddenSourceIdentifiers.get(value);
-    const extensionGuidance = rule ? undefined : this.extensionForbiddenIdentifiers.get(value);
     const previous = this.tokens.at(-1)?.kind;
+    // `int` remains forbidden as a type or binding, but velar/random owns the
+    // method spelling Random.int(...). Member names are not type vocabulary.
+    const rule = value === "int" && (previous === "dot" || previous === "optionalDot")
+      ? undefined
+      : forbiddenSourceIdentifiers.get(value);
+    const extensionGuidance = rule ? undefined : this.extensionForbiddenIdentifiers.get(value);
     if ((value === "Infinity" || value === "NaN") && previous !== "dot" && previous !== "optionalDot") {
       this.diagnostics.push(diagnostic(
         "VEL1007",
@@ -539,6 +543,10 @@ export class Lexer {
 
   private readNumber(): void {
     const start = this.index;
+    if (this.peek() === "0" && ["x", "X", "b", "B", "o", "O"].includes(this.peek(1))) {
+      this.readRadixNumber();
+      return;
+    }
     const integer = this.readDigitsWithSeparators();
     if (integer.length > 1 && integer.startsWith("0")) {
       this.diagnostics.push(diagnostic(
@@ -605,6 +613,50 @@ export class Lexer {
       ));
     }
     this.tokens.push({ kind: "number", value, span: span(start, numberEnd) });
+  }
+
+  private readRadixNumber(): void {
+    const start = this.index;
+    const prefix = this.peek(1).toLowerCase();
+    const radix = prefix === "x" ? 16 : prefix === "b" ? 2 : 8;
+    const radixName = radix === 16 ? "hexadecimal" : radix === 2 ? "binary" : "octal";
+    this.advance();
+    this.advance();
+    let digits = "";
+    let sawDigit = false;
+    while (this.isIdentifierPart(this.peek())) {
+      const character = this.peek();
+      if (character === "_") {
+        const separator = this.index;
+        const previous = this.text[this.index - 1] ?? "";
+        const next = this.peek(1);
+        this.advance();
+        if (!this.isRadixDigit(previous, radix) || !this.isRadixDigit(next, radix)) {
+          this.diagnostics.push(diagnostic("VEL1007", "Numeric separators must appear only between digits", span(separator, this.index)));
+        }
+        continue;
+      }
+      if (!this.isRadixDigit(character, radix)) {
+        const invalidStart = this.index;
+        while (this.isIdentifierPart(this.peek())) this.advance();
+        this.diagnostics.push(diagnostic("VEL1007", `Invalid digit in ${radixName} integer literal`, span(invalidStart, this.index)));
+        break;
+      }
+      sawDigit = true;
+      digits += this.advance();
+    }
+    if (!sawDigit) {
+      this.diagnostics.push(diagnostic("VEL1007", `${radixName[0]!.toUpperCase()}${radixName.slice(1)} integer literals require at least one digit`, span(start, this.index)));
+      digits = "0";
+    }
+    this.tokens.push({ kind: "number", value: `0${prefix}${digits}`, span: span(start, this.index) });
+  }
+
+  private isRadixDigit(character: string, radix: number): boolean {
+    if (character >= "0" && character <= "9") return Number(character) < radix;
+    if (radix !== 16) return false;
+    const lower = character.toLowerCase();
+    return lower >= "a" && lower <= "f";
   }
 
   /**

@@ -120,6 +120,24 @@ export type ValueType =
   | { readonly kind: "intrinsic"; readonly name: string; readonly typeParameterNames?: readonly string[]; readonly typeParameterBounds?: readonly (TypeParameterBound | null)[]; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType }
   | { readonly kind: "union"; readonly members: readonly ValueType[] };
 
+/** Canonical identities for Core's cross-runtime binary storage types. */
+export const VELAR_BYTES_TYPE_IDENTITY = "velar/binary#type:Bytes";
+export const VELAR_UINT16_BUFFER_TYPE_IDENTITY = "velar/binary#type:UInt16Buffer";
+
+export type BinaryStorageKind = "bytes" | "uint16";
+
+/**
+ * Binary storage stays nominal even though its JavaScript representation is a
+ * typed array. This keeps Buffer's accidental surface out of source while
+ * giving the analyzer and emitter one exact fast-path discriminator.
+ */
+export function binaryStorageKind(type: ValueType): BinaryStorageKind | null {
+  if (type.kind !== "named") return null;
+  if (type.identity === VELAR_BYTES_TYPE_IDENTITY) return "bytes";
+  if (type.identity === VELAR_UINT16_BUFFER_TYPE_IDENTITY) return "uint16";
+  return null;
+}
+
 export const unknownType: ValueType = { kind: "unknown" };
 export const invalidType: ValueType = Object.freeze({ kind: "unknown" });
 export const anyType: ValueType = { kind: "any" };

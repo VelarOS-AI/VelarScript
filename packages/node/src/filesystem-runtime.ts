@@ -3,6 +3,7 @@
 // the private isolated velar/node-host-v1 runtime dependency.
 export const VELAR_NODE_FILESYSTEM_RUNTIME = String.raw`
 import { __velarNodeHostInvoke } from "velar/node-host-v1";
+import { Bytes as __velarFsBytesType } from "velar/binary";
 
 const __velarFsNativeArray = globalThis.Array;
 const __velarFsNativeError = globalThis.Error;
@@ -206,11 +207,26 @@ export async function readText(path, maxBytes = __velarFsMaxFileBytes) {
   catch { throw new __velarFsNativeTypeError("readText requires valid UTF-8 text"); }
 }
 
+export async function readBytes(path, maxBytes = __velarFsMaxFileBytes) {
+  path = __velarFsPath(path, "readBytes");
+  maxBytes = __velarFsByteLimit(maxBytes, "readBytes");
+  const data = __velarFsBytes(await __velarNodeHostInvoke("fs.readFile", [path, maxBytes, "readBytes"]), "readBytes");
+  if (__velarFsByteLength(data) > maxBytes) throw new __velarFsNativeRangeError("readBytes file exceeds maxBytes");
+  return __velarFsBytesType.parse(data);
+}
+
 export async function createText(path, text) {
   path = __velarFsPath(path, "createText");
   if (typeof text !== "string") throw new __velarFsNativeTypeError("createText requires text");
   if (__velarUtf8ByteLength(text) > __velarFsMaxFileBytes) throw new __velarFsNativeRangeError("createText cannot write more than 16 MiB");
   return __velarFsNull(await __velarNodeHostInvoke("fs.createFile", [path, __velarFsEncode(text)]), "createText");
+}
+
+export async function createBytes(path, bytes) {
+  path = __velarFsPath(path, "createBytes");
+  bytes = __velarFsBytesType.parse(bytes);
+  if (__velarFsByteLength(bytes) > __velarFsMaxFileBytes) throw new __velarFsNativeRangeError("createBytes cannot write more than 16 MiB");
+  return __velarFsNull(await __velarNodeHostInvoke("fs.createFile", [path, bytes, "createBytes"]), "createBytes");
 }
 
 export async function replaceTextIfMatches(path, expected, replacement) {
@@ -229,6 +245,13 @@ export async function writeText(path, text) {
   if (typeof text !== "string") throw new __velarFsNativeTypeError("writeText requires text");
   if (__velarUtf8ByteLength(text) > __velarFsMaxFileBytes) throw new __velarFsNativeRangeError("writeText cannot write more than 16 MiB");
   return __velarFsNull(await __velarNodeHostInvoke("fs.writeFile", [path, __velarFsEncode(text)]), "writeText");
+}
+
+export async function writeBytes(path, bytes) {
+  path = __velarFsPath(path, "writeBytes");
+  bytes = __velarFsBytesType.parse(bytes);
+  if (__velarFsByteLength(bytes) > __velarFsMaxFileBytes) throw new __velarFsNativeRangeError("writeBytes cannot write more than 16 MiB");
+  return __velarFsNull(await __velarNodeHostInvoke("fs.writeFile", [path, bytes, "writeBytes"]), "writeBytes");
 }
 
 export async function appendText(path, text) {

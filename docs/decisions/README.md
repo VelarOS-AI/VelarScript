@@ -52,6 +52,7 @@ their titles are reproduced verbatim below.
 | [D53](D53-EMBEDDED-SOURCE.md) | 内联外语源码块 | Inline foreign source blocks: a good spelling for inline JavaScript, which was already executable through a `data:` URL, and the injection channel editors need. |
 | [D54](D54-CONSIDERED-AND-REJECTED.md) | 考虑并否决 | Features proposed seriously and rejected deliberately, each with its reasoning and its reopening condition — so a returning proposal is read, not re-debated. |
 | [D55](D55-GENERIC-TYPES.md) | 泛型类型与泛型类 | Generic types and generic classes, established as a completion of the existing design rather than a reversal of it. |
+| [D83](D83-MINECRAFT-READINESS.md) | Minecraft Readiness：二进制、确定性与有界并发 | The real binary consumer reopens radix and bitwise syntax, establishes one Node/Web Bytes model, and closes the loop through deterministic workers, bounded WebSocket, SQLite/IndexedDB, binary IO, and supported mature-library adapters. |
 
 ## archive/
 

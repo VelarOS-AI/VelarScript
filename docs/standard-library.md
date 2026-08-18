@@ -147,7 +147,9 @@ spelling and a `velar fix` rewrite that performs it.
 
 ### Group 2 — pure modules imported by name
 
-`velar/collections`, `velar/url`, `velar/test`, and, on Web, `velar/look`.
+`velar/collections`, `velar/binary`, `velar/random`, `velar/task`,
+`velar/msgpack`, `velar/compression`, `velar/noise`, `velar/url`, `velar/test`,
+and, on Web, `velar/look`.
 
 These compute and touch nothing, so question 1 clears them; they are imported
 because question 2 does not — there is no `Collections`, `Url`, or `Look` in
@@ -163,7 +165,8 @@ question 1 — they read the clock, read entropy, and write to the outside world
 ### Group 3 — capabilities
 
 `velar/fs`, `velar/path`, `velar/process`, `velar/env`, `velar/host`,
-`velar/serve`, `velar/terminal`, `velar/http`, and the Web modules documented in
+`velar/serve`, `velar/terminal`, `velar/http`, `velar/worker`,
+`velar/websocket`, Node `velar/sqlite`, and the Web modules documented in
 `web-api.md`.
 
 For a capability the import line is the audit signal — it is how a reader sees
@@ -221,11 +224,12 @@ const byRole = groupBy(users, user => user.role)
 const labeled = enumerate(start=10, values=users)
 ```
 
-Core prelude `range` deliberately materializes the same checked,
-at-most-1,000,000-item List
-whether it is used by `for` or as a value. This keeps one public iterable type,
-one named-call contract, and ordinary List reuse; it does not hide a second
-lazy object behind a call-shape optimization.
+Core prelude `range` returns the same checked, at-most-1,000,000-item List when
+it is used as a value. The compiler recognizes only the direct one-slot loop
+head `for value in range(...):`: it evaluates the arguments once, performs the
+same complete range validation, and emits a native counter loop without
+materializing the List. Aliased, saved, nested, or two-slot iteration keeps the
+ordinary List contract, so there is no second public iterable type.
 
 Ordering never uses JavaScript's mixed-type relational coercion. The compiler
 rejects known boolean/record/optional/mixed key results and enum keys — an enum
@@ -243,6 +247,87 @@ prototypes afterward cannot redirect traversal, grouping, sorting, joining, or
 allocation. Imported helpers use explicit index loops over the one checked List
 copy; stable sort remains the host's standards-defined stable Array sort through
 the captured operation.
+
+## Binary data, deterministic computation, and work ownership
+
+`velar/binary` is the common Node/Web binary boundary. `Bytes` is an immutable
+snapshot with `size` and read-only integer indexing. `UInt16Buffer` is fixed-size
+mutable working memory with checked integer indexing and `toBytes(order)`;
+`uint16FromBytes(snapshot, order)` restores it. Every value and index is checked,
+so the API never inherits typed-array truncation or out-of-bounds no-ops. The
+compiler emits direct specialized index operations rather than routing these
+types through reactive Lists or ordinary method wrappers. Safe JavaScript
+declarations map `Uint8Array` and Node `Buffer` results to `Bytes`, and
+`Uint16Array` results to `UInt16Buffer`; no `Buffer`-specific API enters source.
+
+```velar fragment
+import {ByteOrder, Bytes, uint16Buffer, uint16FromBytes} from "velar/binary"
+
+const blocks = uint16Buffer(16 ** 3)
+blocks[0] = 7
+const snapshot: Bytes = blocks.toBytes(ByteOrder.little)
+const restored = uint16FromBytes(snapshot, ByteOrder.little)
+assert restored[0] == 7
+```
+
+`velar/random` creates a deterministic `Random` from a string or safe-integer
+seed. Its `number()`, `int(start, end?)`, `bool(probability=0.5)`, `pick(values)`,
+`shuffle(values)`, and `fork(label)` operations have identical Node/browser
+results. A fork derives an independent stream from the original seed and label;
+it does not consume or couple itself to the parent's current position.
+
+`velar/task` owns structured asynchronous work. `task(work, parent?)` passes a
+`Cancellation` into `work`, propagates a parent cancellation, and returns an
+owned `Task<T>`. `cancel(reason?)` requests cancellation and waits for the work
+to finish; CPU-heavy work cooperates with `await cancellation.checkpoint()`.
+`withTimeout(task, duration)` cancels the underlying task before it rejects with
+`TaskTimeoutError`. A `using` Task cancels and joins automatically on every exit.
+
+## Workers and pull-based WebSockets
+
+`velar/worker` uses entries declared in `velar.json`:
+
+```json
+{
+  "formatVersion": 2,
+  "entry": "src/main.vel",
+  "workers": {"terrain": "src/terrain-worker.vel"}
+}
+```
+
+`worker(name, RequestType, ResponseType, capacity=64)` starts one worker;
+`workerPool(name, RequestType, ResponseType, size, capacity=64)` starts a bounded
+pool. Both expose `call(request, cancellation?, timeout?)` and `close()`. A
+worker entry calls `serveWorker(RequestType, ResponseType, handler,
+capacity=64)`. Runtime Types validate both directions, `Bytes` transfers its
+backing storage without an extra transport copy, queue capacity supplies
+backpressure, and a crash rejects every pending call with one stable worker
+error identity. The implementation selects browser Worker or Node
+`worker_threads`; source never handles native URLs or ports.
+
+`velar/websocket` exposes `connect(url, options?)` on Node and Web, plus Node
+`listen(options)`. A `WebSocketConnection` sends `string | Bytes`, and its
+`next() -> Promise<(string | Bytes)?>` is consumed directly or with `async for`.
+`send` resolves only after the bounded pending-byte budget drains. Connection,
+message, send, accept, and unread-message limits fail explicitly. `listen` may
+receive the same typed HTTP handler as `velar/serve`, so HTTP and upgrade traffic
+share one port. Connections and servers are owned resources for `using`.
+
+## Binary codecs and noise adapters
+
+The official adapters deliberately expose small stable Velar surfaces over
+mature packages: `velar/msgpack` uses `msgpackr`, `velar/compression` uses
+`fflate`, and `velar/noise` uses `simplex-noise`.
+
+- MessagePack provides `encode(value) -> Bytes`, `decode(bytes) -> unknown`, and
+  `parse(bytes, Type) -> T`.
+- Compression provides bounded `deflate`/`inflate` and `gzip`/`gunzip` Bytes
+  operations; decompression accepts a maximum output byte count.
+- Noise provides seeded `simplex2`, `simplex3`, and `simplex4` functions whose
+  results are deterministic across supported targets.
+
+These modules are the supported contract. Their npm packages and complex
+TypeScript generics are implementation details, not a second public API.
 
 ## `Text.` (permanent, no import)
 

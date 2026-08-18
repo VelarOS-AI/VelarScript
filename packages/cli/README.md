@@ -22,6 +22,10 @@ official Node capability plus Web and Desktop application targets so a zero-`nod
 consume that toolchain generation, but it owns none of their syntax, HTML,
 CSP, lifecycle, runtime, or native packaging behavior. Project-local targets
 take precedence and third-party extensions never use this fallback.
+The distribution also pins and bundles the implementation dependencies behind
+the official `velar/msgpack`, `velar/compression`, and `velar/noise` adapters;
+applications import those Velar modules, not `msgpackr`, `fflate`, or
+`simplex-noise` directly.
 
 ```sh
 npx @velarscript/cli create my-app

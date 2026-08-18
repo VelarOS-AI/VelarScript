@@ -143,7 +143,7 @@ function securityConfig(value: unknown, manifestPath: string): VelarWebConfig["s
   if (security) knownFields(security as Record<string, unknown>, new Set(["contentSecurityPolicy", "connectSources", "imageSources"]), "web.security", manifestPath);
   return {
     contentSecurityPolicy: booleanField(security?.contentSecurityPolicy, "web.security.contentSecurityPolicy", true),
-    connectSources: sourceList(security?.connectSources, "web.security.connectSources", new Set(["https:", "wss:"])),
+    connectSources: sourceList(security?.connectSources, "web.security.connectSources", new Set(["https:", "wss:", "ws:"])),
     imageSources: sourceList(security?.imageSources, "web.security.imageSources", new Set(["https:"])),
   };
 }
@@ -167,12 +167,14 @@ function booleanField(value: unknown, field: string, fallback: boolean): boolean
 
 function sourceList(value: unknown, field: string, protocols: ReadonlySet<string>): readonly string[] {
   if (value === undefined) return [];
-  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) throw new Error(`'${field}' must be a list of secure origins`);
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) throw new Error(`'${field}' must be a list of allowed origins`);
   return [...new Set(value.map((item) => {
     let url: URL;
     try { url = new URL(item as string); }
     catch { throw new Error(`'${field}' contains invalid origin '${String(item)}'`); }
-    if (!protocols.has(url.protocol) || url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
+    const localPlainWebSocket = url.protocol === "ws:" && (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]");
+    if (!protocols.has(url.protocol) || url.protocol === "ws:" && !localPlainWebSocket
+      || url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
       throw new Error(`'${field}' contains unsupported origin '${String(item)}'`);
     }
     return url.origin;

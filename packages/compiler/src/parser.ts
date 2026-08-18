@@ -95,19 +95,25 @@ const binaryPrecedence: Partial<Record<TokenKind, number>> = {
   nullish: 1,
   or: 2,
   and: 3,
-  equal: 4,
-  notEqual: 4,
-  is: 4,
-  in: 4,
-  less: 4,
-  lessEqual: 4,
-  greater: 4,
-  greaterEqual: 4,
-  plus: 6,
-  minus: 6,
-  star: 7,
-  slash: 7,
-  percent: 7,
+  pipe: 4,
+  caret: 5,
+  amp: 6,
+  equal: 7,
+  notEqual: 7,
+  is: 7,
+  in: 7,
+  less: 7,
+  lessEqual: 7,
+  greater: 7,
+  greaterEqual: 7,
+  leftShift: 8,
+  rightShift: 8,
+  unsignedRightShift: 8,
+  plus: 9,
+  minus: 9,
+  star: 10,
+  slash: 10,
+  percent: 10,
 };
 
 const comparisonOperators: Partial<Record<TokenKind, ComparisonChainExpression["operators"][number]>> = {
@@ -141,10 +147,20 @@ const assignmentOperators: Partial<Record<TokenKind, AssignmentStatement["operat
   starAssign: "*=",
   slashAssign: "/=",
   percentAssign: "%=",
+  bitOrAssign: "|=",
+  bitAndAssign: "&=",
+  bitXorAssign: "^=",
+  leftShiftAssign: "<<=",
+  rightShiftAssign: ">>=",
+  unsignedRightShiftAssign: ">>>=",
 };
 
 export class Parser {
-  private readonly tokens: readonly Token[];
+  // Keep a private mutable token view so a run of adjacent `>` characters can
+  // be consumed one close at a time while parsing nested generic types. The
+  // lexer must still emit `>>` and `>>>` as shift operators in expressions;
+  // splitting them here is contextual and therefore preserves both grammars.
+  private readonly tokens: Token[];
   protected readonly lexicalExtensions: readonly CompilerLexicalExtension[];
   protected readonly diagnostics: Diagnostic[] = [];
   private readonly genericCallableNames = new Set<string>();
@@ -163,7 +179,7 @@ export class Parser {
   private contextualParameterDepth = 0;
 
   constructor(tokens: readonly Token[], lexicalExtensions: readonly CompilerLexicalExtension[] = []) {
-    this.tokens = tokens;
+    this.tokens = [...tokens];
     this.lexicalExtensions = lexicalExtensions;
     this.contextualKeywords = new Set(lexicalExtensions.flatMap((extension) => [...extension.contextualKeywords ?? []]));
     for (let index = 0; index + 2 < tokens.length; index += 1) {
@@ -2381,12 +2397,14 @@ export class Parser {
       const open = this.previous();
       const closeKind = squareArguments ? "rightBracket" : "greater";
       const arguments_: TypeSyntax[] = [];
-      if (!this.check(closeKind)) {
+      if (!(squareArguments ? this.check(closeKind) : this.checkTypeGreater())) {
         do {
           arguments_.push(this.parseTypeReference().syntax);
-        } while (this.match("comma") && !this.check(closeKind));
+        } while (this.match("comma") && !(squareArguments ? this.check(closeKind) : this.checkTypeGreater()));
       }
-      const close = this.expect(closeKind, squareArguments ? "Expected ']' after type arguments" : "Expected '>' after type arguments");
+      const close = squareArguments
+        ? this.expect(closeKind, "Expected ']' after type arguments")
+        : this.expectTypeGreater("Expected '>' after type arguments");
       if (squareArguments && arguments_.length === 0) {
         // A postfix 'Name[]' array annotation guides straight to the List
         // spelling and recovers as 'List<Name>'.
@@ -2502,26 +2520,6 @@ export class Parser {
     let left = this.parseUnary();
 
     while (true) {
-      // '|' never operates on values — the union spelling lives in type
-      // annotations — and the author reaching for it here almost always
-      // means 'or'. Recovery reads it that way under one diagnostic.
-      if (this.check("pipe") && binaryPrecedence.or! >= minimumPrecedence) {
-        const operator = this.advance();
-        this.diagnostics.push(recoveredDiagnostic(
-          "VEL2031",
-          "'|' joins types only in type annotations; combine conditions with 'or'",
-          operator.span,
-        ));
-        const right = this.parseExpression(binaryPrecedence.or! + 1);
-        left = {
-          kind: "BinaryExpression",
-          left,
-          operator: "or",
-          right,
-          span: span(left.span.start, right.span.end),
-        } satisfies BinaryExpression;
-        continue;
-      }
       const javaScriptInstanceof = this.check("identifier") && this.current().value === "instanceof";
       const compoundNotIn = this.check("not") && this.peekKind(1) === "in";
       const precedence = javaScriptInstanceof
@@ -2849,13 +2847,13 @@ export class Parser {
       this.advance();
       return this.withParseDepth(() => this.parseUnary());
     }
-    if (this.match("not") || this.match("plus") || this.match("minus")) {
+    if (this.match("not") || this.match("plus") || this.match("minus") || this.match("tilde")) {
       const operator = this.previous();
       return this.withParseDepth(() => {
         const operand = this.parseUnary();
         return {
           kind: "UnaryExpression",
-          operator: operator.kind === "not" ? "not" : operator.kind === "plus" ? "+" : "-",
+          operator: operator.kind === "not" ? "not" : operator.kind === "plus" ? "+" : operator.kind === "minus" ? "-" : "~",
           operand,
           span: span(operator.span.start, operand.span.end),
         };
@@ -2894,7 +2892,7 @@ export class Parser {
     if (!this.match("await")) return this.parsePostfix();
     const operator = this.previous();
     return this.withParseDepth(() => {
-      const operand = this.check("not") || this.check("plus") || this.check("minus")
+      const operand = this.check("not") || this.check("plus") || this.check("minus") || this.check("tilde")
         ? this.parseUnary()
         : this.parsePowerBase();
       return {
@@ -3560,6 +3558,12 @@ export class Parser {
       starStar: "**",
       slash: "/",
       percent: "%",
+      pipe: "|",
+      amp: "&",
+      caret: "^",
+      leftShift: "<<",
+      rightShift: ">>",
+      unsignedRightShift: ">>>",
     };
     return operators[token.kind] ?? "+";
   }
@@ -3779,6 +3783,28 @@ export class Parser {
     const token = this.current();
     this.diagnostics.push(diagnostic("VEL2001", message, token.span));
     return { kind, value: "", span: token.span };
+  }
+
+  private checkTypeGreater(): boolean {
+    return this.check("greater") || this.check("rightShift") || this.check("unsignedRightShift");
+  }
+
+  /** Consume one `>` from a generic close without changing shift lexing. */
+  private expectTypeGreater(message: string): Token {
+    if (this.check("greater")) return this.advance();
+    const token = this.current();
+    if (token.kind === "rightShift" || token.kind === "unsignedRightShift") {
+      const close = { kind: "greater", value: ">", span: span(token.span.start, token.span.start + 1) } satisfies Token;
+      const remainderKind: TokenKind = token.kind === "rightShift" ? "greater" : "rightShift";
+      this.tokens[this.index] = {
+        kind: remainderKind,
+        value: token.value.slice(1),
+        span: span(token.span.start + 1, token.span.end),
+      };
+      return close;
+    }
+    this.diagnostics.push(diagnostic("VEL2001", message, token.span));
+    return { kind: "greater", value: "", span: token.span };
   }
 
   private expectMemberName(message = "Expected a member name after '.'"): Token {

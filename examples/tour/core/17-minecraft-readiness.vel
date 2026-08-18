@@ -1,0 +1,144 @@
+/// Chapter 17 — the cross-target binary and structured-concurrency surface.
+///
+/// Host-affecting calls live behind exported functions that the tour does not
+/// execute. The pure buffer, codec, compression, noise, and random calls are
+/// kept together so their shared `Bytes` contract remains visible.
+
+import {ByteOrder, Bytes, UInt16Buffer, uint16Buffer, uint16FromBytes} from "velar/binary"
+import {Random, random} from "velar/random"
+import {Cancellation, CancellationError, Task, TaskTimeoutError, task, withTimeout} from "velar/task"
+import {Worker, WorkerBackpressureError, WorkerCallError, WorkerClosedError, WorkerCrashedError, WorkerPool, serveWorker, worker, workerPool} from "velar/worker"
+import {WebSocketBackpressureError, WebSocketClosedError, WebSocketConnection, WebSocketProtocolError, WebSocketServer, WebSocketTimeoutError, connect, listen} from "velar/websocket"
+import {decode as decodeMessage, encode as encodeMessage, parse as parseMessage} from "velar/msgpack"
+import {deflate, gunzip, gzip, inflate} from "velar/compression"
+import {simplex2, simplex3, simplex4} from "velar/noise"
+import {createBytes, readBytes, writeBytes} from "velar/fs"
+import {Database, SqliteBackpressureError, SqliteError, Statement, Transaction, open as openDatabase} from "velar/sqlite"
+
+type ChunkEnvelope:
+    checksum: number
+    payload: Bytes
+
+type ChunkRequest:
+    x: number
+    z: number
+
+type ChunkReply:
+    checksum: number
+
+const bufferType = UInt16Buffer
+const bytesType = Bytes
+const littleEndian = ByteOrder.little
+
+export def binaryAndCodecSpellings() -> number:
+    const blocks: UInt16Buffer = uint16Buffer(16 ** 3)
+    blocks[0] = 0x7f
+    const snapshot: Bytes = blocks.toBytes(littleEndian)
+    const restored = uint16FromBytes(snapshot, ByteOrder.little)
+    const packed = encodeMessage({checksum: restored[0], payload: snapshot})
+    const decodedUnknown = decodeMessage(packed)
+    const decoded: ChunkEnvelope = parseMessage(packed, ChunkEnvelope)
+    const compressed = deflate(decoded.payload)
+    const uncompressed = inflate(compressed)
+    const archived = gzip(uncompressed, 6)
+    const reopened = gunzip(archived, 64 * 1024 * 1024)
+    const field2 = simplex2("tour-world")
+    const field3 = simplex3("tour-world")
+    const field4 = simplex4("tour-world")
+    const source: Random = random("tour-world")
+    const child = source.fork("chunk:0:0")
+    return decoded.checksum + reopened.size + Math.trunc(field2(0, 0) + field3(0, 0, 0) + field4(0, 0, 0, 0)) + child.int(1) + (decodedUnknown != null ? 1 : 0)
+
+async def cancellableWork(cancellation: Cancellation) -> number:
+    await cancellation.checkpoint()
+    return 17
+
+def taskValue(owner: Task<number>) -> Task<number>:
+    return owner
+
+export async def taskSpellings(parent: Cancellation?) -> number:
+    using owner = task(cancellableWork, parent)
+    return await withTimeout(taskValue(owner), 2s)
+
+async def generate(request: ChunkRequest, cancellation: Cancellation) -> ChunkReply:
+    await cancellation.checkpoint()
+    return {checksum: request.x ^ request.z}
+
+def workerValue(value: Worker<ChunkRequest, ChunkReply>) -> Worker<ChunkRequest, ChunkReply>:
+    return value
+
+def poolValue(value: WorkerPool<ChunkRequest, ChunkReply>) -> WorkerPool<ChunkRequest, ChunkReply>:
+    return value
+
+export async def workerClientSpellings() -> number:
+    using single = worker("tour-chunk", ChunkRequest, ChunkReply, 8)
+    using pool = workerPool("tour-chunk", ChunkRequest, ChunkReply, 2, 16)
+    const first = await workerValue(single).call({x: 1, z: 2})
+    const second = await poolValue(pool).call({x: 3, z: 4})
+    return first.checksum + second.checksum
+
+export def workerServerSpelling():
+    serveWorker(ChunkRequest, ChunkReply, generate, 16)
+
+def connectionValue(value: WebSocketConnection) -> WebSocketConnection:
+    return value
+
+def serverValue(value: WebSocketServer) -> WebSocketServer:
+    return value
+
+export async def websocketSpellings() -> number:
+    using connection = await connect("ws://127.0.0.1:8080/socket", {timeout: 2s})
+    using server = await listen({port: 0, path: "/socket"})
+    await connectionValue(connection).send("tour")
+    return serverValue(server).port
+
+def databaseValue(value: Database) -> Database:
+    return value
+
+async def statementValue(value: Statement) -> Statement:
+    return value
+
+async def transactionValue(value: Transaction) -> Transaction:
+    return value
+
+export async def persistenceSpellings(path: string, snapshot: Bytes) -> number:
+    await createBytes(f"{path}.new", snapshot)
+    await writeBytes(path, snapshot)
+    const restored = await readBytes(path, 64 * 1024 * 1024)
+    using database = await openDatabase(f"{path}.sqlite", {busyTimeout: 2000, queueCapacity: 64})
+    await databaseValue(database).execute("CREATE TABLE IF NOT EXISTS chunks (id INTEGER PRIMARY KEY, payload BLOB)")
+    using statement = await database.prepare("INSERT INTO chunks (id, payload) VALUES (?, ?)")
+    await (await statementValue(statement)).execute([1, restored])
+    using transaction = await database.transaction()
+    await (await transactionValue(transaction)).execute("DELETE FROM chunks WHERE id = ?", [1])
+    await transaction.commit()
+    return restored.size
+
+export def readinessFailure(error: Error) -> string:
+    if error is CancellationError:
+        return "cancelled"
+    if error is TaskTimeoutError:
+        return "task timeout"
+    if error is WorkerBackpressureError:
+        return "worker backpressure"
+    if error is WorkerCallError:
+        return "worker call"
+    if error is WorkerClosedError:
+        return "worker closed"
+    if error is WorkerCrashedError:
+        return "worker crashed"
+    if error is WebSocketBackpressureError:
+        return "socket backpressure"
+    if error is WebSocketClosedError:
+        return "socket closed"
+    if error is WebSocketProtocolError:
+        return "socket protocol"
+    if error is WebSocketTimeoutError:
+        return "socket timeout"
+    if error is SqliteBackpressureError:
+        return "sqlite backpressure"
+    if error is SqliteError:
+        return "sqlite"
+    return "other"
+
+export const chapterSeventeen = {bytesType, bufferType, littleEndian}

@@ -409,11 +409,11 @@ test("[GRM-T1] named-argument diagnostics say what to write and where", () => {
   assert.ok(!messages.some((message) => /Expected '\)' after arguments/u.test(message)), JSON.stringify(messages));
 });
 
-test("[grammar vocabulary] ;  |  &  ^  function  := each get one taught message", () => {
+test("[grammar vocabulary] ;, boolean bitwise misuse, function, and := each get one taught message", () => {
   rejects("const a = 1;\nprint(str(a))\n", /A statement ends at its newline; VelarScript does not use ';'/u);
-  rejects("const a = true\nconst b = false\nif a | b:\n    print(\"x\")\n", /'\|' joins types only in type annotations; combine conditions with 'or'/u);
-  rejects("const a = true\nconst b = false\nif a & b:\n    print(\"x\")\n", /Combine conditions with 'and'; VelarScript has no bitwise '&'/u);
-  rejects("print(str(2 ^ 8))\n", /Write '\*\*' for exponentiation; VelarScript has no bitwise '\^'/u);
+  rejects("const a = true\nconst b = false\nif a | b:\n    print(\"x\")\n", /Cannot assign bool to number/u);
+  rejects("const a = true\nconst b = false\nif a & b:\n    print(\"x\")\n", /Cannot assign bool to number/u);
+  accepts("print(str(2 ^ 8))\n");
   rejects("const f = function() { return 1 }\nprint(\"x\")\n", /VelarScript has no 'function' expressions; declare 'def name\(\.\.\.\)' or write an arrow/u);
   rejects("let x = 1\nx := 5\nprint(str(x))\n", /VelarScript has no ':=' binding operator/u);
 });

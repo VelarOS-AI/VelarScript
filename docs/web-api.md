@@ -1033,9 +1033,10 @@ const result = await http.post("/api/images", {body: body}).parse(UploadResult)
   methods, and forbidden `CONNECT`/`TRACE`/`TRACK` fail at request creation.
   Credentials are `omit`, `same-origin`, or `include`; cache is `default`,
   `no-store`, `reload`, `no-cache`, or `force-cache`.
-- Requests expose `response`, `json`, `text`, `streamText`, `blob`,
+- Requests expose `response`, `json`, `text`, `bytes`, `streamText`, `blob`,
   `parse(Type)`, and `cancel`. Responses expose typed status, URL, and header
-  fields plus the same body readers. `streamText` incrementally decodes valid
+  fields plus the same body readers. `bytes()` returns the target-neutral
+  immutable `Bytes` snapshot. `streamText` incrementally decodes valid
   UTF-8 chunks and awaits each consumer before pulling the next chunk. `blob()`
   returns an opaque checked `Blob`, not `any`; it may be
   passed back as an HTTP body but does not expose the native browser object or
@@ -1089,7 +1090,8 @@ const result = await http.post("/api/images", {body: body}).parse(UploadResult)
   responses throw `HttpError` with `status`, `url`, and an `unknown` body. Its
   URL is the final response URL after redirects; only a synthetic response
   without a URL falls back to the initial request URL.
-- JSON request bodies use the same strict lossless data boundary as
+- A `Bytes` request body is sent as binary without JSON/Base64 conversion. JSON
+  request bodies use the same strict lossless data boundary as
   `velar/json`: records, dense Lists, finite primitives, and `null` are accepted;
   Map, Set, class/function values, cycles, sparse Lists, and non-finite numbers
   fail before `fetch` starts. Other bodies are explicit text, Blob, or form
@@ -1177,13 +1179,21 @@ component PreferencesPanel:
   the listener normally. Event payloads are read only through captured native
   browser getters or enumerable own data fields; a synthetic accessor-backed
   event is ignored without executing its getters.
-- `database(name)` provides asynchronous IndexedDB `get`, `set`, `has`,
-  `keys`, `remove`, and `clear`. Its `get` and `set` accept the same trailing
+- `database(name)` provides asynchronous IndexedDB `get`, `set`, `getBytes`,
+  `setBytes`, atomic `batch`, `has`, `keys`, `remove`, and `clear`. Its JSON
+  `get` and `set` accept the same trailing
   `maxBytes` contract. Values are stored as canonical strict JSON text rather
   than arbitrary structured-clone objects, allowing an oversized value to be
   rejected before parsing. Typed reads use the same VelarScript `type`
   validator and fallback rules; values written directly by JavaScript in a
   different representation are foreign data and return the declared fallback.
+  `getBytes(key, fallback=null, maxBytes=16777216)` and
+  `setBytes(key, value, maxBytes=16777216)` use the shared immutable `Bytes`
+  representation directly. `batch([{key, bytes}, ...])` commits all binary
+  writes/removals in one transaction; `bytes: null` removes that key.
+- IndexedDB quota, transaction, and version/open failures keep distinct
+  `StorageQuotaError`, `StorageTransactionError`, and `StorageUpgradeError`
+  identities. A failed atomic batch exposes no partial success.
 - The IndexedDB factory, request getters, database/transaction/object-store
   methods, key-list checks, and event listeners use the same captured host ABI.
   JavaScript may still expose an explicit data-only test double, but ambient or
@@ -1426,6 +1436,27 @@ iterators, or instance overrides. File metadata and text reads use the native
 instance `text` method.
 `readText` and `readDataUrl` also verify the asynchronous reader result and its
 maximum encoded expansion before returning a string.
+
+## `velar/worker` and `velar/websocket`
+
+Web projects use the same checked `velar/worker` contract as Node. The
+`workers` map in `velar.json` names source entries; production builds emit those
+graphs and the runtime resolves them without exposing bundle URLs. `worker` and
+`workerPool` validate requests and responses with runtime Types, bound queued
+calls, propagate per-call cancellation and timeout, transfer `Bytes`, and reject
+pending work if the native Worker crashes. A Worker entry uses `serveWorker`.
+
+`velar/websocket.connect` returns an owned pull connection whose `send` accepts
+`string | Bytes` and whose `next()` resolves to the next checked message or
+`null` after close. Message size, unread message count, and pending send bytes
+are bounded. Binary messages set the native browser socket's array-buffer mode
+and enter source as `Bytes`; native Blob/ArrayBuffer/WebSocket objects remain
+hidden. Plain `ws:` is admitted by generated CSP only for loopback development;
+production origins use `wss:`.
+
+The older `velar/realtime.socket` text API remains source-compatible. New
+binary and pull-based protocols use `velar/websocket`; existing text-only code
+does not need to migrate merely because the binary transport exists.
 
 ## `velar/realtime`
 

@@ -47,7 +47,7 @@ import {
   VELAR_TYPE_VALIDATION_MODULE,
   VELAR_TYPE_VALIDATION_MODULE_SOURCE,
 } from "../packages/compiler/src/type-validation-runtime.ts";
-import { standardModuleInterfaces, standardModuleSources } from "../packages/cli/src/standard-modules.ts";
+import { VELAR_WORKER_MANIFEST_MODULE, standardModuleInterfaces, standardModuleSources } from "../packages/cli/src/standard-modules.ts";
 import { esModuleExports } from "./es-module-exports.mjs";
 import { velarCompilerExtension as velarWebCompilerExtension } from "../packages/web/src/compiler.ts";
 import { VELAR_NODE_HOST_MODULE, velarNodeCompilerExtension } from "../packages/node/src/compiler.ts";
@@ -506,7 +506,7 @@ const nodeServeModuleSource = generatedModuleSource(nodeCompilerSource, "velar/s
 const nodeProcessModuleSource = generatedModuleSource(nodeCompilerSource, "velar/process", "velar/http");
 const coreCollectionsModuleSource = generatedModuleSource(standardModulesSource, "velar/collections", "velar/text");
 const coreTextModuleSource = generatedModuleSource(standardModulesSource, "velar/text", "velar/math");
-const coreMathModuleSource = generatedModuleSource(standardModulesSource, "velar/math", "velar/json");
+const coreMathModuleSource = generatedModuleSource(standardModulesSource, "velar/math", "velar/binary");
 const coreJsonModuleSource = generatedModuleSource(standardModulesSource, "velar/json", "velar/async");
 const coreUrlModuleSource = generatedModuleSource(standardModulesSource, "velar/url", "velar/time");
 const coreTimeModuleSource = generatedModuleSource(standardModulesSource, "velar/time", "velar/id");
@@ -742,8 +742,8 @@ for (const phrase of [
   '["velar/env", VELAR_NODE_ENV_RUNTIME]',
   '["velar/host", VELAR_NODE_HOST_RUNTIME]',
   'VELAR_NODE_TERMINAL_RUNTIME.replace("WORKER_SOURCE", JSON.stringify(VELAR_NODE_TERMINAL_WORKER_SOURCE))',
-  '["velar/fs", [VELAR_NODE_HOST_MODULE]]',
-  '["velar/http", [VELAR_NODE_HOST_MODULE]]',
+  '["velar/fs", [VELAR_NODE_HOST_MODULE, "velar/binary"]]',
+  '["velar/http", [VELAR_NODE_HOST_MODULE, "velar/binary"]]',
   '["velar/serve", [VELAR_NODE_HOST_MODULE]]',
   "dependencies: nodeModuleDependencies",
 ]) {
@@ -871,7 +871,7 @@ for (const phrase of [
 for (const phrase of [
   'import { createServer, request as createHttpRequest } from "node:http"',
   'import { request as createHttpsRequest } from "node:https"',
-  '"http.request", "http.read", "http.cancel", "http.close"',
+  '"http.request", "http.read", "http.readBytes", "http.cancel", "http.close"',
   "const httpRequests = new Map()",
   'decoder: new TextDecoder("utf-8", {fatal: true})',
   "if (httpRequests.size >= maxHttpRequests)",
@@ -904,7 +904,7 @@ if (!desktopNativeHostSource.includes("VelarDesktopHttpTransportError")
   || !desktopHttpModuleSource.includes("function bridgeTransportError(error, phase)")) {
   failures.push("packages/desktop: structured HTTP transport failures must survive the Worker/WebView bridge and be revalidated in the renderer");
 }
-if (!nodeCompilerSource.includes('["velar/http", [VELAR_NODE_HOST_MODULE]]')) {
+if (!nodeCompilerSource.includes('["velar/http", [VELAR_NODE_HOST_MODULE, "velar/binary"]]')) {
   failures.push("packages/node/src/compiler.ts: velar/http must materialize the private Node host dependency");
 }
 if (/\b(?:globalThis\.(?:fetch|Headers|Response|AbortController|ReadableStream)|new (?:Headers|Response|AbortController|TextDecoder)|await fetch\s*\()/u.test(nodeHttpModuleSource)
@@ -1986,6 +1986,7 @@ const declaredInternalModules = new Set([
   VELAR_PROMISE_NORMALIZATION_MODULE,
   VELAR_REACTIVE_BRIDGE_MODULE,
   VELAR_TYPE_VALIDATION_MODULE,
+  VELAR_WORKER_MANIFEST_MODULE,
 ]);
 let publicModuleSurfaces = 0;
 let internalModuleSurfaces = 0;

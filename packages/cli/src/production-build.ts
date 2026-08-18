@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, win32 } from "node:path";
+import { fileURLToPath } from "node:url";
 import { build, type Plugin } from "esbuild";
 import { projectStyles } from "./framework-host.ts";
 import { projectImportKey, type ProjectResult } from "./project.ts";
@@ -14,6 +15,7 @@ import { resolveBrowserNpmEntry } from "./npm.ts";
 import { isNodeOnlyModule, nodeModuleDiagnostic } from "@velarscript/node/compiler";
 import { assertUniqueEmbeddedModuleOutputs, embeddedModuleOutputPath } from "./embedded-modules.ts";
 import { BUILD_STAGING_MARKER } from "./build-staging.ts";
+import { CORE_WORKER_CONFIG_KEY } from "./project-format.ts";
 
 export interface ProductionBuildResult {
   readonly framework: ProductionFrameworkIdentity;
@@ -108,6 +110,35 @@ export async function buildProductionFramework(project: ProjectResult, outputDir
   const entryOutput = Object.entries(result.metafile.outputs).find(([, output]) => Boolean(output.entryPoint));
   if (!entryOutput) throw new Error("The production bundler did not emit the VelarScript entry module");
   const entryPath = relative(outputDirectory, resolve(project.projectRoot, entryOutput[0])).replaceAll("\\", "/");
+
+  const configuredWorkers = project.extensionConfig.get(CORE_WORKER_CONFIG_KEY);
+  if (configuredWorkers && typeof configuredWorkers === "object" && !Array.isArray(configuredWorkers)) {
+    for (const output of Object.values(configuredWorkers as Record<string, unknown>)) {
+      if (typeof output !== "string" || !output.endsWith(".js") || isAbsoluteBrowserImportPath(output) || output.split("/").includes("..")) {
+        throw new Error("The checked Worker manifest contains an invalid emitted path");
+      }
+      const input = resolve(dirname(project.entryPath), output.replace(/\.js$/u, ".vel"));
+      if (!project.modules.some((module) => resolve(module.inputPath) === input)) throw new Error(`Worker entry '${input}' was not compiled`);
+      const outfile = resolve(outputDirectory, output);
+      await mkdir(dirname(outfile), { recursive: true });
+      await build({
+        absWorkingDir: project.projectRoot,
+        entryPoints: [input],
+        outfile,
+        bundle: true,
+        format: "esm",
+        platform: "browser",
+        target: "es2022",
+        minify: true,
+        treeShaking: true,
+        sourcemap: framework.host.sourceMaps(framework.config) ? "linked" : false,
+        sourcesContent: framework.host.sourceMaps(framework.config),
+        legalComments: "none",
+        plugins: [velarModules(project)],
+        logLevel: "silent",
+      });
+    }
+  }
 
   const css = projectStyles(project);
   let stylesheetPath: string | null = null;
@@ -320,7 +351,11 @@ function velarModules(project: ProjectResult): Plugin {
               return { path: targetModule.inputPath };
             }
           }
-          const base = sourceModule ? dirname(sourceModule.inputPath) : arguments_.resolveDir || project.projectRoot;
+          const base = sourceModule
+            ? dirname(sourceModule.inputPath)
+            : arguments_.namespace === "velar-standard"
+              ? dirname(fileURLToPath(import.meta.url))
+              : arguments_.resolveDir || project.projectRoot;
           return { path: await resolveBrowserNpmEntry(arguments_.path, base) };
         } catch (error) {
           return { errors: [buildImportError(sourceModule ?? undefined, arguments_.path, `Cannot resolve browser import '${arguments_.path}': ${hostErrorMessage(error)}`, embeddedByPath.get(resolve(arguments_.importer))?.sourceSpan)] };

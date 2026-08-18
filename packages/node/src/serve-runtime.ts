@@ -157,12 +157,13 @@ function __velarServePairsMap(value, name) {
   return output;
 }
 
-function __velarServeTypeObject(check, message) {
-  const value = __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{
+function __velarServeTypeObject(check, message, internal = null) {
+  const value = {
     is(candidate) { try { return check(candidate); } catch { return false; } },
     parse(candidate) { if (!check(candidate)) throw new __velarServeTypeError(message); return candidate; },
-  }]);
-  return __velarRegisterRuntimeType(value);
+  };
+  if (internal !== null) __velarServeCall(__velarServeObjectDefineProperty, __velarServeObject, [value, "__velarHandleNative", {value: internal, enumerable: false, configurable: false, writable: false}]);
+  return __velarRegisterRuntimeType(__velarServeCall(__velarServeObjectFreeze, __velarServeObject, [value]));
 }
 
 export class RequestBodyTooLargeError extends __velarServeRangeError {
@@ -240,7 +241,7 @@ function __velarServeIsRequest(value) {
   } catch { return false; }
 }
 
-export const ServeRequest = __velarServeTypeObject(__velarServeIsRequest, "ServeRequest requires the request fields provided by velar/serve");
+export const ServeRequest = __velarServeTypeObject(__velarServeIsRequest, "ServeRequest requires the request fields provided by velar/serve", __velarServeHandleNative);
 export const ServeResponse = __velarServeTypeObject(value => { __velarServeResponse(value); return true; }, "ServeResponse requires exactly one checked body");
 export const Server = __velarServeTypeObject(value => {
   try {
@@ -335,6 +336,69 @@ async function __velarServeWriteResponse(handle, value) {
   if (result !== null) throw new __velarServeTypeError("ServeResponse.stream producer must resolve to null");
   await __velarNodeHostInvoke("serve.streamEnd", [handle]);
   return null;
+}
+
+function __velarServeNativeHeaders(request) {
+  const output = new __velarServeMap();
+  let units = 0;
+  for (const [name, value] of __velarServeObject.entries(request.headers)) {
+    if (value === undefined) continue;
+    const text = __velarServeIsArray(value) ? value.join(", ") : __velarServeString(value);
+    units += name.length + text.length;
+    if (units > 1024 * 1024) throw new __velarServeRangeError("ServeRequest headers cannot exceed 1 MiB");
+    output.set(name, text);
+  }
+  return output;
+}
+
+function __velarServeNativeRequest(request) {
+  const method = request.method ?? "GET";
+  if (typeof method !== "string" || !__velarServeCall(__velarServeRegExpTest, __velarServeMethodPattern, [method])) throw new __velarServeTypeError("Native HTTP method is invalid");
+  const url = new URL(request.url ?? "/", "http://velar.local");
+  if (url.pathname.length > __velarServeMaxPathCodeUnits) throw new __velarServeRangeError("ServeRequest path is too long");
+  const query = new __velarServeMap();
+  for (const [name, value] of url.searchParams) query.set(name, value);
+  let bodyPromise = null;
+  const body = async (maxBytes = __velarServeMaxBodyBytes) => {
+    if (!__velarServeIsSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > __velarServeMaxBodyBytes) throw new __velarServeRangeError("Request body maxBytes must be an integer from 1 through 16777216");
+    if (bodyPromise === null) bodyPromise = (async () => {
+      const chunks = []; let total = 0;
+      for await (const chunk of request) { const bytes = chunk instanceof Uint8Array ? chunk : Buffer.from(chunk); total += bytes.byteLength; if (total > __velarServeMaxBodyBytes) { request.resume(); throw new RequestBodyTooLargeError(__velarServeMaxBodyBytes); } chunks.push(bytes); }
+      return Buffer.concat(chunks, total).toString("utf8");
+    })();
+    const text = await bodyPromise;
+    if (__velarUtf8ByteLength(text) > maxBytes) throw new RequestBodyTooLargeError(maxBytes);
+    return text;
+  };
+  const json = async (maxBytes = __velarServeMaxBodyBytes) => __velarJsonParse(await body(maxBytes), "ServeRequest JSON text");
+  return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{method, path: url.pathname, query, headers: __velarServeNativeHeaders(request), text: body, json, parse: async (Type, maxBytes = __velarServeMaxBodyBytes) => { Type = __velarRequireRuntimeType(Type, "ServeRequest.parse"); return Type.parse(await json(maxBytes)); }}]);
+}
+
+function __velarServeNativeSetHeaders(response, headers) { for (const [name, value] of headers) response.setHeader(name, value); }
+async function __velarServeNativeFile(value, operations) {
+  const root = await operations.realpath(operations.resolve(value.root));
+  const load = async path => {
+    const target = await operations.realpath(operations.resolve(root, path.startsWith("/") ? "." + path : path));
+    const relative = operations.relative(root, target);
+    if (relative.startsWith("..") || operations.isAbsolute(relative)) throw new __velarServeTypeError("fileResponse path escapes its root");
+    const info = await operations.stat(target);
+    if (!info.isFile() || info.size > 64 * 1024 * 1024) throw new __velarServeRangeError("fileResponse file exceeds 64 MiB");
+    return operations.readFile(target);
+  };
+  try { return await load(value.path); } catch (error) { if (value.fallback === null) throw error; return load(value.fallback); }
+}
+async function __velarServeNativeEnd(response, value) { await new Promise((resolve, reject) => { response.once("error", reject); response.end(value, () => { response.off("error", reject); resolve(null); }); }); }
+async function __velarServeNativeWrite(response, value) { if (response.write(value)) return; await new Promise((resolve, reject) => { const failed = error => { response.off("drain", ready); reject(error); }; const ready = () => { response.off("error", failed); resolve(null); }; response.once("error", failed); response.once("drain", ready); }); }
+async function __velarServeHandleNative(handler, request, response, operations) {
+  try {
+    const value = await handler(__velarServeNativeRequest(request));
+    if (__velarServeIsFileResponse(value)) { response.statusCode = 200; await __velarServeNativeEnd(response, await __velarServeNativeFile(value, operations)); return null; }
+    const checked = __velarServeResponse(value); response.statusCode = checked.status; __velarServeNativeSetHeaders(response, __velarServeResponseHeaders(checked.headers));
+    if (__velarServeOwnDescriptor(checked, "json")) { response.setHeader("content-type", "application/json; charset=utf-8"); await __velarServeNativeEnd(response, __velarJsonStringify(checked.json)); return null; }
+    if (__velarServeOwnDescriptor(checked, "text")) { response.setHeader("content-type", checked.contentType ?? "text/plain; charset=utf-8"); await __velarServeNativeEnd(response, checked.text); return null; }
+    const write = async chunk => { if (typeof chunk !== "string" || __velarUtf8ByteLength(chunk) > 1024 * 1024) throw new __velarServeTypeError("ServeResponse.stream chunks must be text of at most 1 MiB"); await __velarServeNativeWrite(response, chunk); return null; };
+    const result = await checked.stream(write); if (result !== null) throw new __velarServeTypeError("ServeResponse.stream producer must resolve to null"); await __velarServeNativeEnd(response); return null;
+  } catch { if (!response.headersSent) { response.statusCode = 500; response.setHeader("content-type", "text/plain; charset=utf-8"); response.end("Internal server error"); } else response.destroy(); return null; }
 }
 
 async function __velarServeDispatch(event) {

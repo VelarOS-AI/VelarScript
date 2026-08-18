@@ -108,6 +108,7 @@ export component App:
 - [CLI 参考](docs/cli.md) — 按使用场景组织的全部命令
 - [语言参考](docs/language-charter.md) — 完整的语言契约
 - [标准库](docs/standard-library.md) · [Web 框架](docs/web-api.md)
+- [Minecraft 就绪能力](docs/minecraft-readiness.md) — 二进制内存、确定性 Worker、传输与持久化
 - [AI 技能简报](docs/ai-skill.md) — `velar skill` 输出的内容
 - [逃生舱](docs/escape-hatches.md) · [JavaScript 边界](docs/javascript-bridge.md)
 
@@ -123,8 +124,8 @@ Core 保持与目标平台无关；每种目标平台都由显式的软件包负
 | 软件包 | 职责 |
 | --- | --- |
 | `@velarscript/compiler` | Core 语言 |
-| `@velarscript/node` | 文件系统、路径、进程、终端、服务器和 HTTP，且不暴露 Node.js ABI |
-| `@velarscript/web` | 组件、JSX、响应式系统、生命周期和 Look |
+| `@velarscript/node` | 文件系统、SQLite、Worker、WebSocket/服务器与 HTTP，且不暴露 Node.js ABI |
+| `@velarscript/web` | 组件、JSX、响应式系统、生命周期、Look、浏览器 Worker 与二进制存储/传输 |
 | `@velarscript/desktop` | 在系统 WebView 宿主上沿用相同的 Web 源码模型，并提供受权限范围约束的能力 |
 | `@velarscript/cli` | 项目、构建、测试、开发服务器和语言服务器 |
 | `create-velar` | 项目模板 |

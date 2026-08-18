@@ -1,0 +1,9 @@
+import {Bytes} from "velar/binary"
+import {Cancellation} from "velar/task"
+import {serveWorker} from "velar/worker"
+import {ChunkRequest, generateChunk} from "./world-core.vel"
+
+async def generate(request: ChunkRequest, cancellation: Cancellation) -> Bytes:
+    return await generateChunk(request, cancellation)
+
+serveWorker(ChunkRequest, Bytes, generate, 8)

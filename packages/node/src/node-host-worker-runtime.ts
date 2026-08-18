@@ -34,7 +34,7 @@ const watchDebounceMilliseconds = 20;
 const operations = new Set([
   "fs.readFile", "fs.createFile", "fs.replaceFileIfMatches", "fs.writeFile", "fs.appendFile", "fs.exists", "fs.list", "fs.info",
   "fs.canonical", "fs.makeDirectory", "fs.copyFile", "fs.move", "fs.removeFile", "fs.watchStart", "fs.watchNext", "fs.watchClose",
-  "http.request", "http.read", "http.cancel", "http.close",
+  "http.request", "http.read", "http.readBytes", "http.cancel", "http.close",
   "serve.start", "serve.stop", "serve.body", "serve.respond", "serve.respondFile",
   "serve.streamStart", "serve.streamWrite", "serve.streamEnd", "serve.fail",
 ]);
@@ -516,8 +516,8 @@ async function startHttpRequest(args) {
   let headers = httpHeaderRecord(args[3]);
   const secretHeaderNames = applyHttpSecrets(args[4], headers);
   let body = args[5];
-  if (body !== null && typeof body !== "string") throw new TypeError("HTTP body must be validated text");
-  if (body !== null && Buffer.byteLength(body, "utf8") > maxHttpBodyBytes) throw new RangeError("HTTP body cannot exceed 16 MiB");
+  if (body !== null && typeof body !== "string" && !(body instanceof Uint8Array)) throw new TypeError("HTTP body must be validated text or bytes");
+  if (body !== null && (typeof body === "string" ? Buffer.byteLength(body, "utf8") : body.byteLength) > maxHttpBodyBytes) throw new RangeError("HTTP body cannot exceed 16 MiB");
   if ((method === "GET" || method === "HEAD") && body !== null) throw new TypeError(method + " requests cannot have a body");
   const maxBytes = integer(args[6], 1, maxHttpResponseBytes, "HTTP maxBytes");
   const task = {
@@ -589,7 +589,7 @@ async function startHttpRequest(args) {
   }
 }
 
-async function readHttpRequest(args) {
+async function readHttpRequest(args, binary = false) {
   if (args.length !== 1) throw new TypeError("http.read arguments are invalid");
   const handle = integer(args[0], 1, Number.MAX_SAFE_INTEGER, "Node HTTP request handle");
   const task = httpRequests.get(handle);
@@ -603,13 +603,14 @@ async function readHttpRequest(args) {
     if (!next || typeof next !== "object" || typeof next.done !== "boolean") throw new TypeError("Node HTTP returned an invalid response stream result");
     if (next.done) {
       task.ended = true;
-      return {done: true, text: task.decoder.decode()};
+      return binary ? {done: true, bytes: new Uint8Array()} : {done: true, text: task.decoder.decode()};
     }
     if (!(next.value instanceof Uint8Array)) throw new TypeError("Node HTTP returned a non-byte response chunk");
     task.bytes += next.value.byteLength;
     task.chunks += 1;
     if (task.bytes > task.maxBytes) throw new RangeError("HTTP response exceeds maxBytes");
     if (task.chunks > maxHttpResponseChunks) throw new RangeError("HTTP responses cannot exceed 1000000 chunks");
+    if (binary) { const bytes = new Uint8Array(next.value.byteLength); bytes.set(next.value); return {done: false, bytes}; }
     return {done: false, text: task.decoder.decode(next.value, {stream: true})};
   } finally {
     task.reading = false;
@@ -829,6 +830,7 @@ async function dispatch(operation, args) {
   if (!operations.has(operation) || !Array.isArray(args)) throw new TypeError("Node host request is invalid");
   if (operation === "http.request") return startHttpRequest(args);
   if (operation === "http.read") return readHttpRequest(args);
+  if (operation === "http.readBytes") return readHttpRequest(args, true);
   if (operation === "http.cancel") {
     if (args.length !== 2 || args[1] !== "cancelled" && args[1] !== "timeout") throw new TypeError("http.cancel arguments are invalid");
     const handle = integer(args[0], 1, Number.MAX_SAFE_INTEGER, "Node HTTP request handle");
@@ -842,17 +844,18 @@ async function dispatch(operation, args) {
     return task ? releaseHttpRequest(task, null) : false;
   }
   if (operation === "fs.readFile") {
-    if (args.length !== 3 || args[2] !== "readText") throw new TypeError("fs.readFile arguments are invalid");
+    if (args.length !== 3 || args[2] !== "readText" && args[2] !== "readBytes") throw new TypeError("fs.readFile arguments are invalid");
     return regularFile(boundedPath(args[0], args[2]), args[2], byteLimit(args[1], args[2]));
   }
   if (operation === "fs.createFile") {
-    if (args.length !== 2) throw new TypeError("fs.createFile arguments are invalid");
-    const path = boundedPath(args[0], "createText");
-    const data = byteArray(args[1], "createText");
+    if (args.length !== 2 && args.length !== 3 || args.length === 3 && args[2] !== "createBytes") throw new TypeError("fs.createFile arguments are invalid");
+    const name = args.length === 3 ? "createBytes" : "createText";
+    const path = boundedPath(args[0], name);
+    const data = byteArray(args[1], name);
     return withFileMutations([path], async () => {
       try { await writeFile(path, data, {flag: "wx"}); }
       catch (error) {
-        if (error && typeof error === "object" && error.code === "EEXIST") throw new AlreadyExists("createText", path);
+        if (error && typeof error === "object" && error.code === "EEXIST") throw new AlreadyExists(name, path);
         throw error;
       }
       return null;
@@ -876,8 +879,8 @@ async function dispatch(operation, args) {
     });
   }
   if (operation === "fs.writeFile" || operation === "fs.appendFile") {
-    if (args.length !== 2) throw new TypeError(operation + " arguments are invalid");
-    const name = operation === "fs.writeFile" ? "writeText" : "appendText";
+    if (args.length !== 2 && args.length !== 3 || args.length === 3 && (operation !== "fs.writeFile" || args[2] !== "writeBytes")) throw new TypeError(operation + " arguments are invalid");
+    const name = args.length === 3 ? "writeBytes" : operation === "fs.writeFile" ? "writeText" : "appendText";
     const path = boundedPath(args[0], name);
     const data = byteArray(args[1], name);
     return withFileMutations([path], async () => {

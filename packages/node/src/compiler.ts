@@ -11,6 +11,9 @@ import { VELAR_NODE_PROCESS_WORKER_SOURCE } from "./process-worker-runtime.ts";
 import { VELAR_NODE_SERVE_RUNTIME } from "./serve-runtime.ts";
 import { VELAR_NODE_TERMINAL_RUNTIME } from "./terminal-runtime.ts";
 import { VELAR_NODE_TERMINAL_WORKER_SOURCE } from "./terminal-worker-runtime.ts";
+import { VELAR_NODE_WORKER_RUNTIME } from "./worker-runtime.ts";
+import { VELAR_NODE_WEBSOCKET_RUNTIME } from "./websocket-runtime.ts";
+import { VELAR_NODE_SQLITE_RUNTIME, VELAR_NODE_SQLITE_WORKER_SOURCE } from "./sqlite-runtime.ts";
 
 export { VELAR_PROCESS_HOST_RUNTIME } from "./process-runtime.ts";
 
@@ -23,7 +26,9 @@ const nullType: ValueType = { kind: "null" };
 const stringType: ValueType = { kind: "string" };
 const numberType: ValueType = { kind: "number" };
 const boolType: ValueType = { kind: "bool" };
+const bytesType: ValueType = { kind: "named", name: "Bytes", identity: "velar/binary#type:Bytes" };
 const listStringType: ValueType = { kind: "list", element: stringType };
+const listUnknownType: ValueType = { kind: "list", element: unknownType };
 const stringMapType: ValueType = { kind: "map", key: stringType, value: stringType };
 
 function promise(value: ValueType): ValueType {
@@ -159,6 +164,7 @@ const nodeHttpResponseType = object({
   headers: stringMapType,
   json: functionType([], [], promise(unknownType)),
   text: functionType([], [], promise(stringType)),
+  bytes: functionType([], [], promise(bytesType)),
   streamText: functionType(["consume"], [httpChunkConsumerType], promise(nullType)),
   parse: namedIntrinsic("runtime.parseAsync", ["target"], [anyType], promise(anyType)),
 });
@@ -166,6 +172,7 @@ const nodeHttpRequestType = object({
   response: functionType([], [], promise(nodeHttpResponseType)),
   json: functionType([], [], promise(unknownType)),
   text: functionType([], [], promise(stringType)),
+  bytes: functionType([], [], promise(bytesType)),
   streamText: functionType(["consume"], [httpChunkConsumerType], promise(nullType)),
   parse: namedIntrinsic("runtime.parseAsync", ["target"], [anyType], promise(anyType)),
   cancel: functionType([], [], nullType),
@@ -197,6 +204,60 @@ const nodeHttpType = object({
   delete: functionType(["url", "options"], [stringType, nodeHttpOptionsType], nodeHttpRequestType, 1),
   head: functionType(["url", "options"], [stringType, nodeHttpOptionsType], nodeHttpRequestType, 1),
 });
+const sqliteDatabaseIdentity = "velar/sqlite#type:Database";
+const sqliteStatementIdentity = "velar/sqlite#type:Statement";
+const sqliteTransactionIdentity = "velar/sqlite#type:Transaction";
+const sqliteErrorIdentity = "velar/sqlite#class:SqliteError";
+const sqliteBackpressureErrorIdentity = "velar/sqlite#class:SqliteBackpressureError";
+const sqliteDatabaseType: ValueType = { kind: "named", name: "Database", identity: sqliteDatabaseIdentity };
+const sqliteStatementType: ValueType = { kind: "named", name: "Statement", identity: sqliteStatementIdentity };
+const sqliteTransactionType: ValueType = { kind: "named", name: "Transaction", identity: sqliteTransactionIdentity };
+const sqliteRowType: ValueType = { kind: "parameter", name: "Row", index: 0 };
+const sqliteRead = (name: "one" | "all", withSql: boolean): ValueType => ({
+  kind: "function", typeParameterNames: ["Row"], parameterNames: withSql ? ["sql", "params", "RowType"] : ["params", "RowType"],
+  parameters: [
+    ...(withSql ? [stringType] : []), listUnknownType, { kind: "runtimeType", value: sqliteRowType },
+  ],
+  requiredParameters: withSql ? 3 : 2,
+  result: promise(name === "one" ? optional(sqliteRowType) : { kind: "list", element: sqliteRowType }),
+});
+const sqliteDatabaseFields = new Map<string, ValueType>([
+  ["execute", functionType(["sql", "params"], [stringType, listUnknownType], promise(numberType), 1)],
+  ["one", sqliteRead("one", true)], ["all", sqliteRead("all", true)],
+  ["prepare", functionType(["sql"], [stringType], promise(sqliteStatementType))],
+  ["transaction", functionType([], [], promise(sqliteTransactionType))],
+  ["close", functionType([], [], promise(nullType))],
+]);
+const sqliteStatementFields = new Map<string, ValueType>([
+  ["execute", functionType(["params"], [listUnknownType], promise(numberType), 0)],
+  ["one", sqliteRead("one", false)], ["all", sqliteRead("all", false)],
+  ["close", functionType([], [], promise(nullType))],
+]);
+const sqliteTransactionFields = new Map<string, ValueType>([
+  ["execute", functionType(["sql", "params"], [stringType, listUnknownType], promise(numberType), 1)],
+  ["one", sqliteRead("one", true)], ["all", sqliteRead("all", true)],
+  ["prepare", functionType(["sql"], [stringType], promise(sqliteStatementType))],
+  ["commit", functionType([], [], promise(nullType))], ["rollback", functionType([], [], promise(nullType))],
+  ["close", functionType([], [], promise(nullType))],
+]);
+const sqliteOptionsType = object({
+  busyTimeout: optional(numberType), queueCapacity: optional(numberType), maxRows: optional(numberType), maxResultBytes: optional(numberType),
+});
+const sqliteErrorClass: ClassInfo = {
+  identity: sqliteErrorIdentity,
+  parameters: [stringType, optional(stringType)], parameterNames: ["message", "code"], requiredParameters: 0,
+  base: "Error", abstract: false,
+  fields: new Map([["code", { mutable: false, type: optional(stringType) }]]),
+  getters: new Set(), abstractGetters: new Set(), methods: new Map(), abstractMethods: new Set(),
+  staticFields: new Map(), staticGetters: new Set(), staticMethods: new Map(),
+};
+const sqliteBackpressureErrorClass: ClassInfo = {
+  identity: sqliteBackpressureErrorIdentity,
+  parameters: [stringType], parameterNames: ["message"], requiredParameters: 0,
+  base: "Error", abstract: false, fields: new Map(),
+  getters: new Set(), abstractGetters: new Set(), methods: new Map(), abstractMethods: new Set(),
+  staticFields: new Map(), staticGetters: new Set(), staticMethods: new Map(),
+};
 const httpTransportPhaseIdentity = "velar/http#enum:HttpTransportPhase";
 const httpTransportPhaseMembers = new Set(["request", "response"]);
 const httpTransportPhaseType: ValueType = { kind: "enum", name: "HttpTransportPhase", identity: httpTransportPhaseIdentity };
@@ -233,6 +294,24 @@ const httpTransportErrorClass: ClassInfo = {
 };
 
 export const nodeModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map([
+  ["velar/sqlite", moduleInterface(
+    new Map([
+      ["Database", { kind: "typeObject", name: "Database", value: sqliteDatabaseType }],
+      ["Statement", { kind: "typeObject", name: "Statement", value: sqliteStatementType }],
+      ["Transaction", { kind: "typeObject", name: "Transaction", value: sqliteTransactionType }],
+      ["SqliteError", { kind: "classConstructor", name: "SqliteError", identity: sqliteErrorIdentity }],
+      ["SqliteBackpressureError", { kind: "classConstructor", name: "SqliteBackpressureError", identity: sqliteBackpressureErrorIdentity }],
+      ["open", functionType(["path", "options"], [stringType, sqliteOptionsType], promise(sqliteDatabaseType), 1)],
+    ]),
+    new Map([
+      ["Database", sqliteDatabaseFields], ["Statement", sqliteStatementFields], ["Transaction", sqliteTransactionFields],
+    ]),
+    new Map([
+      ["Database", sqliteDatabaseIdentity], ["Statement", sqliteStatementIdentity], ["Transaction", sqliteTransactionIdentity],
+    ]),
+    new Map(),
+    new Map([["SqliteError", sqliteErrorClass], ["SqliteBackpressureError", sqliteBackpressureErrorClass]]),
+  )],
   ["velar/serve", moduleInterface(
     new Map([
       ["ServeRequest", { kind: "typeObject", name: "ServeRequest" }],
@@ -269,9 +348,12 @@ export const nodeModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Ma
       ["FileWatchBatch", { kind: "typeObject", name: "FileWatchBatch" }],
       ["FileWatcher", { kind: "typeObject", name: "FileWatcher" }],
       ["readText", functionType(["path", "maxBytes"], [stringType, numberType], promise(stringType), 1)],
+      ["readBytes", functionType(["path", "maxBytes"], [stringType, numberType], promise(bytesType), 1)],
       ["createText", functionType(["path", "text"], [stringType, stringType], promise(nullType))],
+      ["createBytes", functionType(["path", "bytes"], [stringType, bytesType], promise(nullType))],
       ["replaceTextIfMatches", functionType(["path", "expected", "replacement"], [stringType, stringType, stringType], promise(boolType))],
       ["writeText", functionType(["path", "text"], [stringType, stringType], promise(nullType))],
+      ["writeBytes", functionType(["path", "bytes"], [stringType, bytesType], promise(nullType))],
       ["appendText", functionType(["path", "text"], [stringType, stringType], promise(nullType))],
       ["exists", functionType(["path"], [stringType], promise(boolType))],
       ["list", functionType(["path", "maxItems"], [stringType, numberType], promise(listStringType), 1)],
@@ -358,6 +440,9 @@ export const nodeModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Ma
 ]);
 
 export const nodeModuleSources: ReadonlyMap<string, string> = new Map([
+  ["velar/sqlite", VELAR_NODE_SQLITE_RUNTIME.replace("WORKER_SOURCE", JSON.stringify(VELAR_NODE_SQLITE_WORKER_SOURCE))],
+  ["velar/websocket", VELAR_NODE_WEBSOCKET_RUNTIME],
+  ["velar/worker", VELAR_NODE_WORKER_RUNTIME],
   [VELAR_NODE_HOST_MODULE, VELAR_SHARED_NODE_HOST_RUNTIME.replace("WORKER_SOURCE", JSON.stringify(VELAR_NODE_HOST_WORKER_SOURCE))],
   ["velar/fs", String.raw`
 ${VELAR_UTF8_RUNTIME}
@@ -895,8 +980,10 @@ ${VELAR_NODE_SERVE_RUNTIME}
 ]);
 
 export const nodeModuleDependencies: ReadonlyMap<string, readonly string[]> = new Map([
-  ["velar/http", [VELAR_NODE_HOST_MODULE]],
-  ["velar/fs", [VELAR_NODE_HOST_MODULE]],
+  ["velar/worker", ["velar/worker-manifest", "velar/task"]],
+  ["velar/websocket", ["velar/serve"]],
+  ["velar/http", [VELAR_NODE_HOST_MODULE, "velar/binary"]],
+  ["velar/fs", [VELAR_NODE_HOST_MODULE, "velar/binary"]],
   ["velar/serve", [VELAR_NODE_HOST_MODULE]],
   // D50 rule 89: the host proxy rebuilds the compiler-owned capability error
   // classes, so its module carries that dependency edge.

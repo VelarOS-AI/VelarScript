@@ -20,6 +20,7 @@ import { LOOK_BUILDER_SIGNATURES, LOOK_BUILDERS, LOOK_MEDIA_SUBJECTS, LOOK_PUBLI
 import { CACHED_INTRINSIC_TYPE, isWebTypeAssignable, resolveWebTypeSyntax, WEB_OWNED_TYPE_NAMES, webComponentConstructor, webNodeType } from "./types.ts";
 
 export const VELAR_WEB_API_VERSION = "0.10";
+const bytesType: ValueType = { kind: "named", name: "Bytes", identity: "velar/binary#type:Bytes" };
 
 // D57 rule 138 gave the browser-test boundary teeth, so the two names it is
 // written in are part of the published contract: the framework host hands the
@@ -192,6 +193,7 @@ const httpResponseType = object({
   headers: mapString(stringType),
   json: namedFunction([], [], promise(unknownType)),
   text: namedFunction([], [], promise(stringType)),
+  bytes: namedFunction([], [], promise(bytesType)),
   streamText: namedFunction(["consume"], [httpChunkConsumerType], promise(nullType)),
   blob: namedFunction([], [], promise(blobType)),
   parse: namedIntrinsic("runtime.parseAsync", ["target"], [anyType], promise(anyType)),
@@ -201,6 +203,7 @@ const requestType = object({
   response: namedFunction([], [], promise(httpResponseType)),
   json: namedFunction([], [], promise(unknownType)),
   text: namedFunction([], [], promise(stringType)),
+  bytes: namedFunction([], [], promise(bytesType)),
   streamText: namedFunction(["consume"], [httpChunkConsumerType], promise(nullType)),
   blob: namedFunction([], [], promise(blobType)),
   parse: namedIntrinsic("runtime.parseAsync", ["target"], [anyType], promise(anyType)),
@@ -242,14 +245,28 @@ function createStorageType(): ValueType {
 }
 
 const storageType = createStorageType();
+const storageBatchChangeType = object({ key: stringType, bytes: optional(bytesType) });
 const databaseType = object({
   get: namedIntrinsic("storage.databaseGet", ["key", "target", "fallback", "maxBytes"], [stringType, anyType, anyType, numberType], promise(anyType), 2),
   set: namedIntrinsic("storage.set", ["key", "value", "maxBytes"], [stringType, anyType, numberType], promise(nullType), 2),
+  getBytes: namedFunction(["key", "fallback", "maxBytes"], [stringType, optional(bytesType), numberType], promise(optional(bytesType)), 1),
+  setBytes: namedFunction(["key", "value", "maxBytes"], [stringType, bytesType, numberType], promise(nullType), 2),
+  batch: namedFunction(["changes"], [{ kind: "list", element: storageBatchChangeType }], promise(nullType)),
   has: namedFunction(["key"], [stringType], promise(boolType)),
   keys: namedFunction([], [], promise(arrayString)),
   remove: namedFunction(["key"], [stringType], promise(nullType)),
   clear: namedFunction([], [], promise(nullType)),
 });
+const storageQuotaErrorIdentity = "velar/storage#class:StorageQuotaError";
+const storageTransactionErrorIdentity = "velar/storage#class:StorageTransactionError";
+const storageUpgradeErrorIdentity = "velar/storage#class:StorageUpgradeError";
+function storageErrorClass(identity: string): ClassInfo {
+  return {
+    identity, parameters: [stringType], parameterNames: ["message"], requiredParameters: 0,
+    base: "Error", abstract: false, fields: new Map(), getters: new Set(), abstractGetters: new Set(),
+    methods: new Map(), abstractMethods: new Set(), staticFields: new Map(), staticGetters: new Set(), staticMethods: new Map(),
+  };
+}
 
 const routeType = object({
   path: stringType,
@@ -470,6 +487,13 @@ export const webModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map
     ["storage", storageType],
     ["session", storageType],
     ["database", namedFunction(["name"], [stringType], databaseType)],
+    ["StorageQuotaError", { kind: "classConstructor", name: "StorageQuotaError", identity: storageQuotaErrorIdentity }],
+    ["StorageTransactionError", { kind: "classConstructor", name: "StorageTransactionError", identity: storageTransactionErrorIdentity }],
+    ["StorageUpgradeError", { kind: "classConstructor", name: "StorageUpgradeError", identity: storageUpgradeErrorIdentity }],
+  ]), new Map([
+    ["StorageQuotaError", storageErrorClass(storageQuotaErrorIdentity)],
+    ["StorageTransactionError", storageErrorClass(storageTransactionErrorIdentity)],
+    ["StorageUpgradeError", storageErrorClass(storageUpgradeErrorIdentity)],
   ]))],
   ["velar/forms", moduleInterface(new Map([
     ["values", namedFunction(["form"], [elementType], formValuesType)],
@@ -712,6 +736,11 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
     apiVersion: VELAR_WEB_API_VERSION,
     interfaces: webModuleInterfaces,
     sources: webModuleSources,
+    dependencies: new Map([
+      ["velar/worker", ["velar/worker-manifest", "velar/task"]],
+      ["velar/http", ["velar/binary"]],
+      ["velar/storage", ["velar/binary"]],
+    ]),
     source(specifier: string, projectConfig: unknown) {
       return webModuleSource(specifier, (projectConfig ?? { base: "/" }) as VelarWebRuntimeConfig);
     },

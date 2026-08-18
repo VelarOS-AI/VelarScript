@@ -25,7 +25,8 @@
     "access": "public"
   },
   "dependencies": {
-    "@velarscript/compiler": "0.10.0"
+    "@velarscript/compiler": "0.10.0",
+    "ws": "^8.21.1"
   },
   "exports": {
     ".": {
