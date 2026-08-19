@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -282,6 +282,116 @@ print(f"{ChunkQuery.is({position: {x: 1, y: 2, z: "bad"}, direct: valid.direct, 
     const execution = spawnSync(process.execPath, [join(output, "main.js")], { encoding: "utf8", timeout: 20_000 });
     assert.equal(execution.status, 0, String(execution.stderr));
     assert.equal(String(execution.stdout), "true\n1:9:overworld\nnarrowed:2\nfalse\n");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("inherited record validators retain transitive cross-module runtime type dependencies", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-inherited-runtime-dependency-"));
+  const sourceRoot = join(directory, "src");
+  const packageRoot = join(directory, "node_modules", "@example", "domain");
+  const output = join(directory, "dist");
+  try {
+    await mkdir(sourceRoot, { recursive: true });
+    await mkdir(join(packageRoot, "src"), { recursive: true });
+    await writeFile(join(directory, "velar.json"), JSON.stringify({
+      formatVersion: 2,
+      entry: "src/main.vel",
+      extensions: [],
+    }), "utf8");
+    await writeFile(join(directory, "package.json"), JSON.stringify({
+      name: "inherited-runtime-dependency-fixture",
+      private: true,
+    }), "utf8");
+    await writeFile(join(packageRoot, "package.json"), JSON.stringify({
+      name: "@example/domain",
+      version: "1.0.0",
+      velar: { entry: "src/index.vel" },
+    }), "utf8");
+    await writeFile(join(packageRoot, "src", "index.vel"), `
+export type Coordinate3:
+    x: number
+    y: number
+    z: number
+
+export type BlockPosition = Coordinate3
+`.trimStart(), "utf8");
+    await writeFile(join(sourceRoot, "http.vel"), `
+import {BlockPosition} from "@example/domain"
+
+export type BlockMutation:
+    position: BlockPosition
+`.trimStart(), "utf8");
+    await writeFile(join(sourceRoot, "realtime.vel"), `
+import {BlockMutation} from "./http.vel"
+
+export type SocketBlockCommand extends BlockMutation:
+    operation: string
+`.trimStart(), "utf8");
+    await writeFile(join(sourceRoot, "queued.vel"), `
+import {SocketBlockCommand} from "./realtime.vel"
+
+export type QueuedSocketBlockCommand extends SocketBlockCommand:
+    sequence: number
+`.trimStart(), "utf8");
+    await writeFile(join(sourceRoot, "main.vel"), `
+import {SocketBlockCommand} from "./realtime.vel"
+import {QueuedSocketBlockCommand} from "./queued.vel"
+
+const valid = {position: {x: 1, y: 2, z: 3}, operation: "set"}
+print(f"{SocketBlockCommand.is(valid)}")
+const parsed = SocketBlockCommand.parse(valid)
+print(f"{parsed.position.x}:{parsed.operation}")
+
+const queued = QueuedSocketBlockCommand.parse({position: valid.position, operation: "remove", sequence: 7})
+print(f"{queued.position.z}:{queued.operation}:{queued.sequence}")
+print(f"{SocketBlockCommand.is({position: {x: 1, y: "bad", z: 3}, operation: "set"})}")
+
+try:
+    const invalidPosition = SocketBlockCommand.parse({position: {x: 1, y: "bad", z: 3}, operation: "set"})
+    print(invalidPosition.operation)
+catch error:
+    if error is ValidationError:
+        print((error.path ?? "missing path") + ":" + (error.field ?? "missing field"))
+
+try:
+    const invalid = SocketBlockCommand.parse({position: valid.position, operation: 1})
+    print(invalid.operation)
+catch error:
+    if error is ValidationError:
+        print((error.path ?? "missing path") + ":" + (error.field ?? "missing field"))
+`.trimStart(), "utf8");
+    await writeFile(join(sourceRoot, "realtime.test.vel"), `
+import {expect} from "velar/test"
+import {SocketBlockCommand} from "./realtime.vel"
+
+test "an inherited package type validates in test output":
+    const value = SocketBlockCommand.parse({position: {x: 4, y: 5, z: 6}, operation: "set"})
+    expect(SocketBlockCommand.is(value)).toBe(true)
+    expect(value.position.y).toBe(5)
+`.trimStart(), "utf8");
+
+    const checked = spawnSync(process.execPath, [cliPath, "check", directory], { encoding: "utf8", timeout: 120_000 });
+    assert.equal(checked.status, 0, String(checked.stderr));
+
+    const built = spawnSync(process.execPath, [cliPath, "build", directory, "--out-dir", output], {
+      encoding: "utf8",
+      timeout: 120_000,
+    });
+    assert.equal(built.status, 0, String(built.stderr));
+    const javascriptFiles = (await readdir(output, { recursive: true }))
+      .filter((path): path is string => typeof path === "string" && path.endsWith(".js"));
+    const emitted = (await Promise.all(javascriptFiles.map((path) => readFile(join(output, path), "utf8")))).join("\n");
+    assert.doesNotMatch(emitted, /__velarField\d+[^\n]*&& false/u);
+
+    const execution = spawnSync(process.execPath, [join(output, "main.js")], { encoding: "utf8", timeout: 20_000 });
+    assert.equal(execution.status, 0, String(execution.stderr));
+    assert.equal(String(execution.stdout), "true\n1:set\n3:remove:7\nfalse\nSocketBlockCommand.position:position\nSocketBlockCommand.operation:operation\n");
+
+    const tested = spawnSync(process.execPath, [cliPath, "test", directory], { encoding: "utf8", timeout: 120_000 });
+    assert.equal(tested.status, 0, String(tested.stderr));
+    assert.match(String(tested.stdout), /1 passed, 0 failed/u);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

@@ -1007,14 +1007,16 @@ export class JavaScriptEmitter {
         this.expandedRuntimeTypes.add(value.name);
         const declaration = this.typeDeclarations.get(value.name)!;
         if (declaration.kind === "TypeDeclaration") {
-          const complete = this.hints.typeDeclarationFields.get(declaration.span.start);
-          const ownNames = new Set(declaration.fields.map((field) => field.name));
           // A field written in this module must retain the local spelling that
           // owns its runtime Type binding. The analyzer's complete structural
           // table expands aliases for static work; walking that expansion here
           // can lose the only imported/local validator name before emission.
+          // A derived record retains the direct base spelling for the same
+          // reason. Marking that base recursively makes its module own every
+          // inherited field dependency instead of asking the child to recreate
+          // validators for names that are not in the child's scope.
+          if (declaration.base) visit(resolveTypeReference(declaration.base));
           declaration.fields.forEach((field) => visit(resolveTypeReference(field.type)));
-          complete?.filter((field) => !ownNames.has(field.name)).forEach((field) => visit(field.type));
         } else {
           visit(resolveTypeReference(declaration.target));
         }
@@ -1585,27 +1587,26 @@ export class JavaScriptEmitter {
     const generic = this.genericTypeParameters;
     const guarded = this.runtimeTypeNeedsTraversalGuard(statement.name);
     const checkName = this.runtimeTypeCheckName(statement.name);
-    const ownFields = new Map(statement.fields.map((field) => [field.name, field]));
-    const completeFields = this.hints.typeDeclarationFields.get(statement.span.start)
-      ?? statement.fields.map((field) => ({ name: field.name, type: this.resolveDeclarationType(field.type) }));
-    const fields = completeFields.map((field, index) => ({
+    const baseType = statement.base ? this.resolveDeclarationType(statement.base) : null;
+    const baseExpression = baseType ? this.runtimeTypeObjectExpression(baseType) : null;
+    const fields = statement.fields.map((field, index) => ({
       name: field.name,
       descriptor: `__velarField${index}`,
-      // Complete field tables are alias-expanded for structural analysis. An
-      // own field's source spelling is nevertheless the runtime authority in
-      // this module: an imported alias may be the only binding available for
-      // its target record. Inherited fields have no local syntax and continue
-      // to use the analyzer-owned resolved type.
-      type: ownFields.has(field.name)
-        ? this.resolveDeclarationType(ownFields.get(field.name)!.type)
-        : field.type,
-      syntax: ownFields.get(field.name)?.type.syntax ?? null,
+      // Runtime validation follows source-visible bindings. Structural field
+      // tables stay analyzer-owned, but an imported alias may be the only Type
+      // object this module can legally name in emitted JavaScript.
+      type: this.resolveDeclarationType(field.type),
+      syntax: field.type.syntax,
     }));
     const checks = fields.map(({ descriptor, type }) => {
       const present = `${descriptor}?.enumerable && "value" in ${descriptor} && ${this.emitTypeCheck(type, `${descriptor}.value`, guarded ? "__state" : "undefined")}`;
       return type.kind === "optional" ? `(${descriptor} === undefined || (${present}))` : present;
     });
-    const predicate = checks.length > 0 ? checks.join(" && ") : "true";
+    // A base validates the fields it owns using the bindings available in its
+    // declaring module. Delegating the whole inherited prefix is what carries
+    // cross-package runtime dependencies through any number of derived modules.
+    const predicateParts = [...(baseType ? [this.emitTypeCheck(baseType, "value", "__state")] : []), ...checks];
+    const predicate = predicateParts.length > 0 ? predicateParts.join(" && ") : "true";
     const exportPrefix = statement.exported ? "export " : "";
     // COL-U5: parse failures name the failing field. The explain companion
     // re-runs the per-field checks only on the failure path, so is() and the
@@ -1626,6 +1627,18 @@ export class JavaScriptEmitter {
       `${indentation}  if (value === null || typeof value !== "object" || __velarValidationIsArray(value) || !__velarValidationIsPlainObject(value)) {`,
       `${indentation}    return { path: ${pathText("")}, field: null, reason: "the value is not a record" };`,
       `${indentation}  }`,
+      ...(baseExpression ? [
+        // parse() is used only on this already-failing explanation path. It
+        // preserves the base module's own field reason, then rebases the public
+        // path onto the derived type so callers still see the type they parsed.
+        `${indentation}  try {`,
+        `${indentation}    ${baseExpression}.parse(value);`,
+        `${indentation}  } catch (__velarBaseFailure) {`,
+        `${indentation}    if (!__velarValidationIsInstance(__velarBaseFailure, __VelarValidationError)) throw __velarBaseFailure;`,
+        `${indentation}    const __velarBaseField = __velarBaseFailure.field;`,
+        `${indentation}    return { path: __velarBaseField === null ? ${pathText("")} : ${pathText("")} + "." + __velarBaseField, field: __velarBaseField, reason: __velarBaseFailure.reason };`,
+        `${indentation}  }`,
+      ] : []),
       ...fields.flatMap(({ name, type, syntax }) => {
         const descriptor = "__velarExplainField";
         const typeText = this.typeTextExpression(type, syntax);
@@ -2054,6 +2067,15 @@ export class JavaScriptEmitter {
       return mapNestedTypes(type, bindParameters);
     };
     return bindParameters(resolved);
+  }
+
+  /** The Type object expression for a source-visible record name or application. */
+  private runtimeTypeObjectExpression(type: ValueType): string | null {
+    if (type.kind !== "named") return null;
+    if (type.application && this.genericTypeBinding(type.application.name)) {
+      return this.genericInstanceExpression(type.application);
+    }
+    return this.runtimeTypeBinding(type.name) ? type.name : null;
   }
 
   /**
