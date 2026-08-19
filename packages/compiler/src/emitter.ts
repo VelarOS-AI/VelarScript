@@ -1605,7 +1605,10 @@ export class JavaScriptEmitter {
     // A base validates the fields it owns using the bindings available in its
     // declaring module. Delegating the whole inherited prefix is what carries
     // cross-package runtime dependencies through any number of derived modules.
-    const predicateParts = [...(baseType ? [this.emitTypeCheck(baseType, "value", "__state")] : []), ...checks];
+    const predicateParts = [
+      ...(baseType ? [this.emitTypeCheck(baseType, "value", guarded ? "__state" : "undefined")] : []),
+      ...checks,
+    ];
     const predicate = predicateParts.length > 0 ? predicateParts.join(" && ") : "true";
     const exportPrefix = statement.exported ? "export " : "";
     // COL-U5: parse failures name the failing field. The explain companion
@@ -2102,10 +2105,14 @@ export class JavaScriptEmitter {
     if (declaration.kind === "TypeAliasDeclaration") {
       guarded = this.typeNeedsTraversalGuard(resolveTypeReference(declaration.target), path);
     } else {
+      const baseGuarded = declaration.base
+        ? this.typeNeedsTraversalGuard(resolveTypeReference(declaration.base), path)
+        : false;
       const ownFields = new Map(declaration.fields.map((field) => [field.name, resolveTypeReference(field.type)]));
       const fields = this.hints.typeDeclarationFields.get(declaration.span.start)
         ?? declaration.fields.map((field) => ({ name: field.name, type: resolveTypeReference(field.type) }));
-      guarded = fields.some((field) => this.typeNeedsTraversalGuard(ownFields.get(field.name) ?? field.type, path));
+      guarded = baseGuarded
+        || fields.some((field) => this.typeNeedsTraversalGuard(ownFields.get(field.name) ?? field.type, path));
     }
     return guarded;
   }
