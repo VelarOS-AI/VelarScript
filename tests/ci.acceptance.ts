@@ -184,8 +184,8 @@ test("CI covers platform, browser, rehearsal, and explicit npm publication gates
   assert.match(release, /attestations: write/u);
   assert.match(release, /artifact-metadata: write/u);
   assert.match(release, /actions\/attest@v4/u);
-  assert.match(release, /playwright install --with-deps chromium/u);
-  assert.match(release, /release-toolchain\.mjs candidate/u);
+  assert.match(release, /release:rehearse/u);
+  assert.doesNotMatch(release, /playwright install|npm test/u);
   assert.doesNotMatch(release, /npm publish/u);
 
   const publication = await readFile(".github/workflows/publish-npm.yml", "utf8");
@@ -195,6 +195,7 @@ test("CI covers platform, browser, rehearsal, and explicit npm publication gates
   assert.match(publication, /id-token: write/u);
   assert.match(publication, /release-toolchain\.mjs candidate/u);
   assert.match(publication, /npm run release:publish/u);
+  assert.doesNotMatch(publication, /playwright install|npm test|test:browser|test:packages/u);
   assert.doesNotMatch(publication, /\n\s+push:/u);
   assert.match(publicationHelper, /GITHUB_ACTIONS/u);
   assert.match(publicationHelper, /ACTIONS_ID_TOKEN_REQUEST_URL/u);

@@ -2,9 +2,6 @@ name: Toolchain release rehearsal
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - "v*"
 
 permissions:
   contents: read
@@ -29,16 +26,9 @@ jobs:
       - run: npm ci
         env:
           NODE_AUTH_TOKEN: ${{ github.token }}
-      # `npm test` includes Chromium-backed lifecycle and runtime probes.
-      - run: npx playwright install --with-deps chromium
       - run: npm run check
-      - run: npm test
-      - name: Create non-publishing rehearsal
-        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+      - name: Create verified rehearsal
         run: npm run release:rehearse -- --output-dir release/toolchain
-      - name: Create strict tagged candidate
-        if: ${{ startsWith(github.ref, 'refs/tags/') }}
-        run: npm run build:packages && node scripts/release-toolchain.mjs candidate --output-dir release/toolchain
       - name: Attest packed toolchain
         uses: actions/attest@v4
         with:

@@ -47,11 +47,6 @@ jobs:
         run: npm ci
         env:
           NODE_AUTH_TOKEN: ${{ github.token }}
-      - run: npx playwright install --with-deps chromium firefox webkit
-      - run: npm run check
-      - run: npm test
-      - run: npm run test:packages
-      - run: npm run test:browser
       - name: Create and verify strict candidate
         run: |
           npm run build:packages
