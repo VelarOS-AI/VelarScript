@@ -29,6 +29,8 @@ jobs:
       - run: npm ci
         env:
           NODE_AUTH_TOKEN: ${{ github.token }}
+      # `npm test` includes Chromium-backed lifecycle and runtime probes.
+      - run: npx playwright install --with-deps chromium
       - run: npm run check
       - run: npm test
       - name: Create non-publishing rehearsal

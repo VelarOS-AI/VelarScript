@@ -184,6 +184,7 @@ test("CI covers platform, browser, rehearsal, and explicit npm publication gates
   assert.match(release, /attestations: write/u);
   assert.match(release, /artifact-metadata: write/u);
   assert.match(release, /actions\/attest@v4/u);
+  assert.match(release, /playwright install --with-deps chromium/u);
   assert.match(release, /release-toolchain\.mjs candidate/u);
   assert.doesNotMatch(release, /npm publish/u);
 
