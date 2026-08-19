@@ -387,6 +387,8 @@ export interface ModuleInterface {
   readonly namedTypes: ReadonlyMap<string, ReadonlyMap<string, ValueType>>;
   readonly namedTypeReadonlyFields?: ReadonlyMap<string, ReadonlySet<string>>;
   readonly namedTypeIdentities: ReadonlyMap<string, string>;
+  /** Direct record inheritance edges. Field tables above already include inherited fields. */
+  readonly namedTypeBases?: ReadonlyMap<string, ValueType>;
   /**
    * D55 rule 120: the module's generic record declarations. A generic type has
    * no field table of its own — it has one per instantiation — so it is

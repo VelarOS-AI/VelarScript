@@ -249,15 +249,15 @@ Parameter names in a function type are optional but worth writing:
 resolved value — `async def loadUser(id: string) -> User` satisfies
 `(id: string) -> Promise<User>`.
 
-`type` declares record shapes and aliases, `T?` is optional, and every record
-type carries a runtime validator for untrusted data:
+`type` declares records and aliases, `T?` is optional, and each record validates untrusted data;
+one concrete record may be extended, with inherited fields remaining structural and joining the child's `is`/`parse` checks:
 
 ```velar
-type User:
+type Entity:
     id: string
+type User extends Entity:
     name: string
     avatar: string?
-
 type UserId = string
 
 def load(untrusted: unknown) -> User:

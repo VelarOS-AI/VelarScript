@@ -310,6 +310,8 @@ export interface TypeDeclaration {
   readonly name: string;
   /** D55 rule 120: `type Box<T>` / `type Box<T: Data>`, the same list `def` takes. */
   readonly typeParameters?: readonly TypeParameterDeclaration[];
+  /** One concrete record base. Inheritance extends the field contract; it has no runtime prototype semantics. */
+  readonly base: TypeReference | null;
   readonly fields: readonly TypeField[];
   readonly span: Span;
 }

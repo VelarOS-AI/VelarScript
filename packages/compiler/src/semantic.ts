@@ -737,6 +737,7 @@ export function buildSemanticIndex(
         }
         break;
       case "TypeDeclaration":
+        if (statement.base) typeReferences(statement.base);
         for (const field of statement.fields) {
           const selection = nameSpan(field.span, field.name);
           declare(field, field.name, "field", field.span, selection, false, false, false, statement.name);

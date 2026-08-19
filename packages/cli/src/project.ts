@@ -1151,6 +1151,9 @@ export function moduleInterfaceIdentity(
   const namedTypeIdentities = node("named-type-identities", [...interface_.namedTypeIdentities]
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([name, identity]) => node("named-type-identity", [name, identity])));
+  const namedTypeBases = node("named-type-bases", [...(interface_.namedTypeBases ?? new Map())]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, base]) => node("named-type-base", [name, analysisTypeIdentity(base)])));
   // D55 rule 120, and batch M's lesson one layer out: a dependent compiled
   // against the parameter list, the bounds, *and* the template's field types.
   // A change to any of the three has to invalidate that dependent's cache — a
@@ -1231,6 +1234,7 @@ export function moduleInterfaceIdentity(
     namedTypes,
     namedTypeReadonlyFields,
     namedTypeIdentities,
+    namedTypeBases,
     genericTypes,
     typeMap(interface_.typeAliases),
     enums,
@@ -1264,6 +1268,7 @@ async function createAnalysisContext(
   const namedTypes = new Map<string, ReadonlyMap<string, ValueType>>();
   const namedTypeReadonlyFields = new Map<string, ReadonlySet<string>>();
   const namedTypeIdentities = new Map<string, string>();
+  const namedTypeBases = new Map<string, ValueType>();
   const genericTypes = new Map<string, GenericTypeInfo>();
   const typeAliases = new Map<string, ValueType>();
   const enums = new Map<string, EnumInfo>();
@@ -1297,7 +1302,7 @@ async function createAnalysisContext(
         fields: new Map(interface_.exports),
         readonlyFields: new Set(interface_.exports.keys()),
       });
-      importHiddenTypeMetadata(interface_, namedTypes, namedTypeReadonlyFields, genericTypes, enums, classes);
+      importHiddenTypeMetadata(interface_, namedTypes, namedTypeReadonlyFields, namedTypeBases, genericTypes, enums, classes);
       continue;
     }
     if (dependency.reExport) {
@@ -1365,7 +1370,7 @@ async function createAnalysisContext(
     }
     const standard = standardModuleInterface(dependency.source, compilerExtensions);
     if (standard) {
-      importInterface(module, dependency, standard, imports, reactiveImports, namedTypes, namedTypeReadonlyFields, namedTypeIdentities, genericTypes, typeAliases, enums, classes, extensionImports, failures);
+      importInterface(module, dependency, standard, imports, reactiveImports, namedTypes, namedTypeReadonlyFields, namedTypeIdentities, namedTypeBases, genericTypes, typeAliases, enums, classes, extensionImports, failures);
       continue;
     }
     const targetPath = dependency.source.startsWith(".") && extname(dependency.source) === ".vel"
@@ -1374,7 +1379,7 @@ async function createAnalysisContext(
     if (!targetPath) continue;
     const target = loaded.get(targetPath);
     if (!target) continue;
-    importInterface(module, dependency, resolvedModuleInterface(target, loaded, velarImports, interfaceCache, compiledInterfaces, compilerExtensions), imports, reactiveImports, namedTypes, namedTypeReadonlyFields, namedTypeIdentities, genericTypes, typeAliases, enums, classes, extensionImports, failures);
+    importInterface(module, dependency, resolvedModuleInterface(target, loaded, velarImports, interfaceCache, compiledInterfaces, compilerExtensions), imports, reactiveImports, namedTypes, namedTypeReadonlyFields, namedTypeIdentities, namedTypeBases, genericTypes, typeAliases, enums, classes, extensionImports, failures);
   }
   return {
     imports,
@@ -1383,6 +1388,7 @@ async function createAnalysisContext(
     namedTypes,
     namedTypeReadonlyFields,
     namedTypeIdentities,
+    namedTypeBases,
     genericTypes,
     typeAliases,
     enums,
@@ -1410,6 +1416,7 @@ function resolvedModuleInterface(
   const namedTypes = new Map(own.namedTypes);
   const namedTypeReadonlyFields = new Map(own.namedTypeReadonlyFields ?? []);
   const namedTypeIdentities = new Map(own.namedTypeIdentities);
+  const namedTypeBases = new Map(own.namedTypeBases ?? []);
   const genericTypes = new Map(own.genericTypes ?? []);
   const typeAliases = new Map(own.typeAliases);
   const enums = new Map(own.enums);
@@ -1420,11 +1427,13 @@ function resolvedModuleInterface(
     if (fields) namedTypes.set(identity, fields);
     const readonlyFields = own.namedTypeReadonlyFields?.get(name);
     if (readonlyFields) namedTypeReadonlyFields.set(identity, readonlyFields);
+    const base = own.namedTypeBases?.get(name);
+    if (base) namedTypeBases.set(identity, base);
   }
   for (const info of own.enums.values()) enums.set(info.identity, info);
   for (const info of own.classes.values()) if (info.identity) classes.set(info.identity, info);
   const extensionExports = new Map([...own.extensionExports].map(([id, values]) => [id, new Map(values)] as const));
-  const resolved: ModuleInspection["moduleInterface"] = { ...own, exports, mutableExports, reactiveExports, namedTypes, namedTypeReadonlyFields, namedTypeIdentities, genericTypes, typeAliases, enums, classes, extensionExports };
+  const resolved: ModuleInspection["moduleInterface"] = { ...own, exports, mutableExports, reactiveExports, namedTypes, namedTypeReadonlyFields, namedTypeIdentities, namedTypeBases, genericTypes, typeAliases, enums, classes, extensionExports };
   cache.set(module.inputPath, resolved);
 
   for (const dependency of module.inspection.dependencies) {
@@ -1457,6 +1466,14 @@ function resolvedModuleInterface(
         if (readonlyFields) namedTypeReadonlyFields.set(localName, readonlyFields);
         namedTypeIdentities.set(localName, identity);
       }
+    }
+    for (const [name, base] of dependencyInterface.namedTypeBases ?? []) {
+      const identity = dependencyInterface.namedTypeIdentities.get(name) ?? (dependencyTypeIdentities.has(name) ? name : null);
+      if (!identity) continue;
+      const renamedBase = renameType(base, aliases);
+      if (!namedTypeBases.has(identity)) namedTypeBases.set(identity, renamedBase);
+      const localName = aliases.get(name);
+      if (localName && dependencyInterface.exports.has(name)) namedTypeBases.set(localName, renamedBase);
     }
     // D55 rule 120: a re-exported generic record travels with the barrel that
     // re-exports it, under the name the barrel gives it.
@@ -1510,6 +1527,7 @@ function resolvedModuleInterface(
   for (const [name, fields] of namedTypes) {
     namedTypes.set(name, new Map([...fields].map(([field, type]) => [field, resolveType(type)])));
   }
+  for (const [name, base] of namedTypeBases) namedTypeBases.set(name, resolveType(base));
   for (const [name, type] of typeAliases) typeAliases.set(name, resolveType(type));
   for (const [name, info] of classes) {
     classes.set(name, mapClassInfo(
@@ -1581,6 +1599,7 @@ function importHiddenTypeMetadata(
   interface_: ModuleInspection["moduleInterface"],
   namedTypes: Map<string, ReadonlyMap<string, ValueType>>,
   namedTypeReadonlyFields: Map<string, ReadonlySet<string>>,
+  namedTypeBases: Map<string, ValueType>,
   genericTypes: Map<string, GenericTypeInfo>,
   enums: Map<string, EnumInfo>,
   classes: Map<string, ClassInfo>,
@@ -1599,6 +1618,10 @@ function importHiddenTypeMetadata(
     const readonlyFields = interface_.namedTypeReadonlyFields?.get(name) ?? (identity ? interface_.namedTypeReadonlyFields?.get(identity) : undefined);
     if (identity && readonlyFields && !namedTypeReadonlyFields.has(identity)) namedTypeReadonlyFields.set(identity, readonlyFields);
   }
+  for (const [name, base] of interface_.namedTypeBases ?? []) {
+    const identity = interface_.namedTypeIdentities.get(name) ?? (identities.has(name) ? name : null);
+    if (identity && !namedTypeBases.has(identity)) namedTypeBases.set(identity, base);
+  }
   for (const info of interface_.enums.values()) if (!enums.has(info.identity)) enums.set(info.identity, info);
   for (const info of interface_.classes.values()) {
     if (info.identity && !classes.has(info.identity)) classes.set(info.identity, info);
@@ -1614,6 +1637,7 @@ function importInterface(
   namedTypes: Map<string, ReadonlyMap<string, ValueType>>,
   namedTypeReadonlyFields: Map<string, ReadonlySet<string>>,
   namedTypeIdentities: Map<string, string>,
+  namedTypeBases: Map<string, ValueType>,
   genericTypes: Map<string, GenericTypeInfo>,
   typeAliases: Map<string, ValueType>,
   enums: Map<string, EnumInfo>,
@@ -1658,6 +1682,14 @@ function importInterface(
         if (readonlyFields) namedTypeReadonlyFields.set(localName, readonlyFields);
         namedTypeIdentities.set(localName, identity);
       }
+    }
+    for (const [name, base] of interface_.namedTypeBases ?? []) {
+      const identity = interface_.namedTypeIdentities.get(name) ?? (interfaceTypeIdentities.has(name) ? name : null);
+      if (!identity) continue;
+      const resolvedBase = resolveImportedType(base);
+      namedTypeBases.set(identity, resolvedBase);
+      const localName = aliases.get(name);
+      if (localName && interface_.exports.get(name)?.kind === "typeObject") namedTypeBases.set(localName, resolvedBase);
     }
     // D55 rule 120: an imported generic record is bound under the name this
     // module writes, and its template's field types are renamed and nominally

@@ -6,6 +6,19 @@ truth for acceptance status.
 
 ## Unreleased
 
+## 0.10.2 — 2026-08-19
+
+### Record inheritance
+
+- Added single inheritance for structural record declarations with
+  `type Child extends Parent:`.
+- Inherited fields retain their original types and `readonly` contracts, and
+  participate in the child type's static surface and runtime `is`/`parse`
+  validation without introducing a JavaScript prototype or nominal subtype.
+- Supported local, imported, aliased, forward-declared, and applied generic
+  record bases while rejecting inherited-field redeclarations, invalid bases,
+  and direct, indirect, alias-mediated, or cross-module inheritance cycles.
+
 ## 0.10.1 — 2026-08-19
 
 VelarScript 0.10.1 is the first public npm registry release. It keeps the

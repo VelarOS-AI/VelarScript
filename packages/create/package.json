@@ -1,6 +1,6 @@
 {
   "name": "create-velar",
-  "version": "0.10.1",
+  "version": "0.10.2",
   "description": "Create reproducible VelarScript Web, Node, and Desktop applications plus documentation sites and source packages.",
   "license": "Apache-2.0",
   "type": "module",

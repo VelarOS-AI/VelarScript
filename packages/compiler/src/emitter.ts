@@ -12,7 +12,6 @@ import type {
   TypeAliasDeclaration,
   TestDeclaration,
   TypeDeclaration,
-  TypeField,
   TypeSyntax,
   UsingDeclaration,
   TypeReference,
@@ -1005,7 +1004,9 @@ export class JavaScriptEmitter {
         this.expandedRuntimeTypes.add(value.name);
         const declaration = this.typeDeclarations.get(value.name)!;
         if (declaration.kind === "TypeDeclaration") {
-          declaration.fields.forEach((field) => visit(resolveTypeReference(field.type)));
+          const complete = this.hints.typeDeclarationFields.get(declaration.span.start);
+          if (complete) complete.forEach((field) => visit(field.type));
+          else declaration.fields.forEach((field) => visit(resolveTypeReference(field.type)));
         } else {
           visit(resolveTypeReference(declaration.target));
         }
@@ -1565,10 +1566,14 @@ export class JavaScriptEmitter {
     const indentation = "  ".repeat(depth);
     const generic = this.genericTypeParameters;
     const checkName = this.runtimeTypeCheckName(statement.name);
-    const fields = statement.fields.map((field, index) => ({
-      field,
+    const ownFields = new Map(statement.fields.map((field) => [field.name, field]));
+    const completeFields = this.hints.typeDeclarationFields.get(statement.span.start)
+      ?? statement.fields.map((field) => ({ name: field.name, type: this.resolveDeclarationType(field.type) }));
+    const fields = completeFields.map((field, index) => ({
+      name: field.name,
       descriptor: `__velarField${index}`,
-      type: this.resolveDeclarationType(field.type),
+      type: field.type,
+      syntax: ownFields.get(field.name)?.type.syntax ?? null,
     }));
     const checks = fields.map(({ descriptor, type }) => {
       const present = `${descriptor}?.enumerable && "value" in ${descriptor} && ${this.emitTypeCheck(type, `${descriptor}.value`, "__state")}`;
@@ -1595,22 +1600,22 @@ export class JavaScriptEmitter {
       `${indentation}  if (value === null || typeof value !== "object" || __velarValidationIsArray(value) || !__velarValidationIsPlainObject(value)) {`,
       `${indentation}    return { path: ${pathText("")}, field: null, reason: "the value is not a record" };`,
       `${indentation}  }`,
-      ...fields.flatMap(({ field, type }) => {
+      ...fields.flatMap(({ name, type, syntax }) => {
         const descriptor = "__velarExplainField";
-        const typeText = this.typeTextExpression(type, field.type.syntax);
+        const typeText = this.typeTextExpression(type, syntax);
         const lines = [
           `${indentation}  {`,
-          `${indentation}    const ${descriptor} = __velarValidationOwnDescriptor(value, ${JSON.stringify(field.name)});`,
+          `${indentation}    const ${descriptor} = __velarValidationOwnDescriptor(value, ${JSON.stringify(name)});`,
         ];
         if (type.kind === "optional") {
           lines.push(`${indentation}    if (${descriptor} !== undefined && !(${descriptor}.enumerable && "value" in ${descriptor} && ${this.emitTypeCheck(type, `${descriptor}.value`, "__velarValidationState()")})) {`);
         } else {
           lines.push(`${indentation}    if (${descriptor} === undefined) {`);
-          lines.push(`${indentation}      return { path: ${pathText(`.${field.name}`)}, field: ${JSON.stringify(field.name)}, reason: ${JSON.stringify(`field '${field.name}' is missing`)} };`);
+          lines.push(`${indentation}      return { path: ${pathText(`.${name}`)}, field: ${JSON.stringify(name)}, reason: ${JSON.stringify(`field '${name}' is missing`)} };`);
           lines.push(`${indentation}    }`);
           lines.push(`${indentation}    if (!(${descriptor}.enumerable && "value" in ${descriptor} && ${this.emitTypeCheck(type, `${descriptor}.value`, "__velarValidationState()")})) {`);
         }
-        lines.push(`${indentation}      return { path: ${pathText(`.${field.name}`)}, field: ${JSON.stringify(field.name)}, reason: ${JSON.stringify(`field '${field.name}' does not match `)} + ${typeText} };`);
+        lines.push(`${indentation}      return { path: ${pathText(`.${name}`)}, field: ${JSON.stringify(name)}, reason: ${JSON.stringify(`field '${name}' does not match `)} + ${typeText} };`);
         lines.push(`${indentation}    }`);
         lines.push(`${indentation}  }`);
         return lines;
@@ -1675,7 +1680,7 @@ export class JavaScriptEmitter {
   /** The record predicate itself: identical for a plain record and a generic one but for the arguments it carries. */
   private recordCheckFunctionLines(
     statement: TypeDeclaration,
-    fields: readonly { readonly field: TypeField; readonly descriptor: string }[],
+    fields: readonly { readonly name: string; readonly descriptor: string }[],
     predicate: string,
     checkName: string,
     indentation: string,
@@ -1700,7 +1705,7 @@ export class JavaScriptEmitter {
       `${indentation}  __velarValidationSetAdd(__active, ${guard});`,
       `${indentation}  __state.depth += 1;`,
       `${indentation}  try {`,
-      ...fields.map(({ field, descriptor }) => `${indentation}    const ${descriptor} = __velarValidationOwnDescriptor(value, ${JSON.stringify(field.name)});`),
+      ...fields.map(({ name, descriptor }) => `${indentation}    const ${descriptor} = __velarValidationOwnDescriptor(value, ${JSON.stringify(name)});`),
       `${indentation}    return !!(${predicate});`,
       `${indentation}  } finally {`,
       `${indentation}    __state.depth -= 1;`,
@@ -1978,10 +1983,10 @@ export class JavaScriptEmitter {
    * A generic record's `parse` failure names the type the caller instantiated
    * — `field 'value' does not match string`, not `does not match T`.
    */
-  private typeTextExpression(type: ValueType, syntax: TypeSyntax): string {
+  private typeTextExpression(type: ValueType, syntax: TypeSyntax | null): string {
     return this.genericTypeParameters?.length
       ? this.genericArgumentExpression(type, "text")
-      : JSON.stringify(formatTypeSyntax(syntax));
+      : JSON.stringify(syntax ? formatTypeSyntax(syntax) : describeType(type));
   }
 
   /**

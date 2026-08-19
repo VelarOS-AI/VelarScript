@@ -115,7 +115,7 @@ const keywordDocumentation = new Map<string, string>([
   ["type", "Declares one data shape used for static checking and runtime validation."],
   ["enum", "Declares a finite set of string-backed values for application states."],
   ["abstract", "Marks a class, instance method, or getter as an incomplete behavior contract."],
-  ["extends", "Declares one base class; pass base arguments through super(...) in the constructor."],
+  ["extends", "Declares one base class or one concrete record base; classes call super(...) while record types inherit fields and validation."],
   ["override", "Explicitly replaces a compatible inherited instance method or getter."],
   ["private", "Keeps one class field, getter, or method inside its declaring class."],
   ["static", "Declares a field, getter, or method on the class rather than an instance."],

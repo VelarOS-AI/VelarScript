@@ -1013,6 +1013,46 @@ Those words remain ordinary data names; when `schema Name:` or
 `interface Name:` appears in declaration position, diagnostics guide it to
 `type Name:` without reserving the identifier globally.
 
+A record may extend one concrete record type. Inheritance reuses and extends a
+data contract; it does not create behavior or a JavaScript prototype chain:
+
+```velar
+type Entity:
+    readonly id: string
+    createdAt: number
+
+type User extends Entity:
+    name: string
+    avatar: string?
+```
+
+`User` contains all four fields, a `User` is assignable to `Entity`, and
+`User.is`/`User.parse` validate the inherited fields together with its own.
+This remains structural assignability: an unrelated record with the same
+required fields can still satisfy either contract, and `extends` does not add a
+nominal test.
+
+The base may be local or imported, and a generic record may apply its own type
+parameters in the base:
+
+```velar fragment
+type Box<T>:
+    readonly value: T
+
+type LabelledBox<T> extends Box<T>:
+    label: string
+```
+
+Only one base is accepted. It must resolve, including through an alias, to one
+concrete record declaration or generic-record application; classes, primitives,
+collections, unions, and `readonly` views are not bases. Inherited fields keep
+their original type and `readonly` contract and cannot be redeclared in the
+child. Direct, indirect, alias-mediated, and cross-module inheritance cycles are
+rejected. A declaration that only needs another name for the same contract uses
+an alias (`type PublicUser = User`) rather than an empty derived record. There is
+no record `override`, `super`, constructor, abstract member, multiple
+inheritance, or runtime parent object.
+
 Record types have a runtime validator:
 
 ```velar fragment

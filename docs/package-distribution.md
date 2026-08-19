@@ -212,5 +212,5 @@ complete license text, and package acceptance verifies the installed metadata
 and file rather than trusting the source manifest alone. The current rehearsal
 is always marked non-publishable because rehearsal mode is evidence only. A
 strict candidate becomes publishable only from the clean, exactly tagged
-`v0.10.1` source with the matching remote; registry publication remains a
+`v0.10.2` source with the matching remote; registry publication remains a
 separate explicit authority and must carry npm provenance.

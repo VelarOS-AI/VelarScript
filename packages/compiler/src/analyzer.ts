@@ -301,6 +301,11 @@ export interface FormReadField {
   readonly enumValues?: readonly string[];
 }
 
+export interface RecordTypeField {
+  readonly name: string;
+  readonly type: ValueType;
+}
+
 export interface LoweringHints {
   readonly collectionCalls: ReadonlyMap<number, CollectionOperation>;
   readonly collectionSizes: ReadonlySet<number>;
@@ -334,6 +339,8 @@ export interface LoweringHints {
    * apart before it writes either into the output.
    */
   readonly genericTypeNames: ReadonlySet<string>;
+  /** Complete inherited-plus-local record fields for each `type` declaration, keyed by declaration start. */
+  readonly typeDeclarationFields: ReadonlyMap<number, readonly RecordTypeField[]>;
   readonly optionalMembers: ReadonlySet<string>;
   readonly optionalCalls: ReadonlySet<string>;
   readonly optionalIndexes: ReadonlySet<string>;
@@ -438,6 +445,8 @@ export interface AnalysisContext {
   readonly namedTypes?: ReadonlyMap<string, ReadonlyMap<string, ValueType>>;
   readonly namedTypeReadonlyFields?: ReadonlyMap<string, ReadonlySet<string>>;
   readonly namedTypeIdentities?: ReadonlyMap<string, string>;
+  /** Direct record inheritance edges by local name or canonical identity. */
+  readonly namedTypeBases?: ReadonlyMap<string, ValueType>;
   /** D55: imported generic record declarations, by the name this module writes. */
   readonly genericTypes?: ReadonlyMap<string, GenericTypeInfo>;
   readonly typeAliases?: ReadonlyMap<string, ValueType>;
@@ -906,6 +915,12 @@ export class Analyzer implements TypeEnvironment {
   private readonly namedTypes = new Map<string, ReadonlyMap<string, ValueType>>();
   private readonly namedTypeReadonlyFields = new Map<string, ReadonlySet<string>>();
   private readonly namedTypeIdentities = new Map<string, string>();
+  /** Direct record bases by local name or canonical identity. Field tables remain flattened separately. */
+  private readonly namedTypeBases = new Map<string, ValueType>();
+  /** Fields contributed by a base, used to reject redeclaration in the child body. */
+  private readonly inheritedTypeFields = new WeakMap<TypeDeclaration, ReadonlySet<string>>();
+  /** Analyzer-owned complete field tables passed to the emitter for runtime validation. */
+  private readonly typeDeclarationFields = new Map<number, readonly RecordTypeField[]>();
   /** D55: generic record declarations in scope, by the name this module writes. */
   private readonly genericTypes = new Map<string, GenericTypeInfo>();
   /** The same declarations by identity, so a substituted application can be re-instantiated. */
@@ -1179,6 +1194,7 @@ export class Analyzer implements TypeEnvironment {
     for (const [name, fields] of context.namedTypes ?? []) this.namedTypes.set(name, fields);
     for (const [name, fields] of context.namedTypeReadonlyFields ?? []) this.namedTypeReadonlyFields.set(name, fields);
     for (const [name, identity] of context.namedTypeIdentities ?? []) this.namedTypeIdentities.set(name, identity);
+    for (const [name, base] of context.namedTypeBases ?? []) this.namedTypeBases.set(name, base);
     for (const [name, info] of context.genericTypes ?? []) {
       // The context carries each template twice — under the name this module
       // writes, and under its identity for the modules reached without an
@@ -1330,7 +1346,24 @@ export class Analyzer implements TypeEnvironment {
         : action();
       let valid = withParameters(() => declaration.kind === "TypeAliasDeclaration"
         ? this.validateTypeReference(declaration.target)
-        : declaration.fields.map((field) => this.validateTypeReference(field.type)).every(Boolean));
+        : [
+          ...(declaration.base ? [this.validateTypeReference(declaration.base)] : []),
+          ...declaration.fields.map((field) => this.validateTypeReference(field.type)),
+        ].every(Boolean));
+      if (valid && declaration.kind === "TypeDeclaration" && declaration.base) {
+        withParameters(() => {
+          const base = this.resolveAnnotation(declaration.base);
+          const fields = base.kind === "named" && !base.readonlyView
+            ? this.fieldsOf(base.identity ?? base.name)
+            : null;
+          if (base.kind === "named" && fields !== null && !this.isPrimitiveType(base.name)) return;
+          this.typeError(
+            `Type '${declaration.name}' can only extend one concrete record type; ${describeType(base)} is not a record declaration`,
+            declaration.base!.span,
+          );
+          valid = false;
+        });
+      }
       if (valid) {
         withParameters(() => {
           const runtimeCheckedReferences = declaration.kind === "TypeAliasDeclaration"
@@ -1373,7 +1406,10 @@ export class Analyzer implements TypeEnvironment {
         if (this.invalidDeclaredTypes.has(declaration.name)) continue;
         const syntaxes = declaration.kind === "TypeAliasDeclaration"
           ? [declaration.target.syntax]
-          : declaration.fields.map((field) => field.type.syntax);
+          : [
+            ...(declaration.base ? [declaration.base.syntax] : []),
+            ...declaration.fields.map((field) => field.type.syntax),
+          ];
         if (!syntaxes.some((syntax) => this.typeSyntaxReferencesInvalidDeclaration(syntax))) continue;
         this.invalidDeclaredTypes.add(declaration.name);
         changed = true;
@@ -1709,6 +1745,7 @@ export class Analyzer implements TypeEnvironment {
       enumNames: new Set(this.enums.keys()),
       runtimeTypeObjectNames: this.runtimeTypeObjectNames,
       genericTypeNames: new Set(this.genericTypes.keys()),
+      typeDeclarationFields: this.typeDeclarationFields,
       optionalMembers: this.optionalMembers,
       optionalCalls: this.optionalCalls,
       optionalIndexes: this.optionalIndexes,
@@ -1773,6 +1810,22 @@ export class Analyzer implements TypeEnvironment {
 
   analyzedClasses(): ReadonlyMap<string, ClassInfo> {
     return this.classes;
+  }
+
+  analyzedNamedTypes(): ReadonlyMap<string, ReadonlyMap<string, ValueType>> {
+    return this.namedTypes;
+  }
+
+  analyzedNamedTypeReadonlyFields(): ReadonlyMap<string, ReadonlySet<string>> {
+    return this.namedTypeReadonlyFields;
+  }
+
+  analyzedNamedTypeBases(): ReadonlyMap<string, ValueType> {
+    return this.namedTypeBases;
+  }
+
+  analyzedGenericTypes(): ReadonlyMap<string, GenericTypeInfo> {
+    return this.genericTypes;
   }
 
   semanticExpressions(): {
@@ -2495,53 +2548,117 @@ export class Analyzer implements TypeEnvironment {
     return type;
   }
 
-  /**
-   * D55 rule 120: generic record declarations are registered in two steps —
-   * every name and parameter list first, then the field types. A field type may
-   * apply another generic record, or this one, and neither could be resolved if
-   * the declarations were read one at a time.
-   */
-  private registerGenericTypeShapes(program: Program): void {
-    const declarations: { readonly statement: TypeDeclaration; readonly fields: Map<string, ValueType> }[] = [];
-    for (const statement of program.body) {
-      if (statement.kind !== "TypeDeclaration" || !statement.typeParameters?.length) continue;
-      if (this.genericTypes.has(statement.name)) continue;
-      const fields = new Map<string, ValueType>();
-      const readonlyFields = new Set(statement.fields.filter((field) => field.readonly).map((field) => field.name));
-      const info: GenericTypeInfo = {
-        identity: this.namedTypeIdentities.get(statement.name) ?? statement.name,
-        name: statement.name,
-        parameterNames: statement.typeParameters.map((parameter) => parameter.name),
-        parameterBounds: statement.typeParameters.map((parameter) =>
-          parameter.bound && isTypeParameterBound(parameter.bound) ? parameter.bound : null),
-        fields,
-        ...(readonlyFields.size > 0 ? { readonlyFields } : {}),
-      };
-      this.genericTypes.set(statement.name, info);
-      this.genericTypesByIdentity.set(info.identity, info);
-      declarations.push({ statement, fields });
-    }
-    for (const { statement, fields } of declarations) {
-      this.withTypeParameterFrame(this.typeParameterFrame(statement.typeParameters), () => {
-        for (const field of statement.fields) fields.set(field.name, this.resolveAnnotation(field.type));
-      });
-    }
-  }
-
   private registerTypeShapes(program: Program): void {
-    this.registerGenericTypeShapes(program);
+    const declarations = new Map<string, TypeDeclaration>();
+    const concrete = new Map<string, { readonly fields: Map<string, ValueType>; readonly readonlyFields: Set<string> }>();
+    const generic = new Map<string, { readonly info: GenericTypeInfo; readonly fields: Map<string, ValueType>; readonly readonlyFields: Set<string> }>();
+
+    // Register every name and mutable placeholder first. A base may be declared
+    // later, and a generic base may mention the child's own parameters.
     for (const statement of program.body) {
-      if (statement.kind !== "TypeDeclaration" || statement.typeParameters?.length) {
-        continue;
-      }
+      if (statement.kind !== "TypeDeclaration") continue;
+      declarations.set(statement.name, statement);
       const fields = new Map<string, ValueType>();
       const readonlyFields = new Set<string>();
-      for (const field of statement.fields) {
-        fields.set(field.name, this.resolveAnnotation(field.type));
-        if (field.readonly) readonlyFields.add(field.name);
+      if (statement.typeParameters?.length) {
+        const info: GenericTypeInfo = {
+          identity: this.namedTypeIdentities.get(statement.name) ?? statement.name,
+          name: statement.name,
+          parameterNames: statement.typeParameters.map((parameter) => parameter.name),
+          parameterBounds: statement.typeParameters.map((parameter) =>
+            parameter.bound && isTypeParameterBound(parameter.bound) ? parameter.bound : null),
+          fields,
+          readonlyFields,
+        };
+        this.genericTypes.set(statement.name, info);
+        this.genericTypesByIdentity.set(info.identity, info);
+        generic.set(statement.name, { info, fields, readonlyFields });
+      } else {
+        this.namedTypes.set(statement.name, fields);
+        this.namedTypeReadonlyFields.set(statement.name, readonlyFields);
+        concrete.set(statement.name, { fields, readonlyFields });
       }
-      this.namedTypes.set(statement.name, fields);
-      if (readonlyFields.size > 0) this.namedTypeReadonlyFields.set(statement.name, readonlyFields);
+    }
+
+    const resolved = new Set<string>();
+    const resolving: string[] = [];
+    const localIdentity = (name: string): string => this.namedTypeIdentities.get(name)
+      ?? (this.modulePath ? `velar:${this.modulePath}#type:${name}` : name);
+    const declarationName = (type: ValueType): string | null => type.kind === "named"
+      ? type.application?.name ?? type.name
+      : null;
+    const declarationKey = (type: ValueType): string | null => {
+      if (type.kind !== "named") return null;
+      const name = type.application?.name ?? type.name;
+      if (declarations.has(name)) return localIdentity(name);
+      return type.application?.declaration ?? type.identity ?? type.name;
+    };
+
+    const resolveDeclaration = (statement: TypeDeclaration): void => {
+      if (resolved.has(statement.name)) return;
+      if (resolving.includes(statement.name)) return;
+      resolving.push(statement.name);
+      const target = concrete.get(statement.name) ?? generic.get(statement.name)!;
+      const withParameters = <T>(action: () => T): T => statement.typeParameters?.length
+        ? this.withTypeParameterFrame(this.typeParameterFrame(statement.typeParameters), action)
+        : action();
+      withParameters(() => {
+        let inherited = new Map<string, ValueType>();
+        let inheritedReadonly = new Set<string>();
+        if (statement.base) {
+          let base = this.resolveAnnotation(statement.base);
+          const baseName = declarationName(base);
+          const localBase = baseName ? declarations.get(baseName) : undefined;
+          if (localBase && !resolving.includes(localBase.name)) {
+            resolveDeclaration(localBase);
+            base = this.resolveAnnotation(statement.base);
+          }
+          this.namedTypeBases.set(statement.name, base);
+          this.namedTypeBases.set(localIdentity(statement.name), base);
+          const baseFields = base.kind === "named" ? this.fieldsOf(base.identity ?? base.name) : null;
+          if (baseFields) inherited = new Map(baseFields);
+          const readonly = base.kind === "named" ? this.readonlyFieldsOf(base.identity ?? base.name) : null;
+          if (readonly) inheritedReadonly = new Set(readonly);
+        }
+        this.inheritedTypeFields.set(statement, new Set(inherited.keys()));
+        for (const [name, type] of inherited) target.fields.set(name, type);
+        for (const name of inheritedReadonly) target.readonlyFields.add(name);
+        for (const field of statement.fields) {
+          target.fields.set(field.name, this.resolveAnnotation(field.type));
+          if (field.readonly) target.readonlyFields.add(field.name);
+        }
+        this.typeDeclarationFields.set(statement.span.start, [...target.fields].map(([name, type]) => ({ name, type })));
+      });
+      resolving.pop();
+      resolved.add(statement.name);
+    };
+
+    for (const statement of declarations.values()) resolveDeclaration(statement);
+
+    // The direct edge is preserved separately from the flattened fields, so a
+    // cycle that crosses module boundaries cannot stabilize into an apparently
+    // valid structural map during the project interface fixed point.
+    for (const statement of declarations.values()) {
+      if (!statement.base) continue;
+      const start = localIdentity(statement.name);
+      const path = [start];
+      let current = start;
+      const seen = new Set([start]);
+      while (true) {
+        const base = this.namedTypeBases.get(current);
+        const next = base ? declarationKey(base) : null;
+        if (!next) break;
+        path.push(next);
+        if (next === start) {
+          const display = path.map((identity) => identity.replace(/^.*#type:/u, "")).join(" -> ");
+          this.diagnostics.push(diagnostic("VEL4017", `Type inheritance is cyclic: ${display}`, statement.base.span));
+          this.invalidDeclaredTypes.add(statement.name);
+          break;
+        }
+        if (seen.has(next)) break;
+        seen.add(next);
+        current = next;
+      }
     }
   }
 
@@ -3723,7 +3840,15 @@ export class Analyzer implements TypeEnvironment {
     // so a `type` is judged by the same procedure a `def` is.
     this.checkTypeParameterDeclarations(statement.typeParameters);
     const seen = new Set<string>();
+    const inherited = this.inheritedTypeFields.get(statement) ?? new Set<string>();
     for (const field of statement.fields) {
+      if (inherited.has(field.name)) {
+        this.diagnostics.push(diagnostic(
+          "VEL4004",
+          `Type '${statement.name}' cannot redeclare inherited field '${field.name}'; inherited record fields keep their original contract`,
+          field.span,
+        ));
+      }
       if (seen.has(field.name)) {
         this.diagnostics.push(diagnostic("VEL4004", `Type '${statement.name}' declares '${field.name}' more than once`, field.span));
       }

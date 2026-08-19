@@ -585,14 +585,14 @@ export class Parser {
 
   /**
    * D30 item 16: `type` opens a declaration only in its declaration shape —
-   * the word, a name, and then ':' for a record body, '=' for an alias, or '<'
-   * for the rejected type-parameter spelling. `type = payload.type`,
+   * the word, a name, and then ':' for a record body, '=' for an alias, '<'
+   * for type parameters, or `extends` for record inheritance. `type = payload.type`,
    * `type(value)`, and `type.field` all keep the identifier reading.
    */
   private typeDeclarationAhead(): boolean {
     if (!this.checkWord(CORE_WORDS.type) || this.peekKind(1) !== "identifier") return false;
     const shape = this.peekKind(2);
-    return shape === "colon" || shape === "assign" || shape === "less";
+    return shape === "colon" || shape === "assign" || shape === "less" || shape === "extends";
   }
 
   /**
@@ -1507,6 +1507,7 @@ export class Parser {
       }
       return { kind: "TypeAliasDeclaration", exported, name: name.value, target, span: span(start, target.span.end) };
     }
+    const base = this.match("extends") ? this.parseTypeReference() : null;
     this.expect("colon", "Expected ':' after type name");
     this.expect("newline", "Expected a newline before type fields");
     this.consumeNewlines();
@@ -1543,7 +1544,7 @@ export class Parser {
       this.consumeNewlines();
     }
     const close = this.expect("dedent", "Expected the end of type fields");
-    return { kind: "TypeDeclaration", exported, name: name.value, ...(typeParameters ? { typeParameters } : {}), fields, span: span(start, fields.at(-1)?.span.end ?? close.span.end) };
+    return { kind: "TypeDeclaration", exported, name: name.value, ...(typeParameters ? { typeParameters } : {}), base, fields, span: span(start, fields.at(-1)?.span.end ?? close.span.end) };
   }
 
   private parseEnumDeclaration(start: number, exported: boolean): EnumDeclaration {

@@ -257,6 +257,10 @@ function compileUnchecked(text: string, options: CompileOptions): CompileResult 
       extensions,
       analyzer.semanticTypes(),
       analyzer.analyzedClasses(),
+      analyzer.analyzedNamedTypes(),
+      analyzer.analyzedNamedTypeReadonlyFields(),
+      analyzer.analyzedNamedTypeBases(),
+      analyzer.analyzedGenericTypes(),
     ),
     semanticIndex,
     initializationImportReads: analyzer.moduleInitializationImportReads(),
@@ -502,6 +506,10 @@ function interfaceOf(
   extensions: readonly CompilerExtension[],
   analyzedBindings: ReadonlyMap<string, ValueType> = new Map(),
   analyzedClasses: ReadonlyMap<string, ClassInfo> = new Map(),
+  analyzedNamedTypes: ReadonlyMap<string, ReadonlyMap<string, ValueType>> = new Map(),
+  analyzedNamedTypeReadonlyFields: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
+  analyzedNamedTypeBases: ReadonlyMap<string, ValueType> = new Map(),
+  analyzedGenericTypes: ReadonlyMap<string, GenericTypeInfo> = new Map(),
 ): ModuleInterface {
   const classIdentities = new Map<string, string>([["Error", "Error"]]);
   for (const statement of program.body) {
@@ -603,6 +611,7 @@ function interfaceOf(
     .map(([name, type]) => [name, resolveNominals(expandAliases(type), classIdentities, enumNames, namedTypeIdentities)]));
   const namedTypes = new Map<string, ReadonlyMap<string, ValueType>>();
   const namedTypeReadonlyFields = new Map<string, ReadonlySet<string>>();
+  const namedTypeBases = new Map<string, ValueType>();
   const genericTypes = new Map<string, GenericTypeInfo>();
   const typeAliases = new Map<string, ValueType>();
   const enums = new Map<string, EnumInfo>();
@@ -629,25 +638,37 @@ function interfaceOf(
 
   for (const statement of program.body) {
     if (statement.kind === "TypeDeclaration") {
-      const readonlyFields = new Set(statement.fields.filter((field) => field.readonly).map((field) => field.name));
+      const readonlyFields = new Set(analyzedNamedTypeReadonlyFields.get(statement.name)
+        ?? statement.fields.filter((field) => field.readonly).map((field) => field.name));
+      if (statement.base) {
+        namedTypeBases.set(statement.name, resolveAnalyzed(
+          analyzedNamedTypeBases.get(statement.name) ?? resolve(statement.base),
+        ));
+      }
       // D55 rule 120: a generic record crosses the boundary as a template. Its
       // field table still has the `parameter` kinds in it, which is what lets a
       // dependent instantiate it with an argument this module never named.
       if (statement.typeParameters?.length) {
         const frame = new Map<string, ValueType>(statement.typeParameters
           .map((parameter, index) => [parameter.name, { kind: "parameter", name: parameter.name, index }] as const));
+        const analyzed = analyzedGenericTypes.get(statement.name);
         genericTypes.set(statement.name, {
           identity: namedTypeIdentities.get(statement.name)!,
           name: statement.name,
           parameterNames: statement.typeParameters.map((parameter) => parameter.name),
           parameterBounds: statement.typeParameters.map((parameter) =>
             parameter.bound && isTypeParameterBound(parameter.bound) ? parameter.bound : null),
-          fields: new Map(statement.fields.map((field) => [field.name, bindNamedTypeParameters(resolve(field.type), frame)])),
+          fields: analyzed
+            ? new Map([...analyzed.fields].map(([name, type]) => [name, resolveAnalyzed(type)]))
+            : new Map(statement.fields.map((field) => [field.name, bindNamedTypeParameters(resolve(field.type), frame)])),
           ...(readonlyFields.size > 0 ? { readonlyFields } : {}),
         });
         continue;
       }
-      namedTypes.set(statement.name, new Map(statement.fields.map((field) => [field.name, resolve(field.type)])));
+      const analyzed = analyzedNamedTypes.get(statement.name);
+      namedTypes.set(statement.name, analyzed
+        ? new Map([...analyzed].map(([name, type]) => [name, resolveAnalyzed(type)]))
+        : new Map(statement.fields.map((field) => [field.name, resolve(field.type)])));
       if (readonlyFields.size > 0) namedTypeReadonlyFields.set(statement.name, readonlyFields);
     } else if (statement.kind === "EnumDeclaration") {
       enums.set(statement.name, enumNames.get(statement.name)!);
@@ -847,6 +868,7 @@ function interfaceOf(
     namedTypes,
     namedTypeReadonlyFields,
     namedTypeIdentities,
+    ...(namedTypeBases.size > 0 ? { namedTypeBases } : {}),
     ...(genericTypes.size > 0 ? { genericTypes } : {}),
     typeAliases,
     enums,

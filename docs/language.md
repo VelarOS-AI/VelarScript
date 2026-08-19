@@ -157,7 +157,8 @@ print(describe({label: "kitchen", celsius: 21.4}))
 One keyword, `type`, declares both record shapes and aliases. A record type is
 structural — any value with the right fields satisfies it — and it carries
 `parse` and `is` for untrusted data. Fields may be optional (`name: string?`)
-and individually `readonly`.
+and individually `readonly`. A record may extend one concrete record; the child
+inherits its fields and validator checks while assignability stays structural.
 
 `enum` declares a finite, string-backed state. A member may carry an external
 wire spelling (`textDelta = "response.output_text.delta"`) without losing its
@@ -172,8 +173,10 @@ enum Status:
 
 type UserId = string
 
-type User:
+type Entity:
     id: UserId
+
+type User extends Entity:
     name: string
     avatar: string?
     status: Status
