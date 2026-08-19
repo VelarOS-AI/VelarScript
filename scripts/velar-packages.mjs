@@ -4,7 +4,9 @@ import { fileURLToPath } from "node:url";
 
 /**
  * D63 rule 159 — which packages make up the toolchain is a derived fact, not a
- * list somebody maintains.
+ * list somebody maintains. Toolchain implementations live under `packages/`;
+ * ordinary VelarScript source libraries live under `libraries/`. npm sees both
+ * as workspaces, but only the first directory defines a toolchain release.
  *
  * `tests/package.acceptance.ts` named eight packages as literal `pack()` calls
  * and `scripts/release-toolchain.mjs` held the same eight in a literal array.
@@ -17,9 +19,10 @@ import { fileURLToPath } from "node:url";
  * a command nobody has to retype removes the failure mode rather than the
  * mistake.
  *
- * Publishability is read from each manifest's own `private` flag, so a package
- * added to the workspace joins the toolchain the day it exists, and one that
- * must stay unpublished says so where it is defined.
+ * Publishability is read from each manifest's own `private` flag. A package
+ * added under `packages/` joins the toolchain; a package added under
+ * `libraries/` joins source-library acceptance without silently joining the
+ * compiler/runtime release generation.
  *
  * A-024: deriving the *names* was only the first consumer. `test:packages`
  * packed this roster and then rewrote the same eight names by hand for the
@@ -34,11 +37,11 @@ import { fileURLToPath } from "node:url";
 const workspaceRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 /**
- * Every publishable workspace package, in dependency-friendly name order.
+ * Every workspace entry under one owned directory, in name order.
  * Returns `{name, version, directory, private}` records.
  */
-export async function velarPackages(root = workspaceRoot) {
-  const packagesDirectory = join(root, "packages");
+async function workspacePackagesUnder(root, directoryName) {
+  const packagesDirectory = join(root, directoryName);
   const entries = await readdir(packagesDirectory, { withFileTypes: true });
   const found = [];
   for (const entry of entries) {
@@ -59,18 +62,52 @@ export async function velarPackages(root = workspaceRoot) {
       manifest,
     });
   }
-  if (found.length === 0) throw new Error("no workspace packages found under packages/");
+  if (found.length === 0) throw new Error(`no workspace packages found under ${directoryName}/`);
   return found.sort((left, right) => left.name.localeCompare(right.name));
 }
 
-/** Every publishable workspace package — what a release set is made of. */
-export async function velarPublishedPackages(root = workspaceRoot) {
-  return (await velarPackages(root)).filter((entry) => !entry.private);
+/** Compiler, CLI, official targets, and other toolchain implementation packages. */
+export async function velarToolchainPackages(root = workspaceRoot) {
+  return workspacePackagesUnder(root, "packages");
 }
 
-/** The names a complete offline install needs — the answer the old lists spelled out. */
-export async function velarPackageNames(root = workspaceRoot) {
-  return (await velarPublishedPackages(root)).map((entry) => entry.name);
+/** Ordinary installable libraries authored in VelarScript source. */
+export async function velarLibraries(root = workspaceRoot) {
+  return workspacePackagesUnder(root, "libraries");
+}
+
+/** Every publishable package in the six-package toolchain release generation. */
+export async function velarPublishedToolchainPackages(root = workspaceRoot) {
+  return (await velarToolchainPackages(root)).filter((entry) => !entry.private);
+}
+
+/** Every publishable first-party VelarScript source library. */
+export async function velarPublishedLibraries(root = workspaceRoot) {
+  return (await velarLibraries(root)).filter((entry) => !entry.private);
+}
+
+/** Every publishable workspace package, used by source-package consumer gates. */
+export async function velarPublishedWorkspacePackages(root = workspaceRoot) {
+  const workspaces = [
+    ...await velarPublishedToolchainPackages(root),
+    ...await velarPublishedLibraries(root),
+  ].sort((left, right) => left.name.localeCompare(right.name));
+  for (let index = 1; index < workspaces.length; index += 1) {
+    if (workspaces[index - 1].name === workspaces[index].name) {
+      throw new Error(`duplicate workspace package name ${workspaces[index].name}`);
+    }
+  }
+  return workspaces;
+}
+
+/** The package names in a complete toolchain candidate. */
+export async function velarToolchainPackageNames(root = workspaceRoot) {
+  return (await velarPublishedToolchainPackages(root)).map((entry) => entry.name);
+}
+
+/** All local tarballs needed to exercise toolchain and source libraries together. */
+export async function velarWorkspacePackageNames(root = workspaceRoot) {
+  return (await velarPublishedWorkspacePackages(root)).map((entry) => entry.name);
 }
 
 /**
@@ -83,8 +120,8 @@ export async function velarPackageNames(root = workspaceRoot) {
  * chain, which was correct and was a copy — a seventh compiled package would
  * have been packed by the release gate without ever having been built.
  */
-export async function velarBuildOrder(root = workspaceRoot) {
-  const packages = await velarPublishedPackages(root);
+export async function velarToolchainBuildOrder(root = workspaceRoot) {
+  const packages = await velarPublishedToolchainPackages(root);
   const byName = new Map(packages.map((entry) => [entry.name, entry]));
   const order = [];
   const placed = new Set();
@@ -101,8 +138,8 @@ export async function velarBuildOrder(root = workspaceRoot) {
     placed.add(entry.name);
     if (entry.manifest.scripts?.build) order.push(entry);
   };
-  // `velarPackages` sorts by name, so the traversal — and therefore the build
-  // order — is the same on every machine.
+  // The toolchain roster is sorted by name, so the traversal — and therefore
+  // the build order — is the same on every machine.
   for (const entry of packages) visit(entry);
   return order;
 }

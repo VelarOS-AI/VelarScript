@@ -1,15 +1,33 @@
 import type { Plugin } from "esbuild";
-import { fileURLToPath } from "node:url";
+import { readFile } from "node:fs/promises";
+import { findPackageJSON } from "node:module";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { formatDiagnostic } from "@velarscript/compiler";
 import { compileProject } from "./project.ts";
 import { standardModuleSource } from "./standard-modules.ts";
 
-const scriptAnalysisEntry = fileURLToPath(new URL("../../script-analysis/src/index.vel", import.meta.url));
+async function sourcePackage(name: string): Promise<{ root: string; entry: string }> {
+  const manifestPath = findPackageJSON(name, import.meta.url);
+  if (!manifestPath) throw new Error(`Official tool dependency '${name}' is not installed`);
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as { velar?: { entry?: unknown } };
+  const declared = manifest.velar?.entry;
+  if (typeof declared !== "string" || declared.length === 0 || isAbsolute(declared)) {
+    throw new Error(`Official tool dependency '${name}' has no valid velar.entry`);
+  }
+  const root = dirname(manifestPath);
+  const entry = resolve(root, declared);
+  const inside = relative(root, entry);
+  if (inside === "" || inside === ".." || inside.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute(inside)) {
+    throw new Error(`Official tool dependency '${name}' has a velar.entry outside its package root`);
+  }
+  return { root, entry };
+}
 
 export async function officialToolModulesPlugin(): Promise<Plugin> {
-  const project = await compileProject(scriptAnalysisEntry, new Map(), {
-    sourceRoot: fileURLToPath(new URL("../../script-analysis/src/", import.meta.url)),
-    projectRoot: fileURLToPath(new URL("../../script-analysis/", import.meta.url)),
+  const scriptAnalysis = await sourcePackage("@velarscript/script-analysis");
+  const project = await compileProject(scriptAnalysis.entry, new Map(), {
+    sourceRoot: dirname(scriptAnalysis.entry),
+    projectRoot: scriptAnalysis.root,
   });
   const failures = [
     ...project.failures.map((failure) => `${failure.path}: ${failure.message}`),
@@ -19,7 +37,7 @@ export async function officialToolModulesPlugin(): Promise<Plugin> {
   if (failures.length > 0) throw new Error(`Cannot compile official script-analysis package:\n${failures.join("\n\n")}`);
   const textBufferEntry = project.velarPackages.find((package_) => package_.name === "@velarscript/text-buffer")?.entryPath;
   const modules = new Map([
-    ["@velarscript/script-analysis", project.modules.find((module) => module.inputPath === scriptAnalysisEntry)?.result.code],
+    ["@velarscript/script-analysis", project.modules.find((module) => module.inputPath === scriptAnalysis.entry)?.result.code],
     ["@velarscript/text-buffer", project.modules.find((module) => module.inputPath === textBufferEntry)?.result.code],
   ]);
   for (const [source, code] of modules) if (!code) throw new Error(`Official tool package '${source}' did not emit JavaScript`);

@@ -125,8 +125,8 @@ test("pure VelarScript script service bounds 1 MiB initial and tail-update work"
   const packageScope = join(directory, "node_modules", "@velarscript");
   await mkdir(packageScope, { recursive: true });
   await Promise.all([
-    symlink(resolve("packages/text-buffer"), join(packageScope, "text-buffer"), "dir"),
-    symlink(resolve("packages/script-analysis"), join(packageScope, "script-analysis"), "dir"),
+    symlink(resolve("libraries/text-buffer"), join(packageScope, "text-buffer"), "dir"),
+    symlink(resolve("libraries/script-analysis"), join(packageScope, "script-analysis"), "dir"),
   ]);
   await writeFile(entry, `
 import {ScriptDocument, ScriptLanguage} from "@velarscript/script-analysis"

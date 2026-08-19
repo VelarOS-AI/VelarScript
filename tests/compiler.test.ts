@@ -211,8 +211,8 @@ async function linkWorkspaceEditorPackages(projectRoot: string): Promise<void> {
   const scope = join(projectRoot, "node_modules", "@velarscript");
   await mkdir(scope, { recursive: true });
   await Promise.all([
-    symlink(resolve("packages/text-buffer"), join(scope, "text-buffer"), "dir"),
-    symlink(resolve("packages/script-analysis"), join(scope, "script-analysis"), "dir"),
+    symlink(resolve("libraries/text-buffer"), join(scope, "text-buffer"), "dir"),
+    symlink(resolve("libraries/script-analysis"), join(scope, "script-analysis"), "dir"),
   ]);
 }
 

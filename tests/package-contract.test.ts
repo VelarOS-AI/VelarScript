@@ -4,13 +4,18 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import test, { after } from "node:test";
 import { fileURLToPath } from "node:url";
-import { velarBuildOrder, velarPublishedPackages } from "../scripts/velar-packages.mjs";
+import {
+  velarPublishedLibraries,
+  velarPublishedToolchainPackages,
+  velarPublishedWorkspacePackages,
+  velarToolchainBuildOrder,
+} from "../scripts/velar-packages.mjs";
 import { declaredEntryPaths, declaredImportSpecifiers, packageContentFailures, type PackedPackage } from "./package-contract.ts";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
 
 // ---------------------------------------------------------------------------
 // A-024 — `test:packages` is the release boundary, and it was checking a set it
-// had stopped deriving. `velarPackageNames()` produced the roster, `pack()`
+// had stopped deriving. `velarWorkspacePackageNames()` produced the roster, `pack()`
 // consumed it, and everything after `pack()` re-spelled the same eight names by
 // hand: content checks over six of them, an install listing eight literal
 // tarball paths, and a sixth copy in the `gate:build:packages` npm script.
@@ -151,12 +156,12 @@ test("[A-024] the contract is derived from the manifest, not from a list of name
   assert.ok(failures.some((failure) => failure.includes("src/index.vel")), failures.join("\n"));
 });
 
-test("[A-024] every publishable package that declares a build is built, dependencies first", async () => {
+test("[A-024] every publishable toolchain package that declares a build is built, dependencies first", async () => {
   // The third copy of the roster was the `gate:build:packages` npm script, six
   // workspaces chained by hand. A publishable package added with a build script
   // would have been packed and content-checked against a `dist` nothing built.
-  const published = await velarPublishedPackages(root);
-  const order = await velarBuildOrder(root);
+  const published = await velarPublishedToolchainPackages(root);
+  const order = await velarToolchainBuildOrder(root);
   const built = order.map((package_) => package_.name);
   const shouldBuild = published.filter((package_) => package_.manifest.scripts?.build).map((package_) => package_.name);
   assert.deepEqual([...built].sort(), [...shouldBuild].sort(), "a publishable package declares a build the gate does not run");
@@ -170,13 +175,24 @@ test("[A-024] every publishable package that declares a build is built, dependen
   assert.equal(manifest.scripts["gate:build:packages"], "node scripts/build-packages.mjs");
 });
 
-test("[A-024] the release gate walks the derived roster", async () => {
+test("VelarScript source libraries stay source-only and outside the toolchain build order", async () => {
+  const libraries = await velarPublishedLibraries(root);
+  assert.ok(libraries.length > 0, "the source-library workspace is empty");
+  for (const library of libraries) {
+    assert.match(library.manifest.velar?.entry ?? "", /\.vel$/u, `${library.name} has no VelarScript source entry`);
+    assert.equal(library.manifest.scripts?.build, undefined, `${library.name} is a source library but declares a toolchain build`);
+  }
+  const toolchainNames = new Set((await velarPublishedToolchainPackages(root)).map((package_) => package_.name));
+  for (const library of libraries) assert.ok(!toolchainNames.has(library.name), `${library.name} leaked into the toolchain roster`);
+});
+
+test("[A-024] workspace acceptance walks both derived package layers", async () => {
   // Structural, and deliberately so: what went wrong was not a wrong list, it
   // was a second list. The acceptance script may name a package to make a
   // specific claim about it — `native/macos/VelarDesktopHost.swift` is a fact
   // about Desktop alone — but the roster it walks has to be the derived one.
   const acceptance = await readFile(join(root, "tests", "package.acceptance.ts"), "utf8");
-  assert.match(acceptance, /const published = await velarPublishedPackages\(root\)/u);
+  assert.match(acceptance, /const published = await velarPublishedWorkspacePackages\(root\)/u);
   assert.match(acceptance, /published\.flatMap\(\(package_\) => packageContentFailures\(package_\.manifest, named\(package_\.name\)\)\)/u);
   assert.match(acceptance, /\.\.\.published\.map\(\(package_\) => join\(directory, named\(package_\.name\)\.filename\)\)/u);
   // And no tarball path is spelled out beside them.
@@ -195,7 +211,7 @@ test("[A-024] every acceptance script that installs the toolchain derives its se
     assert.doesNotMatch(
       source,
       /await pack\("(?:@velarscript\/[a-z-]+|create-velar)"\)/u,
-      `${name} packs a package by literal name; pack whatever packages/* publishes`,
+      `${name} packs a package by literal name; pack the derived workspace layers`,
     );
   }
 });

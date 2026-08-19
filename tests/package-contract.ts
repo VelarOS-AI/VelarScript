@@ -4,7 +4,7 @@ import type { VelarPackageManifest } from "../scripts/velar-packages.mjs";
 // A-024 — what a published VelarScript package must contain, derived from what
 // the package itself promises.
 //
-// `test:packages` packed a derived roster (`velarPackageNames`) and then wrote
+// `test:packages` packed a derived roster (`velarWorkspacePackageNames`) and then wrote
 // the same eight names out again by hand: the content checks walked six of
 // them, the clean install listed eight tarball paths, and `gate:build:packages`
 // held a sixth copy. The commit that derived the roster said a new package

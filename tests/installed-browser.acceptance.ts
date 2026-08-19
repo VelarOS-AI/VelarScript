@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { velarPackageNames } from "../scripts/velar-packages.mjs";
+import { velarWorkspacePackageNames } from "../scripts/velar-packages.mjs";
 import { BROWSER_TEST_MODULE, webModuleInterfaces } from "../packages/web/dist/compiler.js";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -47,11 +47,11 @@ try {
   // A-024: this file held the fifth copy of the eight-package roster — one
   // literal `pack()` list and four literal install lists — while
   // `docs/contributing/continuous-integration.md` said the installed set is
-  // derived from `packages/*`. A publishable package added to the workspace
-  // was packed, content-checked and installed by `test:packages` on the day it
-  // existed, and never entered the installed-toolchain acceptance at all.
+  // derived from the workspace topology. Toolchain packages and source
+  // libraries are installed together here, even though only packages/* enters
+  // a toolchain release candidate.
   const tarballs: string[] = [];
-  for (const name of await velarPackageNames(root)) tarballs.push(join(directory, await pack(name)));
+  for (const name of await velarWorkspacePackageNames(root)) tarballs.push(join(directory, await pack(name)));
   /** Every packed tarball, as one `npm install` takes them. */
   const install = (extra: readonly string[], cwd: string) =>
     runNpm(["install", ...extra, "--ignore-scripts", "--no-audit", "--no-fund", ...tarballs], cwd);

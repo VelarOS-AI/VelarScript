@@ -6,6 +6,17 @@ truth for acceptance status.
 
 ## Unreleased
 
+### Source-library ownership
+
+- Moved the pure VelarScript `text-buffer` and `script-analysis` libraries from
+  the toolchain implementation directory into a distinct `libraries/` layer.
+- Restored the toolchain release set to compiler, Node, Web, Desktop, creator,
+  and CLI; source libraries retain independent versions while remaining part
+  of packed workspace consumer validation.
+- Made the CLI language-service build resolve its pinned installed
+  `script-analysis` package instead of reaching into a repository-relative
+  source directory.
+
 ## 0.10.4 — 2026-08-19
 
 ### Inherited runtime validation

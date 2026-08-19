@@ -21,6 +21,7 @@ const copiedRootEntries = [
   "package-lock.json",
   "package.json",
   "packages",
+  "libraries",
   "scripts",
   "tsconfig.base.json",
   "tsconfig.json",
@@ -63,22 +64,24 @@ async function linkDependencies(workspaceRoot) {
   }
   await symlink(join(sourceModules, ".bin"), join(targetModules, ".bin"), directoryLinkType);
 
-  for (const entry of await readdir(join(workspaceRoot, "packages"), { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const packageRoot = join(workspaceRoot, "packages", entry.name);
-    let manifest;
-    try {
-      manifest = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"));
-    } catch {
-      continue;
+  for (const workspaceDirectory of ["packages", "libraries"]) {
+    for (const entry of await readdir(join(workspaceRoot, workspaceDirectory), { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const packageRoot = join(workspaceRoot, workspaceDirectory, entry.name);
+      let manifest;
+      try {
+        manifest = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"));
+      } catch {
+        continue;
+      }
+      if (typeof manifest.name !== "string" || !manifest.name) continue;
+      const parts = manifest.name.split("/");
+      const link = parts.length === 2
+        ? join(targetModules, parts[0], parts[1])
+        : join(targetModules, manifest.name);
+      await mkdir(dirname(link), { recursive: true });
+      await symlink(packageRoot, link, directoryLinkType);
     }
-    if (typeof manifest.name !== "string" || !manifest.name) continue;
-    const parts = manifest.name.split("/");
-    const link = parts.length === 2
-      ? join(targetModules, parts[0], parts[1])
-      : join(targetModules, manifest.name);
-    await mkdir(dirname(link), { recursive: true });
-    await symlink(packageRoot, link, directoryLinkType);
   }
 }
 

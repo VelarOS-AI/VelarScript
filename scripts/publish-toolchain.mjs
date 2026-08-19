@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { verifyToolchainRelease } from "./release-toolchain.mjs";
-import { velarPublishedPackages } from "./velar-packages.mjs";
+import { velarPublishedToolchainPackages } from "./velar-packages.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const registry = "https://registry.npmjs.org";
@@ -90,7 +90,7 @@ function parseArguments(arguments_) {
 }
 
 async function publicationOrder() {
-  const packages = await velarPublishedPackages(root);
+  const packages = await velarPublishedToolchainPackages(root);
   const byName = new Map(packages.map((package_) => [package_.name, package_]));
   const placed = new Set();
   const visiting = new Set();

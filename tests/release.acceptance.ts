@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { prepareExternalPreview } from "../scripts/prepare-external-preview.mjs";
-import { velarBuildOrder } from "../scripts/velar-packages.mjs";
+import { velarToolchainBuildOrder } from "../scripts/velar-packages.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 
@@ -32,8 +32,6 @@ test("publication rehearsal emits reproducible verified package identities witho
       "@velarscript/compiler",
       "@velarscript/desktop",
       "@velarscript/node",
-      "@velarscript/script-analysis",
-      "@velarscript/text-buffer",
       "@velarscript/web",
       "create-velar",
     ]);
@@ -140,8 +138,8 @@ async function protectWorkspaceOutputs(label: string) {
   // which was correct and was a copy: the seventh compiled package would have
   // been the one package release tooling could quietly overwrite. What has to
   // be protected is every package that has a `dist` to lose, and that is what
-  // `velarBuildOrder` already answers.
-  const built = await velarBuildOrder(root);
+  // `velarToolchainBuildOrder` already answers.
+  const built = await velarToolchainBuildOrder(root);
   const paths = built.map((package_) => join(package_.directory, "dist", `.workspace-${label}.sentinel`));
   // Recomputed by a second route — the manifests themselves — so that replacing
   // the derivation above with a literal list again fails here instead of

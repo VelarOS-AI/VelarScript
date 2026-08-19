@@ -5,7 +5,8 @@
   "license": "Apache-2.0",
   "type": "module",
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "libraries/*"
   ],
   "scripts": {
     "build:packages": "node scripts/gate-lock.mjs npm run gate:build:packages",

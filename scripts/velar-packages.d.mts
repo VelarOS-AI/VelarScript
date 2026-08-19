@@ -25,14 +25,26 @@ export interface VelarWorkspacePackage {
   readonly manifest: VelarPackageManifest;
 }
 
-/** Every workspace package under `packages`, in name order. */
-export function velarPackages(root?: string): Promise<VelarWorkspacePackage[]>;
+/** Every toolchain implementation package under `packages`, in name order. */
+export function velarToolchainPackages(root?: string): Promise<VelarWorkspacePackage[]>;
 
-/** Every publishable workspace package, in name order. */
-export function velarPublishedPackages(root?: string): Promise<VelarWorkspacePackage[]>;
+/** Every VelarScript source library under `libraries`, in name order. */
+export function velarLibraries(root?: string): Promise<VelarWorkspacePackage[]>;
 
-/** The publishable package names a complete offline install needs. */
-export function velarPackageNames(root?: string): Promise<string[]>;
+/** Every publishable toolchain package, in name order. */
+export function velarPublishedToolchainPackages(root?: string): Promise<VelarWorkspacePackage[]>;
 
-/** The publishable packages that declare a build, dependencies first. */
-export function velarBuildOrder(root?: string): Promise<VelarWorkspacePackage[]>;
+/** Every publishable source library, in name order. */
+export function velarPublishedLibraries(root?: string): Promise<VelarWorkspacePackage[]>;
+
+/** Every publishable package across the toolchain and source-library layers. */
+export function velarPublishedWorkspacePackages(root?: string): Promise<VelarWorkspacePackage[]>;
+
+/** The six-package toolchain release names. */
+export function velarToolchainPackageNames(root?: string): Promise<string[]>;
+
+/** Every local package name needed by complete workspace consumer gates. */
+export function velarWorkspacePackageNames(root?: string): Promise<string[]>;
+
+/** Publishable toolchain packages that declare a build, dependencies first. */
+export function velarToolchainBuildOrder(root?: string): Promise<VelarWorkspacePackage[]>;

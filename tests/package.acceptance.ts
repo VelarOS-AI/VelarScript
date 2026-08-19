@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { velarPublishedPackages } from "../scripts/velar-packages.mjs";
+import { velarPublishedWorkspacePackages } from "../scripts/velar-packages.mjs";
 import { declaredEntryPaths, declaredImportSpecifiers, packageContentFailures, type PackedPackage } from "./package-contract.ts";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -12,10 +12,10 @@ const directory = await mkdtemp(join(tmpdir(), "velar-packages-"));
 const consumerDirectory = await mkdtemp(join(tmpdir(), "velar-zero-npm-consumer-"));
 
 try {
-  // D63 rule 159: pack whatever packages/* publishes, rather than a list here
-  // that has to be kept level with it. A package added to the workspace is
-  // packed by this gate the day it exists, and an install that needs it cannot
-  // silently go untested.
+  // D63 rule 159: pack every publishable toolchain package and source library,
+  // rather than a list here that has to be kept level with both workspace
+  // layers. A library added under libraries/* joins consumer acceptance without
+  // silently joining the version-locked toolchain release.
   //
   // A-024: the roster was derived and then immediately re-spelled by hand for
   // everything that came after `pack()`. The content checks walked six of the
@@ -23,12 +23,12 @@ try {
   // package that had neither LICENSE, README, `dist`, nor the file its own
   // `exports` pointed at sailed through both while a real consumer importing it
   // failed with ERR_MODULE_NOT_FOUND. Everything below walks `published`.
-  const published = await velarPublishedPackages(root);
+  const published = await velarPublishedWorkspacePackages(root);
   const packed = new Map<string, PackedPackage>();
   for (const package_ of published) packed.set(package_.name, await pack(package_.name));
   const named = (name: string) => {
     const entry = packed.get(name);
-    assert.ok(entry, `packages/* no longer publishes ${name}; this gate assumed it does`);
+    assert.ok(entry, `the workspace no longer publishes ${name}; this gate assumed it does`);
     return entry;
   };
   const compiler = named("@velarscript/compiler");
@@ -68,7 +68,7 @@ try {
 
   await writeFile(join(directory, "package.json"), "{}\n", "utf8");
   // The complete set, from the same derived roster that packed it. A tarball
-  // list written out here is a list that stops matching `packages/*`.
+  // list written out here stops matching `packages/*` or `libraries/*`.
   await runNpm([
     "install",
     "--ignore-scripts",
@@ -114,7 +114,10 @@ try {
   assert.equal(installedManifest.dependencies.playwright, "^1.58.2");
   assert.equal(installedManifest.dependencies["@velarscript/compiler"], "0.10.4");
   assert.equal(installedManifest.dependencies["@velarscript/node"], "0.10.4");
-  assert.equal(installedManifest.dependencies["@velarscript/script-analysis"], "0.10.4");
+  assert.equal(
+    installedManifest.dependencies["@velarscript/script-analysis"],
+    published.find((package_) => package_.name === "@velarscript/script-analysis")?.version,
+  );
   assert.equal(installedManifest.dependencies["@velarscript/web"], "0.10.4");
   assert.equal(installedManifest.dependencies["@velarscript/desktop"], "0.10.4");
   assert.equal(installedManifest.dependencies["create-velar"], "0.10.4");

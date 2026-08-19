@@ -953,8 +953,10 @@ build. `@velarscript/text-buffer` and `@velarscript/script-analysis` are the
 first substantial consumers of this path. Their AVL rope, bounded history,
 incremental lexer, and local semantic analysis use ordinary class, optional
 narrowing, collection, readonly-view, and primitive-method lowering. The CLI
-language server consumes them through a build-time internal package edge; they
-never regain a user-visible `velar/*` identity.
+language server consumes its installed, explicitly pinned library generation
+through a build-time package edge. These libraries live under `libraries/`,
+not beside compiler/runtime implementations under `packages/`; they version
+and release independently and never regain a user-visible `velar/*` identity.
 
 Checked Number receiver methods use a separate compiler-owned Number runtime.
 It captures the exact Math operations, `Number.isSafeInteger`, native

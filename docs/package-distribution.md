@@ -2,8 +2,9 @@
 
 Status: stable package contract for the published VelarScript 0.10 toolchain
 
-The repository distributes six toolchain packages and two installable
-VelarScript domain-library packages through npm:
+The repository contains two distinct npm workspace layers: six version-locked
+toolchain packages under `packages/`, and independently versioned VelarScript
+source libraries under `libraries/`:
 
 - `@velarscript/compiler`: compiler, formatter, diagnostics, semantic index,
   Core lowering APIs, compiler-extension ABI, neutral framework-host ABI, and
@@ -31,14 +32,15 @@ VelarScript domain-library packages through npm:
   `@velarscript/text-buffer` and is bundled internally by the CLI language
   server without acquiring a `velar/*` Standard identity.
 
-All eight packages require Node.js 24 or later and contain no Workbench code.
+All current packages require Node.js 24 or later and contain no Workbench code.
 Compiler, Node, Web, Desktop, creator, and CLI publish JavaScript and `.d.ts`
 artifacts from `dist`; text-buffer and script-analysis publish their checked
-`.vel` source entries. Web pins the exact
+`.vel` source entries and are not members of the toolchain release set. Web pins the exact
 matching compiler version. Node pins compiler. Desktop pins compiler, Node,
 and Web, but never imports or executes the CLI. Script-analysis pins
-text-buffer. CLI pins compiler, Node, Web, Desktop, creator, and script-analysis
-as one complete official release generation. It resolves
+text-buffer. CLI pins compiler, Node, Web, Desktop, and creator as one complete
+official release generation, and separately pins the script-analysis library
+version it bundles into the official language service. It resolves
 every compiler/project extension declared by the application's format-v2
 manifest from the project first, then discovers and validates optional
 protocol-v1 `/host` and `/package-host` entries from the same owner.
@@ -167,10 +169,11 @@ remain ordinary source libraries rather than hidden framework extensions.
 The complete layering, accessibility, and versioning rules are documented in
 [`component-packages.md`](component-packages.md).
 
-`npm run test:packages` is the release boundary. It builds the compiled packages,
-runs `npm pack`, checks the tarball contents, installs the complete set into a clean
-temporary consumer, invokes the installed CLI, builds and runs a VelarScript file
-that imports the Core Standard API and imports the public compiler API. The
+`npm run test:packages` is the workspace consumer boundary. It builds the
+compiled toolchain packages, runs `npm pack` over both workspace layers, checks
+the tarball contents, installs the complete set into a clean temporary consumer,
+invokes the installed CLI, and builds and runs a VelarScript file that imports
+the Core Standard API, the two source libraries, and the public compiler API. The
 browser package gate additionally creates a project through packed tarballs,
 builds and verifies its production output, and runs its browser test. A
 successful source build without this consumer test is not considered
@@ -182,12 +185,19 @@ installed `@velarscript/web` tarball, and the generated browser test imports
 `velar/web-test`. The installed CLI must check, test, build, integrity-verify,
 and run the resulting project before the release set is accepted.
 
-`npm run release:rehearse` adds the release-set boundary: all eight tarballs,
+`npm run release:rehearse` adds the toolchain release-set boundary: the six
+compiler/runtime/framework/tooling tarballs,
 deterministic SHA-256 values, source identity, npm integrity, and explicit
 publication blockers. Candidate mode fails closed unless Git/version/remote
 and license requirements are satisfied. CI may attest and upload these
 tarballs. Registry publication is a separately authorized, provenance-bearing
 GitHub Actions job that consumes the verified strict candidate.
+
+The source libraries keep their own package versions and release authority.
+Changing a library does not add it to a toolchain tag or candidate. The CLI
+adopts a library generation by updating its ordinary exact npm dependency and
+resolves that installed package's `velar.entry`; it does not read a repository
+relative library path.
 
 The rehearsal builds and packs a private temporary toolchain snapshot. It never
 cleans or rewrites the active workspace's `dist` directories, so release checks
@@ -195,8 +205,8 @@ cannot race with compiler, editor, or application tests.
 
 Release output replacement refuses repository roots/ancestors, symbolic links,
 and non-release directories. Verification accepts exactly the sorted compiler,
-Node, Web, Desktop, creator, CLI, text-buffer, and script-analysis package
-identities, canonical tarball names, matching versions/sizes/hashes/npm
+Node, Web, Desktop, creator, and CLI package identities, canonical tarball
+names, matching versions/sizes/hashes/npm
 integrity, the declared checksum file, and no undeclared files. Downstream
 consumers independently check the required package subset and tarball SHA-256
 values before installing it; they do not import this repository's verifier.

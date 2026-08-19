@@ -9,11 +9,11 @@ The repository defines four GitHub Actions workflows:
   Chromium, Firefox, and WebKit dependencies and runs both development-server
   and CSP-enabled production browser matrices, the project-owned
   `.browser.test.vel` suite in all engines, and the same generated browser test
-  through the eight packed installed tarballs (compiler, Node, Web, Desktop,
-  creator, CLI, text-buffer, and script-analysis). Browser-project execution
-  first verifies the exact production asset inventory and uses the public
-  preview server. That set is derived from `packages/*` rather than listed:
-  every publishable workspace package is built, packed, checked against what
+  through the six packed toolchain tarballs plus the independently versioned
+  source-library tarballs. Browser-project execution first verifies the exact
+  production asset inventory and uses the public preview server. The toolchain
+  and library sets are derived separately from `packages/*` and `libraries/*`:
+  every publishable workspace package is packed and checked against what
   its own manifest promises a consumer — LICENSE, README, and every path named
   by `main`, `types`, `exports`, `bin` or `velar.entry` — installed into the
   clean consumer, and imported through every specifier it publishes. A package
@@ -38,14 +38,14 @@ The repository defines four GitHub Actions workflows:
   Chromium, Firefox, and WebKit, and releases both resources through component
   cleanup. Host-side tests do not bypass that source contract by importing the
   generated realtime JavaScript module directly.
-- Packed-browser acceptance independently creates an application from the eight
-  installed tarballs. Its application graph imports every browser application
-  module the Web extension publishes — ten today, derived from the extension's
-  own interface table rather than listed, so an eleventh fails this acceptance
-  until the installed toolchain serves it — while its generated browser test
-  loads `velar/web-test`, which application source may not import at all; the
-  installed CLI then checks, tests,
-  builds, verifies, and executes that project.
+- Packed-browser acceptance independently creates an application from the
+  complete locally packed workspace. Its application graph imports every
+  browser application module the Web extension publishes — ten today, derived
+  from the extension's own interface table rather than listed, so an eleventh
+  fails this acceptance until the installed toolchain serves it — while its
+  generated browser test loads `velar/web-test`, which application source may
+  not import at all; the installed CLI then checks, tests, builds, verifies,
+  and executes that project.
 - Hosted-deployment acceptance runs the public remote verifier against root and
   subpath product servers and proves that byte tampering, wrong cache headers,
   access redirects, and asset-to-HTML fallback are rejected. A real preview
@@ -54,8 +54,8 @@ The repository defines four GitHub Actions workflows:
   verified non-publishing toolchain artifact, adds an OIDC artifact attestation,
   and uploads it. A tag switches the packaging step to strict candidate mode.
 - `Publish npm toolchain` is manual, requires an exact tag and literal
-  publication confirmation, reruns every release gate, creates a strict
-  candidate, publishes all eight packages with npm provenance under `next`,
+  publication confirmation, creates a strict candidate, publishes all six
+  toolchain packages with npm provenance under `next`,
   verifies their registry integrity, and exposes `latest` only after the
   complete version-locked graph exists.
 - `External preview verification` is manual and credential-free. It rebuilds

@@ -16,16 +16,16 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createIsolatedToolchainBuild } from "./isolated-toolchain-build.mjs";
-import { velarPackageNames } from "./velar-packages.mjs";
+import { velarToolchainPackageNames } from "./velar-packages.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const defaultOutput = join(root, "release", "rehearsal");
 const manifestName = "velar-toolchain-release.json";
 const checksumName = "SHA256SUMS";
-// D63 rule 159: derived from packages/*, never restated here. A release that
-// omits a package produces a toolchain that cannot install, and a hand-kept
-// list is how a package gets omitted.
-const workspaces = await velarPackageNames(root);
+// D63 rule 159: derived from packages/*, never restated here. Ordinary source
+// libraries under libraries/* remain npm dependencies but are not members of
+// this version-locked compiler/runtime release generation.
+const workspaces = await velarToolchainPackageNames(root);
 const excludedTreeNames = new Set([".git", "node_modules", "dist", "release", "coverage"]);
 
 async function main(arguments_) {
@@ -207,9 +207,9 @@ async function readPackageManifests() {
   const create = JSON.parse(await readFile(join(root, "packages", "create", "package.json"), "utf8"));
   const cli = JSON.parse(await readFile(join(root, "packages", "cli", "package.json"), "utf8"));
   const desktop = JSON.parse(await readFile(join(root, "packages", "desktop", "package.json"), "utf8"));
-  const textBuffer = JSON.parse(await readFile(join(root, "packages", "text-buffer", "package.json"), "utf8"));
-  const scriptAnalysis = JSON.parse(await readFile(join(root, "packages", "script-analysis", "package.json"), "utf8"));
-  for (const package_ of [compiler, node, web, create, cli, desktop, textBuffer, scriptAnalysis]) {
+  const textBuffer = JSON.parse(await readFile(join(root, "libraries", "text-buffer", "package.json"), "utf8"));
+  const scriptAnalysis = JSON.parse(await readFile(join(root, "libraries", "script-analysis", "package.json"), "utf8"));
+  for (const package_ of [compiler, node, web, create, cli, desktop]) {
     if (package_.version !== rootManifest.version) throw new Error(`${package_.name} version must exactly match ${rootManifest.version}`);
     if (package_.repository?.url !== rootManifest.repository?.url) throw new Error(`${package_.name} repository must match the workspace repository`);
   }
@@ -264,8 +264,6 @@ function releaseBlockers(manifests, source) {
     manifests.create,
     manifests.cli,
     manifests.desktop,
-    manifests.textBuffer,
-    manifests.scriptAnalysis,
   ]) {
     if (!package_.license || package_.license === "UNLICENSED") blockers.push(`${package_.name} has no publishable license decision`);
   }

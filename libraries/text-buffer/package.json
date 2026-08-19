@@ -13,7 +13,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/VelarOS-AI/VelarScript.git",
-    "directory": "packages/text-buffer"
+    "directory": "libraries/text-buffer"
   },
   "publishConfig": {
     "access": "public"

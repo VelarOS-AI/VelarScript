@@ -2,6 +2,8 @@
 
 Pure VelarScript JavaScript and TypeScript lexical and local structural
 analysis for editor tooling.
+It is an independently versioned source library, not a member of the
+VelarScript compiler/runtime toolchain release.
 
 Install it through npm, then import its public source entry by package name:
 
