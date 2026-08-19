@@ -31,7 +31,9 @@ test("a normally exiting browser worker reaps a stubborn process-group descendan
   const source = [
     'const { spawn } = require("node:child_process");',
     `spawn(process.execPath, ["-e", 'process.on("SIGHUP", () => {}); process.on("SIGINT", () => {}); process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)', ${JSON.stringify(marker)}], { stdio: "ignore" });`,
-    "setTimeout(() => process.exit(0), 250);",
+    // Leave enough time for a loaded hosted runner to observe both processes;
+    // the assertion is about process-group cleanup, not scheduler latency.
+    "setTimeout(() => process.exit(0), 1000);",
   ].join(" ");
   const running = superviseBrowserWorker({
     executable: process.execPath,

@@ -193,9 +193,11 @@ console.log(JSON.stringify({
   t.diagnostic(`record-field write ${(measured.microseconds * 1000).toFixed(0)}ns (baseline before the fix: 4858ns)`);
   assert.equal(measured.detached, 1, "the replaced record field kept its owner");
   assert.equal(measured.attached, 1, "the new record field never became owned");
-  // 4.86us per write before the fix, 0.41us after. The gate is deliberately
-  // loose: it separates "the throwing probe came back" from machine noise.
-  assert.ok(measured.microseconds < 2, `a primitive record-field write took ${measured.microseconds.toFixed(3)}us`);
+  // 4.86us per write before the fix, 0.41us after. Windows' timer and hosted
+  // runner overhead is measurably higher, but 3us still separates that noise
+  // from the old throwing collection-brand probe.
+  const budget = process.platform === "win32" ? 3 : 2;
+  assert.ok(measured.microseconds < budget, `a primitive record-field write took ${measured.microseconds.toFixed(3)}us`);
 });
 
 test("[beta-9] a reused dependency buffer still drops and re-adds subscriptions", { timeout: 180_000 }, () => {
