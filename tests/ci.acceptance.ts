@@ -132,7 +132,7 @@ function workflowRunCommands(workflow: string): string[] {
   return commands;
 }
 
-test("CI covers platform, browser, rehearsal, and explicit npm publication gates", async () => {
+test("default CI stays lightweight while rehearsal and npm publication remain explicit", async () => {
   const workspace = JSON.parse(await readFile("package.json", "utf8")) as { scripts: Record<string, string> };
   assert.match(resolveScript(workspace.scripts, "test"), /tests\/release\.acceptance\.ts/u);
   assert.equal(workspace.scripts["release:rehearse"], "node scripts/release-toolchain.mjs rehearse");
@@ -159,25 +159,21 @@ test("CI covers platform, browser, rehearsal, and explicit npm publication gates
   // the set CI has to run — this fails rather than quietly shrinking that set.
   const forwarding = gates.filter((gate) => (workspace.scripts[gate] ?? "").trimEnd().endsWith(" --"));
   assert.deepEqual(forwarding, ["velar"], "the gates that forward developer arguments changed");
-  const required = gates.filter((gate) => !forwarding.includes(gate));
-
   const ci = await readFile(".github/workflows/ci.yml", "utf8");
-  for (const platform of ["ubuntu-latest", "macos-latest", "windows-latest"]) assert.match(ci, new RegExp(platform, "u"));
+  assert.match(ci, /runs-on: ubuntu-latest/u);
   assert.match(ci, /node-version: "24\.x"/u);
-  assert.match(ci, /playwright install --with-deps chromium firefox webkit/u);
 
-  // The only gate this file used to assert about ci.yml was `test:browser`.
-  // The three lines above it — `npm run check`, `npm test`,
-  // `npm run test:packages` — were covered by nothing: deleting any of them
-  // from the workflow left every test in this repository green, and
-  // `test:packages` had already sat red for days on the strength of being the
-  // gate people skip. The steps are read out of the workflow now and followed
-  // through the script graph, so a deleted step takes a named gate down with
-  // it. Which job runs which gate is not modelled here; the platform matrix
-  // and the browser job are asserted separately above.
+  // Full tests, packed consumers, and the browser matrix run locally before a
+  // release. A default push only repeats the cheap clean-install source check;
+  // publication below independently rebuilds and verifies the strict tagged
+  // candidate. Pin both sides so routine pushes cannot silently grow back into
+  // the former three-OS plus six-browser release suite.
   const reached = reachedScripts(workspace.scripts, workflowRunCommands(ci));
-  const missing = required.filter((gate) => !reached.has(gate));
-  assert.deepEqual(missing, [], `.github/workflows/ci.yml runs no step that reaches: ${missing.join(", ")}`);
+  assert.ok(reached.has("check"), ".github/workflows/ci.yml must reach the source-quality gate");
+  for (const heavy of ["test", "test:packages", "test:browser", "release:rehearse", "release:publish"]) {
+    assert.equal(reached.has(heavy), false, `.github/workflows/ci.yml must not run ${heavy} on every push`);
+  }
+  assert.doesNotMatch(ci, /macos-latest|windows-latest|playwright install|npm test|test:packages|test:browser/u);
 
   const release = await readFile(".github/workflows/release-rehearsal.yml", "utf8");
   assert.match(release, /id-token: write/u);

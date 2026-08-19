@@ -34,7 +34,7 @@ after(removeTemporaryDirectories);
 /** The manifest from the A-024 reproduction, verbatim. */
 const brokenManifest = {
   name: "@velarscript/broken-probe",
-  version: "0.10.2",
+  version: "0.10.3",
   license: "UNLICENSED",
   type: "module",
   exports: "./dist/does-not-exist.js",
@@ -107,7 +107,7 @@ test("[A-024] a package that keeps its promises passes both halves", async () =>
   // refuses everything.
   const manifest = {
     name: "velar-contract-probe",
-    version: "0.10.2",
+    version: "0.10.3",
     license: "Apache-2.0",
     type: "module",
     files: ["dist", "README.md"],
@@ -130,7 +130,7 @@ test("[A-024] the contract is derived from the manifest, not from a list of name
   // they could only ever check the packages somebody had named.
   const manifest = {
     name: "velar-contract-probe",
-    version: "0.10.2",
+    version: "0.10.3",
     type: "module",
     exports: {
       ".": { default: "./dist/index.js" },

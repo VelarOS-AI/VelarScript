@@ -1,6 +1,6 @@
 {
   "name": "@velarscript/text-buffer",
-  "version": "0.10.2",
+  "version": "0.10.3",
   "description": "A bounded incremental text buffer authored in pure VelarScript.",
   "license": "Apache-2.0",
   "files": [

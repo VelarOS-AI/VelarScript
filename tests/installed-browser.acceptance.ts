@@ -111,7 +111,7 @@ mount(<App />, "#app")
   };
   assert.deepEqual(componentManifest.files, ["src/index.vel", "README.md"]);
   assert.equal(componentManifest.velar.entry, "src/index.vel");
-  assert.equal(componentManifest.peerDependencies["@velarscript/web"], "^0.10.2");
+  assert.equal(componentManifest.peerDependencies["@velarscript/web"], "^0.10.3");
   await runNpm(["run", "format:check"], component);
   await runNpm(["run", "check"], component);
   await runNpm(["test"], component);

@@ -1005,8 +1005,13 @@ export class JavaScriptEmitter {
         const declaration = this.typeDeclarations.get(value.name)!;
         if (declaration.kind === "TypeDeclaration") {
           const complete = this.hints.typeDeclarationFields.get(declaration.span.start);
-          if (complete) complete.forEach((field) => visit(field.type));
-          else declaration.fields.forEach((field) => visit(resolveTypeReference(field.type)));
+          const ownNames = new Set(declaration.fields.map((field) => field.name));
+          // A field written in this module must retain the local spelling that
+          // owns its runtime Type binding. The analyzer's complete structural
+          // table expands aliases for static work; walking that expansion here
+          // can lose the only imported/local validator name before emission.
+          declaration.fields.forEach((field) => visit(resolveTypeReference(field.type)));
+          complete?.filter((field) => !ownNames.has(field.name)).forEach((field) => visit(field.type));
         } else {
           visit(resolveTypeReference(declaration.target));
         }
@@ -1572,7 +1577,14 @@ export class JavaScriptEmitter {
     const fields = completeFields.map((field, index) => ({
       name: field.name,
       descriptor: `__velarField${index}`,
-      type: field.type,
+      // Complete field tables are alias-expanded for structural analysis. An
+      // own field's source spelling is nevertheless the runtime authority in
+      // this module: an imported alias may be the only binding available for
+      // its target record. Inherited fields have no local syntax and continue
+      // to use the analyzer-owned resolved type.
+      type: ownFields.has(field.name)
+        ? this.resolveDeclarationType(ownFields.get(field.name)!.type)
+        : field.type,
       syntax: ownFields.get(field.name)?.type.syntax ?? null,
     }));
     const checks = fields.map(({ descriptor, type }) => {

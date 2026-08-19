@@ -6,6 +6,17 @@ truth for acceptance status.
 
 ## Unreleased
 
+## 0.10.3 — 2026-08-19
+
+### Runtime record alias validation
+
+- Fixed imported record aliases used as record fields being accepted by static
+  analysis but rejected by runtime `is` and `parse` validation.
+- Preserved runtime validators for aliases to ordinary and inherited records,
+  including nested `List<Alias>` fields and flow narrowing.
+- Added a fail-closed emission regression gate so a legal imported alias cannot
+  silently lower to a constant `false` validator again.
+
 ## 0.10.2 — 2026-08-19
 
 ### Record inheritance

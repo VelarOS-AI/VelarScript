@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -211,4 +211,78 @@ print(value.a)
   });
   assert.notEqual(execution.status, 0);
   assert.match(String(execution.stderr), /Type inheritance is cyclic/u);
+});
+
+test("record aliases keep runtime validators across an installed package boundary", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-type-alias-package-"));
+  const packageRoot = join(directory, "node_modules", "@example", "domain");
+  const output = join(directory, "dist");
+  try {
+    await mkdir(join(packageRoot, "src"), { recursive: true });
+    await writeFile(join(packageRoot, "package.json"), JSON.stringify({
+      name: "@example/domain",
+      version: "1.0.0",
+      velar: { entry: "src/index.vel" },
+    }), "utf8");
+    await writeFile(join(packageRoot, "src", "index.vel"), `
+export type Coordinate3:
+    x: number
+    y: number
+    z: number
+
+export type ChunkPosition = Coordinate3
+
+export type DirectCoordinate3:
+    x: number
+    y: number
+    z: number
+
+export type LocatedCoordinate extends Coordinate3:
+    world: string
+
+export type LocatedPosition = LocatedCoordinate
+`.trimStart(), "utf8");
+    const entry = join(directory, "main.vel");
+    await writeFile(entry, `
+import {DirectCoordinate3, ChunkPosition, LocatedPosition} from "@example/domain"
+
+type ChunkQuery:
+    position: ChunkPosition
+    direct: DirectCoordinate3
+    trail: List<ChunkPosition>
+    located: LocatedPosition
+
+const valid = {
+    position: {x: 1, y: 2, z: 3},
+    direct: {x: 4, y: 5, z: 6},
+    trail: [{x: 7, y: 8, z: 9}],
+    located: {x: 10, y: 11, z: 12, world: "overworld"},
+}
+
+print(f"{ChunkQuery.is(valid)}")
+const parsed = ChunkQuery.parse(valid)
+print(f"{parsed.position.x}:{parsed.trail[0].z}:{parsed.located.world}")
+
+const candidate: unknown = valid
+if candidate is ChunkQuery:
+    print(f"narrowed:{candidate.position.y}")
+
+print(f"{ChunkQuery.is({position: {x: 1, y: 2, z: "bad"}, direct: valid.direct, trail: valid.trail, located: valid.located})}")
+`.trimStart(), "utf8");
+
+    const build = spawnSync(process.execPath, [cliPath, "build", entry, "--out-dir", output], {
+      encoding: "utf8",
+      timeout: 120_000,
+    });
+    assert.equal(build.status, 0, String(build.stderr));
+    const emitted = await readFile(join(output, "main.js"), "utf8");
+    assert.doesNotMatch(emitted, /__velarField\d+[^\n]*&& false/u);
+    assert.doesNotMatch(emitted, /__velarListTypeIs\([^\n]*=> false\)/u);
+
+    const execution = spawnSync(process.execPath, [join(output, "main.js")], { encoding: "utf8", timeout: 20_000 });
+    assert.equal(execution.status, 0, String(execution.stderr));
+    assert.equal(String(execution.stdout), "true\n1:9:overworld\nnarrowed:2\nfalse\n");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
