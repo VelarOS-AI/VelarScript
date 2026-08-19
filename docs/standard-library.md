@@ -251,21 +251,32 @@ the captured operation.
 ## Binary data, deterministic computation, and work ownership
 
 `velar/binary` is the common Node/Web binary boundary. `Bytes` is an immutable
-snapshot with `size` and read-only integer indexing. `UInt16Buffer` is fixed-size
-mutable working memory with checked integer indexing and `toBytes(order)`;
-`uint16FromBytes(snapshot, order)` restores it. Every value and index is checked,
-so the API never inherits typed-array truncation or out-of-bounds no-ops. The
-compiler emits direct specialized index operations rather than routing these
-types through reactive Lists or ordinary method wrappers. Safe JavaScript
-declarations map `Uint8Array` and Node `Buffer` results to `Bytes`, and
-`Uint16Array` results to `UInt16Buffer`; no `Buffer`-specific API enters source.
+snapshot with `size` and read-only integer indexing. `UInt8Buffer`,
+`UInt16Buffer`, `UInt32Buffer`, and `Float32Buffer` are fixed-size mutable
+working memory for compact state and numeric datasets. They provide checked
+indexing, independent `copy()`/`slice(start=0, end=size)` values, and `toBytes`;
+multi-byte buffers require an explicit `ByteOrder`. Matching `*FromBytes`
+functions restore them. Every value, size, slice bound, and index is checked, so
+the API never inherits typed-array truncation, non-finite floats, or
+out-of-bounds no-ops. Constructors and every runtime `Type.is`/`Type.parse`
+boundary enforce one 64 MiB byte ceiling before scanning or copying a typed
+array. The compiler emits direct specialized index operations rather than
+routing these types through reactive Lists or ordinary methods.
+
+`UInt32Builder` and `Float32Builder` grow only up to their required
+`maxElements`; `push(value)` rejects overflow and `finish()` returns one exact
+fixed buffer and seals the builder. Safe JavaScript declarations map
+`Uint8Array` and Node `Buffer` results to read-only `Bytes`, `Uint16Array` to
+`UInt16Buffer`, `Uint32Array` to `UInt32Buffer`, and `Float32Array` to
+`Float32Buffer`. A JavaScript `Uint8Array` parameter accepts either `Bytes` or
+`UInt8Buffer`; no `Buffer`-specific API enters source.
 
 ```velar fragment
 import {ByteOrder, Bytes, uint16Buffer, uint16FromBytes} from "velar/binary"
 
-const blocks = uint16Buffer(16 ** 3)
-blocks[0] = 7
-const snapshot: Bytes = blocks.toBytes(ByteOrder.little)
+const values = uint16Buffer(4096)
+values[0] = 7
+const snapshot: Bytes = values.toBytes(ByteOrder.little)
 const restored = uint16FromBytes(snapshot, ByteOrder.little)
 assert restored[0] == 7
 ```
@@ -291,7 +302,7 @@ to finish; CPU-heavy work cooperates with `await cancellation.checkpoint()`.
 {
   "formatVersion": 2,
   "entry": "src/main.vel",
-  "workers": {"terrain": "src/terrain-worker.vel"}
+  "workers": {"processor": "src/data-worker.vel"}
 }
 ```
 
@@ -299,19 +310,25 @@ to finish; CPU-heavy work cooperates with `await cancellation.checkpoint()`.
 `workerPool(name, RequestType, ResponseType, size, capacity=64)` starts a bounded
 pool. Both expose `call(request, cancellation?, timeout?)` and `close()`. A
 worker entry calls `serveWorker(RequestType, ResponseType, handler,
-capacity=64)`. Runtime Types validate both directions, `Bytes` transfers its
-backing storage without an extra transport copy, queue capacity supplies
-backpressure, and a crash rejects every pending call with one stable worker
-error identity. The implementation selects browser Worker or Node
-`worker_threads`; source never handles native URLs or ports.
+capacity=64)`. Runtime Types validate both directions. Full-storage `Bytes` and
+fixed numeric buffers are found inside bounded, cycle-safe List/Map/record
+graphs. `call` first isolates any caller-owned transferable storage, then
+transfers the snapshot's deduplicated backing buffers; the caller's values are
+never detached implicitly. Queue capacity supplies backpressure, and a crash
+rejects every pending call with one stable worker error identity. The
+implementation selects browser Worker or Node `worker_threads`; source never
+handles native URLs or ports.
 
 `velar/websocket` exposes `connect(url, options?)` on Node and Web, plus Node
 `listen(options)`. A `WebSocketConnection` sends `string | Bytes`, and its
 `next() -> Promise<(string | Bytes)?>` is consumed directly or with `async for`.
 `send` resolves only after the bounded pending-byte budget drains. Connection,
-message, send, accept, and unread-message limits fail explicitly. `listen` may
+message, send, accept, unread-message count, and aggregate unread-byte limits
+fail explicitly. `maxQueuedBytes` defaults to 16 MiB on Node and Web. `listen` may
 receive the same typed HTTP handler as `velar/serve`, so HTTP and upgrade traffic
-share one port. Connections and servers are owned resources for `using`.
+share one port. A normal close leaves accepted messages available to `next()`
+until the queue drains to EOF; receive-limit and protocol failures clear it
+immediately. Connections and servers are owned resources for `using`.
 
 ## Binary codecs and noise adapters
 
@@ -322,7 +339,10 @@ mature packages: `velar/msgpack` uses `msgpackr`, `velar/compression` uses
 - MessagePack provides `encode(value) -> Bytes`, `decode(bytes) -> unknown`, and
   `parse(bytes, Type) -> T`.
 - Compression provides bounded `deflate`/`inflate` and `gzip`/`gunzip` Bytes
-  operations; decompression accepts a maximum output byte count.
+  operations. Decompression feeds `fflate` dynamically sized compressed-input
+  slices and aborts on the first output callback that would cross `maxBytes`.
+  Small default-limit payloads do not reserve 64 MiB, and rejected streams do
+  not consume or compute their remaining compressed tail.
 - Noise provides seeded `simplex2`, `simplex3`, and `simplex4` functions whose
   results are deterministic across supported targets.
 

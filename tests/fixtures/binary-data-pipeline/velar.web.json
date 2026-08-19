@@ -2,11 +2,11 @@
   "formatVersion": 2,
   "entry": "src/web-main.vel",
   "workers": {
-    "terrain": "src/terrain-worker.vel"
+    "processor": "src/data-worker.vel"
   },
   "extensions": ["@velarscript/web"],
   "web": {
-    "title": "Minecraft readiness acceptance",
+    "title": "Binary data pipeline acceptance",
     "base": "/",
     "publicConfig": {"socketUrl": "ws://127.0.0.1:1"},
     "build": {"sourceMaps": true},

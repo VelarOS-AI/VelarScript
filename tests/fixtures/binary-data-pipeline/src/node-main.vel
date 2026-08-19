@@ -1,0 +1,113 @@
+import {Bytes, uint8Buffer} from "velar/binary"
+import {deflate, inflate} from "velar/compression"
+import {writeBytes} from "velar/fs"
+import {http} from "velar/http"
+import {encode, parse} from "velar/msgpack"
+import {ServeRequest, ServeResponse} from "velar/serve"
+import {open} from "velar/sqlite"
+import {CancellationError, task} from "velar/task"
+import {WebSocketBackpressureError, connect, listen} from "velar/websocket"
+import {workerPool} from "velar/worker"
+import {DataReply, DataRequest, dataChecksum} from "./shared-data.vel"
+
+type DataPacket:
+    key: string
+    bytes: Bytes
+
+type DataRow:
+    key: string
+    bytes: Bytes
+
+async def health(request: ServeRequest) -> ServeResponse:
+    return {status: 200, text: f"ready:{request.path}"}
+
+async def main():
+    using workers = workerPool("processor", DataRequest, DataReply, 2, 8)
+    const probeBuffer = uint8Buffer(3)
+    probeBuffer[0] = 11
+    probeBuffer[1] = 22
+    probeBuffer[2] = 33
+    const probe = probeBuffer.toBytes()
+    const request: DataRequest = {seed: "velar-binary-data", partitionX: -3, partitionY: 5, probe}
+
+    using cancelled = task(async cancellation => await workers.call(request, cancellation, 5s))
+    await cancelled.cancel("data request is no longer needed")
+    let cancellationObserved = false
+    try:
+        await cancelled.result()
+    catch error:
+        if error is CancellationError:
+            cancellationObserved = true
+    if not cancellationObserved:
+        throw Error("Worker cancellation did not reach the caller")
+    if probe.size != 3 or probe[0] != 11 or probe[1] != 22 or probe[2] != 33:
+        throw Error("Worker.call consumed the caller's nested Bytes")
+
+    const dataset = (await workers.call(request, null, 5s)).bytes
+    await writeBytes("snapshot.bin", dataset)
+    const wire = deflate(encode({key: "-3,5", bytes: dataset}))
+
+    using sockets = await listen({port: 0, path: "/data", http: health, maxPendingSendBytes: 8192})
+    const ready = await http.get(f"http://127.0.0.1:{sockets.port}/health").text()
+    const readyBytes = await http.post(f"http://127.0.0.1:{sockets.port}/health", {body: dataset}).bytes()
+    if readyBytes.size != 13:
+        throw Error("Node HTTP did not preserve a Bytes request and response")
+    using client = await connect(f"ws://127.0.0.1:{sockets.port}/data")
+    const accepted = await sockets.next()
+    if accepted == null:
+        throw Error("WebSocket connection was not accepted")
+    using peer = accepted
+    await client.send(wire)
+    const received = await peer.next()
+    if not (received is Bytes):
+        throw Error("WebSocket did not preserve binary data")
+    const packet = parse(inflate(received), DataPacket)
+
+    const firstSlowSend = peer.send(dataset)
+    let backpressureObserved = false
+    try:
+        await peer.send(dataset)
+    catch error:
+        if error is WebSocketBackpressureError:
+            backpressureObserved = true
+    await firstSlowSend
+    if not backpressureObserved:
+        throw Error("A slow WebSocket client did not apply send backpressure")
+    await client.close()
+    if await peer.next() != null or peer.state() != "closed":
+        throw Error("A disconnected WebSocket did not release its pull connection")
+
+    using drainClient = await connect(f"ws://127.0.0.1:{sockets.port}/data")
+    const drainAccepted = await sockets.next()
+    if drainAccepted == null:
+        throw Error("WebSocket EOF-drain connection was not accepted")
+    using drainPeer = drainAccepted
+    await drainPeer.send("first")
+    await drainPeer.send("second")
+    await drainPeer.close()
+    await Promise.sleep(20ms)
+    if await drainClient.next() != "first" or await drainClient.next() != "second" or await drainClient.next() != null:
+        throw Error("Normal WebSocket EOF discarded queued messages")
+
+    using overflowClient = await connect(f"ws://127.0.0.1:{sockets.port}/data", {maxMessageBytes: 16, maxQueuedMessages: 8, maxQueuedBytes: 12})
+    const overflowAccepted = await sockets.next()
+    if overflowAccepted == null:
+        throw Error("WebSocket queue-limit connection was not accepted")
+    using overflowPeer = overflowAccepted
+    await overflowPeer.send("12345678")
+    await overflowPeer.send("abcdefgh")
+    await Promise.sleep(20ms)
+    if overflowClient.state() != "closed":
+        throw Error("WebSocket receive queue did not enforce maxQueuedBytes")
+
+    using database = await open("snapshots.sqlite", {queueCapacity: 16, maxRows: 4, maxResultBytes: 1048576})
+    await database.execute("CREATE TABLE IF NOT EXISTS snapshots (key TEXT PRIMARY KEY, bytes BLOB NOT NULL)")
+    using transaction = await database.transaction()
+    await transaction.execute("INSERT OR REPLACE INTO snapshots (key, bytes) VALUES (?, ?)", [packet.key, packet.bytes])
+    await transaction.commit()
+    const restored = await database.one("SELECT key, bytes FROM snapshots WHERE key = ?", [packet.key], DataRow)
+    if restored == null:
+        throw Error("SQLite did not restore the dataset")
+    print(f"{ready}:{dataChecksum(restored.bytes)}:{restored.bytes.size}")
+
+await main()

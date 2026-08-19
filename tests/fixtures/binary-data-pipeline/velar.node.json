@@ -2,6 +2,6 @@
   "formatVersion": 2,
   "entry": "src/node-main.vel",
   "workers": {
-    "terrain": "src/terrain-worker.vel"
+    "processor": "src/data-worker.vel"
   }
 }

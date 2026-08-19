@@ -152,7 +152,7 @@ The full reasoning is in [Why VelarScript exists](docs/why-velarscript.md).
 - [CLI reference](docs/cli.md) — every command, grouped by what you are doing
 - [Language charter](docs/language-charter.md) — the full contract
 - [Standard library](docs/standard-library.md) · [Web framework](docs/web-api.md)
-- [Minecraft readiness](docs/minecraft-readiness.md) — binary memory, deterministic workers, transport, and persistence
+- [Binary data and concurrency](docs/binary-data-and-concurrency.md) — checked memory, deterministic workers, transport, and persistence
 - [AI skill brief](docs/ai-skill.md) — what `velar skill` prints
 - [Escape hatches](docs/escape-hatches.md) · [JavaScript boundary](docs/javascript-bridge.md)
 

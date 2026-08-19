@@ -6,6 +6,7 @@ import { Cancellation, CancellationError, TaskTimeoutError } from "velar/task";
 const __velarWorkerStates = new WeakMap();
 const __velarWorkerPoolStates = new WeakMap();
 let __velarWorkerServerInstalled = false;
+const __velarWorkerStructuredClone = globalThis.structuredClone;
 function __velarWorkerInteger(value, minimum, maximum, name) {
   if (!Number.isSafeInteger(value) || value < minimum || value > maximum) throw new RangeError(name + " must be an integer from " + minimum + " through " + maximum);
   return value;
@@ -24,7 +25,44 @@ function __velarWorkerDuration(value) {
   return milliseconds;
 }
 function __velarWorkerTransfer(value) {
-  return value instanceof Uint8Array && value.byteOffset === 0 && value.byteLength === value.buffer.byteLength ? [value.buffer] : [];
+  const transfers = [];
+  const buffers = new Set();
+  const objects = new Set();
+  const pending = [{ value, depth: 0 }];
+  let visited = 0;
+  let transferBytes = 0;
+  while (pending.length > 0 && visited < 10000 && transfers.length < 1024) {
+    const current = pending.pop();
+    const item = current.value;
+    visited += 1;
+    if (item === null || (typeof item !== "object" && typeof item !== "function")) continue;
+    if (objects.has(item)) continue;
+    objects.add(item);
+    if (ArrayBuffer.isView(item)) {
+      const supported = item instanceof Uint8Array || item instanceof Uint16Array || item instanceof Uint32Array || item instanceof Float32Array;
+      const buffer = item.buffer;
+      if (supported && buffer instanceof ArrayBuffer && item.byteOffset === 0 && item.byteLength === buffer.byteLength
+        && buffer.byteLength > 0 && transferBytes + buffer.byteLength <= 64 * 1024 * 1024 && !buffers.has(buffer)) {
+        buffers.add(buffer);
+        transfers.push(buffer);
+        transferBytes += buffer.byteLength;
+      }
+      continue;
+    }
+    if (current.depth >= 32) continue;
+    const depth = current.depth + 1;
+    if (item instanceof Map) { for (const [key, nested] of item) { pending.push({ value: key, depth }, { value: nested, depth }); } continue; }
+    if (item instanceof Set) { for (const nested of item) pending.push({ value: nested, depth }); continue; }
+    for (const key of Object.keys(item)) pending.push({ value: item[key], depth });
+  }
+  return transfers;
+}
+function __velarWorkerOutbound(value) {
+  const sourceTransfers = __velarWorkerTransfer(value);
+  if (sourceTransfers.length === 0) return { value, transfers: sourceTransfers };
+  if (typeof __velarWorkerStructuredClone !== "function") throw new Error("The structured clone API is unavailable");
+  const snapshot = __velarWorkerStructuredClone(value);
+  return { value: snapshot, transfers: __velarWorkerTransfer(snapshot) };
 }
 function __velarWorkerFailure(error) {
   return { name: typeof error?.name === "string" ? error.name : "Error", message: typeof error?.message === "string" ? error.message : String(error), stack: typeof error?.stack === "string" ? error.stack : "" };
@@ -70,11 +108,12 @@ const __velarWorkerPrototype = Object.freeze({
     if (state.pending.size >= state.capacity) return Promise.reject(new WorkerBackpressureError("Worker queue capacity " + state.capacity + " is full"));
     if (cancellation !== null && !Cancellation.is(cancellation)) return Promise.reject(new TypeError("Worker cancellation must be Cancellation or null"));
     let validated; try { validated = state.RequestType.parse(request); } catch (error) { return Promise.reject(error); }
+    let outbound; try { outbound = __velarWorkerOutbound(validated); } catch (error) { return Promise.reject(error); }
     const milliseconds = __velarWorkerDuration(timeout); const id = state.nextId++;
     return new Promise((resolve, reject) => {
       const pending = { resolve, reject, cancel: null, reason: "Worker call cancelled", timeout, timer: null, unsubscribe: () => null };
       state.pending.set(id, pending);
-      state.instance.postMessage({ kind: "call", id, value: validated }, __velarWorkerTransfer(validated));
+      state.instance.postMessage({ kind: "call", id, value: outbound.value }, outbound.transfers);
       if (cancellation !== null) pending.unsubscribe = Cancellation.__velarOn(cancellation, reason => { if (!state.pending.has(id) || pending.cancel) return; pending.cancel = "cancel"; pending.reason = reason ?? pending.reason; state.instance.postMessage({ kind: "cancel", id, reason: pending.reason }); });
       if (milliseconds > 0) pending.timer = setTimeout(() => { if (!state.pending.has(id) || pending.cancel) return; pending.cancel = "timeout"; state.instance.postMessage({ kind: "cancel", id, reason: "Worker call timed out" }); }, milliseconds);
     });
@@ -113,7 +152,7 @@ export function serveWorker(RequestType, ResponseType, handler, capacity = 64) {
   RequestType = __velarWorkerRuntimeType(RequestType, "Worker request Type"); ResponseType = __velarWorkerRuntimeType(ResponseType, "Worker response Type");
   if (typeof handler !== "function") throw new TypeError("serveWorker handler must be an async function"); capacity = __velarWorkerInteger(capacity, 1, 10000, "Worker capacity");
   __velarWorkerServerInstalled = true; const queue = []; const active = new Map(); let running = false;
-  const drain = async () => { if (running) return; running = true; while (queue.length) { const message = queue.shift(); const cancellation = Cancellation.__velarCreate(); active.set(message.id, cancellation); try { const request = RequestType.parse(message.value); const result = ResponseType.parse(await handler(request, cancellation)); __velarWorkerParentPort.postMessage({ id: message.id, ok: true, value: result }, __velarWorkerTransfer(result)); } catch (error) { __velarWorkerParentPort.postMessage({ id: message.id, ok: false, error: __velarWorkerFailure(error) }); } finally { active.delete(message.id); } } running = false; };
+  const drain = async () => { if (running) return; running = true; while (queue.length) { const message = queue.shift(); const cancellation = Cancellation.__velarCreate(); active.set(message.id, cancellation); try { const request = RequestType.parse(message.value); const result = ResponseType.parse(await handler(request, cancellation)); const outbound = __velarWorkerOutbound(result); __velarWorkerParentPort.postMessage({ id: message.id, ok: true, value: outbound.value }, outbound.transfers); } catch (error) { __velarWorkerParentPort.postMessage({ id: message.id, ok: false, error: __velarWorkerFailure(error) }); } finally { active.delete(message.id); } } running = false; };
   __velarWorkerParentPort.on("message", message => { if (!message || !Number.isSafeInteger(message.id)) return; if (message.kind === "cancel") { const cancellation = active.get(message.id); if (cancellation) Cancellation.__velarCancel(cancellation, typeof message.reason === "string" ? message.reason : "Worker call cancelled"); else { const index = queue.findIndex(item => item.id === message.id); if (index >= 0) { queue.splice(index, 1); __velarWorkerParentPort.postMessage({ id: message.id, ok: false, error: __velarWorkerFailure(new CancellationError(typeof message.reason === "string" ? message.reason : "Worker call cancelled")) }); } } return; } if (message.kind !== "call") return; if (queue.length + active.size >= capacity) { __velarWorkerParentPort.postMessage({ id: message.id, ok: false, error: __velarWorkerFailure(new WorkerBackpressureError()) }); return; } queue.push(message); drain(); });
   return null;
 }

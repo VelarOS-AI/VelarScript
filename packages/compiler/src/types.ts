@@ -122,9 +122,12 @@ export type ValueType =
 
 /** Canonical identities for Core's cross-runtime binary storage types. */
 export const VELAR_BYTES_TYPE_IDENTITY = "velar/binary#type:Bytes";
+export const VELAR_UINT8_BUFFER_TYPE_IDENTITY = "velar/binary#type:UInt8Buffer";
 export const VELAR_UINT16_BUFFER_TYPE_IDENTITY = "velar/binary#type:UInt16Buffer";
+export const VELAR_UINT32_BUFFER_TYPE_IDENTITY = "velar/binary#type:UInt32Buffer";
+export const VELAR_FLOAT32_BUFFER_TYPE_IDENTITY = "velar/binary#type:Float32Buffer";
 
-export type BinaryStorageKind = "bytes" | "uint16";
+export type BinaryStorageKind = "bytes" | "uint8" | "uint16" | "uint32" | "float32";
 
 /**
  * Binary storage stays nominal even though its JavaScript representation is a
@@ -134,7 +137,10 @@ export type BinaryStorageKind = "bytes" | "uint16";
 export function binaryStorageKind(type: ValueType): BinaryStorageKind | null {
   if (type.kind !== "named") return null;
   if (type.identity === VELAR_BYTES_TYPE_IDENTITY) return "bytes";
+  if (type.identity === VELAR_UINT8_BUFFER_TYPE_IDENTITY) return "uint8";
   if (type.identity === VELAR_UINT16_BUFFER_TYPE_IDENTITY) return "uint16";
+  if (type.identity === VELAR_UINT32_BUFFER_TYPE_IDENTITY) return "uint32";
+  if (type.identity === VELAR_FLOAT32_BUFFER_TYPE_IDENTITY) return "float32";
   return null;
 }
 

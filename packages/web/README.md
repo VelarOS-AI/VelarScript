@@ -58,6 +58,14 @@ The npm manifest declares generic `velar.extension` metadata with the owned
 `web` project field, so `velar add` and `velar remove` can maintain project
 activation without teaching the CLI this package's name.
 
+The Web Worker runtime snapshots caller-owned transferable data, then transfers
+nested `Bytes`, `UInt8Buffer`, `UInt16Buffer`, `UInt32Buffer`, and
+`Float32Buffer` storage after checked request/response validation and a bounded
+cycle-safe graph scan. Caller buffers stay intact. Pull WebSockets independently
+bound unread message count, aggregate unread bytes, and pending send bytes;
+normal EOF preserves queued messages for draining, while receive failure clears
+them immediately.
+
 `@velarscript/web` requires the exact matching `@velarscript/compiler`
 version. It has no dependency on VelarOS Workbench and does not define the
 future Canvas-oriented `velar/game` framework.

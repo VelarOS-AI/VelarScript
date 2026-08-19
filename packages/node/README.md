@@ -107,9 +107,13 @@ uncommitted transaction rolls it back. Synchronous `node:sqlite` work never runs
 on the application thread.
 
 `velar/worker` resolves only entries declared in `velar.json`, validates each
-request and response, transfers `Bytes`, and provides single-worker and bounded
-pool owners with per-call cancellation and timeout. `velar/websocket` provides
-bounded pull connections and a Node server; `listen({http: handler, ...})`
+request and response, snapshots caller-owned transferable data, and transfers
+the snapshot's nested `Bytes`/fixed numeric buffers through a bounded cycle-safe
+data-graph scan without detaching the caller's values. It provides single-worker
+and bounded pool owners with per-call cancellation and timeout.
+`velar/websocket` provides pull connections bounded by both unread message count
+and aggregate bytes, preserves queued messages through normal EOF, and discards
+them on receive failure, plus a Node server; `listen({http: handler, ...})`
 serves the same typed HTTP contract as `velar/serve` on the upgrade port. Its
 only external transport dependency is the pinned `ws` package; native socket
 objects remain private.

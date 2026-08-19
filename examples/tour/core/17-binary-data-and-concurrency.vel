@@ -4,7 +4,7 @@
 /// execute. The pure buffer, codec, compression, noise, and random calls are
 /// kept together so their shared `Bytes` contract remains visible.
 
-import {ByteOrder, Bytes, UInt16Buffer, uint16Buffer, uint16FromBytes} from "velar/binary"
+import {ByteOrder, Bytes, Float32Buffer, Float32Builder, UInt8Buffer, UInt16Buffer, UInt32Buffer, UInt32Builder, float32Buffer, float32Builder, float32FromBytes, uint8Buffer, uint8FromBytes, uint16Buffer, uint16FromBytes, uint32Buffer, uint32Builder, uint32FromBytes} from "velar/binary"
 import {Random, random} from "velar/random"
 import {Cancellation, CancellationError, Task, TaskTimeoutError, task, withTimeout} from "velar/task"
 import {Worker, WorkerBackpressureError, WorkerCallError, WorkerClosedError, WorkerCrashedError, WorkerPool, serveWorker, worker, workerPool} from "velar/worker"
@@ -15,15 +15,15 @@ import {simplex2, simplex3, simplex4} from "velar/noise"
 import {createBytes, readBytes, writeBytes} from "velar/fs"
 import {Database, SqliteBackpressureError, SqliteError, Statement, Transaction, open as openDatabase} from "velar/sqlite"
 
-type ChunkEnvelope:
+type DataEnvelope:
     checksum: number
     payload: Bytes
 
-type ChunkRequest:
+type DataRequest:
     x: number
-    z: number
+    y: number
 
-type ChunkReply:
+type DataReply:
     checksum: number
 
 const bufferType = UInt16Buffer
@@ -31,23 +31,43 @@ const bytesType = Bytes
 const littleEndian = ByteOrder.little
 
 export def binaryAndCodecSpellings() -> number:
-    const blocks: UInt16Buffer = uint16Buffer(16 ** 3)
-    blocks[0] = 0x7f
-    const snapshot: Bytes = blocks.toBytes(littleEndian)
+    const values: UInt16Buffer = uint16Buffer(4096)
+    values[0] = 0x7f
+    const snapshot: Bytes = values.toBytes(littleEndian)
     const restored = uint16FromBytes(snapshot, ByteOrder.little)
     const packed = encodeMessage({checksum: restored[0], payload: snapshot})
     const decodedUnknown = decodeMessage(packed)
-    const decoded: ChunkEnvelope = parseMessage(packed, ChunkEnvelope)
+    const decoded: DataEnvelope = parseMessage(packed, DataEnvelope)
     const compressed = deflate(decoded.payload)
     const uncompressed = inflate(compressed)
     const archived = gzip(uncompressed, 6)
     const reopened = gunzip(archived, 64 * 1024 * 1024)
-    const field2 = simplex2("tour-world")
-    const field3 = simplex3("tour-world")
-    const field4 = simplex4("tour-world")
-    const source: Random = random("tour-world")
-    const child = source.fork("chunk:0:0")
+    const field2 = simplex2("tour-data")
+    const field3 = simplex3("tour-data")
+    const field4 = simplex4("tour-data")
+    const source: Random = random("tour-data")
+    const child = source.fork("partition:0:0")
     return decoded.checksum + reopened.size + Math.trunc(field2(0, 0) + field3(0, 0, 0) + field4(0, 0, 0, 0)) + child.int(1) + (decodedUnknown != null ? 1 : 0)
+
+export def numericBufferSpellings() -> number:
+    const flags: UInt8Buffer = uint8Buffer(4)
+    flags[0] = 0xff
+    const flagCopy = uint8FromBytes(flags.toBytes())
+    const samples = uint16Buffer(2).copy()
+    const identifiers: UInt32Buffer = uint32Buffer(3)
+    identifiers[0] = 0xffffffff
+    const identifierCopy = uint32FromBytes(identifiers.slice(0, 1).toBytes(ByteOrder.little), ByteOrder.little)
+    const measurements: Float32Buffer = float32Buffer(3)
+    measurements[0] = 0.5
+    const measurementCopy = float32FromBytes(measurements.copy().toBytes(ByteOrder.little), ByteOrder.little)
+    const indexBuilder: UInt32Builder = uint32Builder(6)
+    indexBuilder.push(0)
+    indexBuilder.push(1)
+    const builtIndices = indexBuilder.finish()
+    const positionBuilder: Float32Builder = float32Builder(6)
+    positionBuilder.push(1.25)
+    const builtPositions = positionBuilder.finish()
+    return flagCopy[0] + samples.size + identifierCopy[0] + Math.trunc(measurementCopy[0]) + builtIndices.size + builtPositions.size
 
 async def cancellableWork(cancellation: Cancellation) -> number:
     await cancellation.checkpoint()
@@ -60,25 +80,25 @@ export async def taskSpellings(parent: Cancellation?) -> number:
     using owner = task(cancellableWork, parent)
     return await withTimeout(taskValue(owner), 2s)
 
-async def generate(request: ChunkRequest, cancellation: Cancellation) -> ChunkReply:
+async def generate(request: DataRequest, cancellation: Cancellation) -> DataReply:
     await cancellation.checkpoint()
-    return {checksum: request.x ^ request.z}
+    return {checksum: request.x ^ request.y}
 
-def workerValue(value: Worker<ChunkRequest, ChunkReply>) -> Worker<ChunkRequest, ChunkReply>:
+def workerValue(value: Worker<DataRequest, DataReply>) -> Worker<DataRequest, DataReply>:
     return value
 
-def poolValue(value: WorkerPool<ChunkRequest, ChunkReply>) -> WorkerPool<ChunkRequest, ChunkReply>:
+def poolValue(value: WorkerPool<DataRequest, DataReply>) -> WorkerPool<DataRequest, DataReply>:
     return value
 
 export async def workerClientSpellings() -> number:
-    using single = worker("tour-chunk", ChunkRequest, ChunkReply, 8)
-    using pool = workerPool("tour-chunk", ChunkRequest, ChunkReply, 2, 16)
-    const first = await workerValue(single).call({x: 1, z: 2})
-    const second = await poolValue(pool).call({x: 3, z: 4})
+    using single = worker("tour-data", DataRequest, DataReply, 8)
+    using pool = workerPool("tour-data", DataRequest, DataReply, 2, 16)
+    const first = await workerValue(single).call({x: 1, y: 2})
+    const second = await poolValue(pool).call({x: 3, y: 4})
     return first.checksum + second.checksum
 
 export def workerServerSpelling():
-    serveWorker(ChunkRequest, ChunkReply, generate, 16)
+    serveWorker(DataRequest, DataReply, generate, 16)
 
 def connectionValue(value: WebSocketConnection) -> WebSocketConnection:
     return value
@@ -106,15 +126,15 @@ export async def persistenceSpellings(path: string, snapshot: Bytes) -> number:
     await writeBytes(path, snapshot)
     const restored = await readBytes(path, 64 * 1024 * 1024)
     using database = await openDatabase(f"{path}.sqlite", {busyTimeout: 2000, queueCapacity: 64})
-    await databaseValue(database).execute("CREATE TABLE IF NOT EXISTS chunks (id INTEGER PRIMARY KEY, payload BLOB)")
-    using statement = await database.prepare("INSERT INTO chunks (id, payload) VALUES (?, ?)")
+    await databaseValue(database).execute("CREATE TABLE IF NOT EXISTS snapshots (id INTEGER PRIMARY KEY, payload BLOB)")
+    using statement = await database.prepare("INSERT INTO snapshots (id, payload) VALUES (?, ?)")
     await (await statementValue(statement)).execute([1, restored])
     using transaction = await database.transaction()
-    await (await transactionValue(transaction)).execute("DELETE FROM chunks WHERE id = ?", [1])
+    await (await transactionValue(transaction)).execute("DELETE FROM snapshots WHERE id = ?", [1])
     await transaction.commit()
     return restored.size
 
-export def readinessFailure(error: Error) -> string:
+export def concurrencyFailure(error: Error) -> string:
     if error is CancellationError:
         return "cancelled"
     if error is TaskTimeoutError:

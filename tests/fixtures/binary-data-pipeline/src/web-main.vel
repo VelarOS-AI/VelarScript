@@ -1,0 +1,66 @@
+import {Bytes, uint8Buffer} from "velar/binary"
+import {deflate, inflate} from "velar/compression"
+import {publicConfig} from "velar/config"
+import {http} from "velar/http"
+import {encode, parse} from "velar/msgpack"
+import {database} from "velar/storage"
+import {connect} from "velar/websocket"
+import {workerPool} from "velar/worker"
+import {DataReply, DataRequest, dataChecksum} from "./shared-data.vel"
+
+type PipelineConfig:
+    socketUrl: string
+
+type DataPacket:
+    bytes: Bytes
+
+const config = publicConfig(PipelineConfig)
+
+component App:
+    state report = "pending"
+
+    async def generate():
+        using workers = workerPool("processor", DataRequest, DataReply, 2, 8)
+        const probeBuffer = uint8Buffer(3)
+        probeBuffer[0] = 11
+        probeBuffer[1] = 22
+        probeBuffer[2] = 33
+        const probe = probeBuffer.toBytes()
+        const dataset = (await workers.call({seed: "velar-binary-data", partitionX: -3, partitionY: 5, probe}, null, 5s)).bytes
+        if probe.size != 3 or probe[0] != 11 or probe[1] != 22 or probe[2] != 33:
+            throw Error("Worker.call consumed the caller's nested Bytes")
+        const wire = deflate(encode({bytes: dataset}))
+        using socket = await connect(config.socketUrl, {maxPendingSendBytes: 1048576})
+        await socket.send(wire)
+        const echoed = await socket.next()
+        if not (echoed is Bytes):
+            throw Error("Browser WebSocket did not preserve binary data")
+        const packet = parse(inflate(echoed), DataPacket)
+        using drain = await connect(f"{config.socketUrl}?drain=1")
+        await Promise.sleep(50ms)
+        if await drain.next() != "first" or await drain.next() != "second" or await drain.next() != null:
+            throw Error("Normal browser WebSocket EOF discarded queued messages")
+        using overflow = await connect(f"{config.socketUrl}?overflow=1", {maxMessageBytes: 16, maxQueuedMessages: 8, maxQueuedBytes: 12})
+        await Promise.sleep(50ms)
+        if overflow.state() != "closed":
+            throw Error("Browser WebSocket receive queue did not enforce maxQueuedBytes")
+        const workerAsset = await http.get("/data-worker.js").bytes()
+        if workerAsset.size == 0:
+            throw Error("Browser HTTP did not return Bytes")
+        const snapshots = database("binary-data-pipeline")
+        await snapshots.setBytes("snapshot", packet.bytes)
+        const restored = await snapshots.getBytes("snapshot", null, 1048576)
+        if restored == null:
+            throw Error("IndexedDB did not restore the dataset")
+        await snapshots.batch([
+            {key: "snapshot-copy", bytes: restored},
+            {key: "obsolete", bytes: null},
+        ])
+        report = f"{dataChecksum(restored)}:{restored.size}"
+
+    @mounted:
+        await generate()
+
+    return <main data-binary-data-pipeline={report}>{report}</main>
+
+mount(<App />, "#app")

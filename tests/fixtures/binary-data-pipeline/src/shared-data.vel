@@ -1,0 +1,37 @@
+import {ByteOrder, Bytes, uint16Buffer} from "velar/binary"
+import {simplex3} from "velar/noise"
+import {random} from "velar/random"
+import {Cancellation} from "velar/task"
+
+export type DataRequest:
+    seed: string
+    partitionX: number
+    partitionY: number
+    probe: Bytes
+
+export type DataReply:
+    bytes: Bytes
+
+export async def generateData(request: DataRequest, cancellation: Cancellation) -> Bytes:
+    const values = uint16Buffer(4096)
+    const field = simplex3(request.seed)
+    const variation = random(request.seed).fork(f"partition:{request.partitionX}:{request.partitionY}")
+    for index in range(4096):
+        if (index & 0x7f) == 0:
+            await cancellation.checkpoint()
+        const x = index & 0x0f
+        const y = (index >> 4) & 0x0f
+        const z = (index >> 8) & 0x0f
+        const sampleX = request.partitionX * 16 + x
+        const sampleY = request.partitionY * 16 + z
+        const signal = field(sampleX / 48, y / 32, sampleY / 48)
+        const category = signal + variation.number() * 0.2 > -0.05 ? 0x021 : 0x003
+        const flags = y > 11 ? 0x0f : y
+        values[index] = ((flags & 0x0f) << 12) | (category & 0x0fff)
+    return values.toBytes(ByteOrder.little)
+
+export def dataChecksum(bytes: Bytes) -> number:
+    let value = 0x6d2b79f5
+    for index in range(bytes.size):
+        value = ((value << 5) ^ (value >>> 2) ^ bytes[index]) & 0xffffffff
+    return value >>> 0

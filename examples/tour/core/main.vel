@@ -31,7 +31,7 @@ import {chapterThirteen} from "./13-javascript-boundary.vel"
 import {chapterFourteen} from "./14-files-and-host.vel"
 import {chapterFifteen} from "./15-process-and-network.vel"
 import {chapterSixteen} from "./16-contextual-names.vel"
-import {chapterSeventeen} from "./17-minecraft-readiness.vel"
+import {chapterSeventeen} from "./17-binary-data-and-concurrency.vel"
 
 print(f" 1 values .................. {chapterOne.applicationName}")
 print(f" 2 operators ............... {chapterTwo.label}")
@@ -49,4 +49,4 @@ print(f"13 javascript boundary ..... {chapterThirteen.chapterName}")
 print(f"14 files and host .......... {chapterFourteen.joined}")
 print(f"15 process and network ..... {chapterFifteen.encoded}")
 print(f"16 contextual names ........ {chapterSixteen.type}")
-print(f"17 Minecraft readiness ..... {chapterSeventeen.littleEndian}")
+print(f"17 binary and concurrency .. {chapterSeventeen.littleEndian}")

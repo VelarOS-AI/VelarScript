@@ -108,7 +108,7 @@ export component App:
 - [CLI 参考](docs/cli.md) — 按使用场景组织的全部命令
 - [语言参考](docs/language-charter.md) — 完整的语言契约
 - [标准库](docs/standard-library.md) · [Web 框架](docs/web-api.md)
-- [Minecraft 就绪能力](docs/minecraft-readiness.md) — 二进制内存、确定性 Worker、传输与持久化
+- [二进制数据与并发](docs/binary-data-and-concurrency.md) — 受检内存、确定性 Worker、传输与持久化
 - [AI 技能简报](docs/ai-skill.md) — `velar skill` 输出的内容
 - [逃生舱](docs/escape-hatches.md) · [JavaScript 边界](docs/javascript-bridge.md)
 

@@ -10571,8 +10571,8 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
   // same unreachable-name judgment Opacity was deleted under — and D65 rule
   // 171 published velar/log's LogRecord, which is the record useSink already
   // handed over and had no name for.
-  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 333);
-  assert.equal(Object.values(api.modules).slice(0, 17).reduce((total, exports_) => total + exports_.length, 0), 160);
+  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 346);
+  assert.equal(Object.values(api.modules).slice(0, 17).reduce((total, exports_) => total + exports_.length, 0), 173);
   assert.equal(api.modules["velar/collections"]?.length, 28);
   assert.equal(api.modules["velar/text"]?.length, 23);
   assert.equal(api.modules["velar/math"]?.length, 30);
@@ -18781,6 +18781,10 @@ export declare function mutableValues(): string[];
 export declare function bytes(): Uint8Array;
 export declare function nodeBytes(): Buffer<ArrayBuffer>;
 export declare function words(): Uint16Array<ArrayBuffer>;
+export declare function indices(): Uint32Array<ArrayBuffer>;
+export declare function positions(): Float32Array<ArrayBuffer>;
+export declare function acceptBytes(value: Uint8Array): void;
+export declare function acceptIndices(value: Uint32Array): void;
 export declare function acceptValues(values: string[]): void;
 export declare function dictionary(): Record<string, number>;
 export declare function setMode(value: "fast" | "safe"): void;
@@ -18832,6 +18836,10 @@ export declare class InvalidOrder {
   assert.equal(describeType(declarations.exports.get("bytes")!), "() -> Bytes");
   assert.equal(describeType(declarations.exports.get("nodeBytes")!), "() -> Bytes");
   assert.equal(describeType(declarations.exports.get("words")!), "() -> UInt16Buffer");
+  assert.equal(describeType(declarations.exports.get("indices")!), "() -> UInt32Buffer");
+  assert.equal(describeType(declarations.exports.get("positions")!), "() -> Float32Buffer");
+  assert.equal(describeType(declarations.exports.get("acceptBytes")!), "(Bytes | UInt8Buffer) -> null");
+  assert.equal(describeType(declarations.exports.get("acceptIndices")!), "(UInt32Buffer) -> null");
   assert.equal(describeType(declarations.exports.get("dictionary")!), "() -> unknown");
   assert.equal(describeType(declarations.exports.get("setMode")!), "(unknown) -> null");
   assert.equal(describeType(declarations.exports.get("visit")!), "((string) -> null) -> null");

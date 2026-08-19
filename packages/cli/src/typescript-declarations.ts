@@ -9,7 +9,10 @@ import {
   semanticTypeIdentity,
   unionOf,
   VELAR_BYTES_TYPE_IDENTITY,
+  VELAR_FLOAT32_BUFFER_TYPE_IDENTITY,
+  VELAR_UINT8_BUFFER_TYPE_IDENTITY,
   VELAR_UINT16_BUFFER_TYPE_IDENTITY,
+  VELAR_UINT32_BUFFER_TYPE_IDENTITY,
   type ClassInfo,
   type ValueType,
 } from "@velarscript/compiler";
@@ -45,7 +48,10 @@ const stringType: ValueType = { kind: "string" };
 const numberType: ValueType = { kind: "number" };
 const boolType: ValueType = { kind: "bool" };
 const bytesType: ValueType = { kind: "named", name: "Bytes", identity: VELAR_BYTES_TYPE_IDENTITY };
+const uint8BufferType: ValueType = { kind: "named", name: "UInt8Buffer", identity: VELAR_UINT8_BUFFER_TYPE_IDENTITY };
 const uint16BufferType: ValueType = { kind: "named", name: "UInt16Buffer", identity: VELAR_UINT16_BUFFER_TYPE_IDENTITY };
+const uint32BufferType: ValueType = { kind: "named", name: "UInt32Buffer", identity: VELAR_UINT32_BUFFER_TYPE_IDENTITY };
+const float32BufferType: ValueType = { kind: "named", name: "Float32Buffer", identity: VELAR_FLOAT32_BUFFER_TYPE_IDENTITY };
 const MAX_PACKAGE_MANIFEST_BYTES = 1024 * 1024;
 const MAX_TYPESCRIPT_DECLARATION_BYTES = 2 * 1024 * 1024;
 const MAX_TYPESCRIPT_DECLARATION_FILES = 64;
@@ -1158,13 +1164,17 @@ function parseTsType(
   // The safe bridge maps storage semantics, not the host's incidental API.
   // Node Buffer is a Uint8Array representation and therefore enters source as
   // read-only Bytes; no Buffer-only member is exposed.
-  if (value === "Uint8Array" || value === "Buffer") return bytesType;
+  if (value === "Uint8Array" || value === "Buffer") return direction === "to-js" ? unionOf([bytesType, uint8BufferType]) : bytesType;
   if (value === "Uint16Array") return uint16BufferType;
+  if (value === "Uint32Array") return uint32BufferType;
+  if (value === "Float32Array") return float32BufferType;
   const generic = /^([A-Za-z_$][\w$]*)\s*<([\s\S]+)>$/u.exec(value);
   if (generic) {
     const arguments_ = splitTopLevel(generic[2] ?? "", ",");
-    if (generic[1] === "Uint8Array" || generic[1] === "Buffer") return bytesType;
+    if (generic[1] === "Uint8Array" || generic[1] === "Buffer") return direction === "to-js" ? unionOf([bytesType, uint8BufferType]) : bytesType;
     if (generic[1] === "Uint16Array") return uint16BufferType;
+    if (generic[1] === "Uint32Array") return uint32BufferType;
+    if (generic[1] === "Float32Array") return float32BufferType;
     if (generic[1] === "Array") return {
       kind: "list",
       element: parseTsType(arguments_[0] ?? "unknown", aliases, warnings, stack, classTypes, "invariant"),

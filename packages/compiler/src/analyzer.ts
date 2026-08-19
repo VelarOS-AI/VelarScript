@@ -305,7 +305,7 @@ export interface LoweringHints {
   readonly collectionCalls: ReadonlyMap<number, CollectionOperation>;
   readonly collectionSizes: ReadonlySet<number>;
   /** Binary members and indexes lower directly against their typed-array storage. */
-  readonly binaryCalls: ReadonlyMap<number, "uint16ToBytes">;
+  readonly binaryCalls: ReadonlyMap<number, "bufferCopy" | "bufferSlice" | "bufferToBytes">;
   readonly binarySizes: ReadonlyMap<number, BinaryStorageKind>;
   readonly binaryIndexes: ReadonlyMap<string, BinaryStorageKind>;
   readonly primitiveCalls: ReadonlyMap<number, PrimitiveOperation>;
@@ -930,7 +930,7 @@ export class Analyzer implements TypeEnvironment {
   private readonly asynchronousFunctions: boolean[] = [];
   private readonly collectionCalls = new Map<number, CollectionOperation>();
   private readonly collectionSizes = new Set<number>();
-  private readonly binaryCalls = new Map<number, "uint16ToBytes">();
+  private readonly binaryCalls = new Map<number, "bufferCopy" | "bufferSlice" | "bufferToBytes">();
   private readonly binarySizes = new Map<number, BinaryStorageKind>();
   private readonly binaryIndexes = new Map<string, BinaryStorageKind>();
   private readonly primitiveCalls = new Map<number, PrimitiveOperation>();
@@ -8463,7 +8463,11 @@ export class Analyzer implements TypeEnvironment {
     const object = nonOptional(resolvedOriginal);
     const binaryKind = binaryStorageKind(object);
     if (binaryKind && property === "size") this.binarySizes.set(memberSpan.end, binaryKind);
-    if (binaryKind === "uint16" && property === "toBytes") this.binaryCalls.set(memberSpan.end, "uint16ToBytes");
+    if (binaryKind && binaryKind !== "bytes") {
+      if (property === "copy") this.binaryCalls.set(memberSpan.end, "bufferCopy");
+      if (property === "slice") this.binaryCalls.set(memberSpan.end, "bufferSlice");
+      if (property === "toBytes") this.binaryCalls.set(memberSpan.end, "bufferToBytes");
+    }
     const guardedCollectionOperation = object.kind === "list"
       ? listCollectionOperations.get(property) ?? null
       : object.kind === "map"

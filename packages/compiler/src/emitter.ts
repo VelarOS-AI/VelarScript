@@ -21,7 +21,7 @@ import { blockContainsDirectAwait, expressionContainsDirectAwait as containsDire
 import { VELAR_CLASS_FIELD_MODULE, VELAR_CLASS_FIELD_RUNTIME } from "./class-runtime.ts";
 import { VELAR_COLLECTION_HOST_EXPORTS, VELAR_COLLECTION_HOST_MODULE, VELAR_COLLECTION_IDENTITY_RUNTIME, VELAR_COLLECTION_LIST_RUNTIME, VELAR_COLLECTION_RECORD_RUNTIME, VELAR_COLLECTION_SET_MAP_RUNTIME, VELAR_COLLECTION_TYPE_RUNTIME } from "./collection-runtime.ts";
 import { VELAR_COLLECTION_LOWERING_EXPORTS, VELAR_COLLECTION_LOWERING_MODULE, VELAR_COLLECTION_LOWERING_RUNTIME } from "./collection-lowering-runtime.ts";
-import { describeType, formatTypeReference, formatTypeSyntax, mapNestedTypes, resolveTypeReference, semanticTypeIdentity, typeContainsParameter, type GenericApplication, type ValueType } from "./types.ts";
+import { describeType, formatTypeReference, formatTypeSyntax, mapNestedTypes, resolveTypeReference, semanticTypeIdentity, typeContainsParameter, type BinaryStorageKind, type GenericApplication, type ValueType } from "./types.ts";
 import { disposeMemberKey, iterateMemberKey, type LoweringHints } from "./analyzer.ts";
 import { VELAR_ERROR_NORMALIZATION_MODULE, VELAR_ERROR_NORMALIZATION_RUNTIME, VELAR_HOST_ERROR_NAMES, VELAR_HOST_ERROR_RUNTIME } from "./error-runtime.ts";
 import { embeddedJavaScriptSpecifier } from "./embedded-module.ts";
@@ -1267,13 +1267,21 @@ export class JavaScriptEmitter {
             : arguments_.join(", ");
           const suffix = statement.span.start;
           const boundsName = `__velarRangeBounds${suffix}`;
-          const indexName = `__velarRangeIndex${suffix}`;
+          const counterName = `__velarRangeCounter${suffix}`;
+          const endName = `__velarRangeEnd${suffix}`;
+          const stepName = `__velarRangeStep${suffix}`;
           const valueName = statement.pattern.name;
-          const body = this.emitStatementLines(statement.body, depth + 1).join("\n");
+          const body = this.emitStatementLines(statement.body, depth + 2).join("\n");
           return [
-            `${indentation}for (let ${boundsName} = __velarCountedRangeOwner.__velarCounted(${emittedArguments}), ${valueName} = ${boundsName}[0], ${indexName} = 0;`,
-            `${indentation}  ${boundsName}[2] > 0 ? ${valueName} < ${boundsName}[1] : ${valueName} > ${boundsName}[1];`,
-            `${indentation}  ${valueName} += ${boundsName}[2], ${indexName} += 1) {${body.length > 0 ? `\n${body}\n${indentation}` : ""}}`,
+            `${indentation}{`,
+            `${indentation}  const ${boundsName} = __velarCountedRangeOwner.__velarCounted(${emittedArguments});`,
+            `${indentation}  let ${counterName} = ${boundsName}[0];`,
+            `${indentation}  const ${endName} = ${boundsName}[1];`,
+            `${indentation}  const ${stepName} = ${boundsName}[2];`,
+            `${indentation}  for (; ${stepName} > 0 ? ${counterName} < ${endName} : ${counterName} > ${endName}; ${counterName} += ${stepName}) {`,
+            `${indentation}    const ${valueName} = ${counterName};${body.length > 0 ? `\n${body}` : ""}`,
+            `${indentation}  }`,
+            `${indentation}}`,
           ].join("\n");
         }
         this.needsCollectionHelpers = true;
@@ -1337,9 +1345,11 @@ export class JavaScriptEmitter {
           if (binaryKind === "bytes") {
             return `${indentation}__velarBinaryRuntime.__velarSetIndex(${object}, ${index}, ${this.emitMappedExpression(statement.value)});`;
           }
-          if (binaryKind === "uint16") {
+          if (binaryKind) {
+            const setHelper = this.binarySetIndexHelper(binaryKind);
+            const getHelper = this.binaryIndexHelper(binaryKind);
             if (statement.operator === "=") {
-              return `${indentation}__velarBinaryRuntime.__velarUInt16SetIndex(${object}, ${index}, ${this.emitMappedExpression(statement.value)});`;
+              return `${indentation}__velarBinaryRuntime.${setHelper}(${object}, ${index}, ${this.emitMappedExpression(statement.value)});`;
             }
             const suffix = statement.span.start;
             const objectName = `__velarIndexObject${suffix}`;
@@ -1349,7 +1359,7 @@ export class JavaScriptEmitter {
               `${indentation}{`,
               `${indentation}  const ${objectName} = ${object};`,
               `${indentation}  const ${keyName} = ${index};`,
-              `${indentation}  __velarBinaryRuntime.__velarUInt16SetIndex(${objectName}, ${keyName}, ${this.emitCompoundOperation(`__velarBinaryRuntime.__velarUInt16Index(${objectName}, ${keyName})`, statement.operator, value)});`,
+              `${indentation}  __velarBinaryRuntime.${setHelper}(${objectName}, ${keyName}, ${this.emitCompoundOperation(`__velarBinaryRuntime.${getHelper}(${objectName}, ${keyName})`, statement.operator, value)});`,
               `${indentation}}`,
             ].join("\n");
           }
@@ -2649,7 +2659,7 @@ export class JavaScriptEmitter {
           const binaryKind = this.hints.binaryIndexes.get(spanIdentity(expression.span));
           if (binaryKind) {
             this.needsBinaryHelpers = true;
-            const helper = binaryKind === "bytes" ? "__velarIndex" : "__velarUInt16Index";
+            const helper = this.binaryIndexHelper(binaryKind);
             const object = this.emitMappedExpression(expression.object);
             if (this.hints.optionalIndexes.has(spanIdentity(expression.span))) {
               return `(__velarValue => __velarValue == null ? null : __velarBinaryRuntime.${helper}(__velarValue, ${this.emitMappedExpression(expression.index)}))(${object})`;
@@ -2787,9 +2797,31 @@ export class JavaScriptEmitter {
   }
 
   private binaryHelper(expression: Extract<Expression, { kind: "MemberExpression" }>): string | null {
-    return this.hints.binaryCalls.get(expression.span.end) === "uint16ToBytes"
-      ? "__velarBinaryRuntime.__velarUInt16ToBytes"
-      : null;
+    switch (this.hints.binaryCalls.get(expression.span.end)) {
+      case "bufferCopy": return "__velarBinaryRuntime.__velarBufferCopy";
+      case "bufferSlice": return "__velarBinaryRuntime.__velarBufferSlice";
+      case "bufferToBytes": return "__velarBinaryRuntime.__velarBufferToBytes";
+      default: return null;
+    }
+  }
+
+  private binaryIndexHelper(kind: BinaryStorageKind): string {
+    switch (kind) {
+      case "bytes": return "__velarIndex";
+      case "uint8": return "__velarUInt8Index";
+      case "uint16": return "__velarUInt16Index";
+      case "uint32": return "__velarUInt32Index";
+      case "float32": return "__velarFloat32Index";
+    }
+  }
+
+  private binarySetIndexHelper(kind: Exclude<BinaryStorageKind, "bytes">): string {
+    switch (kind) {
+      case "uint8": return "__velarUInt8SetIndex";
+      case "uint16": return "__velarUInt16SetIndex";
+      case "uint32": return "__velarUInt32SetIndex";
+      case "float32": return "__velarFloat32SetIndex";
+    }
   }
 
   private primitiveHelper(expression: Extract<Expression, { kind: "MemberExpression" }>): string | null {
