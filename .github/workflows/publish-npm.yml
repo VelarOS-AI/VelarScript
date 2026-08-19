@@ -1,0 +1,66 @@
+name: Publish npm toolchain
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Exact release tag to publish (for example v0.10.1)
+        required: true
+        type: string
+      confirm:
+        description: Type publish to authorize irreversible registry publication
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+  id-token: write
+
+concurrency:
+  group: npm-toolchain-publication
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: ${{ inputs.confirm == 'publish' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: npm
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+      - name: Verify exact release identity
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          test "$(git tag --points-at HEAD)" = "$RELEASE_TAG"
+          test "$RELEASE_TAG" = "v$(node -p "require('./package.json').version")"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24.x"
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Install release dependencies
+        run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+      - run: npx playwright install --with-deps chromium firefox webkit
+      - run: npm run check
+      - run: npm test
+      - run: npm run test:packages
+      - run: npm run test:browser
+      - name: Create and verify strict candidate
+        run: |
+          npm run build:packages
+          node scripts/release-toolchain.mjs candidate --output-dir release/toolchain
+          npm run release:verify -- release/toolchain
+      - name: Publish complete toolchain with provenance
+        run: npm run release:publish -- --directory release/toolchain --staging-tag next --promote-tag latest
+        env:
+          # Used only to bootstrap the first registry release. Once every
+          # package has its npm trusted publisher configured, this secret is
+          # removed and npm authenticates this exact workflow through OIDC.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

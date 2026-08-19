@@ -1,8 +1,8 @@
 # VelarScript Continuous Integration
 
-Status: VelarScript 0.10 internal gate; publishing remains absent
+Status: VelarScript 0.10 public release and publication gates
 
-The repository defines three GitHub Actions workflows:
+The repository defines four GitHub Actions workflows:
 
 - `Velar CI` runs Node 24 check, tests, and packed-package consumer validation
   on Linux, macOS, and Windows. A separate Linux job installs Playwright's
@@ -53,6 +53,11 @@ The repository defines three GitHub Actions workflows:
 - `Toolchain release rehearsal` runs the complete compiler gate, creates the
   verified non-publishing toolchain artifact, adds an OIDC artifact attestation,
   and uploads it. A tag switches the packaging step to strict candidate mode.
+- `Publish npm toolchain` is manual, requires an exact tag and literal
+  publication confirmation, reruns every release gate, creates a strict
+  candidate, publishes all eight packages with npm provenance under `next`,
+  verifies their registry integrity, and exposes `latest` only after the
+  complete version-locked graph exists.
 - `External preview verification` is manual and credential-free. It rebuilds
   the root Netlify Release Studio profile, verifies a required HTTPS origin,
   emits a versioned JSON
@@ -69,4 +74,6 @@ Browser binaries are installed for the exact locked Playwright version in CI.
 They are not cached independently because browser/system dependency caches can
 drift from Playwright and do not provide a reliable speed advantage.
 
-No workflow publishes to npm in VelarScript 0.10.
+The rehearsal and external-preview workflows remain non-publishing. Only the
+manual npm workflow has registry authority, and its publication helper refuses
+to run outside an OIDC-capable GitHub Actions runner.

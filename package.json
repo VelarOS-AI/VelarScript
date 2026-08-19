@@ -1,6 +1,6 @@
 {
   "name": "velarscript-workspace",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
@@ -20,6 +20,7 @@
     "test:packages": "node scripts/gate-lock.mjs npm run gate:test:packages",
     "release:rehearse": "node scripts/release-toolchain.mjs rehearse",
     "release:verify": "node scripts/release-toolchain.mjs verify",
+    "release:publish": "node scripts/publish-toolchain.mjs",
     "preview:prepare": "node scripts/prepare-external-preview.mjs",
     "velar": "node scripts/gate-lock.mjs npm run --silent gate:velar --",
     "gate:build:packages": "node scripts/build-packages.mjs",

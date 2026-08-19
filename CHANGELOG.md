@@ -6,6 +6,40 @@ truth for acceptance status.
 
 ## Unreleased
 
+## 0.10.1 — 2026-08-19
+
+VelarScript 0.10.1 is the first public npm registry release. It keeps the
+0.10 compiler-extension contract and publishes the compiler, Node runtime,
+Web and Desktop frameworks, project creator, CLI, text buffer, and script
+analysis as one exact, version-locked generation.
+
+### Binary data and structured concurrency
+
+- Added target-neutral `Bytes`, fixed numeric buffers, bounded builders,
+  byte-order conversion, checked bitwise operations, and allocation-free
+  compiler lowering for direct `range(...)` loops.
+- Added deterministic random/noise streams, owned Tasks and Worker pools,
+  cancellation and timeouts, transfer-safe checked messages, and bounded
+  queue/backpressure behavior.
+- Carried binary payloads through Node and Web HTTP, WebSocket, filesystem,
+  SQLite, IndexedDB, MessagePack, and compression boundaries with the same
+  64 MiB contract and fail-closed handling for hostile compressed input.
+- Added a cross-target acceptance project that produces byte-identical data
+  in Node and browser Workers and verifies persistence, cancellation,
+  transport, backpressure, and cleanup behavior.
+
+### Toolchain and release reliability
+
+- Replaced hand-maintained module dependency switches with structural
+  traversal, closing missed imports inside `try`, `using`, tests, getters,
+  disposal hooks, and iteration hooks.
+- Made package, documentation, tour, browser-readiness, and cross-platform
+  gates prove the surfaces they report instead of accepting partial coverage.
+- Added durable, permission-aware Desktop project transactions and kept the
+  native worker, compiler extension, and installed package contracts aligned.
+- Hardened worker, process, terminal, source-map, browser-module, and
+  cross-platform path behavior uncovered by the release audit.
+
 ## 0.10.0 — 2026-08-16
 
 VelarScript 0.10.0 is the first public source release: a checked, Web-first

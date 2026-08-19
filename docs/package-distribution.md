@@ -1,6 +1,6 @@
 # VelarScript Toolchain Distribution
 
-Status: stable package contract for VelarScript 0.10; publication separately authorized
+Status: stable package contract for the published VelarScript 0.10 toolchain
 
 The repository distributes six toolchain packages and two installable
 VelarScript domain-library packages through npm:
@@ -186,7 +186,8 @@ and run the resulting project before the release set is accepted.
 deterministic SHA-256 values, source identity, npm integrity, and explicit
 publication blockers. Candidate mode fails closed unless Git/version/remote
 and license requirements are satisfied. CI may attest and upload these
-tarballs, but no VelarScript 0.10 workflow invokes `npm publish`.
+tarballs. Registry publication is a separately authorized, provenance-bearing
+GitHub Actions job that consumes the verified strict candidate.
 
 The rehearsal builds and packs a private temporary toolchain snapshot. It never
 cleans or rewrites the active workspace's `dist` directories, so release checks
@@ -211,5 +212,5 @@ complete license text, and package acceptance verifies the installed metadata
 and file rather than trusting the source manifest alone. The current rehearsal
 is always marked non-publishable because rehearsal mode is evidence only. A
 strict candidate becomes publishable only from the clean, exactly tagged
-`v0.10.0` source with the matching remote; actual registry publication remains
-a separate explicit authority.
+`v0.10.1` source with the matching remote; registry publication remains a
+separate explicit authority and must carry npm provenance.

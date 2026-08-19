@@ -132,10 +132,11 @@ function workflowRunCommands(workflow: string): string[] {
   return commands;
 }
 
-test("CI covers platform, browser, and non-publishing provenance gates", async () => {
+test("CI covers platform, browser, rehearsal, and explicit npm publication gates", async () => {
   const workspace = JSON.parse(await readFile("package.json", "utf8")) as { scripts: Record<string, string> };
   assert.match(resolveScript(workspace.scripts, "test"), /tests\/release\.acceptance\.ts/u);
   assert.equal(workspace.scripts["release:rehearse"], "node scripts/release-toolchain.mjs rehearse");
+  assert.equal(workspace.scripts["release:publish"], "node scripts/publish-toolchain.mjs");
   assert.equal(workspace.scripts["preview:prepare"], "node scripts/prepare-external-preview.mjs");
 
   // Every gate, derived: a `gate:x` script is the body a public gate `x` runs
@@ -185,6 +186,20 @@ test("CI covers platform, browser, and non-publishing provenance gates", async (
   assert.match(release, /actions\/attest@v4/u);
   assert.match(release, /release-toolchain\.mjs candidate/u);
   assert.doesNotMatch(release, /npm publish/u);
+
+  const publication = await readFile(".github/workflows/publish-npm.yml", "utf8");
+  const publicationHelper = await readFile("scripts/publish-toolchain.mjs", "utf8");
+  assert.match(publication, /workflow_dispatch:/u);
+  assert.match(publication, /inputs\.confirm == 'publish'/u);
+  assert.match(publication, /id-token: write/u);
+  assert.match(publication, /release-toolchain\.mjs candidate/u);
+  assert.match(publication, /npm run release:publish/u);
+  assert.doesNotMatch(publication, /\n\s+push:/u);
+  assert.match(publicationHelper, /GITHUB_ACTIONS/u);
+  assert.match(publicationHelper, /ACTIONS_ID_TOKEN_REQUEST_URL/u);
+  assert.match(publicationHelper, /"--provenance"/u);
+  assert.match(publicationHelper, /waitForIntegrity/u);
+  assert.match(publicationHelper, /"dist-tag", "add"/u);
 
   const externalPreview = await readFile(".github/workflows/external-preview-verification.yml", "utf8");
   assert.match(externalPreview, /workflow_dispatch:/u);

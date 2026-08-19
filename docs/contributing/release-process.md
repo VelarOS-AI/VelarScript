@@ -1,6 +1,6 @@
 # VelarScript Toolchain Release Process
 
-Status: VelarScript 0.10.0 public source release; registry publication deferred
+Status: VelarScript 0.10.1 public npm registry release
 
 VelarScript ships the compiler, official Node runtime, official Web and Desktop frameworks, project creator, CLI, and the
 two domain libraries as eight
@@ -46,9 +46,24 @@ Candidate mode fails unless all of these are true:
 
 The GitHub rehearsal workflow adds an OIDC artifact attestation to the packed
 tarballs and uploads them as workflow artifacts. It deliberately contains no
-registry token and no publication command. Actual npm publication remains a
-separate, explicit release action. npm trusted publishing/provenance must be
-configured against the final public repository before that action is added.
+registry token and no publication command.
+
+## Registry publication
+
+`Publish npm toolchain` is a separate manual workflow. It accepts only an exact
+release tag plus the literal confirmation `publish`, checks that the tag and
+workspace version agree, reruns the complete compiler, package-consumer, and
+browser gates, and creates a fresh strict candidate from that tagged source.
+
+The publication helper accepts only that verified candidate on an OIDC-capable
+GitHub Actions runner. It publishes in workspace dependency order with npm
+provenance under the non-default `next` dist-tag, verifies each registry
+integrity, and promotes `latest` only after all eight exact versions are
+available. A partially completed run is resumable: an existing version is
+accepted only when its npm integrity is byte-for-byte identical to the strict
+candidate. The first registry generation uses a short-lived repository secret;
+after every package exists, each package is bound to this workflow through npm
+trusted publishing and the bootstrap secret is removed.
 
 Application artifacts have a separate integrity boundary. `velar verify`
 recomputes the format-3 framework-build inventory and `buildId`, while `velar preview`
