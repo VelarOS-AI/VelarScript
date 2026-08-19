@@ -60,3 +60,6 @@ jobs:
           # removed and npm authenticates this exact workflow through OIDC.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_SCOPE_TOKEN }}
           NPM_UNSCOPED_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # A pre-publish 404 must not stay cached while the helper waits for
+          # that newly-created package to become visible.
+          NPM_CONFIG_PREFER_ONLINE: "true"
