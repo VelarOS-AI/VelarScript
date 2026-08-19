@@ -549,7 +549,7 @@ print(count("a", "b"))
   assert.match(result.code ?? "", /function total\(first, \.\.\.values\)/u);
   assert.match(result.code ?? "", /total\(first, \.\.\.values\)/u);
   assert.match(result.code ?? "", /\.\.\.__velarCopyList\(tail, "Call spread"\)/u);
-  assert.match(result.code ?? "", /const count = \(\.\.\.values\) => __velarCollectionSize\(values\);/u);
+  assert.match(result.code ?? "", /const count = \(\.\.\.values\) => __velarListSize\(values\);/u);
   const restSymbol = result.semanticIndex.symbols.find((symbol) => symbol.name === "values" && symbol.kind === "parameter");
   assert.equal(restSymbol?.type, "List<number>");
   const totalSymbol = result.semanticIndex.symbols.find((symbol) => symbol.name === "total" && symbol.kind === "function");
@@ -3246,9 +3246,10 @@ print(order.join(","))
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /__velarContains\("Ada", names\)/u);
-  assert.match(result.code ?? "", /__velarContains\("Ada", scores\)/u);
-  assert.match(result.code ?? "", /!\(__velarContains\("missing", names\)\)/u);
+  assert.match(result.code ?? "", /__velarListContains\("Ada", names\)/u);
+  assert.match(result.code ?? "", /__velarMapContains\("Ada", scores\)/u);
+  assert.match(result.code ?? "", /!\(__velarListContains\("missing", names\)\)/u);
+  assert.match(result.code ?? "", /__velarContains\("Script", "VelarScript"\)/u);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "true\ntrue\ntrue\ntrue\ntrue\ntrue\nneedle,haystack\nfalse\nneedle,haystack\ntrue\nasync needle,async haystack\n");
@@ -6168,7 +6169,7 @@ test("compiles the Core language contract", async () => {
   assert.match(result.code ?? "", /class Player/);
   assert.match(result.code ?? "", /new Player\(user\.name\)/);
   assert.match(result.code ?? "", /User\.is\(raw\)/);
-  assert.match(result.code ?? "", /__velarIndex\(names, 0\)/);
+  assert.match(result.code ?? "", /__velarListIndexGet\(names, 0\)/);
   assert.match(result.code ?? "", /for \(const/);
 });
 
@@ -14473,8 +14474,8 @@ mount(<App />, "#app")
   assert.deepEqual(result.diagnostics, []);
   // Reactive lowering is determined by lexical binding identity, not by
   // whether the module reactive declaration appeared before the local scope.
-  assert.match(result.code ?? "", /function countSaved\(sessions\) \{\n  return __velarCollectionSize\(sessions\);\n\}/u);
-  assert.match(result.code ?? "", /__velarCollectionSize\(sessions\.get\(\)\)/u);
+  assert.match(result.code ?? "", /function countSaved\(sessions\) \{\n  return __velarListSize\(sessions\);\n\}/u);
+  assert.match(result.code ?? "", /__velarListSize\(sessions\.get\(\)\)/u);
 });
 
 test("a shadowed name cannot be referenced in the shadow's scope before its declaration", () => {
@@ -17483,7 +17484,9 @@ test("project compilation shares compiler runtime modules while standalone compi
   const standalone = compileCore(source);
   assert.deepEqual(standalone.diagnostics, []);
   assert.deepEqual(standalone.runtimeModules, []);
-  assert.match(standalone.code ?? "", /function __velarResolveReactiveBridge/u);
+  assert.match(standalone.code ?? "", /function __velarReactiveRaw\(value\) \{ return value; \}/u);
+  assert.doesNotMatch(standalone.code ?? "", /function __velarResolveReactiveBridge/u);
+  assert.doesNotMatch(standalone.code ?? "", /velar\.runtime\.v1/u);
   assert.doesNotMatch(standalone.code ?? "", /compiler-runtime-reactive-v1/u);
 
   const shared = compileCore(source, { sharedRuntimeModules: true });
@@ -17513,6 +17516,10 @@ test("project compilation shares compiler runtime modules while standalone compi
   }
   const runtimeSource = standardModuleSourceCore(VELAR_REACTIVE_BRIDGE_MODULE);
   assert.ok(runtimeSource);
+  assert.doesNotMatch(runtimeSource, /__velarResolveReactiveBridge/u);
+  const webRuntimeSource = webModuleSource(VELAR_REACTIVE_BRIDGE_MODULE);
+  assert.ok(webRuntimeSource);
+  assert.match(webRuntimeSource, /function __velarResolveReactiveBridge/u);
   assert.equal(standardModuleApiCore().modules[VELAR_REACTIVE_BRIDGE_MODULE], undefined);
   const runtimeRoute = `/@velar/${VELAR_REACTIVE_BRIDGE_MODULE.slice("velar/".length)}.js`;
   assert.equal(standardModuleAssetCore(runtimeRoute), runtimeSource);
@@ -17627,7 +17634,7 @@ print(scores.values().size)
 `.trimStart(), { sharedRuntimeModules: true });
   assert.deepEqual(collection.diagnostics, []);
   assert.deepEqual(collection.runtimeModules, [VELAR_COLLECTION_LOWERING_MODULE]);
-  assert.match(collection.code ?? "", /__velarCollectionValues/u);
+  assert.match(collection.code ?? "", /__velarMapValues/u);
   assert.doesNotMatch(collection.code ?? "", /\s__velarCollectionValue,/u);
 });
 
@@ -18324,9 +18331,15 @@ export def optionalIndex(values: List<number>?) -> number?:
   assert.ok((shared.code ?? "").includes(`from ${JSON.stringify(VELAR_COLLECTION_HOST_MODULE)}`));
   assert.ok((shared.code ?? "").includes(`from ${JSON.stringify(VELAR_REACTIVE_BRIDGE_MODULE)}`));
   assert.ok((shared.code ?? "").includes(`from ${JSON.stringify(VELAR_COLLECTION_LOWERING_MODULE)}`));
-  assert.match(shared.code ?? "", /__velarIndex/u);
-  assert.match(shared.code ?? "", /__velarSetIndex/u);
-  assert.match(shared.code ?? "", /__velarOptionalIndex/u);
+  assert.match(shared.code ?? "", /\b__velarListIndexGet\b/u);
+  assert.match(shared.code ?? "", /\b__velarRecordIndexGet\b/u);
+  assert.match(shared.code ?? "", /\b__velarListIndexSet\b/u);
+  assert.match(shared.code ?? "", /\b__velarRecordIndexSet\b/u);
+  assert.match(shared.code ?? "", /\b__velarMapGet\b/u);
+  assert.match(shared.code ?? "", /\b__velarSetSize\b/u);
+  assert.doesNotMatch(shared.code ?? "", /\b__velarIndex\b/u);
+  assert.doesNotMatch(shared.code ?? "", /\b__velarSetIndex\b/u);
+  assert.doesNotMatch(shared.code ?? "", /\b__velarOptionalIndex\b/u);
   assert.doesNotMatch(shared.code ?? "", /__velarListExtend,/u);
   assert.doesNotMatch(shared.code ?? "", /__velarMapCopy,/u);
   assert.doesNotMatch(shared.code ?? "", /const __velarCollectionNativeArray = globalThis\.Array/u);
@@ -18442,20 +18455,19 @@ globalThis.Symbol = class PoisonedSymbol {};
 globalThis.TypeError = class PoisonedTypeError extends OriginalTypeError {};
 globalThis.RangeError = class PoisonedRangeError extends OriginalRangeError {};
 exercise();
-let optionalReads = 0;
-const optional = __velarOptionalIndex(null, () => { optionalReads += 1; return 0; });
+const optional = optionalIndex(null);
 const indexed = [1, 2];
-__velarSetIndex(indexed, -1, 8);
+__velarListIndexSet(indexed, -1, 8);
 const record = {a: 1};
-__velarSetIndex(record, "b", 2);
+__velarRecordIndexSet(record, "b", 2);
 let indexFailure = null;
-try { __velarIndex(indexed, 2); } catch (error) { indexFailure = error; }
-console.log(__velarIndex(indexed, -1), __velarIndex(record, "b"), optional, optionalReads, indexFailure?.name, indexFailure instanceof OriginalRangeError);
+try { __velarListIndexGet(indexed, 2); } catch (error) { indexFailure = error; }
+console.log(__velarListIndexGet(indexed, -1), __velarRecordIndexGet(record, "b"), optional, indexFailure?.name, indexFailure instanceof OriginalRangeError);
 OriginalObject.defineProperty;
 console.log(poisonCalls);
 `);
   assert.equal(hostile.status, 0, String(hostile.stderr));
-  assert.equal(hostile.stdout, "3\n6\n4\n2\n2\n8 2 null 0 IndexError true\n0\n");
+  assert.equal(hostile.stdout, "3\n6\n4\n2\n2\n8 2 null IndexError true\n0\n");
 });
 
 test("extension runtime dependencies materialize transitively without becoming public modules", () => {
@@ -19868,7 +19880,7 @@ print(copiedScores.get("Ada") ?? 0)
 
   assert.deepEqual(result.diagnostics, []);
   assert.equal(result.semanticIndex.symbols.find((symbol) => symbol.name === "entries")?.type, "List<{ key: string, value: number }>");
-  assert.match(result.code ?? "", /__velarCollectionEntries\(scores\)/u);
+  assert.match(result.code ?? "", /__velarMapEntries\(scores\)/u);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "Ada:7:Ada:9:game\n9\n");
@@ -20826,7 +20838,7 @@ for key in lookup:
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /of __velarCollectionIterator\(lookup\)/);
+  assert.match(result.code ?? "", /of __velarReactiveMapKeyIterator\(lookup\)/);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "first:6\n");
@@ -22371,6 +22383,41 @@ print(session.profile.name)
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "Ada\n");
+});
+
+test("acyclic runtime Types emit straight-line validators without graph state", () => {
+  const result = compileCore(`
+export type Point:
+    x: number
+    y: number
+
+export type Marker:
+    point: Point
+    label: string?
+
+export type PointAlias = Point
+
+export def pointIs(value: unknown) -> bool:
+    return Point.is(value)
+
+export def markerIs(value: unknown) -> bool:
+    return Marker.is(value)
+
+print(pointIs({x: 1, y: 2}))
+print(markerIs({point: {x: 1, y: 2}, label: "origin"}))
+print(PointAlias.is({x: 1, y: "bad"}))
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  const code = result.code ?? "";
+  assert.match(code, /function __velarTypeCheck_Point\(value\) \{/u);
+  assert.match(code, /function __velarTypeCheck_Marker\(value\) \{/u);
+  assert.match(code, /function __velarTypeCheck_PointAlias\(value\) \{/u);
+  assert.doesNotMatch(code, /function __velarTypeCheck_(?:Point|Marker|PointAlias)\(value, __state/u);
+  assert.doesNotMatch(code, /__velarTypeCheck_(?:Point|Marker|PointAlias)[\s\S]{0,900}__velarValidationWeakMap/u);
+  assert.match(code, /return __velarTypeCheck_Point\(value\);/u);
+  const execution = executeModule(code);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "true\ntrue\nfalse\n");
 });
 
 test("recursive record types validate finite trees and reject cyclic or excessive graphs", () => {
@@ -26802,8 +26849,8 @@ component Flow(messages: List<Message>):
     return <section>{messages.size == 0 ? <p>empty</p> : messages.map(message => <article key={message.id}>{message.text}</article>)}</section>
 `.trimStart());
   assert.deepEqual(ternary.diagnostics, []);
-  assert.match(ternary.code ?? "", /__velarDynamic\(__velarElement\d+, \(__velarChildScope\) => \(\(__velarCollectionSize\(messages\.get\(\)\) === 0\)\) \? \(/u);
-  assert.match(ternary.code ?? "", /__velarKeyed\(__velarElement\d+, \(\) => \(\(__velarCollectionSize\(messages\.get\(\)\) === 0\)\) \? \[\] : \(messages\.get\(\)\)/u);
+  assert.match(ternary.code ?? "", /__velarDynamic\(__velarElement\d+, \(__velarChildScope\) => \(\(__velarListSize\(messages\.get\(\)\) === 0\)\) \? \(/u);
+  assert.match(ternary.code ?? "", /__velarKeyed\(__velarElement\d+, \(\) => \(\(__velarListSize\(messages\.get\(\)\) === 0\)\) \? \[\] : \(messages\.get\(\)\)/u);
 
   const bothKeyed = compile(`
 component Flow(on: bool, alpha: List<string>, beta: List<string>):

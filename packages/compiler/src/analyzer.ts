@@ -239,31 +239,33 @@ export interface ClassInfo {
   readonly staticMethods: ReadonlyMap<string, ValueType>;
 }
 
-export type CollectionOperation = "get" | "slice" | "listAppend" | "listExtend" | "listInsert" | "listRemove" | "listPop" | "listCopy" | "listCount" | "listIndex" | "listFind" | "listSome" | "listEvery" | "listMap" | "listFilter" | "listFlatMap" | "listReduce" | "listJoin" | "listSorted" | "listReversed" | "listSum" | "listMin" | "listMax" | "setAdd" | "setUpdate" | "setCopy" | "setUnion" | "setIntersection" | "setDifference" | "mapSet" | "mapUpdate" | "mapCopy" | "recordSet" | "recordCopy" | "has" | "remove" | "clear" | "keys" | "values" | "entries";
+export type CollectionRuntimeKind = "list" | "map" | "set" | "record";
+
+export type CollectionOperation = "listGet" | "mapGet" | "recordGet" | "slice" | "listAppend" | "listExtend" | "listInsert" | "listRemove" | "listPop" | "listClear" | "listCopy" | "listHas" | "listCount" | "listIndex" | "listFind" | "listSome" | "listEvery" | "listMap" | "listFilter" | "listFlatMap" | "listReduce" | "listJoin" | "listSorted" | "listReversed" | "listSum" | "listMin" | "listMax" | "setAdd" | "setUpdate" | "setHas" | "setRemove" | "setClear" | "setValues" | "setCopy" | "setUnion" | "setIntersection" | "setDifference" | "mapSet" | "mapUpdate" | "mapHas" | "mapRemove" | "mapClear" | "mapKeys" | "mapValues" | "mapEntries" | "mapCopy" | "recordSet" | "recordHas" | "recordRemove" | "recordClear" | "recordKeys" | "recordValues" | "recordEntries" | "recordCopy";
 
 export type PrimitiveOperation = "stringTrim" | "stringUpper" | "stringLower" | "stringSlice" | "stringChar" | "stringHas" | "stringIndex" | "stringCount" | "stringStartsWith" | "stringEndsWith" | "stringSplit" | "stringReplace" | "stringReplaceAll" | "stringPadStart" | "stringPadEnd" | "stringRepeat" | "stringIsBlank" | "numberAbs" | "numberRound" | "numberFloor" | "numberCeil" | "numberToFixed" | "numberIsInteger" | "numberIsNaN" | "numberIsFinite";
 
 const listCollectionOperations = new Map<string, CollectionOperation>([
-  ["get", "get"], ["slice", "slice"], ["append", "listAppend"], ["extend", "listExtend"],
+  ["get", "listGet"], ["slice", "slice"], ["append", "listAppend"], ["extend", "listExtend"],
   ["insert", "listInsert"], ["remove", "listRemove"], ["pop", "listPop"],
-  ["clear", "clear"], ["copy", "listCopy"], ["has", "has"], ["count", "listCount"],
+  ["clear", "listClear"], ["copy", "listCopy"], ["has", "listHas"], ["count", "listCount"],
   ["index", "listIndex"], ["find", "listFind"], ["some", "listSome"], ["every", "listEvery"],
   ["map", "listMap"], ["filter", "listFilter"], ["flatMap", "listFlatMap"], ["reduce", "listReduce"], ["join", "listJoin"],
   ["sorted", "listSorted"], ["reversed", "listReversed"], ["sum", "listSum"], ["min", "listMin"], ["max", "listMax"],
 ]);
 const mapCollectionOperations = new Map<string, CollectionOperation>([
-  ["get", "get"], ["set", "mapSet"], ["update", "mapUpdate"], ["has", "has"],
-  ["remove", "remove"], ["clear", "clear"], ["copy", "mapCopy"],
-  ["keys", "keys"], ["values", "values"], ["entries", "entries"],
+  ["get", "mapGet"], ["set", "mapSet"], ["update", "mapUpdate"], ["has", "mapHas"],
+  ["remove", "mapRemove"], ["clear", "mapClear"], ["copy", "mapCopy"],
+  ["keys", "mapKeys"], ["values", "mapValues"], ["entries", "mapEntries"],
 ]);
 const setCollectionOperations = new Map<string, CollectionOperation>([
-  ["add", "setAdd"], ["update", "setUpdate"], ["has", "has"], ["remove", "remove"],
-  ["clear", "clear"], ["copy", "setCopy"], ["values", "values"],
+  ["add", "setAdd"], ["update", "setUpdate"], ["has", "setHas"], ["remove", "setRemove"],
+  ["clear", "setClear"], ["copy", "setCopy"], ["values", "setValues"],
   ["union", "setUnion"], ["intersection", "setIntersection"], ["difference", "setDifference"],
 ]);
 const recordCollectionOperations = new Map<string, CollectionOperation>([
-  ["get", "get"], ["set", "recordSet"], ["has", "has"], ["remove", "remove"],
-  ["clear", "clear"], ["copy", "recordCopy"], ["keys", "keys"], ["values", "values"], ["entries", "entries"],
+  ["get", "recordGet"], ["set", "recordSet"], ["has", "recordHas"], ["remove", "recordRemove"],
+  ["clear", "recordClear"], ["copy", "recordCopy"], ["keys", "recordKeys"], ["values", "recordValues"], ["entries", "recordEntries"],
 ]);
 const stringPrimitiveOperations = new Map<string, PrimitiveOperation>([
   ["trim", "stringTrim"], ["upper", "stringUpper"], ["lower", "stringLower"], ["slice", "stringSlice"],
@@ -282,10 +284,10 @@ const numberPrimitiveOperations = new Map<string, PrimitiveOperation>([
 // operations (pop/remove) and null-returning mutators stay legal,
 // and user-function purity is deliberately never analyzed (D26 retired that).
 const discardedPureCollectionOperations = new Set<CollectionOperation>([
-  "get", "slice", "listCopy", "listCount", "listIndex", "listFind", "listSome", "listEvery",
+  "listGet", "mapGet", "recordGet", "slice", "listCopy", "listCount", "listIndex", "listFind", "listSome", "listEvery",
   "listMap", "listFilter", "listFlatMap", "listReduce", "listJoin", "listSorted", "listReversed",
   "listSum", "listMin", "listMax", "setCopy", "setUnion", "setIntersection", "setDifference", "mapCopy", "recordCopy",
-  "has", "keys", "values", "entries",
+  "listHas", "mapHas", "setHas", "recordHas", "mapKeys", "recordKeys", "mapValues", "setValues", "recordValues", "mapEntries", "recordEntries",
 ]);
 const discardedPurePrimitiveOperations = new Set<PrimitiveOperation>([
   "stringTrim", "stringUpper", "stringLower", "stringSlice", "stringChar",
@@ -308,7 +310,10 @@ export interface RecordTypeField {
 
 export interface LoweringHints {
   readonly collectionCalls: ReadonlyMap<number, CollectionOperation>;
-  readonly collectionSizes: ReadonlySet<number>;
+  readonly collectionSizes: ReadonlyMap<number, CollectionRuntimeKind>;
+  readonly collectionIndexes: ReadonlyMap<string, "list" | "record">;
+  readonly collectionMemberships: ReadonlyMap<string, CollectionRuntimeKind | "string">;
+  readonly collectionIterations: ReadonlyMap<number, CollectionRuntimeKind | "string">;
   /** Binary members and indexes lower directly against their typed-array storage. */
   readonly binaryCalls: ReadonlyMap<number, "bufferCopy" | "bufferSlice" | "bufferToBytes">;
   readonly binarySizes: ReadonlyMap<number, BinaryStorageKind>;
@@ -944,7 +949,10 @@ export class Analyzer implements TypeEnvironment {
   private readonly returnContexts: ReturnContext[] = [];
   private readonly asynchronousFunctions: boolean[] = [];
   private readonly collectionCalls = new Map<number, CollectionOperation>();
-  private readonly collectionSizes = new Set<number>();
+  private readonly collectionSizes = new Map<number, CollectionRuntimeKind>();
+  private readonly collectionIndexes = new Map<string, "list" | "record">();
+  private readonly collectionMemberships = new Map<string, CollectionRuntimeKind | "string">();
+  private readonly collectionIterations = new Map<number, CollectionRuntimeKind | "string">();
   private readonly binaryCalls = new Map<number, "bufferCopy" | "bufferSlice" | "bufferToBytes">();
   private readonly binarySizes = new Map<number, BinaryStorageKind>();
   private readonly binaryIndexes = new Map<string, BinaryStorageKind>();
@@ -1731,6 +1739,9 @@ export class Analyzer implements TypeEnvironment {
     return {
       collectionCalls: this.collectionCalls,
       collectionSizes: this.collectionSizes,
+      collectionIndexes: this.collectionIndexes,
+      collectionMemberships: this.collectionMemberships,
+      collectionIterations: this.collectionIterations,
       binaryCalls: this.binaryCalls,
       binarySizes: this.binarySizes,
       binaryIndexes: this.binaryIndexes,
@@ -3454,6 +3465,10 @@ export class Analyzer implements TypeEnvironment {
         // releasing?" undecidable, so the projection happens on the
         // synchronous side only and `async for` keeps refusing user types.
         const iterable = statement.asynchronous ? inferredIterable : this.iterationSource(statement.iterable, inferredIterable);
+        if (!statement.asynchronous
+          && (iterable.kind === "list" || iterable.kind === "map" || iterable.kind === "set" || iterable.kind === "record" || iterable.kind === "string")) {
+          this.collectionIterations.set(statement.span.start, iterable.kind);
+        }
         for (const name of pendingLoopNames) this.pendingScopeDeclarations.at(-1)!.delete(name);
         let first: ValueType;
         let second: ValueType;
@@ -5284,6 +5299,7 @@ export class Analyzer implements TypeEnvironment {
       } else if (objectType.kind === "list") {
         this.requireAssignable(indexType, numberType, statement.target.index.span);
         targetType = objectType.element;
+        this.collectionIndexes.set(spanIdentity(statement.target.span), "list");
         if (objectType.readonlyView) {
           this.diagnostics.push(diagnostic("VEL3002", `Cannot index-assign through ${describeType(objectType)}; it is a read-only view`, statement.target.span));
           targetWritable = false;
@@ -5294,6 +5310,7 @@ export class Analyzer implements TypeEnvironment {
       } else if (objectType.kind === "record") {
         this.requireAssignable(indexType, stringType, statement.target.index.span);
         targetType = objectType.value;
+        this.collectionIndexes.set(spanIdentity(statement.target.span), "record");
         if (objectType.readonlyView) {
           this.diagnostics.push(diagnostic("VEL3002", `Cannot index-assign through ${describeType(objectType)}; it is a read-only view`, statement.target.span));
           targetWritable = false;
@@ -5965,6 +5982,7 @@ export class Analyzer implements TypeEnvironment {
         }
         if (object.kind === "list") {
           this.requireAssignable(index, numberType, expression.index.span);
+          this.collectionIndexes.set(spanIdentity(expression.span), "list");
           const element = object.readonlyView ? this.readonlyDataViewOf(object.element) : object.element;
           if (guarded) {
             this.optionalIndexes.add(spanIdentity(expression.span));
@@ -5982,6 +6000,7 @@ export class Analyzer implements TypeEnvironment {
         }
         if (object.kind === "record") {
           this.requireAssignable(index, stringType, expression.index.span);
+          this.collectionIndexes.set(spanIdentity(expression.span), "record");
           if (guarded) this.optionalIndexes.add(spanIdentity(expression.span));
           return optionalOf(object.readonlyView ? this.readonlyDataViewOf(object.value) : object.value);
         }
@@ -6087,6 +6106,9 @@ export class Analyzer implements TypeEnvironment {
       // contract. Letting one work while the other refused is the trap the
       // ruling names — the author would have no way to see where the line is.
       const container = this.iterationSource(rightExpression, right);
+      if (container.kind === "list" || container.kind === "map" || container.kind === "set" || container.kind === "record" || container.kind === "string") {
+        this.collectionMemberships.set(spanIdentity(operationSpan), container.kind);
+      }
       if (container.kind === "list" || container.kind === "set") {
         this.requireMembershipIntersection(left, this.readonlyDataViewOf(container.element), leftExpression.span, operator);
       } else if (container.kind === "map") {
@@ -7860,7 +7882,7 @@ export class Analyzer implements TypeEnvironment {
     argumentNames: readonly (string | null)[] | undefined,
     callSpan: Span,
   ): ValueType | null {
-    const object = this.inferredOrAnalyze(member.object);
+    const object = this.expandAliases(this.inferredOrAnalyze(member.object));
     if (object.kind !== "list" && object.kind !== "map" && object.kind !== "set" && object.kind !== "record") return null;
     const mutating = object.kind === "list"
       ? new Set(["append", "extend", "insert", "remove", "pop", "clear"])
@@ -8109,12 +8131,12 @@ export class Analyzer implements TypeEnvironment {
         return object.element;
       }
       if (member.property === "clear" || member.property === "copy" || member.property === "reversed") {
-        this.collectionCalls.set(member.span.end, member.property === "clear" ? "clear" : member.property === "copy" ? "listCopy" : "listReversed");
+        this.collectionCalls.set(member.span.end, member.property === "clear" ? "listClear" : member.property === "copy" ? "listCopy" : "listReversed");
         checkCollectionArguments([]);
         return member.property === "clear" ? nullType : { kind: "list", element: readonlyElement! };
       }
       if (member.property === "has" || member.property === "count") {
-        this.collectionCalls.set(member.span.end, member.property === "has" ? "has" : "listCount");
+        this.collectionCalls.set(member.span.end, member.property === "has" ? "listHas" : "listCount");
         checkProbeArgument(comparisonElement!, `List.${member.property}`);
         return member.property === "has" ? boolType : numberType;
       }
@@ -8232,7 +8254,7 @@ export class Analyzer implements TypeEnvironment {
         return stringType;
       }
       if (member.property === "get") {
-        this.collectionCalls.set(member.span.end, "get");
+        this.collectionCalls.set(member.span.end, "listGet");
         checkCollectionArguments([numberType]);
         return optionalOf(readonlyElement!);
       }
@@ -8271,7 +8293,7 @@ export class Analyzer implements TypeEnvironment {
         return nullType;
       }
       if (member.property === "get") {
-        this.collectionCalls.set(member.span.end, "get");
+        this.collectionCalls.set(member.span.end, "mapGet");
         if (!namedPreanalyzed && sourceArguments.length === 2 && !sourceArguments.some((argument) => argument.kind === "SpreadExpression")) {
           const key = inferArgument(0, comparisonKey!);
           const keyArgument = argumentAt(0);
@@ -8284,32 +8306,32 @@ export class Analyzer implements TypeEnvironment {
         return optionalOf(readonlyValue!);
       }
       if (member.property === "keys") {
-        this.collectionCalls.set(member.span.end, "keys");
+        this.collectionCalls.set(member.span.end, "mapKeys");
         checkCollectionArguments([]);
         return { kind: "list", element: readonlyKey! };
       }
       if (member.property === "values") {
-        this.collectionCalls.set(member.span.end, "values");
+        this.collectionCalls.set(member.span.end, "mapValues");
         checkCollectionArguments([]);
         return { kind: "list", element: readonlyValue! };
       }
       if (member.property === "entries") {
-        this.collectionCalls.set(member.span.end, "entries");
+        this.collectionCalls.set(member.span.end, "mapEntries");
         checkCollectionArguments([]);
         return { kind: "list", element: { kind: "object", fields: new Map([["key", readonlyKey!], ["value", readonlyValue!]]) } };
       }
       if (member.property === "has") {
-        this.collectionCalls.set(member.span.end, "has");
+        this.collectionCalls.set(member.span.end, "mapHas");
         checkProbeArgument(comparisonKey!, "Map.has");
         return boolType;
       }
       if (member.property === "remove") {
-        this.collectionCalls.set(member.span.end, "remove");
+        this.collectionCalls.set(member.span.end, "mapRemove");
         checkProbeArgument(comparisonKey!, "Map.remove");
         return boolType;
       }
       if (member.property === "clear") {
-        this.collectionCalls.set(member.span.end, "clear");
+        this.collectionCalls.set(member.span.end, "mapClear");
         checkCollectionArguments([]);
         return nullType;
       }
@@ -8326,37 +8348,37 @@ export class Analyzer implements TypeEnvironment {
         return nullType;
       }
       if (member.property === "get") {
-        this.collectionCalls.set(member.span.end, "get");
+        this.collectionCalls.set(member.span.end, "recordGet");
         checkProbeArgument(stringType, "Record.get");
         return optionalOf(readonlyValue!);
       }
       if (member.property === "keys") {
-        this.collectionCalls.set(member.span.end, "keys");
+        this.collectionCalls.set(member.span.end, "recordKeys");
         checkCollectionArguments([]);
         return { kind: "list", element: stringType };
       }
       if (member.property === "values") {
-        this.collectionCalls.set(member.span.end, "values");
+        this.collectionCalls.set(member.span.end, "recordValues");
         checkCollectionArguments([]);
         return { kind: "list", element: readonlyValue! };
       }
       if (member.property === "entries") {
-        this.collectionCalls.set(member.span.end, "entries");
+        this.collectionCalls.set(member.span.end, "recordEntries");
         checkCollectionArguments([]);
         return { kind: "list", element: { kind: "object", fields: new Map([["key", stringType], ["value", readonlyValue!]]) } };
       }
       if (member.property === "has") {
-        this.collectionCalls.set(member.span.end, "has");
+        this.collectionCalls.set(member.span.end, "recordHas");
         checkProbeArgument(stringType, "Record.has");
         return boolType;
       }
       if (member.property === "remove") {
-        this.collectionCalls.set(member.span.end, "remove");
+        this.collectionCalls.set(member.span.end, "recordRemove");
         checkProbeArgument(stringType, "Record.remove");
         return boolType;
       }
       if (member.property === "clear") {
-        this.collectionCalls.set(member.span.end, "clear");
+        this.collectionCalls.set(member.span.end, "recordClear");
         checkCollectionArguments([]);
         return nullType;
       }
@@ -8392,22 +8414,22 @@ export class Analyzer implements TypeEnvironment {
         return nullType;
       }
       if (member.property === "has") {
-        this.collectionCalls.set(member.span.end, "has");
+        this.collectionCalls.set(member.span.end, "setHas");
         checkProbeArgument(comparisonElement!, "Set.has");
         return boolType;
       }
       if (member.property === "remove") {
-        this.collectionCalls.set(member.span.end, "remove");
+        this.collectionCalls.set(member.span.end, "setRemove");
         checkProbeArgument(comparisonElement!, "Set.remove");
         return boolType;
       }
       if (member.property === "clear") {
-        this.collectionCalls.set(member.span.end, "clear");
+        this.collectionCalls.set(member.span.end, "setClear");
         checkCollectionArguments([]);
         return nullType;
       }
       if (member.property === "values") {
-        this.collectionCalls.set(member.span.end, "values");
+        this.collectionCalls.set(member.span.end, "setValues");
         checkCollectionArguments([]);
         return { kind: "list", element: readonlyElement! };
       }
@@ -8633,7 +8655,7 @@ export class Analyzer implements TypeEnvironment {
       }
     } else if (object.kind === "list") {
       result = this.listMember(object, property) ?? unknownType;
-      if (property === "size") this.collectionSizes.add(memberSpan.end);
+      if (property === "size") this.collectionSizes.set(memberSpan.end, "list");
       if (result.kind === "unknown") {
         const guidance = collectionMemberGuidance("List", property);
         const recovered = guidance?.replacement ? this.listMember(object, guidance.replacement) : null;
@@ -8646,21 +8668,21 @@ export class Analyzer implements TypeEnvironment {
       }
     } else if (object.kind === "set") {
       result = this.setMember(object, property) ?? unknownType;
-      if (property === "size") this.collectionSizes.add(memberSpan.end);
+      if (property === "size") this.collectionSizes.set(memberSpan.end, "set");
       if (result.kind === "unknown") {
         const nearest = collectionMemberGuidance("Set", property) ? null : uniqueNearestName(property, this.semanticMembersOf(object).keys());
         this.typeError(`${this.collectionMemberError("Set", property)}${nearest ? `; did you mean '${nearest}'?` : ""}`, memberSpan, this.collectionMemberFix("Set", property, memberSpan));
       }
     } else if (object.kind === "map") {
       result = this.mapMember(object, property) ?? unknownType;
-      if (property === "size") this.collectionSizes.add(memberSpan.end);
+      if (property === "size") this.collectionSizes.set(memberSpan.end, "map");
       if (result.kind === "unknown") {
         const nearest = collectionMemberGuidance("Map", property) ? null : uniqueNearestName(property, this.semanticMembersOf(object).keys());
         this.typeError(`${this.collectionMemberError("Map", property)}${nearest ? `; did you mean '${nearest}'?` : ""}`, memberSpan, this.collectionMemberFix("Map", property, memberSpan));
       }
     } else if (object.kind === "record") {
       result = this.recordMember(object, property) ?? unknownType;
-      if (property === "size") this.collectionSizes.add(memberSpan.end);
+      if (property === "size") this.collectionSizes.set(memberSpan.end, "record");
       if (result.kind === "unknown") this.typeError(`Record fields are dynamic; use ${describeType(object)}[${JSON.stringify(property)}]`, memberSpan);
     } else if (object.kind === "promise") {
       const awaited = this.expandAliases(object.value);

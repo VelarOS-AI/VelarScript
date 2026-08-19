@@ -436,26 +436,21 @@ reuses the same initialization-captured discovery/definition/Error operations
 and walks generated parts plus source fields by index. It no longer re-enters
 ambient Object reflection, `hasOwnProperty.call`, or Array iteration.
 
-Raw identity at a JavaScript call and collection reactivity share a
-compiler-owned registry bridge, but they do not share one unconditional output
-blob. The base fragment captures the global object and its Object/Symbol/Error
-operations needed by its host boundary, validates the immutable registry owner,
-and exposes only `toRaw`; registry functions are receiver-independent
-compiler-owned callables, so invoking their captured identity does not require a
-second ambient reflection path. The collection fragment is emitted separately
-and validates only its additional
-read/track/link/trigger operations. This keeps a JavaScript-only module from
-carrying the collection path. When a Web module itself installs and validates
-the runtime foundation, the Web emitter selects a compact local adapter that
-captures those already-proved operation fields instead of repeating the
-registry verifier. Core-shaped dependencies retain the general bridge because
-they may initialize before their Web importer. Resolution there is deliberately late: an ESM
-dependency can execute before the Web module that installs the optional runtime
-provider. Absence therefore returns the input unchanged and is retried, while
-the first valid provider and its data-valued operations are cached. A present
-but malformed provider always fails closed. No later replacement of
-`globalThis`, Symbol lookup, Object reflection, or Error
-identity can redirect the generated bridge.
+Raw identity at a JavaScript call and collection reactivity share one private
+compiler ABI with target-selected implementations. Core compilation binds that
+ABI statically to identity/no-op operations, so a collection read cannot spend
+time probing for a Web provider that Core will never install. Web project
+compilation replaces the same hidden module with the registry-backed bridge,
+allowing Core-shaped dependencies to observe the Web owner without changing
+their generated imports. Resolution there remains deliberately late because an
+ESM dependency can execute before the Web module that installs the optional
+runtime provider: absence returns the input unchanged and is retried, while the
+first valid immutable provider and its data-valued operations are cached. A Web
+module that already installed and validated the runtime foundation uses the
+compact local adapter and does not repeat the registry verifier. A present but
+malformed provider always fails closed, and no later replacement of
+`globalThis`, Symbol lookup, Object reflection, or Error identity can redirect
+the Web bridge.
 
 Standalone compilation and project compilation deliberately package this bridge
 differently. `compile()` defaults to a self-contained JavaScript result and
@@ -479,22 +474,30 @@ bundled copy.
 
 Compiler-known runtime Types split identity from validation execution. The
 global registry fragment owns the immutable cross-module WeakSet identity; a
-separate validation fragment owns per-call WeakMap/Set recursion state,
-descriptor reads, Array/Promise/class brands, Type-object freezing, Reflect calls,
-collection traversal, and ValidationError identity. Standalone compilation
-composes those fragments inline. Project compilation imports their stateless
-operations from one compiler-internal runtime module; every validation call still
-creates fresh recursion state, while each generated record/alias predicate and
-each concrete Type object remains in its declaring source module. The internal
-module has no `ModuleInterface`, so sharing host operations neither publishes a
-reflection surface nor turns module-local type declarations into global names.
-Generated validators therefore do not call mutable collection prototypes, and
-recursive validation rejects cycles while accepting repeated DAG nodes even
-after application code replaces the ambient constructors, prototypes, or a
-class's `Symbol.hasInstance` hook.
+separate validation fragment owns descriptor reads, Array/Promise/class brands,
+Type-object freezing, Reflect calls, collection traversal, ValidationError
+identity, and the WeakMap/Set recursion state needed by cyclic type graphs.
+Standalone compilation composes those fragments inline. Project compilation
+imports their stateless operations from one compiler-internal runtime module,
+while each generated record/alias predicate and each concrete Type object
+remains in its declaring source module. The analyzer classifies the local type
+dependency graph: acyclic concrete validators emit a straight-line predicate
+and allocate no graph state on successful `is` or `parse`; recursive,
+generic, or imported/opaque graphs retain fresh per-call state and the bounded
+cycle guard. The internal module has no `ModuleInterface`, so sharing host
+operations neither publishes a reflection surface nor turns module-local type
+declarations into global names. Generated validators therefore do not call
+mutable collection prototypes, and recursive validation rejects cycles while
+accepting repeated DAG nodes even after application code replaces the ambient
+constructors, prototypes, or a class's `Symbol.hasInstance` hook.
 Reading a collection method as a value lowers to a receiver-once bound wrapper
 around the same helper, including optional access; it never leaks a nonexistent
 or overridable JavaScript instance method.
+When analysis proves the receiver kind, indexing, size, membership, iteration,
+lookup, mutation, removal, clearing, and snapshot operations lower directly to
+the corresponding List, Map, Set, or Record helper. The generic dispatcher is
+reserved for genuinely dynamic receivers, so ordinary typed code does not pay
+repeated kind discrimination or unrelated reactive-wrapper work.
 Collection runtime ownership is also split from collection values. Standalone
 compilation inlines both the captured Array/Map/Set/Object/Reflect host ABI and
 the stateless List/Set/Map/Record lowering algorithms. Project compilation uses

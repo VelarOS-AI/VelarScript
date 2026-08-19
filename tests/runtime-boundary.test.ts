@@ -6,6 +6,7 @@ import { compile as compileCore } from "@velarscript/compiler";
 import {
   VELAR_RUNTIME_REGISTRY_KEY,
   VELAR_RUNTIME_SCHEMA_VERSION,
+  VELAR_REACTIVE_BRIDGE_RUNTIME,
   VELAR_TYPE_REGISTRY_KEY,
   VELAR_TYPE_REGISTRY_RUNTIME,
   VELAR_UTF8_RUNTIME,
@@ -68,8 +69,9 @@ test("compiler-owned UTF-8 sizing matches transport encoding semantics", () => {
 test("generated Core and Web code consume the compiler-owned runtime ABI", () => {
   const core = compileCore("const values = [1]\nvalues.append(2)\n");
   assert.deepEqual(core.diagnostics, []);
-  assert.match(core.code ?? "", new RegExp(`__velarReactiveBridgeSymbolFor\\(${escapeRegex(JSON.stringify(VELAR_RUNTIME_REGISTRY_KEY))}\\)`, "u"));
-  assert.match(core.code ?? "", new RegExp(`version !== ${escapeRegex(JSON.stringify(VELAR_RUNTIME_SCHEMA_VERSION))}`, "u"));
+  assert.doesNotMatch(core.code ?? "", new RegExp(escapeRegex(JSON.stringify(VELAR_RUNTIME_REGISTRY_KEY)), "u"));
+  assert.match(core.code ?? "", /const __velarReactiveIterateKey = null;/u);
+  assert.match(core.code ?? "", /function __velarHostRaw\(value\) \{ return value; \}/u);
 
   const web = compileCore("component App:\n    return <main>Ready</main>\n", { extensions: [velarCompilerExtension] });
   assert.deepEqual(web.diagnostics, []);
@@ -100,17 +102,10 @@ ${web.code ?? ""}
   assert.match(String(execution.stderr), /VelarScript Web runtime (?:ownership|values) is invalid/u);
 });
 
-test("the JavaScript raw bridge retries a missing runtime and caches a valid immutable provider", () => {
-  const identitySource = Buffer.from("export function identity(value){return value}", "utf8").toString("base64");
-  const core = compileCore(`
-import js unsafe {identity} from "data:text/javascript;base64,${identitySource}"
-
-export def cross(value: unknown) -> unknown:
-    return identity(value)
-`.trimStart());
-  assert.deepEqual(core.diagnostics, []);
+test("the Web registry raw bridge retries a missing runtime and caches a valid immutable provider", () => {
   const execution = executeModule(`
-${core.code ?? ""}
+${VELAR_REACTIVE_BRIDGE_RUNTIME}
+function cross(value) { return __velarHostRaw(value); }
 const plain = {};
 const first = cross(plain) === plain;
 const raw = {};
@@ -144,15 +139,9 @@ console.log(first + "|" + second + "|" + third);
   assert.equal(execution.stdout.trim(), "true|true|true");
 });
 
-test("the JavaScript raw bridge rejects accessor-backed runtime operations without invoking them", () => {
-  const identitySource = Buffer.from("export function identity(value){return value}", "utf8").toString("base64");
-  const core = compileCore(`
-import js unsafe {identity} from "data:text/javascript;base64,${identitySource}"
-identity({})
-`.trimStart());
-  assert.deepEqual(core.diagnostics, []);
-  const appUrl = `data:text/javascript;base64,${Buffer.from(core.code ?? "").toString("base64")}`;
+test("the Web registry raw bridge rejects accessor-backed runtime operations without invoking them", () => {
   const execution = executeModule(`
+${VELAR_REACTIVE_BRIDGE_RUNTIME}
 let reads = 0;
 const runtime = Object.create(null);
 Object.defineProperty(runtime, "version", { value: ${JSON.stringify(VELAR_RUNTIME_SCHEMA_VERSION)}, enumerable: false, configurable: false, writable: false });
@@ -161,7 +150,7 @@ Object.preventExtensions(runtime);
 Object.defineProperty(globalThis, Symbol.for(${JSON.stringify(VELAR_RUNTIME_REGISTRY_KEY)}), {
   value: runtime, enumerable: false, configurable: false, writable: false,
 });
-try { await import(${JSON.stringify(appUrl)}); }
+try { __velarHostRaw({}); }
 catch (error) { console.log(reads + "|" + error.message); }
 `);
   assert.equal(execution.status, 0, execution.stderr);

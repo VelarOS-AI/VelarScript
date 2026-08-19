@@ -14,6 +14,8 @@ export const VELAR_COLLECTION_LOWERING_EXPORTS = [
   "__velarReactiveSetIterator",
   "__velarReactiveMapKeyIterator",
   "__velarReactiveRecordIterator",
+  "__velarReactiveMapPairIterator",
+  "__velarReactiveRecordPairIterator",
   "__velarCollectionIterator",
   "__velarCollectionPairIterator",
   "__velarCopyList",
@@ -23,7 +25,14 @@ export const VELAR_COLLECTION_LOWERING_EXPORTS = [
   "__velarCreateSet",
   "__velarCreateMap",
   "__velarCollectionSize",
+  "__velarListSize",
+  "__velarMapSize",
+  "__velarSetSize",
+  "__velarRecordSize",
   "__velarCollectionGet",
+  "__velarListGet",
+  "__velarMapGet",
+  "__velarRecordGet",
   "__velarCollectionSlice",
   // COL-U5: `IndexError` is a nameable source type, so a project build must be
   // able to import the one runtime class every List position raises. The
@@ -32,8 +41,12 @@ export const VELAR_COLLECTION_LOWERING_EXPORTS = [
   // unbound reference.
   "__VelarIndexError",
   "__velarIndex",
+  "__velarListIndexGet",
+  "__velarRecordIndexGet",
   "__velarOptionalIndex",
   "__velarSetIndex",
+  "__velarListIndexSet",
+  "__velarRecordIndexSet",
   "__velarListAppend",
   "__velarListExtend",
   "__velarListInsert",
@@ -69,12 +82,34 @@ export const VELAR_COLLECTION_LOWERING_EXPORTS = [
   "__velarRecordSet",
   "__velarRecordCopy",
   "__velarCollectionHas",
+  "__velarListHas",
+  "__velarMapHas",
+  "__velarSetHas",
+  "__velarRecordHas",
+  "__velarListContains",
+  "__velarMapContains",
+  "__velarSetContains",
+  "__velarRecordContains",
   "__velarContains",
   "__velarCollectionRemove",
+  "__velarMapRemove",
+  "__velarSetRemove",
+  "__velarRecordRemove",
   "__velarCollectionClear",
+  "__velarListClear",
+  "__velarMapClear",
+  "__velarSetClear",
+  "__velarRecordClear",
   "__velarCollectionKeys",
+  "__velarMapKeys",
+  "__velarRecordKeys",
   "__velarCollectionValues",
+  "__velarMapValues",
+  "__velarSetValues",
+  "__velarRecordValues",
   "__velarCollectionEntries",
+  "__velarMapEntries",
+  "__velarRecordEntries",
   "__velarOptionalCollection",
 ] as const;
 
@@ -212,41 +247,54 @@ function __velarCollectionIterator(value) {
   if (__velarIsRecord(value)) return __velarReactiveRecordIterator(value);
   throw new __velarCollectionNativeTypeError("VelarScript iteration requires a List, Set, Map, or Record");
 }
+function* __velarReactiveMapPairIterator(value) {
+  const raw = __velarReactiveRaw(value);
+  if (__velarCheckedMapSize(raw, "Map iteration") > __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A Map cannot exceed 1000000 entries");
+  __velarReactiveCollectionTrack(raw);
+  const iterator = __velarCollectionSetMapMapEntries(raw);
+  while (true) { const step = __velarCollectionSetMapMapNext(iterator); if (step.done) return; const entry = step.value; yield [__velarReactiveCollectionRead(raw, __velarReactiveIterateKey, entry[0]), __velarReactiveCollectionRead(raw, entry[0], entry[1])]; }
+}
+function* __velarReactiveRecordPairIterator(value) {
+  const raw = __velarReactiveRaw(value);
+  const fields = __velarRecordFields(raw, "Record iteration");
+  __velarReactiveCollectionTrack(raw);
+  for (let index = 0; index < fields.length; index += 1) {
+    const field = fields[index];
+    const descriptor = __velarCollectionRecordGetOwnPropertyDescriptor(raw, field);
+    // COL-D1: the key snapshot can outlive the field — a body that removes
+    // a later key must see that key skipped (Map iteration parity), not a
+    // raw TypeError from reading a missing descriptor.
+    if (descriptor === undefined) continue;
+    yield [__velarReactiveCollectionRead(raw, __velarReactiveIterateKey, field), __velarReactiveCollectionRead(raw, field, descriptor.value)];
+  }
+}
 function* __velarCollectionPairIterator(value) {
   const raw = __velarReactiveRaw(value);
-  if (__velarIsMap(raw)) {
-    if (__velarCollectionSetMapMapSize(raw) > __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A Map cannot exceed 1000000 entries");
-    __velarReactiveCollectionTrack(raw);
-    const iterator = __velarCollectionSetMapMapEntries(raw);
-    while (true) { const step = __velarCollectionSetMapMapNext(iterator); if (step.done) return; const entry = step.value; yield [__velarReactiveCollectionRead(raw, __velarReactiveIterateKey, entry[0]), __velarReactiveCollectionRead(raw, entry[0], entry[1])]; }
-  }
-  if (__velarIsRecord(raw)) {
-    const fields = __velarRecordFields(raw, "Record iteration");
-    __velarReactiveCollectionTrack(raw);
-    for (let index = 0; index < fields.length; index += 1) {
-      const field = fields[index];
-      const descriptor = __velarCollectionRecordGetOwnPropertyDescriptor(raw, field);
-      // COL-D1: the key snapshot can outlive the field — a body that removes
-      // a later key must see that key skipped (Map iteration parity), not a
-      // raw TypeError from reading a missing descriptor.
-      if (descriptor === undefined) continue;
-      yield [__velarReactiveCollectionRead(raw, __velarReactiveIterateKey, field), __velarReactiveCollectionRead(raw, field, descriptor.value)];
-    }
-    return;
-  }
+  if (__velarIsMap(raw)) { yield* __velarReactiveMapPairIterator(raw); return; }
+  if (__velarIsRecord(raw)) { yield* __velarReactiveRecordPairIterator(raw); return; }
   let index = 0;
   for (const item of __velarCollectionIterator(value)) yield [item, index++];
 }
 
+function __velarCheckedMapSize(value, name) {
+  try { return __velarCollectionSetMapMapSize(value); }
+  catch { throw new __velarCollectionNativeTypeError(name + " requires a Map"); }
+}
+function __velarCheckedSetSize(value, name) {
+  try { return __velarCollectionSetMapSetSize(value); }
+  catch { throw new __velarCollectionNativeTypeError(name + " requires a Set"); }
+}
+function __velarListSize(value) { value = __velarValidateOwnedList(value, "List size"); __velarReactiveCollectionTrack(value, __velarReactiveStructureKey); return value.length; }
+function __velarMapSize(value) { value = __velarReactiveRaw(value); __velarReactiveCollectionTrack(value, __velarReactiveStructureKey); const size = __velarCheckedMapSize(value, "Map.size"); if (size > __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A Map cannot exceed 1000000 entries"); return size; }
+function __velarSetSize(value) { value = __velarReactiveRaw(value); __velarReactiveCollectionTrack(value, __velarReactiveStructureKey); const size = __velarCheckedSetSize(value, "Set.size"); if (size > __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A Set cannot exceed 1000000 items"); return size; }
+function __velarRecordSize(value) { value = __velarReactiveRaw(value); __velarReactiveCollectionTrack(value, __velarReactiveStructureKey); return __velarRecordFields(value, "Record size").length; }
 function __velarCollectionSize(value) {
-  value = __velarReactiveRaw(value);
-  __velarReactiveCollectionTrack(value, __velarReactiveStructureKey);
-  if (__velarCollectionListIsArray(value)) return __velarValidateOwnedList(value, "List size").length;
-  if (__velarIsRecord(value)) return __velarRecordFields(value, "Record size").length;
-  const size = __velarIsMap(value) ? __velarCollectionSetMapMapSize(value) : __velarIsSet(value) ? __velarCollectionSetMapSetSize(value) : null;
-  if (size === null) throw new __velarCollectionNativeTypeError("VelarScript size requires a List, Set, Map, or Record");
-  if (size > __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A collection cannot exceed 1000000 items");
-  return size;
+  const raw = __velarReactiveRaw(value);
+  if (__velarCollectionListIsArray(raw)) return __velarListSize(raw);
+  if (__velarIsRecord(raw)) return __velarRecordSize(raw);
+  if (__velarIsMap(raw)) return __velarMapSize(raw);
+  if (__velarIsSet(raw)) return __velarSetSize(raw);
+  throw new __velarCollectionNativeTypeError("VelarScript size requires a List, Set, Map, or Record");
 }
 
 function __velarCreateList(parts) {
@@ -333,31 +381,37 @@ function __velarCreateMap(value) {
   throw new __velarCollectionNativeTypeError("Map construction requires a Map, a List of [key, value] Lists, or a record");
 }
 
-function __velarCollectionGet(value, key) {
+function __velarListGet(value, key) {
+  value = __velarValidateOwnedList(value, "List.get");
+  if (!__velarCollectionListIsInteger(key)) throw new __VelarIndexError("List.get index must be an integer");
+  const index = key < 0 ? value.length + key : key;
+  if (index >= 0 && index < value.length) return __velarReactiveCollectionRead(value, index, __velarOwnedListElement(value, index, "List.get"));
+  __velarReactiveCollectionTrack(value, key < 0 ? __velarReactiveIterateKey : index);
+  __velarReactiveCollectionTrack(value);
+  return null;
+}
+function __velarRecordGet(value, key) {
   value = __velarReactiveRaw(value);
-  if (__velarCollectionListIsArray(value)) {
-    __velarValidateOwnedList(value, "List.get");
-    if (!__velarCollectionListIsInteger(key)) throw new __VelarIndexError("List.get index must be an integer");
-    const index = key < 0 ? value.length + key : key;
-    if (index >= 0 && index < value.length) return __velarReactiveCollectionRead(value, index, __velarOwnedListElement(value, index, "List.get"));
-    __velarReactiveCollectionTrack(value, key < 0 ? __velarReactiveIterateKey : index);
-    __velarReactiveCollectionTrack(value);
-    return null;
-  }
-  if (__velarIsRecord(value)) {
-    if (typeof key !== "string") throw new __velarCollectionNativeTypeError("Record.get requires a string key");
-    __velarRecordFields(value, "Record.get");
-    __velarReactiveCollectionTrack(value, key);
-    const descriptor = __velarCollectionRecordGetOwnPropertyDescriptor(value, key);
-    return descriptor === undefined ? null : __velarReactiveCollectionRead(value, key, descriptor.value);
-  }
-  if (!__velarIsMap(value)) throw new __velarCollectionNativeTypeError("Map.get requires a Map");
-  const size = __velarCollectionSetMapMapSize(value);
+  if (typeof key !== "string") throw new __velarCollectionNativeTypeError("Record.get requires a string key");
+  __velarRecordFields(value, "Record.get");
+  __velarReactiveCollectionTrack(value, key);
+  const descriptor = __velarCollectionRecordGetOwnPropertyDescriptor(value, key);
+  return descriptor === undefined ? null : __velarReactiveCollectionRead(value, key, descriptor.value);
+}
+function __velarMapGet(value, key) {
+  value = __velarReactiveRaw(value);
+  const size = __velarCheckedMapSize(value, "Map.get");
   if (size > __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A Map cannot exceed 1000000 entries");
   key = __velarReactiveRaw(key);
   __velarReactiveCollectionTrack(value, key);
   const item = __velarCollectionSetMapMapGet(value, key);
   return item === undefined ? null : __velarReactiveCollectionRead(value, key, item);
+}
+function __velarCollectionGet(value, key) {
+  const raw = __velarReactiveRaw(value);
+  if (__velarCollectionListIsArray(raw)) return __velarListGet(raw, key);
+  if (__velarIsRecord(raw)) return __velarRecordGet(raw, key);
+  return __velarMapGet(raw, key);
 }
 
 function __velarCollectionSlice(value, start = 0, end = null) {
@@ -391,37 +445,41 @@ function __velarStrictListIndex(value, requested) {
   if (index < 0 || index >= value.length) throw new __VelarIndexError("List index must be an in-range integer");
   return index;
 }
-function __velarIndex(value, index) {
+function __velarListIndexGet(value, index) {
+  value = __velarValidateOwnedList(value, "List index");
+  index = __velarStrictListIndex(value, index);
+  return __velarReactiveCollectionRead(value, index, __velarOwnedListElement(value, index, "List index"));
+}
+function __velarRecordIndexGet(value, index) {
   value = __velarReactiveRaw(value);
-  if (__velarCollectionListIsArray(value)) {
-    __velarValidateOwnedList(value, "List index");
-    index = __velarStrictListIndex(value, index);
-    return __velarReactiveCollectionRead(value, index, __velarOwnedListElement(value, index, "List index"));
-  }
-  if (!__velarIsRecord(value) || typeof index !== "string") throw new __velarCollectionNativeTypeError("Record index requires a plain record and a string key");
+  if (typeof index !== "string") throw new __velarCollectionNativeTypeError("Record index requires a plain record and a string key");
   __velarRecordFields(value, "Record index");
   const descriptor = __velarCollectionRecordGetOwnPropertyDescriptor(value, index);
   return __velarReactiveCollectionRead(value, index, descriptor?.value);
 }
+function __velarIndex(value, index) {
+  const raw = __velarReactiveRaw(value);
+  return __velarCollectionListIsArray(raw) ? __velarListIndexGet(raw, index) : __velarRecordIndexGet(raw, index);
+}
 function __velarOptionalIndex(value, index) {
   return value == null ? null : __velarIndex(value, index());
 }
-function __velarSetIndex(value, index, next) {
+function __velarListIndexSet(value, index, next) {
+  value = __velarValidateOwnedList(value, "List index assignment");
+  index = __velarStrictListIndex(value, index);
+  const previous = __velarOwnedListElement(value, index, "List index assignment");
+  next = __velarReactiveRaw(next);
+  if (__velarCollectionListObjectIs(__velarReactiveRaw(previous), next)) return next;
+  value[index] = next;
+  __velarReactiveCollectionUnlink(value, previous);
+  __velarReactiveCollectionLink(value, next);
+  __velarReactiveCollectionTrigger(value, index, true, false);
+  __velarMarkOwnedList(value);
+  return next;
+}
+function __velarRecordIndexSet(value, index, next) {
   value = __velarReactiveRaw(value);
-  if (__velarCollectionListIsArray(value)) {
-    __velarValidateOwnedList(value, "List index assignment");
-    index = __velarStrictListIndex(value, index);
-    const previous = __velarOwnedListElement(value, index, "List index assignment");
-    next = __velarReactiveRaw(next);
-    if (__velarCollectionListObjectIs(__velarReactiveRaw(previous), next)) return next;
-    value[index] = next;
-    __velarReactiveCollectionUnlink(value, previous);
-    __velarReactiveCollectionLink(value, next);
-    __velarReactiveCollectionTrigger(value, index, true, false);
-    __velarMarkOwnedList(value);
-    return next;
-  }
-  if (!__velarIsRecord(value) || typeof index !== "string") throw new __velarCollectionNativeTypeError("Record index assignment requires a plain record and a string key");
+  if (typeof index !== "string") throw new __velarCollectionNativeTypeError("Record index assignment requires a plain record and a string key");
   const fields = __velarRecordFields(value, "Record index assignment");
   const descriptor = __velarCollectionRecordGetOwnPropertyDescriptor(value, index);
   if (descriptor === undefined && fields.length >= 1000000) throw new __velarCollectionRecordNativeRangeError("A Record cannot exceed 1000000 fields");
@@ -433,6 +491,10 @@ function __velarSetIndex(value, index, next) {
   __velarReactiveCollectionLink(value, next);
   __velarReactiveCollectionTrigger(value, index, true, descriptor === undefined);
   return next;
+}
+function __velarSetIndex(value, index, next) {
+  const raw = __velarReactiveRaw(value);
+  return __velarCollectionListIsArray(raw) ? __velarListIndexSet(raw, index, next) : __velarRecordIndexSet(raw, index, next);
 }
 
 function __velarListAppend(value, item) {
@@ -679,17 +741,24 @@ function __velarRecordCopy(value) {
   return output;
 }
 
+function __velarListHas(value, item) { value = __velarValidateOwnedList(value, "List.has"); item = __velarReactiveRaw(item); __velarReactiveCollectionTrack(value); for (let index = 0; index < value.length; index += 1) if (__velarSameValueZero(__velarReactiveRaw(__velarOwnedListElement(value, index, "List.has")), item)) return true; return false; }
+function __velarRecordHas(value, item) { value = __velarReactiveRaw(value); item = __velarReactiveRaw(item); if (typeof item !== "string") throw new __velarCollectionNativeTypeError("Record.has requires a string key"); __velarRecordFields(value, "Record.has"); __velarReactiveCollectionTrack(value, item); return __velarCollectionRecordGetOwnPropertyDescriptor(value, item) !== undefined; }
+function __velarMapHas(value, item) { value = __velarReactiveRaw(value); item = __velarReactiveRaw(item); const size = __velarCheckedMapSize(value, "Map.has"); if (size > __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A Map cannot exceed 1000000 entries"); __velarReactiveCollectionTrack(value, item); return __velarCollectionSetMapMapHas(value, item); }
+function __velarSetHas(value, item) { value = __velarReactiveRaw(value); item = __velarReactiveRaw(item); const size = __velarCheckedSetSize(value, "Set.has"); if (size > __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A Set cannot exceed 1000000 items"); __velarReactiveCollectionTrack(value, item); return __velarCollectionSetMapSetHas(value, item); }
 function __velarCollectionHas(value, item) {
-  value = __velarReactiveRaw(value); item = __velarReactiveRaw(item);
-  if (__velarCollectionListIsArray(value)) { value = __velarValidateOwnedList(value, "List.has"); __velarReactiveCollectionTrack(value); for (let index = 0; index < value.length; index += 1) if (__velarSameValueZero(__velarReactiveRaw(__velarOwnedListElement(value, index, "List.has")), item)) return true; return false; }
-  if (__velarIsRecord(value)) { if (typeof item !== "string") throw new __velarCollectionNativeTypeError("Record.has requires a string key"); __velarRecordFields(value, "Record.has"); __velarReactiveCollectionTrack(value, item); return __velarCollectionRecordGetOwnPropertyDescriptor(value, item) !== undefined; }
-  const map = __velarIsMap(value); const set = !map && __velarIsSet(value);
-  if (!map && !set) throw new __velarCollectionNativeTypeError("VelarScript membership requires a List, Set, Map, or Record");
-  const size = map ? __velarCollectionSetMapMapSize(value) : __velarCollectionSetMapSetSize(value);
-  if (size > __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A collection cannot exceed 1000000 items");
-  __velarReactiveCollectionTrack(value, item);
-  return map ? __velarCollectionSetMapMapHas(value, item) : __velarCollectionSetMapSetHas(value, item);
+  const raw = __velarReactiveRaw(value);
+  if (__velarCollectionListIsArray(raw)) return __velarListHas(raw, item);
+  if (__velarIsRecord(raw)) return __velarRecordHas(raw, item);
+  if (__velarIsMap(raw)) return __velarMapHas(raw, item);
+  if (__velarIsSet(raw)) return __velarSetHas(raw, item);
+  throw new __velarCollectionNativeTypeError("VelarScript membership requires a List, Set, Map, or Record");
 }
+// Membership keeps source evaluation order (item before container) while the
+// method-shaped helpers keep receiver-first order for values.has(item).
+function __velarListContains(item, value) { return __velarListHas(value, item); }
+function __velarMapContains(item, value) { return __velarMapHas(value, item); }
+function __velarSetContains(item, value) { return __velarSetHas(value, item); }
+function __velarRecordContains(item, value) { return __velarRecordHas(value, item); }
 function __velarContains(item, value) {
   if (typeof value === "string") { if (typeof item !== "string") throw new __velarCollectionNativeTypeError("String membership requires a string"); return value.includes(item); }
   value = __velarReactiveRaw(value);
@@ -861,78 +930,153 @@ function __velarEqualsVisit(left, right, active, depth) {
   }
 }
 
-function __velarCollectionRemove(value, item) {
+function __velarRecordRemove(value, item) {
   value = __velarReactiveRaw(value); item = __velarReactiveRaw(item);
-  if (__velarIsRecord(value)) {
-    if (typeof item !== "string") throw new __velarCollectionNativeTypeError("Record.remove requires a string key");
-    __velarRecordFields(value, "Record.remove");
-    const descriptor = __velarCollectionRecordGetOwnPropertyDescriptor(value, item);
-    if (descriptor === undefined) return false;
-    if (!descriptor.configurable) throw new __velarCollectionNativeTypeError("Record.remove requires a configurable data field");
-    if (!__velarCollectionRecordDeleteProperty(value, item)) throw new __velarCollectionNativeTypeError("Record.remove could not delete the field");
-    __velarReactiveCollectionUnlink(value, descriptor.value);
-    __velarReactiveCollectionTrigger(value, item, true, true);
-    return true;
-  }
-  const map = __velarIsMap(value);
-  const previous = map ? __velarCollectionSetMapMapGet(value, item) : undefined;
-  const removed = map ? __velarCollectionSetMapMapDelete(value, item) : __velarCollectionSetMapSetDelete(value, item);
-  // A Set member is its own entry: unlinking it twice repeats an O(children)
-  // scan for nothing. Only a Map has a separate value to unlink.
-  if (removed) { __velarReactiveCollectionUnlink(value, item); if (map) __velarReactiveCollectionUnlink(value, previous); __velarReactiveCollectionTrigger(value, item, true, true); }
+  if (typeof item !== "string") throw new __velarCollectionNativeTypeError("Record.remove requires a string key");
+  __velarRecordFields(value, "Record.remove");
+  const descriptor = __velarCollectionRecordGetOwnPropertyDescriptor(value, item);
+  if (descriptor === undefined) return false;
+  if (!descriptor.configurable) throw new __velarCollectionNativeTypeError("Record.remove requires a configurable data field");
+  if (!__velarCollectionRecordDeleteProperty(value, item)) throw new __velarCollectionNativeTypeError("Record.remove could not delete the field");
+  __velarReactiveCollectionUnlink(value, descriptor.value);
+  __velarReactiveCollectionTrigger(value, item, true, true);
+  return true;
+}
+function __velarMapRemove(value, item) {
+  value = __velarReactiveRaw(value); item = __velarReactiveRaw(item);
+  const size = __velarCheckedMapSize(value, "Map.remove");
+  if (size > __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A Map cannot exceed 1000000 entries");
+  const previous = __velarCollectionSetMapMapGet(value, item);
+  const removed = __velarCollectionSetMapMapDelete(value, item);
+  if (removed) { __velarReactiveCollectionUnlink(value, item); __velarReactiveCollectionUnlink(value, previous); __velarReactiveCollectionTrigger(value, item, true, true); }
   return removed;
 }
+function __velarSetRemove(value, item) {
+  value = __velarReactiveRaw(value); item = __velarReactiveRaw(item);
+  const size = __velarCheckedSetSize(value, "Set.remove");
+  if (size > __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A Set cannot exceed 1000000 items");
+  const removed = __velarCollectionSetMapSetDelete(value, item);
+  if (removed) { __velarReactiveCollectionUnlink(value, item); __velarReactiveCollectionTrigger(value, item, true, true); }
+  return removed;
+}
+function __velarCollectionRemove(value, item) {
+  const raw = __velarReactiveRaw(value);
+  if (__velarIsRecord(raw)) return __velarRecordRemove(raw, item);
+  if (__velarIsMap(raw)) return __velarMapRemove(raw, item);
+  return __velarSetRemove(raw, item);
+}
 
-function __velarCollectionClear(value) {
+function __velarListClear(value) {
   value = __velarReactiveRaw(value);
-  if (__velarCollectionListIsArray(value)) {
-    const previous = __velarCopyList(value, "List.clear");
-    if (previous.length === 0) return null;
-    value.length = 0;
-    __velarMarkOwnedList(value);
-    for (let index = 0; index < previous.length; index += 1) __velarReactiveCollectionUnlink(value, previous[index]);
-    __velarReactiveCollectionTrigger(value, __velarReactiveIterateKey, true, true, 0);
-    return null;
-  }
-  if (__velarIsRecord(value)) {
-    const fields = __velarRecordFields(value, "Record.clear");
-    if (fields.length === 0) return null;
-    const previous = new __velarCollectionNativeArray(fields.length);
-    for (let index = 0; index < fields.length; index += 1) { const descriptor = __velarCollectionRecordGetOwnPropertyDescriptor(value, fields[index]); if (!descriptor.configurable) throw new __velarCollectionNativeTypeError("Record.clear requires configurable data fields"); previous[index] = descriptor.value; }
-    for (let index = 0; index < fields.length; index += 1) if (!__velarCollectionRecordDeleteProperty(value, fields[index])) throw new __velarCollectionNativeTypeError("Record.clear could not delete a field");
-    for (let index = 0; index < previous.length; index += 1) __velarReactiveCollectionUnlink(value, previous[index]);
-    __velarReactiveCollectionTrigger(value, __velarReactiveIterateKey, true, true, null, true);
-    return null;
-  }
-  const map = __velarIsMap(value);
-  const previous = [];
-  if (map) { const iterator = __velarCollectionSetMapMapEntries(value); while (true) { const step = __velarCollectionSetMapMapNext(iterator); if (step.done) break; const entry = step.value; previous[previous.length] = entry[0]; previous[previous.length] = entry[1]; } }
-  else { const iterator = __velarCollectionSetMapSetValues(value); while (true) { const step = __velarCollectionSetMapSetNext(iterator); if (step.done) break; previous[previous.length] = step.value; } }
+  const previous = __velarCopyList(value, "List.clear");
   if (previous.length === 0) return null;
-  if (map) __velarCollectionSetMapMapClear(value); else __velarCollectionSetMapSetClear(value);
+  value.length = 0;
+  __velarMarkOwnedList(value);
+  for (let index = 0; index < previous.length; index += 1) __velarReactiveCollectionUnlink(value, previous[index]);
+  __velarReactiveCollectionTrigger(value, __velarReactiveIterateKey, true, true, 0);
+  return null;
+}
+function __velarRecordClear(value) {
+  value = __velarReactiveRaw(value);
+  const fields = __velarRecordFields(value, "Record.clear");
+  if (fields.length === 0) return null;
+  const previous = new __velarCollectionNativeArray(fields.length);
+  for (let index = 0; index < fields.length; index += 1) { const descriptor = __velarCollectionRecordGetOwnPropertyDescriptor(value, fields[index]); if (!descriptor.configurable) throw new __velarCollectionNativeTypeError("Record.clear requires configurable data fields"); previous[index] = descriptor.value; }
+  for (let index = 0; index < fields.length; index += 1) if (!__velarCollectionRecordDeleteProperty(value, fields[index])) throw new __velarCollectionNativeTypeError("Record.clear could not delete a field");
   for (let index = 0; index < previous.length; index += 1) __velarReactiveCollectionUnlink(value, previous[index]);
   __velarReactiveCollectionTrigger(value, __velarReactiveIterateKey, true, true, null, true);
   return null;
 }
+function __velarMapClear(value) {
+  value = __velarReactiveRaw(value);
+  const size = __velarCheckedMapSize(value, "Map.clear");
+  if (size > __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A Map cannot exceed 1000000 entries");
+  if (size === 0) return null;
+  const previous = new __velarCollectionNativeArray(size * 2);
+  const iterator = __velarCollectionSetMapMapEntries(value);
+  let index = 0;
+  while (true) { const step = __velarCollectionSetMapMapNext(iterator); if (step.done) break; previous[index++] = step.value[0]; previous[index++] = step.value[1]; }
+  __velarCollectionSetMapMapClear(value);
+  for (let previousIndex = 0; previousIndex < previous.length; previousIndex += 1) __velarReactiveCollectionUnlink(value, previous[previousIndex]);
+  __velarReactiveCollectionTrigger(value, __velarReactiveIterateKey, true, true, null, true);
+  return null;
+}
+function __velarSetClear(value) {
+  value = __velarReactiveRaw(value);
+  const size = __velarCheckedSetSize(value, "Set.clear");
+  if (size > __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A Set cannot exceed 1000000 items");
+  if (size === 0) return null;
+  const previous = new __velarCollectionNativeArray(size);
+  const iterator = __velarCollectionSetMapSetValues(value);
+  let index = 0;
+  while (true) { const step = __velarCollectionSetMapSetNext(iterator); if (step.done) break; previous[index++] = step.value; }
+  __velarCollectionSetMapSetClear(value);
+  for (let previousIndex = 0; previousIndex < previous.length; previousIndex += 1) __velarReactiveCollectionUnlink(value, previous[previousIndex]);
+  __velarReactiveCollectionTrigger(value, __velarReactiveIterateKey, true, true, null, true);
+  return null;
+}
+function __velarCollectionClear(value) {
+  const raw = __velarReactiveRaw(value);
+  if (__velarCollectionListIsArray(raw)) return __velarListClear(raw);
+  if (__velarIsRecord(raw)) return __velarRecordClear(raw);
+  if (__velarIsMap(raw)) return __velarMapClear(raw);
+  return __velarSetClear(raw);
+}
 
-function __velarCollectionKeys(value) {
+function __velarRecordKeys(value) {
   value = __velarReactiveRaw(value); __velarReactiveCollectionTrack(value, __velarReactiveStructureKey);
-  if (__velarIsRecord(value)) { const fields = __velarRecordFields(value, "Record.keys"); const output = new __velarCollectionNativeArray(fields.length); for (let index = 0; index < fields.length; index += 1) output[index] = __velarReactiveCollectionRead(value, __velarReactiveStructureKey, fields[index]); return __velarMarkOwnedList(output); }
-  const size = __velarCollectionSetMapMapSize(value); if (size > __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A Map cannot exceed 1000000 entries");
-  const output = new __velarCollectionNativeArray(size); const iterator = __velarCollectionSetMapMapKeys(value); let index = 0; while (true) { const step = __velarCollectionSetMapMapNext(iterator); if (step.done) return __velarMarkOwnedList(output); output[index++] = __velarReactiveCollectionRead(value, __velarReactiveStructureKey, step.value); }
+  const fields = __velarRecordFields(value, "Record.keys");
+  const output = new __velarCollectionNativeArray(fields.length);
+  for (let index = 0; index < fields.length; index += 1) output[index] = __velarReactiveCollectionRead(value, __velarReactiveStructureKey, fields[index]);
+  return __velarMarkOwnedList(output);
+}
+function __velarMapKeys(value) {
+  value = __velarReactiveRaw(value); __velarReactiveCollectionTrack(value, __velarReactiveStructureKey);
+  const size = __velarCheckedMapSize(value, "Map.keys");
+  if (size > __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A Map cannot exceed 1000000 entries");
+  const output = new __velarCollectionNativeArray(size); const iterator = __velarCollectionSetMapMapKeys(value); let index = 0;
+  while (true) { const step = __velarCollectionSetMapMapNext(iterator); if (step.done) return __velarMarkOwnedList(output); output[index++] = __velarReactiveCollectionRead(value, __velarReactiveStructureKey, step.value); }
+}
+function __velarCollectionKeys(value) { value = __velarReactiveRaw(value); return __velarIsRecord(value) ? __velarRecordKeys(value) : __velarMapKeys(value); }
+
+function __velarRecordValues(value) {
+  value = __velarReactiveRaw(value); __velarReactiveCollectionTrack(value);
+  const fields = __velarRecordFields(value, "Record.values"); const output = new __velarCollectionNativeArray(fields.length);
+  for (let index = 0; index < fields.length; index += 1) { const field = fields[index]; output[index] = __velarReactiveCollectionRead(value, field, __velarCollectionRecordGetOwnPropertyDescriptor(value, field).value); }
+  return __velarMarkOwnedList(output);
+}
+function __velarMapValues(value) {
+  value = __velarReactiveRaw(value); __velarReactiveCollectionTrack(value);
+  const size = __velarCheckedMapSize(value, "Map.values"); if (size > __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A Map cannot exceed 1000000 entries");
+  const output = new __velarCollectionNativeArray(size); const iterator = __velarCollectionSetMapMapValues(value); let index = 0;
+  while (true) { const step = __velarCollectionSetMapMapNext(iterator); if (step.done) return __velarMarkOwnedList(output); output[index++] = __velarReactiveCollectionRead(value, __velarReactiveIterateKey, step.value); }
+}
+function __velarSetValues(value) {
+  value = __velarReactiveRaw(value); __velarReactiveCollectionTrack(value);
+  const size = __velarCheckedSetSize(value, "Set.values"); if (size > __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A Set cannot exceed 1000000 items");
+  const output = new __velarCollectionNativeArray(size); const iterator = __velarCollectionSetMapSetValues(value); let index = 0;
+  while (true) { const step = __velarCollectionSetMapSetNext(iterator); if (step.done) return __velarMarkOwnedList(output); output[index++] = __velarReactiveCollectionRead(value, __velarReactiveIterateKey, step.value); }
 }
 function __velarCollectionValues(value) {
-  value = __velarReactiveRaw(value); __velarReactiveCollectionTrack(value);
-  if (__velarIsRecord(value)) { const fields = __velarRecordFields(value, "Record.values"); const output = new __velarCollectionNativeArray(fields.length); for (let index = 0; index < fields.length; index += 1) { const field = fields[index]; output[index] = __velarReactiveCollectionRead(value, field, __velarCollectionRecordGetOwnPropertyDescriptor(value, field).value); } return __velarMarkOwnedList(output); }
-  const map = __velarIsMap(value); const size = map ? __velarCollectionSetMapMapSize(value) : __velarCollectionSetMapSetSize(value); if (size > __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A collection cannot exceed 1000000 items");
-  const output = new __velarCollectionNativeArray(size); const iterator = map ? __velarCollectionSetMapMapValues(value) : __velarCollectionSetMapSetValues(value); let index = 0; while (true) { const step = map ? __velarCollectionSetMapMapNext(iterator) : __velarCollectionSetMapSetNext(iterator); if (step.done) return __velarMarkOwnedList(output); output[index++] = __velarReactiveCollectionRead(value, __velarReactiveIterateKey, step.value); }
+  value = __velarReactiveRaw(value);
+  if (__velarIsRecord(value)) return __velarRecordValues(value);
+  if (__velarIsMap(value)) return __velarMapValues(value);
+  return __velarSetValues(value);
 }
-function __velarCollectionEntries(value) {
+
+function __velarRecordEntries(value) {
   value = __velarReactiveRaw(value); __velarReactiveCollectionTrack(value);
-  if (__velarIsRecord(value)) { const fields = __velarRecordFields(value, "Record.entries"); const output = new __velarCollectionNativeArray(fields.length); for (let index = 0; index < fields.length; index += 1) { const field = fields[index]; output[index] = __velarCollectionRecordFreeze({ key: __velarReactiveCollectionRead(value, __velarReactiveIterateKey, field), value: __velarReactiveCollectionRead(value, field, __velarCollectionRecordGetOwnPropertyDescriptor(value, field).value) }); } return __velarMarkOwnedList(output); }
-  const size = __velarCollectionSetMapMapSize(value); if (size > __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A Map cannot exceed 1000000 entries");
-  const output = new __velarCollectionNativeArray(size); const iterator = __velarCollectionSetMapMapEntries(value); let index = 0; while (true) { const step = __velarCollectionSetMapMapNext(iterator); if (step.done) return __velarMarkOwnedList(output); const entry = step.value; output[index++] = __velarCollectionSetMapFreeze({ key: __velarReactiveCollectionRead(value, __velarReactiveIterateKey, entry[0]), value: __velarReactiveCollectionRead(value, entry[0], entry[1]) }); }
+  const fields = __velarRecordFields(value, "Record.entries"); const output = new __velarCollectionNativeArray(fields.length);
+  for (let index = 0; index < fields.length; index += 1) { const field = fields[index]; output[index] = __velarCollectionRecordFreeze({ key: __velarReactiveCollectionRead(value, __velarReactiveIterateKey, field), value: __velarReactiveCollectionRead(value, field, __velarCollectionRecordGetOwnPropertyDescriptor(value, field).value) }); }
+  return __velarMarkOwnedList(output);
 }
+function __velarMapEntries(value) {
+  value = __velarReactiveRaw(value); __velarReactiveCollectionTrack(value);
+  const size = __velarCheckedMapSize(value, "Map.entries"); if (size > __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A Map cannot exceed 1000000 entries");
+  const output = new __velarCollectionNativeArray(size); const iterator = __velarCollectionSetMapMapEntries(value); let index = 0;
+  while (true) { const step = __velarCollectionSetMapMapNext(iterator); if (step.done) return __velarMarkOwnedList(output); const entry = step.value; output[index++] = __velarCollectionSetMapFreeze({ key: __velarReactiveCollectionRead(value, __velarReactiveIterateKey, entry[0]), value: __velarReactiveCollectionRead(value, entry[0], entry[1]) }); }
+}
+function __velarCollectionEntries(value) { value = __velarReactiveRaw(value); return __velarIsRecord(value) ? __velarRecordEntries(value) : __velarMapEntries(value); }
 function __velarOptionalCollection(value, operation) { return value == null ? null : operation(value); }`;
 
 export const VELAR_COLLECTION_LOWERING_MODULE_SOURCE = String.raw`

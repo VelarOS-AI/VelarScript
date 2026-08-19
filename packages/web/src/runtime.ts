@@ -1,5 +1,7 @@
 import {
   VELAR_ERROR_NORMALIZATION_RUNTIME,
+  VELAR_REACTIVE_BRIDGE_MODULE,
+  VELAR_REACTIVE_BRIDGE_MODULE_SOURCE,
   VELAR_RUNTIME_REGISTRY_KEY,
   VELAR_RUNTIME_SCHEMA_VERSION,
   VELAR_STRICT_JSON_RUNTIME,
@@ -3450,6 +3452,7 @@ export interface VelarWebRuntimeConfig {
 }
 
 export function webModuleSource(source: string, web: VelarWebRuntimeConfig = { base: "/" }): string | null {
+  if (source === VELAR_REACTIVE_BRIDGE_MODULE) return VELAR_REACTIVE_BRIDGE_MODULE_SOURCE;
   if (source === "velar/websocket") return VELAR_WEB_WEBSOCKET_RUNTIME;
   if (source === "velar/worker") return VELAR_WEB_WORKER_RUNTIME;
   const value = webModuleSources.get(source);

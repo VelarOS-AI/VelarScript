@@ -12,6 +12,7 @@ import {
   VELAR_PROMISE_NORMALIZATION_MODULE_SOURCE,
 } from "../packages/compiler/src/promise-runtime.ts";
 import {
+  VELAR_NON_REACTIVE_BRIDGE_MODULE_SOURCE,
   VELAR_REACTIVE_BRIDGE_MODULE,
   VELAR_REACTIVE_BRIDGE_MODULE_SOURCE,
 } from "../packages/compiler/src/reactive-bridge-runtime.ts";
@@ -289,8 +290,8 @@ if (/\b(?:Object\.(?:getOwnPropertyDescriptor|getPrototypeOf|isExtensible|getOwn
   failures.push("packages/compiler/src/reactive-bridge-runtime.ts: JavaScript or collection bridging bypasses its captured registry, Object, Symbol, or Error ABI");
 }
 for (const phrase of [
-  "return [VELAR_REACTIVE_BRIDGE_RUNTIME",
-  "needsCollections ? [VELAR_REACTIVE_COLLECTION_BRIDGE_RUNTIME]",
+  "return [VELAR_NON_REACTIVE_BRIDGE_RUNTIME",
+  "needsCollections ? [VELAR_NON_REACTIVE_COLLECTION_BRIDGE_RUNTIME]",
   "__velarHostRaw(${emitted})",
 ]) {
   if (!compilerEmitterSource.includes(phrase)) failures.push(`packages/compiler/src/emitter.ts: JavaScript or collection calls bypass the compiler-owned reactive bridge '${phrase}'`);
@@ -309,6 +310,9 @@ const reactiveBridgeExports = [
 for (const name of reactiveBridgeExports) {
   if (!VELAR_REACTIVE_BRIDGE_MODULE_SOURCE.includes(` as ${name},`)) {
     failures.push(`packages/compiler/src/reactive-bridge-runtime.ts: shared compiler runtime does not export '${name}'`);
+  }
+  if (!VELAR_NON_REACTIVE_BRIDGE_MODULE_SOURCE.includes(` as ${name},`)) {
+    failures.push(`packages/compiler/src/reactive-bridge-runtime.ts: Core's static bridge does not export '${name}'`);
   }
 }
 for (const phrase of [
@@ -347,6 +351,9 @@ for (const phrase of [
 ]) {
   if (!webEmitterSource.includes(phrase)) failures.push(`packages/web/src/emitter.ts: Web-local reactive calls bypass the already-validated runtime operation '${phrase}'`);
 }
+if (!webRuntimeSource.includes("if (source === VELAR_REACTIVE_BRIDGE_MODULE) return VELAR_REACTIVE_BRIDGE_MODULE_SOURCE")) {
+  failures.push("packages/web/src/runtime.ts: shared Web builds do not replace Core's static bridge with the reactive bridge");
+}
 for (const phrase of [
   "function __velarReactiveRuntime",
   "Object.getOwnPropertyDescriptor(globalThis, Symbol.for",
@@ -363,8 +370,8 @@ const browserAcceptanceSource = await readFile(join(root, "tests", "browser.acce
 if (!projectCompilerSource.includes("sharedRuntimeModules: true")) {
   failures.push("packages/cli/src/project.ts: project compilation does not request shared compiler runtime modules");
 }
-if (!standardModulesSource.includes("[VELAR_REACTIVE_BRIDGE_MODULE, VELAR_REACTIVE_BRIDGE_MODULE_SOURCE]")) {
-  failures.push("packages/cli/src/standard-modules.ts: shared compiler runtime source is not available to project execution paths");
+if (!standardModulesSource.includes("[VELAR_REACTIVE_BRIDGE_MODULE, VELAR_NON_REACTIVE_BRIDGE_MODULE_SOURCE]")) {
+  failures.push("packages/cli/src/standard-modules.ts: Core's static compiler bridge is not available to project execution paths");
 }
 if (!standardModulesSource.includes("[VELAR_PRIMITIVE_METHOD_MODULE, VELAR_PRIMITIVE_METHOD_MODULE_SOURCE]")) {
   failures.push("packages/cli/src/standard-modules.ts: shared primitive runtime source is not available to project execution paths");

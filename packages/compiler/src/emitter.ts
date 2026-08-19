@@ -29,7 +29,7 @@ import { VELAR_NARROWING_MODULE, VELAR_NARROWING_RUNTIME } from "./narrowing-run
 import { VELAR_NUMBER_METHOD_RUNTIME } from "./number-runtime.ts";
 import { VELAR_PRIMITIVE_METHOD_MODULE } from "./primitive-runtime.ts";
 import { VELAR_PROMISE_NORMALIZATION_MODULE, VELAR_PROMISE_NORMALIZATION_RUNTIME } from "./promise-runtime.ts";
-import { VELAR_REACTIVE_BRIDGE_MODULE, VELAR_REACTIVE_BRIDGE_RUNTIME, VELAR_REACTIVE_COLLECTION_BRIDGE_RUNTIME } from "./reactive-bridge-runtime.ts";
+import { VELAR_NON_REACTIVE_BRIDGE_RUNTIME, VELAR_NON_REACTIVE_COLLECTION_BRIDGE_RUNTIME, VELAR_REACTIVE_BRIDGE_MODULE } from "./reactive-bridge-runtime.ts";
 import { spanIdentity, type SourceText, type Span } from "./source.ts";
 import { VELAR_TEXT_METHOD_RUNTIME } from "./text-runtime.ts";
 import { VELAR_TYPE_REGISTRY_RUNTIME } from "./type-registry-runtime.ts";
@@ -75,6 +75,8 @@ export class JavaScriptEmitter {
   private readonly typeDeclarations = new Map<string, TypeDeclaration | TypeAliasDeclaration>();
   private readonly runtimeTypes = new Set<string>();
   private readonly expandedRuntimeTypes = new Set<string>();
+  /** Whether a runtime Type can revisit the same value through its declared type graph. */
+  private readonly runtimeTypeTraversalGuards = new Map<string, boolean>();
   /**
    * D55 rule 121: the type parameters of the generic record currently being
    * emitted. Inside that body a `T`-typed position is checked by the argument
@@ -128,6 +130,7 @@ export class JavaScriptEmitter {
     this.javaScriptNodeSpans.clear();
     this.requiredRuntimeModules.clear();
     this.requiredHostErrorClasses.clear();
+    this.runtimeTypeTraversalGuards.clear();
     this.prepareEmbeddedJavaScript(program);
     this.collectDeclarations(program);
     this.collectRuntimeUses(program);
@@ -659,7 +662,7 @@ export class JavaScriptEmitter {
       ];
       return [`import { ${imports.join(", ")} } from ${JSON.stringify(VELAR_REACTIVE_BRIDGE_MODULE)};`];
     }
-    return [VELAR_REACTIVE_BRIDGE_RUNTIME, ...(needsCollections ? [VELAR_REACTIVE_COLLECTION_BRIDGE_RUNTIME] : [])];
+    return [VELAR_NON_REACTIVE_BRIDGE_RUNTIME, ...(needsCollections ? [VELAR_NON_REACTIVE_COLLECTION_BRIDGE_RUNTIME] : [])];
   }
 
   protected usesSharedRuntimeModules(): boolean {
@@ -1292,25 +1295,28 @@ export class JavaScriptEmitter {
         }
         this.needsCollectionHelpers = true;
         const iterable = this.emitMappedExpression(statement.iterable);
+        const collectionKind = this.hints.collectionIterations.get(statement.span.start);
+        const iteratorHelper = collectionKind ? this.collectionIteratorHelper(collectionKind, false) : "__velarCollectionIterator";
         if (!statement.secondPattern && statement.pattern.kind === "NameBindingPattern") {
           const body = this.emitStatementLines(statement.body, depth + 1).join("\n");
-          return `${indentation}for (const ${statement.pattern.name} of __velarCollectionIterator(${iterable})) {${body.length > 0 ? `\n${body}\n${indentation}` : ""}}`;
+          return `${indentation}for (const ${statement.pattern.name} of ${iteratorHelper}(${iterable})) {${body.length > 0 ? `\n${body}\n${indentation}` : ""}}`;
         }
         if (statement.secondPattern) {
           const pairName = `__velarForPair${statement.pattern.span.start}`;
+          const pairIteratorHelper = collectionKind ? this.collectionIteratorHelper(collectionKind, true) : "__velarCollectionPairIterator";
           const lines = [
             ...this.emitBindingPatternStatements(statement.pattern, `${pairName}[0]`, "const", false, depth + 1, "For first slot"),
             ...this.emitBindingPatternStatements(statement.secondPattern, `${pairName}[1]`, "const", false, depth + 1, "For second slot"),
             ...this.emitStatementLines(statement.body, depth + 1),
           ];
-          return `${indentation}for (const ${pairName} of __velarCollectionPairIterator(${iterable})) {${lines.length > 0 ? `\n${lines.join("\n")}\n${indentation}` : ""}}`;
+          return `${indentation}for (const ${pairName} of ${pairIteratorHelper}(${iterable})) {${lines.length > 0 ? `\n${lines.join("\n")}\n${indentation}` : ""}}`;
         }
         const valueName = `__velarForValue${statement.pattern.span.start}`;
         const lines = [
           ...this.emitBindingPatternStatements(statement.pattern, valueName, "const", false, depth + 1, "For"),
           ...this.emitStatementLines(statement.body, depth + 1),
         ];
-        return `${indentation}for (const ${valueName} of __velarCollectionIterator(${iterable})) {${lines.length > 0 ? `\n${lines.join("\n")}\n${indentation}` : ""}}`;
+        return `${indentation}for (const ${valueName} of ${iteratorHelper}(${iterable})) {${lines.length > 0 ? `\n${lines.join("\n")}\n${indentation}` : ""}}`;
       }
       case "WhileStatement": {
         const body = this.emitStatementLines(statement.body, depth + 1).join("\n");
@@ -1341,6 +1347,7 @@ export class JavaScriptEmitter {
       case "AssignmentStatement":
         if (statement.target.kind === "IndexExpression") {
           const binaryKind = this.hints.binaryIndexes.get(spanIdentity(statement.target.span));
+          const collectionKind = this.hints.collectionIndexes.get(spanIdentity(statement.target.span));
           if (binaryKind) this.needsBinaryHelpers = true;
           else {
             this.needsIndexHelpers = true;
@@ -1369,8 +1376,14 @@ export class JavaScriptEmitter {
               `${indentation}}`,
             ].join("\n");
           }
+          const collectionSetHelper = collectionKind === "list" ? "__velarListIndexSet"
+            : collectionKind === "record" ? "__velarRecordIndexSet"
+              : "__velarSetIndex";
+          const collectionGetHelper = collectionKind === "list" ? "__velarListIndexGet"
+            : collectionKind === "record" ? "__velarRecordIndexGet"
+              : "__velarIndex";
           if (statement.operator === "=") {
-            return `${indentation}__velarSetIndex(${object}, ${index}, ${this.emitMappedExpression(statement.value)});`;
+            return `${indentation}${collectionSetHelper}(${object}, ${index}, ${this.emitMappedExpression(statement.value)});`;
           }
           const suffix = statement.span.start;
           const objectName = `__velarIndexObject${suffix}`;
@@ -1380,7 +1393,7 @@ export class JavaScriptEmitter {
             `${indentation}{`,
             `${indentation}  const ${objectName} = ${object};`,
             `${indentation}  const ${keyName} = ${index};`,
-            `${indentation}  __velarSetIndex(${objectName}, ${keyName}, ${this.emitCompoundOperation(`__velarIndex(${objectName}, ${keyName})`, statement.operator, value)});`,
+            `${indentation}  ${collectionSetHelper}(${objectName}, ${keyName}, ${this.emitCompoundOperation(`${collectionGetHelper}(${objectName}, ${keyName})`, statement.operator, value)});`,
             `${indentation}}`,
           ].join("\n");
         }
@@ -1570,6 +1583,7 @@ export class JavaScriptEmitter {
   private emitRecordTypeDeclaration(statement: TypeDeclaration, depth: number): string {
     const indentation = "  ".repeat(depth);
     const generic = this.genericTypeParameters;
+    const guarded = this.runtimeTypeNeedsTraversalGuard(statement.name);
     const checkName = this.runtimeTypeCheckName(statement.name);
     const ownFields = new Map(statement.fields.map((field) => [field.name, field]));
     const completeFields = this.hints.typeDeclarationFields.get(statement.span.start)
@@ -1588,7 +1602,7 @@ export class JavaScriptEmitter {
       syntax: ownFields.get(field.name)?.type.syntax ?? null,
     }));
     const checks = fields.map(({ descriptor, type }) => {
-      const present = `${descriptor}?.enumerable && "value" in ${descriptor} && ${this.emitTypeCheck(type, `${descriptor}.value`, "__state")}`;
+      const present = `${descriptor}?.enumerable && "value" in ${descriptor} && ${this.emitTypeCheck(type, `${descriptor}.value`, guarded ? "__state" : "undefined")}`;
       return type.kind === "optional" ? `(${descriptor} === undefined || (${present}))` : present;
     });
     const predicate = checks.length > 0 ? checks.join(" && ") : "true";
@@ -1637,11 +1651,15 @@ export class JavaScriptEmitter {
       "",
     ];
     const typeObject = [
-      `${indentation}  is(value, __state) {`,
-      `${indentation}    return ${checkName}(value, __state${generic ? ", __velarArguments" : ""});`,
+      guarded ? `${indentation}  is(value, __state) {` : `${indentation}  is(value) {`,
+      guarded
+        ? `${indentation}    return ${checkName}(value, __state${generic ? ", __velarArguments" : ""});`
+        : `${indentation}    return ${checkName}(value${generic ? ", __velarArguments" : ""});`,
       `${indentation}  },`,
       `${indentation}  parse(value) {`,
-      `${indentation}    if (!${checkName}(value, __velarValidationState()${generic ? ", __velarArguments" : ""})) {`,
+      guarded
+        ? `${indentation}    if (!${checkName}(value, __velarValidationState()${generic ? ", __velarArguments" : ""})) {`
+        : `${indentation}    if (!${checkName}(value${generic ? ", __velarArguments" : ""})) {`,
       `${indentation}      const __velarDetail = ${explainName}(value${generic ? ", __velarArguments" : ""});`,
       `${indentation}      throw new __VelarValidationError(${generic ? `"Value does not match " + ${displayName}` : JSON.stringify(`Value does not match ${statement.name}`)} + (__velarDetail.reason ? " — " + __velarDetail.reason : "") + __velarValidationRejectionHint(value), __velarDetail);`,
       `${indentation}    }`,
@@ -1652,7 +1670,7 @@ export class JavaScriptEmitter {
       const instances = `__velarGenericInstances_${statement.name}`;
       return [
         ...explainLines,
-        ...this.recordCheckFunctionLines(statement, fields, predicate, checkName, indentation, argumentsParameter),
+        ...this.recordCheckFunctionLines(fields, predicate, checkName, indentation, argumentsParameter, guarded),
         "",
         `${indentation}const ${instances} = [];`,
         // The instantiation memo: one frozen Type object per set of arguments,
@@ -1681,7 +1699,7 @@ export class JavaScriptEmitter {
     }
     return [
       ...explainLines,
-      ...this.recordCheckFunctionLines(statement, fields, predicate, checkName, indentation, ""),
+      ...this.recordCheckFunctionLines(fields, predicate, checkName, indentation, "", guarded),
       "",
       `${indentation}${exportPrefix}const ${statement.name} = __velarRegisterRuntimeType(__velarValidationFreeze({`,
       ...typeObject,
@@ -1691,13 +1709,22 @@ export class JavaScriptEmitter {
 
   /** The record predicate itself: identical for a plain record and a generic one but for the arguments it carries. */
   private recordCheckFunctionLines(
-    statement: TypeDeclaration,
     fields: readonly { readonly name: string; readonly descriptor: string }[],
     predicate: string,
     checkName: string,
     indentation: string,
     argumentsParameter: string,
+    guarded: boolean,
   ): readonly string[] {
+    if (!guarded) {
+      return [
+        `${indentation}function ${checkName}(value${argumentsParameter}) {`,
+        `${indentation}  if (value === null || typeof value !== "object" || __velarValidationIsArray(value) || !__velarValidationIsPlainObject(value)) return false;`,
+        ...fields.map(({ name, descriptor }) => `${indentation}  const ${descriptor} = __velarValidationOwnDescriptor(value, ${JSON.stringify(name)});`),
+        `${indentation}  return !!(${predicate});`,
+        `${indentation}}`,
+      ];
+    }
     // The per-value cycle guard is keyed by the *instantiation*, not by the
     // function: `Tree<string>` and `Tree<number>` share one predicate, and a
     // value reached under both in one traversal is two questions, not one.
@@ -1748,16 +1775,21 @@ export class JavaScriptEmitter {
       return `${indentation}${statement.exported ? "export " : ""}const ${statement.name} = ${this.genericInstanceExpression(target.application)};`;
     }
     const checkName = this.runtimeTypeCheckName(statement.name);
-    const predicate = this.emitTypeCheck(resolveTypeReference(statement.target), "value", "__state");
+    const guarded = this.runtimeTypeNeedsTraversalGuard(statement.name);
+    const predicate = this.emitTypeCheck(resolveTypeReference(statement.target), "value", guarded ? "__state" : "undefined");
     const exportPrefix = statement.exported ? "export " : "";
     return [
-      `${indentation}function ${checkName}(value, __state = __velarValidationState()) {`,
+      guarded
+        ? `${indentation}function ${checkName}(value, __state = __velarValidationState()) {`
+        : `${indentation}function ${checkName}(value) {`,
       `${indentation}  return ${predicate};`,
       `${indentation}}`,
       "",
       `${indentation}${exportPrefix}const ${statement.name} = __velarRegisterRuntimeType(__velarValidationFreeze({`,
-      `${indentation}  is(value, __state) {`,
-      `${indentation}    return ${checkName}(value, __state);`,
+      guarded ? `${indentation}  is(value, __state) {` : `${indentation}  is(value) {`,
+      guarded
+        ? `${indentation}    return ${checkName}(value, __state);`
+        : `${indentation}    return ${checkName}(value);`,
       `${indentation}  },`,
       `${indentation}  parse(value) {`,
       `${indentation}    if (!${checkName}(value)) {`,
@@ -1836,7 +1868,10 @@ export class JavaScriptEmitter {
         // An alias of an enum is lowered as the enum object itself, so its
         // check delegates the same way a direct enum name does (ENM-I4).
         if (this.enumAliasTarget(type.name) !== null) return `${type.name}.is(${value})`;
-        if (this.typeDeclarations.has(type.name)) return `${this.runtimeTypeCheckName(type.name)}(${value}, ${state})`;
+        if (this.typeDeclarations.has(type.name)) {
+          const check = this.runtimeTypeCheckName(type.name);
+          return this.runtimeTypeNeedsTraversalGuard(type.name) ? `${check}(${value}, ${state})` : `${check}(${value})`;
+        }
         // D60 rule 148: only a name that actually binds a runtime Type object
         // may be written into the output. See `runtimeTypeBinding`.
         return this.runtimeTypeBinding(type.name) ? `${type.name}.is(${value}, ${state})` : "false";
@@ -2019,6 +2054,76 @@ export class JavaScriptEmitter {
       return mapNestedTypes(type, bindParameters);
     };
     return bindParameters(resolved);
+  }
+
+  /**
+   * Acyclic declared type graphs have a statically bounded walk, even when the
+   * JavaScript data itself contains a cycle: every recursive check consumes one
+   * layer of the finite type. Only a declaration cycle, an erased generic, or
+   * an imported runtime Type needs the shared WeakMap/Set traversal guard.
+   */
+  private runtimeTypeNeedsTraversalGuard(name: string): boolean {
+    const cached = this.runtimeTypeTraversalGuards.get(name);
+    if (cached !== undefined) return cached;
+    const guarded = this.declarationNeedsTraversalGuard(name, []);
+    this.runtimeTypeTraversalGuards.set(name, guarded);
+    return guarded;
+  }
+
+  private declarationNeedsTraversalGuard(name: string, visiting: readonly string[]): boolean {
+    if (visiting.includes(name)) return true;
+    const declaration = this.typeDeclarations.get(name);
+    if (!declaration) return true;
+    if (declaration.kind === "TypeDeclaration" && (declaration.typeParameters?.length ?? 0) > 0) return true;
+    const path = [...visiting, name];
+    let guarded: boolean;
+    if (declaration.kind === "TypeAliasDeclaration") {
+      guarded = this.typeNeedsTraversalGuard(resolveTypeReference(declaration.target), path);
+    } else {
+      const ownFields = new Map(declaration.fields.map((field) => [field.name, resolveTypeReference(field.type)]));
+      const fields = this.hints.typeDeclarationFields.get(declaration.span.start)
+        ?? declaration.fields.map((field) => ({ name: field.name, type: resolveTypeReference(field.type) }));
+      guarded = fields.some((field) => this.typeNeedsTraversalGuard(ownFields.get(field.name) ?? field.type, path));
+    }
+    return guarded;
+  }
+
+  private typeNeedsTraversalGuard(type: ValueType, visiting: readonly string[]): boolean {
+    switch (type.kind) {
+      case "optional": return this.typeNeedsTraversalGuard(type.inner, visiting);
+      case "list":
+      case "set": return this.typeNeedsTraversalGuard(type.element, visiting);
+      case "map": return this.typeNeedsTraversalGuard(type.key, visiting) || this.typeNeedsTraversalGuard(type.value, visiting);
+      case "record": return this.typeNeedsTraversalGuard(type.value, visiting);
+      case "union": return type.members.some((member) => this.typeNeedsTraversalGuard(member, visiting));
+      case "parameter": return true;
+      case "named":
+        if (type.application) return true;
+        if (type.name === "Duration" || this.hints.enumNames.has(type.name) || this.hints.classNames.has(type.name)
+          || this.enumAliasTarget(type.name) !== null) return false;
+        if (this.typeDeclarations.has(type.name)) return this.declarationNeedsTraversalGuard(type.name, visiting);
+        return this.runtimeTypeBinding(type.name);
+      case "unknown":
+      case "any":
+      case "null":
+      case "string":
+      case "number":
+      case "bool":
+      case "promise":
+      case "object":
+      case "class":
+      case "enum":
+      case "enumMember":
+      case "enumObject":
+      case "typeObject":
+      case "runtimeType":
+      case "classConstructor":
+      case "function":
+      case "action":
+      case "intrinsic":
+      case "extension":
+        return false;
+    }
   }
 
   /**
@@ -2377,7 +2482,15 @@ export class JavaScriptEmitter {
         }
         if (expression.operator === "in" || expression.operator === "not in") {
           this.needsCollectionHelpers = true;
-          const membership = `__velarContains(${this.emitMappedExpression(expression.left)}, ${this.emitMappedExpression(expression.right)})`;
+          const kind = this.hints.collectionMemberships.get(spanIdentity(expression.span));
+          const left = this.emitMappedExpression(expression.left);
+          const right = this.emitMappedExpression(expression.right);
+          const helper = kind === "list" ? "__velarListContains"
+            : kind === "map" ? "__velarMapContains"
+              : kind === "set" ? "__velarSetContains"
+                : kind === "record" ? "__velarRecordContains"
+                  : null;
+          const membership = helper ? `${helper}(${left}, ${right})` : `__velarContains(${left}, ${right})`;
           return expression.operator === "not in" ? `!(${membership})` : membership;
         }
         if (["&", "|", "^", "<<", ">>", ">>>"].includes(expression.operator)) {
@@ -2614,12 +2727,14 @@ export class JavaScriptEmitter {
             ? `(__velarValue => __velarValue == null ? null : ${bound})(${object})`
             : `(__velarValue => ${bound})(${object})`;
         }
-        if (this.hints.collectionSizes.has(expression.span.end)) {
+        const collectionSizeKind = this.hints.collectionSizes.get(expression.span.end);
+        if (collectionSizeKind) {
           this.needsCollectionHelpers = true;
           const object = this.emitMappedExpression(expression.object);
+          const helper = this.collectionSizeHelper(collectionSizeKind);
           return expression.optional
-            ? `(__velarOptionalCollection(${object}, __velarCollectionSize) ?? null)`
-            : `__velarCollectionSize(${object})`;
+            ? `(__velarOptionalCollection(${object}, ${helper}) ?? null)`
+            : `${helper}(${object})`;
         }
         const staticFieldOwnerDepth = this.hints.staticFieldReads.get(spanIdentity(expression.span));
         if (staticFieldOwnerDepth !== undefined) {
@@ -2682,6 +2797,17 @@ export class JavaScriptEmitter {
               return `(__velarValue => __velarValue == null ? null : __velarBinaryRuntime.${helper}(__velarValue, ${this.emitMappedExpression(expression.index)}))(${object})`;
             }
             return `__velarBinaryRuntime.${helper}(${object}, ${this.emitMappedExpression(expression.index)})`;
+          }
+          const collectionKind = this.hints.collectionIndexes.get(spanIdentity(expression.span));
+          if (collectionKind) {
+            this.needsIndexHelpers = true;
+            this.needsCollectionHelpers = true;
+            const helper = collectionKind === "list" ? "__velarListIndexGet" : "__velarRecordIndexGet";
+            const object = this.emitMappedExpression(expression.object);
+            if (this.hints.optionalIndexes.has(spanIdentity(expression.span))) {
+              return `(__velarValue => __velarValue == null ? null : ${helper}(__velarValue, ${this.emitMappedExpression(expression.index)}))(${object})`;
+            }
+            return `${helper}(${object}, ${this.emitMappedExpression(expression.index)})`;
           }
         }
         this.needsIndexHelpers = true;
@@ -2769,14 +2895,18 @@ export class JavaScriptEmitter {
 
   private collectionHelper(expression: Extract<Expression, { kind: "MemberExpression" }>): string | null {
     switch (this.hints.collectionCalls.get(expression.span.end)) {
-      case "get": return "__velarCollectionGet";
+      case "listGet": return "__velarListGet";
+      case "mapGet": return "__velarMapGet";
+      case "recordGet": return "__velarRecordGet";
       case "slice": return "__velarCollectionSlice";
       case "listAppend": return "__velarListAppend";
       case "listExtend": return "__velarListExtend";
       case "listInsert": return "__velarListInsert";
       case "listRemove": return "__velarListRemove";
       case "listPop": return "__velarListPop";
+      case "listClear": return "__velarListClear";
       case "listCopy": return "__velarListCopy";
+      case "listHas": return "__velarListHas";
       case "listCount": return "__velarListCount";
       case "listFind": return "__velarListFind";
       case "listIndex": return "__velarListIndex";
@@ -2794,22 +2924,56 @@ export class JavaScriptEmitter {
       case "listMax": return "__velarListMax";
       case "setAdd": return "__velarSetAdd";
       case "setUpdate": return "__velarSetUpdate";
+      case "setHas": return "__velarSetHas";
+      case "setRemove": return "__velarSetRemove";
+      case "setClear": return "__velarSetClear";
+      case "setValues": return "__velarSetValues";
       case "setCopy": return "__velarSetCopy";
       case "setUnion": return "__velarSetUnion";
       case "setIntersection": return "__velarSetIntersection";
       case "setDifference": return "__velarSetDifference";
       case "mapSet": return "__velarMapSet";
       case "mapUpdate": return "__velarMapUpdate";
+      case "mapHas": return "__velarMapHas";
+      case "mapRemove": return "__velarMapRemove";
+      case "mapClear": return "__velarMapClear";
+      case "mapKeys": return "__velarMapKeys";
+      case "mapValues": return "__velarMapValues";
+      case "mapEntries": return "__velarMapEntries";
       case "mapCopy": return "__velarMapCopy";
       case "recordSet": return "__velarRecordSet";
+      case "recordHas": return "__velarRecordHas";
+      case "recordRemove": return "__velarRecordRemove";
+      case "recordClear": return "__velarRecordClear";
+      case "recordKeys": return "__velarRecordKeys";
+      case "recordValues": return "__velarRecordValues";
+      case "recordEntries": return "__velarRecordEntries";
       case "recordCopy": return "__velarRecordCopy";
-      case "has": return "__velarCollectionHas";
-      case "remove": return "__velarCollectionRemove";
-      case "clear": return "__velarCollectionClear";
-      case "keys": return "__velarCollectionKeys";
-      case "values": return "__velarCollectionValues";
-      case "entries": return "__velarCollectionEntries";
       default: return null;
+    }
+  }
+
+  private collectionSizeHelper(kind: "list" | "map" | "set" | "record"): string {
+    switch (kind) {
+      case "list": return "__velarListSize";
+      case "map": return "__velarMapSize";
+      case "set": return "__velarSetSize";
+      case "record": return "__velarRecordSize";
+    }
+  }
+
+  private collectionIteratorHelper(kind: "list" | "map" | "set" | "record" | "string", pair: boolean): string {
+    if (pair) {
+      if (kind === "map") return "__velarReactiveMapPairIterator";
+      if (kind === "record") return "__velarReactiveRecordPairIterator";
+      return "__velarCollectionPairIterator";
+    }
+    switch (kind) {
+      case "list": return "__velarReactiveListIterator";
+      case "map": return "__velarReactiveMapKeyIterator";
+      case "set": return "__velarReactiveSetIterator";
+      case "record": return "__velarReactiveRecordIterator";
+      case "string": return "__velarCollectionIterator";
     }
   }
 

@@ -562,7 +562,7 @@ component App:
 `);
   assert.match(result.code ?? "", /__velarBindValue\(__velarElement\d+, \{ get: \(\) => \(form\.get\(\)\.name\), set: \(__velarBindNext\) => \{ form\.get\(\)\.name = __velarBindNext; \} \}/u);
   assert.match(result.code ?? "", /get: \(\) => \(form\.get\(\)\.theme\.mode\)/u);
-  assert.match(result.code ?? "", /get: \(\) => \(__velarIndex\(items\.get\(\), 0\)\), set: \(__velarBindNext\) => \{ __velarSetIndex\(items\.get\(\), 0, __velarBindNext\); \}/u);
+  assert.match(result.code ?? "", /get: \(\) => \(__velarListIndexGet\(items\.get\(\), 0\)\), set: \(__velarBindNext\) => \{ __velarListIndexSet\(items\.get\(\), 0, __velarBindNext\); \}/u);
 });
 
 test("[D47-84] computed, const, and non-reactive bind targets keep their rejection", () => {

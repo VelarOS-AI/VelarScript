@@ -236,6 +236,85 @@ test("emitted equality holds the SameValueZero hot-loop budget", { timeout: 180_
     `the equality benchmark took ${(performance.now() - started).toFixed(0)}ms end to end`);
 });
 
+const runtimeTypeProgram = `
+import {monotonic} from "velar/time"
+
+type Point:
+    x: number
+    y: number
+
+type Sample:
+    point: Point
+    label: string
+    active: bool
+
+const point = {x: 1, y: 2}
+const sample = {point: point, label: "origin", active: true}
+const iterations = 2000000
+
+def pointChecks(value: unknown, count: number) -> number:
+    let hits = 0
+    let index = 0
+    while index < count:
+        if Point.is(value):
+            hits += 1
+        index += 1
+    return hits
+
+def sampleChecks(value: unknown, count: number) -> number:
+    let hits = 0
+    let index = 0
+    while index < count:
+        if Sample.is(value):
+            hits += 1
+        index += 1
+    return hits
+
+let sink = pointChecks(point, iterations) + sampleChecks(sample, iterations)
+let pointSamples = ""
+let sampleSamples = ""
+let round = 0
+while round < 5:
+    let start = monotonic()
+    sink += pointChecks(point, iterations)
+    pointSamples += f"{str(monotonic() - start)},"
+    start = monotonic()
+    sink += sampleChecks(sample, iterations)
+    sampleSamples += f"{str(monotonic() - start)},"
+    round += 1
+
+print(f"point={pointSamples}")
+print(f"sample={sampleSamples}")
+print(f"sink={str(sink)},")
+`.trimStart();
+
+test("acyclic runtime Type checks stay on the straight-line validation path", { timeout: 180_000 }, async (t) => {
+  const started = performance.now();
+  const { samples, code } = await benchmarkProgram("velar-runtime-type-", runtimeTypeProgram);
+  const pointCheck = code.slice(code.indexOf("function __velarTypeCheck_Point"), code.indexOf("\n}\n", code.indexOf("function __velarTypeCheck_Point")) + 3);
+  const sampleCheck = code.slice(code.indexOf("function __velarTypeCheck_Sample"), code.indexOf("\n}\n", code.indexOf("function __velarTypeCheck_Sample")) + 3);
+  assert.match(pointCheck, /function __velarTypeCheck_Point\(value\)/u);
+  assert.match(sampleCheck, /function __velarTypeCheck_Sample\(value\)/u);
+  assert.doesNotMatch(pointCheck + sampleCheck, /__velarValidation(?:State|WeakMap|Set)/u,
+    "an acyclic Type validator reintroduced graph-traversal state");
+
+  const iterations = 2_000_000;
+  const point = dimension(samples, "point");
+  const sample = dimension(samples, "sample");
+  const perCheck = (elapsed: number): string => `${((elapsed * 1e6) / iterations).toFixed(1)}ns/check`;
+  const context = `${iterations.toLocaleString("en-US")} Type.is calls: Point ${point.toFixed(1)}ms (${perCheck(point)}), `
+    + `nested Sample ${sample.toFixed(1)}ms (${perCheck(sample)})`;
+  t.diagnostic(context);
+
+  // Baseline 2026-08-19 after acyclic validators stopped allocating graph
+  // traversal state: Point 66.1ms (33.0ns/check), nested Sample 157.2ms
+  // (78.6ns/check) for 2M checks.
+  assert.ok(point < timeBudget(105), `flat Type.is exceeded its budget -- ${context}`);
+  assert.ok(sample < timeBudget(240), `nested acyclic Type.is exceeded its budget -- ${context}`);
+  assert.ok(performance.now() - started < BENCHMARK_WALL_CLOCK_BUDGET_MS,
+    `the runtime Type benchmark took ${(performance.now() - started).toFixed(0)}ms end to end`);
+});
+
 const collectionProgram = `
 import {monotonic} from "velar/time"
 
@@ -376,7 +455,14 @@ print(f"sink={str(sink)},")
 
 test("emitted collection operations hold their large-List and Map/Set budgets", { timeout: 180_000 }, async (t) => {
   const started = performance.now();
-  const { samples } = await benchmarkProgram("velar-runtime-collections-", collectionProgram);
+  const { samples, code } = await benchmarkProgram("velar-runtime-collections-", collectionProgram);
+
+  assert.match(code, /__velarListIndexGet\(values,/u);
+  assert.match(code, /__velarMapGet\(values,/u);
+  assert.match(code, /__velarSetHas\(values,/u);
+  assert.match(code, /__velarListSize\(values\)/u);
+  assert.doesNotMatch(code, /\b__velarCollection(?:Get|Has|Size)\b/u,
+    "statically typed collection operations fell back to runtime kind dispatch");
 
   const size = 100_000;
   const append = dimension(samples, "append");
@@ -395,17 +481,19 @@ test("emitted collection operations hold their large-List and Map/Set budgets", 
     + `200,000 index reads of a 2,000-item range() ${rangeIndex.toFixed(1)}ms`;
   t.diagnostic(context);
 
-  // Baselines 2026-08-12, all over a 100,000-item List built by `append`.
+  // Baselines refreshed 2026-08-19 after Core's non-reactive bridge became
+  // static and typed collection operations selected exact helpers. All cover
+  // a 100,000-item List built by `append`.
   // Provenance is settled by validation, not by construction site: the first
   // operation that proves a List dense records its element count, and every
   // later operation takes the cheap path until a foreign length change breaks
   // the match. A List the compiler did not build therefore pays full
   // validation once instead of on every read.
-  // append 29.4ms (294ns/item)
-  assert.ok(append < timeBudget(90), `List.append exceeded its budget -- ${context}`);
-  // index 22.8ms (228ns/read)
-  assert.ok(index < timeBudget(70), `List index reads exceeded their budget -- ${context}`);
-  // map 9.7ms, filter 8.8ms, sorted 15.9ms, measured 2026-08-12 after every
+  // append 17.5ms (175ns/item)
+  assert.ok(append < timeBudget(65), `List.append exceeded its budget -- ${context}`);
+  // index 7.1ms (71ns/read)
+  assert.ok(index < timeBudget(30), `List index reads exceeded their budget -- ${context}`);
+  // map 4.8ms, filter 4.6ms, sorted 16.5ms, measured 2026-08-19 after every
   // callback operation's snapshot (__velarCopyList) took the owned fast path.
   // Before that the snapshot revalidated the whole List and then re-read every
   // element through a second descriptor, so `map` paid roughly three
@@ -414,21 +502,15 @@ test("emitted collection operations hold their large-List and Map/Set budgets", 
   assert.ok(mapped < timeBudget(30), `List.map exceeded its budget -- ${context}`);
   assert.ok(filtered < timeBudget(27), `List.filter exceeded its budget -- ${context}`);
   assert.ok(sorted < timeBudget(48), `List.sorted exceeded its budget -- ${context}`);
-  // Map.set 22.0ms (220ns/insert), Map.get 14.2ms (142ns/lookup)
-  assert.ok(mapInsert < timeBudget(70), `Map.set exceeded its budget -- ${context}`);
-  assert.ok(mapLookup < timeBudget(45), `Map.get exceeded its budget -- ${context}`);
-  // Set.add 14.2ms (142ns/insert)
-  assert.ok(setInsert < timeBudget(45), `Set.add exceeded its budget -- ${context}`);
-  // Set.has 11.3ms (113ns/lookup), measured 2026-08-12 after the Map/Set brand
-  // probe stopped identifying a non-Map by catching the TypeError the Map
-  // `size` getter throws. The probe is still the only unforgeable, cross-realm
-  // test JavaScript offers, but its verdict can never change for a given
-  // object, so it runs once per object and is answered from a WeakMap after
-  // that. Before the fix this dimension measured 190.0ms (1.90us/lookup),
-  // roughly thirteen times Map.get for the same work.
-  assert.ok(setLookup < timeBudget(34), `Set.has exceeded its budget -- ${context}`);
-  // rangeIndex 42.9ms for 200,000 index reads of the 2,000-item List `range()`
-  // returns (214ns/read), measured 2026-08-12. This case used to be left out
+  // Baseline 2026-08-19 after Core's non-reactive bridge became static and
+  // typed collection operations selected exact helpers: Map.set 4.6ms,
+  // Map.get 2.5ms, Set.add 3.9ms, Set.has 2.0ms per 100,000 operations.
+  assert.ok(mapInsert < timeBudget(18), `Map.set exceeded its budget -- ${context}`);
+  assert.ok(mapLookup < timeBudget(10), `Map.get exceeded its budget -- ${context}`);
+  assert.ok(setInsert < timeBudget(15), `Set.add exceeded its budget -- ${context}`);
+  assert.ok(setLookup < timeBudget(9), `Set.has exceeded its budget -- ${context}`);
+  // rangeIndex 12.1ms for 200,000 index reads of the 2,000-item List `range()`
+  // returns (61ns/read), measured 2026-08-19. This case used to be left out
   // of the gate deliberately: only mutating methods and map/filter/slice/sorted
   // marked a List owned, so a List that reached VelarScript from the standard
   // library revalidated all 2,000 elements on every single read and the same
