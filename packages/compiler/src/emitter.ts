@@ -1463,6 +1463,11 @@ export class JavaScriptEmitter {
 
   private emitImport(statement: ImportDeclaration, indentation: string): string {
     const source = statement.source;
+    if (statement.resource === "json") {
+      const local = statement.specifiers[0]?.local ?? "resource";
+      const emittedResource = source.startsWith(".") ? `${source}.js` : source;
+      return `${indentation}import ${local} from ${JSON.stringify(emittedResource)};`;
+    }
     const emittedSource = source.endsWith(".vel") ? `${source.slice(0, -4)}.js` : source;
     const first = statement.specifiers[0];
     if (first?.namespace) {

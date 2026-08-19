@@ -13,7 +13,14 @@ export interface VelarPackageManifest {
   readonly scripts?: Record<string, string>;
   readonly dependencies?: Record<string, string>;
   readonly peerDependencies?: Record<string, string>;
-  readonly velar?: { readonly entry?: string; readonly extension?: unknown };
+  readonly velar?: {
+    readonly entry?: string;
+    readonly extension?: unknown;
+    readonly resources?: Readonly<Record<string, {
+      readonly path: string;
+      readonly type: "json";
+    }>>;
+  };
 }
 
 /** One workspace package as its own `package.json` declares it. */

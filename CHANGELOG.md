@@ -6,6 +6,17 @@ truth for acceptance status.
 
 ## Unreleased
 
+## 0.11.0 — 2026-08-20
+
+### Package JSON resources
+
+- Added `import json value from "specifier"` as a checked resource boundary;
+  imported values are `unknown` and require explicit Runtime Type validation.
+- Added exact `package.json#velar.resources` declarations aligned with npm
+  subpath exports, including containment, symlink, size, and JSON validation.
+- Unified JSON resource watching, serving, bundling, copying, and test-sandbox
+  exports across `check`, `run`, `test`, `dev`, and `build`.
+
 ### Source-library ownership
 
 - Moved the pure VelarScript `text-buffer` and `script-analysis` libraries from

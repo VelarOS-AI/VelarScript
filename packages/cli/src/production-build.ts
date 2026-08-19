@@ -259,6 +259,9 @@ function assetRole(path: string, build: ProductionBuildResult): ProductionBuildM
 
 function velarModules(project: ProjectResult): Plugin {
   const modulesByPath = new Map<string, ProjectResult["modules"][number]>();
+  const resourcesByWrapperPath = new Map(project.resources
+    .filter((resource) => resource.source.startsWith("."))
+    .map((resource) => [resolve(`${resource.inputPath}.js`), resource]));
   const embeddedByPath = new Map<string, {
     readonly module: ProjectResult["modules"][number];
     readonly code: string;
@@ -313,6 +316,10 @@ function velarModules(project: ProjectResult): Plugin {
           resolveDir: dirname(embedded.module.inputPath),
         };
       });
+      context.onLoad({ filter: /.*/, namespace: "velar-resource" }, (arguments_) => {
+        const resource = resourcesByWrapperPath.get(resolve(arguments_.path));
+        return resource ? { contents: resource.content, loader: "json" } : { errors: [{ text: `Resource '${arguments_.path}' was not checked` }] };
+      });
       context.onResolve({ filter: /^velar\// }, (arguments_) => ({ path: arguments_.path, namespace: "velar-standard" }));
       context.onLoad({ filter: /.*/, namespace: "velar-standard" }, (arguments_) => {
         if (isNodeOnlyModule(arguments_.path)
@@ -327,6 +334,7 @@ function velarModules(project: ProjectResult): Plugin {
         if (!sourceModule || !arguments_.path.endsWith(".js")) return null;
         const embeddedPath = resolve(dirname(sourceModule.inputPath), arguments_.path);
         if (embeddedByPath.has(embeddedPath)) return { path: embeddedPath, namespace: "velar-embedded" };
+        if (resourcesByWrapperPath.has(embeddedPath)) return { path: embeddedPath, namespace: "velar-resource" };
         const targetPath = resolve(dirname(sourceModule.inputPath), arguments_.path.replace(/\.js$/u, ".vel"));
         const targetModule = moduleAt(targetPath);
         return targetModule ? { path: targetModule.inputPath } : null;

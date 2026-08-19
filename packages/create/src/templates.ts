@@ -451,6 +451,8 @@ Run these before considering any change done:
 - \`await task()\` or detached \`async task()\` — a dropped Promise is a
   compile error.
 - \`range\` needs \`import {range} from "velar/collections"\`.
+- JSON data uses \`import json raw from "package/subpath"\`; the value is
+  \`unknown\`, so validate it with \`Type.parse(raw)\` before field access.
 - Multi-line text is a layout string: a quote followed by a newline opens
   it; a quote at the opening line's indentation closes it.
 - \`print(value)\` inspects any value; f-strings and \`str()\` accept only

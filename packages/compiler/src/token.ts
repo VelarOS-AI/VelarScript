@@ -109,8 +109,8 @@ export interface Token {
 /**
  * Hard reserved words: spellings the lexer always turns into a keyword token,
  * so they can never name a binding. D30 item 16 softened the statement-head
- * words that JavaScript does not reserve — `type`, `match`, `case`, `from`,
- * `as` — into contextual keywords, which the lexer emits as ordinary
+ * words that JavaScript does not reserve — including `type`, `match`, `from`,
+ * `as`, and `json` — into contextual keywords, which the lexer emits as ordinary
  * identifiers and the parser recognizes by declaration shape. `enum` stays
  * here because JavaScript reserves it, and generated JavaScript must be legal.
  */

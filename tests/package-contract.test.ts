@@ -10,7 +10,7 @@ import {
   velarPublishedWorkspacePackages,
   velarToolchainBuildOrder,
 } from "../scripts/velar-packages.mjs";
-import { declaredEntryPaths, declaredImportSpecifiers, packageContentFailures, type PackedPackage } from "./package-contract.ts";
+import { declaredEntryPaths, declaredImportSpecifiers, declaredJsonResourceImportSpecifiers, packageContentFailures, type PackedPackage } from "./package-contract.ts";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
 
 // ---------------------------------------------------------------------------
@@ -154,6 +154,52 @@ test("[A-024] the contract is derived from the manifest, not from a list of name
   const failures = packageContentFailures(manifest, packed);
   assert.ok(failures.some((failure) => failure.includes("dist/brand-new.js")), failures.join("\n"));
   assert.ok(failures.some((failure) => failure.includes("src/index.vel")), failures.join("\n"));
+});
+
+test("package resource files and matching npm subpath exports are part of the packed contract", async () => {
+  const manifest = {
+    name: "velar-resource-probe",
+    version: "0.11.0",
+    type: "module",
+    files: ["src", "generated", "dist", "README.md"],
+    exports: {
+      ".": "./dist/index.js",
+      "./catalog": "./generated/catalog.json",
+    },
+    velar: {
+      entry: "src/index.vel",
+      resources: {
+        "./catalog": { path: "generated/catalog.json", type: "json" as const },
+      },
+    },
+  };
+  assert.ok(declaredEntryPaths(manifest).includes("generated/catalog.json"));
+  assert.deepEqual(declaredJsonResourceImportSpecifiers(manifest), ["velar-resource-probe/catalog"]);
+  assert.deepEqual(declaredImportSpecifiers(manifest), ["velar-resource-probe"]);
+  const complete = await packageOf(manifest, {
+    LICENSE: "x\n",
+    "README.md": "x\n",
+    "dist/index.js": "export const value = 1\n",
+    "src/index.vel": "export const value = 1\n",
+    "generated/catalog.json": "{}\n",
+  });
+  assert.deepEqual(packageContentFailures(manifest, complete.packed), []);
+
+  const mismatched = {
+    ...manifest,
+    exports: { ...manifest.exports, "./catalog": "./generated/other.json" },
+  };
+  const broken = await packageOf(mismatched, {
+    LICENSE: "x\n",
+    "README.md": "x\n",
+    "dist/index.js": "export const value = 1\n",
+    "src/index.vel": "export const value = 1\n",
+    "generated/catalog.json": "{}\n",
+    "generated/other.json": "{}\n",
+  });
+  assert.ok(packageContentFailures(mismatched, broken.packed).some((failure) =>
+    failure.includes("resource './catalog' must export './generated/catalog.json' in every condition")
+  ));
 });
 
 test("[A-024] every publishable toolchain package that declares a build is built, dependencies first", async () => {

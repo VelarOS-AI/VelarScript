@@ -176,7 +176,7 @@ them; the first two are the **silent traps** in the list — read them twice.
 | `if value:` truthiness | Conditions accept only `bool`/`bool?`. Test presence explicitly: `if value != null:`. |
 | `value is null` | `value == null` / `value != null` — `is` tests runtime types, `null` is a value. |
 | `switch`, or an `if`/`else if` ladder over an enum | `match` with `case _:` as the only fallback. |
-| Renaming a binding away from `type`, `state`, `from`, `match`, `as`, `action`, `resource`, `watch`, `look`, `component` | Don't. Declaration words are contextual: each declares only in its own shape, so `const {type, from} = event` and `const state = "ready"` are ordinary code in Core and Web alike. `enum` and `case` are the exceptions — `enum` is a real VelarScript keyword, `case` is reserved by JavaScript — so neither can be a binding name; both stay fine as record fields, member names, and `match` branches. |
+| Renaming a binding away from `type`, `json`, `state`, `from`, `match`, `as`, `action`, `resource`, `watch`, `look`, `component` | Don't. Declaration words are contextual: each declares only in its own shape, so `const {type, from} = event` and `const state = "ready"` are ordinary code in Core and Web alike. `enum` and `case` are the exceptions — `enum` is a real VelarScript keyword, `case` is reserved by JavaScript — so neither can be a binding name; both stay fine as record fields, member names, and `match` branches. |
 | A component's `mounted:` / `cleanup:` block | `@mounted:` / `@cleanup:`. Lifecycle hooks live in the language's `@` namespace, which is why a component can also declare its own `def mounted()`. |
 | Two statements on one line | One statement per line; there are no semicolons. A line starting with `.` or `?.` continues the previous line, so method chains format normally. |
 | `count++` | `count += 1` |
@@ -635,10 +635,10 @@ An expected failure is an optional, not a block: `try expression` produces
 
 ### Modules
 
-Export and import by name; a package's public face is a barrel of explicit
-re-exports — `export {measure, firstLine} from "./text.vel"`. There is no
-`import type`: Vel does not erase types, so a type carries its runtime
-validator and a type import is an ordinary import.
+Export and import by name; package barrels use explicit re-exports. There is no
+`import type`: types carry runtime validators, so their imports are ordinary.
+
+JSON uses `import json raw from "package/subpath"` and yields `unknown`; validate with `Type.parse(raw)`. Relative JSON stays inside the source root; package subpaths must agree in `velar.resources` and npm `exports`.
 
 ## When Vel is in your way
 

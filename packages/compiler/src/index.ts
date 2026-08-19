@@ -109,6 +109,8 @@ export interface ModuleDependency {
   readonly javascript: boolean;
   readonly unsafe: boolean;
   readonly dynamic: boolean;
+  /** A checked resource edge that is emitted as an ESM value import. */
+  readonly resource?: "json";
   /** True for `export {name} from "source"` re-export dependencies. */
   readonly reExport?: boolean;
   /** True when the importing module declares `extern module "source"` itself. */
@@ -293,6 +295,12 @@ function complexityFailureResult(text: string, options: CompileOptions): Compile
 function resourcesOf(program: Program, extensions: readonly CompilerExtension[]): readonly CompilerResourceDependency[] {
   const output: CompilerResourceDependency[] = [];
   const seen = new Set<string>();
+  for (const statement of program.body) {
+    if (statement.kind !== "ImportDeclaration" || !statement.resource) continue;
+    const key = `${statement.resource}\0${statement.source}`;
+    seen.add(key);
+    output.push({ source: statement.source, kind: statement.resource });
+  }
   for (const extension of extensions) {
     for (const resource of extension.inspection?.resources?.(program) ?? []) {
       const key = `${resource.kind}\0${resource.source}`;
@@ -430,9 +438,10 @@ function dependenciesOf(program: Program): readonly ModuleDependency[] {
     .map((statement) => ({
       source: statement.source,
       span: statement.sourceSpan,
-      javascript: statement.javascript,
+      javascript: statement.javascript || statement.resource !== undefined,
       unsafe: statement.unsafe,
       dynamic: false,
+      ...(statement.resource ? { resource: statement.resource } : {}),
       ...(statement.javascript && !statement.unsafe && externSources.has(statement.source) ? { externOwned: true } : {}),
       specifiers: statement.specifiers.map((specifier) => ({
         imported: specifier.imported,

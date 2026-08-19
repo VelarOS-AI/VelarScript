@@ -1,6 +1,6 @@
 # VelarScript Toolchain Distribution
 
-Status: stable package contract for the published VelarScript 0.10 toolchain
+Status: stable package contract for the published VelarScript 0.11 toolchain
 
 The repository contains two distinct npm workspace layers: six version-locked
 toolchain packages under `packages/`, and independently versioned VelarScript
@@ -85,6 +85,51 @@ to `velar.json.extensions`. `velar remove` removes the extension and its owned
 manifest field. The compiler and optional framework-host exports remain the
 runtime authority; metadata only controls project activation and never bypasses
 protocol validation.
+
+### Package resources
+
+A source package that exposes static JSON data declares an exact resource map
+beside `velar.entry`, and exposes the same file through npm `exports`:
+
+```json
+{
+  "name": "catalog-package",
+  "type": "module",
+  "files": ["src", "generated/block-catalog.json"],
+  "exports": {
+    ".": "./dist/index.js",
+    "./block-catalog": "./generated/block-catalog.json"
+  },
+  "velar": {
+    "entry": "src/index.vel",
+    "resources": {
+      "./block-catalog": {
+        "path": "generated/block-catalog.json",
+        "type": "json"
+      }
+    }
+  }
+}
+```
+
+Consumers write `import json rawCatalog from
+"catalog-package/block-catalog"`. The binding has type `unknown`; a Runtime
+Type such as `Catalog.parse(rawCatalog)` must validate it before field access.
+
+Every resource key is an exact `./subpath` with no wildcard. `path` is a
+normalized, package-relative `.json` file, and every string leaf under the
+matching npm export condition must name exactly `./<path>`. Declared files
+must be ordinary files contained by the package after symbolic links are
+resolved, valid UTF-8 JSON, no larger than 4 MiB, and present in the published npm
+tarball. npm remains the package and integrity authority; `velar.resources`
+only tells the compiler which data subpaths it is allowed to copy, watch,
+serve, or bundle.
+
+`velar test` reconstructs the used package entry and resource subpath exports
+inside its sandbox. Framework-free builds copy the exact checked JSON bytes
+and a generated ESM value wrapper; browser builds bundle the checked JSON.
+This makes `check`, `run`, `test`, `dev`, and `build` consume one resource
+graph instead of each command inventing a partial package view.
 
 An extension may give one of its JavaScript module sources an explicit
 implementation-only dependency list. This list is not a package dependency and
@@ -222,5 +267,5 @@ complete license text, and package acceptance verifies the installed metadata
 and file rather than trusting the source manifest alone. The current rehearsal
 is always marked non-publishable because rehearsal mode is evidence only. A
 strict candidate becomes publishable only from the clean, exactly tagged
-`v0.10.4` source with the matching remote; registry publication remains a
+`v0.11.0` source with the matching remote; registry publication remains a
 separate explicit authority and must carry npm provenance.

@@ -141,6 +141,8 @@ export interface ImportDeclaration {
   readonly sourceSpan: Span;
   readonly javascript: boolean;
   readonly unsafe: boolean;
+  /** A checked non-code package or project resource imported as a value. */
+  readonly resource?: "json";
   readonly specifiers: readonly ImportSpecifier[];
   readonly span: Span;
 }

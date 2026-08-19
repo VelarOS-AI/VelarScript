@@ -91,7 +91,7 @@ test("[D62-157/158] the gate requires Core's own contextual keywords and numeric
     return Number(/\d+\/(?<required>\d+)/u.exec(line)?.groups?.required);
   };
   // The Web extension publishes ten contextual keywords and thirteen numeric
-  // suffixes; Core's ten words are disjoint from those, and its two suffixes
+  // suffixes; Core's words are disjoint from those, and its two suffixes
   // are the pair the Web extension republishes. Requiring *at least* Core's own
   // counts is what a Core-only checkout must also satisfy.
   assert.ok(required("contextual-keyword") >= CORE_CONTEXTUAL_KEYWORD_WORDS.length,

@@ -5773,19 +5773,42 @@ test("dev server watches installed VelarScript source package roots", async (con
   const packageRoot = join(directory, "library");
   await mkdir(join(projectRoot, "node_modules"), { recursive: true });
   await mkdir(join(packageRoot, "src"), { recursive: true });
+  await mkdir(join(packageRoot, "generated"), { recursive: true });
   await writeFile(join(packageRoot, "package.json"), JSON.stringify({
     name: "external-velar-kit",
-    velar: { entry: "src/index.vel" },
+    version: "1.0.0",
+    type: "module",
+    exports: { "./catalog": "./generated/catalog.json" },
+    velar: {
+      entry: "src/index.vel",
+      resources: { "./catalog": { path: "generated/catalog.json", type: "json" } },
+    },
   }), "utf8");
   const packageEntry = join(packageRoot, "src", "index.vel");
-  await writeFile(packageEntry, "export const label = \"Library\"\n", "utf8");
+  const resourcePath = join(packageRoot, "generated", "catalog.json");
+  await writeFile(resourcePath, JSON.stringify({ label: "Library" }), "utf8");
+  await writeFile(packageEntry, `
+import json rawCatalog from "../generated/catalog.json"
+
+type Catalog:
+    readonly label: string
+
+const catalog = Catalog.parse(rawCatalog)
+export const label = catalog.label
+`.trimStart(), "utf8");
   await symlink(packageRoot, join(projectRoot, "node_modules", "external-velar-kit"), "dir");
   await linkWorkspaceWebExtension(projectRoot);
   await writeFile(join(projectRoot, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: ["@velarscript/web"] }), "utf8");
   await writeFile(join(projectRoot, "main.vel"), `
 import {label} from "external-velar-kit"
+import json rawCatalog from "external-velar-kit/catalog"
+
+type Catalog:
+    readonly label: string
+
+const directLabel = Catalog.parse(rawCatalog).label
 component App:
-    return <main>{label}</main>
+    return <main>{label}:{directLabel}</main>
 mount(<App />, "#app")
 `.trimStart(), "utf8");
 
@@ -5802,15 +5825,38 @@ mount(<App />, "#app")
     assert.match(output, pattern);
   };
   await waitForOutput(/VelarScript dev server:/u);
+  const page = await fetch("http://127.0.0.1:42884/");
+  assert.equal(page.status, 200);
+  const html = await page.text();
+  assert.match(html, /"external-velar-kit\/catalog":"\/@npm\/external-velar-kit\/catalog\.js"/u);
+  const resourceModule = await fetch("http://127.0.0.1:42884/@npm/external-velar-kit/catalog.js");
+  assert.equal(resourceModule.status, 200);
+  assert.match(await resourceModule.text(), /Library/u);
   await reportedChange(
-    packageEntry,
-    "export const label = \"Updated library\"\n",
+    resourcePath,
+    JSON.stringify({ label: "Updated library" }),
     () => /VelarScript app rebuilt in .*\(2 compiled, 0 reused\)/u.test(output),
-    "the dev-server installed-package watch",
+    "the dev-server installed-package resource watch",
   );
+  const updatedPackageResource = await fetch("http://127.0.0.1:42884/@npm/external-velar-kit/catalog.js");
+  assert.equal(updatedPackageResource.status, 200);
+  assert.match(await updatedPackageResource.text(), /Updated library/u);
+  const updatedRelativeResource = await fetch("http://127.0.0.1:42884/__velar_packages__/external-velar-kit/generated/catalog.json.js");
+  assert.equal(updatedRelativeResource.status, 200);
+  assert.match(await updatedRelativeResource.text(), /Updated library/u);
   child.kill("SIGTERM");
   const exitCode = await new Promise<number | null>((resolve) => child.once("exit", resolve));
   assertDevServerExit(exitCode, String(child.stderr.read() ?? ""));
+
+  const built = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "build"], {
+    cwd: projectRoot,
+    encoding: "utf8",
+  });
+  assert.equal(built.status, 0, String(built.stderr));
+  const assets = await readdir(join(projectRoot, "dist", "assets"));
+  const javascript = assets.find((name) => /^main-[A-Z0-9]+\.js$/u.test(name));
+  assert.ok(javascript);
+  assert.match(await readFile(join(projectRoot, "dist", "assets", javascript), "utf8"), /Updated library/u);
 });
 
 test("dev server watches JavaScript package subpath declarations and reanalyzes safe imports", async (context) => {
@@ -6236,6 +6282,51 @@ const id = randomUUID()
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /import \{ randomUUID \} from "node:crypto";/);
   assert.doesNotMatch(result.code ?? "", /import js/);
+});
+
+test("JSON resource imports are explicit unknown values and preserve contextual json bindings", () => {
+  const source = `
+import json catalog from "./catalog.json"
+
+print(catalog)
+`.trimStart();
+  const inspection = inspectModule(source, { path: "main.vel" });
+  const result = compile(source, { path: "main.vel" });
+  assert.deepEqual(result.diagnostics, []);
+  assert.deepEqual(inspection.resources, [{ source: "./catalog.json", kind: "json" }]);
+  assert.equal(inspection.dependencies[0]?.resource, "json");
+  assert.match(result.code ?? "", /import catalog from "\.\/catalog\.json\.js";/u);
+
+  const unsafeAssumption = compile('import json catalog from "./catalog.json"\nconst name: string = catalog\n');
+  assert.ok(unsafeAssumption.diagnostics.some((diagnostic) => /Cannot assign unknown to string/u.test(diagnostic.message)));
+
+  const contextual = inspectModule('import json from "./module.vel"\nprint(json)\n');
+  assert.deepEqual(contextual.resources, []);
+  assert.equal(contextual.dependencies[0]?.resource, undefined);
+  assert.equal(contextual.dependencies[0]?.specifiers[0]?.local, "json");
+});
+
+test("a standalone build bundles a checked relative JSON resource", async () => {
+  const directory = await makeTemporaryDirectory("velar-standalone-json-");
+  const entry = join(directory, "main.vel");
+  const output = join(directory, "main.js");
+  await writeFile(join(directory, "catalog.json"), JSON.stringify({ name: "standalone" }), "utf8");
+  await writeFile(entry, `
+import json rawCatalog from "./catalog.json"
+
+type Catalog:
+    readonly name: string
+
+print(Catalog.parse(rawCatalog).name)
+`.trimStart(), "utf8");
+  const build = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "build", entry, "--out", output], {
+    cwd: directory,
+    encoding: "utf8",
+  });
+  assert.equal(build.status, 0, String(build.stderr));
+  const execution = spawnSync(process.execPath, [output], { cwd: directory, encoding: "utf8" });
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "standalone\n");
 });
 
 test("type-checks literal dynamic VelarScript imports and lazy components", async () => {
@@ -15722,8 +15813,8 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     devDependencies: Record<string, string>;
   };
-  assert.equal(createdPackage.dependencies["@velarscript/web"], "^0.10.4");
-  assert.equal(createdPackage.devDependencies["@velarscript/cli"], "^0.10.4");
+  assert.equal(createdPackage.dependencies["@velarscript/web"], "^0.11.0");
+  assert.equal(createdPackage.devDependencies["@velarscript/cli"], "^0.11.0");
   assert.equal(createdPackage.scripts.format, "velar format");
   assert.equal(createdPackage.scripts["format:check"], "velar format --check");
   assert.equal(createdPackage.scripts["test:browser"], "velar test --browser");
@@ -15851,8 +15942,8 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   assert.equal(componentPackage.velar.entry, "src/index.vel");
   assert.equal(componentPackage.scripts["pack:check"], "npm pack --dry-run --json");
   assert.match(componentPackage.scripts.validate ?? "", /npm run pack:check$/u);
-  assert.equal(componentPackage.peerDependencies["@velarscript/web"], "^0.10.4");
-  assert.equal(componentPackage.devDependencies["@velarscript/web"], "^0.10.4");
+  assert.equal(componentPackage.peerDependencies["@velarscript/web"], "^0.11.0");
+  assert.equal(componentPackage.devDependencies["@velarscript/web"], "^0.11.0");
   assert.match(await readFile(join(componentRoot, "src", "index.vel"), "utf8"), /export component InfoCard/u);
   assert.deepEqual(JSON.parse(await readFile(join(componentRoot, "velar.json"), "utf8")).extensions, ["@velarscript/web"]);
   await linkWorkspaceWebExtension(componentRoot);
@@ -15877,7 +15968,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     scripts: Record<string, string>;
   };
-  assert.equal(nodePackage.dependencies["@velarscript/node"], "^0.10.4");
+  assert.equal(nodePackage.dependencies["@velarscript/node"], "^0.11.0");
   assert.equal(nodePackage.scripts.dev, "velar run");
   assert.match(await readFile(join(nodeRoot, "src", "app.vel"), "utf8"), /from "velar\/serve"/u);
   assert.match(await readFile(join(nodeRoot, "public", "index.html"), "utf8"), /velarscript-mark\.svg/u);
@@ -15895,7 +15986,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     scripts: Record<string, string>;
   };
-  assert.equal(desktopPackage.dependencies["@velarscript/desktop"], "^0.10.4");
+  assert.equal(desktopPackage.dependencies["@velarscript/desktop"], "^0.11.0");
   assert.equal(desktopPackage.scripts.package, "velar package");
   assert.equal(desktopPackage.scripts["test:browser"], "velar test --browser=all");
   assert.match(await readFile(join(desktopRoot, "src", "app.vel"), "utf8"), /VelarScript Desktop/u);
@@ -15952,7 +16043,7 @@ test("CLI help is command-specific and malformed top-level invocations fail clea
   const creator = resolve("packages/create/src/cli.ts");
   const creatorVersion = spawnSync(process.execPath, [creator, "--version"], { encoding: "utf8" });
   assert.equal(creatorVersion.status, 0, creatorVersion.stderr);
-  assert.equal(creatorVersion.stdout, "create-velar 0.10.4\n");
+  assert.equal(creatorVersion.stdout, "create-velar 0.11.0\n");
   const creatorMissing = spawnSync(process.execPath, [creator], { encoding: "utf8" });
   assert.equal(creatorMissing.status, 2);
   assert.match(creatorMissing.stderr, /expected one project directory/u);
@@ -16311,6 +16402,106 @@ test "the package graph resolves":
   const execution = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "test"], { cwd: directory, encoding: "utf8" });
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.match(execution.stdout, /package\.test\.vel" :: "the package graph resolves"/u);
+});
+
+test("declared JSON package resources survive check test run and framework-free build", async () => {
+  const directory = await makeTemporaryDirectory("velar-package-resource-");
+  const packageRoot = join(directory, "node_modules", "catalog-package");
+  await mkdir(join(directory, "src"), { recursive: true });
+  await mkdir(join(packageRoot, "src"), { recursive: true });
+  await mkdir(join(packageRoot, "generated"), { recursive: true });
+  await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "src/main.vel", extensions: [] }), "utf8");
+  await writeFile(join(directory, "src", "main.vel"), `
+import {catalogName} from "catalog-package"
+import json rawCatalog from "catalog-package/catalog"
+
+type Catalog:
+    readonly name: string
+
+print(catalogName + ":" + Catalog.parse(rawCatalog).name)
+`.trimStart(), "utf8");
+  await writeFile(join(directory, "src", "catalog.test.vel"), `
+import {expect} from "velar/test"
+import {catalogName} from "catalog-package"
+
+test "the declared package resource loads":
+    expect(catalogName).toBe("blocks")
+`.trimStart(), "utf8");
+  const packageManifest = {
+    name: "catalog-package",
+    version: "1.0.0",
+    type: "module",
+    exports: {
+      ".": "./dist/index.js",
+      "./catalog": "./generated/catalog.json",
+    },
+    velar: {
+      entry: "src/index.vel",
+      resources: {
+        "./catalog": { path: "generated/catalog.json", type: "json" },
+      },
+    },
+  };
+  await writeFile(join(packageRoot, "package.json"), JSON.stringify(packageManifest), "utf8");
+  await writeFile(join(packageRoot, "generated", "catalog.json"), JSON.stringify({ name: "blocks" }), "utf8");
+  await writeFile(join(packageRoot, "src", "index.vel"), `
+import json rawCatalog from "../generated/catalog.json"
+
+type Catalog:
+    readonly name: string
+
+const catalog = Catalog.parse(rawCatalog)
+export const catalogName = catalog.name
+`.trimStart(), "utf8");
+
+  const runExecution = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "run"], { cwd: directory, encoding: "utf8" });
+  assert.equal(runExecution.status, 0, String(runExecution.stderr));
+  assert.equal(runExecution.stdout, "blocks:blocks\n");
+
+  const testExecution = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "test"], { cwd: directory, encoding: "utf8" });
+  assert.equal(testExecution.status, 0, String(testExecution.stderr));
+  assert.match(testExecution.stdout, /catalog\.test\.vel" :: "the declared package resource loads"/u);
+
+  const output = join(directory, "dist");
+  const buildExecution = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "build"], { cwd: directory, encoding: "utf8" });
+  assert.equal(buildExecution.status, 0, String(buildExecution.stderr));
+  assert.equal(await readFile(join(output, "node_modules", "catalog-package", "generated", "catalog.json"), "utf8"), JSON.stringify({ name: "blocks" }));
+  const generatedManifest = JSON.parse(await readFile(join(output, "node_modules", "catalog-package", "package.json"), "utf8")) as { exports: Record<string, string> };
+  assert.equal(generatedManifest.exports["./catalog"], "./generated/catalog.json.js");
+  const runtime = spawnSync(process.execPath, [join(output, "main.js")], { cwd: directory, encoding: "utf8" });
+  assert.equal(runtime.status, 0, String(runtime.stderr));
+  assert.equal(runtime.stdout, "blocks:blocks\n");
+  assert.equal(
+    await readFile(join(output, "__velar_packages__", "catalog-package", "generated", "catalog.json"), "utf8"),
+    JSON.stringify({ name: "blocks" }),
+  );
+
+  await writeFile(join(packageRoot, "generated", "catalog.json"), "{broken", "utf8");
+  const invalidJson = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "check"], { cwd: directory, encoding: "utf8" });
+  assert.equal(invalidJson.status, 1);
+  assert.match(invalidJson.stderr, /Cannot load json resource 'catalog-package\/catalog'.*JSON is invalid/u);
+
+  await writeFile(join(packageRoot, "generated", "catalog.json"), new Uint8Array([0x7b, 0x22, 0x78, 0x22, 0x3a, 0x22, 0xff, 0x22, 0x7d]));
+  const invalidUtf8 = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "check"], { cwd: directory, encoding: "utf8" });
+  assert.equal(invalidUtf8.status, 1);
+  assert.match(invalidUtf8.stderr, /Cannot load json resource 'catalog-package\/catalog'.*not valid UTF-8/u);
+
+  await writeFile(join(packageRoot, "generated", "catalog.json"), JSON.stringify({ name: "blocks" }), "utf8");
+  packageManifest.exports["./catalog"] = "./generated/other.json";
+  await writeFile(join(packageRoot, "package.json"), JSON.stringify(packageManifest), "utf8");
+  const mismatchedExport = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "check"], { cwd: directory, encoding: "utf8" });
+  assert.equal(mismatchedExport.status, 1);
+  assert.match(mismatchedExport.stderr, /resource '\.\/catalog' must point to '\.\/generated\/catalog\.json' in every package\.json export condition/u);
+
+  packageManifest.exports["./catalog"] = "./generated/catalog.json";
+  await writeFile(join(packageRoot, "package.json"), JSON.stringify(packageManifest), "utf8");
+  const outside = join(directory, "outside.json");
+  await writeFile(outside, JSON.stringify({ name: "outside" }), "utf8");
+  await unlink(join(packageRoot, "generated", "catalog.json"));
+  await symlink(outside, join(packageRoot, "generated", "catalog.json"));
+  const linkedResource = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "check"], { cwd: directory, encoding: "utf8" });
+  assert.equal(linkedResource.status, 1);
+  assert.match(linkedResource.stderr, /cannot escape .* through a symbolic link/u);
 });
 
 test("JSX fragments, declared children, form bindings, and event modifiers compose", () => {
@@ -27429,7 +27620,7 @@ test("CLI emits complete Web application assets", async () => {
     apiVersion: "0.10",
     artifactKind: "velar-web-build",
   });
-  assert.deepEqual(manifest.compiler, { name: "velar", version: "0.10.4" });
+  assert.deepEqual(manifest.compiler, { name: "velar", version: "0.11.0" });
   assert.match(manifest.buildId, /^[a-f0-9]{64}$/u);
   assert.equal(manifest.sourceMaps, true);
   assert.equal(manifest.entry, `assets/${javascript}`);

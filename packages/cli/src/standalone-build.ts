@@ -2,6 +2,7 @@ import { isBuiltin } from "node:module";
 import { dirname, resolve } from "node:path";
 import type { CompileResult } from "@velarscript/compiler";
 import { build, type Plugin } from "esbuild";
+import type { ProjectResource } from "./project.ts";
 
 export interface StandaloneJavaScriptOutput {
   readonly code: string;
@@ -10,7 +11,8 @@ export interface StandaloneJavaScriptOutput {
 
 /** True when Node would otherwise have to search outside the emitted tree. */
 export function needsStandaloneJavaScriptBundle(result: CompileResult): boolean {
-  return result.dependencies.some((dependency) => dependency.javascript
+  return result.dependencies.some((dependency) => dependency.resource !== undefined
+    || dependency.javascript
     && !dependency.source.startsWith(".")
     && !dependency.source.startsWith("/")
     && !dependency.source.startsWith("data:")
@@ -27,6 +29,7 @@ export function needsStandaloneJavaScriptBundle(result: CompileResult): boolean 
 export async function bundleStandaloneJavaScript(
   outputPath: string,
   result: CompileResult,
+  resources: readonly ProjectResource[] = [],
 ): Promise<StandaloneJavaScriptOutput> {
   const embeddedByPath = new Map(result.embeddedModules.map((module) => [
     resolve(dirname(result.source.path), module.specifier),
@@ -53,6 +56,20 @@ export async function bundleStandaloneJavaScript(
       });
     },
   };
+  const resourcesByPath = new Map(resources.map((resource) => [resolve(resource.inputPath), resource]));
+  const resourcePlugin: Plugin = {
+    name: "velar-standalone-resources",
+    setup(context) {
+      context.onResolve({ filter: /\.json\.js$/ }, (arguments_) => {
+        const path = resolve(arguments_.resolveDir, arguments_.path.slice(0, -3));
+        return resourcesByPath.has(path) ? { path, namespace: "velar-resource" } : null;
+      });
+      context.onLoad({ filter: /.*/, namespace: "velar-resource" }, (arguments_) => {
+        const resource = resourcesByPath.get(resolve(arguments_.path));
+        return resource ? { contents: resource.content, loader: "json" } : null;
+      });
+    },
+  };
   const sourceMap = result.sourceMap
     ? `\n//# sourceMappingURL=data:application/json;base64,${Buffer.from(result.sourceMap).toString("base64")}\n`
     : "";
@@ -65,7 +82,7 @@ export async function bundleStandaloneJavaScript(
     outfile: outputPath,
     packages: "bundle",
     platform: "node",
-    plugins: [embeddedPlugin],
+    plugins: [embeddedPlugin, resourcePlugin],
     sourcemap: "external",
     sourcesContent: true,
     stdin: {

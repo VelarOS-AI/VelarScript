@@ -43,7 +43,7 @@ function messages(source: string): readonly string[] {
 
 test("[D62-157] the roster is well formed and disjoint from the hard keywords", () => {
   assert.deepEqual([...CORE_CONTEXTUAL_KEYWORD_WORDS], [
-    "as", "case", "constructor", "from", "get", "match", "readonly", "test", "type", "using",
+    "as", "case", "constructor", "from", "get", "json", "match", "readonly", "test", "type", "using",
   ]);
   // Sorted and unique, so a later addition has one obvious place to go.
   assert.deepEqual([...CORE_CONTEXTUAL_KEYWORD_WORDS], [...new Set(CORE_CONTEXTUAL_KEYWORD_WORDS)].sort());
@@ -175,6 +175,7 @@ test("[D62-157] every roster word is still claimed as syntax in its own shape", 
     ["constructor", "class Box:\n    const name: string\n\n    constructor(name: string):\n        self.name = name\n\nprint(Box(\"a\").name)\n"],
     ["from", "import {compile} from \"./m.vel\"\n\nprint(compile)\n"],
     ["get", "class Box:\n    get empty() -> bool:\n        return true\n\nprint(Box().empty)\n"],
+    ["json", "import json data from \"./catalog.json\"\n\nprint(data)\n"],
     ["match", matchStatement],
     ["readonly", "type Holder:\n    readonly tags: List<string>\n\nconst holder: Holder = {tags: [\"a\"]}\nprint(holder.tags)\n"],
     ["test", "test \"a name\":\n    print(1)\n"],
@@ -240,6 +241,7 @@ test("[D62-157] the formatter's statement-head set is the roster's, not its own"
     "using file = open(path)\n",
     "test \"a name\":\n    print(1)\n",
     "import {compile as build} from \"./m.vel\"\n",
+    "import json catalog from \"./catalog.json\"\n",
   ];
   for (const shape of shapes) {
     assert.equal(formatSource(shape), shape, shape);

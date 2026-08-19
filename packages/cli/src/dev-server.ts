@@ -68,7 +68,7 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
         if (!fileName) return;
         const name = fileName;
         const declarationChanged = /\.d\.[cm]?ts$/u.test(name);
-        if (!/\.(?:vel|[cm]?js)$/u.test(name) && !declarationChanged && name !== "package.json") return;
+        if (!/\.(?:vel|[cm]?js|json)$/u.test(name) && !declarationChanged && name !== "package.json") return;
         const path = resolve(root, name);
         dirtyPaths.add(path);
         if (npmPackageRoots.has(root)) staleNpmRoots.add(root);
@@ -207,9 +207,9 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
 
   syncPackageWatchers(snapshot.project, snapshot.npmPackages);
   const watcher = watchDirectoryTree(config.root, (_event, fileName) => {
-    if (!fileName?.endsWith(".vel") && !fileName?.startsWith(relativePublic(config))) return;
+    if (!fileName?.endsWith(".vel") && !fileName?.endsWith(".json") && !fileName?.startsWith(relativePublic(config))) return;
     dirtyRevision += 1;
-    if (fileName.endsWith(".vel")) {
+    if (fileName.endsWith(".vel") || fileName.endsWith(".json")) {
       dirtyPaths.add(resolve(config.root, fileName));
     }
     scheduleRebuild();

@@ -1,6 +1,6 @@
 import { createRequire, findPackageJSON, isBuiltin } from "node:module";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
-import { readdir } from "node:fs/promises";
+import { lstat, readFile, readdir } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import {
   analysisTypeIdentity,
@@ -32,6 +32,9 @@ import { readBoundedText } from "./bounded-text.ts";
 import { hostErrorMessage, isHostErrorCode } from "./host-error.ts";
 import { canonicalizePotentialPath } from "./canonical-path.ts";
 
+const MAX_PROJECT_RESOURCES = 1024;
+const MAX_JSON_RESOURCE_BYTES = 4 * 1024 * 1024;
+
 export interface ProjectModule {
   readonly inputPath: string;
   readonly relativePath: string;
@@ -59,6 +62,26 @@ export interface VelarSourcePackage {
   readonly name: string;
   readonly root: string;
   readonly entryPath: string;
+  readonly resources: readonly VelarPackageResource[];
+}
+
+export interface VelarPackageResource {
+  readonly subpath: `./${string}` | null;
+  readonly relativePath: string;
+  readonly inputPath: string;
+  readonly kind: "json";
+}
+
+export interface ProjectResource {
+  readonly importerPath: string;
+  readonly source: string;
+  readonly inputPath: string;
+  readonly content: string;
+  readonly kind: "json";
+  readonly packageName: string | null;
+  readonly packageRoot: string | null;
+  readonly packageRelativePath: string | null;
+  readonly packageSubpath: `./${string}` | null;
 }
 
 export interface ProjectResult {
@@ -75,6 +98,8 @@ export interface ProjectResult {
   readonly notices: readonly ProjectNotice[];
   readonly velarPackages: readonly VelarSourcePackage[];
   readonly velarImports: ReadonlyMap<string, string>;
+  readonly resources: readonly ProjectResource[];
+  readonly resourceImports: ReadonlyMap<string, ProjectResource>;
   readonly externalTypeDependencies: ReadonlyMap<string, ReadonlySet<string>>;
   readonly stats: ProjectCompilationStats;
 }
@@ -186,6 +211,8 @@ export async function compileProjectEntries(
   const interfaceCache = new Map<string, ModuleInspection["moduleInterface"]>();
   const velarPackages = new Map<string, VelarSourcePackage>();
   const velarImports = new Map<string, string>();
+  const resources = new Map<string, ProjectResource>();
+  const resourceImports = new Map<string, ProjectResource>();
   const unsafeCssOwners = new Map<string, string>();
   const resolutionDiagnostics = new Map<string, ModuleResolutionDiagnostic[]>();
   const recordResolution = (importerPath: string, source: string, code: string, message: string): void => {
@@ -302,6 +329,48 @@ export async function compileProjectEntries(
     const inspection = inspectModule(text, { path: inputPath, extensions: compilerExtensions });
     const resourceContents = new Map<string, string>();
     for (const resource of inspection.resources) {
+      if (resource.kind === "json") {
+        try {
+          const resolved = await resolveJsonResource(resource.source, inputPath, pendingModule.package, sourceRoot);
+          if (resolved.package_) {
+            const existing = velarPackages.get(resolved.package_.name);
+            if (existing && existing.root !== resolved.package_.root) {
+              throw new Error(`VelarScript package '${resolved.package_.name}' resolves to multiple installed versions; use one package instance per application build`);
+            }
+            velarPackages.set(resolved.package_.name, resolved.package_);
+          }
+          const content = overrides.get(resolved.resource.inputPath)
+            ?? await readJsonResource(resolved.resource.inputPath, resource.source);
+          if (Buffer.byteLength(content, "utf8") > MAX_JSON_RESOURCE_BYTES) {
+            throw new RangeError(`json resource '${resource.source}' exceeds ${MAX_JSON_RESOURCE_BYTES} bytes`);
+          }
+          try {
+            JSON.parse(content);
+          } catch (error) {
+            throw new Error(`JSON is invalid: ${hostErrorMessage(error)}`);
+          }
+          const projectResource: ProjectResource = {
+            importerPath: inputPath,
+            source: resource.source,
+            inputPath: resolved.resource.inputPath,
+            content,
+            kind: "json",
+            packageName: resolved.package_?.name ?? pendingModule.package?.name ?? null,
+            packageRoot: resolved.package_?.root ?? pendingModule.package?.root ?? null,
+            packageRelativePath: resolved.resource.relativePath,
+            packageSubpath: resolved.resource.subpath,
+          };
+          const importKey = projectImportKey(inputPath, resource.source);
+          resourceContents.set(resource.source, content);
+          resourceImports.set(importKey, projectResource);
+          const importMode = projectResource.source.startsWith(".") ? "relative" : "package";
+          resources.set(`${projectResource.kind}\0${projectResource.inputPath}\0${projectResource.packageSubpath ?? ""}\0${importMode}`, projectResource);
+          if (resources.size > MAX_PROJECT_RESOURCES) throw new RangeError(`A project cannot import more than ${MAX_PROJECT_RESOURCES} resources`);
+        } catch (error) {
+          failures.push({ path: inputPath, message: `Cannot load json resource '${resource.source}': ${hostErrorMessage(error)}` });
+        }
+        continue;
+      }
       if (!resource.source.startsWith(".")) {
         failures.push({ path: inputPath, message: `Compiler resource '${resource.source}' must use a relative path` });
         continue;
@@ -346,6 +415,7 @@ export async function compileProjectEntries(
     loaded.set(inputPath, { inputPath, relativePath, text, inspection, package: pendingModule.package, resourceContents });
 
     for (const dependency of inspection.dependencies) {
+      if (dependency.resource) continue;
       if (dependency.javascript) {
         if (dependency.source.startsWith(".")) {
           failures.push({
@@ -479,7 +549,7 @@ export async function compileProjectEntries(
   }
 
   const modules: ProjectModule[] = [];
-  const affected = previous ? affectedModules(loaded, velarImports, previous, changedPaths) : new Set(loaded.keys());
+  const affected = previous ? affectedModules(loaded, velarImports, resourceImports, previous, changedPaths) : new Set(loaded.keys());
   const previousModules = new Map(previous?.modules.map((module) => [module.inputPath, module]));
   for (const [dependency, importers] of previous?.externalTypeDependencies ?? []) {
     for (const importer of importers) {
@@ -593,6 +663,8 @@ export async function compileProjectEntries(
     notices: uniqueNotices(notices),
     velarPackages: [...velarPackages.values()],
     velarImports,
+    resources: [...resources.values()],
+    resourceImports,
     externalTypeDependencies,
     stats: {
       moduleCount: modules.length,
@@ -774,6 +846,7 @@ function importedReactiveAssignmentDiagnostics(
 function affectedModules(
   loaded: ReadonlyMap<string, LoadedModule>,
   velarImports: ReadonlyMap<string, string>,
+  resourceImports: ReadonlyMap<string, ProjectResource>,
   previous: ProjectResult,
   changedPaths: ReadonlySet<string>,
 ): Set<string> {
@@ -797,17 +870,22 @@ function affectedModules(
   };
   for (const module of loaded.values()) dependencies(module.inputPath, module.inspection.dependencies, velarImports);
   for (const module of previous.modules) dependencies(module.inputPath, module.result.dependencies, previous.velarImports);
-  const resources = (path: string, values: readonly { readonly source: string }[]): void => {
+  const resources = (
+    path: string,
+    values: readonly { readonly source: string }[],
+    imports: ReadonlyMap<string, ProjectResource>,
+  ): void => {
     for (const resource of values) {
-      if (!resource.source.startsWith(".")) continue;
-      const target = resolve(dirname(path), resource.source);
+      const target = imports.get(projectImportKey(path, resource.source))?.inputPath
+        ?? (resource.source.startsWith(".") ? resolve(dirname(path), resource.source) : null);
+      if (!target) continue;
       const dependents = reverse.get(target) ?? new Set<string>();
       dependents.add(path);
       reverse.set(target, dependents);
     }
   };
-  for (const module of loaded.values()) resources(module.inputPath, module.inspection.resources);
-  for (const module of previous.modules) resources(module.inputPath, module.result.resources);
+  for (const module of loaded.values()) resources(module.inputPath, module.inspection.resources, resourceImports);
+  for (const module of previous.modules) resources(module.inputPath, module.result.resources, previous.resourceImports);
   for (const [dependency, importers] of previous.externalTypeDependencies) {
     const dependents = reverse.get(dependency) ?? new Set<string>();
     for (const importer of importers) dependents.add(importer);
@@ -1555,18 +1633,7 @@ async function resolveVelarSourcePackage(source: string, importerPath: string): 
   while (true) {
     const root = join(directory, "node_modules", ...name.split("/"));
     try {
-      const manifest = JSON.parse(await readBoundedText(join(root, "package.json"), 1024 * 1024, `Package manifest for '${name}'`)) as {
-        name?: unknown;
-        velar?: { entry?: unknown };
-      };
-      if (manifest.name !== undefined && manifest.name !== name) throw new Error(`package name is '${String(manifest.name)}', expected '${name}'`);
-      const entry = manifest.velar?.entry;
-      if (typeof entry !== "string" || entry.length === 0) throw new JavaScriptOnlyPackageError("package.json must declare 'velar.entry'");
-      if (isAbsolute(entry)) throw new Error("'velar.entry' must be relative to the package root");
-      const entryPath = resolve(root, entry);
-      if (escapesRoot(relative(root, entryPath))) throw new Error("'velar.entry' cannot escape the package root");
-      if (extname(entryPath) !== ".vel") throw new Error("'velar.entry' must point to a .vel source file");
-      return { name, root, entryPath };
+      return await velarPackageAtRoot(name, root);
     } catch (error) {
       if (error instanceof SyntaxError) throw error;
       if (!isHostErrorCode(error, "ENOENT")) throw error;
@@ -1574,6 +1641,177 @@ async function resolveVelarSourcePackage(source: string, importerPath: string): 
     const parent = dirname(directory);
     if (parent === directory) throw new Error(`package '${name}' is not installed`);
     directory = parent;
+  }
+}
+
+interface VelarPackageManifestShape {
+  readonly name?: unknown;
+  readonly exports?: unknown;
+  readonly velar?: { readonly entry?: unknown; readonly resources?: unknown };
+}
+
+async function velarPackageAtRoot(name: string, root: string): Promise<VelarSourcePackage> {
+  const manifest = JSON.parse(await readBoundedText(
+    join(root, "package.json"),
+    1024 * 1024,
+    `Package manifest for '${name}'`,
+  )) as VelarPackageManifestShape;
+  if (manifest.name !== undefined && manifest.name !== name) {
+    throw new Error(`package name is '${String(manifest.name)}', expected '${name}'`);
+  }
+  const entry = manifest.velar?.entry;
+  if (typeof entry !== "string" || entry.length === 0) {
+    throw new JavaScriptOnlyPackageError("package.json must declare 'velar.entry'");
+  }
+  if (isAbsolute(entry)) throw new Error("'velar.entry' must be relative to the package root");
+  const entryPath = resolve(root, entry);
+  if (escapesRoot(relative(root, entryPath))) throw new Error("'velar.entry' cannot escape the package root");
+  if (extname(entryPath) !== ".vel") throw new Error("'velar.entry' must point to a .vel source file");
+  return {
+    name,
+    root,
+    entryPath,
+    resources: packageResources(name, root, manifest.velar!.resources, manifest.exports),
+  };
+}
+
+function packageResources(name: string, root: string, value: unknown, exports: unknown): readonly VelarPackageResource[] {
+  if (value === undefined) return [];
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("'velar.resources' must be an object mapping exact package subpaths to resource declarations");
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length > 128) throw new RangeError("'velar.resources' cannot declare more than 128 resources");
+  return entries.map(([subpath, declaration]) => {
+    if (!/^\.\/[A-Za-z0-9][A-Za-z0-9._/-]*$/u.test(subpath)
+      || subpath.slice(2).split("/").some((part) => part === "" || part === "." || part === "..")) {
+      throw new Error(`'velar.resources' key '${subpath}' must be an exact './name' package subpath without wildcards or traversal`);
+    }
+    if (declaration === null || typeof declaration !== "object" || Array.isArray(declaration)) {
+      throw new Error(`'velar.resources.${subpath}' must contain 'path' and 'type'`);
+    }
+    const fields = declaration as Record<string, unknown>;
+    const unknown = Object.keys(fields).filter((field) => field !== "path" && field !== "type");
+    if (unknown.length > 0) throw new Error(`'velar.resources.${subpath}' has unknown field '${unknown[0]}'`);
+    if (fields.type !== "json") throw new Error(`'velar.resources.${subpath}.type' must be 'json'`);
+    if (typeof fields.path !== "string" || fields.path === "" || isAbsolute(fields.path)
+      || fields.path.includes("\\") || fields.path.split("/").some((part) => part === "" || part === "." || part === "..")) {
+      throw new Error(`'velar.resources.${subpath}.path' must be a normalized package-relative file path`);
+    }
+    if (extname(fields.path).toLowerCase() !== ".json") {
+      throw new Error(`'velar.resources.${subpath}.path' must point to a .json file`);
+    }
+    const target = `./${fields.path}`;
+    const declaredTargets = packageExportTargets(exports, subpath);
+    if (declaredTargets.length === 0) {
+      throw new Error(`Package '${name}' must expose resource '${subpath}' through package.json 'exports'`);
+    }
+    if (declaredTargets.some((candidate) => candidate !== target)) {
+      throw new Error(`Package '${name}' resource '${subpath}' must point to '${target}' in every package.json export condition`);
+    }
+    return {
+      subpath: subpath as `./${string}`,
+      relativePath: fields.path,
+      inputPath: resolve(root, ...fields.path.split("/")),
+      kind: "json" as const,
+    };
+  });
+}
+
+function packageExportTargets(exports: unknown, subpath: string): string[] {
+  if (exports === null || typeof exports !== "object" || Array.isArray(exports)) return [];
+  const target = (exports as Record<string, unknown>)[subpath];
+  const output: string[] = [];
+  const visit = (value: unknown): void => {
+    if (typeof value === "string") output.push(value);
+    else if (Array.isArray(value)) value.forEach(visit);
+    else if (value !== null && typeof value === "object") Object.values(value).forEach(visit);
+  };
+  visit(target);
+  return output;
+}
+
+async function resolveJsonResource(
+  source: string,
+  importerPath: string,
+  ownerPackage: VelarSourcePackage | null,
+  sourceRoot: string,
+): Promise<{ readonly resource: VelarPackageResource; readonly package_: VelarSourcePackage | null }> {
+  if (source.startsWith(".")) {
+    const inputPath = resolve(dirname(importerPath), source);
+    const boundary = ownerPackage?.root ?? sourceRoot;
+    await authorizeJsonResource(inputPath, boundary, source);
+    const relativePath = normalizeModulePath(relative(boundary, inputPath));
+    const declared = ownerPackage?.resources.find((resource) => resource.relativePath === relativePath) ?? null;
+    if (ownerPackage && !declared) {
+      throw new Error(`VelarScript package '${ownerPackage.name}' must declare '${relativePath}' in package.json#velar.resources`);
+    }
+    return {
+      resource: declared ?? { subpath: null, relativePath, inputPath, kind: "json" },
+      package_: null,
+    };
+  }
+  if (isAbsolute(source)) throw new Error("JSON resource paths must be relative or an exact package resource subpath");
+  const name = packageNameOf(source);
+  if (source === name) throw new Error("A JSON resource import must name a declared package subpath");
+  const subpath = `.${source.slice(name.length)}` as `./${string}`;
+  const package_ = await resolveResourcePackage(name, source, importerPath);
+  const resource = package_.resources.find((candidate) => candidate.subpath === subpath);
+  if (!resource) throw new Error(`Package '${name}' does not declare JSON resource '${subpath}' in package.json#velar.resources`);
+  await authorizeJsonResource(resource.inputPath, package_.root, source);
+  return { resource, package_ };
+}
+
+async function resolveResourcePackage(name: string, source: string, importerPath: string): Promise<VelarSourcePackage> {
+  let directory = dirname(importerPath);
+  while (true) {
+    try {
+      const manifest = JSON.parse(await readBoundedText(join(directory, "package.json"), 1024 * 1024, `Package manifest for '${name}'`)) as { readonly name?: unknown };
+      if (manifest.name === name) return await velarPackageAtRoot(name, directory);
+    } catch (error) {
+      if (error instanceof SyntaxError) throw error;
+      if (!isHostErrorCode(error, "ENOENT")) throw error;
+    }
+    const parent = dirname(directory);
+    if (parent === directory) break;
+    directory = parent;
+  }
+  directory = dirname(importerPath);
+  while (true) {
+    const root = join(directory, "node_modules", ...name.split("/"));
+    try {
+      return await velarPackageAtRoot(name, root);
+    } catch (error) {
+      if (error instanceof SyntaxError) throw error;
+      if (!isHostErrorCode(error, "ENOENT")) throw error;
+    }
+    const parent = dirname(directory);
+    if (parent === directory) throw new Error(`package '${name}' is not installed for resource import '${source}'`);
+    directory = parent;
+  }
+}
+
+async function authorizeJsonResource(inputPath: string, boundary: string, source: string): Promise<void> {
+  if (extname(inputPath).toLowerCase() !== ".json") throw new Error(`JSON resource '${source}' must point to a .json file`);
+  if (escapesRoot(relative(boundary, inputPath))) throw new Error(`JSON resource '${source}' cannot escape '${boundary}'`);
+  const [canonicalRoot, canonicalInput, metadata] = await Promise.all([
+    canonicalizePotentialPath(boundary),
+    canonicalizePotentialPath(inputPath),
+    lstat(inputPath),
+  ]);
+  if (escapesRoot(relative(canonicalRoot, canonicalInput))) throw new Error(`JSON resource '${source}' cannot escape '${boundary}' through a symbolic link`);
+  if (!metadata.isFile() || metadata.isSymbolicLink()) throw new Error(`JSON resource '${source}' must be an ordinary file, not a symbolic link`);
+}
+
+async function readJsonResource(inputPath: string, source: string): Promise<string> {
+  const bytes = await readFile(inputPath);
+  if (bytes.byteLength > MAX_JSON_RESOURCE_BYTES) {
+    throw new RangeError(`json resource '${source}' exceeds ${MAX_JSON_RESOURCE_BYTES} bytes`);
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new Error("JSON resource is not valid UTF-8");
   }
 }
 

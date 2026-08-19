@@ -63,6 +63,11 @@ velar package [project-directory]
 ```
 
 `verify` checks that a build is actually deployable rather than merely present.
+All commands read the same checked JSON-resource graph: `dev` watches and
+serves it, `test` reconstructs used package resource exports in its sandbox,
+browser builds bundle it, and framework-free builds copy its exact bytes and
+portable ESM wrapper. Package resources must follow the manifest contract in
+[package distribution](package-distribution.md#package-resources).
 `verify-deployment` runs the same checks against a live origin. `package`
 builds the target-owned native application package for a project whose
 framework host implements that operation. Reusable library and component

@@ -199,9 +199,10 @@ attempts += 1
 - Binding names beginning with `__velar`, case-insensitively, are
   reserved for hygienic generated helpers. Object fields and JavaScript
   property names are unaffected because they cannot capture a lexical helper.
-- Most declaration words are **contextual**, not reserved. Core's ten are `as`,
-  `case`, `constructor`, `from`, `get`, `match`, `readonly`, `test`, `type`,
-  and `using`; the compiler owns that roster as `CORE_CONTEXTUAL_KEYWORDS`, and
+- Most declaration words are **contextual**, not reserved. Core's eleven are
+  `as`, `case`, `constructor`, `from`, `get`, `json`, `match`, `readonly`,
+  `test`, `type`, and `using`; the compiler owns that roster as
+  `CORE_CONTEXTUAL_KEYWORDS`, and
   this sentence quotes it rather than keeping a second copy of it. Every word
   the Web extension adds — `component`, `state`, `computed`, `resource`,
   `action`, `watch`, `look`, `keyframes`, `css`, `expose`, `exposes` — belongs
@@ -2500,6 +2501,31 @@ import {User as Account, loadUser} from "./users.vel"
 const user: Account = loadUser()
 ```
 
+JSON files enter that graph through an explicit resource import:
+
+```velar fragment
+import json rawCatalog from "catalog-package/block-catalog"
+
+type Catalog:
+    readonly version: number
+    readonly blocks: List<string>
+
+const catalog = Catalog.parse(rawCatalog)
+```
+
+The imported value is `unknown`, never an inferred record and never `any`.
+Application code must validate it with a Runtime Type before reading fields.
+A project may import a relative `.json` file contained by its source root. A
+published VelarScript package must declare every importable resource as an
+exact `velar.resources` subpath and expose the same file through npm
+`exports`; wildcards, traversal, symbolic-link escapes, non-JSON resources,
+invalid UTF-8 or JSON, and files larger than 4 MiB are refused. The checked resource
+graph is shared by `check`, `run`, `test`, `dev`, and `build`: development
+watches it, browser builds bundle it, and unbundled/test output copies the
+exact checked bytes plus the generated ESM wrapper used by emitted imports.
+The package declaration and output layouts are specified in
+[package distribution](package-distribution.md#package-resources).
+
 There is no separate type import. `import type {User} from "./x.vel"` and
 `export type {User} from "./x.vel"` are recognized — the TypeScript habit is
 frequent enough to be worth teaching — and refused with the reason: VelarScript
@@ -3861,7 +3887,7 @@ becomes VelarScript syntax without an explicit language decision, AST node,
 analysis rule, lowering, and proof test. JavaScript reserved words cannot be
 used as binding names because generated modules must remain valid JavaScript;
 `enum` is reserved for exactly that reason, while `type`, `match`, `case`,
-`from`, and `as` — which JavaScript does not reserve — are contextual keywords
+`from`, `as`, and `json` — which JavaScript does not reserve — are contextual keywords
 and stay available as names (section 3). Spellings such as `delete`, `default`,
 and `arguments` remain valid as ordinary record keys and class member names, so
 external data and Web APIs do not need renamed fields. Execution-capability and

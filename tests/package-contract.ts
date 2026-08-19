@@ -15,7 +15,7 @@ import type { VelarPackageManifest } from "../scripts/velar-packages.mjs";
 //
 // So the contract below asks the manifest, not a list. Every path a manifest
 // promises a consumer — `main`, `types`, `bin`, every string leaf of `exports`,
-// `velar.entry` — must be inside the tarball, and every specifier those
+// `velar.entry`, every declared `velar.resources` path — must be inside the tarball, and every specifier those
 // promises create must resolve after a clean install. A package that publishes
 // a new export subpath is checked for it without anybody editing this file, and
 // a package added to the workspace is checked at all.
@@ -53,7 +53,20 @@ export function declaredEntryPaths(manifest: VelarPackageManifest): string[] {
   if (typeof manifest.bin === "string") add(manifest.bin);
   else for (const value of Object.values(manifest.bin ?? {})) add(value);
   add(manifest.velar?.entry);
+  for (const resource of Object.values(manifest.velar?.resources ?? {})) add(resource.path);
   return paths;
+}
+
+function exportTargetsAt(manifest: VelarPackageManifest, subpath: string): string[] {
+  if (manifest.exports === null || typeof manifest.exports !== "object" || Array.isArray(manifest.exports)) return [];
+  const output: string[] = [];
+  const walk = (value: unknown): void => {
+    if (typeof value === "string") output.push(value);
+    else if (Array.isArray(value)) value.forEach(walk);
+    else if (value !== null && typeof value === "object") Object.values(value).forEach(walk);
+  };
+  walk((manifest.exports as Record<string, unknown>)[subpath]);
+  return output;
 }
 
 /**
@@ -69,14 +82,23 @@ export function declaredImportSpecifiers(manifest: VelarPackageManifest): string
     return manifest.main !== undefined ? [manifest.name] : [];
   }
   const specifiers: string[] = [];
+  const resourceSubpaths = new Set(Object.keys(manifest.velar?.resources ?? {}));
   for (const key of Object.keys(exports)) {
     // A subpath key starts with '.'; anything else is a condition name at the
     // top level, which means the whole object describes the '.' entry.
     if (!key.startsWith(".")) return [manifest.name];
     if (key.includes("*")) continue;
+    if (resourceSubpaths.has(key)) continue;
     specifiers.push(key === "." ? manifest.name : `${manifest.name}/${key.slice(2)}`);
   }
   return specifiers;
+}
+
+/** JSON resource specifiers, imported with a JSON attribute by JS consumer gates. */
+export function declaredJsonResourceImportSpecifiers(manifest: VelarPackageManifest): string[] {
+  return Object.keys(manifest.velar?.resources ?? {}).map((subpath) =>
+    `${manifest.name}/${subpath.slice(2)}`
+  );
 }
 
 /** A `*` target matched against the tarball's file list. */
@@ -106,6 +128,15 @@ export function packageContentFailures(manifest: VelarPackageManifest, packed: P
   for (const path of declared) {
     const present = path.includes("*") ? matchesPattern(path, paths) : has(path);
     if (!present) failures.push(`${manifest.name}: the manifest points at '${path}', which is not in the tarball (${paths.length} file${paths.length === 1 ? "" : "s"} packed)`);
+  }
+  for (const [subpath, resource] of Object.entries(manifest.velar?.resources ?? {})) {
+    const expected = `./${resource.path}`;
+    const targets = exportTargetsAt(manifest, subpath);
+    if (resource.type !== "json") failures.push(`${manifest.name}: resource '${subpath}' has unsupported type '${resource.type}'`);
+    if (targets.length === 0) failures.push(`${manifest.name}: resource '${subpath}' has no matching npm export`);
+    else if (targets.some((target) => target !== expected)) {
+      failures.push(`${manifest.name}: resource '${subpath}' must export '${expected}' in every condition`);
+    }
   }
   for (const path of paths) {
     if (/(?:^|\/)tests?(?:\/|$)/u.test(path)) failures.push(`${manifest.name}: the tarball ships '${path}'; tests are not published`);

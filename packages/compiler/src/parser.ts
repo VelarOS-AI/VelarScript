@@ -692,6 +692,13 @@ export class Parser {
   private parseImport(start: number): ImportDeclaration | null {
     const javascript = this.match("js");
     const unsafe = javascript && this.match("unsafe");
+    const resource = !javascript
+      && this.checkWord(CORE_WORDS.json)
+      && this.peekKind(1) === "identifier"
+      && this.tokens[this.index + 2]?.kind === "identifier"
+      && this.tokens[this.index + 2]?.value === CORE_WORDS.from
+      ? (this.advance(), "json" as const)
+      : undefined;
     if (this.typeImportMarkerAhead()) this.rejectTypeImportMarker(this.advance(), "import");
     const specifiers: ImportSpecifier[] = [];
 
@@ -713,7 +720,10 @@ export class Parser {
     }
 
     let emptyBraces: Span | null = null;
-    if (this.match("star")) {
+    if (resource) {
+      const local = this.expect("identifier", "Expected a binding name after 'import json'");
+      specifiers.push({ imported: "default", local: local.value, namespace: false, span: local.span });
+    } else if (this.match("star")) {
       const star = this.previous();
       this.expectWord(CORE_WORDS.as, "Expected 'as' after namespace import");
       const local = this.expect("identifier", "Expected a namespace name");
@@ -767,7 +777,16 @@ export class Parser {
       return null;
     }
     this.reportInlineDataJavaScriptMigration(start, source, javascript, unsafe, specifiers);
-    return { kind: "ImportDeclaration", source: source.value, sourceSpan: source.span, javascript, unsafe, specifiers, span: span(start, source.span.end) };
+    return {
+      kind: "ImportDeclaration",
+      source: source.value,
+      sourceSpan: source.span,
+      javascript,
+      unsafe,
+      ...(resource ? { resource } : {}),
+      specifiers,
+      span: span(start, source.span.end),
+    };
   }
 
   /** D53 rule 117: only an export-exact data URL has a semantics-preserving block rewrite. */

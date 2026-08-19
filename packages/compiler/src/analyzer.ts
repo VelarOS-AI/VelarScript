@@ -9500,6 +9500,7 @@ export class Analyzer implements TypeEnvironment {
   }
 
   private importType(statement: Extract<Statement, { kind: "ImportDeclaration" }>, local: string, imported: string, namespace: boolean, importSpan: Span): ValueType {
+    if (statement.resource === "json") return unknownType;
     if (!statement.javascript) {
       const type = this.importBindings.get(local) ?? unknownType;
       if (type.kind === "classConstructor" && type.identity) this.classDisplayNames.set(type.identity, local);

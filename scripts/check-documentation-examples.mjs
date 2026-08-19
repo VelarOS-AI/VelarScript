@@ -322,7 +322,8 @@ function mentionsUnknownType(message) {
 }
 
 function inherentProjectFailure(message) {
-  return /^Cannot load .* resource '[^']*': ENOENT\b/u.test(message);
+  return /^Cannot load .* resource '[^']*': ENOENT\b/u.test(message)
+    || /^Cannot load json resource '[^']*': package '[^']*' is not installed\b/u.test(message);
 }
 
 async function markdownFiles(directory) {

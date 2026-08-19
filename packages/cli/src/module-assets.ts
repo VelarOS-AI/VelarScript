@@ -2,9 +2,20 @@ import { lstat } from "node:fs/promises";
 import { extname, posix, relative, resolve } from "node:path";
 import { projectImportKey, type ProjectModule, type ProjectResult } from "./project.ts";
 import { frameworkBase } from "./framework-host.ts";
+import { jsonResourceModule } from "./resource-output.ts";
 
 export function moduleOutput(project: ProjectResult, pathname: string, revision: string | null = null): { readonly body: string; readonly contentType: string } | null {
   const normalized = pathname.replace(/^\//u, "");
+  for (const resource of project.resources ?? []) {
+    if (!resource.source.startsWith(".")) continue;
+    const owner = project.modules.find((module) => module.inputPath === resource.importerPath);
+    if (!owner) continue;
+    const route = posix.normalize(posix.join(
+      posix.dirname(owner.relativePath.replaceAll("\\", "/")),
+      `${resource.source}.js`,
+    ));
+    if (normalized === route) return { body: jsonResourceModule(resource.content), contentType: "text/javascript; charset=utf-8" };
+  }
   for (const owner of project.modules) {
     const ownerDirectory = posix.dirname(owner.relativePath.replaceAll("\\", "/"));
     for (const embedded of owner.result.embeddedModules) {

@@ -1,8 +1,8 @@
 /// Chapter 16 — every contextual keyword standing as an ordinary name.
 ///
 /// Charter section 3: Core's contextual keywords are `as`, `case`,
-/// `constructor`, `from`, `get`, `match`, `readonly`, `test`, `type`, and
-/// `using` — "ordinary names anywhere a name can stand: a binding, a
+/// `constructor`, `from`, `get`, `json`, `match`, `readonly`, `test`, `type`,
+/// and `using` — "ordinary names anywhere a name can stand: a binding, a
 /// parameter, a loop binding, a named argument, a record field, a member name,
 /// and a record shorthand."
 ///
@@ -22,6 +22,7 @@ const using = "ownership"
 const test = "assertion"
 const constructor = "construction"
 const get = "accessor"
+const json = "resource"
 const readonly = "view"
 
 // A binding may reuse a contextual keyword under `let` too.
@@ -34,8 +35,8 @@ let usingCounter = 0
 export def describe(type: string, match: string, from: string, as: string, using: string, test: string) -> string:
     return type + match + from + as + using + test
 
-export def describeRest(constructor: string, get: string, readonly: string) -> string:
-    return constructor + get + readonly
+export def describeRest(constructor: string, get: string, json: string, readonly: string) -> string:
+    return constructor + get + json + readonly
 
 export def withDefaults(type: string = "a", match: string = "b") -> string:
     return type + match
@@ -61,6 +62,8 @@ export def loopBindings() -> string:
         joined += test
     for constructor in rows:
         joined += constructor
+    for json in rows:
+        joined += json
     for get, readonly in pairs:
         joined += f"{get}{readonly}"
     return joined
@@ -71,7 +74,7 @@ export def loopBindings() -> string:
 
 const namedArguments = describe(type="t", match="m", from="f", as="a", using="u", test="x")
 const reorderedNamedArguments = describe(test="x", using="u", as="a", from="f", match="m", type="t")
-const restNamedArguments = describeRest(readonly="r", get="g", constructor="c")
+const restNamedArguments = describeRest(readonly="r", json="j", get="g", constructor="c")
 
 // ---------------------------------------------------------------------------
 // Position 5 — a record field
@@ -87,6 +90,7 @@ type Descriptor:
     case: string
     constructor: string
     get: string
+    json: string
     // `readonly` followed by `:` is a field of that name; the modifier shape is
     // `readonly` followed by a *name*, which is the line below it.
     readonly: string
@@ -102,6 +106,7 @@ const descriptor: Descriptor = {
     case: "c",
     constructor: "n",
     get: "g",
+    json: "j",
     readonly: "r",
     frozen: "z",
 }
@@ -119,6 +124,7 @@ const readTest = descriptor.test
 const readCase = descriptor.case
 const readConstructor = descriptor.constructor
 const readGet = descriptor.get
+const readJson = descriptor.json
 const readReadonly = descriptor.readonly
 
 class Rule:
@@ -126,6 +132,7 @@ class Rule:
     let case: string = "also a class field"
     let readonly: string = "a field named readonly"
     let get: string = "a field named get"
+    let json: string = "a field named json"
 
     def match(value: string) -> string:
         return self.type + value
@@ -148,18 +155,19 @@ enum Kind:
     test
     case
     get
+    json
     readonly
 
 const enumMembers = [
     Kind.type, Kind.match, Kind.from, Kind.as, Kind.using, Kind.test, Kind.case,
-    Kind.get, Kind.readonly,
+    Kind.get, Kind.json, Kind.readonly,
 ]
 
 // ---------------------------------------------------------------------------
 // Position 7 — a record shorthand
 // ---------------------------------------------------------------------------
 
-const shorthand = {type, match, from, as, using, test, constructor, get, readonly}
+const shorthand = {type, match, from, as, using, test, constructor, get, json, readonly}
 
 // The same shorthand inside an arrow body. `{` after `=>` opens a record, so a
 // word with a statement shape is read as the binding it names here too.
@@ -170,7 +178,7 @@ const readShorthandInArrow = shorthandInArrow().match + shorthandPairInArrow().t
 // A binding pattern reads the same names back out.
 const {type: readBackType, match: readBackMatch} = descriptor
 const {from: readBackFrom, as: readBackAs, using: readBackUsing, test: readBackTest, case: readBackCase} = descriptor
-const {constructor: readBackConstructor, get: readBackGet, readonly: readBackReadonly} = descriptor
+const {constructor: readBackConstructor, get: readBackGet, json: readBackJson, readonly: readBackReadonly} = descriptor
 
 // ---------------------------------------------------------------------------
 // Where the two readings could compete, the name wins
@@ -235,13 +243,13 @@ const sessionLabel = session.label
 // would not parse — but it is a field, a member, and a `match` branch above.
 
 export const chapterSixteen = {
-    type, match, from, as, using, test, constructor, get, readonly, descriptor,
+    type, match, from, as, using, test, constructor, get, json, readonly, descriptor,
     readType, readMatch, readFrom, readAs, readUsing, readTest, readCase,
-    readConstructor, readGet, readReadonly, enumMembers, shorthand,
+    readConstructor, readGet, readJson, readReadonly, enumMembers, shorthand,
     shorthandInArrow, shorthandPairInArrow, readShorthandInArrow,
     namedArguments, reorderedNamedArguments, restNamedArguments,
     arrowParameters, called, sessionLabel,
     readBackType, readBackMatch, readBackFrom, readBackAs, readBackUsing,
-    readBackTest, readBackCase, readBackConstructor, readBackGet,
+    readBackTest, readBackCase, readBackConstructor, readBackGet, readBackJson,
     readBackReadonly,
 }

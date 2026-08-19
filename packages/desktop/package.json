@@ -1,6 +1,6 @@
 {
   "name": "@velarscript/desktop",
-  "version": "0.10.4",
+  "version": "0.11.0",
   "description": "The optional single-project VelarScript Desktop application framework backed by Web, Node capabilities, and system WebViews.",
   "license": "Apache-2.0",
   "type": "module",
@@ -38,9 +38,9 @@
     }
   },
   "dependencies": {
-    "@velarscript/compiler": "0.10.4",
-    "@velarscript/node": "0.10.4",
-    "@velarscript/web": "0.10.4"
+    "@velarscript/compiler": "0.11.0",
+    "@velarscript/node": "0.11.0",
+    "@velarscript/web": "0.11.0"
   },
   "exports": {
     ".": {

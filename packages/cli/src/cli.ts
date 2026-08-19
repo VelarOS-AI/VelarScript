@@ -41,6 +41,7 @@ import {
   embeddedModuleOutputPath,
   VELAR_EMBEDDED_MODULE_MARKER,
 } from "./embedded-modules.ts";
+import { writeBuildResourcePackageManifests, writeProjectResources } from "./resource-output.ts";
 
 
 interface CommandArguments {
@@ -544,7 +545,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
       await mkdir(dirname(outputPath), { recursive: true });
       const result = project.modules[0]!.result;
       if (needsStandaloneJavaScriptBundle(result)) {
-        const bundled = await bundleStandaloneJavaScript(outputPath, result);
+        const bundled = await bundleStandaloneJavaScript(outputPath, result, project.resources);
         await writeCompiled(outputPath, result, true, bundled.code, bundled.sourceMap, false);
       } else {
         await writeCompiled(outputPath, result, true);
@@ -580,6 +581,8 @@ async function main(arguments_: readonly string[]): Promise<number> {
       await mkdir(dirname(outputPath), { recursive: true });
       await writeCompiled(outputPath, module.result, false, rewriteVelarPackageImports(project, module));
     }
+    await writeProjectResources(project, staging, "build");
+    await writeBuildResourcePackageManifests(project, staging);
     await writeNodeStandardModules(staging, project);
     await replaceOutputDirectory(staging, outputDirectory);
   } catch (error) {

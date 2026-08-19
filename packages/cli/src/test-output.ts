@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, rmdir, writeFile } from "node:fs/promises
 import { basename, dirname, join, relative } from "node:path";
 import type { ProjectModule, ProjectResult, VelarSourcePackage } from "./project.ts";
 import { assertUniqueEmbeddedModuleOutputs, embeddedModuleFileContents, embeddedModuleOutputPath } from "./embedded-modules.ts";
+import { usedPackageResourceExports, writeProjectResources } from "./resource-output.ts";
 
 /**
  * D51 rule 105: the verdict line is the last link in the trust chain, so what
@@ -78,7 +79,8 @@ export async function removeCompiledSandbox(sandbox: string): Promise<void> {
 }
 
 export async function writeCompiledTestProject(project: ProjectResult, outputRoot: string): Promise<void> {
-  for (const package_ of project.velarPackages) await writePackageManifest(package_, outputRoot);
+  await writeProjectResources(project, outputRoot, "sandbox");
+  for (const package_ of project.velarPackages) await writePackageManifest(project, package_, outputRoot);
   assertUniqueEmbeddedModuleOutputs(project.modules.map((module) => ({
     ownerPath: compiledTestModulePath(project, module, outputRoot),
     embeddedModules: module.result.embeddedModules,
@@ -110,16 +112,17 @@ function packageForModule(project: ProjectResult, inputPath: string): VelarSourc
   return null;
 }
 
-async function writePackageManifest(package_: VelarSourcePackage, outputRoot: string): Promise<void> {
+async function writePackageManifest(project: ProjectResult, package_: VelarSourcePackage, outputRoot: string): Promise<void> {
   const root = join(outputRoot, "node_modules", ...package_.name.split("/"));
   const entry = `./${compiledRelativePath(package_.root, package_.entryPath).replaceAll("\\", "/")}`;
+  const resources = usedPackageResourceExports(project, package_.name);
   await mkdir(root, { recursive: true });
   await writeFile(join(root, "package.json"), JSON.stringify({
     name: package_.name,
     private: true,
     type: "module",
     main: entry,
-    exports: entry,
+    exports: Object.keys(resources).length === 0 ? entry : { ".": entry, ...resources },
   }), "utf8");
 }
 

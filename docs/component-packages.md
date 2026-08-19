@@ -30,6 +30,9 @@ framework host, and cannot silently activate language syntax.
   hide a second Web runtime inside itself.
 - Runtime JavaScript dependencies remain ordinary npm dependencies. Framework
   and toolchain dependencies are not smuggled through VelarScript metadata.
+- Public JSON data uses the exact `velar.resources` plus npm `exports`
+  contract from [package distribution](package-distribution.md#package-resources).
+  Source imports receive `unknown` and validate it with a Runtime Type.
 
 `npm create velar@latest components -- --template component` creates this
 shape with a local preview application, Core contract test, browser rendering

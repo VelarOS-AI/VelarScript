@@ -21,6 +21,7 @@ import {barrelName, bump, liveCount, Identifier} from "./12-modules-barrel.vel"
 // read-only.
 import * as lazy from "./12-modules-lazy.vel"
 import * as urls from "velar/url"
+import json rawModuleCatalog from "./12-modules-catalog.json"
 
 // An unused import is not an error and produces no warning; importing a name
 // still initializes the module it comes from.
@@ -48,6 +49,13 @@ const throughNamespace = lazy.render(["a"])
 
 // A standard module reached the same way.
 const joinedUrl = urls.join("https://example.test", "api", "v1")
+
+// JSON resources cross the module boundary as `unknown`; a runtime type owns
+// validation before application code reads fields from the value.
+type ModuleCatalog:
+    readonly chapter: string
+
+const moduleCatalog = ModuleCatalog.parse(rawModuleCatalog)
 
 // ---------------------------------------------------------------------------
 // Live bindings
@@ -112,5 +120,5 @@ export def installsExplicitly():
 
 export const chapterTwelve = {
     version, encoded, account, identifier, aliasedIdentifier, role, badge,
-    namespaceTitle, throughNamespace, joinedUrl, barrelName,
+    namespaceTitle, throughNamespace, joinedUrl, moduleCatalog, barrelName,
 }

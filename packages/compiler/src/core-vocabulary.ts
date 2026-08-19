@@ -78,6 +78,7 @@ export const CORE_CONTEXTUAL_KEYWORDS = [
   { word: "constructor", shape: "a class's construction member: 'constructor(name: string):'", statementSubjectFollows: false },
   { word: "from", shape: "the module an import or a re-export reads: 'import {a} from \"./m.vel\"'", statementSubjectFollows: false },
   { word: "get", shape: "a class getter: 'get empty() -> bool:'", statementSubjectFollows: false },
+  { word: "json", shape: "a checked JSON resource import: 'import json data from \"package/data\"'", statementSubjectFollows: false },
   { word: "match", shape: "a match statement: 'match value:'", statementSubjectFollows: true },
   { word: "readonly", shape: "a read-only record field or type: 'readonly tags: List<string>'", statementSubjectFollows: false },
   { word: "test", shape: "a test declaration: 'test \"a name\":'", statementSubjectFollows: false },
