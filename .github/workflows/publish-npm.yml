@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Exact release tag to publish (for example v0.10.3)
+        description: Exact release tag to publish (for example v0.10.4)
         required: true
         type: string
       confirm:

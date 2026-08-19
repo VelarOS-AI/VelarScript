@@ -6,6 +6,23 @@ truth for acceptance status.
 
 ## Unreleased
 
+## 0.10.4 — 2026-08-19
+
+### Inherited runtime validation
+
+- Fixed derived record validators losing runtime type dependencies owned by an
+  imported base record, including dependencies reached through multiple levels
+  of inheritance.
+- Kept `.is`, `.parse`, flow narrowing, test compilation, and production builds
+  aligned for inherited fields while preserving derived validation paths.
+
+### Collection runtime performance
+
+- Specialized statically typed List, Set, Map, and Record operations onto their
+  exact runtime helpers instead of paying repeated dynamic-kind dispatch.
+- Split collection lowering, captured host operations, and reactive bridging so
+  project output imports only the runtime fragments and named operations it uses.
+
 ## 0.10.3 — 2026-08-19
 
 ### Runtime record alias validation
