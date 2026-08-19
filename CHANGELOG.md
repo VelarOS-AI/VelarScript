@@ -6,6 +6,14 @@ truth for acceptance status.
 
 ## Unreleased
 
+## 0.11.1 — 2026-08-20
+
+### Framework-free JSON resources
+
+- Framework-free builds now rewrite checked JSON resource imports to their
+  generated output wrappers, so a source package's own npm self-reference
+  cannot redirect built code back to the unwrapped source JSON export.
+
 ## 0.11.0 — 2026-08-20
 
 ### Package JSON resources

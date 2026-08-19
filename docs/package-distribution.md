@@ -126,8 +126,10 @@ only tells the compiler which data subpaths it is allowed to copy, watch,
 serve, or bundle.
 
 `velar test` reconstructs the used package entry and resource subpath exports
-inside its sandbox. Framework-free builds copy the exact checked JSON bytes
-and a generated ESM value wrapper; browser builds bundle the checked JSON.
+inside its sandbox. Framework-free builds copy the exact checked JSON bytes,
+generate an ESM value wrapper, and rewrite emitted imports to that output-local
+wrapper so npm self-references cannot escape back to a source package manifest;
+browser builds bundle the checked JSON.
 This makes `check`, `run`, `test`, `dev`, and `build` consume one resource
 graph instead of each command inventing a partial package view.
 
@@ -267,5 +269,5 @@ complete license text, and package acceptance verifies the installed metadata
 and file rather than trusting the source manifest alone. The current rehearsal
 is always marked non-publishable because rehearsal mode is evidence only. A
 strict candidate becomes publishable only from the clean, exactly tagged
-`v0.11.0` source with the matching remote; registry publication remains a
+`v0.11.1` source with the matching remote; registry publication remains a
 separate explicit authority and must carry npm provenance.

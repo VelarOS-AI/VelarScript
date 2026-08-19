@@ -25,7 +25,7 @@ def seed() -> List<Release>:
         {
             id: "web-0-11",
             name: "VelarScript Web",
-            version: "0.11.0",
+            version: "0.11.1",
             stage: Stage.verifying,
             target: "2026-08-22",
             checks: [
@@ -38,7 +38,7 @@ def seed() -> List<Release>:
         {
             id: "compiler-0-11",
             name: "VelarScript Compiler",
-            version: "0.11.0",
+            version: "0.11.1",
             stage: Stage.building,
             target: "2026-08-29",
             checks: [

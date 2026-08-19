@@ -41,7 +41,7 @@ import {
   embeddedModuleOutputPath,
   VELAR_EMBEDDED_MODULE_MARKER,
 } from "./embedded-modules.ts";
-import { writeBuildResourcePackageManifests, writeProjectResources } from "./resource-output.ts";
+import { resourceOutputRelativePath, writeBuildResourcePackageManifests, writeProjectResources } from "./resource-output.ts";
 
 
 interface CommandArguments {
@@ -950,6 +950,13 @@ async function assertEmbeddedModuleOutputWritable(path: string): Promise<void> {
 function rewriteVelarPackageImports(project: ProjectResult, module: ProjectModule): string | null {
   if (!module.result.code) return null;
   return module.result.code.replace(/(\bfrom\s+["']|\bimport\s+["'])([^"']+)(["'])/gu, (match, prefix: string, source: string, suffix: string) => {
+    const resource = project.resourceImports.get(projectImportKey(module.inputPath, source));
+    if (resource) {
+      const output = `${resourceOutputRelativePath(project, resource, "build")}.js`;
+      let targetImport = relative(dirname(module.relativePath), output).replaceAll("\\", "/");
+      if (!targetImport.startsWith(".")) targetImport = `./${targetImport}`;
+      return `${prefix}${targetImport}${suffix}`;
+    }
     const targetPath = project.velarImports.get(projectImportKey(module.inputPath, source));
     if (!targetPath) return match;
     const target = project.modules.find((item) => item.inputPath === targetPath);

@@ -28,6 +28,25 @@ export async function writeProjectResources(
   }));
 }
 
+/** Relative location of a checked resource and its generated value wrapper. */
+export function resourceOutputRelativePath(
+  project: ProjectResult,
+  resource: ProjectResource,
+  layout: ResourceOutputLayout,
+): string {
+  if (resource.packageName && resource.packageRelativePath) {
+    const packageRoot = layout === "build" && resource.source.startsWith(".")
+      ? join("__velar_packages__", ...resource.packageName.split("/"))
+      : join("node_modules", ...resource.packageName.split("/"));
+    return join(packageRoot, ...resource.packageRelativePath.split("/"));
+  }
+  const path = relative(project.sourceRoot, resource.inputPath);
+  if (!path || path === ".." || path.startsWith("../") || path.startsWith("..\\")) {
+    throw new Error(`Project resource '${resource.inputPath}' escapes the compiled source root`);
+  }
+  return path;
+}
+
 /** Bare resource imports need a package export in framework-free build output. */
 export async function writeBuildResourcePackageManifests(project: ProjectResult, outputRoot: string): Promise<void> {
   const packages = new Map<string, Record<string, string>>();
@@ -64,17 +83,7 @@ function resourceOutputPath(
   outputRoot: string,
   layout: ResourceOutputLayout,
 ): string {
-  if (resource.packageName && resource.packageRelativePath) {
-    const packageRoot = layout === "build" && resource.source.startsWith(".")
-      ? join(outputRoot, "__velar_packages__", ...resource.packageName.split("/"))
-      : join(outputRoot, "node_modules", ...resource.packageName.split("/"));
-    return join(packageRoot, ...resource.packageRelativePath.split("/"));
-  }
-  const path = relative(project.sourceRoot, resource.inputPath);
-  if (!path || path === ".." || path.startsWith("../") || path.startsWith("..\\")) {
-    throw new Error(`Project resource '${resource.inputPath}' escapes the compiled source root`);
-  }
-  return resolve(outputRoot, path);
+  return resolve(outputRoot, resourceOutputRelativePath(project, resource, layout));
 }
 
 export function jsonResourceModule(content: string): string {

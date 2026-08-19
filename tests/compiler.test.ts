@@ -15813,8 +15813,8 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     devDependencies: Record<string, string>;
   };
-  assert.equal(createdPackage.dependencies["@velarscript/web"], "^0.11.0");
-  assert.equal(createdPackage.devDependencies["@velarscript/cli"], "^0.11.0");
+  assert.equal(createdPackage.dependencies["@velarscript/web"], "^0.11.1");
+  assert.equal(createdPackage.devDependencies["@velarscript/cli"], "^0.11.1");
   assert.equal(createdPackage.scripts.format, "velar format");
   assert.equal(createdPackage.scripts["format:check"], "velar format --check");
   assert.equal(createdPackage.scripts["test:browser"], "velar test --browser");
@@ -15942,8 +15942,8 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   assert.equal(componentPackage.velar.entry, "src/index.vel");
   assert.equal(componentPackage.scripts["pack:check"], "npm pack --dry-run --json");
   assert.match(componentPackage.scripts.validate ?? "", /npm run pack:check$/u);
-  assert.equal(componentPackage.peerDependencies["@velarscript/web"], "^0.11.0");
-  assert.equal(componentPackage.devDependencies["@velarscript/web"], "^0.11.0");
+  assert.equal(componentPackage.peerDependencies["@velarscript/web"], "^0.11.1");
+  assert.equal(componentPackage.devDependencies["@velarscript/web"], "^0.11.1");
   assert.match(await readFile(join(componentRoot, "src", "index.vel"), "utf8"), /export component InfoCard/u);
   assert.deepEqual(JSON.parse(await readFile(join(componentRoot, "velar.json"), "utf8")).extensions, ["@velarscript/web"]);
   await linkWorkspaceWebExtension(componentRoot);
@@ -15968,7 +15968,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     scripts: Record<string, string>;
   };
-  assert.equal(nodePackage.dependencies["@velarscript/node"], "^0.11.0");
+  assert.equal(nodePackage.dependencies["@velarscript/node"], "^0.11.1");
   assert.equal(nodePackage.scripts.dev, "velar run");
   assert.match(await readFile(join(nodeRoot, "src", "app.vel"), "utf8"), /from "velar\/serve"/u);
   assert.match(await readFile(join(nodeRoot, "public", "index.html"), "utf8"), /velarscript-mark\.svg/u);
@@ -15986,7 +15986,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     scripts: Record<string, string>;
   };
-  assert.equal(desktopPackage.dependencies["@velarscript/desktop"], "^0.11.0");
+  assert.equal(desktopPackage.dependencies["@velarscript/desktop"], "^0.11.1");
   assert.equal(desktopPackage.scripts.package, "velar package");
   assert.equal(desktopPackage.scripts["test:browser"], "velar test --browser=all");
   assert.match(await readFile(join(desktopRoot, "src", "app.vel"), "utf8"), /VelarScript Desktop/u);
@@ -16043,7 +16043,7 @@ test("CLI help is command-specific and malformed top-level invocations fail clea
   const creator = resolve("packages/create/src/cli.ts");
   const creatorVersion = spawnSync(process.execPath, [creator, "--version"], { encoding: "utf8" });
   assert.equal(creatorVersion.status, 0, creatorVersion.stderr);
-  assert.equal(creatorVersion.stdout, "create-velar 0.11.0\n");
+  assert.equal(creatorVersion.stdout, "create-velar 0.11.1\n");
   const creatorMissing = spawnSync(process.execPath, [creator], { encoding: "utf8" });
   assert.equal(creatorMissing.status, 2);
   assert.match(creatorMissing.stderr, /expected one project directory/u);
@@ -16502,6 +16502,45 @@ export const catalogName = catalog.name
   const linkedResource = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "check"], { cwd: directory, encoding: "utf8" });
   assert.equal(linkedResource.status, 1);
   assert.match(linkedResource.stderr, /cannot escape .* through a symbolic link/u);
+});
+
+test("framework-free builds isolate self-package JSON resource imports from the source manifest", async () => {
+  const directory = await makeTemporaryDirectory("velar-self-package-resource-");
+  await mkdir(join(directory, "src"), { recursive: true });
+  await mkdir(join(directory, "generated"), { recursive: true });
+  await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "src/index.vel", extensions: [] }), "utf8");
+  await writeFile(join(directory, "package.json"), JSON.stringify({
+    name: "self-catalog",
+    version: "1.0.0",
+    type: "module",
+    exports: {
+      ".": "./dist/index.js",
+      "./catalog": "./generated/catalog.json",
+    },
+    velar: {
+      entry: "src/index.vel",
+      resources: {
+        "./catalog": { path: "generated/catalog.json", type: "json" },
+      },
+    },
+  }), "utf8");
+  await writeFile(join(directory, "generated", "catalog.json"), JSON.stringify({ name: "blocks" }), "utf8");
+  await writeFile(join(directory, "src", "index.vel"), `
+import json rawCatalog from "self-catalog/catalog"
+
+type Catalog:
+    readonly name: string
+
+print(Catalog.parse(rawCatalog).name)
+`.trimStart(), "utf8");
+
+  const build = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "build"], { cwd: directory, encoding: "utf8" });
+  assert.equal(build.status, 0, String(build.stderr));
+  const output = await readFile(join(directory, "dist", "index.js"), "utf8");
+  assert.match(output, /from "\.\/node_modules\/self-catalog\/generated\/catalog\.json\.js"/u);
+  const runtime = spawnSync(process.execPath, [join(directory, "dist", "index.js")], { cwd: directory, encoding: "utf8" });
+  assert.equal(runtime.status, 0, String(runtime.stderr));
+  assert.equal(runtime.stdout, "blocks\n");
 });
 
 test("JSX fragments, declared children, form bindings, and event modifiers compose", () => {
@@ -27620,7 +27659,7 @@ test("CLI emits complete Web application assets", async () => {
     apiVersion: "0.10",
     artifactKind: "velar-web-build",
   });
-  assert.deepEqual(manifest.compiler, { name: "velar", version: "0.11.0" });
+  assert.deepEqual(manifest.compiler, { name: "velar", version: "0.11.1" });
   assert.match(manifest.buildId, /^[a-f0-9]{64}$/u);
   assert.equal(manifest.sourceMaps, true);
   assert.equal(manifest.entry, `assets/${javascript}`);
