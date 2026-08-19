@@ -200,6 +200,8 @@ test("CI covers platform, browser, rehearsal, and explicit npm publication gates
   assert.match(publicationHelper, /GITHUB_ACTIONS/u);
   assert.match(publicationHelper, /ACTIONS_ID_TOKEN_REQUEST_URL/u);
   assert.match(publicationHelper, /"--provenance"/u);
+  assert.match(publication, /NPM_UNSCOPED_TOKEN/u);
+  assert.match(publicationHelper, /publicationToken/u);
   assert.match(publicationHelper, /waitForIntegrity/u);
   assert.match(publicationHelper, /"dist-tag", "add"/u);
 

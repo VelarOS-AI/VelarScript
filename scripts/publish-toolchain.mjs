@@ -44,7 +44,7 @@ async function main(arguments_) {
       "--tag", options.stagingTag,
       "--provenance",
       "--registry", registry,
-    ]);
+    ], false, publicationToken(package_.name));
     await waitForIntegrity(package_.name, manifest.version, candidate.npmIntegrity);
     process.stdout.write(`Published ${package_.name}@${manifest.version} with npm provenance\n`);
   }
@@ -57,7 +57,7 @@ async function main(arguments_) {
       "dist-tag", "add", `${package_.name}@${manifest.version}`,
       options.promoteTag,
       "--registry", registry,
-    ]);
+    ], false, publicationToken(package_.name));
   }
   for (const package_ of order) {
     const promoted = await view(`${package_.name}@${options.promoteTag}`, "version");
@@ -142,11 +142,20 @@ async function view(specifier, field) {
   return typeof value === "string" ? value : null;
 }
 
-async function runNpm(arguments_, allowFailure = false) {
+function publicationToken(name) {
+  return name.startsWith("@")
+    ? process.env.NODE_AUTH_TOKEN
+    : process.env.NPM_UNSCOPED_TOKEN ?? process.env.NODE_AUTH_TOKEN;
+}
+
+async function runNpm(arguments_, allowFailure = false, authenticationToken = undefined) {
   const npm = process.env.npm_execpath;
   const command = npm ? process.execPath : "npm";
   const values = npm ? [npm, ...arguments_] : arguments_;
-  const child = spawn(command, values, { cwd: root, stdio: ["ignore", "pipe", "pipe"] });
+  const environment = authenticationToken === undefined
+    ? process.env
+    : { ...process.env, NODE_AUTH_TOKEN: authenticationToken };
+  const child = spawn(command, values, { cwd: root, env: environment, stdio: ["ignore", "pipe", "pipe"] });
   let stdout = "";
   let stderr = "";
   child.stdout.on("data", (chunk) => { stdout += chunk.toString("utf8"); });
