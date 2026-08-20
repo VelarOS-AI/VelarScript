@@ -1,9 +1,11 @@
 import { rm } from "node:fs/promises";
-import { basename, resolve } from "node:path";
+import { basename, dirname, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const root = resolve(process.cwd());
-if (!root.includes(`${process.platform === "win32" ? "\\" : "/"}packages${process.platform === "win32" ? "\\" : "/"}`)) {
-  throw new Error("Package clean must run from a packages/* directory");
+const workspaceRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const packageRoot = resolve(process.cwd());
+const parts = relative(workspaceRoot, packageRoot).split(/[\\/]/u);
+if (parts.length !== 2 || !new Set(["packages", "libraries", "adapters", "integrations"]).has(parts[0] ?? "") || !basename(packageRoot)) {
+  throw new Error("Package clean must run from one direct workspace package directory");
 }
-if (!basename(root)) throw new Error("Package directory was not resolved");
-await rm(resolve(root, "dist"), { recursive: true, force: true });
+await rm(resolve(packageRoot, "dist"), { recursive: true, force: true });

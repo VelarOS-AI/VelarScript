@@ -1,0 +1,49 @@
+// Chapter 02 — host capabilities and their boundary.
+//
+// Desktop does not invent product-specific language services. It supplies the
+// existing checked filesystem, path, process, HTTP, and environment contracts
+// behind manifest grants. Editors, task runners, semantic transactions, and
+// terminals belong to a product or an independently installed integration.
+
+import {appDataDirectory} from "velar/desktop"
+import {exists, readText, writeText} from "velar/fs"
+import {join} from "velar/path"
+import {border, rgb, spacing} from "velar/look"
+
+const ink = rgb(24, 24, 24)
+const paper = rgb(250, 250, 248)
+
+const capabilityLook = look:
+    display = "grid"
+    gap = 12px
+    padding = spacing(20px, 24px)
+    border = border(1px, ink)
+    borderRadius = 12px
+    color = ink
+    background = paper
+
+export async def remember(value: string) -> string:
+    const root = await appDataDirectory()
+    const path = join([root, "tour-note.txt"])
+    await writeText(path, value)
+    return await readText(path, 4096)
+
+export async def hasRememberedValue() -> bool:
+    const root = await appDataDirectory()
+    return await exists(join([root, "tour-note.txt"]))
+
+export component CapabilityPanel:
+    state result = "nothing written"
+
+    action writeFixture() -> string:
+        result = await remember("owned by the app-data grant")
+        return result
+
+    return <section data-chapter="02" look={capabilityLook}>
+        <h2>02 — checked host capabilities</h2>
+        <p data-boundary>Product tooling stays outside the Desktop language framework.</p>
+        <p data-result>{result}</p>
+        <button type="button" data-write-fixture on:click={writeFixture} disabled={writeFixture.pending}>
+            Write through the app-data grant
+        </button>
+    </section>

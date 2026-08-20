@@ -63,7 +63,7 @@ Format 2 makes the language/framework boundary explicit:
     "publicConfig": {},
     "build": { "sourceMaps": false },
     "security": { "contentSecurityPolicy": true },
-    "deployment": { "spaFallback": true, "adapter": "neutral" }
+    "deployment": { "spaFallback": true }
   }
 }
 ```
@@ -169,6 +169,6 @@ to that target. `velar build` remains the renderer/static artifact command.
 
 An explicit manifest file may be passed instead of the conventional project
 directory. This supports checked-in deployment profiles sharing source and
-public roots while declaring different Web base paths, adapters, source-map
+public roots while declaring different Web base paths, source-map
 policy, or public configuration. Extension selection is always declared in the
 selected manifest and is never inferred from source text.

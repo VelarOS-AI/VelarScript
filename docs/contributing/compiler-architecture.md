@@ -149,11 +149,9 @@ overlay that exceeds either text ceiling replaces any older searchable disk
 snapshot with a reason-only exclusion marker; the index does not retain the
 rejected body, and close restores disk through the same bounded read path. This
 is an in-process LSP session cache, not a disk cache or an Editor-owned
-filesystem scanner. A
-packaged Desktop host privately confines the same process to its current project
-grant; renderer-supplied initialize roots and document URIs cannot widen that
-filesystem authority. Its canonical grant root is resolved once and watcher
-targets are authorized with at most 16 concurrent filesystem operations, so a
+filesystem scanner. A launcher may additionally provide one canonical workspace
+grant; initialize roots, documents, and watcher targets cannot widen it.
+Canonical checks run with at most 16 concurrent filesystem operations, so a
 maximum legal batch cannot multiply root resolution or create unbounded I/O.
 
 JavaScript and TypeScript documents use a separate protocol-neutral provider
@@ -165,9 +163,9 @@ provider applies the smallest code-point edit derived from a full-text LSP
 change and keeps one `ScriptDocument` per open document. It advertises this
 bounded local service explicitly and returns no formatter edits, because a full
 TypeScript checker, module resolver, and JavaScript/TypeScript formatter have
-not been published. Desktop packages the same official tool and owns its child
-process lifecycle; editors remain clients and do not embed either protocol
-framing or language semantics.
+not been published. The CLI owns the `velar lsp` process and protocol lifecycle;
+editors remain clients and do not embed either protocol framing or language
+semantics. Desktop applications do not bundle the language server.
 
 Script diagnostics and semantic tokens convert their required code-point
 offsets to the negotiated LSP encoding with one monotonic text scan per response.
@@ -817,9 +815,9 @@ initialization therefore cannot change which case is selected.
   contribution owns presentation and connection metadata, but never copies or
   embeds compiler semantics.
 
-The compiler, Node runtime, Web and Desktop frameworks, creator, and CLI build as independent npm packages
+The compiler, Core Standard API, Node runtime, Web and Desktop frameworks, creator, and CLI build as independent npm packages
 containing emitted JavaScript, source maps, and `.d.ts` declarations. Node and Web pin
-the exact compiler version. CLI pins the compiler, Node, Web, Desktop, and
+the exact compiler version. CLI pins Core, the compiler, Node, Web, Desktop, and
 creator as its official toolchain fallback; normal projects may still install
 their own matching target, which resolves first. Desktop does not depend on or
 execute CLI.
@@ -1010,9 +1008,11 @@ hooks. Node error codes therefore remain usable across realms while an
 extension failure cannot break the diagnostic path that reports it.
 
 Release packaging is outside compiler semantics. A repository script builds
-all six npm packages, records source and tarball identities, verifies every
+all seven toolchain npm packages, records source and tarball identities, verifies every
 SHA-256, and refuses candidate status without a clean exact tag, matching
-remote, stable version, and publishable license. It contains no publish step.
+remote, stable version, and publishable license. Ecosystem source packages and
+deployment integrations use a separate one-package release contract and never
+join that lockstep manifest. Neither rehearsal script contains a publish step.
 
 ## Resource ceilings
 

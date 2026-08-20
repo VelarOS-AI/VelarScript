@@ -73,6 +73,6 @@ function webConfig(value: unknown) {
     publicConfig: Object.freeze({ desktop: Object.freeze({ identifier: config.identifier }) }),
     build: Object.freeze({ sourceMaps: false }),
     security: Object.freeze({ contentSecurityPolicy: true, connectSources: Object.freeze([]), imageSources: Object.freeze([]) }),
-    deployment: Object.freeze({ spaFallback: true, adapter: "neutral" as const }),
+    deployment: Object.freeze({ spaFallback: true }),
   };
 }

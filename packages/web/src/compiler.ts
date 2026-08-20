@@ -390,8 +390,59 @@ const browserTestNetworkControllerType = object({
   clear: namedFunction([], [], promise(nullType)),
 });
 
+const webSocketConnectionIdentity = "velar/websocket#type:WebSocketConnection";
+const webSocketConnectionType: ValueType = { kind: "named", name: "WebSocketConnection", identity: webSocketConnectionIdentity };
+const webSocketMessageType: ValueType = { kind: "union", members: [stringType, bytesType] };
+const webSocketConnectionFields = new Map<string, ValueType>([
+  ["state", namedFunction([], [], stringType)],
+  ["send", namedFunction(["message"], [webSocketMessageType], promise(nullType))],
+  ["next", namedFunction([], [], promise(optional(webSocketMessageType)))],
+  ["close", namedFunction(["code", "reason"], [numberType, stringType], promise(nullType), 0)],
+]);
+const webSocketConnectOptions = object({
+  timeout: optional(durationType),
+  maxMessageBytes: optional(numberType),
+  maxQueuedMessages: optional(numberType),
+  maxQueuedBytes: optional(numberType),
+  maxPendingSendBytes: optional(numberType),
+});
+const webSocketErrorIdentities = new Map([
+  ["WebSocketBackpressureError", "velar/websocket#class:WebSocketBackpressureError"],
+  ["WebSocketClosedError", "velar/websocket#class:WebSocketClosedError"],
+  ["WebSocketProtocolError", "velar/websocket#class:WebSocketProtocolError"],
+  ["WebSocketTimeoutError", "velar/websocket#class:WebSocketTimeoutError"],
+]);
+const webSocketErrorClass = (identity: string): ClassInfo => ({
+  identity,
+  parameters: [stringType],
+  parameterNames: ["message"],
+  requiredParameters: 0,
+  base: "Error",
+  abstract: false,
+  fields: new Map(),
+  getters: new Set(),
+  abstractGetters: new Set(),
+  methods: new Map(),
+  abstractMethods: new Set(),
+  staticFields: new Map(),
+  staticGetters: new Set(),
+  staticMethods: new Map(),
+});
+
 
 export const webModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map([
+  ["velar/websocket", moduleInterface(
+    new Map([
+      ["WebSocketConnection", { kind: "typeObject", name: "WebSocketConnection", value: webSocketConnectionType }],
+      ...[...webSocketErrorIdentities].map(([name, identity]) => [name, { kind: "classConstructor", name, identity } as ValueType] as const),
+      ["connect", namedFunction(["url", "options"], [stringType, webSocketConnectOptions], promise(webSocketConnectionType), 1)],
+    ]),
+    new Map([...webSocketErrorIdentities].map(([name, identity]) => [name, webSocketErrorClass(identity)])),
+    new Map([["WebSocketConnection", webSocketConnectionFields]]),
+    new Map([["WebSocketConnection", webSocketConnectionIdentity]]),
+    new Map(),
+    new Map([["WebSocketConnection", new Set(webSocketConnectionFields.keys())]]),
+  )],
   ["velar/look", moduleInterface(lookModuleExports)],
   ["velar/app", moduleInterface(new Map([
     ["onError", namedFunction(["handler"], [functionType([appErrorType], unknownType)], cleanupType)],
@@ -565,8 +616,9 @@ function moduleInterface(
   namedTypes: ReadonlyMap<string, ReadonlyMap<string, ValueType>> = new Map(),
   namedTypeIdentities: ReadonlyMap<string, string> = new Map(),
   enums: ReadonlyMap<string, EnumInfo> = new Map(),
+  namedTypeReadonlyFields: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
 ): ModuleInterface {
-  return { exports, mutableExports: new Set(), reactiveExports: new Map(), reExports: new Map(), namedTypes, namedTypeIdentities, typeAliases: new Map(), enums, classes, tests: [], extensionExports: new Map(), extensionData: new Map() };
+  return { exports, mutableExports: new Set(), reactiveExports: new Map(), reExports: new Map(), namedTypes, namedTypeReadonlyFields, namedTypeIdentities, typeAliases: new Map(), enums, classes, tests: [], extensionExports: new Map(), extensionData: new Map() };
 }
 
 export const velarCompilerExtension: CompilerExtension = Object.freeze({

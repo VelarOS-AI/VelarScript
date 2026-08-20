@@ -174,34 +174,25 @@ test("[MIG-3] a Desktop size budget failure reports the bundle's composition, no
     hostBytes: 400_000,
     rendererBytes: 900_000,
     capabilityHostBytes: 300_000,
-    languageServerBytes: 3_500_000,
-    projectTaskBytes: 2_400_000,
-    buildEngineBytes: 7_400_000,
-    terminalHostBytes: 400_000,
-    toolchainBytes: 13_700_000,
     metadataBytes: 200_000,
-    totalBytes: 15_500_000,
+    totalBytes: 1_800_000,
   };
-  assert.equal(desktopSizeBudgetFailure(sizes, 16 * 1024 * 1024), null);
+  assert.equal(desktopSizeBudgetFailure(sizes, 2 * 1024 * 1024), null);
 
-  const failure = desktopSizeBudgetFailure(sizes, 12 * 1024 * 1024);
+  const failure = desktopSizeBudgetFailure(sizes, 1024 * 1024);
   assert.ok(failure, "a bundle over its budget must fail");
-  assert.match(failure, /exceeding the 12\.00 MiB \(12582912-byte\) size budget by 2\.78 MiB \(2917088 bytes\)/u, failure);
+  assert.match(failure, /exceeding the 1\.00 MiB \(1048576-byte\) size budget by 733\.8 KiB \(751424 bytes\)/u, failure);
   // Every component, largest first, with its share.
-  assert.match(failure, /7400000 bytes\s+47\.7%\s+build engine \(velar-build-engine\) \[mandatory first-party tooling\]/u, failure);
-  assert.match(failure, /3500000 bytes\s+22\.6%\s+language server \(velar-language-server\) \[mandatory first-party tooling\]/u, failure);
-  assert.match(failure, /2400000 bytes\s+15\.5%\s+project task host \(velar-project-task\) \[mandatory first-party tooling\]/u, failure);
-  assert.match(failure, /400000 bytes\s+2\.6%\s+terminal host \(VelarTerminalHost\) \[mandatory first-party tooling\]/u, failure);
-  assert.match(failure, /300000 bytes\s+1\.9%\s+capability host \(worker\.js\) \[mandatory first-party tooling\]/u, failure);
-  assert.match(failure, /900000 bytes\s+5\.8%\s+renderer \(application code and assets\)\n/u, failure);
-  assert.match(failure, /400000 bytes\s+2\.6%\s+native host \(VelarDesktopHost\)\n/u, failure);
-  assert.match(failure, /200000 bytes\s+1\.3%\s+bundle metadata \(Info\.plist, icon, desktop\.json\)\n/u, failure);
+  assert.match(failure, /900000 bytes\s+50\.0%\s+renderer \(application code and assets\)\n/u, failure);
+  assert.match(failure, /400000 bytes\s+22\.2%\s+native host \(VelarDesktopHost\)\n/u, failure);
+  assert.match(failure, /300000 bytes\s+16\.7%\s+capability host \(worker\.js\) \[mandatory capability infrastructure\]/u, failure);
+  assert.match(failure, /200000 bytes\s+11\.1%\s+bundle metadata \(Info\.plist, icon, desktop\.json\)\n/u, failure);
   // The floor no project change can remove, and the budget that would pass.
-  assert.match(failure, /Mandatory first-party tooling: 13\.35 MiB \(14000000 bytes, 90\.3% of the bundle\)/u, failure);
-  assert.match(failure, /Largest contributor: build engine \(velar-build-engine\) at 7\.06 MiB \(47\.7%\)/u, failure);
-  assert.match(failure, /Raise desktop\.build\.sizeBudgetBytes to at least 15500000/u, failure);
+  assert.match(failure, /Mandatory capability infrastructure: 293\.0 KiB \(300000 bytes, 16\.7% of the bundle\)/u, failure);
+  assert.match(failure, /Largest contributor: renderer \(application code and assets\) at 878\.9 KiB \(50\.0%\)/u, failure);
+  assert.match(failure, /Raise desktop\.build\.sizeBudgetBytes to at least 1800000/u, failure);
   // A reader never has to leave the message to judge the budget.
-  assert.equal(failure.split("\n").length, 13, failure);
+  assert.equal(failure.split("\n").length, 9, failure);
 });
 
 test("[MOD-U10] an uncaught program error presents as a VelarScript failure, with the Node.js trace one flag away", async () => {

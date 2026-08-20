@@ -1,8 +1,8 @@
 # VelarScript Continuous Integration
 
-Status: VelarScript 0.10 public release and publication gates
+Status: current public release and publication gates
 
-The repository defines four GitHub Actions workflows:
+The repository defines five GitHub Actions workflows:
 
 - `Velar CI` runs Node 24 check, tests, and packed-package consumer validation
   on Linux, macOS, and Windows. A separate Linux job installs Playwright's
@@ -10,10 +10,10 @@ The repository defines four GitHub Actions workflows:
   and CSP-enabled production browser matrices, the project-owned
   `.browser.test.vel` suite in all engines, and the same generated browser test
   through the packed toolchain tarballs plus the independently versioned source
-  library and adapter tarballs. Browser-project execution first verifies the exact
-  production asset inventory and uses the public preview server. The toolchain
-  library, and adapter sets are derived separately from `packages/*`,
-  `libraries/*`, and `adapters/*`:
+  library, adapter, and integration tarballs. Browser-project execution first verifies the exact
+  production asset inventory and uses the public preview server. The toolchain,
+  library, adapter, and integration sets are derived separately from `packages/*`,
+  `libraries/*`, `adapters/*`, and `integrations/*`:
   every publishable workspace package is packed and checked against what
   its own manifest promises a consumer — LICENSE, README, and every path named
   by `main`, `types`, `exports`, `bin` or `velar.entry` — installed into the
@@ -33,7 +33,7 @@ The repository defines four GitHub Actions workflows:
   exactly as in a complete example. Project scaffolds are compiled again by
   packed-package consumer acceptance.
 - The checked-in Web-capabilities fixture (`tests/fixtures/web-capabilities`)
-  imports all ten public Web modules from real
+  imports all twelve public Web modules from real
   `.vel` source. Its realtime acceptance path creates WebSocket and server-sent
   event resources inside a component, observes their typed callbacks in
   Chromium, Firefox, and WebKit, and releases both resources through component
@@ -41,8 +41,8 @@ The repository defines four GitHub Actions workflows:
   generated realtime JavaScript module directly.
 - Packed-browser acceptance independently creates an application from the
   complete locally packed workspace. Its application graph imports every
-  browser application module the Web extension publishes — ten today, derived
-  from the extension's own interface table rather than listed, so an eleventh
+  browser application module the Web extension publishes — twelve today, derived
+  from the extension's own interface table rather than listed, so a thirteenth
   fails this acceptance until the installed toolchain serves it — while its
   generated browser test loads `velar/web-test`, which application source may
   not import at all; the installed CLI then checks, tests, builds, verifies,
@@ -55,15 +55,22 @@ The repository defines four GitHub Actions workflows:
   verified non-publishing toolchain artifact, adds an OIDC artifact attestation,
   and uploads it. A tag switches the packaging step to strict candidate mode.
 - `Publish npm toolchain` is manual, requires an exact tag and literal
-  publication confirmation, creates a strict candidate, publishes all six
+  publication confirmation, creates a strict candidate, publishes all seven
   toolchain packages with npm provenance under `next`,
   verifies their registry integrity, and exposes `latest` only after the
   complete version-locked graph exists.
 - `External preview verification` is manual and credential-free. It rebuilds
-  the root Netlify Release Studio profile, verifies a required HTTPS origin,
+  the provider-neutral root Release Studio profile, projects the external
+  Netlify bundle, verifies a required HTTPS origin,
   emits a versioned JSON
   report, attests that report plus the build/deployment manifests, and uploads
   the evidence. It cannot deploy or publish.
+- `Publish npm ecosystem package` is manual and publishes exactly one derived
+  library, adapter, or integration. It requires a clean checkout whose HEAD has
+  the package-specific `<name>@<version>` tag, repeats the exact package name as
+  confirmation, uses OIDC provenance, publishes under `next`, and verifies the
+  registry integrity against the candidate tarball. Toolchain packages are not
+  selectable through this workflow.
 
 The browser job additionally opens the prepared root external-preview bundle
 in Chromium, checks its CSP, typed canonical/social metadata, public share
@@ -76,5 +83,5 @@ They are not cached independently because browser/system dependency caches can
 drift from Playwright and do not provide a reliable speed advantage.
 
 The rehearsal and external-preview workflows remain non-publishing. Only the
-manual npm workflow has registry authority, and its publication helper refuses
-to run outside an OIDC-capable GitHub Actions runner.
+two manual npm workflows have registry authority, and both publication helpers
+refuse to run outside an OIDC-capable GitHub Actions runner.

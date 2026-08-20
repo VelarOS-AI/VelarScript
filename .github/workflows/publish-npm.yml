@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Exact release tag to publish (for example v0.11.1)
+        description: Exact release tag to publish (for example v0.12.0)
         required: true
         type: string
       confirm:
@@ -36,7 +36,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
-          test "$(git tag --points-at HEAD)" = "$RELEASE_TAG"
+          test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$(git rev-parse HEAD)"
           test "$RELEASE_TAG" = "v$(node -p "require('./package.json').version")"
       - uses: actions/setup-node@v6
         with:

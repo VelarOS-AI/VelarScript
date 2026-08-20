@@ -222,7 +222,7 @@ test("record aliases keep runtime validators across an installed package boundar
     await writeFile(join(packageRoot, "package.json"), JSON.stringify({
       name: "@example/domain",
       version: "1.0.0",
-      velar: { entry: "src/index.vel" },
+      velar: { entry: "src/index.vel", targets: ["core", "node"], requires: { capabilities: [] } },
     }), "utf8");
     await writeFile(join(packageRoot, "src", "index.vel"), `
 export type Coordinate3:
@@ -307,7 +307,7 @@ test("inherited record validators retain transitive cross-module runtime type de
     await writeFile(join(packageRoot, "package.json"), JSON.stringify({
       name: "@example/domain",
       version: "1.0.0",
-      velar: { entry: "src/index.vel" },
+      velar: { entry: "src/index.vel", targets: ["core", "node"], requires: { capabilities: [] } },
     }), "utf8");
     await writeFile(join(packageRoot, "src", "index.vel"), `
 export type Coordinate3:

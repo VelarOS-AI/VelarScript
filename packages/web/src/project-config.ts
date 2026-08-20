@@ -30,7 +30,6 @@ export interface VelarWebConfig {
   };
   readonly deployment: {
     readonly spaFallback: boolean;
-    readonly adapter: "neutral" | "netlify";
   };
 }
 
@@ -62,9 +61,6 @@ function webConfig(value: unknown, manifestPath: string): VelarWebConfig {
   if (!base.endsWith("/")) base += "/";
   validateWebBase(base, manifestPath);
   const deployment = deploymentConfig(web?.deployment, manifestPath);
-  if (deployment.adapter === "netlify" && base !== "/") {
-    throw new Error(`${manifestPath}: 'web.deployment.adapter' netlify currently requires 'web.base' to be '/'`);
-  }
   return {
     title,
     base,
@@ -152,11 +148,9 @@ function deploymentConfig(value: unknown, manifestPath: string): VelarWebConfig[
   if (value !== undefined && (!value || typeof value !== "object" || Array.isArray(value))) {
     throw new Error(`${manifestPath}: 'web.deployment' must be an object`);
   }
-  const deployment = value as { readonly spaFallback?: unknown; readonly adapter?: unknown } | undefined;
-  if (deployment) knownFields(deployment as Record<string, unknown>, new Set(["spaFallback", "adapter"]), "web.deployment", manifestPath);
-  const adapter = stringField(deployment?.adapter, "web.deployment.adapter", "neutral");
-  if (adapter !== "neutral" && adapter !== "netlify") throw new Error(`'web.deployment.adapter' must be 'neutral' or 'netlify'`);
-  return { spaFallback: booleanField(deployment?.spaFallback, "web.deployment.spaFallback", true), adapter };
+  const deployment = value as { readonly spaFallback?: unknown } | undefined;
+  if (deployment) knownFields(deployment as Record<string, unknown>, new Set(["spaFallback"]), "web.deployment", manifestPath);
+  return { spaFallback: booleanField(deployment?.spaFallback, "web.deployment.spaFallback", true) };
 }
 
 function booleanField(value: unknown, field: string, fallback: boolean): boolean {

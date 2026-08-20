@@ -4,11 +4,6 @@ import { createInterface } from "node:readline";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
-import {
-  createDesktopProjectTransactionOwner,
-  desktopProjectChangePage,
-  desktopProjectChangeView,
-} from "./project-transactions.js";
 
 const MAX_MESSAGE_BYTES = 128 * 1024 * 1024;
 const MAX_FILE_BYTES = 16 * 1024 * 1024;
@@ -20,23 +15,9 @@ const MAX_PATH_UNITS = 4096;
 const MAX_FILE_WATCHERS = 128;
 const MAX_WATCH_PATHS = 4096;
 const MAX_WATCH_TEXT_UNITS = 2 * 1024 * 1024;
-const MAX_LANGUAGE_SERVER_MESSAGE_BYTES = 16 * 1024 * 1024;
-const MAX_LANGUAGE_SERVER_QUEUED_BYTES = 64 * 1024 * 1024;
-const MAX_LANGUAGE_SERVERS = 4;
-const MAX_PROJECT_TASKS = 4;
-const MAX_PROJECT_CHANGE_HANDLES = 16;
-const MAX_PROJECT_CHANGE_QUEUE_ITEMS = 100;
-const MAX_PROJECT_CHANGE_QUEUE_BYTES = 16 * 1024 * 1024;
-const MAX_TERMINALS = 4;
-const MAX_TERMINAL_CHUNK_BYTES = 1024 * 1024;
-const MAX_TERMINAL_QUEUED_BYTES = 4 * 1024 * 1024;
-const TERMINAL_PAUSE_BYTES = 2 * 1024 * 1024;
-const TERMINAL_RESUME_BYTES = 1024 * 1024;
 const WATCH_DEBOUNCE_MS = 20;
 const PROCESS_STOP_CONFIRMATION_TIMEOUT_MS = 5000;
 const PROCESS_EXIT_PIPE_CONFIRMATION_TIMEOUT_MS = 5000;
-const HOST_HANDSHAKE_TIMEOUT_MS = 5000;
-const HOST_PIPE_WRITE_TIMEOUT_MS = 5000;
 const FATAL_DRAIN_TIMEOUT_MS = 8000;
 const processTerminationMarker = Object.freeze({});
 const processRootExitMarker = Object.freeze({});
@@ -58,12 +39,6 @@ const activeRequests = new Map();
 const fileMutationTails = new Map();
 const fileWatchers = new Map();
 let nextFileWatcherHandle = 1;
-const languageServers = new Map();
-let nextLanguageServerHandle = 1_000_000_000;
-const projectChangeHandles = new Map();
-let nextProjectChangeHandle = 3_000_000_000;
-const terminals = new Map();
-let nextTerminalHandle = 2_000_000_000;
 let nextTextReplacementIdentity = 1;
 let fatalDrainStarted = false;
 let activeOwner = null;
@@ -74,14 +49,6 @@ let appDataLexicalRoot = null;
 let projectRoot = null;
 let projectLexicalRoot = null;
 let projectRootUpdate = Promise.resolve();
-let projectTransactionOwner = null;
-let projectTransactionOwnerPending = null;
-let projectTransactionGeneration = 0;
-let languageServerPath = null;
-let projectTaskPath = null;
-let buildEnginePath = null;
-let terminalHostPath = null;
-const terminalGranted = config.permissions.terminal === true;
 
 class HttpTransportFailure extends Error {
   constructor(phase) {
@@ -90,59 +57,7 @@ class HttpTransportFailure extends Error {
     this.phase = phase;
   }
 }
-// A bundled child that stops answering must fail the one request that waits on
-// it, never leave the host waiting without a bound.
-class HostDeadlineFailure extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "HostDeadlineError";
-  }
-}
-function boundedHostWait(value, message, timeout) {
-  let timer = null;
-  const guarded = value.then(
-    (result) => { if (timer !== null) clearTimeout(timer); return result; },
-    (error) => { if (timer !== null) clearTimeout(timer); throw error; },
-  );
-  return Promise.race([guarded, new Promise((_, rejectDeadline) => {
-    timer = setTimeout(() => rejectDeadline(new HostDeadlineFailure(message)), timeout);
-  })]);
-}
 const launchDirectory = await realpath(launchRoot);
-if (config.languageServer !== undefined) {
-  if (!config.languageServer || typeof config.languageServer !== "object" || Array.isArray(config.languageServer)
-    || Object.keys(config.languageServer).some(key => key !== "path")
-    || config.languageServer.path !== "host/language-server.js") throw new Error("Invalid bundled language-server configuration");
-  const candidate = resolve(dirname(configPath), config.languageServer.path);
-  languageServerPath = await realpath(candidate);
-  if (!(await stat(languageServerPath)).isFile()) throw new Error("Bundled language server must be an ordinary file");
-}
-if (config.projectTask !== undefined) {
-  if (!config.projectTask || typeof config.projectTask !== "object" || Array.isArray(config.projectTask)
-    || Object.keys(config.projectTask).some(key => !["path", "buildEnginePath"].includes(key))
-    || config.projectTask.path !== "host/project-task.js" || config.projectTask.buildEnginePath !== "host/build-engine") {
-    throw new Error("Invalid bundled project-task configuration");
-  }
-  const resourcesRoot = await realpath(dirname(configPath));
-  projectTaskPath = await realpath(resolve(dirname(configPath), config.projectTask.path));
-  buildEnginePath = await realpath(resolve(dirname(configPath), config.projectTask.buildEnginePath));
-  if (!contained(resourcesRoot, projectTaskPath) || !contained(resourcesRoot, buildEnginePath)
-    || !(await stat(projectTaskPath)).isFile() || !(await stat(buildEnginePath)).isFile()) {
-    throw new Error("Bundled project task tools must be ordinary files inside Desktop resources");
-  }
-  await access(buildEnginePath, fsConstants.X_OK);
-}
-if (config.terminalHost !== undefined) {
-  if (!config.terminalHost || typeof config.terminalHost !== "object" || Array.isArray(config.terminalHost)
-    || Object.keys(config.terminalHost).some(key => key !== "path")
-    || config.terminalHost.path !== "host/terminal-host") throw new Error("Invalid bundled terminal-host configuration");
-  const resourcesRoot = await realpath(dirname(configPath));
-  terminalHostPath = await realpath(resolve(dirname(configPath), config.terminalHost.path));
-  if (!contained(resourcesRoot, terminalHostPath) || !(await stat(terminalHostPath)).isFile()) {
-    throw new Error("Bundled terminal host must be an ordinary file inside Desktop resources");
-  }
-  await access(terminalHostPath, fsConstants.X_OK);
-}
 if (fileScopes.has("app-data")) {
   const dataRoot = resolve(appDataRoot, "data");
   await mkdir(dataRoot, { recursive: true });
@@ -158,10 +73,7 @@ rebuildFileRoots();
 const reader = createInterface({ input: process.stdin, crlfDelay: Infinity, terminal: false });
 reader.once("close", () => {
   if (activeOwner !== null) retireOwner(activeOwner);
-  retireProjectTransactionOwner(new Error("Desktop capability host closed"));
   for (const task of fileWatchers.values()) releaseFileWatcher(task, new Error("Desktop capability host closed"));
-  for (const task of languageServers.values()) releaseLanguageServer(task, new Error("Desktop capability host closed"));
-  for (const task of terminals.values()) releaseTerminal(task, new Error("Desktop capability host closed"));
   for (const activity of activeRequests.values()) cancelActivity(activity);
 });
 reader.on("line", async (line) => {
@@ -261,10 +173,6 @@ async function dispatch(capability, operation, args, owner, activity) {
     if (operation === "wait") return processWait(args, owner);
     if (operation === "stop") return processStop(args, owner);
   }
-  if (capability === "language-server") return languageServerOperation(operation, args, owner, activity);
-  if (capability === "project-task") return projectTaskOperation(operation, args, owner, activity);
-  if (capability === "project-changes") return projectChangeOperation(operation, args, owner, activity);
-  if (capability === "terminal") return terminalOperation(operation, args, owner, activity);
   if (capability === "http") {
     if (operation === "request") return httpRequest(args, owner, activity);
     if (operation === "read") return httpRead(args, owner);
@@ -291,9 +199,6 @@ async function replaceProjectRoot(path) {
   const metadata = await stat(canonical);
   if (!metadata.isDirectory()) throw new TypeError("Desktop project grant must identify a directory");
   for (const task of fileWatchers.values()) releaseFileWatcher(task, new Error("Desktop project grant changed"));
-  for (const task of languageServers.values()) releaseLanguageServer(task, new Error("Desktop project grant changed"));
-  for (const task of terminals.values()) releaseTerminal(task, new Error("Desktop project grant changed"));
-  retireProjectTransactionOwner(new Error("Desktop project grant changed"));
   for (const activity of activeRequests.values()) cancelActivity(activity);
   for (const [handle, task] of processHandles) retainRetiredProcess(handle, task);
   for (const [handle, request] of httpHandles) {
@@ -304,214 +209,6 @@ async function replaceProjectRoot(path) {
   projectLexicalRoot = resolve(path);
   projectRoot = canonical;
   rebuildFileRoots();
-}
-
-function closeRetiredProjectTransactionOwner(owner) {
-  if (!owner.retired || owner.activeOperations > 0) return;
-  owner.close();
-}
-
-function retireProjectTransactionOwner(error) {
-  projectTransactionGeneration += 1;
-  const current = projectTransactionOwner;
-  projectTransactionOwner = null;
-  if (current !== null) {
-    current.retired = true;
-    closeRetiredProjectTransactionOwner(current);
-  }
-  for (const task of projectChangeHandles.values()) releaseProjectChangeHandle(task, error);
-}
-
-async function currentProjectTransactionOwner() {
-  if (projectRoot === null || !fileScopes.has("project")) {
-    throw new Error("Desktop project changes require the project file grant");
-  }
-  if (projectTransactionOwner?.root === projectRoot && !projectTransactionOwner.retired) return projectTransactionOwner;
-  const generation = projectTransactionGeneration;
-  if (projectTransactionOwnerPending?.root !== projectRoot || projectTransactionOwnerPending.generation !== generation) {
-    const root = projectRoot;
-    const pending = createDesktopProjectTransactionOwner(root, appDataRoot).then((created) => ({
-      ...created,
-      activeOperations: 0,
-      retired: false,
-    }));
-    projectTransactionOwnerPending = { root, generation, pending };
-  }
-  const pendingOwner = projectTransactionOwnerPending;
-  try {
-    const created = await pendingOwner.pending;
-    if (generation !== projectTransactionGeneration || projectRoot !== pendingOwner.root) {
-      created.retired = true;
-      closeRetiredProjectTransactionOwner(created);
-      throw new Error("Desktop project grant changed while project transactions were opening");
-    }
-    projectTransactionOwner = created;
-    return created;
-  } finally {
-    if (projectTransactionOwnerPending === pendingOwner) projectTransactionOwnerPending = null;
-  }
-}
-
-async function withProjectTransactionOperation(owner, action) {
-  owner.activeOperations += 1;
-  try {
-    return await action(owner.controller);
-  } finally {
-    owner.activeOperations -= 1;
-    closeRetiredProjectTransactionOwner(owner);
-  }
-}
-
-function allocateProjectChangeHandle() {
-  let candidate = nextProjectChangeHandle;
-  for (let attempts = 0; attempts <= MAX_PROJECT_CHANGE_HANDLES; attempts += 1) {
-    if (!projectChangeHandles.has(candidate)) {
-      nextProjectChangeHandle = candidate >= 3_000_000_015 ? 3_000_000_000 : candidate + 1;
-      return candidate;
-    }
-    candidate = candidate >= 3_000_000_015 ? 3_000_000_000 : candidate + 1;
-  }
-  throw new RangeError("Desktop project change handle space is unavailable");
-}
-
-function projectChangeUpdate(task) {
-  const changes = [...task.queue.values()];
-  const update = { changes, rescan: task.rescan };
-  task.queue.clear();
-  task.queuedBytes = 0;
-  task.rescan = false;
-  return update;
-}
-
-function settleProjectChangeSubscription(task) {
-  if (task.pending === null || !task.rescan && task.queue.size === 0) return;
-  const pending = task.pending;
-  task.pending = null;
-  pending.activity.cancel = null;
-  pending.resolve(projectChangeUpdate(task));
-}
-
-function enqueueProjectChange(task, value) {
-  if (task.closed || task.rescan) return;
-  try {
-    const change = desktopProjectChangeView(value);
-    const bytes = Buffer.byteLength(JSON.stringify(change), "utf8");
-    const previous = task.queue.get(change.transactionId);
-    if (previous !== undefined) task.queuedBytes -= Buffer.byteLength(JSON.stringify(previous), "utf8");
-    if (!task.queue.has(change.transactionId) && task.queue.size >= MAX_PROJECT_CHANGE_QUEUE_ITEMS
-      || task.queuedBytes + bytes > MAX_PROJECT_CHANGE_QUEUE_BYTES) {
-      task.queue.clear();
-      task.queuedBytes = 0;
-      task.rescan = true;
-    } else {
-      task.queue.set(change.transactionId, change);
-      task.queuedBytes += bytes;
-    }
-  } catch {
-    task.queue.clear();
-    task.queuedBytes = 0;
-    task.rescan = true;
-  }
-  settleProjectChangeSubscription(task);
-}
-
-function releaseProjectChangeHandle(task, error = null) {
-  if (task.closed) return false;
-  task.closed = true;
-  projectChangeHandles.delete(task.handle);
-  task.unsubscribe();
-  if (task.pending !== null) {
-    const pending = task.pending;
-    task.pending = null;
-    pending.activity.cancel = null;
-    if (error === null) pending.resolve(null);
-    else pending.reject(error);
-  }
-  return true;
-}
-
-function ownedProjectChangeHandle(value, owner) {
-  const handle = integer(value, 3_000_000_000, 3_000_000_015, "ProjectChanges handle");
-  const task = projectChangeHandles.get(handle);
-  if (!task || task.closed) throw new Error("Desktop ProjectChanges handle is unknown or already released");
-  if (task.owner !== owner) throw new Error("Desktop ProjectChanges handle belongs to another document generation");
-  return task;
-}
-
-async function startProjectChanges(args, owner) {
-  if (args.length !== 0) throw new TypeError("projectChanges start arguments are invalid");
-  if (projectChangeHandles.size >= MAX_PROJECT_CHANGE_HANDLES) throw new RangeError("Desktop cannot own more than 16 project change handles");
-  const transactionOwner = await currentProjectTransactionOwner();
-  const handle = allocateProjectChangeHandle();
-  const task = {
-    handle,
-    owner,
-    transactionOwner,
-    queue: new Map(),
-    queuedBytes: 0,
-    rescan: false,
-    pending: null,
-    closed: false,
-    unsubscribe: null,
-  };
-  task.unsubscribe = transactionOwner.controller.subscribe((change) => enqueueProjectChange(task, change));
-  projectChangeHandles.set(handle, task);
-  return handle;
-}
-
-function listProjectChanges(args, owner) {
-  if (args.length !== 2) throw new TypeError("ProjectChanges.list arguments are invalid");
-  const task = ownedProjectChangeHandle(args[0], owner);
-  const limit = integer(args[1], 1, 100, "ProjectChanges.list limit");
-  return desktopProjectChangePage(task.transactionOwner.controller.list({ limit: limit + 1 }), limit);
-}
-
-function getProjectChange(args, owner) {
-  if (args.length !== 2) throw new TypeError("ProjectChanges.get arguments are invalid");
-  const task = ownedProjectChangeHandle(args[0], owner);
-  const change = task.transactionOwner.controller.get(args[1]);
-  return change === undefined ? null : desktopProjectChangeView(change);
-}
-
-function subscribeProjectChanges(args, owner, activity) {
-  if (args.length !== 1) throw new TypeError("ProjectChanges.subscribe arguments are invalid");
-  const task = ownedProjectChangeHandle(args[0], owner);
-  if (task.pending !== null) throw new Error("ProjectChanges.subscribe already has an active pull");
-  if (task.rescan || task.queue.size > 0) return projectChangeUpdate(task);
-  return new Promise((resolveNext, rejectNext) => {
-    const pending = { resolve: resolveNext, reject: rejectNext, activity };
-    task.pending = pending;
-    setActivityCancellation(activity, () => {
-      if (task.pending !== pending) return;
-      task.pending = null;
-      pending.reject(new Error("Desktop project change subscription was cancelled"));
-    });
-  });
-}
-
-async function mutateProjectChange(args, owner, operation) {
-  if (args.length !== 2) throw new TypeError(`ProjectChanges.${operation} arguments are invalid`);
-  const task = ownedProjectChangeHandle(args[0], owner);
-  const input = { transactionId: args[1] };
-  await withProjectTransactionOperation(task.transactionOwner, (controller) => controller[operation](input));
-  const change = task.transactionOwner.controller.get(args[1]);
-  if (change === undefined) throw new Error(`Project transaction disappeared after ${operation}`);
-  return desktopProjectChangeView(change);
-}
-
-function projectChangeOperation(operation, args, owner, activity) {
-  if (operation === "start") return startProjectChanges(args, owner);
-  if (operation === "list") return listProjectChanges(args, owner);
-  if (operation === "get") return getProjectChange(args, owner);
-  if (operation === "subscribe") return subscribeProjectChanges(args, owner, activity);
-  if (operation === "apply") return mutateProjectChange(args, owner, "apply");
-  if (operation === "rollback") return mutateProjectChange(args, owner, "rollback");
-  if (operation === "close") {
-    if (args.length !== 1) throw new TypeError("ProjectChanges.close arguments are invalid");
-    releaseProjectChangeHandle(ownedProjectChangeHandle(args[0], owner));
-    return null;
-  }
-  throw new Error(`Unknown project-changes operation '${operation}'`);
 }
 
 function allocateFileWatcherHandle() {
@@ -660,245 +357,6 @@ function closeFileWatchHandle(args, owner) {
   return releaseFileWatcher(task);
 }
 
-function allocateLanguageServerHandle() {
-  let candidate = nextLanguageServerHandle;
-  for (let attempts = 0; attempts <= MAX_LANGUAGE_SERVERS; attempts += 1) {
-    if (!languageServers.has(candidate)) {
-      nextLanguageServerHandle = candidate >= 1_000_000_003 ? 1_000_000_000 : candidate + 1;
-      return candidate;
-    }
-    candidate = candidate >= 1_000_000_003 ? 1_000_000_000 : candidate + 1;
-  }
-  throw new RangeError("Desktop language-server handle space is unavailable");
-}
-
-function ownedLanguageServer(value, owner) {
-  const handle = integer(value, 1, Number.MAX_SAFE_INTEGER, "Desktop language-server handle");
-  const task = languageServers.get(handle);
-  if (!task) throw new Error("Desktop language-server handle is unknown or already released");
-  if (task.owner !== owner) throw new Error("Desktop language server belongs to another document generation");
-  return task;
-}
-
-function settleLanguageServerPull(task) {
-  if (task.waiter === null) return;
-  if (task.queue.length > 0) {
-    const waiter = task.waiter;
-    task.waiter = null;
-    waiter.activity.cancel = null;
-    const value = task.queue.shift();
-    task.queuedBytes -= Buffer.byteLength(value, "utf8");
-    waiter.resolve(value);
-  } else if (task.failure || task.settled) {
-    const waiter = task.waiter;
-    task.waiter = null;
-    waiter.activity.cancel = null;
-    if (task.failure) waiter.reject(task.failure);
-    else waiter.resolve(null);
-  }
-}
-
-function failLanguageServer(task, error) {
-  if (!task.failure) task.failure = error instanceof Error ? error : new Error("Bundled language server failed");
-  settleLanguageServerPull(task);
-  signalTree(task.child, "SIGKILL");
-}
-
-function enqueueLanguageServerMessage(task, body) {
-  const bytes = Buffer.byteLength(body, "utf8");
-  if (bytes < 1 || bytes > MAX_LANGUAGE_SERVER_MESSAGE_BYTES) {
-    failLanguageServer(task, new RangeError("Bundled language-server message exceeds 16 MiB"));
-    return;
-  }
-  if (task.waiter !== null) {
-    const waiter = task.waiter;
-    task.waiter = null;
-    waiter.activity.cancel = null;
-    waiter.resolve(body);
-    return;
-  }
-  if (task.queuedBytes + bytes > MAX_LANGUAGE_SERVER_QUEUED_BYTES) {
-    failLanguageServer(task, new RangeError("Bundled language-server queue exceeds 64 MiB"));
-    return;
-  }
-  task.queue.push(body);
-  task.queuedBytes += bytes;
-}
-
-function parseLanguageServerOutput(task, chunk) {
-  task.buffer = Buffer.concat([task.buffer, chunk]);
-  while (!task.failure) {
-    const boundary = task.buffer.indexOf("\r\n\r\n");
-    if (boundary === -1) {
-      if (task.buffer.byteLength > 64 * 1024) failLanguageServer(task, new RangeError("Bundled language-server header exceeds 64 KiB"));
-      return;
-    }
-    if (boundary > 64 * 1024) { failLanguageServer(task, new RangeError("Bundled language-server header exceeds 64 KiB")); return; }
-    const header = task.buffer.subarray(0, boundary).toString("ascii");
-    const match = /(?:^|\r\n)Content-Length:\s*(\d+)/iu.exec(header);
-    if (!match) { failLanguageServer(task, new Error("Bundled language server emitted an invalid frame")); return; }
-    const size = Number(match[1]);
-    if (!Number.isSafeInteger(size) || size < 1 || size > MAX_LANGUAGE_SERVER_MESSAGE_BYTES) {
-      failLanguageServer(task, new RangeError("Bundled language-server message exceeds 16 MiB"));
-      return;
-    }
-    const end = boundary + 4 + size;
-    if (task.buffer.byteLength < end) return;
-    const body = task.buffer.subarray(boundary + 4, end).toString("utf8");
-    task.buffer = task.buffer.subarray(end);
-    try { JSON.parse(body); }
-    catch { failLanguageServer(task, new Error("Bundled language server emitted invalid JSON")); return; }
-    enqueueLanguageServerMessage(task, body);
-  }
-}
-
-async function startLanguageServer(args, owner, activity) {
-  if (args.length !== 0) throw new TypeError("languageServer start arguments are invalid");
-  if (languageServerPath === null) throw new Error("This Desktop package does not contain an official language server");
-  if (projectRoot === null || !fileScopes.has("project")) throw new Error("Desktop language services require the project file grant");
-  if (languageServers.size >= MAX_LANGUAGE_SERVERS) throw new RangeError("Desktop cannot own more than 4 language servers");
-  const handle = allocateLanguageServerHandle();
-  const environment = Object.create(null);
-  for (const name of ["HOME", "LANG", "LC_ALL", "PATH", "TMPDIR"]) {
-    if (typeof process.env[name] === "string") environment[name] = process.env[name];
-  }
-  environment.VELAR_LANGUAGE_SERVER_WORKSPACE_ROOT = projectLexicalRoot ?? projectRoot;
-  environment.VELAR_LANGUAGE_SERVER_CANONICAL_ROOT = projectRoot;
-  const child = spawn(process.execPath, [languageServerPath], {
-    cwd: projectRoot,
-    env: environment,
-    shell: false,
-    windowsHide: true,
-    detached: process.platform !== "win32",
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-  let resolveClosed;
-  const closed = new Promise(resolve => { resolveClosed = resolve; });
-  const task = { handle, owner, child, buffer: Buffer.alloc(0), queue: [], queuedBytes: 0, waiter: null, stderr: "", settled: false, failure: null, ownershipPublished: false, closed, resolveClosed };
-  languageServers.set(handle, task);
-  setActivityCancellation(activity, () => releaseLanguageServer(task, new Error("Desktop language-server start was cancelled")));
-  child.stdout.on("data", chunk => parseLanguageServerOutput(task, chunk));
-  child.stderr.on("data", chunk => {
-    if (task.stderr.length < 64 * 1024) task.stderr += chunk.toString("utf8").slice(0, 64 * 1024 - task.stderr.length);
-  });
-  child.once("error", error => failLanguageServer(task, error));
-  child.once("close", (code, signal) => {
-    task.settled = true;
-    task.resolveClosed();
-    if (!task.failure && code !== 0) task.failure = new Error(`Bundled language server exited with ${code === null ? signal ?? "an unknown signal" : `code ${code}`}${task.stderr ? `: ${task.stderr}` : ""}`);
-    settleLanguageServerPull(task);
-    if (task.ownershipPublished) respond({ protocolVersion: 1, hostEvent: "language-server-settled", owner, handle });
-  });
-  try {
-    await new Promise((resolveStart, rejectStart) => {
-      child.once("spawn", resolveStart);
-      child.once("error", rejectStart);
-    });
-  } catch (error) {
-    releaseLanguageServer(task, error instanceof Error ? error : new Error("Bundled language server failed to start"));
-    throw error;
-  }
-  activity.cancel = null;
-  task.ownershipPublished = true;
-  respond({ protocolVersion: 1, hostEvent: "language-server-owned", owner, handle, pid: child.pid });
-  if (activity.cancelled || owner !== activeOwner) {
-    releaseLanguageServer(task, new Error("Desktop document generation is no longer active"));
-    throw new Error("Desktop document generation is no longer active");
-  }
-  return handle;
-}
-
-async function sendLanguageServer(args, owner) {
-  if (args.length !== 2 || typeof args[1] !== "string") throw new TypeError("languageServer send arguments are invalid");
-  const task = ownedLanguageServer(args[0], owner);
-  if (task.failure) throw task.failure;
-  if (task.settled || !task.child.stdin.writable) throw new Error("Bundled language server is closed");
-  const bytes = Buffer.byteLength(args[1], "utf8");
-  if (bytes < 1 || bytes > MAX_LANGUAGE_SERVER_MESSAGE_BYTES) throw new RangeError("Language-server request exceeds 16 MiB");
-  try { JSON.parse(args[1]); }
-  catch { throw new TypeError("Language-server request must contain valid JSON"); }
-  const frame = `Content-Length: ${bytes}\r\n\r\n${args[1]}`;
-  try {
-    await boundedHostWait(
-      new Promise((resolveWrite, rejectWrite) => task.child.stdin.write(frame, error => error ? rejectWrite(error) : resolveWrite())),
-      `Bundled language server did not accept a request within ${HOST_PIPE_WRITE_TIMEOUT_MS} milliseconds`,
-      HOST_PIPE_WRITE_TIMEOUT_MS,
-    );
-  } catch (error) {
-    // A half-written frame leaves the protocol stream unusable, so a write that
-    // never drains retires the server instead of corrupting later requests.
-    if (error instanceof HostDeadlineFailure) failLanguageServer(task, error);
-    throw error;
-  }
-  return null;
-}
-
-function nextLanguageServer(args, owner, activity) {
-  if (args.length !== 1) throw new TypeError("languageServer next arguments are invalid");
-  const task = ownedLanguageServer(args[0], owner);
-  if (task.waiter !== null) throw new Error("LanguageServer.next already has an active pull");
-  if (task.queue.length > 0) {
-    const value = task.queue.shift();
-    task.queuedBytes -= Buffer.byteLength(value, "utf8");
-    return value;
-  }
-  if (task.failure) throw task.failure;
-  if (task.settled) return null;
-  return new Promise((resolveNext, rejectNext) => {
-    const waiter = { resolve: resolveNext, reject: rejectNext, activity };
-    task.waiter = waiter;
-    setActivityCancellation(activity, () => {
-      if (task.waiter !== waiter) return;
-      task.waiter = null;
-      waiter.reject(new Error("Desktop language-server pull was cancelled"));
-    });
-  });
-}
-
-function releaseLanguageServer(task, error = null) {
-  if (languageServers.get(task.handle) !== task) return false;
-  languageServers.delete(task.handle);
-  if (task.waiter !== null) {
-    const waiter = task.waiter;
-    task.waiter = null;
-    waiter.activity.cancel = null;
-    if (error) waiter.reject(error);
-    else waiter.resolve(null);
-  }
-  try { task.child.stdin.end(); } catch {}
-  if (error) signalTree(task.child, "SIGTERM");
-  else setTimeout(() => { if (!task.settled) signalTree(task.child, "SIGTERM"); }, 500).unref();
-  setTimeout(() => { if (!task.settled) signalTree(task.child, "SIGKILL"); }, 2500).unref();
-  return true;
-}
-
-async function closeLanguageServer(args, owner) {
-  if (args.length !== 1) throw new TypeError("languageServer close arguments are invalid");
-  const task = ownedLanguageServer(args[0], owner);
-  releaseLanguageServer(task);
-  let timer = null;
-  try {
-    const closed = await Promise.race([
-      task.closed.then(() => true),
-      new Promise(resolve => { timer = setTimeout(() => resolve(false), 5000); }),
-    ]);
-    if (!closed) {
-      signalTree(task.child, "SIGKILL");
-      throw new Error("Bundled language server did not close within 5000 milliseconds");
-    }
-  } finally {
-    if (timer !== null) clearTimeout(timer);
-  }
-  return null;
-}
-
-function languageServerOperation(operation, args, owner, activity) {
-  if (operation === "start") return startLanguageServer(args, owner, activity);
-  if (operation === "send") return sendLanguageServer(args, owner);
-  if (operation === "next") return nextLanguageServer(args, owner, activity);
-  if (operation === "close") return closeLanguageServer(args, owner);
-  throw new Error(`Unknown language-server operation '${operation}'`);
-}
 
 async function fsOperation(operation, args, owner, activity) {
   if (operation === "watchStart") return startFileWatch(args, owner);
@@ -1151,360 +609,6 @@ async function commitTextReplacement(path, data, mode) {
   finally { await rm(temporary, {force: true, recursive: false}); }
 }
 
-function allocateTerminalHandle() {
-  let candidate = nextTerminalHandle;
-  for (let attempts = 0; attempts <= MAX_TERMINALS; attempts += 1) {
-    if (!terminals.has(candidate)) {
-      nextTerminalHandle = candidate >= 2_000_000_003 ? 2_000_000_000 : candidate + 1;
-      return candidate;
-    }
-    candidate = candidate >= 2_000_000_003 ? 2_000_000_000 : candidate + 1;
-  }
-  throw new RangeError("Desktop terminal handle space is unavailable");
-}
-
-function ownedTerminal(value, owner) {
-  const handle = integer(value, 1, Number.MAX_SAFE_INTEGER, "Desktop terminal handle");
-  const task = terminals.get(handle);
-  if (!task) throw new Error("Desktop terminal handle is unknown or already released");
-  if (task.owner !== owner) throw new Error("Desktop terminal belongs to another document generation");
-  return task;
-}
-
-function terminalFrame(kind, payload = Buffer.alloc(0)) {
-  if (!(payload instanceof Buffer) || payload.byteLength > MAX_TERMINAL_CHUNK_BYTES) throw new RangeError("Terminal frame exceeds 1 MiB");
-  const frame = Buffer.allocUnsafe(5 + payload.byteLength);
-  frame[0] = kind;
-  frame.writeUInt32BE(payload.byteLength, 1);
-  payload.copy(frame, 5);
-  return frame;
-}
-
-async function writeTerminalFrame(task, frame) {
-  if (task.failure) throw task.failure;
-  if (task.settled || task.closing || !task.child.stdin.writable) throw new Error("Desktop terminal is closed");
-  try {
-    await boundedHostWait(
-      new Promise((resolveWrite, rejectWrite) => {
-        task.child.stdin.write(frame, error => error ? rejectWrite(error) : resolveWrite(null));
-      }),
-      `Bundled terminal host did not accept a frame within ${HOST_PIPE_WRITE_TIMEOUT_MS} milliseconds`,
-      HOST_PIPE_WRITE_TIMEOUT_MS,
-    );
-  } catch (error) {
-    // A half-written frame desynchronizes the terminal transport, so a write
-    // that never drains retires the session instead of corrupting it.
-    if (error instanceof HostDeadlineFailure) failTerminal(task, error);
-    throw error;
-  }
-  return null;
-}
-
-function settleTerminalPull(task) {
-  if (task.waiter === null) return;
-  if (task.queue.length > 0) {
-    const waiter = task.waiter;
-    task.waiter = null;
-    waiter.activity.cancel = null;
-    const value = task.queue.shift();
-    task.queuedBytes -= Buffer.byteLength(value, "utf8");
-    if (task.paused && task.queuedBytes <= TERMINAL_RESUME_BYTES) {
-      task.paused = false;
-      task.child.stdout.resume();
-    }
-    waiter.resolve(value);
-  } else if (task.failure || task.settled) {
-    const waiter = task.waiter;
-    task.waiter = null;
-    waiter.activity.cancel = null;
-    if (task.failure) waiter.reject(task.failure);
-    else { task.outputEnded = true; waiter.resolve(null); }
-  }
-}
-
-function enqueueTerminalText(task, value) {
-  if (value.length === 0) return;
-  const bytes = Buffer.byteLength(value, "utf8");
-  if (bytes > MAX_TERMINAL_CHUNK_BYTES || task.queuedBytes + bytes > MAX_TERMINAL_QUEUED_BYTES) {
-    failTerminal(task, new RangeError("Desktop terminal output queue exceeded 4 MiB"));
-    return;
-  }
-  if (task.waiter !== null) {
-    const waiter = task.waiter;
-    task.waiter = null;
-    waiter.activity.cancel = null;
-    waiter.resolve(value);
-    return;
-  }
-  task.queue.push(value);
-  task.queuedBytes += bytes;
-  if (!task.paused && task.queuedBytes >= TERMINAL_PAUSE_BYTES) {
-    task.paused = true;
-    task.child.stdout.pause();
-  }
-}
-
-function signalTerminalTree(task, signal) {
-  if (task.shellPid !== null) {
-    try { process.kill(-task.shellPid, signal); }
-    catch { try { process.kill(task.shellPid, signal); } catch {} }
-  }
-  signalTree(task.child, signal);
-}
-
-function failTerminal(task, error) {
-  if (!task.failure) task.failure = error instanceof Error ? error : new Error("Desktop terminal failed");
-  settleTerminalPull(task);
-  signalTerminalTree(task, "SIGKILL");
-}
-
-async function terminalMetadata(task) {
-  const stream = task.child.stdio[3];
-  if (!stream) throw new Error("Bundled terminal host ownership channel is unavailable");
-  let text = "";
-  stream.setEncoding("utf8");
-  // The ownership handshake is the one reply the host cannot proceed without,
-  // so it carries its own bound: a terminal host that neither publishes its
-  // shell nor exits fails this open instead of blocking it forever.
-  const metadata = await boundedHostWait(new Promise((resolveMetadata, rejectMetadata) => {
-    stream.on("data", chunk => {
-      text += chunk;
-      if (Buffer.byteLength(text, "utf8") > 256) rejectMetadata(new RangeError("Bundled terminal host metadata exceeds 256 bytes"));
-    });
-    stream.once("error", rejectMetadata);
-    stream.once("end", () => resolveMetadata(text));
-    task.child.once("error", rejectMetadata);
-    task.child.once("close", () => rejectMetadata(new Error("Bundled terminal host closed before publishing shell ownership")));
-  }), `Bundled terminal host did not publish shell ownership within ${HOST_HANDSHAKE_TIMEOUT_MS} milliseconds`, HOST_HANDSHAKE_TIMEOUT_MS);
-  let value;
-  try { value = JSON.parse(metadata); }
-  catch { throw new Error("Bundled terminal host returned invalid ownership metadata"); }
-  if (!value || typeof value !== "object" || Array.isArray(value)
-    || Object.keys(value).some(key => !["protocolVersion", "pid"].includes(key))
-    || value.protocolVersion !== 1 || !Number.isSafeInteger(value.pid) || value.pid < 1 || value.pid === task.child.pid) {
-    throw new Error("Bundled terminal host returned invalid ownership metadata");
-  }
-  return value.pid;
-}
-
-async function terminalOpen(args, owner, activity) {
-  if (!terminalGranted) throw new Error("Desktop terminal access requires desktop.permissions.terminal");
-  if (terminalHostPath === null) throw new Error("This Desktop package does not contain the official terminal host");
-  if (projectRoot === null || !fileScopes.has("project")) throw new Error("Desktop terminals require the project file grant");
-  if (args.length !== 1 || !args[0] || typeof args[0] !== "object" || Array.isArray(args[0])
-    || Object.keys(args[0]).some(key => !["columns", "rows"].includes(key))) throw new TypeError("Terminal options are invalid");
-  const columns = integer(args[0].columns ?? 80, 20, 1000, "Terminal columns");
-  const rows = integer(args[0].rows ?? 24, 5, 1000, "Terminal rows");
-  if (terminals.size >= MAX_TERMINALS) throw new RangeError("Desktop cannot own more than 4 terminals");
-  if (activity.cancelled) throw new Error("Desktop host request was cancelled");
-  const handle = allocateTerminalHandle();
-  const environment = Object.create(null);
-  for (const name of ["HOME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR"]) {
-    if (typeof process.env[name] === "string") environment[name] = process.env[name];
-  }
-  environment.TERM = "xterm-256color";
-  environment.COLORTERM = "truecolor";
-  const child = spawn(terminalHostPath, [projectLexicalRoot ?? projectRoot, String(columns), String(rows)], {
-    cwd: projectRoot,
-    env: environment,
-    shell: false,
-    windowsHide: true,
-    detached: true,
-    stdio: ["pipe", "pipe", "pipe", "pipe"],
-  });
-  let resolveResult;
-  let rejectResult;
-  const result = new Promise((resolve, reject) => { resolveResult = resolve; rejectResult = reject; });
-  result.catch(() => {});
-  const task = {
-    handle, owner, child, shellPid: null, queue: [], queuedBytes: 0, waiter: null, paused: false,
-    decoder: new StringDecoder("utf8"), failure: null, settled: false, closing: false, ownershipPublished: false, outputEnded: false,
-    result, resolveResult, rejectResult, stderr: "",
-  };
-  terminals.set(handle, task);
-  setActivityCancellation(activity, () => releaseTerminal(task, new Error("Desktop terminal start was cancelled")));
-  child.stdout.on("data", chunk => enqueueTerminalText(task, task.decoder.write(chunk)));
-  child.stderr.on("data", chunk => {
-    if (task.stderr.length < 64 * 1024) task.stderr += chunk.toString("utf8").slice(0, 64 * 1024 - task.stderr.length);
-  });
-  child.once("error", error => failTerminal(task, error));
-  child.once("close", (code, signal) => {
-    enqueueTerminalText(task, task.decoder.end());
-    task.settled = true;
-    if (task.failure) task.rejectResult(task.failure);
-    else if (code === null) task.rejectResult(new Error(`Bundled terminal host exited with ${signal ?? "an unknown signal"}${task.stderr ? `: ${task.stderr}` : ""}`));
-    else task.resolveResult({code});
-    settleTerminalPull(task);
-    if (task.ownershipPublished) respond({ protocolVersion: 1, hostEvent: "terminal-settled", owner, handle });
-  });
-  try {
-    const ownership = terminalMetadata(task);
-    // A failed spawn rejects both waits; keep the handshake observed so the
-    // losing rejection cannot escalate into a fatal drain of the whole host.
-    void ownership.catch(() => {});
-    await new Promise((resolveStart, rejectStart) => {
-      child.once("spawn", resolveStart);
-      child.once("error", rejectStart);
-    });
-    task.shellPid = await ownership;
-  } catch (error) {
-    releaseTerminal(task, error instanceof Error ? error : new Error("Bundled terminal host failed to start"));
-    throw error;
-  }
-  activity.cancel = null;
-  task.ownershipPublished = true;
-  respond({ protocolVersion: 1, hostEvent: "terminal-owned", owner, handle, pids: [child.pid, task.shellPid] });
-  if (activity.cancelled || owner !== activeOwner) {
-    releaseTerminal(task, new Error("Desktop document generation is no longer active"));
-    throw new Error("Desktop document generation is no longer active");
-  }
-  return {handle, pid: task.shellPid};
-}
-
-function terminalWrite(args, owner) {
-  if (args.length !== 2 || typeof args[1] !== "string" || Buffer.byteLength(args[1], "utf8") < 1
-    || Buffer.byteLength(args[1], "utf8") > MAX_TERMINAL_CHUNK_BYTES) throw new RangeError("Terminal write requires 1 byte through 1 MiB of text");
-  return writeTerminalFrame(ownedTerminal(args[0], owner), terminalFrame(1, Buffer.from(args[1], "utf8")));
-}
-
-function terminalResize(args, owner) {
-  if (args.length !== 3) throw new TypeError("Terminal resize arguments are invalid");
-  const columns = integer(args[1], 20, 1000, "Terminal columns");
-  const rows = integer(args[2], 5, 1000, "Terminal rows");
-  const payload = Buffer.allocUnsafe(8);
-  payload.writeUInt32BE(columns, 0);
-  payload.writeUInt32BE(rows, 4);
-  return writeTerminalFrame(ownedTerminal(args[0], owner), terminalFrame(2, payload));
-}
-
-function terminalNext(args, owner, activity) {
-  if (args.length !== 1) throw new TypeError("Terminal next arguments are invalid");
-  const task = ownedTerminal(args[0], owner);
-  if (task.waiter !== null) throw new Error("TerminalSession.next already has an active pull");
-  if (task.queue.length > 0) {
-    const value = task.queue.shift();
-    task.queuedBytes -= Buffer.byteLength(value, "utf8");
-    if (task.paused && task.queuedBytes <= TERMINAL_RESUME_BYTES) { task.paused = false; task.child.stdout.resume(); }
-    return value;
-  }
-  if (task.failure) throw task.failure;
-  if (task.settled) { task.outputEnded = true; return null; }
-  return new Promise((resolveNext, rejectNext) => {
-    const waiter = {resolve: resolveNext, reject: rejectNext, activity};
-    task.waiter = waiter;
-    setActivityCancellation(activity, () => {
-      if (task.waiter !== waiter) return;
-      task.waiter = null;
-      waiter.reject(new Error("Desktop terminal pull was cancelled"));
-    });
-  });
-}
-
-async function terminalWait(args, owner) {
-  if (args.length !== 1) throw new TypeError("Terminal wait arguments are invalid");
-  const task = ownedTerminal(args[0], owner);
-  if (!task.outputEnded) throw new Error("Terminal output must be consumed before wait()");
-  const result = await task.result;
-  terminals.delete(task.handle);
-  return result;
-}
-
-function releaseTerminal(task, error = null) {
-  if (terminals.get(task.handle) !== task || task.closing) return false;
-  task.closing = true;
-  if (error && !task.failure) task.failure = error;
-  if (task.waiter !== null) {
-    const waiter = task.waiter;
-    task.waiter = null;
-    waiter.activity.cancel = null;
-    if (error) waiter.reject(error);
-    else if (task.queue.length === 0) waiter.resolve(null);
-  }
-  try { task.child.stdin.end(terminalFrame(3)); } catch {}
-  setTimeout(() => { if (!task.settled) signalTerminalTree(task, "SIGTERM"); }, 500).unref();
-  setTimeout(() => { if (!task.settled) signalTerminalTree(task, "SIGKILL"); }, 2500).unref();
-  if (error) void task.result.finally(() => { if (terminals.get(task.handle) === task) terminals.delete(task.handle); }).catch(() => {});
-  return true;
-}
-
-async function terminalClose(args, owner) {
-  if (args.length !== 1) throw new TypeError("Terminal close arguments are invalid");
-  const task = ownedTerminal(args[0], owner);
-  releaseTerminal(task);
-  const result = await task.result;
-  terminals.delete(task.handle);
-  return result;
-}
-
-function terminalOperation(operation, args, owner, activity) {
-  if (operation === "open") return terminalOpen(args, owner, activity);
-  if (operation === "write") return terminalWrite(args, owner);
-  if (operation === "resize") return terminalResize(args, owner);
-  if (operation === "next") return terminalNext(args, owner, activity);
-  if (operation === "wait") return terminalWait(args, owner);
-  if (operation === "close") return terminalClose(args, owner);
-  throw new Error(`Unknown terminal operation '${operation}'`);
-}
-
-async function projectTaskStart(args, owner, activity) {
-  if (projectTaskPath === null || buildEnginePath === null) throw new Error("This Desktop package does not contain official project tasks");
-  if (projectRoot === null || !fileScopes.has("project")) throw new Error("Desktop project tasks require the project file grant");
-  if (args.length !== 3) throw new TypeError("Project task start arguments are invalid");
-  const [command, commandArgs, options] = args;
-  if (!["check", "test", "browserTest", "build", "fix", "package", "run"].includes(command)) throw new TypeError("Project task command is invalid");
-  if (!Array.isArray(commandArgs) || commandArgs.length > 1000 || command !== "run" && commandArgs.length > 0) {
-    throw new TypeError("Only a run project task accepts a bounded List<string> of program arguments");
-  }
-  let argumentUnits = 0;
-  for (const item of commandArgs) {
-    if (typeof item !== "string" || item.length > 1024 * 1024 || item.includes("\0")) throw new TypeError("Project task arguments must contain bounded strings");
-    argumentUnits += item.length;
-    if (argumentUnits > 1024 * 1024) throw new RangeError("Project task arguments cannot exceed 1 MiB");
-  }
-  if (!options || typeof options !== "object" || Array.isArray(options)
-    || Object.keys(options).some(key => !["timeout", "maxOutputBytes"].includes(key))) throw new TypeError("Project task options are invalid");
-  const timeout = integer(options.timeout ?? 120000, 0, 600000, "Project task timeout");
-  const maxOutputBytes = integer(options.maxOutputBytes ?? 4 * 1024 * 1024, 1, 16 * 1024 * 1024, "Project task maxOutputBytes");
-  let activeProjectTasks = 0;
-  for (const task of processHandles.values()) if (task.kind === "project-task") activeProjectTasks += 1;
-  if (activeProjectTasks >= MAX_PROJECT_TASKS) throw new RangeError("Desktop cannot own more than 4 project tasks");
-  if (processHandles.size >= 128) throw new RangeError("Desktop process handle limit reached");
-  if (activity.cancelled) throw new Error("Desktop host request was cancelled");
-  const handle = nextProcessHandle++;
-  const environment = Object.create(null);
-  for (const name of ["HOME", "LANG", "LC_ALL", "TMPDIR"]) if (typeof process.env[name] === "string") environment[name] = process.env[name];
-  environment.ESBUILD_BINARY_PATH = buildEnginePath;
-  if (command === "package") environment.VELAR_DESKTOP_PACKAGE_TEMPLATE_ROOT = await realpath(dirname(configPath));
-  const toolArguments = [projectTaskPath, command, projectLexicalRoot ?? projectRoot];
-  if (command === "run" && commandArgs.length > 0) toolArguments.push("--", ...commandArgs);
-  let task = null;
-  setActivityCancellation(activity, () => { if (task !== null) retainRetiredProcess(handle, task); });
-  task = await launchChild(process.execPath, toolArguments, {
-    cwd: projectRoot,
-    environment,
-    stdin: "",
-    timeout,
-    maxOutputBytes,
-  }, () => respond({ protocolVersion: 1, hostEvent: "process-settled", owner, handle }));
-  task.owner = owner;
-  task.kind = "project-task";
-  processHandles.set(handle, task);
-  respond({ protocolVersion: 1, hostEvent: "process-owned", owner, handle, pid: task.pid });
-  task.result.catch(() => {});
-  if (activity.cancelled || owner !== activeOwner) {
-    retainRetiredProcess(handle, task);
-    throw new Error("Desktop document generation is no longer active");
-  }
-  return {handle, pid: task.pid};
-}
-
-function projectTaskOperation(operation, args, owner, activity) {
-  if (operation === "start") return projectTaskStart(args, owner, activity);
-  if (operation === "read") return processRead(args, owner, "project-task");
-  if (operation === "wait") return processWait(args, owner, "project-task");
-  if (operation === "stop") return processStop(args, owner, "project-task");
-  throw new Error(`Unknown project-task operation '${operation}'`);
-}
 
 async function processRun(args, owner, activity) {
   const started = await processStart(args, owner, activity);
@@ -1547,8 +651,8 @@ async function processStart(args, owner, activity) {
   return { handle, pid: task.pid };
 }
 
-async function processWait(args, owner, kind = "process") {
-  const [handle, task] = ownedProcess(args[0], owner, kind);
+async function processWait(args, owner) {
+  const [handle, task] = ownedProcess(args[0], owner);
   if (task.reading) throw new Error("Process wait() cannot run while next() is pending");
   task.waitStarted = true;
   if (task.waitRetained && !task.settled) signalTree(task.child, "SIGKILL");
@@ -1558,16 +662,16 @@ async function processWait(args, owner, kind = "process") {
   return outcome;
 }
 
-async function processRead(args, owner, kind = "process") {
-  const [, task] = ownedProcess(args[0], owner, kind);
+async function processRead(args, owner) {
+  const [, task] = ownedProcess(args[0], owner);
   return task.next();
 }
 
-async function processStop(args, owner, kind = "process") {
+async function processStop(args, owner) {
   const handle = processHandle(args[0]);
   const task = processHandles.get(handle);
   if (!task) return { result: null, error: null };
-  if (task.kind !== kind) throw new Error(`Desktop ${kind === "process" ? "process" : "project task"} handle is unknown or already released`);
+  if (task.kind !== "process") throw new Error("Desktop process handle is unknown or already released");
   if (task.owner !== owner) throw new Error("Desktop process handle belongs to another document generation");
   task.stop();
   const outcome = await waitForTask(task);
@@ -1576,10 +680,10 @@ async function processStop(args, owner, kind = "process") {
   return { result: outcome.result, error: outcome.error };
 }
 
-function ownedProcess(value, owner, kind = "process") {
+function ownedProcess(value, owner) {
   const handle = processHandle(value);
   const task = processHandles.get(handle);
-  if (!task || task.kind !== kind) throw new Error(`Desktop ${kind === "process" ? "process" : "project task"} handle is unknown or already released`);
+  if (!task || task.kind !== "process") throw new Error("Desktop process handle is unknown or already released");
   if (task.owner !== owner) throw new Error("Desktop process handle belongs to another document generation");
   return [handle, task];
 }
@@ -1606,15 +710,6 @@ function retireOwner(owner) {
     if (task.owner === owner) releaseFileWatcher(task, new Error("Desktop document generation retired"));
   }
   for (const activity of activeRequests.values()) if (activity.owner === owner) cancelActivity(activity);
-  for (const task of languageServers.values()) {
-    if (task.owner === owner) releaseLanguageServer(task, new Error("Desktop document generation retired"));
-  }
-  for (const task of projectChangeHandles.values()) {
-    if (task.owner === owner) releaseProjectChangeHandle(task, new Error("Desktop document generation retired"));
-  }
-  for (const task of terminals.values()) {
-    if (task.owner === owner) releaseTerminal(task, new Error("Desktop document generation retired"));
-  }
   for (const [handle, task] of processHandles) {
     if (task.owner === owner) retainRetiredProcess(handle, task);
   }
@@ -1632,9 +727,6 @@ async function fatalDrain() {
   reader.removeAllListeners("line");
   reader.close();
   for (const task of fileWatchers.values()) releaseFileWatcher(task, new Error("Desktop capability host failed"));
-  for (const task of languageServers.values()) releaseLanguageServer(task, new Error("Desktop capability host failed"));
-  retireProjectTransactionOwner(new Error("Desktop capability host failed"));
-  for (const task of terminals.values()) releaseTerminal(task, new Error("Desktop capability host failed"));
   const tasks = Array.from(processHandles.values());
   for (const task of tasks) task.stop();
   for (const request of httpHandles.values()) request.controller.abort(new Error("Desktop capability host failed"));
@@ -1665,19 +757,19 @@ function processError(value) {
   return new Error(value.message);
 }
 
-function terminalProcessOutcome(task) {
+function processCompletionOutcome(task) {
   return task.result.then(
     (result) => ({ result, error: null, retained: false }),
     (failure) => ({ result: null, error: processErrorRecord(failure), retained: false }),
   );
 }
 
-async function processConfirmationOutcome(terminal) {
+async function processConfirmationOutcome(completion) {
   let timer = null;
   const confirmationFailure = new Error(`Process termination could not be confirmed within ${PROCESS_STOP_CONFIRMATION_TIMEOUT_MS} milliseconds`);
   try {
     return await Promise.race([
-      terminal,
+      completion,
       new Promise((resolveOutcome) => {
         timer = setTimeout(
           () => resolveOutcome({ result: null, error: processErrorRecord(confirmationFailure), retained: true }),
@@ -1691,27 +783,27 @@ async function processConfirmationOutcome(terminal) {
 }
 
 async function waitForTask(task) {
-  const terminal = terminalProcessOutcome(task);
+  const completion = processCompletionOutcome(task);
   if (!task.terminationRequested) {
-    const first = await Promise.race([terminal, task.termination.then(() => processTerminationMarker)]);
+    const first = await Promise.race([completion, task.termination.then(() => processTerminationMarker)]);
     if (first !== processTerminationMarker) return first;
   }
   if (task.rootExited && !task.stopping) {
-    const afterExit = await Promise.race([terminal, task.stopRequest.then(() => processStopMarker)]);
+    const afterExit = await Promise.race([completion, task.stopRequest.then(() => processStopMarker)]);
     if (afterExit !== processStopMarker) return afterExit;
-    return await processConfirmationOutcome(terminal);
+    return await processConfirmationOutcome(completion);
   }
-  const confirmation = processConfirmationOutcome(terminal);
+  const confirmation = processConfirmationOutcome(completion);
   const first = await Promise.race([
-    terminal,
+    completion,
     confirmation,
     task.stopping ? new Promise(() => {}) : task.rootExit.then(() => processRootExitMarker),
   ]);
   if (first !== processRootExitMarker) return first;
   if (task.stopping) return await confirmation;
-  const afterExit = await Promise.race([terminal, task.stopRequest.then(() => processStopMarker)]);
+  const afterExit = await Promise.race([completion, task.stopRequest.then(() => processStopMarker)]);
   if (afterExit !== processStopMarker) return afterExit;
-  return await processConfirmationOutcome(terminal);
+  return await processConfirmationOutcome(completion);
 }
 
 function processHandle(value) {
@@ -2213,8 +1305,6 @@ function respond(value) {
 
 process.once("exit", () => {
   for (const task of processHandles.values()) signalTree(task.child, "SIGKILL");
-  for (const task of languageServers.values()) signalTree(task.child, "SIGKILL");
-  for (const task of terminals.values()) signalTerminalTree(task, "SIGKILL");
 });
 process.on("uncaughtException", () => { void fatalDrain(); });
 process.on("unhandledRejection", () => { void fatalDrain(); });

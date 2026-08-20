@@ -8,22 +8,17 @@ import { isHostErrorCode } from "./host-error.ts";
 
 export const STATIC_DEPLOYMENT_MANIFEST_NAME = "velar-deploy.json";
 export const STATIC_FALLBACK_NAME = "404.html";
-export const NETLIFY_HEADERS_NAME = "_headers";
-export const NETLIFY_REDIRECTS_NAME = "_redirects";
 const reservedRootFiles = new Set([
   "index.html",
   STATIC_FALLBACK_NAME,
   "velar-build.json",
   STATIC_DEPLOYMENT_MANIFEST_NAME,
-  NETLIFY_HEADERS_NAME,
-  NETLIFY_REDIRECTS_NAME,
 ]);
 
 export interface StaticDeploymentSummary {
   readonly manifest: typeof STATIC_DEPLOYMENT_MANIFEST_NAME;
   readonly fallback: typeof STATIC_FALLBACK_NAME | null;
   readonly contentSecurityPolicy: boolean;
-  readonly adapter: "neutral" | "netlify";
 }
 
 export interface StaticDeploymentManifest {
@@ -41,10 +36,6 @@ export interface StaticDeploymentManifest {
     readonly assets: "public, max-age=31536000, immutable";
     readonly documents: "no-cache";
   };
-  readonly adapter: {
-    readonly name: "netlify";
-    readonly files: readonly (typeof NETLIFY_HEADERS_NAME | typeof NETLIFY_REDIRECTS_NAME)[];
-  } | null;
 }
 
 /**
@@ -132,7 +123,7 @@ export async function writeStaticDeployment(
     `${config.base}${STATIC_DEPLOYMENT_MANIFEST_NAME}`,
     ...(config.spaFallback ? [`${config.base}${STATIC_FALLBACK_NAME}`] : []),
   ];
-  const contract: Omit<StaticDeploymentManifest, "adapter"> = {
+  const manifest: StaticDeploymentManifest = {
     formatVersion: 2,
     kind: "velar-static-deployment",
     compiler: { name: "velar", version: VELAR_VERSION },
@@ -146,40 +137,11 @@ export async function writeStaticDeployment(
     ],
     caching: { assets: "public, max-age=31536000, immutable", documents: "no-cache" },
   };
-  const adapterFiles = config.adapter === "netlify"
-    ? await writeNetlifyAdapter(outputDirectory, contract)
-    : null;
-  const manifest: StaticDeploymentManifest = {
-    ...contract,
-    adapter: adapterFiles ? { name: "netlify", files: adapterFiles } : null,
-  };
   if (config.spaFallback) await writeFile(join(outputDirectory, STATIC_FALLBACK_NAME), html, "utf8");
   await writeFile(join(outputDirectory, STATIC_DEPLOYMENT_MANIFEST_NAME), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
   return {
     manifest: STATIC_DEPLOYMENT_MANIFEST_NAME,
     fallback: config.spaFallback ? STATIC_FALLBACK_NAME : null,
     contentSecurityPolicy: config.contentSecurityPolicy !== null,
-    adapter: config.adapter,
   };
-}
-
-async function writeNetlifyAdapter(
-  outputDirectory: string,
-  manifest: Omit<StaticDeploymentManifest, "adapter">,
-): Promise<readonly (typeof NETLIFY_HEADERS_NAME | typeof NETLIFY_REDIRECTS_NAME)[]> {
-  const headerSource = `${manifest.headers.map((rule) => [
-    rule.path,
-    ...Object.entries(rule.values).map(([name, value]) => `  ${name}: ${value}`),
-  ].join("\n")).join("\n\n")}\n`;
-  await writeFile(join(outputDirectory, NETLIFY_HEADERS_NAME), headerSource, "utf8");
-  const files: Array<typeof NETLIFY_HEADERS_NAME | typeof NETLIFY_REDIRECTS_NAME> = [NETLIFY_HEADERS_NAME];
-  if (manifest.spaFallback) {
-    await writeFile(
-      join(outputDirectory, NETLIFY_REDIRECTS_NAME),
-      "/assets/* /404.html 404\n/* /index.html 200\n",
-      "utf8",
-    );
-    files.push(NETLIFY_REDIRECTS_NAME);
-  }
-  return files;
 }

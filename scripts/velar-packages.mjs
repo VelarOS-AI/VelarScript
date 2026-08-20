@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
  * D63 rule 159 — which packages make up the toolchain is a derived fact, not a
  * list somebody maintains. Toolchain implementations live under `packages/`;
  * ordinary VelarScript source libraries live under `libraries/`; concrete
- * ecosystem integrations live under `adapters/`. npm sees all three as
+ * ecosystem adapters live under `adapters/` and host integrations under
+ * `integrations/`. npm sees all four as
  * workspaces, but only `packages/` defines a toolchain release.
  *
  * `tests/package.acceptance.ts` named eight packages as literal `pack()` calls
@@ -83,6 +84,11 @@ export async function velarAdapters(root = workspaceRoot) {
   return workspacePackagesUnder(root, "adapters");
 }
 
+/** Independently versioned host and deployment integrations. */
+export async function velarIntegrations(root = workspaceRoot) {
+  return workspacePackagesUnder(root, "integrations");
+}
+
 /** Every publishable package in the toolchain release generation. */
 export async function velarPublishedToolchainPackages(root = workspaceRoot) {
   return (await velarToolchainPackages(root)).filter((entry) => !entry.private);
@@ -98,12 +104,27 @@ export async function velarPublishedAdapters(root = workspaceRoot) {
   return (await velarAdapters(root)).filter((entry) => !entry.private);
 }
 
+/** Every publishable host integration kept outside the language toolchain. */
+export async function velarPublishedIntegrations(root = workspaceRoot) {
+  return (await velarIntegrations(root)).filter((entry) => !entry.private);
+}
+
+/** Every independently versioned ecosystem package, outside toolchain lockstep. */
+export async function velarPublishedEcosystemPackages(root = workspaceRoot) {
+  return [
+    ...await velarPublishedLibraries(root),
+    ...await velarPublishedAdapters(root),
+    ...await velarPublishedIntegrations(root),
+  ].sort((left, right) => left.name.localeCompare(right.name));
+}
+
 /** Every publishable workspace package, used by source-package consumer gates. */
 export async function velarPublishedWorkspacePackages(root = workspaceRoot) {
   const workspaces = [
     ...await velarPublishedToolchainPackages(root),
     ...await velarPublishedLibraries(root),
     ...await velarPublishedAdapters(root),
+    ...await velarPublishedIntegrations(root),
   ].sort((left, right) => left.name.localeCompare(right.name));
   for (let index = 1; index < workspaces.length; index += 1) {
     if (workspaces[index - 1].name === workspaces[index].name) {
@@ -153,6 +174,29 @@ export async function velarToolchainBuildOrder(root = workspaceRoot) {
   };
   // The toolchain roster is sorted by name, so the traversal — and therefore
   // the build order — is the same on every machine.
+  for (const entry of packages) visit(entry);
+  return order;
+}
+
+/** Every compiled publishable workspace package, in dependency-first order. */
+export async function velarWorkspaceBuildOrder(root = workspaceRoot) {
+  const packages = await velarPublishedWorkspacePackages(root);
+  const byName = new Map(packages.map((entry) => [entry.name, entry]));
+  const order = [];
+  const placed = new Set();
+  const visiting = new Set();
+  const visit = (entry) => {
+    if (placed.has(entry.name)) return;
+    if (visiting.has(entry.name)) throw new Error(`workspace dependency cycle through ${entry.name}`);
+    visiting.add(entry.name);
+    for (const dependency of Object.keys(entry.manifest.dependencies ?? {}).sort()) {
+      const workspace = byName.get(dependency);
+      if (workspace) visit(workspace);
+    }
+    visiting.delete(entry.name);
+    placed.add(entry.name);
+    if (entry.manifest.scripts?.build) order.push(entry);
+  };
   for (const entry of packages) visit(entry);
   return order;
 }

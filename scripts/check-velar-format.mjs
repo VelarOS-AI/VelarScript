@@ -48,7 +48,7 @@ for (const file of files) {
 // comes from them, so they answer to the formatter like every other example.
 let templateCount = 0;
 for (const template of VELAR_PROJECT_TEMPLATES) {
-  for (const [name, source] of createTemplateFiles(template, join(root, "example-app"), "0.11.1", 2)) {
+  for (const [name, source] of createTemplateFiles(template, join(root, "example-app"), "0.12.0", 2)) {
     if (!name.endsWith(".vel")) continue;
     templateCount += 1;
     if (!isFormatted(source)) failures.push(`packages/create template ${template}: ${name}`);

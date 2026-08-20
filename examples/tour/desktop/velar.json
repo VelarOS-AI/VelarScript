@@ -21,7 +21,6 @@
         "project"
       ],
       "processes": [],
-      "terminal": false,
       "network": [],
       "environment": [],
       "secrets": []

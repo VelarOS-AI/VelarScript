@@ -1,8 +1,7 @@
 export const VELAR_DESKTOP_API_VERSION = "0.10";
-// The complete Project transaction owner adds about 4.39 MiB to the mandatory
-// capability Worker. 32 MiB is the current default accounting threshold, not
-// an architectural ceiling: projects may raise it explicitly when their
-// measured application payload justifies the increase.
+// The budget covers only the native shell, renderer, capability host, and
+// metadata. Product tooling is installed by products rather than bundled into
+// every Desktop application.
 export const DEFAULT_DESKTOP_SIZE_BUDGET_BYTES = 32 * 1024 * 1024;
 
 export interface DesktopWindowConfig {
@@ -16,7 +15,6 @@ export interface DesktopWindowConfig {
 export interface DesktopPermissionConfig {
   readonly files: readonly ("app-data" | "project")[];
   readonly processes: readonly string[];
-  readonly terminal: boolean;
   readonly network: readonly string[];
   readonly environment: readonly string[];
   readonly secrets: readonly string[];
@@ -77,7 +75,7 @@ function windowConfig(value: unknown, productName: string, manifestPath: string)
 
 function permissionConfig(value: unknown, manifestPath: string): DesktopPermissionConfig {
   const permissions = value === undefined ? {} : objectField(value, "desktop.permissions", manifestPath);
-  knownFields(permissions, new Set(["files", "processes", "terminal", "network", "environment", "secrets"]), "desktop.permissions", manifestPath);
+  knownFields(permissions, new Set(["files", "processes", "network", "environment", "secrets"]), "desktop.permissions", manifestPath);
   const files = stringList(permissions.files, "desktop.permissions.files", 3);
   const validFileScopes = new Set(["app-data", "project"]);
   for (const scope of files) if (!validFileScopes.has(scope)) throw new Error(`${manifestPath}: unknown desktop file scope '${scope}'`);
@@ -85,7 +83,6 @@ function permissionConfig(value: unknown, manifestPath: string): DesktopPermissi
   for (const command of processes) {
     if (!/^[A-Za-z0-9._+-]{1,128}$/u.test(command)) throw new Error(`${manifestPath}: desktop process permissions must be executable names, not paths or shell text`);
   }
-  const terminal = booleanField(permissions.terminal, "desktop.permissions.terminal", false);
   const network = stringList(permissions.network, "desktop.permissions.network", 64);
   for (const origin of network) {
     let parsed: URL;
@@ -106,7 +103,7 @@ function permissionConfig(value: unknown, manifestPath: string): DesktopPermissi
     if (!/^[A-Z_][A-Z0-9_]{0,127}$/u.test(name)) throw new Error(`${manifestPath}: desktop secret permissions must be uppercase variable names`);
     if (environment.includes(name)) throw new Error(`${manifestPath}: desktop secret '${name}' cannot also be exposed through desktop.permissions.environment`);
   }
-  return Object.freeze({ files: files as DesktopPermissionConfig["files"], processes, terminal, network, environment, secrets });
+  return Object.freeze({ files: files as DesktopPermissionConfig["files"], processes, network, environment, secrets });
 }
 
 function buildConfig(value: unknown, manifestPath: string): VelarDesktopConfig["build"] {

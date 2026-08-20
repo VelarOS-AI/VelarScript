@@ -36,9 +36,7 @@ import { readVelarSourceFile } from "./source-limits.ts";
 import { parseDependencyArguments, runDependencyCommand, type DependencyAction } from "./package-manager.ts";
 import { hostErrorMessage, isHostErrorCode } from "./host-error.ts";
 import { loadApplicationPackageHost, validateApplicationPackageResult } from "./application-package-host.ts";
-import { buildLanguageServerTool, VELAR_LANGUAGE_SERVER_TOOL_ID } from "./language-server-tool.ts";
-import { buildProjectTaskTool, VELAR_PROJECT_TASK_TOOL_ID } from "./project-task-tool.ts";
-import { buildBuildEngineTool, VELAR_BUILD_ENGINE_TOOL_ID } from "./build-engine-tool.ts";
+import { buildLanguageServerTool } from "./language-server-tool.ts";
 import { applyProjectMechanicalFixes } from "./mechanical-fixer.ts";
 import { bundleStandaloneJavaScript, needsStandaloneJavaScriptBundle } from "./standalone-build.ts";
 import { resolveInstalledPackageRoot } from "./installed-package.ts";
@@ -537,7 +535,6 @@ async function main(arguments_: readonly string[]): Promise<number> {
     try {
       const packageHost = await loadApplicationPackageHost(projectConfig);
       let buildRequests = 0;
-      const toolRequests = new Set<string>();
       let frameworkBuild: Promise<void> | null = null;
       const packageResult = await packageHost.packageApplication({
         projectRoot: projectConfig.root,
@@ -548,18 +545,6 @@ async function main(arguments_: readonly string[]): Promise<number> {
           const outputDirectory = packageFrameworkOutput(projectConfig.root, requestedOutput);
           frameworkBuild = writeFrameworkProductionApplication(project, outputDirectory);
           await frameworkBuild;
-        },
-        buildTool: async (tool) => {
-          if (!tool || typeof tool.outputFile !== "string"
-            || ![VELAR_LANGUAGE_SERVER_TOOL_ID, VELAR_PROJECT_TASK_TOOL_ID, VELAR_BUILD_ENGINE_TOOL_ID].includes(tool.id)) {
-            throw new Error(`application package host requested unknown official tool '${String(tool?.id ?? "")}'`);
-          }
-          if (toolRequests.has(tool.id)) throw new Error(`application package host requested official tool '${tool.id}' more than once`);
-          toolRequests.add(tool.id);
-          const outputFile = packageFrameworkOutput(projectConfig.root, tool.outputFile);
-          if (tool.id === VELAR_LANGUAGE_SERVER_TOOL_ID) await buildLanguageServerTool(outputFile);
-          else if (tool.id === VELAR_PROJECT_TASK_TOOL_ID) await buildProjectTaskTool(outputFile);
-          else await buildBuildEngineTool(outputFile);
         },
       });
       if (buildRequests !== 1 || !frameworkBuild) throw new Error("application package host did not request exactly one checked framework build");

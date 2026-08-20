@@ -1,128 +1,87 @@
-# VelarScript Static Deployment Contract
+# VelarScript static deployment contract
 
-Status: production contract retained for VelarScript 0.10 internal development
-
-`velar build` creates a complete static Web application in an isolated staging
-directory. Only a successful build replaces the configured output directory.
-This removes stale assets and leaves the previous complete build intact when
-compilation, public-asset validation, bundling, or manifest generation fails.
-
-After building, use the product-owned integrity and local-hosting commands:
+`velar build` creates one provider-neutral static Web application in an
+isolated staging directory. Only a successful build replaces the configured
+output, so stale files disappear and a failed build preserves the last complete
+artifact.
 
 ```sh
+velar build
 velar verify
 velar preview --port 4173
 velar verify-deployment --url https://preview.example.com
 ```
 
-`verify` requires exact equality between the output file tree and the format-3
-framework-build asset inventory, rejects symbolic links and unsafe/duplicate paths, checks
-every size and SHA-256, recomputes `buildId`, and cross-checks entry,
-stylesheet, deployment, CSP, cache, fallback, and adapter contracts. `preview`
-always runs this verification first. It applies the declared base and headers,
-supports GET/HEAD only, uses SPA fallback only for HTML navigation, and returns
-404 for a missing asset instead of hiding deployment defects. An undecodable
-percent sequence is served through the SPA fallback only for an in-base HTML
-navigation, allowing the typed/default application 404 to recover; the same
-malformed path with an asset request remains a 400 response.
+`verify` requires exact equality between the directory and the format-3
+`velar-build.json` inventory. It rejects symbolic links and unsafe or duplicate
+paths, verifies every byte count and SHA-256, recomputes `buildId`, and
+cross-checks entry, stylesheet, source-map, CSP, cache, and fallback facts.
+`preview` always performs that verification before serving.
 
-`verify-deployment` closes the gap between a correct directory and what users
-actually receive. It reuses the local verifier, then compares every public file
-and `velar-build.json` with the explicit HTTPS origin by decoded byte size and
-SHA-256. It checks MIME types, all applicable security/cache headers, root and
-deep SPA navigation, and a unique missing hashed asset. Redirects and login
-pages are not followed. `VELAR_DEPLOYMENT_URL` is the CI alternative to
-`--url`; HTTP is accepted only for localhost/loopback acceptance.
-`--json` emits a format-version-1 report containing the timestamp, exact target,
-compiler/API identity, source-map policy, `buildId`, and check counts. The
-report records a successful observation; it becomes provenance evidence only
-when an external system signs or attests it.
+`verify-deployment` compares every public file with an explicit HTTPS origin
+by decoded byte size and SHA-256. It also checks MIME types, applicable
+security/cache headers, root and deep SPA navigation, and a unique missing
+hashed asset. Redirects and login pages are not followed. Loopback HTTP is
+accepted only for local acceptance. A JSON report is observation evidence;
+publisher authenticity still requires an external signature or attestation.
 
-The repository prepares its exact deployable preview with
-`npm run preview:prepare`. The command builds the checked-in root Netlify
-profile from the same Release Studio source files, disables source maps, runs
-the production verifier, and atomically writes
-`release/external-preview/site`. It refuses to replace an arbitrary directory.
-Deployment remains a separate explicit action; the prepared directory is the
-only directory the external-preview workflow expects at the target origin.
+## Generated files
 
-This is integrity and self-consistency verification, not publisher
-authentication. Authenticity still requires a trusted release signature or
-provenance over the build manifest in the external release pipeline.
+- `index.html`: framework-owned HTML entry.
+- `404.html`: optional provider-neutral SPA fallback document.
+- `velar-deploy.json`: format-2 base, framework identity, fallback, headers,
+  and caching contract.
+- `velar-build.json`: format-3 build identity and exact file inventory.
+- `assets/*`: content-hashed JavaScript, CSS, and optional maps.
 
-Production source maps are not emitted by default because linked maps contain
-VelarScript source content. An application may opt in with
-`web.build.sourceMaps: true`; the policy is recorded in `velar-build.json`, and
-maps participate in the exact file inventory and `buildId`. Repeated builds of
-identical inputs must produce identical manifest and asset bytes even when the
-output directories differ.
-
-## Generated deployment files
-
-- `index.html`: framework-host-owned HTML entry with production CSP metadata.
-- `404.html`: optional SPA fallback copy for simple static hosts.
-- `velar-deploy.json`: format version 2 provider-neutral base path, framework
-  identity, fallback, header, and cache contract.
-- `velar-build.json`: format version 3 build identity, framework/host-protocol
-  identity, and hashes for every emitted file, including deployment files.
-- `assets/*`: content-hashed JavaScript, CSS, and maps.
-- `_headers` and `_redirects`: CLI deployment-adapter files when the explicit Netlify
-  adapter is selected.
-
-`web.publicConfig` is validated and compiled into the content-hashed JavaScript
-entry. Changing it therefore changes the build identity and must go through a
-new build. Static adapters do not inject environment variables at request time,
-and secrets must never be placed in this public object.
-
-Static host adapters consume `velar-deploy.json`. They must apply its security
-headers and rewrite unknown application paths to `index.html` without rewriting
-real asset requests. Content-hashed assets are immutable for one year; HTML and
-manifests use `no-cache`.
-
-## Netlify adapter
-
-Root-base applications may select the first concrete adapter:
+The CLI never emits provider control files and the Web manifest has no
+provider/adapter selector. `web.deployment` contains only portable behavior:
 
 ```json
 {
   "web": {
     "base": "/",
-    "deployment": {
-      "spaFallback": true,
-      "adapter": "netlify"
-    }
+    "deployment": { "spaFallback": true }
   }
 }
 ```
 
-The CLI deployment adapter translates every framework-projected header rule to Netlify's `_headers` syntax. Its
-redirects first map a nonexistent `/assets/*` request to `404.html` with status
-404, then apply `/* /index.html 200` as the SPA rewrite. Netlify's documented
-shadowing keeps existing assets available while preventing a missing script
-from becoming `index.html`. These are the provider's
-documented file-based [custom-header](https://docs.netlify.com/manage/routing/headers/)
-and [rewrite](https://docs.netlify.com/manage/routing/redirects/rewrites-proxies/)
-contracts. The adapter files are hashed assets in `velar-build.json`; a public
-asset cannot override them. Root HTML, fallback HTML, and both VelarScript manifests
-have explicit `no-cache` rules; content-hashed assets remain immutable.
+Provider integrations are ordinary, independently versioned packages. They
+consume `velar-deploy.json` after the neutral build and cannot acquire a
+`velar/*` module, compiler hook, manifest keyword, or hidden release coupling.
 
-The Netlify adapter currently rejects non-root `web.base`. VelarScript's neutral
-manifest and local production server support a subpath, but silently pretending
-that Netlify will strip that prefix would misroute physical assets. A future
-path-aware adapter must prove that mapping before this restriction is relaxed.
+## Netlify integration
 
-## Default security policy
+Install and run `@velarscript/netlify` separately:
 
-Production HTML and the deployment header contract default to a restrictive
-Content Security Policy: scripts and fonts are same-origin, objects and base
-URLs are disabled, forms remain same-origin, and only explicit secure API/image
-origins may be added. `style-src-attr 'unsafe-inline'` is retained narrowly for
-runtime Look variables and checked `style:property` compatibility overrides
-whose values depend on application state; raw JSX style strings and objects
-remain unavailable, and script execution never receives an inline escape
-hatch.
+```sh
+velar build
+npx velar-netlify dist netlify-bundle
+```
 
-Additional origins are configured structurally:
+The integration copies the exact verified build to `netlify-bundle/site` and
+writes `netlify-bundle/netlify.toml` beside it. Netlify uses the bundle root and
+publishes `site/`. Provider configuration therefore never alters the
+compiler-owned file inventory or build identity. The integration currently
+accepts root-base builds only, rejects symbolic links, enforces file/byte
+ceilings, and requires a new output directory.
+
+The repository's `npm run preview:prepare` flow applies this same external
+projection to the checked-in provider-neutral preview profile. Deployment
+remains a separate authorized action.
+
+## Security and public configuration
+
+Production source maps are off by default because they contain source text.
+Opt in with `web.build.sourceMaps: true`; maps then participate in the exact
+inventory and `buildId`.
+
+`web.publicConfig` is validated and compiled into the content-hashed entry.
+It is public and must never contain secrets. Static provider integrations do
+not inject environment variables into application JavaScript.
+
+Production HTML and deployment headers default to a restrictive Content
+Security Policy. Additional connect/image origins are structured exact origins:
 
 ```json
 {
@@ -131,23 +90,13 @@ Additional origins are configured structurally:
       "contentSecurityPolicy": true,
       "connectSources": ["https://api.example.com"],
       "imageSources": ["https://images.example.com"]
-    },
-    "deployment": {
-      "spaFallback": true,
-      "adapter": "neutral"
     }
   }
 }
 ```
 
-Only secure origin values are accepted. Paths, credentials, queries, hashes,
-and arbitrary CSP fragments fail configuration loading.
-
-The framework/CLI production pipeline reserves `index.html`, `404.html`,
-`velar-build.json`, `velar-deploy.json`, `_headers`, and `_redirects`. Files with those names in
-`publicDir` fail the build rather than overriding the security boundary. Public
-symbolic links are also rejected so a build cannot copy files outside the
-declared asset root. The same boundary runs in the other direction: a manifest
-key that names a public file the document will point at — `web.icon` — fails
-the build when `publicDir` holds no such regular file, instead of shipping a
-document whose own reference resolves to nothing.
+Paths, credentials, queries, hashes, and arbitrary CSP fragments are rejected.
+The production pipeline reserves only its provider-neutral generated names:
+`index.html`, `404.html`, `velar-build.json`, and `velar-deploy.json`. Public
+symbolic links are rejected, and manifest-referenced public files such as
+`web.icon` must exist as ordinary files.

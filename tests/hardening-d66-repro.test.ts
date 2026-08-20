@@ -173,7 +173,7 @@ test("D66 7A a module the bundle cannot carry is named relative to the project, 
   // file meant to be handed to a stranger.
   const directory = await project("velar-d66-repro-installed-package-", {
     "velar.json": `${JSON.stringify({ formatVersion: 2, entry: "src/main.vel" }, null, 2)}\n`,
-    "node_modules/chart-kit/package.json": JSON.stringify({ name: "chart-kit", version: "1.0.0", velar: { entry: "src/index.vel" } }),
+    "node_modules/chart-kit/package.json": JSON.stringify({ name: "chart-kit", version: "1.0.0", velar: { entry: "src/index.vel", targets: ["node"], requires: { capabilities: ["node"] } } }),
     "node_modules/chart-kit/src/index.vel": "export def scale(value: number) -> number:\n    return value * 4\n",
     "src/main.vel": 'import {scale} from "chart-kit"\n\nconst total: number = "not a number"\nprint(scale(total))\n',
   });

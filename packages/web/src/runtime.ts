@@ -492,6 +492,7 @@ function storageListenGlobal(name, callback) {
 const runtimeTypeRuntime = VELAR_TYPE_REGISTRY_RUNTIME;
 
 export const webModuleSources: ReadonlyMap<string, string> = new Map([
+  ["velar/websocket", VELAR_WEB_WEBSOCKET_RUNTIME],
   ["velar/look", String.raw`
 ${runtimeTypeRuntime}
 
@@ -3453,7 +3454,6 @@ export interface VelarWebRuntimeConfig {
 
 export function webModuleSource(source: string, web: VelarWebRuntimeConfig = { base: "/" }): string | null {
   if (source === VELAR_REACTIVE_BRIDGE_MODULE) return VELAR_REACTIVE_BRIDGE_MODULE_SOURCE;
-  if (source === "velar/websocket") return VELAR_WEB_WEBSOCKET_RUNTIME;
   if (source === "velar/worker") return VELAR_WEB_WORKER_RUNTIME;
   const value = webModuleSources.get(source);
   if (!value) return null;

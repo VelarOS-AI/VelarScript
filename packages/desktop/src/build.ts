@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { VelarDesktopConfig } from "./config.ts";
 
 export interface DesktopBuildManifest {
-  readonly formatVersion: 2;
+  readonly formatVersion: 3;
   readonly kind: "velar-desktop-build";
   readonly productName: string;
   readonly identifier: string;
@@ -26,11 +26,6 @@ export interface DesktopBuildManifest {
     readonly hostBytes: number;
     readonly rendererBytes: number;
     readonly capabilityHostBytes: number;
-    readonly languageServerBytes: number;
-    readonly projectTaskBytes: number;
-    readonly buildEngineBytes: number;
-    readonly terminalHostBytes: number;
-    readonly toolchainBytes: number;
     readonly metadataBytes: number;
     readonly totalBytes: number;
   };
@@ -50,8 +45,8 @@ interface DesktopSizeComponent {
   readonly label: string;
   readonly bytes: number;
   /**
-   * Mandatory first-party tooling ships in every Desktop application: it is not
-   * application code and cannot be removed by changing the project.
+   * Mandatory capability infrastructure ships in every Desktop application: it
+   * is not application code and cannot be removed by changing the project.
    */
   readonly mandatory: boolean;
 }
@@ -59,18 +54,17 @@ interface DesktopSizeComponent {
 interface DesktopNativeTemplate {
   readonly host: string;
   readonly worker: string;
-  readonly terminalHost: string;
   readonly icon: string;
 }
 
 const desktopPackageTemplateEnvironment = "VELAR_DESKTOP_PACKAGE_TEMPLATE_ROOT";
 
 /**
- * A packaged Desktop task has no TypeScript checkout or Swift sources. The
+ * A packaged Desktop build has no TypeScript checkout or Swift sources. The
  * native host already running it is the exact signed-architecture template it
- * may reuse; renderer and all JavaScript tools are still rebuilt from the
- * checked target project. The Worker supplies this path from its validated
- * bundle config, never from renderer input.
+ * may reuse; the renderer is still rebuilt from the checked target project.
+ * The Worker supplies this path from its validated bundle config, never from
+ * renderer input.
  */
 async function desktopNativeTemplate(): Promise<DesktopNativeTemplate | null> {
   const value = process.env[desktopPackageTemplateEnvironment];
@@ -83,7 +77,6 @@ async function desktopNativeTemplate(): Promise<DesktopNativeTemplate | null> {
   const template: DesktopNativeTemplate = {
     host: join(contents, "MacOS", "VelarDesktopHost"),
     worker: join(resources, "host", "worker.js"),
-    terminalHost: join(resources, "host", "terminal-host"),
     icon: join(resources, "VelarScript.icns"),
   };
   for (const candidate of Object.values(template)) {
@@ -99,10 +92,6 @@ function bundledCapabilityWorker(): string {
 
 function desktopSizeComponents(sizes: DesktopBuildSizes): readonly DesktopSizeComponent[] {
   return [
-    { label: "build engine (velar-build-engine)", bytes: sizes.buildEngineBytes, mandatory: true },
-    { label: "language server (velar-language-server)", bytes: sizes.languageServerBytes, mandatory: true },
-    { label: "project task host (velar-project-task)", bytes: sizes.projectTaskBytes, mandatory: true },
-    { label: "terminal host (VelarTerminalHost)", bytes: sizes.terminalHostBytes, mandatory: true },
     { label: "capability host (worker.js)", bytes: sizes.capabilityHostBytes, mandatory: true },
     { label: "native host (VelarDesktopHost)", bytes: sizes.hostBytes, mandatory: false },
     { label: "renderer (application code and assets)", bytes: sizes.rendererBytes, mandatory: false },
@@ -113,8 +102,8 @@ function desktopSizeComponents(sizes: DesktopBuildSizes): readonly DesktopSizeCo
 /**
  * MIG-3: a budget failure that reports only the total forces upstream
  * archaeology before anyone can judge whether raising the budget is safe. The
- * composition — every component, its share, and the mandatory first-party
- * tooling floor no project can shrink — makes that judgment possible in one
+ * composition — every component, its share, and the mandatory capability
+ * infrastructure floor no project can shrink — makes that judgment possible in one
  * pass, so this is the one message the failure prints.
  */
 export function desktopSizeBudgetFailure(sizes: DesktopBuildSizes, sizeBudgetBytes: number): string | null {
@@ -131,8 +120,8 @@ export function desktopSizeBudgetFailure(sizes: DesktopBuildSizes, sizeBudgetByt
     + `${formatDesktopBytes(sizes.totalBytes - sizeBudgetBytes)} (${sizes.totalBytes - sizeBudgetBytes} bytes)`,
     "Composition:",
     ...components.map((component) => `  ${component.bytes.toString().padStart(11)} bytes  ${share(component.bytes).padStart(6)}  `
-      + `${component.label}${component.mandatory ? " [mandatory first-party tooling]" : ""}`),
-    `Mandatory first-party tooling: ${formatDesktopBytes(mandatoryBytes)} (${mandatoryBytes} bytes, ${share(mandatoryBytes)} of the bundle) `
+      + `${component.label}${component.mandatory ? " [mandatory capability infrastructure]" : ""}`),
+    `Mandatory capability infrastructure: ${formatDesktopBytes(mandatoryBytes)} (${mandatoryBytes} bytes, ${share(mandatoryBytes)} of the bundle) `
     + "ships in every Desktop application and no project change removes it, so any budget below that floor can never pass",
     `Largest contributor: ${largest ? `${largest.label} at ${formatDesktopBytes(largest.bytes)} (${share(largest.bytes)})` : "none"}`,
     `Raise desktop.build.sizeBudgetBytes to at least ${sizes.totalBytes} to accept this bundle, or remove bytes from the non-mandatory components above`,
@@ -149,7 +138,6 @@ export async function buildDesktopApplication(
   projectRoot: string,
   config: VelarDesktopConfig,
   buildRenderer: (outputDirectory: string) => Promise<void>,
-  buildTool: (tool: { readonly id: string; readonly outputFile: string }) => Promise<void>,
 ): Promise<DesktopBuildResult> {
   if (process.platform !== "darwin") throw new Error("@velarscript/desktop 0.10 currently builds only the macOS system-WebView host");
   projectRoot = resolve(projectRoot);
@@ -174,21 +162,6 @@ export async function buildDesktopApplication(
     await mkdir(hostResources);
     const workerPath = join(hostResources, "worker.js");
     await cp(nativeTemplate?.worker ?? bundledCapabilityWorker(), workerPath);
-    const languageServerPath = join(hostResources, "language-server.js");
-    const projectTaskPath = join(hostResources, "project-task.js");
-    const buildEnginePath = join(hostResources, "build-engine");
-    const terminalHostPath = join(hostResources, "terminal-host");
-    await Promise.all([
-      buildTool({ id: "velar-language-server", outputFile: languageServerPath }),
-      buildTool({ id: "velar-project-task", outputFile: projectTaskPath }),
-      buildTool({ id: "velar-build-engine", outputFile: buildEnginePath }),
-    ]);
-    if (nativeTemplate) {
-      await cp(nativeTemplate.terminalHost, terminalHostPath);
-      await chmod(terminalHostPath, 0o755);
-    } else {
-      await compileMacTerminalHost(terminalHostPath);
-    }
     await cp(nativeTemplate?.icon ?? fileURLToPath(new URL("../native/macos/VelarScript.icns", import.meta.url)), join(resources, "VelarScript.icns"));
     const hostPath = join(executableDirectory, "VelarDesktopHost");
     if (nativeTemplate) {
@@ -206,38 +179,23 @@ export async function buildDesktopApplication(
       nodeMinimumMajor: 24,
       window: config.window,
       permissions: config.permissions,
-      languageServer: { path: "host/language-server.js" },
-      projectTask: { path: "host/project-task.js", buildEnginePath: "host/build-engine" },
-      terminalHost: { path: "host/terminal-host" },
     }, null, 2)}\n`, "utf8");
 
     const hostBytes = (await stat(hostPath)).size;
     const rendererBytes = await treeSize(renderer);
     const capabilityHostBytes = (await stat(workerPath)).size;
-    const languageServerBytes = (await stat(languageServerPath)).size;
-    const projectTaskBytes = (await stat(projectTaskPath)).size
-      + (await stat(join(hostResources, "playwright-core", "package.json"))).size
-      + (await stat(join(hostResources, "playwright-core", "browsers.json"))).size;
-    const buildEngineBytes = (await stat(buildEnginePath)).size;
-    const terminalHostBytes = (await stat(terminalHostPath)).size;
-    const toolchainBytes = languageServerBytes + projectTaskBytes + buildEngineBytes + terminalHostBytes;
     const totalBytes = await treeSize(applicationBundle);
-    const metadataBytes = totalBytes - hostBytes - rendererBytes - capabilityHostBytes - toolchainBytes;
+    const metadataBytes = totalBytes - hostBytes - rendererBytes - capabilityHostBytes;
     const budgetFailure = desktopSizeBudgetFailure({
       hostBytes,
       rendererBytes,
       capabilityHostBytes,
-      languageServerBytes,
-      projectTaskBytes,
-      buildEngineBytes,
-      terminalHostBytes,
-      toolchainBytes,
       metadataBytes,
       totalBytes,
     }, config.build.sizeBudgetBytes);
     if (budgetFailure) throw new Error(budgetFailure);
     const manifest: DesktopBuildManifest = Object.freeze({
-      formatVersion: 2,
+      formatVersion: 3,
       kind: "velar-desktop-build",
       productName: config.productName,
       identifier: config.identifier,
@@ -252,11 +210,6 @@ export async function buildDesktopApplication(
         hostBytes,
         rendererBytes,
         capabilityHostBytes,
-        languageServerBytes,
-        projectTaskBytes,
-        buildEngineBytes,
-        terminalHostBytes,
-        toolchainBytes,
         metadataBytes,
         totalBytes,
       }),
@@ -282,14 +235,6 @@ async function compileMacHost(output: string): Promise<void> {
   await runProcess("/usr/bin/swiftc", [
     "-Osize", "-whole-module-optimization", "-swift-version", "5", "-parse-as-library",
     "-framework", "Cocoa", "-framework", "WebKit", source, "-o", output,
-  ], dirname(output));
-  await chmod(output, 0o755);
-}
-
-async function compileMacTerminalHost(output: string): Promise<void> {
-  const source = fileURLToPath(new URL("../native/macos/VelarTerminalHost.swift", import.meta.url));
-  await runProcess("/usr/bin/swiftc", [
-    "-Osize", "-whole-module-optimization", "-swift-version", "5", source, "-o", output,
   ], dirname(output));
   await chmod(output, 0o755);
 }

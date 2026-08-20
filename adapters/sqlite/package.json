@@ -19,12 +19,14 @@
     "access": "public"
   },
   "velar": {
-    "entry": "src/index.vel"
+    "entry": "src/index.vel",
+    "targets": ["node"],
+    "requires": { "capabilities": ["node"] }
   },
   "dependencies": {
     "@velarscript/database": "0.1.0"
   },
   "peerDependencies": {
-    "@velarscript/node": ">=0.11.1 <0.12.0"
+    "@velarscript/node": ">=0.12.0 <0.13.0"
   }
 }

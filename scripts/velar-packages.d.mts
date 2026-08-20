@@ -16,6 +16,8 @@ export interface VelarPackageManifest {
   readonly velar?: {
     readonly entry?: string;
     readonly extension?: unknown;
+    readonly targets?: readonly ("core" | "node" | "web" | "desktop")[];
+    readonly requires?: { readonly capabilities?: readonly string[] };
     readonly resources?: Readonly<Record<string, {
       readonly path: string;
       readonly type: "json";
@@ -41,6 +43,9 @@ export function velarLibraries(root?: string): Promise<VelarWorkspacePackage[]>;
 /** Every independently versioned ecosystem adapter under `adapters`. */
 export function velarAdapters(root?: string): Promise<VelarWorkspacePackage[]>;
 
+/** Every independently versioned host integration under `integrations`. */
+export function velarIntegrations(root?: string): Promise<VelarWorkspacePackage[]>;
+
 /** Every publishable toolchain package, in name order. */
 export function velarPublishedToolchainPackages(root?: string): Promise<VelarWorkspacePackage[]>;
 
@@ -50,7 +55,13 @@ export function velarPublishedLibraries(root?: string): Promise<VelarWorkspacePa
 /** Every publishable external adapter, in name order. */
 export function velarPublishedAdapters(root?: string): Promise<VelarWorkspacePackage[]>;
 
-/** Every publishable package across the toolchain, library, and adapter layers. */
+/** Every publishable host integration, in name order. */
+export function velarPublishedIntegrations(root?: string): Promise<VelarWorkspacePackage[]>;
+
+/** Every publishable package outside the version-locked toolchain. */
+export function velarPublishedEcosystemPackages(root?: string): Promise<VelarWorkspacePackage[]>;
+
+/** Every publishable package across all workspace ownership layers. */
 export function velarPublishedWorkspacePackages(root?: string): Promise<VelarWorkspacePackage[]>;
 
 /** The toolchain release names. */
@@ -61,3 +72,6 @@ export function velarWorkspacePackageNames(root?: string): Promise<string[]>;
 
 /** Publishable toolchain packages that declare a build, dependencies first. */
 export function velarToolchainBuildOrder(root?: string): Promise<VelarWorkspacePackage[]>;
+
+/** All compiled workspace packages, dependencies first. */
+export function velarWorkspaceBuildOrder(root?: string): Promise<VelarWorkspacePackage[]>;

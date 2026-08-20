@@ -14,6 +14,7 @@ export const VELAR_WEB_MODULES = Object.freeze([
   "velar/files",
   "velar/realtime",
   "velar/web-test",
+  "velar/websocket",
 ] as const);
 
 export interface VelarWebFrameworkManifest {

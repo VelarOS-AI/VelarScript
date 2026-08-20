@@ -1,13 +1,14 @@
 {
   "name": "velarscript-workspace",
-  "version": "0.11.1",
+  "version": "0.12.0",
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
   "workspaces": [
     "packages/*",
     "libraries/*",
-    "adapters/*"
+    "adapters/*",
+    "integrations/*"
   ],
   "scripts": {
     "build:packages": "node scripts/gate-lock.mjs npm run gate:build:packages",
@@ -23,6 +24,8 @@
     "release:rehearse": "node scripts/release-toolchain.mjs rehearse",
     "release:verify": "node scripts/release-toolchain.mjs verify",
     "release:publish": "node scripts/publish-toolchain.mjs",
+    "release:ecosystem:rehearse": "node scripts/release-ecosystem.mjs rehearse",
+    "release:ecosystem:verify": "node scripts/release-ecosystem.mjs verify",
     "preview:prepare": "node scripts/prepare-external-preview.mjs",
     "velar": "node scripts/gate-lock.mjs npm run --silent gate:velar --",
     "gate:build:packages": "node scripts/build-packages.mjs",
@@ -42,7 +45,6 @@
   "devDependencies": {
     "@types/node": "^26.1.2",
     "@types/ws": "^8.18.1",
-    "@velaros-ai/project": "2.0.1",
     "playwright": "^1.58.2",
     "typescript": "^7.0.2"
   }

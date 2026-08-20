@@ -10,7 +10,7 @@ export const CORE_PROJECT_MANIFEST_FIELDS = Object.freeze([
 ] as const);
 
 /** Internal standard-module config carrying logical worker names to output paths. */
-export const CORE_WORKER_CONFIG_KEY = "velar:core-workers-v1";
+export { CORE_WORKER_CONFIG_KEY } from "@velarscript/core";
 
 const reservedExtensionManifestKeys = new Set<string>([
   ...CORE_PROJECT_MANIFEST_FIELDS,

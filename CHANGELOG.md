@@ -6,6 +6,40 @@ truth for acceptance status.
 
 ## Unreleased
 
+## 0.12.0 — 2026-08-20
+
+### Node server framework
+
+- Added compiler-owned anonymous route declarations, typed path-pattern
+  parameters, request inputs, providers, middleware, lifespan hooks, OpenAPI,
+  security helpers, in-process server tests, graceful shutdown, and bounded
+  WebSocket servers to the Node target.
+- Kept `@` as one compiler-metadata namespace rather than turning routes into
+  runtime decorators, and kept path-pattern strings owned by Node rather than
+  changing Core string semantics.
+
+### Package and capability boundaries
+
+- Extracted the target-neutral Standard API into `@velarscript/core`; CLI now
+  composes Core and explicit targets rather than owning the language runtime.
+- Required every source package to declare supported targets and host
+  capabilities before its source can be compiled.
+- Added the portable `@velarscript/database` model/query contract and kept the
+  concrete SQLite worker implementation in the independent
+  `@velarscript/sqlite` adapter.
+- Split WebSocket ownership into a client-only Web surface and a Node
+  client/server surface.
+
+### Product and provider separation
+
+- Removed product task orchestration, project transactions, and PTY tooling
+  from the Desktop language framework and application-package ABI.
+- Moved Netlify projection into independently versioned
+  `@velarscript/netlify`, leaving verified static output provider-neutral.
+- Added independent ecosystem package rehearsal and provenance publication
+  workflows, plus owner-specific Core, Web, Node, Desktop, adapter, and
+  integration agent guides.
+
 ## 0.11.1 — 2026-08-20
 
 ### Framework-free JSON resources

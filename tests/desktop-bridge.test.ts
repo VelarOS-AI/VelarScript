@@ -11,7 +11,6 @@ test("Desktop WebView bridge chunks large requests and responses without changin
   assert.match(hostSource, /environmentBytes \+ entryBytes <= 1024 \* 1024/u);
   assert.match(hostSource, /process\.terminationHandler/u);
   assert.match(hostSource, /case "process-owned":/u);
-  assert.match(hostSource, /case "terminal-owned":/u);
   assert.match(hostSource, /for pid in owner\.pids \{ _ = Darwin\.kill\(-pid, SIGKILL\) \}/u);
   assert.match(hostSource, /pending\.removeAll/u);
   assert.match(hostSource, /private var pending: \[Int: PendingRequest\]/u);

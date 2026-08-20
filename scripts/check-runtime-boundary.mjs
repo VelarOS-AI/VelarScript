@@ -48,7 +48,7 @@ import {
   VELAR_TYPE_VALIDATION_MODULE,
   VELAR_TYPE_VALIDATION_MODULE_SOURCE,
 } from "../packages/compiler/src/type-validation-runtime.ts";
-import { VELAR_WORKER_MANIFEST_MODULE, standardModuleInterfaces, standardModuleSources } from "../packages/cli/src/standard-modules.ts";
+import { VELAR_WORKER_MANIFEST_MODULE, standardModuleInterfaces, standardModuleSources } from "../packages/core/src/index.ts";
 import { esModuleExports } from "./es-module-exports.mjs";
 import { velarCompilerExtension as velarWebCompilerExtension } from "../packages/web/src/compiler.ts";
 import { VELAR_NODE_HOST_MODULE, velarNodeCompilerExtension } from "../packages/node/src/compiler.ts";
@@ -56,6 +56,45 @@ import { velarCompilerExtension as velarDesktopCompilerExtension } from "../pack
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const failures = [];
+const workspaceLayers = ["packages", "libraries", "adapters", "integrations"];
+const workspacePackages = [];
+for (const layer of workspaceLayers) {
+  for (const entry of await readdir(join(root, layer), { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const directory = join(root, layer, entry.name);
+    const manifest = JSON.parse(await readFile(join(directory, "package.json"), "utf8"));
+    workspacePackages.push({ layer, directory, manifest });
+  }
+}
+
+const corePackage = workspacePackages.find((package_) => package_.manifest.name === "@velarscript/core");
+if (!corePackage) failures.push("packages/core/package.json: Core package is missing");
+else if (Object.hasOwn(corePackage.manifest.dependencies ?? {}, "@velarscript/node")) {
+  failures.push("packages/core/package.json: Core must not select or depend on the Node target");
+}
+for (const package_ of workspacePackages.filter((entry) => entry.layer === "libraries" || entry.layer === "adapters")) {
+  const velar = package_.manifest.velar;
+  if (typeof velar?.entry !== "string") continue;
+  if (!Array.isArray(velar.targets) || velar.targets.length === 0) {
+    failures.push(`${display(join(package_.directory, "package.json"))}: source package must declare non-empty velar.targets`);
+  }
+  if (!Array.isArray(velar.requires?.capabilities)) {
+    failures.push(`${display(join(package_.directory, "package.json"))}: source package must declare velar.requires.capabilities`);
+  }
+}
+
+const cliStandardModulesSource = await readFile(join(root, "packages", "cli", "src", "standard-modules.ts"), "utf8");
+for (const phrase of ['from "@velarscript/core"', "extensions.length === 0 ? [velarNodeCompilerExtension] : extensions"]) {
+  if (!cliStandardModulesSource.includes(phrase)) failures.push(`packages/cli/src/standard-modules.ts: composition facade is missing '${phrase}'`);
+}
+if (cliStandardModulesSource.length > 10_000) failures.push("packages/cli/src/standard-modules.ts: CLI has reabsorbed the Core Standard API implementation");
+
+for (const package_ of workspacePackages.filter((entry) => entry.layer === "packages")) {
+  for (const file of await sourceFiles(join(package_.directory, "src"))) {
+    const source = await readFile(file, "utf8");
+    if (/netlify/iu.test(source)) failures.push(`${display(file)}: provider-specific Netlify behavior crossed into the language toolchain`);
+  }
+}
 const ledgerPath = join(root, "docs", "contributing", "runtime-boundary.md");
 const ledger = await readFile(ledgerPath, "utf8");
 const ids = new Set();
@@ -113,13 +152,7 @@ const ownedLiteral = JSON.stringify(VELAR_RUNTIME_REGISTRY_KEY);
 const ownedVersion = JSON.stringify(VELAR_RUNTIME_SCHEMA_VERSION);
 const ownedTypeLiteral = JSON.stringify(VELAR_TYPE_REGISTRY_KEY);
 const ownedPromiseLiteral = JSON.stringify(VELAR_PROMISE_NORMALIZATION_REGISTRY_KEY);
-const sourceRoots = [
-  join(root, "packages", "compiler", "src"),
-  join(root, "packages", "web", "src"),
-  join(root, "packages", "node", "src"),
-  join(root, "packages", "desktop", "src"),
-  join(root, "packages", "cli", "src"),
-];
+const sourceRoots = workspacePackages.map((package_) => join(package_.directory, "src"));
 for (const directory of sourceRoots) {
   for (const file of await sourceFiles(directory)) {
     if (file === join(root, "packages", "compiler", "src", "runtime-abi.ts")) continue;
@@ -140,12 +173,10 @@ for (const directory of sourceRoots) {
   }
 }
 
-const retiredConcreteStandardModules = [
-  "velar/msgpack",
-  "velar/compression",
-  "velar/noise",
-  "velar/sqlite",
-];
+const adapterPackages = workspacePackages.filter((package_) => package_.layer === "adapters");
+const retiredConcreteStandardModules = adapterPackages.map((package_) =>
+  `velar/${package_.manifest.name.slice(package_.manifest.name.lastIndexOf("/") + 1)}`
+);
 for (const directory of sourceRoots) {
   for (const file of await sourceFiles(directory)) {
     const source = await readFile(file, "utf8");
@@ -156,11 +187,16 @@ for (const directory of sourceRoots) {
     }
   }
 }
-for (const packageName of ["node", "cli"]) {
-  const manifestPath = join(root, "packages", packageName, "package.json");
-  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
-  const dependencies = {...manifest.dependencies, ...manifest.optionalDependencies};
-  for (const dependency of ["@velarscript/sqlite", "msgpackr", "fflate", "simplex-noise"]) {
+const concreteAdapterDependencies = new Set(adapterPackages.map((package_) => package_.manifest.name));
+for (const package_ of adapterPackages) {
+  for (const dependency of Object.keys(package_.manifest.dependencies ?? {})) {
+    if (!dependency.startsWith("@velarscript/")) concreteAdapterDependencies.add(dependency);
+  }
+}
+for (const package_ of workspacePackages.filter((entry) => entry.layer === "packages")) {
+  const manifestPath = join(package_.directory, "package.json");
+  const dependencies = {...package_.manifest.dependencies, ...package_.manifest.optionalDependencies};
+  for (const dependency of concreteAdapterDependencies) {
     if (Object.hasOwn(dependencies, dependency)) {
       failures.push(`${display(manifestPath)}: concrete adapter dependency '${dependency}' crosses the toolchain boundary`);
     }
@@ -168,7 +204,7 @@ for (const packageName of ["node", "cli"]) {
 }
 
 const strictJsonConsumers = [
-  join(root, "packages", "cli", "src", "standard-modules.ts"),
+  join(root, "packages", "core", "src", "index.ts"),
   join(root, "packages", "web", "src", "runtime.ts"),
   join(root, "packages", "node", "src", "compiler.ts"),
   join(root, "packages", "desktop", "src", "compiler.ts"),
@@ -219,6 +255,42 @@ const compilerFormatterSource = await readFile(join(root, "packages", "compiler"
 const compilerSemanticSource = await readFile(join(root, "packages", "compiler", "src", "semantic.ts"), "utf8");
 const desktopCompilerSource = await readFile(join(root, "packages", "desktop", "src", "compiler.ts"), "utf8");
 const webTypesSource = await readFile(join(root, "packages", "web", "src", "types.ts"), "utf8");
+
+const coreWebSocket = standardModuleInterfaces().get("velar/websocket");
+const webWebSocket = standardModuleInterfaces([velarWebCompilerExtension]).get("velar/websocket");
+const nodeWebSocket = standardModuleInterfaces([velarNodeCompilerExtension]).get("velar/websocket");
+if (coreWebSocket) failures.push("packages/core/src/index.ts: Core must not own the target-specific velar/websocket surface");
+if (!webWebSocket || webWebSocket.exports.has("listen") || webWebSocket.exports.has("WebSocketServer")) {
+  failures.push("packages/web/src/compiler.ts: Web velar/websocket must remain client-only");
+}
+if (!nodeWebSocket?.exports.has("listen") || !nodeWebSocket.exports.has("WebSocketServer")) {
+  failures.push("packages/node/src/compiler.ts: Node must own the WebSocket server surface");
+}
+
+const desktopSources = [];
+for (const directory of [join(root, "packages", "desktop", "src"), join(root, "packages", "desktop", "native")]) {
+  for (const file of await sourceFiles(directory)) desktopSources.push([file, await readFile(file, "utf8")]);
+}
+for (const [file, source] of desktopSources) {
+  for (const retired of [
+    "LanguageServer", "ProjectTask", "ProjectChanges", "TerminalSession", "openTerminal", "languageServer",
+    "startProjectTask", "projectChanges", "project-transactions", "terminal-owned", "language-server", "project-task", "@velaros",
+  ]) {
+    if (source.includes(retired)) failures.push(`${display(file)}: product tooling '${retired}' crossed into the Desktop language framework`);
+  }
+}
+
+const applicationPackageAbi = await readFile(join(root, "packages", "compiler", "src", "application-package-host.ts"), "utf8");
+if (applicationPackageAbi.includes("buildTool") || !applicationPackageAbi.includes("PROTOCOL_VERSION = 3")) {
+  failures.push("packages/compiler/src/application-package-host.ts: application packaging must expose only the checked framework build to its target container");
+}
+const cliSources = [];
+for (const file of await sourceFiles(join(root, "packages", "cli", "src"))) cliSources.push([file, await readFile(file, "utf8")]);
+for (const [file, source] of cliSources) {
+  for (const retired of ["VELAR_PROJECT_TASK_TOOL_ID", "VELAR_BUILD_ENGINE_TOOL_ID", "copyPackagedOfficialTool", "buildTool:"]) {
+    if (source.includes(retired)) failures.push(`${display(file)}: product-packaging hook '${retired}' crossed into the CLI`);
+  }
+}
 
 const coreTargetBoundarySources = new Map([
   ["packages/compiler/src/ast.ts", compilerAstSource],
@@ -389,7 +461,7 @@ for (const phrase of [
   if (compilerEmitterSource.includes(phrase)) failures.push(`packages/compiler/src/emitter.ts: retains ambient reactive bridge helper '${phrase}'`);
 }
 const projectCompilerSource = await readFile(join(root, "packages", "cli", "src", "project.ts"), "utf8");
-const standardModulesSource = await readFile(join(root, "packages", "cli", "src", "standard-modules.ts"), "utf8");
+const standardModulesSource = await readFile(join(root, "packages", "core", "src", "index.ts"), "utf8");
 const cliSource = await readFile(join(root, "packages", "cli", "src", "cli.ts"), "utf8");
 const browserTestRunnerSource = await readFile(join(root, "packages", "cli", "src", "browser-test-runner.ts"), "utf8");
 const browserProcessOwnerSource = await readFile(join(root, "packages", "cli", "src", "browser-process-owner.ts"), "utf8");
@@ -398,34 +470,34 @@ if (!projectCompilerSource.includes("sharedRuntimeModules: true")) {
   failures.push("packages/cli/src/project.ts: project compilation does not request shared compiler runtime modules");
 }
 if (!standardModulesSource.includes("[VELAR_REACTIVE_BRIDGE_MODULE, VELAR_NON_REACTIVE_BRIDGE_MODULE_SOURCE]")) {
-  failures.push("packages/cli/src/standard-modules.ts: Core's static compiler bridge is not available to project execution paths");
+  failures.push("packages/core/src/index.ts: Core's static compiler bridge is not available to project execution paths");
 }
 if (!standardModulesSource.includes("[VELAR_PRIMITIVE_METHOD_MODULE, VELAR_PRIMITIVE_METHOD_MODULE_SOURCE]")) {
-  failures.push("packages/cli/src/standard-modules.ts: shared primitive runtime source is not available to project execution paths");
+  failures.push("packages/core/src/index.ts: shared primitive runtime source is not available to project execution paths");
 }
 if (!standardModulesSource.includes("[VELAR_PROMISE_NORMALIZATION_MODULE, VELAR_PROMISE_NORMALIZATION_MODULE_SOURCE]")) {
-  failures.push("packages/cli/src/standard-modules.ts: shared Promise runtime source is not available to project execution paths");
+  failures.push("packages/core/src/index.ts: shared Promise runtime source is not available to project execution paths");
 }
 if (!standardModulesSource.includes("[VELAR_CLASS_FIELD_MODULE, VELAR_CLASS_FIELD_MODULE_SOURCE]")) {
-  failures.push("packages/cli/src/standard-modules.ts: shared class-field runtime source is not available to project execution paths");
+  failures.push("packages/core/src/index.ts: shared class-field runtime source is not available to project execution paths");
 }
 if (!standardModulesSource.includes("[VELAR_COLLECTION_HOST_MODULE, VELAR_COLLECTION_HOST_MODULE_SOURCE]")) {
-  failures.push("packages/cli/src/standard-modules.ts: shared collection host source is not available to project execution paths");
+  failures.push("packages/core/src/index.ts: shared collection host source is not available to project execution paths");
 }
 if (!standardModulesSource.includes("[VELAR_COLLECTION_LOWERING_MODULE, VELAR_COLLECTION_LOWERING_MODULE_SOURCE]")) {
-  failures.push("packages/cli/src/standard-modules.ts: shared collection lowering source is not available to project execution paths");
+  failures.push("packages/core/src/index.ts: shared collection lowering source is not available to project execution paths");
 }
 if (!standardModulesSource.includes("[VELAR_COLLECTION_LOWERING_MODULE, VELAR_COLLECTION_LOWERING_DEPENDENCIES]")) {
-  failures.push("packages/cli/src/standard-modules.ts: shared collection lowering dependencies are not registered");
+  failures.push("packages/core/src/index.ts: shared collection lowering dependencies are not registered");
 }
 if (!standardModulesSource.includes("[VELAR_ERROR_NORMALIZATION_MODULE, VELAR_ERROR_NORMALIZATION_MODULE_SOURCE]")) {
-  failures.push("packages/cli/src/standard-modules.ts: shared error runtime source is not available to project execution paths");
+  failures.push("packages/core/src/index.ts: shared error runtime source is not available to project execution paths");
 }
 if (!standardModulesSource.includes("[VELAR_NARROWING_MODULE, VELAR_NARROWING_MODULE_SOURCE]")) {
-  failures.push("packages/cli/src/standard-modules.ts: shared narrowing runtime source is not available to project execution paths");
+  failures.push("packages/core/src/index.ts: shared narrowing runtime source is not available to project execution paths");
 }
 if (!standardModulesSource.includes("[VELAR_TYPE_VALIDATION_MODULE, VELAR_TYPE_VALIDATION_MODULE_SOURCE]")) {
-  failures.push("packages/cli/src/standard-modules.ts: shared runtime-Type source is not available to project execution paths");
+  failures.push("packages/core/src/index.ts: shared runtime-Type source is not available to project execution paths");
 }
 const coreInterfaceSection = standardModulesSource.slice(
   standardModulesSource.indexOf("const coreModuleInterfaces"),
@@ -433,7 +505,7 @@ const coreInterfaceSection = standardModulesSource.slice(
 );
 for (const internalModule of ["VELAR_REACTIVE_BRIDGE_MODULE", "VELAR_PRIMITIVE_METHOD_MODULE", "VELAR_PROMISE_NORMALIZATION_MODULE", "VELAR_CLASS_FIELD_MODULE", "VELAR_COLLECTION_HOST_MODULE", "VELAR_COLLECTION_LOWERING_MODULE", "VELAR_ERROR_NORMALIZATION_MODULE", "VELAR_NARROWING_MODULE", "VELAR_TYPE_VALIDATION_MODULE"]) {
   if (coreInterfaceSection.includes(internalModule)) {
-    failures.push(`packages/cli/src/standard-modules.ts: internal compiler runtime '${internalModule}' leaked into the public standard-module API`);
+    failures.push(`packages/core/src/index.ts: internal compiler runtime '${internalModule}' leaked into the public standard-module API`);
   }
 }
 for (const phrase of [
@@ -1737,7 +1809,7 @@ for (const phrase of [
   if (!coreTextModuleSource.includes(phrase)) failures.push(`packages/cli: velar/text is missing captured host operation '${phrase}'`);
 }
 if (/\b(?:Array|String|Number|Math|Object|Reflect)\.(?:isArray|isSafeInteger|isInteger|floor|max|min|getOwnPropertyDescriptor|getOwnPropertyNames|getOwnPropertySymbols|getPrototypeOf|create|freeze)\s*\(|\b(?:String|RegExp)\.prototype\b|\bnew (?:Array|Set|TypeError|RangeError)\b|\.(?:call|push|map|join|slice|replace|replaceAll|split|normalize|toLowerCase|toUpperCase|match)\s*\(|for \(const /u.test(coreTextModuleSource)) {
-  failures.push("packages/cli/src/standard-modules.ts: velar/text bypasses its captured Array, text, RegExp, reflection, numeric, iterator, or Error ABI");
+  failures.push("packages/core/src/index.ts: velar/text bypasses its captured Array, text, RegExp, reflection, numeric, iterator, or Error ABI");
 }
 for (const phrase of [
   "const __velarTypeNativeWeakSet = globalThis.WeakSet",
@@ -1762,7 +1834,7 @@ for (const phrase of [
 }
 if (!coreJsonModuleSource.includes("__velarJsonApply(__velarJsonArraySort, keys")) failures.push("packages/cli: velar/json stableStringify must consume the compiler-owned captured JSON sort ABI");
 if (/\b(?:Array|Map|Set|WeakSet|Object|Reflect|Symbol)\.(?:isArray|entries|values|has|get|sort|getOwnPropertyDescriptor|getOwnPropertyNames|getOwnPropertySymbols|getPrototypeOf|for)\s*\(|\bnew (?:WeakSet|TypeError|RangeError)\b|\.(?:has|add|delete|entries|values|sort|every|call)\s*\(/u.test(coreTestDisplayRuntimeSource + "\n" + coreJsonModuleSource)) {
-  failures.push("packages/cli/src/standard-modules.ts: velar/json or the test display runtime bypasses its captured graph, order, reflection, Type, or Error ABI");
+  failures.push("packages/core/src/index.ts: velar/json or the test display runtime bypasses its captured graph, order, reflection, Type, or Error ABI");
 }
 for (const phrase of [
   "const __velarCollectionsNativeArray = globalThis.Array",
@@ -1778,7 +1850,7 @@ for (const phrase of [
   if (!coreCollectionsModuleSource.includes(phrase)) failures.push(`packages/cli: velar/collections is missing captured host operation '${phrase}'`);
 }
 if (/\b(?:Array|Map|Set|Number|Math|Object|Reflect)\.(?:from|isArray|isFinite|isNaN|isSafeInteger|max|min|floor|freeze|is|get|set|has|add)\s*\(|\bnew (?:Array|Map|Set|TypeError|RangeError)\b|\.(?:map|filter|slice|reverse|find|findIndex|some|every|reduce|sort|join|push|get|set|has|add|call)\s*\(/u.test(coreCollectionsModuleSource)) {
-  failures.push("packages/cli/src/standard-modules.ts: velar/collections bypasses its captured Array, Map/Set, numeric, Reflect, or Error ABI");
+  failures.push("packages/core/src/index.ts: velar/collections bypasses its captured Array, Map/Set, numeric, Reflect, or Error ABI");
 }
 for (const phrase of [
   "const __velarMathNativeMath = globalThis.Math",
@@ -1792,7 +1864,7 @@ for (const phrase of [
   if (!coreMathModuleSource.includes(phrase)) failures.push(`packages/cli: velar/math is missing captured host operation '${phrase}'`);
 }
 if (/\b(?:Math|Number)\.(?:abs|acos|asin|atan|atan2|cbrt|cos|exp|floor|hypot|isFinite|isInteger|isSafeInteger|log|log10|log2|max|min|pow|random|sign|sin|sqrt|tan|trunc)\s*\(|\bnew (?:TypeError|RangeError)\s*\(/u.test(coreMathModuleSource)) {
-  failures.push("packages/cli/src/standard-modules.ts: velar/math bypasses its captured numeric, random, Reflect, or Error ABI");
+  failures.push("packages/core/src/index.ts: velar/math bypasses its captured numeric, random, Reflect, or Error ABI");
 }
 for (const phrase of [
   "const __velarUrlNativeUrl = globalThis.URL",
@@ -1808,7 +1880,7 @@ for (const phrase of [
   if (!coreUrlModuleSource.includes(phrase)) failures.push(`packages/cli: velar/url is missing captured host operation '${phrase}'`);
 }
 if (/\b(?:URL|URLSearchParams|Map|Number|String|Object|Array|Reflect)\.(?:append|entries|freeze|getOwnPropertyDescriptor|getOwnPropertyNames|getOwnPropertySymbols|getPrototypeOf|isArray|isFinite|set|toString)\s*\(|\bnew (?:URL|URLSearchParams|Map|TypeError|RangeError|URIError)\b|\.(?:append|charCodeAt|endsWith|entries|set|slice|startsWith|test|toString)\s*\(/u.test(coreUrlModuleSource)) {
-  failures.push("packages/cli/src/standard-modules.ts: velar/url bypasses its captured URL, query, location, collection, text, Reflect, or Error ABI");
+  failures.push("packages/core/src/index.ts: velar/url bypasses its captured URL, query, location, collection, text, Reflect, or Error ABI");
 }
 for (const phrase of [
   "const __velarTimeNativeDate = globalThis.Date",
@@ -1824,7 +1896,7 @@ for (const phrase of [
   if (!coreTimeModuleSource.includes(phrase)) failures.push(`packages/cli: velar/time is missing captured host operation '${phrase}'`);
 }
 if (/\b(?:Date|Number|Math|Object|Array|String)\.(?:abs|freeze|getOwnPropertyDescriptor|isArray|isFinite|isInteger|isSafeInteger|now|padEnd|slice)\s*\(|\bnew (?:Date|Intl\.DateTimeFormat|Map|Set)\s*\(|\.(?:format|formatToParts|getDate|getDay|getFullYear|getHours|getMilliseconds|getMinutes|getMonth|getSeconds|getTime|getUTCDate|getUTCFullYear|getUTCHours|getUTCMilliseconds|getUTCMinutes|getUTCMonth|getUTCSeconds|setFullYear|setHours|setUTCFullYear|setUTCHours|toISOString)\s*\(/u.test(coreTimeModuleSource)) {
-  failures.push("packages/cli/src/standard-modules.ts: velar/time bypasses its captured clock, date, internationalization, text, collection, or Error ABI");
+  failures.push("packages/core/src/index.ts: velar/time bypasses its captured clock, date, internationalization, text, collection, or Error ABI");
 }
 for (const phrase of [
   "const __velarIdCrypto = globalThis.crypto",
@@ -1838,7 +1910,7 @@ for (const phrase of [
 }
 if ((coreIdModuleSource.match(/globalThis\.crypto/gu)?.length ?? 0) !== 1
   || /\b(?:Error\.isError|uuidPattern\.test)\s*\(|\.call\s*\(|\bnew (?:Error|TypeError)\s*\(/u.test(coreIdModuleSource)) {
-  failures.push("packages/cli/src/standard-modules.ts: velar/id bypasses its captured crypto, RegExp, or Error ABI");
+  failures.push("packages/core/src/index.ts: velar/id bypasses its captured crypto, RegExp, or Error ABI");
 }
 for (const phrase of [
   "const __velarLogDateNow = __velarLogGetOwnPropertyDescriptor",
@@ -1854,7 +1926,7 @@ for (const phrase of [
   if (!coreLogModuleSource.includes(phrase)) failures.push(`packages/cli: velar/log is missing captured host operation '${phrase}'`);
 }
 if (/\b(?:Date\.now|Number\.isFinite|Math\.abs|Object\.fromEntries)\s*\(|\bPromise\.prototype\.then\b|\bError\.isError\s*\(|\b(?:uuidPattern|String\.prototype)\.(?:test|trim|toLowerCase)\s*\(|\b(?:ranks|sinks)\.(?:get|has|set|add|delete|size|values)\b/u.test(coreLogModuleSource)) {
-  failures.push("packages/cli/src/standard-modules.ts: velar/log bypasses its captured clock, collection, Promise, text, console, or Error ABI");
+  failures.push("packages/core/src/index.ts: velar/log bypasses its captured clock, collection, Promise, text, console, or Error ABI");
 }
 // D50 rule 97.2 and D59 rule 141: the assertion asks the language for both of
 // its comparisons -- content equality through `equals` and value equality
@@ -1863,7 +1935,7 @@ if (/\b(?:Date\.now|Number\.isFinite|Math\.abs|Object\.fromEntries)\s*\(|\bPromi
 // the one comparison in the language that answered differently from the
 // language, and NaN was where that showed.
 if (!standardModulesSource.includes('const collectionLoweringImport = `import { __velarEquals, __velarSameValueZero } from "${VELAR_COLLECTION_LOWERING_MODULE}";`;')) {
-  failures.push("packages/cli/src/standard-modules.ts: velar/test must import the Core __velarEquals and __velarSameValueZero rather than restate a comparison");
+  failures.push("packages/core/src/index.ts: velar/test must import the Core __velarEquals and __velarSameValueZero rather than restate a comparison");
 }
 for (const phrase of [
   "${collectionLoweringImport}",
@@ -1882,7 +1954,7 @@ for (const phrase of [
   if (!coreTestModuleSource.includes(phrase)) failures.push(`packages/cli: velar/test is missing captured host operation '${phrase}'`);
 }
 if (/\b(?:Array\.isArray|Number\.isSafeInteger|JSON\.stringify|Math\.min|Object\.(?:freeze|getOwnPropertyDescriptor|getOwnPropertyNames|getOwnPropertySymbols|getPrototypeOf)|Reflect\.apply)\s*\(|\b(?:Map|Set|WeakSet|String|Promise|RegExp)\.prototype\b|\bnew (?:WeakSet|Error|TypeError|RangeError)\b|\.(?:call|push|join|slice|map|includes)\s*\(/u.test(coreTestModuleSource)) {
-  failures.push("packages/cli/src/standard-modules.ts: velar/test bypasses its captured display, collection, text, Promise, RegExp, reflection, or Error ABI");
+  failures.push("packages/core/src/index.ts: velar/test bypasses its captured display, collection, text, Promise, RegExp, reflection, or Error ABI");
 }
 for (const phrase of [
   "const __velarWebErrorNativePromise = globalThis.Promise",
@@ -1917,7 +1989,6 @@ for (const phrase of [
   "const hostTextEncode = TextEncoder.prototype.encode",
   "process.terminationHandler =",
   'case "process-owned":',
-  'case "terminal-owned":',
   "for pid in owner.pids { _ = Darwin.kill(-pid, SIGKILL) }",
 ]) {
   if (!desktopNativeHostSource.includes(phrase)) {
@@ -2098,7 +2169,7 @@ async function sourceFiles(directory) {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const path = join(directory, entry.name);
     if (entry.isDirectory()) files.push(...await sourceFiles(path));
-    else if (entry.isFile() && path.endsWith(".ts")) files.push(path);
+    else if (entry.isFile() && /\.(?:ts|js|mjs|swift)$/u.test(path)) files.push(path);
   }
   return files.sort();
 }

@@ -78,7 +78,7 @@ export interface ProductionBuildManifest {
     readonly path: string;
     readonly sizeBytes: number;
     readonly sha256: string;
-    readonly role: "entry" | "stylesheet" | "source-map" | "html" | "deployment" | "adapter" | "asset";
+    readonly role: "entry" | "stylesheet" | "source-map" | "html" | "deployment" | "asset";
   }[];
 }
 
@@ -251,7 +251,6 @@ function assetRole(path: string, build: ProductionBuildResult): ProductionBuildM
   if (path === build.entryPath) return "entry";
   if (path === build.stylesheetPath) return "stylesheet";
   if (path === "velar-deploy.json") return "deployment";
-  if (path === "_headers" || path === "_redirects") return "adapter";
   if (build.sourceMaps && path.startsWith("assets/") && path.endsWith(".map")) return "source-map";
   if (path.endsWith(".html")) return "html";
   return "asset";

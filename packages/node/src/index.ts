@@ -3,6 +3,7 @@ import { VELAR_NODE_API_VERSION } from "./compiler.ts";
 export { VELAR_NODE_API_VERSION } from "./compiler.ts";
 
 export const VELAR_NODE_MODULES = Object.freeze([
+  "velar/server-test",
   "velar/serve",
   "velar/fs",
   "velar/env",
@@ -11,6 +12,8 @@ export const VELAR_NODE_MODULES = Object.freeze([
   "velar/path",
   "velar/process",
   "velar/http",
+  "velar/worker",
+  "velar/websocket",
 ] as const);
 
 export interface VelarNodeRuntimeManifest {

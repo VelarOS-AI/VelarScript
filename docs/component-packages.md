@@ -14,7 +14,11 @@ framework host, and cannot silently activate language syntax.
   "version": "1.0.0",
   "type": "module",
   "files": ["src/index.vel", "README.md"],
-  "velar": { "entry": "src/index.vel" },
+  "velar": {
+    "entry": "src/index.vel",
+    "targets": ["web", "desktop"],
+    "requires": { "capabilities": [] }
+  },
   "peerDependencies": {
     "@velarscript/web": "^1.0.0"
   }
@@ -22,6 +26,9 @@ framework host, and cannot silently activate language syntax.
 ```
 
 - `velar.entry` is the one public source entry resolved by the compiler.
+- `velar.targets` is the complete list of application targets that may compile
+  the source. `velar.requires.capabilities` lists additional host capabilities
+  the implementation actually calls; it is empty for a portable component.
 - `files` contains the public source and required package documentation. Demo
   applications, browser tests, screenshots, and local project manifests remain
   outside the published inventory.

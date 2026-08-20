@@ -163,7 +163,6 @@ export function webStaticDeployment(config: unknown): FrameworkStaticDeployment 
   return Object.freeze({
     base: web.base,
     spaFallback: web.deployment.spaFallback,
-    adapter: web.deployment.adapter,
     contentSecurityPolicy: web.security.contentSecurityPolicy ? contentSecurityPolicy(web, true) : null,
   });
 }

@@ -576,7 +576,7 @@ test("[BRG-U2] bare import js specifiers resolve at check time in both direction
   assert.match(missing.stderr, /VEL6006: JavaScript package import "not-a-real-package-xyz" does not resolve to an installed package/u);
 
   const velThroughJs = await runCli({
-    "node_modules/vel-widgets/package.json": JSON.stringify({ name: "vel-widgets", velar: { entry: "index.vel" } }),
+    "node_modules/vel-widgets/package.json": JSON.stringify({ name: "vel-widgets", velar: { entry: "index.vel", targets: ["web"], requires: { capabilities: ["web"] } } }),
     "node_modules/vel-widgets/index.vel": "export const banner = \"w\"\n",
     "main.vel": "import js {banner} from \"vel-widgets\"\nprint(\"k\")\n",
   }, ["check", "<dir>/main.vel"]);

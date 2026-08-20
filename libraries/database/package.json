@@ -19,6 +19,8 @@
     "access": "public"
   },
   "velar": {
-    "entry": "src/index.vel"
+    "entry": "src/index.vel",
+    "targets": ["core", "node", "web", "desktop"],
+    "requires": { "capabilities": [] }
   }
 }

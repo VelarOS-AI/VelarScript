@@ -1,28 +1,24 @@
 # @velarscript/desktop
 
 The optional single-project VelarScript Desktop framework. Application authors
-write one ordinary VelarScript source graph with the same components, JSX,
-Look, state, derived values, resources, and actions used by
-`@velarscript/web`. There is no user-facing renderer project, main project,
-local server, port, or IPC layer.
+write one ordinary Web-shaped VelarScript source graph; there is no public
+renderer/main split, local server, port, Electron main process, or IPC API.
 
-Internally the package composes the Web compiler/runtime with a least-privilege
-Node capability host and a thin operating-system WebView shell. Privileged APIs
-remain asynchronous and are transported through a versioned bridge generated
-by the framework. That separation is an implementation and security boundary,
-not a second application programming model.
+Desktop composes `@velarscript/web` with a least-privilege Node capability
+worker and a thin system-WebView shell. It owns only the application host and
+permission-scoped implementations of existing language capabilities:
 
-Each official target module captures the bridge identity, its data-valued
-invoke operation, and any platform/environment snapshot fields when that module
-initializes. Replacing a global bridge later cannot reroute an official API.
-The system-WebView transport also captures its serializer, encoders, timers,
-collections, Promise constructor, and native message handler before application
-JavaScript executes, so ordinary dependency code cannot monkey-patch an active
-capability call into a different transport.
-`velar/desktop-test` is the intentional exception: the controller installs a
-fresh isolated browser Page for each test, so the helper resolves and validates
-one data-only controller snapshot per call instead of retaining authority from
-the previous test.
+- `velar/desktop`: platform, packaging state, application directories, and the
+  native project-directory picker.
+- `velar/fs`, `velar/path`, `velar/process`, `velar/http`, and `velar/env`: the
+  same checked contracts as Node, restricted by the Desktop manifest.
+- `velar/desktop-test`: deterministic platform selection and bounded fixture
+  filesystem helpers for official browser tests.
+
+Language servers, project transactions, product task runners, terminals,
+editors, and other Workbench features are not Desktop language capabilities.
+Products or independently versioned integrations own those features and may
+compose the public filesystem/process/network contracts where appropriate.
 
 ```json
 {
@@ -37,211 +33,57 @@ the previous test.
     "permissions": {
       "files": ["project"],
       "processes": ["git"],
-      "terminal": true,
-      "network": ["https://api.example.com"]
+      "network": ["https://api.example.com"],
+      "environment": [],
+      "secrets": []
     }
   }
 }
 ```
 
-The macOS host uses the system WKWebView and never bundles Chromium, Electron,
-or Tauri. Thin builds keep Node external and require Node.js 24 or newer. The
-package supplies the borderless VelarScript mark as the default application
-icon, so a project receives a branded Dock and Finder identity without owning
-platform icon files. A future custom-icon contract must remain an explicit
-project setting rather than replacing this package default implicitly.
-The host resolves an explicit absolute `VELAR_DESKTOP_NODE`, absolute entries from
-the launch environment's `PATH`, and trusted system package-manager locations
-without a shell, then verifies the runtime version. Build-machine executable
-paths and versions are not embedded in the application.
-A future standalone profile must report its runtime bytes separately instead
-of hiding them from the application size budget.
-`velar package` asks the CLI package host to build the exact official language
-server, the bounded project-task launcher, the platform build engine, and the
-native PTY helper. They
-are stored under `Contents/Resources/host` and counted separately as language,
-task, build-engine, terminal-host, and capability-Worker bytes. The generated tools contain the official
-Core/Web/Desktop compiler extensions and source-backed standard assets, so the
-installed application neither searches `PATH` for `velar`, resolves project npm
-packages, nor depends on the build workspace. The default Desktop size budget
-is currently 32 MiB. It is an accounting threshold rather than an architecture
-ceiling: a project may set `desktop.build.sizeBudgetBytes` to a larger measured
-value when the bundle composition explains the growth. The package command
-still reports every component and the application tree hash; size pressure must
-not split a privileged owner across the renderer boundary.
+The permission manifest is the authority. File access is limited to the
+`app-data` and `project` scopes. Process grants are exact executable names and
+do not imply shell parsing or an operating-system sandbox. Network grants are
+exact HTTPS origins (or loopback HTTP origins). Readable environment values
+and opaque HTTP secrets are separate allowlists.
 
-Desktop owns `velar/desktop` and permission-scoped target implementations of
-`velar/fs`, `velar/path`, `velar/process`, `velar/http`, and `velar/env`.
-Packaged applications may call `languageServer() -> Promise<LanguageServer>`.
-The returned owner sends and pulls bounded JSON message bodies through
-`send(message)`, `next()`, and idempotent `close()`; Content-Length framing,
-the exact official executable, and child-process ownership remain private to
-Desktop. Only one pull may be pending, at most four servers may be live, and
-document-generation retirement, project-grant replacement, Worker failure, or
-host shutdown reaps the corresponding process group. This exact official tool
-does not require a general process permission and cannot launch an arbitrary
-command.
-Applications with the `project` file grant may also call
-`projectChanges() -> Promise<ProjectChanges>`. Desktop binds the returned owner
-to the same durable `@velaros-ai/project` kernel that prepares and validates
-transactions. The public surface is intentionally finite: `list(limit)`,
-`get(transactionId)`, pull-based `subscribe()`, `apply(transactionId)`,
-`rollback(transactionId)`, and idempotent `close()`. It exposes reviewable
-intent, patch, diff, risk, revision, lifecycle, and timestamp projections, but
-never the project root, persistence paths, policies, providers, old/new full
-file contents, arbitrary metadata, or a caller-selected file operation.
-Transactions and their latest projections are committed under the app-data
-root before project mutation; a restarted Worker restores an interrupted
-apply/rollback to its prior durable state and fails closed if an external edit
-conflicts with that recovery. The JSONL change feed is fsynced before
-subscribers observe a row. Subscriptions coalesce the latest record per
-transaction and request a full `list()` rescan on bounded queue overflow.
-Changing the project grant retires existing handles; an already-running
-apply/rollback finishes against the original durable owner before that owner is
-closed. The complete owner is bundled into the existing Node capability Worker
-and adds about 4.39 MiB; there is still no Electron-style user main process,
-second source graph, local server, port, or renderer-accessible IPC design.
+`selectProjectDirectory()` opens the native directory chooser. A successful
+selection atomically replaces the project grant used by subsequent relative
+filesystem, path, and default process-working-directory operations;
+`selectedProjectDirectory()` returns only an explicitly selected or restored
+grant. The current effective root remains available through
+`projectDirectory()`.
 
-Applications with the `project` file grant may also call
-`startProjectTask(ProjectTaskCommand, arguments, options)`. The finite command
-set is `check`, `test`, `browserTest`, `build`, `fix`, `package`, and `run`;
-only `run` accepts program arguments. `browserTest` always runs all three
-engines through the packaged official browser-test supervisor and cannot
-accept a browser, output-directory, or CLI-flag override. The Playwright driver
-is counted in the application bundle; matching Chromium, Firefox, and WebKit
-binaries remain an explicit external Playwright cache and a missing engine
-fails the task instead of silently reducing coverage.
-The returned `ProjectTask` exposes its package-owned PID plus pull-based
-`next()`, terminal `wait()`, and bounded `stop()` operations. Desktop fixes the
-working directory to the current canonical project grant, injects only its
-counted build-engine path, and for `package` only, the Worker-validated current
-application Resources template. The package host rebuilds the target renderer
-and copies the same versioned official tools and native system-WebView assets;
-it does not resolve project `node_modules`, a source checkout, or `PATH`.
-Desktop exposes no executable, shell, working-directory, environment,
-package-manager, or caller-controlled browser-test option. Output is incrementally
-decoded and tagged by `ProjectTaskOutputChannel`, only one pull may be active,
-at most four tasks may live, output and timeout are bounded, and callers must
-consume output before waiting. Explicit stop, timeout, document retirement,
-project replacement, Worker failure, and host shutdown reuse the same
-process-group termination and confirmed-reaping owner as `velar/process`.
-Applications with the `project` file grant and an explicit
-`desktop.permissions.terminal: true` grant may call
-`openTerminal({columns, rows}) -> Promise<TerminalSession>`. Desktop fixes the
-working directory to the current canonical project, launches only the user's
-trusted login shell, and exposes no executable, shell path, cwd, environment,
-or command-string option. The returned owner publishes the shell PID and
-bounded `write(text)`, `resize(columns, rows)`, pull-based `next()`, terminal
-`wait()`, and idempotent `close()` operations. Input chunks are capped at 1 MiB,
-the decoded output queue applies PTY backpressure at 2 MiB and fails closed
-above 4 MiB, one pull may be active, and at most four sessions may live. The
-output stream must be consumed through its final `null` before `wait()`; an
-explicit `close()` discards that requirement while still confirming cleanup. The
-package-owned native helper and the shell occupy separate process groups;
-Desktop publishes both to its native crash owner before returning the session.
-Explicit close, document retirement, project replacement, Worker failure, and
-host shutdown terminate and confirm reaping of both groups. Terminal output is
-the PTY's UTF-8 text, including control sequences emitted by interactive
-programs; presentation and session/tab orchestration remain application UX.
-Applications with the `project` file grant may call
-`selectProjectDirectory()` to open the native directory chooser. A successful
-choice atomically replaces the single project grant for subsequent relative
-`velar/fs`, `velar/path`, and default process-working-directory operations;
-cancel returns `null`. `selectedProjectDirectory()` reports only a user-picked
-or restored grant, while `projectDirectory()` continues to report the current
-effective root, including the private app-data fallback before any selection.
-The macOS host persists the user's explicit choice as a bounded bookmark and
-restores it before renderer startup. Project selection has no arbitrary timeout
-while the native chooser is open. Replacing the grant cancels unpublished
-capability work and releases project-owned processes; filesystem effects that
-already reached the operating system may still settle, with their retired
-results discarded. The capability Worker revalidates the replacement directory
-and keeps the independent `app-data` grant unchanged. This is one dynamic
-single-project authority, not a renderer-owned allowlist and not a second file
-API.
-`velar/fs.createText` preserves Node's exclusive no-clobber contract inside the
-capability Worker; authorization and creation remain one bounded native effect
-rather than a renderer-side check followed by an overwriting write.
-`replaceTextIfMatches` carries the same optimistic edit contract: file
-mutations for one canonical target are coordinated inside the capability
-Worker and a matching replacement commits by same-directory rename. External
-processes outside the bridge are not silently described as participants in
-that lock.
-`watchFiles` also preserves Node's public pull contract and bounds: one active
-`next()`, at most 128 live watchers, a 4,096-path/2 MiB coalescing queue, and
-`rescan=true` when a native event cannot identify a safe path. Watcher handles
-belong to the current document generation and granted roots. Explicit
-`close()`, owner retirement, input shutdown, fatal drain, and a successful
-project-root replacement all close them; a pending pull cannot publish an
-event from the old project after authority changes.
-Desktop preserves the shared HTTP failure model across its native bridge:
-non-2xx, cancellation/timeout, and request/response transport failures remain
-distinct typed errors instead of collapsing Worker failures into one string.
-`process.start` is async on Node and Desktop. Process-only applications may
-omit file grants and use the launch directory as the default working directory;
-an explicit working directory must be inside a granted file root. Exact
-executable grants prevent shell parsing but do not claim to OS-sandbox the
-native program's own effects—product approval and tool policy remain outside
-the language package. Process stdout/stderr crosses the worker bridge as
-enum-tagged pull chunks consumed by `async for`; incremental UTF-8 decoding,
-single-reader ownership, output bounds, and the consume-before-`wait` lifecycle
-match the Node target. The renderer reuses Node's internal process host ABI for
-value validation, Map snapshots, Promise operations, and result assembly, and
-composes the compiler-owned UTF-8 budget runtime. Desktop does not maintain a
-second semantic implementation and adds only its capability bridge and isolated
-worker. HTTP response bodies cross the
-bridge as bounded pull-based chunks, so timeout and cancellation remain active
-through body consumption. Redirects continue only while every exact origin is
-granted. `desktop.permissions.secrets` is disjoint from readable environment
-permissions; `velar/http.secretHeader` lets the worker inject those values
-without exposing them to the renderer, and cross-origin redirects strip every
-secret-derived header. Large filesystem, process-input, and HTTP-request values use a bounded
-bidirectional chunk transport instead of inheriting WebView message-size
-accidents.
+Each loaded document owns one private bridge generation. The renderer captures
+the bridge and host operations at module initialization. Native code translates
+page-local request IDs to host-global IDs, retires old generations on
+navigation, bounds pending request and response memory, and reaps owned process
+groups on retirement or failure. Filesystem work already issued to the
+operating system may settle, but a retired response cannot reach a replacement
+document.
 
-Each loaded main document owns a private bridge generation. Page request IDs
-may restart at one after reload, but the native host translates the generation
-and page ID to a host-global Worker request ID before forwarding. Committed
-navigation retires the old generation: late responses are discarded, old
-process groups are terminated, old HTTP streams are aborted, and the Worker
-rejects any handle used by a different generation. Native completion injection
-requires the private generation as well, so application JavaScript cannot
-resolve a pending bridge request by invoking the transport hook with only a
-guessed numeric ID. Filesystem work that has already reached the OS may finish;
-its retired response is never routed into the replacement document.
-Pending serialized requests and assembled response chunks each share a 128 MiB
-aggregate bridge budget, so the 1,024-request count cannot multiply every
-per-request limit into unbounded transport memory. A finite bridge timeout
-sends a private generation-qualified cancellation before rejecting. Native
-code discards the later response without treating it as an unknown protocol
-message, and the Worker aborts an active HTTP request or stops a process that
-has not safely transferred its public handle. Filesystem effects remain
-non-cancellable and retain their bounded request reservation until they settle.
+The capability worker preserves the public Node contracts: exclusive
+`createText`, optimistic `replaceTextIfMatches`, bounded pull-based file
+watching, incremental process output with consume-before-wait ownership, and
+streamed HTTP bodies with distinct status, abort, and transport failures.
+Large request and response values use the bounded chunk transport rather than
+depending on WebView message limits.
 
-Filesystem content calls follow symlinks only when the canonical target stays
-inside a granted root. Metadata, move, and removal operate on the final entry
-instead; dangling links cannot be used as write targets. The renderer, native
-worker, and deterministic test host independently enforce the same path,
-file-size, list-count, list-text, result-shape, and replacement contracts.
-Desktop path composition rejects sparse/accessor-backed Lists and checks the
-combined result, not just each input. Native home, app-data, and project paths
-must remain absolute and bounded. Readable environment values are snapshotted
-from data descriptors under the same 64-variable, 64 KiB item, and 1 MiB total
-budgets enforced by the native host.
+The macOS package uses WKWebView and keeps Node external (Node.js 24 or newer).
+`velar package` contains only the native host, the capability worker, renderer,
+icon, and metadata. The manifest reports each component and the complete tree
+hash under one size budget; it does not bundle the CLI, compiler, browser
+automation, language server, build engine, project kernel, or PTY helper.
 
 ```sh
-velar package .
+velar check .
+velar test .
 velar test . --browser=all
+velar build .
+velar package .
 ```
 
-`velar test --browser` runs `.browser.test.vel` files without opening a window.
-It installs a deterministic, permission-aware in-memory Desktop filesystem,
-finite ProjectChanges owner, and deterministic handles for manifest-granted
-processes; the native worker keeps a separate integration suite for real
-filesystem, process, network, and durable transaction enforcement. Test
-modules may import the restricted `velar/desktop-test` helpers to inspect
-app-data/project text, create a bounded test directory, and call
-`seedProjectChange(transactionId, lifecycle, diff)` through the page's actual
-capability bridge;
-ordinary `velar/fs` remains application-side and is not faked in the test
-controller process.
+Browser tests may use `velar/desktop-test` to select the simulated platform and
+prepare bounded app-data/project files through the actual page bridge. Native
+filesystem, process, network, ownership, and crash-reaping behavior has a
+separate worker integration suite.

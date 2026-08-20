@@ -6,9 +6,16 @@ import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { prepareExternalPreview } from "../scripts/prepare-external-preview.mjs";
-import { velarToolchainBuildOrder } from "../scripts/velar-packages.mjs";
+import { sourceHasExpectedTag } from "../scripts/release-toolchain.mjs";
+import { velarWorkspaceBuildOrder } from "../scripts/velar-packages.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
+
+test("toolchain release identity accepts its exact tag when sibling package tags share HEAD", () => {
+  assert.equal(sourceHasExpectedTag({ tag: null, tags: ["@velarscript/core@0.12.0", "v0.12.0"] }, "v0.12.0"), true);
+  assert.equal(sourceHasExpectedTag({ tag: null, tags: ["@velarscript/core@0.12.0"] }, "v0.12.0"), false);
+  assert.equal(sourceHasExpectedTag({ tag: "v0.12.0" }, "v0.12.0"), true);
+});
 
 test("publication rehearsal emits reproducible verified package identities without publishing", async () => {
   const temporary = await mkdtemp(join(tmpdir(), "velar-release-rehearsal-"));
@@ -21,7 +28,7 @@ test("publication rehearsal emits reproducible verified package identities witho
     await runRelease(["rehearse", "--output-dir", second]);
     const firstManifest = JSON.parse(await readFile(join(first, "velar-toolchain-release.json"), "utf8"));
     const secondManifest = JSON.parse(await readFile(join(second, "velar-toolchain-release.json"), "utf8"));
-    assert.equal(firstManifest.version, "0.11.1");
+    assert.equal(firstManifest.version, "0.12.0");
     assert.equal(firstManifest.mode, "rehearse");
     assert.equal(firstManifest.publish.performed, false);
     assert.equal(firstManifest.publish.publishable, false);
@@ -30,6 +37,7 @@ test("publication rehearsal emits reproducible verified package identities witho
     assert.deepEqual(firstManifest.packages.map((item: { name: string }) => item.name), [
       "@velarscript/cli",
       "@velarscript/compiler",
+      "@velarscript/core",
       "@velarscript/desktop",
       "@velarscript/node",
       "@velarscript/web",
@@ -91,7 +99,7 @@ test("publication rehearsal emits reproducible verified package identities witho
   }
 });
 
-test("external preview preparation emits a reproducible root Netlify build", async () => {
+test("external preview preparation emits a reproducible neutral site and external Netlify bundle", async () => {
   const temporary = await mkdtemp(join(tmpdir(), "velar-external-preview-"));
   const workspaceOutputs = await protectWorkspaceOutputs("preview");
   const first = join(temporary, "first");
@@ -104,19 +112,16 @@ test("external preview preparation emits a reproducible root Netlify build", asy
     assert.ok(firstResult.manifest.assets.every((asset: { role: string }) => asset.role !== "source-map"));
     for (const asset of firstResult.manifest.assets) {
       assert.deepEqual(
-        await readFile(join(first, asset.path)),
-        await readFile(join(second, asset.path)),
+        await readFile(join(firstResult.outputDirectory, asset.path)),
+        await readFile(join(secondResult.outputDirectory, asset.path)),
         `non-reproducible external preview asset ${asset.path}`,
       );
     }
-    const deployment = JSON.parse(await readFile(join(first, "velar-deploy.json"), "utf8"));
+    const deployment = JSON.parse(await readFile(join(firstResult.outputDirectory, "velar-deploy.json"), "utf8"));
     assert.equal(deployment.base, "/");
-    assert.deepEqual(deployment.adapter, { name: "netlify", files: ["_headers", "_redirects"] });
-    assert.equal(
-      await readFile(join(first, "_redirects"), "utf8"),
-      "/assets/* /404.html 404\n/* /index.html 200\n",
-    );
-    const html = await readFile(join(first, "index.html"), "utf8");
+    assert.equal(deployment.adapter, undefined);
+    assert.match(await readFile(join(first, "netlify.toml"), "utf8"), /^\[build\]\npublish = "site"/u);
+    const html = await readFile(join(firstResult.outputDirectory, "index.html"), "utf8");
     assert.match(html, /(?:src|href)="\/assets\//u);
     assert.doesNotMatch(html, /(?:src|href)="\/app\/assets\//u);
     assert.ok(firstResult.manifest.assets.some((asset) => asset.path === "mark.svg" && asset.role === "asset"));
@@ -133,35 +138,69 @@ test("external preview preparation emits a reproducible root Netlify build", asy
   }
 });
 
+test("ecosystem rehearsal packages one independently versioned integration and verifies its identity", async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "velar-ecosystem-rehearsal-"));
+  const output = join(temporary, "netlify");
+  const workspaceOutputs = await protectWorkspaceOutputs("ecosystem");
+  try {
+    await runEcosystemRelease(["rehearse", "@velarscript/netlify", "--output-dir", output]);
+    await runEcosystemRelease(["verify", output, "@velarscript/netlify"]);
+    const manifestPath = join(output, "velar-ecosystem-release.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+    assert.equal(manifest.kind, "velar-ecosystem-release");
+    assert.equal(manifest.mode, "rehearse");
+    assert.equal(manifest.package.name, "@velarscript/netlify");
+    assert.equal(manifest.package.version, "0.1.0");
+    assert.equal(manifest.source.expectedTag, "@velarscript/netlify@0.1.0");
+    assert.equal(manifest.publish.publishable, false);
+    assert.deepEqual((await readdir(output)).sort(), [
+      "SHA256SUMS",
+      "velar-ecosystem-release.json",
+      "velarscript-netlify-0.1.0.tgz",
+    ]);
+
+    manifest.source.expectedTag = "v0.1.0";
+    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+    const refused = await runEcosystemRelease(["verify", output, "@velarscript/netlify"], true);
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.stderr, /source identity is invalid/u);
+    await workspaceOutputs.assertUntouched();
+  } finally {
+    await workspaceOutputs.dispose();
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
+
 async function protectWorkspaceOutputs(label: string) {
-  // A-024 again, one file further on. The six workspaces were spelled out here,
-  // which was correct and was a copy: the seventh compiled package would have
-  // been the one package release tooling could quietly overwrite. What has to
-  // be protected is every package that has a `dist` to lose, and that is what
-  // `velarToolchainBuildOrder` already answers.
-  const built = await velarToolchainBuildOrder(root);
+  // Release and preview tooling must work in isolation. Protect every compiled
+  // publishable workspace, including integrations outside packages/*, so a new
+  // layer cannot be overwritten merely because a test forgot its directory.
+  const built = await velarWorkspaceBuildOrder(root);
   const paths = built.map((package_) => join(package_.directory, "dist", `.workspace-${label}.sentinel`));
   // Recomputed by a second route — the manifests themselves — so that replacing
   // the derivation above with a literal list again fails here instead of
   // silently protecting fewer packages than the workspace has.
-  const compiled = (await Promise.all((await readdir(join(root, "packages"), { withFileTypes: true }))
-    .filter((entry) => entry.isDirectory())
-    .map(async (entry) => {
+  const compiled = (await Promise.all((await Promise.all(["packages", "libraries", "adapters", "integrations"].map(async (layer) =>
+    (await readdir(join(root, layer), { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => ({ layer, name: entry.name }))))).flat()
+    .map(async ({ layer, name }) => {
       let manifest: { private?: boolean; scripts?: Record<string, string> };
       try {
-        manifest = JSON.parse(await readFile(join(root, "packages", entry.name, "package.json"), "utf8"));
+        manifest = JSON.parse(await readFile(join(root, layer, name, "package.json"), "utf8"));
       } catch {
         return null;
       }
-      return manifest.private === true || manifest.scripts?.build === undefined ? null : entry.name;
+      return manifest.private === true || manifest.scripts?.build === undefined ? null : join(layer, name);
     })))
     .filter((name): name is string => name !== null)
-    .map((name) => join(root, "packages", name, "dist", `.workspace-${label}.sentinel`));
+    .map((name) => join(root, name, "dist", `.workspace-${label}.sentinel`));
   assert.deepEqual([...paths].sort(), compiled.sort(), "release tooling is not protected on every package that declares a build");
   const sourcePaths = [
     join(root, "packages", "compiler", "src", "analyzer.ts"),
     join(root, "packages", "web", "src", "analyzer.ts"),
     join(root, "packages", "cli", "src", "project.ts"),
+    join(root, "integrations", "netlify", "src", "index.ts"),
   ];
   const sourceContents = new Map(await Promise.all(sourcePaths.map(async (path) => [path, await readFile(path)] as const)));
   const value = `workspace-owned-${label}\n`;
@@ -196,5 +235,22 @@ async function runRelease(arguments_: readonly string[], allowFailure = false): 
     child.once("exit", resolvePromise);
   });
   if (code !== 0 && !allowFailure) throw new Error(`release command failed (${code})\n${stdout}\n${stderr}`);
+  return { code, stdout, stderr };
+}
+
+async function runEcosystemRelease(arguments_: readonly string[], allowFailure = false): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  const child = spawn(process.execPath, ["scripts/release-ecosystem.mjs", ...arguments_], {
+    cwd: root,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf8"); });
+  child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
+  const code = await new Promise<number | null>((resolvePromise, reject) => {
+    child.once("error", reject);
+    child.once("exit", resolvePromise);
+  });
+  if (code !== 0 && !allowFailure) throw new Error(`ecosystem release command failed (${code})\n${stdout}\n${stderr}`);
   return { code, stdout, stderr };
 }

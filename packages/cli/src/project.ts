@@ -63,7 +63,11 @@ export interface VelarSourcePackage {
   readonly root: string;
   readonly entryPath: string;
   readonly resources: readonly VelarPackageResource[];
+  readonly targets: readonly VelarPackageTarget[];
+  readonly requiredCapabilities: readonly string[];
 }
+
+export type VelarPackageTarget = "core" | "node" | "web" | "desktop";
 
 export interface VelarPackageResource {
   readonly subpath: `./${string}` | null;
@@ -199,6 +203,15 @@ export async function compileProjectEntries(
   const extensionConfig = options.extensionConfig ?? new Map<string, unknown>();
   const framework = options.framework ?? null;
   const capabilities = new Set(compilerExtensions.flatMap((extension) => extension.capabilities ?? []));
+  const packageCapabilities = new Set(capabilities);
+  if (packageCapabilities.size === 0 && framework === null) packageCapabilities.add("node");
+  const packageTarget: VelarPackageTarget = packageCapabilities.has("desktop")
+    ? "desktop"
+    : packageCapabilities.has("web")
+      ? "web"
+      : packageCapabilities.has("node")
+        ? "node"
+        : "core";
   const initialEntries = [...new Set(entries.map((entry) => resolve(entry)))];
   const pending: PendingModule[] = initialEntries.slice(0, MAX_VELAR_PROJECT_MODULES).map((inputPath) => ({ inputPath, package: null }));
   const scheduled = new Set(pending.map((module) => module.inputPath));
@@ -333,6 +346,7 @@ export async function compileProjectEntries(
         try {
           const resolved = await resolveJsonResource(resource.source, inputPath, pendingModule.package, sourceRoot);
           if (resolved.package_) {
+            assertVelarPackageCompatibility(resolved.package_, packageTarget, packageCapabilities);
             const existing = velarPackages.get(resolved.package_.name);
             if (existing && existing.root !== resolved.package_.root) {
               throw new Error(`VelarScript package '${resolved.package_.name}' resolves to multiple installed versions; use one package instance per application build`);
@@ -494,6 +508,7 @@ export async function compileProjectEntries(
         }
         try {
           const package_ = await resolveVelarSourcePackage(dependency.source, inputPath);
+          assertVelarPackageCompatibility(package_, packageTarget, packageCapabilities);
           const existing = velarPackages.get(package_.name);
           if (existing && existing.root !== package_.root) {
             recordResolution(inputPath, dependency.source, "VEL6002", `VelarScript package '${package_.name}' resolves to multiple installed versions; use one package instance per application build`);
@@ -1647,7 +1662,12 @@ async function resolveVelarSourcePackage(source: string, importerPath: string): 
 interface VelarPackageManifestShape {
   readonly name?: unknown;
   readonly exports?: unknown;
-  readonly velar?: { readonly entry?: unknown; readonly resources?: unknown };
+  readonly velar?: {
+    readonly entry?: unknown;
+    readonly resources?: unknown;
+    readonly targets?: unknown;
+    readonly requires?: unknown;
+  };
 }
 
 async function velarPackageAtRoot(name: string, root: string): Promise<VelarSourcePackage> {
@@ -1667,12 +1687,69 @@ async function velarPackageAtRoot(name: string, root: string): Promise<VelarSour
   const entryPath = resolve(root, entry);
   if (escapesRoot(relative(root, entryPath))) throw new Error("'velar.entry' cannot escape the package root");
   if (extname(entryPath) !== ".vel") throw new Error("'velar.entry' must point to a .vel source file");
+  const targets = packageTargets(manifest.velar?.targets);
+  const requiredCapabilities = packageRequiredCapabilities(manifest.velar?.requires);
   return {
     name,
     root,
     entryPath,
     resources: packageResources(name, root, manifest.velar!.resources, manifest.exports),
+    targets,
+    requiredCapabilities,
   };
+}
+
+const velarPackageTargets = new Set<VelarPackageTarget>(["core", "node", "web", "desktop"]);
+
+function packageTargets(value: unknown): readonly VelarPackageTarget[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > velarPackageTargets.size) {
+    throw new Error("'velar.targets' must be a non-empty list of core, node, web, or desktop");
+  }
+  const targets: VelarPackageTarget[] = [];
+  for (const target of value) {
+    if (typeof target !== "string" || !velarPackageTargets.has(target as VelarPackageTarget)) {
+      throw new Error("'velar.targets' entries must be core, node, web, or desktop");
+    }
+    if (targets.includes(target as VelarPackageTarget)) throw new Error(`'velar.targets' contains duplicate '${target}'`);
+    targets.push(target as VelarPackageTarget);
+  }
+  return targets;
+}
+
+function packageRequiredCapabilities(value: unknown): readonly string[] {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("'velar.requires' must be an object");
+  }
+  const fields = value as Record<string, unknown>;
+  const unknown = Object.keys(fields).filter((field) => field !== "capabilities");
+  if (unknown.length > 0) throw new Error(`'velar.requires' has unknown field '${unknown[0]}'`);
+  const capabilities = fields.capabilities;
+  if (!Array.isArray(capabilities) || capabilities.length > 16) {
+    throw new Error("'velar.requires.capabilities' must be a list with at most 16 entries");
+  }
+  const required: string[] = [];
+  for (const capability of capabilities) {
+    if (typeof capability !== "string" || !/^[a-z][a-z0-9-]{0,63}$/u.test(capability)) {
+      throw new Error("'velar.requires.capabilities' entries must be normalized capability names");
+    }
+    if (required.includes(capability)) throw new Error(`'velar.requires.capabilities' contains duplicate '${capability}'`);
+    required.push(capability);
+  }
+  return required;
+}
+
+function assertVelarPackageCompatibility(
+  package_: VelarSourcePackage,
+  target: VelarPackageTarget,
+  capabilities: ReadonlySet<string>,
+): void {
+  if (!package_.targets.includes(target)) {
+    throw new Error(`package '${package_.name}' does not support the '${target}' target; supported targets: ${package_.targets.join(", ")}`);
+  }
+  const missing = package_.requiredCapabilities.filter((capability) => !capabilities.has(capability));
+  if (missing.length > 0) {
+    throw new Error(`package '${package_.name}' requires host ${missing.length === 1 ? "capability" : "capabilities"} ${missing.map((name) => `'${name}'`).join(", ")}`);
+  }
 }
 
 function packageResources(name: string, root: string, value: unknown, exports: unknown): readonly VelarPackageResource[] {

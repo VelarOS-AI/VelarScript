@@ -106,12 +106,14 @@ mount(<App />, "#app")
   await install(["--save-dev"], component);
   const componentManifest = JSON.parse(await readFile(join(component, "package.json"), "utf8")) as {
     files: string[];
-    velar: { entry: string };
+    velar: { entry: string; targets: string[]; requires: { capabilities: string[] } };
     peerDependencies: Record<string, string>;
   };
   assert.deepEqual(componentManifest.files, ["src/index.vel", "README.md"]);
   assert.equal(componentManifest.velar.entry, "src/index.vel");
-  assert.equal(componentManifest.peerDependencies["@velarscript/web"], "^0.11.1");
+  assert.deepEqual(componentManifest.velar.targets, ["web", "desktop"]);
+  assert.deepEqual(componentManifest.velar.requires.capabilities, []);
+  assert.equal(componentManifest.peerDependencies["@velarscript/web"], "^0.12.0");
   await runNpm(["run", "format:check"], component);
   await runNpm(["run", "check"], component);
   await runNpm(["test"], component);

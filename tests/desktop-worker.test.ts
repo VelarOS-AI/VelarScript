@@ -1,25 +1,18 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import test, { before } from "node:test";
-import { pathToFileURL } from "node:url";
-import { buildLanguageServerTool } from "../packages/cli/src/language-server-tool.ts";
-import { buildProjectTaskTool } from "../packages/cli/src/project-task-tool.ts";
-import { buildBuildEngineTool } from "../packages/cli/src/build-engine-tool.ts";
-import { FileProjectChangeFeed } from "@velaros-ai/project/changes";
-import { createProjectKernel } from "@velaros-ai/project/runtime";
 
 const workerPath = resolve("packages/desktop/native/node/worker.js");
 const temporaryPrefix = join(tmpdir(), "velar-desktop-");
 const desktopWorkerTest = process.platform === "win32" ? test.skip : test;
 
 // Every wait in this suite is bounded. The worker speaks over stdio pipes and
-// drives real child processes, PTYs and OS file watchers, so a single reply
+// drives real child processes, HTTP streams, and OS file watchers, so a single reply
 // that never arrives used to freeze the whole `npm test` run at 0% CPU
 // indefinitely: node:test runs with --test-timeout=0, so nothing above these
 // promises ever intervenes. Each bound below is far above the worker's own
@@ -27,23 +20,14 @@ const desktopWorkerTest = process.platform === "win32" ? test.skip : test;
 // each failure names what timed out and the states that explain it.
 //
 // The worker's longest internal confirmation deadline for filesystem, process,
-// HTTP, language-server and terminal work is 5000 milliseconds, and the widest
+// and HTTP work is 5000 milliseconds, and the widest
 // payload the suite pushes through the pipe is about 1.2 MiB.
 const WORKER_CALL_TIMEOUT_MS = 30_000;
-// A project task carries its own bounded timeout (120000 milliseconds below),
-// so the transport deadline has to sit above the worker's own bound.
-const PROJECT_TASK_CALL_TIMEOUT_MS = 150_000;
 // macOS arms a recursive watch asynchronously, so a change written before the
 // FSEvents stream starts is never reported at all. Re-trigger the change while
 // the pull is outstanding instead of trusting one notification.
 const WATCHED_CHANGE_TIMEOUT_MS = 30_000;
 const WATCHED_CHANGE_RETRIGGER_MS = 250;
-// Optimized Swift compilation of the terminal host normally takes seconds.
-const TERMINAL_HOST_COMPILE_TIMEOUT_MS = 180_000;
-// Bundling an official tool is sub-second, and esbuild's own service pipe has
-// no deadline of its own, so name that wait rather than leave it to the
-// per-test backstop.
-const TOOL_BUILD_TIMEOUT_MS = 60_000;
 const LOCAL_SERVER_TIMEOUT_MS = 10_000;
 const STALE_STATE_TIMEOUT_MS = 30_000;
 // The process tests let descendants escape on purpose, and those descendants
@@ -151,403 +135,6 @@ async function runBoundedCommand(executable: string, args: readonly string[], ti
   catch (error) { child.kill("SIGKILL"); throw error; }
   return output;
 }
-
-desktopWorkerTest("Desktop owns one packaged official language-server lifecycle without process grants", { timeout: 90_000 }, async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-desktop-language-server-"));
-  const project = join(directory, "project");
-  const appData = join(directory, "app-data");
-  const host = join(directory, "host");
-  await Promise.all([mkdir(project), mkdir(appData), mkdir(host)]);
-  await writeFile(join(project, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: [] }), "utf8");
-  const mainPath = join(project, "main.vel");
-  await writeFile(mainPath, "const value = 1\n", "utf8");
-  const readmePath = join(project, "README.md");
-  await writeFile(readmePath, "Packaged workspace search needle\n", "utf8");
-  const outsidePath = join(directory, "outside.vel");
-  await writeFile(outsidePath, "const privateOutsideProject = 1\n", "utf8");
-  const escapedLinkPath = join(project, "escaped-link.vel");
-  await symlink(outsidePath, escapedLinkPath);
-  await withDeadline(buildLanguageServerTool(join(host, "language-server.js")), "the bundled language-server tool build", TOOL_BUILD_TIMEOUT_MS);
-  const configPath = join(directory, "desktop.json");
-  await writeFile(configPath, JSON.stringify({
-    protocolVersion: 1,
-    permissions: { files: ["project"], processes: [], network: [], secrets: [] },
-    languageServer: { path: "host/language-server.js" },
-  }), "utf8");
-  const worker = spawn(process.execPath, [workerPath, configPath, appData, project], { stdio: ["pipe", "pipe", "pipe"] });
-  const client = new WorkerClient(worker);
-  let serverPid: number | null = null;
-  try {
-    const rejectedHandle = await client.call("language-server", "start", []) as number;
-    await client.call("language-server", "send", [rejectedHandle, JSON.stringify({
-      jsonrpc: "2.0",
-      id: 90,
-      method: "initialize",
-      params: { rootUri: pathToFileURL(directory).href },
-    })]);
-    const rejectedInitialize = JSON.parse(await client.call("language-server", "next", [rejectedHandle]) as string) as { id: number; error: { code: number; message: string } };
-    assert.equal(rejectedInitialize.id, 90);
-    assert.equal(rejectedInitialize.error.code, -32602);
-    assert.match(rejectedInitialize.error.message, /Desktop project grant/u);
-    await client.call("language-server", "close", [rejectedHandle]);
-
-    const handle = await client.call("language-server", "start", []) as number;
-    assert.ok(handle >= 1_000_000_000);
-    const ownership = client.lifecycle().find((event) => event.hostEvent === "language-server-owned" && event.handle === handle);
-    assert.ok(ownership?.pid);
-    serverPid = ownership.pid as number;
-
-    assert.equal(await client.call("language-server", "send", [handle, JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: { rootUri: pathToFileURL(project).href, capabilities: { general: { positionEncodings: ["utf-32"] } } },
-    })]), null);
-    const initialized = JSON.parse(await client.call("language-server", "next", [handle]) as string) as { id: number; result: { serverInfo: { name: string } } };
-    assert.equal(initialized.id, 1);
-    assert.equal(initialized.result?.serverInfo.name, "VelarScript Language Server", JSON.stringify(initialized));
-    await client.call("language-server", "send", [handle, JSON.stringify({ jsonrpc: "2.0", method: "initialized", params: {} })]);
-
-    const outsideUri = pathToFileURL(outsidePath).href;
-    await client.call("language-server", "send", [handle, JSON.stringify({
-      jsonrpc: "2.0",
-      method: "textDocument/didOpen",
-      params: { textDocument: { uri: outsideUri, languageId: "velar", version: 1, text: "const privateOutsideProject =\n" } },
-    })]);
-    const outsideLog = JSON.parse(await client.call("language-server", "next", [handle]) as string) as { method: string; params: { message: string } };
-    assert.equal(outsideLog.method, "window/logMessage");
-    assert.match(outsideLog.params.message, /outside the Desktop project grant/u);
-    await client.call("language-server", "send", [handle, JSON.stringify({
-      jsonrpc: "2.0",
-      id: 9,
-      method: "textDocument/definition",
-      params: { textDocument: { uri: outsideUri }, position: { line: 0, character: 6 } },
-    })]);
-    const outsideDefinition = JSON.parse(await client.call("language-server", "next", [handle]) as string) as { id: number; result: unknown };
-    assert.equal(outsideDefinition.id, 9);
-    assert.equal(outsideDefinition.result, null);
-    await client.call("language-server", "send", [handle, JSON.stringify({
-      jsonrpc: "2.0",
-      method: "textDocument/didOpen",
-      params: { textDocument: { uri: pathToFileURL(escapedLinkPath).href, languageId: "velar", version: 1, text: "const privateOutsideProject =\n" } },
-    })]);
-    const escapedLinkLog = JSON.parse(await client.call("language-server", "next", [handle]) as string) as { method: string; params: { message: string } };
-    assert.equal(escapedLinkLog.method, "window/logMessage");
-    assert.match(escapedLinkLog.params.message, /outside the Desktop project grant/u);
-
-    for (let attempt = 0; attempt < 4; attempt += 1) {
-      const cancelledPull = client.beginCall("language-server", "next", [handle]);
-      client.cancelRequest(cancelledPull.id);
-      await assert.rejects(
-        withDeadline(cancelledPull.result, "cancelled language-server pull", 5_000),
-        /pull was cancelled|request was cancelled/u,
-      );
-    }
-    assert.equal(await client.call("language-server", "send", [handle, JSON.stringify({
-      jsonrpc: "2.0",
-      method: "textDocument/didOpen",
-      params: { textDocument: { uri: new URL(`file://${mainPath}`).href, languageId: "velar", version: 1, text: "const value =\n" } },
-    })]), null);
-    const diagnostics = JSON.parse(await client.call("language-server", "next", [handle]) as string) as { method: string; params: { diagnostics: unknown[] } };
-    assert.equal(diagnostics.method, "textDocument/publishDiagnostics");
-    assert.ok(diagnostics.params.diagnostics.length > 0);
-
-    const scriptPath = join(project, "probe.ts");
-    const scriptUri = new URL(`file://${scriptPath}`).href;
-    assert.equal(await client.call("language-server", "send", [handle, JSON.stringify({
-      jsonrpc: "2.0",
-      method: "textDocument/didOpen",
-      params: { textDocument: { uri: scriptUri, languageId: "typescript", version: 1, text: "const value = 1\nconst next = value + 1\n" } },
-    })]), null);
-    const scriptDiagnostics = JSON.parse(await client.call("language-server", "next", [handle]) as string) as { method: string; params: { diagnostics: unknown[] } };
-    assert.equal(scriptDiagnostics.method, "textDocument/publishDiagnostics");
-    assert.deepEqual(scriptDiagnostics.params.diagnostics, []);
-    await client.call("language-server", "send", [handle, JSON.stringify({
-      jsonrpc: "2.0",
-      id: 2,
-      method: "textDocument/definition",
-      params: { textDocument: { uri: scriptUri }, position: { line: 1, character: 13 } },
-    })]);
-    const scriptDefinition = JSON.parse(await client.call("language-server", "next", [handle]) as string) as { id: number; result: { range: { start: { line: number } } } };
-    assert.equal(scriptDefinition.id, 2);
-    assert.equal(scriptDefinition.result.range.start.line, 0);
-
-    await client.call("language-server", "send", [handle, JSON.stringify({
-      jsonrpc: "2.0",
-      id: 4,
-      method: "velar/workspaceSearch",
-      params: { query: "workspace search needle", maximumResults: 10 },
-    })]);
-    const workspaceSearch = JSON.parse(await client.call("language-server", "next", [handle]) as string) as {
-      id: number;
-      result: { items: Array<{ uri: string; preview: string }>; indexedFiles: number };
-    };
-    assert.equal(workspaceSearch.id, 4);
-    assert.deepEqual(workspaceSearch.result.items.map((item) => item.uri), [pathToFileURL(readmePath).href]);
-    assert.match(workspaceSearch.result.items[0]?.preview ?? "", /Packaged workspace search needle/u);
-    assert.ok(workspaceSearch.result.indexedFiles >= 2);
-
-    await client.call("language-server", "send", [handle, JSON.stringify({ jsonrpc: "2.0", id: 3, method: "shutdown", params: null })]);
-    const shutdown = JSON.parse(await client.call("language-server", "next", [handle]) as string) as { id: number };
-    assert.equal(shutdown.id, 3);
-    await client.call("language-server", "send", [handle, JSON.stringify({ jsonrpc: "2.0", method: "exit", params: null })]);
-    assert.equal(await client.call("language-server", "close", [handle]), null);
-    await assert.rejects(client.call("language-server", "next", [handle]), /unknown or already released/u);
-    assert.ok(client.lifecycle().some((event) => event.hostEvent === "language-server-settled" && event.handle === handle));
-    for (let attempt = 0; attempt < 100 && serverPid !== null; attempt += 1) {
-      try { process.kill(serverPid, 0); await new Promise((resolveWait) => setTimeout(resolveWait, 20)); }
-      catch { serverPid = null; }
-    }
-    assert.equal(serverPid, null, "closing the Desktop language server must reap its process group");
-  } finally {
-    if (serverPid !== null) terminateProcessGroup(serverPid);
-    await client.close();
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-
-desktopWorkerTest("Desktop owns permission-scoped PTY terminals with resize and crash reaping", {
-  timeout: 240_000,
-  skip: process.platform !== "darwin" ? "the 0.10 PTY host is the macOS Swift host" : false,
-}, async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-desktop-terminal-"));
-  const project = join(directory, "project");
-  const appData = join(directory, "app-data");
-  const host = join(directory, "host");
-  await Promise.all([mkdir(project), mkdir(appData), mkdir(host)]);
-  const terminalHost = join(host, "terminal-host");
-  await compileTerminalHost(terminalHost);
-  const deniedConfig = join(directory, "desktop-denied.json");
-  await writeFile(deniedConfig, JSON.stringify({
-    protocolVersion: 1,
-    permissions: { files: ["project"], processes: [], terminal: false, network: [], secrets: [] },
-    terminalHost: { path: "host/terminal-host" },
-  }), "utf8");
-  const deniedWorker = spawn(process.execPath, [workerPath, deniedConfig, appData, project], { stdio: ["pipe", "pipe", "pipe"] });
-  const deniedClient = new WorkerClient(deniedWorker);
-  try {
-    await assert.rejects(withDeadline(deniedClient.call("terminal", "open", [{columns: 80, rows: 24}]), "denied terminal open"), /desktop\.permissions\.terminal/u);
-  } finally {
-    await deniedClient.close();
-  }
-
-  const configPath = join(directory, "desktop.json");
-  await writeFile(configPath, JSON.stringify({
-    protocolVersion: 1,
-    permissions: { files: ["project"], processes: [], terminal: true, network: [], secrets: [] },
-    terminalHost: { path: "host/terminal-host" },
-  }), "utf8");
-  const worker = spawn(process.execPath, [workerPath, configPath, appData, project], { stdio: ["pipe", "pipe", "pipe"] });
-  const client = new WorkerClient(worker);
-  const terminalCall = (operation: string, args: readonly unknown[]): Promise<unknown> => withDeadline(client.call("terminal", operation, args), `terminal ${operation}`);
-  const ownedPids = new Set<number>();
-  try {
-    const started = await terminalCall("open", [{columns: 80, rows: 24}]) as {handle: number; pid: number};
-    assert.ok(started.handle >= 2_000_000_000);
-    const ownership = client.lifecycle().find(event => event.hostEvent === "terminal-owned" && event.handle === started.handle);
-    assert.deepEqual(ownership?.pids?.length, 2);
-    assert.equal(ownership?.pids?.includes(started.pid), true);
-    for (const pid of ownership?.pids ?? []) ownedPids.add(pid);
-
-    assert.equal(await terminalCall("resize", [started.handle, 100, 30]), null);
-    assert.equal(await terminalCall("write", [started.handle, "echo __VELAR_PTY__:$COLUMNS:$LINES; exit 7\n"]), null);
-    let output = "";
-    let outputEnded = false;
-    for (let pulls = 0; pulls < 100; pulls += 1) {
-      const chunk = await terminalCall("next", [started.handle]) as string | null;
-      if (chunk === null) { outputEnded = true; break; }
-      output += chunk;
-    }
-    assert.match(output, /__VELAR_PTY__:100:30/u);
-    assert.equal(outputEnded, true, "the terminal output stream must reach its final null");
-    assert.deepEqual(await terminalCall("wait", [started.handle]).catch(error => { throw new Error(`first terminal wait failed: ${String(error)}`); }), {code: 7});
-    assert.ok(client.lifecycle().some(event => event.hostEvent === "terminal-settled" && event.handle === started.handle));
-    await waitForPidsToExit(ownedPids, 5_000);
-    ownedPids.clear();
-
-    const cancelled = await terminalCall("open", [{columns: 80, rows: 24}]) as {handle: number; pid: number};
-    const cancelledOwnership = client.lifecycle().find(event => event.hostEvent === "terminal-owned" && event.handle === cancelled.handle);
-    for (const pid of cancelledOwnership?.pids ?? []) ownedPids.add(pid);
-    const cancelledRead = client.beginCall("terminal", "next", [cancelled.handle]);
-    client.cancelRequest(cancelledRead.id);
-    await assert.rejects(withDeadline(cancelledRead.result, "cancelled terminal read"), /terminal pull was cancelled|request was cancelled/u);
-    await assert.rejects(terminalCall("wait", [cancelled.handle]), /output must be consumed/u);
-    assert.equal(await terminalCall("write", [cancelled.handle, "exit 0\n"]), null);
-    while (await terminalCall("next", [cancelled.handle]) !== null) {}
-    assert.deepEqual(await terminalCall("wait", [cancelled.handle]).catch(error => { throw new Error(`cancelled-read terminal wait failed: ${String(error)}`); }), {code: 0});
-    await waitForPidsToExit(ownedPids, 5_000);
-    ownedPids.clear();
-
-    const retired = await terminalCall("open", [{columns: 80, rows: 24}]) as {handle: number; pid: number};
-    const retiredOwnership = client.lifecycle().find(event => event.hostEvent === "terminal-owned" && event.handle === retired.handle);
-    for (const pid of retiredOwnership?.pids ?? []) ownedPids.add(pid);
-    assert.equal(ownedPids.size, 2);
-    client.retireOwner();
-    await waitForPidsToExit(ownedPids, 5_000);
-    ownedPids.clear();
-  } finally {
-    for (const pid of ownedPids) terminateProcessGroup(pid);
-    await client.close();
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-
-desktopWorkerTest("Desktop owns bounded packaged project tasks without executable grants", { timeout: 240_000 }, async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-desktop-project-task-"));
-  const project = join(directory, "project");
-  const appData = join(directory, "app-data");
-  const host = join(directory, "host");
-  await Promise.all([mkdir(project), mkdir(appData), mkdir(host)]);
-  await writeFile(join(project, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", outDir: "dist", extensions: [] }), "utf8");
-  await writeFile(join(project, "main.vel"), "print(\"project-task-run\")\n", "utf8");
-  await writeFile(join(project, "main.test.vel"), "test \"the project task runs\":\n    if 2 + 2 != 4:\n        throw Error(\"math failed\")\n", "utf8");
-  await withDeadline(Promise.all([
-    buildProjectTaskTool(join(host, "project-task.js")),
-    buildBuildEngineTool(join(host, "build-engine")),
-  ]), "the bundled project-task and build-engine tool builds", TOOL_BUILD_TIMEOUT_MS);
-  const configPath = join(directory, "desktop.json");
-  await writeFile(configPath, JSON.stringify({
-    protocolVersion: 1,
-    permissions: { files: ["project"], processes: [], network: [], secrets: [] },
-    projectTask: { path: "host/project-task.js", buildEnginePath: "host/build-engine" },
-  }), "utf8");
-  const worker = spawn(process.execPath, [workerPath, configPath, appData, project], { stdio: ["pipe", "pipe", "pipe"] });
-  const client = new WorkerClient(worker);
-  let runningPid: number | null = null;
-  try {
-    await assert.rejects(client.call("project-task", "start", ["dev", [], { timeout: 1000, maxOutputBytes: 65536 }]), /command is invalid/u);
-    await assert.rejects(client.call("project-task", "start", ["check", ["--out", "escape"], { timeout: 1000, maxOutputBytes: 65536 }]), /Only a run project task accepts/u);
-    await assert.rejects(client.call("project-task", "start", ["check", [], { cwd: "/tmp", timeout: 1000, maxOutputBytes: 65536 }]), /options are invalid/u);
-
-    for (const [command, expected] of [
-      ["check", /Checked 2 modules/u],
-      ["test", /1 passed, 0 failed/u],
-      ["build", /Built 1 module/u],
-      ["fix", /applied 0 mechanical fixes; 0 diagnostics remain/u],
-      ["run", /project-task-run/u],
-    ] as const) {
-      const started = await client.call("project-task", "start", [command, [], { timeout: 120000, maxOutputBytes: 1024 * 1024 }]) as { handle: number; pid: number };
-      assert.ok(started.handle > 0 && started.pid > 0);
-      await assert.rejects(client.call("process", "read", [started.handle]), /process handle is unknown/u);
-      let output = "";
-      while (true) {
-        const chunk = await client.call("project-task", "read", [started.handle]) as { channel: string; text: string } | null;
-        if (chunk === null) break;
-        output += chunk.text;
-      }
-      const outcome = await client.call("project-task", "wait", [started.handle]) as {
-        result: { code: number | null; signal: string | null; stdout: string; stderr: string };
-        error: null;
-        retained: false;
-      };
-      assert.equal(outcome.result.code, 0, outcome.result.stderr);
-      assert.match(output, expected);
-      assert.equal(output, `${outcome.result.stdout}${outcome.result.stderr}`);
-      await assert.rejects(client.call("project-task", "read", [started.handle]), /project task handle is unknown/u);
-    }
-    assert.equal((await readFile(join(project, "dist", "main.js"), "utf8")).includes("project-task-run"), true);
-
-    await writeFile(join(project, "main.vel"), "print(\"started\")\nawait Promise.sleep(60000ms)\n", "utf8");
-    const running = await client.call("project-task", "start", ["run", [], { timeout: 0, maxOutputBytes: 65536 }]) as { handle: number; pid: number };
-    runningPid = running.pid;
-    const first = await client.call("project-task", "read", [running.handle]) as { channel: string; text: string };
-    assert.match(first.text, /started/u);
-    const stopStarted = Date.now();
-    const stopped = await client.call("project-task", "stop", [running.handle]) as { result: { code: number | null; signal: string | null } | null; error: unknown };
-    assert.equal(stopped.error, null);
-    assert.ok((stopped.result?.code ?? 0) !== 0 || stopped.result?.signal !== null, JSON.stringify(stopped));
-    assert.ok(Date.now() - stopStarted < 5000, "ProjectTask.stop must confirm package-owned process-group cleanup within 5 seconds");
-    for (let attempt = 0; attempt < 100; attempt += 1) {
-      try { process.kill(runningPid, 0); await new Promise((resolveWait) => setTimeout(resolveWait, 20)); }
-      catch { runningPid = null; break; }
-    }
-    assert.equal(runningPid, null, "ProjectTask.stop must reap the package-owned launcher PID");
-  } finally {
-    if (runningPid !== null) terminateProcessGroup(runningPid);
-    await client.close();
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-
-desktopWorkerTest("Desktop owns durable finite project changes across Worker restarts", { timeout: 120_000 }, async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-desktop-project-changes-"));
-  const project = join(directory, "project");
-  const appData = join(directory, "app-data");
-  await Promise.all([mkdir(project), mkdir(appData)]);
-  const notePath = join(project, "note.txt");
-  await writeFile(notePath, "before\n", "utf8");
-  const canonicalProject = await realpath(project);
-  const privateDirectory = join(appData, "project-transactions", createHash("sha256").update(canonicalProject).digest("hex"));
-  const statePath = join(privateDirectory, "transactions.json");
-  const feedPath = join(privateDirectory, "changes.jsonl");
-  const feed = new FileProjectChangeFeed({path: feedPath});
-  let transactionId = "";
-  try {
-    const owner = await createProjectKernel({root: canonicalProject, changeFeed: feed, transactionStatePath: statePath});
-    const prepared = await owner.prepareEdit({
-      operations: [{
-        reason: "Desktop finite project change transport",
-        operation: {type: "replace_text", path: "note.txt", oldText: "before", newText: "after"},
-      }],
-    });
-    transactionId = prepared.transactionId;
-    const validation = await owner.validate({transactionId});
-    assert.equal(validation.ok, true);
-  } finally {
-    feed.close();
-  }
-
-  const configPath = join(directory, "desktop.json");
-  await writeFile(configPath, JSON.stringify({
-    protocolVersion: 1,
-    permissions: {files: ["project"], processes: [], terminal: false, network: [], environment: [], secrets: []},
-  }), "utf8");
-  const open = (): WorkerClient => new WorkerClient(spawn(process.execPath, [workerPath, configPath, appData, project], {stdio: ["pipe", "pipe", "pipe"]}));
-  let client = open();
-  try {
-    let handle = await client.call("project-changes", "start", []) as number;
-    assert.ok(handle >= 3_000_000_000 && handle <= 3_000_000_015);
-    const page = await client.call("project-changes", "list", [handle, 50]) as {
-      changes: Array<{transactionId: string; lifecycle: string; diff: string; changedFiles: string[]}>;
-      truncated: boolean;
-    };
-    assert.equal(page.truncated, false);
-    assert.equal(page.changes[0]?.transactionId, transactionId);
-    assert.equal(page.changes[0]?.lifecycle, "validated");
-    assert.deepEqual(page.changes[0]?.changedFiles, ["note.txt"]);
-    assert.match(page.changes[0]?.diff ?? "", /after/u);
-    assert.equal("root" in (page.changes[0] ?? {}), false);
-    assert.equal("transactionStatePath" in (page.changes[0] ?? {}), false);
-
-    const appliedUpdate = client.call("project-changes", "subscribe", [handle]) as Promise<{changes: Array<{lifecycle: string}>; rescan: boolean}>;
-    const applied = await client.call("project-changes", "apply", [handle, transactionId]) as {lifecycle: string};
-    assert.equal(applied.lifecycle, "applied");
-    let observedApplied = await appliedUpdate;
-    if (observedApplied.changes[0]?.lifecycle !== "applied") {
-      observedApplied = await client.call("project-changes", "subscribe", [handle]) as typeof observedApplied;
-    }
-    assert.equal(observedApplied.changes[0]?.lifecycle, "applied");
-    assert.equal(await readFile(notePath, "utf8"), "after\n");
-    assert.equal(await client.call("project-changes", "close", [handle]), null);
-    await client.close();
-
-    client = open();
-    handle = await client.call("project-changes", "start", []) as number;
-    const restored = await client.call("project-changes", "get", [handle, transactionId]) as {lifecycle: string};
-    assert.equal(restored.lifecycle, "applied");
-    const rolledBackUpdate = client.call("project-changes", "subscribe", [handle]) as Promise<{changes: Array<{lifecycle: string}>; rescan: boolean}>;
-    const rolledBack = await client.call("project-changes", "rollback", [handle, transactionId]) as {lifecycle: string};
-    assert.equal(rolledBack.lifecycle, "rolled_back");
-    assert.equal((await rolledBackUpdate).changes[0]?.lifecycle, "rolled_back");
-    assert.equal(await readFile(notePath, "utf8"), "before\n");
-    assert.equal(await client.call("project-changes", "close", [handle]), null);
-    assert.equal((await readdir(project)).some((name) => name.includes("transaction") || name.includes("change")), false);
-    assert.equal((await readdir(privateDirectory)).sort().join(","), "changes.jsonl,transactions.json");
-  } finally {
-    await client.close();
-    await rm(directory, {recursive: true, force: true});
-  }
-});
 
 desktopWorkerTest("Desktop Node capability host enforces filesystem, process, and network grants", { timeout: 120_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-desktop-worker-"));
@@ -1120,10 +707,7 @@ desktopWorkerTest("Desktop capability host drains transferred process ownership 
     protocolVersion: 1,
     permissions: { files: [], processes: [basename(process.execPath)], network: [] },
   }), "utf8");
-  const source = (await readFile(workerPath, "utf8")).replace(
-    'from "./project-transactions.js"',
-    `from ${JSON.stringify(pathToFileURL(resolve("packages/desktop/native/node/project-transactions.js")).href)}`,
-  );
+  const source = await readFile(workerPath, "utf8");
   const crashingSource = source.replace(
     'task.kind = "process";\n  processHandles.set(handle, task);\n  // The native shell becomes the crash-recovery owner before the renderer\n  // receives the public start/run result.\n  respond({ protocolVersion: 1, hostEvent: "process-owned", owner, handle, pid: task.pid });',
     'task.kind = "process";\n  processHandles.set(handle, task);\n  // The native shell becomes the crash-recovery owner before the renderer\n  // receives the public start/run result.\n  respond({ protocolVersion: 1, hostEvent: "process-owned", owner, handle, pid: task.pid }); setTimeout(() => { throw new Error("injected Desktop worker crash"); }, 100); await new Promise(() => {});',
@@ -1157,42 +741,6 @@ desktopWorkerTest("Desktop capability host drains transferred process ownership 
 function terminateProcessGroup(pid: number): void {
   try { process.kill(-pid, "SIGKILL"); }
   catch { try { process.kill(pid, "SIGKILL"); } catch {} }
-}
-
-async function waitForPidsToExit(pids: ReadonlySet<number>, timeout: number): Promise<void> {
-  const remaining = new Set(pids);
-  const deadline = Date.now() + timeout;
-  while (remaining.size > 0 && Date.now() < deadline) {
-    for (const pid of remaining) {
-      try { process.kill(pid, 0); }
-      catch { remaining.delete(pid); }
-    }
-    if (remaining.size > 0) await new Promise(resolveWait => setTimeout(resolveWait, 20));
-  }
-  assert.deepEqual([...remaining], [], `Desktop left terminal processes alive: ${[...remaining].join(", ")}`);
-}
-
-async function compileTerminalHost(output: string): Promise<void> {
-  const child = spawn("/usr/bin/swiftc", [
-    "-Osize", "-whole-module-optimization", "-swift-version", "5",
-    resolve("packages/desktop/native/macos/VelarTerminalHost.swift"), "-o", output,
-  ], { stdio: ["ignore", "pipe", "pipe"] });
-  let diagnostics = "";
-  child.stdout.on("data", chunk => { diagnostics += chunk.toString("utf8"); });
-  child.stderr.on("data", chunk => { diagnostics += chunk.toString("utf8"); });
-  const exited = new Promise<number | null>((resolveExit, rejectExit) => {
-    child.once("error", rejectExit);
-    child.once("exit", resolveExit);
-  });
-  let code: number | null;
-  try { code = await withDeadline(exited, "the bundled terminal-host Swift compilation", TERMINAL_HOST_COMPILE_TIMEOUT_MS); }
-  catch (error) {
-    // A compiler that never exits (a module-cache lock left behind by a killed
-    // run is the usual reason) must fail this test, not park the whole suite.
-    child.kill("SIGKILL");
-    throw new Error(`${error instanceof Error ? error.message : String(error)}; swiftc pid ${child.pid ?? 0} was killed. Diagnostics so far: ${diagnostics || "(none)"}`);
-  }
-  assert.equal(code, 0, diagnostics);
 }
 
 /**
@@ -1255,9 +803,7 @@ class WorkerClient {
         else update.reject(new Error(typeof message.error === "string" ? message.error : "Desktop project-root update failed"));
         return;
       }
-      if ((message.hostEvent === "process-owned" || message.hostEvent === "process-settled"
-        || message.hostEvent === "language-server-owned" || message.hostEvent === "language-server-settled"
-        || message.hostEvent === "terminal-owned" || message.hostEvent === "terminal-settled")
+      if ((message.hostEvent === "process-owned" || message.hostEvent === "process-settled")
         && Number.isSafeInteger(message.handle) && typeof message.owner === "string") {
         this.lifecycleEvents.push({ hostEvent: message.hostEvent, owner: message.owner, handle: message.handle as number,
           ...(Number.isSafeInteger(message.pid) ? {pid: message.pid} : {}),
@@ -1310,8 +856,7 @@ class WorkerClient {
   beginCall(capability: string, operation: string, args: readonly unknown[]): { id: number; result: Promise<unknown> } {
     const id = this.nextId++;
     const reply = new Promise<unknown>((resolveCall, rejectCall) => this.pending.set(id, { resolve: resolveCall, reject: rejectCall }));
-    const timeout = capability === "project-task" ? PROJECT_TASK_CALL_TIMEOUT_MS : WORKER_CALL_TIMEOUT_MS;
-    const result = this.deadline(reply, `Desktop worker call #${id} ${capability}.${operation}`, timeout)
+    const result = this.deadline(reply, `Desktop worker call #${id} ${capability}.${operation}`, WORKER_CALL_TIMEOUT_MS)
       .finally(() => this.pending.delete(id));
     this.child.stdin.write(`${JSON.stringify({ protocolVersion: 1, id, owner: this.owner, capability, operation, args })}\n`);
     return { id, result };

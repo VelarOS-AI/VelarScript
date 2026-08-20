@@ -68,9 +68,7 @@ export async function verifyRemoteDeployment(
       sha256: manifestIdentity.sha256,
       acceptedStatuses: [200],
     },
-    ...build.manifest.assets
-      .filter((asset) => asset.role !== "adapter")
-      .map((asset) => ({
+    ...build.manifest.assets.map((asset) => ({
         path: asset.path,
         sizeBytes: asset.sizeBytes,
         sha256: asset.sha256,

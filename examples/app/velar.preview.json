@@ -1,7 +1,7 @@
 {
   "formatVersion": 2,
   "entry": "src/main.vel",
-  "outDir": "dist-netlify",
+  "outDir": "dist-preview",
   "publicDir": "public",
   "extensions": ["@velarscript/web"],
   "web": {
@@ -22,8 +22,7 @@
       "imageSources": []
     },
     "deployment": {
-      "spaFallback": true,
-      "adapter": "netlify"
+      "spaFallback": true
     }
   }
 }

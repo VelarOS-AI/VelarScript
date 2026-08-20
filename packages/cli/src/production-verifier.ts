@@ -14,7 +14,7 @@ export interface VerifiedProductionBuild {
   readonly deployment: StaticDeploymentManifest;
 }
 
-const assetRoles = new Set(["entry", "stylesheet", "source-map", "html", "deployment", "adapter", "asset"]);
+const assetRoles = new Set(["entry", "stylesheet", "source-map", "html", "deployment", "asset"]);
 
 export async function verifyProductionBuild(input: string | null, cwd = process.cwd()): Promise<VerifiedProductionBuild> {
   const directory = await resolveProductionDirectory(input, cwd);
@@ -190,18 +190,6 @@ function verifyDeploymentManifest(
   }
   const hasCsp = deployment.headers.some((rule) => Object.hasOwn(rule.values, "Content-Security-Policy"));
   if (hasCsp !== build.deployment.contentSecurityPolicy) throw new Error(`CSP state differs between build and deployment manifests`);
-  const adapter = deployment.adapter?.name ?? "neutral";
-  if (adapter !== build.deployment.adapter) throw new Error(`Host adapter differs between build and deployment manifests`);
-  if (deployment.adapter) {
-    if (deployment.adapter.name !== "netlify" || !Array.isArray(deployment.adapter.files)) throw new Error(`Static deployment adapter is invalid`);
-    if (deployment.base !== "/") throw new Error(`Netlify deployment adapter requires root base`);
-    if (new Set(deployment.adapter.files).size !== deployment.adapter.files.length) throw new Error(`Static deployment adapter declares duplicate files`);
-    for (const path of deployment.adapter.files) {
-      if (assets.get(safeRelativePath(path, "adapter file"))?.role !== "adapter") {
-        throw new Error(`Host adapter file '${path}' is not a declared adapter asset`);
-      }
-    }
-  }
 }
 
 function sameFramework(left: ProductionBuildManifest["framework"], right: ProductionBuildManifest["framework"]): boolean {

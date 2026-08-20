@@ -129,9 +129,8 @@ async function runBrowserAcceptance(): Promise<void> {
       for (const browser of browsers) {
         await boundedBrowserOperation(acceptBrowser(`Production ${browser.name}`, browser.type, productionUrl, true, realtimePort, activeBrowsers), 180_000, `Production ${browser.name} acceptance`, interruption);
       }
-      const externalDirectory = join(externalPreviewRoot, "site");
-      await prepareExternalPreview(externalDirectory);
-      externalPreview = await startProductionPreview(await verifyProductionBuild(externalDirectory), 0);
+      const externalBundle = await prepareExternalPreview(join(externalPreviewRoot, "netlify"));
+      externalPreview = await startProductionPreview(await verifyProductionBuild(externalBundle.outputDirectory), 0);
       await boundedBrowserOperation(acceptExternalPreview(externalPreview, activeBrowsers), 120_000, "External preview Chromium acceptance", interruption);
       process.stdout.write(`VelarScript development and CSP production browser matrices passed\n`);
     };

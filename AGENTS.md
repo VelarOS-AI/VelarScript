@@ -11,7 +11,8 @@ This file governs the repository unless a closer `AGENTS.md` narrows the target.
   the matching official owner. Ordinary libraries and concrete integrations use
   npm package names and `velar.entry`.
 - Keep `libraries/*` target-neutral and free of native drivers. Put concrete
-  third-party integrations in `adapters/*`.
+  runtime drivers in `adapters/*` and deployment-provider projection in
+  `integrations/*`.
 - A language change requires parser/analyzer/emitter/formatter/diagnostic and
   round-trip coverage as applicable. A runtime change requires emitted-output
   and execution coverage.

@@ -689,8 +689,6 @@ private final class NodeCapabilityHost {
         }
         switch event {
         case "process-owned":
-            fallthrough
-        case "language-server-owned":
             guard let pid = object["pid"] as? Int, pid > 0, pid <= Int(Int32.max),
                   processOwners[handle] == nil,
                   generation == activeGeneration || pending.values.contains(where: { $0.identity.generation == generation }) else {
@@ -698,21 +696,7 @@ private final class NodeCapabilityHost {
                 return
             }
             processOwners[handle] = ProcessOwner(pids: [pid_t(pid)], generation: generation)
-        case "terminal-owned":
-            guard let values = object["pids"] as? [Int], values.count == 2,
-                  Set(values).count == values.count,
-                  values.allSatisfy({ $0 > 0 && $0 <= Int(Int32.max) }),
-                  processOwners[handle] == nil,
-                  generation == activeGeneration || pending.values.contains(where: { $0.identity.generation == generation }) else {
-                fail("Desktop Node capability host returned an invalid terminal owner")
-                return
-            }
-            processOwners[handle] = ProcessOwner(pids: values.map(pid_t.init), generation: generation)
         case "process-settled":
-            fallthrough
-        case "language-server-settled":
-            fallthrough
-        case "terminal-settled":
             guard let owner = processOwners[handle], owner.generation == generation else {
                 fail("Desktop Node capability host settled an unknown process owner")
                 return

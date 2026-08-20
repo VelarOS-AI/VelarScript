@@ -32,7 +32,6 @@ test("Desktop is one VelarScript project with Web syntax and no renderer/main so
         permissions: {
           files: ["project"],
           processes: ["git", basename(process.execPath)],
-          terminal: true,
           network: ["https://api.example.com"],
           environment: ["LANG", "VELAR_DESKTOP_GENERATION_SMOKE"],
           secrets: ["OPENAI_API_KEY"],
@@ -41,7 +40,7 @@ test("Desktop is one VelarScript project with Web syntax and no renderer/main so
       },
     }, null, 2), "utf8");
     await writeFile(join(projectRoot, "src", "main.vel"), `
-import {ProjectChangeLifecycle, ProjectTaskCommand, ProjectTaskOutputChannel, appDataDirectory, openTerminal, platform, projectChanges, projectDirectory, selectedProjectDirectory, selectProjectDirectory, startProjectTask} from "velar/desktop"
+import {appDataDirectory, platform, projectDirectory, selectedProjectDirectory, selectProjectDirectory} from "velar/desktop"
 import {createText, exists, readText, watchFiles, writeText} from "velar/fs"
 import {get} from "velar/env"
 import {ProcessOutputChannel, run, start} from "velar/process"
@@ -89,37 +88,10 @@ component App:
         const second = await run("git", ["--version"])
         detail = await readText(probe) + ":" + (get("LANG") ?? "") + streamed + git.stdout + second.stdout
 
-    action checkProject():
-        const task = await startProjectTask(ProjectTaskCommand.check, [], {timeout: 120000, maxOutputBytes: 1048576})
-        let output = ""
-        async for chunk in task:
-            if chunk.channel == ProjectTaskOutputChannel.stdout:
-                output += chunk.text
-        const result = await task.wait()
-        detail = output + result.stderr
-
-    action inspectChanges():
-        const changes = await projectChanges()
-        const page = await changes.list(10)
-        for change in page.changes:
-            if change.lifecycle == ProjectChangeLifecycle.applied:
-                detail = change.transactionId + ":" + change.diff
-        await changes.close()
-
-    action openShell():
-        const session = await openTerminal({columns: 100, rows: 30})
-        await session.resize(120, 40)
-        await session.write("echo VelarScript terminal\\n")
-        detail = await session.next() ?? ""
-        await session.close()
-
     return <main>
         <GenerationProbe />
         <h1>VelarScript Desktop</h1>
         <button on:click={inspectHost}>Inspect host</button>
-        <button on:click={checkProject}>Check project</button>
-        <button on:click={inspectChanges}>Inspect changes</button>
-        <button on:click={openShell}>Open shell</button>
         <p>{detail}</p>
     </main>
 
@@ -148,11 +120,7 @@ mount(<App />, "#app")
     });
     const assets = await readFile(join(projectRoot, "build", manifestEntry(await readFile(join(projectRoot, "build", "velar-build.json"), "utf8"))), "utf8");
     assert.match(assets, /velar\.desktop\.bridge\.v1/u);
-    assert.match(assets, /project-task/u);
-    assert.match(assets, /startProjectTask/u);
-    assert.match(assets, /project-changes/u);
-    assert.match(assets, /ProjectChangeLifecycle/u);
-    assert.match(assets, /openTerminal/u);
+    assert.doesNotMatch(assets, /project-task|project-changes|openTerminal|languageServer/u);
 
     // The 0.10 native host is deliberately the macOS system-WebView host.
     // Other platforms still prove the single-project compiler contract above;
@@ -169,18 +137,14 @@ mount(<App />, "#app")
         hostBytes: number;
         rendererBytes: number;
         capabilityHostBytes: number;
-        languageServerBytes: number;
-        projectTaskBytes: number;
-        buildEngineBytes: number;
-        terminalHostBytes: number;
-        toolchainBytes: number;
+        metadataBytes: number;
         totalBytes: number;
       };
       sizeBudgetBytes: number;
       applicationBundle: string;
       runtime: { kind: string; minimumMajor: number; discovery: string; embedded: boolean; version?: unknown; executableHint?: unknown };
     };
-    assert.equal(desktopBuild.formatVersion, 2);
+    assert.equal(desktopBuild.formatVersion, 3);
     assert.equal(desktopBuild.kind, "velar-desktop-build");
     assert.equal(desktopBuild.version, "0.1.0");
     assert.deepEqual({
@@ -197,13 +161,8 @@ mount(<App />, "#app")
     assert.equal(desktopBuild.runtime.version, undefined);
     assert.equal(desktopBuild.runtime.executableHint, undefined);
     assert.ok(desktopBuild.sizes.hostBytes < 512 * 1024, JSON.stringify(desktopBuild.sizes));
-    assert.ok(desktopBuild.sizes.capabilityHostBytes > 4 * 1024 * 1024, JSON.stringify(desktopBuild.sizes));
-    assert.ok(desktopBuild.sizes.languageServerBytes > 1024 * 1024, JSON.stringify(desktopBuild.sizes));
-    assert.ok(desktopBuild.sizes.projectTaskBytes > 1024 * 1024, JSON.stringify(desktopBuild.sizes));
-    assert.ok(desktopBuild.sizes.buildEngineBytes > 5 * 1024 * 1024, JSON.stringify(desktopBuild.sizes));
-    assert.ok(desktopBuild.sizes.terminalHostBytes > 32 * 1024, JSON.stringify(desktopBuild.sizes));
-    assert.equal(desktopBuild.sizes.toolchainBytes,
-      desktopBuild.sizes.languageServerBytes + desktopBuild.sizes.projectTaskBytes + desktopBuild.sizes.buildEngineBytes + desktopBuild.sizes.terminalHostBytes);
+    assert.ok(desktopBuild.sizes.capabilityHostBytes > 0 && desktopBuild.sizes.capabilityHostBytes < 256 * 1024, JSON.stringify(desktopBuild.sizes));
+    assert.ok(desktopBuild.sizes.metadataBytes > 0, JSON.stringify(desktopBuild.sizes));
     assert.ok(desktopBuild.sizes.totalBytes < desktopBuild.sizeBudgetBytes, JSON.stringify(desktopBuild.sizes));
     const application = join(projectRoot, "dist", "desktop", desktopBuild.applicationBundle);
     assert.ok(!(await collectNames(application)).some((name) => name === "node_modules" || name.endsWith(".map")));
@@ -213,15 +172,10 @@ mount(<App />, "#app")
     assert.equal(applicationIcon.subarray(0, 4).toString("ascii"), "icns");
     const hostConfigText = await readFile(join(application, "Contents", "Resources", "desktop.json"), "utf8");
     const hostConfig = JSON.parse(hostConfigText) as Record<string, unknown>;
-    assert.deepEqual(hostConfig.languageServer, { path: "host/language-server.js" });
-    assert.deepEqual(hostConfig.projectTask, { path: "host/project-task.js", buildEnginePath: "host/build-engine" });
-    assert.deepEqual(hostConfig.terminalHost, { path: "host/terminal-host" });
-    assert.ok((await readFile(join(application, "Contents", "Resources", "host", "language-server.js"))).byteLength > 1024 * 1024);
-    assert.ok((await readFile(join(application, "Contents", "Resources", "host", "project-task.js"))).byteLength > 1024 * 1024);
-    assert.equal(JSON.parse(await readFile(join(application, "Contents", "Resources", "host", "playwright-core", "package.json"), "utf8")).name, "playwright-core");
-    assert.ok(JSON.parse(await readFile(join(application, "Contents", "Resources", "host", "playwright-core", "browsers.json"), "utf8")).browsers.length >= 3);
-    assert.ok((await readFile(join(application, "Contents", "Resources", "host", "build-engine"))).byteLength > 5 * 1024 * 1024);
-    assert.ok((await readFile(join(application, "Contents", "Resources", "host", "terminal-host"))).byteLength > 32 * 1024);
+    assert.equal(hostConfig.languageServer, undefined);
+    assert.equal(hostConfig.projectTask, undefined);
+    assert.equal(hostConfig.terminalHost, undefined);
+    assert.deepEqual((await readdir(join(application, "Contents", "Resources", "host"))).sort(), ["worker.js"]);
     assert.equal(hostConfig.nodeExecutableHint, undefined);
     assert.doesNotMatch(hostConfigText, new RegExp(process.execPath.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"));
     const smokeEnvironment = { ...process.env, VELAR_DESKTOP_NODE: process.execPath, VELAR_DESKTOP_PROJECT_ROOT: projectRoot };
@@ -232,21 +186,6 @@ mount(<App />, "#app")
       protocolVersion: 1,
       identifier: "dev.velarscript.fixture",
     });
-    const packagedTask = spawnSync(process.execPath, [
-      join(application, "Contents", "Resources", "host", "project-task.js"),
-      "package",
-      projectRoot,
-    ], {
-      cwd: projectRoot,
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        ESBUILD_BINARY_PATH: join(application, "Contents", "Resources", "host", "build-engine"),
-        VELAR_DESKTOP_PACKAGE_TEMPLATE_ROOT: join(application, "Contents", "Resources"),
-      },
-    });
-    assert.equal(packagedTask.status, 0, packagedTask.stderr);
-    assert.match(packagedTask.stdout, /Packaged Desktop application/u);
     const invalidRootSmoke = spawnSync(join(application, "Contents", "MacOS", "VelarDesktopHost"), ["--smoke"], {
       encoding: "utf8",
       env: { ...smokeEnvironment, VELAR_DESKTOP_PROJECT_ROOT: "relative-project" },
@@ -287,42 +226,6 @@ mount(<App />, "#app")
   }
 });
 
-test("Desktop project task diagnostics keep commands finite", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-desktop-project-task-diagnostic-"));
-  try {
-    await mkdir(join(directory, "src"));
-    await linkDesktopExtension(directory);
-    await writeFile(join(directory, "package.json"), JSON.stringify({ name: "task-diagnostic", version: "0.1.0", private: true, type: "module" }), "utf8");
-    await writeFile(join(directory, "velar.json"), JSON.stringify({
-      formatVersion: 2,
-      entry: "src/main.vel",
-      extensions: ["@velarscript/desktop"],
-      desktop: { productName: "Task Diagnostic", identifier: "dev.velarscript.task-diagnostic", permissions: { files: ["project"], processes: [] } },
-    }), "utf8");
-    const sourcePath = join(directory, "src", "main.vel");
-    await writeFile(sourcePath, `
-import {startProjectTask} from "velar/desktop"
-
-async def invalidCommand():
-    await startProjectTask("shell")
-`.trimStart(), "utf8");
-    const invalidCommand = spawnSync(process.execPath, [cli, "check", directory], { encoding: "utf8" });
-    assert.equal(invalidCommand.status, 1);
-    assert.match(invalidCommand.stderr, /ProjectTaskCommand/u);
-    await writeFile(sourcePath, `
-import {openTerminal} from "velar/desktop"
-
-async def invalidTerminal():
-    await openTerminal({columns: "wide", rows: 24})
-`.trimStart(), "utf8");
-    const invalidTerminal = spawnSync(process.execPath, [cli, "check", directory], { encoding: "utf8" });
-    assert.equal(invalidTerminal.status, 1);
-    assert.match(invalidTerminal.stderr, /VEL4001: Cannot assign string to number/u);
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-
 test("Desktop permissions fail closed before application compilation", async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-desktop-permissions-"));
   try {
@@ -358,10 +261,10 @@ test("Desktop permissions fail closed before application compilation", async () 
       desktop: {
         productName: "Unsafe",
         identifier: "dev.velarscript.unsafe",
-        permissions: { terminal: "yes" },
+        permissions: { terminal: true },
       },
     }), "utf8");
-    await assert.rejects(resolveVelarProject(directory), /desktop\.permissions\.terminal.*boolean/u);
+    await assert.rejects(resolveVelarProject(directory), /unknown 'desktop\.permissions' field 'terminal'/u);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

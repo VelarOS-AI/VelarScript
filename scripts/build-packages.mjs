@@ -1,12 +1,14 @@
 import { spawn } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { velarToolchainBuildOrder } from "./velar-packages.mjs";
+import { velarWorkspaceBuildOrder } from "./velar-packages.mjs";
 
 /**
- * Build every publishable toolchain package that declares a build, in an order
- * where each one follows the toolchain packages it depends on. Source
- * libraries publish `.vel` entries directly and do not have a build step.
+ * Build every publishable workspace package that declares a build, in an order
+ * where each one follows workspace packages it depends on. Source libraries
+ * and source adapters publish `.vel` entries directly and have no build step;
+ * compiled host integrations remain independently versioned even though the
+ * repository-wide build gate compiles them.
  *
  * This replaces a literal npm script that chained six `npm run build
  * --workspace …` invocations. That chain was a copy of what `packages/*`
@@ -16,14 +18,14 @@ import { velarToolchainBuildOrder } from "./velar-packages.mjs";
  * packed on the day it existed and built on no day at all — so its `dist` was
  * whatever the last manual build had left behind, or nothing.
  *
- * The order is derived, not preserved: `velarToolchainBuildOrder` reads each manifest's
+ * The order is derived, not preserved: `velarWorkspaceBuildOrder` reads each manifest's
  * own `dependencies` and its own `scripts.build`.
  */
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-const order = await velarToolchainBuildOrder(root);
-if (order.length === 0) throw new Error("no publishable toolchain package declares a build script");
+const order = await velarWorkspaceBuildOrder(root);
+if (order.length === 0) throw new Error("no publishable workspace package declares a build script");
 
 for (const package_ of order) {
   await run(["run", "build", "--workspace", package_.name]);

@@ -8,12 +8,12 @@
 // renderer/main split, so this entry is the same shape a Web entry has.
 
 import {HostPanel} from "./01-desktop-host.vel"
-import {TaskPanel} from "./02-project-tasks.vel"
+import {CapabilityPanel} from "./02-capabilities.vel"
 
 component Tour:
     return <div id="tour">
         <HostPanel />
-        <TaskPanel />
+        <CapabilityPanel />
     </div>
 
 mount(<Tour />, "#app")

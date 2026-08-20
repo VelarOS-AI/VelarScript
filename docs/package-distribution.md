@@ -77,8 +77,28 @@ Registry package specifications are passed to npm as argument-array data after
 to direct npm usage. `update` follows the ranges already declared in
 `package.json` rather than silently moving every dependency to a new major.
 
-A reusable VelarScript source package declares `velar.entry`. A compiler/framework
+A reusable VelarScript source package declares `velar.entry`, its supported
+`velar.targets`, and a bounded `velar.requires.capabilities` list. Compatibility
+is checked before package source is compiled. A compiler/framework
 extension declares `velar.extension`:
+
+```json
+{
+  "velar": {
+    "entry": "src/index.vel",
+    "targets": ["core", "node", "web", "desktop"],
+    "requires": { "capabilities": [] }
+  }
+}
+```
+
+Targets are `core`, `node`, `web`, or `desktop`. A concrete adapter may narrow
+that list and require a host capability; for example SQLite declares only the
+Node target and the `node` capability. Missing, empty, duplicated, unknown, or
+incompatible declarations fail package resolution instead of leaking a native
+dependency into another target.
+
+An extension package instead declares:
 
 ```json
 {
@@ -113,6 +133,8 @@ beside `velar.entry`, and exposes the same file through npm `exports`:
   },
   "velar": {
     "entry": "src/index.vel",
+    "targets": ["core", "node", "web", "desktop"],
+    "requires": { "capabilities": [] },
     "resources": {
       "./block-catalog": {
         "path": "generated/block-catalog.json",
@@ -284,5 +306,5 @@ complete license text, and package acceptance verifies the installed metadata
 and file rather than trusting the source manifest alone. The current rehearsal
 is always marked non-publishable because rehearsal mode is evidence only. A
 strict candidate becomes publishable only from the clean, exactly tagged
-`v0.11.1` source with the matching remote; registry publication remains a
+`v0.12.0` source with the matching remote; registry publication remains a
 separate explicit authority and must carry npm provenance.

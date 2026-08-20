@@ -70,7 +70,7 @@ async function desktopProject(prefix: string, files: ReadonlyMap<string, string>
     desktop: {
       productName: "D60 rule 153",
       identifier: "dev.velarscript.d60r153",
-      permissions: { files: ["project"], processes: [], terminal: false, network: [], environment: ["HOME"], secrets: [] },
+      permissions: { files: ["project"], processes: [], network: [], environment: ["HOME"], secrets: [] },
     },
   }), "utf8");
   for (const [name, contents] of files) await writeFile(join(directory, "src", name), contents, "utf8");

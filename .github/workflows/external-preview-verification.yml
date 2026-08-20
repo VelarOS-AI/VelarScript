@@ -29,16 +29,16 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ github.token }}
       - run: npm run check
-      - name: Prepare the exact root Netlify preview
-        run: node scripts/prepare-external-preview.mjs --output-dir release/external-preview/site
+      - name: Prepare the neutral build and external Netlify bundle
+        run: node scripts/prepare-external-preview.mjs --output-dir release/external-preview/netlify
       - name: Verify hosted bytes and deployment behavior
         env:
           VELAR_DEPLOYMENT_URL: ${{ inputs.deployment_url }}
         run: |
           mkdir -p release/external-preview
-          node packages/cli/dist/cli.js verify-deployment release/external-preview/site --json > release/external-preview/velar-deployment-verification.json
-          cp release/external-preview/site/velar-build.json release/external-preview/velar-build.json
-          cp release/external-preview/site/velar-deploy.json release/external-preview/velar-deploy.json
+          node packages/cli/dist/cli.js verify-deployment release/external-preview/netlify/site --json > release/external-preview/velar-deployment-verification.json
+          cp release/external-preview/netlify/site/velar-build.json release/external-preview/velar-build.json
+          cp release/external-preview/netlify/site/velar-deploy.json release/external-preview/velar-deploy.json
           node -e "JSON.parse(require('node:fs').readFileSync('release/external-preview/velar-deployment-verification.json', 'utf8'))"
       - name: Attest external-preview evidence
         uses: actions/attest@v4

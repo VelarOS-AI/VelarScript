@@ -24,16 +24,10 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
   const directory = await mkdtemp(join(tmpdir(), "velar-desktop-runtime-"));
   const calls: Array<{ capability: string; operation: string; args: readonly unknown[]; timeout: number }> = [];
   const processChunks = new Map<number, unknown[]>();
-  const projectTaskChunks = new Map<number, unknown[]>();
-  const terminalChunks = new Map<number, unknown[]>();
   const httpChunks = new Map<number, unknown[]>();
   const httpResponseFailures = new Set<number>();
   const pendingRequests = new Map<number, { reject(error: Error): void }>();
   const pendingProcessRead = { resolve: null as ((value: unknown) => void) | null };
-  const languageServerMessages = ['{"jsonrpc":"2.0","id":1,"result":null}'];
-  const projectChangeRecords = new Map<string, Record<string, unknown>>();
-  const projectChangeUpdates: unknown[] = [];
-  let hostileProjectChangeReads = 0;
   const stopWaitRace = { reject: null as ((error: Error) => void) | null };
   let pendingProcessReadDelivered = false;
   let hostileResponseReads = 0;
@@ -42,38 +36,17 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
   let retriableProcessStops = 0;
   let retriableProcessWaits = 0;
   let transportProcessWaits = 0;
-  let terminalProcessWaits = 0;
   let retainedRunStops = 0;
   let invalidProcessWaits = 0;
   let malformedWatcherCloses = 0;
   let currentProjectDirectory = directory;
   let selectedProjectDirectory: string | null = null;
-  let nextTerminalHandle = 2_000_000_000;
   const transportFailure = (phase: "request" | "response"): Error => {
     const error = new Error(phase === "request" ? "HTTP request transport failed" : "HTTP response transport failed");
     Object.defineProperty(error, "name", { value: "VelarDesktopHttpTransportError" });
     Object.defineProperty(error, "phase", { value: phase, enumerable: true });
     return error;
   };
-  const projectChangeRecord = (lifecycle: string, sequence: number): Record<string, unknown> => ({
-    transactionId: "tx-editor-1",
-    sequence,
-    lifecycle,
-    reason: null,
-    intents: [{type: "replace_text", path: "src/main.vel", from: null, to: null, targetId: null, reason: "test"}],
-    patches: [{patchId: "patch-1", strategyId: "text", path: "src/main.vel", baseRevision: null, diff: "-old\n+new", changedLines: 2, risk: "low", operation: "replace_text"}],
-    changedFiles: ["src/main.vel"],
-    diff: "-old\n+new",
-    changedLines: 2,
-    risk: "low",
-    revisions: [{path: "src/main.vel", before: "before", after: "after"}],
-    createdAt: 1,
-    updatedAt: sequence,
-    appliedAt: lifecycle === "applied" || lifecycle === "rolled_back" ? 2 : null,
-  });
-  const preparedProjectChange = projectChangeRecord("prepared", 1);
-  projectChangeRecords.set("tx-editor-1", preparedProjectChange);
-  projectChangeUpdates.push({changes: [preparedProjectChange], rescan: false});
   const bridge = Object.freeze({
     platform: "test",
     packaged: false,
@@ -93,59 +66,6 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
           return selectedProjectDirectory;
         }
       }
-      if (capability === "language-server") {
-        if (operation === "start") return 1_000_000_000;
-        if (operation === "send" || operation === "close") return null;
-        if (operation === "next") return languageServerMessages.shift() ?? null;
-      }
-      if (capability === "project-task" && operation === "start") {
-        projectTaskChunks.set(20, [{ channel: "stdout", text: "checked\n" }, { channel: "stderr", text: "notice\n" }, null]);
-        return { handle: 20, pid: 720 };
-      }
-      if (capability === "project-task" && operation === "read") return projectTaskChunks.get(args[0] as number)?.shift() ?? null;
-      if (capability === "project-task" && operation === "wait") return {
-        result: { code: 0, signal: null, stdout: "checked\n", stderr: "notice\n" },
-        error: null,
-        retained: false,
-      };
-      if (capability === "project-task" && operation === "stop") return {
-        result: { code: 143, signal: null, stdout: "", stderr: "" },
-        error: null,
-      };
-      if (capability === "project-changes") {
-        if (operation === "start") return 3_000_000_000;
-        if (operation === "list") {
-          const values = [...projectChangeRecords.values()];
-          return {changes: values.slice(0, args[1] as number), truncated: values.length > (args[1] as number)};
-        }
-        if (operation === "get") {
-          if (args[1] === "hostile") {
-            return Object.defineProperty({...preparedProjectChange}, "transactionId", {
-              enumerable: true,
-              get() { hostileProjectChangeReads += 1; return "hostile"; },
-            });
-          }
-          return projectChangeRecords.get(args[1] as string) ?? null;
-        }
-        if (operation === "subscribe") return projectChangeUpdates.shift() ?? null;
-        if (operation === "apply" || operation === "rollback") {
-          const transactionId = args[1] as string;
-          if (!projectChangeRecords.has(transactionId)) throw new Error("unknown project transaction");
-          const change = projectChangeRecord(operation === "apply" ? "applied" : "rolled_back", operation === "apply" ? 2 : 3);
-          projectChangeRecords.set(transactionId, change);
-          return change;
-        }
-        if (operation === "close") return null;
-      }
-      if (capability === "terminal" && operation === "open") {
-        const handle = nextTerminalHandle++;
-        terminalChunks.set(handle, ["terminal output\n", null]);
-        return {handle, pid: 730 + handle - 2_000_000_000};
-      }
-      if (capability === "terminal" && (operation === "write" || operation === "resize")) return null;
-      if (capability === "terminal" && operation === "next") return terminalChunks.get(args[0] as number)?.shift() ?? null;
-      if (capability === "terminal" && operation === "wait") return {code: 7};
-      if (capability === "terminal" && operation === "close") return {code: 129};
       if (capability === "process" && operation === "start") {
         if (args[0] === "hostile-start") {
           return Object.defineProperty({ pid: 700 }, "handle", {
@@ -165,7 +85,6 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
         if (args[0] === "retry-wait") return { handle: 14, pid: 706 };
         if (args[0] === "retry-run") return { handle: 15, pid: 707 };
         if (args[0] === "transport-wait") return { handle: 16, pid: 708 };
-        if (args[0] === "terminal-wait") return { handle: 17, pid: 709 };
         if (args[0] === "invalid-wait") return { handle: 18, pid: 710 };
         if (args[0] === "stop-wait-race") return { handle: 19, pid: 711 };
         return { handle: 7, pid: 700 };
@@ -203,10 +122,6 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
         }
         if (args[0] === 15) return { result: null, error: { name: "Error", message: "run cleanup unconfirmed" }, retained: true };
         if (args[0] === 16 && transportProcessWaits++ === 0) throw new Error("process wait transport failed");
-        if (args[0] === 17) {
-          terminalProcessWaits += 1;
-          return { result: null, error: { name: "Error", message: "terminal process failure" }, retained: false };
-        }
         if (args[0] === 18 && invalidProcessWaits++ === 0) {
           return { result: { code: 0, signal: null, stdout: "invalid", stderr: "" }, error: null, retained: true };
         }
@@ -407,13 +322,6 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
     await assert.rejects(transportWait.wait(), /process wait transport failed/u);
     assert.equal((await transportWait.wait()).stdout, "ready");
     assert.equal(transportProcessWaits, 2);
-
-    const terminalWait = await processRuntime.start("terminal-wait");
-    const firstTerminalWait = terminalWait.wait();
-    assert.equal(terminalWait.wait(), firstTerminalWait);
-    await assert.rejects(firstTerminalWait, /terminal process failure/u);
-    await assert.rejects(terminalWait.wait(), /terminal process failure/u);
-    assert.equal(terminalProcessWaits, 1);
 
     const invalidWait = await processRuntime.start("invalid-wait");
     await assert.rejects(invalidWait.wait(), /invalid or contradictory/u);
@@ -710,57 +618,6 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
       projectDirectory(): Promise<string>;
       selectedProjectDirectory(): Promise<string | null>;
       selectProjectDirectory(): Promise<string | null>;
-      LanguageServer: { is(value: unknown): boolean; parse(value: unknown): unknown };
-      languageServer(): Promise<{ send(message: string): Promise<null>; next(): Promise<string | null>; close(): Promise<null> }>;
-      ProjectTask: { is(value: unknown): boolean; parse(value: unknown): unknown };
-      ProjectTaskCommand: Readonly<{
-        check: "check"; test: "test"; browserTest: "browserTest"; build: "build"; fix: "fix"; package: "package"; run: "run";
-        is(value: unknown): boolean; parse(value: unknown): unknown; values(): string[];
-      }>;
-      ProjectTaskOutputChannel: Readonly<{
-        stdout: "stdout"; stderr: "stderr";
-        is(value: unknown): boolean; parse(value: unknown): unknown; values(): string[];
-      }>;
-      ProjectChanges: { is(value: unknown): boolean; parse(value: unknown): unknown };
-      ProjectChangeLifecycle: Readonly<{
-        prepared: "prepared"; validationFailed: "validationFailed"; rolledBack: "rolledBack";
-        is(value: unknown): boolean; parse(value: unknown): unknown; values(): string[];
-      }>;
-      ProjectChangeRisk: Readonly<{
-        low: "low"; medium: "medium"; high: "high";
-        is(value: unknown): boolean; parse(value: unknown): unknown; values(): string[];
-      }>;
-      projectChanges(): Promise<{
-        list(limit?: number): Promise<{changes: Array<{
-          transactionId: string;
-          lifecycle: string;
-          diff: string;
-          intents: unknown[];
-          patches: unknown[];
-          changedFiles: string[];
-          revisions: unknown[];
-        }>; truncated: boolean}>;
-        get(transactionId: string): Promise<{transactionId: string; lifecycle: string; diff: string} | null>;
-        subscribe(): Promise<{changes: Array<{transactionId: string; lifecycle: string}>; rescan: boolean} | null>;
-        apply(transactionId: string): Promise<{lifecycle: string}>;
-        rollback(transactionId: string): Promise<{lifecycle: string}>;
-        close(): Promise<null>;
-      }>;
-      startProjectTask(command: "check" | "test" | "build" | "fix" | "package" | "run", args?: string[], options?: { timeout?: number; maxOutputBytes?: number }): Promise<{
-        pid: number;
-        next(): Promise<{ channel: "stdout" | "stderr"; text: string } | null>;
-        wait(): Promise<{ code: number | null; signal: string | null; stdout: string; stderr: string }>;
-        stop(): Promise<null>;
-      }>;
-      TerminalSession: { is(value: unknown): boolean; parse(value: unknown): unknown };
-      openTerminal(options?: { columns?: number; rows?: number }): Promise<{
-        pid: number;
-        write(text: string): Promise<null>;
-        resize(columns: number, rows: number): Promise<null>;
-        next(): Promise<string | null>;
-        wait(): Promise<{code: number}>;
-        close(): Promise<null>;
-      }>;
     }>(directory, "desktop", "velar/desktop");
     assert.equal(desktopRuntime.platform(), "test");
     assert.equal(desktopRuntime.DesktopPlatform.macos, "macos");
@@ -776,95 +633,6 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
     assert.equal(await desktopRuntime.selectedProjectDirectory(), join(directory, "selected"));
     assert.equal(await desktopRuntime.projectDirectory(), join(directory, "selected"));
     assert.equal(pathRuntime.resolve(["dynamic.vel"]), join(directory, "selected", "dynamic.vel"));
-    const languageServer = await desktopRuntime.languageServer();
-    assert.equal(desktopRuntime.LanguageServer.is(languageServer), true);
-    assert.equal(desktopRuntime.LanguageServer.parse(languageServer), languageServer);
-    assert.equal(await languageServer.send('{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'), null);
-    assert.equal(await languageServer.next(), '{"jsonrpc":"2.0","id":1,"result":null}');
-    assert.equal(calls.find((call) => call.capability === "language-server" && call.operation === "next")?.timeout, 0);
-    assert.equal(await languageServer.close(), null);
-    assert.equal(await languageServer.next(), null);
-    assert.equal(desktopRuntime.ProjectTaskCommand.check, "check");
-    assert.equal(desktopRuntime.ProjectTaskCommand.fix, "fix");
-    assert.equal(desktopRuntime.ProjectTaskCommand.package, "package");
-    assert.equal(desktopRuntime.ProjectTaskOutputChannel.stderr, "stderr");
-    // D60 rule 149: the two Desktop enums answer all three names charter
-    // section 6 reserves, not only their members. `values` was the gap, and it
-    // threw `is not a function` from code that compiled clean.
-    assert.equal(desktopRuntime.ProjectTaskCommand.browserTest, "browserTest");
-    assert.deepEqual(desktopRuntime.ProjectTaskCommand.values(), ["check", "test", "browserTest", "build", "fix", "package", "run"]);
-    assert.deepEqual(desktopRuntime.ProjectTaskOutputChannel.values(), ["stdout", "stderr"]);
-    assert.notEqual(desktopRuntime.ProjectTaskCommand.values(), desktopRuntime.ProjectTaskCommand.values());
-    assert.equal(desktopRuntime.ProjectTaskCommand.is("check"), true);
-    assert.equal(desktopRuntime.ProjectTaskCommand.is("publish"), false);
-    assert.equal(desktopRuntime.ProjectTaskCommand.parse("build"), "build");
-    assert.throws(() => desktopRuntime.ProjectTaskCommand.parse("publish"));
-    assert.equal(desktopRuntime.ProjectTaskOutputChannel.is("stderr"), true);
-    assert.equal(desktopRuntime.ProjectTaskOutputChannel.parse("stdout"), "stdout");
-    assert.throws(() => desktopRuntime.ProjectTaskOutputChannel.parse("both"));
-    assert.equal(desktopRuntime.ProjectChangeLifecycle.validationFailed, "validationFailed");
-    assert.equal(desktopRuntime.ProjectChangeLifecycle.rolledBack, "rolledBack");
-    assert.deepEqual(desktopRuntime.ProjectChangeLifecycle.values(), ["prepared", "amended", "validated", "validationFailed", "applied", "rolledBack", "discarded"]);
-    assert.equal(desktopRuntime.ProjectChangeRisk.high, "high");
-    assert.deepEqual(desktopRuntime.ProjectChangeRisk.values(), ["low", "medium", "high"]);
-    const projectChanges = await desktopRuntime.projectChanges();
-    assert.equal(desktopRuntime.ProjectChanges.is(projectChanges), true);
-    assert.equal(desktopRuntime.ProjectChanges.parse(projectChanges), projectChanges);
-    const changePage = await projectChanges.list();
-    assert.equal(changePage.truncated, false);
-    assert.equal(Object.isFrozen(changePage.changes), false);
-    assert.equal(Object.isFrozen(changePage.changes[0]?.intents), false);
-    assert.equal(Object.isFrozen(changePage.changes[0]?.patches), false);
-    assert.equal(Object.isFrozen(changePage.changes[0]?.changedFiles), false);
-    assert.equal(Object.isFrozen(changePage.changes[0]?.revisions), false);
-    assert.equal(changePage.changes[0]?.transactionId, "tx-editor-1");
-    assert.equal(changePage.changes[0]?.lifecycle, "prepared");
-    assert.equal(changePage.changes[0]?.diff, "-old\n+new");
-    assert.equal((await projectChanges.get("tx-editor-1"))?.lifecycle, "prepared");
-    assert.equal((await projectChanges.subscribe())?.changes[0]?.lifecycle, "prepared");
-    assert.equal(calls.find((call) => call.capability === "project-changes" && call.operation === "subscribe")?.timeout, 0);
-    assert.equal((await projectChanges.apply("tx-editor-1")).lifecycle, "applied");
-    assert.equal((await projectChanges.rollback("tx-editor-1")).lifecycle, "rolledBack");
-    await assert.rejects(projectChanges.get("hostile"), /enumerable data values/u);
-    assert.equal(hostileProjectChangeReads, 0);
-    await assert.rejects(projectChanges.list(101), /integer from 1 through 100/u);
-    assert.equal(await projectChanges.close(), null);
-    assert.equal(await projectChanges.close(), null);
-    await assert.rejects(projectChanges.get("tx-editor-1"), /closed/u);
-    await assert.rejects(desktopRuntime.startProjectTask(desktopRuntime.ProjectTaskCommand.check, ["--unsafe"]), /Only a run project task accepts/u);
-    const projectTask = await desktopRuntime.startProjectTask(desktopRuntime.ProjectTaskCommand.check, [], { timeout: 5000, maxOutputBytes: 65536 });
-    assert.equal(projectTask.pid, 720);
-    assert.equal(desktopRuntime.ProjectTask.is(projectTask), true);
-    assert.equal(desktopRuntime.ProjectTask.parse(projectTask), projectTask);
-    assert.deepEqual(await projectTask.next(), { channel: "stdout", text: "checked\n" });
-    assert.deepEqual(await projectTask.next(), { channel: "stderr", text: "notice\n" });
-    assert.equal(await projectTask.next(), null);
-    assert.deepEqual(await projectTask.wait(), { code: 0, signal: null, stdout: "checked\n", stderr: "notice\n" });
-    const projectTaskStart = calls.find((call) => call.capability === "project-task" && call.operation === "start");
-    assert.deepEqual(projectTaskStart?.args, ["check", [], { timeout: 5000, maxOutputBytes: 65536 }]);
-    assert.equal(calls.find((call) => call.capability === "project-task" && call.operation === "read")?.timeout, 0);
-    const terminalCallsBeforeValidation = calls.filter(call => call.capability === "terminal").length;
-    await assert.rejects(desktopRuntime.openTerminal({columns: 19}), /columns must be an integer from 20/u);
-    assert.equal(calls.filter(call => call.capability === "terminal").length, terminalCallsBeforeValidation);
-    const terminal = await desktopRuntime.openTerminal({columns: 100, rows: 30});
-    assert.equal(terminal.pid, 730);
-    assert.equal(desktopRuntime.TerminalSession.is(terminal), true);
-    assert.equal(desktopRuntime.TerminalSession.parse(terminal), terminal);
-    assert.equal(await terminal.resize(120, 40), null);
-    assert.equal(await terminal.write("echo ready\n"), null);
-    await assert.rejects(terminal.wait(), /output must be consumed/u);
-    assert.equal(await terminal.next(), "terminal output\n");
-    assert.equal(await terminal.next(), null);
-    assert.deepEqual(await terminal.wait(), {code: 7});
-    assert.equal(await terminal.wait(), await terminal.wait());
-    await assert.rejects(terminal.write("echo closed\n"), /closed/u);
-    assert.deepEqual(calls.find(call => call.capability === "terminal" && call.operation === "open")?.args, [{columns: 100, rows: 30}]);
-    assert.equal(calls.find(call => call.capability === "terminal" && call.operation === "next")?.timeout, 0);
-    const closedTerminal = await desktopRuntime.openTerminal();
-    assert.equal(await closedTerminal.close(), null);
-    assert.equal(await closedTerminal.close(), null);
-    assert.deepEqual(await closedTerminal.wait(), {code: 129});
-
     const environment = await runtime<{ get(name: string): string | null; require(name: string): string }>(directory, "env", "velar/env");
     assert.equal(environment.get("LANG"), "en_US.UTF-8");
     assert.equal(environment.get("SECRET"), null);
@@ -1164,7 +932,7 @@ test("Desktop CLI test host provides deterministic manifest-scoped process handl
     productName: "Test",
     identifier: "dev.velarscript.test",
     window: { title: "Test", width: 800, height: 600, minWidth: 480, minHeight: 320 },
-    permissions: { files: ["project"], processes: ["git"], terminal: false, network: [], environment: ["PRODUCTION_MODE"], secrets: ["PROVIDER_KEY"] },
+    permissions: { files: ["project"], processes: ["git"], network: [], environment: ["PRODUCTION_MODE"], secrets: ["PROVIDER_KEY"] },
     build: { outDir: "dist/desktop", sizeBudgetBytes: 10 * 1024 * 1024 },
   })
     .replace("const maxListTextUnits = 2 * 1024 * 1024;", "const maxListTextUnits = 8;")
@@ -1227,23 +995,6 @@ test("Desktop CLI test host provides deterministic manifest-scoped process handl
     stdout: "[desktop-test] git --version\n",
     stderr: "",
   });
-  const projectChangesHandle = await bridge.invoke("project-changes", "start", []) as number;
-  const seededUpdate = bridge.invoke("project-changes", "subscribe", [projectChangesHandle]) as Promise<{changes: Array<{transactionId: string; lifecycle: string}>; rescan: boolean}>;
-  assert.equal(await bridge.invoke("project-change-test", "seed", ["tx-browser", "prepared", "-old\n+new"]), null);
-  const seeded = await seededUpdate;
-  assert.equal(seeded.rescan, false);
-  assert.equal(seeded.changes[0]?.transactionId, "tx-browser");
-  assert.equal(seeded.changes[0]?.lifecycle, "prepared");
-  const projectChangesPage = await bridge.invoke("project-changes", "list", [projectChangesHandle, 50]) as {changes: Array<{transactionId: string; lifecycle: string}>; truncated: boolean};
-  assert.equal(projectChangesPage.truncated, false);
-  assert.equal(projectChangesPage.changes[0]?.transactionId, "tx-browser");
-  const appliedUpdate = bridge.invoke("project-changes", "subscribe", [projectChangesHandle]) as Promise<{changes: Array<{lifecycle: string}>}>;
-  assert.equal((await bridge.invoke("project-changes", "apply", [projectChangesHandle, "tx-browser"]) as {lifecycle: string}).lifecycle, "applied");
-  assert.equal((await appliedUpdate).changes[0]?.lifecycle, "applied");
-  const rolledBackUpdate = bridge.invoke("project-changes", "subscribe", [projectChangesHandle]) as Promise<{changes: Array<{lifecycle: string}>}>;
-  assert.equal((await bridge.invoke("project-changes", "rollback", [projectChangesHandle, "tx-browser"]) as {lifecycle: string}).lifecycle, "rolled_back");
-  assert.equal((await rolledBackUpdate).changes[0]?.lifecycle, "rolled_back");
-  assert.equal(await bridge.invoke("project-changes", "close", [projectChangesHandle]), null);
   await assert.rejects(bridge.invoke("process", "start", ["sh", [], {}]), /not granted/u);
 });
 
@@ -1252,7 +1003,7 @@ test("Desktop browser-test platform is selected before the first open and then s
     productName: "Test",
     identifier: "dev.velarscript.test",
     window: { title: "Test", width: 800, height: 600, minWidth: 480, minHeight: 320 },
-    permissions: { files: ["project"], processes: [], terminal: false, network: [], environment: [], secrets: [] },
+    permissions: { files: ["project"], processes: [], network: [], environment: [], secrets: [] },
     build: { outDir: "dist/desktop", sizeBudgetBytes: 10 * 1024 * 1024 },
   } as const;
   const controller = desktopBrowserTestController(config);

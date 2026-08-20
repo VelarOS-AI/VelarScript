@@ -3,7 +3,7 @@ import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/pr
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { velarPublishedWorkspacePackages } from "../scripts/velar-packages.mjs";
 import { declaredEntryPaths, declaredImportSpecifiers, declaredJsonResourceImportSpecifiers, packageContentFailures, type PackedPackage } from "./package-contract.ts";
 
@@ -13,8 +13,8 @@ const consumerDirectory = await mkdtemp(join(tmpdir(), "velar-zero-npm-consumer-
 
 try {
   // D63 rule 159: pack every publishable toolchain package, source library, and
-  // external adapter rather than a list here that has to be kept level with all
-  // three workspace layers. A library or adapter joins consumer acceptance
+  // external adapter or integration rather than a list here that has to be kept level with all
+  // four workspace layers. An ecosystem package joins consumer acceptance
   // without silently joining the version-locked toolchain release.
   //
   // A-024: the roster was derived and then immediately re-spelled by hand for
@@ -32,6 +32,7 @@ try {
     return entry;
   };
   const compiler = named("@velarscript/compiler");
+  const core = named("@velarscript/core");
   const node = named("@velarscript/node");
   const web = named("@velarscript/web");
   const create = named("create-velar");
@@ -58,6 +59,7 @@ try {
     assert.ok(cli.files.some((entry) => entry.path === `skill/${file}`), `CLI package is missing skill/${file}`);
   }
   assert.ok(compiler.files.some((file) => file.path === "dist/framework-host.js"));
+  assert.ok(core.files.some((file) => file.path === "dist/index.js"));
   assert.ok(compiler.files.some((file) => file.path === "dist/application-package-host.js"));
   assert.ok(node.files.some((file) => file.path === "dist/compiler.js"));
   assert.ok(web.files.some((file) => file.path === "dist/host.js"));
@@ -66,7 +68,7 @@ try {
   assert.ok(desktop.files.some((file) => file.path === "dist/package-host.js"));
   assert.ok(!desktop.files.some((file) => file.path === "dist/cli.js"));
   assert.ok(desktop.files.some((file) => file.path === "native/macos/VelarDesktopHost.swift"));
-  assert.ok(desktop.files.some((file) => file.path === "native/macos/VelarTerminalHost.swift"));
+  assert.ok(!desktop.files.some((file) => file.path === "native/macos/VelarTerminalHost.swift"));
 
   await writeFile(join(directory, "package.json"), "{}\n", "utf8");
   // The complete set, from the same derived roster that packed it. A tarball
@@ -123,15 +125,16 @@ try {
   assert.equal(installedManifest.license, "Apache-2.0");
   assert.match(await readFile(join(directory, "node_modules", "@velarscript", "cli", "LICENSE"), "utf8"), /Apache License\s+Version 2\.0/u);
   assert.equal(installedManifest.dependencies.playwright, "^1.58.2");
-  assert.equal(installedManifest.dependencies["@velarscript/compiler"], "0.11.1");
-  assert.equal(installedManifest.dependencies["@velarscript/node"], "0.11.1");
+  assert.equal(installedManifest.dependencies["@velarscript/compiler"], "0.12.0");
+  assert.equal(installedManifest.dependencies["@velarscript/core"], "0.12.0");
+  assert.equal(installedManifest.dependencies["@velarscript/node"], "0.12.0");
   assert.equal(
     installedManifest.dependencies["@velarscript/script-analysis"],
     published.find((package_) => package_.name === "@velarscript/script-analysis")?.version,
   );
-  assert.equal(installedManifest.dependencies["@velarscript/web"], "0.11.1");
-  assert.equal(installedManifest.dependencies["@velarscript/desktop"], "0.11.1");
-  assert.equal(installedManifest.dependencies["create-velar"], "0.11.1");
+  assert.equal(installedManifest.dependencies["@velarscript/web"], "0.12.0");
+  assert.equal(installedManifest.dependencies["@velarscript/desktop"], "0.12.0");
+  assert.equal(installedManifest.dependencies["create-velar"], "0.12.0");
   for (const dependency of ["@velarscript/sqlite", "msgpackr", "fflate", "simplex-noise"]) {
     assert.equal(installedManifest.dependencies[dependency], undefined, `CLI must not hide external adapter dependency ${dependency}`);
   }
@@ -139,7 +142,7 @@ try {
   const installedNodeManifest = JSON.parse(await readFile(join(directory, "node_modules", "@velarscript", "node", "package.json"), "utf8")) as {
     dependencies: Record<string, string>;
   };
-  assert.equal(installedNodeManifest.dependencies["@velarscript/compiler"], "0.11.1");
+  assert.equal(installedNodeManifest.dependencies["@velarscript/compiler"], "0.12.0");
   assert.equal(installedNodeManifest.dependencies["@velarscript/sqlite"], undefined);
   const installedWebManifest = JSON.parse(await readFile(join(directory, "node_modules", "@velarscript", "web", "package.json"), "utf8")) as {
     velar?: { extension?: { kind?: string; apiVersion?: string; manifestKey?: string; extends?: Record<string, string> } };
@@ -171,12 +174,12 @@ try {
     },
   });
   for (const dependency of ["@velarscript/compiler", "@velarscript/node", "@velarscript/web"]) {
-    assert.equal(installedDesktopManifest.dependencies[dependency], "0.11.1");
+    assert.equal(installedDesktopManifest.dependencies[dependency], "0.12.0");
   }
   assert.equal(installedDesktopManifest.dependencies["@velarscript/cli"], undefined);
   assert.equal(installedDesktopManifest.dependencies.esbuild, undefined);
   const version = await run(process.execPath, [installedCli, "--version"], directory);
-  assert.equal(version.stdout, "velar 0.11.1\n");
+  assert.equal(version.stdout, "velar 0.12.0\n");
   const help = await run(process.execPath, [installedCli, "help", "build"], directory);
   assert.match(help.stdout, /Usage: velar build/u);
   assert.match(help.stdout, /standalone Node application/u);
@@ -290,14 +293,14 @@ await main()
   const nodeRuntime = await run(process.execPath, [
     "--input-type=module",
     "--eval",
-    "import {VELAR_NODE_API_VERSION,VELAR_NODE_MODULES,velarNodeRuntime} from '@velarscript/node'; import {nodeModuleSources,velarNodeCompilerExtension} from '@velarscript/node/compiler'; const fs=nodeModuleSources.get('velar/fs') ?? ''; const http=nodeModuleSources.get('velar/http') ?? ''; const serve=nodeModuleSources.get('velar/serve') ?? ''; if (VELAR_NODE_API_VERSION !== '0.10' || VELAR_NODE_MODULES.length !== 8 || velarNodeRuntime.name !== '@velarscript/node' || velarNodeCompilerExtension.id !== '@velarscript/node' || !fs.includes('export async function readText') || !fs.includes('export async function createText') || !fs.includes('export async function replaceTextIfMatches') || !fs.includes('export async function watchFiles') || !fs.includes('export const FileWatcher') || !fs.includes('__velarNodeHostInvoke(\"fs.createFile\"') || !fs.includes('__velarNodeHostInvoke(\"fs.replaceFileIfMatches\"') || !fs.includes('__velarNodeHostInvoke(\"fs.watchNext\"') || !http.includes('streamText') || !http.includes('__velarAssertJson') || !http.includes('__velarJsonStringify') || !http.includes('__velarNodeHostInvoke(\"http.request\"') || !http.includes('HttpTransportError') || !http.includes('HttpTransportPhase') || !http.includes('maxResponseChunks') || !serve.includes('parse: async (Type') || !serve.includes('ServeRequest.parse') || !nodeModuleSources.get('velar/terminal')?.includes('readLine')) process.exit(1); console.log(velarNodeRuntime.modules.join(','))",
+    "import {VELAR_NODE_API_VERSION,VELAR_NODE_MODULES,velarNodeRuntime} from '@velarscript/node'; import {nodeModuleSources,velarNodeCompilerExtension} from '@velarscript/node/compiler'; const fs=nodeModuleSources.get('velar/fs') ?? ''; const http=nodeModuleSources.get('velar/http') ?? ''; const serve=nodeModuleSources.get('velar/serve') ?? ''; const websocket=nodeModuleSources.get('velar/websocket') ?? ''; if (VELAR_NODE_API_VERSION !== '0.10' || VELAR_NODE_MODULES.length !== 11 || velarNodeRuntime.name !== '@velarscript/node' || velarNodeCompilerExtension.id !== '@velarscript/node' || !fs.includes('export async function readText') || !fs.includes('export async function createText') || !fs.includes('export async function replaceTextIfMatches') || !fs.includes('export async function watchFiles') || !fs.includes('export const FileWatcher') || !fs.includes('__velarNodeHostInvoke(\"fs.createFile\"') || !fs.includes('__velarNodeHostInvoke(\"fs.replaceFileIfMatches\"') || !fs.includes('__velarNodeHostInvoke(\"fs.watchNext\"') || !http.includes('streamText') || !http.includes('__velarAssertJson') || !http.includes('__velarJsonStringify') || !http.includes('__velarNodeHostInvoke(\"http.request\"') || !http.includes('HttpTransportError') || !http.includes('HttpTransportPhase') || !http.includes('maxResponseChunks') || !serve.includes('parse: async (Type') || !serve.includes('ServeRequest.parse') || !websocket.includes('export async function listen') || !nodeModuleSources.get('velar/server-test')?.includes('export async function client') || !nodeModuleSources.get('velar/terminal')?.includes('readLine')) process.exit(1); console.log(velarNodeRuntime.modules.join(','))",
   ], directory);
-  assert.equal(nodeRuntime.stdout, "velar/serve,velar/fs,velar/env,velar/host,velar/terminal,velar/path,velar/process,velar/http\n");
+  assert.equal(nodeRuntime.stdout, "velar/server-test,velar/serve,velar/fs,velar/env,velar/host,velar/terminal,velar/path,velar/process,velar/http,velar/worker,velar/websocket\n");
 
   const framework = await run(process.execPath, [
     "--input-type=module",
     "--eval",
-    "import {VELAR_WEB_API_VERSION, VELAR_WEB_MODULES, velarWebFramework, webModuleSource} from '@velarscript/web'; if (VELAR_WEB_API_VERSION !== '0.10' || VELAR_WEB_MODULES.length !== 11 || velarWebFramework.name !== '@velarscript/web' || !webModuleSource('velar/web')?.includes('export function domId') || !webModuleSource('velar/look')?.includes('export function rgb')) process.exit(1); console.log(velarWebFramework.modules.join(','))",
+    "import {VELAR_WEB_API_VERSION, VELAR_WEB_MODULES, velarWebFramework, webModuleSource} from '@velarscript/web'; if (VELAR_WEB_API_VERSION !== '0.10' || VELAR_WEB_MODULES.length !== 12 || velarWebFramework.name !== '@velarscript/web' || !webModuleSource('velar/web')?.includes('export function domId') || !webModuleSource('velar/look')?.includes('export function rgb') || !webModuleSource('velar/websocket')?.includes('export function connect')) process.exit(1); console.log(velarWebFramework.modules.join(','))",
   ], directory);
   assert.match(framework.stdout, /velar\/app,velar\/config,velar\/web/u);
   const host = await run(process.execPath, [
@@ -309,7 +312,7 @@ await main()
   const desktopApi = await run(process.execPath, [
     "--input-type=module",
     "--eval",
-    "import {VELAR_DESKTOP_API_VERSION,VELAR_DESKTOP_MODULES,velarDesktopFramework} from '@velarscript/desktop'; import {velarCompilerExtension} from '@velarscript/desktop/compiler'; import {velarFrameworkHost} from '@velarscript/desktop/host'; const desktop=velarCompilerExtension.modules?.sources.get('velar/desktop') ?? ''; const fs=velarCompilerExtension.modules?.sources.get('velar/fs') ?? ''; const http=velarCompilerExtension.modules?.sources.get('velar/http') ?? ''; if (VELAR_DESKTOP_API_VERSION !== '0.10' || !VELAR_DESKTOP_MODULES.includes('velar/desktop') || velarDesktopFramework.programmingModel !== 'single-project' || velarCompilerExtension.contract?.kind !== 'application' || velarFrameworkHost.id !== '@velarscript/desktop' || !desktop.includes('export async function startProjectTask') || !desktop.includes('ProjectTaskCommand') || !desktop.includes('ProjectTaskOutputChannel') || !desktop.includes('export async function projectChanges') || !desktop.includes('ProjectChangeLifecycle') || !desktop.includes('ProjectChangeRisk') || !desktop.includes('export async function openTerminal') || !desktop.includes('TerminalSession') || !fs.includes('export async function createText') || !fs.includes('export async function replaceTextIfMatches') || !fs.includes('export async function watchFiles') || !fs.includes('invoke(\"watchNext\", [this.handle], 0)') || !http.includes('__velarAssertJson') || !http.includes('__velarJsonStringify') || !http.includes('HTTP options fields must be enumerable data values') || !http.includes('HttpTransportError') || !http.includes('HttpTransportPhase') || !http.includes('responseOf') || !http.includes('maxResponseChunks')) process.exit(1); console.log(velarDesktopFramework.name)",
+    "import {VELAR_DESKTOP_API_VERSION,VELAR_DESKTOP_MODULES,velarDesktopFramework} from '@velarscript/desktop'; import {velarCompilerExtension} from '@velarscript/desktop/compiler'; import {velarFrameworkHost} from '@velarscript/desktop/host'; const desktop=velarCompilerExtension.modules?.sources.get('velar/desktop') ?? ''; const fs=velarCompilerExtension.modules?.sources.get('velar/fs') ?? ''; const http=velarCompilerExtension.modules?.sources.get('velar/http') ?? ''; const retired=/startProjectTask|ProjectTaskCommand|ProjectTaskOutputChannel|projectChanges|ProjectChangeLifecycle|ProjectChangeRisk|openTerminal|TerminalSession|languageServer/; if (VELAR_DESKTOP_API_VERSION !== '0.10' || !VELAR_DESKTOP_MODULES.includes('velar/desktop') || velarDesktopFramework.programmingModel !== 'single-project' || velarCompilerExtension.contract?.kind !== 'application' || velarFrameworkHost.id !== '@velarscript/desktop' || retired.test(desktop) || !desktop.includes('export async function selectProjectDirectory') || !fs.includes('export async function createText') || !fs.includes('export async function replaceTextIfMatches') || !fs.includes('export async function watchFiles') || !fs.includes('invoke(\"watchNext\", [this.handle], 0)') || !http.includes('__velarAssertJson') || !http.includes('__velarJsonStringify') || !http.includes('HTTP options fields must be enumerable data values') || !http.includes('HttpTransportError') || !http.includes('HttpTransportPhase') || !http.includes('responseOf') || !http.includes('maxResponseChunks')) process.exit(1); console.log(velarDesktopFramework.name)",
   ], directory);
   assert.equal(desktopApi.stdout, "@velarscript/desktop\n");
 
@@ -338,7 +341,7 @@ mount(<App />, "#app")
       formatVersion: number;
       kind: string;
       applicationBundle: string;
-      sizes: { languageServerBytes: number; projectTaskBytes: number; buildEngineBytes: number; terminalHostBytes: number; toolchainBytes: number; totalBytes: number };
+      sizes: { hostBytes: number; rendererBytes: number; capabilityHostBytes: number; metadataBytes: number; totalBytes: number };
       sizeBudgetBytes: number;
       runtime: {
         kind: string;
@@ -349,11 +352,10 @@ mount(<App />, "#app")
         executableHint?: unknown;
       };
     };
-    assert.equal(builtDesktop.formatVersion, 2);
+    assert.equal(builtDesktop.formatVersion, 3);
     assert.equal(builtDesktop.kind, "velar-desktop-build");
     assert.ok(builtDesktop.sizes.totalBytes < builtDesktop.sizeBudgetBytes);
-    assert.equal(builtDesktop.sizes.toolchainBytes,
-      builtDesktop.sizes.languageServerBytes + builtDesktop.sizes.projectTaskBytes + builtDesktop.sizes.buildEngineBytes + builtDesktop.sizes.terminalHostBytes);
+    assert.ok(builtDesktop.sizes.metadataBytes > 0);
     assert.deepEqual(builtDesktop.runtime, {
       kind: "external-node",
       minimumMajor: 24,
@@ -369,17 +371,10 @@ mount(<App />, "#app")
     assert.equal(applicationIcon.subarray(0, 4).toString("ascii"), "icns");
     const hostConfigurationText = await readFile(join(application, "Contents", "Resources", "desktop.json"), "utf8");
     const hostConfiguration = JSON.parse(hostConfigurationText) as Record<string, unknown>;
-    assert.deepEqual(hostConfiguration.languageServer, { path: "host/language-server.js" });
-    assert.deepEqual(hostConfiguration.projectTask, { path: "host/project-task.js", buildEnginePath: "host/build-engine" });
-    const packagedLanguageServer = join(application, "Contents", "Resources", "host", "language-server.js");
-    const packagedTerminalHost = join(application, "Contents", "Resources", "host", "terminal-host");
-    assert.ok((await readFile(packagedLanguageServer)).byteLength > 1024 * 1024);
-    assert.ok((await readFile(packagedTerminalHost)).byteLength > 32 * 1024);
-    assert.ok((await readFile(join(application, "Contents", "Resources", "host", "project-task.js"))).byteLength > 1024 * 1024);
-    assert.equal(JSON.parse(await readFile(join(application, "Contents", "Resources", "host", "playwright-core", "package.json"), "utf8")).name, "playwright-core");
-    assert.ok(JSON.parse(await readFile(join(application, "Contents", "Resources", "host", "playwright-core", "browsers.json"), "utf8")).browsers.length >= 3);
-    assert.ok((await readFile(join(application, "Contents", "Resources", "host", "build-engine"))).byteLength > 5 * 1024 * 1024);
-    await probeLanguageServer(packagedLanguageServer, desktopProject);
+    assert.equal(hostConfiguration.languageServer, undefined);
+    assert.equal(hostConfiguration.projectTask, undefined);
+    assert.equal(hostConfiguration.terminalHost, undefined);
+    assert.deepEqual((await readdir(join(application, "Contents", "Resources", "host"))).sort(), ["worker.js"]);
     assert.equal(hostConfiguration.nodeExecutableHint, undefined);
     assert.ok(!hostConfigurationText.includes(process.execPath));
     const smoke = await run(join(application, "Contents", "MacOS", "VelarDesktopHost"), ["--smoke"], desktopProject, {
@@ -400,7 +395,7 @@ mount(<App />, "#app")
   const docsManifest = JSON.parse(await readFile(join(docsProject, "package.json"), "utf8")) as {
     dependencies: Record<string, string>;
   };
-  assert.equal(docsManifest.dependencies["@velarscript/web"], "^0.11.1");
+  assert.equal(docsManifest.dependencies["@velarscript/web"], "^0.12.0");
   await run(process.execPath, [installedCli, "check", docsProject], directory);
 
   const componentProject = join(directory, "created-component");
@@ -408,12 +403,14 @@ mount(<App />, "#app")
   assert.match(componentCreated.stdout, /Created VelarScript component project/u);
   const componentManifest = JSON.parse(await readFile(join(componentProject, "package.json"), "utf8")) as {
     files: string[];
-    velar: { entry: string };
+    velar: { entry: string; targets: string[]; requires: { capabilities: string[] } };
     peerDependencies: Record<string, string>;
   };
   assert.deepEqual(componentManifest.files, ["src/index.vel", "README.md"]);
   assert.equal(componentManifest.velar.entry, "src/index.vel");
-  assert.equal(componentManifest.peerDependencies["@velarscript/web"], "^0.11.1");
+  assert.deepEqual(componentManifest.velar.targets, ["web", "desktop"]);
+  assert.deepEqual(componentManifest.velar.requires.capabilities, []);
+  assert.equal(componentManifest.peerDependencies["@velarscript/web"], "^0.12.0");
   await run(process.execPath, [installedCli, "check", componentProject], directory);
 
   const nodeProject = join(directory, "created-node");
@@ -422,7 +419,7 @@ mount(<App />, "#app")
   const nodeManifest = JSON.parse(await readFile(join(nodeProject, "package.json"), "utf8")) as {
     dependencies: Record<string, string>;
   };
-  assert.equal(nodeManifest.dependencies["@velarscript/node"], "^0.11.1");
+  assert.equal(nodeManifest.dependencies["@velarscript/node"], "^0.12.0");
   assert.deepEqual(JSON.parse(await readFile(join(nodeProject, "velar.json"), "utf8")).extensions, ["@velarscript/node"]);
   assert.match(await readFile(join(nodeProject, "src", "app.vel"), "utf8"), /@get\(p"\/api\/hello"\)/u);
   assert.match(await readFile(join(nodeProject, "public", "index.html"), "utf8"), /velarscript-mark\.svg/u);
@@ -434,7 +431,7 @@ mount(<App />, "#app")
   const createdDesktopManifest = JSON.parse(await readFile(join(createdDesktopProject, "package.json"), "utf8")) as {
     dependencies: Record<string, string>;
   };
-  assert.equal(createdDesktopManifest.dependencies["@velarscript/desktop"], "^0.11.1");
+  assert.equal(createdDesktopManifest.dependencies["@velarscript/desktop"], "^0.12.0");
   assert.match(await readFile(join(createdDesktopProject, "public", "velarscript-mark.svg"), "utf8"), /<path d=/u);
   await run(process.execPath, [installedCli, "check", createdDesktopProject], directory);
 
@@ -445,7 +442,7 @@ mount(<App />, "#app")
   await writeFile(join(localDependency, "package.json"), `${JSON.stringify({
     name: "local-dependency",
     version: "1.0.0",
-    velar: { entry: "src/index.vel" },
+    velar: { entry: "src/index.vel", targets: ["core", "node", "web", "desktop"], requires: { capabilities: [] } },
   }, null, 2)}\n`, "utf8");
   await writeFile(join(localDependency, "src", "index.vel"), `
 export def decode<T>(value: unknown, target: Type<T>) -> T:
@@ -573,81 +570,4 @@ async function run(
   });
   if (code !== 0) throw new Error(`${command} ${arguments_.join(" ")} failed (${code})\n${stdout}\n${stderr}`);
   return { stdout, stderr };
-}
-
-async function probeLanguageServer(entry: string, cwd: string): Promise<void> {
-  const child = spawn(process.execPath, [entry], { cwd, env: process.env, stdio: ["pipe", "pipe", "pipe"] });
-  let buffer = Buffer.alloc(0);
-  let stderr = "";
-  const messages: Array<Record<string, unknown>> = [];
-  child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
-  child.stdout.on("data", (chunk: Buffer) => {
-    buffer = Buffer.concat([buffer, chunk]);
-    while (true) {
-      const boundary = buffer.indexOf("\r\n\r\n");
-      if (boundary < 0) return;
-      const match = /Content-Length:\s*(\d+)/iu.exec(buffer.subarray(0, boundary).toString("ascii"));
-      if (!match) return;
-      const size = Number(match[1]);
-      const end = boundary + 4 + size;
-      if (buffer.byteLength < end) return;
-      messages.push(JSON.parse(buffer.subarray(boundary + 4, end).toString("utf8")) as Record<string, unknown>);
-      buffer = buffer.subarray(end);
-    }
-  });
-  const send = (message: unknown): void => {
-    const body = JSON.stringify(message);
-    child.stdin.write(`Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
-  };
-  const waitForId = async (id: number): Promise<Record<string, unknown>> => {
-    const deadline = Date.now() + 5_000;
-    while (Date.now() < deadline) {
-      const message = messages.find((candidate) => candidate.id === id);
-      if (message) return message;
-      await new Promise((resolveWait) => setTimeout(resolveWait, 10));
-    }
-    throw new Error(`Installed language server did not respond to ${id}: ${stderr}`);
-  };
-  const waitForDiagnostics = async (uri: string): Promise<Record<string, unknown>> => {
-    const deadline = Date.now() + 5_000;
-    while (Date.now() < deadline) {
-      const message = messages.find((candidate) => candidate.method === "textDocument/publishDiagnostics"
-        && (candidate.params as { uri?: string } | undefined)?.uri === uri);
-      if (message) return message;
-      await new Promise((resolveWait) => setTimeout(resolveWait, 10));
-    }
-    throw new Error(`Installed language server did not publish script diagnostics: ${stderr}`);
-  };
-  try {
-    send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
-    const initialized = await waitForId(1);
-    assert.equal((initialized.result as { serverInfo: { name: string } }).serverInfo.name, "VelarScript Language Server");
-    assert.equal((initialized.result as { capabilities: { experimental: { velar: { scriptImplementation: string } } } }).capabilities.experimental.velar.scriptImplementation, "velarscript");
-    send({ jsonrpc: "2.0", method: "initialized", params: {} });
-    const uri = pathToFileURL(join(cwd, "packed-probe.ts")).href;
-    const text = "interface User { name: string }\nconst user: User = { name: 'Ada' }\nconst name = user.name\n";
-    send({ jsonrpc: "2.0", method: "textDocument/didOpen", params: { textDocument: { uri, languageId: "typescript", version: 1, text } } });
-    const diagnostics = await waitForDiagnostics(uri);
-    assert.deepEqual((diagnostics.params as { diagnostics: unknown[] }).diagnostics, []);
-    send({ jsonrpc: "2.0", id: 2, method: "textDocument/definition", params: { textDocument: { uri }, position: { line: 2, character: 14 } } });
-    const definition = await waitForId(2);
-    assert.equal((definition.result as { range: { start: { line: number } } }).range.start.line, 1);
-    send({ jsonrpc: "2.0", id: 3, method: "textDocument/semanticTokens/full", params: { textDocument: { uri } } });
-    const semantic = await waitForId(3);
-    assert.ok((semantic.result as { data: number[] }).data.length > 0);
-    send({ jsonrpc: "2.0", id: 4, method: "textDocument/formatting", params: { textDocument: { uri }, options: { tabSize: 2, insertSpaces: true } } });
-    assert.deepEqual((await waitForId(4)).result, []);
-    send({ jsonrpc: "2.0", id: 5, method: "shutdown", params: null });
-    await waitForId(5);
-    send({ jsonrpc: "2.0", method: "exit", params: null });
-    child.stdin.end();
-    const code = await new Promise<number | null>((resolveExit, rejectExit) => {
-      const timer = setTimeout(() => rejectExit(new Error("Installed language server did not exit within 5 seconds")), 5_000);
-      child.once("error", (error) => { clearTimeout(timer); rejectExit(error); });
-      child.once("exit", (exitCode) => { clearTimeout(timer); resolveExit(exitCode); });
-    });
-    assert.equal(code, 0, stderr);
-  } finally {
-    if (child.exitCode === null) child.kill("SIGKILL");
-  }
 }

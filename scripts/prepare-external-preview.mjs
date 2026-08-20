@@ -5,18 +5,21 @@ import {
   mkdir,
   lstat,
   mkdtemp,
+  readFile,
+  readdir,
   rename,
   rm,
 } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { verifyProductionBuild } from "../packages/cli/src/production-verifier.ts";
+import { projectNetlifyDeployment } from "../integrations/netlify/src/index.ts";
 import { createIsolatedToolchainBuild } from "./isolated-toolchain-build.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const sourceProject = join(root, "examples", "app");
-const previewManifest = join(sourceProject, "velar.netlify.json");
-const defaultOutput = join(root, "release", "external-preview", "site");
+const previewManifest = join(sourceProject, "velar.preview.json");
+const defaultOutput = join(root, "release", "external-preview", "netlify");
 
 export async function prepareExternalPreview(outputDirectory = defaultOutput) {
   const output = resolve(outputDirectory);
@@ -28,19 +31,19 @@ export async function prepareExternalPreview(outputDirectory = defaultOutput) {
     toolchain = await createIsolatedToolchainBuild();
     await mkdir(parent, { recursive: true });
     staging = await mkdtemp(join(parent, `.velar-${basename(output)}-`));
-    const built = join(staging, "site");
+    const built = join(staging, "neutral");
     await runCompiler(toolchain.root, ["build", previewManifest, "--out-dir", built]);
     const verified = await verifyProductionBuild(built);
-    if (verified.deployment.base !== "/" || verified.deployment.adapter?.name !== "netlify") {
-      throw new Error("external preview preparation did not create the root Netlify contract");
-    }
+    if (verified.deployment.base !== "/") throw new Error("external preview preparation did not create a root-base contract");
     if (verified.manifest.sourceMaps || verified.manifest.assets.some((asset) => asset.role === "source-map")) {
       throw new Error("external preview preparation must not publish source maps");
     }
+    const projected = await projectNetlifyDeployment(built, join(staging, "projected"));
+    await verifyProductionBuild(projected.siteDirectory);
     await assertReplaceableOutput(output);
     await rm(output, { recursive: true, force: true });
-    await rename(built, output);
-    return { outputDirectory: output, manifest: verified.manifest };
+    await rename(projected.outputDirectory, output);
+    return { outputDirectory: join(output, "site"), bundleDirectory: output, manifest: verified.manifest };
   } finally {
     if (staging) await rm(staging, { recursive: true, force: true });
     await toolchain?.dispose();
@@ -62,8 +65,19 @@ async function assertReplaceableOutput(output) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") return;
     throw error;
   }
+  const entries = await readdir(output, { withFileTypes: true });
+  if (entries.some((entry) => entry.isSymbolicLink())
+    || JSON.stringify(entries.map((entry) => entry.name).sort()) !== JSON.stringify(["netlify.toml", "site"])) {
+    throw new Error(`refusing to replace '${output}' because it is not an exact VelarScript Netlify preview bundle`);
+  }
+  const configurationPath = join(output, "netlify.toml");
+  const configurationStatus = await lstat(configurationPath);
+  if (!configurationStatus.isFile() || configurationStatus.isSymbolicLink() || configurationStatus.size > 1024 * 1024
+    || !(await readFile(configurationPath, "utf8")).startsWith('[build]\npublish = "site"\n')) {
+    throw new Error(`refusing to replace '${output}' because its Netlify configuration is invalid`);
+  }
   try {
-    await verifyProductionBuild(output);
+    await verifyProductionBuild(join(output, "site"));
   } catch {
     throw new Error(`refusing to replace '${output}' because it is not an existing VelarScript Web build`);
   }
@@ -98,7 +112,7 @@ function parseArguments(arguments_) {
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     const result = await prepareExternalPreview(parseArguments(process.argv.slice(2)));
-    process.stdout.write(`Prepared verified VelarScript external preview ${result.manifest.buildId} -> ${result.outputDirectory}\n`);
+    process.stdout.write(`Prepared verified VelarScript Netlify preview ${result.manifest.buildId} -> ${result.bundleDirectory}\n`);
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;

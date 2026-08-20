@@ -23,7 +23,6 @@ export interface FrameworkHostErrorDocumentInput {
 export interface FrameworkStaticDeployment {
   readonly base: string;
   readonly spaFallback: boolean;
-  readonly adapter: "neutral" | "netlify";
   readonly contentSecurityPolicy: string | null;
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "@velarscript/script-analysis",
-  "version": "0.10.4",
+  "version": "0.10.5",
   "description": "Pure VelarScript JavaScript and TypeScript lexical analysis for editor tooling.",
   "license": "Apache-2.0",
   "files": [
@@ -19,9 +19,11 @@
     "access": "public"
   },
   "velar": {
-    "entry": "src/index.vel"
+    "entry": "src/index.vel",
+    "targets": ["core", "node", "web", "desktop"],
+    "requires": { "capabilities": [] }
   },
   "dependencies": {
-    "@velarscript/text-buffer": "0.10.4"
+    "@velarscript/text-buffer": "0.10.5"
   }
 }

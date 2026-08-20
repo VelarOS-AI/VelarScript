@@ -16,14 +16,14 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createIsolatedToolchainBuild } from "./isolated-toolchain-build.mjs";
-import { velarToolchainPackageNames } from "./velar-packages.mjs";
+import { velarPublishedToolchainPackages, velarToolchainPackageNames } from "./velar-packages.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const defaultOutput = join(root, "release", "rehearsal");
 const manifestName = "velar-toolchain-release.json";
 const checksumName = "SHA256SUMS";
 // D63 rule 159: derived from packages/*, never restated here. Ordinary source
-// libraries under libraries/* and concrete integrations under adapters/* are
+// libraries under libraries/* and concrete integrations under adapters/* or integrations/* are
 // independent packages, not members of this version-locked compiler/runtime
 // release generation.
 const workspaces = await velarToolchainPackageNames(root);
@@ -202,20 +202,34 @@ export async function verifyToolchainRelease(outputDirectory) {
 
 async function readPackageManifests() {
   const rootManifest = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
-  const compiler = JSON.parse(await readFile(join(root, "packages", "compiler", "package.json"), "utf8"));
-  const node = JSON.parse(await readFile(join(root, "packages", "node", "package.json"), "utf8"));
-  const web = JSON.parse(await readFile(join(root, "packages", "web", "package.json"), "utf8"));
-  const create = JSON.parse(await readFile(join(root, "packages", "create", "package.json"), "utf8"));
-  const cli = JSON.parse(await readFile(join(root, "packages", "cli", "package.json"), "utf8"));
-  const desktop = JSON.parse(await readFile(join(root, "packages", "desktop", "package.json"), "utf8"));
+  const packages = (await velarPublishedToolchainPackages(root)).map((entry) => entry.manifest);
+  const byName = new Map(packages.map((package_) => [package_.name, package_]));
+  const required = (name) => {
+    const value = byName.get(name);
+    if (!value) throw new Error(`toolchain release is missing ${name}`);
+    return value;
+  };
+  const compiler = required("@velarscript/compiler");
+  const core = required("@velarscript/core");
+  const node = required("@velarscript/node");
+  const web = required("@velarscript/web");
+  const create = required("create-velar");
+  const cli = required("@velarscript/cli");
+  const desktop = required("@velarscript/desktop");
   const textBuffer = JSON.parse(await readFile(join(root, "libraries", "text-buffer", "package.json"), "utf8"));
   const scriptAnalysis = JSON.parse(await readFile(join(root, "libraries", "script-analysis", "package.json"), "utf8"));
-  for (const package_ of [compiler, node, web, create, cli, desktop]) {
+  for (const package_ of packages) {
     if (package_.version !== rootManifest.version) throw new Error(`${package_.name} version must exactly match ${rootManifest.version}`);
     if (package_.repository?.url !== rootManifest.repository?.url) throw new Error(`${package_.name} repository must match the workspace repository`);
   }
   if (cli.dependencies?.["@velarscript/compiler"] !== rootManifest.version) {
     throw new Error("@velarscript/cli must pin the exact compiler version");
+  }
+  if (cli.dependencies?.["@velarscript/core"] !== rootManifest.version) {
+    throw new Error("@velarscript/cli must pin the exact Core Standard API version");
+  }
+  if (core.dependencies?.["@velarscript/compiler"] !== rootManifest.version) {
+    throw new Error("@velarscript/core must pin the exact compiler version");
   }
   if (web.dependencies?.["@velarscript/compiler"] !== rootManifest.version) {
     throw new Error("@velarscript/web must pin the exact compiler version");
@@ -248,7 +262,7 @@ async function readPackageManifests() {
   if (cli.dependencies?.["@velarscript/script-analysis"] !== scriptAnalysis.version) {
     throw new Error("@velarscript/cli must pin the exact @velarscript/script-analysis version");
   }
-  return { root: rootManifest, compiler, node, web, create, cli, desktop, textBuffer, scriptAnalysis };
+  return { root: rootManifest, packages, compiler, core, node, web, create, cli, desktop, textBuffer, scriptAnalysis };
 }
 
 function releaseBlockers(manifests, source) {
@@ -256,16 +270,10 @@ function releaseBlockers(manifests, source) {
   if (manifests.root.version.includes("-")) blockers.push(`version ${manifests.root.version} is not a stable release version`);
   if (!source.commit) blockers.push("source repository has no committed HEAD");
   if (!source.clean) blockers.push("source working tree is not clean");
-  if (source.tag !== `v${manifests.root.version}`) blockers.push(`HEAD is not exactly tagged v${manifests.root.version}`);
+  const expectedTag = `v${manifests.root.version}`;
+  if (!sourceHasExpectedTag(source, expectedTag)) blockers.push(`HEAD is not exactly tagged ${expectedTag}`);
   if (!source.remoteMatches) blockers.push("origin does not match package repository metadata");
-  for (const package_ of [
-    manifests.compiler,
-    manifests.node,
-    manifests.web,
-    manifests.create,
-    manifests.cli,
-    manifests.desktop,
-  ]) {
+  for (const package_ of manifests.packages) {
     if (!package_.license || package_.license === "UNLICENSED") blockers.push(`${package_.name} has no publishable license decision`);
   }
   return blockers;
@@ -280,11 +288,18 @@ async function sourceIdentity(repository) {
     repository,
     commit,
     tag: tags.length === 1 ? tags[0] : null,
+    tags,
     clean: status === "",
     remote: origin,
     remoteMatches: Boolean(origin && repository && normalizeRepository(origin) === normalizeRepository(repository)),
     treeSha256: await sourceTreeHash(),
   };
+}
+
+export function sourceHasExpectedTag(source, expectedTag) {
+  return Array.isArray(source?.tags)
+    ? source.tags.includes(expectedTag)
+    : source?.tag === expectedTag;
 }
 
 function normalizeRepository(value) {
