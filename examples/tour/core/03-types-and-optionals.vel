@@ -238,6 +238,24 @@ const city = account?.profile?.address?.city
 const firstValue = optionalValues?.[0]
 const called = optionalCallback?.(1)
 
+// ---------------------------------------------------------------------------
+// The required-value unwrap
+// ---------------------------------------------------------------------------
+
+// `value!` takes `T?` to `T` and raises AssertionError where the value turns
+// out to be absent. It checks — it never merely claims — so it belongs where
+// absence would mean the program is wrong and there is nothing more to say
+// about it. When the failure has something to tell a reader, the statement
+// form carries the message: `assert value != null else "..."`.
+export def requiredValue(lookup: Map<string, string>, key: string) -> number:
+    return lookup.get(key)!.size
+
+// `!` is postfix and binds with the rest of a postfix chain, so this unwraps
+// the field and then reads through it. An unwrap before an equality test needs
+// its space, because `!=` still wins by longest match.
+export def requiredChain(owner: Owner) -> bool:
+    return owner.profile!.email == "ada@example.com"
+
 export const chapterThree = {
     text, quantity, flag, nothing, listOfText, setOfNumbers, mapOfUsers,
     recordOfTags, optionalText, smallUnion, threeArmUnion, dynamic, handler,
@@ -246,4 +264,5 @@ export const chapterThree = {
     readonlyRecord, readonlyOptional, barePromise, explicitPromise,
     promiseOfText, bareFunction, functionResult, functionOneInput,
     functionTwoInputs, owned, selected, city, firstValue, called,
+    requiredValue, requiredChain,
 }

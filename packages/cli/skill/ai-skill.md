@@ -192,7 +192,7 @@ them; the first two are the **silent traps** in the list — read them twice.
 | A line that is only a value — `x == 5`, `items[0]`, `"a note"` | A statement must do something: call, assign, `await`, or `async`. A computed-and-discarded value is a compile error, and a bare string is not a docstring — use `//`. |
 | A block comment that starts or ends beside code on a multi-line span | `/* */` exists and nests — commenting out a region that already holds a comment works — but a multi-line one takes whole lines: only `/*` on its opening line, only `*/` on its closing line. Within a single line it can sit anywhere: `call(/* why */ value)`. |
 | `x if cond else y` | `cond ? x : y` |
-| `&&`, `\|\|`, `!`, `===`, `var`, `elif`, `None`, `undefined` | `and`, `or`, `not`, `==`, `let`/`const`, `else if`, `null`, `null`. |
+| `&&`, `\|\|`, `!value`, `===`, `var`, `elif`, `None`, `undefined` | `and`, `or`, `not value`, `==`, `let`/`const`, `else if`, `null`, `null`. `!` **after** a value is a different operator: `value!` unwraps `T?` to `T` and raises `AssertionError` when it is absent. `!=` still wins by longest match, so an unwrap before an equality test needs its space — `value! == other`. |
 | `f"{user}"` or `str(user)` on a record | Text conversion accepts strings, numbers, bools, enums, and `null` only. `print(user)` inspects a value; permanent `Json.stringify(user)` builds data text without an import. |
 | Calling an async function and moving on | A dropped Promise is a compile error. `await task()` to wait; `async task()` to run it detached. |
 | `flag or name ?? fallback` | Parenthesize — `??` never shares an unparenthesized chain with `and`/`or`. |
@@ -400,8 +400,8 @@ def measure(text: string) -> TextMeasure:
 ### Null discipline
 
 One spelling per job: test presence with `!= null`, default with `??`,
-reach through maybes with `?.`, and narrow once — then use the value
-directly:
+reach through maybes with `?.`, unwrap what cannot be absent with `!`, and
+narrow once — then use the value directly:
 
 ```velar
 type Ticket:
@@ -416,6 +416,12 @@ def notifyLine(ticket: Ticket) -> string:
 def owner(ticket: Ticket) -> string:
     return ticket.assignee ?? "unassigned"
 ```
+
+`value!` unwraps `T?` to `T` and raises `AssertionError` where the value turns
+out to be absent — it checks, it never merely claims. Use it where absence
+would be a bug and there is nothing more to say about it, such as an index the
+code just populated. When the failure has something to tell a reader, the
+statement form says it: `assert value != null else "..."`.
 
 ### Chains over cursors
 

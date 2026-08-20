@@ -925,6 +925,11 @@ function encodeCanonicalStringText(
  */
 function endsExpression(token: InlineToken | undefined, statementHead = false): boolean {
   if (!token) return false;
+  // D86 rule 212: a postfix `!` ends the value it unwraps, so `tags!(...)` and
+  // `rows!` keep the tight spelling the rest of a postfix chain uses. The
+  // prefix reading is a VEL1005 diagnostic rather than canonical source, and
+  // the tight `!(...)` it formats to is the JavaScript spelling anyway.
+  if (token.kind === "operator" && token.text === "!") return true;
   switch (token.kind) {
     case "word":
       // `match` and `case` are keywords only at the head of a statement line
@@ -1093,6 +1098,10 @@ function needsSpace(
     if (previous.text === "..." || current.text === "...") return false;
     if (current.text === "?" && isOptionalQuestion(current, next, tokens[index + 2])) return false;
     if (previous.text === "?" && isOptionalQuestion(previous, current, next)) return true;
+    // D86 rule 212: `!` after a value is the required-value unwrap and sits
+    // against it, like `?.` and `[`. Before a value it is the negation the
+    // compiler guides to `not`, and it keeps that reading's spacing.
+    if (current.text === "!" && endsExpression(previous, index === 1)) return false;
     if (isUnaryOperator(previous, index >= 2 ? tokens[index - 2] : preceding, index === 2)) {
       return previous.text === "not" || previous.text === "await";
     }

@@ -5802,6 +5802,33 @@ export class Analyzer implements TypeEnvironment {
         this.requireAssignable(operand, numberType, expression.operand.span);
         return numberType;
       }
+      case "RequiredExpression": {
+        // D86 rule 212: `value!` answers "absent here is a bug", so it takes
+        // `T?` to `T` and has nothing to say about a value that already holds
+        // one. The contextual type is the optional of what the consumer wants,
+        // since the unwrap is what removes the question.
+        const value = this.inferExpression(expression.value, optionalOf(this.expandAliases(contextualType)));
+        if (isInvalidType(value)) return invalidType;
+        const resolved = this.expandAliases(value);
+        if (resolved.kind === "any") return value;
+        if (resolved.kind === "optional") return resolved.inner;
+        const message = resolved.kind === "unknown"
+          ? `'!' unwraps an optional, and ${describeType(value)} is not one; validate it with 'is' or 'parse' before reading it`
+          : resolved.kind === "promise"
+            // The same mistake `try` guards against: the unwrap reached the
+            // Promise rather than the value it resolves to.
+            ? `'!' unwraps an optional, and this expression is ${describeType(value)}; write '(await ...)!' so the unwrap reaches the resolved value`
+            : `'!' unwraps an optional, and this value is already ${describeType(value)}; remove the '!'`;
+        this.diagnostics.push(diagnostic(
+          "VEL4040",
+          message,
+          expression.span,
+          ...(resolved.kind === "unknown" || resolved.kind === "promise"
+            ? []
+            : [mechanicalFix({ start: expression.span.end - 1, end: expression.span.end }, "", "Remove the redundant '!'")]),
+        ));
+        return value;
+      }
       case "TryExpression": {
         // D39 item 51: an expected failure is an optional. The inner
         // expression is checked against the non-optional shape of whatever the

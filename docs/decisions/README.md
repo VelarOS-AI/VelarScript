@@ -54,6 +54,7 @@ their titles are reproduced verbatim below.
 | [D55](D55-GENERIC-TYPES.md) | 泛型类型与泛型类 | Generic types and generic classes, established as a completion of the existing design rather than a reversal of it. |
 | [D83](D83-BINARY-DATA-AND-CONCURRENCY.md) | 二进制数据、确定性与有界并发 | Real binary workloads reopen radix and bitwise syntax, establish one Node/Web Bytes model, and close the loop through deterministic workers, bounded WebSocket, SQLite/IndexedDB, binary IO, and supported mature-library adapters. |
 | [D85](D85-EMPTY-COLLECTION-ANNOTATION.md) | 空集合必须在自己的位置定型 | An empty `Set()`, `Map()`, or `[]` takes its element type from its own position or is an error — the language's one backwards inference is removed, and a check is settled never to widen. |
+| [D86](D86-REQUIRED-VALUE-UNWRAP.md) | 必需值解包 `value!` | The expression-position unwrap that `assert value != null` had no spelling for — checked, never claimed, and divided from the assertion by position rather than by meaning. |
 
 ## archive/
 

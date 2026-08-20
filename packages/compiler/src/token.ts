@@ -62,6 +62,13 @@ export type TokenKind =
   | "dot"
   | "ellipsis"
   | "question"
+  /**
+   * A bare `!`. The character alone does not say which operator it is: after
+   * an operand it is the required-value unwrap (`tags!`), and before one it is
+   * the JavaScript negation VelarScript guides to `not`. Position decides, so
+   * the lexer hands both readings to the parser under one kind.
+   */
+  | "bang"
   | "optionalDot"
   | "nullish"
   | "arrow"

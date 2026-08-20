@@ -88,7 +88,7 @@ print(usage)
 ## 3. Operators, and what a condition is
 
 Arithmetic and comparison read as you expect. The words are `and`, `or`, `not`
-— not `&&`, `||`, `!`. Equality is `==`/`!=` and it never coerces: the two
+— not `&&`, `||`, `!value`. Equality is `==`/`!=` and it never coerces: the two
 sides must have overlapping possible values, so `1 == "1"` does not compile.
 Equality also never chains — write `a == b and b == c`. Ordered comparisons do
 chain, but must point one way: `0 < index <= size`.
@@ -99,7 +99,12 @@ optional is tested explicitly with `!= null`. The conditional expression is
 `cond ? a : b`; there is no `x if cond else y`.
 
 `??` supplies a default for an optional and `?.` reaches through one, but `??`
-never shares an unparenthesized chain with `and`/`or`.
+never shares an unparenthesized chain with `and`/`or`. `value!` takes the third
+road: it unwraps an optional and raises where the value turns out to be absent,
+for the places where absence would mean the program is wrong. It checks — there
+is no spelling that merely claims. `!` after a value is that unwrap; `!` before
+one is the negation above, and `!=` still wins by longest match, so an unwrap
+before an equality test needs its space: `value! == other`.
 
 Integer literals may use `0x`, `0b`, or `0o`. Bitwise `~`, `&`, `|`, `^`,
 `<<`, `>>`, and `>>>` (and their compound assignments) accept only checked

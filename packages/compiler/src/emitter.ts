@@ -109,6 +109,7 @@ export class JavaScriptEmitter {
   private needsDetachedTaskHelper = false;
   private needsDisposalHelper = false;
   private needsIntegrityFailureHelper = false;
+  private needsRequiredValueHelper = false;
   private needsNarrowingErrorClass = false;
   private suppressPromiseNormalization = 0;
   private nextJavaScriptNodeId = 0;
@@ -365,6 +366,9 @@ export class JavaScriptEmitter {
     }
     if (this.needsIntegrityFailureHelper) {
       helpers.push(...this.integrityFailureHelpers());
+    }
+    if (this.needsRequiredValueHelper) {
+      helpers.push(...this.requiredValueHelpers());
     }
     const needsErrorNormalizationRuntime = this.needsThrownValueHelper || this.needsErrorCodeHelper;
     if (needsErrorNormalizationRuntime && !this.includesErrorNormalizationRuntime()) {
@@ -764,6 +768,24 @@ export class JavaScriptEmitter {
     ].join("\n")];
   }
 
+  /**
+   * D86 rule 212: `value!` raises the same `AssertionError` an
+   * `assert value != null` raises, so the integrity check above keeps letting
+   * it through `try` — a broken assertion is a bug, never a "not found".
+   */
+  protected requiredValueHelpers(): readonly string[] {
+    return [[
+      "function __velarRequired(value, description, offset) {",
+      "  if (value === null || value === undefined) {",
+      "    const __velarRequiredError = new Error(\"Required value \" + description + \" is absent at source offset \" + offset);",
+      "    __velarRequiredError.name = \"AssertionError\";",
+      "    throw __velarRequiredError;",
+      "  }",
+      "  return value;",
+      "}",
+    ].join("\n")];
+  }
+
   protected requireRuntimeModule(source: string): void {
     this.requiredRuntimeModules.add(source);
   }
@@ -842,6 +864,9 @@ export class JavaScriptEmitter {
           visitExpression(expression.operand);
           break;
         case "TryExpression":
+          visitExpression(expression.value);
+          break;
+        case "RequiredExpression":
           visitExpression(expression.value);
           break;
         case "BinaryExpression":
@@ -2482,6 +2507,13 @@ export class JavaScriptEmitter {
       case "SpreadExpression":
         this.needsCollectionHelpers = true;
         return `...__velarCopyList(${this.emitMappedExpression(expression.value)}, "Call spread")`;
+      // D86 rule 212: the unwrap evaluates its value once and raises where the
+      // absence is, not ten lines later where the `undefined` would surface.
+      case "RequiredExpression": {
+        this.needsRequiredValueHelper = true;
+        const description = JSON.stringify(requiredValueDescription(expression.value));
+        return `__velarRequired(${this.emitMappedExpression(expression.value)}, ${description}, ${expression.span.start})`;
+      }
       // D39 item 51: the attempt runs in its own frame so any failure inside
       // the whole chain becomes null, and nothing else in the surrounding
       // expression is skipped.
@@ -3477,4 +3509,30 @@ function emitCheckedEmbeddedJavaScript(
   const entries = statement.exports.map((item) => `${JSON.stringify(item.name)}: ${item.local}`).join(", ");
   code += `return { ${entries} };\n}\n`;
   return { code, mappings };
+}
+
+/**
+ * The source-shaped name a failed `value!` reports. Dotted paths, indexes, and
+ * calls read back the way the author wrote them; anything else reports as a
+ * plain value, since the source offset beside it already locates the unwrap.
+ */
+function requiredValueDescription(expression: Expression): string {
+  switch (expression.kind) {
+    case "IdentifierExpression":
+      return `'${expression.name}'`;
+    case "MemberExpression": {
+      const owner = requiredValueDescription(expression.object);
+      return owner.startsWith("'") ? `'${owner.slice(1, -1)}${expression.optional ? "?." : "."}${expression.property}'` : `'${expression.property}'`;
+    }
+    case "IndexExpression": {
+      const owner = requiredValueDescription(expression.object);
+      return owner.startsWith("'") ? `'${owner.slice(1, -1)}[...]'` : "a value";
+    }
+    case "CallExpression": {
+      const callee = requiredValueDescription(expression.callee);
+      return callee.startsWith("'") ? `'${callee.slice(1, -1)}(...)'` : "a call result";
+    }
+    default:
+      return "a value";
+  }
 }

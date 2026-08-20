@@ -272,15 +272,25 @@ export class Lexer {
           break;
         case "!":
           if (this.peek(1) === "=" && this.peek(2) === "=") {
-            this.diagnostics.push(recoveredDiagnostic("VEL1005", "Use '!='; inequality is already strict in VelarScript", span(start, start + 3),
+            // D86 rule 212: `!=` keeps winning by longest match, so `!==` is
+            // the one spelling the required-value unwrap cannot claim. The
+            // JavaScript reading is the common one and keeps the fix; the
+            // message names the other reading so an author who meant the
+            // unwrap learns that `==` needs its space.
+            this.diagnostics.push(recoveredDiagnostic("VEL1005",
+              "Use '!='; inequality is already strict in VelarScript — and if the '!' unwraps the value before it, give '==' its space: 'value! == other'",
+              span(start, start + 3),
               mechanicalFix(span(start, start + 3), "!=", "Use VelarScript strict inequality '!='")));
             this.simple("notEqual", start, 3);
           } else if (this.peek(1) === "=") {
             this.simple("notEqual", start, 2);
           } else {
-            this.diagnostics.push(recoveredDiagnostic("VEL1005", "Use 'not'; VelarScript uses readable logical operators", span(start, start + 1),
-              this.wordOperatorFix(start, start + 1, "not", "Use readable 'not'")));
-            this.simple("not", start, 1);
+            // D86 rule 212: `!` reads as the required-value unwrap after an
+            // operand and as JavaScript negation before one, and only the
+            // parser knows which position this is. The guidance for the
+            // negation reading therefore moves to the parser; `!=` still wins
+            // by longest match above, so `x! == y` needs its space.
+            this.simple("bang", start, 1);
           }
           break;
         case "&":

@@ -478,7 +478,10 @@ The fallback is checked only for the null path and receives the expected result
 type. This keeps direct fallbacks such as `names ?? []`, `scores ?? Map()`, and
 `callback ?? (value => value)` fully typed without extra annotations.
 
-Logical operators are `and`, `or`, and `not`. Their operands are `bool` or
+Logical operators are `and`, `or`, and `not`; `!` before a value is the
+JavaScript spelling and is rewritten to `not`. After a value the same
+character is the required-value unwrap, a different operator entirely
+(section 5). Their operands are `bool` or
 `bool?` — an absent `bool?` behaves as `false` — and they are not general
 value-selection operators: an operand of any other optional type is rejected,
 because a condition judges truth rather than presence (section 9). `and` and
@@ -1025,6 +1028,40 @@ be assignment targets. On the path where an optional index or call continues,
 its guarded receiver or callable is known to be present inside the index and
 argument expressions. Optional function annotations also contextually type a
 function expression assigned to them.
+
+### Required values
+
+`value!` is the required-value unwrap: it takes `T?` to `T`, and raises
+`AssertionError` at that position when the value turns out to be absent. It is
+a check, not a claim — the language has no spelling for "trust me", because a
+belief the compiler cannot see is exactly the trap section 1 rule 2 removes.
+It is `AssertionError` for the same reason `assert` raises it: an absent value
+here means the program is wrong, so `try` and every other failure-to-value
+combinator pass it through rather than turning a bug into a "not found"
+(section 11).
+
+```velar fragment
+const definition = catalog.get(id)!
+const address = user.profile!.email
+```
+
+`!` is postfix and binds with the rest of a postfix chain, so `a!.b` unwraps
+`a` and then reads `b`, while `a.b!` unwraps the field. It reads a value, so it
+cannot stand on an assignment target — assign to the location. A `!` on
+something that is not optional is an error rather than a no-op, exactly as a
+repeated presence check is: the value already answers the question.
+
+`!` and `assert` divide by position, not by meaning. `value!` is the
+expression-position unwrap and carries the message the compiler writes;
+`assert value != null else "..."` is the statement-position contract and
+carries the one the author writes. Reach for the assertion when the failure
+has something to say to whoever reads the report, and for `!` when the only
+thing to say is that this cannot be absent.
+
+`!=` still wins by longest match, so an unwrap followed by an equality test
+needs its space: `value! == other`. A `!` written *before* a value is the
+JavaScript negation, which the compiler still rewrites to `not`
+(section 4).
 
 ## 6. Records, aliases, and enums
 

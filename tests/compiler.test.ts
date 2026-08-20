@@ -2689,6 +2689,91 @@ const callback: () -> number = () => value
   assert.ok(legacySeparator.diagnostics.some((item) => item.code === "VEL2017" && /assert condition else message/u.test(item.message)));
   assert.equal(legacySeparator.code, null);
 });
+test("the required-value unwrap checks, reports, and never claims", () => {
+  // D86 rule 212: `value!` takes `T?` to `T` and raises AssertionError where
+  // the value is absent — a check, not a TypeScript-style claim.
+  const result = compile(`
+type Contact:
+    email: string
+
+type Owner:
+    profile: Contact?
+
+def address(owner: Owner) -> string:
+    return owner.profile!.email
+
+const lookup: Map<string, number> = Map()
+lookup.set("a", 1)
+print(str(lookup.get("a")!))
+print(address({profile: {email: "ada@example.com"}}))
+try:
+    print(str(lookup.get("missing")!))
+catch error:
+    print(error.name)
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "1\nada@example.com\nAssertionError\n");
+
+  // The failure is a bug, so `try` passes it through exactly as it passes a
+  // failed `assert` through.
+  const swallowed = compile("def find() -> string?:\n    return null\n\nconst v = try find()!\nprint(str(v))\n");
+  assert.deepEqual(swallowed.diagnostics, []);
+  const failed = executeModule(swallowed.code ?? "");
+  assert.notEqual(failed.status, 0);
+  assert.match(String(failed.stderr), /AssertionError/u);
+
+  const rejected = compile(`
+def redundant(name: string) -> number:
+    return name!.size
+
+def opaque(value: unknown):
+    print(value!)
+
+async def loaded() -> string?:
+    return "a"
+
+async def early() -> number:
+    return (await loaded())!.size
+`.trimStart());
+  const messages = rejected.diagnostics.map((item) => `${item.code}: ${item.message}`);
+  assert.ok(messages.some((message) => /VEL4040.*already string; remove the '!'/u.test(message)), messages.join("\n"));
+  assert.ok(messages.some((message) => /VEL4040.*unknown is not one; validate it/u.test(message)), messages.join("\n"));
+  assert.equal(messages.length, 2);
+
+  // A parser diagnostic gates analysis, so the write target stands alone.
+  const written = compile("let held: string? = \"a\"\nheld! = \"b\"\n");
+  assert.deepEqual(written.diagnostics.map((item) => item.code), ["VEL2005"]);
+  assert.match(written.diagnostics[0]?.message ?? "", /cannot stand on an assignment target/u);
+  assert.deepEqual(written.diagnostics[0]?.fix?.edits.map((edit) => edit.text), [""]);
+
+  const promised = compile("async def loaded() -> string?:\n    return \"a\"\n\nasync def early() -> number:\n    return await loaded()!.size\n");
+  assert.ok(promised.diagnostics.some((item) => /VEL4040/u.test(item.code) && /write '\(await \.\.\.\)!'/u.test(item.message)));
+});
+
+test("'!' reads as negation before a value and as the unwrap after one", () => {
+  // D54 rule 118 stands for the prefix reading: it stays a teaching
+  // diagnostic, now reported by the parser because only position decides.
+  const prefix = compile("const ready: bool = true\nif !ready:\n    print(\"no\")\n");
+  assert.deepEqual(prefix.diagnostics.map((item) => item.code), ["VEL1005"]);
+  assert.match(prefix.diagnostics[0]?.message ?? "", /Use 'not'/u);
+  assert.deepEqual(prefix.diagnostics[0]?.fix?.edits.map((edit) => edit.text), ["not "]);
+
+  // `!=` keeps winning by longest match, so `!==` stays the inequality
+  // guidance and names the other reading rather than guessing between them.
+  const tight = compile("def check(a: number?) -> bool:\n    return a!==1\n");
+  assert.ok(tight.diagnostics.some((item) => item.code === "VEL1005" && /give '==' its space/u.test(item.message)));
+  const spaced = compile("def check(a: number?) -> bool:\n    return a! == 1\n");
+  assert.deepEqual(spaced.diagnostics, []);
+  const inequality = compile("def check(a: number) -> bool:\n    return a != 1\n");
+  assert.deepEqual(inequality.diagnostics, []);
+
+  // The unwrap is part of the postfix chain, and the formatter writes it tight.
+  assert.equal(formatSource("const v = lookup.get(key) !\n"), "const v = lookup.get(key)!\n");
+  assert.equal(formatSource("print(a ! == 1)\n"), "print(a! == 1)\n");
+  assert.equal(formatSource("print(owner.profile ! .email)\n"), "print(owner.profile!.email)\n");
+});
 
 test("transparent type aliases improve names without changing assignability", () => {
   const result = compile(`

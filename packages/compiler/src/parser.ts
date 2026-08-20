@@ -239,9 +239,7 @@ export class Parser {
       "Assignment is a statement, not an expression; write it on its own line inside a function, action, or handler body",
       operatorToken.span,
     ));
-    if (expression.kind !== "IdentifierExpression" && expression.kind !== "MemberExpression" && expression.kind !== "IndexExpression") {
-      this.diagnostics.push(diagnostic("VEL2005", "Assignment target must be a name, member, or index", expression.span));
-    }
+    this.reportInvalidAssignmentTarget(expression);
     const value = this.recoverExpressionAssignment(this.parseExpression());
     return { kind: "AssignmentExpression", target: expression, operator, value, span: span(expression.span.start, value.span.end) };
   }
@@ -567,9 +565,7 @@ export class Parser {
     const operator = assignmentOperators[this.current().kind];
     if (operator) {
       this.advance();
-      if (expression.kind !== "IdentifierExpression" && expression.kind !== "MemberExpression" && expression.kind !== "IndexExpression") {
-        this.diagnostics.push(diagnostic("VEL2005", "Assignment target must be a name, member, or index", expression.span));
-      }
+      this.reportInvalidAssignmentTarget(expression);
       const value = this.parseExpression();
       return {
         kind: "AssignmentStatement",
@@ -2865,6 +2861,17 @@ export class Parser {
       this.advance();
       return this.withParseDepth(() => this.parseUnary());
     }
+    if (this.match("bang")) {
+      // D86 rule 212: a `!` reached here stands before its operand, so it is
+      // the JavaScript negation, not the required-value unwrap the postfix
+      // loop reads. D54 rule 118 keeps that reading a teaching diagnostic.
+      this.reportPrefixBang(this.previous());
+      const operator = this.previous();
+      return this.withParseDepth(() => {
+        const operand = this.parseUnary();
+        return { kind: "UnaryExpression", operator: "not", operand, span: span(operator.span.start, operand.span.end) };
+      });
+    }
     if (this.match("not") || this.match("plus") || this.match("minus") || this.match("tilde")) {
       const operator = this.previous();
       return this.withParseDepth(() => {
@@ -2910,7 +2917,7 @@ export class Parser {
     if (!this.match("await")) return this.parsePostfix();
     const operator = this.previous();
     return this.withParseDepth(() => {
-      const operand = this.check("not") || this.check("plus") || this.check("minus") || this.check("tilde")
+      const operand = this.check("not") || this.check("bang") || this.check("plus") || this.check("minus") || this.check("tilde")
         ? this.parseUnary()
         : this.parsePowerBase();
       return {
@@ -2951,6 +2958,14 @@ export class Parser {
             : [mechanicalFix(span(start, this.previous().span.end), "", "Remove the explicit type arguments")]),
         ));
         typeArgumentsRemoved = true;
+        continue;
+      }
+      // D86 rule 212: a `!` that follows an operand is the required-value
+      // unwrap. It binds with the rest of the postfix chain, so `a!.b` unwraps
+      // `a` and then reads `b`, and `a.b!` unwraps the field.
+      if (this.match("bang")) {
+        const bang = this.previous();
+        expression = { kind: "RequiredExpression", value: expression, span: span(expression.span.start, bang.span.end) };
         continue;
       }
       let call = false;
@@ -3933,6 +3948,44 @@ export class Parser {
       this.index += 1;
     }
     return token;
+  }
+
+  /**
+   * D54 rule 118 keeps prefix `!` a teaching diagnostic rather than a second
+   * spelling of `not`; D86 rule 212 moved the report here because only the
+   * parser knows the `!` stood before its operand. The rewrite carries the
+   * spacing the word form needs, exactly as the lexer's own word-operator
+   * fixes do: `!ready` becomes `not ready`, `and!ready` becomes `and not ready`.
+   */
+  /**
+   * D86 rule 212: `value! = next` names the unwrap on the left of a write. The
+   * unwrap reads a value and proves it present; a write has neither a result
+   * to unwrap nor a fact to prove, and assigning `null` back into an optional
+   * is legitimate — so the target is the location itself.
+   */
+  protected reportInvalidAssignmentTarget(expression: Expression): void {
+    if (expression.kind === "IdentifierExpression" || expression.kind === "MemberExpression" || expression.kind === "IndexExpression") return;
+    if (expression.kind === "RequiredExpression") {
+      this.diagnostics.push(diagnostic(
+        "VEL2005",
+        "'!' unwraps a value that is read, so it cannot stand on an assignment target; assign to the location itself",
+        expression.span,
+        mechanicalFix(span(expression.span.end - 1, expression.span.end), "", "Remove the '!'"),
+      ));
+      return;
+    }
+    this.diagnostics.push(diagnostic("VEL2005", "Assignment target must be a name, member, or index", expression.span));
+  }
+
+  protected reportPrefixBang(bang: Token): void {
+    const spaceBefore = this.tokens[this.index - 2]?.span.end === bang.span.start ? " " : "";
+    const spaceAfter = this.current().span.start === bang.span.end ? " " : "";
+    this.diagnostics.push(recoveredDiagnostic(
+      "VEL1005",
+      "Use 'not'; VelarScript uses readable logical operators",
+      bang.span,
+      mechanicalFix(bang.span, `${spaceBefore}not${spaceAfter}`, "Use readable 'not'"),
+    ));
   }
 
   protected current(): Token {

@@ -785,6 +785,7 @@ export type CoreExpression =
   | ObjectExpression
   | SpreadExpression
   | UnaryExpression
+  | RequiredExpression
   | TryExpression
   | BinaryExpression
   | AssignmentExpression
@@ -823,6 +824,7 @@ export const CORE_EXPRESSION_CONSTRUCTS = Object.freeze({
   ComparisonChainExpression: "minimum <= value < maximum",
   ConditionalExpression: "value if condition else fallback",
   IsExpression: "value is Type",
+  RequiredExpression: "value!",
   ArrowFunctionExpression: "value => result",
   CallExpression: "call()",
   MemberExpression: "value.member",
@@ -912,6 +914,18 @@ export interface UnaryExpression {
   readonly kind: "UnaryExpression";
   readonly operator: "not" | "+" | "-" | "~" | "await";
   readonly operand: Expression;
+  readonly span: Span;
+}
+
+/**
+ * D86 rule 212: `value!` is the required-value unwrap — `T?` in, `T` out, and
+ * an `AssertionError` at the moment the value turns out to be absent. It is
+ * the expression-position counterpart of `assert value != null`, which stays
+ * the spelling for a contract that carries its own message.
+ */
+export interface RequiredExpression {
+  readonly kind: "RequiredExpression";
+  readonly value: Expression;
   readonly span: Span;
 }
 
@@ -1175,6 +1189,8 @@ export function expressionContainsDirectAwait(
       // The wrapper is emitted as an async immediately-invoked function only
       // when its own body awaits, and that await belongs to the frame around
       // it either way.
+      return contains(core.value);
+    case "RequiredExpression":
       return contains(core.value);
     case "FStringExpression":
       return core.parts.some((part) => part.kind === "expression" && contains(part.value));
