@@ -327,41 +327,28 @@ message, pending connection, pending send, and 128 MiB byte budgets, so empty
 messages cannot bypass accounting. `maxQueuedBytes` defaults to 16 MiB on Node
 and Web. `listen` may receive a `ServeApp` or the same typed low-level handler
 as `velar/serve`, so HTTP and upgrade traffic share one port and a composed app
-keeps one startup/shutdown lifecycle. Normal EOF preserves accepted messages
+keeps one startup/shutdown lifecycle. Its `maxBodyBytes` option bounds HTTP
+bodies on that shared listener. `origins` accepts exact canonical HTTP/HTTPS
+origins; by default upgrades carrying `Origin` receive 403 before admission,
+while non-browser requests without `Origin` remain allowed. `["*"]` is the
+explicit unrestricted policy. Normal EOF preserves accepted messages
 until `next()` drains them. Protocol/limit failure and server stop release
 unread queues immediately; an abandoned connection is terminated and releases
 its reservations when its owner is collected.
 Connections and servers are owned resources for `using`.
 
-## Ecosystem codecs, noise, and database adapters
+## Application libraries and adapters
 
-Concrete third-party integrations do not occupy the reserved `velar/*`
-namespace. Install and import the independently versioned source adapters:
-`@velarscript/msgpack`, `@velarscript/compression`, and
-`@velarscript/noise`. They expose small checked Velar surfaces over `msgpackr`,
-`fflate`, and `simplex-noise`.
+Codecs, compression, procedural algorithms, database models, concrete drivers,
+and deployment-provider integrations are not part of the Standard API or this
+repository. The consuming project defines or installs the smallest checked
+VelarScript surface it needs and owns the implementation, dependency versions,
+resource ceilings, concurrency behavior, and tests.
 
-- MessagePack provides `encode(value) -> Bytes`, `decode(bytes) -> unknown`, and
-  `parse(bytes, Type) -> T`.
-- Compression provides bounded `deflate`/`inflate` and `gzip`/`gunzip` Bytes
-  operations. Decompression feeds `fflate` dynamically sized compressed-input
-  slices and aborts on the first output callback that would cross `maxBytes`.
-  Small default-limit payloads do not reserve 64 MiB, and rejected streams do
-  not consume or compute their remaining compressed tail.
-- Noise provides seeded `simplex2`, `simplex3`, and `simplex4` functions whose
-  results are deterministic across supported targets.
-
-These source packages are supported contracts, but they are not Standard
-modules and are not shipped as hidden CLI dependencies. npm installs and locks
-them like every other application dependency.
-
-Database models follow the same boundary. `@velarscript/database` defines the
-engine-neutral model, query, mutation, migration, transaction, capability, and
-error contracts. A package such as `@velarscript/sqlite` implements that
-contract and owns its driver, SQL dialect, workers, pooling, and engine-specific
-escape hatches. Core has no database keyword, decorator, schema lowering, SQL
-parser, or privileged package name. See [Database model and adapter
-standard](database-model.md).
+Core has no database keyword, schema lowering, SQL parser, privileged adapter
+package name, or provider-specific deployment surface. Reuse across projects is
+handled through the public `velar.entry` package contract, never by expanding
+the reserved `velar/*` namespace or adding hidden CLI dependencies.
 
 ## `Text.` (permanent, no import)
 
@@ -882,12 +869,16 @@ route; explicit `RouteDocumentation.errors` entries override their
 descriptions. Typed path syntax such as `p"/articles/{id:number}"` is rendered
 as `/articles/{id}` in that document.
 
-The application entry exports the `ServeApp` named by `node.app`; `node.host`,
-`node.port`, `node.maxBodyBytes`, and `node.build.sourceMaps` configure its
-target. `velar dev` watches and restarts the last-good build, `velar serve`
-runs checked source with production behavior, and `velar build` emits a
-standalone Node directory. Direct `serve(...)` is the lower-level operation for
-tests, embedded servers, and handler adapters.
+The application entry exports either the `ServeApp` named by `node.app` or an
+async WebSocket startup function with the exact checked parameters
+`(host: string, port: number, maxBodyBytes: number)` and a
+`Promise<WebSocketServer>` result. The latter calls `websocket.listen` when HTTP
+and WebSocket traffic must share the configured application port. `node.host`,
+`node.port`, `node.maxBodyBytes`, and `node.build.sourceMaps` configure either
+form. `velar dev` watches and restarts the last-good build, `velar serve` runs
+checked source with production behavior, and `velar build` emits a standalone
+Node directory with the same startup contract. Direct `serve(...)` is the
+lower-level operation for tests, embedded servers, and handler adapters.
 
 Explicit route defaults cover the inputs that cannot be inferred:
 `input.query`, `input.header`, `input.cookie`, `input.form`, `input.upload`, and

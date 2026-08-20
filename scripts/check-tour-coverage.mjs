@@ -198,7 +198,7 @@ const exemptions = [
   },
   {
     label: "velar/javascript and velar/text-buffer",
-    reason: "migrated out of velar/*; ordinary npm packages now, so not standard-library vocabulary",
+    reason: "removed from the language; products own editor buffers and JavaScript/TypeScript tooling",
     withheldFrom: ["module-export", "namespace-member"],
     names: () => new Set(["velar/javascript", "velar/text-buffer"]),
     // Module categories are keyed '<source> <name>', so a whole module is
@@ -210,7 +210,7 @@ const exemptions = [
   },
   {
     label: "`import js` naming a real third-party npm package",
-    reason: "third-party dependencies are exposed through checked external source adapters such as @velarscript/msgpack, @velarscript/compression, and @velarscript/noise; `node:crypto` remains the deliberate raw js/unsafe/extern/module example",
+    reason: "applications declare their own checked third-party boundaries; `node:crypto` remains the deliberate raw js/unsafe/extern/module example",
     withheldFrom: [],
     names: () => new Set(),
   },

@@ -9,7 +9,6 @@ import { extname, join, normalize } from "node:path";
 import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { chromium, firefox, webkit, type Browser, type BrowserServer, type BrowserType } from "playwright";
-import { prepareExternalPreview } from "../scripts/prepare-external-preview.mjs";
 import {
   boundedBrowserOperation,
   exitBrowserWorker,
@@ -17,8 +16,6 @@ import {
   superviseBrowserWorker,
   terminateBrowserServer,
 } from "../packages/cli/src/browser-process-owner.ts";
-import { verifyProductionBuild } from "../packages/cli/src/production-verifier.ts";
-import { startProductionPreview, type ProductionPreviewHandle } from "../packages/cli/src/preview-server.ts";
 
 type TrackedServer = Server & { velarUpgradedSockets?: Set<Duplex> };
 interface ActiveBrowser {
@@ -65,11 +62,9 @@ async function runBrowserAcceptance(): Promise<void> {
   let devServer: ChildProcess | null = null;
   let staticServer: Server | null = null;
   let realtimeServer: Server | null = null;
-  let externalPreview: ProductionPreviewHandle | null = null;
   const activeBrowsers = new Set<ActiveBrowser>();
   const activeChildren = new Set<ChildProcess>();
   const productionDirectory = await mkdtemp(join(tmpdir(), "velar-browser-production-"));
-  const externalPreviewRoot = await mkdtemp(join(tmpdir(), "velar-browser-external-preview-"));
   let rejectInterruption!: (error: BrowserAcceptanceInterrupted) => void;
   const interruption = new Promise<never>((_resolve, reject) => { rejectInterruption = reject; });
   void interruption.catch(() => {});
@@ -129,9 +124,6 @@ async function runBrowserAcceptance(): Promise<void> {
       for (const browser of browsers) {
         await boundedBrowserOperation(acceptBrowser(`Production ${browser.name}`, browser.type, productionUrl, true, realtimePort, activeBrowsers), 180_000, `Production ${browser.name} acceptance`, interruption);
       }
-      const externalBundle = await prepareExternalPreview(join(externalPreviewRoot, "netlify"));
-      externalPreview = await startProductionPreview(await verifyProductionBuild(externalBundle.outputDirectory), 0);
-      await boundedBrowserOperation(acceptExternalPreview(externalPreview, activeBrowsers), 120_000, "External preview Chromium acceptance", interruption);
       process.stdout.write(`VelarScript development and CSP production browser matrices passed\n`);
     };
     await Promise.race([scenario(), interruption]);
@@ -148,11 +140,9 @@ async function runBrowserAcceptance(): Promise<void> {
       stopChild(devServer),
       closeServer(staticServer),
       closeServer(realtimeServer),
-      closeProductionPreview(externalPreview),
     ]);
     const storageCleanup = await Promise.allSettled([
       rm(productionDirectory, { recursive: true, force: true }),
-      rm(externalPreviewRoot, { recursive: true, force: true }),
     ]);
     if (!scenarioFailed) {
       const cleanupFailure = [...ownerCleanup, ...storageCleanup].find((result) => result.status === "rejected");
@@ -163,44 +153,6 @@ async function runBrowserAcceptance(): Promise<void> {
     }
   }
   if (scenarioFailed) throw scenarioFailure;
-}
-
-async function acceptExternalPreview(preview: ProductionPreviewHandle, active: Set<ActiveBrowser>): Promise<void> {
-  const owner: ActiveBrowser = {
-    server: await chromium.launchServer({ headless: true, timeout: 30_000 }),
-    browser: null,
-    closing: null,
-  };
-  active.add(owner);
-  try {
-    owner.browser = await chromium.connect(owner.server.wsEndpoint(), { timeout: 30_000 });
-    const browser = owner.browser;
-    const page = await browser.newPage();
-    const failures: string[] = [];
-    page.on("pageerror", (error) => failures.push(error.stack ?? error.message));
-    page.on("console", (message) => {
-      if (message.type() === "error" || message.type() === "warning") failures.push(`${message.type()}: ${message.text()}`);
-    });
-    const response = await page.goto(preview.url, { waitUntil: "networkidle" });
-    assert.equal(response?.status(), 200);
-    assert.match(response?.headers()["content-security-policy"] ?? "", /script-src 'self'/u);
-    assert.equal(new URL(page.url()).pathname, "/");
-    assert.equal(await page.locator("h1").textContent(), "Release board");
-    assert.equal(await page.locator('link[rel="canonical"]').getAttribute("href"), "https://releases.velar.example/");
-    assert.equal(await page.locator('meta[property="og:image"]').getAttribute("content"), "/mark.svg");
-    assert.equal((await page.request.get(new URL("mark.svg", preview.url).href)).status(), 200);
-    assert.equal((await page.request.get(new URL("assets/missing.js", preview.url).href)).status(), 404);
-    await page.getByRole("link", { name: "About" }).click();
-    await page.waitForURL("**/about");
-    assert.equal(await page.locator("h1").textContent(), "About Release Studio");
-    await page.reload({ waitUntil: "networkidle" });
-    assert.equal(await page.locator("h1").textContent(), "About Release Studio");
-    assert.deepEqual(failures, [], `External preview Chromium: ${failures.join("\n")}`);
-    process.stdout.write("✓ External preview Chromium\n");
-  } finally {
-    await closeBrowserOwner(owner);
-    active.delete(owner);
-  }
 }
 
 async function acceptBrowser(
@@ -514,10 +466,6 @@ async function closeServer(server: Server | null): Promise<void> {
   for (const socket of (server as TrackedServer).velarUpgradedSockets ?? []) socket.destroy();
   server.closeAllConnections();
   await new Promise<void>((resolvePromise, reject) => server.close((error) => error ? reject(error) : resolvePromise()));
-}
-
-async function closeProductionPreview(preview: ProductionPreviewHandle | null): Promise<void> {
-  if (preview !== null) await preview.close();
 }
 
 async function run(command: string, arguments_: readonly string[], active: Set<ChildProcess>): Promise<void> {

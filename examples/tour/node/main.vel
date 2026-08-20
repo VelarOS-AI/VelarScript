@@ -1,7 +1,7 @@
 import {app as routes, describeApi} from "./01-server.vel"
-import {findArticle, openArticleStore} from "./03-database.vel"
+import {findArticle} from "./03-project-dependencies.vel"
 
 export const app = routes
-export const databaseExample = {findArticle, openArticleStore}
+export const projectDependencyExample = {findArticle}
 
 describeApi(app)

@@ -22,10 +22,8 @@ const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const defaultOutput = join(root, "release", "rehearsal");
 const manifestName = "velar-toolchain-release.json";
 const checksumName = "SHA256SUMS";
-// D63 rule 159: derived from packages/*, never restated here. Ordinary source
-// libraries under libraries/* and concrete integrations under adapters/* or integrations/* are
-// independent packages, not members of this version-locked compiler/runtime
-// release generation.
+// Derived from packages/*, never restated here. Project-owned libraries,
+// concrete adapters, and provider integrations do not live in this repository.
 const workspaces = await velarToolchainPackageNames(root);
 const excludedTreeNames = new Set([".git", "node_modules", "dist", "release", "coverage"]);
 
@@ -216,8 +214,6 @@ async function readPackageManifests() {
   const create = required("create-velar");
   const cli = required("@velarscript/cli");
   const desktop = required("@velarscript/desktop");
-  const textBuffer = JSON.parse(await readFile(join(root, "libraries", "text-buffer", "package.json"), "utf8"));
-  const scriptAnalysis = JSON.parse(await readFile(join(root, "libraries", "script-analysis", "package.json"), "utf8"));
   for (const package_ of packages) {
     if (package_.version !== rootManifest.version) throw new Error(`${package_.name} version must exactly match ${rootManifest.version}`);
     if (package_.repository?.url !== rootManifest.repository?.url) throw new Error(`${package_.name} repository must match the workspace repository`);
@@ -256,13 +252,7 @@ async function readPackageManifests() {
   if (cli.dependencies?.["create-velar"] !== rootManifest.version) {
     throw new Error("@velarscript/cli must pin the exact project creator version");
   }
-  if (scriptAnalysis.dependencies?.["@velarscript/text-buffer"] !== textBuffer.version) {
-    throw new Error("@velarscript/script-analysis must pin the exact @velarscript/text-buffer version");
-  }
-  if (cli.dependencies?.["@velarscript/script-analysis"] !== scriptAnalysis.version) {
-    throw new Error("@velarscript/cli must pin the exact @velarscript/script-analysis version");
-  }
-  return { root: rootManifest, packages, compiler, core, node, web, create, cli, desktop, textBuffer, scriptAnalysis };
+  return { root: rootManifest, packages, compiler, core, node, web, create, cli, desktop };
 }
 
 function releaseBlockers(manifests, source) {

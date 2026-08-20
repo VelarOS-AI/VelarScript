@@ -6,7 +6,8 @@ capabilities, or application configuration.
 
 ## Ownership and application entry
 
-A Node service activates the extension and names one exported `ServeApp`:
+A Node service activates the extension and names one exported `ServeApp` or
+one typed WebSocket startup function:
 
 ```json
 {
@@ -33,6 +34,28 @@ import {app as routes} from "./app.vel"
 
 export const app = routes
 ```
+
+For one shared HTTP/WebSocket application port, `node.app` may instead name
+exactly this function shape:
+
+```velar fragment
+import {app as routes} from "./app.vel"
+import {listen} from "velar/websocket"
+
+export async def start(host: string, port: number, maxBodyBytes: number):
+    return await listen({
+        host,
+        port,
+        http: routes,
+        path: "/api/events",
+        origins: ["https://app.example.com"],
+        maxBodyBytes,
+    })
+```
+
+Set `node.app` to `"start"`. The exact result is
+`Promise<WebSocketServer>`; `dev`, `serve`, and the production launcher pass
+the same three configured values.
 
 Use `velar dev` while editing, `velar serve` for checked production runtime
 behavior, and `velar build` for a standalone Node output directory. A direct
@@ -212,9 +235,13 @@ total stream are bounded. SSE accepts text or checked
 root-contained, streamed reads with validators and one byte range.
 
 `velar/websocket.listen({http: app, ...})` serves a `ServeApp` and WebSocket
-upgrades on one native server and owns the application lifecycle. Connections
-are pull-based. Always consume `next()`, handle backpressure, and stop the
-server.
+upgrades on one native server and owns the application lifecycle. Set
+`maxBodyBytes` to the supplied application value. `origins` contains exact
+canonical HTTP/HTTPS origins. The default rejects any upgrade carrying
+`Origin`; no-Origin non-browser clients remain allowed. Use `["*"]` only for an
+intentional unrestricted policy. A rejected browser origin receives 403 before
+it consumes connection-queue capacity. Connections are pull-based. Always
+consume `next()`, handle backpressure, and stop the server.
 
 ## Tests
 
@@ -290,11 +317,10 @@ read-modify-write sequence atomic.
 
 Use `velar/fs`, `velar/path`, `velar/process`, `velar/env`,
 `velar/terminal`, `velar/http`, `velar/worker`, and `velar/websocket` instead of
-ambient Node globals. Databases are ordinary external source packages: use the
-engine-neutral `@velarscript/database` model contract and install an adapter
-such as `@velarscript/sqlite`. Third-party packages cross a checked `extern
-module` adapter first; keep `import js unsafe` at one narrow validation
-boundary.
+ambient Node globals. Database contracts, drivers, codecs, and other
+application integrations are project-owned modules or dependencies. Declare
+third-party boundaries with checked `extern module`; keep `import js unsafe`
+at one narrow validation boundary.
 
 Run `velar format --check`, `velar check`, `velar test`, and
 `velar build`. The complete runnable spelling lives in

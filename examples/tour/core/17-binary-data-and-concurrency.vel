@@ -1,22 +1,15 @@
 /// Chapter 17 — the cross-target binary and structured-concurrency surface.
 ///
 /// Host-affecting calls live behind exported functions that the tour does not
-/// execute. The pure buffer, codec, compression, noise, and random calls are
-/// kept together so their shared `Bytes` contract remains visible.
+/// execute. Binary buffers and deterministic random values remain target-neutral;
+/// codecs, compression, and domain algorithms belong to consuming projects.
 
 import {ByteOrder, Bytes, Float32Buffer, Float32Builder, UInt8Buffer, UInt16Buffer, UInt32Buffer, UInt32Builder, float32Buffer, float32Builder, float32FromBytes, uint8Buffer, uint8FromBytes, uint16Buffer, uint16FromBytes, uint32Buffer, uint32Builder, uint32FromBytes} from "velar/binary"
 import {Random, random} from "velar/random"
 import {Cancellation, CancellationError, Task, TaskTimeoutError, task, withTimeout} from "velar/task"
 import {Worker, WorkerBackpressureError, WorkerCallError, WorkerClosedError, WorkerCrashedError, WorkerPool, serveWorker, worker, workerPool} from "velar/worker"
 import {WebSocketBackpressureError, WebSocketClosedError, WebSocketConnection, WebSocketProtocolError, WebSocketServer, WebSocketTimeoutError, connect, listen} from "velar/websocket"
-import {decode as decodeMessage, encode as encodeMessage, parse as parseMessage} from "@velarscript/msgpack"
-import {deflate, gunzip, gzip, inflate} from "@velarscript/compression"
-import {simplex2, simplex3, simplex4} from "@velarscript/noise"
 import {createBytes, readBytes, writeBytes} from "velar/fs"
-
-type DataEnvelope:
-    checksum: number
-    payload: Bytes
 
 type DataRequest:
     x: number
@@ -29,24 +22,14 @@ const bufferType = UInt16Buffer
 const bytesType = Bytes
 const littleEndian = ByteOrder.little
 
-export def binaryAndCodecSpellings() -> number:
+export def binaryAndRandomSpellings() -> number:
     const values: UInt16Buffer = uint16Buffer(4096)
     values[0] = 0x7f
     const snapshot: Bytes = values.toBytes(littleEndian)
     const restored = uint16FromBytes(snapshot, ByteOrder.little)
-    const packed = encodeMessage({checksum: restored[0], payload: snapshot})
-    const decodedUnknown = decodeMessage(packed)
-    const decoded: DataEnvelope = parseMessage(packed, DataEnvelope)
-    const compressed = deflate(decoded.payload)
-    const uncompressed = inflate(compressed)
-    const archived = gzip(uncompressed, 6)
-    const reopened = gunzip(archived, 64 * 1024 * 1024)
-    const field2 = simplex2("tour-data")
-    const field3 = simplex3("tour-data")
-    const field4 = simplex4("tour-data")
     const source: Random = random("tour-data")
     const child = source.fork("partition:0:0")
-    return decoded.checksum + reopened.size + Math.trunc(field2(0, 0) + field3(0, 0, 0) + field4(0, 0, 0, 0)) + child.int(1) + (decodedUnknown != null ? 1 : 0)
+    return restored[0] + snapshot.size + child.int(1)
 
 export def numericBufferSpellings() -> number:
     const flags: UInt8Buffer = uint8Buffer(4)

@@ -13,6 +13,7 @@ import { Readable, Writable } from "node:stream";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { MessageChannel, MessagePort, Worker } from "node:worker_threads";
+import WebSocket from "ws";
 import { compileProject } from "../packages/cli/src/project.ts";
 import { VELAR_TYPE_REGISTRY_KEY } from "../packages/compiler/src/runtime-abi.ts";
 import { standardModuleApi, standardModuleDependencies, standardModuleSource } from "../packages/cli/src/standard-modules.ts";
@@ -1156,10 +1157,11 @@ test("Node form and upload inputs parse bounded multipart and URL-encoded bodies
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), {title: "cover", public: true, filename: "cover.txt", size: 6, text: "pixels"});
     let lifetimeEnded = false;
-    for (let attempt = 0; attempt < 20 && !lifetimeEnded; attempt += 1) {
+    const lifetimeDeadline = Date.now() + 1000;
+    while (!lifetimeEnded && Date.now() < lifetimeDeadline) {
       try { await escapedUpload!.text(); }
       catch (error) { assert.match(String(error), /lifetime ended with its request/u); lifetimeEnded = true; }
-      if (!lifetimeEnded) await new Promise<void>((resolve) => setImmediate(resolve));
+      if (!lifetimeEnded) await new Promise<void>((resolve) => setTimeout(resolve, 5));
     }
     assert.equal(lifetimeEnded, true, "request cleanup must revoke upload views promptly");
 
@@ -1539,7 +1541,7 @@ test("Node WebSocket listen composes one ServeApp lifecycle and keeps queues glo
       lifecycle(app: unknown, startup: () => Promise<null>, shutdown: () => Promise<null>): unknown;
     };
     const websocket = await import(`${pathToFileURL(websocketPath).href}?compose=${Date.now()}`) as {
-      listen(options: Record<string, unknown>): Promise<{port: number; next(): Promise<{send(value: string): Promise<null>; next(): Promise<string | Uint8Array | null>} | null>; stop(): Promise<null>}>;
+      listen(options: Record<string, unknown>): Promise<{port: number; next(): Promise<{send(value: string): Promise<null>; next(): Promise<string | Uint8Array | null>; close(): Promise<null>} | null>; stop(): Promise<null>}>;
       connect(url: string): Promise<{send(value: string): Promise<null>; next(): Promise<string | Uint8Array | null>; close(): Promise<null>}>;
     };
     const bridge = Object.getOwnPropertyDescriptor(serve.ServeApp, "__velarCompilerBridge")?.value as {
@@ -1560,12 +1562,43 @@ test("Node WebSocket listen composes one ServeApp lifecycle and keeps queues glo
       return {stopped: true};
     });
     const app = serve.lifecycle(bridge.createApp("socket", [health, echo, wait]), async () => { starts += 1; return null; }, async () => { stops += 1; return null; });
-    const server = await websocket.listen({port: 0, host: "127.0.0.1", path: "/ws", http: app, maxQueuedBytes: 1024, maxPendingSendBytes: 1024});
+    await assert.rejects(
+      websocket.listen({port: 0, origins: ["https://client.test/path"]}),
+      /must not contain paths/u,
+    );
+    const defaultServer = await websocket.listen({port: 0, host: "127.0.0.1", path: "/default"});
+    try {
+      assert.equal(await rejectedWebSocketStatus(`ws://127.0.0.1:${defaultServer.port}/default`, "https://client.test"), 403, "browser Origins must be denied by default");
+      const serviceClient = await websocket.connect(`ws://127.0.0.1:${defaultServer.port}/default`);
+      const serviceConnection = await defaultServer.next();
+      assert.ok(serviceConnection, "a non-browser client without Origin remains available by default");
+      await serviceClient.close();
+    } finally {
+      await defaultServer.stop();
+    }
+    const wildcardServer = await websocket.listen({port: 0, host: "127.0.0.1", path: "/wildcard", origins: ["*"]});
+    try {
+      const wildcardClient = await openedWebSocket(`ws://127.0.0.1:${wildcardServer.port}/wildcard`, "https://unlisted.test");
+      const wildcardConnection = await wildcardServer.next();
+      assert.ok(wildcardConnection, "the explicit wildcard policy accepts browser Origins");
+      wildcardClient.close();
+      await wildcardConnection.close();
+    } finally {
+      await wildcardServer.stop();
+    }
+    const server = await websocket.listen({port: 0, host: "127.0.0.1", path: "/ws", http: app, origins: ["https://client.test"], maxBodyBytes: 4, maxQueuedBytes: 1024, maxPendingSendBytes: 1024});
     let pendingAfterPeerClose: Promise<unknown> | null = null;
     try {
       assert.equal(starts, 1);
       assert.deepEqual(await (await fetch(`http://127.0.0.1:${server.port}/health`)).json(), {ok: true});
-      assert.deepEqual(await (await fetch(`http://127.0.0.1:${server.port}/echo`, {method: "POST", body: "native-body"})).json(), {body: "native-body"});
+      assert.deepEqual(await (await fetch(`http://127.0.0.1:${server.port}/echo`, {method: "POST", body: "four"})).json(), {body: "four"});
+      assert.equal((await fetch(`http://127.0.0.1:${server.port}/echo`, {method: "POST", body: "oversized"})).status, 413);
+      assert.equal(await rejectedWebSocketStatus(`ws://127.0.0.1:${server.port}/ws`, "https://untrusted.test"), 403);
+      const browserClient = await openedWebSocket(`ws://127.0.0.1:${server.port}/ws`, "https://client.test");
+      const browserAccepted = await server.next();
+      assert.ok(browserAccepted, "the exact allowed Origin must reach the connection queue");
+      browserClient.close();
+      await browserAccepted.close();
       const client = await websocket.connect(`ws://127.0.0.1:${server.port}/ws`);
       const accepted = await server.next();
       assert.ok(accepted);
@@ -1602,6 +1635,49 @@ test("Node WebSocket listen composes one ServeApp lifecycle and keeps queues glo
     await rm(directory, {recursive: true, force: true});
   }
 });
+
+function rejectedWebSocketStatus(url: string, origin: string): Promise<number> {
+  return new Promise((resolveStatus, rejectStatus) => {
+    const socket = new WebSocket(url, {origin});
+    let settled = false;
+    const finish = (action: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      action();
+    };
+    const timer = setTimeout(() => finish(() => rejectStatus(new Error("WebSocket rejection did not settle"))), 5_000);
+    socket.once("unexpected-response", (_request, response) => finish(() => {
+      response.resume();
+      resolveStatus(response.statusCode ?? 0);
+    }));
+    socket.once("open", () => finish(() => {
+      socket.close();
+      rejectStatus(new Error("WebSocket Origin was unexpectedly accepted"));
+    }));
+    socket.once("error", error => finish(() => rejectStatus(error)));
+  });
+}
+
+function openedWebSocket(url: string, origin: string): Promise<WebSocket> {
+  return new Promise((resolveSocket, rejectSocket) => {
+    const socket = new WebSocket(url, {origin});
+    let settled = false;
+    const finish = (action: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      action();
+    };
+    const timer = setTimeout(() => finish(() => rejectSocket(new Error("WebSocket connection did not open"))), 5_000);
+    socket.once("open", () => finish(() => resolveSocket(socket)));
+    socket.once("unexpected-response", (_request, response) => finish(() => {
+      response.resume();
+      rejectSocket(new Error(`WebSocket handshake returned ${response.statusCode ?? 0}`));
+    }));
+    socket.once("error", error => finish(() => rejectSocket(error)));
+  });
+}
 
 test("Node serve enforces one aggregate byte budget and releases ownership after completion", async () => {
   const serveRuntime = await runtime<{

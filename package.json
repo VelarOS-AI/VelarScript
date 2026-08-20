@@ -5,10 +5,7 @@
   "license": "Apache-2.0",
   "type": "module",
   "workspaces": [
-    "packages/*",
-    "libraries/*",
-    "adapters/*",
-    "integrations/*"
+    "packages/*"
   ],
   "scripts": {
     "build:packages": "node scripts/gate-lock.mjs npm run gate:build:packages",
@@ -24,9 +21,6 @@
     "release:rehearse": "node scripts/release-toolchain.mjs rehearse",
     "release:verify": "node scripts/release-toolchain.mjs verify",
     "release:publish": "node scripts/publish-toolchain.mjs",
-    "release:ecosystem:rehearse": "node scripts/release-ecosystem.mjs rehearse",
-    "release:ecosystem:verify": "node scripts/release-ecosystem.mjs verify",
-    "preview:prepare": "node scripts/prepare-external-preview.mjs",
     "velar": "node scripts/gate-lock.mjs npm run --silent gate:velar --",
     "gate:build:packages": "node scripts/build-packages.mjs",
     "gate:check": "npm run build:packages && npm run check:format && npm run check:docs && npm run check:boundaries && npm run check:projects && npm run check:tour-coverage && tsc -p tsconfig.json",

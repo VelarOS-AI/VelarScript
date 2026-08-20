@@ -68,7 +68,7 @@ test("language server owns versioned ownership graph and emitted JavaScript view
     send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { rootUri: pathToFileURL(root).href, capabilities: {} } });
     const initialize = await waitFor((message) => message.id === 1);
     const velar = ((initialize.result as { capabilities: { experimental: { velar: Record<string, unknown> } } }).capabilities.experimental.velar);
-    assert.equal(velar.protocolVersion, 4);
+    assert.equal(velar.protocolVersion, 5);
     assert.equal(velar.ownershipGraph, true);
     assert.equal(velar.emittedJavaScript, true);
     send({ jsonrpc: "2.0", method: "initialized", params: {} });

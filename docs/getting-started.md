@@ -56,8 +56,9 @@ npm run dev
 ```
 
 For Web/Desktop, the dev server rebuilds and serves the renderer. For Node, it
-checks the exported `ServeApp`, starts it from `node.host` and `node.port`, and
-restarts the last-good build after a source change. Edit `src/app.vel`; the
+checks the exported `ServeApp` or typed WebSocket startup function, starts it
+from the shared `node.host`, `node.port`, and `node.maxBodyBytes` configuration,
+and restarts the last-good build after a source change. Edit `src/app.vel`; the
 generated Node service answers `/api/hello` and uses `npm start` (`velar serve`)
 when a watcher is not wanted.
 

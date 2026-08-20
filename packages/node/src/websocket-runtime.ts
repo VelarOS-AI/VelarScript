@@ -13,10 +13,19 @@ const __velarWebSocketServers = new WeakMap();
 const __velarWsPromise = globalThis.Promise;
 const __velarWsPromiseAll = __velarWsPromise.all.bind(__velarWsPromise);
 const __velarWsReflectApply = globalThis.Reflect.apply;
+const __velarWsReflectConstruct = globalThis.Reflect.construct;
 const __velarWsFinalizationRegistry = globalThis.FinalizationRegistry;
 const __velarWsFinalizerRegister = __velarWsFinalizationRegistry.prototype.register;
 const __velarWsSetTimeout = globalThis.setTimeout;
 const __velarWsClearTimeout = globalThis.clearTimeout;
+const __velarWsArrayIsArray = globalThis.Array.isArray;
+const __velarWsObjectGetOwnPropertyDescriptor = globalThis.Object.getOwnPropertyDescriptor;
+const __velarWsObjectFreeze = globalThis.Object.freeze;
+const __velarWsSet = globalThis.Set;
+const __velarWsSetHas = __velarWsSet.prototype.has;
+const __velarWsSetAdd = __velarWsSet.prototype.add;
+const __velarWsURL = globalThis.URL;
+const __velarWsURLOriginGet = __velarWsObjectGetOwnPropertyDescriptor(__velarWsURL.prototype, "origin").get;
 const __velarServeGzip = __velarServePromisify(__velarServeGzipNode);
 const __velarServeBrotli = __velarServePromisify(__velarServeBrotliNode);
 const __velarWsAggregateByteLimit = 128 * 1024 * 1024;
@@ -33,7 +42,28 @@ let __velarWsActiveHttpSockets = 0;
 const __velarServeNativeOperations = Object.freeze({readFile: __velarServeReadFile, createReadStream: __velarServeCreateReadStream, realpath: __velarServeRealpath, stat: __velarServeStat, extname: __velarServeExtname, isAbsolute: __velarServeIsAbsolute, relative: __velarServeRelative, resolve: __velarServeResolve, compress: (encoding, value) => encoding === "br" ? __velarServeBrotli(value) : __velarServeGzip(value)});
 function __velarWsInteger(value, fallback, minimum, maximum, name) { if (value === undefined || value === null) return fallback; if (!Number.isSafeInteger(value) || value < minimum || value > maximum) throw new RangeError(name + " must be an integer from " + minimum + " through " + maximum); return value; }
 function __velarWsDuration(value, fallback) { if (value === undefined || value === null) return fallback; if (typeof value !== "string") throw new TypeError("WebSocket timeout must be Duration"); const match = /^([+-]?(?:\d+(?:\.\d+)?|\.\d+))(ms|s)$/.exec(value); if (!match) throw new TypeError("WebSocket timeout must be Duration such as 5s"); const result = Number(match[1]) * (match[2] === "s" ? 1000 : 1); if (!Number.isFinite(result) || result < 0 || result > 2147483647) throw new RangeError("WebSocket timeout is outside the supported range"); return result; }
-function __velarWsOptions(options = {}) { if (options === null || typeof options !== "object" || Array.isArray(options)) throw new TypeError("WebSocket options must be a record"); return { maxMessageBytes: __velarWsInteger(options.maxMessageBytes, 16 * 1024 * 1024, 1, 64 * 1024 * 1024, "maxMessageBytes"), maxQueuedMessages: __velarWsInteger(options.maxQueuedMessages, 256, 1, 10000, "maxQueuedMessages"), maxQueuedBytes: __velarWsInteger(options.maxQueuedBytes, 16 * 1024 * 1024, 1, 64 * 1024 * 1024, "maxQueuedBytes"), maxPendingSendBytes: __velarWsInteger(options.maxPendingSendBytes, 16 * 1024 * 1024, 1, 64 * 1024 * 1024, "maxPendingSendBytes") }; }
+function __velarWsOption(options, name) { const descriptor = __velarWsObjectGetOwnPropertyDescriptor(options, name); if (descriptor === undefined) return undefined; if (!("value" in descriptor)) throw new TypeError("WebSocket option '" + name + "' must be a data value"); return descriptor.value; }
+function __velarWsOptions(options = {}) { if (options === null || typeof options !== "object" || __velarWsArrayIsArray(options)) throw new TypeError("WebSocket options must be a record"); return { maxMessageBytes: __velarWsInteger(__velarWsOption(options, "maxMessageBytes"), 16 * 1024 * 1024, 1, 64 * 1024 * 1024, "maxMessageBytes"), maxQueuedMessages: __velarWsInteger(__velarWsOption(options, "maxQueuedMessages"), 256, 1, 10000, "maxQueuedMessages"), maxQueuedBytes: __velarWsInteger(__velarWsOption(options, "maxQueuedBytes"), 16 * 1024 * 1024, 1, 64 * 1024 * 1024, "maxQueuedBytes"), maxPendingSendBytes: __velarWsInteger(__velarWsOption(options, "maxPendingSendBytes"), 16 * 1024 * 1024, 1, 64 * 1024 * 1024, "maxPendingSendBytes") }; }
+function __velarWsOrigins(value) {
+  if (value === undefined || value === null) value = [];
+  if (!__velarWsArrayIsArray(value)) throw new TypeError("WebSocket origins must be a List<string>");
+  if (value.length > 256) throw new RangeError("WebSocket origins cannot contain more than 256 entries");
+  const exact = new __velarWsSet(); let exactCount = 0; let wildcard = false;
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = __velarWsObjectGetOwnPropertyDescriptor(value, index);
+    if (!descriptor?.enumerable || !("value" in descriptor) || typeof descriptor.value !== "string") throw new TypeError("WebSocket origins must contain enumerable text data values");
+    const origin = descriptor.value;
+    if (origin === "*") { if (wildcard || exactCount !== 0 || value.length !== 1) throw new TypeError("WebSocket origin '*' must be the only whitelist entry"); wildcard = true; continue; }
+    if (origin.length === 0 || origin.length > 2048 || !/^https?:\/\//u.test(origin)) throw new TypeError("WebSocket origins must be exact HTTP or HTTPS origins");
+    let normalized;
+    try { normalized = __velarWsReflectApply(__velarWsURLOriginGet, __velarWsReflectConstruct(__velarWsURL, [origin]), []); }
+    catch { throw new TypeError("WebSocket origins must be exact HTTP or HTTPS origins"); }
+    if (normalized !== origin) throw new TypeError("WebSocket origins must not contain paths, credentials, queries, fragments, or non-canonical text");
+    if (__velarWsReflectApply(__velarWsSetHas, exact, [origin])) throw new TypeError("WebSocket origins cannot contain duplicates");
+    __velarWsReflectApply(__velarWsSetAdd, exact, [origin]); exactCount += 1;
+  }
+  return __velarWsObjectFreeze({exact, wildcard});
+}
 function __velarWsBytes(value) { if (value instanceof Uint8Array) { const output = new Uint8Array(value.byteLength); output.set(value); return output; } return null; }
 function __velarWsMessageBytes(value) { if (typeof value === "string") return Buffer.byteLength(value, "utf8"); if (value instanceof Uint8Array) return value.byteLength; throw new TypeError("WebSocket.send requires text or Bytes"); }
 function __velarWsReserve(size) { if (!Number.isSafeInteger(size) || size < 0 || __velarWsAggregateBytes + size > __velarWsAggregateByteLimit) return false; __velarWsAggregateBytes += size; return true; }
@@ -138,27 +168,32 @@ const __velarWsServerPrototype = Object.freeze({
 const __velarWsConnectionType = Object.freeze({ is(value) { return __velarWebSocketConnections.has(value); }, parse(value) { if (!this.is(value)) throw new TypeError("Value does not match WebSocketConnection"); return value; } });
 const __velarWsServerType = Object.freeze({ is(value) { return __velarWebSocketServers.has(value); }, parse(value) { if (!this.is(value)) throw new TypeError("Value does not match WebSocketServer"); return value; } });
 export const WebSocketConnection = __velarWsConnectionType; export const WebSocketServer = __velarWsServerType;
-export function connect(url, options = {}) { if (typeof url !== "string" || !/^wss?:\/\//u.test(url)) return __velarWsPromise.reject(new TypeError("WebSocket URL must start with ws:// or wss://")); const limits = __velarWsOptions(options); const timeout = __velarWsDuration(options.timeout, 10000); return new __velarWsPromise((resolve, reject) => { const socket = new __VelarWebSocket(url, { maxPayload: limits.maxMessageBytes }); let settled = false; const finish = (action) => { if (settled) return false; settled = true; __velarWsClearTimeout(timer); socket.off("open", opened); socket.off("error", failed); action(); return true; }; const absorbTerminalError = () => socket.once("error", () => {}); const opened = () => { if (__velarWsActiveConnections >= __velarWsActiveConnectionLimit) { if (finish(() => reject(new WebSocketBackpressureError("WebSocket connection limit exceeded")))) { absorbTerminalError(); socket.close(1013, "Client connection limit reached"); } return; } finish(() => resolve(__velarWsWrap(socket, limits))); }; const failed = error => finish(() => reject(new WebSocketProtocolError(error instanceof Error ? error.message : "WebSocket connection failed"))); const timer = __velarWsSetTimeout(() => { if (finish(() => reject(new WebSocketTimeoutError("WebSocket connection timed out")))) { absorbTerminalError(); socket.terminate(); } }, timeout); socket.once("open", opened); socket.once("error", failed); }); }
+export function connect(url, options = {}) { if (typeof url !== "string" || !/^wss?:\/\//u.test(url)) return __velarWsPromise.reject(new TypeError("WebSocket URL must start with ws:// or wss://")); const limits = __velarWsOptions(options); const timeout = __velarWsDuration(__velarWsOption(options, "timeout"), 10000); return new __velarWsPromise((resolve, reject) => { const socket = new __VelarWebSocket(url, { maxPayload: limits.maxMessageBytes }); let settled = false; const finish = (action) => { if (settled) return false; settled = true; __velarWsClearTimeout(timer); socket.off("open", opened); socket.off("error", failed); action(); return true; }; const absorbTerminalError = () => socket.once("error", () => {}); const opened = () => { if (__velarWsActiveConnections >= __velarWsActiveConnectionLimit) { if (finish(() => reject(new WebSocketBackpressureError("WebSocket connection limit exceeded")))) { absorbTerminalError(); socket.close(1013, "Client connection limit reached"); } return; } finish(() => resolve(__velarWsWrap(socket, limits))); }; const failed = error => finish(() => reject(new WebSocketProtocolError(error instanceof Error ? error.message : "WebSocket connection failed"))); const timer = __velarWsSetTimeout(() => { if (finish(() => reject(new WebSocketTimeoutError("WebSocket connection timed out")))) { absorbTerminalError(); socket.terminate(); } }, timeout); socket.once("open", opened); socket.once("error", failed); }); }
 export async function listen(options) {
-  if (options === null || typeof options !== "object" || Array.isArray(options)) throw new TypeError("listen requires an options record");
+  if (options === null || typeof options !== "object" || __velarWsArrayIsArray(options)) throw new TypeError("listen requires an options record");
   const limits = __velarWsOptions(options);
-  const port = __velarWsInteger(options.port, 0, 0, 65535, "port");
-  const maxConnections = __velarWsInteger(options.maxConnections, 1024, 1, 4096, "maxConnections");
-  const maxPendingConnections = __velarWsInteger(options.maxPendingConnections, 128, 1, 4096, "maxPendingConnections");
-  if (options.host !== undefined && typeof options.host !== "string") throw new TypeError("WebSocket host must be text");
-  if (options.path !== undefined && (typeof options.path !== "string" || !options.path.startsWith("/"))) throw new TypeError("WebSocket path must start with '/'");
-  const application = __velarServeApp.is(options.http) ? await __velarServeApp.__velarCompilerBridge.nativeApp(options.http) : null;
-  const handler = application ? application.handle : options.http;
+  const port = __velarWsInteger(__velarWsOption(options, "port"), 0, 0, 65535, "port");
+  const maxConnections = __velarWsInteger(__velarWsOption(options, "maxConnections"), 1024, 1, 4096, "maxConnections");
+  const maxPendingConnections = __velarWsInteger(__velarWsOption(options, "maxPendingConnections"), 128, 1, 4096, "maxPendingConnections");
+  const maxBodyBytes = __velarWsInteger(__velarWsOption(options, "maxBodyBytes"), 16 * 1024 * 1024, 1, 16 * 1024 * 1024, "maxBodyBytes");
+  const host = __velarWsOption(options, "host");
+  const path = __velarWsOption(options, "path");
+  const http = __velarWsOption(options, "http");
+  const origins = __velarWsOrigins(__velarWsOption(options, "origins"));
+  if (host !== undefined && typeof host !== "string") throw new TypeError("WebSocket host must be text");
+  if (path !== undefined && (typeof path !== "string" || !path.startsWith("/"))) throw new TypeError("WebSocket path must start with '/'");
+  const application = __velarServeApp.is(http) ? await __velarServeApp.__velarCompilerBridge.nativeApp(http, maxBodyBytes) : null;
+  const handler = application ? application.handle : http;
   if (handler !== undefined && typeof handler !== "function") { if (application) await application.close(); throw new TypeError("WebSocket http must be a ServeApp or velar/serve handler"); }
   try {
     return await new __velarWsPromise((resolve, reject) => {
       const httpServer = __velarCreateHttpServer({maxHeaderSize: 64 * 1024, headersTimeout: 10000, requestTimeout: 60000, keepAliveTimeout: 5000, connectionsCheckingInterval: 1000}, (request, response) => {
-        if (handler) void __velarServeRuntime.__velarHandleNative(handler, request, response, __velarServeNativeOperations);
+        if (handler) void __velarServeRuntime.__velarHandleNative(handler, request, response, __velarServeNativeOperations, maxBodyBytes);
         else { response.statusCode = 404; response.setHeader("content-type", "text/plain; charset=utf-8"); response.end(request.method === "HEAD" ? undefined : "Not found"); }
       });
       httpServer.maxConnections = 2048;
       httpServer.maxRequestsPerSocket = 1000;
-      const server = new __VelarWebSocketServer({server: httpServer, path: options.path, maxPayload: limits.maxMessageBytes, perMessageDeflate: false, clientTracking: true});
+      const server = new __VelarWebSocketServer({server: httpServer, path, maxPayload: limits.maxMessageBytes, perMessageDeflate: false, clientTracking: true, verifyClient(info, complete) { const origin = info.origin; const allowed = origin === undefined || origins.wildcard || __velarWsReflectApply(__velarWsSetHas, origins.exact, [origin]); if (allowed) complete(true); else complete(false, 403, "Origin not allowed"); }});
       const value = Object.create(__velarWsServerPrototype);
       const state = {server, httpServer, application, queue: [], pendingConnections: new Set(), waiter: null, stopped: false, stopPromise: null, connections: new Set(), sockets: new Set()};
       __velarWebSocketServers.set(value, state);
@@ -185,7 +220,7 @@ export async function listen(options) {
       };
       server.on("error", fail);
       httpServer.on("error", fail);
-      httpServer.listen({port, host: options.host ?? "127.0.0.1"}, () => {
+      httpServer.listen({port, host: host ?? "127.0.0.1"}, () => {
         if (settled) return;
         const address = httpServer.address();
         if (!address || typeof address === "string") { fail(new Error("WebSocket server could not determine its bound port")); return; }

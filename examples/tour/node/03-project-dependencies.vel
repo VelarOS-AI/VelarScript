@@ -1,0 +1,13 @@
+/// Application contracts stay in the project. The Node framework can receive
+/// them through ordinary values or providers without defining a database API.
+
+type Article:
+    id: string
+    title: string
+    published: bool
+
+export type ArticleStore:
+    find: (string) -> Promise<Article?>
+
+export async def findArticle(store: ArticleStore, id: string) -> Article?:
+    return await store.find(id)

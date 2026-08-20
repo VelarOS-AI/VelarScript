@@ -5,10 +5,8 @@ import { velarWorkspaceBuildOrder } from "./velar-packages.mjs";
 
 /**
  * Build every publishable workspace package that declares a build, in an order
- * where each one follows workspace packages it depends on. Source libraries
- * and source adapters publish `.vel` entries directly and have no build step;
- * compiled host integrations remain independently versioned even though the
- * repository-wide build gate compiles them.
+ * where each one follows workspace packages it depends on. Application
+ * libraries and adapters are not workspaces of this repository.
  *
  * This replaces a literal npm script that chained six `npm run build
  * --workspace …` invocations. That chain was a copy of what `packages/*`

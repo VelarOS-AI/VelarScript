@@ -8,11 +8,13 @@ This file governs the repository unless a closer `AGENTS.md` narrows the target.
   declaration or structural entry. Do not add unrelated runtime invocation or
   database semantics.
 - Reserve `velar/*` for language semantics and target capabilities shipped by
-  the matching official owner. Ordinary libraries and concrete integrations use
-  npm package names and `velar.entry`.
-- Keep `libraries/*` target-neutral and free of native drivers. Put concrete
-  runtime drivers in `adapters/*` and deployment-provider projection in
-  `integrations/*`.
+  the matching official owner. Project libraries use npm package names,
+  `velar.entry`, or project-relative modules.
+- Every package owned by this repository lives under `packages/*` and must
+  implement the language, official target frameworks, or their required
+  tooling. Database models, drivers, codecs, domain algorithms, and deployment
+  providers belong to consuming projects; usefulness to VelarScript
+  applications is not repository ownership.
 - A language change requires parser/analyzer/emitter/formatter/diagnostic and
   round-trip coverage as applicable. A runtime change requires emitted-output
   and execution coverage.

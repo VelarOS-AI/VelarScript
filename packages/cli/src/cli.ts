@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
-import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
-import { createRequire } from "node:module";
+import { lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -22,7 +21,7 @@ import {
 } from "./node-application.ts";
 import { createFrameworkArtifacts } from "./framework-host.ts";
 import { resolveVelarProject, type VelarProjectConfig } from "./config.ts";
-import { STANDARD_MODULE_ADAPTER_DEPENDENCIES, standardModuleClosure, standardModuleSource, standardModuleSources } from "./standard-modules.ts";
+import { standardModuleClosure, standardModuleSource, standardModuleSources } from "./standard-modules.ts";
 import { runTests } from "./test-runner.ts";
 import { runProgram } from "./program-runner.ts";
 import type { BrowserEngineSelection } from "./browser-test-runner.ts";
@@ -39,8 +38,8 @@ import { loadApplicationPackageHost, validateApplicationPackageResult } from "./
 import { buildLanguageServerTool } from "./language-server-tool.ts";
 import { applyProjectMechanicalFixes } from "./mechanical-fixer.ts";
 import { bundleStandaloneJavaScript, needsStandaloneJavaScriptBundle } from "./standalone-build.ts";
-import { resolveInstalledPackageRoot } from "./installed-package.ts";
 import { BUILD_STAGING_MARKER } from "./build-staging.ts";
+import { writeWebSocketDependency } from "./node-runtime-dependencies.ts";
 import {
   assertUniqueEmbeddedModuleOutputs,
   embeddedModuleFileContents,
@@ -669,7 +668,8 @@ async function writeNodeProductionApplication(
   outputDirectory: string,
   config: VelarNodeConfig,
 ): Promise<void> {
-  const entry = nodeApplicationEntry(project, config);
+  const application = nodeApplicationEntry(project, config);
+  const entry = application.entry;
   const staging = await prepareBuildStaging(outputDirectory);
   try {
     assertUniqueEmbeddedModuleOutputs(project.modules.map((module) => ({
@@ -687,7 +687,7 @@ async function writeNodeProductionApplication(
     await copyPublicAssets(project.publicRoot, join(staging, "public"), true);
     const entryPath = `./${relative(project.sourceRoot, entry.inputPath).replace(/\.vel$/u, ".js").replaceAll("\\", "/")}`;
     const launcher = ".velar-node-entry.mjs";
-    await writeFile(join(staging, launcher), nodeApplicationLauncherSource(entryPath, config, {}, false), "utf8");
+    await writeFile(join(staging, launcher), nodeApplicationLauncherSource(entryPath, config, {}, false, application.kind), "utf8");
     await writeFile(join(staging, "package.json"), `${JSON.stringify({ name: "velar-node-build", private: true, type: "module" }, null, 2)}\n`, "utf8");
     await writeFile(join(staging, "velar-node.json"), `${JSON.stringify({
       formatVersion: 1,
@@ -850,7 +850,6 @@ async function writeNodeStandardModules(outputRoot: string, project: ProjectResu
     if (used.size === 0) return;
     await writeNodeStandardModulePackage(packageRoot, used, project);
     if (used.has("velar/websocket")) await writeWebSocketDependency(dirname(packageRoot));
-    await writeAdapterDependencies(dirname(packageRoot), used);
     return;
   }
 
@@ -867,43 +866,9 @@ async function writeNodeStandardModules(outputRoot: string, project: ProjectResu
     if (ownership === "generated") await replaceOutputDirectory(staging, packageRoot);
     else await rename(staging, packageRoot);
     if (used.has("velar/websocket")) await writeWebSocketDependency(dirname(packageRoot));
-    await writeAdapterDependencies(dirname(packageRoot), used);
   } catch (error) {
     await rm(staging, { recursive: true, force: true });
     throw error;
-  }
-}
-
-async function writeWebSocketDependency(nodeModulesRoot: string): Promise<void> {
-  const target = join(nodeModulesRoot, "ws");
-  try {
-    const manifest = JSON.parse(await readFile(join(target, "package.json"), "utf8")) as Record<string, unknown>;
-    if (manifest.name !== "ws" || manifest.version !== "8.21.1") throw new Error(`Refusing to use incompatible WebSocket runtime package '${target}'`);
-    return;
-  } catch (error) {
-    if (!isHostErrorCode(error, "ENOENT")) throw error;
-  }
-  const require = createRequire(import.meta.url);
-  const source = dirname(require.resolve("ws/package.json"));
-  await cp(source, target, { recursive: true, errorOnExist: true });
-}
-
-async function writeAdapterDependencies(nodeModulesRoot: string, used: ReadonlySet<string>): Promise<void> {
-  const require = createRequire(import.meta.url);
-  for (const [moduleName, dependency] of STANDARD_MODULE_ADAPTER_DEPENDENCIES) {
-    if (!used.has(moduleName)) continue;
-    const target = join(nodeModulesRoot, dependency.packageName);
-    try {
-      const manifest = JSON.parse(await readFile(join(target, "package.json"), "utf8")) as Record<string, unknown>;
-      if (manifest.name !== dependency.packageName || manifest.version !== dependency.version) {
-        throw new Error(`Refusing to use incompatible ${moduleName} runtime package '${target}'`);
-      }
-      continue;
-    } catch (error) {
-      if (!isHostErrorCode(error, "ENOENT")) throw error;
-    }
-    const source = await resolveInstalledPackageRoot(dependency.packageName, dependency.packageName, require);
-    await cp(source, target, { recursive: true, errorOnExist: true });
   }
 }
 

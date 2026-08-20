@@ -1,8 +1,10 @@
 # D87 — 数据库模型规范与外部适配器边界（用户裁决 2026-08-20）
 
+> 已由 D88 废止。把应用包放进独立目录并没有改变 VelarScript 仓库对它们的
+> 所有权；当前规则以 D88 为准。
+
 这是一份已实施裁决的历史记录。当前契约见
-[数据库模型与适配器规范](../database-model.md)、
-[标准库](../standard-library.md) 与
+[D88](D88-REPOSITORY-OWNERSHIP-BOUNDARY.md)、[标准库](../standard-library.md) 与
 [运行时边界账本](../contributing/runtime-boundary.md)。
 
 ## 问题

@@ -2,7 +2,6 @@ import { chmod, mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
-import { officialToolModulesPlugin } from "./official-tool-assets.ts";
 
 export async function buildLanguageServerTool(outputFile: string): Promise<void> {
   outputFile = resolve(outputFile);
@@ -20,7 +19,6 @@ export async function buildLanguageServerTool(outputFile: string): Promise<void>
     sourcemap: false,
     legalComments: "none",
     logLevel: "silent",
-    plugins: [await officialToolModulesPlugin()],
   });
   await chmod(outputFile, 0o644);
 }

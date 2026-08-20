@@ -6,14 +6,6 @@ server for VelarScript. The language server and project graph are compiler-owned
 editors, including the injected VelarOS Workbench contribution, consume them as
 independent clients. Requires Node.js 24 or later.
 
-The same server routes JavaScript and TypeScript documents to the pure
-VelarScript `@velarscript/script-analysis` package through an internal bundled
-tool edge. That package publishes bounded lexical
-and local structural diagnostics, symbols, hover, definition, references,
-rename, completion, and semantic tokens with incremental lexical updates. It is
-not the TypeScript compiler: cross-file/package type checking and JavaScript/
-TypeScript formatting remain unsupported and are never synthesized by the CLI.
-
 Application framework behavior is injected. For each project extension the CLI
 loads its compiler entry and optional host entry, validates the versioned host
 protocol, then supplies generic filesystem, bundling, development transport,
@@ -21,10 +13,10 @@ preview, and browser-driver services. The CLI distribution includes exact
 official Node capability plus Web and Desktop application targets so a zero-`node_modules` project can
 consume that toolchain generation, but it owns none of their syntax, HTML,
 CSP, lifecycle, runtime, or native packaging behavior. Project-local targets
-take precedence and third-party extensions never use this fallback. Codecs,
-compression, noise, database contracts, and database engines are independently
-installed source packages; the CLI neither reserves `velar/*` names for them
-nor hides their npm dependency graph.
+take precedence and third-party extensions never use this fallback. Application
+libraries, database engines, codecs, algorithms, and provider integrations are
+owned and installed by consuming projects; the CLI neither publishes them nor
+hides their npm dependency graph.
 
 ```sh
 npx @velarscript/cli create my-app

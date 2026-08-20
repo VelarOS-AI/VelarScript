@@ -2081,6 +2081,7 @@ async function __velarServeHandleAppResponse(app, request, maxBodyBytes, context
     return await __velarServeApplyMiddleware(selected.route, request, invokeRoute);
   } catch (error) {
     if (error instanceof HttpError) return {status: error.status, json: error.body, headers: error.headers};
+    if (error instanceof RequestBodyTooLargeError) return {status: 413, json: {error: "request_too_large"}};
     throw error;
   }
 }
@@ -2681,7 +2682,8 @@ function __velarServeNativeHeaders(request) {
   return output;
 }
 
-function __velarServeNativeRequest(request) {
+function __velarServeNativeRequest(request, maximum = __velarServeMaxBodyBytes) {
+  maximum = __velarServeBodyLimit(maximum);
   const method = request.method ?? "GET";
   if (typeof method !== "string" || !__velarServeCall(__velarServeRegExpTest, __velarServeMethodPattern, [method])) throw new __velarServeTypeError("Native HTTP method is invalid");
   const target = request.url ?? "/";
@@ -2698,7 +2700,7 @@ function __velarServeNativeRequest(request) {
       try {
         for await (const chunk of request) {
           const data = chunk instanceof __velarServeUint8Array ? chunk : __velarServeCall(__velarServeTextEncode, __velarServeUtf8Encoder, [__velarServeString(chunk)]);
-          if (total + data.byteLength > __velarServeMaxBodyBytes) { request.resume(); throw new RequestBodyTooLargeError(__velarServeMaxBodyBytes); }
+          if (total + data.byteLength > maximum) { request.resume(); throw new RequestBodyTooLargeError(maximum); }
           __velarServeReserveOutbound(data.byteLength);
           total += data.byteLength;
           reservedBodyBytes += data.byteLength;
@@ -2721,20 +2723,21 @@ function __velarServeNativeRequest(request) {
     })();
     return await bodyPromise;
   };
-  const bytes = async (maxBytes = __velarServeMaxBodyBytes) => {
+  const bytes = async (maxBytes = maximum) => {
     if (!__velarServeIsSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > __velarServeMaxBodyBytes) throw new __velarServeRangeError("Request body maxBytes must be an integer from 1 through 16777216");
     const data = await rawBody();
-    if (data.byteLength > maxBytes) throw new RequestBodyTooLargeError(maxBytes);
+    const effective = maxBytes > maximum ? maximum : maxBytes;
+    if (data.byteLength > effective) throw new RequestBodyTooLargeError(effective);
     return data;
   };
-  const body = async (maxBytes = __velarServeMaxBodyBytes) => {
+  const body = async (maxBytes = maximum) => {
     const data = await bytes(maxBytes);
     try { return __velarServeCall(__velarServeTextDecode, __velarServeUtf8Decoder, [data]); }
     catch { throw new __velarServeTypeError("Request body must be valid UTF-8 text"); }
   };
-  const json = async (maxBytes = __velarServeMaxBodyBytes) => __velarJsonParse(await body(maxBytes), "ServeRequest JSON text");
+  const json = async (maxBytes = maximum) => __velarJsonParse(await body(maxBytes), "ServeRequest JSON text");
   return {
-    request: __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{method, path, query: query.values, queryAll: query.all, headers: __velarServeNativeHeaders(request), cancellation, text: body, bytes, json, parse: async (Type, maxBytes = __velarServeMaxBodyBytes) => { Type = __velarRequireRuntimeType(Type, "ServeRequest.parse"); return Type.parse(await json(maxBytes)); }}]),
+    request: __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{method, path, query: query.values, queryAll: query.all, headers: __velarServeNativeHeaders(request), cancellation, text: body, bytes, json, parse: async (Type, maxBytes = maximum) => { Type = __velarRequireRuntimeType(Type, "ServeRequest.parse"); return Type.parse(await json(maxBytes)); }}]),
     cancellation,
     cleanup() { if (reservedBodyBytes > 0) { __velarServeReleaseOutbound(reservedBodyBytes); reservedBodyBytes = 0; } return null; },
   };
@@ -2826,13 +2829,13 @@ async function __velarServeNativeBody(response, value, checked, suppressBody, op
   if (!response.hasHeader("vary")) response.setHeader("vary", "Accept-Encoding");
   return __velarServeWithOutbound(compressed.byteLength, () => __velarServeNativeEnd(response, compressed));
 }
-async function __velarServeHandleNative(handler, request, response, operations) {
+async function __velarServeHandleNative(handler, request, response, operations, maxBodyBytes = __velarServeMaxBodyBytes) {
   let cleanup = null;
   let backgroundTasks = null;
   let incoming = null;
   let disconnected = null;
   try {
-    incoming = __velarServeNativeRequest(request);
+    incoming = __velarServeNativeRequest(request, maxBodyBytes);
     disconnected = () => { if (!response.writableFinished) __velarServeCancellation.__velarCancel(incoming.cancellation, "client_disconnect"); };
     request.once("aborted", disconnected);
     response.once("close", disconnected);
@@ -2847,7 +2850,18 @@ async function __velarServeHandleNative(handler, request, response, operations) 
     let writing = false;
     const write = async chunk => { if (writing) throw new __velarServeError("ServeResponse allows only one active stream write"); writing = true; try { if (typeof chunk !== "string" || __velarUtf8ByteLength(chunk) > 1024 * 1024) throw new __velarServeTypeError("ServeResponse.stream chunks must be text of at most 1 MiB"); if (!suppressBody) await __velarServeWithOutbound(__velarUtf8ByteLength(chunk), () => __velarServeNativeWrite(response, chunk)); return null; } finally { writing = false; } };
     const result = await checked.stream(write); if (result !== null) throw new __velarServeTypeError("ServeResponse.stream producer must resolve to null"); if (writing) throw new __velarServeError("ServeResponse stream producer returned before its write completed"); await __velarServeNativeEnd(response); return null;
-  } catch (error) { __velarServeReportFailure(error); if (!response.headersSent) { response.statusCode = 500; response.setHeader("content-type", "text/plain; charset=utf-8"); response.end("Internal server error"); } else response.destroy(); return null; }
+  } catch (error) {
+    if (error instanceof RequestBodyTooLargeError && !response.headersSent) {
+      response.statusCode = 413;
+      response.setHeader("content-type", "application/json; charset=utf-8");
+      response.end(request.method === "HEAD" ? undefined : '{"error":"request_too_large"}');
+      return null;
+    }
+    __velarServeReportFailure(error);
+    if (!response.headersSent) { response.statusCode = 500; response.setHeader("content-type", "text/plain; charset=utf-8"); response.end("Internal server error"); }
+    else response.destroy();
+    return null;
+  }
   finally {
     if (disconnected !== null) { request.off("aborted", disconnected); response.off("close", disconnected); }
     await __velarServeRunBackground(backgroundTasks);

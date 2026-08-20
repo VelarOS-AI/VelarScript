@@ -5,6 +5,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import WebSocket from "ws";
 
 const cli = resolve("packages/cli/src/cli.ts");
 
@@ -59,7 +60,76 @@ test("Node application target creates, serves, and builds a standalone productio
     await stop(running);
     running = null;
   } finally {
-    if (running) {
+    if (running && running.exitCode === null && running.signalCode === null) {
+      running.kill("SIGKILL");
+      await new Promise<void>((resolveExit) => running!.once("exit", () => resolveExit()));
+    }
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test("Node application production build starts one shared HTTP and WebSocket port with Origin admission", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-node-websocket-application-"));
+  const project = join(directory, "service");
+  let running: ChildProcess | null = null;
+  try {
+    const created = spawnSync(process.execPath, [cli, "create", project, "--template", "node"], {encoding: "utf8"});
+    assert.equal(created.status, 0, created.stderr);
+    const manifestPath = join(project, "velar.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {node: {app: string; port: number; build: {sourceMaps: boolean}}};
+    manifest.node.app = "start";
+    manifest.node.port = await availablePort();
+    manifest.node.build.sourceMaps = false;
+    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+
+    const output = join(project, "production");
+    await writeFile(join(project, "src", "main.vel"), `import {listen} from "velar/websocket"
+
+export async def start(host: string, port: number):
+    return await listen({host, port})
+`, "utf8");
+    const rejected = spawnSync(process.execPath, [cli, "build", project, "--out-dir", output], {encoding: "utf8"});
+    assert.notEqual(rejected.status, 0, "a WebSocket startup entry with the wrong parameter contract must fail the build");
+    assert.match(rejected.stderr, /host: string, port: number, maxBodyBytes: number/u);
+
+    await writeFile(join(project, "src", "main.vel"), `import {app as routes} from "./app.vel"
+import {listen} from "velar/websocket"
+
+export async def start(host: string, port: number, maxBodyBytes: number):
+    return await listen({
+        port,
+        host,
+        http: routes,
+        path: "/api/events",
+        origins: ["https://client.test"],
+        maxBodyBytes,
+    })
+`, "utf8");
+
+    running = spawn(process.execPath, [cli, "serve", project], {stdio: ["ignore", "pipe", "pipe"]});
+    await expectHello(running, manifest.node.port);
+    assert.equal(await rejectedWebSocketStatus(`ws://127.0.0.1:${manifest.node.port}/api/events`, "https://untrusted.test"), 403);
+    const servedSocket = await openedWebSocket(`ws://127.0.0.1:${manifest.node.port}/api/events`, "https://client.test");
+    servedSocket.close();
+    await stop(running);
+    running = null;
+
+    const built = spawnSync(process.execPath, [cli, "build", project, "--out-dir", output], {encoding: "utf8"});
+    assert.equal(built.status, 0, built.stderr);
+    assert.ok((await readdir(join(output, "node_modules", "ws"))).includes("package.json"), "production WebSocket builds must carry their framework runtime dependency");
+    const launcher = await readFile(join(output, ".velar-node-entry.mjs"), "utf8");
+    assert.match(launcher, /WebSocketServer\.parse\(await start/u);
+    assert.doesNotMatch(launcher, /await serve\(app/u);
+
+    running = spawn(process.execPath, [join(output, ".velar-node-entry.mjs")], {cwd: output, stdio: ["ignore", "pipe", "pipe"]});
+    await expectHello(running, manifest.node.port);
+    assert.equal(await rejectedWebSocketStatus(`ws://127.0.0.1:${manifest.node.port}/api/events`, "https://untrusted.test"), 403);
+    const accepted = await openedWebSocket(`ws://127.0.0.1:${manifest.node.port}/api/events`, "https://client.test");
+    accepted.close();
+    await stop(running);
+    running = null;
+  } finally {
+    if (running && running.exitCode === null && running.signalCode === null) {
       running.kill("SIGKILL");
       await new Promise<void>((resolveExit) => running!.once("exit", () => resolveExit()));
     }
@@ -112,4 +182,47 @@ async function stop(child: ChildProcess): Promise<void> {
     assert.fail("Node application did not stop within 10 seconds");
   }
   assert.ok(result.code === 0 || result.code === 143 || result.signal === "SIGTERM", `unexpected Node application exit ${JSON.stringify(result)}`);
+}
+
+function rejectedWebSocketStatus(url: string, origin: string): Promise<number> {
+  return new Promise((resolveStatus, rejectStatus) => {
+    const socket = new WebSocket(url, {origin});
+    let settled = false;
+    const finish = (action: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      action();
+    };
+    const timer = setTimeout(() => finish(() => rejectStatus(new Error("WebSocket rejection did not settle"))), 5_000);
+    socket.once("unexpected-response", (_request, response) => finish(() => {
+      response.resume();
+      resolveStatus(response.statusCode ?? 0);
+    }));
+    socket.once("open", () => finish(() => {
+      socket.close();
+      rejectStatus(new Error("WebSocket Origin was unexpectedly accepted"));
+    }));
+    socket.once("error", error => finish(() => rejectStatus(error)));
+  });
+}
+
+function openedWebSocket(url: string, origin: string): Promise<WebSocket> {
+  return new Promise((resolveSocket, rejectSocket) => {
+    const socket = new WebSocket(url, {origin});
+    let settled = false;
+    const finish = (action: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      action();
+    };
+    const timer = setTimeout(() => finish(() => rejectSocket(new Error("WebSocket connection did not open"))), 5_000);
+    socket.once("open", () => finish(() => resolveSocket(socket)));
+    socket.once("unexpected-response", (_request, response) => finish(() => {
+      response.resume();
+      rejectSocket(new Error(`WebSocket handshake returned ${response.statusCode ?? 0}`));
+    }));
+    socket.once("error", error => finish(() => rejectSocket(error)));
+  });
 }

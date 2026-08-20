@@ -5,10 +5,9 @@ Status: VelarScript 0.12.1 released on 2026-08-20
 VelarScript ships the compiler, target-neutral Core Standard API, official Node
 runtime, official Web and Desktop frameworks, project creator, and CLI as one
 seven-package version-locked release set. Node, Web, and Desktop pin their exact
-toolchain dependencies; CLI pins Core, compiler, Node, Web, Desktop, and creator. Independently versioned VelarScript
-source libraries live under `libraries/` and are not toolchain release members.
-Concrete runtime adapters live under `adapters/`; deployment integrations live
-under `integrations/`. Both have the same independent release boundary.
+toolchain dependencies; CLI pins Core, compiler, Node, Web, Desktop, and creator.
+Application libraries, external-service adapters, and provider integrations are
+not workspaces or release artifacts of this repository.
 
 ## Rehearsal
 
@@ -82,47 +81,18 @@ application manifest when authenticated application releases are introduced.
 
 The manual `External preview verification` workflow accepts one HTTPS origin,
 builds the repository's checked-in provider-neutral root Release Studio profile
-with the checked-out toolchain, projects it through the independently versioned
-Netlify integration, and
-runs `velar verify-deployment --json`. It attests and uploads the resulting
+with the checked-out toolchain, and runs `velar verify-deployment --json`
+against the application deployment. It attests and uploads the resulting
 format-version-1 verification report together with the exact local
 `velar-build.json` and `velar-deploy.json`. The workflow has no host deployment
 command, registry publication command, provider credential, or secret input;
 creating the remote preview remains a separately authorized action.
 
-`npm run preview:prepare` creates the same verified directory locally at
-`release/external-preview/netlify/site`. Its source paths remain the checked-in Release
-Studio paths, so repeated preparation into different output directories has
-identical asset bytes, names, manifest, and `buildId`. The profile explicitly
-uses root base and no source maps; the separate bundle root contains
-`netlify.toml`, while deployment metadata remains provider-neutral.
+The workflow's local output remains provider-neutral. Any provider projection
+and provider configuration belongs to the deployment repository that owns the
+application and does not enter VelarScript's release graph.
 
 The report alone is an observation rather than publisher authenticity. GitHub
 provenance binds its bytes to the workflow run and source revision. Current
 `actions/attest@v4` use requires `contents: read`, `id-token: write`,
 `attestations: write`, and `artifact-metadata: write` permissions.
-
-## Independently versioned ecosystem packages
-
-Packages under `libraries/`, `adapters/`, and `integrations/` do not join the
-toolchain version or its all-or-nothing publication generation. Rehearse one
-package with:
-
-```sh
-npm run release:ecosystem:rehearse -- @velarscript/netlify
-node scripts/release-ecosystem.mjs verify release/ecosystem/velarscript-netlify/rehearse @velarscript/netlify
-```
-
-A publishable candidate requires a clean commit tagged with the exact package
-identity, for example `@velarscript/netlify@0.1.0`. The manual `Publish npm
-ecosystem package` workflow accepts one derived ecosystem name and requires the
-same name again as explicit confirmation. It builds and packs that package in
-an isolated checkout, publishes only its verified tarball under `next` with
-OIDC provenance, checks registry integrity, and then promotes that one package
-to `latest`. It cannot publish a toolchain package or silently include another
-ecosystem package. A retry accepts an existing version only when its integrity
-is byte-identical to the candidate. The scope token is used to bootstrap a new
-package or a new trusted-publisher workflow; provenance still binds the
-published tarball to this workflow and source revision. Registry integrity and
-`latest` verification use the same bounded five-minute convergence window as
-the toolchain publisher.

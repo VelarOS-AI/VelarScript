@@ -3,7 +3,7 @@
 VelarScript provides one target-neutral contract for checked binary memory,
 deterministic computation, owned concurrent work, bounded transports, and
 binary persistence. The same application core can run in Node and browser
-Workers without project-local unsafe JavaScript or host-specific byte types.
+Workers without exposing host-specific byte types.
 
 ## Hot loops and packed numeric data
 
@@ -40,8 +40,8 @@ Data operands must be 32-bit integers and shift counts must be within `0..31`.
 
 ## Reproducible computation
 
-Use `velar/random` and the external `@velarscript/noise` adapter, never host
-`Math.random()`, for reproducible data. String and safe-integer seeds produce
+Use `velar/random`, never host `Math.random()`, for reproducible data. String
+and safe-integer seeds produce
 the same stream in Node and every supported browser. `fork(label)` derives a
 stream that is independent of the parent's consumption order, which makes
 scheduling order irrelevant to output.
@@ -69,10 +69,6 @@ async def generate(request: DatasetRequest, cancellation: Cancellation) -> Bytes
         values[index] = stream.bool(0.5) ? 1 : 0
     return values.toBytes(ByteOrder.little)
 ```
-
-The complete runnable shared-core example is the repository's
-`tests/fixtures/binary-data-pipeline` project. It is the acceptance contract, not
-sample-only pseudocode.
 
 ## Worker ownership
 
@@ -140,38 +136,22 @@ The same `Bytes` flows through all official boundaries:
   normal EOF preserves already accepted messages until `next()` drains them,
   while limit/protocol failure discards the unread queue immediately. Node
   `listen` can share its HTTP port with a `velar/serve` handler.
-- External Node `@velarscript/sqlite`: parameterized BLOB values, typed models,
-  prepared statements, bounded streaming, and explicit transactions in an
-  isolated database Worker.
 - Web `velar/storage`: IndexedDB `getBytes`, `setBytes`, and atomic `batch`.
 
-MessagePack, compression, and noise use the external `@velarscript/msgpack`,
-`@velarscript/compression`, and `@velarscript/noise` source adapters. They are
-backed by `msgpackr`, `fflate`, and `simplex-noise`, but those packages do not
-define the VelarScript surface. Inflate and gunzip feed the decoder compressed
-input slices that shrink with the remaining output budget. The first output
-callback that would cross `maxBytes` aborts the decoder, so it neither reserves
-the default 64 MiB for a small payload nor continues consuming the compressed
-tail of a hostile stream.
+Codecs, compression, procedural algorithms, database models, and concrete
+drivers are application dependencies. Define their checked VelarScript surface
+in the consuming project and keep any `extern module` implementation there or
+in a separately maintained package. They do not become Standard modules merely
+because several applications use the same host library.
 
-SQLite transactions and every Worker, Task, WebSocket connection, server,
-statement, and database are owned handles. Use `using`; an uncommitted
-transaction rolls back, active work is cancelled and joined, sockets close, and
-queued callers receive the resource's terminal error. SQLite is an external
-adapter rather than a Node language capability; the portable contract is
-documented in [Database model and adapter standard](database-model.md).
+Every Worker, Task, WebSocket connection, and server is an owned handle. Use
+`using`; active work is cancelled and joined, sockets close, and queued callers
+receive the resource's terminal error. Application-owned drivers must specify
+their own ownership, concurrency, cancellation, backpressure, and memory limits.
 
 ## Acceptance contract
 
-The permanent gate compiles one `shared-data.vel` into Node and browser Worker
-graphs, produces a byte-identical 8,192-byte dataset, exercises pool
-cancellation, MessagePack plus compression, binary WebSocket and HTTP traffic,
-SQLite and IndexedDB restoration, slow-client backpressure, and disconnect
-cleanup. It also measures direct range lowering against the prior materialized
-path so the historical hot-loop penalty cannot silently return.
-
-Run the focused evidence with:
-
-```sh
-node --test tests/binary-data-pipeline.test.ts
-```
+Compiler, Node, and Web tests cover typed-buffer bounds, transfer snapshots,
+worker cancellation, binary WebSocket and HTTP traffic, IndexedDB persistence,
+slow-client backpressure, and disconnect cleanup. Application adapters must add
+their own focused gates in the repository that owns them.

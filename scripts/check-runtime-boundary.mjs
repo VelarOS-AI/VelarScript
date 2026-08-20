@@ -56,15 +56,19 @@ import { velarCompilerExtension as velarDesktopCompilerExtension } from "../pack
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const failures = [];
-const workspaceLayers = ["packages", "libraries", "adapters", "integrations"];
+const forbiddenApplicationLayers = ["libraries", "adapters", "integrations"];
+const rootDirectories = new Set((await readdir(root, { withFileTypes: true }))
+  .filter((entry) => entry.isDirectory())
+  .map((entry) => entry.name));
+for (const layer of forbiddenApplicationLayers) {
+  if (rootDirectories.has(layer)) failures.push(`${layer}/: application package layers do not belong to the language repository`);
+}
 const workspacePackages = [];
-for (const layer of workspaceLayers) {
-  for (const entry of await readdir(join(root, layer), { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const directory = join(root, layer, entry.name);
-    const manifest = JSON.parse(await readFile(join(directory, "package.json"), "utf8"));
-    workspacePackages.push({ layer, directory, manifest });
-  }
+for (const entry of await readdir(join(root, "packages"), { withFileTypes: true })) {
+  if (!entry.isDirectory()) continue;
+  const directory = join(root, "packages", entry.name);
+  const manifest = JSON.parse(await readFile(join(directory, "package.json"), "utf8"));
+  workspacePackages.push({ directory, manifest });
 }
 
 const corePackage = workspacePackages.find((package_) => package_.manifest.name === "@velarscript/core");
@@ -72,24 +76,13 @@ if (!corePackage) failures.push("packages/core/package.json: Core package is mis
 else if (Object.hasOwn(corePackage.manifest.dependencies ?? {}, "@velarscript/node")) {
   failures.push("packages/core/package.json: Core must not select or depend on the Node target");
 }
-for (const package_ of workspacePackages.filter((entry) => entry.layer === "libraries" || entry.layer === "adapters")) {
-  const velar = package_.manifest.velar;
-  if (typeof velar?.entry !== "string") continue;
-  if (!Array.isArray(velar.targets) || velar.targets.length === 0) {
-    failures.push(`${display(join(package_.directory, "package.json"))}: source package must declare non-empty velar.targets`);
-  }
-  if (!Array.isArray(velar.requires?.capabilities)) {
-    failures.push(`${display(join(package_.directory, "package.json"))}: source package must declare velar.requires.capabilities`);
-  }
-}
-
 const cliStandardModulesSource = await readFile(join(root, "packages", "cli", "src", "standard-modules.ts"), "utf8");
 for (const phrase of ['from "@velarscript/core"', "extensions.length === 0 ? [velarNodeCompilerExtension] : extensions"]) {
   if (!cliStandardModulesSource.includes(phrase)) failures.push(`packages/cli/src/standard-modules.ts: composition facade is missing '${phrase}'`);
 }
 if (cliStandardModulesSource.length > 10_000) failures.push("packages/cli/src/standard-modules.ts: CLI has reabsorbed the Core Standard API implementation");
 
-for (const package_ of workspacePackages.filter((entry) => entry.layer === "packages")) {
+for (const package_ of workspacePackages) {
   for (const file of await sourceFiles(join(package_.directory, "src"))) {
     const source = await readFile(file, "utf8");
     if (/netlify/iu.test(source)) failures.push(`${display(file)}: provider-specific Netlify behavior crossed into the language toolchain`);
@@ -173,32 +166,42 @@ for (const directory of sourceRoots) {
   }
 }
 
-const adapterPackages = workspacePackages.filter((package_) => package_.layer === "adapters");
-const retiredConcreteStandardModules = adapterPackages.map((package_) =>
-  `velar/${package_.manifest.name.slice(package_.manifest.name.lastIndexOf("/") + 1)}`
-);
+const retiredConcreteStandardModules = [
+  "velar/compression",
+  "velar/database",
+  "velar/javascript",
+  "velar/msgpack",
+  "velar/noise",
+  "velar/sqlite",
+  "velar/text-buffer",
+];
 for (const directory of sourceRoots) {
   for (const file of await sourceFiles(directory)) {
     const source = await readFile(file, "utf8");
     for (const specifier of retiredConcreteStandardModules) {
-      if (source.includes(`"${specifier}"`) || source.includes(`'${specifier}'`)) {
-        failures.push(`${display(file)}: concrete adapter '${specifier}' must remain an external source package`);
+      const importPattern = new RegExp(`\\bfrom\\s+["']${escapeRegex(specifier)}["']`, "u");
+      if (importPattern.test(source)) {
+        failures.push(`${display(file)}: retired application module '${specifier}' crossed back into the language toolchain`);
       }
     }
   }
 }
-const concreteAdapterDependencies = new Set(adapterPackages.map((package_) => package_.manifest.name));
-for (const package_ of adapterPackages) {
-  for (const dependency of Object.keys(package_.manifest.dependencies ?? {})) {
-    if (!dependency.startsWith("@velarscript/")) concreteAdapterDependencies.add(dependency);
-  }
-}
-for (const package_ of workspacePackages.filter((entry) => entry.layer === "packages")) {
+const retiredApplicationPackages = new Set([
+  "@velarscript/compression",
+  "@velarscript/database",
+  "@velarscript/msgpack",
+  "@velarscript/netlify",
+  "@velarscript/noise",
+  "@velarscript/script-analysis",
+  "@velarscript/sqlite",
+  "@velarscript/text-buffer",
+]);
+for (const package_ of workspacePackages) {
   const manifestPath = join(package_.directory, "package.json");
   const dependencies = {...package_.manifest.dependencies, ...package_.manifest.optionalDependencies};
-  for (const dependency of concreteAdapterDependencies) {
+  for (const dependency of retiredApplicationPackages) {
     if (Object.hasOwn(dependencies, dependency)) {
-      failures.push(`${display(manifestPath)}: concrete adapter dependency '${dependency}' crosses the toolchain boundary`);
+      failures.push(`${display(manifestPath)}: application dependency '${dependency}' crosses the toolchain boundary`);
     }
   }
 }

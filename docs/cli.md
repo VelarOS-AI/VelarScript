@@ -47,9 +47,10 @@ velar test [project-directory] --browser [chromium|firefox|webkit|all]
 ```
 
 `dev` rebuilds on save and serves a Web/Desktop application or restarts the
-last-good exported Node `ServeApp`. Web defaults to port 5173; Node reads
-`node.host` and `node.port` unless `--port` overrides it. `serve` checks and
-runs a Node application with production runtime behavior and no file watcher.
+last-good exported Node `ServeApp` or typed WebSocket startup function. Web
+defaults to port 5173; Node reads `node.host` and `node.port` unless `--port`
+overrides it. `serve` checks and runs either Node application form with
+production runtime behavior and no file watcher.
 `run` executes a framework-free CLI program; `--stack` keeps the full trace
 instead of hiding internal frames. `test` runs
 `*.test.vel` modules in Node; `--browser` runs `*.browser.test.vel` modules in
@@ -70,8 +71,10 @@ velar package [project-directory]
 `verify` checks that a build is actually deployable rather than merely present.
 For a Node application, `build` instead writes a standalone ESM directory with
 copied public assets, `.velar-node-entry.mjs`, and `velar-node.json`; run the
-launcher with Node from that output directory. `node.build.sourceMaps` controls
-whether source-map files are retained.
+launcher with Node from that output directory. A typed WebSocket startup entry
+uses the same host, port, body limit, and shared HTTP/WebSocket listener after
+build; its pinned transport dependency is copied into the output.
+`node.build.sourceMaps` controls whether source-map files are retained.
 All commands read the same checked JSON-resource graph: `dev` watches and
 serves it, `test` reconstructs used package resource exports in its sandbox,
 browser builds bundle it, and framework-free builds copy its exact bytes and

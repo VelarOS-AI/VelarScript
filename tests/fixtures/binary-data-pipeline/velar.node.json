@@ -1,7 +1,0 @@
-{
-  "formatVersion": 2,
-  "entry": "src/node-main.vel",
-  "workers": {
-    "processor": "src/data-worker.vel"
-  }
-}

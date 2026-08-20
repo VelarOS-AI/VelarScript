@@ -154,23 +154,10 @@ grant; initialize roots, documents, and watcher targets cannot widen it.
 Canonical checks run with at most 16 concurrent filesystem operations, so a
 maximum legal batch cannot multiply root resolution or create unbounded I/O.
 
-JavaScript and TypeScript documents use a separate protocol-neutral provider
-whose implementation is the pure source package `@velarscript/script-analysis`.
-The CLI owns extension/language-id routing and LSP coordinate conversion; the
-package owns only tokenization, structural diagnostics, local symbols,
-references, navigation, completion, rename, and semantic-token inputs. The
-provider applies the smallest code-point edit derived from a full-text LSP
-change and keeps one `ScriptDocument` per open document. It advertises this
-bounded local service explicitly and returns no formatter edits, because a full
-TypeScript checker, module resolver, and JavaScript/TypeScript formatter have
-not been published. The CLI owns the `velar lsp` process and protocol lifecycle;
-editors remain clients and do not embed either protocol framing or language
-semantics. Desktop applications do not bundle the language server.
-
-Script diagnostics and semantic tokens convert their required code-point
-offsets to the negotiated LSP encoding with one monotonic text scan per response.
-They never restart at the beginning for every token; the 10,000-result transport
-ceiling therefore remains linear even for a 1 MiB document.
+The CLI language server analyzes VelarScript documents only. JavaScript,
+TypeScript, and other language services are product-owned dependencies of an
+editor or Workbench and are not bundled into the VelarScript CLI. Protocol
+lifecycle does not imply language-semantic ownership.
 
 Source-backed Standard assets compile dependency-first before their public
 interfaces are exposed to another asset. Their static named-import graph must
@@ -973,19 +960,13 @@ shape retains the explicit code-point scan. `Text.lineStarts` and
 or bounded pieces without repeated source-level `.char(index)` calls or
 surrogate splitting.
 
-Reusable VelarScript algorithms outside the closed Standard vocabulary publish
-ordinary npm packages with a `velar.entry` source entry. The project loader
-resolves that entry from the installed package, keeps all relative imports
-inside its package root, compiles it with the ordinary application pipeline,
-and rejects multiple installed instances of one package in an application
-build. `@velarscript/text-buffer` and `@velarscript/script-analysis` are the
-first substantial consumers of this path. Their AVL rope, bounded history,
-incremental lexer, and local semantic analysis use ordinary class, optional
-narrowing, collection, readonly-view, and primitive-method lowering. The CLI
-language server consumes its installed, explicitly pinned library generation
-through a build-time package edge. These libraries live under `libraries/`,
-not beside compiler/runtime implementations under `packages/`; they version
-and release independently and never regain a user-visible `velar/*` identity.
+Reusable application algorithms outside the closed Standard vocabulary may be
+published as ordinary npm packages with a `velar.entry` source entry. The
+project loader resolves that entry from the installed package, keeps relative
+imports inside its package root, compiles it with the ordinary application
+pipeline, and rejects multiple installed instances of one package in an
+application build. No such application package is owned by this repository or
+acquires a user-visible `velar/*` identity.
 
 Checked Number receiver methods use a separate compiler-owned Number runtime.
 It captures the exact Math operations, `Number.isSafeInteger`, native

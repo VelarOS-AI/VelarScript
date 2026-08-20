@@ -56,6 +56,30 @@ Node. Calling `serve(...)` directly remains available for tests, embedded
 servers, and low-level protocol adapters, but it is not required at an
 application entry point.
 
+When HTTP and WebSocket traffic must share that application port, `node.app`
+instead names an exported startup function with the exact checked type
+`(string, number, number) -> Promise<WebSocketServer>`. The CLI supplies the
+configured host, port, and request-body ceiling consistently in development,
+serve, and production builds:
+
+```velar fragment
+import {app as routes} from "./app.vel"
+import {listen} from "velar/websocket"
+
+export async def start(host: string, port: number, maxBodyBytes: number):
+    return await listen({
+        host,
+        port,
+        http: routes,
+        path: "/api/events",
+        origins: ["https://app.example.com"],
+        maxBodyBytes,
+    })
+```
+
+Set `node.app` to `"start"` for this form. No second listener or application
+configuration surface is introduced.
+
 `p"..."` is scanned and checked only by this extension; Core does not acquire a
 general `p` string prefix. Captures use `{name:type}` with a half-width `:` and
 declare the route-scope name once. The five route verbs are compiler-owned
@@ -86,7 +110,12 @@ Repeated scalar query or form fields fail with 422, while checked
 are decoded exactly once with invalid UTF-8, encoded separators, NULs, and dot
 segments rejected before routing. Multiple cookies stay separate on the wire.
 `velar/websocket.listen({http: app, ...})` composes the ServeApp lifecycle on
-one HTTP/WebSocket port.
+one HTTP/WebSocket port. `origins` accepts only exact canonical HTTP/HTTPS
+origins. Its default rejects every browser-style upgrade carrying `Origin`;
+requests without `Origin` remain available to non-browser clients, and
+`origins: ["*"]` is the explicit unrestricted policy. Rejection returns 403
+before a connection consumes queue capacity. `maxBodyBytes` applies the same
+bounded body ceiling to HTTP requests handled on the shared listener.
 
 Memory limits compose instead of multiplying silently: HTTP owns a 128 MiB
 aggregate host budget and at most 4,096 inbound requests; request bodies remain
@@ -186,12 +215,12 @@ Binary filesystem and HTTP operations use the target-neutral `Bytes` contract:
 `.bytes()`. Node `Buffer` is confined to the isolated implementation and never
 becomes a VelarScript type or API.
 
-Database engines are not Node language capabilities. The independent
-`@velarscript/database` source library defines portable model and execution
-contracts; adapters such as `@velarscript/sqlite` own their concrete driver,
-dialect, Worker isolation, queue and result budgets, streaming backpressure,
-and raw escape hatches. The server framework may depend on the portable
-contract, but must never acquire a concrete engine dependency.
+Database engines and database-model abstractions are not Node language
+capabilities. Each application owns or installs its model contract and concrete
+driver, including dialect behavior, isolation, queue and result budgets,
+streaming backpressure, cancellation truthfulness, and raw escape hatches. The
+server framework accepts application services but never acquires a database
+dependency.
 
 `velar/worker` resolves only entries declared in `velar.json`, validates each
 request and response, snapshots caller-owned transferable data, and transfers

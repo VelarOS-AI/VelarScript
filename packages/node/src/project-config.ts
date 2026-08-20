@@ -2,7 +2,7 @@ const DEFAULT_MAX_BODY_BYTES = 16 * 1024 * 1024;
 const MAX_BODY_BYTES = 16 * 1024 * 1024;
 
 export interface VelarNodeConfig {
-  /** Exported ServeApp value in the project entry module. */
+  /** Exported ServeApp or checked WebSocket startup function in the project entry module. */
   readonly app: string;
   readonly host: string;
   readonly port: number;

@@ -2944,8 +2944,6 @@ const coreModuleDependencies: ReadonlyMap<string, readonly string[]> = new Map([
   ["velar/test", [VELAR_COLLECTION_LOWERING_MODULE] as readonly string[]],
 ]);
 
-export const STANDARD_MODULE_ADAPTER_DEPENDENCIES: ReadonlyMap<string, { readonly packageName: string; readonly version: string }> = new Map();
-
 export function standardModuleSources(extensions: readonly CompilerExtension[] = []): ReadonlyMap<string, string> {
   const activeExtensions = standardExtensions(extensions);
   return new Map([

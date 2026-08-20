@@ -1,8 +1,0 @@
-import {Cancellation} from "velar/task"
-import {serveWorker} from "velar/worker"
-import {DataReply, DataRequest, generateData} from "./shared-data.vel"
-
-async def generate(request: DataRequest, cancellation: Cancellation) -> DataReply:
-    return {bytes: await generateData(request, cancellation)}
-
-serveWorker(DataRequest, DataReply, generate, 8)

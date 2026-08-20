@@ -1,13 +1,10 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import test, { after } from "node:test";
 import { fileURLToPath } from "node:url";
 import {
-  velarPublishedAdapters,
-  velarPublishedIntegrations,
-  velarPublishedLibraries,
   velarPublishedToolchainPackages,
   velarPublishedWorkspacePackages,
   velarToolchainBuildOrder,
@@ -224,58 +221,16 @@ test("[A-024] every publishable toolchain package that declares a build is built
   assert.equal(manifest.scripts["gate:build:packages"], "node scripts/build-packages.mjs");
 });
 
-test("compiled integrations join the repository build without joining toolchain lockstep", async () => {
+test("the repository owns one package layer and no application package directories", async () => {
   const workspaceOrder = await velarWorkspaceBuildOrder(root);
   const toolchainOrder = await velarToolchainBuildOrder(root);
-  assert.ok(workspaceOrder.some((package_) => package_.name === "@velarscript/netlify"));
-  assert.equal(toolchainOrder.some((package_) => package_.name === "@velarscript/netlify"), false);
-});
-
-test("VelarScript source libraries stay source-only and outside the toolchain build order", async () => {
-  const libraries = await velarPublishedLibraries(root);
-  assert.ok(libraries.length > 0, "the source-library workspace is empty");
-  for (const library of libraries) {
-    assert.match(library.manifest.velar?.entry ?? "", /\.vel$/u, `${library.name} has no VelarScript source entry`);
-    assert.deepEqual(library.manifest.velar?.targets, ["core", "node", "web", "desktop"], `${library.name} has no explicit target contract`);
-    assert.deepEqual(library.manifest.velar?.requires?.capabilities, [], `${library.name} has no explicit host-capability contract`);
-    assert.equal(library.manifest.scripts?.build, undefined, `${library.name} is a source library but declares a toolchain build`);
+  assert.deepEqual(workspaceOrder.map((package_) => package_.name), toolchainOrder.map((package_) => package_.name));
+  const rootDirectories = new Set((await readdir(root, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name));
+  for (const forbidden of ["libraries", "adapters", "integrations"]) {
+    assert.equal(rootDirectories.has(forbidden), false, `${forbidden}/ must not become a first-party application package layer`);
   }
-  const toolchainNames = new Set((await velarPublishedToolchainPackages(root)).map((package_) => package_.name));
-  for (const library of libraries) assert.ok(!toolchainNames.has(library.name), `${library.name} leaked into the toolchain roster`);
-});
-
-test("external adapters stay source-only and outside the toolchain release", async () => {
-  const adapters = await velarPublishedAdapters(root);
-  assert.deepEqual(adapters.map((adapter) => adapter.name), [
-    "@velarscript/compression",
-    "@velarscript/msgpack",
-    "@velarscript/noise",
-    "@velarscript/sqlite",
-  ]);
-  const toolchainNames = new Set((await velarPublishedToolchainPackages(root)).map((package_) => package_.name));
-  for (const adapter of adapters) {
-    assert.match(adapter.manifest.velar?.entry ?? "", /\.vel$/u, `${adapter.name} has no VelarScript source entry`);
-    assert.ok((adapter.manifest.velar?.targets?.length ?? 0) > 0, `${adapter.name} has no explicit target contract`);
-    assert.ok(Array.isArray(adapter.manifest.velar?.requires?.capabilities), `${adapter.name} has no explicit host-capability contract`);
-    assert.equal(adapter.manifest.scripts?.build, undefined, `${adapter.name} declares a toolchain build`);
-    assert.ok(!toolchainNames.has(adapter.name), `${adapter.name} leaked into the toolchain roster`);
-  }
-  const sqlite = adapters.find((adapter) => adapter.name === "@velarscript/sqlite")!;
-  assert.equal(sqlite.manifest.dependencies?.["@velarscript/database"], "0.1.0");
-  assert.equal(sqlite.manifest.peerDependencies?.["@velarscript/node"], ">=0.12.0 <0.13.0");
-  assert.deepEqual(sqlite.manifest.velar?.targets, ["node"]);
-  assert.deepEqual(sqlite.manifest.velar?.requires?.capabilities, ["node"]);
-});
-
-test("deployment integrations stay independently versioned and outside source adapters", async () => {
-  const integrations = await velarPublishedIntegrations(root);
-  assert.deepEqual(integrations.map((integration) => integration.name), ["@velarscript/netlify"]);
-  const netlify = integrations[0]!;
-  assert.equal(netlify.manifest.version, "0.1.0");
-  assert.equal(netlify.manifest.velar?.entry, undefined);
-  assert.equal(netlify.manifest.scripts?.build, "npm run clean && tsc -p tsconfig.build.json");
-  const toolchainNames = new Set((await velarPublishedToolchainPackages(root)).map((package_) => package_.name));
-  assert.ok(!toolchainNames.has(netlify.name));
 });
 
 test("[A-024] workspace acceptance walks all derived package layers", async () => {
@@ -288,7 +243,7 @@ test("[A-024] workspace acceptance walks all derived package layers", async () =
   assert.match(acceptance, /published\.flatMap\(\(package_\) => packageContentFailures\(package_\.manifest, named\(package_\.name\)\)\)/u);
   assert.match(acceptance, /\.\.\.published\.map\(\(package_\) => join\(directory, named\(package_\.name\)\.filename\)\)/u);
   // And no tarball path is spelled out beside them.
-  assert.doesNotMatch(acceptance, /join\(directory, (?:compiler|node|web|create|cli|desktop|textBuffer|scriptAnalysis)\.filename\)/u);
+  assert.doesNotMatch(acceptance, /join\(directory, (?:compiler|node|web|create|cli|desktop)\.filename\)/u);
 });
 
 test("[A-024] every acceptance script that installs the toolchain derives its set", async () => {

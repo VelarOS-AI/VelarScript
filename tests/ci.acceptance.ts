@@ -137,7 +137,7 @@ test("default CI stays lightweight while rehearsal and npm publication remain ex
   assert.match(resolveScript(workspace.scripts, "test"), /tests\/release\.acceptance\.ts/u);
   assert.equal(workspace.scripts["release:rehearse"], "node scripts/release-toolchain.mjs rehearse");
   assert.equal(workspace.scripts["release:publish"], "node scripts/publish-toolchain.mjs");
-  assert.equal(workspace.scripts["preview:prepare"], "node scripts/prepare-external-preview.mjs");
+  assert.equal(workspace.scripts["preview:prepare"], undefined);
 
   // Every gate, derived: a `gate:x` script is the body a public gate `x` runs
   // under the checkout lock. The list this replaces named six by hand.
@@ -208,28 +208,13 @@ test("default CI stays lightweight while rehearsal and npm publication remain ex
   assert.match(externalPreview, /workflow_dispatch:/u);
   assert.match(externalPreview, /deployment_url:/u);
   assert.match(externalPreview, /VELAR_DEPLOYMENT_URL/u);
-  assert.match(externalPreview, /verify-deployment release\/external-preview\/netlify\/site --json/u);
+  assert.match(externalPreview, /build examples\/app --out-dir release\/external-preview\/site/u);
+  assert.match(externalPreview, /verify-deployment release\/external-preview\/site --json/u);
   assert.match(externalPreview, /actions\/attest@v4/u);
   assert.match(externalPreview, /artifact-metadata: write/u);
   assert.match(externalPreview, /actions\/upload-artifact@v5/u);
   assert.doesNotMatch(externalPreview, /netlify deploy|npm publish|secrets\./u);
 
-  const ecosystemPublication = await readFile(".github/workflows/publish-ecosystem.yml", "utf8");
-  const ecosystemHelper = await readFile("scripts/publish-ecosystem.mjs", "utf8");
-  assert.match(ecosystemPublication, /workflow_dispatch:/u);
-  assert.match(ecosystemPublication, /release-ecosystem\.mjs candidate/u);
-  assert.match(ecosystemPublication, /VELAR_ECOSYSTEM_PUBLISH_CONFIRM/u);
-  assert.match(ecosystemPublication, /NPM_SCOPE_TOKEN/u);
-  assert.match(ecosystemPublication, /NPM_CONFIG_PREFER_ONLINE/u);
-  assert.match(ecosystemPublication, /id-token: write/u);
-  assert.doesNotMatch(ecosystemPublication, /\n\s+push:|release-toolchain\.mjs|publish-toolchain\.mjs/u);
-  assert.match(ecosystemHelper, /verifyEcosystemRelease/u);
-  assert.match(ecosystemHelper, /ACTIONS_ID_TOKEN_REQUEST_URL/u);
-  assert.match(ecosystemHelper, /"--provenance"/u);
-  assert.match(ecosystemHelper, /waitForIntegrity/u);
-  assert.match(ecosystemHelper, /registryVisibilityAttempts = 100/u);
-  assert.match(ecosystemHelper, /waitForVersion/u);
-  assert.match(ecosystemHelper, /"dist-tag", "add"/u);
 });
 
 test("[D61-156] the test gates discover example projects instead of naming them", async () => {

@@ -6,6 +6,22 @@ truth for acceptance status.
 
 ## Unreleased
 
+### Node server framework
+
+- Added exact WebSocket Origin admission on shared HTTP/WebSocket listeners.
+  Browser upgrades are denied by default, rejected with 403 before connection
+  admission, and may use an explicit exact-origin list or `"*"` policy.
+- Allowed `node.app` to name a strictly typed WebSocket startup function so
+  development, serve, and standalone production builds use the same configured
+  host, port, request-body ceiling, HTTP application, and WebSocket listener.
+
+### Repository ownership
+
+- Removed database contracts, concrete drivers, codecs, algorithms, editor
+  components, and provider integrations from the language repository. These
+  are application-owned dependencies; permanent gates prevent them from
+  returning as toolchain or framework dependencies.
+
 ## 0.12.1 — 2026-08-20
 
 ### Node server framework

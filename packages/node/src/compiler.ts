@@ -378,6 +378,8 @@ const webSocketListenOptions = object({
   host: optional(stringType),
   path: optional(stringType),
   http: optional({ kind: "union", members: [functionType(["request"], [serveRequestType], promise(serveResponseAlias)), serveAppType] }),
+  origins: optional(listStringType),
+  maxBodyBytes: optional(numberType),
   maxMessageBytes: optional(numberType),
   maxQueuedMessages: optional(numberType),
   maxQueuedBytes: optional(numberType),

@@ -1,7 +1,6 @@
 import type { CompilerExtension, ModuleInterface } from "@velarscript/compiler";
 import {
   CORE_WORKER_CONFIG_KEY,
-  STANDARD_MODULE_ADAPTER_DEPENDENCIES,
   VELAR_STANDARD_API_VERSION,
   VELAR_WORKER_MANIFEST_MODULE,
   isStandardModule as coreIsStandardModule,
@@ -20,7 +19,6 @@ import { velarNodeCompilerExtension } from "@velarscript/node/compiler";
 
 export {
   CORE_WORKER_CONFIG_KEY,
-  STANDARD_MODULE_ADAPTER_DEPENDENCIES,
   VELAR_STANDARD_API_VERSION,
   VELAR_WORKER_MANIFEST_MODULE,
   standardModuleRoute,

@@ -810,10 +810,10 @@ function standardModuleListing(source: string, interfaces: ReadonlyMap<string, M
 
 function migratedStandardPackageDiagnostic(source: string): string | null {
   if (source === "velar/javascript") {
-    return "Standard module 'velar/javascript' moved to package '@velarscript/script-analysis'; install it, then import from '@velarscript/script-analysis'";
+    return "Standard module 'velar/javascript' is not part of VelarScript; JavaScript and TypeScript tooling belongs to the consuming project";
   }
   if (source === "velar/text-buffer") {
-    return "Standard module 'velar/text-buffer' moved to package '@velarscript/text-buffer'; install it, then import from '@velarscript/text-buffer'";
+    return "Standard module 'velar/text-buffer' is not part of VelarScript; applications must own or install their text-buffer implementation";
   }
   return null;
 }

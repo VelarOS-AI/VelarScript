@@ -53,7 +53,8 @@ These names need no import and cannot be shadowed: `const Text = 1` is rejected.
 protects these names. Capabilities stay explicit imports. Durations use `ms` or
 `s`, so write `await Promise.sleep(250ms)`, not a bare number.
 
-Use checked binary, random, task, and official adapter APIs. A direct
+Use checked binary, random, and task APIs. Project-specific codecs, storage,
+and algorithms come from project-owned modules or dependencies. A direct
 `for index in range(...):` is a native counter; range as a value is a List. Use `UInt16Buffer` for 16-bit numeric state,
 `UInt8Buffer` for compact data, and bounded `UInt32Builder`/`Float32Builder` values for variable-size numeric output.
 

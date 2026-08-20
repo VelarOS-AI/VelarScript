@@ -31,7 +31,7 @@ import {
 import { resolveVelarProject } from "../packages/cli/src/config.ts";
 import { moduleOutput } from "../packages/cli/src/module-assets.ts";
 import { npmAsset } from "../packages/cli/src/npm.ts";
-import { STANDARD_MODULE_ADAPTER_DEPENDENCIES, standardModuleApi as standardModuleApiCore, standardModuleAsset as standardModuleAssetCore, standardModuleClosure, standardModuleDependencies, standardModuleInterface as standardModuleInterfaceCore, standardModuleSource as standardModuleSourceCore } from "../packages/cli/src/standard-modules.ts";
+import { standardModuleApi as standardModuleApiCore, standardModuleAsset as standardModuleAssetCore, standardModuleClosure, standardModuleDependencies, standardModuleInterface as standardModuleInterfaceCore, standardModuleSource as standardModuleSourceCore } from "../packages/cli/src/standard-modules.ts";
 import { standardModuleApi as languageCoreModuleApi } from "../packages/core/src/index.ts";
 import { velarNodeCompilerExtension } from "../packages/node/src/compiler.ts";
 import { VELAR_WEB_API_VERSION, VELAR_WEB_MODULES, velarWebFramework } from "../packages/web/src/index.ts";
@@ -207,15 +207,6 @@ async function linkWorkspaceDesktopExtension(projectRoot: string): Promise<void>
   const scope = join(projectRoot, "node_modules", "@velarscript");
   await mkdir(scope, { recursive: true });
   await symlink(resolve("packages/desktop"), join(scope, "desktop"), "dir");
-}
-
-async function linkWorkspaceEditorPackages(projectRoot: string): Promise<void> {
-  const scope = join(projectRoot, "node_modules", "@velarscript");
-  await mkdir(scope, { recursive: true });
-  await Promise.all([
-    symlink(resolve("libraries/text-buffer"), join(scope, "text-buffer"), "dir"),
-    symlink(resolve("libraries/script-analysis"), join(scope, "script-analysis"), "dir"),
-  ]);
 }
 
 test("compiles bindings, functions, and strict equality", () => {
@@ -10925,309 +10916,6 @@ print(logLevel())
   ].join("\n"));
 });
 
-test("evicted editor modules teach their installable package replacements", async () => {
-  const directory = await makeTemporaryDirectory("velar-evicted-editor-modules-");
-  const entry = join(directory, "main.vel");
-  await writeFile(entry, `
-import {ScriptDocument} from "velar/javascript"
-import {TextBuffer} from "velar/text-buffer"
-`.trimStart(), "utf8");
-
-  const project = await compileProjectCore(entry);
-  assert.deepEqual(project.failures.map((failure) => failure.message), [
-    "Standard module 'velar/javascript' moved to package '@velarscript/script-analysis'; install it, then import from '@velarscript/script-analysis'",
-    "Standard module 'velar/text-buffer' moved to package '@velarscript/text-buffer'; install it, then import from '@velarscript/text-buffer'",
-  ]);
-});
-
-test("pure VelarScript text buffer ships a balanced rope with code-point positions", async () => {
-  const directory = await makeTemporaryDirectory("velar-text-buffer-");
-  const entry = join(directory, "main.vel");
-  const output = join(directory, "dist");
-  await linkWorkspaceEditorPackages(directory);
-  await writeFile(entry, `
-import {TextBuffer, TextChange, TextEdit, TextHistory, TextLineSlice, TextPosition, TextSelection, TextTransaction} from "@velarscript/text-buffer"
-
-const buffer = TextBuffer("ab😀\\ncd")
-const initialPosition: TextPosition = buffer.positionAt(4)
-print(f"{str(buffer.size)}|{str(buffer.lineCount)}|{buffer.lineText(0)}|{str(initialPosition.line)}:{str(initialPosition.column)}")
-
-const first: TextChange = buffer.replace(1, 3, "X\\nY")
-print(first.removed == "b😀")
-print(f"{str(first.beforeRevision)}:{str(first.afterRevision)}:{str(buffer.revision)}")
-print(buffer.text() == "aX\\nY\\ncd")
-const finalPosition = buffer.positionAt(buffer.offsetAt(2, 2))
-print(f"{str(finalPosition.line)}:{str(finalPosition.column)}")
-
-buffer.insert(buffer.size, "!")
-buffer.delete(1, 2)
-let count = 0
-while count < 100:
-    buffer.insert(buffer.size, "x")
-    count += 1
-print(f"{str(buffer.size)}|{str(buffer.lineCount)}|{buffer.lineText(1)}|{str(buffer.revision)}")
-try:
-    buffer.slice(-1, 0)
-catch error:
-    print(error.name)
-
-const newline = TextBuffer("a\\nb")
-newline.delete(1, 2)
-const newlinePosition = newline.positionAt(1)
-print(f"{str(newline.lineCount)}|{str(newlinePosition.line)}:{str(newlinePosition.column)}|{newline.lineText(0)}")
-
-const lines = TextBuffer("a\\r\\nb\\n😀")
-const sliceRange: TextLineSlice = lines.lineSlice(1, 3)
-print(f"{str(lines.size)}|{str(lines.lineCount)}|{lines.lineText(0)}|{str(sliceRange.start)}:{str(sliceRange.end)}|{sliceRange.text == "b\\n😀"}")
-const crlfMiddle = lines.positionAt(2)
-print(f"{str(crlfMiddle.line)}:{str(crlfMiddle.column)}|{str(lines.offsetAt(crlfMiddle.line, crlfMiddle.column))}")
-
-const batch = TextBuffer("0123456789")
-const edits: List<TextEdit> = [
-    {start: 1, end: 3, inserted: "A"},
-    {start: 7, end: 9, inserted: "😀"},
-]
-const transaction: TextTransaction = batch.apply(edits)
-print(f"{batch.text()}|{str(transaction.changes.size)}|{transaction.changes[0].removed}|{transaction.changes[1].removed}|{str(batch.revision)}")
-batch.apply([
-    {start: 1, end: 1, inserted: "x"},
-    {start: 1, end: 1, inserted: "y"},
-])
-print(batch.text())
-const beforeFailure = batch.text()
-try:
-    batch.apply([
-        {start: 0, end: 2, inserted: "first"},
-        {start: 1, end: 3, inserted: "overlap"},
-    ])
-catch error:
-    print(f"{error.name}|{batch.text() == beforeFailure}|{str(batch.revision)}")
-
-const owned = TextBuffer("abc")
-const history = TextHistory(owned, maxEntries=2, maxBytes=1024)
-const before: TextSelection = {anchor: 1, head: 2}
-const after: TextSelection = {anchor: 2, head: 2}
-history.apply([{start: 1, end: 2, inserted: "X"}], before, after)
-history.begin(after)
-history.apply([{start: 2, end: 2, inserted: "中"}], after, {anchor: 3, head: 3})
-history.apply([{start: 3, end: 3, inserted: "😀"}], {anchor: 3, head: 3}, {anchor: 4, head: 4})
-history.commit({anchor: 4, head: 4})
-const groupUndo = history.undo()
-const editUndo = history.undo()
-print(f"{owned.text()}|{str(groupUndo?.head ?? -1)}|{str(editUndo?.anchor ?? -1)}|{history.canRedo}")
-const editRedo = history.redo()
-const groupRedo = history.redo()
-print(f"{owned.text()}|{str(editRedo?.head ?? -1)}|{str(groupRedo?.head ?? -1)}|{history.canUndo}")
-history.begin(groupRedo)
-history.apply([{start: 4, end: 4, inserted: "!"}], groupRedo, {anchor: 5, head: 5})
-const cancelled = history.cancel()
-print(f"{owned.text()}|{str(cancelled?.head ?? -1)}|{str(owned.revision)}")
-
-let model = "alpha😀\\r\\nbeta\\n"
-const fuzz = TextBuffer(model)
-let iteration = 0
-while iteration < 500:
-    const start = (iteration * 37 + 11) % (model.size + 1)
-    const available = model.size - start
-    const requested = (iteration * 13) % 3
-    const removed = requested < available ? requested : available
-    const inserted = iteration % 4 == 0 ? "中\\n" : iteration % 4 == 1 ? "😀" : iteration % 4 == 2 ? "" : "x"
-    fuzz.replace(start, start + removed, inserted)
-    model = model.slice(0, start) + inserted + model.slice(start + removed)
-    assert fuzz.text() == model else "TextBuffer diverged from the reference text"
-    const probe = (iteration * 19) % (model.size + 1)
-    const position = fuzz.positionAt(probe)
-    const normalized = fuzz.offsetAt(position.line, position.column)
-    const insideCrLf = probe > 0 and probe < model.size and model.slice(probe - 1, probe + 1) == "\\r\\n"
-    assert normalized == (insideCrLf ? probe - 1 : probe) else "TextBuffer position mapping diverged"
-    iteration += 1
-print(f"{str(fuzz.revision)}|{fuzz.text() == model}")
-
-const externallyChanged = TextBuffer("owner")
-const staleHistory = TextHistory(externallyChanged)
-externallyChanged.insert(5, "!")
-try:
-    staleHistory.apply([{start: 0, end: 0, inserted: "x"}])
-catch error:
-    print(f"{error.name}|{externallyChanged.text()}")
-`.trimStart(), "utf8");
-
-  const project = await compileProjectCore(entry);
-  assert.deepEqual(project.failures, []);
-  assert.deepEqual(project.modules.flatMap((module) => module.result.diagnostics), []);
-  const build = spawnSync(process.execPath, ["packages/cli/src/cli.ts", "build", entry, "--out-dir", output], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-  });
-  assert.equal(build.status, 0, String(build.stderr));
-  const generated = await readFile(join(output, "__velar_packages__", "@velarscript", "text-buffer", "src", "index.js"), "utf8");
-  assert.match(generated, /class TextBuffer/u);
-  assert.match(generated, /class RopeNode/u);
-  assert.match(generated, /#root/u);
-  assert.match(generated, /__velarStringSlice/u);
-  await readFile(join(output, "node_modules", "velar", "text.js"), "utf8");
-  const execution = spawnSync(process.execPath, [join(output, "main.js")], { encoding: "utf8" });
-  assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, [
-    "6|2|ab😀|1:0",
-    "true",
-    "0:1:1",
-    "true",
-    "2:2",
-    "107|3|Y|103",
-    "AssertionError",
-    "1|0:1|ab",
-    "6|3|a|3:6|true",
-    "0:1|1",
-    "0A3456😀9|2|12|78|1",
-    "0xyA3456😀9",
-    "AssertionError|true|2",
-    "abc|2|1|true",
-    "aX中😀c|2|4|true",
-    "aX中😀c|4|11",
-    "500|true",
-    "AssertionError|owner!",
-    "",
-  ].join("\n"));
-
-  const invalidEntry = join(directory, "invalid.vel");
-  await writeFile(invalidEntry, `
-import {TextBuffer} from "@velarscript/text-buffer"
-
-const buffer = TextBuffer("value")
-buffer.replace("0", 1, "x")
-buffer.offsetAt(0, "1")
-buffer.apply([{start: 0, end: 1, inserted: 1}])
-buffer.compact()
-print(buffer.pieces)
-`.trimStart(), "utf8");
-  const invalid = await compileProjectCore(invalidEntry);
-  const diagnostics = invalid.modules.flatMap((module) => module.result.diagnostics).map((diagnostic) => diagnostic.message).join("\n");
-  assert.match(diagnostics, /Cannot assign string to number/u);
-  assert.match(diagnostics, /Cannot assign number to string/u);
-  assert.match(diagnostics, /Class 'TextBuffer' has no member 'compact'/u);
-  assert.match(diagnostics, /Class 'TextBuffer' has no member 'pieces'/u);
-});
-
-test("pure VelarScript JavaScript service owns incremental lexing and local semantics", async () => {
-  const directory = await makeTemporaryDirectory("velar-javascript-service-");
-  const entry = join(directory, "main.vel");
-  const output = join(directory, "dist");
-  await linkWorkspaceEditorPackages(directory);
-  await writeFile(entry, `
-import {ScriptDocument, ScriptLanguage} from "@velarscript/script-analysis"
-
-const source = "interface User { name: string }\\nconst count: number = 1\\nfunction greet(name: string): string {\\n    const message = ` + "`" + `Hello \${name}` + "`" + `\\n    return message\\n}\\nconst result = greet(\\\"Velar\\\")\\n"
-const service = ScriptDocument(ScriptLanguage.typescript, source)
-const first = service.analysis()
-print(first.diagnostics.size)
-print(first.symbols.map(symbol => symbol.name).join(","))
-const referenceOffset = (source.index("return message") ?? 0) + "return ".size
-const definition = service.definitionAt(referenceOffset)
-print(definition == null ? "missing" : source.slice(definition.start, definition.end))
-print(service.referencesAt(referenceOffset).size)
-print(service.hoverAt(referenceOffset)?.contents ?? "missing")
-print(service.completionsAt(referenceOffset).map(item => item.label).join(","))
-print(str(service.symbolAt(referenceOffset + "message".size) == null))
-const renamed = service.renameAt(referenceOffset, "label")
-print(f"{renamed.placeholder}|{str(renamed.edits.size)}|{renamed.error ?? \"ok\"}")
-
-const next = source.replace("return message", "return message + name")
-const activity = service.update(next)
-print(f"{activity.incremental}|{str(activity.restartOffset)}|{str(activity.tokensReused)}|{str(activity.codePointsRead < next.size)}")
-print(service.analysis().diagnostics.size)
-const tail = service.apply([{start: next.size, end: next.size, replacement: "// tail\\n"}])
-print(f"{tail.incremental}|{str(tail.restartOffset)}|{str(tail.codePointsRead)}")
-
-const javascript = ScriptDocument(ScriptLanguage.javascript, "interface User {}")
-print(javascript.analysis().diagnostics[0].code)
-const broken = ScriptDocument(ScriptLanguage.typescript, "const value = \\"missing")
-print(broken.analysis().diagnostics[0].code)
-`.trimStart(), "utf8");
-
-  const project = await compileProjectCore(entry);
-  assert.deepEqual(project.failures, []);
-  assert.deepEqual(project.modules.flatMap((module) => module.result.diagnostics), []);
-  const build = spawnSync(process.execPath, ["packages/cli/src/cli.ts", "build", entry, "--out-dir", output], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-  });
-  assert.equal(build.status, 0, String(build.stderr));
-  const generated = await readFile(join(output, "__velar_packages__", "@velarscript", "script-analysis", "src", "index.js"), "utf8");
-  assert.match(generated, /class ScriptDocument/u);
-  assert.match(generated, /function lexScript/u);
-  assert.doesNotMatch(generated, /from ["']typescript|tsserver|node_modules\/typescript/u);
-  const execution = spawnSync(process.execPath, [join(output, "main.js")], { encoding: "utf8" });
-  assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, [
-    "0",
-    "User,count,greet,name,message,result",
-    "message",
-    "2",
-    "constant message: string",
-    "User,count,greet,message,name,result",
-    "true",
-    "message|2|ok",
-    "true|142|28|true",
-    "0",
-    "true|189|8",
-    "SCRIPT1201",
-    "SCRIPT1002",
-    "",
-  ].join("\n"));
-
-  const invalidEntry = join(directory, "invalid.vel");
-  await writeFile(invalidEntry, `
-import {ScriptDocument, ScriptLanguage} from "@velarscript/script-analysis"
-
-const service = ScriptDocument("typescript", "const value = 1")
-service.update(1)
-service.apply([{start: 0, end: 0, replacement: 1}])
-service.renameAt("0", "value")
-const analysis = service.analysis()
-analysis.tokens.clear()
-analysis.symbols[0].name = "changed"
-service.activity().revision = 2
-`.trimStart(), "utf8");
-  const invalid = await compileProjectCore(invalidEntry);
-  const diagnostics = invalid.modules.flatMap((module) => module.result.diagnostics).map((diagnostic) => diagnostic.message).join("\n");
-  assert.match(diagnostics, /Cannot assign string to ScriptLanguage/u);
-  assert.match(diagnostics, /Cannot assign number to string/u);
-  assert.match(diagnostics, /Cannot assign string to number/u);
-  assert.match(diagnostics, /Cannot call mutating method 'clear' through readonly List<ScriptToken>/u);
-  assert.match(diagnostics, /Cannot assign through readonly ScriptSymbol/u);
-  assert.match(diagnostics, /Cannot assign through readonly ScriptActivity/u);
-});
-
-test("TextBuffer keeps repeated 1 MiB middle edits below the piece-table regression budget", async () => {
-  const directory = await makeTemporaryDirectory("velar-text-buffer-performance-");
-  const entry = join(directory, "main.vel");
-  await linkWorkspaceEditorPackages(directory);
-  await writeFile(entry, `
-import {TextBuffer} from "@velarscript/text-buffer"
-
-const buffer = TextBuffer("const value = 1\\n".repeat(65536))
-const offset = (buffer.size / 2).floor()
-let count = 0
-while count < 2000:
-    buffer.insert(offset, "x")
-    count += 1
-const end = buffer.positionAt(buffer.size)
-print(f"{str(buffer.size)}|{str(buffer.byteSize)}|{str(buffer.lineCount)}|{str(end.line)}:{str(end.column)}|{str(buffer.revision)}")
-`.trimStart(), "utf8");
-
-  const started = performance.now();
-  const execution = spawnSync(process.execPath, ["packages/cli/src/cli.ts", "run", entry], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    timeout: 12_000,
-  });
-  const elapsed = performance.now() - started;
-  assert.equal(execution.status, 0, String(execution.stderr || execution.error));
-  assert.equal(execution.stdout, "1050576|1050576|65537|65536:0|2000\n");
-  assert.ok(elapsed < 8_000, `TextBuffer 1 MiB repeated-edit gate took ${elapsed.toFixed(1)}ms`);
-});
-
 test("Core builtins and standard modules share one named-argument ABI", async () => {
   const intentionallyPositional = new Map<string, ReadonlySet<string>>([
     ["velar/collections", new Set(["range"])],
@@ -11625,14 +11313,6 @@ test("every declared standard-module export exists in the shipped runtime", asyn
       try {
         const packageRoot = join(directory, "node_modules", "velar");
         await mkdir(packageRoot, {recursive: true});
-        const adapter = STANDARD_MODULE_ADAPTER_DEPENDENCIES.get(source);
-        if (adapter) {
-          await symlink(
-            await realpath(resolve("node_modules", adapter.packageName)),
-            join(directory, "node_modules", adapter.packageName),
-            "dir",
-          );
-        }
         const exports_: Record<string, string> = {};
         for (const dependency of standardModuleClosure([source], { base: "/" }, webCompilerExtensions)) {
           if (dependency === source) continue;
@@ -14587,15 +14267,20 @@ test("source package target and host requirements fail before incompatible code 
     ...project.modules.flatMap((module) => module.result.diagnostics.map((diagnostic) => diagnostic.message)),
   ].join("\n");
   const directory = await makeTemporaryDirectory("velar-package-targets-");
-  const scope = join(directory, "node_modules", "@velarscript");
-  await mkdir(scope, { recursive: true });
   await linkWorkspaceWebExtension(directory);
-  await symlink(resolve("adapters/sqlite"), join(scope, "sqlite"), "dir");
+  const nodeOnlyRoot = join(directory, "node_modules", "node-only-fixture");
+  await mkdir(join(nodeOnlyRoot, "src"), { recursive: true });
+  await writeFile(join(nodeOnlyRoot, "package.json"), JSON.stringify({
+    name: "node-only-fixture",
+    version: "1.0.0",
+    velar: { entry: "src/index.vel", targets: ["node"], requires: { capabilities: ["node"] } },
+  }), "utf8");
+  await writeFile(join(nodeOnlyRoot, "src", "index.vel"), "export const value = 1\n", "utf8");
   const entry = join(directory, "main.vel");
-  await writeFile(entry, 'import {open} from "@velarscript/sqlite"\n\nexport const database = open\n', "utf8");
+  await writeFile(entry, 'import {value} from "node-only-fixture"\n\nprint(value)\n', "utf8");
   await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: ["@velarscript/web"] }), "utf8");
   const incompatible = await compileProject(entry, new Map(), { projectRoot: directory });
-  assert.match(messages(incompatible), /@velarscript\/sqlite.*does not support the 'web' target.*node/u);
+  assert.match(messages(incompatible), /node-only-fixture.*does not support the 'web' target.*node/u);
 
   const packageRoot = join(directory, "node_modules", "malformed-package");
   await mkdir(join(packageRoot, "src"), { recursive: true });
@@ -28008,20 +27693,17 @@ test("language server publishes diagnostics, hover, and completion", async (cont
       semanticTokensProvider: { legend: { tokenTypes: string[]; tokenModifiers: string[] }; full: boolean };
       codeActionProvider: { codeActionKinds: string[] };
       workspaceSymbolProvider: boolean;
-      experimental: { velar: { protocolVersion: number; incrementalSessions: boolean; watchedFiles: boolean; workspaceRescan: boolean; cancellation: boolean; scriptLanguages: string[]; scriptImplementation: string; incrementalScriptLexing: boolean; workspaceSearch: boolean; workspaceTextExtensions: string[]; workspaceTextFileLimit: number; workspaceSearchResultLimit: number; workspaceWatchPathLimit: number; workspaceWatchPathCodeUnitLimit: number; workspaceWatchTextCodeUnitLimit: number; ownershipGraph: boolean; ownershipGraphNodeLimit: number; ownershipGraphEdgeLimit: number; emittedJavaScript: boolean; emittedJavaScriptCodeUnitLimit: number } };
+      experimental: { velar: { protocolVersion: number; incrementalSessions: boolean; watchedFiles: boolean; workspaceRescan: boolean; cancellation: boolean; workspaceSearch: boolean; workspaceTextExtensions: string[]; workspaceTextFileLimit: number; workspaceSearchResultLimit: number; workspaceWatchPathLimit: number; workspaceWatchPathCodeUnitLimit: number; workspaceWatchTextCodeUnitLimit: number; ownershipGraph: boolean; ownershipGraphNodeLimit: number; ownershipGraphEdgeLimit: number; emittedJavaScript: boolean; emittedJavaScriptCodeUnitLimit: number } };
     };
     serverInfo: { name: string };
   };
   assert.equal(initializeResult.serverInfo.name, "VelarScript Language Server");
   assert.equal(initializeResult.capabilities.positionEncoding, "utf-32");
-  assert.equal(initializeResult.capabilities.experimental.velar.protocolVersion, 4);
+  assert.equal(initializeResult.capabilities.experimental.velar.protocolVersion, 5);
   assert.equal(initializeResult.capabilities.experimental.velar.incrementalSessions, true);
   assert.equal(initializeResult.capabilities.experimental.velar.watchedFiles, true);
   assert.equal(initializeResult.capabilities.experimental.velar.workspaceRescan, true);
   assert.equal(initializeResult.capabilities.experimental.velar.cancellation, true);
-  assert.deepEqual(initializeResult.capabilities.experimental.velar.scriptLanguages, ["javascript", "typescript"]);
-  assert.equal(initializeResult.capabilities.experimental.velar.scriptImplementation, "velarscript");
-  assert.equal(initializeResult.capabilities.experimental.velar.incrementalScriptLexing, true);
   assert.equal(initializeResult.capabilities.experimental.velar.workspaceSearch, true);
   assert.deepEqual(initializeResult.capabilities.experimental.velar.workspaceTextExtensions,
     [".vel", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx", ".json", ".md", ".css"]);
@@ -28548,82 +28230,21 @@ test("language server publishes diagnostics, hover, and completion", async (cont
   const boundedRename = await waitFor((message) => message.id === 24);
   assert.match(String((boundedRename.error as { message?: string }).message), /more than 10000 locations/u);
 
-  const scriptPath = join(directory, "feature.ts");
-  const scriptUri = pathToFileURL(scriptPath).href;
-  const scriptText = [
-    "interface User { name: string }",
-    "const count: number = 1",
-    "function greet(name: string): string {",
-    "    const message = `Hello ${name}`",
-    "    return message",
-    "}",
-    "const result = greet(\"Velar\")",
-    "",
-  ].join("\n");
+  const foreignUri = pathToFileURL(join(directory, "feature.ts")).href;
   send({
     jsonrpc: "2.0",
     method: "textDocument/didOpen",
-    params: { textDocument: { uri: scriptUri, languageId: "typescript", version: 1, text: scriptText } },
+    params: { textDocument: { uri: foreignUri, languageId: "typescript", version: 1, text: "const value: number = 1\n" } },
   });
-  const scriptPublished = await waitFor((message) => message.method === "textDocument/publishDiagnostics"
-    && (message.params as { uri?: string; version?: number }).uri === scriptUri
-    && (message.params as { version?: number }).version === 1);
-  assert.deepEqual((scriptPublished.params as { diagnostics: unknown[] }).diagnostics, []);
-  const messagePosition = { line: 4, character: "    return ".length + 1 };
-  send({ jsonrpc: "2.0", id: 200, method: "textDocument/definition", params: { textDocument: { uri: scriptUri }, position: messagePosition } });
-  const scriptDefinition = await waitFor((message) => message.id === 200);
-  assert.deepEqual((scriptDefinition.result as { range: { start: { line: number; character: number } } }).range.start, { line: 3, character: 10 });
-  send({ jsonrpc: "2.0", id: 201, method: "textDocument/hover", params: { textDocument: { uri: scriptUri }, position: messagePosition } });
-  const scriptHover = await waitFor((message) => message.id === 201);
-  assert.match(JSON.stringify(scriptHover.result), /constant message: string/u);
-  send({ jsonrpc: "2.0", id: 202, method: "textDocument/references", params: { textDocument: { uri: scriptUri }, position: messagePosition, context: { includeDeclaration: true } } });
-  const scriptReferences = await waitFor((message) => message.id === 202);
-  assert.equal((scriptReferences.result as unknown[]).length, 2);
-  send({ jsonrpc: "2.0", id: 203, method: "textDocument/prepareRename", params: { textDocument: { uri: scriptUri }, position: messagePosition } });
-  const scriptPrepareRename = await waitFor((message) => message.id === 203);
-  assert.equal((scriptPrepareRename.result as { placeholder: string }).placeholder, "message");
-  send({ jsonrpc: "2.0", id: 204, method: "textDocument/rename", params: { textDocument: { uri: scriptUri }, position: messagePosition, newName: "label" } });
-  const scriptRename = await waitFor((message) => message.id === 204);
-  assert.equal((scriptRename.result as { changes: Record<string, unknown[]> }).changes[scriptUri]?.length, 2);
-  send({ jsonrpc: "2.0", id: 205, method: "textDocument/documentSymbol", params: { textDocument: { uri: scriptUri } } });
-  const scriptSymbols = await waitFor((message) => message.id === 205);
-  assert.match(JSON.stringify(scriptSymbols.result), /"name":"User".*"name":"greet".*"name":"message"/u);
-  send({ jsonrpc: "2.0", id: 206, method: "textDocument/completion", params: { textDocument: { uri: scriptUri }, position: messagePosition } });
-  const scriptCompletion = await waitFor((message) => message.id === 206);
-  const scriptItems = (scriptCompletion.result as { items: Array<{ label: string }> }).items;
-  assert.ok(scriptItems.some((item) => item.label === "message"));
-  assert.ok(scriptItems.some((item) => item.label === "name"));
-  send({ jsonrpc: "2.0", id: 207, method: "textDocument/semanticTokens/full", params: { textDocument: { uri: scriptUri } } });
-  const scriptSemantic = await waitFor((message) => message.id === 207);
-  const scriptSemanticData = (scriptSemantic.result as { data: number[] }).data;
-  assert.equal(scriptSemanticData.length % 5, 0);
-  assert.ok(scriptSemanticData.some((value, index) => index % 5 === 3 && value === 9), "TypeScript interface tokens must come from the pure VelarScript service");
-  assert.ok(scriptSemanticData.some((value, index) => index % 5 === 3 && value === 12), "JavaScript keywords must be semantically decorated");
-  send({ jsonrpc: "2.0", id: 208, method: "textDocument/formatting", params: { textDocument: { uri: scriptUri }, options: { tabSize: 2, insertSpaces: true } } });
-  const scriptFormatting = await waitFor((message) => message.id === 208);
-  assert.deepEqual(scriptFormatting.result, [], "The server must not pretend that a JS/TS formatter exists yet");
-
-  const javascriptUri = pathToFileURL(join(directory, "feature.js")).href;
-  send({
-    jsonrpc: "2.0",
-    method: "textDocument/didOpen",
-    params: { textDocument: { uri: javascriptUri, languageId: "javascript", version: 1, text: "interface User {}\n" } },
-  });
-  const javascriptPublished = await waitFor((message) => message.method === "textDocument/publishDiagnostics"
-    && (message.params as { uri?: string }).uri === javascriptUri);
-  assert.equal(((javascriptPublished.params as { diagnostics: Array<{ code: string }> }).diagnostics)[0]?.code, "SCRIPT1201");
-
-  send({
-    jsonrpc: "2.0",
-    method: "textDocument/didChange",
-    params: { textDocument: { uri: scriptUri, version: 2 }, contentChanges: [{ text: `${scriptText}const broken = \"😀\n` }] },
-  });
-  const changedScriptPublished = await waitFor((message) => message.method === "textDocument/publishDiagnostics"
-    && (message.params as { uri?: string; version?: number }).uri === scriptUri
-    && (message.params as { version?: number }).version === 2);
-  const changedScriptDiagnostics = (changedScriptPublished.params as { diagnostics: Array<{ code: string; range: { start: { character: number } } }> }).diagnostics;
-  assert.equal(changedScriptDiagnostics[0]?.code, "SCRIPT1002");
-  assert.equal(changedScriptDiagnostics[0]?.range.start.character, "const broken = ".length);
+  const foreignPublished = await waitFor((message) => message.method === "textDocument/publishDiagnostics"
+    && (message.params as { uri?: string }).uri === foreignUri);
+  assert.deepEqual((foreignPublished.params as { diagnostics: unknown[] }).diagnostics, []);
+  send({ jsonrpc: "2.0", id: 1200, method: "textDocument/hover", params: { textDocument: { uri: foreignUri }, position: { line: 0, character: 6 } } });
+  assert.equal((await waitFor((message) => message.id === 1200)).result, null);
+  send({ jsonrpc: "2.0", id: 1201, method: "textDocument/completion", params: { textDocument: { uri: foreignUri }, position: { line: 0, character: 6 } } });
+  assert.deepEqual((await waitFor((message) => message.id === 1201)).result, { isIncomplete: false, items: [] });
+  send({ jsonrpc: "2.0", id: 1202, method: "textDocument/formatting", params: { textDocument: { uri: foreignUri }, options: { tabSize: 2, insertSpaces: true } } });
+  assert.deepEqual((await waitFor((message) => message.id === 1202)).result, []);
 
   send({ jsonrpc: "2.0", id: 9, method: "shutdown", params: null });
   await waitFor((message) => message.id === 9);

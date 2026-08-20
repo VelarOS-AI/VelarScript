@@ -21,9 +21,6 @@ const copiedRootEntries = [
   "package-lock.json",
   "package.json",
   "packages",
-  "libraries",
-  "adapters",
-  "integrations",
   "scripts",
   "tsconfig.base.json",
   "tsconfig.json",
@@ -66,7 +63,7 @@ async function linkDependencies(workspaceRoot) {
   }
   await symlink(join(sourceModules, ".bin"), join(targetModules, ".bin"), directoryLinkType);
 
-  for (const workspaceDirectory of ["packages", "libraries", "adapters", "integrations"]) {
+  for (const workspaceDirectory of ["packages"]) {
     for (const entry of await readdir(join(workspaceRoot, workspaceDirectory), { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
       const packageRoot = join(workspaceRoot, workspaceDirectory, entry.name);

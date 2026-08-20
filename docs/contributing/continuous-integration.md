@@ -2,23 +2,21 @@
 
 Status: current public release and publication gates
 
-The repository defines five GitHub Actions workflows:
+The repository defines four GitHub Actions workflows:
 
 - `Velar CI` runs Node 24 check, tests, and packed-package consumer validation
   on Linux, macOS, and Windows. A separate Linux job installs Playwright's
   Chromium, Firefox, and WebKit dependencies and runs both development-server
   and CSP-enabled production browser matrices, the project-owned
   `.browser.test.vel` suite in all engines, and the same generated browser test
-  through the packed toolchain tarballs plus the independently versioned source
-  library, adapter, and integration tarballs. Browser-project execution first verifies the exact
-  production asset inventory and uses the public preview server. The toolchain,
-  library, adapter, and integration sets are derived separately from `packages/*`,
-  `libraries/*`, `adapters/*`, and `integrations/*`:
+  through the packed toolchain tarballs. Browser-project execution first verifies the exact
+  production asset inventory and uses the public preview server. The toolchain
+  set is derived from `packages/*`:
   every publishable workspace package is packed and checked against what
   its own manifest promises a consumer — LICENSE, README, and every path named
   by `main`, `types`, `exports`, `bin` or `velar.entry` — installed into the
   clean consumer, and imported through every specifier it publishes. A package
-  added to the workspace therefore enters all four steps on the day it exists.
+  added to the workspace therefore enters all checks on the day it exists.
 - The check gate extracts every `velar` fence from README, package guides, and
   language/API documentation. Fences are read by CommonMark's rules rather than
   by a regular expression: up to three columns of indentation, backticks or
@@ -60,19 +58,12 @@ The repository defines five GitHub Actions workflows:
   verifies their registry integrity, and exposes `latest` only after the
   complete version-locked graph exists.
 - `External preview verification` is manual and credential-free. It rebuilds
-  the provider-neutral root Release Studio profile, projects the external
-  Netlify bundle, verifies a required HTTPS origin,
-  emits a versioned JSON
+  the provider-neutral root Release Studio profile, verifies a required HTTPS
+  origin, and emits a versioned JSON
   report, attests that report plus the build/deployment manifests, and uploads
   the evidence. It cannot deploy or publish.
-- `Publish npm ecosystem package` is manual and publishes exactly one derived
-  library, adapter, or integration. It requires a clean checkout whose HEAD has
-  the package-specific `<name>@<version>` tag, repeats the exact package name as
-  confirmation, uses OIDC provenance, publishes under `next`, and verifies the
-  registry integrity against the candidate tarball. Toolchain packages are not
-  selectable through this workflow.
 
-The browser job additionally opens the prepared root external-preview bundle
+The browser job additionally opens the prepared root external-preview site
 in Chromium, checks its CSP, typed canonical/social metadata, public share
 asset, root/deep navigation, reload, and missing-asset 404. This is separate
 from the existing `/app/` three-engine matrix so deployment-profile bugs cannot
@@ -83,5 +74,5 @@ They are not cached independently because browser/system dependency caches can
 drift from Playwright and do not provide a reliable speed advantage.
 
 The rehearsal and external-preview workflows remain non-publishing. Only the
-two manual npm workflows have registry authority, and both publication helpers
-refuse to run outside an OIDC-capable GitHub Actions runner.
+manual toolchain publication workflow has registry authority, and its helper
+refuses to run outside an OIDC-capable GitHub Actions runner.

@@ -524,12 +524,11 @@ print(f"{measured.lines} lines, {measured.words} words")
 
 ## 12. What elegance means here
 
-The `@velarscript/text-buffer` package is the reference specimen: small pure
+A well-owned application library is the reference specimen: small pure
 functions, structural record returns, one job per function, contracts as
-asserts, and not one comment explaining a workaround — because there is
-nothing to work around when data is modeled first. Elegant VelarScript is
-not clever; it is unsurprising, and it looks the same no matter who — or
-what — wrote it.
+asserts, and no workaround disguised as abstraction. Elegant VelarScript is not
+clever; it is unsurprising, and it looks the same no matter who — or what —
+wrote it.
 
 ```velar
 type Span:

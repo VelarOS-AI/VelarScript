@@ -8,6 +8,7 @@ import type { VelarNodeConfig } from "@velarscript/node/compiler";
 import type { VelarProjectConfig } from "./config.ts";
 import { compileProject, type ProjectModule, type ProjectResult } from "./project.ts";
 import { hostErrorMessage } from "./host-error.ts";
+import { writeWebSocketDependency } from "./node-runtime-dependencies.ts";
 import { prepareStandardModules } from "./test-runner.ts";
 import {
   compiledTestModulePath,
@@ -18,8 +19,16 @@ import {
 
 const NODE_EXTENSION_ID = "@velarscript/node";
 const SERVE_APP_IDENTITY = "velar/serve#type:ServeApp";
+const WEBSOCKET_SERVER_IDENTITY = "velar/websocket#type:WebSocketServer";
 const CHILD_SHUTDOWN_DEADLINE_MS = 35_000;
 const REBUILD_DEBOUNCE_MS = 50;
+
+export type NodeApplicationKind = "serve-app" | "websocket-factory";
+
+export interface CheckedNodeApplication {
+  readonly entry: ProjectModule;
+  readonly kind: NodeApplicationKind;
+}
 
 export interface NodeApplicationOverrides {
   readonly host?: string;
@@ -176,12 +185,12 @@ async function prepareNodeApplication(
     ...project.failures.map((failure) => `${failure.path}: ${failure.message}`),
     ...project.modules.flatMap((module) => module.result.diagnostics.map((diagnostic) => formatDiagnostic(module.result.source, diagnostic))),
   ];
-  const entry = project.modules.find((module) => module.inputPath === project.entryPath);
+  let application: CheckedNodeApplication | null = null;
   if (errors.length === 0) {
-    try { nodeApplicationEntry(project, node); }
+    try { application = nodeApplicationEntry(project, node); }
     catch (error) { errors.push(hostErrorMessage(error)); }
   }
-  if (errors.length > 0 || !entry) {
+  if (errors.length > 0 || !application) {
     process.stderr.write(`${errors.join("\n\n")}\n`);
     return null;
   }
@@ -189,10 +198,11 @@ async function prepareNodeApplication(
   const sandbox = await createCompiledSandbox(config.root, prefix);
   try {
     await prepareStandardModules(sandbox, config);
+    if (usesNodeWebSocket(project)) await writeWebSocketDependency(join(sandbox, "node_modules"));
     await writeCompiledTestProject(project, sandbox);
     const launcher = join(sandbox, ".velar-node-entry.mjs");
-    const entryUrl = pathToFileURL(compiledTestModulePath(project, entry, sandbox)).href;
-    await writeFile(launcher, nodeApplicationLauncherSource(entryUrl, node, overrides, development), "utf8");
+    const entryUrl = pathToFileURL(compiledTestModulePath(project, application.entry, sandbox)).href;
+    await writeFile(launcher, nodeApplicationLauncherSource(entryUrl, node, overrides, development, application.kind), "utf8");
     return { sandbox, launcher, projectRoot: project.projectRoot, compilation: project.stats };
   } catch (error) {
     await removeCompiledSandbox(sandbox);
@@ -200,13 +210,12 @@ async function prepareNodeApplication(
   }
 }
 
-export function nodeApplicationEntry(project: ProjectResult, config: VelarNodeConfig): ProjectModule {
+export function nodeApplicationEntry(project: ProjectResult, config: VelarNodeConfig): CheckedNodeApplication {
   const entry = project.modules.find((module) => module.inputPath === project.entryPath);
   const exportType = entry?.result.moduleInterface.exports.get(config.app);
-  if (!entry || !exportType || !isServeAppType(exportType)) {
-    throw new Error(`${project.entryPath}: Node application entry must export ServeApp '${config.app}' (set node.app to choose another export)`);
-  }
-  return entry;
+  if (entry && exportType && isServeAppType(exportType)) return { entry, kind: "serve-app" };
+  if (entry && exportType && isWebSocketFactoryType(exportType)) return { entry, kind: "websocket-factory" };
+  throw new Error(`${project.entryPath}: Node application entry must export ServeApp '${config.app}' or an async WebSocket startup function (host: string, port: number, maxBodyBytes: number) (set node.app to choose another export)`);
 }
 
 export function nodeApplicationLauncherSource(
@@ -214,14 +223,23 @@ export function nodeApplicationLauncherSource(
   config: VelarNodeConfig,
   overrides: NodeApplicationOverrides,
   development: boolean,
+  kind: NodeApplicationKind,
 ): string {
   const host = overrides.host ?? config.host;
   const port = overrides.port ?? config.port;
-  return `import {ServeApp, serve} from "velar/serve";\n`
+  const runtimeImport = kind === "serve-app"
+    ? `import {ServeApp, serve} from "velar/serve";\n`
+    : `import {WebSocketServer} from "velar/websocket";\n`;
+  const start = kind === "serve-app"
+    ? `const app = ServeApp.parse(entry[${JSON.stringify(config.app)}]);\n`
+      + `const server = await serve(app, ${port}, ${JSON.stringify(host)}, ${config.maxBodyBytes});\n`
+    : `const start = entry[${JSON.stringify(config.app)}];\n`
+      + `if (typeof start !== "function") throw new TypeError("Configured WebSocket application export is not callable");\n`
+      + `const server = WebSocketServer.parse(await start(${JSON.stringify(host)}, ${port}, ${config.maxBodyBytes}));\n`;
+  return runtimeImport
     + `import * as entry from ${JSON.stringify(entryUrl)};\n`
-    + `const app = ServeApp.parse(entry[${JSON.stringify(config.app)}]);\n`
-    + `const server = await serve(app, ${port}, ${JSON.stringify(host)}, ${config.maxBodyBytes});\n`
-    + `process.stdout.write(${JSON.stringify(`VelarScript ${development ? "development" : "production"} server: http://${displayHost(host)}:${port}\n`)});\n`
+    + start
+    + `process.stdout.write(${JSON.stringify(`VelarScript ${development ? "development" : "production"} server: http://${displayHost(host)}:`)} + server.port + "\\n");\n`
     + `let stopping = false;\n`
     + `const stop = async signal => { if (stopping) return; stopping = true; try { await server.stop(); } catch (error) { console.error(error); process.exitCode = 1; } if (signal === "SIGINT" && process.exitCode == null) process.exitCode = 130; if (signal === "SIGTERM" && process.exitCode == null) process.exitCode = 143; };\n`
     + `process.once("SIGINT", () => void stop("SIGINT"));\n`
@@ -286,6 +304,25 @@ function requireNodeConfig(config: VelarProjectConfig): VelarNodeConfig {
 
 function isServeAppType(type: ValueType): boolean {
   return type.kind === "named" && type.identity === SERVE_APP_IDENTITY;
+}
+
+function isWebSocketFactoryType(type: ValueType): boolean {
+  return type.kind === "function"
+    && type.typeParameterNames === undefined
+    && type.rest === undefined
+    && type.requiredParameters === 3
+    && type.parameters.length === 3
+    && type.parameters[0]?.kind === "string"
+    && type.parameters[1]?.kind === "number"
+    && type.parameters[2]?.kind === "number"
+    && type.result.kind === "promise"
+    && type.result.value.kind === "named"
+    && type.result.value.identity === WEBSOCKET_SERVER_IDENTITY;
+}
+
+function usesNodeWebSocket(project: ProjectResult): boolean {
+  return project.modules.some((module) => module.result.dependencies.some((dependency) => dependency.source === "velar/websocket")
+    || module.result.runtimeModules.includes("velar/websocket"));
 }
 
 function watchedProjectPath(config: VelarProjectConfig, input: string): boolean {

@@ -46,29 +46,11 @@ provider/adapter selector. `web.deployment` contains only portable behavior:
 }
 ```
 
-Provider integrations are ordinary, independently versioned packages. They
-consume `velar-deploy.json` after the neutral build and cannot acquire a
-`velar/*` module, compiler hook, manifest keyword, or hidden release coupling.
-
-## Netlify integration
-
-Install and run `@velarscript/netlify` separately:
-
-```sh
-velar build
-npx velar-netlify dist netlify-bundle
-```
-
-The integration copies the exact verified build to `netlify-bundle/site` and
-writes `netlify-bundle/netlify.toml` beside it. Netlify uses the bundle root and
-publishes `site/`. Provider configuration therefore never alters the
-compiler-owned file inventory or build identity. The integration currently
-accepts root-base builds only, rejects symbolic links, enforces file/byte
-ceilings, and requires a new output directory.
-
-The repository's `npm run preview:prepare` flow applies this same external
-projection to the checked-in provider-neutral preview profile. Deployment
-remains a separate authorized action.
+Provider projection is application or deployment-repository code. A project
+may consume `velar-deploy.json` after verification and create the configuration
+required by its chosen host, but VelarScript does not ship provider packages or
+provider-specific release workflows. Such code cannot acquire a `velar/*`
+module, compiler hook, manifest keyword, or hidden release coupling.
 
 ## Security and public configuration
 
