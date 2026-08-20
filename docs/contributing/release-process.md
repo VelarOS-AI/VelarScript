@@ -1,6 +1,6 @@
 # VelarScript Toolchain Release Process
 
-Status: VelarScript 0.12.0 release candidate
+Status: VelarScript 0.12.0 released on 2026-08-20
 
 VelarScript ships the compiler, target-neutral Core Standard API, official Node
 runtime, official Web and Desktop frameworks, project creator, and CLI as one
@@ -40,7 +40,8 @@ Candidate mode fails unless all of these are true:
 
 - the version is stable rather than `-dev` or another prerelease;
 - Git has a committed, clean `HEAD`;
-- `HEAD` has exactly the `v<version>` tag;
+- the exact `v<version>` tag resolves to `HEAD` (independent-package tags may
+  resolve to the same commit);
 - `origin` matches package repository metadata;
 - all seven packages have an explicit publishable license;
 - compiler, Core, Node, Web, Desktop, creator, and CLI versions and internal
@@ -65,7 +66,9 @@ provenance under the non-default `next` dist-tag, verifies each registry
 integrity, and promotes `latest` only after all seven exact versions are
 available. A partially completed run is resumable: an existing version is
 accepted only when its npm integrity is byte-for-byte identical to the strict
-candidate. The first registry generation uses a short-lived repository secret;
+candidate. Exact-version and dist-tag reads allow up to five minutes for npm's
+public index to converge, which is required for first-time package creation.
+The first registry generation uses a short-lived repository secret;
 after every package exists, each package is bound to this workflow through npm
 trusted publishing and the bootstrap secret is removed.
 
@@ -120,4 +123,6 @@ to `latest`. It cannot publish a toolchain package or silently include another
 ecosystem package. A retry accepts an existing version only when its integrity
 is byte-identical to the candidate. The scope token is used to bootstrap a new
 package or a new trusted-publisher workflow; provenance still binds the
-published tarball to this workflow and source revision.
+published tarball to this workflow and source revision. Registry integrity and
+`latest` verification use the same bounded five-minute convergence window as
+the toolchain publisher.
