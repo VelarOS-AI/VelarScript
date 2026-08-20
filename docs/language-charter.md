@@ -1723,8 +1723,23 @@ Map members are `size`, `get`, `set`, `update`, `remove`, `has`, `clear`,
 accepts a checked dense List whose every item is exactly `[key, value]`;
 `Map(record)` converts own enumerable string data fields into entries. Both
 forms reject accessors, sparse or malformed Lists, symbol fields, and
-overridable collection iterators at their runtime boundary. Empty `Set()` and
-`Map()` keep their existing contextual and first-mutation inference.
+overridable collection iterators at their runtime boundary.
+
+An empty collection settles its element type where it is written. `Set()`,
+`Map()`, and `[]` carry no items to infer from, so one of three things must
+say what they hold: an annotation on the binding, a contextual type (an
+argument position, a return position, an annotated field, `state`, or a record
+field), or the constructor's own arguments. A binding with none of the three is
+an error rather than a collection of `unknown` waiting for a later line to fill
+it in — a later mutation never reaches back to type an earlier declaration.
+
+```velar fragment
+const tags: Set<string> = Set()      // the annotation says it
+const initial = Set(["web"])         // the argument says it
+
+def empty() -> Set<string>:
+    return Set()                     // the return type says it
+```
 
 ### Dynamic Record
 
@@ -3892,6 +3907,12 @@ The following are not part of VelarScript:
   there the question is arity rather than nullability — a declaration answers
   that one with a default value instead
 - TypeScript-style interfaces, assertions, overloads, or type programming
+- inference that runs backwards. A declaration takes its type from its own
+  position — annotation, contextual type, or initializer — and never from a
+  statement below it. `const tags = Set()` is therefore an error rather than an
+  element type a later `tags.add("web")` fills in (section 8): a reader would
+  have to scan forward to learn what the line declares, and a use before that
+  mutation would see `unknown`
 - generators, `yield`, or the JavaScript `Symbol.asyncIterator` protocol;
   incremental sources use checked `async for` pull contracts or producer
   callbacks, and JavaScript `for await` is guided to `async for`. A class that

@@ -108,12 +108,6 @@ interface Binding {
   ownedResource?: { readonly handle: string; readonly depth: number };
 }
 
-interface CollectionInferenceGroup {
-  readonly type: ValueType;
-  readonly bindings: Map<Binding, string>;
-  open: boolean;
-}
-
 interface MemberNarrowing {
   readonly type: ValueType;
   readonly frame: number;
@@ -1052,8 +1046,6 @@ export class Analyzer implements TypeEnvironment {
     readonly truthy: ReadonlyMap<string, ValueType>;
     readonly falsy: ReadonlyMap<string, ValueType>;
   }>();
-  private readonly collectionInferenceGroups = new WeakMap<Binding, CollectionInferenceGroup>();
-  private readonly collectionInferenceTypes = new WeakMap<object, CollectionInferenceGroup>();
   private readonly privateFields = new Map<string, Map<string, ClassField>>();
   private readonly privateGetters = new Map<string, Set<string>>();
   private readonly privateMethods = new Map<string, Map<string, ValueType>>();
@@ -1979,11 +1971,10 @@ export class Analyzer implements TypeEnvironment {
       application.arguments.map(resolveArgument),
       type.readonlyView === true,
     );
-    // One object per instantiation, not one per resolution. Several traversals
-    // cut their cycles by object identity (`freezeEscapedCollectionInference`
-    // keys a WeakMap by the expanded type), and a recursive generic re-enters
-    // them; handing back a fresh equal object each time would defeat the guard
-    // and recur without end.
+    // One object per instantiation, not one per resolution. A recursive
+    // generic re-enters resolution, so handing back a fresh equal object each
+    // time would defeat any traversal that memoizes by type identity and recur
+    // without end.
     const key = `${built.identity}${built.readonlyView ? "\u0000readonly" : ""}`;
     const cached = this.canonicalGenericApplications.get(key);
     if (cached) return cached;
@@ -3048,9 +3039,6 @@ export class Analyzer implements TypeEnvironment {
         }
         const annotated = statement.type ? this.resolveAnnotation(statement.type) : null;
         const annotationValid = statement.type ? this.validateTypeReference(statement.type) : true;
-        const aliasedBinding = !annotated && statement.initializer.kind === "IdentifierExpression"
-          ? this.lookup(statement.initializer.name)
-          : null;
         const actual = this.inferExpression(statement.initializer, annotationValid ? annotated ?? unknownType : invalidType);
         // D44 rule 71: an unannotated alias of an assignment-established fact
         // declares the source's domain and re-establishes the fact below, so
@@ -3063,6 +3051,7 @@ export class Analyzer implements TypeEnvironment {
         const declared = annotationValid ? annotated ?? inferredStorage : invalidType;
         const contract = annotationValid ? annotated ?? inferredStorage : invalidType;
         if (annotationValid) this.requireAssignable(actual, declared, statement.initializer.span);
+        this.requireSettledCollectionElement(statement.initializer, declared, annotated !== null);
         this.declarePattern(statement.pattern, statement.binding === "let", declared, contract);
         // D51 rule 101: an alias of an owned handle — or a closure over one —
         // is the same resource under a second name, so it inherits the
@@ -3081,13 +3070,6 @@ export class Analyzer implements TypeEnvironment {
           const binding = this.scopes.at(-1)?.get(statement.pattern.name);
           if (binding?.span.start === statement.pattern.span.start && binding.span.end === statement.pattern.span.end) {
             if (this.expandAliases(actual).kind === "promise") this.promiseInitializerBindings.add(binding);
-            if (!annotated) {
-              const aliasedGroup = aliasedBinding ? this.collectionInferenceGroups.get(aliasedBinding) : null;
-              if (aliasedGroup) this.joinCollectionInference(statement.pattern.name, binding, aliasedGroup);
-              else if (this.isFreshUnresolvedCollection(statement.initializer, declared)) {
-                this.joinCollectionInference(statement.pattern.name, binding, this.createCollectionInference(declared));
-              }
-            }
           }
         }
         break;
@@ -5064,9 +5046,12 @@ export class Analyzer implements TypeEnvironment {
       this.declareBinding("self", false, selfType, statement.span, true);
     }
     for (const parameter of statement.parameters) {
-      const type = this.resolveAnnotation(parameter.type);
-      const valid = parameter.type ? this.validateTypeReference(parameter.type) : true;
-      if (parameter.defaultValue && valid) {
+      const contextualType = !parameter.type && parameter.defaultValue
+        ? this.contextualFunctionParameterDefault(statement, parameter)
+        : null;
+      const type = contextualType ?? this.resolveAnnotation(parameter.type);
+      const valid = contextualType !== null || (parameter.type ? this.validateTypeReference(parameter.type) : true);
+      if (parameter.defaultValue && valid && contextualType === null) {
         this.requireAssignable(this.inferParameterDefault(parameter.defaultValue, type), type, parameter.defaultValue.span);
       }
       const declared = valid ? type : invalidType;
@@ -5111,6 +5096,19 @@ export class Analyzer implements TypeEnvironment {
     this.exitScope();
     this.typeParameterFrames.pop();
     this.constructorDepth = outerConstructorDepth;
+  }
+
+  /**
+   * A target-owned declaration may use an ordinary default expression as a
+   * typed input descriptor. The target analyzes that expression and returns
+   * the value type visible inside the body; Core owns only the function-scope
+   * plumbing and never learns the descriptor vocabulary.
+   */
+  protected contextualFunctionParameterDefault(
+    _statement: AnalyzableFunctionDeclaration,
+    _parameter: AnalyzableFunctionDeclaration["parameters"][number],
+  ): ValueType | null {
+    return null;
   }
 
   protected analyzeBlock(
@@ -5357,7 +5355,6 @@ export class Analyzer implements TypeEnvironment {
           if (storageBinding.narrowingFrame === null) storageBinding.type = rebound;
           targetBinding.storageType = rebound;
           targetBinding.type = rebound;
-          this.rebindCollectionInference(statement.target.kind === "IdentifierExpression" ? statement.target.name : "", targetBinding, statement.value, valueType);
         }
         // D44 rule 71: the assignment establishes the right-hand side's type
         // as the location's fact (`x = maybeNull()` establishes nothing —
@@ -8088,9 +8085,7 @@ export class Analyzer implements TypeEnvironment {
         this.collectionCalls.set(member.span.end, "listAppend");
         const argument = argumentAt(0);
         const value = inferArgument(0, object.element);
-        if (argument && object.element.kind === "unknown") {
-          if (!this.refineCollectionInference(object, { kind: "list", element: value })) this.requireAssignable(value, object.element, argument.span);
-        } else if (argument) this.requireAssignable(value, object.element, argument.span);
+        if (argument) this.requireAssignable(value, object.element, argument.span);
         requireCount(1);
         return nullType;
       }
@@ -8098,11 +8093,7 @@ export class Analyzer implements TypeEnvironment {
         this.collectionCalls.set(member.span.end, "listExtend");
         const argument = argumentAt(0);
         const source = argument ? this.expandAliases(inferArgument(0)) : unknownType;
-        let inferred = false;
-        if (argument && source.kind === "list" && object.element.kind === "unknown") {
-          inferred = this.refineCollectionInference(object, source);
-        }
-        if (argument && !inferred) this.requireAssignable(source, object, argument.span);
+        if (argument) this.requireAssignable(source, object, argument.span);
         requireCount(1);
         return nullType;
       }
@@ -8112,9 +8103,7 @@ export class Analyzer implements TypeEnvironment {
         if (indexArgument) this.requireAssignable(inferArgument(0, numberType), numberType, indexArgument.span);
         const argument = argumentAt(1);
         const value = inferArgument(1, object.element);
-        if (argument && object.element.kind === "unknown") {
-          if (!this.refineCollectionInference(object, { kind: "list", element: value })) this.requireAssignable(value, object.element, argument.span);
-        } else if (argument) this.requireAssignable(value, object.element, argument.span);
+        if (argument) this.requireAssignable(value, object.element, argument.span);
         requireCount(2);
         return nullType;
       }
@@ -8268,11 +8257,12 @@ export class Analyzer implements TypeEnvironment {
         this.collectionCalls.set(member.span.end, "mapSet");
         const keyArgument = argumentAt(0);
         const valueArgument = argumentAt(1);
-        const key = inferArgument(0);
-        const value = inferArgument(1);
-        if (object.key.kind === "unknown" && object.value.kind === "unknown") {
-          this.refineCollectionInference(object, { kind: "map", key, value });
-        }
+        // D85 rule 211: the receiver's declared key and value types are the
+        // contextual types of this call, exactly as `List.append` passes its
+        // element type. Without them an empty `[]`, an arrow, or any other
+        // value that reads its shape from context arrives as `unknown`.
+        const key = inferArgument(0, object.key);
+        const value = inferArgument(1, object.value);
         if (keyArgument) this.requireAssignable(key, object.key, keyArgument.span);
         if (valueArgument) this.requireAssignable(value, object.value, valueArgument.span);
         requireCount(2);
@@ -8282,11 +8272,7 @@ export class Analyzer implements TypeEnvironment {
         this.collectionCalls.set(member.span.end, "mapUpdate");
         const argument = argumentAt(0);
         const source = argument ? this.expandAliases(inferArgument(0)) : unknownType;
-        let inferred = false;
-        if (argument && source.kind === "map" && object.key.kind === "unknown" && object.value.kind === "unknown") {
-          inferred = this.refineCollectionInference(object, source);
-        }
-        if (argument && !inferred) this.requireAssignable(source, object, argument.span);
+        if (argument) this.requireAssignable(source, object, argument.span);
         requireCount(1);
         return nullType;
       }
@@ -8392,22 +8378,15 @@ export class Analyzer implements TypeEnvironment {
         const argument = argumentAt(0);
         const value = inferArgument(0, object.element);
         requireCount(1);
-        if (argument && object.element.kind === "unknown") {
-          if (!this.refineCollectionInference(object, { kind: "set", element: value })) this.requireAssignable(value, object.element, argument.span);
-        } else if (argument) this.requireAssignable(value, object.element, argument.span);
+        if (argument) this.requireAssignable(value, object.element, argument.span);
         return nullType;
       }
       if (member.property === "update") {
         this.collectionCalls.set(member.span.end, "setUpdate");
         const argument = argumentAt(0);
+        const accepted: ValueType = { kind: "union", members: [object, { kind: "list", element: object.element }] };
         const source = argument ? this.expandAliases(inferArgument(0)) : unknownType;
-        let inferred = false;
-        if (argument && (source.kind === "set" || source.kind === "list") && object.element.kind === "unknown") {
-          inferred = this.refineCollectionInference(object, { kind: "set", element: source.element });
-        }
-        if (argument && !inferred) {
-          this.requireAssignable(source, { kind: "union", members: [object, { kind: "list", element: object.element }] }, argument.span);
-        }
+        if (argument) this.requireAssignable(source, accepted, argument.span);
         requireCount(1);
         return nullType;
       }
@@ -9973,10 +9952,7 @@ export class Analyzer implements TypeEnvironment {
   }
 
   protected requireAssignable(actual: ValueType, expected: ValueType, valueSpan: Span): void {
-    if (this.contextuallyAssignable(actual, expected, valueSpan)) {
-      this.freezeEscapedCollectionInference(actual, expected);
-      return;
-    }
+    if (this.contextuallyAssignable(actual, expected, valueSpan)) return;
     const expandedActual = this.expandAliases(actual);
     const expandedExpected = this.expandAliases(expected);
     const expectedCore = expandedExpected.kind === "optional" ? this.expandAliases(expandedExpected.inner) : expandedExpected;
@@ -10107,60 +10083,6 @@ export class Analyzer implements TypeEnvironment {
       if (actual.kind === "list") return "Map(entries) builds a Map from a List of [key, value] Lists";
     }
     return null;
-  }
-
-  private freezeEscapedCollectionInference(actual: ValueType, expected: ValueType, seen: WeakMap<object, WeakSet<object>> = new WeakMap()): void {
-    const inference = this.collectionInferenceTypes.get(actual);
-    const expectedInference = this.collectionInferenceTypes.get(expected);
-    if (inference && actual !== expected && !expectedInference) inference.open = false;
-
-    const expandedActual = this.expandAliases(actual);
-    const expandedExpected = this.expandAliases(expected);
-    const expectedSeen = seen.get(expandedActual) ?? new WeakSet<object>();
-    if (expectedSeen.has(expandedExpected)) return;
-    expectedSeen.add(expandedExpected);
-    seen.set(expandedActual, expectedSeen);
-
-    if (expandedExpected.kind === "optional") {
-      if (expandedActual.kind === "optional") this.freezeEscapedCollectionInference(expandedActual.inner, expandedExpected.inner, seen);
-      else if (expandedActual.kind !== "null") this.freezeEscapedCollectionInference(expandedActual, expandedExpected.inner, seen);
-      return;
-    }
-    if (expandedExpected.kind === "union") {
-      const target = expandedExpected.members.find((member) => isAssignable(expandedActual, member, this));
-      if (target) this.freezeEscapedCollectionInference(expandedActual, target, seen);
-      return;
-    }
-    if (expandedActual.kind === "union") {
-      for (const member of expandedActual.members) this.freezeEscapedCollectionInference(member, expandedExpected, seen);
-      return;
-    }
-    if ((expandedActual.kind === "list" && expandedExpected.kind === "list")
-      || (expandedActual.kind === "set" && expandedExpected.kind === "set")) {
-      this.freezeEscapedCollectionInference(expandedActual.element, expandedExpected.element, seen);
-      return;
-    }
-    if (expandedActual.kind === "map" && expandedExpected.kind === "map") {
-      this.freezeEscapedCollectionInference(expandedActual.key, expandedExpected.key, seen);
-      this.freezeEscapedCollectionInference(expandedActual.value, expandedExpected.value, seen);
-      return;
-    }
-    if (expandedActual.kind === "record" && expandedExpected.kind === "record") {
-      this.freezeEscapedCollectionInference(expandedActual.value, expandedExpected.value, seen);
-      return;
-    }
-    const actualFields = expandedActual.kind === "object" ? expandedActual.fields
-      : expandedActual.kind === "named" ? this.fieldsOf(expandedActual.identity ?? expandedActual.name)
-        : null;
-    const expectedFields = expandedExpected.kind === "object" ? expandedExpected.fields
-      : expandedExpected.kind === "named" ? this.fieldsOf(expandedExpected.identity ?? expandedExpected.name)
-        : null;
-    if (actualFields && expectedFields) {
-      for (const [name, expectedField] of expectedFields) {
-        const actualField = actualFields.get(name);
-        if (actualField) this.freezeEscapedCollectionInference(actualField, expectedField, seen);
-      }
-    }
   }
 
   private contextuallyAssignable(actual: ValueType, expected: ValueType, valueSpan: Span): boolean {
@@ -11528,71 +11450,47 @@ export class Analyzer implements TypeEnvironment {
     } : null;
   }
 
+  /**
+   * D85 rule 207: an empty collection's element type must be settled where the
+   * collection is written — by an annotation, a contextual type, or the
+   * constructor's own arguments. Nothing infers it from a later mutation, so a
+   * binding left with no source is reported at the construction rather than
+   * kept as `unknown` for a following line to fill in.
+   */
+  protected requireSettledCollectionElement(initializer: Expression, declared: ValueType, annotated: boolean): void {
+    if (annotated) return;
+    const type = this.expandAliases(declared);
+    if (!this.isFreshUnresolvedCollection(initializer, type)) return;
+    const [spelling, holds, example] = type.kind === "list"
+      ? ["[]", "what the List holds", "let items: List<string> = []"]
+      : type.kind === "set"
+        ? ["Set()", "what the Set holds", "const tags: Set<string> = Set()"]
+        : ["Map()", "what the Map holds", "const users: Map<string, User> = Map()"];
+    this.diagnostics.push(diagnostic(
+      "VEL4039",
+      `Empty '${spelling}' requires an explicit type; nothing at this position says ${holds} — write '${example}'`,
+      initializer.span,
+    ));
+  }
+
   private isFreshUnresolvedCollection(expression: Expression, type: ValueType): boolean {
     const unresolved = type.kind === "list" ? type.element.kind === "unknown"
       : type.kind === "set" ? type.element.kind === "unknown"
         : type.kind === "map" ? type.key.kind === "unknown" && type.value.kind === "unknown"
           : false;
     if (!unresolved) return false;
-    if (expression.kind === "ListExpression") return true;
+    // Only a genuinely empty construction is unsettled. A populated one whose
+    // items happen to be `unknown` (`[value]` over an unchecked boundary
+    // value) says what it holds; the element type is simply that.
+    if (expression.kind === "ListExpression") return expression.elements.length === 0;
     return expression.kind === "CallExpression"
+      && expression.arguments.length === 0
+      // `Set<string>()` already told the author where the element type goes
+      // (VEL2031); reporting the missing one here would name the same mistake
+      // twice and contradict the fix the first report offers.
+      && expression.typeArgumentsRemoved !== true
       && expression.callee.kind === "IdentifierExpression"
       && (expression.callee.name === "Map" || expression.callee.name === "Set");
-  }
-
-  private joinCollectionInference(name: string, binding: Binding, group: CollectionInferenceGroup): void {
-    group.bindings.set(binding, name);
-    this.collectionInferenceGroups.set(binding, group);
-  }
-
-  private createCollectionInference(type: ValueType): CollectionInferenceGroup {
-    const group = { type, bindings: new Map<Binding, string>(), open: true };
-    this.collectionInferenceTypes.set(type, group);
-    return group;
-  }
-
-  private refineCollectionInference(current: ValueType, next: ValueType): boolean {
-    const group = this.collectionInferenceTypes.get(current);
-    if (!group?.open) return false;
-    if (group.type.kind === "list" && next.kind === "list") {
-      (group.type as { kind: "list"; element: ValueType }).element = next.element;
-    } else if (group.type.kind === "set" && next.kind === "set") {
-      (group.type as { kind: "set"; element: ValueType }).element = next.element;
-    } else if (group.type.kind === "map" && next.kind === "map") {
-      (group.type as { kind: "map"; key: ValueType; value: ValueType }).key = next.key;
-      (group.type as { kind: "map"; key: ValueType; value: ValueType }).value = next.value;
-    } else return false;
-    for (const [member, name] of group.bindings) {
-      this.recordSemanticBinding(`${member.span.start}:${name}`, group.type);
-    }
-    return true;
-  }
-
-  private rebindCollectionInference(name: string, binding: Binding, value: Expression, valueType: ValueType): void {
-    const previous = this.collectionInferenceGroups.get(binding);
-    if (!previous) return;
-    const aliasedBinding = value.kind === "IdentifierExpression" ? this.lookup(value.name) : null;
-    const aliasedGroup = aliasedBinding ? this.collectionInferenceGroups.get(aliasedBinding) : null;
-    if (previous === aliasedGroup && aliasedGroup) return;
-    previous?.bindings.delete(binding);
-    this.collectionInferenceGroups.delete(binding);
-    if (aliasedGroup) {
-      binding.type = aliasedGroup.type;
-      binding.declaredType = aliasedGroup.type;
-      binding.storageType = aliasedGroup.type;
-      this.joinCollectionInference(name, binding, aliasedGroup);
-    }
-    else if (this.isFreshUnresolvedCollection(value, valueType)) {
-      binding.type = valueType;
-      binding.declaredType = valueType;
-      binding.storageType = valueType;
-      this.joinCollectionInference(name, binding, this.createCollectionInference(valueType));
-    } else {
-      binding.type = valueType;
-      binding.declaredType = valueType;
-      binding.storageType = valueType;
-    }
-    this.recordSemanticBinding(`${binding.span.start}:${name}`, binding.type);
   }
 
   protected declareBinding(
@@ -12520,6 +12418,12 @@ export class Analyzer implements TypeEnvironment {
 
   private runtimeCheckedType(input: ValueType, checked: ValueType): ValueType {
     const source = this.expandAliases(input);
+    // D85 rule 210: `unknown` is the one checked domain that proves nothing,
+    // so a check against it leaves the subject's own type alone. Without this
+    // a membership probe against a container whose element or key type is
+    // `unknown` replaced a `string` subject with `unknown`, which is a
+    // widening — every later read of it then failed for the wrong reason.
+    if (this.expandAliases(checked).kind === "unknown") return source;
     const candidates = source.kind === "union" ? source.members
       : source.kind === "optional" ? [source.inner, nullType]
         : [source];

@@ -2924,6 +2924,7 @@ export class Parser {
 
   private parsePostfix(): Expression {
     let expression = this.parsePrimary();
+    let typeArgumentsRemoved = false;
 
     while (true) {
       const explicitTypeArgumentsEnd = this.explicitTypeArgumentsEnd(expression);
@@ -2933,12 +2934,23 @@ export class Parser {
         const name = expression.kind === "IdentifierExpression" ? expression.name
           : expression.kind === "MemberExpression" ? expression.property
             : "function";
+        // D85 rule 207: an empty `Set<string>()` has no argument to infer from,
+        // so "remove the type arguments" alone would leave the author with
+        // code the analyzer rejects. Name where the type belongs instead, and
+        // withhold the mechanical fix that would not reach working source.
+        const emptyCollection = (name === "Set" || name === "Map")
+          && this.check("leftParen") && this.peekKind(1) === "rightParen";
         this.diagnostics.push(recoveredDiagnostic(
           "VEL2031",
-          `Type arguments are inferred at each call site; write '${name}(...)' without '<...>'`,
+          emptyCollection
+            ? `Type arguments are inferred at each call site; an empty '${name}()' takes its type from the binding — write 'const values: ${name === "Set" ? "Set<string>" : "Map<string, number>"} = ${name}()'`
+            : `Type arguments are inferred at each call site; write '${name}(...)' without '<...>'`,
           span(start, this.previous().span.end),
-          mechanicalFix(span(start, this.previous().span.end), "", "Remove the explicit type arguments"),
+          ...(emptyCollection
+            ? []
+            : [mechanicalFix(span(start, this.previous().span.end), "", "Remove the explicit type arguments")]),
         ));
+        typeArgumentsRemoved = true;
         continue;
       }
       let call = false;
@@ -2992,8 +3004,10 @@ export class Parser {
           arguments: arguments_,
           ...(sawNamed ? { argumentNames } : {}),
           optional: optionalCall,
+          ...(typeArgumentsRemoved ? { typeArgumentsRemoved: true } : {}),
           span: span(expression.span.start, close.span.end),
         };
+        typeArgumentsRemoved = false;
         continue;
       }
 

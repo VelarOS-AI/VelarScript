@@ -981,6 +981,7 @@ export class VelarWebAnalyzer extends Analyzer {
         const actual = this.inferExpression(statement.initializer, annotationContext ?? unknownType);
         const declared = annotationContext ?? actual;
         if (annotationValid) this.requireAssignable(actual, declared, statement.initializer.span);
+        this.requireSettledCollectionElement(statement.initializer, declared, annotationContext !== null);
         this.declareBinding(statement.name, true, declared, statement.span);
         this.markDeclaredBindingReactive(statement.name, "state");
         return true;
@@ -1734,6 +1735,7 @@ export class VelarWebAnalyzer extends Analyzer {
         const actual = this.inferExpression(item.initializer, annotationContext ?? unknownType);
         const declared = annotationContext ?? actual;
         if (annotationValid) this.requireAssignable(actual, declared, item.initializer.span);
+        this.requireSettledCollectionElement(item.initializer, declared, annotationContext !== null);
         this.declareBinding(item.name, true, declared, item.span);
         this.markDeclaredBindingReactive(item.name, "state");
       } else if (item.kind === "ExtensionStatement:web:computed") {

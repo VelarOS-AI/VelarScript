@@ -173,6 +173,7 @@ them; the first two are the **silent traps** in the list — read them twice.
 | `interface X:`, `record X:`, `struct X:` | `type X:` — one keyword for record shapes and aliases. |
 | `items.length` | `items.size` (also on strings, Sets, Maps). |
 | `items.push(x)` | `items.append(x)`. There is no `splice`/`shift`/`unshift`/mutating `sort`; use `insert`, `pop`, `remove`, `extend`, and the copying `sorted()`/`reversed()`. |
+| `const items = []`, `const tags = Set()` | An empty collection takes its type where it is written: `const items: List<string> = []`. A later `append`/`add`/`set` never types the declaration. A contextual position supplies it too, so `take(Set())` and `return Map()` need no annotation. |
 | `if value:` truthiness | Conditions accept only `bool`/`bool?`. Test presence explicitly: `if value != null:`. |
 | `value is null` | `value == null` / `value != null` — `is` tests runtime types, `null` is a value. |
 | `switch`, or an `if`/`else if` ladder over an enum | `match` with `case _:` as the only fallback. |

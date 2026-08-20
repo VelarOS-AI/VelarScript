@@ -469,7 +469,7 @@ test("[COL-U9] a two-parameter map callback teaches the two-slot loop without a 
 
 test("[COL-U10] cross-collection mismatches teach the bridge spellings", () => {
   rejects("def wants(values: List<number>) -> number:\n    return values.size\nconst s = Set([1])\nprint(str(wants(s)))\n", "VEL4001", /Set\.values\(\) returns the members as a List/u);
-  rejects("def wants(values: List<string>) -> number:\n    return values.size\nconst m = Map()\nm.set(\"a\", 1)\nprint(str(wants(m)))\n", "VEL4001", /Map\.keys\(\), Map\.values\(\), or Map\.entries\(\)/u);
+  rejects("def wants(values: List<string>) -> number:\n    return values.size\nconst m: Map<string, number> = Map()\nm.set(\"a\", 1)\nprint(str(wants(m)))\n", "VEL4001", /Map\.keys\(\), Map\.values\(\), or Map\.entries\(\)/u);
   rejects("def wants(values: Set<number>) -> number:\n    return values.size\nprint(str(wants([1, 2])))\n", "VEL4001", /Set\(values\) builds a Set from a List/u);
   rejects("def wants(values: Map<string, number>) -> number:\n    return values.size\nconst r: Record<number> = {a: 1}\nprint(str(wants(r)))\n", "VEL4001", /Map\(record\) builds a string-keyed Map from a record/u);
 });

@@ -994,6 +994,13 @@ export interface CallExpression {
   readonly arguments: readonly Expression[];
   readonly argumentNames?: readonly (string | null)[];
   readonly optional: boolean;
+  /**
+   * The call was written with explicit type arguments, which VEL2031 removed
+   * as it recovered. The author did name the types, so a later rule that
+   * reports a missing one stays quiet rather than reporting the same mistake
+   * a second time.
+   */
+  readonly typeArgumentsRemoved?: boolean;
   readonly span: Span;
 }
 

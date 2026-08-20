@@ -268,7 +268,7 @@ class P:
 def touch():
     return null
 
-const registry = Map()
+const registry: Map<string, () -> P> = Map()
 registry.set("p", () => P())
 const factory = registry.get("p")
 if factory != null:

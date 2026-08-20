@@ -40,7 +40,7 @@ const names = activeNames(users)
 const firstName = names[0]
 const namedUserCount = names.map(name => name == "" ? 0 : 1).reduce((total, count) => total + count, 0)
 
-const scores = Map()
+const scores: Map<string, number> = Map()
 scores.set(user.id, 10)
 const savedScore = scores.get(user.id)
 

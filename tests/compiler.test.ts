@@ -1514,7 +1514,7 @@ def hold<T>(value: T) -> T?:
     return stored
 
 def collect<T>(value: T) -> List<T>:
-    const items = []
+    const items: List<T> = []
     items.append(value)
     return items
 
@@ -3202,7 +3202,7 @@ test("in provides typed Python-style membership over JavaScript collections", ()
   const result = compile(`
 const names = ["Ada", "Lin"]
 const tags = Set(["web", "game"])
-const scores = Map()
+const scores: Map<string, number> = Map()
 scores.set("Ada", 9)
 print("Ada" in names)
 print("web" in tags)
@@ -13554,7 +13554,7 @@ const tagCopy = tags.copy()
 for tag in tags:
     const current = tag
 
-let scores = Map()
+let scores: Map<string, number> = Map()
 scores.set("seed", 1)
 const more = Map([["next", 2]])
 scores.update(more)
@@ -13742,7 +13742,7 @@ values.append(2)
 values.extend([3])
 const selected = Set(values)
 selected.add(3)
-const lookup = Map()
+const lookup: Map<string, number> = Map()
 lookup.set("value", 1)
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
@@ -14263,7 +14263,7 @@ class Box:
 
 const tree: Tree = {name: "root", children: []}
 const valid = Json.stringify(tree)
-const mapping = Map()
+const mapping: Map<string, number> = Map()
 mapping.set("value", 1)
 const unique = Set([1, 2])
 const callback = () => 1
@@ -17014,7 +17014,7 @@ print(values.pop())
 print(values.some(value => value == 4))
 print(values.every(value => value > 0))
 
-const lookup = Map()
+const lookup: Map<string, number> = Map()
 lookup.set("answer", 42)
 print(lookup.get("missing") == null)
 print(lookup.remove("answer"))
@@ -17035,7 +17035,7 @@ const values = [1]
 values.extend(["two"])
 values.push(2)
 
-const lookup = Map()
+const lookup: Map<string, number> = Map()
 lookup.set("answer", 42)
 print(lookup["answer"])
 lookup["answer"] = 43
@@ -17097,9 +17097,9 @@ print(tags.update(["game", "web"]) == null)
 print(tags.has("game"))
 print(tags.remove("web"))
 
-const scores = Map()
+const scores: Map<string, number> = Map()
 scores.set("Ada", 9)
-const more = Map()
+const more: Map<string, number> = Map()
 more.set("Lin", 7)
 print(scores.update(more) == null)
 print(scores.get("Lin"))
@@ -17128,12 +17128,12 @@ values.splice(0, 1)
 values.any(value => value > 0)
 values.findIndex(value => value > 0)
 
-const tags = Set()
+const tags: Set<string> = Set()
 tags.addAll(["web"])
 tags.append("game")
 tags.delete("web")
 
-const scores = Map()
+const scores: Map<string, number> = Map()
 scores.setAll(Map())
 scores.put("Ada", 9)
 scores.delete("Ada")
@@ -17189,15 +17189,15 @@ print("done")
   assert.equal(execution.stdout, "value\nindex\na,b,c\nb\n6\n2\ntrue\ndone\n");
 
   const inferred = compileCore(`
-let values = []
+let values: List<number> = []
 values.append(value=1)
 const first: number = values[0]
 
-let tags = Set()
+let tags: Set<string> = Set()
 tags.add(value="web")
 const tag: string = tags.values()[0]
 
-let scores = Map()
+let scores: Map<string, number> = Map()
 scores.set(value=1, key="Ada")
 const score: number? = scores.get(key="Ada")
 `.trimStart());
@@ -17322,15 +17322,26 @@ print(scores.get("Ada", 0))
   assert.match(messages, /Use 'get\(key\) \?\? fallback'/u);
 });
 
-test("empty Lists infer one element type from append or extend", () => {
-  const result = compile(`
-let appended = []
+test("empty collections take their element type from their own position", () => {
+  // D85 rule 207: an annotation, a contextual type, or the constructor's own
+  // arguments settle it — never a mutation on a later line.
+  const settled = compile(`
+type Bucket:
+    values: List<number>
+
+def share(tags: Set<string>):
+    print(tags.size)
+
+def empty() -> Map<string, number>:
+    return Map()
+
+let appended: List<number> = []
 appended.append(1)
 const first: number = appended[0]
 
-let extended = []
-extended.extend([2, 3])
-const second: number = extended[0]
+const bucket: Bucket = {values: []}
+const initial = Set(["web"])
+share(Set())
 
 component Values:
     state values: List<number> = []
@@ -17338,29 +17349,96 @@ component Values:
         values = [...values, 1, 2, 3]
     return <div>{values.map(value => <span key={value}>{value + 1}</span>)}</div>
 
-print(first + second)
+print(first + empty().size + bucket.values.size + initial.size)
 `.trimStart());
+  assert.deepEqual(settled.diagnostics, []);
+  const execution = executeModule(settled.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "0\n2\n");
 
+  const unsettled = compile(`
+const values = []
+const tags = Set()
+const scores = Map()
+values.append(1)
+tags.add("web")
+scores.set("Ada", 9)
+`.trimStart());
+  assert.deepEqual(unsettled.diagnostics.map((item) => item.code), ["VEL4039", "VEL4039", "VEL4039"]);
+  // The compiler cannot know which type was meant, so it offers no fix that
+  // would turn the omission into a silently wrong annotation.
+  assert.ok(unsettled.diagnostics.every((item) => item.fix === undefined));
+  assert.match(unsettled.diagnostics[0]?.message ?? "", /Empty '\[\]' requires an explicit type/u);
+  assert.match(unsettled.diagnostics[1]?.message ?? "", /const tags: Set<string> = Set\(\)/u);
+  assert.match(unsettled.diagnostics[2]?.message ?? "", /what the Map holds/u);
+
+  // A populated construction says what it holds even when that is `unknown`.
+  const populated = compile("def take(value: unknown):\n    const items = [value]\n    print(items.size)\n");
+  assert.deepEqual(populated.diagnostics, []);
+
+  // VEL2031 already named where the type belongs, so VEL4039 stays quiet
+  // rather than reporting the same mistake a second time.
+  const misplaced = compile("const tags = Set<string>()\nprint(tags.size)\n");
+  assert.deepEqual(misplaced.diagnostics.map((item) => item.code), ["VEL2031"]);
+  assert.match(misplaced.diagnostics[0]?.message ?? "", /takes its type from the binding/u);
+  assert.equal(misplaced.diagnostics[0]?.fix, undefined);
+  const generic = compile("const values = mapValues<string, bool>([1])\n");
+  assert.ok(generic.diagnostics.some((item) => item.code === "VEL2031" && item.fix !== undefined));
+});
+test("a check against unknown leaves the subject's own type alone", () => {
+  // D85 rule 210: `unknown` is the one checked domain that proves nothing, so
+  // a membership probe against a container of `unknown` must not replace the
+  // subject's type with it.
+  const probes = compile(`
+def check(items: List<string>, tags: Set<unknown>, other: List<unknown>, keyed: Map<unknown, number>):
+    for tag in items:
+        if tag in tags:
+            print(f"{tag}")
+        if tag in other:
+            print(f"{tag}")
+        if tag in keyed:
+            print(f"{tag}")
+        assert tag not in tags else f"duplicate {tag}"
+`.trimStart());
+  assert.deepEqual(probes.diagnostics, []);
+
+  // A checked domain that does prove something still narrows, and a nominal
+  // `is` still establishes the named type rather than the structural one it
+  // was assigned from.
+  const narrows = compile(`
+type User:
+    name: string
+
+def narrow(tag: string?, tags: Set<string>) -> number:
+    if tag in tags:
+        return tag.size
+    return 0
+
+const raw: unknown = {name: "n", age: 39}
+assert raw is User
+const named = raw
+print(narrow("a", Set(["a"])) + named.name.size)
+`.trimStart());
+  assert.deepEqual(narrows.diagnostics, []);
+});
+test("Map.set contextually types its key and value like List.append does", () => {
+  // D85 rule 211: the receiver's declared types reach the arguments, so a
+  // value that reads its shape from context arrives checked, not `unknown`.
+  const result = compile(`
+const rows: Map<string, List<number>> = Map()
+rows.set("a", [])
+const handlers: Map<string, (number) -> number> = Map()
+handlers.set("inc", value => value + 1)
+print(rows.size + handlers.size)
+`.trimStart());
   assert.deepEqual(result.diagnostics, []);
-  const bindings = result.semanticIndex.symbols.filter((symbol) => symbol.name === "appended" || symbol.name === "extended" || symbol.name === "values");
-  assert.ok(bindings.length >= 3);
-  assert.ok(bindings.every((symbol) => symbol.type === "List<number>"));
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "3\n");
+  assert.equal(execution.stdout, "2\n");
 
-  const invalid = compile(`
-let appended = []
-appended.append(1)
-appended.append("bad")
-
-let extended = []
-extended.extend([1])
-extended.extend(["bad"])
-`.trimStart());
-  assert.equal(invalid.diagnostics.filter((item) => /Cannot assign/u.test(item.message)).length, 2);
-  assert.ok(invalid.diagnostics.some((item) => /Cannot assign string to number/u.test(item.message)));
-  assert.ok(invalid.diagnostics.some((item) => /Cannot assign List<string> to List<number>/u.test(item.message)));
+  // One wrong value is still exactly one diagnostic.
+  const invalid = compile("const scores: Map<string, number> = Map()\nscores.set(\"a\", \"bad\")\n");
+  assert.deepEqual(invalid.diagnostics.map((item) => item.message), ["Cannot assign string to number"]);
 });
 
 test("optional collection annotations contextually type empty values", () => {
@@ -17406,88 +17484,6 @@ print((value => value) == (value => value))
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "0\n0\n0\nAda\nfalse\n");
-});
-
-test("empty collection inference follows runtime aliases instead of individual bindings", () => {
-  const valid = compile(`
-const values = []
-const sameValues = values
-sameValues.append(1)
-const first: number = values[0]
-
-const scores = Map()
-const sameScores = scores
-sameScores.set("Ada", 9)
-const score: number = scores.get("Ada") ?? 0
-
-const tags = Set()
-const sameTags = tags
-sameTags.add("web")
-print(first + score)
-print(tags.has("web"))
-`.trimStart());
-  assert.deepEqual(valid.diagnostics, []);
-  const execution = executeModule(valid.code ?? "");
-  assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "10\ntrue\n");
-
-  const invalid = compile(`
-const values = []
-const sameValues = values
-sameValues.append(1)
-values.append("wrong")
-
-const scores = Map()
-const sameScores = scores
-sameScores.set("Ada", 9)
-scores.set(1, "wrong")
-
-const tags = Set()
-const sameTags = tags
-sameTags.add("web")
-tags.add(1)
-
-const nestedValues = []
-const holder = {values: nestedValues}
-nestedValues.append(1)
-holder.values.append("wrong")
-
-const inner = []
-const outer = [inner]
-inner.append(1)
-outer[0].append("wrong")
-
-let current = []
-const previous = current
-let replacement = []
-current = replacement
-replacement.append(1)
-current.append("wrong")
-previous.append("independent")
-`.trimStart());
-  const messages = invalid.diagnostics.map((item) => item.message);
-  assert.equal(messages.filter((message) => /Cannot assign string to number/u.test(message)).length, 5);
-  assert.equal(messages.filter((message) => /Cannot assign number to string/u.test(message)).length, 2);
-
-  const escaped = compile(`
-type Bucket:
-    values: List<unknown>
-
-def share(values: List<unknown>):
-    print(values.size)
-
-const objectValues = []
-const bucket: Bucket = {values: objectValues}
-objectValues.append(1)
-bucket.values.append("mixed")
-const objectNumber: number = objectValues[0]
-
-const argumentValues = []
-share(argumentValues)
-argumentValues.append(1)
-const argumentNumber: number = argumentValues[0]
-`.trimStart());
-  assert.equal(escaped.diagnostics.filter((item) => /Cannot assign unknown to number/u.test(item.message)).length, 2);
 });
 
 test("List.slice returns a typed checked copy with familiar positional semantics", () => {
@@ -19718,7 +19714,7 @@ print(tags.remove("web"))
 for tag in tags:
     print(tag)
 
-const inferred = Set()
+const inferred: Set<number> = Set()
 inferred.add(7)
 print(inferred.has(7))
 
@@ -20074,7 +20070,7 @@ test("Set rejects invalid construction, element mutation, annotations, and shado
   const result = compile(`
 const invalid = Set(1)
 const names: Set<string> = Set([1])
-const inferred = Set()
+const inferred: Set<number> = Set()
 inferred.add(1)
 inferred.add("wrong")
 const Set = "shadow"
@@ -20095,7 +20091,7 @@ const Set = "shadow"
 
 test("Map and Set expose typed ordered snapshots without iterator leakage", () => {
   const result = compile(`
-const scores = Map()
+const scores: Map<string, number> = Map()
 scores.set("Ada", 9)
 scores.set("Lin", 7)
 const names = scores.keys()
@@ -21061,7 +21057,7 @@ test("supports reduce callbacks, map key iteration, and friendly core builtins",
   const result = compile(`
 const values = [1, 2, 3]
 const total = values.reduce((sum, value) => sum + value, 0)
-const lookup = Map()
+const lookup: Map<string, number> = Map()
 lookup.set("first", total)
 for key in lookup:
     print(f"{key}:{str(total)}")
