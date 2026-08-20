@@ -236,7 +236,7 @@ class Handle:
 class Handle:
     @release:
         pass
-`).some((item) => /^VEL2022 Unknown language member '@release'/u.test(item)));
+`).some((item) => /^VEL2022 Unknown compiler-owned name '@release' in a class/u.test(item)));
 });
 
 test("[D43 69] ownership requires a scope that ends", () => {

@@ -134,9 +134,8 @@ export class VelarWebParser extends Parser {
   }
 
   /**
-   * D43 item 67: a component's lifecycle hooks are spelled '@mounted:' and
-   * '@cleanup:'. The '@' marker is what keeps them out of the author's own
-   * namespace, so a hook is only recognized through it.
+   * `@` selects the component's closed compiler namespace. The role names are
+   * `mounted` and `cleanup`; neither is found through author-name lookup.
    */
   private matchLifecycleHook(name: string): boolean {
     if (!this.check("at") || this.peekKind(1) !== "identifier" || this.peekValue(1) !== name) return false;
@@ -563,20 +562,19 @@ export class VelarWebParser extends Parser {
         this.diagnostics.push(diagnostic(
           "VEL5061",
           name
-            ? `A component has no '@${name.value}' block; the lifecycle hooks are '@mounted:' and '@cleanup:'`
-            : "'@' marks a lifecycle hook; a component's hooks are '@mounted:' and '@cleanup:'",
+            ? `Unknown compiler-owned name '@${name.value}' in a component; the component namespace contains only '@mounted:' and '@cleanup:'`
+            : "Expected a compiler-owned component name after '@'; the component namespace contains only '@mounted:' and '@cleanup:'",
           span(marker.span.start, (name ?? marker).span.end),
         ));
         this.skipMistypedDeclaration();
       } else if (this.check("identifier") && lifecycleHookSpellings.has(this.current().value) && this.peekKind(1) === "colon") {
-        // D43 item 67: the bare words are ordinary names now, so the removed
-        // hook spelling gets its own directed answer instead of falling into
-        // the statement-boundary message. The block still parses as the hook so
-        // its body keeps analyzing in the same compile.
+        // The bare words are ordinary author names. Recover as the one accepted
+        // compiler-owned spelling so the body keeps analyzing, while retaining
+        // a diagnostic: recovery is not a second alias.
         const keyword = this.advance();
         this.diagnostics.push(recoveredDiagnostic(
           "VEL5061",
-          `Use '@${keyword.value}:'; a lifecycle hook is a language-owned name, which leaves '${keyword.value}' free for your own method`,
+          `Use '@${keyword.value}:'; it is a compiler-owned component name, which leaves '${keyword.value}' free for your own method`,
           keyword.span,
         ));
         const body = this.parseBlock();

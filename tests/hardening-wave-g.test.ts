@@ -410,19 +410,35 @@ component Panel:
     return <p>x</p>
 `.trimStart(), true);
   assert.deepEqual(reported, [
-    "VEL5061 Use '@mounted:'; a lifecycle hook is a language-owned name, which leaves 'mounted' free for your own method",
+    "VEL5061 Use '@mounted:'; it is a compiler-owned component name, which leaves 'mounted' free for your own method",
   ]);
 });
 
-test("[wave G] an unknown '@' member names the hooks that exist", () => {
+test("[wave G] an unknown compiler-owned name reports the component vocabulary", () => {
   assert.deepEqual(
     messages(`component Panel:\n    @started:\n        print("in")\n\n    return <p>x</p>\n`, true),
-    ["VEL5061 A component has no '@started' block; the lifecycle hooks are '@mounted:' and '@cleanup:'"],
+    ["VEL5061 Unknown compiler-owned name '@started' in a component; the component namespace contains only '@mounted:' and '@cleanup:'"],
   );
   assert.ok(
     messages(`@mounted:\n    print("in")\n`, false)
-      .some((item) => item.includes("'@mounted' names a language-owned member and appears only inside a declaration body")),
+      .some((item) => item.includes("'@mounted' is a compiler-owned contextual name and is not valid here")),
     "'@' outside a declaration body",
+  );
+});
+
+test("[wave G] '@' selects one closed compiler namespace and never creates a runtime value", () => {
+  assert.deepEqual(
+    messages(`class Handle:\n    @mounted:\n        pass\n`, false),
+    ["VEL2022 Unknown compiler-owned name '@mounted' in a class; the class namespace contains only '@dispose:' and '@iterate:'"],
+  );
+  assert.deepEqual(
+    messages(`component Panel:\n    @dispose:\n        pass\n\n    return <p>x</p>\n`, true),
+    ["VEL5061 Unknown compiler-owned name '@dispose' in a component; the component namespace contains only '@mounted:' and '@cleanup:'"],
+  );
+  assert.ok(
+    messages(`const hook = @mounted\n`, false)
+      .some((item) => item.includes("'@mounted' is a compiler-owned contextual name and is not valid here")),
+    "an @name is not a storable expression",
   );
 });
 

@@ -53,8 +53,8 @@ export function isPermanentNamespaceName(name: string): name is PermanentNamespa
  * (VelarScript has no setters), `default` (no default export), and `invert`
  * (the removed toggle statement) are spellings the language does not have, and
  * requiring a tour or an editor to offer them would resurrect them. `dispose`
- * is not here either — it is only ever read after `@`, which is the separate
- * closed `@name` vocabulary of D43 item 67.
+ * is not here either — it is only ever read after `@`, which selects the
+ * separate closed compiler-owned vocabulary of the current syntax context.
  */
 export interface CoreContextualKeyword {
   /** The spelling, as the lexer emits it. */

@@ -86,7 +86,7 @@ test("[D62-157] words the parser recognizes only in order to refuse them are not
   assert.ok(messages("class Box:\n    set name(value: string):\n        print(1)\n").some((item) => item.includes("VelarScript classes have no setters")));
   assert.ok(messages("export default 1\n").some((item) => item.includes("VelarScript modules have no default export")));
   // `@dispose` is not on the roster either: it is only ever read after `@`,
-  // which is D43 item 67's separate closed vocabulary.
+  // which selects the current context's closed compiler-owned vocabulary.
   assert.ok(!(CORE_CONTEXTUAL_KEYWORD_WORDS as readonly string[]).includes("dispose"));
 });
 

@@ -320,12 +320,14 @@ Classes have typed body fields, **one** explicit constructor, and an explicit
 `self`. Instances are called directly — there is no `new`. A `const`/`let`
 prefix on a constructor parameter declares the field at the same time.
 
-Members whose names begin with `@` belong to the language and can never collide
-with yours. `@dispose:` is the release contract: `using name = expression` runs
-it on **every** exit from the owning scope — block end, `return`, `break`,
-`continue`, a throw three frames down — in reverse declaration order. An owned
-value may not leave its scope, so return the data you read from it rather than
-the handle.
+`@` always qualifies the following name into the compiler-owned namespace of
+the current context. It is not a decorator or a runtime value, and source code
+cannot define an `@name`; the class context currently accepts `@dispose:` and
+`@iterate:`. That namespace can never collide with yours. `@dispose:` is the
+release contract: `using name = expression` runs it on **every** exit from the
+owning scope — block end, `return`, `break`, `continue`, a throw three frames
+down — in reverse declaration order. An owned value may not leave its scope,
+so return the data you read from it rather than the handle.
 
 ```velar
 class Session:
@@ -555,10 +557,12 @@ the gate still checks it in full.)
 
 ## 15. Lifecycle
 
-Two sibling blocks in the language's `@` namespace. `@mounted:` runs once after
+The component context has two compiler-owned names. `@mounted:` runs once after
 the DOM is inserted and may `await`. `@cleanup:` runs once before the component
-is destroyed and is synchronous. Because they live under `@`, a component can
-still declare its own ordinary `def mounted()`.
+is destroyed and is synchronous. `@` has the same namespace-qualification
+meaning it has in classes and Look; it does not mean "lifecycle". Because these
+names are compiler-owned, a component can still declare its own ordinary
+`def mounted()`.
 
 ```velar
 component Chart(points: readonly List<number>):

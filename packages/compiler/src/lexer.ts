@@ -215,10 +215,9 @@ export class Lexer {
         case ",":
           this.simple("comma", start, 1);
           break;
-        // D43 item 67: '@name' marks a name the language owns, in the very
-        // positions where a user's own names also appear — class and component
-        // members. '@' is not an identifier character, so the two namespaces
-        // cannot collide however the surrounding words are softened.
+        // '@' has one job: qualify the next name into the compiler-owned
+        // namespace of the current syntax context. It is not an identifier
+        // character, so compiler roles cannot collide with author names.
         case "@":
           this.simple("at", start, 1);
           break;
@@ -313,9 +312,8 @@ export class Lexer {
             this.simple("or", start, 2);
           } else this.operator("pipe", "bitOrAssign", start);
           break;
-        // D43 item 67: `@name` is the one spelling for a name the language
-        // owns in a position where an author's own name may also appear. '@'
-        // is not an identifier character, so the two can never collide.
+        // The embedded scanner follows the same rule as the main scanner:
+        // `@` selects the contextual compiler namespace and nothing else.
         case "@":
           this.simple("at", start, 1);
           break;

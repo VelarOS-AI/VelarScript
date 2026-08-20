@@ -34,6 +34,29 @@ each Web compiler layer and replaces only its target-owned module sources.
 Adding a Game application follows the same contract; it does not add a Game
 branch to Core AST, `ValueType`, Analyzer, formatter, semantic kinds, or emitter.
 
+### Compiler-owned contextual names
+
+The source spelling `@name` has one implementation contract across Core and
+every compiler extension: `@` selects the compiler-owned namespace for the
+current syntax context. It is not a generic decorator hook and must never be
+implemented through runtime functions, metadata, reflection, declaration
+wrapping, or user registration.
+
+An owner that adds an `@name` must keep one closed roster for the relevant
+context and use it for parsing, diagnostics, formatting, editor support, and
+coverage. The role is resolved during compilation and lowered directly; no
+runtime `@` lookup or callable annotation object is emitted. Unknown names and
+known names in the wrong context fail closed. Accepted source has no bare-name
+alias for the same role, although a teaching diagnostic may recover from a
+retired spelling while keeping the compile unsuccessful.
+
+Role-specific AST nodes may differ because their behavior differs; their
+namespace semantics may not. If a role accepts a payload after `@name`, its
+parser must treat that payload as static role syntax rather than an ordinary
+call expression. Only Core or the active syntax-owning compiler extension may
+add to the roster. A Standard API package, imported library, macro-like
+callback, or application module cannot create or intercept an `@name`.
+
 The [runtime and JavaScript boundary ledger](runtime-boundary.md) is the
 required map from language semantics to host inheritance, compiler lowering,
 runtime ownership, checked foreign ABI, and explicit unsafe entry points. This

@@ -230,12 +230,6 @@ attempts += 1
   `self`. Using one as a name is reported by name. `constructor` and `get` are
   **not** among them: both name a class member in their own shape and are
   ordinary names everywhere else, which is what puts them on the roster above.
-- `@name` is the language's own namespace for members that stand where your
-  names stand: a component's `@mounted:` and `@cleanup:` blocks, a class's
-  `@dispose:` block, and a Look block's `@hover`. `@` is not an identifier
-  character, so a component can declare `def mounted()` and an `@mounted:` hook
-  without any collision.
-
 ```velar
 const event = {type: "ping", from: "worker"}
 const {type, from} = event          // ordinary names
@@ -256,6 +250,43 @@ match type:                         // a header ending in ':' above a block
     case _:
         pass
 ```
+
+### Compiler-owned contextual names: `@name`
+
+`@` has exactly one responsibility everywhere in VelarScript: it qualifies the
+name immediately after it into the compiler-owned namespace of the current
+syntactic context. The name and that context determine the role; `@` never
+does. A class therefore accepts `@dispose:` and `@iterate:`, a component accepts
+`@mounted:` and `@cleanup:`, and Look accepts names such as `@hover` and
+`@before:` under one namespace rule, not separate decorator, lifecycle,
+selector, or protocol meanings for `@`.
+
+The contract is closed and static:
+
+- `@name` never performs lexical or member lookup. It cannot be shadowed by an
+  author's binding, and `@` is not an identifier character, so `def mounted()`
+  and `@mounted:` can coexist without collision.
+- Core or the active syntax-owning compiler extension owns every accepted name
+  and the contexts in which it is valid. Source code and libraries cannot
+  declare, import, export, alias, or register an `@name`. An unknown name, or a
+  known name in the wrong context, is a compile-time error that names the
+  vocabulary accepted there.
+- `@name` is not an ordinary runtime value. It cannot be stored, passed,
+  returned, called, reflected, or assembled dynamically. The compiler resolves
+  its role statically and lowers that role directly; no `@` name or decorator
+  lookup survives in emitted JavaScript.
+- Any punctuation or payload a particular role permits after `@name` belongs
+  to that role's grammar. Parentheses, if a future compiler-owned role defines
+  them, carry static compiler input; they do not turn `@name` into a function
+  call or a runtime wrapper around the following declaration.
+- One role has one accepted spelling. A compiler diagnostic may recover from a
+  retired bare spelling to continue checking the file, but the recovered form
+  remains an error, never an alias. New contextual roles in this family use
+  `@name`; they do not add a competing bare keyword for the same role.
+
+This rule does not apply to `@` characters inside strings, module specifiers,
+comments, or extension-owned embedded foreign source: those are data for their
+own grammar, not VelarScript `@name` syntax.
 
 Literals are intentionally small:
 
@@ -2072,7 +2103,7 @@ Three ideas stay separate. `using` is ownership. `@dispose:` is the release
 contract. `close()` and `stop()` are ordinary public verbs that mean what they
 say. A type never has to be renamed to participate.
 
-A class declares its own contract as a compiler-known `@dispose:` block, which
+A class declares its own contract as a compiler-owned `@dispose:` block, which
 usually delegates to the verb the class already publishes:
 
 ```velar fragment
@@ -2183,12 +2214,12 @@ class Session:
 - Instances are called directly: `Session("session-1")`.
 - `self` is explicit in method bodies.
 - Getters read as ordinary properties.
-- `@dispose:` and `@iterate:` are the compiler-known class members. `@dispose:`
+- `@dispose:` and `@iterate:` are the compiler-owned class roles. `@dispose:`
   declares the release contract `using` runs (section 9, *Owned resources*).
   `@iterate:` declares what iterating the class means (section 9, *Loops*).
   Neither is callable from source, a class may declare at most one of each, and
-  `@` marks names the language owns, so a member the author declares can never
-  collide with one.
+  `@` qualifies them into the contextual compiler namespace, so an ordinary
+  member the author declares can never collide with one.
 
 `@iterate:` returns the collection the class iterates as:
 
@@ -3869,13 +3900,15 @@ The following are not part of VelarScript:
   iteration protocol enters the language
 - JavaScript `splice`, `push`, `shift`, `unshift`, mutating `sort`, or mutating
   `reverse`
-- user-defined decorators or declaration annotations. VelarScript's decorators
-  are its modifier keywords — `export`, `abstract`, `override`, `static`,
-  `private`, `readonly`, `async` — and they come from a closed vocabulary the
-  compiler owns. A library that could change what a declaration means would put
-  the reader back to reading the library before reading the code; the same
-  reason forbids user-defined type-parameter bounds. New declaration markings
-  arrive as new modifier keywords, not as an extension point
+- user-defined decorators or declaration annotations. `@name` does not reopen
+  them: it is the compiler-namespace qualifier defined in section 3, never a
+  library function, runtime wrapper, or user annotation. Declaration modifiers
+  remain the closed keywords `export`, `abstract`, `override`, `static`,
+  `private`, `readonly`, and `async`. A library that could change what a
+  declaration means would put the reader back to reading the library before
+  reading the code; the same reason forbids user-defined type-parameter bounds.
+  A new compiler-owned contextual role uses `@name`; a new declaration
+  attribute uses a modifier keyword. Neither is a user extension point
 - magical JSX control-flow attributes
 - a public `effect` primitive
 - implicit global CSS

@@ -177,7 +177,7 @@ them; the first two are the **silent traps** in the list — read them twice.
 | `value is null` | `value == null` / `value != null` — `is` tests runtime types, `null` is a value. |
 | `switch`, or an `if`/`else if` ladder over an enum | `match` with `case _:` as the only fallback. |
 | Renaming a binding away from `type`, `json`, `state`, `from`, `match`, `as`, `action`, `resource`, `watch`, `look`, `component` | Don't. Declaration words are contextual: each declares only in its own shape, so `const {type, from} = event` and `const state = "ready"` are ordinary code in Core and Web alike. `enum` and `case` are the exceptions — `enum` is a real VelarScript keyword, `case` is reserved by JavaScript — so neither can be a binding name; both stay fine as record fields, member names, and `match` branches. |
-| A component's `mounted:` / `cleanup:` block | `@mounted:` / `@cleanup:`. Lifecycle hooks live in the language's `@` namespace, which is why a component can also declare its own `def mounted()`. |
+| Treating `@` as a decorator, call, value, or user extension point; or writing a component's bare `mounted:` / `cleanup:` block | `@` has one meaning: `@name` qualifies the name into the closed compiler-owned namespace of the current context. Core or the active syntax-owning compiler extension owns the vocabulary; source cannot declare, import, alias, pass, or construct an `@name`. The context supplies the role: class `@dispose:`/`@iterate:`, component `@mounted:`/`@cleanup:`, and Look `@hover`/`@before:` all follow this rule. Because the namespace is separate, a component may also declare its own `def mounted()`. |
 | Two statements on one line | One statement per line; there are no semicolons. A line starting with `.` or `?.` continues the previous line, so method chains format normally. |
 | `count++` | `count += 1` |
 | `call(name: value)` named argument | `call(name=value)` |
@@ -300,7 +300,7 @@ class Session:
 const session = Session("session-1")
 ```
 
-`@name` members belong to the language and can never collide with yours.
+`@name` qualifies a compiler-owned contextual name and can never collide with yours.
 `@dispose:` is the release contract — never called directly — that
 `using name = expression` runs on every exit from the owning scope (block end,
 `return`, `break`, `continue`, throw), in reverse declaration order. A derived
@@ -541,7 +541,7 @@ component TicketPanel(id: string):
     </section>
 ```
 
-Lifecycle is two sibling blocks in the language's own `@` namespace —
+Lifecycle is two sibling blocks in the component's compiler-owned namespace —
 `@mounted:` runs once after the DOM is inserted and may `await`; `@cleanup:`
 runs once before the component is destroyed and is synchronous:
 

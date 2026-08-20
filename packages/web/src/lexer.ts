@@ -8,8 +8,8 @@ import { WEB_VOID_ELEMENTS } from "./elements.ts";
  * item 16 made every one of them contextual: the lexer leaves them ordinary
  * identifiers and the Web parser claims one only where its declaration shape
  * appears, so `const state = ...` and `component state(...)` can share a
- * module. The lifecycle hooks are not here — D43 item 67 gave them the
- * '@mounted:' and '@cleanup:' spellings, which cannot collide at all.
+ * module. The component's compiler-owned names are not here: `@` selects their
+ * separate closed contextual namespace, so they cannot collide at all.
  */
 export const WEB_CONTEXTUAL_KEYWORDS: ReadonlySet<string> = new Set([
   "component", "state", "computed", "resource", "action", "watch", "exposes", "expose", "look", "keyframes", "css",

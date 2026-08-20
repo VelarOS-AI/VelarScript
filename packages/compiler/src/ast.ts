@@ -360,15 +360,15 @@ export interface ClassDeclaration {
   readonly initialization: ClassInitBlock | null;
   readonly getters: readonly ClassGetterDeclaration[];
   readonly methods: readonly ClassMethodDeclaration[];
-  /** D43 item 69: the compiler-known `@dispose:` release contract, if declared. */
+  /** The compiler-owned `@dispose:` release contract, if declared. */
   readonly dispose: ClassDisposeBlock | null;
-  /** D68 rule 177: the compiler-known `@iterate:` iteration contract, if declared. */
+  /** The compiler-owned `@iterate:` iteration contract, if declared. */
   readonly iterate: ClassIterateBlock | null;
   readonly span: Span;
 }
 
 /**
- * D43 item 69: `@dispose:` is a compiler-known class member, not a method. It
+ * `@dispose:` is a compiler-owned contextual role, not a method. It
  * cannot be called from source — it is the ownership contract `using` runs, and
  * a second spelling of `close()` is exactly what it exists to avoid.
  */
@@ -380,7 +380,7 @@ export interface ClassDisposeBlock {
 }
 
 /**
- * D68 rule 177: `@iterate:` is the second compiler-known class member, and it
+ * `@iterate:` is the second compiler-owned class role, and it
  * carries `@dispose:`'s shape for the same reason — it is a question the
  * language asks the type ("what does iterating you mean?"), not a method the
  * author publishes, so it cannot be called from source either. It answers with

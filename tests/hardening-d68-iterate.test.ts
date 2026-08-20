@@ -245,7 +245,7 @@ class Bag:
 
     @walk:
         return self.items
-`), ["VEL2022 Unknown language member '@walk'; a class declares '@dispose:' and '@iterate:', and no other '@' member"]);
+`), ["VEL2022 Unknown compiler-owned name '@walk' in a class; the class namespace contains only '@dispose:' and '@iterate:'"]);
 
   // A class may still declare an ordinary method spelled `iterate`; `@` is a
   // separate namespace, exactly as it is for `dispose`.

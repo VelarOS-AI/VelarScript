@@ -1707,20 +1707,18 @@ export class Parser {
 
     while (!this.check("dedent") && !this.check("eof")) {
       const methodStart = this.current().span.start;
-      // D43 item 67/69 + D68 rule 177: an `@name` member belongs to the
-      // language. `@dispose:` and `@iterate:` are the two a class declares;
-      // anything else gets the closed vocabulary named back. Both are parsed
-      // and validated on one path because they are one idea — a question the
-      // language asks the type, answered in a block that is not a method.
+      // `@` always selects the contextual compiler namespace. In a class that
+      // closed namespace contains `dispose` and `iterate`; their behavior
+      // differs, but their resolution, rejection, and collision rules do not.
       if (this.check("at")) {
         const marker = this.advance();
-        const memberName = this.expect("identifier", "Expected a compiler-known class member name after '@'");
+        const memberName = this.expect("identifier", "Expected a compiler-owned class name after '@'");
         const keywordSpan = span(marker.span.start, memberName.span.end);
         const known = memberName.value === "dispose" || memberName.value === "iterate";
         if (!known) {
           this.diagnostics.push(diagnostic(
             "VEL2022",
-            `Unknown language member '@${memberName.value}'; a class declares '@dispose:' and '@iterate:', and no other '@' member`,
+            `Unknown compiler-owned name '@${memberName.value}' in a class; the class namespace contains only '@dispose:' and '@iterate:'`,
             keywordSpan,
           ));
         }
@@ -3317,15 +3315,14 @@ export class Parser {
           }
           return { kind: "LiteralExpression", value: null, raw: "null", span: token.span };
         }
-        // D43 item 67: '@name' is the language's own namespace for members that
-        // sit where user names also sit. Outside a declaration body it is not an
-        // expression, so the reader is told what the marker means instead of
-        // receiving a bare 'Expected an expression'.
+        // `@name` is resolved only by a compiler-owned syntax context. Here it
+        // cannot become an expression or runtime value, so name the namespace
+        // rule instead of reporting a bare 'Expected an expression'.
         if (token.kind === "at") {
           const name = this.check("identifier") ? this.advance().value : "";
           this.diagnostics.push(diagnostic(
             "VEL2002",
-            `'@${name}' names a language-owned member and appears only inside a declaration body, such as a component's '@mounted:' block`,
+            `'@${name}' is a compiler-owned contextual name and is not valid here; use it only in a context that defines it, such as a component's '@mounted:' block`,
             span(token.span.start, this.previous().span.end),
           ));
           this.skipMistypedDeclaration();

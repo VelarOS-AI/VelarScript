@@ -571,16 +571,15 @@ const asyncResultAnnotationMessage =
   "An async result annotation in a declaration names the resolved value; write '-> T', not '-> Promise<T>'";
 const memberNarrowingPrefix = "\u0000member:";
 /**
- * D43 item 69: the emitted member behind a class's `@dispose:` block. The key
- * is not a source-shaped identifier, so no author member can collide with it —
- * `@dispose` is the language's name, not a name in the author's namespace.
+ * The emitted member behind a class's `@dispose:` block. The key is not a
+ * source-shaped identifier, so no author member can collide with it:
+ * `@dispose` is compiler-owned, not part of the author's namespace.
  */
 export const disposeMemberKey = "__velar:dispose";
 /**
- * D68 rule 177: the emitted member behind a class's `@iterate:` block, under
- * the same kind of key and for the same reason — `@iterate` is the language's
- * name for the question, so no author member can answer it by accident and no
- * author call can reach it.
+ * The emitted member behind a class's `@iterate:` block, under the same kind of
+ * key and for the same reason: `@iterate` is compiler-owned, so no author
+ * member can answer it by accident and no author call can reach it.
  */
 export const iterateMemberKey = "__velar:iterate";
 
@@ -4557,12 +4556,11 @@ export class Analyzer implements TypeEnvironment {
   }
 
   /**
-   * D68 rule 177: `@iterate:` answers the language's question "what does
+   * `@iterate:` answers the compiler's question "what does
    * iterating you mean?" with a collection the language already iterates. It
-   * shares `@dispose:`'s path because it is the same kind of member — a
-   * contract, not a method — and it differs in exactly two ways, both forced:
-   * it produces a value, and it may not `await`, because every one of the eight
-   * consumers reads it synchronously.
+   * shares `@dispose:`'s compiler-name path, then supplies its own role: it is
+   * a contract, not a method, it produces a value, and it may not `await`,
+   * because every one of the eight consumers reads it synchronously.
    */
   private analyzeClassIterate(statement: ClassDeclaration, block: ClassIterateBlock, baseName: string | null): void {
     this.enterScope();
