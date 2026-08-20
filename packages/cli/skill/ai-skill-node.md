@@ -41,7 +41,7 @@ server.
 
 `@name` keeps its one language-wide role: it qualifies a compiler-owned name
 in the current context. In a `server` block, the available names are `@get`,
-`@post`, `@put`, `@patch`, and `@delete`. They are not decorators,
+`@post`, `@put`, `@patch`, `@delete`, and `@notFound`. They are not decorators,
 functions, imports, annotations, first-class values, or user extension points.
 
 ## Routes and checked inputs
@@ -65,6 +65,7 @@ export server articles:
 
     @post(p"/articles", input: CreateArticle):
         return created({id: 1, title: input.title})
+
 ```
 
 The path is written once. A capture such as `{id:number}` declares `id`
@@ -81,6 +82,18 @@ checked JSON body. A `Request` parameter explicitly requests the complete
 request, including `queryAll` and cooperative `cancellation`. Ambiguous bodies,
 duplicate declarations, conflicting path shapes, and unsupported path types are
 compile errors.
+
+`@notFound()` is the one application fallback for a path that matches no
+route. It may omit its parameter or accept one explicitly typed `Request`.
+Returning Data keeps status 404; return an explicit response such as
+`json(value, status=410)` to choose another final status. A matched route's
+`HttpError` and framework 405 responses do not enter this fallback. Declare at
+most one on the final application; an app that owns `@notFound` cannot be moved
+under a non-root `prefix`, because a global fallback has no unambiguous prefix
+scope. Compose prefixed route tables first, then declare the fallback on the
+outer `server`. A catch-all route such as `staticFiles("/", ...)` is a matched
+route and therefore owns its own file fallback instead of entering
+`@notFound`.
 
 Use ordinary values for the cases that need more than inference:
 
@@ -131,7 +144,7 @@ closed. Do not build a controller or container layer around it.
 Compose route tables as values:
 
 ```velar fragment
-import {RouteDocumentation, docs, lifecycle, middleware, prefix, staticFiles, use} from "velar/serve"
+import {Request, RouteDocumentation, docs, lifecycle, middleware, prefix, staticFiles, use} from "velar/serve"
 
 const service = lifecycle(
     prefix("/api", articles),
@@ -154,7 +167,8 @@ const routeDocs: Map<string, RouteDocumentation> = Map([["GET /api/articles/{id:
 
 export server app:
     ...docs(hardened, title="Article API", version="1.0.0", routes=routeDocs)
-    ...staticFiles("/", root="public", fallback="index.html")
+    ...staticFiles("/assets", root="public")
+    @notFound(request: Request) => {error: "route_not_found", path: request.path}
 ```
 
 `prefix` changes a literal route prefix; `bodyLimit` narrows one route

@@ -113,7 +113,7 @@ mount(<App />, "#app")
   assert.equal(componentManifest.velar.entry, "src/index.vel");
   assert.deepEqual(componentManifest.velar.targets, ["web", "desktop"]);
   assert.deepEqual(componentManifest.velar.requires.capabilities, []);
-  assert.equal(componentManifest.peerDependencies["@velarscript/web"], "^0.12.0");
+  assert.equal(componentManifest.peerDependencies["@velarscript/web"], "^0.12.1");
   await runNpm(["run", "format:check"], component);
   await runNpm(["run", "check"], component);
   await runNpm(["test"], component);

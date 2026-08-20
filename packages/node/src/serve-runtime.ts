@@ -114,6 +114,7 @@ const __velarServeDefaultShutdownGrace = 30_000;
 const __velarServeFileMarker = Symbol("velar.serve.file-response");
 const __velarServeAppMarker = Symbol("velar.serve.app");
 const __velarServeRouteMarker = Symbol("velar.serve.route");
+const __velarServeNotFoundMarker = Symbol("velar.serve.not-found");
 const __velarServeInputMarker = Symbol("velar.serve.input");
 const __velarServeProviderMarker = Symbol("velar.serve.provider");
 const __velarServeUploadMarker = Symbol("velar.serve.upload");
@@ -581,7 +582,7 @@ export const ServeApp = __velarServeTypeObject(
   value => __velarServeIsApp(value),
   "ServeApp values are declared with 'server name:' or built by velar/serve composition functions",
   null,
-  __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{createApp: __velarCreateServeApp, createRoute: __velarCreateServeRoute, testClient: __velarServeTestClient, nativeApp: __velarServeNativeApp}]),
+  __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{createApp: __velarCreateServeApp, createRoute: __velarCreateServeRoute, createNotFound: __velarCreateServeNotFound, testClient: __velarServeTestClient, nativeApp: __velarServeNativeApp}]),
 );
 export const Server = __velarServeTypeObject(value => {
   try {
@@ -897,6 +898,12 @@ function __velarServeIsRoute(value) {
   return descriptor?.enumerable === true && "value" in descriptor && descriptor.value === true;
 }
 
+function __velarServeIsNotFound(value) {
+  if (!value || typeof value !== "object") return false;
+  const descriptor = __velarServeOwnDescriptor(value, __velarServeNotFoundMarker);
+  return descriptor?.enumerable === true && "value" in descriptor && descriptor.value === true;
+}
+
 function __velarServeIsApp(value) {
   if (!value || typeof value !== "object") return false;
   const descriptor = __velarServeOwnDescriptor(value, __velarServeAppMarker);
@@ -1032,6 +1039,21 @@ function __velarCreateServeRoute(method, path, parameters, handler, metadata = {
   }]);
 }
 
+function __velarCreateServeNotFound(handler, middleware = []) {
+  if (typeof handler !== "function") throw new __velarServeTypeError("@notFound handler is invalid");
+  if (!__velarServeIsArray(middleware) || middleware.length > 64) throw new __velarServeRangeError("@notFound cannot have more than 64 middleware functions");
+  const checkedMiddleware = [];
+  for (let index = 0; index < middleware.length; index += 1) {
+    if (typeof middleware[index] !== "function") throw new __velarServeTypeError("@notFound middleware entries must be functions");
+    checkedMiddleware[checkedMiddleware.length] = middleware[index];
+  }
+  return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{
+    [__velarServeNotFoundMarker]: true,
+    handler,
+    middleware: __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [checkedMiddleware]),
+  }]);
+}
+
 function __velarServeDocumentationText(value, name, maximum) {
   if (value == null) return null;
   if (typeof value !== "string" || value.length === 0 || value.length > maximum || /[\0]/u.test(value)) {
@@ -1118,7 +1140,7 @@ function __velarServeBodyLimit(value) {
   return value;
 }
 
-function __velarServeAppValue(name, routes, lifecycles = []) {
+function __velarServeAppValue(name, routes, lifecycles = [], notFound = null) {
   const router = __velarServeRouter(routes);
   return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{
     [__velarServeAppMarker]: true,
@@ -1126,14 +1148,16 @@ function __velarServeAppValue(name, routes, lifecycles = []) {
     routes: __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [routes]),
     router,
     lifecycles: __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [lifecycles]),
+    notFound,
   }]);
 }
 
 function __velarCreateServeApp(name, items) {
   if (typeof name !== "string" || name.length === 0 || name.length > 256) throw new __velarServeTypeError("ServeApp name must be bounded text");
-  if (!__velarServeIsArray(items) || items.length > __velarServeMaxRoutes) throw new __velarServeTypeError("ServeApp items cannot exceed 4096 entries");
+  if (!__velarServeIsArray(items) || items.length > __velarServeMaxRoutes + 1) throw new __velarServeTypeError("ServeApp items cannot exceed 4096 routes and one fallback");
   const routes = [];
   const lifecycles = [];
+  let notFound = null;
   const shapes = new __velarServeMap();
   const append = route => {
     if (routes.length >= __velarServeMaxRoutes) throw new __velarServeRangeError("ServeApp cannot contain more than 4096 routes after composition");
@@ -1145,15 +1169,23 @@ function __velarCreateServeApp(name, items) {
   for (let index = 0; index < items.length; index += 1) {
     const item = items[index];
     if (__velarServeIsRoute(item)) append(item);
+    else if (__velarServeIsNotFound(item)) {
+      if (notFound !== null) throw new __velarServeTypeError("ServeApp contains more than one @notFound fallback");
+      notFound = item;
+    }
     else if (__velarServeIsApp(item)) {
       for (let route = 0; route < item.routes.length; route += 1) append(item.routes[route]);
       for (let hook = 0; hook < item.lifecycles.length; hook += 1) {
         if (lifecycles.length >= __velarServeMaxLifecycles) throw new __velarServeRangeError("ServeApp cannot contain more than 4096 lifecycle pairs after composition");
         lifecycles[lifecycles.length] = item.lifecycles[hook];
       }
+      if (item.notFound !== null) {
+        if (notFound !== null) throw new __velarServeTypeError("ServeApp contains more than one @notFound fallback");
+        notFound = item.notFound;
+      }
     } else throw new __velarServeTypeError("A server composition entry must be a ServeApp");
   }
-  return __velarServeAppValue(name, routes, lifecycles);
+  return __velarServeAppValue(name, routes, lifecycles, notFound);
 }
 
 export function prefix(path, app) {
@@ -1163,6 +1195,7 @@ export function prefix(path, app) {
     throw new __velarServeTypeError("prefix path must contain only literal path segments");
   }
   if (path === "/") return app;
+  if (app.notFound !== null) throw new __velarServeTypeError("prefix cannot scope @notFound; compose the fallback on the final server instead");
   const routes = [];
   for (let index = 0; index < app.routes.length; index += 1) {
     const route = app.routes[index];
@@ -1175,7 +1208,7 @@ export function prefix(path, app) {
     );
   }
   const output = __velarCreateServeApp(app.name, routes);
-  return __velarServeAppValue(output.name, output.routes, app.lifecycles);
+  return __velarServeAppValue(output.name, output.routes, app.lifecycles, null);
 }
 
 export function staticFiles(path, root, fallback = null) {
@@ -1208,8 +1241,18 @@ export function use(app, middleware) {
       {...__velarServeRouteMetadata(route), middleware: entries},
     );
   }
-  const output = __velarCreateServeApp(app.name, routes);
-  return __velarServeAppValue(output.name, output.routes, app.lifecycles);
+  let notFound = app.notFound;
+  if (notFound !== null) {
+    const entries = [];
+    for (let item = 0; item < notFound.middleware.length; item += 1) entries[entries.length] = notFound.middleware[item];
+    for (let item = 0; item < additions.length; item += 1) entries[entries.length] = additions[item];
+    notFound = __velarCreateServeNotFound(notFound.handler, entries);
+  }
+  const items = [];
+  for (let index = 0; index < routes.length; index += 1) items[items.length] = routes[index];
+  if (notFound !== null) items[items.length] = notFound;
+  const output = __velarCreateServeApp(app.name, items);
+  return __velarServeAppValue(output.name, output.routes, app.lifecycles, output.notFound);
 }
 
 export function bodyLimit(app, maxBytes) {
@@ -1227,7 +1270,7 @@ export function bodyLimit(app, maxBytes) {
     );
   }
   const output = __velarCreateServeApp(app.name, routes);
-  return __velarServeAppValue(output.name, output.routes, app.lifecycles);
+  return __velarServeAppValue(output.name, output.routes, app.lifecycles, app.notFound);
 }
 
 export function lifecycle(app, startup = null, shutdown = null) {
@@ -1237,7 +1280,7 @@ export function lifecycle(app, startup = null, shutdown = null) {
   const lifecycles = [];
   for (let index = 0; index < app.lifecycles.length; index += 1) lifecycles[index] = app.lifecycles[index];
   lifecycles[lifecycles.length] = __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{startup, shutdown}]);
-  return __velarServeAppValue(app.name, app.routes, lifecycles);
+  return __velarServeAppValue(app.name, app.routes, lifecycles, app.notFound);
 }
 
 function __velarServeResponseWithHeaders(value, additions) {
@@ -1987,6 +2030,12 @@ function __velarServeAutomaticResponse(value) {
   catch { return __velarServeResponse({status: 200, json: value}); }
 }
 
+function __velarServeNotFoundResponse(value) {
+  if (__velarServeIsFileResponse(value)) return value;
+  try { return __velarServeResponse(value); }
+  catch { return __velarServeResponse({status: 404, json: value}); }
+}
+
 async function __velarServeHandleAppResponse(app, request, maxBodyBytes, context) {
   try {
     const actual = __velarServeCall(__velarServeStringSplit, request.path, ["/"]);
@@ -2013,6 +2062,13 @@ async function __velarServeHandleAppResponse(app, request, maxBodyBytes, context
       if (__velarServeCall(__velarServeMapSize, allowed, []) > 0) {
         const methods = __velarServeAllowedMethods(allowed);
         return await __velarServeApplyMiddleware(pathOwner.route, request, async () => ({status: 405, json: {error: "method_not_allowed"}, headers: new __velarServeMap([["allow", __velarServeCall(__velarServeArrayJoin, methods, [", "])]])}));
+      }
+      if (app.notFound !== null) {
+        return await __velarServeApplyMiddleware(
+          app.notFound,
+          request,
+          async () => __velarServeNotFoundResponse(await __velarServeCall(app.notFound.handler, undefined, [request])),
+        );
       }
       return {status: 404, json: {error: "not_found"}};
     }
@@ -2462,7 +2518,7 @@ function __velarServeDocumentRoutes(app, documentation) {
     output[output.length] = __velarCreateServeRoute(route.method, route.path, route.parameters, route.handler, __velarServeRouteMetadata(route, __velarServeCall(__velarServeMapGet, configured, [key])));
   }
   if (__velarServeCall(__velarServeMapSize, seen, []) !== size) throw new __velarServeTypeError("docs routes contains a route that the application does not declare");
-  return __velarServeAppValue(app.name, output, app.lifecycles);
+  return __velarServeAppValue(app.name, output, app.lifecycles, app.notFound);
 }
 
 function __velarServeOpenApiPath(path) {

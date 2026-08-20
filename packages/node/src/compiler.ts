@@ -1251,6 +1251,7 @@ export const velarNodeCompilerExtension: CompilerExtension = Object.freeze({
       "@put": "Declares an anonymous PUT route in the current server.",
       "@patch": "Declares an anonymous PATCH route in the current server.",
       "@delete": "Declares an anonymous DELETE route in the current server.",
+      "@notFound": "Declares the application fallback for an unmatched request path.",
     }),
   }),
   createEmitter(

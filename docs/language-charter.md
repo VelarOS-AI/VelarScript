@@ -288,16 +288,19 @@ This rule does not apply to `@` characters inside strings, module specifiers,
 comments, or extension-owned embedded foreign source: those are data for their
 own grammar, not VelarScript `@name` syntax.
 
-The Node extension applies this same rule to HTTP routes. Directly inside a
+The Node extension applies this same rule to HTTP servers. Directly inside a
 `server` declaration, `@get`, `@post`, `@put`, `@patch`, and `@delete` select
-one compiler-owned route role. They are anonymous route declarations, not
-decorators and not references to functions of those names. Their first item is
-the Node-owned path-pattern literal `p"..."`:
+one compiler-owned route role, while `@notFound` selects the application's one
+unmatched-path fallback. They are anonymous structural declarations, not
+decorators and not references to functions of those names. A route's first
+item is the Node-owned path-pattern literal `p"..."`:
 
 ```velar
 export server articles:
     @get(p"/articles/{id:string}", details: bool = false):
         return {id, details}
+
+    @notFound() => {error: "not_found"}
 ```
 
 `p"..."` is not a fifth Core string prefix. Core owns ordinary, raw, and

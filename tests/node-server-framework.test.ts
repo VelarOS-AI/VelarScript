@@ -41,6 +41,8 @@ export server api:
 
     @post(p"/users", input: CreateUser):
         return {id: "u1", name: input.name}
+
+    @notFound() => {error: "route_not_found"}
 `;
   const result = compileNode(source);
   assert.deepEqual(result.diagnostics, []);
@@ -51,6 +53,7 @@ export server api:
   assert.match(code, /source:"path",kind:"number"/u);
   assert.match(code, /source:"query",kind:"bool",required:false/u);
   assert.match(code, /source:"body",kind:"data"/u);
+  assert.match(code, /__velarCreateServeNotFound\(async \(\)/u);
   assert.match(code, /schema:\{"type":"object","properties":\{"name":\{"type":"string"\}\},"required":\["name"\],"additionalProperties":false\}/u);
   assert.match(code, /responseSchema:/u);
   assert.match(code, /description:"Reports whether the service is ready\."/u);
@@ -58,6 +61,7 @@ export server api:
 
   const formatted = formatSource(source.trimStart(), { extensions: [velarNodeCompilerExtension] });
   assert.match(formatted, /@get\(p"\/health"\) => \{ok: true\}/u);
+  assert.match(formatted, /@notFound\(\) => \{error: "route_not_found"\}/u);
   assert.equal(formatSource(formatted, { extensions: [velarNodeCompilerExtension] }), formatted);
 });
 
@@ -96,8 +100,42 @@ import {Request} from "velar/serve"
 
 server api:
     @get(p"/request", first: Request, second: Request) => {ok: true}
+    @notFound(request: Request) => {error: "missing", path: request.path}
 `.trimStart()]]), { extensions: [velarNodeCompilerExtension] });
-  assert.ok(requestProject.modules.flatMap((module) => module.result.diagnostics).some((item) => /only one Request parameter/u.test(item.message)));
+  const requestDiagnostics = requestProject.modules.flatMap((module) => module.result.diagnostics);
+  assert.ok(requestDiagnostics.some((item) => /only one Request parameter/u.test(item.message)));
+  assert.ok(requestDiagnostics.every((item) => !/@notFound/u.test(item.message)));
+
+  const fallbackPath = join(tmpdir(), "velar-node-server-fallback.vel");
+  const fallbackProject = await compileProject(fallbackPath, new Map([[fallbackPath, `
+import {Request} from "velar/serve"
+
+server api:
+    @notFound(request: Request) => {error: "missing", path: request.path}
+`.trimStart()]]), {extensions: [velarNodeCompilerExtension]});
+  assert.deepEqual(fallbackProject.failures, []);
+  assert.deepEqual(fallbackProject.modules.flatMap((module) => module.result.diagnostics), []);
+  assert.match(fallbackProject.modules.find((module) => module.inputPath === fallbackPath)?.result.code ?? "", /__velarCreateServeNotFound\(async \(request\)/u);
+
+  const duplicateFallback = compileNode(`
+server api:
+    @notFound() => {error: "missing"}
+    @notFound() => {error: "still_missing"}
+`);
+  const fallbackMessages = duplicateFallback.diagnostics.map((item) => item.message);
+  assert.ok(fallbackMessages.some((message) => /only one @notFound fallback/u.test(message)));
+
+  const invalidFallback = compileNode(`
+server api:
+    @notFound(request) => {error: "missing"}
+`);
+  assert.ok(invalidFallback.diagnostics.some((item) => /requires the explicit Request type/u.test(item.message)));
+
+  const wrongFallback = compileNode(`
+server api:
+    @notFound(path: string) => {error: "missing", path}
+`);
+  assert.ok(wrongFallback.diagnostics.some((item) => /parameter must be Request/u.test(item.message)));
 });
 
 test("Node owns and validates path-pattern strings without changing Core strings", () => {

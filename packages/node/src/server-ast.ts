@@ -13,7 +13,7 @@ export interface NodeServerDeclaration {
   readonly span: Span;
 }
 
-export type NodeServerItem = NodeRouteDeclaration | NodeServerSpread;
+export type NodeServerItem = NodeRouteDeclaration | NodeNotFoundDeclaration | NodeServerSpread;
 
 export interface NodeServerSpread {
   readonly kind: "NodeServerSpread";
@@ -28,6 +28,19 @@ export interface NodeRouteDeclaration {
   readonly method: NodeHttpMethod;
   readonly path: string;
   readonly pathSpan: Span;
+  readonly parameters: readonly Parameter[];
+  readonly returnType: TypeReference | null;
+  readonly resultAnnotationSpan?: Span;
+  readonly signatureSpan: Span;
+  readonly body: readonly Statement[];
+  readonly expressionBody: boolean;
+  readonly span: Span;
+}
+
+export interface NodeNotFoundDeclaration {
+  readonly kind: "NodeNotFoundDeclaration";
+  /** Internal diagnostic identity. A fallback does not introduce a source binding. */
+  readonly name: "notFound";
   readonly parameters: readonly Parameter[];
   readonly returnType: TypeReference | null;
   readonly resultAnnotationSpan?: Span;

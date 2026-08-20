@@ -821,7 +821,7 @@ The Node extension's native server framework declares an immutable route table
 instead of a controller class or a group of decorated functions:
 
 ```velar
-import {HttpError, created} from "velar/serve"
+import {HttpError, Request, created} from "velar/serve"
 
 type CreateArticle:
     title: string
@@ -836,11 +836,14 @@ export server app:
 
     @post(p"/articles", input: CreateArticle) => created({id: 1, title: input.title})
 
+    @notFound(request: Request) => {error: "route_not_found", path: request.path}
+
 ```
 
 `server name:` and the Node-only `p"..."` path pattern are enabled by
 `@velarscript/node`. `@get`, `@post`, `@put`, `@patch`, and `@delete` are the
-only route roles. They are anonymous compiler declarations, not decorators or
+route roles; `@notFound` is the one unmatched-path fallback on the final
+application. They are anonymous compiler declarations, not decorators or
 runtime functions. A `{name:type}` path capture declares the checked name in
 the route body; the type is `string`, `number`, `bool`, or a named enum. A
 remaining scalar or `List<scalar>` parameter is read from the query string, and
@@ -849,6 +852,15 @@ a 422 error instead of silently choosing one value. One concrete Data record on
 `POST`, `PUT`, or `PATCH` is the JSON body. `Request` asks for the complete
 low-level request explicitly. Route bodies may `await` directly and use either
 `=> expression` or an indented block.
+
+`@notFound` accepts zero parameters or one explicitly typed `Request`.
+Ordinary Data becomes a 404 JSON response; an explicit `ServeResponse` keeps
+its selected status. A matched route's `HttpError` and framework 405 response
+remain outside this fallback. It participates in application middleware and
+lifecycle handling, but cannot be carried through a non-root `prefix`; declare
+it after composing prefixed route tables. A catch-all route such as
+`staticFiles("/", ...)` is already a matched route and retains ownership of its
+own file fallback.
 
 Returning ordinary Data produces a JSON response. `json(value, status=200,
 headers=null)`, `created(value, headers=null)`, `noContent(completion=null,

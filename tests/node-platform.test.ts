@@ -965,6 +965,88 @@ test("Node ServeApp routes bind checked inputs, compose, and normalize HTTP outc
   }
 });
 
+test("Node ServeApp exposes one bounded unmatched-path fallback without intercepting route errors or 405", async () => {
+  const serveRuntime = await runtime<{
+    readonly HttpError: new (status: number, body?: unknown) => Error;
+    readonly ServeApp: object;
+    bodyLimit(app: unknown, maxBytes: number): unknown;
+    docs(app: unknown, title?: string, version?: string): unknown;
+    json(value: unknown, status?: number): unknown;
+    lifecycle(app: unknown, startup?: (() => Promise<unknown>) | null, shutdown?: (() => Promise<unknown>) | null): unknown;
+    prefix(path: string, app: unknown): unknown;
+    use(app: unknown, middleware: (request: unknown, next: () => Promise<unknown>) => Promise<unknown>): unknown;
+    serve(app: unknown, port: number): Promise<{readonly port: number; stop(): Promise<null>}>;
+  }>("velar/serve");
+  const bridge = Object.getOwnPropertyDescriptor(serveRuntime.ServeApp, "__velarCompilerBridge")?.value as {
+    createRoute(method: string, path: string, parameters: readonly Record<string, unknown>[], handler: (...arguments_: never[]) => Promise<unknown>): unknown;
+    createNotFound(handler: (...arguments_: never[]) => Promise<unknown>): unknown;
+    createApp(name: string, items: readonly unknown[]): unknown;
+  } | undefined;
+  assert.ok(bridge);
+
+  let fallbackCalls = 0;
+  let middlewareCalls = 0;
+  const health = bridge.createRoute("GET", "/health", [], async () => ({ok: true}));
+  const routeOwnedMissing = bridge.createRoute("GET", "/route-missing", [], async () => {
+    throw new serveRuntime.HttpError(404, {error: "route_owned"});
+  });
+  const fallback = bridge.createNotFound(async (request: {readonly path: string}) => {
+    fallbackCalls += 1;
+    return {error: "route_not_found", path: request.path};
+  });
+  assert.throws(() => bridge.createApp("duplicate", [fallback, fallback]), /more than one @notFound fallback/u);
+
+  const source = bridge.createApp("api", [health, routeOwnedMissing, fallback]);
+  assert.throws(() => serveRuntime.prefix("/api", source), /cannot scope @notFound/u);
+  let app = serveRuntime.bodyLimit(source, 1024);
+  app = serveRuntime.use(app, async (_request, next) => {
+    middlewareCalls += 1;
+    return next();
+  });
+  app = serveRuntime.lifecycle(app, async () => null, async () => null);
+  app = serveRuntime.docs(app, "Fallback API", "1.0.0");
+
+  const server = await serveRuntime.serve(app, 0);
+  try {
+    const unknown = await fetch(`http://127.0.0.1:${server.port}/api/missing?source=test`);
+    assert.equal(unknown.status, 404);
+    assert.deepEqual(await unknown.json(), {error: "route_not_found", path: "/api/missing"});
+    assert.equal(fallbackCalls, 1);
+    assert.equal(middlewareCalls, 1, "application middleware must wrap the fallback once");
+
+    const routeError = await fetch(`http://127.0.0.1:${server.port}/route-missing`);
+    assert.equal(routeError.status, 404);
+    assert.deepEqual(await routeError.json(), {error: "route_owned"});
+    assert.equal(fallbackCalls, 1, "an explicitly matched route owns its HttpError response");
+
+    const wrongMethod = await fetch(`http://127.0.0.1:${server.port}/health`, {method: "POST"});
+    assert.equal(wrongMethod.status, 405);
+    assert.deepEqual(await wrongMethod.json(), {error: "method_not_allowed"});
+    assert.equal(fallbackCalls, 1, "method-not-allowed is not an unmatched path");
+  } finally {
+    await server.stop();
+  }
+
+  const defaultServer = await serveRuntime.serve(bridge.createApp("default", [health]), 0);
+  try {
+    const unknown = await fetch(`http://127.0.0.1:${defaultServer.port}/missing`);
+    assert.equal(unknown.status, 404);
+    assert.deepEqual(await unknown.json(), {error: "not_found"});
+  } finally {
+    await defaultServer.stop();
+  }
+
+  const explicit = bridge.createNotFound(async () => serveRuntime.json({error: "gone"}, 410));
+  const explicitServer = await serveRuntime.serve(bridge.createApp("explicit", [explicit]), 0);
+  try {
+    const unknown = await fetch(`http://127.0.0.1:${explicitServer.port}/missing`);
+    assert.equal(unknown.status, 410);
+    assert.deepEqual(await unknown.json(), {error: "gone"});
+  } finally {
+    await explicitServer.stop();
+  }
+});
+
 test("Node route input values resolve security, cookies, and scoped providers", async () => {
   const serveRuntime = await runtime<{
     readonly ServeApp: object;

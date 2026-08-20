@@ -10,7 +10,7 @@ import {
   type TypeSyntax,
   type ValueType,
 } from "@velarscript/compiler/extension";
-import { isNodeServerStatement, type NodeRouteDeclaration, type NodeServerDeclaration } from "./server-ast.ts";
+import { isNodeServerStatement, type NodeNotFoundDeclaration, type NodeRouteDeclaration, type NodeServerDeclaration } from "./server-ast.ts";
 import { parseRouteParameterHint, parseRouteResultHint } from "./server-analyzer.ts";
 
 export class NodeJavaScriptEmitter extends JavaScriptEmitter {
@@ -36,7 +36,7 @@ export class NodeJavaScriptEmitter extends JavaScriptEmitter {
     if (!this.nodeServerOutput) return helpers;
     this.requireRuntimeModule("velar/serve");
     helpers.push('import { ServeApp as __velarServeAppType } from "velar/serve";');
-    helpers.push("const { createApp: __velarCreateServeApp, createRoute: __velarCreateServeRoute } = __velarServeAppType.__velarCompilerBridge;");
+    helpers.push("const { createApp: __velarCreateServeApp, createRoute: __velarCreateServeRoute, createNotFound: __velarCreateServeNotFound } = __velarServeAppType.__velarCompilerBridge;");
     return helpers;
   }
 
@@ -78,12 +78,23 @@ export class NodeJavaScriptEmitter extends JavaScriptEmitter {
     const itemIndent = "  ".repeat(depth + 1);
     const items = statement.items.map((item) => item.kind === "NodeServerSpread"
       ? `${itemIndent}${this.emitMappedExpression(item.value)}`
-      : `${itemIndent}${this.emitRoute(item, depth + 1)}`);
+      : item.kind === "NodeNotFoundDeclaration"
+        ? `${itemIndent}${this.emitNotFound(item, depth + 1)}`
+        : `${itemIndent}${this.emitRoute(item, depth + 1)}`);
     return [
       `${indentation}${statement.exported ? "export " : ""}const ${statement.name} = __velarCreateServeApp(${JSON.stringify(statement.name)}, [`,
       items.join(",\n"),
       `${indentation}]);`,
     ].join("\n");
+  }
+
+  private emitNotFound(fallback: NodeNotFoundDeclaration, depth: number): string {
+    const indentation = "  ".repeat(depth);
+    const parameters = fallback.parameters.map((parameter) => this.emitParameter(parameter.name, parameter.defaultValue, false)).join(", ");
+    const bodyLines = [...this.emitStatementLines(fallback.body, depth + 1)];
+    if (!this.blockAlwaysReturns(fallback.body)) bodyLines.push(`${"  ".repeat(depth + 1)}return null;`);
+    const body = bodyLines.join("\n");
+    return `__velarCreateServeNotFound(async (${parameters}) => {${body ? `\n${body}\n${indentation}` : ""}})`;
   }
 
   private emitRoute(route: NodeRouteDeclaration, depth: number): string {

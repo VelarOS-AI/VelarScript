@@ -93,7 +93,8 @@ server routes:
 
 server composed:
     ...prefix("/api", routes)
-    ...staticFiles("/", root="public", fallback="index.html")
+    ...staticFiles("/assets", root="public")
+    @notFound(request: Request) => {error: "route_not_found", path: request.path}
 
 const guarded = use(bodyLimit(composed, 1_048_576), [
     passThrough,

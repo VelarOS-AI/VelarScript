@@ -16,7 +16,7 @@ import {
   type Statement,
   type ValueType,
 } from "@velarscript/compiler/extension";
-import { isNodeServerStatement, type NodeRouteDeclaration, type NodeServerDeclaration } from "./server-ast.ts";
+import { isNodeServerStatement, type NodeNotFoundDeclaration, type NodeRouteDeclaration, type NodeServerDeclaration } from "./server-ast.ts";
 import {
   isNodeProviderType,
   isNodeRouteInputType,
@@ -143,9 +143,16 @@ export class VelarNodeAnalyzer extends Analyzer {
     if (!this.isPredeclared(statement)) this.declareBinding(statement.name, false, serveAppType, statement.span);
 
     const routes = new Map<string, NodeRouteDeclaration>();
+    let notFound: NodeNotFoundDeclaration | null = null;
     for (const item of statement.items) {
       if (item.kind === "NodeServerSpread") {
         this.requireAssignable(this.inferExpression(item.value, serveAppType), serveAppType, item.value.span);
+        continue;
+      }
+      if (item.kind === "NodeNotFoundDeclaration") {
+        if (notFound) this.typeError("A server can declare only one @notFound fallback", item.span);
+        else notFound = item;
+        this.analyzeNotFound(item);
         continue;
       }
       const shape = routeShape(item.path);
@@ -158,6 +165,30 @@ export class VelarNodeAnalyzer extends Analyzer {
         );
       } else routes.set(key, item);
       this.analyzeRoute(item);
+    }
+  }
+
+  private analyzeNotFound(fallback: NodeNotFoundDeclaration): void {
+    this.analyzeFunctionDeclaration(fallback, null, true, false, true, "Not-found fallback");
+    if (fallback.parameters.length > 1) {
+      this.typeError("@notFound accepts at most one Request parameter", fallback.signatureSpan);
+    }
+    const parameter = fallback.parameters[0];
+    if (parameter) {
+      if (parameter.rest) this.typeError("@notFound Request cannot be a rest parameter", parameter.span);
+      if (parameter.defaultValue) this.typeError("@notFound Request is supplied by the server and cannot have a default value", parameter.span);
+      if (!parameter.type) this.typeError("@notFound Request requires the explicit Request type", parameter.span);
+      else {
+        const resolved = this.expandAliases(this.resolveValidatedAnnotation(parameter.type));
+        if (!isServeRequestType(resolved)) this.typeError(`@notFound parameter must be Request; received ${describeType(resolved)}`, parameter.span);
+      }
+    }
+    const result = this.expandAliases(this.inferredFunctionResult(fallback));
+    if (!isRouteResult(result, (identity) => this.fieldsOf(identity), new Set())) {
+      this.typeError(
+        `@notFound must return Data or a response from velar/serve; received ${describeType(result)}`,
+        fallback.returnType?.span ?? fallback.span,
+      );
     }
   }
 

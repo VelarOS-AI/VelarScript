@@ -6,6 +6,14 @@ truth for acceptance status.
 
 ## Unreleased
 
+## 0.12.1 — 2026-08-20
+
+### Node server framework
+
+- Added one application-level `@notFound` fallback for unmatched request paths,
+  while preserving route-owned errors, method-not-allowed handling, middleware,
+  lifecycle, and the bounded default 404 response.
+
 ## 0.12.0 — 2026-08-20
 
 ### Node server framework

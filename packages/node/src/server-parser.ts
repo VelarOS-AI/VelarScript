@@ -10,6 +10,7 @@ import {
 import {
   NODE_HTTP_METHODS,
   type NodeHttpMethodName,
+  type NodeNotFoundDeclaration,
   type NodeRouteDeclaration,
   type NodeServerDeclaration,
   type NodeServerItem,
@@ -72,14 +73,16 @@ export class VelarNodeParser extends Parser {
     while (!this.check("dedent") && !this.check("eof")) {
       const itemStart = this.current().span.start;
       let item: NodeServerItem | null = null;
-      if (this.check("at")) item = this.parseRoute(itemStart);
+      if (this.check("at")) item = this.peekValue(1) === "notFound"
+        ? this.parseNotFound(itemStart)
+        : this.parseRoute(itemStart);
       else if (this.match("ellipsis")) {
         const value = this.parseExpression();
         item = { kind: "NodeServerSpread", value, span: span(itemStart, value.span.end) };
       } else {
         this.diagnostics.push(diagnostic(
           "VEL6003",
-          "A server body contains only @get/@post/@put/@patch/@delete routes or '...app' composition entries; put ordinary declarations outside the server",
+          "A server body contains only HTTP routes, one @notFound fallback, or '...app' composition entries; put ordinary declarations outside the server",
           this.current().span,
         ));
         this.skipMistypedDeclaration();
@@ -105,8 +108,8 @@ export class VelarNodeParser extends Parser {
       this.diagnostics.push(diagnostic(
         "VEL6002",
         name
-          ? `Unknown compiler-owned name '@${name.value}' in a server; use @get, @post, @put, @patch, or @delete`
-          : "Expected a compiler-owned server name after '@'; use @get, @post, @put, @patch, or @delete",
+          ? `Unknown compiler-owned name '@${name.value}' in a server; use an HTTP route name or @notFound`
+          : "Expected a compiler-owned server name after '@'; use an HTTP route name or @notFound",
         span(marker.span.start, (name ?? marker).span.end),
       ));
       this.skipMistypedDeclaration();
@@ -150,21 +153,7 @@ export class VelarNodeParser extends Parser {
     const close = this.expect("rightParen", "Expected ')' after route parameters");
     const parameterListEnd = close.span.end;
 
-    let returnType: TypeReference | null = null;
-    let resultAnnotationSpan: Span | undefined;
-    let expressionBody = false;
-    let body: readonly Statement[];
-    if (this.match("fatArrow")) {
-      expressionBody = true;
-      const value = this.parseExpression();
-      body = [{ kind: "ReturnStatement", value, span: value.span }];
-    } else {
-      if (this.match("arrow")) {
-        returnType = this.parseTypeReference();
-        resultAnnotationSpan = span(parameterListEnd, returnType.span.end);
-      }
-      body = this.parseBlock();
-    }
+    const { returnType, resultAnnotationSpan, expressionBody, body } = this.parseHandlerBody(parameterListEnd);
     const method = methodName.toUpperCase() as Uppercase<NodeHttpMethodName>;
     const end = body.at(-1)?.span.end ?? returnType?.span.end ?? close.span.end;
     return {
@@ -181,6 +170,50 @@ export class VelarNodeParser extends Parser {
       expressionBody,
       span: span(start, end),
     };
+  }
+
+  private parseNotFound(start: number): NodeNotFoundDeclaration {
+    this.expect("at", "Expected '@'");
+    this.expect("identifier", "Expected 'notFound' after '@'");
+    const parameters = this.parseParameters();
+    const parameterListEnd = this.previous().span.end;
+    const { returnType, resultAnnotationSpan, expressionBody, body } = this.parseHandlerBody(parameterListEnd);
+    const end = body.at(-1)?.span.end ?? returnType?.span.end ?? parameterListEnd;
+    return {
+      kind: "NodeNotFoundDeclaration",
+      name: "notFound",
+      parameters,
+      returnType,
+      ...(resultAnnotationSpan ? { resultAnnotationSpan } : {}),
+      signatureSpan: span(start, returnType?.span.end ?? parameterListEnd),
+      body,
+      expressionBody,
+      span: span(start, end),
+    };
+  }
+
+  private parseHandlerBody(parameterListEnd: number): {
+    readonly returnType: TypeReference | null;
+    readonly resultAnnotationSpan?: Span;
+    readonly expressionBody: boolean;
+    readonly body: readonly Statement[];
+  } {
+    let returnType: TypeReference | null = null;
+    let resultAnnotationSpan: Span | undefined;
+    let expressionBody = false;
+    let body: readonly Statement[];
+    if (this.match("fatArrow")) {
+      expressionBody = true;
+      const value = this.parseExpression();
+      body = [{ kind: "ReturnStatement", value, span: value.span }];
+    } else {
+      if (this.match("arrow")) {
+        returnType = this.parseTypeReference();
+        resultAnnotationSpan = span(parameterListEnd, returnType.span.end);
+      }
+      body = this.parseBlock();
+    }
+    return { returnType, ...(resultAnnotationSpan ? { resultAnnotationSpan } : {}), expressionBody, body };
   }
 
   private advanceWithPathPatternDiagnostic(methodName: NodeHttpMethodName): Token {

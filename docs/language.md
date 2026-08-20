@@ -464,7 +464,7 @@ body. Other scalar parameters come from the query string; one Data record on a
 writing route comes from JSON.
 
 ```velar
-import {HttpError, created} from "velar/serve"
+import {HttpError, Request, created} from "velar/serve"
 
 type CreateArticle:
     title: string
@@ -479,6 +479,8 @@ export server app:
 
     @post(p"/articles", input: CreateArticle) => created({id: 1, title: input.title})
 
+    @notFound(request: Request) => {error: "route_not_found", path: request.path}
+
 ```
 
 `p"..."` belongs to the Node extension rather than Core's string system.
@@ -489,6 +491,10 @@ configuration selects this exported app. `velar dev` watches and restarts it,
 `velar serve` runs it with production behavior, and `velar build` emits the
 standalone Node application. Direct `serve(...)` remains an ordinary library
 operation for integration tests and embedded servers.
+`@notFound` is the single application fallback for a path that matches no
+route. Its optional parameter must be `Request`; Data keeps the 404 status,
+while an explicit response may select another status. It does not intercept a
+matched route's `HttpError` or a method-not-allowed response.
 
 ↳ charter [§3 Bindings and literals](language-charter.md#3-bindings-and-literals)
 · [Standard library: `velar/serve`](standard-library.md#velarserve)
