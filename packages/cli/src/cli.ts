@@ -7,11 +7,19 @@ import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { formatSource } from "@velarscript/compiler";
 import type { CompileResult, CompilerExtension } from "@velarscript/compiler";
+import type { VelarNodeConfig } from "@velarscript/node/compiler";
 import { createVelarProject, parseCreateArguments } from "create-velar";
 import { projectImportKey, type ProjectModule, type ProjectResult } from "./project.ts";
 import { checkResolvedProject, discoverVelarSources, formatCheckOutput, projectTestModules } from "./project-check.ts";
 import { reproductionHint, writeReproduction } from "./reproduction.ts";
 import { runDevServer } from "./dev-server.ts";
+import {
+  nodeApplicationConfig,
+  nodeApplicationEntry,
+  nodeApplicationLauncherSource,
+  runNodeApplication,
+  runNodeDevelopment,
+} from "./node-application.ts";
 import { createFrameworkArtifacts } from "./framework-host.ts";
 import { resolveVelarProject, type VelarProjectConfig } from "./config.ts";
 import { STANDARD_MODULE_ADAPTER_DEPENDENCIES, standardModuleClosure, standardModuleSource, standardModuleSources } from "./standard-modules.ts";
@@ -57,7 +65,13 @@ interface FormatArguments {
 
 interface DevArguments {
   readonly input: string | null;
-  readonly port: number;
+  readonly port: number | null;
+}
+
+interface ServeArguments {
+  readonly input: string | null;
+  readonly host: string | null;
+  readonly port: number | null;
 }
 
 interface TestArguments {
@@ -143,11 +157,18 @@ async function main(arguments_: readonly string[]): Promise<number> {
   }
 
   if (command === "skill") {
-    if (rest.length > 0) {
-      process.stderr.write("velar skill: this command does not accept arguments\n");
+    const kind = rest[0] ?? "core";
+    const files: Readonly<Record<string, string>> = Object.freeze({
+      core: "ai-skill.md",
+      web: "ai-skill-web.md",
+      node: "ai-skill-node.md",
+      desktop: "ai-skill-desktop.md",
+    });
+    if (rest.length > 1 || files[kind] === undefined) {
+      process.stderr.write("velar skill: expected core, web, node, or desktop\n");
       return 2;
     }
-    process.stdout.write(await readFile(new URL("../skill/ai-skill.md", import.meta.url), "utf8"));
+    process.stdout.write(await readFile(new URL(`../skill/${files[kind]}`, import.meta.url), "utf8"));
     return 0;
   }
 
@@ -345,7 +366,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
     }
   }
 
-  if (command !== "check" && command !== "build" && command !== "package" && command !== "format" && command !== "dev" && command !== "test") {
+  if (command !== "check" && command !== "build" && command !== "package" && command !== "format" && command !== "dev" && command !== "serve" && command !== "test") {
     process.stderr.write(`Unknown command '${command}'.\n\n`);
     printHelp(process.stderr);
     return 2;
@@ -415,13 +436,33 @@ async function main(arguments_: readonly string[]): Promise<number> {
     let projectConfig: VelarProjectConfig;
     try {
       projectConfig = await resolveVelarProject(parsed.input);
-      if (!projectConfig.framework) throw new Error("the project does not declare an application framework host");
-      await runDevServer(projectConfig, parsed.port);
+      if (projectConfig.framework) await runDevServer(projectConfig, parsed.port ?? 5173);
+      else if (nodeApplicationConfig(projectConfig)) await runNodeDevelopment(projectConfig, parsed.port === null ? {} : { port: parsed.port });
+      else throw new Error("the project does not declare a Web, Desktop, or Node application target");
     } catch (error) {
       process.stderr.write(`velar dev: ${hostErrorMessage(error)}\n`);
       return 1;
     }
     return 0;
+  }
+
+  if (command === "serve") {
+    const parsed = parseServeArguments(rest);
+    if (typeof parsed === "string") {
+      process.stderr.write(`velar serve: ${parsed}\n`);
+      return 2;
+    }
+    try {
+      const projectConfig = await resolveVelarProject(parsed.input);
+      const overrides = {
+        ...(parsed.host === null ? {} : { host: parsed.host }),
+        ...(parsed.port === null ? {} : { port: parsed.port }),
+      };
+      return await runNodeApplication(projectConfig, overrides);
+    } catch (error) {
+      process.stderr.write(`velar serve: ${hostErrorMessage(error)}\n`);
+      return 1;
+    }
   }
 
   if (command === "test") {
@@ -570,6 +611,17 @@ async function main(arguments_: readonly string[]): Promise<number> {
     process.stdout.write(`Built production ${project.framework.host.displayName} app -> ${outputDirectory}\n`);
     return 0;
   }
+  const nodeConfig = nodeApplicationConfig(projectConfig);
+  if (nodeConfig) {
+    try {
+      await writeNodeProductionApplication(project, outputDirectory, nodeConfig);
+    } catch (error) {
+      process.stderr.write(`velar build: ${hostErrorMessage(error)}\n`);
+      return 1;
+    }
+    process.stdout.write(`Built production Node app -> ${outputDirectory}\n`);
+    return 0;
+  }
   const staging = await prepareBuildStaging(outputDirectory);
   try {
     assertUniqueEmbeddedModuleOutputs(project.modules.map((module) => ({
@@ -620,6 +672,48 @@ async function writeFrameworkProductionApplication(project: ProjectResult, outpu
       production.framework,
     );
     await writeProductionManifest(staging, production, deployment);
+    await replaceOutputDirectory(staging, outputDirectory);
+  } catch (error) {
+    await rm(staging, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+async function writeNodeProductionApplication(
+  project: ProjectResult,
+  outputDirectory: string,
+  config: VelarNodeConfig,
+): Promise<void> {
+  const entry = nodeApplicationEntry(project, config);
+  const staging = await prepareBuildStaging(outputDirectory);
+  try {
+    assertUniqueEmbeddedModuleOutputs(project.modules.map((module) => ({
+      ownerPath: join(staging, module.relativePath.replace(/\.vel$/u, ".js")),
+      embeddedModules: module.result.embeddedModules,
+    })));
+    for (const module of project.modules) {
+      const outputPath = join(staging, module.relativePath.replace(/\.vel$/u, ".js"));
+      await mkdir(dirname(outputPath), { recursive: true });
+      await writeCompiled(outputPath, module.result, false, rewriteVelarPackageImports(project, module), null, true, config.build.sourceMaps);
+    }
+    await writeProjectResources(project, staging, "build");
+    await writeBuildResourcePackageManifests(project, staging);
+    await writeNodeStandardModules(staging, project);
+    await copyPublicAssets(project.publicRoot, join(staging, "public"), true);
+    const entryPath = `./${relative(project.sourceRoot, entry.inputPath).replace(/\.vel$/u, ".js").replaceAll("\\", "/")}`;
+    const launcher = ".velar-node-entry.mjs";
+    await writeFile(join(staging, launcher), nodeApplicationLauncherSource(entryPath, config, {}, false), "utf8");
+    await writeFile(join(staging, "package.json"), `${JSON.stringify({ name: "velar-node-build", private: true, type: "module" }, null, 2)}\n`, "utf8");
+    await writeFile(join(staging, "velar-node.json"), `${JSON.stringify({
+      formatVersion: 1,
+      kind: "velar-node-build",
+      entry: launcher,
+      app: config.app,
+      host: config.host,
+      port: config.port,
+      maxBodyBytes: config.maxBodyBytes,
+      sourceMaps: config.build.sourceMaps,
+    }, null, 2)}\n`, "utf8");
     await replaceOutputDirectory(staging, outputDirectory);
   } catch (error) {
     await rm(staging, { recursive: true, force: true });
@@ -895,10 +989,11 @@ async function writeCompiled(
   codeOverride: string | null = null,
   sourceMapOverride: string | null = null,
   writeEmbedded = true,
+  sourceMaps = true,
 ): Promise<void> {
   const mapPath = `${outputPath}.map`;
   const rawCode = codeOverride ?? result.code ?? "";
-  const code = rawCode.includes(`//# sourceMappingURL=${basename(mapPath)}`)
+  const code = !sourceMaps || rawCode.includes(`//# sourceMappingURL=${basename(mapPath)}`)
     ? rawCode
     : `${rawCode}//# sourceMappingURL=${basename(mapPath)}\n`;
   if (writeEmbedded) {
@@ -910,13 +1005,15 @@ async function writeCompiled(
   }
   const writes = [
     writeFile(outputPath, code, "utf8"),
-    writeFile(mapPath, sourceMapOverride ?? result.sourceMap ?? "", "utf8"),
+    ...(sourceMaps ? [writeFile(mapPath, sourceMapOverride ?? result.sourceMap ?? "", "utf8")] : []),
     ...(writeEmbedded ? result.embeddedModules : []).flatMap((module) => {
       const embeddedPath = embeddedModuleOutputPath(outputPath, module.specifier);
-      return [
-        writeFile(embeddedPath, embeddedModuleFileContents(embeddedPath, module), "utf8"),
-        writeFile(`${embeddedPath}.map`, module.sourceMap, "utf8"),
-      ];
+      const embeddedCode = sourceMaps
+        ? embeddedModuleFileContents(embeddedPath, module)
+        : `${module.code.endsWith("\n") || module.code.endsWith("\r") ? module.code : `${module.code}\n`}${VELAR_EMBEDDED_MODULE_MARKER}`;
+      return sourceMaps
+        ? [writeFile(embeddedPath, embeddedCode, "utf8"), writeFile(`${embeddedPath}.map`, module.sourceMap, "utf8")]
+        : [writeFile(embeddedPath, embeddedCode, "utf8")];
     }),
   ];
   if (writeCss) {
@@ -1049,7 +1146,7 @@ function parsePackageArguments(arguments_: readonly string[]): CommandArguments 
 
 function parseDevArguments(arguments_: readonly string[]): DevArguments | string {
   let input: string | null = null;
-  let port = 5173;
+  let port: number | null = null;
   for (let index = 0; index < arguments_.length; index += 1) {
     const argument = arguments_[index]!;
     if (argument === "--port") {
@@ -1067,6 +1164,34 @@ function parseDevArguments(arguments_: readonly string[]): DevArguments | string
     }
   }
   return { input, port };
+}
+
+function parseServeArguments(arguments_: readonly string[]): ServeArguments | string {
+  let input: string | null = null;
+  let host: string | null = null;
+  let port: number | null = null;
+  for (let index = 0; index < arguments_.length; index += 1) {
+    const argument = arguments_[index]!;
+    if (argument === "--host") {
+      const value = arguments_[index + 1];
+      if (!value || value.startsWith("--") || value.length > 255 || value.includes("\0")) return "--host requires a bounded hostname or IP address";
+      host = value;
+      index += 1;
+    } else if (argument === "--port") {
+      const value = arguments_[index + 1];
+      const parsed = value ? Number(value) : Number.NaN;
+      if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65_535) return "--port requires an integer from 1 to 65535";
+      port = parsed;
+      index += 1;
+    } else if (argument.startsWith("--")) {
+      return `unknown option '${argument}'`;
+    } else if (input) {
+      return `unexpected extra input '${argument}'`;
+    } else {
+      input = argument;
+    }
+  }
+  return { input, host, port };
 }
 
 function parseTestArguments(arguments_: readonly string[]): TestArguments | string {
@@ -1207,6 +1332,7 @@ function printHelp(output: NodeJS.WritableStream = process.stdout): void {
     "  velar remove <package>...",
     "  velar update [package...]",
     "  velar dev [entry.vel | project-directory] [--port <port>]",
+    "  velar serve [project-directory] [--host <host>] [--port <port>]",
     "  velar build [entry.vel | project-directory] [--out-dir <directory>]",
     "  velar run [entry.vel | project-directory] [--stack] [-- <program-arguments>...]",
     "  velar verify [project-directory | build-directory]",
@@ -1219,7 +1345,7 @@ function printHelp(output: NodeJS.WritableStream = process.stdout): void {
     "  velar format [file.vel | project-directory] [--check]",
     "  velar fix [entry.vel | project-directory]",
     "  velar repro [entry.vel | project-directory] [--out-dir <directory>]",
-    "  velar skill",
+    "  velar skill [core|web|node|desktop]",
     "  velar lsp",
     "  velar --version",
     "",
@@ -1227,7 +1353,7 @@ function printHelp(output: NodeJS.WritableStream = process.stdout): void {
 }
 
 const commandNames = new Set([
-  "check", "create", "install", "add", "remove", "update", "dev", "build", "package", "run", "verify", "preview",
+  "check", "create", "install", "add", "remove", "update", "dev", "serve", "build", "package", "run", "verify", "preview",
   "verify-deployment", "test", "format", "fix", "repro", "skill", "lsp",
 ]);
 
@@ -1239,8 +1365,9 @@ function printCommandHelp(command: string, output: NodeJS.WritableStream = proce
     add: ["Usage: velar add <package[@version]>... [--dev]", "Adds npm registry packages and activates packages that declare velar.extension metadata."],
     remove: ["Usage: velar remove <package>...", "Removes npm packages and their extension-owned VelarScript project configuration."],
     update: ["Usage: velar update [package...]", "Updates all or selected direct dependencies within package.json ranges through npm."],
-    dev: ["Usage: velar dev [entry.vel | project-directory] [--port <1-65535>]", "Runs the development server; the default port is 5173."],
-    build: ["Usage: velar build [entry.vel | project-directory] [--out-dir <directory>]", "       velar build <single.vel> --out <file.js>", "Builds isolated framework application output or JavaScript modules."],
+    dev: ["Usage: velar dev [entry.vel | project-directory] [--port <1-65535>]", "Watches a framework app or last-good Node ServeApp; Web defaults to 5173 and Node reads node.port."],
+    serve: ["Usage: velar serve [project-directory] [--host <host>] [--port <1-65535>]", "Checks and runs a Node ServeApp with production runtime behavior; node.host and node.port provide the defaults."],
+    build: ["Usage: velar build [entry.vel | project-directory] [--out-dir <directory>]", "       velar build <single.vel> --out <file.js>", "Builds isolated Web/Desktop output, a standalone Node application, or JavaScript modules."],
     package: ["Usage: velar package [project-directory]", "Packages an application through its target-owned native packaging host."],
     run: ["Usage: velar run [entry.vel | project-directory] [--stack] [-- <program-arguments>...]", "Compiles the resolved Core project and executes its entry module once on Node.js; arguments after '--' reach the program.", "--stack prints the full Node.js trace behind an uncaught program error instead of the VelarScript frames."],
     verify: ["Usage: velar verify [project-directory | build-directory]", "Verifies the exact production manifest, inventory, sizes, hashes, and relationships."],
@@ -1260,7 +1387,7 @@ function printCommandHelp(command: string, output: NodeJS.WritableStream = proce
       "The bundle is extracted to a temporary directory and re-checked first; if the copy stops reproducing, the command says so rather than reporting a clean reproduction.",
       "The default location is .velar/repro inside the project, replaced on each run; a directory named with --out-dir must be empty.",
     ],
-    skill: ["Usage: velar skill", "Prints the packaged VelarScript AI skill brief verbatim to stdout for any coding agent."],
+    skill: ["Usage: velar skill [core|web|node|desktop]", "Prints one packaged, owner-specific VelarScript AI skill brief verbatim to stdout; the default is core."],
     lsp: ["Usage: velar lsp", "Runs the stdio language server for an editor host."],
   };
   output.write(["VelarScript Compiler", "", ...(details[command] ?? []), ""].join("\n"));

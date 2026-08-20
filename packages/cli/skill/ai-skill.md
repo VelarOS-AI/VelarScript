@@ -1,16 +1,17 @@
-# The VelarScript AI skill brief
+# The VelarScript Core AI skill brief
 
 This is the language brief for AI agents working in a VelarScript project. It
-is agent-agnostic markdown, it ships inside the toolchain, and `velar skill`
+is agent-agnostic markdown, it ships inside the toolchain, and `velar skill core`
 prints it verbatim — no network, no external documentation. Every code fence
 in this file compiles against the current compiler; the brief cannot drift
-from the language.
+from the language. Projects using a framework also load the separate `web`,
+`node`, or `desktop` brief named by their `AGENTS.md`.
 
 ## What VelarScript is
 
-VelarScript (Vel) is an extensible programming language for the AI era where the
-framework is the language: `component`, `state`, and `look` are keywords rather
-than imports, so one checked language covers markup, styling, state, and tests.
+VelarScript (Vel) is an extensible programming language for the AI era. Core
+owns the general-purpose language; a framework extension may add checked
+syntax without changing Core's grammar or strings.
 You write the Vel and every later change; the owner reads the result; the
 compiler guards each change. Vel's parents are JavaScript and Python: ask the
 mother about behavior — the program runs inside her — and the father about spelling.
@@ -46,23 +47,21 @@ JavaScript global, so there are exactly four and the list is closed:
 `escapeHtml`, `codePoint`, `fromCodePoint`, `matches`, `findMatch`,
 `findMatches`, `replaceMatches`, `splitPattern`). A string method is a core
 operation; `Text.*` is the extension toolbox, and nothing moves between them.
-Web visual builders are named imports from `velar/look` — there is no `Look`
-global in JavaScript, so there is no `Look.` prefix here either. These names
-need no import and cannot be shadowed: `const Text = 1` is rejected. `print`,
+These names need no import and cannot be shadowed: `const Text = 1` is rejected. `print`,
 `str`, `number`, `equals`, and `range` are likewise in the Core prelude —
 `equals(a, b)` is the one content-comparison spelling. One roster grants and
 protects these names. Capabilities stay explicit imports. Durations use `ms` or
 `s`, so write `await Promise.sleep(250ms)`, not a bare number.
 
-Use checked binary/random/task, manifest Workers, pull WebSockets, Node SQLite,
-Web binary IndexedDB, and official adapters. A direct `for index in range(...):` is a native counter; range as a value is a List. Use `UInt16Buffer` for 16-bit numeric state,
+Use checked binary, random, task, and official adapter APIs. A direct
+`for index in range(...):` is a native counter; range as a value is a List. Use `UInt16Buffer` for 16-bit numeric state,
 `UInt8Buffer` for compact data, and bounded `UInt32Builder`/`Float32Builder` values for variable-size numeric output.
 
 ## Project setup
 
 A VelarScript project is a directory containing a `velar.json` manifest. Let
-the toolchain write it — `velar create my-app` scaffolds the Web template, and
-`--template node|desktop|docs|library|component` picks another. Each writes
+the toolchain write it — `velar create my-lib --template library` scaffolds a
+Core source library; other templates select their own framework brief. Each writes
 `velar.json`, a `package.json` whose scripts are the gates, a `src/` tree, a
 passing test, and an `AGENTS.md`.
 
@@ -70,7 +69,7 @@ Writing the manifest yourself: `formatVersion` is required, `extensions` may be
 omitted by a project that loads none, `entry` defaults to `src/main.vel`,
 `outDir` to `dist`, and `publicDir` to `public`.
 
-A Core project (CLI, library, Node) loads no extensions:
+A Core project (CLI or library) loads no extensions:
 
 ```json
 {
@@ -80,83 +79,14 @@ A Core project (CLI, library, Node) loads no extensions:
 }
 ```
 
-A Web project activates the Web extension **by package name**. That one line is
-what turns on `component`, JSX, `state`, `computed`, `resource`, `action`,
-`watch`, `look`, and `mount`; without it `component` is an unknown declaration
-keyword and every JSX token is a parse error:
-
-```json
-{
-  "formatVersion": 2,
-  "entry": "src/main.vel",
-  "extensions": ["@velarscript/web"]
-}
-```
-
-An extension owns its own manifest key — `"web": {"title": "My App"}` sets the
-document title. Anything else in `velar.json` is rejected by name.
-
-**Files the toolchain owns.** `dist/` is build output, and in a Web build the
-toolchain writes `dist/index.html` itself — the title comes from `web.title`, the
-favicon from `web.icon` (a `publicDir`-relative `.svg`/`.png`/`.ico` path; the
-build fails if no such file exists), the
-mount host is `<div id="app"></div>`, and assets are content-hashed. Never author
-that file; a `public/index.html` is overwritten by the generated one, while
-everything else in `public/` is copied through. `.velar/` is scratch; both belong in `.gitignore`.
+An extension owns its syntax, modules, and manifest keys. Anything outside the
+active owners' closed manifest vocabulary is rejected by name. `dist/` is build
+output and `.velar/` is scratch; both belong in `.gitignore`.
 
 **Tests.** `velar test` finds every `*.test.vel` file under the project (skipping
 `outDir` and `publicDir`) and runs its `test "name":` blocks. The name is a
 sentence about the code, quoted verbatim by the reporter and unique in its
 module; the body may `await` directly and needs no `export`. A file that declares no tests is a failure rather than a skip.
-`velar test --browser` runs `*.browser.test.vel` in a real browser — and bare
-`--browser` is **Chromium only**. Three engines is `--browser=all` (or
-`--browser all`), which is what any cross-browser claim costs;
-`--browser=firefox` and `--browser=webkit` pick one.
-
-**Separate the mounted entrypoint from testable code.** A test runs in Node with
-no DOM, so a headless test that imports the module calling `mount` fails on
-`document`. Keep the entry trivial and put everything worth testing in modules it
-imports:
-
-```velar fragment
-// src/main.vel — the mounted entrypoint; no test imports this file
-import {App} from "./app.vel"
-
-mount(<App />, "#app")
-```
-
-Components, functions, and types live in `src/app.vel` and its neighbours;
-`src/app.test.vel` tests those exports headlessly and
-`src/app.browser.test.vel` drives the mounted application.
-
-**A browser test drives the page; it does not build one.** Its body runs in the
-test process against a page already running the production build, so `mount`,
-JSX, and `document` are unavailable there — the driving surface is
-`velar/web-test`, and selectors are ordinary CSS:
-
-```velar fragment
-import {expect} from "velar/test"
-import {browser, localStorage} from "velar/web-test"
-
-test "adding a link shows it in the list":
-    await browser.open("/")
-    await browser.fill("#title", "Vel")
-    await browser.click("#add")
-    await browser.waitForText("[data-item]", "Vel")
-    expect(await browser.text("[data-count]")).toBe("1")
-    expect(await localStorage.get("reading")).toBe(`[{"title":"Vel"}]`)
-```
-
-`browser` also carries `reload`, `press`, `select`, `attribute`, `count`,
-`visible`, `waitFor`, `currentPath`, and `viewport`; `localStorage` and
-`sessionStorage` read and write the page's raw storage. Any unhandled error —
-in the page or in the test process — fails the test.
-
-`velar/web-test` may be imported **only** from a `*.browser.test.vel` module.
-Reaching for it from application code, from a plain `*.test.vel`, through
-`import js`, or through a re-export is rejected on the import line — rename the
-module or move the browser test into one of its own. Application code that
-needs the page reaches it through `velar/browser` instead.
 
 ## The traps your reflexes will hit
 
@@ -177,14 +107,13 @@ them; the first two are the **silent traps** in the list — read them twice.
 | `if value:` truthiness | Conditions accept only `bool`/`bool?`. Test presence explicitly: `if value != null:`. |
 | `value is null` | `value == null` / `value != null` — `is` tests runtime types, `null` is a value. |
 | `switch`, or an `if`/`else if` ladder over an enum | `match` with `case _:` as the only fallback. |
-| Renaming a binding away from `type`, `json`, `state`, `from`, `match`, `as`, `action`, `resource`, `watch`, `look`, `component` | Don't. Declaration words are contextual: each declares only in its own shape, so `const {type, from} = event` and `const state = "ready"` are ordinary code in Core and Web alike. `enum` and `case` are the exceptions — `enum` is a real VelarScript keyword, `case` is reserved by JavaScript — so neither can be a binding name; both stay fine as record fields, member names, and `match` branches. |
-| Treating `@` as a decorator, call, value, or user extension point; or writing a component's bare `mounted:` / `cleanup:` block | `@` has one meaning: `@name` qualifies the name into the closed compiler-owned namespace of the current context. Core or the active syntax-owning compiler extension owns the vocabulary; source cannot declare, import, alias, pass, or construct an `@name`. The context supplies the role: class `@dispose:`/`@iterate:`, component `@mounted:`/`@cleanup:`, and Look `@hover`/`@before:` all follow this rule. Because the namespace is separate, a component may also declare its own `def mounted()`. |
+| Renaming a binding away from `type`, `json`, `from`, `match`, or `as` | Don't. Declaration words are contextual: each declares only in its own shape, so `const {type, from} = event` is ordinary code. `enum` and `case` are the exceptions — `enum` is a real VelarScript keyword and `case` is reserved by JavaScript — so neither can be a binding name; both stay fine as record fields, member names, and `match` branches. |
+| Treating `@` as a decorator, call, value, or user extension point | `@` has one meaning: `@name` qualifies the name into the closed compiler-owned namespace of the current context. Core or the active syntax-owning compiler extension owns the vocabulary; source cannot declare, import, alias, pass, or construct an `@name`. The class contracts `@dispose:` and `@iterate:` follow this one rule. |
 | Two statements on one line | One statement per line; there are no semicolons. A line starting with `.` or `?.` continues the previous line, so method chains format normally. |
 | `count++` | `count += 1` |
 | `call(name: value)` named argument | `call(name=value)` |
 | Importing `range` | `range(...)` is a Core prelude function and needs no import. |
 | `import {sqrt} from "velar/math"` | `Math.sqrt(x)`; `Math.` is permanent. `velar fix` performs the rewrite. |
-| `Look.spacing(16px)` | `spacing(16px)` with `import {spacing} from "velar/look"`; the `Look.` prefix is retired. `velar fix` performs the rewrite. |
 | `"""triple-quoted"""` for a block of text | A layout string: a double quote followed immediately by a newline opens it; a quote back at the opening line's indentation closes it. Backtick strings are real, but always single-line. |
 | Escaping `\"` through a JSON, HTML, or selector string | Use backticks: `` `{"name":"Nova"}` `` is the same `string` value, with `"` as ordinary text. Prefixes are orthogonal (`` f` ``, `` r` ``, `` rf` ``), and `velar format` picks the delimiter for you (`"` by default, backticks when the text contains `"`), so write whichever is convenient. |
 | `007`, `.5` | Write `7`, `0.5`. Explicit `0xFF`, `0b1010`, and `0o17` integers are supported; legacy leading-zero octal is not. Group long digits with `_` — `1_000_000`. `Infinity` and `NaN` are not literals: write `1 / 0` and `0 / 0`. |
@@ -196,8 +125,6 @@ them; the first two are the **silent traps** in the list — read them twice.
 | `f"{user}"` or `str(user)` on a record | Text conversion accepts strings, numbers, bools, enums, and `null` only. `print(user)` inspects a value; permanent `Json.stringify(user)` builds data text without an import. |
 | Calling an async function and moving on | A dropped Promise is a compile error. `await task()` to wait; `async task()` to run it detached. |
 | `flag or name ?? fallback` | Parenthesize — `??` never shares an unparenthesized chain with `and`/`or`. |
-| `onClick={handler}` | `on:click={handler}`; form binding is `bind:value={state}`. |
-| Implicit `{props.children}` | Declare it: a `children: WebNode` prop receives the JSX tag body. |
 | `map[key]` reads | `map.get(key)` returns `T?`. On Lists, `[index]` throws on a bug; `.get(index)` returns `null` when absence is an expected answer. |
 | `[...text]` or `list(text)` for characters | `text.split("")` — the empty separator splits per Unicode code point. |
 | `x !== x` or `Number.isNaN(x)` | Number predicates are members: `x.isNaN()`, `x.isFinite()`, `x.isInteger()`. `NaN == NaN` is `true` — equality is SameValueZero. |
@@ -236,11 +163,7 @@ it names a result. They stand next to each other most often on a callback prop
 type Transform = (value: number) -> number
 
 const double: Transform = value => value * 2
-
-component Stepper(step: number, onChange: (next: number) -> null):
-    return <button type="button" on:click={() => onChange(step + 1)}>+1</button>
-
-mount(<Stepper step={double(1)} onChange={next => print(next)} />, "#app")
+print(double(2))
 ```
 
 Parameter names in a function type are optional but worth writing:
@@ -312,69 +235,6 @@ scope: `return handle`, storing it outside, or capturing it in a closure that
 escapes are rejected — return the data you read from it, or move the `using` up
 to the scope that really owns it. A JavaScript handle is owned by composition:
 hold it in a field of a class whose `@dispose:` releases it.
-
-Components (Web extension) return JSX directly — there is no `render` block.
-`state` holds a fact, `computed name = ...` derives and is read bare, `action`
-performs a user operation with reactive `pending`/`error`:
-
-```velar
-component Counter(label: string):
-    state count = 0
-    computed caption = f"{label}: {count}"
-
-    action reset():
-        count = 0
-
-    def bump():
-        count += 1
-
-    return <section>
-        <button type="button" on:click={bump}>{caption}</button>
-        <button type="button" disabled={reset.pending} on:click={reset}>Reset</button>
-    </section>
-
-mount(<Counter label="Clicks" />, "#app")
-```
-
-`look` is the checked visual language — a value, composed per element with
-`look={...}`. CSS keywords are quoted strings; property names are real DOM
-camelCase; units are literal:
-
-```velar
-import {border, rgb, spacing} from "velar/look"
-
-const buttonLook = look:
-    border = border(0px, rgb(220, 224, 235))
-    borderRadius = 10px
-    padding = spacing(10px, 14px)
-    cursor = "pointer"
-
-    if @hover:
-        background = rgb(235, 240, 255)
-
-component SaveButton(children: WebNode):
-    return <button look={buttonLook} type="button">{children}</button>
-```
-
-A `look:` literal is built once, so its conditions and values cannot read state; put a reactive visual on the element with `look={active ? a : b}` or `look:color={...}`. Declare checked motion as a module-level `keyframes:` value and pass it to `animate` from `velar/look`; disable nonessential motion at the CSS layer:
-
-```velar
-import {animate} from "velar/look"
-
-const spin = keyframes:
-    from:
-        rotate = 0deg
-    to:
-        rotate = 1turn
-
-const rotatingLook = look:
-    if not motion.reduced:
-        animation = animate(spin, 1s, easing="linear", loop=true)
-```
-
-The `animation` property accepts only `Animation`, `List<Animation>`, or `null`; a CSS animation string is rejected. Bind a changing animation on the element with `look:animation={active ? animate(spin, 1s) : null}`. Native animation longhands remain outside Look because `animate` owns the checked contract.
-
-Form state binds with `bind:value={name}` (also a writable path such as `bind:value={form.email}`), `bind:checked={flag}`, and `bind:group={choice}` — radio state holds the selected input's `value`, checkbox `List<string>` state holds the checked values; the event object has no `target`.
 
 ## The idioms
 
@@ -497,11 +357,11 @@ def firstLine(text: string) -> string:
 
 Callbacks stay arrows while they are one expression; promote two-statement
 logic to a named `def`. Name arguments where a bare value would read as a
-mystery: `buttonLook(dangerous=true)`, never `buttonLook(true)`.
+mystery: `connect(retry=true)`, never `connect(true)`.
 
 ### Strings
 
-Build text with f-strings — numbers, bools, enums, and Web unit values with a declared text form interpolate directly.
+Build text with f-strings — numbers, bools, and enums interpolate directly.
 Data becomes text through permanent `Json.stringify`. Multi-line text is
 a layout string, not a stack of `\n` escapes. Text that contains `"` — a JSON
 fixture, a quoted selector — goes in backticks instead of being escaped:
@@ -522,96 +382,6 @@ print(gapLabel)
 print(usage)
 print(Json.stringify({open: count}))
 ```
-
-### Components: four cells, one job each
-
-`state` holds a fact. `computed` derives from facts. `resource` loads async
-data. `action` performs a user operation. Read a resource as
-`value != null`; render nothing with `null`; key dynamic children:
-
-```velar fragment
-component TicketPanel(id: string):
-    state draft = ""
-    resource ticket: Ticket = loadTicket(id)
-    computed heading = ticket.value?.title ?? "Loading"
-
-    action save():
-        await saveDraft(id, draft)
-
-    watch id:
-        async ticket.reload()
-
-    return <section>
-        <h2>{heading}</h2>
-        <textarea bind:value={draft}></textarea>
-        <button disabled={save.pending} on:click={save}>Save</button>
-    </section>
-```
-
-Lifecycle is two sibling blocks in the component's compiler-owned namespace —
-`@mounted:` runs once after the DOM is inserted and may `await`; `@cleanup:`
-runs once before the component is destroyed and is synchronous:
-
-```velar fragment
-component Chart(points: List<number>):
-    let canvas: CanvasElement? = null
-
-    @mounted:
-        if canvas != null:
-            drawChart(canvas, points)
-
-    @cleanup:
-        releaseChart()
-
-    return <canvas ref={canvas}></canvas>
-```
-
-**A resource loads once, at mount, and does not refetch when its inputs
-change** — a new `id` prop leaves the old data on screen. "Refetch when the
-input changes" is the `watch` above: watch the input, and start `reload()` with
-the detached `async` statement, because a watch body is synchronous. `reload()`
-re-evaluates the initializer against the current inputs, keeps the last value if
-it fails, and puts the failure in `error`. Actions do not queue either: two
-clicks run two calls, `pending` means any call is active, so guard with
-`disabled={save.pending}`.
-
-Conditional rendering is an ordinary expression — there are no magic JSX
-control-flow attributes:
-
-```velar fragment
-component Panel:
-    return <section>
-        {loading ? <p aria-busy="true">Loading…</p> : <Results items={items} />}
-        <ul>
-            {items.map(item => <li key={item.id}>{item.title}</li>)}
-        </ul>
-    </section>
-```
-
-Component props are live reactive inputs and their data is mutable by default.
-Writing `item.title = next` through a prop publishes through the same deep
-reactive path as writing the source state. Write `items: readonly List<Item>`
-when the component author deliberately wants a read-only contract; that
-explicit view travels into helpers and nested data without copying or freezing.
-
-`velar/storage` persists JSON and validates on the way back in, so a read needs
-a **named** runtime type — a primitive or generic spelling is a type, not a
-value:
-
-```velar fragment
-import {storage} from "velar/storage"
-
-type SavedItem:
-    title: string
-
-type SavedItems = List<SavedItem>
-
-const items = storage.get("reading", SavedItems, [])
-storage.set("reading", items)
-```
-
-The third argument is the fallback for missing or invalid data; `session` and
-`database(name)` from the same module carry the same shape.
 
 ### Errors and async
 
@@ -707,9 +477,7 @@ data and assign the result on the Vel side.
    `undefined` even answers `false` to `== null`. The import statement is the
    only correctness boundary — validate with `Type.parse` there, before the
    value touches typed code.
-3. **Styling beyond Look** — `import css unsafe "./file.css" before look`
-   (or `after look`); trusted markup renders through `unsafe:html`.
-4. **A suspected compiler defect blocking you** — run `velar repro` (below),
+3. **A suspected compiler defect blocking you** — run `velar repro` (below),
    then take the final exit: `velar build` output is readable, source-mapped
    JavaScript that runs without the toolchain.
 
@@ -742,11 +510,9 @@ compatibility promise, changing a word costs nothing yet.
 ## Where to look up what this brief leaves out
 
 The repository carries a **tour** that shows every spelling exactly once, as
-compiling projects you can run: `examples/tour/core/` (17 numbered chapters,
-values through testing), `examples/tour/web/` (13 — components, Look, routing,
-both kinds of test), `examples/tour/desktop/` (4). When you are about to guess
-at a spelling, open the chapter instead. `examples/app/` is the companion — one
-real application, showing how the pieces are put together.
+compiling projects you can run. Core is in `examples/tour/core/`; the framework
+briefs point to their own projects. When you are about to guess at a spelling,
+open the relevant chapter instead.
 
 ## The meta-rule
 

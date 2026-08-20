@@ -3,11 +3,27 @@ import { velarFrameworkHost as webHost } from "@velarscript/web/host";
 import { velarCompilerExtension as desktopCompiler, velarProjectExtension as desktopProject } from "@velarscript/desktop/compiler";
 import { velarFrameworkHost as desktopHost } from "@velarscript/desktop/host";
 import { VELAR_DESKTOP_API_VERSION } from "@velarscript/desktop";
-import { VELAR_NODE_API_VERSION } from "@velarscript/node/compiler";
+import {
+  VELAR_NODE_API_VERSION,
+  velarCompilerExtension as nodeCompiler,
+  velarProjectExtension as nodeProject,
+} from "@velarscript/node/compiler";
 import { registerBundledExtension } from "./bundled-extension-registry.ts";
 import { VELAR_VERSION } from "./version.ts";
 
 export function installOfficialLanguageServerExtensions(): void {
+  registerBundledExtension({
+    name: "@velarscript/node",
+    version: VELAR_VERSION,
+    kind: "capability",
+    apiVersion: VELAR_NODE_API_VERSION,
+    manifestKey: "node",
+    extends: Object.freeze({}),
+    composes: Object.freeze({}),
+    compiler: nodeCompiler,
+    project: nodeProject,
+    host: null,
+  });
   registerBundledExtension({
     name: "@velarscript/web",
     version: VELAR_VERSION,

@@ -26,7 +26,7 @@ npm create velar@latest component-library -- --template component
 
 ```text
 my-app/
-  velar.json                  project format, entry, extensions, web settings
+  velar.json                  project format, entry, extension-owned settings
   package.json                npm dependencies and the script names below
   AGENTS.md                   instructions for the model that will write this app
   public/                     files copied to the build as-is
@@ -40,11 +40,14 @@ my-app/
 Two things are worth noticing now.
 
 `velar.json` lists **extensions** explicitly. A Web project activates
-`@velarscript/web`; a Node project activates nothing. The language does not
-guess what target you are on — see [project lifecycle](project-lifecycle.md).
+`@velarscript/web`; a Node server project activates `@velarscript/node` for its
+`server`, route, and path-pattern syntax. A framework-free Core project
+activates nothing. The language does not guess what target you are on — see
+[project lifecycle](project-lifecycle.md).
 
-`AGENTS.md` is there because the model is the author. `velar skill` prints the
-full brief; `AGENTS.md` points your tools at it.
+`AGENTS.md` is there because the model is the author. It names the Core brief
+and the exact framework brief this template needs; `velar skill <owner>` prints
+each version-locked document.
 
 ## 3. Run it
 
@@ -52,8 +55,11 @@ full brief; `AGENTS.md` points your tools at it.
 npm run dev
 ```
 
-The dev server rebuilds on save and serves the app. Edit `src/app.vel` and the
-page updates.
+For Web/Desktop, the dev server rebuilds and serves the renderer. For Node, it
+checks the exported `ServeApp`, starts it from `node.host` and `node.port`, and
+restarts the last-good build after a source change. Edit `src/app.vel`; the
+generated Node service answers `/api/hello` and uses `npm start` (`velar serve`)
+when a watcher is not wanted.
 
 ## 4. Change something, and let the compiler teach you
 
@@ -91,7 +97,7 @@ npx velar fix
 
 ```sh
 npm test              # unit tests, in Node
-npm run test:browser  # browser tests, in a real browser
+npm run test:browser  # Web/Desktop browser tests, in a real browser
 ```
 
 A unit test is a named block in a `*.test.vel` module:
@@ -116,10 +122,15 @@ that module anywhere else is refused at the import line.
 ## 6. Build it
 
 ```sh
-npm run build     # produces dist/
-npm run verify    # checks the build is actually deployable
-npm run preview   # serves dist/ locally
+npm run build     # produces the target-owned dist/
+npm run verify    # Web: checks the static build is deployable
+npm run preview   # Web: serves the verified build locally
+npm run package   # Desktop: creates the native application package
 ```
+
+A Node build is a standalone ESM directory containing copied public assets,
+`velar-node.json`, and `.velar-node-entry.mjs`. Run the launcher with Node from
+that directory; the toolchain is not required at runtime.
 
 Or run the whole gate in one command, which is what CI does:
 
@@ -130,13 +141,17 @@ npm run validate
 ## 7. Hand it to your model
 
 ```sh
-npx velar skill
+npx velar skill core
+npx velar skill web      # Web and component projects
+npx velar skill node     # Node services
+npx velar skill desktop  # after Core + Web for Desktop projects
 ```
 
-That prints the brief describing the whole language — every spelling, every
-trap, the migration table. Give it to whatever model is writing your code. The
-brief is the same document as [the AI skill brief](ai-skill.md), and it is
-version-locked to the compiler you have installed.
+The generated `AGENTS.md` names the exact sequence for its template. Core,
+[Web](ai-skill-web.md), [Node](ai-skill-node.md), and
+[Desktop](ai-skill-desktop.md) have separate owner-specific briefs, all
+version-locked to the installed compiler. Calling `velar skill` with no owner
+remains the Core shorthand.
 
 ## Where to go next
 

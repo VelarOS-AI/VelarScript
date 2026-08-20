@@ -40,13 +40,18 @@ mechanizes is [escape hatches](escape-hatches.md#4-a-suspected-compiler-defect).
 
 ```text
 velar dev [entry.vel | project-directory] [--port <port>]
+velar serve [project-directory] [--host <host>] [--port <port>]
 velar run [entry.vel | project-directory] [--stack] [-- <program-arguments>...]
 velar test [project-directory | file.test.vel]
 velar test [project-directory] --browser [chromium|firefox|webkit|all]
 ```
 
-`dev` rebuilds on save and serves the app. `run` executes a Node/CLI project;
-`--stack` keeps the full trace instead of hiding internal frames. `test` runs
+`dev` rebuilds on save and serves a Web/Desktop application or restarts the
+last-good exported Node `ServeApp`. Web defaults to port 5173; Node reads
+`node.host` and `node.port` unless `--port` overrides it. `serve` checks and
+runs a Node application with production runtime behavior and no file watcher.
+`run` executes a framework-free CLI program; `--stack` keeps the full trace
+instead of hiding internal frames. `test` runs
 `*.test.vel` modules in Node; `--browser` runs `*.browser.test.vel` modules in
 a real browser, which requires the matching Playwright browsers to be
 installed.
@@ -63,6 +68,10 @@ velar package [project-directory]
 ```
 
 `verify` checks that a build is actually deployable rather than merely present.
+For a Node application, `build` instead writes a standalone ESM directory with
+copied public assets, `.velar-node-entry.mjs`, and `velar-node.json`; run the
+launcher with Node from that output directory. `node.build.sourceMaps` controls
+whether source-map files are retained.
 All commands read the same checked JSON-resource graph: `dev` watches and
 serves it, `test` reconstructs used package resource exports in its sandbox,
 browser builds bundle it, and framework-free builds copy its exact bytes and
@@ -94,8 +103,10 @@ a second registry. Details in [project lifecycle](project-lifecycle.md).
 ## Handing work to a model
 
 ```text
-velar skill
+velar skill [core|web|node|desktop]
 ```
 
-Prints the full language brief, version-locked to the installed compiler. It is
-the same document as [the AI skill brief](ai-skill.md).
+Prints one owner-specific language brief, version-locked to the installed
+compiler. Core is the default; framework projects load Core plus the briefs
+named by their generated `AGENTS.md`: [Web](ai-skill-web.md),
+[Node](ai-skill-node.md), or [Desktop](ai-skill-desktop.md).

@@ -147,9 +147,8 @@ spelling and a `velar fix` rewrite that performs it.
 
 ### Group 2 — pure modules imported by name
 
-`velar/collections`, `velar/binary`, `velar/random`, `velar/task`,
-`velar/msgpack`, `velar/compression`, `velar/noise`, `velar/url`, `velar/test`,
-and, on Web, `velar/look`.
+`velar/collections`, `velar/binary`, `velar/random`, `velar/task`, `velar/url`,
+`velar/test`, and, on Web, `velar/look`.
 
 These compute and touch nothing, so question 1 clears them; they are imported
 because question 2 does not — there is no `Collections`, `Url`, or `Look` in
@@ -166,8 +165,7 @@ question 1 — they read the clock, read entropy, and write to the outside world
 
 `velar/fs`, `velar/path`, `velar/process`, `velar/env`, `velar/host`,
 `velar/serve`, `velar/terminal`, `velar/http`, `velar/worker`,
-`velar/websocket`, Node `velar/sqlite`, and the Web modules documented in
-`web-api.md`.
+`velar/websocket`, and the Web modules documented in `web-api.md`.
 
 For a capability the import line is the audit signal — it is how a reader sees
 what a module touches — so no capability becomes permanent for convenience,
@@ -324,17 +322,24 @@ handles native URLs or ports.
 `next() -> Promise<(string | Bytes)?>` is consumed directly or with `async for`.
 `send` resolves only after the bounded pending-byte budget drains. Connection,
 message, send, accept, unread-message count, and aggregate unread-byte limits
-fail explicitly. `maxQueuedBytes` defaults to 16 MiB on Node and Web. `listen` may
-receive the same typed HTTP handler as `velar/serve`, so HTTP and upgrade traffic
-share one port. A normal close leaves accepted messages available to `next()`
-until the queue drains to EOF; receive-limit and protocol failures clear it
-immediately. Connections and servers are owned resources for `using`.
+fail explicitly. Node additionally enforces process-wide connection, queued
+message, pending connection, pending send, and 128 MiB byte budgets, so empty
+messages cannot bypass accounting. `maxQueuedBytes` defaults to 16 MiB on Node
+and Web. `listen` may receive a `ServeApp` or the same typed low-level handler
+as `velar/serve`, so HTTP and upgrade traffic share one port and a composed app
+keeps one startup/shutdown lifecycle. Normal EOF preserves accepted messages
+until `next()` drains them. Protocol/limit failure and server stop release
+unread queues immediately; an abandoned connection is terminated and releases
+its reservations when its owner is collected.
+Connections and servers are owned resources for `using`.
 
-## Binary codecs and noise adapters
+## Ecosystem codecs, noise, and database adapters
 
-The official adapters deliberately expose small stable Velar surfaces over
-mature packages: `velar/msgpack` uses `msgpackr`, `velar/compression` uses
-`fflate`, and `velar/noise` uses `simplex-noise`.
+Concrete third-party integrations do not occupy the reserved `velar/*`
+namespace. Install and import the independently versioned source adapters:
+`@velarscript/msgpack`, `@velarscript/compression`, and
+`@velarscript/noise`. They expose small checked Velar surfaces over `msgpackr`,
+`fflate`, and `simplex-noise`.
 
 - MessagePack provides `encode(value) -> Bytes`, `decode(bytes) -> unknown`, and
   `parse(bytes, Type) -> T`.
@@ -346,8 +351,17 @@ mature packages: `velar/msgpack` uses `msgpackr`, `velar/compression` uses
 - Noise provides seeded `simplex2`, `simplex3`, and `simplex4` functions whose
   results are deterministic across supported targets.
 
-These modules are the supported contract. Their npm packages and complex
-TypeScript generics are implementation details, not a second public API.
+These source packages are supported contracts, but they are not Standard
+modules and are not shipped as hidden CLI dependencies. npm installs and locks
+them like every other application dependency.
+
+Database models follow the same boundary. `@velarscript/database` defines the
+engine-neutral model, query, mutation, migration, transaction, capability, and
+error contracts. A package such as `@velarscript/sqlite` implements that
+contract and owns its driver, SQL dialect, workers, pooling, and engine-specific
+escape hatches. Core has no database keyword, decorator, schema lowering, SQL
+parser, or privileged package name. See [Database model and adapter
+standard](database-model.md).
 
 ## `Text.` (permanent, no import)
 
@@ -803,10 +817,108 @@ caller would write different recovery for it.
 
 ### `velar/serve`
 
-`serve(handler, port, host="127.0.0.1")` binds an HTTP server and resolves to a
-`Server` record containing the actual `port` and an idempotent async `stop()`.
-The handler receives a `ServeRequest` with method, decoded URL path, first-value
-query and normalized header Maps, plus cached async
+The Node extension's native server framework declares an immutable route table
+instead of a controller class or a group of decorated functions:
+
+```velar
+import {HttpError, created} from "velar/serve"
+
+type CreateArticle:
+    title: string
+
+export server app:
+    @get(p"/health") => {ok: true}
+
+    @get(p"/articles/{id:number}", details: bool = false):
+        if id < 1:
+            throw HttpError(404, {error: "article_not_found"})
+        return {id, details}
+
+    @post(p"/articles", input: CreateArticle) => created({id: 1, title: input.title})
+
+```
+
+`server name:` and the Node-only `p"..."` path pattern are enabled by
+`@velarscript/node`. `@get`, `@post`, `@put`, `@patch`, and `@delete` are the
+only route roles. They are anonymous compiler declarations, not decorators or
+runtime functions. A `{name:type}` path capture declares the checked name in
+the route body; the type is `string`, `number`, `bool`, or a named enum. A
+remaining scalar or `List<scalar>` parameter is read from the query string, and
+a default makes it optional. Repeated values fill a List; repeating a scalar is
+a 422 error instead of silently choosing one value. One concrete Data record on
+`POST`, `PUT`, or `PATCH` is the JSON body. `Request` asks for the complete
+low-level request explicitly. Route bodies may `await` directly and use either
+`=> expression` or an indented block.
+
+Returning ordinary Data produces a JSON response. `json(value, status=200,
+headers=null)`, `created(value, headers=null)`, `noContent(completion=null,
+headers=null)`, `redirect(location, status=302, headers=null)`, `text(value,
+status=200, contentType="text/plain; charset=utf-8", headers=null)`,
+`stream(producer, status=200, headers=null)`, and `file(path, root=".",
+fallback=null)` express the response cases whose status or transport should be
+visible. `HttpError(status, body, headers=null)` exits a route with a checked
+4xx/5xx JSON response. `prefix(path, app)` and server-body `...app` entries
+compose route tables; `staticFiles(path, root, fallback=null)` adds a bounded,
+root-contained streaming route with `HEAD`, validators, and single byte-range
+support. `bodyLimit(app, maxBytes)` narrows inferred JSON input for that route
+group, and `use(app, middleware)` wraps only that app's routes after composition.
+A middleware `next()` continuation is single-use.
+`openapi(app, title=null, version="1.0.0")` derives an OpenAPI 3.1 document with
+checked parameter, request-body, and response schemas. It also documents the
+framework-generated 400, 401, 413, 415, and 422 responses that apply to each
+route; explicit `RouteDocumentation.errors` entries override their
+descriptions. Typed path syntax such as `p"/articles/{id:number}"` is rendered
+as `/articles/{id}` in that document.
+
+The application entry exports the `ServeApp` named by `node.app`; `node.host`,
+`node.port`, `node.maxBodyBytes`, and `node.build.sourceMaps` configure its
+target. `velar dev` watches and restarts the last-good build, `velar serve`
+runs checked source with production behavior, and `velar build` emits a
+standalone Node directory. Direct `serve(...)` is the lower-level operation for
+tests, embedded servers, and handler adapters.
+
+Explicit route defaults cover the inputs that cannot be inferred:
+`input.query`, `input.header`, `input.cookie`, `input.form`, `input.upload`, and
+`input.dependency`. Security descriptors include API key, Basic, Bearer,
+OAuth2, and OpenID. `provide` resolves request- or application-scoped
+dependencies once, detects cycles, optionally initializes app providers
+eagerly, and invokes release callbacks before clearing the ended scope’s cache.
+`lifecycle`, `background`, cookie helpers, `sse`, and
+`velar/websocket.listen({http: app, ...})` cover owned service lifetime and
+realtime transport without adding compiler-owned names.
+Lifecycle hooks are paired: successful startups unwind in reverse order, while
+a hook whose startup failed never receives a shutdown call. Multiple cookies
+remain multiple `Set-Cookie` fields rather than being comma-joined.
+
+Built-in middleware covers CORS, trusted hosts, request IDs, access logs,
+security headers, compression, error recovery, timeouts, and concurrency.
+`docs` composes a bundled offline UI and OpenAPI endpoint; its optional ordinary
+Map adds summary, tags, success/error statuses, or visibility without changing
+the single role of `@`. The test-only `velar/server-test` module runs routing,
+lifecycle, provider overrides, cookies, multipart uploads, streams, and files
+in process.
+
+`GET` routes answer `HEAD` automatically without writing the response body.
+`OPTIONS` and `405` responses publish `GET`, `HEAD`, and `OPTIONS` consistently,
+and 204 and 304 responses are always bodyless at the transport boundary. Public
+response and documentation statuses are final HTTP statuses from 200 through
+599; an application cannot emit an informational response as its final result.
+Path and query `number` inputs use finite decimal syntax rather than JavaScript
+coercion, so whitespace and hexadecimal text are rejected with 422.
+An inferred JSON body accepts a missing media type, `application/json`, or an
+`application/*+json` type; another declared media type returns 415 before body
+decoding.
+
+`serve(app, port, host="127.0.0.1", maxBodyBytes=16777216)` binds a declared
+`ServeApp` and resolves to a `Server` record containing the actual `port` and an
+idempotent async `stop(grace=30000)`. Stop closes admission, requests cooperative
+cancellation, drains admitted work until the bounded deadline, and only then
+releases application providers and lifecycle hooks.
+For low-level protocol adapters, `serve` continues to accept an async handler.
+The handler receives a `ServeRequest` with method, a once-decoded canonical URL
+path, first-value `query` and repeated-value `queryAll` Maps, normalized headers,
+and a request `cancellation`. Invalid percent-encoded UTF-8, encoded path
+separators, NULs, and dot segments are rejected before routing. It also provides cached async
 `text(maxBytes=16777216)` and `json(maxBytes=16777216)` body readers. The first
 read enforces its byte budget while the request arrives, before accumulating a
 larger body; a later read may impose a smaller budget on the cached body.
@@ -877,6 +989,16 @@ and disconnect return stable request ownership only after concurrent host
 operations settle; a stream write owns a separate temporary reservation until
 its flush or failure. This private compiler dependency is materialized
 transitively and cannot be imported as a Standard API module.
+
+The count side is bounded too: at most 4,096 inbound requests, routes,
+lifecycle pairs, and middleware concurrency slots, plus 256 request providers,
+512 app providers, and 256 unfinished timed-out requests. OpenAPI JSON
+cannot exceed 16 MiB. Request caches and upload views are cleared after
+response/background completion; app provider caches are cleared after release
+and shutdown. WebSocket has its own 128 MiB aggregate budget plus global active
+connection, pending connection, queued message, and pending-send counts, so
+zero-byte messages cannot evade backpressure by consuming objects instead of
+bytes.
 
 Transport-owned headers cannot be overridden. Handler failures are reported to
 stderr and return an opaque `500 Internal server error`; no development stack

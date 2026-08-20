@@ -3,12 +3,14 @@
 // application code and npm dependencies remain in the application Realm.
 export const VELAR_NODE_HOST_WORKER_SOURCE = String.raw`
 import { Buffer } from "node:buffer";
-import { watch as watchNode } from "node:fs";
+import { createReadStream, watch as watchNode } from "node:fs";
 import { appendFile, copyFile, lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, request as createHttpRequest } from "node:http";
 import { request as createHttpsRequest } from "node:https";
 import { basename, dirname, extname, isAbsolute, relative, resolve } from "node:path";
 import { URL as NodeURL } from "node:url";
+import { brotliCompress as brotliCompressNode, gzip as gzipNode } from "node:zlib";
+import { promisify } from "node:util";
 import { workerData } from "node:worker_threads";
 
 const port = workerData;
@@ -21,6 +23,16 @@ const maxServeFileBytes = 64 * 1024 * 1024;
 const maxServeStreamBytes = 64 * 1024 * 1024;
 const maxServeStreamChunkBytes = 1024 * 1024;
 const maxServeAggregateBytes = 128 * 1024 * 1024;
+const maxServeRequestTargetBytes = 64 * 1024;
+const maxServeRequestMetadataBytes = 512 * 1024;
+const maxServeQueryFields = 1000;
+const maxServeHeaderTextBytes = 64 * 1024;
+const maxServeSockets = 4096;
+const maxServeSocketsPerServer = 2048;
+const serveHeadersTimeoutMilliseconds = 10_000;
+const serveRequestTimeoutMilliseconds = 60_000;
+const serveKeepAliveTimeoutMilliseconds = 5_000;
+const serveShutdownTimeoutMilliseconds = 30_000;
 const maxHttpBodyBytes = 16 * 1024 * 1024;
 const maxHttpResponseBytes = 64 * 1024 * 1024;
 const maxHttpResponseChunks = 1000000;
@@ -35,7 +47,7 @@ const operations = new Set([
   "fs.readFile", "fs.createFile", "fs.replaceFileIfMatches", "fs.writeFile", "fs.appendFile", "fs.exists", "fs.list", "fs.info",
   "fs.canonical", "fs.makeDirectory", "fs.copyFile", "fs.move", "fs.removeFile", "fs.watchStart", "fs.watchNext", "fs.watchClose",
   "http.request", "http.read", "http.readBytes", "http.cancel", "http.close",
-  "serve.start", "serve.stop", "serve.body", "serve.respond", "serve.respondFile",
+  "serve.start", "serve.stop", "serve.body", "serve.bodyBytes", "serve.readFile", "serve.respond", "serve.respondFile",
   "serve.streamStart", "serve.streamWrite", "serve.streamEnd", "serve.fail",
 ]);
 const servers = new Map();
@@ -48,6 +60,7 @@ let nextRequestHandle = 1;
 let nextTextReplacementIdentity = 1;
 let nextFileWatcherHandle = 1;
 let reservedServeBytes = 0;
+let activeServeSockets = 0;
 const contentTypes = Object.freeze({
   ".css": "text/css; charset=utf-8", ".gif": "image/gif", ".html": "text/html; charset=utf-8",
   ".ico": "image/x-icon", ".jpeg": "image/jpeg", ".jpg": "image/jpeg", ".js": "text/javascript; charset=utf-8",
@@ -55,8 +68,11 @@ const contentTypes = Object.freeze({
   ".png": "image/png", ".svg": "image/svg+xml", ".txt": "text/plain; charset=utf-8", ".wasm": "application/wasm",
   ".webp": "image/webp", ".woff": "font/woff", ".woff2": "font/woff2",
 });
+const gzip = promisify(gzipNode);
+const brotliCompress = promisify(brotliCompressNode);
 
 class StaticNotFound extends Error {}
+class RequestHeadersTooLarge extends RangeError {}
 
 function allocateHandle(values, next, maximum, name) {
   let candidate = next;
@@ -106,7 +122,15 @@ function cleanupRequest(task) {
   releaseServeBytes(task);
 }
 
-function closeRequest(task) {
+function cancelRequest(task, reason = "client_disconnect") {
+  if (task.cancelled || task.completed) return;
+  task.cancelled = true;
+  try { port.postMessage({kind: "event", event: "serve.cancel", value: {token: task.token, request: task.handle, reason}}); }
+  catch {}
+}
+
+function closeRequest(task, cancelled = false) {
+  if (cancelled) cancelRequest(task);
   task.transportDone = true;
   cleanupRequest(task);
 }
@@ -118,6 +142,24 @@ async function withRequest(task, action) {
     task.activeOperations -= 1;
     cleanupRequest(task);
   }
+}
+
+async function withTerminalResponse(task, action) {
+  if (task.responseMode !== "idle") throw new Error("Node serve request already owns a response operation");
+  task.responseMode = "terminal";
+  try { return await withRequest(task, action); }
+  catch (error) {
+    if (!task.completed && !task.transportDone && !task.response.headersSent) task.responseMode = "idle";
+    throw error;
+  }
+}
+
+async function withStreamWrite(task, action) {
+  if (task.responseMode !== "streaming") throw new Error("ServeResponse stream has not started");
+  if (task.writeActive) throw new Error("ServeResponse allows only one active stream write");
+  task.writeActive = true;
+  try { return await withRequest(task, action); }
+  finally { task.writeActive = false; }
 }
 
 function completeRequest(task) {
@@ -650,14 +692,33 @@ function headerPairs(value) {
       throw new TypeError("ServeResponse cannot set transport-owned header '" + item[0] + "'");
     }
     units += item[0].length + item[1].length;
-    if (units > 1024 * 1024) throw new RangeError("ServeResponse headers cannot exceed 1 MiB of text");
+    if (units > 64 * 1024) throw new RangeError("ServeResponse headers cannot exceed 64 KiB of text");
     output.push(item);
   }
   return output;
 }
 
-function setHeaders(response, values) {
-  for (const [name, value] of headerPairs(values)) response.setHeader(name, value);
+function cookieValues(value) {
+  if (!Array.isArray(value) || value.length > 64) throw new TypeError("ServeResponse cookies must be a bounded list");
+  const output = [];
+  let bytes = 0;
+  for (const cookie of value) {
+    if (typeof cookie !== "string" || cookie.length === 0 || cookie.length > 8192 || /[\0\r\n]/u.test(cookie)) throw new TypeError("ServeResponse cookie is invalid");
+    bytes += Buffer.byteLength(cookie, "utf8");
+    if (bytes > 64 * 1024) throw new RangeError("ServeResponse cookies cannot exceed 64 KiB");
+    output.push(cookie);
+  }
+  return output;
+}
+
+function setHeaders(response, values, cookies = []) {
+  const setCookies = [];
+  for (const [name, value] of headerPairs(values)) {
+    if (name.toLowerCase() === "set-cookie") setCookies.push(value);
+    else response.setHeader(name, value);
+  }
+  for (const cookie of cookieValues(cookies)) setCookies.push(cookie);
+  if (setCookies.length > 0) response.setHeader("Set-Cookie", setCookies);
 }
 
 function requestPath(value) {
@@ -675,7 +736,7 @@ function inside(root, target) {
   return path === "" || !path.startsWith("..") && !isAbsolute(path);
 }
 
-async function staticFile(task, rootValue, pathValue, fallbackValue) {
+async function staticFile(rootValue, pathValue, fallbackValue) {
   const root = await realpath(resolve(boundedPath(rootValue, "fileResponse")));
   const relativePath = requestPath(pathValue);
   const fallback = fallbackValue === null ? null : requestPath(fallbackValue);
@@ -684,19 +745,103 @@ async function staticFile(task, rootValue, pathValue, fallbackValue) {
     if (!inside(root, target)) throw new StaticNotFound();
     const metadata = await stat(target);
     if (!metadata.isFile() || metadata.size > maxServeFileBytes) throw new StaticNotFound();
-    reserveServeBytes(task, metadata.size);
-    let reserved = metadata.size;
-    try {
-      const data = await readFile(target);
-      if (data.byteLength > maxServeFileBytes) throw new StaticNotFound();
-      if (data.byteLength > reserved) reserveServeBytes(task, data.byteLength - reserved);
-      else if (data.byteLength < reserved) releaseServeBytes(task, reserved - data.byteLength);
-      reserved = data.byteLength;
-      return {data, contentType: contentTypes[extname(target).toLowerCase()] ?? "application/octet-stream"};
-    } catch (error) {
-      releaseServeBytes(task, reserved);
-      throw error;
+    return {target, metadata, contentType: contentTypes[extname(target).toLowerCase()] ?? "application/octet-stream"};
+  };
+  try { return await load(relativePath); }
+  catch (error) {
+    if ((error instanceof StaticNotFound || missing(error) || error?.code === "EISDIR") && fallback !== null) return load(fallback);
+    throw error;
+  }
+}
+
+function staticEtag(metadata) {
+  const modified = Number.isFinite(metadata.mtimeMs) ? Math.floor(metadata.mtimeMs) : 0;
+  return 'W/"' + metadata.size.toString(16) + "-" + modified.toString(16) + '"';
+}
+
+function staticNotModified(request, metadata, etag) {
+  const noneMatch = request.headers["if-none-match"];
+  if (typeof noneMatch === "string") {
+    for (const candidate of noneMatch.split(",")) if (candidate.trim() === "*" || candidate.trim() === etag) return true;
+    return false;
+  }
+  const modifiedSince = request.headers["if-modified-since"];
+  if (typeof modifiedSince !== "string") return false;
+  const time = Date.parse(modifiedSince);
+  return Number.isFinite(time) && Math.floor(metadata.mtimeMs / 1000) * 1000 <= time;
+}
+
+function staticRange(request, metadata, etag) {
+  const value = request.headers.range;
+  if (typeof value !== "string") return null;
+  const ifRange = request.headers["if-range"];
+  if (typeof ifRange === "string" && ifRange !== etag) {
+    const time = Date.parse(ifRange);
+    if (!Number.isFinite(time) || Math.floor(metadata.mtimeMs / 1000) * 1000 > time) return null;
+  }
+  const match = /^bytes=(\d*)-(\d*)$/u.exec(value.trim());
+  if (!match || match[1] === "" && match[2] === "" || metadata.size === 0) return false;
+  let start;
+  let end;
+  if (match[1] === "") {
+    const suffix = Number(match[2]);
+    if (!Number.isSafeInteger(suffix) || suffix < 1) return false;
+    start = Math.max(0, metadata.size - suffix);
+    end = metadata.size - 1;
+  } else {
+    start = Number(match[1]);
+    end = match[2] === "" ? metadata.size - 1 : Number(match[2]);
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || start >= metadata.size || end < start) return false;
+    if (end >= metadata.size) end = metadata.size - 1;
+  }
+  return {start, end};
+}
+
+async function writeStaticRange(task, file, start, end) {
+  if (end < start) return;
+  const source = createReadStream(file.target, {start, end, highWaterMark: 64 * 1024});
+  try {
+    for await (const chunk of source) {
+      const bytes = chunk.byteLength;
+      reserveTransientServeBytes(bytes);
+      try {
+        await new Promise((resolveWrite, rejectWrite) => {
+          let settled = false;
+          const cleanup = () => { task.response.off("error", failed); task.response.off("close", closed); };
+          const finish = action => { if (settled) return; settled = true; cleanup(); action(); };
+          const failed = error => finish(() => rejectWrite(error));
+          const closed = () => finish(() => rejectWrite(new Error("ServeResponse client connection is closed")));
+          task.response.once("error", failed);
+          task.response.once("close", closed);
+          task.response.write(chunk, error => error ? failed(error) : finish(resolveWrite));
+        });
+      } finally { releaseTransientServeBytes(bytes); }
     }
+  } finally { source.destroy(); }
+}
+
+async function testStaticFile(rootValue, pathValue, fallbackValue) {
+  const root = await realpath(resolve(boundedPath(rootValue, "fileResponse")));
+  const relativePath = requestPath(pathValue);
+  const fallback = fallbackValue === null ? null : requestPath(fallbackValue);
+  const load = async path => {
+    const target = await realpath(resolve(root, path));
+    if (!inside(root, target)) throw new StaticNotFound();
+    const metadata = await stat(target);
+    if (!metadata.isFile() || metadata.size > maxServeBodyBytes) throw new StaticNotFound();
+    let reserved = metadata.size * 2;
+    reserveTransientServeBytes(reserved);
+    try {
+      const source = await readFile(target);
+      if (source.byteLength > maxServeBodyBytes) throw new StaticNotFound();
+      if (source.byteLength > metadata.size) { const extra = (source.byteLength - metadata.size) * 2; reserveTransientServeBytes(extra); reserved += extra; }
+      else if (source.byteLength < metadata.size) { const surplus = (metadata.size - source.byteLength) * 2; releaseTransientServeBytes(surplus); reserved -= surplus; }
+      const data = new Uint8Array(source.byteLength);
+      data.set(source);
+      releaseTransientServeBytes(source.byteLength);
+      reserved -= source.byteLength;
+      return {data, contentType: contentTypes[extname(target).toLowerCase()] ?? "application/octet-stream"};
+    } catch (error) { releaseTransientServeBytes(reserved); throw error; }
   };
   try { return await load(relativePath); }
   catch (error) {
@@ -710,37 +855,76 @@ function opaqueFailure(task) {
   else {
     task.response.statusCode = 500;
     task.response.setHeader("Content-Type", "text/plain; charset=utf-8");
-    task.response.end("Internal server error");
+    task.response.end(task.request.method === "HEAD" ? undefined : "Internal server error");
   }
   completeRequest(task);
 }
 
-function bodyOf(task) {
+function responseHasNoBody(task, status) {
+  return task.request.method === "HEAD" || status >= 100 && status < 200 || status === 204 || status === 304;
+}
+
+async function endServeResponse(task, value) {
+  await new Promise((resolveEnd, rejectEnd) => {
+    let settled = false;
+    const cleanup = () => {
+      task.response.off("error", failed);
+      task.response.off("close", closed);
+    };
+    const finish = action => { if (settled) return; settled = true; cleanup(); action(); };
+    const failed = error => finish(() => rejectEnd(error));
+    const closed = () => finish(() => task.response.writableFinished ? resolveEnd(null) : rejectEnd(new Error("ServeResponse client connection is closed")));
+    task.response.once("error", failed);
+    task.response.once("close", closed);
+    task.response.end(value, () => finish(() => resolveEnd(null)));
+    if (task.response.destroyed && !task.response.writableFinished) closed();
+  });
+}
+
+function rawBodyOf(task, maximum) {
   if (task.body !== null) return task.body;
   task.body = (async () => {
     const declaredText = task.request.headers["content-length"];
+    let declared = null;
     if (typeof declaredText === "string" && /^[0-9]+$/u.test(declaredText)) {
-      const declared = Number(declaredText);
-      if (!Number.isSafeInteger(declared) || declared > maxServeBodyBytes) {
+      declared = Number(declaredText);
+      if (!Number.isSafeInteger(declared) || declared > maximum) {
         task.request.resume();
-        throw new RangeError("Request body cannot exceed 16 MiB");
+        return {data: null, bytes: maximum, tooLarge: true};
       }
+    }
+    if (declared !== null) {
+      const output = Buffer.allocUnsafe(declared);
+      reserveServeBytes(task, declared);
+      let offset = 0;
+      try {
+        for await (const chunk of task.request) {
+          const data = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+          if (offset + data.byteLength > declared) { task.request.resume(); releaseServeBytes(task, declared); return {data: null, bytes: maximum, tooLarge: true}; }
+          data.copy(output, offset);
+          offset += data.byteLength;
+        }
+        if (offset !== declared) throw new TypeError("Request body length does not match Content-Length");
+        return {data: output, bytes: declared, tooLarge: false};
+      } catch (error) { if (task.reservedBytes >= declared) releaseServeBytes(task, declared); throw error; }
     }
     const chunks = [];
     let total = 0;
     try {
       for await (const chunk of task.request) {
         const data = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
-        if (total + data.byteLength > maxServeBodyBytes) {
+        if (total + data.byteLength > maximum) {
           task.request.resume();
-          throw new RangeError("Request body cannot exceed 16 MiB");
+          releaseServeBytes(task, total);
+          return {data: null, bytes: maximum, tooLarge: true};
         }
         reserveServeBytes(task, data.byteLength);
         total += data.byteLength;
         chunks.push(data);
       }
-      try { return {text: new TextDecoder("utf-8", {fatal: true}).decode(Buffer.concat(chunks, total)), bytes: total}; }
-      catch { throw new TypeError("Request body must be valid UTF-8 text"); }
+      reserveTransientServeBytes(total);
+      try { return {data: Buffer.concat(chunks, total), bytes: total, tooLarge: false}; }
+      finally { releaseTransientServeBytes(total); }
     } catch (error) {
       releaseServeBytes(task, total);
       throw error;
@@ -749,44 +933,134 @@ function bodyOf(task) {
   return task.body;
 }
 
-function incomingRequest(server, request, response) {
-  if (requests.size >= maxRequests) { response.statusCode = 503; response.end("Service unavailable"); return; }
-  const target = request.url ?? "/";
-  if (typeof target !== "string" || target.length === 0 || target.length > 2 * 1024 * 1024 || target.includes("\0")) {
-    response.statusCode = 400; response.end("Bad request"); return;
+async function bodyOf(task, maximum) {
+  const value = await rawBodyOf(task, maximum);
+  if (value.tooLarge) return {text: null, bytes: value.bytes, tooLarge: true};
+  try { return {text: new TextDecoder("utf-8", {fatal: true}).decode(value.data), bytes: value.bytes, tooLarge: false}; }
+  catch { throw new TypeError("Request body must be valid UTF-8 text"); }
+}
+
+async function bodyBytesOf(task, maximum) {
+  const value = await rawBodyOf(task, maximum);
+  return value.tooLarge
+    ? {data: null, bytes: value.bytes, tooLarge: true}
+    : {data: new Uint8Array(value.data.buffer, value.data.byteOffset, value.data.byteLength), bytes: value.bytes, tooLarge: false};
+}
+
+function canonicalServePath(rawPath) {
+  const source = rawPath.split("/");
+  const decoded = new Array(source.length);
+  let units = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    let segment;
+    try { segment = decodeURIComponent(source[index]); }
+    catch { throw new TypeError("Request path is not valid percent-encoded UTF-8"); }
+    if (segment.includes("/") || segment.includes("\\") || segment.includes("\0") || segment === "." || segment === "..") {
+      throw new TypeError("Request path contains an unsafe encoded segment");
+    }
+    units += segment.length + (index === 0 ? 0 : 1);
+    if (units > maxPathCodeUnits) throw new RangeError("Request target path is too long");
+    decoded[index] = segment;
   }
-  let url;
-  let path;
-  try {
-    url = new URL(target, "http://velar.invalid");
-    path = decodeURIComponent(url.pathname);
-  } catch { response.statusCode = 400; response.end("Bad request"); return; }
-  if (path.length === 0 || path.length > maxPathCodeUnits || path.includes("\0")) {
-    response.statusCode = 414; response.end("Request target too long"); return;
-  }
+  const path = decoded.join("/");
+  if (!path.startsWith("/")) throw new TypeError("Request target must use an absolute path");
+  return path;
+}
+
+function serveHeaderPairs(request) {
   const headers = [];
+  let bytes = 0;
   for (const [name, value] of Object.entries(request.headers)) {
-    if (typeof value === "string") headers.push([name, value]);
-    else if (Array.isArray(value)) headers.push([name, value.join(", ")]);
+    if (typeof value !== "string" && !Array.isArray(value)) continue;
+    const text = typeof value === "string" ? value : value.join(", ");
+    bytes += Buffer.byteLength(name, "utf8") + Buffer.byteLength(text, "utf8");
+    if (bytes > maxServeHeaderTextBytes || headers.length >= maxServeQueryFields) throw new RequestHeadersTooLarge("Request headers are too large");
+    headers.push([name, text]);
   }
+  return {headers, bytes};
+}
+
+function serveQueryPairs(source) {
   const query = [];
-  for (const [name, value] of url.searchParams) if (!query.some(item => item[0] === name)) query.push([name, value]);
+  let bytes = 0;
+  if (source === "") return {query, bytes};
+  const fields = source.split("&");
+  if (fields.length > maxServeQueryFields) throw new RangeError("Request query is too large");
+  for (const field of fields) {
+    const separator = field.indexOf("=");
+    const rawName = separator < 0 ? field : field.slice(0, separator);
+    const rawValue = separator < 0 ? "" : field.slice(separator + 1);
+    let name;
+    let value;
+    try {
+      name = decodeURIComponent(rawName.replaceAll("+", " "));
+      value = decodeURIComponent(rawValue.replaceAll("+", " "));
+    } catch { throw new TypeError("Request query is not valid percent-encoded UTF-8"); }
+    bytes += Buffer.byteLength(name, "utf8") + Buffer.byteLength(value, "utf8");
+    if (bytes > maxServeRequestTargetBytes) throw new RangeError("Request query is too large");
+    query.push([name, value]);
+  }
+  return {query, bytes};
+}
+
+function rejectIncomingRequest(request, response, status, message) {
+  response.statusCode = status;
+  response.setHeader("Connection", "close");
+  response.setHeader("Content-Type", "text/plain; charset=utf-8");
+  response.end(message);
+  request.resume();
+}
+
+function incomingRequest(server, request, response) {
+  if (server.stopping) { rejectIncomingRequest(request, response, 503, "Service unavailable"); return; }
+  if (requests.size >= maxRequests) { rejectIncomingRequest(request, response, 503, "Service unavailable"); return; }
+  const target = request.url ?? "/";
+  if (typeof target !== "string" || target.length === 0 || !target.startsWith("/") || Buffer.byteLength(target, "utf8") > maxServeRequestTargetBytes || target.includes("\0")) {
+    rejectIncomingRequest(request, response, 414, "Request target too long"); return;
+  }
+  let path;
+  let headerResult;
+  let queryResult;
+  try {
+    if (target.includes("#")) throw new TypeError("Request target must not contain a URL fragment");
+    const separator = target.indexOf("?");
+    path = canonicalServePath(separator < 0 ? target : target.slice(0, separator));
+    headerResult = serveHeaderPairs(request);
+    queryResult = serveQueryPairs(separator < 0 ? "" : target.slice(separator + 1));
+  } catch (error) {
+    const status = error instanceof RequestHeadersTooLarge ? 431 : error instanceof RangeError ? 414 : 400;
+    rejectIncomingRequest(request, response, status, status === 431 ? "Request headers too large" : status === 414 ? "Request target too long" : "Bad request");
+    return;
+  }
+  const declaredText = request.headers["content-length"];
+  if (typeof declaredText === "string" && /^[0-9]+$/u.test(declaredText)) {
+    const declared = Number(declaredText);
+    if (!Number.isSafeInteger(declared) || declared > maxServeBodyBytes) {
+      rejectIncomingRequest(request, response, 413, "Request body too large");
+      return;
+    }
+  }
   const handle = allocateHandle(requests, nextRequestHandle, maxRequests, "Node serve request");
   nextRequestHandle = advanceHandle(handle);
   const task = {
-    handle, server: server.handle, request, response, body: null, streamBytes: 0, streaming: false,
-    reservedBytes: 0, completed: false, abandoned: false, transportDone: false, activeOperations: 0,
+    handle, token: server.token, server: server.handle, request, response, body: null, streamBytes: 0, responseMode: "idle", writeActive: false, suppressBody: false,
+    reservedBytes: 0, completed: false, abandoned: false, cancelled: false, transportDone: false, activeOperations: 0,
   };
+  const metadataBytes = (Buffer.byteLength(target, "utf8") + headerResult.bytes + queryResult.bytes + Buffer.byteLength(path, "utf8") + 256) * 2;
+  if (metadataBytes > maxServeRequestMetadataBytes) { rejectIncomingRequest(request, response, 431, "Request metadata too large"); return; }
+  try { reserveServeBytes(task, metadataBytes); }
+  catch { rejectIncomingRequest(request, response, 503, "Service unavailable"); return; }
   requests.set(handle, task);
-  response.once("finish", () => closeRequest(task));
-  response.once("close", () => closeRequest(task));
+  request.once("aborted", () => cancelRequest(task));
+  response.once("finish", () => closeRequest(task, false));
+  response.once("close", () => closeRequest(task, !response.writableFinished));
   port.postMessage({kind: "event", event: "serve.request", value: {
     token: server.token,
     request: handle,
     method: request.method ?? "GET",
     path,
-    query,
-    headers,
+    query: queryResult.query,
+    headers: headerResult.headers,
   }});
 }
 
@@ -797,33 +1071,98 @@ async function startServer(args) {
   const host = boundedHost(args[2]);
   const handle = allocateHandle(servers, nextServerHandle, maxServers, "Node serve server");
   nextServerHandle = advanceHandle(handle);
-  const task = {handle, token, server: null};
-  const server = createServer((request, response) => incomingRequest(task, request, response));
+  const task = {handle, token, server: null, sockets: new Set(), stopping: false, stopPromise: null};
+  const server = createServer({
+    maxHeaderSize: maxServeHeaderTextBytes,
+    headersTimeout: serveHeadersTimeoutMilliseconds,
+    requestTimeout: serveRequestTimeoutMilliseconds,
+    keepAliveTimeout: serveKeepAliveTimeoutMilliseconds,
+    connectionsCheckingInterval: 1000,
+  }, (request, response) => incomingRequest(task, request, response));
   task.server = server;
-  await new Promise((resolveListen, rejectListen) => {
-    const failed = error => { server.off("listening", ready); rejectListen(error); };
-    const ready = () => { server.off("error", failed); resolveListen(); };
-    server.once("error", failed);
-    server.once("listening", ready);
-    server.listen({port: portValue, host});
+  server.maxConnections = maxServeSocketsPerServer;
+  server.maxRequestsPerSocket = 1000;
+  server.on("connection", socket => {
+    if (task.stopping || task.sockets.size >= maxServeSocketsPerServer || activeServeSockets >= maxServeSockets) {
+      socket.destroy();
+      return;
+    }
+    task.sockets.add(socket);
+    activeServeSockets += 1;
+    socket.setNoDelay(true);
+    socket.setKeepAlive(true, serveKeepAliveTimeoutMilliseconds);
+    socket.once("close", () => {
+      if (!task.sockets.delete(socket)) return;
+      activeServeSockets -= 1;
+      if (activeServeSockets < 0) activeServeSockets = 0;
+    });
   });
-  const address = server.address();
-  if (!address || typeof address === "string") throw new Error("velar/serve could not determine the bound port");
   servers.set(handle, task);
-  return {handle, port: address.port};
+  try {
+    await new Promise((resolveListen, rejectListen) => {
+      const failed = error => { server.off("listening", ready); rejectListen(error); };
+      const ready = () => { server.off("error", failed); resolveListen(); };
+      server.once("error", failed);
+      server.once("listening", ready);
+      server.listen({port: portValue, host});
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("velar/serve could not determine the bound port");
+    server.on("error", error => {
+      if (task.stopping) return;
+      const failure = errorRecord(error);
+      try { port.postMessage({kind: "event", event: "serve.error", value: {token, message: failure.message}}); }
+      catch {}
+    });
+    return {handle, port: address.port};
+  } catch (error) {
+    if (servers.get(handle) === task) servers.delete(handle);
+    try { server.close(); } catch {}
+    throw error;
+  }
 }
 
 async function stopServer(args) {
-  if (args.length !== 1) throw new TypeError("serve.stop arguments are invalid");
+  if (args.length < 1 || args.length > 2) throw new TypeError("serve.stop arguments are invalid");
   const handle = integer(args[0], 1, Number.MAX_SAFE_INTEGER, "Node serve server handle");
+  const grace = args.length === 2 ? integer(args[1], 1, 120_000, "serve stop grace") : serveShutdownTimeoutMilliseconds;
   const task = servers.get(handle);
   if (!task) return null;
-  await new Promise((resolveStop, rejectStop) => {
-    task.server.close(error => error ? rejectStop(error) : resolveStop(null));
-    task.server.closeIdleConnections?.();
-  });
-  servers.delete(handle);
-  return null;
+  if (task.stopPromise !== null) return await task.stopPromise;
+  task.stopping = true;
+  for (const request of requests.values()) if (request.server === handle && !request.completed) {
+    request.response.shouldKeepAlive = false;
+    if (!request.response.headersSent) request.response.setHeader("Connection", "close");
+    cancelRequest(request, "server_stopping");
+  }
+  const pending = (async () => {
+    await new Promise((resolveStop, rejectStop) => {
+      let settled = false;
+      let forceTimer = null;
+      let finalTimer = null;
+      const finish = action => {
+        if (settled) return;
+        settled = true;
+        if (forceTimer !== null) clearTimeout(forceTimer);
+        if (finalTimer !== null) clearTimeout(finalTimer);
+        action();
+      };
+      task.server.close(error => error ? finish(() => rejectStop(error)) : finish(() => resolveStop(null)));
+      task.server.closeIdleConnections?.();
+      forceTimer = setTimeout(() => {
+        try { task.server.closeAllConnections?.(); } catch {}
+        for (const socket of task.sockets) try { socket.destroy(); } catch {}
+        finalTimer = setTimeout(() => finish(() => rejectStop(new Error("Node serve transport did not stop within its graceful shutdown deadline"))), 1000);
+        finalTimer.unref?.();
+      }, grace);
+      forceTimer.unref?.();
+    });
+    if (servers.get(handle) === task) servers.delete(handle);
+    return null;
+  })();
+  task.stopPromise = pending;
+  try { return await pending; }
+  catch (error) { if (task.stopPromise === pending) { task.stopPromise = null; task.stopping = false; } throw error; }
 }
 
 async function dispatch(operation, args) {
@@ -980,77 +1319,129 @@ async function dispatch(operation, args) {
     const task = requestHandle(args[0]);
     return withRequest(task, async () => {
       const maximum = integer(args[1], 1, maxServeBodyBytes, "Request body maxBytes");
-      const body = await bodyOf(task);
-      return body.bytes > maximum ? {text: null, bytes: body.bytes, tooLarge: true} : {text: body.text, bytes: body.bytes, tooLarge: false};
+      return bodyOf(task, maximum);
     });
   }
-  if (operation === "serve.respond") {
-    if (args.length !== 6) throw new TypeError("serve.respond arguments are invalid");
+  if (operation === "serve.bodyBytes") {
+    if (args.length !== 2) throw new TypeError("serve.bodyBytes arguments are invalid");
     const task = requestHandle(args[0]);
     return withRequest(task, async () => {
-      const status = integer(args[1], 100, 599, "ServeResponse.status");
+      const maximum = integer(args[1], 1, maxServeBodyBytes, "Request body maxBytes");
+      return bodyBytesOf(task, maximum);
+    });
+  }
+  if (operation === "serve.readFile") {
+    if (args.length !== 3) throw new TypeError("serve.readFile arguments are invalid");
+    return testStaticFile(args[0], args[1], args[2]);
+  }
+  if (operation === "serve.respond") {
+    if (args.length !== 8) throw new TypeError("serve.respond arguments are invalid");
+    const task = requestHandle(args[0]);
+    return withTerminalResponse(task, async () => {
+      const status = integer(args[1], 200, 599, "ServeResponse.status");
       const headers = headerPairs(args[2]);
       const kind = args[3];
       const body = args[4];
       const contentType = args[5];
+      const compression = args[6];
+      const cookies = cookieValues(args[7]);
       if (kind !== "json" && kind !== "text" || typeof body !== "string" || Buffer.byteLength(body, "utf8") > maxServeBodyBytes) {
         throw new TypeError("ServeResponse body is invalid");
       }
       if (contentType !== null && (typeof contentType !== "string" || contentType.length === 0 || contentType.length > 1024 || /[\0\r\n]/u.test(contentType))) {
         throw new TypeError("ServeResponse.contentType must be bounded single-line text");
       }
-      reserveServeBytes(task, Buffer.byteLength(body, "utf8"));
+      if (compression !== null && compression !== "gzip" && compression !== "br") throw new TypeError("ServeResponse compression is invalid");
+      const suppressBody = responseHasNoBody(task, status);
+      let output = body;
+      if (!suppressBody && compression !== null) {
+        const inputBytes = Buffer.byteLength(body, "utf8");
+        reserveTransientServeBytes(inputBytes * 2);
+        try { output = await (compression === "br" ? brotliCompress(body) : gzip(body)); }
+        finally { releaseTransientServeBytes(inputBytes * 2); }
+        if (output.byteLength > maxServeBodyBytes) throw new RangeError("Compressed ServeResponse exceeds 16 MiB");
+      }
+      if (!suppressBody) reserveServeBytes(task, typeof output === "string" ? Buffer.byteLength(output, "utf8") : output.byteLength);
       task.response.statusCode = status;
-      setHeaders(task.response, headers);
-      if (!task.response.hasHeader("Content-Type")) {
+      setHeaders(task.response, headers, cookies);
+      if (!task.response.hasHeader("Content-Type") && (task.request.method === "HEAD" || !suppressBody)) {
         task.response.setHeader("Content-Type", kind === "json" ? "application/json; charset=utf-8" : contentType ?? "text/plain; charset=utf-8");
       }
-      task.response.end(body);
+      if (compression !== null) {
+        task.response.setHeader("Content-Encoding", compression);
+        if (!task.response.hasHeader("Vary")) task.response.setHeader("Vary", "Accept-Encoding");
+      }
+      await endServeResponse(task, suppressBody ? undefined : output);
       completeRequest(task);
       return null;
     });
   }
   if (operation === "serve.respondFile") {
-    if (args.length !== 4) throw new TypeError("serve.respondFile arguments are invalid");
+    if (args.length !== 6) throw new TypeError("serve.respondFile arguments are invalid");
     const task = requestHandle(args[0]);
-    return withRequest(task, async () => {
+    return withTerminalResponse(task, async () => {
       try {
-        const file = await staticFile(task, args[1], args[2], args[3]);
-        task.response.statusCode = 200;
+        const file = await staticFile(args[1], args[2], args[3]);
+        setHeaders(task.response, headerPairs(args[4]), args[5]);
         task.response.setHeader("Content-Type", file.contentType);
-        task.response.setHeader("Content-Length", file.data.byteLength);
-        task.response.end(file.data);
+        task.response.setHeader("Accept-Ranges", "bytes");
+        const etag = staticEtag(file.metadata);
+        task.response.setHeader("ETag", etag);
+        task.response.setHeader("Last-Modified", file.metadata.mtime.toUTCString());
+        if (staticNotModified(task.request, file.metadata, etag)) {
+          task.response.statusCode = 304;
+          await endServeResponse(task);
+        } else {
+          const range = staticRange(task.request, file.metadata, etag);
+          if (range === false) {
+            task.response.statusCode = 416;
+            task.response.setHeader("Content-Range", "bytes */" + file.metadata.size);
+            await endServeResponse(task, task.request.method === "HEAD" ? undefined : "Range not satisfiable");
+          } else {
+            const start = range === null ? 0 : range.start;
+            const end = range === null ? file.metadata.size - 1 : range.end;
+            task.response.statusCode = range === null ? 200 : 206;
+            task.response.setHeader("Content-Length", Math.max(0, end - start + 1));
+            if (range !== null) task.response.setHeader("Content-Range", "bytes " + start + "-" + end + "/" + file.metadata.size);
+            if (task.request.method !== "HEAD") await writeStaticRange(task, file, start, end);
+            await endServeResponse(task);
+          }
+        }
       } catch (error) {
         if (!(error instanceof StaticNotFound) && !missing(error) && error?.code !== "EISDIR") throw error;
         task.response.statusCode = 404;
         task.response.setHeader("Content-Type", "text/plain; charset=utf-8");
-        task.response.end("Not found");
+        await endServeResponse(task, "Not found");
       }
       completeRequest(task);
       return null;
     });
   }
   if (operation === "serve.streamStart") {
-    if (args.length !== 3) throw new TypeError("serve.streamStart arguments are invalid");
+    if (args.length !== 4) throw new TypeError("serve.streamStart arguments are invalid");
     const task = requestHandle(args[0]);
+    const status = integer(args[1], 200, 599, "ServeResponse.status");
+    const headers = headerPairs(args[2]);
     return withRequest(task, async () => {
-      if (task.streaming) throw new Error("ServeResponse stream has already started");
-      task.response.statusCode = integer(args[1], 100, 599, "ServeResponse.status");
-      setHeaders(task.response, args[2]);
-      task.streaming = true;
+      if (task.responseMode !== "idle") throw new Error("Node serve request already owns a response operation");
+      task.responseMode = "streaming";
+      task.response.statusCode = status;
+      setHeaders(task.response, headers, args[3]);
+      task.suppressBody = responseHasNoBody(task, task.response.statusCode);
       return null;
     });
   }
   if (operation === "serve.streamWrite") {
     if (args.length !== 2) throw new TypeError("serve.streamWrite arguments are invalid");
     const task = requestHandle(args[0]);
-    return withRequest(task, async () => {
+    return withStreamWrite(task, async () => {
       const chunk = args[1];
-      if (!task.streaming || typeof chunk !== "string") throw new TypeError("ServeResponse.stream chunks must be strings");
+      if (typeof chunk !== "string") throw new TypeError("ServeResponse.stream chunks must be strings");
       const bytes = Buffer.byteLength(chunk, "utf8");
       if (bytes > maxServeStreamChunkBytes || task.streamBytes + bytes > maxServeStreamBytes) {
         throw new RangeError("ServeResponse.stream exceeded its bounded output");
       }
+      if (task.suppressBody) return null;
       if (task.response.destroyed || task.response.writableEnded) throw new Error("ServeResponse.stream client connection is closed");
       reserveTransientServeBytes(bytes);
       task.streamBytes += bytes;
@@ -1081,8 +1472,10 @@ async function dispatch(operation, args) {
     if (args.length !== 1) throw new TypeError("serve.streamEnd arguments are invalid");
     const task = requestHandle(args[0]);
     return withRequest(task, async () => {
-      if (!task.streaming) throw new Error("ServeResponse stream has not started");
-      task.response.end();
+      if (task.responseMode !== "streaming") throw new Error("ServeResponse stream has not started");
+      if (task.writeActive) throw new Error("ServeResponse stream still has an active write");
+      task.responseMode = "terminal";
+      await endServeResponse(task);
       completeRequest(task);
       return null;
     });
@@ -1090,7 +1483,7 @@ async function dispatch(operation, args) {
   if (operation === "serve.fail") {
     if (args.length !== 1) throw new TypeError("serve.fail arguments are invalid");
     const task = requestHandle(args[0]);
-    return withRequest(task, async () => { opaqueFailure(task); return null; });
+    return withRequest(task, async () => { task.responseMode = "terminal"; opaqueFailure(task); return null; });
   }
   throw new TypeError("Unknown Node host operation");
 }
@@ -1131,7 +1524,16 @@ port.on("message", value => {
     }
     return dispatch(value.operation, value.args);
   }).then(
-    result => port.postMessage({kind: "response", id, ok: true, value: result, error: null}),
+    result => {
+      const message = {kind: "response", id, ok: true, value: result, error: null};
+      if ((value?.operation === "serve.bodyBytes" || value?.operation === "serve.readFile") && result?.data instanceof Uint8Array && result.data.byteLength > 0) {
+        let data = result.data;
+        if (data.byteOffset !== 0 || data.buffer.byteLength !== data.byteLength) data = new Uint8Array(data);
+        result.data = data;
+        try { port.postMessage(message, [data.buffer]); }
+        finally { if (value.operation === "serve.readFile") releaseTransientServeBytes(data.byteLength); }
+      } else port.postMessage(message);
+    },
     error => port.postMessage({kind: "response", id, ok: false, value: null, error: errorRecord(error)}),
   );
 });

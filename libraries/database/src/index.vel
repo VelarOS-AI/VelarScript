@@ -1,0 +1,484 @@
+import {Cancellation} from "velar/task"
+
+/// Portable storage kinds. Adapters may expose additional kinds only through
+/// adapter-specific APIs.
+export enum DatabaseFieldKind:
+    text
+    integer
+    real
+    boolean
+    bytes
+    json
+
+/// Portable filter operations. Every value remains parameter data; adapters
+/// must never concatenate it into a query string.
+export enum DatabaseFilterKind:
+    equal
+    notEqual
+    lessThan
+    lessOrEqual
+    greaterThan
+    greaterOrEqual
+    oneOf
+    contains
+    startsWith
+    endsWith
+    isNull
+    isNotNull
+    all
+    any
+    not
+
+export enum DatabaseOrderDirection:
+    ascending
+    descending
+
+export enum DatabaseMutationKind:
+    insert
+    update
+    delete
+
+export enum DatabaseMigrationStepKind:
+    createModel
+    dropModel
+    addField
+    dropField
+    createIndex
+    dropIndex
+
+export enum DatabaseReferenceAction:
+    restrict
+    cascade
+    setNull
+
+/// Optional relation metadata. Relations never trigger hidden loading.
+export type DatabaseReference:
+    readonly model: string
+    readonly field: string
+    readonly onDelete: DatabaseReferenceAction
+    readonly onUpdate: DatabaseReferenceAction
+
+/// One portable storage field. `defaultValue == null` means that the
+/// application supplies the value; portable migrations do not contain raw SQL
+/// default expressions.
+export type DatabaseField:
+    readonly kind: DatabaseFieldKind
+    readonly nullable: bool
+    readonly primary: bool
+    readonly unique: bool
+    readonly generated: bool
+    readonly defaultValue: unknown
+    readonly reference: DatabaseReference?
+
+export type DatabaseIndex:
+    readonly name: string
+    readonly fields: readonly List<string>
+    readonly unique: bool
+
+/// The engine-facing, Runtime-Type-free portion of a model.
+export type DatabaseModelDefinition:
+    readonly name: string
+    readonly fields: readonly Record<DatabaseField>
+    readonly indexes: readonly List<DatabaseIndex>
+
+/// A checked application model. Runtime row validation stays beside the
+/// portable definition and never crosses a Worker boundary.
+export type DatabaseModel<T>:
+    readonly definition: readonly DatabaseModelDefinition
+    readonly parse: (unknown) -> T
+
+export type DatabaseFilter:
+    readonly kind: DatabaseFilterKind
+    readonly model: string
+    readonly field: string?
+    readonly value: unknown
+    readonly values: readonly List<unknown>
+    readonly filters: readonly List<DatabaseFilter>
+
+export type DatabaseOrder:
+    readonly model: string
+    readonly field: string
+    readonly direction: DatabaseOrderDirection
+
+/// Plain data sent to an adapter. It cannot contain a Runtime Type or an
+/// adapter-native handle.
+export type DatabaseQueryPlan:
+    readonly model: readonly DatabaseModelDefinition
+    readonly where: DatabaseFilter?
+    readonly orderBy: readonly List<DatabaseOrder>
+    readonly limit: number?
+    readonly offset: number
+
+/// The application-facing query retains its Runtime Type outside the adapter.
+export type DatabaseQuery<T>:
+    readonly plan: readonly DatabaseQueryPlan
+    readonly parse: (unknown) -> T
+
+export type DatabaseMutationPlan:
+    readonly kind: DatabaseMutationKind
+    readonly model: readonly DatabaseModelDefinition
+    readonly value: unknown
+    readonly changes: readonly Record<unknown>
+    readonly where: DatabaseFilter?
+
+export type DatabaseMutationResult:
+    readonly affected: number
+
+export type DatabaseMigrationStep:
+    readonly kind: DatabaseMigrationStepKind
+    readonly model: readonly DatabaseModelDefinition?
+    readonly modelName: string?
+    readonly fieldName: string?
+    readonly field: DatabaseField?
+    readonly index: DatabaseIndex?
+    readonly destructive: bool
+
+export type DatabaseMigration:
+    readonly version: number
+    readonly steps: readonly List<DatabaseMigrationStep>
+
+export type DatabaseSchema:
+    readonly name: string
+    readonly version: number
+    readonly models: readonly List<readonly DatabaseModelDefinition>
+    readonly migrations: readonly List<DatabaseMigration>
+
+export type DatabaseMigrationResult:
+    readonly previousVersion: number
+    readonly version: number
+    readonly applied: number
+
+/// An adapter states unsupported semantics instead of silently degrading them.
+export type DatabaseCapabilities:
+    readonly transactions: bool
+    readonly migrations: bool
+    readonly streaming: bool
+    readonly cancellation: bool
+    readonly concurrentReads: bool
+    readonly returning: bool
+    readonly maxParameters: number
+
+export class DatabaseError extends Error:
+    const databaseCode: string
+    const operation: string
+    const retryable: bool
+
+    constructor(message: string = "Database operation failed", code: string = "DATABASE_ERROR", operation: string = "unknown", retryable: bool = false):
+        super(message)
+        self.databaseCode = code
+        self.operation = operation
+        self.retryable = retryable
+
+export class DatabaseBackpressureError extends DatabaseError:
+    constructor(message: string = "Database queue is full", operation: string = "queue"):
+        super(message, "DATABASE_BACKPRESSURE", operation, true)
+
+export class DatabaseConcurrencyError extends DatabaseError:
+    constructor(message: string = "Database handle is already executing an operation", operation: string = "concurrency"):
+        super(message, "DATABASE_CONCURRENCY", operation, true)
+
+def identifierCharacter(value: string, first: bool) -> bool:
+    const letter = (value >= "a" and value <= "z") or (value >= "A" and value <= "Z")
+    return letter or value == "_" or (not first and value >= "0" and value <= "9")
+
+def requireIdentifier(value: string, label: string):
+    assert value.size > 0 and value.size <= 128 else f"{label} must contain from 1 through 128 characters"
+    let first = true
+    for character in value:
+        assert identifierCharacter(character, first) else f"{label} must use portable ASCII identifier characters"
+        first = false
+    assert not value.startsWith("__velar_") else f"{label} cannot use the reserved __velar_ prefix"
+
+def requireField(definition: readonly DatabaseModelDefinition, name: string):
+    requireIdentifier(name, "Database field name")
+    assert definition.fields.has(name) else f"Database model '{definition.name}' has no field '{name}'"
+
+def requireLimit(value: number?, name: string, maximum: number) -> number?:
+    if value == null:
+        return null
+    assert value.isInteger() and value >= 0 and value <= maximum else f"{name} must be an integer from 0 through {maximum}"
+    return value
+
+def databaseField(kind: DatabaseFieldKind, nullable: bool, primary: bool, unique: bool, generated: bool, defaultValue: unknown, reference: DatabaseReference?) -> DatabaseField:
+    assert not (primary and nullable) else "A primary database field cannot be nullable"
+    assert not (generated and not primary) else "A generated database field must be a primary field"
+    assert not (generated and kind != DatabaseFieldKind.integer) else "A generated database field must use integer storage"
+    assert not (generated and defaultValue != null) else "A generated database field cannot also declare a default value"
+    return {kind, nullable, primary, unique, generated, defaultValue, reference}
+
+def textField(nullable: bool = false, primary: bool = false, unique: bool = false, defaultValue: unknown = null, reference: DatabaseReference? = null) -> DatabaseField:
+    return databaseField(DatabaseFieldKind.text, nullable, primary, unique, false, defaultValue, reference)
+
+def integerField(nullable: bool = false, primary: bool = false, unique: bool = false, generated: bool = false, defaultValue: unknown = null, reference: DatabaseReference? = null) -> DatabaseField:
+    return databaseField(DatabaseFieldKind.integer, nullable, primary, unique, generated, defaultValue, reference)
+
+def realField(nullable: bool = false, unique: bool = false, defaultValue: unknown = null) -> DatabaseField:
+    return databaseField(DatabaseFieldKind.real, nullable, false, unique, false, defaultValue, null)
+
+def booleanField(nullable: bool = false, unique: bool = false, defaultValue: unknown = null) -> DatabaseField:
+    return databaseField(DatabaseFieldKind.boolean, nullable, false, unique, false, defaultValue, null)
+
+def bytesField(nullable: bool = false, unique: bool = false, defaultValue: unknown = null) -> DatabaseField:
+    return databaseField(DatabaseFieldKind.bytes, nullable, false, unique, false, defaultValue, null)
+
+def jsonField(nullable: bool = false, defaultValue: unknown = null) -> DatabaseField:
+    return databaseField(DatabaseFieldKind.json, nullable, false, false, false, defaultValue, null)
+
+/// Column constructors are ordinary values, not decorators or language names.
+export const column = {
+    text: textField,
+    integer: integerField,
+    real: realField,
+    boolean: booleanField,
+    bytes: bytesField,
+    json: jsonField,
+}
+
+export def reference(model: string, field: string, onDelete: DatabaseReferenceAction = DatabaseReferenceAction.restrict, onUpdate: DatabaseReferenceAction = DatabaseReferenceAction.restrict) -> DatabaseReference:
+    requireIdentifier(model, "Referenced model name")
+    requireIdentifier(field, "Referenced field name")
+    return {model, field, onDelete, onUpdate}
+
+export def index(name: string, fields: List<string>, unique: bool = false) -> DatabaseIndex:
+    requireIdentifier(name, "Database index name")
+    assert fields.size > 0 and fields.size <= 32 else "A database index must contain from 1 through 32 fields"
+    let copied: List<string> = []
+    for field in fields:
+        requireIdentifier(field, "Database index field")
+        assert not copied.has(field) else f"Database index '{name}' repeats field '{field}'"
+        copied.append(field)
+    return {name, fields: copied, unique}
+
+export def model<T>(name: string, RowType: Type<T>, fields: Record<DatabaseField>, indexes: List<DatabaseIndex> = []) -> DatabaseModel<T>:
+    requireIdentifier(name, "Database model name")
+    assert fields.size > 0 and fields.size <= 1024 else "A database model must contain from 1 through 1024 fields"
+    let primaryFields = 0
+    for fieldName, field in fields:
+        requireIdentifier(fieldName, "Database field name")
+        if field.primary:
+            primaryFields += 1
+    assert primaryFields <= 1 else "Portable database models currently support one primary field"
+    let copiedIndexes: List<DatabaseIndex> = []
+    for item in indexes:
+        for fieldName in item.fields:
+            assert fields.has(fieldName) else f"Database index '{item.name}' names missing field '{fieldName}'"
+        assert copiedIndexes.every(previous => previous.name != item.name) else f"Database model '{name}' repeats index '{item.name}'"
+        copiedIndexes.append({name: item.name, fields: item.fields.copy(), unique: item.unique})
+    const definition: DatabaseModelDefinition = {name, fields: fields.copy(), indexes: copiedIndexes}
+    const parseRow: (unknown) -> T = value => RowType.parse(value)
+    return {definition, parse: parseRow}
+
+def leafFilter<T>(model: DatabaseModel<T>, kind: DatabaseFilterKind, field: string, value: unknown = null, values: List<unknown> = []) -> DatabaseFilter:
+    requireField(model.definition, field)
+    assert values.size <= 10000 else "A database filter cannot contain more than 10000 values"
+    return {kind, model: model.definition.name, field, value, values: values.copy(), filters: []}
+
+def equalFilter<T>(model: DatabaseModel<T>, field: string, value: unknown) -> DatabaseFilter:
+    return leafFilter(model, DatabaseFilterKind.equal, field, value)
+
+def notEqualFilter<T>(model: DatabaseModel<T>, field: string, value: unknown) -> DatabaseFilter:
+    return leafFilter(model, DatabaseFilterKind.notEqual, field, value)
+
+def lessThanFilter<T>(model: DatabaseModel<T>, field: string, value: unknown) -> DatabaseFilter:
+    return leafFilter(model, DatabaseFilterKind.lessThan, field, value)
+
+def lessOrEqualFilter<T>(model: DatabaseModel<T>, field: string, value: unknown) -> DatabaseFilter:
+    return leafFilter(model, DatabaseFilterKind.lessOrEqual, field, value)
+
+def greaterThanFilter<T>(model: DatabaseModel<T>, field: string, value: unknown) -> DatabaseFilter:
+    return leafFilter(model, DatabaseFilterKind.greaterThan, field, value)
+
+def greaterOrEqualFilter<T>(model: DatabaseModel<T>, field: string, value: unknown) -> DatabaseFilter:
+    return leafFilter(model, DatabaseFilterKind.greaterOrEqual, field, value)
+
+def oneOfFilter<T>(model: DatabaseModel<T>, field: string, values: List<unknown>) -> DatabaseFilter:
+    assert values.size > 0 else "A oneOf database filter cannot be empty"
+    return leafFilter(model, DatabaseFilterKind.oneOf, field, null, values)
+
+def containsFilter<T>(model: DatabaseModel<T>, field: string, value: string) -> DatabaseFilter:
+    return leafFilter(model, DatabaseFilterKind.contains, field, value)
+
+def startsWithFilter<T>(model: DatabaseModel<T>, field: string, value: string) -> DatabaseFilter:
+    return leafFilter(model, DatabaseFilterKind.startsWith, field, value)
+
+def endsWithFilter<T>(model: DatabaseModel<T>, field: string, value: string) -> DatabaseFilter:
+    return leafFilter(model, DatabaseFilterKind.endsWith, field, value)
+
+def isNullFilter<T>(model: DatabaseModel<T>, field: string) -> DatabaseFilter:
+    return leafFilter(model, DatabaseFilterKind.isNull, field)
+
+def isNotNullFilter<T>(model: DatabaseModel<T>, field: string) -> DatabaseFilter:
+    return leafFilter(model, DatabaseFilterKind.isNotNull, field)
+
+def groupFilter(kind: DatabaseFilterKind, filters: List<DatabaseFilter>) -> DatabaseFilter:
+    assert filters.size > 0 and filters.size <= 1000 else "A grouped database filter must contain from 1 through 1000 filters"
+    const owner = filters[0].model
+    for item in filters:
+        assert item.model == owner else "A grouped database filter cannot mix models"
+    return {kind, model: owner, field: null, value: null, values: [], filters: filters.copy()}
+
+def allFilters(filters: List<DatabaseFilter>) -> DatabaseFilter:
+    return groupFilter(DatabaseFilterKind.all, filters)
+
+def anyFilters(filters: List<DatabaseFilter>) -> DatabaseFilter:
+    return groupFilter(DatabaseFilterKind.any, filters)
+
+def notFilter(value: DatabaseFilter) -> DatabaseFilter:
+    return {kind: DatabaseFilterKind.not, model: value.model, field: null, value: null, values: [], filters: [value]}
+
+export const filter = {
+    equal: equalFilter,
+    notEqual: notEqualFilter,
+    lessThan: lessThanFilter,
+    lessOrEqual: lessOrEqualFilter,
+    greaterThan: greaterThanFilter,
+    greaterOrEqual: greaterOrEqualFilter,
+    oneOf: oneOfFilter,
+    contains: containsFilter,
+    startsWith: startsWithFilter,
+    endsWith: endsWithFilter,
+    isNull: isNullFilter,
+    isNotNull: isNotNullFilter,
+    all: allFilters,
+    any: anyFilters,
+    not: notFilter,
+}
+
+export def order<T>(model: DatabaseModel<T>, field: string, direction: DatabaseOrderDirection = DatabaseOrderDirection.ascending) -> DatabaseOrder:
+    requireField(model.definition, field)
+    return {model: model.definition.name, field, direction}
+
+export def select<T>(model: DatabaseModel<T>, where: DatabaseFilter? = null, orderBy: List<DatabaseOrder> = [], limit: number? = null, offset: number = 0) -> DatabaseQuery<T>:
+    if where != null:
+        assert where.model == model.definition.name else "A database query filter belongs to another model"
+    assert orderBy.size <= 64 else "A database query cannot contain more than 64 order fields"
+    for item in orderBy:
+        assert item.model == model.definition.name else "A database query order belongs to another model"
+        requireField(model.definition, item.field)
+    const checkedLimit = requireLimit(limit, "Database query limit", 1000000)
+    assert offset.isInteger() and offset >= 0 and offset <= 1000000000 else "Database query offset must be an integer from 0 through 1000000000"
+    const plan: DatabaseQueryPlan = {model: model.definition, where, orderBy: orderBy.copy(), limit: checkedLimit, offset}
+    return {plan, parse: model.parse}
+
+def insertPlan<T>(model: DatabaseModel<T>, value: T) -> DatabaseMutationPlan:
+    const checked = model.parse(value)
+    return {kind: DatabaseMutationKind.insert, model: model.definition, value: checked, changes: {}, where: null}
+
+def updatePlan<T>(model: DatabaseModel<T>, changes: Record<unknown>, where: DatabaseFilter) -> DatabaseMutationPlan:
+    assert where.model == model.definition.name else "A database update filter belongs to another model"
+    assert changes.size > 0 else "A database update must contain at least one field"
+    for fieldName in changes:
+        requireField(model.definition, fieldName)
+    return {kind: DatabaseMutationKind.update, model: model.definition, value: null, changes: changes.copy(), where}
+
+def deletePlan<T>(model: DatabaseModel<T>, where: DatabaseFilter) -> DatabaseMutationPlan:
+    assert where.model == model.definition.name else "A database delete filter belongs to another model"
+    return {kind: DatabaseMutationKind.delete, model: model.definition, value: null, changes: {}, where}
+
+/// Adapter SPI plus checked application methods. Implementations must keep
+/// `executeQuery` and `streamQuery` bounded according to their documented
+/// configuration.
+export abstract class DatabaseExecutor:
+    abstract async def executeQuery(plan: readonly DatabaseQueryPlan) -> List<unknown>
+    abstract async def streamQuery(plan: readonly DatabaseQueryPlan, consume: (unknown) -> Promise<null>) -> null
+    abstract async def executeMutation(plan: readonly DatabaseMutationPlan) -> DatabaseMutationResult
+
+    async def find<T>(query: DatabaseQuery<T>, cancellation: Cancellation? = null) -> List<T>:
+        if cancellation != null:
+            await cancellation.checkpoint()
+        const rows = await self.executeQuery(query.plan)
+        let output: List<T> = []
+        for row in rows:
+            output.append(query.parse(row))
+        if cancellation != null:
+            await cancellation.checkpoint()
+        return output
+
+    async def findOne<T>(query: DatabaseQuery<T>, cancellation: Cancellation? = null) -> T?:
+        const rows = await self.find(query, cancellation)
+        if rows.size == 0:
+            return null
+        return rows[0]
+
+    async def stream<T>(query: DatabaseQuery<T>, consume: (T) -> Promise<null>, cancellation: Cancellation? = null):
+        async def checkedConsume(row: unknown):
+            if cancellation != null:
+                await cancellation.checkpoint()
+            await consume(query.parse(row))
+        if cancellation != null:
+            await cancellation.checkpoint()
+        await self.streamQuery(query.plan, checkedConsume)
+
+    async def insert<T>(model: DatabaseModel<T>, value: T) -> DatabaseMutationResult:
+        return await self.executeMutation(insertPlan(model, value))
+
+    async def update<T>(model: DatabaseModel<T>, changes: Record<unknown>, where: DatabaseFilter) -> DatabaseMutationResult:
+        return await self.executeMutation(updatePlan(model, changes, where))
+
+    async def delete<T>(model: DatabaseModel<T>, where: DatabaseFilter) -> DatabaseMutationResult:
+        return await self.executeMutation(deletePlan(model, where))
+
+export abstract class DatabaseTransaction extends DatabaseExecutor:
+    abstract async def commit() -> null
+    abstract async def rollback() -> null
+
+    @dispose:
+        await self.rollback()
+
+export abstract class Database extends DatabaseExecutor:
+    abstract get capabilities() -> DatabaseCapabilities
+    abstract async def transaction() -> DatabaseTransaction
+    abstract async def migrate(schema: DatabaseSchema) -> DatabaseMigrationResult
+    abstract async def close() -> null
+
+    @dispose:
+        await self.close()
+
+export def migration(version: number, steps: List<DatabaseMigrationStep>) -> DatabaseMigration:
+    assert version.isInteger() and version > 0 and version <= 1000000 else "Database migration version must be an integer from 1 through 1000000"
+    assert steps.size > 0 and steps.size <= 1000 else "A database migration must contain from 1 through 1000 steps"
+    return {version, steps: steps.copy()}
+
+export def databaseSchema(name: string, version: number, models: List<readonly DatabaseModelDefinition>, migrations: List<DatabaseMigration>) -> DatabaseSchema:
+    requireIdentifier(name, "Database schema name")
+    assert version.isInteger() and version >= 0 and version <= 1000000 else "Database schema version must be an integer from 0 through 1000000"
+    assert models.size <= 1000 else "A database schema cannot contain more than 1000 models"
+    assert migrations.size == version else "Database migrations must contain exactly one ordered migration for every schema version"
+    let expected = 1
+    let modelNames: List<string> = []
+    for item in models:
+        assert not modelNames.has(item.name) else f"Database schema '{name}' repeats model '{item.name}'"
+        modelNames.append(item.name)
+    for item in migrations:
+        assert item.version == expected else f"Database migration {expected} is missing or out of order"
+        expected += 1
+    return {name, version, models: models.copy(), migrations: migrations.copy()}
+
+export def createModelStep<T>(model: DatabaseModel<T>) -> DatabaseMigrationStep:
+    return {kind: DatabaseMigrationStepKind.createModel, model: model.definition, modelName: null, fieldName: null, field: null, index: null, destructive: false}
+
+export def dropModelStep(name: string, destructive: bool = false) -> DatabaseMigrationStep:
+    requireIdentifier(name, "Dropped database model name")
+    assert destructive else "Dropping a database model requires destructive=true"
+    return {kind: DatabaseMigrationStepKind.dropModel, model: null, modelName: name, fieldName: null, field: null, index: null, destructive}
+
+export def addFieldStep(modelName: string, fieldName: string, field: DatabaseField) -> DatabaseMigrationStep:
+    requireIdentifier(modelName, "Altered database model name")
+    requireIdentifier(fieldName, "Added database field name")
+    return {kind: DatabaseMigrationStepKind.addField, model: null, modelName, fieldName, field, index: null, destructive: false}
+
+export def dropFieldStep(modelName: string, fieldName: string, destructive: bool = false) -> DatabaseMigrationStep:
+    requireIdentifier(modelName, "Altered database model name")
+    requireIdentifier(fieldName, "Dropped database field name")
+    assert destructive else "Dropping a database field requires destructive=true"
+    return {kind: DatabaseMigrationStepKind.dropField, model: null, modelName, fieldName, field: null, index: null, destructive}
+
+export def createIndexStep(modelName: string, index: DatabaseIndex) -> DatabaseMigrationStep:
+    requireIdentifier(modelName, "Indexed database model name")
+    return {kind: DatabaseMigrationStepKind.createIndex, model: null, modelName, fieldName: null, field: null, index, destructive: false}
+
+export def dropIndexStep(modelName: string, name: string) -> DatabaseMigrationStep:
+    requireIdentifier(modelName, "Indexed database model name")
+    requireIdentifier(name, "Dropped database index name")
+    const placeholder: DatabaseIndex = {name, fields: [], unique: false}
+    return {kind: DatabaseMigrationStepKind.dropIndex, model: null, modelName, fieldName: null, field: null, index: placeholder, destructive: false}

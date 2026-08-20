@@ -3,7 +3,8 @@ import { Buffer as NodeBuffer } from "node:buffer";
 import { ChildProcess, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { createServer } from "node:http";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -698,6 +699,7 @@ test("Node serve types and JSON stay on the strict owned-data boundary", async (
     query: new Map(),
     headers: new Map(),
     text: async () => "",
+    bytes: async () => new Uint8Array(),
     json: async () => null,
     parse: async () => null,
   };
@@ -713,6 +715,7 @@ test("Node serve types and JSON stay on the strict owned-data boundary", async (
     query: new Map(),
     headers: new Map(),
     text: async () => "",
+    bytes: async () => new Uint8Array(),
     json: async () => null,
     parse: async () => null,
   }), false);
@@ -722,6 +725,7 @@ test("Node serve types and JSON stay on the strict owned-data boundary", async (
     query: new Map(),
     headers: new Map(),
     text: async () => "",
+    bytes: async () => new Uint8Array(),
     json: async () => null,
     parse: async () => null,
   }), true);
@@ -812,6 +816,711 @@ test("Node serve types and JSON stay on the strict owned-data boundary", async (
   }
 });
 
+test("Node ServeApp routes bind checked inputs, compose, and normalize HTTP outcomes", async () => {
+  const serveRuntime = await runtime<{
+    readonly HttpError: new (status: number, body?: unknown, headers?: Map<string, string>) => Error;
+    readonly ServeApp: object;
+    created(value: unknown, headers?: Map<string, string>): unknown;
+    noContent(): unknown;
+    prefix(path: string, app: unknown): unknown;
+    bodyLimit(app: unknown, maxBytes: number): unknown;
+    json(value: unknown): unknown;
+    setCookie(response: unknown, name: string, value: string): unknown;
+    use(app: unknown, middleware: (request: unknown, next: () => Promise<unknown>) => Promise<unknown>): unknown;
+    openapi(app: unknown, title?: string, version?: string): { readonly info: { readonly title: string; readonly version: string }; readonly paths: Record<string, unknown> };
+    serve(app: unknown, port: number): Promise<{readonly port: number; stop(): Promise<null>}>;
+  }>("velar/serve");
+
+  assert.equal("__velarCreateServeRoute" in serveRuntime, false);
+  assert.equal("__velarCreateServeApp" in serveRuntime, false);
+  assert.deepEqual(Object.keys(serveRuntime.ServeApp).sort(), ["is", "parse"]);
+  const bridge = Object.getOwnPropertyDescriptor(serveRuntime.ServeApp, "__velarCompilerBridge")?.value as {
+    createRoute(method: string, path: string, parameters: readonly Record<string, unknown>[], handler: (...arguments_: never[]) => Promise<unknown>, metadata?: Record<string, unknown>): unknown;
+    createApp(name: string, items: readonly unknown[]): unknown;
+  } | undefined;
+  assert.ok(bridge);
+  assert.equal(Object.isFrozen(bridge), true);
+  const health = bridge.createRoute("GET", "/health", [], async () => ({ok: true}));
+  const cookies = bridge.createRoute("GET", "/cookies", [], async () => serveRuntime.setCookie(serveRuntime.setCookie(serveRuntime.json({ok: true}), "first", "1"), "second", "2"));
+  const tags = bridge.createRoute("GET", "/tags", [
+    {name: "tag", source: "query", kind: "list", required: true, check: (value: unknown) => Array.isArray(value) && value.every((item) => typeof item === "string"), schema: {type: "array", items: {type: "string"}}},
+  ], async (tag: readonly string[]) => ({tag}));
+  const user = bridge.createRoute("GET", "/users/{id:number}", [
+    {name: "id", source: "path", kind: "number", required: true, check: (value: unknown) => typeof value === "number", schema: {type: "number"}},
+    {name: "details", source: "query", kind: "bool", required: false, check: (value: unknown) => typeof value === "boolean", schema: {type: "boolean"}},
+  ], async (id: unknown, details = false) => ({id, details}), {responseSchema: {type: "object"}});
+  const create = bridge.createRoute("POST", "/users", [
+    {name: "input", source: "body", kind: "data", required: true, check: (value: unknown) => !!value && typeof value === "object" && typeof (value as {name?: unknown}).name === "string", schema: {type: "object", properties: {name: {type: "string"}}, required: ["name"]}},
+  ], async (input: unknown) => serveRuntime.created(input));
+  const missing = bridge.createRoute("GET", "/missing", [], async () => {
+    throw new serveRuntime.HttpError(404, {error: "user_not_found"}, new Map([["x-error", "missing"]]));
+  });
+  const empty = bridge.createRoute("DELETE", "/users/{id:number}", [
+    {name: "id", source: "path", kind: "number", required: true, check: (value: unknown) => typeof value === "number"},
+  ], async () => serveRuntime.noContent());
+  const users = bridge.createApp("users", [user, create, missing, empty]);
+  let userMiddlewareCalls = 0;
+  const protectedUsers = serveRuntime.use(users, async (_request, next) => {
+    userMiddlewareCalls += 1;
+    return next();
+  });
+  const limitedCreate = bridge.createRoute("POST", "/", [
+    {name: "input", source: "body", kind: "data", required: true, check: () => true},
+  ], async (input: unknown) => input);
+  const limited = serveRuntime.bodyLimit(bridge.createApp("limited", [limitedCreate]), 8);
+  const doubleNextRoute = bridge.createRoute("GET", "/double-next", [], async () => ({ok: true}));
+  const recoveredDoubleNext = serveRuntime.use(bridge.createApp("double-next", [doubleNextRoute]), async (_request, next) => {
+    try { return await next(); }
+    catch { return {status: 500, json: {error: "middleware_failed"}}; }
+  });
+  const doubleNext = serveRuntime.use(recoveredDoubleNext, async (_request, next) => {
+    await next();
+    return next();
+  });
+  const app = bridge.createApp("api", [
+    health,
+    cookies,
+    tags,
+    serveRuntime.prefix("/api", protectedUsers),
+    serveRuntime.prefix("/limited", limited),
+    doubleNext,
+  ]);
+  const document = serveRuntime.openapi(app, "Users API", "2.0.0");
+  assert.deepEqual(document.info, {title: "Users API", version: "2.0.0"});
+  assert.deepEqual(Object.keys(document.paths).sort(), ["/api/missing", "/api/users", "/api/users/{id}", "/cookies", "/double-next", "/health", "/limited", "/tags"]);
+  assert.deepEqual(JSON.parse(JSON.stringify((document.paths["/tags"] as {get: {parameters: unknown[]}}).get.parameters)), [{name: "tag", in: "query", required: true, schema: {type: "array", items: {type: "string"}}, style: "form", explode: true}]);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify((document.paths["/api/users"] as {post: {requestBody: {content: {"application/json": {schema: unknown}}}}}).post.requestBody.content["application/json"].schema)),
+    {type: "object", properties: {name: {type: "string"}}, required: ["name"]},
+  );
+
+  const server = await serveRuntime.serve(app, 0);
+  try {
+    const healthy = await fetch(`http://127.0.0.1:${server.port}/health`);
+    assert.equal(healthy.status, 200);
+    assert.deepEqual(await healthy.json(), {ok: true});
+    assert.equal(userMiddlewareCalls, 0, "middleware from a composed app must remain scoped to that app's routes");
+    const cookieResponse = await fetch(`http://127.0.0.1:${server.port}/cookies`);
+    assert.deepEqual(cookieResponse.headers.getSetCookie().map((value) => value.split(";", 1)[0]), ["first=1", "second=2"]);
+
+    const detailed = await fetch(`http://127.0.0.1:${server.port}/api/users/42?details=true`);
+    assert.equal(detailed.status, 200);
+    assert.deepEqual(await detailed.json(), {id: 42, details: true});
+    assert.equal(userMiddlewareCalls, 1);
+    const defaulted = await fetch(`http://127.0.0.1:${server.port}/api/users/7`);
+    assert.deepEqual(await defaulted.json(), {id: 7, details: false});
+    const invalidPath = await fetch(`http://127.0.0.1:${server.port}/api/users/not-a-number`);
+    assert.equal(invalidPath.status, 422);
+    assert.deepEqual(await invalidPath.json(), {error: "invalid_request", parameter: "id"});
+    for (const invalidNumber of ["%2042", "0x2a"]) {
+      const response = await fetch(`http://127.0.0.1:${server.port}/api/users/${invalidNumber}`);
+      assert.equal(response.status, 422);
+    }
+    const duplicateScalar = await fetch(`http://127.0.0.1:${server.port}/api/users/42?details=true&details=false`);
+    assert.equal(duplicateScalar.status, 422);
+    assert.deepEqual(await duplicateScalar.json(), {error: "duplicate_parameter", parameter: "details"});
+    const repeatedList = await fetch(`http://127.0.0.1:${server.port}/tags?tag=one&tag=two`);
+    assert.deepEqual(await repeatedList.json(), {tag: ["one", "two"]});
+    const encodedSeparator = await fetch(`http://127.0.0.1:${server.port}/api/users/4%2F2`);
+    assert.equal(encodedSeparator.status, 400, "encoded path separators are rejected before routing");
+    const invalidQueryEncoding = await fetch(`http://127.0.0.1:${server.port}/health?value=%FF`);
+    assert.equal(invalidQueryEncoding.status, 400, "invalid query UTF-8 is rejected instead of being replaced silently");
+
+    const created = await fetch(`http://127.0.0.1:${server.port}/api/users`, {method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify({name: "Ada"})});
+    assert.equal(created.status, 201);
+    assert.deepEqual(await created.json(), {name: "Ada"});
+    const invalidBody = await fetch(`http://127.0.0.1:${server.port}/api/users`, {method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify({name: 1})});
+    assert.equal(invalidBody.status, 422);
+    const invalidJson = await fetch(`http://127.0.0.1:${server.port}/api/users`, {method: "POST", headers: {"content-type": "application/json"}, body: "{"});
+    assert.equal(invalidJson.status, 400);
+    const unsupported = await fetch(`http://127.0.0.1:${server.port}/api/users`, {method: "POST", headers: {"content-type": "text/plain"}, body: JSON.stringify({name: "Ada"})});
+    assert.equal(unsupported.status, 415);
+    const limitedBody = await fetch(`http://127.0.0.1:${server.port}/limited`, {method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify({value: 1})});
+    assert.equal(limitedBody.status, 413);
+
+    const notFound = await fetch(`http://127.0.0.1:${server.port}/api/missing`);
+    assert.equal(notFound.status, 404);
+    assert.deepEqual(await notFound.json(), {error: "user_not_found"});
+    assert.equal(notFound.headers.get("x-error"), "missing");
+    const deleted = await fetch(`http://127.0.0.1:${server.port}/api/users/42`, {method: "DELETE"});
+    assert.equal(deleted.status, 204);
+    assert.equal(await deleted.text(), "");
+    assert.equal(deleted.headers.get("content-type"), null);
+    const head = await fetch(`http://127.0.0.1:${server.port}/health`, {method: "HEAD"});
+    assert.equal(head.status, 200);
+    assert.equal(await head.text(), "");
+    const middlewareBeforeOptions = userMiddlewareCalls;
+    const options = await fetch(`http://127.0.0.1:${server.port}/api/users/42`, {method: "OPTIONS"});
+    assert.equal(options.status, 204);
+    assert.equal(userMiddlewareCalls, middlewareBeforeOptions + 1);
+    const method = await fetch(`http://127.0.0.1:${server.port}/health`, {method: "POST"});
+    assert.equal(method.status, 405);
+    assert.match(method.headers.get("allow") ?? "", /GET/u);
+    assert.match(method.headers.get("allow") ?? "", /HEAD/u);
+    assert.match(method.headers.get("allow") ?? "", /OPTIONS/u);
+    const repeatedNext = await fetch(`http://127.0.0.1:${server.port}/double-next`);
+    assert.equal(repeatedNext.status, 500);
+  } finally {
+    await server.stop();
+  }
+});
+
+test("Node route input values resolve security, cookies, and scoped providers", async () => {
+  const serveRuntime = await runtime<{
+    readonly ServeApp: object;
+    readonly Provider: {is(value: unknown): boolean};
+    readonly input: {
+      cookie(name?: string, fallback?: string | null): unknown;
+      dependency(provider: unknown): unknown;
+    };
+    readonly security: { bearer(): unknown };
+    provide(inputs: Record<string, unknown>, resolve: (values: Record<string, unknown>) => unknown, scope?: string, release?: ((value: unknown) => unknown) | null, eager?: boolean): unknown;
+    serve(app: unknown, port: number): Promise<{readonly port: number; stop(): Promise<null>}>;
+  }>("velar/serve");
+  const bridge = Object.getOwnPropertyDescriptor(serveRuntime.ServeApp, "__velarCompilerBridge")?.value as {
+    createRoute(method: string, path: string, parameters: readonly Record<string, unknown>[], handler: (...arguments_: never[]) => Promise<unknown>): unknown;
+    createApp(name: string, items: readonly unknown[]): unknown;
+  };
+  let requestResolves = 0;
+  let requestReleases = 0;
+  let appResolves = 0;
+  let appReleases = 0;
+  const currentUser = serveRuntime.provide(
+    {token: serveRuntime.security.bearer()},
+    async ({token}) => { requestResolves += 1; return {id: token}; },
+    "request",
+    async () => { requestReleases += 1; },
+  );
+  assert.equal(serveRuntime.Provider.is(currentUser), true);
+  const settings = serveRuntime.provide(
+    {},
+    async () => { appResolves += 1; return {region: "local"}; },
+    "app",
+    async () => { appReleases += 1; },
+    true,
+  );
+  const route = bridge.createRoute("GET", "/me", [
+    {name: "first", source: "dependency", kind: "dependency", required: true, check: () => true, input: serveRuntime.input.dependency(currentUser)},
+    {name: "second", source: "dependency", kind: "dependency", required: true, check: () => true, input: serveRuntime.input.dependency(currentUser)},
+    {name: "settings", source: "dependency", kind: "dependency", required: true, check: () => true, input: serveRuntime.input.dependency(settings)},
+    {name: "session", source: "cookie", kind: "string", required: true, check: (value: unknown) => typeof value === "string" || value === null, input: serveRuntime.input.cookie("session", null)},
+  ], async (first: {id: string}, second: {id: string}, appSettings: {region: string}, session: string | null) => ({first: first.id, second: second.id, region: appSettings.region, session}));
+  const server = await serveRuntime.serve(bridge.createApp("inputs", [route]), 0);
+  assert.equal(appResolves, 1, "eager app providers initialize before serve resolves");
+  try {
+    const missing = await fetch(`http://127.0.0.1:${server.port}/me`);
+    assert.equal(missing.status, 401);
+    assert.equal(requestReleases, 0);
+
+    const response = await fetch(`http://127.0.0.1:${server.port}/me`, {headers: {authorization: "Bearer user-1", cookie: "session=s-1"}});
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {first: "user-1", second: "user-1", region: "local", session: "s-1"});
+    const releaseDeadline = Date.now() + 1000;
+    while (requestReleases === 0 && Date.now() < releaseDeadline) await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    assert.equal(requestResolves, 1, "a request provider resolves once even when injected twice");
+    assert.equal(requestReleases, 1, "request providers release after the response completes");
+
+    const withoutCookie = await fetch(`http://127.0.0.1:${server.port}/me`, {headers: {authorization: "Bearer user-2"}});
+    assert.deepEqual(await withoutCookie.json(), {first: "user-2", second: "user-2", region: "local", session: null});
+    assert.equal(appResolves, 1, "an app provider is cached across requests");
+  } finally {
+    await server.stop();
+  }
+  assert.equal(appReleases, 1, "app providers release during server shutdown");
+});
+
+test("Node form and upload inputs parse bounded multipart and URL-encoded bodies", async () => {
+  const serveRuntime = await runtime<{
+    readonly ServeApp: object;
+    readonly input: {
+      form(type: object): unknown;
+      upload(name?: string, maxBytes?: number): unknown;
+    };
+    serve(app: unknown, port: number): Promise<{readonly port: number; stop(): Promise<null>}>;
+  }>("velar/serve");
+  const bridge = Object.getOwnPropertyDescriptor(serveRuntime.ServeApp, "__velarCompilerBridge")?.value as {
+    createRoute(method: string, path: string, parameters: readonly Record<string, unknown>[], handler: (...arguments_: never[]) => Promise<unknown>): unknown;
+    createApp(name: string, items: readonly unknown[]): unknown;
+  };
+  const Metadata = registerRuntimeType(Object.freeze({
+    parse(value: unknown): {title: string; public: boolean} {
+      if (!value || typeof value !== "object" || typeof (value as {title?: unknown}).title !== "string" || typeof (value as {public?: unknown}).public !== "boolean") throw new TypeError("invalid metadata");
+      return value as {title: string; public: boolean};
+    },
+  }));
+  const RepeatedFields = registerRuntimeType(Object.freeze({
+    parse(value: unknown): {tag: string[]} {
+      if (!value || typeof value !== "object" || !Array.isArray((value as {tag?: unknown}).tag) || !(value as {tag: unknown[]}).tag.every((item) => typeof item === "string")) throw new TypeError("invalid repeated fields");
+      return value as {tag: string[]};
+    },
+  }));
+  let escapedUpload: {text(): Promise<string>} | null = null;
+  const parameters = [
+    {name: "metadata", source: "form", kind: "data", required: true, check: () => true, schema: {type: "object", properties: {title: {type: "string"}, public: {type: "boolean"}}, required: ["title", "public"]}, input: serveRuntime.input.form(Metadata)},
+    {name: "image", source: "upload", kind: "upload", required: true, check: () => true, input: serveRuntime.input.upload("image", 32)},
+  ];
+  const upload = bridge.createRoute("POST", "/files", parameters, async (metadata: {title: string; public: boolean}, image: {filename: string; size: number; text(): Promise<string>}) => { escapedUpload = image; return {title: metadata.title, public: metadata.public, filename: image.filename, size: image.size, text: await image.text()}; });
+  const formOnly = bridge.createRoute("POST", "/form", [parameters[0]!], async (metadata: unknown) => metadata);
+  const repeatedForm = bridge.createRoute("POST", "/repeated-form", [
+    {name: "input", source: "form", kind: "data", required: true, check: () => true, schema: {type: "object", properties: {tag: {type: "array", items: {type: "string"}}}, required: ["tag"]}, input: serveRuntime.input.form(RepeatedFields)},
+  ], async (input: unknown) => input);
+  const server = await serveRuntime.serve(bridge.createApp("forms", [upload, formOnly, repeatedForm]), 0);
+  try {
+    const body = new FormData();
+    body.set("title", "cover");
+    body.set("public", "true");
+    body.set("image", new Blob(["pixels"], {type: "text/plain"}), "cover.txt");
+    const response = await fetch(`http://127.0.0.1:${server.port}/files`, {method: "POST", body});
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {title: "cover", public: true, filename: "cover.txt", size: 6, text: "pixels"});
+    let lifetimeEnded = false;
+    for (let attempt = 0; attempt < 20 && !lifetimeEnded; attempt += 1) {
+      try { await escapedUpload!.text(); }
+      catch (error) { assert.match(String(error), /lifetime ended with its request/u); lifetimeEnded = true; }
+      if (!lifetimeEnded) await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    assert.equal(lifetimeEnded, true, "request cleanup must revoke upload views promptly");
+
+    const encoded = await fetch(`http://127.0.0.1:${server.port}/form`, {method: "POST", headers: {"content-type": "application/x-www-form-urlencoded"}, body: "title=plain&public=false"});
+    assert.equal(encoded.status, 200);
+    assert.deepEqual(await encoded.json(), {title: "plain", public: false});
+    const repeated = await fetch(`http://127.0.0.1:${server.port}/repeated-form`, {method: "POST", headers: {"content-type": "application/x-www-form-urlencoded"}, body: "tag=one&tag=two"});
+    assert.equal(repeated.status, 200);
+    assert.deepEqual(await repeated.json(), {tag: ["one", "two"]});
+    const duplicateScalar = await fetch(`http://127.0.0.1:${server.port}/form`, {method: "POST", headers: {"content-type": "application/x-www-form-urlencoded"}, body: "title=one&title=two&public=false"});
+    assert.equal(duplicateScalar.status, 422);
+    assert.deepEqual(await duplicateScalar.json(), {error: "duplicate_parameter", parameter: "title"});
+
+    const oversized = new FormData();
+    oversized.set("title", "large");
+    oversized.set("public", "true");
+    oversized.set("image", new Blob(["x".repeat(33)]), "large.txt");
+    const refused = await fetch(`http://127.0.0.1:${server.port}/files`, {method: "POST", body: oversized});
+    assert.equal(refused.status, 413);
+    assert.deepEqual(await refused.json(), {error: "upload_too_large", parameter: "image"});
+  } finally {
+    await server.stop();
+  }
+  assert.match(VELAR_NODE_HOST_WORKER_SOURCE, /postMessage\(message, \[data\.buffer\]\)/u, "request bytes cross the Host boundary by ownership transfer");
+  assert.match(nodeModuleSources.get("velar/serve") ?? "", /__velarServeUint8Subarray/u, "multipart files use request-buffer views until request cleanup");
+});
+
+test("Node server-test client runs in process with lifespan, cookies, and dependency overrides", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-server-test-files-"));
+  await writeFile(join(directory, "asset.txt"), "file-body", "utf8");
+  const serveRuntime = await runtime<{
+    readonly ServeApp: object;
+    readonly input: {cookie(name?: string, fallback?: string | null): unknown; dependency(provider: unknown): unknown; form(type: object): unknown; upload(name?: string, maxBytes?: number): unknown};
+    provide(inputs: Record<string, unknown>, resolve: (values: Record<string, unknown>) => unknown, scope?: string): unknown;
+    lifecycle(app: unknown, startup: () => unknown, shutdown: () => unknown): unknown;
+    setCookie(response: unknown, name: string, value: string): unknown;
+    json(value: unknown): unknown;
+    fileResponse(root: string, path: string): unknown;
+  }>("velar/serve");
+  const bridge = Object.getOwnPropertyDescriptor(serveRuntime.ServeApp, "__velarCompilerBridge")?.value as {
+    createRoute(method: string, path: string, parameters: readonly Record<string, unknown>[], handler: (...arguments_: never[]) => Promise<unknown>): unknown;
+    createApp(name: string, items: readonly unknown[]): unknown;
+    testClient(app: unknown, overrides?: Map<unknown, unknown>): Promise<{
+      get(path: string): Promise<{status: number; text(): Promise<string>; json(): Promise<unknown>}>;
+      post(path: string, options?: Record<string, unknown>): Promise<{status: number; text(): Promise<string>; json(): Promise<unknown>}>;
+      close(): Promise<null>;
+    }>;
+  };
+  let starts = 0;
+  let stops = 0;
+  let realResolves = 0;
+  const user = serveRuntime.provide({}, async () => { realResolves += 1; return {id: "real"}; }, "app");
+  const login = bridge.createRoute("GET", "/login", [], async () => serveRuntime.setCookie(serveRuntime.setCookie(serveRuntime.json({ok: true}), "session", "s1"), "theme", "dark"));
+  const me = bridge.createRoute("GET", "/me", [
+    {name: "user", source: "dependency", kind: "dependency", required: true, check: () => true, input: serveRuntime.input.dependency(user)},
+    {name: "session", source: "cookie", kind: "string", required: true, check: () => true, input: serveRuntime.input.cookie("session", null)},
+    {name: "theme", source: "cookie", kind: "string", required: true, check: () => true, input: serveRuntime.input.cookie("theme", null)},
+  ], async (current: {id: string}, session: string | null, theme: string | null) => ({id: current.id, session, theme}));
+  const Metadata = registerRuntimeType(Object.freeze({parse(value: unknown) { return value as {title: string}; }}));
+  const upload = bridge.createRoute("POST", "/upload", [
+    {name: "metadata", source: "form", kind: "data", required: true, check: () => true, schema: {type: "object", properties: {title: {type: "string"}}, required: ["title"]}, input: serveRuntime.input.form(Metadata)},
+    {name: "image", source: "upload", kind: "upload", required: true, check: () => true, input: serveRuntime.input.upload("image", 64)},
+  ], async (metadata: {title: string}, image: {filename: string; text(): Promise<string>}) => ({title: metadata.title, filename: image.filename, body: await image.text()}));
+  const asset = bridge.createRoute("GET", "/asset", [], async () => serveRuntime.fileResponse(directory, "/asset.txt"));
+  const app = serveRuntime.lifecycle(bridge.createApp("test", [login, me, upload, asset]), async () => { starts += 1; return null; }, async () => { stops += 1; return null; });
+  const client = await bridge.testClient(app, new Map([[user, {id: "override"}]]));
+  assert.equal(starts, 1);
+  try {
+    await assert.rejects(client.get("/safe/%2e%2e/asset"), /unsafe encoded segment/u);
+    await assert.rejects(client.get("/asset?value=%FF"), /valid percent-encoded UTF-8/u);
+    assert.equal((await client.get("/login")).status, 200);
+    const response = await client.get("/me");
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {id: "override", session: "s1", theme: "dark"});
+    assert.equal(realResolves, 0);
+    const multipart = await client.post("/upload", {form: new Map([["title", "cover"]]), files: new Map([["image", {filename: "cover.txt", contentType: "text/plain", data: "pixels"}]])});
+    assert.equal(multipart.status, 200);
+    assert.deepEqual(await multipart.json(), {title: "cover", filename: "cover.txt", body: "pixels"});
+    const file = await client.get("/asset");
+    assert.equal(file.status, 200);
+    assert.equal(await file.text(), "file-body");
+  } finally {
+    await client.close();
+    await rm(directory, {recursive: true, force: true});
+  }
+  assert.equal(stops, 1);
+});
+
+test("Node lifecycle unwinds only successfully started hook pairs", async () => {
+  const serveRuntime = await runtime<{
+    readonly ServeApp: object;
+    lifecycle(app: unknown, startup: (() => Promise<null>) | null, shutdown: (() => Promise<null>) | null): unknown;
+  }>("velar/serve");
+  const bridge = Object.getOwnPropertyDescriptor(serveRuntime.ServeApp, "__velarCompilerBridge")?.value as {
+    createApp(name: string, items: readonly unknown[]): unknown;
+    testClient(app: unknown): Promise<{close(): Promise<null>}>;
+  };
+  const events: string[] = [];
+  const base = bridge.createApp("lifecycles", []);
+  const first = serveRuntime.lifecycle(
+    base,
+    async () => { events.push("start:first"); return null; },
+    async () => { events.push("stop:first"); return null; },
+  );
+  const failing = serveRuntime.lifecycle(
+    first,
+    async () => { events.push("start:second"); throw new Error("startup failed"); },
+    async () => { events.push("stop:second"); return null; },
+  );
+  await assert.rejects(bridge.testClient(failing), /startup failed/u);
+  assert.deepEqual(events, ["start:first", "start:second", "stop:first"]);
+
+  events.length = 0;
+  const shutdownOnly = serveRuntime.lifecycle(base, null, async () => { events.push("stop:base"); return null; });
+  const ready = serveRuntime.lifecycle(
+    shutdownOnly,
+    async () => { events.push("start:ready"); return null; },
+    async () => { events.push("stop:ready"); return null; },
+  );
+  const client = await bridge.testClient(ready);
+  await Promise.all([client.close(), client.close()]);
+  assert.deepEqual(events, ["start:ready", "stop:ready", "stop:base"]);
+});
+
+test("Node application shutdown joins concurrent callers and drains requests before releasing providers", async () => {
+  const serveRuntime = await runtime<{
+    readonly ServeApp: object;
+    readonly input: {dependency(provider: unknown): unknown};
+    provide(inputs: Record<string, unknown>, resolve: (values: Record<string, unknown>) => unknown, scope?: string, release?: ((value: unknown) => unknown) | null): unknown;
+    lifecycle(app: unknown, startup: () => unknown, shutdown: () => unknown): unknown;
+  }>("velar/serve");
+  const bridge = Object.getOwnPropertyDescriptor(serveRuntime.ServeApp, "__velarCompilerBridge")?.value as {
+    createRoute(method: string, path: string, parameters: readonly Record<string, unknown>[], handler: (...arguments_: never[]) => Promise<unknown>): unknown;
+    createApp(name: string, items: readonly unknown[]): unknown;
+    testClient(app: unknown): Promise<{
+      get(path: string): Promise<{status: number; json(): Promise<unknown>}>;
+      close(): Promise<null>;
+    }>;
+  };
+  let resolveRequests = (): void => {};
+  let markEntered = (): void => {};
+  const requestCount = 64;
+  const requestGate = new Promise<void>((resolveGate) => { resolveRequests = resolveGate; });
+  const allEntered = new Promise<void>((resolveEntered) => { markEntered = resolveEntered; });
+  const events: string[] = [];
+  let entered = 0;
+  let providerResolves = 0;
+  let providerReleases = 0;
+  let shutdowns = 0;
+  const singleton = serveRuntime.provide(
+    {},
+    async () => { providerResolves += 1; return {name: "shared"}; },
+    "app",
+    async () => { providerReleases += 1; events.push("provider-release"); return null; },
+  );
+  const route = bridge.createRoute("GET", "/work", [
+    {name: "shared", source: "dependency", kind: "dependency", required: true, check: () => true, input: serveRuntime.input.dependency(singleton)},
+  ], async () => {
+    entered += 1;
+    if (entered === requestCount) markEntered();
+    await requestGate;
+    events.push("request-finished");
+    return {ok: true};
+  });
+  const app = serveRuntime.lifecycle(
+    bridge.createApp("concurrency", [route]),
+    async () => null,
+    async () => { shutdowns += 1; events.push("shutdown"); return null; },
+  );
+  const client = await bridge.testClient(app);
+  const requests = Array.from({length: requestCount}, () => client.get("/work"));
+  await allEntered;
+  let closeFinished = false;
+  const firstClose = client.close().then((value) => { closeFinished = true; return value; });
+  const secondClose = client.close();
+  await new Promise<void>((resolveWait) => setTimeout(resolveWait, 10));
+  assert.equal(closeFinished, false, "close must wait for every request that already entered the application");
+  await assert.rejects(client.get("/work"), /server-test client is closed/u);
+  resolveRequests();
+  const responses = await Promise.all(requests);
+  assert.equal(responses.length, requestCount);
+  for (const response of responses) assert.equal(response.status, 200);
+  await Promise.all([firstClose, secondClose]);
+  assert.equal(providerResolves, 1, "an app provider initializes exactly once under concurrent demand");
+  assert.equal(providerReleases, 1, "concurrent close calls release an app provider exactly once");
+  assert.equal(shutdowns, 1, "concurrent close calls run shutdown exactly once");
+  assert.equal(events.filter((event) => event === "request-finished").length, requestCount);
+  assert.deepEqual(events.slice(-2), ["provider-release", "shutdown"]);
+});
+
+test("Node timeout ownership survives middleware that replaces the timeout response", async () => {
+  const serveRuntime = await runtime<{
+    readonly ServeApp: object;
+    readonly input: {dependency(provider: unknown): unknown};
+    readonly middleware: {timeout(milliseconds: number): unknown};
+    provide(inputs: Record<string, unknown>, resolve: () => Promise<unknown>, scope?: string, release?: (value: unknown) => Promise<null>): unknown;
+    use(app: unknown, middleware: readonly unknown[]): unknown;
+    serve(app: unknown, port: number): Promise<{readonly port: number; stop(grace?: number): Promise<null>}>;
+  }>("velar/serve");
+  const bridge = Object.getOwnPropertyDescriptor(serveRuntime.ServeApp, "__velarCompilerBridge")?.value as {
+    createRoute(method: string, path: string, parameters: readonly Record<string, unknown>[], handler: (...arguments_: never[]) => Promise<unknown>): unknown;
+    createApp(name: string, items: readonly unknown[]): unknown;
+  };
+  let enter = (): void => {};
+  let finish = (): void => {};
+  const entered = new Promise<void>((resolveEntered) => { enter = resolveEntered; });
+  const gate = new Promise<void>((resolveGate) => { finish = resolveGate; });
+  let releases = 0;
+  const dependency = serveRuntime.provide({}, async () => ({value: "owned"}), "request", async () => { releases += 1; return null; });
+  const route = bridge.createRoute("GET", "/slow", [
+    {name: "owned", source: "dependency", kind: "dependency", required: true, check: () => true, input: serveRuntime.input.dependency(dependency)},
+  ], async () => { enter(); await gate; return {ok: true}; });
+  const app = serveRuntime.use(bridge.createApp("timeout-ownership", [route]), [
+    async (_request: unknown, next: () => Promise<unknown>) => { await next(); return {status: 200, json: {replaced: true}}; },
+    serveRuntime.middleware.timeout(5),
+  ]);
+  const server = await serveRuntime.serve(app, 0);
+  const responsePromise = fetch(`http://127.0.0.1:${server.port}/slow`);
+  await entered;
+  const response = await responsePromise;
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {replaced: true});
+  assert.equal(releases, 0, "replacing a timeout response must not release the still-running request scope");
+  let stopped = false;
+  const stop = server.stop(1000).then((value) => { stopped = true; return value; });
+  await new Promise<void>((resolveWait) => setTimeout(resolveWait, 10));
+  assert.equal(stopped, false, "graceful stop must still see the timed-out downstream request");
+  finish();
+  await stop;
+  assert.equal(releases, 1);
+});
+
+test("Node serve reserves concurrent starts and joins concurrent stops", async () => {
+  const serveRuntime = await runtime<{
+    serve(handler: () => Promise<unknown>, port: number): Promise<{readonly port: number; stop(): Promise<null>}>;
+  }>("velar/serve");
+  const handler = async () => ({status: 200, json: {ok: true}});
+  const [first, second] = await Promise.all([serveRuntime.serve(handler, 0), serveRuntime.serve(handler, 0)]);
+  assert.notEqual(first.port, second.port);
+  try {
+    const responses = await Promise.all([
+      fetch(`http://127.0.0.1:${first.port}/`),
+      fetch(`http://127.0.0.1:${second.port}/`),
+    ]);
+    assert.deepEqual(await Promise.all(responses.map((response) => response.json())), [{ok: true}, {ok: true}]);
+  } finally {
+    await Promise.all([first.stop(), first.stop(), second.stop(), second.stop()]);
+  }
+});
+
+test("Node serve cancellation cooperatively drains handlers before shutdown", async () => {
+  const serveRuntime = await runtime<{
+    serve(
+      handler: (request: {readonly cancellation: {readonly cancelled: boolean; readonly reason: string | null}}) => Promise<unknown>,
+      port: number,
+    ): Promise<{readonly port: number; stop(grace?: number): Promise<null>}>;
+  }>("velar/serve");
+  let entered = (): void => {};
+  const ready = new Promise<void>((resolveReady) => { entered = resolveReady; });
+  let cancellationReason: string | null = null;
+  const server = await serveRuntime.serve(async request => {
+    entered();
+    while (!request.cancellation.cancelled) await new Promise<void>((resolveWait) => setTimeout(resolveWait, 2));
+    cancellationReason = request.cancellation.reason;
+    return {status: 200, text: "stopped"};
+  }, 0);
+  const response = fetch(`http://127.0.0.1:${server.port}/wait`);
+  await ready;
+  await server.stop(1000);
+  assert.equal(cancellationReason, "Server is stopping");
+  assert.equal((await response).status, 200);
+});
+
+test("Node docs and built-in middleware provide offline OpenAPI, security, CORS, headers, and compression", async () => {
+  const serveRuntime = await runtime<{
+    readonly ServeApp: object;
+    readonly RouteDocumentation: {is(value: unknown): boolean};
+    readonly security: {bearer(): unknown; apiKey(name: string): unknown};
+    readonly middleware: {
+      cors(origins?: string[]): unknown;
+      requestId(): unknown;
+      securityHeaders(): unknown;
+      compression(minimumBytes?: number): unknown;
+    };
+    use(app: unknown, middleware: unknown[]): unknown;
+    docs(app: unknown, title?: string | null, version?: string): unknown;
+    sse(producer: (send: (event: unknown) => Promise<null>) => Promise<null>): unknown;
+    openapi(app: unknown, title?: string | null, version?: string): {components?: {securitySchemes: Record<string, unknown>}; paths: Record<string, unknown>};
+    serve(app: unknown, port: number): Promise<{readonly port: number; stop(): Promise<null>}>;
+  }>("velar/serve");
+  const bridge = Object.getOwnPropertyDescriptor(serveRuntime.ServeApp, "__velarCompilerBridge")?.value as {
+    createRoute(method: string, path: string, parameters: readonly Record<string, unknown>[], handler: (...arguments_: never[]) => Promise<unknown>, metadata?: Record<string, unknown>): unknown;
+    createApp(name: string, items: readonly unknown[]): unknown;
+  };
+  const token = serveRuntime.security.bearer();
+  const apiKey = serveRuntime.security.apiKey("x-api-key");
+  assert.equal(serveRuntime.RouteDocumentation.is({summary: "Read data", errors: new Map([[401, "Missing credentials"]])}), true);
+  assert.equal(serveRuntime.RouteDocumentation.is({status: 199}), false, "OpenAPI metadata cannot advertise an informational response as a final route result");
+  assert.equal(serveRuntime.RouteDocumentation.is({status: 200}), true);
+  const route = bridge.createRoute("GET", "/data", [
+    {name: "token", source: "security", kind: "security", required: true, check: () => true, input: token},
+    {name: "apiKey", source: "security", kind: "security", required: true, check: () => true, input: apiKey},
+    {name: "limit", source: "query", kind: "number", required: false, check: (value: unknown) => typeof value === "number", schema: {type: "number"}},
+  ], async (credential: string) => ({credential, payload: "x".repeat(4096)}), {responseSchema: {type: "object"}});
+  const events = bridge.createRoute("GET", "/events", [], async () => serveRuntime.sse(async (send) => {
+    await send({event: "ready", id: "1", retry: 1000, data: "first\nsecond"});
+    return null;
+  }));
+  const app = bridge.createApp("api", [route, events]);
+  const document = serveRuntime.openapi(app, "Secure API", "1.2.0");
+  assert.equal(Object.keys(document.components?.securitySchemes ?? {}).length, 2);
+  const securityRequirements = (document.paths["/data"] as {get?: {security?: Record<string, unknown>[]}}).get?.security ?? [];
+  assert.equal(securityRequirements.length, 1, "multiple route security inputs form one OpenAPI AND requirement");
+  assert.equal(Object.keys(securityRequirements[0] ?? {}).length, 2);
+  const wrapped = serveRuntime.use(app, [
+    serveRuntime.middleware.cors(["https://client.test"]),
+    serveRuntime.middleware.requestId(),
+    serveRuntime.middleware.securityHeaders(),
+    serveRuntime.middleware.compression(128),
+  ]);
+  const documented = (serveRuntime.docs as unknown as (app: unknown, title: string, version: string, path: string, openapiPath: string, routes: Map<string, unknown>) => unknown)(
+    wrapped,
+    "Secure API",
+    "1.2.0",
+    "/docs",
+    "/openapi.json",
+    new Map([["GET /data", {summary: "Read data", description: "Returns protected data.", tags: ["data"], status: 202, errors: new Map([[401, "Missing credentials"]])}]]),
+  );
+  const server = await serveRuntime.serve(documented, 0);
+  try {
+    const schema = await fetch(`http://127.0.0.1:${server.port}/openapi.json`);
+    assert.equal(schema.status, 200);
+    const schemaDocument = await schema.json() as {info: {title: string}; paths: {"/data": {get: {summary: string; tags: string[]; responses: Record<string, {description: string}>}}}};
+    assert.equal(schemaDocument.info.title, "Secure API");
+    assert.equal(schemaDocument.paths["/data"].get.summary, "Read data");
+    assert.deepEqual(schemaDocument.paths["/data"].get.tags, ["data"]);
+    assert.equal(schemaDocument.paths["/data"].get.responses["202"]?.description, "Successful response");
+    assert.equal(schemaDocument.paths["/data"].get.responses["401"]?.description, "Missing credentials");
+    assert.equal(schemaDocument.paths["/data"].get.responses["422"]?.description, "Request validation failed");
+    const ui = await fetch(`http://127.0.0.1:${server.port}/docs`);
+    assert.equal(ui.status, 200);
+    assert.match(await ui.text(), /bundled offline documentation/u);
+
+    const unauthorized = await fetch(`http://127.0.0.1:${server.port}/data`);
+    assert.equal(unauthorized.status, 401);
+    const response = await fetch(`http://127.0.0.1:${server.port}/data`, {headers: {authorization: "Bearer token-1", "x-api-key": "key-1", origin: "https://client.test", "accept-encoding": "gzip"}});
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("access-control-allow-origin"), "https://client.test");
+    assert.match(response.headers.get("vary") ?? "", /Origin/u);
+    assert.match(response.headers.get("vary") ?? "", /Accept-Encoding/u);
+    assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+    assert.ok(response.headers.get("x-request-id"));
+    const noCompression = await fetch(`http://127.0.0.1:${server.port}/data`, {headers: {authorization: "Bearer token-1", "x-api-key": "key-1", "accept-encoding": "br;q=0, gzip;q=0"}});
+    assert.equal(noCompression.headers.get("content-encoding"), null);
+    assert.equal(response.headers.get("content-encoding"), "gzip");
+    assert.equal((await response.json() as {credential: string}).credential, "token-1");
+    const eventStream = await fetch(`http://127.0.0.1:${server.port}/events`);
+    assert.match(eventStream.headers.get("content-type") ?? "", /^text\/event-stream/u);
+    assert.equal(await eventStream.text(), "event: ready\nid: 1\nretry: 1000\ndata: first\ndata: second\n\n");
+  } finally {
+    await server.stop();
+  }
+});
+
+test("Node WebSocket listen composes one ServeApp lifecycle and keeps queues globally bounded", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-websocket-compose-"));
+  try {
+    await materializeNodeRuntimeDependencies(directory, "velar/websocket");
+    const require = createRequire(import.meta.url);
+    await cp(resolve(require.resolve("ws/package.json"), ".."), join(directory, "node_modules", "ws"), {recursive: true});
+    const websocketSource = nodeModuleSources.get("velar/websocket");
+    assert.ok(websocketSource);
+    const websocketPath = join(directory, "websocket.mjs");
+    await writeFile(websocketPath, websocketSource, "utf8");
+    const serve = await import(pathToFileURL(join(directory, "node_modules", "velar", "serve.js")).href) as {
+      ServeApp: object;
+      lifecycle(app: unknown, startup: () => Promise<null>, shutdown: () => Promise<null>): unknown;
+    };
+    const websocket = await import(`${pathToFileURL(websocketPath).href}?compose=${Date.now()}`) as {
+      listen(options: Record<string, unknown>): Promise<{port: number; next(): Promise<{send(value: string): Promise<null>; next(): Promise<string | Uint8Array | null>} | null>; stop(): Promise<null>}>;
+      connect(url: string): Promise<{send(value: string): Promise<null>; next(): Promise<string | Uint8Array | null>; close(): Promise<null>}>;
+    };
+    const bridge = Object.getOwnPropertyDescriptor(serve.ServeApp, "__velarCompilerBridge")?.value as {
+      createRoute(method: string, path: string, parameters: readonly unknown[], handler: (...arguments_: never[]) => Promise<unknown>): unknown;
+      createApp(name: string, items: readonly unknown[]): unknown;
+    };
+    let starts = 0;
+    let stops = 0;
+    let markWaitEntered = (): void => {};
+    const waitEntered = new Promise<void>((resolveEntered) => { markWaitEntered = resolveEntered; });
+    let cancellationReason: string | null = null;
+    const health = bridge.createRoute("GET", "/health", [], async () => ({ok: true}));
+    const echo = bridge.createRoute("POST", "/echo", [{name: "request", source: "request", kind: "request", required: true}], async (request: {text(): Promise<string>}) => ({body: await request.text()}));
+    const wait = bridge.createRoute("GET", "/wait", [{name: "request", source: "request", kind: "request", required: true}], async (request: {cancellation: {cancelled: boolean; reason: string | null}}) => {
+      markWaitEntered();
+      while (!request.cancellation.cancelled) await new Promise<void>((resolveWait) => setTimeout(resolveWait, 2));
+      cancellationReason = request.cancellation.reason;
+      return {stopped: true};
+    });
+    const app = serve.lifecycle(bridge.createApp("socket", [health, echo, wait]), async () => { starts += 1; return null; }, async () => { stops += 1; return null; });
+    const server = await websocket.listen({port: 0, host: "127.0.0.1", path: "/ws", http: app, maxQueuedBytes: 1024, maxPendingSendBytes: 1024});
+    let pendingAfterPeerClose: Promise<unknown> | null = null;
+    try {
+      assert.equal(starts, 1);
+      assert.deepEqual(await (await fetch(`http://127.0.0.1:${server.port}/health`)).json(), {ok: true});
+      assert.deepEqual(await (await fetch(`http://127.0.0.1:${server.port}/echo`, {method: "POST", body: "native-body"})).json(), {body: "native-body"});
+      const client = await websocket.connect(`ws://127.0.0.1:${server.port}/ws`);
+      const accepted = await server.next();
+      assert.ok(accepted);
+      await client.send("hello");
+      assert.equal(await accepted.next(), "hello");
+      await accepted.send("world");
+      assert.equal(await client.next(), "world");
+      await client.close();
+      const abandoned = await websocket.connect(`ws://127.0.0.1:${server.port}/ws`);
+      await abandoned.close();
+      await new Promise<void>((resolveWait) => setTimeout(resolveWait, 10));
+      pendingAfterPeerClose = server.next();
+      const waitingResponse = fetch(`http://127.0.0.1:${server.port}/wait`);
+      await waitEntered;
+      await server.stop();
+      assert.equal(cancellationReason, "Server is stopping", "shared-port stop must cancel HTTP work before waiting for the transport to close");
+      assert.deepEqual(await (await waitingResponse).json(), {stopped: true});
+    } finally {
+      await Promise.all([server.stop(), server.stop()]);
+    }
+    assert.equal(await pendingAfterPeerClose, null, "a peer that closes before accept must not leave a stale queued connection");
+    assert.equal(stops, 1, "concurrent WebSocket stop calls join one application shutdown");
+    for (const contract of [
+      /__velarWsAggregateByteLimit = 128 \* 1024 \* 1024/u,
+      /__velarWsAggregateQueuedMessageLimit = 65536/u,
+      /__velarWsAggregatePendingSendLimit = 8192/u,
+      /__velarWsActiveConnectionLimit = 4096/u,
+      /__velarWsPendingConnectionLimit = 4096/u,
+      /state\.queue\.length = 0/u,
+      /state\.stopPromise/u,
+      /__velarWsReleasePendingSends/u,
+    ]) assert.match(websocketSource, contract);
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
 test("Node serve enforces one aggregate byte budget and releases ownership after completion", async () => {
   const serveRuntime = await runtime<{
     fileResponse(root: string, path: string, fallback?: string | null): Record<string, unknown>;
@@ -823,7 +1532,7 @@ test("Node serve enforces one aggregate byte budget and releases ownership after
     "velar/serve",
     source => source,
     (name, source) => name === "velar/node-host-v1"
-      ? source.replace("const maxServeAggregateBytes = 128 * 1024 * 1024;", "const maxServeAggregateBytes = 32;")
+      ? source.replace("const maxServeAggregateBytes = 128 * 1024 * 1024;", "const maxServeAggregateBytes = 128 * 1024;")
       : source,
   );
   const directory = await mkdtemp(join(tmpdir(), "velar-node-serve-aggregate-"));
@@ -832,7 +1541,7 @@ test("Node serve enforces one aggregate byte budget and releases ownership after
   const heldReady = new Promise<void>(resolveReady => { markHeldReady = resolveReady; });
   const heldRelease = new Promise<void>(resolveRelease => { releaseHeld = resolveRelease; });
   try {
-    await writeFile(join(directory, "large.txt"), "f".repeat(33), "utf8");
+    await writeFile(join(directory, "large.txt"), "f".repeat(128 * 1024 + 1), "utf8");
     const server = await serveRuntime.serve(async request => {
       if (request.path === "/held") {
         await request.text();
@@ -844,14 +1553,14 @@ test("Node serve enforces one aggregate byte budget and releases ownership after
         try { await request.text(); return {status: 200, text: ""}; }
         catch { return {status: 503, text: ""}; }
       }
-      if (request.path === "/large-response") return {status: 200, text: "r".repeat(33)};
+      if (request.path === "/large-response") return {status: 200, text: "r".repeat(128 * 1024 + 1)};
       if (request.path === "/large-file") return serveRuntime.fileResponse(directory, "/large.txt");
       return {status: 200, text: "ok"};
     }, 0);
     try {
-      const held = fetch(`http://127.0.0.1:${server.port}/held`, {method: "POST", body: "h".repeat(24)});
+      const held = fetch(`http://127.0.0.1:${server.port}/held`, {method: "POST", body: "h".repeat(64 * 1024)});
       await heldReady;
-      const competing = await fetch(`http://127.0.0.1:${server.port}/competing`, {method: "POST", body: "c".repeat(16)});
+      const competing = await fetch(`http://127.0.0.1:${server.port}/competing`, {method: "POST", body: "c".repeat(64 * 1024)});
       assert.equal(competing.status, 503);
       assert.equal(await competing.text(), "");
       releaseHeld();
@@ -863,8 +1572,19 @@ test("Node serve enforces one aggregate byte budget and releases ownership after
       assert.equal(largeResponse.status, 500);
       assert.equal(await largeResponse.text(), "Internal server error");
       const largeFile = await fetch(`http://127.0.0.1:${server.port}/large-file`);
-      assert.equal(largeFile.status, 500);
-      assert.equal(await largeFile.text(), "Internal server error");
+      assert.equal(largeFile.status, 200, "static files stream without reserving their full size");
+      assert.equal((await largeFile.text()).length, 128 * 1024 + 1);
+      const etag = largeFile.headers.get("etag");
+      assert.ok(etag);
+      const headFile = await fetch(`http://127.0.0.1:${server.port}/large-file`, {method: "HEAD"});
+      assert.equal(headFile.headers.get("content-length"), String(128 * 1024 + 1));
+      assert.equal(await headFile.text(), "");
+      const rangeFile = await fetch(`http://127.0.0.1:${server.port}/large-file`, {headers: {range: "bytes=10-19"}});
+      assert.equal(rangeFile.status, 206);
+      assert.equal((await rangeFile.text()).length, 10);
+      assert.equal(rangeFile.headers.get("content-range"), `bytes 10-19/${128 * 1024 + 1}`);
+      const unchanged = await fetch(`http://127.0.0.1:${server.port}/large-file`, {headers: {"if-none-match": etag}});
+      assert.equal(unchanged.status, 304);
       const after = await fetch(`http://127.0.0.1:${server.port}/after`);
       assert.equal(after.status, 200);
       assert.equal(await after.text(), "ok");
@@ -902,6 +1622,7 @@ console.log(reads + "|" + runtime.ServeRequest.is({
   query: new Map(),
   headers: new Map(),
   text: async () => "",
+  bytes: async () => new Uint8Array(),
   json: async () => null,
   parse: async () => null,
 }));

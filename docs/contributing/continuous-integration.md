@@ -9,10 +9,11 @@ The repository defines four GitHub Actions workflows:
   Chromium, Firefox, and WebKit dependencies and runs both development-server
   and CSP-enabled production browser matrices, the project-owned
   `.browser.test.vel` suite in all engines, and the same generated browser test
-  through the six packed toolchain tarballs plus the independently versioned
-  source-library tarballs. Browser-project execution first verifies the exact
+  through the packed toolchain tarballs plus the independently versioned source
+  library and adapter tarballs. Browser-project execution first verifies the exact
   production asset inventory and uses the public preview server. The toolchain
-  and library sets are derived separately from `packages/*` and `libraries/*`:
+  library, and adapter sets are derived separately from `packages/*`,
+  `libraries/*`, and `adapters/*`:
   every publishable workspace package is packed and checked against what
   its own manifest promises a consumer — LICENSE, README, and every path named
   by `main`, `types`, `exports`, `bin` or `velar.entry` — installed into the

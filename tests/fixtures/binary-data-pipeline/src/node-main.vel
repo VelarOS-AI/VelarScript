@@ -1,10 +1,10 @@
 import {Bytes, uint8Buffer} from "velar/binary"
-import {deflate, inflate} from "velar/compression"
+import {deflate, inflate} from "@velarscript/compression"
 import {writeBytes} from "velar/fs"
 import {http} from "velar/http"
-import {encode, parse} from "velar/msgpack"
+import {encode, parse} from "@velarscript/msgpack"
 import {ServeRequest, ServeResponse} from "velar/serve"
-import {open} from "velar/sqlite"
+import {open} from "@velarscript/sqlite"
 import {CancellationError, task} from "velar/task"
 import {WebSocketBackpressureError, connect, listen} from "velar/websocket"
 import {workerPool} from "velar/worker"
@@ -102,7 +102,7 @@ async def main():
 
     using database = await open("snapshots.sqlite", {queueCapacity: 16, maxRows: 4, maxResultBytes: 1048576})
     await database.execute("CREATE TABLE IF NOT EXISTS snapshots (key TEXT PRIMARY KEY, bytes BLOB NOT NULL)")
-    using transaction = await database.transaction()
+    using transaction = await database.begin()
     await transaction.execute("INSERT OR REPLACE INTO snapshots (key, bytes) VALUES (?, ?)", [packet.key, packet.bytes])
     await transaction.commit()
     const restored = await database.one("SELECT key, bytes FROM snapshots WHERE key = ?", [packet.key], DataRow)

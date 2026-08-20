@@ -8,6 +8,8 @@ import { CORE_STATEMENT_CONSTRUCTS } from "../packages/compiler/src/ast.ts";
 import { CORE_CONTEXTUAL_KEYWORD_WORDS, CORE_NUMERIC_SUFFIXES } from "../packages/compiler/src/core-vocabulary.ts";
 import { keywordKinds } from "../packages/compiler/src/token.ts";
 import { velarCompilerExtension as desktopCompilerExtension } from "../packages/desktop/src/compiler.ts";
+import { NODE_STATEMENT_CONSTRUCTS } from "../packages/node/src/server-ast.ts";
+import { velarNodeCompilerExtension as nodeCompilerExtension } from "../packages/node/src/compiler.ts";
 import { WEB_STATEMENT_CONSTRUCTS, webStatementConstructKey, type WebUnsafeCssDeclaration } from "../packages/web/src/ast.ts";
 import { velarCompilerExtension as webCompilerExtension } from "../packages/web/src/compiler.ts";
 import { LOOK_PROPERTIES, LOOK_TARGETS } from "../packages/web/src/look.ts";
@@ -119,11 +121,12 @@ test("[D53-117] the gate requires every statement construct the compiler can par
   const counts = /(?<covered>\d+)\/(?<required>\d+)/u.exec(line)?.groups;
   assert.ok(counts, `statement-construct reports no counts:\n${line}`);
   // Compared against the rosters themselves rather than against a number:
-  // Core's is a mapped type over the `CoreStatement` union, and the Web
-  // extension's over its own, so a construct added to either union raises both
-  // sides of this assertion together.
-  const required = Object.keys(CORE_STATEMENT_CONSTRUCTS).length + Object.keys(WEB_STATEMENT_CONSTRUCTS).length;
-  assert.equal(Number(counts.required), required, `the gate required ${counts.required} constructs; Core and Web declare ${required}:\n${output}`);
+  // Each owner publishes its own complete construct roster, so a construct
+  // added to Core or any active syntax extension raises both sides together.
+  const required = Object.keys(CORE_STATEMENT_CONSTRUCTS).length
+    + Object.keys(WEB_STATEMENT_CONSTRUCTS).length
+    + Object.keys(NODE_STATEMENT_CONSTRUCTS).length;
+  assert.equal(Number(counts.required), required, `the gate required ${counts.required} constructs; Core, Web, and Node declare ${required}:\n${output}`);
   assert.equal(counts.covered, counts.required, `the tour does not write every construct:\n${line}`);
 });
 
@@ -131,7 +134,7 @@ test("[D53-117] an extension that owns a parser publishes the constructs its par
   // An extension's statements never join `CoreStatement`, so its own roster is
   // the only table that can name them, and the gate treats a parser without one
   // as a failure rather than as an empty contribution.
-  for (const extension of [webCompilerExtension, desktopCompilerExtension]) {
+  for (const extension of [webCompilerExtension, nodeCompilerExtension, desktopCompilerExtension]) {
     assert.ok(extension.parser, `${extension.id} no longer registers a parser; retarget this test`);
     assert.ok(extension.syntax, `${extension.id} owns a parser but publishes no statement-construct roster`);
     assert.ok(Object.keys(extension.syntax.statementConstructs).length > 0, `${extension.id} publishes an empty roster`);

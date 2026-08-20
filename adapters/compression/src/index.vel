@@ -1,0 +1,94 @@
+import {Bytes} from "velar/binary"
+
+type CompressionOptions:
+    level: number
+
+extern module "fflate":
+    export def zlibSync(value: Bytes, options: CompressionOptions) -> unknown
+    export def gzipSync(value: Bytes, options: CompressionOptions) -> unknown
+
+    export class Unzlib:
+        constructor(consume: (Bytes, bool) -> null)
+        def push(value: Bytes, final: bool) -> null
+
+    export class Gunzip:
+        constructor(consume: (Bytes, bool) -> null)
+        def push(value: Bytes, final: bool) -> null
+
+import js {Gunzip, Unzlib, gzipSync, zlibSync} from "fflate"
+
+extern js()`
+    export function sliceBytes(value, start, end) { return value.subarray(start, end); }
+    export function joinBytes(chunks, size) {
+      const output = new Uint8Array(size);
+      let offset = 0;
+      for (const chunk of chunks) { output.set(chunk, offset); offset += chunk.byteLength; }
+      return output;
+    }
+`:
+    export def sliceBytes(value: Bytes, start: number, end: number) -> unknown
+    export def joinBytes(chunks: List<Bytes>, size: number) -> unknown
+
+def checkedLevel(value: number) -> number:
+    assert value.isInteger() and value >= 0 and value <= 9 else "Compression level must be an integer from 0 through 9"
+    return value
+
+def checkedLimit(value: number) -> number:
+    assert value.isInteger() and value >= 1 and value <= 64 * 1024 * 1024 else "Decompression maxBytes must be an integer from 1 through 67108864"
+    return value
+
+def inputChunk(source: Bytes, start: number, end: number) -> Bytes:
+    return Bytes.parse(sliceBytes(source, start, end))
+
+def joined(chunks: List<Bytes>, size: number) -> Bytes:
+    return Bytes.parse(joinBytes(chunks, size))
+
+export def deflate(value: Bytes, level: number = 6) -> Bytes:
+    return Bytes.parse(zlibSync(value, {level: checkedLevel(level)}))
+
+export def inflate(value: Bytes, maxBytes: number = 67108864) -> Bytes:
+    const maximum = checkedLimit(maxBytes)
+    let chunks: List<Bytes> = []
+    let size = 0
+    def consume(chunk: Bytes, final: bool):
+        size += chunk.size
+        assert size <= maximum else "Decompressed output exceeds maxBytes"
+        chunks.append(chunk)
+    const stream = Unzlib(consume)
+    if value.size == 0:
+        stream.push(value, true)
+    else:
+        let offset = 0
+        while offset < value.size:
+            const remaining = maximum - size + 1
+            const estimated = (remaining / 1032).floor()
+            const inputBytes = estimated < 1 ? 1 : estimated > 256 ? 256 : estimated
+            const end = offset + inputBytes < value.size ? offset + inputBytes : value.size
+            stream.push(inputChunk(value, offset, end), end >= value.size)
+            offset = end
+    return joined(chunks, size)
+
+export def gzip(value: Bytes, level: number = 6) -> Bytes:
+    return Bytes.parse(gzipSync(value, {level: checkedLevel(level)}))
+
+export def gunzip(value: Bytes, maxBytes: number = 67108864) -> Bytes:
+    const maximum = checkedLimit(maxBytes)
+    let chunks: List<Bytes> = []
+    let size = 0
+    def consume(chunk: Bytes, final: bool):
+        size += chunk.size
+        assert size <= maximum else "Decompressed output exceeds maxBytes"
+        chunks.append(chunk)
+    const stream = Gunzip(consume)
+    if value.size == 0:
+        stream.push(value, true)
+    else:
+        let offset = 0
+        while offset < value.size:
+            const remaining = maximum - size + 1
+            const estimated = (remaining / 1032).floor()
+            const inputBytes = estimated < 1 ? 1 : estimated > 256 ? 256 : estimated
+            const end = offset + inputBytes < value.size ? offset + inputBytes : value.size
+            stream.push(inputChunk(value, offset, end), end >= value.size)
+            offset = end
+    return joined(chunks, size)

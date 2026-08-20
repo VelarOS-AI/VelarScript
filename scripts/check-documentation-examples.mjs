@@ -2,7 +2,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inspectModule } from "@velarscript/compiler";
-import { isNodeOnlyModule } from "@velarscript/node/compiler";
+import { isNodeOnlyModule, velarNodeCompilerExtension } from "@velarscript/node/compiler";
 import { BROWSER_TEST_MODULE, BROWSER_TEST_SOURCE_SUFFIX, velarCompilerExtension } from "@velarscript/web/compiler";
 import { compileProject } from "../packages/cli/src/project.ts";
 
@@ -221,16 +221,20 @@ function moduleFileName(source) {
 
 /**
  * The compiler extensions an example is written against. Documentation covers
- * two official targets, and the Web extension replaces shared standard-module
+ * three official targets, and the Web extension replaces shared standard-module
  * interfaces with their browser contracts — `velar/http` exports `secretHeader`
  * on Node but not on the Web, where a process environment does not exist. An
  * example the Web target cannot satisfy — it imports a Node-only module, or a
  * name the browser contract does not export — is therefore a Core/CLI
- * illustration and is checked as a Core project; everything else is checked
- * with the Web extension loaded, which is the stricter of the two (it owns JSX,
- * components, and the Node-module rejection).
+ * illustration and is checked as a Core project. A parsed Node `server` symbol
+ * selects the Node extension that owns it; everything else is checked with the
+ * Web extension loaded, which owns JSX, components, and Node-module rejection.
  */
 function exampleExtensions(source, file) {
+  const nodeInspection = inspectModule(source, { path: file, extensions: [velarNodeCompilerExtension] });
+  if (nodeInspection.semanticIndex.symbols.some((symbol) => symbol.kind === "extension:variable:node-server")) {
+    return [velarNodeCompilerExtension];
+  }
   const inspection = inspectModule(source, { path: file, extensions: [velarCompilerExtension] });
   const webInterfaces = velarCompilerExtension.modules?.interfaces ?? new Map();
   for (const dependency of inspection.dependencies) {

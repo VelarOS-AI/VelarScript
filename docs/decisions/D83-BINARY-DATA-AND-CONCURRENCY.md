@@ -2,7 +2,10 @@
 
 这是一份已实施裁决的历史记录，不是当前规格。当前契约见
 [语言宪章](../language-charter.md)、[标准库](../standard-library.md) 与
-[二进制数据与结构化并发](../binary-data-and-concurrency.md)。
+[二进制数据与结构化并发](../binary-data-and-concurrency.md)。其中 SQLite、
+MessagePack、压缩与噪声的包归属已由
+[D87](D87-DATABASE-AND-EXTERNAL-ADAPTER-BOUNDARY.md) 重新裁定为外部源包；
+本记录中的旧 `velar/*` 身份不再是当前契约。
 
 ## 证据
 

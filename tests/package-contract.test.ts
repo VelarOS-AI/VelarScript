@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import test, { after } from "node:test";
 import { fileURLToPath } from "node:url";
 import {
+  velarPublishedAdapters,
   velarPublishedLibraries,
   velarPublishedToolchainPackages,
   velarPublishedWorkspacePackages,
@@ -232,7 +233,26 @@ test("VelarScript source libraries stay source-only and outside the toolchain bu
   for (const library of libraries) assert.ok(!toolchainNames.has(library.name), `${library.name} leaked into the toolchain roster`);
 });
 
-test("[A-024] workspace acceptance walks both derived package layers", async () => {
+test("external adapters stay source-only and outside the toolchain release", async () => {
+  const adapters = await velarPublishedAdapters(root);
+  assert.deepEqual(adapters.map((adapter) => adapter.name), [
+    "@velarscript/compression",
+    "@velarscript/msgpack",
+    "@velarscript/noise",
+    "@velarscript/sqlite",
+  ]);
+  const toolchainNames = new Set((await velarPublishedToolchainPackages(root)).map((package_) => package_.name));
+  for (const adapter of adapters) {
+    assert.match(adapter.manifest.velar?.entry ?? "", /\.vel$/u, `${adapter.name} has no VelarScript source entry`);
+    assert.equal(adapter.manifest.scripts?.build, undefined, `${adapter.name} declares a toolchain build`);
+    assert.ok(!toolchainNames.has(adapter.name), `${adapter.name} leaked into the toolchain roster`);
+  }
+  const sqlite = adapters.find((adapter) => adapter.name === "@velarscript/sqlite")!;
+  assert.equal(sqlite.manifest.dependencies?.["@velarscript/database"], "0.1.0");
+  assert.equal(sqlite.manifest.peerDependencies?.["@velarscript/node"], ">=0.11.1 <0.12.0");
+});
+
+test("[A-024] workspace acceptance walks all derived package layers", async () => {
   // Structural, and deliberately so: what went wrong was not a wrong list, it
   // was a second list. The acceptance script may name a package to make a
   // specific claim about it — `native/macos/VelarDesktopHost.swift` is a fact

@@ -1,0 +1,22 @@
+import {Bytes} from "velar/binary"
+
+extern module "msgpackr":
+    export def pack(value: unknown) -> unknown
+    export def unpack(value: Bytes) -> unknown
+
+import js {pack, unpack} from "msgpackr"
+
+/// Encodes one value and validates the adapter's bounded byte result.
+export def encode(value: unknown) -> Bytes:
+    const output = Bytes.parse(pack(value))
+    assert output.size <= 64 * 1024 * 1024 else "MessagePack output cannot exceed 64 MiB"
+    return output
+
+/// Decodes one bounded MessagePack document as untrusted data.
+export def decode(value: Bytes) -> unknown:
+    assert value.size <= 64 * 1024 * 1024 else "MessagePack input cannot exceed 64 MiB"
+    return unpack(value)
+
+/// Decodes and validates one MessagePack document at the adapter boundary.
+export def parse<T>(value: Bytes, target: Type<T>) -> T:
+    return target.parse(decode(value))

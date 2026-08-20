@@ -29,6 +29,7 @@ import { inspectModule } from "@velarscript/compiler";
 import type { CompilerExtension } from "@velarscript/compiler/extension";
 import { velarCompilerExtension as webCompilerExtension } from "../packages/web/src/compiler.ts";
 import { velarCompilerExtension as desktopCompilerExtension } from "../packages/desktop/src/compiler.ts";
+import { velarCompilerExtension as nodeCompilerExtension } from "../packages/node/src/compiler.ts";
 
 const cliPath = fileURLToPath(new URL("../packages/cli/src/cli.ts", import.meta.url));
 const examples = fileURLToPath(new URL("../examples", import.meta.url));
@@ -99,6 +100,7 @@ const corpusDirectories: readonly { readonly directory: string; readonly extensi
   { directory: join(examples, "tour", "core"), extensions: [] },
   { directory: join(examples, "tour", "web"), extensions: [webCompilerExtension] },
   { directory: join(examples, "tour", "desktop"), extensions: [desktopCompilerExtension] },
+  { directory: join(examples, "tour", "node"), extensions: [nodeCompilerExtension] },
   { directory: join(examples, "app", "src"), extensions: [webCompilerExtension] },
 ];
 
@@ -139,19 +141,26 @@ interface CorpusSlots {
   readonly containers: ReadonlySet<string>;
   /** Those of them that hold a statement — a code region rather than a value. */
   readonly regions: ReadonlySet<string>;
+  /** Slots nested below an extension statement; the Core runtime matrix does not execute target frameworks. */
+  readonly extensionOwned: ReadonlySet<string>;
 }
 
 async function corpusContainerSlots(): Promise<CorpusSlots> {
   const containers = new Set<string>();
   const regions = new Set<string>();
+  const extensionOwned = new Set<string>();
+  const coreOwned = new Set<string>();
   for (const source of await corpusSources()) {
     for (const placed of placedNodes(parseProgram(source.text, source.extensions))) {
       if (!isExpressionKind(placed.node.kind) && !isStatementKind(placed.node.kind)) continue;
-      containers.add(placed.chain.at(-1)!);
-      if (isStatementKind(placed.node.kind)) regions.add(placed.chain.at(-1)!);
+      const slot = placed.chain.at(-1)!;
+      containers.add(slot);
+      if (isStatementKind(placed.node.kind)) regions.add(slot);
+      if (placed.chain.some((entry) => slotOwner(entry).startsWith("ExtensionStatement:"))) extensionOwned.add(slot);
+      else coreOwned.add(slot);
     }
   }
-  return { containers, regions };
+  return { containers, regions, extensionOwned: new Set([...extensionOwned].filter((slot) => !coreOwned.has(slot))) };
 }
 
 const slotOwner = (slot: string): string => slot.slice(0, slot.indexOf("."));
@@ -510,7 +519,7 @@ test("every container carries its dynamic import through check, run, build, and 
     const corpus = await corpusContainerSlots();
     const required = [...corpus.containers]
       .filter((slot) => isStatementKind(slotOwner(slot)) || corpus.regions.has(slot))
-      .filter((slot) => !slotOwner(slot).startsWith("ExtensionStatement:"))
+      .filter((slot) => !corpus.extensionOwned.has(slot))
       .sort();
     assert.ok(required.length > 30, `the corpus derived only ${required.length} core containers`);
     assert.deepEqual(required.filter((slot) => !spelled.has(slot)), [], "core containers with no dynamic import in the matrix project");

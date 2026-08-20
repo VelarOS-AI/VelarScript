@@ -23,8 +23,9 @@ const defaultOutput = join(root, "release", "rehearsal");
 const manifestName = "velar-toolchain-release.json";
 const checksumName = "SHA256SUMS";
 // D63 rule 159: derived from packages/*, never restated here. Ordinary source
-// libraries under libraries/* remain npm dependencies but are not members of
-// this version-locked compiler/runtime release generation.
+// libraries under libraries/* and concrete integrations under adapters/* are
+// independent packages, not members of this version-locked compiler/runtime
+// release generation.
 const workspaces = await velarToolchainPackageNames(root);
 const excludedTreeNames = new Set([".git", "node_modules", "dist", "release", "coverage"]);
 

@@ -454,10 +454,51 @@ test "a single name keeps one initial":
 
 ---
 
+## Node services
+
+A Node service activates `@velarscript/node` in `velar.json`. `server` declares
+an immutable route table; the five HTTP verbs are compiler-owned `@name` roles,
+not decorators. A Node-owned `p"..."` path pattern declares each path value
+once, with its type, and brings that name directly into the anonymous route
+body. Other scalar parameters come from the query string; one Data record on a
+writing route comes from JSON.
+
+```velar
+import {HttpError, created} from "velar/serve"
+
+type CreateArticle:
+    title: string
+
+export server app:
+    @get(p"/health") => {ok: true}
+
+    @get(p"/articles/{id:number}", details: bool = false):
+        if id < 1:
+            throw HttpError(404, {error: "article_not_found"})
+        return {id, details}
+
+    @post(p"/articles", input: CreateArticle) => created({id: 1, title: input.title})
+
+```
+
+`p"..."` belongs to the Node extension rather than Core's string system.
+`f"..."` therefore keeps its one job—forward runtime interpolation—while a
+path pattern is a reverse matcher checked entirely at compile time.
+The project’s `node.app`, `node.host`, `node.port`, and `node.maxBodyBytes`
+configuration selects this exported app. `velar dev` watches and restarts it,
+`velar serve` runs it with production behavior, and `velar build` emits the
+standalone Node application. Direct `serve(...)` remains an ordinary library
+operation for integration tests and embedded servers.
+
+↳ charter [§3 Bindings and literals](language-charter.md#3-bindings-and-literals)
+· [Standard library: `velar/serve`](standard-library.md#velarserve)
+
+---
+
 The remaining sections belong to the **Web extension**, which a project turns
 on by naming `@velarscript/web` in `velar.json`. Without that line, `component`
 is an unknown declaration keyword and every JSX token is a parse error. A Core
-project — a CLI, a library, a Node service — stops reading here.
+project—or a Node service after the section above—stops reading here.
 
 ## 13. Components and JSX
 

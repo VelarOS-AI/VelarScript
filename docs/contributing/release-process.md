@@ -7,6 +7,8 @@ frameworks, project creator, and CLI as one six-package version-locked release
 set. Node, Web, and Desktop pin their exact toolchain dependencies; CLI pins
 compiler, Node, Web, Desktop, and creator. Independently versioned VelarScript
 source libraries live under `libraries/` and are not toolchain release members.
+Concrete integrations live under `adapters/` and have the same independent
+release boundary.
 
 ## Rehearsal
 

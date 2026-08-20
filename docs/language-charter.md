@@ -288,6 +288,35 @@ This rule does not apply to `@` characters inside strings, module specifiers,
 comments, or extension-owned embedded foreign source: those are data for their
 own grammar, not VelarScript `@name` syntax.
 
+The Node extension applies this same rule to HTTP routes. Directly inside a
+`server` declaration, `@get`, `@post`, `@put`, `@patch`, and `@delete` select
+one compiler-owned route role. They are anonymous route declarations, not
+decorators and not references to functions of those names. Their first item is
+the Node-owned path-pattern literal `p"..."`:
+
+```velar
+export server articles:
+    @get(p"/articles/{id:string}", details: bool = false):
+        return {id, details}
+```
+
+`p"..."` is not a fifth Core string prefix. Core owns ordinary, raw, and
+interpolated strings; only an active `@velarscript/node` lexical extension
+recognizes a path pattern, and only a Node route accepts one. The extension
+checks the entire literal at compile time. It must be a normalized absolute
+path; a capture occupies one complete segment and has the exact
+`{name:type}` form with a half-width `:`. A capture type is `string`, `number`,
+`bool`, or a named enum type. The capture declares that typed name directly in
+the route body, so it is never repeated in the remaining parameter list.
+Scalar remaining parameters are query inputs; their defaults make them
+optional. A single concrete Data record on `POST`, `PUT`, or `PATCH` is the
+checked JSON body, and `Request` is the explicit low-level request input.
+Route bodies are async-capable without an `async` modifier and use either
+`=> expression` or the ordinary indented `:` block. A plain string in the path
+position, an interpolated `f"..."`, an escaped path pattern, an unknown
+compiler-owned verb, or a route role outside a `server` block is a compile-time
+error.
+
 Literals are intentionally small:
 
 ```velar

@@ -9,43 +9,70 @@ import { VELAR_CREATE_VERSION, VELAR_PROJECT_FORMAT_VERSION, VELAR_PROJECT_TEMPL
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 
-test("the AI skill brief ships byte-identical inside the CLI package and stays within budget", async () => {
-  const source = await readFile(join(root, "docs", "ai-skill.md"));
-  const packaged = await readFile(join(root, "packages", "cli", "skill", "ai-skill.md"));
-  assert.ok(source.equals(packaged),
-    "packages/cli/skill/ai-skill.md must stay byte-identical to docs/ai-skill.md; update both in the same commit");
-  // D50 rule 98: the ceiling forces ranking, not brevity for its own sake — the
-  // brief must teach what an author needs to write ordinary code, and the long
-  // tail stays out because the diagnostic names the spelling when they hit it.
-  // Reaching this line means cutting the least-needed content, not raising it.
-  const lines = source.toString("utf8").split("\n").length;
-  assert.ok(lines <= 750, `docs/ai-skill.md must stay within 750 lines (found ${lines}); cut the least-needed content rather than raising the ceiling — the long tail belongs in diagnostics`);
+const skillFiles = Object.freeze({
+  core: "ai-skill.md",
+  web: "ai-skill-web.md",
+  node: "ai-skill-node.md",
+  desktop: "ai-skill-desktop.md",
+});
+
+test("the owner-specific AI skill briefs ship byte-identical inside the CLI package and stay within budget", async () => {
+  for (const [owner, file] of Object.entries(skillFiles)) {
+    const source = await readFile(join(root, "docs", file));
+    const packaged = await readFile(join(root, "packages", "cli", "skill", file));
+    assert.ok(source.equals(packaged),
+      `packages/cli/skill/${file} must stay byte-identical to docs/${file}; update both in the same commit`);
+    // Each owner stays bounded independently; cross-target detail belongs in
+    // the other owner brief instead of consuming every project's context.
+    const lines = source.toString("utf8").split("\n").length;
+    assert.ok(lines <= 750, `docs/${file} must stay within 750 lines (found ${lines}); split owner-specific content instead of raising the ceiling (${owner})`);
+  }
   const manifest = JSON.parse(await readFile(join(root, "packages", "cli", "package.json"), "utf8")) as { files: string[] };
   assert.ok(manifest.files.includes("skill"), "the @velarscript/cli package must publish the skill directory");
 });
 
-test("velar skill prints the packaged brief verbatim to stdout", async () => {
-  const source = await readFile(join(root, "docs", "ai-skill.md"), "utf8");
-  const printed = spawnSync(process.execPath, [join(root, "packages", "cli", "src", "cli.ts"), "skill"], { encoding: "utf8" });
-  assert.equal(printed.status, 0, printed.stderr);
-  assert.equal(printed.stdout, source, "velar skill must print docs/ai-skill.md without modification");
-  assert.equal(printed.stderr, "");
+test("velar skill selects and prints each packaged owner brief verbatim", async () => {
+  const cli = join(root, "packages", "cli", "src", "cli.ts");
+  for (const [owner, file] of Object.entries(skillFiles)) {
+    const source = await readFile(join(root, "docs", file), "utf8");
+    const printed = spawnSync(process.execPath, [cli, "skill", owner], { encoding: "utf8" });
+    assert.equal(printed.status, 0, printed.stderr);
+    assert.equal(printed.stdout, source, `velar skill ${owner} must print docs/${file} without modification`);
+    assert.equal(printed.stderr, "");
+  }
+  const defaultCore = spawnSync(process.execPath, [cli, "skill"], { encoding: "utf8" });
+  assert.equal(defaultCore.status, 0, defaultCore.stderr);
+  assert.equal(defaultCore.stdout, await readFile(join(root, "docs", skillFiles.core), "utf8"));
 
-  const help = spawnSync(process.execPath, [join(root, "packages", "cli", "src", "cli.ts"), "help", "skill"], { encoding: "utf8" });
+  const help = spawnSync(process.execPath, [cli, "help", "skill"], { encoding: "utf8" });
   assert.equal(help.status, 0, help.stderr);
-  assert.match(help.stdout, /Prints the packaged VelarScript AI skill brief verbatim/u);
+  assert.match(help.stdout, /core\|web\|node\|desktop/u);
+  assert.match(help.stdout, /owner-specific VelarScript AI skill brief/u);
 
-  const rejected = spawnSync(process.execPath, [join(root, "packages", "cli", "src", "cli.ts"), "skill", "extra"], { encoding: "utf8" });
+  const rejected = spawnSync(process.execPath, [cli, "skill", "unknown"], { encoding: "utf8" });
   assert.equal(rejected.status, 2);
-  assert.match(rejected.stderr, /does not accept arguments/u);
+  assert.match(rejected.stderr, /expected core, web, node, or desktop/u);
 });
 
 test("every create-velar template scaffolds the AGENTS.md brief pointer", () => {
+  const expectedBriefs: Readonly<Record<string, readonly string[]>> = Object.freeze({
+    library: ["core"],
+    web: ["core", "web"],
+    docs: ["core", "web"],
+    component: ["core", "web"],
+    node: ["core", "node"],
+    desktop: ["core", "web", "desktop"],
+  });
   for (const template of VELAR_PROJECT_TEMPLATES) {
     const files = createTemplateFiles(template, join(root, "example-app"), VELAR_CREATE_VERSION, VELAR_PROJECT_FORMAT_VERSION);
     const guide = files.get("AGENTS.md");
     assert.ok(guide, `the ${template} template must scaffold a root AGENTS.md`);
-    assert.match(guide, /velar skill/u, "AGENTS.md must point agents at the full brief");
+    for (const owner of expectedBriefs[template] ?? []) {
+      assert.ok(guide.includes(`velar skill ${owner}`), `${template} AGENTS.md must load the ${owner} brief`);
+    }
+    for (const owner of Object.keys(skillFiles).filter((owner) => !(expectedBriefs[template] ?? []).includes(owner))) {
+      assert.ok(!guide.includes(`velar skill ${owner}`), `${template} AGENTS.md must not load the unrelated ${owner} brief`);
+    }
     for (const gate of ["`velar check`", "`velar test`", "`velar format`"]) {
       assert.ok(guide.includes(gate), `AGENTS.md must name the ${gate} gate`);
     }

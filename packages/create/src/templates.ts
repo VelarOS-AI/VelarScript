@@ -38,7 +38,7 @@ function nodeTemplate(name: string, displayName: string, version: string, format
   const publicName = escapeHtml(displayName);
   return new Map([
     [".gitignore", "node_modules/\ndist/\n.velar/\n"],
-    agentsGuideFile(),
+    agentsGuideFile("node"),
     ...brandPublicFiles(),
     ["package.json", json({
       name,
@@ -49,8 +49,8 @@ function nodeTemplate(name: string, displayName: string, version: string, format
         check: "velar check",
         format: "velar format",
         "format:check": "velar format --check",
-        dev: "velar run",
-        start: "velar run",
+        dev: "velar dev",
+        start: "velar serve",
         test: "velar test",
         build: "velar build",
         validate: "npm run format:check && npm run check && npm test && npm run build",
@@ -63,9 +63,16 @@ function nodeTemplate(name: string, displayName: string, version: string, format
       entry: "src/main.vel",
       outDir: "dist",
       publicDir: "public",
-      extensions: [],
+      extensions: ["@velarscript/node"],
+      node: {
+        app: "app",
+        host: "127.0.0.1",
+        port: 3000,
+        maxBodyBytes: 16_777_216,
+        build: { sourceMaps: false },
+      },
     })],
-    ["README.md", `# ${displayName}\n\nA VelarScript Node starter modeled on the familiar Node.js Hello World server.\n\n\`\`\`sh\nnpm install\nnpm run dev\n\`\`\`\n\nOpen \`http://127.0.0.1:3000\`. Edit \`src/app.vel\` to add routes and \`src/main.vel\` to change the host or port.\n`],
+    ["README.md", `# ${displayName}\n\nA native VelarScript Node server application.\n\n\`\`\`sh\nnpm install\nnpm run dev\n\`\`\`\n\nOpen \`http://127.0.0.1:3000\`. Edit \`src/app.vel\` to add routes and \`velar.json\` to change the application export, host, port, or request-body ceiling. Use \`npm run build\` for production output and \`npm start\` to run the checked source with production runtime behavior.\n`],
     ["public/index.html", `<!doctype html>
 <html lang="en">
   <head>
@@ -94,28 +101,37 @@ function nodeTemplate(name: string, displayName: string, version: string, format
   </body>
 </html>
 `],
-    ["src/app.vel", `import {ServeRequest, ServeResponse, fileResponse} from "velar/serve"
+    ["src/app.vel", `import {staticFiles} from "velar/serve"
 
 export const appName = "${escapeVelarString(displayName)}"
 export const greeting = "Hello from VelarScript Node"
 
-export async def handle(request: ServeRequest) -> ServeResponse:
-    if request.path == "/api/hello":
-        return {status: 200, json: {message: greeting, target: "node"}}
-    return fileResponse(root="public", path=request.path, fallback="index.html")
-`],
-    ["src/main.vel", `import {serve} from "velar/serve"
-import {appName, handle} from "./app.vel"
+export server app:
+    @get(p"/api/hello") => {message: greeting, target: "node"}
 
-const server = await serve(handle, port=3000)
-print(f"{appName} is running at http://127.0.0.1:{server.port}")
+    ...staticFiles("/", root="public", fallback="index.html")
 `],
-    ["src/app.test.vel", `import {expect} from "velar/test"
-import {appName, greeting} from "./app.vel"
+    ["src/main.vel", `import {app as routes, appName as name} from "./app.vel"
+
+export const app = routes
+export const appName = name
+`],
+    ["src/app.test.vel", `import {http} from "velar/http"
+import {serve} from "velar/serve"
+import {expect} from "velar/test"
+import {app, appName, greeting} from "./app.vel"
 
 test "node application contract":
     expect(appName).toBe("${escapeVelarString(displayName)}")
     expect(greeting).toBe("Hello from VelarScript Node")
+
+test "checked server endpoint":
+    const server = await serve(app, port=0)
+    try:
+        const body = await http.get(f"http://127.0.0.1:{server.port}/api/hello").text()
+        expect(body).toContain(greeting)
+    finally:
+        await server.stop()
 `],
   ]);
 }
@@ -124,7 +140,7 @@ function desktopTemplate(name: string, displayName: string, version: string, for
   const identifier = applicationIdentifier(name);
   const files = new Map([
     [".gitignore", "node_modules/\ndist/\n.velar/\n"],
-    agentsGuideFile(),
+    agentsGuideFile("desktop"),
     ...brandPublicFiles(),
     ["package.json", json({
       name,
@@ -299,7 +315,7 @@ function libraryTemplate(name: string, displayName: string, version: string, for
   };
   return new Map([
     [".gitignore", "node_modules/\ndist/\n.velar/\n"],
-    agentsGuideFile(),
+    agentsGuideFile("core"),
     ["package.json", json(packageManifest)],
     ["velar.json", json({
       formatVersion,
@@ -343,7 +359,7 @@ function componentTemplate(name: string, displayName: string, version: string, f
   };
   const files = new Map([
     [".gitignore", "node_modules/\ndist/\n.velar/\n"],
-    agentsGuideFile(),
+    agentsGuideFile("web"),
     ...brandPublicFiles(),
     ["package.json", json(packageManifest)],
     ["velar.json", json({
@@ -378,7 +394,7 @@ function commonWebFiles(
 ): readonly (readonly [string, string])[] {
   return [
     [".gitignore", "node_modules/\ndist/\n.velar/\n"],
-    agentsGuideFile(),
+    agentsGuideFile("web"),
     ...brandPublicFiles(),
     ["package.json", json({
       name,
@@ -420,12 +436,38 @@ function commonWebFiles(
   ];
 }
 
-const AGENTS_GUIDE = `# Working in this VelarScript project
+type AgentGuideTarget = "core" | "web" | "node" | "desktop";
+
+const AGENT_SKILL_COMMANDS: Readonly<Record<AgentGuideTarget, string>> = Object.freeze({
+  core: "`velar skill core`",
+  web: "`velar skill core`, then `velar skill web`",
+  node: "`velar skill core`, then `velar skill node`",
+  desktop: "`velar skill core`, `velar skill web`, then `velar skill desktop`",
+});
+
+const AGENT_TARGET_BOUNDARIES: Readonly<Record<AgentGuideTarget, string>> = Object.freeze({
+  core: "This is a Core project. Do not use framework syntax unless the manifest activates its owning extension.",
+  web: "This is a Web project. `@velarscript/web` alone owns components, JSX, reactivity, Look, Web units, and browser tests.",
+  node: "This is a Node project. `@velarscript/node` alone owns `server`, route `@` names, and checked `p\"...\"` path patterns.",
+  desktop: "This is a Desktop project. It composes Web, while `@velarscript/desktop` alone owns native capabilities and the permission manifest.",
+});
+
+const AGENT_TARGET_ESCAPE_HATCHES: Readonly<Record<AgentGuideTarget, string>> = Object.freeze({
+  core: "",
+  web: " Explicit `import css unsafe \"./file.css\" before|after look` and `unsafe:html` cover unsupported styling and trusted markup.",
+  node: "",
+  desktop: " Explicit `import css unsafe \"./file.css\" before|after look` and `unsafe:html` cover unsupported renderer styling and trusted markup.",
+});
+
+function agentsGuide(target: AgentGuideTarget): string {
+  return `# Working in this VelarScript project
 
 This project is written in VelarScript (\`.vel\` sources). VelarScript's
 parents are JavaScript and Python: write on those priors and the compiler
-teaches the rest. Run \`velar skill\` for the full language brief — it ships
-with the toolchain and prints agent-ready markdown to stdout.
+teaches the rest. Load ${AGENT_SKILL_COMMANDS[target]}; the briefs ship with the
+toolchain and print agent-ready markdown without a network request.
+
+${AGENT_TARGET_BOUNDARIES[target]}
 
 ## Gates
 
@@ -450,32 +492,31 @@ Run these before considering any change done:
 - \`match\` dispatches finite states; \`case _:\` is the fallback.
 - \`await task()\` or detached \`async task()\` — a dropped Promise is a
   compile error.
-- \`range\` needs \`import {range} from "velar/collections"\`.
+- \`range(...)\` is a Core prelude function and needs no import.
 - JSON data uses \`import json raw from "package/subpath"\`; the value is
   \`unknown\`, so validate it with \`Type.parse(raw)\` before field access.
 - Multi-line text is a layout string: a quote followed by a newline opens
   it; a quote at the opening line's indentation closes it.
 - \`print(value)\` inspects any value; f-strings and \`str()\` accept only
-  strings, numbers, bools, enums, and \`null\` — \`stringify\` from
-  \`velar/json\` builds data text.
+  strings, numbers, bools, enums, and \`null\`; \`Json.stringify\` builds data
+  text without an import.
 
-\`velar skill\` covers the rest: the declaration reference, the idiom
-cookbook, and the complete pitfall table.
+The owner-specific skill briefs cover the rest.
 
 ## When VelarScript is missing something
 
 In order: \`extern module\` declares a checked boundary to any npm package
 (first choice); \`import js unsafe\` admits a raw value as \`any\` — validate
-it with \`Type.parse\` at the edge; \`import css unsafe "./file.css"
-before|after look\` and \`unsafe:html\` cover styling and markup. If the
+it with \`Type.parse\` at the edge.${AGENT_TARGET_ESCAPE_HATCHES[target]} If the
 compiler itself seems wrong, reduce to a minimal repro and report it; the
 emitted \`velar build\` JavaScript is always a readable, source-mapped exit
-that runs without the toolchain. \`velar skill\` includes the full
+that runs without the toolchain. \`velar skill core\` includes the full
 escape-hatch decision tree.
 `;
+}
 
-function agentsGuideFile(): readonly [string, string] {
-  return ["AGENTS.md", AGENTS_GUIDE];
+function agentsGuideFile(target: AgentGuideTarget): readonly [string, string] {
+  return ["AGENTS.md", agentsGuide(target)];
 }
 
 const VELARSCRIPT_MARK_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="85 113 346 290" role="img" aria-labelledby="title">

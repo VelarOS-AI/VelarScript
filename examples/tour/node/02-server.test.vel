@@ -1,0 +1,18 @@
+import {TestClient, TestResponse, client} from "velar/server-test"
+import {expect} from "velar/test"
+import {app} from "./01-server.vel"
+
+def checkedClient(value: TestClient) -> TestClient:
+    return value
+
+def checkedResponse(value: TestResponse) -> TestResponse:
+    return value
+
+test "native server health":
+    const api = checkedClient(await client(app))
+    try:
+        const response = checkedResponse(await api.get("/api/health"))
+        expect(response.status).toBe(200)
+        expect(await response.text()).toContain("ok")
+    finally:
+        await api.close()

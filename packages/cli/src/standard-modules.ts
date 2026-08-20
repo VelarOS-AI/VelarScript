@@ -180,10 +180,6 @@ const randomIdentity = "velar/random#type:Random";
 const randomType: ValueType = { kind: "named", name: "Random", identity: randomIdentity };
 const randomSeedType: ValueType = { kind: "union", members: [stringType, numberType] };
 const randomElementType: ValueType = { kind: "parameter", name: "T", index: 0 };
-const adapterElementType: ValueType = { kind: "parameter", name: "T", index: 0 };
-const noise2Type = apiFunction(["x", "y"], [numberType, numberType], numberType);
-const noise3Type = apiFunction(["x", "y", "z"], [numberType, numberType, numberType], numberType);
-const noise4Type = apiFunction(["x", "y", "z", "w"], [numberType, numberType, numberType, numberType], numberType);
 const randomNamedTypes = new Map([
   ["Random", new Map([
     ["number", apiFunction([], [], numberType)],
@@ -281,8 +277,9 @@ const webSocketServeResponseType: ValueType = { kind: "union", members: [
   { kind: "object", fields: new Map([["status", numberType], ["stream", apiFunction(["write"], [webSocketStreamWriterType], promise(nullType))], ["headers", webSocketResponseHeadersType]]), optionalFields: new Set(["headers"]) },
 ] };
 const webSocketHttpHandlerType = apiFunction(["request"], [webSocketServeRequestType], promise(webSocketServeResponseType));
+const webSocketServeAppType: ValueType = { kind: "named", name: "ServeApp", identity: "velar/serve#type:ServeApp" };
 const webSocketListenOptions = object({
-  port: numberType, host: optional(stringType), path: optional(stringType), http: optional(webSocketHttpHandlerType), maxMessageBytes: optional(numberType), maxQueuedMessages: optional(numberType), maxQueuedBytes: optional(numberType), maxPendingSendBytes: optional(numberType), maxConnections: optional(numberType), maxPendingConnections: optional(numberType),
+  port: numberType, host: optional(stringType), path: optional(stringType), http: optional({ kind: "union", members: [webSocketHttpHandlerType, webSocketServeAppType] }), maxMessageBytes: optional(numberType), maxQueuedMessages: optional(numberType), maxQueuedBytes: optional(numberType), maxPendingSendBytes: optional(numberType), maxConnections: optional(numberType), maxPendingConnections: optional(numberType),
 });
 const webSocketErrorIdentities = new Map([
   ["WebSocketBackpressureError", "velar/websocket#class:WebSocketBackpressureError"],
@@ -490,22 +487,6 @@ const coreModuleInterfaces = new Map<string, ModuleInterface>([
       ["WebSocketServer", webSocketServerIdentity],
     ]),
   )],
-  ["velar/msgpack", moduleInterface(new Map([
-    ["encode", apiFunction(["value"], [unknownType], bytesType)],
-    ["decode", apiFunction(["value"], [bytesType], unknownType)],
-    ["parse", { kind: "function", typeParameterNames: ["T"], parameterNames: ["value", "Type"], parameters: [bytesType, { kind: "runtimeType", value: adapterElementType }], requiredParameters: 2, result: adapterElementType }],
-  ]))],
-  ["velar/compression", moduleInterface(new Map([
-    ["deflate", apiFunction(["value", "level"], [bytesType, numberType], bytesType, 1)],
-    ["inflate", apiFunction(["value", "maxBytes"], [bytesType, numberType], bytesType, 1)],
-    ["gzip", apiFunction(["value", "level"], [bytesType, numberType], bytesType, 1)],
-    ["gunzip", apiFunction(["value", "maxBytes"], [bytesType, numberType], bytesType, 1)],
-  ]))],
-  ["velar/noise", moduleInterface(new Map([
-    ["simplex2", apiFunction(["seed"], [randomSeedType], noise2Type)],
-    ["simplex3", apiFunction(["seed"], [randomSeedType], noise3Type)],
-    ["simplex4", apiFunction(["seed"], [randomSeedType], noise4Type)],
-  ]))],
   ["velar/json", moduleInterface(new Map([
     ["parse", apiIntrinsic("json.parse", ["text", "target"], [stringType, anyType], unknownType, 1)],
     ["tryParse", apiIntrinsic("json.tryParse", ["text", "target", "fallback"], [stringType, anyType, anyType], unknownType, 1)],
@@ -1645,57 +1626,6 @@ export const UInt32Builder = __velarBinaryBuilderType("UInt32Builder", __velarBi
 export const Float32Builder = __velarBinaryBuilderType("Float32Builder", __velarBinaryNativeFloat32Array);
 export function uint32Builder(maxElements) { return __velarBinaryBuilder(maxElements, __velarBinaryNativeUint32Array, 4, "uint32Builder"); }
 export function float32Builder(maxElements) { return __velarBinaryBuilder(maxElements, __velarBinaryNativeFloat32Array, 4, "float32Builder"); }
-`.trimStart()],
-  ["velar/msgpack", String.raw`
-import { pack as __velarMsgpackPack, unpack as __velarMsgpackUnpack } from "msgpackr";
-import { Bytes as __velarMsgpackBytes } from "velar/binary";
-const __velarMsgpackMaxInputBytes = 64 * 1024 * 1024;
-const __velarMsgpackMaxOutputBytes = 64 * 1024 * 1024;
-function __velarMsgpackInput(value) { const bytes = __velarMsgpackBytes.parse(value); if (bytes.byteLength > __velarMsgpackMaxInputBytes) throw new RangeError("MessagePack input cannot exceed 64 MiB"); return bytes; }
-export function encode(value) { const output = __velarMsgpackPack(value, { useRecords: false, structuredClone: false }); if (!__velarMsgpackBytes.is(output)) throw new TypeError("msgpackr returned invalid bytes"); if (output.byteLength > __velarMsgpackMaxOutputBytes) throw new RangeError("MessagePack output cannot exceed 64 MiB"); return __velarMsgpackBytes.parse(output); }
-export function decode(value) { return __velarMsgpackUnpack(__velarMsgpackInput(value), { useRecords: false, mapsAsObjects: false }); }
-export function parse(value, Type) { if (!Type || typeof Type.parse !== "function") throw new TypeError("MessagePack parsing requires a runtime Type"); return Type.parse(decode(value)); }
-`.trimStart()],
-  ["velar/compression", String.raw`
-import { gzipSync as __velarGzip, Gunzip as __VelarGunzip, zlibSync as __velarDeflate, Unzlib as __VelarInflate } from "fflate";
-import { Bytes as __velarCompressionBytes } from "velar/binary";
-const __velarCompressionMaximum = 64 * 1024 * 1024;
-function __velarCompressionInput(value) { const bytes = __velarCompressionBytes.parse(value); if (bytes.byteLength > __velarCompressionMaximum) throw new RangeError("Compression input cannot exceed 64 MiB"); return bytes; }
-function __velarCompressionLevel(value) { if (value === null || value === undefined) return 6; if (!Number.isInteger(value) || value < 0 || value > 9) throw new RangeError("Compression level must be an integer from 0 through 9"); return value; }
-function __velarCompressionLimit(value) { if (value === null || value === undefined) return __velarCompressionMaximum; if (!Number.isSafeInteger(value) || value < 1 || value > __velarCompressionMaximum) throw new RangeError("Decompression maxBytes must be an integer from 1 through 67108864"); return value; }
-function __velarCompressionOutput(value, maximum) { if (value instanceof Uint8Array && value.byteLength > maximum) throw new RangeError("Compressed output exceeds the 64 MiB limit"); if (!__velarCompressionBytes.is(value)) throw new TypeError("fflate returned invalid bytes"); return __velarCompressionBytes.parse(value); }
-function __velarCompressionExpand(Stream, source, maximum) {
-  const chunks = []; let total = 0;
-  const stream = new Stream((chunk) => {
-    if (!__velarCompressionBytes.is(chunk)) throw new TypeError("fflate returned invalid bytes");
-    if (total + chunk.byteLength > maximum) throw new RangeError("Decompressed output exceeds maxBytes");
-    total += chunk.byteLength; chunks.push(chunk);
-  });
-  if (source.byteLength === 0) stream.push(source, true);
-  else for (let offset = 0; offset < source.byteLength;) {
-    const remaining = maximum - total + 1;
-    const inputBytes = Math.max(1, Math.min(256, Math.floor(remaining / 1032)));
-    const end = Math.min(offset + inputBytes, source.byteLength);
-    stream.push(source.subarray(offset, end), end >= source.byteLength);
-    offset = end;
-  }
-  const output = new Uint8Array(total); let offset = 0;
-  for (const chunk of chunks) { output.set(chunk, offset); offset += chunk.byteLength; }
-  return output;
-}
-export function deflate(value, level = 6) { return __velarCompressionOutput(__velarDeflate(__velarCompressionInput(value), { level: __velarCompressionLevel(level) }), __velarCompressionMaximum); }
-export function inflate(value, maxBytes = __velarCompressionMaximum) { maxBytes = __velarCompressionLimit(maxBytes); return __velarCompressionExpand(__VelarInflate, __velarCompressionInput(value), maxBytes); }
-export function gzip(value, level = 6) { return __velarCompressionOutput(__velarGzip(__velarCompressionInput(value), { level: __velarCompressionLevel(level) }), __velarCompressionMaximum); }
-export function gunzip(value, maxBytes = __velarCompressionMaximum) { maxBytes = __velarCompressionLimit(maxBytes); return __velarCompressionExpand(__VelarGunzip, __velarCompressionInput(value), maxBytes); }
-`.trimStart()],
-  ["velar/noise", String.raw`
-import { createNoise2D as __velarCreateNoise2D, createNoise3D as __velarCreateNoise3D, createNoise4D as __velarCreateNoise4D } from "simplex-noise";
-import { random as __velarNoiseRandom } from "velar/random";
-function __velarNoiseCoordinate(value) { if (typeof value !== "number" || !Number.isFinite(value)) throw new TypeError("Simplex noise coordinates must be finite numbers"); return value; }
-function __velarNoiseSource(seed, label) { const source = __velarNoiseRandom(seed).fork(label); return () => source.number(); }
-export function simplex2(seed) { const sample = __velarCreateNoise2D(__velarNoiseSource(seed, "simplex2")); return (x, y) => sample(__velarNoiseCoordinate(x), __velarNoiseCoordinate(y)); }
-export function simplex3(seed) { const sample = __velarCreateNoise3D(__velarNoiseSource(seed, "simplex3")); return (x, y, z) => sample(__velarNoiseCoordinate(x), __velarNoiseCoordinate(y), __velarNoiseCoordinate(z)); }
-export function simplex4(seed) { const sample = __velarCreateNoise4D(__velarNoiseSource(seed, "simplex4")); return (x, y, z, w) => sample(__velarNoiseCoordinate(x), __velarNoiseCoordinate(y), __velarNoiseCoordinate(z), __velarNoiseCoordinate(w)); }
 `.trimStart()],
   ["velar/random", String.raw`
 ${VELAR_TYPE_REGISTRY_RUNTIME}
@@ -3073,18 +3003,11 @@ export function expect(actual) {
 const coreModuleDependencies: ReadonlyMap<string, readonly string[]> = new Map([
   [VELAR_COLLECTION_LOWERING_MODULE, VELAR_COLLECTION_LOWERING_DEPENDENCIES],
   ["velar/binary", [VELAR_COLLECTION_LOWERING_MODULE]],
-  ["velar/msgpack", ["velar/binary"]],
-  ["velar/compression", ["velar/binary"]],
-  ["velar/noise", ["velar/random"]],
   // D50 rule 97.2: 'toEqual' is the language's own equals(a, b).
   ["velar/test", [VELAR_COLLECTION_LOWERING_MODULE] as readonly string[]],
 ]);
 
-export const STANDARD_MODULE_ADAPTER_DEPENDENCIES: ReadonlyMap<string, { readonly packageName: string; readonly version: string }> = new Map([
-  ["velar/msgpack", { packageName: "msgpackr", version: "2.0.5" }],
-  ["velar/compression", { packageName: "fflate", version: "0.8.3" }],
-  ["velar/noise", { packageName: "simplex-noise", version: "4.0.3" }],
-]);
+export const STANDARD_MODULE_ADAPTER_DEPENDENCIES: ReadonlyMap<string, { readonly packageName: string; readonly version: string }> = new Map();
 
 export function standardModuleSources(extensions: readonly CompilerExtension[] = []): ReadonlyMap<string, string> {
   const activeExtensions = standardExtensions(extensions);

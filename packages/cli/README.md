@@ -21,11 +21,10 @@ preview, and browser-driver services. The CLI distribution includes exact
 official Node capability plus Web and Desktop application targets so a zero-`node_modules` project can
 consume that toolchain generation, but it owns none of their syntax, HTML,
 CSP, lifecycle, runtime, or native packaging behavior. Project-local targets
-take precedence and third-party extensions never use this fallback.
-The distribution also pins and bundles the implementation dependencies behind
-the official `velar/msgpack`, `velar/compression`, and `velar/noise` adapters;
-applications import those Velar modules, not `msgpackr`, `fflate`, or
-`simplex-noise` directly.
+take precedence and third-party extensions never use this fallback. Codecs,
+compression, noise, database contracts, and database engines are independently
+installed source packages; the CLI neither reserves `velar/*` names for them
+nor hides their npm dependency graph.
 
 ```sh
 npx @velarscript/cli create my-app
@@ -39,6 +38,12 @@ npm exec velar -- format --check
 npm exec velar -- test
 npm exec velar -- dev
 ```
+
+For a generated Node service, `velar dev` watches and restarts the last-good
+checked `ServeApp`, `velar serve` runs the checked source with production
+runtime behavior, and `velar build` writes a standalone Node directory with a
+launcher and copied public assets. Web/Desktop development continues through
+their framework hosts; `velar run` remains for framework-free CLI programs.
 
 Project creation delegates to the exact matching `create-velar` package, the
 same implementation used by `npm create velar@latest`. First-class application
@@ -99,11 +104,11 @@ returns; a copy that stops reproducing is reported as such rather than handed
 over as a clean report. A failing `velar check` ends with the one line naming
 the command.
 
-The distribution also carries the VelarScript AI skill brief
-(`skill/ai-skill.md`, kept byte-identical to the repository's
-`docs/ai-skill.md` by a permanent gate). `velar skill` prints it verbatim to
-stdout, so any coding agent can load the language brief with one offline
-command.
+The distribution carries separate Core, Web, Node, and Desktop AI skill briefs
+under `skill/`, each kept byte-identical to its repository document by a
+permanent gate. `velar skill [core|web|node|desktop]` prints one verbatim to
+stdout; Core is the default. Generated `AGENTS.md` files name the exact briefs a
+project needs.
 
 Use `velar help <command>` or `velar <command> --help` for command-specific
 usage and defaults. Project creation is transactional, manifests reject unknown

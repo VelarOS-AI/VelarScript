@@ -209,6 +209,7 @@ function compileUnchecked(text: string, options: CompileOptions): CompileResult 
   if (emitterExtensions.length > 1) throw new Error("Only one compiler extension may own JavaScript emission");
   const emitterOptions: CompilerEmitterOptions = {
     sourcePath: parsed.source.path,
+    source: parsed.source,
     ...(options.sharedRuntimeModules === undefined ? {} : { sharedRuntimeModules: options.sharedRuntimeModules }),
   };
   const emitter: CompilerEmitter = emitterExtensions[0]?.createEmitter?.(

@@ -47,9 +47,15 @@ const __velarNodeHostPending = __velarNodeHostApply(__velarNodeHostObjectCreate,
 const __velarNodeHostEventHandlers = __velarNodeHostApply(__velarNodeHostObjectCreate, __velarNodeHostObject, [null]);
 const __velarNodeHostActiveHttpHandles = __velarNodeHostApply(__velarNodeHostObjectCreate, __velarNodeHostObject, [null]);
 const __velarNodeHostActiveFileWatchers = __velarNodeHostApply(__velarNodeHostObjectCreate, __velarNodeHostObject, [null]);
-const __velarNodeHostMaxPending = 1024;
+// Data-plane work may be saturated by application I/O without starving the
+// response/stop control plane. A single shared counter made it possible for
+// 1,024 slow filesystem or body reads to prevent even serve.fail/serve.stop
+// from crossing the worker boundary.
+const __velarNodeHostMaxDataPending = 4096;
+const __velarNodeHostMaxServePending = 4608;
 let __velarNodeHostNextRequest = 1;
-let __velarNodeHostPendingCount = 0;
+let __velarNodeHostDataPendingCount = 0;
+let __velarNodeHostServePendingCount = 0;
 let __velarNodeHostActiveServers = 0;
 let __velarNodeHostActiveHttpRequests = 0;
 let __velarNodeHostActiveWatcherCount = 0;
@@ -122,7 +128,7 @@ function __velarNodeHostErrorOf(value, operation) {
 }
 
 function __velarNodeHostUpdateReference() {
-  const operation = __velarNodeHostPendingCount > 0 || __velarNodeHostActiveServers > 0 || __velarNodeHostActiveHttpRequests > 0 || __velarNodeHostActiveWatcherCount > 0
+  const operation = __velarNodeHostDataPendingCount + __velarNodeHostServePendingCount > 0 || __velarNodeHostActiveServers > 0 || __velarNodeHostActiveHttpRequests > 0 || __velarNodeHostActiveWatcherCount > 0
     ? __velarNodeHostMessagePortRef
     : __velarNodeHostMessagePortUnref;
   __velarNodeHostCall(operation, __velarNodeHostPort, []);
@@ -135,7 +141,7 @@ function __velarNodeHostRequestId() {
       ? 1
       : __velarNodeHostNextRequest + 1;
     attempts += 1;
-    if (attempts > __velarNodeHostMaxPending) throw new __velarNodeHostRangeError("Node host request identity space is unavailable");
+    if (attempts > __velarNodeHostMaxDataPending + __velarNodeHostMaxServePending) throw new __velarNodeHostRangeError("Node host request identity space is unavailable");
   }
   const id = __velarNodeHostNextRequest;
   __velarNodeHostNextRequest = id >= __velarNodeHostNumber.MAX_SAFE_INTEGER ? 1 : id + 1;
@@ -153,7 +159,8 @@ function __velarNodeHostFail(error) {
     if (descriptor && "value" in descriptor) descriptor.value.reject(failure);
     delete __velarNodeHostPending[keys[index]];
   }
-  __velarNodeHostPendingCount = 0;
+  __velarNodeHostDataPendingCount = 0;
+  __velarNodeHostServePendingCount = 0;
   __velarNodeHostActiveServers = 0;
   __velarNodeHostActiveHttpRequests = 0;
   __velarNodeHostActiveWatcherCount = 0;
@@ -176,13 +183,13 @@ function __velarNodeHostMessage(value) {
     return;
   }
   if (message.kind === "event") {
-    if (message.event !== "serve.request") throw new __velarNodeHostTypeError("Node host worker returned an unknown event");
+    if (message.event !== "serve.request" && message.event !== "serve.cancel" && message.event !== "serve.error") throw new __velarNodeHostTypeError("Node host worker returned an unknown event");
     const handler = __velarNodeHostOwnDescriptor(__velarNodeHostEventHandlers, message.event);
     if (!handler || !("value" in handler)) throw new __velarNodeHostError("Node host event has no registered owner");
     try { handler.value(message.value); }
     catch {
       const request = message.value && typeof message.value === "object" ? __velarNodeHostOwnDescriptor(message.value, "request") : null;
-      if (request && "value" in request) __velarNodeHostInvoke("serve.fail", [request.value]);
+      if (message.event === "serve.request" && request && "value" in request) __velarNodeHostInvoke("serve.fail", [request.value]);
     }
     return;
   }
@@ -237,7 +244,8 @@ function __velarNodeHostMessage(value) {
     }
   }
   delete __velarNodeHostPending[message.id];
-  __velarNodeHostPendingCount -= 1;
+  if (pending.serveLane) __velarNodeHostServePendingCount -= 1;
+  else __velarNodeHostDataPendingCount -= 1;
   if (message.ok && pending.operation === "serve.start") __velarNodeHostActiveServers += 1;
   else if (message.ok && pending.operation === "serve.stop" && __velarNodeHostActiveServers > 0) __velarNodeHostActiveServers -= 1;
   __velarNodeHostActiveHttpRequests += activeHttpDelta;
@@ -281,8 +289,14 @@ export function __velarNodeHostInvoke(operation, args) {
   if (typeof operation !== "string" || operation.length === 0 || !__velarNodeHostCall(__velarNodeHostArrayIsArray, __velarNodeHostArray, [args])) {
     return new __velarNodeHostPromise((_resolve, reject) => reject(new __velarNodeHostTypeError("Node host invocation is invalid")));
   }
-  if (__velarNodeHostPendingCount >= __velarNodeHostMaxPending) {
-    return new __velarNodeHostPromise((_resolve, reject) => reject(new __velarNodeHostRangeError("Node host cannot have more than 1024 pending operations")));
+  const serveLane = operation === "serve.start" || operation === "serve.stop" || operation === "serve.respond"
+    || operation === "serve.respondFile" || operation === "serve.streamStart" || operation === "serve.streamWrite"
+    || operation === "serve.streamEnd" || operation === "serve.fail";
+  if (serveLane ? __velarNodeHostServePendingCount >= __velarNodeHostMaxServePending : __velarNodeHostDataPendingCount >= __velarNodeHostMaxDataPending) {
+    const message = serveLane
+      ? "Node serve control plane cannot have more than 4608 pending operations"
+      : "Node host data plane cannot have more than 4096 pending operations";
+    return new __velarNodeHostPromise((_resolve, reject) => reject(new __velarNodeHostRangeError(message)));
   }
   if (__velarNodeHostFailure) return new __velarNodeHostPromise((_resolve, reject) => reject(__velarNodeHostFailure));
   const id = __velarNodeHostRequestId();
@@ -291,13 +305,15 @@ export function __velarNodeHostInvoke(operation, args) {
       || operation === "fs.watchNext" || operation === "fs.watchClose"
       ? args[0]
       : null;
-    __velarNodeHostPending[id] = {operation, handle, resolve, reject};
-    __velarNodeHostPendingCount += 1;
+    __velarNodeHostPending[id] = {operation, handle, serveLane, resolve, reject};
+    if (serveLane) __velarNodeHostServePendingCount += 1;
+    else __velarNodeHostDataPendingCount += 1;
     __velarNodeHostUpdateReference();
     try { __velarNodeHostCall(__velarNodeHostMessagePortPost, __velarNodeHostPort, [{id, operation, args}]); }
     catch (error) {
       delete __velarNodeHostPending[id];
-      __velarNodeHostPendingCount -= 1;
+      if (serveLane) __velarNodeHostServePendingCount -= 1;
+      else __velarNodeHostDataPendingCount -= 1;
       __velarNodeHostUpdateReference();
       reject(error);
     }
@@ -305,7 +321,7 @@ export function __velarNodeHostInvoke(operation, args) {
 }
 
 export function __velarNodeHostOn(event, handler) {
-  if (event !== "serve.request" || typeof handler !== "function") throw new __velarNodeHostTypeError("Node host event registration is invalid");
+  if (event !== "serve.request" && event !== "serve.cancel" && event !== "serve.error" || typeof handler !== "function") throw new __velarNodeHostTypeError("Node host event registration is invalid");
   if (__velarNodeHostFailure) throw __velarNodeHostFailure;
   if (__velarNodeHostOwnDescriptor(__velarNodeHostEventHandlers, event)) throw new __velarNodeHostError("Node host event already has an owner");
   __velarNodeHostEventHandlers[event] = handler;

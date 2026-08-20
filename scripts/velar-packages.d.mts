@@ -38,16 +38,22 @@ export function velarToolchainPackages(root?: string): Promise<VelarWorkspacePac
 /** Every VelarScript source library under `libraries`, in name order. */
 export function velarLibraries(root?: string): Promise<VelarWorkspacePackage[]>;
 
+/** Every independently versioned ecosystem adapter under `adapters`. */
+export function velarAdapters(root?: string): Promise<VelarWorkspacePackage[]>;
+
 /** Every publishable toolchain package, in name order. */
 export function velarPublishedToolchainPackages(root?: string): Promise<VelarWorkspacePackage[]>;
 
 /** Every publishable source library, in name order. */
 export function velarPublishedLibraries(root?: string): Promise<VelarWorkspacePackage[]>;
 
-/** Every publishable package across the toolchain and source-library layers. */
+/** Every publishable external adapter, in name order. */
+export function velarPublishedAdapters(root?: string): Promise<VelarWorkspacePackage[]>;
+
+/** Every publishable package across the toolchain, library, and adapter layers. */
 export function velarPublishedWorkspacePackages(root?: string): Promise<VelarWorkspacePackage[]>;
 
-/** The six-package toolchain release names. */
+/** The toolchain release names. */
 export function velarToolchainPackageNames(root?: string): Promise<string[]>;
 
 /** Every local package name needed by complete workspace consumer gates. */

@@ -1,5 +1,5 @@
 import {ByteOrder, Bytes, uint16Buffer} from "velar/binary"
-import {simplex3} from "velar/noise"
+import {simplex3} from "@velarscript/noise"
 import {random} from "velar/random"
 import {Cancellation} from "velar/task"
 

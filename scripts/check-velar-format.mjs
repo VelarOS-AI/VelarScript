@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { formatSource } from "@velarscript/compiler";
+import { velarCompilerExtension as nodeCompilerExtension } from "@velarscript/node/compiler";
 import { velarCompilerExtension as webCompilerExtension } from "@velarscript/web/compiler";
 import { createTemplateFiles } from "../packages/create/src/templates.ts";
 import { VELAR_PROJECT_TEMPLATES } from "../packages/create/src/types.ts";
@@ -34,8 +35,9 @@ if (corpusFiles.length === 0) {
 }
 
 const isFormatted = (source) => {
+  const nodeOwned = /(?:^|\n)\s*(?:export\s+)?server\s+[A-Za-z_][A-Za-z0-9_]*:/u.test(source);
   const webOwned = /(?:^|\n)\s*(?:component|state|resource|action|watch|@mounted|@cleanup)\b|<[A-Za-z][A-Za-z0-9_.:-]*(?:\s|\/?>)/u.test(source);
-  return formatSource(source, { extensions: webOwned ? [webCompilerExtension] : [] }) === source;
+  return formatSource(source, { extensions: nodeOwned ? [nodeCompilerExtension] : webOwned ? [webCompilerExtension] : [] }) === source;
 };
 
 for (const file of files) {

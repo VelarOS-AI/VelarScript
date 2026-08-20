@@ -1,5 +1,17 @@
 import { optionalOf as optional, type ClassInfo, type CompilerExtension, type EnumInfo, type ModuleInterface, type ValueType } from "@velarscript/compiler";
-import { VELAR_ERROR_NORMALIZATION_MODULE, VELAR_STRICT_JSON_RUNTIME, VELAR_TYPE_REGISTRY_RUNTIME, VELAR_UTF8_RUNTIME } from "@velarscript/compiler/extension";
+import {
+  VELAR_ERROR_NORMALIZATION_MODULE,
+  VELAR_COLLECTION_LOWERING_MODULE,
+  VELAR_STRICT_JSON_RUNTIME,
+  VELAR_TYPE_REGISTRY_RUNTIME,
+  VELAR_UTF8_RUNTIME,
+  type AnalysisContext,
+  type CompilerAnalysisExtension,
+  type CompilerEmitterOptions,
+  type CompilerLexicalExtension,
+  type LoweringHints,
+  type Token,
+} from "@velarscript/compiler/extension";
 import { VELAR_NODE_ENV_RUNTIME } from "./environment-runtime.ts";
 import { VELAR_NODE_FILESYSTEM_RUNTIME } from "./filesystem-runtime.ts";
 import { VELAR_NODE_HTTP_RUNTIME } from "./http-runtime.ts";
@@ -13,7 +25,14 @@ import { VELAR_NODE_TERMINAL_RUNTIME } from "./terminal-runtime.ts";
 import { VELAR_NODE_TERMINAL_WORKER_SOURCE } from "./terminal-worker-runtime.ts";
 import { VELAR_NODE_WORKER_RUNTIME } from "./worker-runtime.ts";
 import { VELAR_NODE_WEBSOCKET_RUNTIME } from "./websocket-runtime.ts";
-import { VELAR_NODE_SQLITE_RUNTIME, VELAR_NODE_SQLITE_WORKER_SOURCE } from "./sqlite-runtime.ts";
+import { NODE_STATEMENT_CONSTRUCTS, nodeServerStatementContainsDirectAwait, nodeStatementConstructKey } from "./server-ast.ts";
+import { inferNodeIntrinsic, VelarNodeAnalyzer } from "./server-analyzer.ts";
+import { NodeJavaScriptEmitter } from "./server-emitter.ts";
+import { velarNodeInspectionExtension } from "./server-inspection.ts";
+import { scanNodePathPatternForFormatting, scanNodeToken } from "./server-lexer.ts";
+import { VelarNodeParser } from "./server-parser.ts";
+import { velarNodeSemanticExtension } from "./server-semantic.ts";
+import { serveAppType, serveRequestType } from "./server-types.ts";
 
 export { VELAR_PROCESS_HOST_RUNTIME } from "./process-runtime.ts";
 
@@ -27,8 +46,8 @@ const stringType: ValueType = { kind: "string" };
 const numberType: ValueType = { kind: "number" };
 const boolType: ValueType = { kind: "bool" };
 const bytesType: ValueType = { kind: "named", name: "Bytes", identity: "velar/binary#type:Bytes" };
+const cancellationType: ValueType = { kind: "named", name: "Cancellation", identity: "velar/task#type:Cancellation" };
 const listStringType: ValueType = { kind: "list", element: stringType };
-const listUnknownType: ValueType = { kind: "list", element: unknownType };
 const stringMapType: ValueType = { kind: "map", key: stringType, value: stringType };
 
 function promise(value: ValueType): ValueType {
@@ -91,9 +110,9 @@ function moduleInterface(
   };
 }
 
-const serveRequestType: ValueType = { kind: "named", name: "ServeRequest", identity: "velar/serve#type:ServeRequest" };
 const serverType: ValueType = { kind: "named", name: "Server", identity: "velar/serve#type:Server" };
 const requestBodyTooLargeErrorIdentity = "velar/serve#class:RequestBodyTooLargeError";
+const responseHeadersType = stringMapType;
 const requestBodyTooLargeErrorClass: ClassInfo = {
   identity: requestBodyTooLargeErrorIdentity,
   parameters: [],
@@ -109,14 +128,104 @@ const requestBodyTooLargeErrorClass: ClassInfo = {
   staticGetters: new Set(),
   staticMethods: new Map(),
 };
+const serveHttpErrorIdentity = "velar/serve#class:HttpError";
+const serveHttpErrorClass: ClassInfo = {
+  identity: serveHttpErrorIdentity,
+  parameters: [numberType, anyType, optional(responseHeadersType)],
+  parameterNames: ["status", "body", "headers"],
+  requiredParameters: 1,
+  base: "Error",
+  abstract: false,
+  fields: new Map([
+    ["status", { mutable: false, type: numberType }],
+    ["body", { mutable: false, type: anyType }],
+    ["headers", { mutable: false, type: responseHeadersType }],
+  ]),
+  getters: new Set(), abstractGetters: new Set(), methods: new Map(), abstractMethods: new Set(),
+  staticFields: new Map(), staticGetters: new Set(), staticMethods: new Map(),
+};
 const writeChunkType = functionType(["chunk"], [stringType], promise(nullType));
 const streamProducerType = functionType(["write"], [writeChunkType], promise(nullType));
-const responseHeadersType = stringMapType;
+const sseEventType = object({
+  data: stringType,
+  event: optional(stringType),
+  id: optional(stringType),
+  retry: optional(numberType),
+}, ["event", "id", "retry"]);
+const sseSendType = functionType(["event"], [{ kind: "union", members: [stringType, sseEventType] }], promise(nullType));
+const sseProducerType = functionType(["send"], [sseSendType], promise(nullType));
 const jsonResponseType = object({ status: numberType, json: anyType, headers: responseHeadersType }, ["headers"]);
 const textResponseType = object({ status: numberType, text: stringType, contentType: stringType, headers: responseHeadersType }, ["contentType", "headers"]);
 const streamResponseType = object({ status: numberType, stream: streamProducerType, headers: responseHeadersType }, ["headers"]);
 const serveResponseAlias: ValueType = { kind: "union", members: [jsonResponseType, textResponseType, streamResponseType] };
+const openApiDocumentType = object({
+  openapi: stringType,
+  info: object({ title: stringType, version: stringType }),
+  paths: { kind: "record", value: anyType },
+});
+const routeDocumentationType = object({
+  summary: optional(stringType),
+  description: optional(stringType),
+  tags: optional(listStringType),
+  status: optional(numberType),
+  errors: optional({ kind: "map", key: numberType, value: stringType }),
+  documented: optional(boolType),
+}, ["summary", "description", "tags", "status", "errors", "documented"]);
+const routeDocumentationMapType: ValueType = { kind: "map", key: stringType, value: routeDocumentationType };
 const handlerType = functionType(["request"], [serveRequestType], promise(serveResponseAlias));
+const serveTargetType: ValueType = { kind: "union", members: [handlerType, serveAppType] };
+const middlewareNextType = functionType([], [], promise(serveResponseAlias));
+const middlewareType = functionType(["request", "next"], [serveRequestType, middlewareNextType], promise(serveResponseAlias));
+const middlewareListType: ValueType = { kind: "list", element: middlewareType };
+const middlewareInputType: ValueType = { kind: "union", members: [middlewareType, middlewareListType] };
+const providerType: ValueType = { kind: "extension", extensionId: "@velarscript/node", family: "serve-provider", role: "provider", properties: new Map(), requiredProperties: new Set(), arguments: [unknownType, unknownType], display: { kind: "named", name: "Provider" } };
+const routeInputType: ValueType = { kind: "extension", extensionId: "@velarscript/node", family: "serve-input", role: "query", properties: new Map(), requiredProperties: new Set(), arguments: [unknownType], display: { kind: "named", name: "RouteInput" } };
+const uploadType: ValueType = { kind: "named", name: "Upload", identity: "velar/serve#type:Upload" };
+const stringOrNullType: ValueType = { kind: "union", members: [stringType, nullType] };
+const inputType = object({
+  query: namedIntrinsic("serve.input.query", ["name", "default"], [stringType, stringOrNullType], routeInputType, 0),
+  header: namedIntrinsic("serve.input.header", ["name", "default"], [stringType, stringOrNullType], routeInputType, 0),
+  cookie: namedIntrinsic("serve.input.cookie", ["name", "default"], [stringType, stringOrNullType], routeInputType, 0),
+  form: namedIntrinsic("serve.input.form", ["target"], [anyType], routeInputType),
+  upload: namedIntrinsic("serve.input.upload", ["name", "maxBytes"], [stringType, numberType], routeInputType, 0),
+  dependency: namedIntrinsic("serve.input.dependency", ["provider"], [unknownType], routeInputType),
+  request: namedIntrinsic("serve.input.request", [], [], routeInputType, 0),
+});
+const securityType = object({
+  apiKey: namedIntrinsic("serve.security.apiKey", ["name", "source"], [stringType, stringType], routeInputType, 1),
+  basic: namedIntrinsic("serve.security.basic", ["realm"], [stringType], routeInputType, 0),
+  bearer: namedIntrinsic("serve.security.bearer", ["scheme"], [stringType], routeInputType, 0),
+  oauth2: namedIntrinsic("serve.security.oauth2", ["authorizationUrl", "tokenUrl", "scopes"], [stringType, stringType, listStringType], routeInputType, 1),
+  openId: namedIntrinsic("serve.security.openId", ["url"], [stringType], routeInputType),
+});
+const releaseProviderType = functionType(["value"], [unknownType], unknownType);
+const errorHandlerType = functionType(["error", "request"], [anyType, serveRequestType], promise(serveResponseAlias));
+const accessLoggerType = functionType(["entry"], [object({method: stringType, path: stringType, status: numberType, durationMs: numberType})], unknownType);
+const middlewareFactoriesType = object({
+  cors: functionType(["origins", "methods", "headers", "credentials", "maxAge"], [listStringType, listStringType, listStringType, boolType, numberType], middlewareType, 0),
+  trustedHosts: functionType(["hosts"], [listStringType], middlewareType),
+  requestId: functionType(["header"], [stringType], middlewareType, 0),
+  accessLog: functionType(["write"], [accessLoggerType], middlewareType),
+  securityHeaders: functionType([], [], middlewareType),
+  compression: functionType(["minimumBytes"], [numberType], middlewareType, 0),
+  errors: functionType(["handle"], [errorHandlerType], middlewareType),
+  timeout: functionType(["milliseconds"], [numberType], middlewareType),
+  concurrency: functionType(["maximum"], [numberType], middlewareType),
+});
+const lifecycleHookType = functionType([], [], unknownType);
+const backgroundTaskType = functionType([], [], unknownType);
+const testResponseType: ValueType = { kind: "named", name: "TestResponse", identity: "velar/server-test#type:TestResponse" };
+const testClientType: ValueType = { kind: "named", name: "TestClient", identity: "velar/server-test#type:TestClient" };
+const testUploadType = object({filename: stringType, contentType: optional(stringType), data: {kind: "union", members: [stringType, bytesType]}}, ["contentType"]);
+const testRequestOptionsType = object({
+  headers: optional(stringMapType),
+  json: optional(anyType),
+  text: optional(stringType),
+  form: optional(stringMapType),
+  files: optional({kind: "map", key: stringType, value: testUploadType}),
+}, ["headers", "json", "text", "form", "files"]);
+const testRequestType = functionType(["method", "path", "options"], [stringType, stringType, testRequestOptionsType], promise(testResponseType), 2);
+const testMethodType = functionType(["path", "options"], [stringType, testRequestOptionsType], promise(testResponseType), 1);
 const fileInfoType = object({
   name: stringType,
   kind: stringType,
@@ -204,60 +313,6 @@ const nodeHttpType = object({
   delete: functionType(["url", "options"], [stringType, nodeHttpOptionsType], nodeHttpRequestType, 1),
   head: functionType(["url", "options"], [stringType, nodeHttpOptionsType], nodeHttpRequestType, 1),
 });
-const sqliteDatabaseIdentity = "velar/sqlite#type:Database";
-const sqliteStatementIdentity = "velar/sqlite#type:Statement";
-const sqliteTransactionIdentity = "velar/sqlite#type:Transaction";
-const sqliteErrorIdentity = "velar/sqlite#class:SqliteError";
-const sqliteBackpressureErrorIdentity = "velar/sqlite#class:SqliteBackpressureError";
-const sqliteDatabaseType: ValueType = { kind: "named", name: "Database", identity: sqliteDatabaseIdentity };
-const sqliteStatementType: ValueType = { kind: "named", name: "Statement", identity: sqliteStatementIdentity };
-const sqliteTransactionType: ValueType = { kind: "named", name: "Transaction", identity: sqliteTransactionIdentity };
-const sqliteRowType: ValueType = { kind: "parameter", name: "Row", index: 0 };
-const sqliteRead = (name: "one" | "all", withSql: boolean): ValueType => ({
-  kind: "function", typeParameterNames: ["Row"], parameterNames: withSql ? ["sql", "params", "RowType"] : ["params", "RowType"],
-  parameters: [
-    ...(withSql ? [stringType] : []), listUnknownType, { kind: "runtimeType", value: sqliteRowType },
-  ],
-  requiredParameters: withSql ? 3 : 2,
-  result: promise(name === "one" ? optional(sqliteRowType) : { kind: "list", element: sqliteRowType }),
-});
-const sqliteDatabaseFields = new Map<string, ValueType>([
-  ["execute", functionType(["sql", "params"], [stringType, listUnknownType], promise(numberType), 1)],
-  ["one", sqliteRead("one", true)], ["all", sqliteRead("all", true)],
-  ["prepare", functionType(["sql"], [stringType], promise(sqliteStatementType))],
-  ["transaction", functionType([], [], promise(sqliteTransactionType))],
-  ["close", functionType([], [], promise(nullType))],
-]);
-const sqliteStatementFields = new Map<string, ValueType>([
-  ["execute", functionType(["params"], [listUnknownType], promise(numberType), 0)],
-  ["one", sqliteRead("one", false)], ["all", sqliteRead("all", false)],
-  ["close", functionType([], [], promise(nullType))],
-]);
-const sqliteTransactionFields = new Map<string, ValueType>([
-  ["execute", functionType(["sql", "params"], [stringType, listUnknownType], promise(numberType), 1)],
-  ["one", sqliteRead("one", true)], ["all", sqliteRead("all", true)],
-  ["prepare", functionType(["sql"], [stringType], promise(sqliteStatementType))],
-  ["commit", functionType([], [], promise(nullType))], ["rollback", functionType([], [], promise(nullType))],
-  ["close", functionType([], [], promise(nullType))],
-]);
-const sqliteOptionsType = object({
-  busyTimeout: optional(numberType), queueCapacity: optional(numberType), maxRows: optional(numberType), maxResultBytes: optional(numberType),
-});
-const sqliteErrorClass: ClassInfo = {
-  identity: sqliteErrorIdentity,
-  parameters: [stringType, optional(stringType)], parameterNames: ["message", "code"], requiredParameters: 0,
-  base: "Error", abstract: false,
-  fields: new Map([["code", { mutable: false, type: optional(stringType) }]]),
-  getters: new Set(), abstractGetters: new Set(), methods: new Map(), abstractMethods: new Set(),
-  staticFields: new Map(), staticGetters: new Set(), staticMethods: new Map(),
-};
-const sqliteBackpressureErrorClass: ClassInfo = {
-  identity: sqliteBackpressureErrorIdentity,
-  parameters: [stringType], parameterNames: ["message"], requiredParameters: 0,
-  base: "Error", abstract: false, fields: new Map(),
-  getters: new Set(), abstractGetters: new Set(), methods: new Map(), abstractMethods: new Set(),
-  staticFields: new Map(), staticGetters: new Set(), staticMethods: new Map(),
-};
 const httpTransportPhaseIdentity = "velar/http#enum:HttpTransportPhase";
 const httpTransportPhaseMembers = new Set(["request", "response"]);
 const httpTransportPhaseType: ValueType = { kind: "enum", name: "HttpTransportPhase", identity: httpTransportPhaseIdentity };
@@ -294,54 +349,108 @@ const httpTransportErrorClass: ClassInfo = {
 };
 
 export const nodeModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map([
-  ["velar/sqlite", moduleInterface(
+  ["velar/server-test", moduleInterface(
     new Map([
-      ["Database", { kind: "typeObject", name: "Database", value: sqliteDatabaseType }],
-      ["Statement", { kind: "typeObject", name: "Statement", value: sqliteStatementType }],
-      ["Transaction", { kind: "typeObject", name: "Transaction", value: sqliteTransactionType }],
-      ["SqliteError", { kind: "classConstructor", name: "SqliteError", identity: sqliteErrorIdentity }],
-      ["SqliteBackpressureError", { kind: "classConstructor", name: "SqliteBackpressureError", identity: sqliteBackpressureErrorIdentity }],
-      ["open", functionType(["path", "options"], [stringType, sqliteOptionsType], promise(sqliteDatabaseType), 1)],
+      ["TestClient", {kind: "typeObject", name: "TestClient", value: testClientType}],
+      ["TestResponse", {kind: "typeObject", name: "TestResponse", value: testResponseType}],
+      ["client", functionType(["app", "overrides"], [serveAppType, {kind: "map", key: providerType, value: unknownType}], promise(testClientType), 1)],
     ]),
     new Map([
-      ["Database", sqliteDatabaseFields], ["Statement", sqliteStatementFields], ["Transaction", sqliteTransactionFields],
+      ["TestClient", new Map([
+        ["request", testRequestType], ["get", testMethodType], ["post", testMethodType], ["put", testMethodType], ["patch", testMethodType], ["delete", testMethodType], ["close", functionType(["grace"], [numberType], promise(nullType), 0)],
+      ])],
+      ["TestResponse", new Map([
+        ["status", numberType], ["headers", stringMapType], ["text", functionType([], [], promise(stringType))], ["json", functionType([], [], promise(unknownType))],
+      ])],
     ]),
-    new Map([
-      ["Database", sqliteDatabaseIdentity], ["Statement", sqliteStatementIdentity], ["Transaction", sqliteTransactionIdentity],
-    ]),
-    new Map(),
-    new Map([["SqliteError", sqliteErrorClass], ["SqliteBackpressureError", sqliteBackpressureErrorClass]]),
+    new Map([["TestClient", "velar/server-test#type:TestClient"], ["TestResponse", "velar/server-test#type:TestResponse"]]),
   )],
   ["velar/serve", moduleInterface(
     new Map([
+      ["Request", { kind: "typeObject", name: "Request", value: serveRequestType }],
       ["ServeRequest", { kind: "typeObject", name: "ServeRequest" }],
       ["ServeResponse", { kind: "typeObject", name: "ServeResponse" }],
+      ["ServeApp", { kind: "typeObject", name: "ServeApp", value: serveAppType }],
       ["Server", { kind: "typeObject", name: "Server" }],
+      ["HttpError", { kind: "classConstructor", name: "HttpError", identity: serveHttpErrorIdentity }],
       ["RequestBodyTooLargeError", { kind: "classConstructor", name: "RequestBodyTooLargeError", identity: requestBodyTooLargeErrorIdentity }],
-      ["serve", functionType(["handler", "port", "host"], [handlerType, numberType, stringType], promise(serverType), 2)],
+      ["Upload", { kind: "typeObject", name: "Upload", value: uploadType }],
+      ["Provider", { kind: "typeObject", name: "Provider", value: providerType }],
+      ["RouteDocumentation", { kind: "typeObject", name: "RouteDocumentation" }],
+      ["input", inputType],
+      ["security", securityType],
+      ["provide", namedIntrinsic("serve.provide", ["inputs", "resolve", "scope", "release", "eager"], [unknownType, unknownType, stringType, releaseProviderType, boolType], providerType, 2)],
+      ["middleware", middlewareFactoriesType],
+      ["serve", functionType(["app", "port", "host", "maxBodyBytes"], [serveTargetType, numberType, stringType, numberType], promise(serverType), 2)],
+      ["json", namedIntrinsic("serve.response.json", ["value", "status", "headers"], [anyType, numberType, optional(responseHeadersType)], jsonResponseType, 1)],
+      ["created", namedIntrinsic("serve.response.created", ["value", "headers"], [anyType, optional(responseHeadersType)], jsonResponseType, 1)],
+      ["noContent", namedIntrinsic("serve.response.noContent", ["completion", "headers"], [nullType, optional(responseHeadersType)], textResponseType, 0)],
+      ["redirect", namedIntrinsic("serve.response.redirect", ["location", "status", "headers"], [stringType, numberType, optional(responseHeadersType)], textResponseType, 1)],
+      ["text", namedIntrinsic("serve.response.text", ["value", "status", "contentType", "headers"], [stringType, numberType, stringType, optional(responseHeadersType)], textResponseType, 1)],
+      ["stream", functionType(["producer", "status", "headers"], [streamProducerType, numberType, optional(responseHeadersType)], streamResponseType, 1)],
+      ["sse", namedIntrinsic("serve.response.sse", ["producer", "headers"], [sseProducerType, optional(responseHeadersType)], streamResponseType, 1)],
+      ["file", functionType(["path", "root", "fallback"], [stringType, stringType, optional(stringType)], serveResponseAlias, 1)],
+      ["prefix", functionType(["path", "app"], [stringType, serveAppType], serveAppType)],
+      ["staticFiles", functionType(["path", "root", "fallback"], [stringType, stringType, optional(stringType)], serveAppType, 2)],
+      ["use", functionType(["app", "middleware"], [serveAppType, middlewareInputType], serveAppType)],
+      ["bodyLimit", functionType(["app", "maxBytes"], [serveAppType, numberType], serveAppType)],
+      ["openapi", functionType(["app", "title", "version"], [serveAppType, optional(stringType), stringType], openApiDocumentType, 1)],
+      ["docs", functionType(["app", "title", "version", "path", "openapiPath", "routes"], [serveAppType, optional(stringType), stringType, stringType, stringType, routeDocumentationMapType], serveAppType, 1)],
+      ["lifecycle", functionType(["app", "startup", "shutdown"], [serveAppType, lifecycleHookType, lifecycleHookType], serveAppType, 1)],
+      ["background", namedIntrinsic("serve.response.background", ["response", "task"], [serveResponseAlias, backgroundTaskType], serveResponseAlias)],
+      ["setCookie", namedIntrinsic("serve.response.setCookie", ["response", "name", "value", "path", "httpOnly", "secure", "sameSite", "maxAge"], [serveResponseAlias, stringType, stringType, stringType, boolType, boolType, stringType, optional(numberType)], serveResponseAlias, 3)],
+      ["clearCookie", namedIntrinsic("serve.response.clearCookie", ["response", "name", "path"], [serveResponseAlias, stringType, stringType], serveResponseAlias, 2)],
       ["fileResponse", functionType(["root", "path", "fallback"], [stringType, stringType, optional(stringType)], serveResponseAlias, 2)],
     ]),
     new Map([
+      ["Request", new Map([
+        ["method", stringType],
+        ["path", stringType],
+        ["query", stringMapType],
+        ["queryAll", {kind: "map", key: stringType, value: listStringType}],
+        ["headers", stringMapType],
+        ["cancellation", cancellationType],
+        ["text", functionType(["maxBytes"], [numberType], promise(stringType), 0)],
+        ["bytes", functionType(["maxBytes"], [numberType], promise(bytesType), 0)],
+        ["json", functionType(["maxBytes"], [numberType], promise(unknownType), 0)],
+        ["parse", namedIntrinsic("runtime.parseAsync", ["target", "maxBytes"], [anyType, numberType], promise(anyType), 1)],
+      ])],
       ["ServeRequest", new Map([
         ["method", stringType],
         ["path", stringType],
         ["query", stringMapType],
+        ["queryAll", {kind: "map", key: stringType, value: listStringType}],
         ["headers", stringMapType],
+        ["cancellation", cancellationType],
         ["text", functionType(["maxBytes"], [numberType], promise(stringType), 0)],
+        ["bytes", functionType(["maxBytes"], [numberType], promise(bytesType), 0)],
         ["json", functionType(["maxBytes"], [numberType], promise(unknownType), 0)],
         ["parse", namedIntrinsic("runtime.parseAsync", ["target", "maxBytes"], [anyType, numberType], promise(anyType), 1)],
       ])],
       ["Server", new Map([
         ["port", numberType],
-        ["stop", functionType([], [], promise(nullType))],
+        ["stop", functionType(["grace"], [numberType], promise(nullType), 0)],
+      ])],
+      ["ServeApp", new Map()],
+      ["Upload", new Map([
+        ["name", stringType],
+        ["filename", stringType],
+        ["contentType", stringType],
+        ["size", numberType],
+        ["text", functionType([], [], promise(stringType))],
+        ["bytes", functionType([], [], promise(bytesType))],
+        ["save", functionType(["path"], [stringType], promise(nullType))],
       ])],
     ]),
     new Map([
+      ["Request", "velar/serve#type:ServeRequest"],
       ["ServeRequest", "velar/serve#type:ServeRequest"],
+      ["ServeApp", "velar/serve#type:ServeApp"],
       ["Server", "velar/serve#type:Server"],
+      ["Upload", "velar/serve#type:Upload"],
     ]),
-    new Map([["ServeResponse", serveResponseAlias]]),
-    new Map([["RequestBodyTooLargeError", requestBodyTooLargeErrorClass]]),
+    new Map<string, ValueType>([["ServeResponse", serveResponseAlias], ["Provider", providerType], ["RouteDocumentation", routeDocumentationType]]),
+    new Map([["HttpError", serveHttpErrorClass], ["RequestBodyTooLargeError", requestBodyTooLargeErrorClass]]),
   )],
   ["velar/fs", moduleInterface(
     new Map([
@@ -440,7 +549,13 @@ export const nodeModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Ma
 ]);
 
 export const nodeModuleSources: ReadonlyMap<string, string> = new Map([
-  ["velar/sqlite", VELAR_NODE_SQLITE_RUNTIME.replace("WORKER_SOURCE", JSON.stringify(VELAR_NODE_SQLITE_WORKER_SOURCE))],
+  ["velar/server-test", String.raw`
+import { ServeApp as __velarServerTestApp } from "velar/serve";
+const __velarServerTestBridge = __velarServerTestApp.__velarCompilerBridge;
+export async function client(app, overrides = null) { return await __velarServerTestBridge.testClient(app, overrides); }
+export const TestClient = Object.freeze({is(value) { return !!value && typeof value === "object" && typeof value.request === "function" && typeof value.close === "function"; }, parse(value) { if (!TestClient.is(value)) throw new TypeError("Value does not match TestClient"); return value; }});
+export const TestResponse = Object.freeze({is(value) { return !!value && typeof value === "object" && Number.isSafeInteger(value.status) && typeof value.text === "function" && typeof value.json === "function"; }, parse(value) { if (!TestResponse.is(value)) throw new TypeError("Value does not match TestResponse"); return value; }});
+`.trimStart()],
   ["velar/websocket", VELAR_NODE_WEBSOCKET_RUNTIME],
   ["velar/worker", VELAR_NODE_WORKER_RUNTIME],
   [VELAR_NODE_HOST_MODULE, VELAR_SHARED_NODE_HOST_RUNTIME.replace("WORKER_SOURCE", JSON.stringify(VELAR_NODE_HOST_WORKER_SOURCE))],
@@ -980,11 +1095,12 @@ ${VELAR_NODE_SERVE_RUNTIME}
 ]);
 
 export const nodeModuleDependencies: ReadonlyMap<string, readonly string[]> = new Map([
+  ["velar/server-test", ["velar/serve"]],
   ["velar/worker", ["velar/worker-manifest", "velar/task"]],
   ["velar/websocket", ["velar/serve"]],
   ["velar/http", [VELAR_NODE_HOST_MODULE, "velar/binary"]],
   ["velar/fs", [VELAR_NODE_HOST_MODULE, "velar/binary"]],
-  ["velar/serve", [VELAR_NODE_HOST_MODULE]],
+  ["velar/serve", [VELAR_NODE_HOST_MODULE, VELAR_ERROR_NORMALIZATION_MODULE, VELAR_COLLECTION_LOWERING_MODULE, "velar/binary", "velar/fs", "velar/task"]],
   // D50 rule 89: the host proxy rebuilds the compiler-owned capability error
   // classes, so its module carries that dependency edge.
   [VELAR_NODE_HOST_MODULE, [VELAR_ERROR_NORMALIZATION_MODULE]],
@@ -1010,10 +1126,61 @@ export const velarNodeCompilerExtension: CompilerExtension = Object.freeze({
   id: "@velarscript/node",
   contract: Object.freeze({ protocolVersion: 1, apiVersion: VELAR_NODE_API_VERSION, kind: "capability", extends: Object.freeze({}) }),
   capabilities: Object.freeze(["node"]),
+  formatting: Object.freeze({
+    scanOpaqueSource: scanNodePathPatternForFormatting,
+  }),
+  lexical: Object.freeze({
+    contextualKeywords: new Set(["server"]),
+    scan: scanNodeToken,
+  }),
+  parser: Object.freeze({
+    create(tokens: readonly Token[], lexicalExtensions: readonly CompilerLexicalExtension[]) {
+      return new VelarNodeParser(tokens, lexicalExtensions);
+    },
+  }),
+  syntax: Object.freeze({
+    statementConstructs: NODE_STATEMENT_CONSTRUCTS,
+    statementConstructKey: nodeStatementConstructKey,
+  }),
+  analyzer: Object.freeze({
+    create(context: AnalysisContext, extensions: readonly CompilerAnalysisExtension[]) {
+      return new VelarNodeAnalyzer(context, extensions);
+    },
+  }),
+  semantic: velarNodeSemanticExtension,
+  inspection: velarNodeInspectionExtension,
+  analysis: Object.freeze({
+    directAwaitStatement: nodeServerStatementContainsDirectAwait,
+    inferIntrinsic: inferNodeIntrinsic,
+  }),
   modules: Object.freeze({
     apiVersion: VELAR_NODE_API_VERSION,
     interfaces: nodeModuleInterfaces,
     sources: nodeModuleSources,
     dependencies: nodeModuleDependencies,
   }),
+  editor: Object.freeze({
+    keywordDocumentation: Object.freeze({
+      server: "Declares an immutable Node HTTP route table.",
+      "@get": "Declares an anonymous GET route in the current server.",
+      "@post": "Declares an anonymous POST route in the current server.",
+      "@put": "Declares an anonymous PUT route in the current server.",
+      "@patch": "Declares an anonymous PATCH route in the current server.",
+      "@delete": "Declares an anonymous DELETE route in the current server.",
+    }),
+  }),
+  createEmitter(
+    hints: LoweringHints,
+    forcedFunctionExports: ReadonlySet<string>,
+    _resourceContents: ReadonlyMap<string, string>,
+    _extensionImports: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
+    options: CompilerEmitterOptions,
+  ) {
+    return new NodeJavaScriptEmitter(hints, forcedFunctionExports, options);
+  },
 });
+
+/** Conventional package entry used by the project extension loader. */
+export const velarCompilerExtension = velarNodeCompilerExtension;
+
+export { velarProjectExtension, type VelarNodeConfig } from "./project-config.ts";

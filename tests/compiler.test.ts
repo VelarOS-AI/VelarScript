@@ -10739,17 +10739,20 @@ const wrongMember = wrongValue.count
 test("0.5 Core standard library combines typed ergonomics with explicit platform boundaries", async () => {
   const api = standardModuleApi();
   assert.deepEqual(Object.keys(api.modules), [
-    "velar/collections", "velar/text", "velar/math", "velar/binary", "velar/random", "velar/task", "velar/worker", "velar/websocket", "velar/msgpack", "velar/compression", "velar/noise", "velar/json", "velar/async", "velar/url", "velar/time", "velar/id", "velar/log",
-    "velar/test", "velar/sqlite", "velar/serve", "velar/fs", "velar/env", "velar/host", "velar/terminal", "velar/path", "velar/process", "velar/look", "velar/app", "velar/config", "velar/web", "velar/http", "velar/storage", "velar/forms", "velar/browser", "velar/files", "velar/realtime", "velar/web-test",
+    "velar/collections", "velar/text", "velar/math", "velar/binary", "velar/random", "velar/task", "velar/worker", "velar/websocket", "velar/json", "velar/async", "velar/url", "velar/time", "velar/id", "velar/log",
+    "velar/test", "velar/server-test", "velar/serve", "velar/fs", "velar/env", "velar/host", "velar/terminal", "velar/path", "velar/process", "velar/look", "velar/app", "velar/config", "velar/web", "velar/http", "velar/storage", "velar/forms", "velar/browser", "velar/files", "velar/realtime", "velar/web-test",
   ]);
   // Text gained codePoint/fromCodePoint, velar/json retired deepEqual, and
   // velar/look retired the unreachable Opacity name; TXT-U3 then added
   // Text.normalize, D57 rule 137 retired velar/fs's Blob and readBlob — the
   // same unreachable-name judgment Opacity was deleted under — and D65 rule
   // 171 published velar/log's LogRecord, which is the record useSink already
-  // handed over and had no name for.
-  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 346);
-  assert.equal(Object.values(api.modules).slice(0, 17).reduce((total, exports_) => total + exports_.length, 0), 173);
+  // handed over and had no name for. The Node server framework then added the
+  // explicit json response and route-table bodyLimit operations. Concrete
+  // codecs, noise, and database engines now live in independently versioned
+  // source packages rather than occupying the Standard namespace.
+  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 361);
+  assert.equal(Object.values(api.modules).slice(0, 14).reduce((total, exports_) => total + exports_.length, 0), 163);
   assert.equal(api.modules["velar/collections"]?.length, 28);
   assert.equal(api.modules["velar/text"]?.length, 23);
   assert.equal(api.modules["velar/math"]?.length, 30);
@@ -10759,7 +10762,8 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
   assert.deepEqual(api.modules["velar/time"], ["date", "format", "iso", "monotonic", "now", "parse", "parts", "utc"]);
   assert.deepEqual(api.modules["velar/id"], ["isUuid", "uuid"]);
   assert.deepEqual(api.modules["velar/log"], ["LogRecord", "level", "log", "logger", "setLevel", "useSink"]);
-  assert.deepEqual(api.modules["velar/serve"], ["RequestBodyTooLargeError", "ServeRequest", "ServeResponse", "Server", "fileResponse", "serve"]);
+  assert.deepEqual(api.modules["velar/server-test"], ["TestClient", "TestResponse", "client"]);
+  assert.deepEqual(api.modules["velar/serve"], ["HttpError", "Provider", "Request", "RequestBodyTooLargeError", "RouteDocumentation", "ServeApp", "ServeRequest", "ServeResponse", "Server", "Upload", "background", "bodyLimit", "clearCookie", "created", "docs", "file", "fileResponse", "input", "json", "lifecycle", "middleware", "noContent", "openapi", "prefix", "provide", "redirect", "security", "serve", "setCookie", "sse", "staticFiles", "stream", "text", "use"]);
   assert.deepEqual(api.modules["velar/fs"], ["FileWatchBatch", "FileWatcher", "appendText", "canonical", "copyFile", "createBytes", "createText", "exists", "info", "list", "makeDirectory", "move", "readBytes", "readText", "removeFile", "replaceTextIfMatches", "watchFiles", "writeBytes", "writeText"]);
   assert.deepEqual(api.modules["velar/env"], ["get", "require"]);
   assert.deepEqual(api.modules["velar/host"], ["exit", "onShutdown"]);
@@ -11247,7 +11251,7 @@ test("Core builtins and standard modules share one named-argument ABI", async ()
     if (type.kind === "union") for (const member of type.members) assertNamedSurface(member, `${path} member`);
   };
   for (const source of [
-    "velar/collections", "velar/text", "velar/math", "velar/binary", "velar/random", "velar/task", "velar/worker", "velar/websocket", "velar/msgpack", "velar/compression", "velar/noise", "velar/json", "velar/async",
+    "velar/collections", "velar/text", "velar/math", "velar/binary", "velar/random", "velar/task", "velar/worker", "velar/websocket", "velar/json", "velar/async",
     "velar/url", "velar/time", "velar/id", "velar/log", "velar/test",
   ]) {
     for (const [name, type] of standardModuleInterface(source)!.exports) {
@@ -15907,6 +15911,9 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   assert.equal(createdPackage.scripts.preview, "velar preview");
   assert.equal(createdPackage.scripts["verify:deployment"], "velar verify-deployment");
   assert.match(await readFile(join(projectRoot, "src", "main.vel"), "utf8"), /import \{App\} from "\.\/app\.vel"/u);
+  const webAgents = await readFile(join(projectRoot, "AGENTS.md"), "utf8");
+  assert.match(webAgents, /velar skill core.*velar skill web/su);
+  assert.doesNotMatch(webAgents, /velar skill node|velar skill desktop/u);
   const generatedApp = await readFile(join(projectRoot, "src", "app.vel"), "utf8");
   assert.match(generatedApp, /VelarScript Web/u);
   assert.equal(
@@ -15997,6 +16004,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   assert.match(libraryPackage.scripts.validate ?? "", /npm run pack:check$/u);
   assert.equal(libraryPackage.devDependencies["@velarscript/web"], undefined);
   assert.deepEqual(JSON.parse(await readFile(join(libraryRoot, "velar.json"), "utf8")).extensions, []);
+  assert.doesNotMatch(await readFile(join(libraryRoot, "AGENTS.md"), "utf8"), /velar skill (?:web|node|desktop)/u);
   const libraryCheck = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "check", libraryRoot], { cwd: directory, encoding: "utf8" });
   assert.equal(libraryCheck.status, 0, libraryCheck.stderr);
   const libraryFormat = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "format", libraryRoot, "--check"], { cwd: directory, encoding: "utf8" });
@@ -16054,8 +16062,15 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     scripts: Record<string, string>;
   };
   assert.equal(nodePackage.dependencies["@velarscript/node"], "^0.11.1");
-  assert.equal(nodePackage.scripts.dev, "velar run");
-  assert.match(await readFile(join(nodeRoot, "src", "app.vel"), "utf8"), /from "velar\/serve"/u);
+  assert.equal(nodePackage.scripts.dev, "velar dev");
+  assert.equal(nodePackage.scripts.start, "velar serve");
+  const nodeManifest = JSON.parse(await readFile(join(nodeRoot, "velar.json"), "utf8"));
+  assert.deepEqual(nodeManifest.extensions, ["@velarscript/node"]);
+  assert.deepEqual(nodeManifest.node, {app: "app", host: "127.0.0.1", port: 3000, maxBodyBytes: 16_777_216, build: {sourceMaps: false}});
+  const nodeAgents = await readFile(join(nodeRoot, "AGENTS.md"), "utf8");
+  assert.match(nodeAgents, /velar skill core.*velar skill node/su);
+  assert.doesNotMatch(nodeAgents, /velar skill web|velar skill desktop/u);
+  assert.match(await readFile(join(nodeRoot, "src", "app.vel"), "utf8"), /@get\(p"\/api\/hello"\)/u);
   assert.match(await readFile(join(nodeRoot, "public", "index.html"), "utf8"), /velarscript-mark\.svg/u);
   const nodeCheck = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "check", nodeRoot], { cwd: directory, encoding: "utf8" });
   assert.equal(nodeCheck.status, 0, nodeCheck.stderr);
@@ -16074,6 +16089,9 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   assert.equal(desktopPackage.dependencies["@velarscript/desktop"], "^0.11.1");
   assert.equal(desktopPackage.scripts.package, "velar package");
   assert.equal(desktopPackage.scripts["test:browser"], "velar test --browser=all");
+  const desktopAgents = await readFile(join(desktopRoot, "AGENTS.md"), "utf8");
+  assert.match(desktopAgents, /velar skill core.*velar skill web.*velar skill desktop/su);
+  assert.doesNotMatch(desktopAgents, /velar skill node/u);
   assert.match(await readFile(join(desktopRoot, "src", "app.vel"), "utf8"), /VelarScript Desktop/u);
   assert.match(await readFile(join(desktopRoot, "public", "velarscript-mark.svg"), "utf8"), /<path d=/u);
   await linkWorkspaceDesktopExtension(desktopRoot);
@@ -16108,7 +16126,11 @@ test("CLI help is command-specific and malformed top-level invocations fail clea
   const help = spawnSync(process.execPath, [cli, "help", "build"], { encoding: "utf8" });
   assert.equal(help.status, 0, help.stderr);
   assert.match(help.stdout, /Usage: velar build/u);
-  assert.match(help.stdout, /isolated framework application output/u);
+  assert.match(help.stdout, /standalone Node application/u);
+
+  const serveHelp = spawnSync(process.execPath, [cli, "help", "serve"], { encoding: "utf8" });
+  assert.equal(serveHelp.status, 0, serveHelp.stderr);
+  assert.match(serveHelp.stdout, /Node ServeApp.*node\.host and node\.port/u);
 
   const inlineHelp = spawnSync(process.execPath, [cli, "test", "--help"], { encoding: "utf8" });
   assert.equal(inlineHelp.status, 0, inlineHelp.stderr);

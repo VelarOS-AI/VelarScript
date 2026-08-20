@@ -50,8 +50,8 @@ npm run dev
 
 Other templates: `--template node | desktop | docs | library | component`.
 
-Then read [Getting started](docs/getting-started.md), or run `velar skill` to
-print the brief you hand your model.
+Then read [Getting started](docs/getting-started.md), or follow the generated
+`AGENTS.md` and run the owner-specific `velar skill` commands it names.
 
 ## What it looks like
 
@@ -153,7 +153,7 @@ The full reasoning is in [Why VelarScript exists](docs/why-velarscript.md).
 - [Language charter](docs/language-charter.md) — the full contract
 - [Standard library](docs/standard-library.md) · [Web framework](docs/web-api.md)
 - [Binary data and concurrency](docs/binary-data-and-concurrency.md) — checked memory, deterministic workers, transport, and persistence
-- [AI skill brief](docs/ai-skill.md) — what `velar skill` prints
+- [AI skill briefs](docs/ai-skill.md) — Core, plus separate [Web](docs/ai-skill-web.md), [Node](docs/ai-skill-node.md), and [Desktop](docs/ai-skill-desktop.md) owners
 - [Escape hatches](docs/escape-hatches.md) · [JavaScript boundary](docs/javascript-bridge.md)
 
 **Working on the compiler**

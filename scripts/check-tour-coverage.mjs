@@ -104,13 +104,13 @@ const WEB_TEST_TOUR_CHAPTER = join("web", "13-browser.browser.test.vel");
 // counts and leaves these alone; shrinking a table below its floor is a
 // deliberate act that must be acknowledged here.
 const FLOORS = Object.freeze({
-  projects: 3,
-  modules: 41,
+  projects: 4,
+  modules: 43,
   "hard-keyword": 40,
   // Ten from the Web extension's `lexical.contextualKeywords` and ten from
   // Core's own roster (D62 rule 157). Before that roster existed the floor was
   // 10, and a Core-only checkout required none of Core's own words.
-  "contextual-keyword": 20,
+  "contextual-keyword": 21,
   "reserved-binding": 6,
   "numeric-suffix": 13,
   "extension-global": 3,
@@ -126,12 +126,13 @@ const FLOORS = Object.freeze({
   // D55 rule 120: `def` and `type`. A form removed from the roster without a
   // ruling drops this below its floor rather than quietly checking less.
   "generic-declaration": 2,
-  // The 26 members of `CoreStatement` plus the 11 the Web extension's parser
-  // adds — ten node kinds, and `unsafe css` twice because its `source` is a
-  // tagged union whose two spellings are separately required. Removing a
+  // The 26 members of `CoreStatement`, the Web extension's 16 refined
+  // constructs, and Node's server declaration. `unsafe css` counts twice
+  // because its `source` is a tagged union whose spellings are separately
+  // required. Removing a
   // statement form from the language is what may lower this; an extension that
   // stops publishing `syntax` fails on its own terms above.
-  "statement-construct": 37,
+  "statement-construct": 38,
   "look-property": 225,
   "look-hook": 9,
   "look-target": 7,
@@ -191,7 +192,7 @@ const exemptions = [
   },
   {
     label: "velar.json configuration vocabulary",
-    reason: "not source-language spelling; the tour's three manifests are corpus, but this gate does not read them",
+    reason: "not source-language spelling; the tour's four manifests are corpus, but this gate does not read them",
     withheldFrom: [],
     names: () => new Set(),
   },
@@ -209,7 +210,7 @@ const exemptions = [
   },
   {
     label: "`import js` naming a real third-party npm package",
-    reason: "official third-party dependencies are exposed only behind checked velar/msgpack, velar/compression, velar/noise, and velar/websocket modules; `node:crypto` remains the deliberate raw js/unsafe/extern/module example",
+    reason: "third-party dependencies are exposed through checked external source adapters such as @velarscript/msgpack, @velarscript/compression, and @velarscript/noise; `node:crypto` remains the deliberate raw js/unsafe/extern/module example",
     withheldFrom: [],
     names: () => new Set(),
   },

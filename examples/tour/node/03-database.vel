@@ -1,0 +1,26 @@
+/// Database models are ordinary source-library values. SQLite is one external
+/// Node adapter; neither the model contract nor the engine belongs to Core.
+
+import {Database, column, filter, model, select} from "@velarscript/database"
+import {open} from "@velarscript/sqlite"
+
+type Article:
+    id: string
+    title: string
+    published: bool
+
+const articles = model("articles", Article, {
+    id: column.text(primary=true),
+    title: column.text(),
+    published: column.boolean(defaultValue=false),
+})
+
+export async def findArticle(database: Database, id: string) -> Article?:
+    return await database.findOne(select(
+        articles,
+        where = filter.equal(articles, "id", id),
+        limit = 1,
+    ))
+
+export async def openArticleStore(path: string) -> Database:
+    return await open(path, {queueCapacity: 64, maxRows: 1000})

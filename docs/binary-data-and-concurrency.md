@@ -40,10 +40,11 @@ Data operands must be 32-bit integers and shift counts must be within `0..31`.
 
 ## Reproducible computation
 
-Use `velar/random` and `velar/noise`, never host `Math.random()`, for reproducible
-data. String and safe-integer seeds produce the same stream in Node and every
-supported browser. `fork(label)` derives a stream that is independent of the
-parent's consumption order, which makes scheduling order irrelevant to output.
+Use `velar/random` and the external `@velarscript/noise` adapter, never host
+`Math.random()`, for reproducible data. String and safe-integer seeds produce
+the same stream in Node and every supported browser. `fork(label)` derives a
+stream that is independent of the parent's consumption order, which makes
+scheduling order irrelevant to output.
 
 Long-running generators accept `Cancellation` and place explicit checkpoints
 at a useful granularity. A timeout on a Task or Worker call cancels the owned
@@ -139,22 +140,26 @@ The same `Bytes` flows through all official boundaries:
   normal EOF preserves already accepted messages until `next()` drains them,
   while limit/protocol failure discards the unread queue immediately. Node
   `listen` can share its HTTP port with a `velar/serve` handler.
-- Node `velar/sqlite`: parameterized BLOB values, typed rows, prepared
-  statements, and explicit transactions in an isolated database Worker.
+- External Node `@velarscript/sqlite`: parameterized BLOB values, typed models,
+  prepared statements, bounded streaming, and explicit transactions in an
+  isolated database Worker.
 - Web `velar/storage`: IndexedDB `getBytes`, `setBytes`, and atomic `batch`.
 
-MessagePack, compression, and noise use the official `velar/msgpack`,
-`velar/compression`, and `velar/noise` adapters. They are backed by `msgpackr`,
-`fflate`, and `simplex-noise`, but those packages do not define the VelarScript
-surface. Inflate and gunzip feed the decoder compressed input slices that shrink
-with the remaining output budget. The first output callback that would cross
-`maxBytes` aborts the decoder, so it neither reserves the default 64 MiB for a
-small payload nor continues consuming the compressed tail of a hostile stream.
+MessagePack, compression, and noise use the external `@velarscript/msgpack`,
+`@velarscript/compression`, and `@velarscript/noise` source adapters. They are
+backed by `msgpackr`, `fflate`, and `simplex-noise`, but those packages do not
+define the VelarScript surface. Inflate and gunzip feed the decoder compressed
+input slices that shrink with the remaining output budget. The first output
+callback that would cross `maxBytes` aborts the decoder, so it neither reserves
+the default 64 MiB for a small payload nor continues consuming the compressed
+tail of a hostile stream.
 
 SQLite transactions and every Worker, Task, WebSocket connection, server,
 statement, and database are owned handles. Use `using`; an uncommitted
 transaction rolls back, active work is cancelled and joined, sockets close, and
-queued callers receive the resource's terminal error.
+queued callers receive the resource's terminal error. SQLite is an external
+adapter rather than a Node language capability; the portable contract is
+documented in [Database model and adapter standard](database-model.md).
 
 ## Acceptance contract
 

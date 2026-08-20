@@ -668,6 +668,14 @@ initialization therefore cannot change which case is selected.
   `velar/http` are selected by the explicit target extension, so Web and Node
   keep one source-level vocabulary without leaking one host implementation
   into the other.
+  The same extension owns Node's application syntax: the `server` statement,
+  its five compiler-owned route roles, and lexical scanning of `p"..."` path
+  patterns. Core exposes only parser, analyzer, emitter, semantic-index,
+  formatting, and lexical-extension seams; it contains no route name, path
+  grammar, request inference, or server lowering. The Node parser turns typed
+  captures into anonymous route-scope parameters, the Node analyzer assigns
+  path/query/body/request sources, and the Node emitter lowers the immutable
+  descriptor consumed by `velar/serve`.
   `velar/process` follows VelarScript's pull protocol directly: `Process.next`
   feeds `async for`, while `wait` owns the final aggregate result. Node and
   Desktop implement the same enum-tagged stdout/stderr chunks, single-reader

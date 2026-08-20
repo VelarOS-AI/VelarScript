@@ -1,0 +1,119 @@
+import {
+    HttpError,
+    Request,
+    Provider,
+    RouteDocumentation,
+    ServeApp,
+    ServeResponse,
+    Upload,
+    background,
+    bodyLimit,
+    clearCookie,
+    created,
+    docs,
+    file,
+    input,
+    json,
+    lifecycle,
+    middleware,
+    noContent,
+    openapi,
+    prefix,
+    provide,
+    redirect,
+    security,
+    setCookie,
+    sse,
+    staticFiles,
+    stream,
+    text,
+    use,
+} from "velar/serve"
+
+type CreateArticle:
+    title: string
+
+type CurrentUser:
+    id: string
+
+type UploadMetadata:
+    title: string
+
+const currentUser = provide(
+    inputs = {token: security.bearer()},
+    resolve = async values => {id: values.token},
+)
+const providerContract = Provider.is(currentUser)
+
+async def chunks(write: (chunk: string) -> Promise<null>):
+    await write("first")
+    await write("second")
+
+async def events(send: (event: string) -> Promise<null>):
+    await send("ready")
+
+async def afterResponse():
+    return null
+
+def uploadName(value: Upload) -> string:
+    return value.filename
+
+async def passThrough(request: Request, next: () -> Promise<ServeResponse>):
+    print(request.path)
+    return await next()
+
+server routes:
+    @get(p"/health") => json({ok: true}, headers=Map([["cache-control", "no-store"]]))
+
+    @get(p"/articles/{id:number}", details: bool = false):
+        if id < 1:
+            throw HttpError(404, {error: "article_not_found"})
+        return {id, details}
+
+    @get(p"/tags", tag: List<string>) => {tag}
+    @post(p"/articles", input: CreateArticle) => created(input)
+    @put(p"/articles/{id:number}", input: CreateArticle) => {id, title: input.title}
+    @patch(p"/articles/{id:number}", input: CreateArticle) => {id, title: input.title}
+    @delete(p"/articles/{id:number}") => noContent()
+    @get(p"/previous") => redirect("/articles/1")
+    @get(p"/plain") => text("plain response")
+    @get(p"/events") => stream(chunks)
+    @get(p"/sse") => sse(events)
+    @get(p"/me",
+        user = input.dependency(currentUser),
+        session = input.cookie("session", default=null),
+    ) => {id: user.id, session}
+    @post(p"/upload",
+        metadata = input.form(UploadMetadata),
+        image = input.upload("image", maxBytes=1_048_576),
+    ) => {title: metadata.title, filename: uploadName(image)}
+    @get(p"/session") => setCookie(background(json({ok: true}), afterResponse), "session", "tour")
+    @delete(p"/session") => clearCookie(json({ok: true}), "session")
+    @get(p"/asset") => file("/index.html", root="public")
+
+server composed:
+    ...prefix("/api", routes)
+    ...staticFiles("/", root="public", fallback="index.html")
+
+const guarded = use(bodyLimit(composed, 1_048_576), [
+    passThrough,
+    middleware.requestId(),
+    middleware.securityHeaders(),
+    middleware.concurrency(256),
+])
+
+const owned = lifecycle(guarded, startup=async () => null, shutdown=async () => null)
+const articleDocs: RouteDocumentation = {summary: "Read article", tags: ["articles"], errors: Map([[404, "Article not found"]])}
+const routeDocs: Map<string, RouteDocumentation> = Map([
+    ["GET /api/articles/{id:number}", articleDocs],
+])
+
+export const app: ServeApp = docs(
+    owned,
+    title = "Article API",
+    version = "1.0.0",
+    routes = routeDocs,
+)
+
+export def describeApi(value: ServeApp):
+    openapi(value, title="Article API", version="1.0.0")

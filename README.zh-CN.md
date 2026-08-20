@@ -27,7 +27,7 @@ npm run dev
 
 其他模板：`--template node | desktop | docs | library | component`。
 
-接下来阅读[入门指南](docs/getting-started.md)，或运行 `velar skill`，打印一份可直接交给模型的简明说明。
+接下来阅读[入门指南](docs/getting-started.md)，或按生成的 `AGENTS.md` 运行其中列出的分平台 `velar skill` 命令。
 
 ## 代码示例
 
@@ -109,7 +109,7 @@ export component App:
 - [语言参考](docs/language-charter.md) — 完整的语言契约
 - [标准库](docs/standard-library.md) · [Web 框架](docs/web-api.md)
 - [二进制数据与并发](docs/binary-data-and-concurrency.md) — 受检内存、确定性 Worker、传输与持久化
-- [AI 技能简报](docs/ai-skill.md) — `velar skill` 输出的内容
+- [AI 技能简报](docs/ai-skill.md) — Core，以及独立的 [Web](docs/ai-skill-web.md)、[Node](docs/ai-skill-node.md)、[Desktop](docs/ai-skill-desktop.md) 指南
 - [逃生舱](docs/escape-hatches.md) · [JavaScript 边界](docs/javascript-bridge.md)
 
 **参与编译器开发**

@@ -1860,6 +1860,11 @@ export class Analyzer implements TypeEnvironment {
     return this.extensionFieldsOf(identity);
   }
 
+  enumValuesOf(identity: string): readonly string[] | null {
+    const values = this.enums.get(identity)?.members;
+    return values ? [...values] : null;
+  }
+
   /**
    * D55 rule 121: an instantiation's field table is the declaration's fields
    * with the arguments substituted, registered under the instantiation's own

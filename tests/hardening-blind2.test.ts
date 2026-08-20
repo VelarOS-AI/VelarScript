@@ -367,8 +367,8 @@ mount(<App />, "#app")
 });
 
 test("[BLIND2-2] the skill brief carries a runnable browser-test recipe", async () => {
-  const brief = await readFile(join(root, "docs", "ai-skill.md"), "utf8");
-  const mirror = await readFile(join(root, "packages", "cli", "skill", "ai-skill.md"), "utf8");
+  const brief = await readFile(join(root, "docs", "ai-skill-web.md"), "utf8");
+  const mirror = await readFile(join(root, "packages", "cli", "skill", "ai-skill-web.md"), "utf8");
   assert.equal(brief, mirror);
   assert.ok(brief.length > 0);
   assert.match(brief, /import \{browser, localStorage\} from "velar\/web-test"/u);

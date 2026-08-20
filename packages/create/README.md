@@ -16,7 +16,8 @@ npm create velar@latest my-components -- --template component
 The first-class application templates are `web`, `node`, and `desktop`. Each
 starts with the borderless VelarScript mark and a small Hello experience shaped
 like the corresponding JavaScript framework category: an interactive Web page,
-a Node HTTP server, or a single-project Desktop window. Specialized templates
+a native Node service with checked routes, dev restart, production serve/build,
+or a single-project Desktop window. Specialized templates
 remain available as `docs`, `library`, and `component`. The Core
 library template publishes a reusable `.vel` entry without Web; the component
 template publishes a checked Web component source entry and keeps its preview
@@ -24,7 +25,7 @@ application outside that public entry. `game` is reserved for the future
 official Canvas framework and deliberately fails until that package exists.
 
 Every generated project includes a root `AGENTS.md` that points coding agents
-at `velar skill` — the language brief packaged with the toolchain — together
+at its distinct Core/Web/Node/Desktop `velar skill` briefs — packaged with the toolchain — together
 with the project's gate commands (`velar check`, `velar test`, `velar format`)
 and the JavaScript escape-hatch ladder.
 

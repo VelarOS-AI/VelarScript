@@ -180,7 +180,7 @@ export async def startServer() -> string:
     const server = await serve(handle, 0)
     const onPort = await serve(handle, 8080)
     const onHostAndPort = await serve(handle, 8080, "127.0.0.1")
-    const named = await serve(handler=handle, port=0, host="127.0.0.1")
+    const named = await serve(handle, port=0, host="127.0.0.1")
     return f"{await shutDown(server)} {onPort.port} {onHostAndPort.port} {named.port}"
 
 async def shutDown(server: Server) -> number:

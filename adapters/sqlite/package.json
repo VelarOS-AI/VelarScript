@@ -1,0 +1,30 @@
+{
+  "name": "@velarscript/sqlite",
+  "version": "0.1.0",
+  "description": "Bounded Worker-isolated SQLite adapter for the VelarScript database contract.",
+  "license": "Apache-2.0",
+  "files": [
+    "src/index.vel",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/VelarOS-AI/VelarScript.git",
+    "directory": "adapters/sqlite"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "velar": {
+    "entry": "src/index.vel"
+  },
+  "dependencies": {
+    "@velarscript/database": "0.1.0"
+  },
+  "peerDependencies": {
+    "@velarscript/node": ">=0.11.1 <0.12.0"
+  }
+}

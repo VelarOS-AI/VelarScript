@@ -121,6 +121,8 @@ export interface CompilerEmitterOptions {
   readonly sharedRuntimeModules?: boolean;
   /** Authoring module path, used to derive collision-free sibling artifacts. */
   readonly sourcePath?: string;
+  /** Immutable author source for extension-owned source-derived metadata. */
+  readonly source?: SourceText;
 }
 
 export interface CompilerStyleSegments {

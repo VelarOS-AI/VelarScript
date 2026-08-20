@@ -47,9 +47,9 @@ try {
   // A-024: this file held the fifth copy of the eight-package roster — one
   // literal `pack()` list and four literal install lists — while
   // `docs/contributing/continuous-integration.md` said the installed set is
-  // derived from the workspace topology. Toolchain packages and source
-  // libraries are installed together here, even though only packages/* enters
-  // a toolchain release candidate.
+  // derived from the workspace topology. Toolchain packages, source libraries,
+  // and adapters are installed together here, even though only packages/*
+  // enters a toolchain release candidate.
   const tarballs: string[] = [];
   for (const name of await velarWorkspacePackageNames(root)) tarballs.push(join(directory, await pack(name)));
   /** Every packed tarball, as one `npm install` takes them. */

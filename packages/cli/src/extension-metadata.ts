@@ -20,6 +20,7 @@ const MAX_VERSION_LENGTH = 256;
 const kinds = new Set<VelarExtensionKind>(["application", "capability", "language"]);
 const toolchainExtensionPackages = new Set([
   "@velarscript/web",
+  "@velarscript/node",
   "@velarscript/desktop",
 ]);
 /**

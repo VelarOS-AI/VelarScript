@@ -6,7 +6,8 @@
   "type": "module",
   "workspaces": [
     "packages/*",
-    "libraries/*"
+    "libraries/*",
+    "adapters/*"
   ],
   "scripts": {
     "build:packages": "node scripts/gate-lock.mjs npm run gate:build:packages",

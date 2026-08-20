@@ -5,8 +5,9 @@ import { fileURLToPath } from "node:url";
 /**
  * D63 rule 159 — which packages make up the toolchain is a derived fact, not a
  * list somebody maintains. Toolchain implementations live under `packages/`;
- * ordinary VelarScript source libraries live under `libraries/`. npm sees both
- * as workspaces, but only the first directory defines a toolchain release.
+ * ordinary VelarScript source libraries live under `libraries/`; concrete
+ * ecosystem integrations live under `adapters/`. npm sees all three as
+ * workspaces, but only `packages/` defines a toolchain release.
  *
  * `tests/package.acceptance.ts` named eight packages as literal `pack()` calls
  * and `scripts/release-toolchain.mjs` held the same eight in a literal array.
@@ -21,7 +22,8 @@ import { fileURLToPath } from "node:url";
  *
  * Publishability is read from each manifest's own `private` flag. A package
  * added under `packages/` joins the toolchain; a package added under
- * `libraries/` joins source-library acceptance without silently joining the
+ * `libraries/` joins source-library acceptance, while one added under
+ * `adapters/` joins adapter acceptance. Neither silently joins the
  * compiler/runtime release generation.
  *
  * A-024: deriving the *names* was only the first consumer. `test:packages`
@@ -76,7 +78,12 @@ export async function velarLibraries(root = workspaceRoot) {
   return workspacePackagesUnder(root, "libraries");
 }
 
-/** Every publishable package in the six-package toolchain release generation. */
+/** Independently versioned ecosystem adapters, never toolchain modules. */
+export async function velarAdapters(root = workspaceRoot) {
+  return workspacePackagesUnder(root, "adapters");
+}
+
+/** Every publishable package in the toolchain release generation. */
 export async function velarPublishedToolchainPackages(root = workspaceRoot) {
   return (await velarToolchainPackages(root)).filter((entry) => !entry.private);
 }
@@ -86,11 +93,17 @@ export async function velarPublishedLibraries(root = workspaceRoot) {
   return (await velarLibraries(root)).filter((entry) => !entry.private);
 }
 
+/** Every publishable first-party adapter kept outside the Standard API. */
+export async function velarPublishedAdapters(root = workspaceRoot) {
+  return (await velarAdapters(root)).filter((entry) => !entry.private);
+}
+
 /** Every publishable workspace package, used by source-package consumer gates. */
 export async function velarPublishedWorkspacePackages(root = workspaceRoot) {
   const workspaces = [
     ...await velarPublishedToolchainPackages(root),
     ...await velarPublishedLibraries(root),
+    ...await velarPublishedAdapters(root),
   ].sort((left, right) => left.name.localeCompare(right.name));
   for (let index = 1; index < workspaces.length; index += 1) {
     if (workspaces[index - 1].name === workspaces[index].name) {
@@ -105,7 +118,7 @@ export async function velarToolchainPackageNames(root = workspaceRoot) {
   return (await velarPublishedToolchainPackages(root)).map((entry) => entry.name);
 }
 
-/** All local tarballs needed to exercise toolchain and source libraries together. */
+/** All local tarballs needed to exercise toolchain, libraries, and adapters together. */
 export async function velarWorkspacePackageNames(root = workspaceRoot) {
   return (await velarPublishedWorkspacePackages(root)).map((entry) => entry.name);
 }

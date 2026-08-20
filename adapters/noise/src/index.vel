@@ -1,0 +1,33 @@
+import {random} from "velar/random"
+
+extern module "simplex-noise":
+    export def createNoise2D(source: () -> number) -> (number, number) -> number
+    export def createNoise3D(source: () -> number) -> (number, number, number) -> number
+    export def createNoise4D(source: () -> number) -> (number, number, number, number) -> number
+
+import js {createNoise2D, createNoise3D, createNoise4D} from "simplex-noise"
+
+def coordinate(value: number) -> number:
+    assert value.isFinite() else "Simplex noise coordinates must be finite numbers"
+    return value
+
+def finite2(source: (number, number) -> number) -> (number, number) -> number:
+    return (x, y) => source(coordinate(x), coordinate(y))
+
+def finite3(source: (number, number, number) -> number) -> (number, number, number) -> number:
+    return (x, y, z) => source(coordinate(x), coordinate(y), coordinate(z))
+
+def finite4(source: (number, number, number, number) -> number) -> (number, number, number, number) -> number:
+    return (x, y, z, w) => source(coordinate(x), coordinate(y), coordinate(z), coordinate(w))
+
+export def simplex2(seed: string | number) -> (number, number) -> number:
+    const source = random(seed).fork("simplex2")
+    return finite2(createNoise2D(() => source.number()))
+
+export def simplex3(seed: string | number) -> (number, number, number) -> number:
+    const source = random(seed).fork("simplex3")
+    return finite3(createNoise3D(() => source.number()))
+
+export def simplex4(seed: string | number) -> (number, number, number, number) -> number:
+    const source = random(seed).fork("simplex4")
+    return finite4(createNoise4D(() => source.number()))

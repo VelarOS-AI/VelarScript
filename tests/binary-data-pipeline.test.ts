@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -94,12 +94,12 @@ export def whileLoop(count: number) -> number:
 });
 
 test("numeric buffers stay checked and decompression stops at maxBytes", { timeout: 60_000 }, async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-numeric-buffers-"));
+  const directory = await mkdtemp(join(root, ".velar-numeric-buffers-"));
   try {
     await writeFile(join(directory, "velar.json"), `${JSON.stringify({ formatVersion: 2, entry: "main.vel" }, null, 2)}\n`);
     await writeFile(join(directory, "main.vel"), `
 import {ByteOrder, Bytes, Float32Buffer, float32Buffer, float32Builder, float32FromBytes, uint8Buffer, uint16Buffer, uint32Buffer, uint32Builder, uint32FromBytes} from "velar/binary"
-import {gunzip} from "velar/compression"
+import {gunzip} from "@velarscript/compression"
 
 const environment = uint8Buffer(2)
 environment[0] = 255
@@ -150,9 +150,12 @@ export def overflowBuilder():
     await run(process.execPath, [cli, "build", directory], root);
     const output = await run(process.execPath, [join(directory, "dist", "main.js")], directory);
     assert.equal(output, "255:65535:4294967295:1.25:-2.5:2:1\n");
-    const compressionRuntime = await readFile(join(directory, "dist", "node_modules", "velar", "compression.js"), "utf8");
-    assert.match(compressionRuntime, /new Stream/u);
-    assert.match(compressionRuntime, /Math\.min\(256/u);
+    const compressionDirectory = join(directory, "dist", "__velar_packages__", "@velarscript", "compression", "src");
+    const compressionRuntime = (await Promise.all((await readdir(compressionDirectory))
+      .filter(name => name.endsWith(".js"))
+      .map(name => readFile(join(compressionDirectory, name), "utf8")))).join("\n");
+    assert.match(compressionRuntime, /new (?:Gunzip|Unzlib)/u);
+    assert.match(compressionRuntime, /estimated > 256/u);
     assert.match(compressionRuntime, /remaining \/ 1032/u);
     assert.doesNotMatch(compressionRuntime, /gunzipSync|unzlibSync|\{ out: storage \}|maximum \+ 1/u);
     const binary = await import(`${pathToFileURL(join(directory, "dist", "node_modules", "velar", "binary.js")).href}?float=${Date.now()}`) as {
@@ -272,7 +275,7 @@ console.log(JSON.stringify({smallAllocation, limitedAllocation: largestAllocatio
 });
 
 test("one shared binary data core runs through Node and Chromium with byte-identical persistence", { timeout: 120_000 }, async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-binary-data-pipeline-"));
+  const directory = await mkdtemp(join(root, ".velar-binary-data-pipeline-"));
   let preview: Awaited<ReturnType<typeof startProductionPreview>> | null = null;
   let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
   let echoServer: WebSocketServer | null = null;

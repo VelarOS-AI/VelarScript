@@ -1,0 +1,24 @@
+{
+  "name": "@velarscript/database",
+  "version": "0.1.0",
+  "description": "Engine-neutral database models, queries, migrations, and lifecycle contracts for VelarScript.",
+  "license": "Apache-2.0",
+  "files": [
+    "src/index.vel",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/VelarOS-AI/VelarScript.git",
+    "directory": "libraries/database"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "velar": {
+    "entry": "src/index.vel"
+  }
+}

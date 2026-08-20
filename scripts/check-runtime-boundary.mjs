@@ -140,6 +140,33 @@ for (const directory of sourceRoots) {
   }
 }
 
+const retiredConcreteStandardModules = [
+  "velar/msgpack",
+  "velar/compression",
+  "velar/noise",
+  "velar/sqlite",
+];
+for (const directory of sourceRoots) {
+  for (const file of await sourceFiles(directory)) {
+    const source = await readFile(file, "utf8");
+    for (const specifier of retiredConcreteStandardModules) {
+      if (source.includes(`"${specifier}"`) || source.includes(`'${specifier}'`)) {
+        failures.push(`${display(file)}: concrete adapter '${specifier}' must remain an external source package`);
+      }
+    }
+  }
+}
+for (const packageName of ["node", "cli"]) {
+  const manifestPath = join(root, "packages", packageName, "package.json");
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  const dependencies = {...manifest.dependencies, ...manifest.optionalDependencies};
+  for (const dependency of ["@velarscript/sqlite", "msgpackr", "fflate", "simplex-noise"]) {
+    if (Object.hasOwn(dependencies, dependency)) {
+      failures.push(`${display(manifestPath)}: concrete adapter dependency '${dependency}' crosses the toolchain boundary`);
+    }
+  }
+}
+
 const strictJsonConsumers = [
   join(root, "packages", "cli", "src", "standard-modules.ts"),
   join(root, "packages", "web", "src", "runtime.ts"),
@@ -668,7 +695,8 @@ if (/from\s+["']node:(?:fs|path)/u.test(nodeFilesystemRuntimeSource)
 }
 for (const phrase of [
   'import { MessageChannel as __VelarNodeHostMessageChannel, MessagePort as __VelarNodeHostMessagePort, Worker as __VelarNodeHostWorker } from "node:worker_threads"',
-  "const __velarNodeHostMaxPending = 1024",
+  "const __velarNodeHostMaxDataPending = 4096",
+  "const __velarNodeHostMaxServePending = 4608",
   "function __velarNodeHostRequestId()",
   "export function __velarNodeHostInvoke(operation, args)",
   "export function __velarNodeHostOn(event, handler)",
@@ -684,14 +712,14 @@ for (const phrase of [
 }
 for (const phrase of [
   'from "node:fs/promises"',
-  'import { watch as watchNode } from "node:fs"',
+  'import { createReadStream, watch as watchNode } from "node:fs"',
   'from "node:worker_threads"',
   '"fs.readFile", "fs.createFile", "fs.replaceFileIfMatches", "fs.writeFile", "fs.appendFile"',
   'await writeFile(path, data, {flag: "wx"})',
   "async function fileMutationIdentities(paths)",
   "async function withFileMutations(paths, action)",
   "async function commitTextReplacement(path, data, mode)",
-  '"serve.start", "serve.stop", "serve.body", "serve.respond", "serve.respondFile"',
+  '"serve.start", "serve.stop", "serve.body", "serve.bodyBytes", "serve.readFile", "serve.respond", "serve.respondFile"',
   '"serve.streamStart", "serve.streamWrite", "serve.streamEnd", "serve.fail"',
   "function allocateHandle(values, next, maximum, name)",
   "candidate >= Number.MAX_SAFE_INTEGER ? 1 : candidate + 1",
@@ -721,7 +749,7 @@ for (const phrase of [
   'import { __velarNodeHostInvoke, __velarNodeHostOn } from "velar/node-host-v1"',
   '__velarNodeHostOn("serve.request"',
   'await __velarNodeHostInvoke("serve.start"',
-  'await __velarNodeHostInvoke("serve.streamWrite"',
+  '__velarNodeHostInvoke("serve.streamWrite"',
   "export class RequestBodyTooLargeError",
 ]) {
   if (!nodeServeRuntimeSource.includes(phrase)) {
@@ -751,7 +779,7 @@ for (const phrase of [
   'VELAR_NODE_TERMINAL_RUNTIME.replace("WORKER_SOURCE", JSON.stringify(VELAR_NODE_TERMINAL_WORKER_SOURCE))',
   '["velar/fs", [VELAR_NODE_HOST_MODULE, "velar/binary"]]',
   '["velar/http", [VELAR_NODE_HOST_MODULE, "velar/binary"]]',
-  '["velar/serve", [VELAR_NODE_HOST_MODULE]]',
+  '["velar/serve", [VELAR_NODE_HOST_MODULE, VELAR_ERROR_NORMALIZATION_MODULE, VELAR_COLLECTION_LOWERING_MODULE, "velar/binary", "velar/fs", "velar/task"]]',
   "dependencies: nodeModuleDependencies",
 ]) {
   if (!nodeCompilerSource.includes(phrase)) failures.push(`packages/node/src/compiler.ts: Node host runtime composition is missing '${phrase}'`);
@@ -982,7 +1010,7 @@ if (/__velarOptions\([^\n]*new Set\s*\(/u.test(webRuntimeSource)
   failures.push("packages/web: options consumers must build allowed fields through the captured guard ABI");
 }
 if ((webCompilerSource.match(/namedIntrinsic\("runtime\.parseAsync"/gu)?.length ?? 0) !== 2
-  || (nodeCompilerSource.match(/namedIntrinsic\("runtime\.parseAsync"/gu)?.length ?? 0) !== 3
+  || (nodeCompilerSource.match(/namedIntrinsic\("runtime\.parseAsync"/gu)?.length ?? 0) !== 4
   || !compilerAnalyzerSource.includes('case "runtime.parseAsync"')
   || !compilerAnalyzerSource.includes("arity();")
   || !compilerAnalyzerSource.includes("this.reportPromiseResolutionHazard(parsed")) {

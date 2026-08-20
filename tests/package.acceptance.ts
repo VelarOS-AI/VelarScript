@@ -12,10 +12,10 @@ const directory = await mkdtemp(join(tmpdir(), "velar-packages-"));
 const consumerDirectory = await mkdtemp(join(tmpdir(), "velar-zero-npm-consumer-"));
 
 try {
-  // D63 rule 159: pack every publishable toolchain package and source library,
-  // rather than a list here that has to be kept level with both workspace
-  // layers. A library added under libraries/* joins consumer acceptance without
-  // silently joining the version-locked toolchain release.
+  // D63 rule 159: pack every publishable toolchain package, source library, and
+  // external adapter rather than a list here that has to be kept level with all
+  // three workspace layers. A library or adapter joins consumer acceptance
+  // without silently joining the version-locked toolchain release.
   //
   // A-024: the roster was derived and then immediately re-spelled by hand for
   // everything that came after `pack()`. The content checks walked six of the
@@ -54,7 +54,9 @@ try {
   assert.ok(cli.files.some((file) => file.path === "dist/preview-server.js"));
   assert.ok(cli.files.some((file) => file.path === "dist/deployment-verifier.js"));
   assert.ok(!cli.files.some((file) => file.path.startsWith("stdlib/")));
-  assert.ok(cli.files.some((file) => file.path === "skill/ai-skill.md"));
+  for (const file of ["ai-skill.md", "ai-skill-web.md", "ai-skill-node.md", "ai-skill-desktop.md"]) {
+    assert.ok(cli.files.some((entry) => entry.path === `skill/${file}`), `CLI package is missing skill/${file}`);
+  }
   assert.ok(compiler.files.some((file) => file.path === "dist/framework-host.js"));
   assert.ok(compiler.files.some((file) => file.path === "dist/application-package-host.js"));
   assert.ok(node.files.some((file) => file.path === "dist/compiler.js"));
@@ -68,7 +70,8 @@ try {
 
   await writeFile(join(directory, "package.json"), "{}\n", "utf8");
   // The complete set, from the same derived roster that packed it. A tarball
-  // list written out here stops matching `packages/*` or `libraries/*`.
+  // list written out here stops matching `packages/*`, `libraries/*`, or
+  // `adapters/*`.
   await runNpm([
     "install",
     "--ignore-scripts",
@@ -129,11 +132,15 @@ try {
   assert.equal(installedManifest.dependencies["@velarscript/web"], "0.11.1");
   assert.equal(installedManifest.dependencies["@velarscript/desktop"], "0.11.1");
   assert.equal(installedManifest.dependencies["create-velar"], "0.11.1");
+  for (const dependency of ["@velarscript/sqlite", "msgpackr", "fflate", "simplex-noise"]) {
+    assert.equal(installedManifest.dependencies[dependency], undefined, `CLI must not hide external adapter dependency ${dependency}`);
+  }
   assert.equal(installedManifest.peerDependencies?.["@velarscript/web"], undefined);
   const installedNodeManifest = JSON.parse(await readFile(join(directory, "node_modules", "@velarscript", "node", "package.json"), "utf8")) as {
     dependencies: Record<string, string>;
   };
   assert.equal(installedNodeManifest.dependencies["@velarscript/compiler"], "0.11.1");
+  assert.equal(installedNodeManifest.dependencies["@velarscript/sqlite"], undefined);
   const installedWebManifest = JSON.parse(await readFile(join(directory, "node_modules", "@velarscript", "web", "package.json"), "utf8")) as {
     velar?: { extension?: { kind?: string; apiVersion?: string; manifestKey?: string; extends?: Record<string, string> } };
   };
@@ -172,7 +179,7 @@ try {
   assert.equal(version.stdout, "velar 0.11.1\n");
   const help = await run(process.execPath, [installedCli, "help", "build"], directory);
   assert.match(help.stdout, /Usage: velar build/u);
-  assert.match(help.stdout, /isolated framework application output/u);
+  assert.match(help.stdout, /standalone Node application/u);
   const packageHelp = await run(process.execPath, [installedCli, "help", "package"], directory);
   assert.match(packageHelp.stdout, /target-owned native packaging host/u);
   const installedSkill = await run(process.execPath, [installedCli, "skill"], directory);
@@ -181,6 +188,10 @@ try {
     await readFile(join(root, "docs", "ai-skill.md"), "utf8"),
     "the installed 'velar skill' must print docs/ai-skill.md verbatim",
   );
+  for (const [owner, file] of [["web", "ai-skill-web.md"], ["node", "ai-skill-node.md"], ["desktop", "ai-skill-desktop.md"]] as const) {
+    const selected = await run(process.execPath, [installedCli, "skill", owner], directory);
+    assert.equal(selected.stdout, await readFile(join(root, "docs", file), "utf8"), `installed skill ${owner} drift`);
+  }
 
   await writeFile(join(directory, "main.vel"), `
 import {sum} from "velar/collections"
@@ -207,6 +218,47 @@ print(f"{str(script.analysis().diagnostics.size)}:{str(script.referencesAt(refer
   assert.match(await readFile(join(directory, "dist", "__velar_packages__", "@velarscript", "script-analysis", "src", "index.js"), "utf8"), /class ScriptDocument/u);
   const built = await run(process.execPath, [join(directory, "dist", "main.js")], directory);
   assert.equal(built.stdout, "42\n11\nA😀|游戏\n5:B!\n0:2\n");
+
+  await writeFile(join(directory, "adapter.vel"), `
+import {column, createModelStep, databaseSchema, filter, migration, model, select} from "@velarscript/database"
+import {deflate, inflate} from "@velarscript/compression"
+import {encode, parse} from "@velarscript/msgpack"
+import {simplex2} from "@velarscript/noise"
+import {open} from "@velarscript/sqlite"
+
+type PackedUser:
+    id: string
+    name: string
+
+const users = model("users", PackedUser, {
+    id: column.text(primary=true),
+    name: column.text(),
+})
+
+async def main():
+    const wire = deflate(encode({id: "u1", name: "Ada"}))
+    const user = parse(inflate(wire), PackedUser)
+    using database = await open(":memory:", {queueCapacity: 8, maxRows: 8})
+    await database.migrate(databaseSchema("packed", 1, [users.definition], [
+        migration(1, [createModelStep(users)]),
+    ]))
+    await database.insert(users, user)
+    const restored = await database.findOne(select(users, where=filter.equal(users, "id", "u1"), limit=1))
+    if restored == null:
+        throw Error("Packed SQLite adapter did not restore the row")
+    const field = simplex2("packed")
+    print(f"{restored.name}:{field(0, 0)}")
+
+await main()
+`.trimStart(), "utf8");
+  await run(process.execPath, [installedCli, "build", "adapter.vel", "--out-dir", "adapter-dist"], directory);
+  const adapterBuilt = await run(process.execPath, [join(directory, "adapter-dist", "adapter.js")], directory);
+  assert.match(adapterBuilt.stdout, /^Ada:0(?:\.0+)?\n$/u);
+  const packedSqliteOutput = join(directory, "adapter-dist", "__velar_packages__", "@velarscript", "sqlite", "src");
+  const packedSqliteSource = (await Promise.all((await readdir(packedSqliteOutput))
+    .filter((name) => name.endsWith(".js"))
+    .map((name) => readFile(join(packedSqliteOutput, name), "utf8")))).join("\n");
+  assert.match(packedSqliteSource, /new Worker/u);
 
   // Anti-lock-in eject gate: the emitted build output is the whole program. It
   // must run standalone in a bare directory with only Node — no compiler, no
@@ -371,6 +423,8 @@ mount(<App />, "#app")
     dependencies: Record<string, string>;
   };
   assert.equal(nodeManifest.dependencies["@velarscript/node"], "^0.11.1");
+  assert.deepEqual(JSON.parse(await readFile(join(nodeProject, "velar.json"), "utf8")).extensions, ["@velarscript/node"]);
+  assert.match(await readFile(join(nodeProject, "src", "app.vel"), "utf8"), /@get\(p"\/api\/hello"\)/u);
   assert.match(await readFile(join(nodeProject, "public", "index.html"), "utf8"), /velarscript-mark\.svg/u);
   await run(process.execPath, [installedCli, "check", nodeProject], directory);
 

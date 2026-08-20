@@ -2,9 +2,10 @@
 
 Status: stable package contract for the published VelarScript 0.11 toolchain
 
-The repository contains two distinct npm workspace layers: six version-locked
-toolchain packages under `packages/`, and independently versioned VelarScript
-source libraries under `libraries/`:
+The repository contains three distinct npm workspace layers: version-locked
+toolchain packages under `packages/`, independently versioned VelarScript source
+libraries under `libraries/`, and independently versioned concrete integrations
+under `adapters/`:
 
 - `@velarscript/compiler`: compiler, formatter, diagnostics, semantic index,
   Core lowering APIs, compiler-extension ABI, neutral framework-host ABI, and
@@ -31,11 +32,21 @@ source libraries under `libraries/`:
   and local structural analysis. It depends exactly on
   `@velarscript/text-buffer` and is bundled internally by the CLI language
   server without acquiring a `velar/*` Standard identity.
+- `@velarscript/database`: the engine-neutral source contract for checked
+  models, query and mutation plans, migrations, transactions, capabilities,
+  bounds, and errors. It contains no SQL, driver, pool, or target runtime.
+- `@velarscript/msgpack`, `@velarscript/compression`, and
+  `@velarscript/noise`: checked source adapters over independently locked npm
+  implementations. They do not acquire `velar/*` Standard identities.
+- `@velarscript/sqlite`: the Node SQLite implementation of
+  `@velarscript/database`. It owns the SQL dialect, `node:sqlite` Worker,
+  bounded queues/results/cache, streaming backpressure, and raw SQL escape
+  hatch; it is not part of `@velarscript/node`.
 
 All current packages require Node.js 24 or later and contain no Workbench code.
 Compiler, Node, Web, Desktop, creator, and CLI publish JavaScript and `.d.ts`
-artifacts from `dist`; text-buffer and script-analysis publish their checked
-`.vel` source entries and are not members of the toolchain release set. Web pins the exact
+artifacts from `dist`; libraries and adapters publish their checked `.vel`
+source entries and are not members of the toolchain release set. Web pins the exact
 matching compiler version. Node pins compiler. Desktop pins compiler, Node,
 and Web, but never imports or executes the CLI. Script-analysis pins
 text-buffer. CLI pins compiler, Node, Web, Desktop, and creator as one complete
@@ -157,9 +168,11 @@ Extension lookup follows Node's nearest `node_modules` search order but never
 falls through an existing malformed, symbolic, or unreadable package manifest
 to an ancestor package with the same name. Only a genuinely missing candidate
 continues the search.
-The CLI-installed official Web and Desktop application extensions form a narrow
-toolchain fallback for projects that intentionally contain no `node_modules`;
-the CLI's existing Node capability remains available without manifest activation.
+The CLI-installed official Web, Node, and Desktop extensions form a narrow
+toolchain fallback for projects that intentionally contain no `node_modules`.
+The existing Node standard-module capability remains available without syntax
+activation; Node-owned `server`, route roles, and `p"..."` path patterns are
+activated only by naming `@velarscript/node`, like all extension-owned syntax.
 A project-local official target always wins, and an invalid local manifest
 fails closed instead of falling back. Third-party extensions never use the
 toolchain fallback and remain project-installed npm dependencies. Thus npm
@@ -217,10 +230,11 @@ The complete layering, accessibility, and versioning rules are documented in
 [`component-packages.md`](component-packages.md).
 
 `npm run test:packages` is the workspace consumer boundary. It builds the
-compiled toolchain packages, runs `npm pack` over both workspace layers, checks
-the tarball contents, installs the complete set into a clean temporary consumer,
-invokes the installed CLI, and builds and runs a VelarScript file that imports
-the Core Standard API, the two source libraries, and the public compiler API. The
+compiled toolchain packages, runs `npm pack` over all three workspace layers,
+checks the tarball contents, installs the complete set into a clean temporary
+consumer, invokes the installed CLI, and builds and runs a VelarScript file that
+imports the Core Standard API, source libraries, external adapters, and the
+public compiler API. The
 browser package gate additionally creates a project through packed tarballs,
 builds and verifies its production output, and runs its browser test. A
 successful source build without this consumer test is not considered
@@ -240,11 +254,12 @@ and license requirements are satisfied. CI may attest and upload these
 tarballs. Registry publication is a separately authorized, provenance-bearing
 GitHub Actions job that consumes the verified strict candidate.
 
-The source libraries keep their own package versions and release authority.
-Changing a library does not add it to a toolchain tag or candidate. The CLI
-adopts a library generation by updating its ordinary exact npm dependency and
-resolves that installed package's `velar.entry`; it does not read a repository
-relative library path.
+Source libraries and adapters keep their own package versions and release
+authority. Changing one does not add it to a toolchain tag or candidate. A
+toolchain package adopts one only through an ordinary exact npm dependency; an
+application installs one through its own dependency declaration. The compiler
+resolves the installed package's `velar.entry` and never grants the package a
+hidden Standard-module path.
 
 The rehearsal builds and packs a private temporary toolchain snapshot. It never
 cleans or rewrites the active workspace's `dist` directories, so release checks

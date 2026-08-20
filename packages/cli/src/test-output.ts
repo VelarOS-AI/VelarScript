@@ -41,7 +41,7 @@ export function portablePath(value: string): string {
  * `import js` packages), while an os.tmpdir() sandbox severs that resolution.
  * The directory is removed after the run; `.velar/` should be gitignored.
  */
-export async function createCompiledSandbox(projectRoot: string, prefix: "test" | "run"): Promise<string> {
+export async function createCompiledSandbox(projectRoot: string, prefix: "test" | "run" | "dev" | "serve"): Promise<string> {
   const velarRoot = join(projectRoot, ".velar");
   await mkdir(velarRoot, { recursive: true });
   const sandbox = await mkdtemp(join(velarRoot, `${prefix}-`));

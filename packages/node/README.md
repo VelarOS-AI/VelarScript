@@ -3,8 +3,7 @@
 The official Node.js runtime boundary for VelarScript. It owns the typed module
 contracts and implementations for `velar/fs`, `velar/env`, `velar/host`,
 `velar/serve`, `velar/path`, `velar/process`, `velar/terminal`,
-`velar/sqlite`, `velar/worker`, and `velar/websocket`, plus the Node target of
-`velar/http`.
+`velar/worker`, and `velar/websocket`, plus the Node target of `velar/http`.
 
 The API exposes VelarScript contracts rather than Node objects. Filesystem
 operations are bounded, process execution is shell-free and starts with a
@@ -18,6 +17,92 @@ only across the private host transport, and cross-origin redirects strip it.
 non-2xx responses, owned cancel/deadline outcomes, and request/response network
 transport failure. The transport phase is typed; retry and replay policy stays
 with the provider or application.
+
+The package also owns Node's native server syntax and application target. A
+project activates `@velarscript/node`, configures its exported application once
+in `velar.json`, then declares anonymous checked routes directly:
+
+```velar
+import {created} from "velar/serve"
+
+type CreateArticle:
+    title: string
+
+export server app:
+    @get(p"/health") => {ok: true}
+    @get(p"/articles/{id:string}") => {id}
+    @post(p"/articles", input: CreateArticle) => created(input)
+```
+
+```json
+{
+  "formatVersion": 2,
+  "entry": "src/main.vel",
+  "extensions": ["@velarscript/node"],
+  "node": {
+    "app": "app",
+    "host": "127.0.0.1",
+    "port": 3000,
+    "maxBodyBytes": 16777216,
+    "build": {"sourceMaps": false}
+  }
+}
+```
+
+`velar dev` checks, starts, watches, and restarts the last-good application;
+`velar serve` checks and runs it with production behavior; `velar build` writes
+a standalone production directory whose `.velar-node-entry.mjs` runs with
+Node. Calling `serve(...)` directly remains available for tests, embedded
+servers, and low-level protocol adapters, but it is not required at an
+application entry point.
+
+`p"..."` is scanned and checked only by this extension; Core does not acquire a
+general `p` string prefix. Captures use `{name:type}` with a half-width `:` and
+declare the route-scope name once. The five route verbs are compiler-owned
+`@name` roles rather than decorators. The compiler lowers each `server` to an
+immutable `ServeApp`; `velar/serve` owns runtime matching, checked input
+decoding, automatic JSON, composition, static files, middleware, errors, and
+OpenAPI generation. Middleware stays attached to the route table passed to
+`use` when applications are composed; `bodyLimit` narrows inferred JSON input
+per route group. Response helpers accept validated header Maps, and the host
+accepts only final 200–599 statuses and enforces bodyless `HEAD`, 204, and 304
+responses. OpenAPI parameter, request-body, response, content-type, and static
+success-status schemas come from compiler-checked route types rather than
+runtime reflection; applicable framework-generated 400, 401, 413, 415, and 422
+responses are documented automatically. Unexpected handler or middleware failures are
+reported on stderr while the client receives only an opaque 500 response.
+
+The framework covers the ordinary service surface without adding controller or
+decorator vocabulary. Route defaults may be explicit `input.query`,
+`input.header`, `input.cookie`, `input.form`, `input.upload`, or
+`input.dependency` values; `security` supplies API-key, Basic, Bearer, OAuth2,
+and OpenID descriptors. `provide` owns request- and application-scoped values,
+deduplicates them, detects cycles, and runs release callbacks at the end of the
+owning scope. `lifecycle`, `background`, cookie helpers, SSE, bounded streaming,
+multipart uploads, route-scoped middleware, offline `docs`, OpenAPI 3.1, and
+the test-only `velar/server-test` client are part of the same checked runtime.
+Repeated scalar query or form fields fail with 422, while checked
+`List<scalar>` inputs preserve all repeated values. Request paths and queries
+are decoded exactly once with invalid UTF-8, encoded separators, NULs, and dot
+segments rejected before routing. Multiple cookies stay separate on the wire.
+`velar/websocket.listen({http: app, ...})` composes the ServeApp lifecycle on
+one HTTP/WebSocket port.
+
+Memory limits compose instead of multiplying silently: HTTP owns a 128 MiB
+aggregate host budget and at most 4,096 inbound requests; request bodies remain
+at or below 16 MiB. Request/application providers, routes, unfinished timed-out
+tasks, WebSocket connections, queued messages, pending sends, pending
+connections, and their aggregate bytes all have hard ceilings. Request caches,
+upload views, application provider caches, connection queues, and development
+build sandboxes are released at their explicit lifecycle boundary.
+
+Shutdown is drain-first and idempotent: concurrent `stop`/`close` calls join
+one completion, new work is refused once draining starts, admitted requests
+receive cooperative cancellation, and application providers are released only
+after request and timed-out continuation ownership really finishes. Lifecycle
+pairs unwind only for successful startups and in reverse order. These
+guarantees protect framework-owned state; cross-request business invariants
+still belong in transactions or another explicitly atomic capability.
 
 Started processes expose pull-based, enum-tagged stdout/stderr chunks through
 the ordinary VelarScript `async for` protocol. Each channel is decoded as one
@@ -51,10 +136,11 @@ static-file reads, response writes, and backpressure. It imports only
 compiler-owned source and static Node built-ins; npm dependencies and
 VelarScript application code never execute in that Realm.
 
-The shared proxy eagerly completes one readiness handshake, caps pending
-operations at 1,024, and is unreferenced while idle. A pending filesystem,
-server, or HTTP operation and every active server or unread HTTP response retain
-the process. Server and request
+The shared proxy eagerly completes one readiness handshake and separates a
+4,096-operation data lane from a 4,608-operation server lane, leaving control
+capacity available while inbound requests are saturated. It is unreferenced
+while idle. A pending filesystem, server, or HTTP operation and every active
+server or unread HTTP response retain the process. Server and request
 handles are bounded, wrap without colliding with live identities, and cap live
 servers at 128, inbound requests at 4,096, and outbound HTTP requests at 1,024.
 Every message is revalidated on both sides. In addition to each public request/file/stream limit, the Worker owns one
@@ -100,20 +186,22 @@ Binary filesystem and HTTP operations use the target-neutral `Bytes` contract:
 `.bytes()`. Node `Buffer` is confined to the isolated implementation and never
 becomes a VelarScript type or API.
 
-`velar/sqlite` owns a dedicated database Worker. It provides parameterized
-`execute`, runtime-Type checked `one`/`all`, prepared statements, bounded queues
-and results, `Bytes` BLOB values, and explicit transaction handles. Closing an
-uncommitted transaction rolls it back. Synchronous `node:sqlite` work never runs
-on the application thread.
+Database engines are not Node language capabilities. The independent
+`@velarscript/database` source library defines portable model and execution
+contracts; adapters such as `@velarscript/sqlite` own their concrete driver,
+dialect, Worker isolation, queue and result budgets, streaming backpressure,
+and raw escape hatches. The server framework may depend on the portable
+contract, but must never acquire a concrete engine dependency.
 
 `velar/worker` resolves only entries declared in `velar.json`, validates each
 request and response, snapshots caller-owned transferable data, and transfers
 the snapshot's nested `Bytes`/fixed numeric buffers through a bounded cycle-safe
 data-graph scan without detaching the caller's values. It provides single-worker
 and bounded pool owners with per-call cancellation and timeout.
-`velar/websocket` provides pull connections bounded by both unread message count
-and aggregate bytes, preserves queued messages through normal EOF, and discards
-them on receive failure, plus a Node server; `listen({http: handler, ...})`
+`velar/websocket` provides pull connections bounded by unread message count,
+pending operations, and aggregate bytes, preserves queued messages through
+normal EOF, and discards them on receive failure, plus a Node server;
+`listen({http: app, ...})` accepts either a `ServeApp` or low-level handler and
 serves the same typed HTTP contract as `velar/serve` on the upgrade port. Its
 only external transport dependency is the pinned `ws` package; native socket
 objects remain private.
