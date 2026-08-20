@@ -8,6 +8,8 @@ import { velarPublishedToolchainPackages } from "./velar-packages.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const registry = "https://registry.npmjs.org";
+const registryVisibilityAttempts = 100;
+const registryPollIntervalMs = 3_000;
 
 async function main(arguments_) {
   if (process.env.GITHUB_ACTIONS !== "true" || !process.env.ACTIONS_ID_TOKEN_REQUEST_URL) {
@@ -60,10 +62,7 @@ async function main(arguments_) {
     ], false, publicationToken(package_.name));
   }
   for (const package_ of order) {
-    const promoted = await view(`${package_.name}@${options.promoteTag}`, "version");
-    if (promoted !== manifest.version) {
-      throw new Error(`${package_.name}@${options.promoteTag} resolved to ${promoted ?? "nothing"}, expected ${manifest.version}`);
-    }
+    await waitForVersion(`${package_.name}@${options.promoteTag}`, manifest.version);
   }
   process.stdout.write(`Promoted complete VelarScript ${manifest.version} toolchain to ${options.promoteTag}\n`);
 }
@@ -127,13 +126,22 @@ async function publishedIntegrity(name, version) {
 }
 
 async function waitForIntegrity(name, version, expected) {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
+  for (let attempt = 0; attempt < registryVisibilityAttempts; attempt += 1) {
     const actual = await publishedIntegrity(name, version);
     if (actual === expected) return;
     if (actual !== null) throw new Error(`${name}@${version} reached npm with different integrity`);
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 3_000));
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, registryPollIntervalMs));
   }
-  throw new Error(`${name}@${version} did not become visible on npm within 60 seconds`);
+  throw new Error(`${name}@${version} did not become visible on npm within 5 minutes`);
+}
+
+async function waitForVersion(specifier, expected) {
+  for (let attempt = 0; attempt < registryVisibilityAttempts; attempt += 1) {
+    const actual = await view(specifier, "version");
+    if (actual === expected) return;
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, registryPollIntervalMs));
+  }
+  throw new Error(`${specifier} did not resolve to ${expected} on npm within 5 minutes`);
 }
 
 async function view(specifier, field) {

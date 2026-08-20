@@ -200,6 +200,8 @@ test("default CI stays lightweight while rehearsal and npm publication remain ex
   assert.match(publication, /NPM_CONFIG_PREFER_ONLINE/u);
   assert.match(publicationHelper, /publicationToken/u);
   assert.match(publicationHelper, /waitForIntegrity/u);
+  assert.match(publicationHelper, /registryVisibilityAttempts = 100/u);
+  assert.match(publicationHelper, /waitForVersion/u);
   assert.match(publicationHelper, /"dist-tag", "add"/u);
 
   const externalPreview = await readFile(".github/workflows/external-preview-verification.yml", "utf8");
@@ -225,6 +227,8 @@ test("default CI stays lightweight while rehearsal and npm publication remain ex
   assert.match(ecosystemHelper, /ACTIONS_ID_TOKEN_REQUEST_URL/u);
   assert.match(ecosystemHelper, /"--provenance"/u);
   assert.match(ecosystemHelper, /waitForIntegrity/u);
+  assert.match(ecosystemHelper, /registryVisibilityAttempts = 100/u);
+  assert.match(ecosystemHelper, /waitForVersion/u);
   assert.match(ecosystemHelper, /"dist-tag", "add"/u);
 });
 

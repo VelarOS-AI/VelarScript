@@ -7,6 +7,8 @@ import { verifyEcosystemRelease } from "./release-ecosystem.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const registry = "https://registry.npmjs.org";
+const registryVisibilityAttempts = 100;
+const registryPollIntervalMs = 3_000;
 
 async function main(arguments_) {
   if (arguments_.length !== 2) throw new Error("Usage: publish-ecosystem.mjs <candidate-directory> <package-name>");
@@ -31,8 +33,7 @@ async function main(arguments_) {
     await waitForIntegrity(name, version, manifest.package.npmIntegrity);
   }
   await runNpm(["dist-tag", "add", `${name}@${version}`, "latest", "--registry", registry]);
-  const latest = JSON.parse((await runNpm(["view", name, "dist-tags.latest", "--json", "--registry", registry])).stdout);
-  if (latest !== version) throw new Error(`${name}@latest resolved to ${latest ?? "nothing"}, expected ${version}`);
+  await waitForVersion(name, "latest", version);
   process.stdout.write(`Published ${name}@${version} with verified integrity and promoted latest\n`);
 }
 
@@ -48,13 +49,26 @@ async function publishedIntegrity(name, version) {
 }
 
 async function waitForIntegrity(name, version, expected) {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
+  for (let attempt = 0; attempt < registryVisibilityAttempts; attempt += 1) {
     const actual = await publishedIntegrity(name, version);
     if (actual === expected) return;
     if (actual !== null) throw new Error(`${name}@${version} reached npm with different integrity`);
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 3_000));
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, registryPollIntervalMs));
   }
-  throw new Error(`${name}@${version} did not become visible on npm within 60 seconds`);
+  throw new Error(`${name}@${version} did not become visible on npm within 5 minutes`);
+}
+
+async function waitForVersion(name, tag, expected) {
+  for (let attempt = 0; attempt < registryVisibilityAttempts; attempt += 1) {
+    const result = await runNpm(["view", name, `dist-tags.${tag}`, "--json", "--registry", registry], true);
+    const actual = result.code === 0 ? JSON.parse(result.stdout) : null;
+    if (actual === expected) return;
+    if (result.code !== 0 && !/E404|404 Not Found/u.test(`${result.stdout}\n${result.stderr}`)) {
+      throw new Error(`registry dist-tag lookup failed\n${result.stderr}`);
+    }
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, registryPollIntervalMs));
+  }
+  throw new Error(`${name}@${tag} did not resolve to ${expected} on npm within 5 minutes`);
 }
 
 async function runNpm(arguments_, allowFailure = false) {
