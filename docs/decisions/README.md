@@ -57,6 +57,7 @@ their titles are reproduced verbatim below.
 | [D86](D86-REQUIRED-VALUE-UNWRAP.md) | 必需值解包 `value!` | The expression-position unwrap that `assert value != null` had no spelling for — checked, never claimed, and divided from the assertion by position rather than by meaning. |
 | [D87](D87-DATABASE-AND-EXTERNAL-ADAPTER-BOUNDARY.md) | 数据库模型与外部适配器边界 | Superseded by D88; records the insufficient repository-local adapter split. |
 | [D88](D88-REPOSITORY-OWNERSHIP-BOUNDARY.md) | 语言、框架与应用所有权边界 | The repository owns only the language, official target frameworks, and required tooling; applications own concrete libraries and integrations. |
+| [D91](D91-OFFICIAL-LIBRARIES-REPOSITORY.md) | 官方非标准库伴生仓库边界 | Optional reusable libraries and adapters may be maintained in an independent companion repository, without re-entering the language toolchain or Standard API. |
 
 ## archive/
 

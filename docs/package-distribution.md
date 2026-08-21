@@ -254,10 +254,13 @@ tarballs. Registry publication is a separately authorized, provenance-bearing
 GitHub Actions job that consumes the verified strict candidate.
 
 Application libraries and external-service adapters belong to their consuming
-project or to an independently owned third-party repository. They are not
-VelarScript workspaces or release artifacts. The compiler resolves an installed
-package's `velar.entry` through the public package protocol and never grants it
-a hidden Standard-module path.
+project, an independently owned third-party repository, or the separately
+versioned `VelarScript-Libraries` companion repository. Companion packages are
+officially curated optional dependencies, not VelarScript Core workspaces,
+Standard modules, target frameworks, or toolchain release artifacts. The Core
+repository never imports them. The compiler resolves an installed package's
+`velar.entry` through the same public package protocol used for every other npm
+dependency and never grants it a hidden Standard-module path.
 
 The rehearsal builds and packs a private temporary toolchain snapshot. It never
 cleans or rewrites the active workspace's `dist` directories, so release checks
