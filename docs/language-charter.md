@@ -3817,10 +3817,12 @@ between two independent writes no order is the right one. Put every update to
 that state in one watch, or give each watch a state of its own.
 The rule reads a direct assignment to a `state` name, and it follows the calls
 it can resolve within the module: a write inside a `def` the watch calls counts
-as that watch's write, and so does one reached through a name statically bound
-to such a `def`. It stops where the answer stops being certain — a call across a
-module boundary, through `any`, or through a value this analysis cannot resolve
-is left alone, as are two writes through member paths, because a path can run
+as that watch's write, and so does one reached through a `const` statically
+bound to such a `def`, however long the chain of them runs. It stops where the
+answer stops being certain, and stays silent there rather than guessing: a call
+across a module boundary, through `any`, or through a value this analysis cannot
+resolve is left alone, as is a call through a `let`, which any line below it may
+rebind, and as are two writes through member paths, because a path can run
 through indices and aliases no analysis here can decide. It is the same shape as the two-independent-looks error in
 section 17, for the same reason: two unrelated sources contending for one thing
 have no winner the source states, so the author says which one he meant.
