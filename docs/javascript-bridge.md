@@ -93,7 +93,44 @@ to VelarScript's lightweight type system:
   `export * from "./module"` declaration graphs. Resolution follows only real
   `.d.ts`, `.d.mts`, or `.d.cts` files inside the package root, to at most 64 files, 16 levels,
   and 2 MiB in aggregate; cycles, missing names, and ambiguous star exports
-  degrade safely instead of selecting an arbitrary contract.
+  degrade safely instead of selecting an arbitrary contract;
+- a package's own contract in the legacy ambient spelling: a
+  `declare module "pkg"` block in `pkg`'s declaration file, or a
+  `declare module "pkg/sub"` block in the file `pkg/sub` resolves to, is read
+  as that module's exports.
+
+The bridge reads a declaration file's own module scope and nothing else. Every
+other ambient block declares names in a scope that is not the module's export
+table, so reading them would fabricate an export the package does not have — a
+clean `velar check` that fails at run time with a host `SyntaxError`.
+`declare global`, `declare namespace X`, a bare `namespace X` or `module X`, an
+`export namespace X`, and a `declare module` naming somebody else's specifier
+are each skipped, and each is reported once as
+`Ambient '<block head>' block is outside the VelarScript declaration bridge and
+its declarations were ignored`. A block whose body never closes ends the sweep
+and is reported as `Ambient '<block head>' block has an unclosed body, so it and
+the rest of the declaration file were ignored`. Both travel the same
+non-blocking `VEL9002` channel as the unsupported shapes. A skipped block costs
+only its own body, and the rest of the file still contributes its contract; an
+unclosed one costs everything after it.
+
+Comments are removed by a quote-aware scan, so a string literal type may contain
+`/*`, `*/`, or `//` — URL literals, glob literals, template literal types —
+without the declarations around it being eaten along with it.
+
+Members of an interface, object type, or class body may be terminated by
+semicolons, by newlines, or by a mix of the two. A newline ends a member only
+when what precedes it is a finished member and what follows opens a new one, so
+a member's type may wrap across lines. A top-level comma terminates a member as
+well, which is how the object-type spelling `{a: string, b: number}` reads as
+two members rather than one.
+
+TypeScript's `this` pseudo-parameter types the receiver and carries no runtime
+argument, so the bridge drops it.
+`export declare function bind(this: object, x: number): string` crosses as a
+one-parameter function taking `number`, not a two-parameter one whose first
+argument nothing could supply. The same applies to interface and class method
+signatures, to declared constructors, and to arrow-function types.
 
 TypeScript's `value?: T` parameter spelling controls call arity only. The bridge
 shows it as `T = default`: omission is allowed, but an explicit VelarScript
@@ -189,13 +226,31 @@ runtime schema. A declared export whose value is legitimately `undefined`
 still loads, because the boundary is membership in the module namespace, not
 the bound value.
 
-An import of a name the package does not export therefore has two failure
+The name itself binds through a real named `import`, and the probe runs beside
+it as a separate statement, so a checked `import js {name}`, a namespace
+`import js * as name`, and `import js unsafe` all observe the same value: a
+`let` the JavaScript module reassigns is read at its current value through every
+spelling. Reading the namespace into a `const` instead would have frozen the
+foreign binding where it started — which is neither what JavaScript does with
+that declaration nor what the other two spellings do.
+
+The probe is therefore the boundary's backstop rather than its primary refusal.
+A host that link-checks named imports refuses a declared-but-absent export
+before any statement runs, in the host's own voice; where the name links to
+`undefined` instead — bundled CommonJS interop, whose namespace is built by
+scanning rather than by linking — the probe beside it is what reports, in the
+velar voice.
+
+An import of a name the package does not export therefore fails in one of three
 shapes, and which one an author sees depends on whether a declaration governs
-the source. Under an `extern module` block, a name the block does not declare is
-a check error naming the block, and a name the block declares but the package
-does not export is the owned initialization error above — both name the source,
-the export, and the fix. Without a declaration, the failure is the host's:
-`import js unsafe` of a missing export produces the native ES-module
+the source and on how the host builds the module's namespace. Under an
+`extern module` block, a name the block does not declare never reaches the host
+at all: it is a check error naming the block and the fix. A name the block
+declares but the package does not export fails at load — as the host's own link
+error where the host links named imports, and as the owned initialization error
+above where the name links to `undefined` instead. Without a declaration the
+failure is always the host's: `import js unsafe` of a missing export produces
+the native ES-module
 `SyntaxError: The requested module 'pkg' does not provide an export named 'x'`.
 That message is source-mapped but unowned, which is one more reason to promote a
 stabilizing boundary to `extern module`.
@@ -314,7 +369,19 @@ imported through any supported module form, or passed through `velar/async`
 before awaiting. A
 JavaScript export declared as `Promise<T>` must return an actual native Promise
 (including one from another realm); arbitrary thenables are rejected without
-reading a `then` accessor. Native Promise resolution itself reserves the
+reading a `then` accessor. Normalization proves its input by invoking the
+captured `Promise.prototype.then` intrinsic on it, and builds the normalized
+value with the captured `%Promise%` constructor rather than returning what
+`then` handed back. `then` derives its own result through the species protocol,
+which reads `promise.constructor[Symbol.species]`, so returning that result
+would let one ordinary property assignment on an ordinary native Promise make
+the cached cross-module identity an arbitrary foreign thenable — and awaiting it
+resolve to raw `undefined`. The species-derived capability is still constructed
+by `then` and then discarded; only a value whose prototype is
+`%Promise%.prototype` is cached. A Promise subclass is normalized like any other
+Promise, and its own `then` override is never consulted, because the probe
+applies the captured intrinsic rather than the value's own property. Native
+Promise resolution itself reserves the
 top-level `then` property, so a checked resolved `T` cannot expose a callable
 `then` data member or any `then` getter. The compiler rejects known bridge
 contracts with that shape. A non-callable data `then` field and nested

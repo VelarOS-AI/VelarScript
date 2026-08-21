@@ -1,5 +1,6 @@
 import type {
   EmbeddedJavaScriptDeclaration,
+  EmbeddedJavaScriptDependency,
   ExternModuleDeclaration,
   ImportDeclaration,
   ImportSpecifier,
@@ -40,6 +41,7 @@ export function programWithEmbeddedJavaScriptImports(program: Program, sourcePat
     const specifier = embeddedJavaScriptSpecifier(sourcePath, ordinal++);
     if (statement.contract) body.push(syntheticExternModule(statement, specifier));
     body.push(syntheticImport(statement, specifier));
+    for (const dependency of statement.dependencies) body.push(syntheticDependencyImport(statement, dependency));
     body.push(statement);
   }
   return { ...program, body };
@@ -79,5 +81,29 @@ function syntheticImport(
     unsafe: statement.unsafe,
     specifiers,
     span: statement.span,
+  };
+}
+
+/**
+ * The block's own JavaScript imports, presented so that a module-resolution
+ * failure lands on the specifier that caused it. The sibling import above
+ * names the generated module, so without these every package a block imports
+ * would report against the block header — a caret at `unsafe js\``, in the one
+ * feature whose justification is that the escape hatch stays debuggable. These
+ * bind no names: the block's own JavaScript already binds them, and the
+ * project's dependency walk still reads the original program.
+ */
+function syntheticDependencyImport(
+  statement: EmbeddedJavaScriptDeclaration,
+  dependency: EmbeddedJavaScriptDependency,
+): ImportDeclaration {
+  return {
+    kind: "ImportDeclaration",
+    source: dependency.source,
+    sourceSpan: dependency.span,
+    javascript: true,
+    unsafe: statement.unsafe,
+    specifiers: [],
+    span: dependency.span,
   };
 }

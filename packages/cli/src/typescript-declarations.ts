@@ -102,7 +102,7 @@ export async function loadTypeScriptDeclarations(source: string, importerPath: s
     return null;
   }
   try {
-    const bridge = await loadTypeScriptDeclarationGraph(root, path, packageName);
+    const bridge = await loadTypeScriptDeclarationGraph(root, path, packageName, source);
     return { ...bridge, dependencies: [...unique([manifestPath, ...bridge.dependencies])].sort() };
   } catch {
     return null;
@@ -153,9 +153,15 @@ interface DeclarationImport {
   readonly unsupported: boolean;
 }
 
-async function loadTypeScriptDeclarationGraph(root: string, entry: string, packageSource: string): Promise<TypeScriptDeclarationBridge> {
+async function loadTypeScriptDeclarationGraph(root: string, entry: string, packageSource: string, importedSpecifier: string = packageSource): Promise<TypeScriptDeclarationBridge> {
   const [rootPath, entryPath] = await Promise.all([realpath(root), realpath(entry)]);
   if (!insideRoot(rootPath, entryPath)) throw new Error("TypeScript declaration entry escapes its package root");
+  // The specifiers a `declare module "…"` block may legitimately declare: the
+  // package this graph belongs to, in the legacy ambient spelling. A subpath
+  // import declares its own specifier, so `pkg/sub.d.ts` writing
+  // `declare module "pkg/sub" { … }` is that subpath's own contract and must
+  // not be excised as somebody else's ambient block.
+  const ownModules = new Set([importedSpecifier, packageSource, packageNameOf(packageSource)]);
   const cache = new Map<string, TypeScriptDeclarationBridge>();
   const visiting = new Set<string>();
   const counted = new Set<string>();
@@ -187,7 +193,7 @@ async function loadTypeScriptDeclarationGraph(root: string, entry: string, packa
       const importedTypes = new Map<string, ValueType>();
       const importedRegistry = new Map<string, ClassInfo>();
       const importWarnings: string[] = [];
-      for (const declarationImport of declarationImports(source)) {
+      for (const declarationImport of declarationImports(source, ownModules)) {
         if (declarationImport.unsupported) {
           importWarnings.push(`Namespace declaration import from '${declarationImport.source}' is outside the VelarScript declaration bridge and was kept as unknown`);
           continue;
@@ -210,7 +216,7 @@ async function loadTypeScriptDeclarationGraph(root: string, entry: string, packa
           }
         }
       }
-      const local = parseTypeScriptDeclarations(source, path, origin, true, importedTypes, importedRegistry);
+      const local = parseTypeScriptDeclarations(source, path, origin, true, importedTypes, importedRegistry, ownModules);
       const exports = new Map(local.exports);
       const typeExports = new Map(local.typeExports);
       const classes = new Map(local.classes);
@@ -218,7 +224,7 @@ async function loadTypeScriptDeclarationGraph(root: string, entry: string, packa
       const warnings = [...importWarnings, ...local.warnings];
       const explicit = new Set(exports.keys());
       const explicitTypes = new Set(typeExports.keys());
-      const reexports = declarationReexports(source);
+      const reexports = declarationReexports(source, ownModules);
 
       for (const reexport of reexports.filter((item) => item.names !== null)) {
         const childPath = await resolveDeclarationReexport(rootPath, path, reexport.source);
@@ -325,8 +331,8 @@ function emptyDeclarationBridge(path: string, warning: string): TypeScriptDeclar
   return { path, dependencies: [path], exports: new Map(), typeExports: new Map(), classes: new Map(), classRegistry: new Map(), warnings: [warning] };
 }
 
-function declarationReexports(source: string): readonly DeclarationReexport[] {
-  const text = source.replace(/\/\*[\s\S]*?\*\//gu, "").replace(/\/\/[^\n]*/gu, "");
+function declarationReexports(source: string, ownModules: ReadonlySet<string>): readonly DeclarationReexport[] {
+  const text = excludeAmbientBlocks(stripDeclarationComments(source), [], ownModules);
   const output: DeclarationReexport[] = [];
   const named = /export\s+(type\s+)?\{([\s\S]*?)\}\s*from\s*["']([^"']+)["']\s*;?/gu;
   for (const match of text.matchAll(named)) {
@@ -343,8 +349,8 @@ function declarationReexports(source: string): readonly DeclarationReexport[] {
   return output;
 }
 
-function declarationImports(source: string): readonly DeclarationImport[] {
-  const text = source.replace(/\/\*[\s\S]*?\*\//gu, "").replace(/\/\/[^\n]*/gu, "");
+function declarationImports(source: string, ownModules: ReadonlySet<string>): readonly DeclarationImport[] {
+  const text = excludeAmbientBlocks(stripDeclarationComments(source), [], ownModules);
   const output: DeclarationImport[] = [];
   const pattern = /^[ \t]*import\s+(?:type\s+)?([\s\S]*?)\s+from\s*["']([^"']+)["']\s*;?/gmu;
   for (const match of text.matchAll(pattern)) {
@@ -433,12 +439,13 @@ export function parseTypeScriptDeclarations(
   reexportsHandled = false,
   importedTypes: ReadonlyMap<string, ValueType> = new Map(),
   importedClassRegistry: ReadonlyMap<string, ClassInfo> = new Map(),
+  ownModules: ReadonlySet<string> = new Set(),
 ): TypeScriptDeclarationBridge {
   if (Buffer.byteLength(source, "utf8") > MAX_TYPESCRIPT_DECLARATION_BYTES) {
     throw new RangeError(`${path} exceeds the 2 MiB TypeScript declaration bridge limit`);
   }
-  const text = source.replace(/\/\*[\s\S]*?\*\//gu, "").replace(/\/\/[^\n]*/gu, "");
   const warnings: string[] = [];
+  const text = excludeAmbientBlocks(stripDeclarationComments(source), warnings, ownModules);
   const aliases = new Map<string, string>();
   const interfaces = new Map<string, { readonly bases: readonly string[]; readonly body: string }>();
   const invalidInterfaces = new Set<string>();
@@ -908,7 +915,7 @@ function parseClassDeclaration(
       continue;
     }
 
-    const property = /^((?:(?:public|static|readonly|declare)\s+)*)?([A-Za-z_$][\w$]*)(\?)?\s*:\s*(.+)$/u.exec(member);
+    const property = /^((?:(?:public|static|readonly|declare)\s+)*)?([A-Za-z_$][\w$]*)(\?)?\s*:\s*(.+)$/su.exec(member);
     if (property) {
       const modifiers = new Set((property[1] ?? "").trim().split(/\s+/u).filter(Boolean));
       const target = modifiers.has("static") ? staticFields : fields;
@@ -1022,6 +1029,16 @@ function parseRestElementType(source: string, parse: (value: string) => ValueTyp
   return generic && splitTopLevel(generic[1] ?? "", ",").length === 1 ? parse(generic[1] ?? "unknown") : null;
 }
 
+/**
+ * Drops TypeScript's `this` pseudo-parameter. It only types the receiver, it
+ * carries no runtime argument, and it is legal only in first position — so
+ * counting it as positional gives every correct call site an arity error with
+ * no value the author could supply.
+ */
+function withoutThisParameter(parts: string[]): string[] {
+  return parts.length > 0 && /^this\s*:/u.test(parts[0]!) ? parts.slice(1) : parts;
+}
+
 function parseParameters(
   source: string,
   parse: (value: string) => ValueType,
@@ -1033,9 +1050,9 @@ function parseParameters(
   let optionalSeen = false;
   let invalid = false;
   let rest: ValueType | undefined;
-  const parts = splitTopLevel(source, ",");
+  const parts = withoutThisParameter(splitTopLevel(source, ","));
   for (const [index, part] of parts.entries()) {
-    const match = /^(\.\.\.)?[A-Za-z_$][\w$]*(\?)?\s*:\s*(.+)$/u.exec(part.trim());
+    const match = /^(\.\.\.)?[A-Za-z_$][\w$]*(\?)?\s*:\s*(.+)$/su.exec(part.trim());
     if (!match) {
       warnings.push(`Unsupported parameter declaration '${part.trim()}' was kept as unknown`);
       types.push(unsupportedType);
@@ -1082,9 +1099,9 @@ function parseClassConstructorParameters(
   let required = 0;
   let optionalSeen = false;
   let rest: ValueType | undefined;
-  const parts = splitTopLevel(source, ",");
+  const parts = withoutThisParameter(splitTopLevel(source, ","));
   for (const [index, part] of parts.entries()) {
-    const match = /^((?:(?:public|private|protected|readonly)\s+)*)(\.\.\.)?([A-Za-z_$][\w$]*)(\?)?\s*:\s*(.+)$/u.exec(part.trim());
+    const match = /^((?:(?:public|private|protected|readonly)\s+)*)(\.\.\.)?([A-Za-z_$][\w$]*)(\?)?\s*:\s*(.+)$/su.exec(part.trim());
     if (!match) {
       warnings.push(`Unsupported constructor parameter declaration '${part.trim()}' was kept as unknown`);
       types.push(unsupportedType);
@@ -1270,7 +1287,7 @@ function objectType(source: string, aliases: ReadonlyMap<string, string>, warnin
   const optionalFields = new Set<string>();
   let invalidInputShape = false;
   for (const part of splitFields(source)) {
-    const match = /^(readonly\s+)?([A-Za-z_$][\w$]*)(\?)?\s*:\s*(.+)$/u.exec(part.trim());
+    const match = /^(readonly\s+)?([A-Za-z_$][\w$]*)(\?)?\s*:\s*(.+)$/su.exec(part.trim());
     if (match) {
       const name = match[2]!;
       const type = parseTsType(match[4] ?? "unknown", aliases, warnings, stack, classTypes, match[1] ? direction : "invariant");
@@ -1388,6 +1405,109 @@ function skipWhitespace(source: string, start: number): number {
   return cursor;
 }
 
+/**
+ * Finds the closing quote of the string literal that opens at `start`, or the
+ * last character it can belong to when the literal is never closed.
+ */
+function closingQuote(source: string, start: number): number {
+  const quote = source[start]!;
+  for (let index = start + 1; index < source.length; index += 1) {
+    const character = source[index]!;
+    if (character === "\\") {
+      index += 1;
+      continue;
+    }
+    if (character === quote) return index;
+    if (quote !== "`" && character === "\n") return index - 1;
+  }
+  return source.length - 1;
+}
+
+/**
+ * Removes comments from a declaration file without disturbing string literal
+ * types. A `.d.ts` routinely writes `/*`, `*` + `/` or `//` inside a string
+ * literal type — URL literals, glob literals, template literal types — and a
+ * regex stripper eats every real declaration between two of them with no word
+ * to the author. Comment bytes become spaces so that every offset recorded
+ * against the result still addresses the same character of `source`.
+ */
+function stripDeclarationComments(source: string): string {
+  let output = "";
+  let index = 0;
+  while (index < source.length) {
+    const character = source[index]!;
+    if (character === "\"" || character === "'" || character === "`") {
+      const end = closingQuote(source, index);
+      output += source.slice(index, end + 1);
+      index = end + 1;
+      continue;
+    }
+    if (character === "/" && source[index + 1] === "*") {
+      const close = source.indexOf("*/", index + 2);
+      const end = close < 0 ? source.length : close + 2;
+      output += " ".repeat(end - index);
+      index = end;
+      continue;
+    }
+    if (character === "/" && source[index + 1] === "/") {
+      let end = index;
+      while (end < source.length && source[end] !== "\n") end += 1;
+      output += " ".repeat(end - index);
+      index = end;
+      continue;
+    }
+    output += character;
+    index += 1;
+  }
+  return output;
+}
+
+const ambientBlockPattern =
+  /(?:^|[;{}\r\n])[\t ]*((?:export\s+)?declare\s+(?:global|namespace\s+[A-Za-z_$][\w$.]*|module\s+(?:"[^"\r\n]*"|'[^'\r\n]*'|[A-Za-z_$][\w$.]*))|(?:export\s+)?(?:namespace|module)\s+[A-Za-z_$][\w$.]*)\s*\{/gu;
+
+/**
+ * Blanks `declare global`, `declare namespace X` and `declare module "x"`
+ * bodies. The declaration sweeps have no concept of a nested declaration
+ * scope, so without this an `export` inside one of these blocks is read as a
+ * module export the package does not have — a clean `velar check` that links
+ * to a host `SyntaxError` at run time. The span becomes spaces rather than
+ * disappearing so recorded offsets stay valid, and each excised block is
+ * reported.
+ *
+ * `ownModules` names the specifiers this file is the declaration for. A
+ * `declare module "self"` block is that package's own contract in the legacy
+ * ambient spelling, so only its head and braces are blanked and its members
+ * stay module members.
+ */
+function excludeAmbientBlocks(source: string, warnings: string[], ownModules: ReadonlySet<string> = new Set()): string {
+  let text = source;
+  let blankedUntil = 0;
+  for (const match of source.matchAll(ambientBlockPattern)) {
+    const head = match[1]!;
+    const start = match.index + match[0].indexOf(head);
+    if (start < blankedUntil) continue;
+    const open = match.index + match[0].length - 1;
+    const close = matchingDelimiter(source, open, "{", "}");
+    const end = close < 0 ? source.length : close + 1;
+    const label = head.replace(/\s+/gu, " ");
+    const declaredModule = /^(?:export\s+)?declare\s+module\s+["'](.+)["']$/u.exec(label);
+    if (declaredModule && ownModules.has(declaredModule[1]!) && close >= 0) {
+      // The kept body is swept again rather than left to this loop, because a
+      // block nested on the same line as this one has no statement start in
+      // front of it once the outer match has consumed the opening brace.
+      text = `${text.slice(0, start)}${" ".repeat(open + 1 - start)}${excludeAmbientBlocks(text.slice(open + 1, close), warnings, ownModules)} ${text.slice(close + 1)}`;
+      blankedUntil = close + 1;
+      continue;
+    }
+    warnings.push(close < 0
+      ? `Ambient '${label}' block has an unclosed body, so it and the rest of the declaration file were ignored`
+      : `Ambient '${label}' block is outside the VelarScript declaration bridge and its declarations were ignored`);
+    text = text.slice(0, start) + " ".repeat(end - start) + text.slice(end);
+    blankedUntil = end;
+  }
+  return text;
+}
+
 function matchingDelimiter(source: string, start: number, open: string, close: string): number {
   let depth = 0;
   let quote = "";
@@ -1435,9 +1555,75 @@ function topLevelTerminator(source: string, start: number, terminator: string): 
   return -1;
 }
 
+/**
+ * Text that starts a fresh interface, object type, or class member. A body may
+ * terminate its members with semicolons, with newlines, or with a mix of the
+ * two, so a newline ends a member only when what follows opens a new one
+ * rather than continuing the type that is being written.
+ */
+const memberHeadPattern =
+  /^(?:(?:readonly|public|private|protected|static|override|abstract|declare)\s+)*(?:new\s*\(|constructor\s*\(|(?:get|set)\s+[A-Za-z_$][\w$]*\s*\(|\[|\(|<|[A-Za-z_$][\w$]*\s*\??\s*[:(<]|["'][^"'\r\n]*["']\s*\??\s*[:(])/u;
+
+/**
+ * Reports whether a member that reads as `pending` is plainly unfinished, so a
+ * newline inside it is a wrap rather than a terminator.
+ */
+function memberContinues(pending: string): boolean {
+  const trimmed = pending.trimEnd();
+  if (!trimmed) return true;
+  if (trimmed.endsWith("=>")) return true;
+  if (/\b(?:extends|keyof|typeof|infer|in|is|new|readonly)$/u.test(trimmed)) return true;
+  return /[:,|&=<([{?+\-.]$/u.test(trimmed);
+}
+
+/**
+ * Splits a declaration body into members on its real terminators: a top-level
+ * `;` or `,`, or a top-level newline that separates a finished member from the
+ * head of the next one. Choosing one separator for the whole body glues the
+ * member after a semicolon-less method onto it, which deletes that member from
+ * the package's contract without a word.
+ */
 function splitFields(source: string): string[] {
-  const semicolons = splitTopLevel(source, ";");
-  return topLevelTerminator(source, 0, ";") >= 0 ? semicolons : source.split(/\n+/u);
+  const output: string[] = [];
+  let start = 0;
+  let angle = 0;
+  let round = 0;
+  let square = 0;
+  let brace = 0;
+  let quote = "";
+  const take = (end: number): void => {
+    const member = source.slice(start, end).trim();
+    if (member) output.push(member);
+    start = end + 1;
+  };
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index]!;
+    if (quote) {
+      if (character === "\\") index += 1;
+      else if (character === quote) quote = "";
+      continue;
+    }
+    if (character === "\"" || character === "'" || character === "`") quote = character;
+    else if (character === "<") angle += 1;
+    else if (character === ">") angle = Math.max(0, angle - 1);
+    else if (character === "(") round += 1;
+    else if (character === ")") round = Math.max(0, round - 1);
+    else if (character === "[") square += 1;
+    else if (character === "]") square = Math.max(0, square - 1);
+    else if (character === "{") brace += 1;
+    else if (character === "}") brace = Math.max(0, brace - 1);
+    else if (angle === 0 && round === 0 && square === 0 && brace === 0) {
+      if (character === ";" || character === ",") take(index);
+      else if (character === "\n"
+        && !memberContinues(source.slice(start, index))
+        && memberHeadPattern.test(source.slice(index + 1).trimStart())) {
+        take(index);
+      }
+    }
+  }
+  const last = source.slice(start).trim();
+  if (last) output.push(last);
+  return output;
 }
 
 function splitTopLevel(source: string, separator: string): string[] {
@@ -1445,16 +1631,26 @@ function splitTopLevel(source: string, separator: string): string[] {
   let start = 0;
   let angle = 0;
   let round = 0;
+  let square = 0;
   let brace = 0;
+  let quote = "";
   for (let index = 0; index < source.length; index += 1) {
     const character = source[index];
-    if (character === "<") angle += 1;
+    if (quote) {
+      if (character === "\\") index += 1;
+      else if (character === quote) quote = "";
+      continue;
+    }
+    if (character === "\"" || character === "'" || character === "`") quote = character;
+    else if (character === "<") angle += 1;
     else if (character === ">") angle = Math.max(0, angle - 1);
     else if (character === "(") round += 1;
     else if (character === ")") round = Math.max(0, round - 1);
+    else if (character === "[") square += 1;
+    else if (character === "]") square = Math.max(0, square - 1);
     else if (character === "{") brace += 1;
     else if (character === "}") brace = Math.max(0, brace - 1);
-    else if (character === separator && angle === 0 && round === 0 && brace === 0) {
+    else if (character === separator && angle === 0 && round === 0 && square === 0 && brace === 0) {
       output.push(source.slice(start, index).trim());
       start = index + 1;
     }

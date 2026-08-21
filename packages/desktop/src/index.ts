@@ -1,6 +1,6 @@
 import { VELAR_DESKTOP_API_VERSION } from "./config.ts";
 
-export { VELAR_DESKTOP_API_VERSION } from "./config.ts";
+export { VELAR_DESKTOP_API_VERSION, desktopExternalNavigationPermitted } from "./config.ts";
 export type { DesktopPermissionConfig, DesktopWindowConfig, VelarDesktopConfig } from "./config.ts";
 
 export const VELAR_DESKTOP_MODULES = Object.freeze([

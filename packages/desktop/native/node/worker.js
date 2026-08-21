@@ -8,6 +8,11 @@ import { StringDecoder } from "node:string_decoder";
 const MAX_MESSAGE_BYTES = 128 * 1024 * 1024;
 const MAX_FILE_BYTES = 16 * 1024 * 1024;
 const MAX_LIST_TEXT_UNITS = 2 * 1024 * 1024;
+// The native host reads one JSON line per response and refuses any line
+// over 65 MiB terminally (packages/desktop/native/macos/VelarDesktopHost.swift
+// `consume`). This bound is the worker's own line bound and must stay strictly
+// below the host's, so an oversized response is a per-request error here
+// instead of a fatal host failure there.
 const MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
 const MAX_HTTP_CHUNKS = 1000000;
 const MAX_HTTP_REDIRECTS = 20;
@@ -811,6 +816,25 @@ function processHandle(value) {
   return value;
 }
 
+// An executable grant is only as narrow as that executable's own environment
+// surface: many granted programs take a command, an interpreter option, or a
+// loader path from their environment, so those names are not caller data. The
+// identical predicate is duplicated renderer-side as
+// `__velarProcessReservedEnvironmentName` in packages/desktop/src/compiler.ts;
+// the two must not drift. `PATH` keeps its own longer-standing message.
+// The bare spellings matter as much as the prefixed ones: `git commit` runs
+// `EDITOR`, `git log` runs `PAGER`, and `HOME` moves the whole configuration
+// surface — including the `.gitconfig` whose own `core.editor` runs a command —
+// into a directory the caller chooses. The base snapshot below owns HOME,
+// SHELL and TMPDIR, so a caller cannot replace them either.
+const RESERVED_ENVIRONMENT_NAMES = /^(?:PATH|HOME|USERPROFILE|SHELL|TMPDIR|IFS|ENV|BASH_ENV|SHELLOPTS|BASHOPTS|PS4|EDITOR|VISUAL|PAGER|MANPAGER|MANOPT|BROWSER|SSH_ASKPASS|SUDO_ASKPASS|NODE_OPTIONS|NODE_REPL_EXTERNAL_MODULE)$/iu;
+const RESERVED_ENVIRONMENT_PREFIXES = /^(?:LD_|DYLD_|GIT_|XDG_|PYTHON|PERL|RUBY|LESS)/iu;
+const RESERVED_ENVIRONMENT_SUFFIXES = /(?:_COMMAND|_EDITOR|_PAGER|_OPTS)$/iu;
+
+function reservedEnvironmentName(name) {
+  return RESERVED_ENVIRONMENT_NAMES.test(name) || RESERVED_ENVIRONMENT_PREFIXES.test(name) || RESERVED_ENVIRONMENT_SUFFIXES.test(name);
+}
+
 async function launchProcess(args, settled) {
   const [command, commandArgs = [], options = {}] = args;
   if (typeof command !== "string" || !allowedProcesses.has(command) || command !== basename(command)) throw new Error(`Process '${String(command)}' is not granted by desktop.permissions.processes`);
@@ -836,6 +860,7 @@ async function launchProcess(args, settled) {
     let environmentUnits = 0;
     for (const pair of options.env) {
       if (!Array.isArray(pair) || pair.length !== 2 || typeof pair[0] !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(pair[0]) || pair[0] === "PATH" || typeof pair[1] !== "string" || pair[1].includes("\0")) throw new TypeError("Process env must contain valid string variables and cannot replace PATH");
+      if (reservedEnvironmentName(pair[0])) throw new TypeError(`Process env cannot set the transport- or interpreter-controlled variable '${pair[0]}'`);
       environmentUnits += pair[0].length + pair[1].length;
       if (environmentUnits > 1024 * 1024) throw new RangeError("Process env cannot exceed 1 MiB");
       environment[pair[0]] = pair[1];
@@ -1296,7 +1321,7 @@ function safeError(error) {
 
 function respond(value) {
   const line = JSON.stringify(value);
-  if (Buffer.byteLength(line, "utf8") > MAX_RESPONSE_BYTES + MAX_MESSAGE_BYTES) {
+  if (Buffer.byteLength(line, "utf8") > MAX_RESPONSE_BYTES) {
     process.stdout.write(`${JSON.stringify({ id: value.id, ok: false, error: "Desktop response exceeds its transport bound" })}\n`);
   } else {
     process.stdout.write(`${line}\n`);

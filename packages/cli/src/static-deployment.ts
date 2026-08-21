@@ -1,6 +1,7 @@
 import { cp, lstat, mkdir, readdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import type { FrameworkRequiredPublicAsset, FrameworkStaticDeployment } from "@velarscript/compiler/framework-host";
+import { BUILD_STAGING_MARKER } from "./build-staging.ts";
 import { MAX_PRODUCTION_ASSETS } from "./file-integrity.ts";
 import { VELAR_VERSION } from "./version.ts";
 import type { ProductionFrameworkIdentity } from "./production-build.ts";
@@ -8,11 +9,26 @@ import { isHostErrorCode } from "./host-error.ts";
 
 export const STATIC_DEPLOYMENT_MANIFEST_NAME = "velar-deploy.json";
 export const STATIC_FALLBACK_NAME = "404.html";
+// Every name the builder writes at the root of the output, so a public file
+// cannot take one: the manifest walk skips these at that one level, and a copy
+// that survived there would be a file `velar verify` reports as undeclared for
+// the rest of the build's life.
 const reservedRootFiles = new Set([
   "index.html",
   STATIC_FALLBACK_NAME,
   "velar-build.json",
   STATIC_DEPLOYMENT_MANIFEST_NAME,
+  BUILD_STAGING_MARKER,
+]);
+/**
+ * `assets/` is the builder's own namespace: the deployment manifest gives
+ * everything under it a one-year `immutable` rule, which is only sound for the
+ * content-hashed names the builder produced. A public file copied there would
+ * inherit that rule under a stable name, so a replacement could never reach a
+ * browser that already fetched it.
+ */
+const reservedRootNames = new Map<string, string>([
+  ["assets", "'assets' holds the build's content-hashed output and carries a one-year immutable cache rule; put it under public/static/ instead"],
 ]);
 
 export interface StaticDeploymentSummary {
@@ -79,6 +95,10 @@ export async function copyPublicAssets(publicRoot: string, outputDirectory: stri
     if (!allowReservedRootFiles && reservedRootFiles.has(entry.name)) {
       throw new Error(`public asset '${entry.name}' is reserved by the VelarScript production builder`);
     }
+    const reservation = allowReservedRootFiles ? undefined : reservedRootNames.get(entry.name);
+    if (reservation !== undefined) {
+      throw new Error(`public asset '${entry.name}' is reserved by the VelarScript production builder: ${reservation}`);
+    }
     await copySafe(join(publicRoot, entry.name), join(outputDirectory, entry.name), publicRoot, state);
   }
 }
@@ -132,6 +152,13 @@ export async function writeStaticDeployment(
     spaFallback: config.spaFallback ? { source: "index.html", fallback: STATIC_FALLBACK_NAME } : null,
     headers: [
       { path: basePattern, values: securityHeaders },
+      // Every document the SPA fallback serves is a deep route the enumerated
+      // paths below cannot name, and `verify-deployment` requires `no-cache` on
+      // one of them. Stating the rule here is what makes a provider that
+      // projects this manifest literally indistinguishable from `velar preview`;
+      // the narrower rules that follow win under last-match-wins, so the hashed
+      // assets keep their immutable year.
+      { path: basePattern, values: { "Cache-Control": "no-cache" } },
       { path: `${config.base}assets/*`, values: { "Cache-Control": "public, max-age=31536000, immutable" } },
       ...documentPaths.map((path) => ({ path, values: { "Cache-Control": "no-cache" } })),
     ],

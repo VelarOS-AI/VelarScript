@@ -13,7 +13,7 @@
 import {expect} from "velar/test"
 import {openTasks, recordVisit, retitle, tasks, visits} from "./03-state-and-derived.vel"
 import {describeHttpFailure} from "./11-storage-realtime-http.vel"
-import {HttpError, HttpTransportError, HttpTransportPhase} from "velar/http"
+import {HttpResponseError, HttpTransportError, HttpTransportPhase} from "velar/http"
 import {refreshEverything} from "./04-resources-and-actions.vel"
 
 test "a module state write is visible after the reactive flush settles":
@@ -45,7 +45,7 @@ test "a module action publishes pending around its call":
     expect(refreshEverything.error).toBe(null)
 
 test "velar/http failures are discriminated by class":
-    expect(describeHttpFailure(HttpError("Not found", 404, "/api/draft"))).toBe("http 404 from /api/draft")
+    expect(describeHttpFailure(HttpResponseError("Not found", 404, "/api/draft"))).toBe("http 404 from /api/draft")
     expect(describeHttpFailure(HttpTransportError("Send failed", HttpTransportPhase.request))).toBe("transport failed while sending the request")
     expect(describeHttpFailure(HttpTransportError("Read failed", HttpTransportPhase.response))).toBe("transport failed while reading the response")
     expect(describeHttpFailure(Error("something else"))).toBe("unclassified: something else")

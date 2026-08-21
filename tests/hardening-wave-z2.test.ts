@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -26,29 +27,35 @@ function projectMessages(project: ProjectResult, name: string): readonly string[
 }
 
 // The generated standard modules name each other by specifier, so the whole
-// graph is linked as data URLs before a program runs. Three passes settle the
-// two-level core dependencies.
-function linkedModuleUrls(): ReadonlyMap<string, string> {
+// graph is linked before a program runs. It is linked on disk rather than as
+// data URLs: a module identifier appears in every stack frame a failure
+// prints, and once the text module outgrew 64 KiB an inlined one filled the
+// whole of stderr — `runFailing` could no longer see the message it asserts.
+// A file path names the same module in a dozen characters.
+function linkedModulePaths(): ReadonlyMap<string, string> {
   const sources = standardModuleSources();
-  const urls = new Map<string, string>();
-  const encode = (source: string): string => `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
-  const link = (source: string): string => {
+  const root = mkdtempSync(join(tmpdir(), "velar-wave-z2-linked-"));
+  const paths = new Map<string, string>();
+  for (const name of sources.keys()) paths.set(name, join(root, `${name.replaceAll("/", "_")}.mjs`));
+  for (const [name, source] of sources) {
     let linked = source;
-    for (const name of sources.keys()) linked = linked.replaceAll(JSON.stringify(name), JSON.stringify(urls.get(name)!));
-    return linked;
-  };
-  for (const [name, source] of sources) urls.set(name, encode(source));
-  for (let pass = 0; pass < 3; pass += 1) {
-    for (const [name, source] of sources) urls.set(name, encode(link(source)));
+    for (const [other, path] of paths) linked = linked.replaceAll(JSON.stringify(other), JSON.stringify(path));
+    writeFileSync(paths.get(name)!, linked, "utf8");
   }
-  return urls;
+  return paths;
 }
 
+/** Linked once: the graph is a pure function of the compiler build. */
+let linkedModules: ReadonlyMap<string, string> | null = null;
+
 function execute(code: string): { readonly status: number | null; readonly stdout: string; readonly stderr: string } {
-  const urls = linkedModuleUrls();
+  linkedModules ??= linkedModulePaths();
+  const root = mkdtempSync(join(tmpdir(), "velar-wave-z2-run-"));
+  const entry = join(root, "entry.mjs");
   let linked = code;
-  for (const [name, url] of urls) linked = linked.replaceAll(JSON.stringify(name), JSON.stringify(url));
-  const result = spawnSync(process.execPath, ["--input-type=module"], { encoding: "utf8", input: linked, timeout: 20_000 });
+  for (const [name, path] of linkedModules) linked = linked.replaceAll(JSON.stringify(name), JSON.stringify(path));
+  writeFileSync(entry, linked, "utf8");
+  const result = spawnSync(process.execPath, [entry], { encoding: "utf8", timeout: 20_000 });
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 

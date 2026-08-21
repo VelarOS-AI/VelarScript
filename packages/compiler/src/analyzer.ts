@@ -11,6 +11,7 @@ import type {
   ExternClassDeclaration,
   ExternFunctionDeclaration,
   ExternConstantDeclaration,
+  ForStatement,
   FunctionDeclaration,
   MatchPattern,
   MatchValue,
@@ -25,7 +26,7 @@ import type {
   UsingDeclaration,
 } from "./ast.ts";
 import { isPermanentNamespaceName, type CoreVocabularyName, type PermanentNamespaceName } from "./core-vocabulary.ts";
-import { diagnostic, mechanicalEdits, mechanicalFix, recoveredDiagnostic, type Diagnostic, type DiagnosticEdit, type DiagnosticFix } from "./diagnostic.ts";
+import { advisory, diagnostic, mechanicalEdits, mechanicalFix, recoveredDiagnostic, type Advisory, type Diagnostic, type DiagnosticEdit, type DiagnosticFix } from "./diagnostic.ts";
 import { VELAR_HOST_ERROR_NAMES, VELAR_HOST_ERROR_PATH_NAMES } from "./error-runtime.ts";
 import type { CompilerAnalysisExtension, RetiredNamespace } from "./extension.ts";
 import { collectionMemberGuidance, removedGlobalFunctionGuidance, stringMemberGuidance, REST_PARAMETER_ELEMENT_TYPE_MESSAGE, type CollectionKind } from "./language-guidance.ts";
@@ -64,6 +65,7 @@ import {
   stringType,
   substituteTypeParameters,
   textConvertibleType,
+  typeContainsAnyOutput,
   typeContainsParameter,
   typeContainsRuntimeTypeCheck,
   unifyTypeParameters,
@@ -88,6 +90,12 @@ interface Binding {
   readonly storageBinding?: Binding;
   readonly span: Span;
   narrowingFrame: number | null;
+  /**
+   * The scope depth this binding was created at. A flow snapshot only visits
+   * bindings whose facts have actually moved, and this is how the set of those
+   * is emptied again when the scope holding them exits.
+   */
+  readonly flowScope?: number;
   /**
    * D44 rule 71: true while the active narrowing was established by an
    * assignment (or a declaration initializer) rather than a check. Only
@@ -127,13 +135,16 @@ interface PendingScopeDeclaration {
   readonly loopHead: boolean;
 }
 
+/** The four flow-analysis fields of a binding, as of one moment. */
+interface FlowFactState {
+  readonly type: ValueType;
+  readonly storageType: ValueType;
+  readonly frame: number | null;
+  readonly assigned: boolean;
+}
+
 interface FlowFactsSnapshot {
-  readonly bindings: ReadonlyMap<Binding, {
-    readonly type: ValueType;
-    readonly storageType: ValueType;
-    readonly frame: number | null;
-    readonly assigned: boolean;
-  }>;
+  readonly bindings: ReadonlyMap<Binding, FlowFactState>;
   readonly members: readonly ReadonlyMap<string, MemberNarrowing>[];
 }
 
@@ -143,10 +154,36 @@ interface FlowFactInvalidations {
   readonly storageTypes: ReadonlyMap<Binding, ValueType>;
 }
 
+/**
+ * The scope chain as it stood at one point, read back on demand. Flattening
+ * every live scope into a fresh Map made each block, loop and match cost
+ * O(names in the module), which is most of what made whole-module analysis
+ * quadratic in module size. The depth is enough: scopes are a stack, so the
+ * scopes below a construct's own are exactly the ones that were there, and
+ * nothing adds a name to them while the construct is being analyzed.
+ */
+type VisibleScopeDepth = number;
+
+/**
+ * How many back-edge passes may be running at once. One is what a single-level
+ * loop needs, and three covers a loop nest three deep — the deepest anyone
+ * writes on purpose — with every level analyzed exactly as before. Past that
+ * the count stops doubling per level: fourteen levels went from 3.2 seconds to
+ * 0.2, and seventeen from 30 seconds to 0.4.
+ */
+const maximumLoopReanalysisDepth = 3;
+
+/** What a loop's back-edge pass answered: its context, or that the budget widened the exit. */
+interface LoopBackEdgeOutcome {
+  readonly repeated: LoopFlowContext | null;
+  /** True when the pass was skipped, so the loop's exit may keep no unconfirmed fact. */
+  readonly widened: boolean;
+}
+
 interface LoopFlowContext {
   readonly baseline: FlowFactsSnapshot;
-  /** The bindings visible outside the loop, so a break's facts can be stated in their terms. */
-  readonly visible: ReadonlyMap<string, Binding>;
+  /** The scopes visible outside the loop, so a break's facts can be stated in their terms. */
+  readonly visible: VisibleScopeDepth;
   readonly carried: FlowFactInvalidations[];
   readonly backEdges: FlowFactInvalidations[];
   /** FLW-N6: the facts holding at each `break`, one entry per break edge. */
@@ -165,6 +202,20 @@ interface ReturnContext {
    */
   readonly observedReturns: ValueType[] | null;
   readonly declarationKind: string;
+  /**
+   * D85 rule 209: a `return []` that VEL4039 already reported contributes
+   * `invalidType` so no caller reports the same hole again. That makes the
+   * collected result invalid, which is otherwise a convergence failure — but
+   * here the author has already been told exactly what to write, so VEL4025
+   * would be the second report of one mistake.
+   */
+  unsettledResult?: boolean;
+  /**
+   * D85 rule 209: the result keys of the local functions this body returns the
+   * result of. A callee's hole can be reported after its caller is analyzed,
+   * so a call contributes a cause here and the whole module decides.
+   */
+  resultHoleCauses?: Set<string>;
 }
 
 type CallableValueType = Extract<ValueType, { readonly kind: "function" | "action" | "intrinsic" }>;
@@ -186,6 +237,9 @@ interface AnalyzableFunctionDeclaration {
   readonly body: FunctionDeclaration["body"];
   readonly span: Span;
   readonly asynchronous?: boolean;
+  // Optional because only a module-level `def` can carry it; a method never
+  // does, and D90 R12 only reasons about what leaves the module.
+  readonly exported?: boolean;
 }
 
 function continuesOptionalChain(expression: Expression): boolean {
@@ -482,6 +536,17 @@ export interface InitializationImportRead {
   readonly span: Span;
 }
 
+/**
+ * A deferred body — a module-local `def` or an arrow bound to a module-local
+ * name — with the imported bindings it reads and the local functions it calls.
+ * Calls are held as bindings rather than as resolved frames because a `def` is
+ * hoisted: `const x = pull()` may be analyzed before `def pull()` is.
+ */
+interface DeferredReadFrame {
+  readonly reads: InitializationImportRead[];
+  readonly calls: Binding[];
+}
+
 // A distinct unknown-like value lets recursive result inference remain
 // fail-closed without confusing an unresolved call with an explicitly unknown
 // result. It may cross an in-memory module interface during project SCC passes.
@@ -515,29 +580,54 @@ function sameInferredResult(left: ValueType, right: ValueType): boolean {
   return sameType(left, right);
 }
 
+/** The furthest a suggestion may be from what was written. */
+const nearestNameLimit = 2;
+
+/**
+ * Edit distance, abandoned as soon as it is known to exceed `nearestNameLimit`.
+ * Only cells within that many steps of the diagonal can hold a value inside the
+ * limit, so each row is a fixed-width band rather than the whole right operand,
+ * and a row whose every cell is already over the limit ends the walk.
+ */
+function boundedEditDistance(left: string, right: string): number {
+  const over = nearestNameLimit + 1;
+  if (Math.abs(left.length - right.length) > nearestNameLimit) return over;
+  let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  let current = new Array<number>(right.length + 1).fill(over);
+  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+    const from = Math.max(1, leftIndex - nearestNameLimit);
+    const to = Math.min(right.length, leftIndex + nearestNameLimit);
+    current[from - 1] = from === 1 ? leftIndex : over;
+    let rowBest = current[from - 1]!;
+    for (let rightIndex = from; rightIndex <= to; rightIndex += 1) {
+      const cell = Math.min(
+        previous[rightIndex]! + 1,
+        current[rightIndex - 1]! + 1,
+        previous[rightIndex - 1]! + (left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1),
+      );
+      current[rightIndex] = cell;
+      if (cell < rowBest) rowBest = cell;
+    }
+    if (to < right.length) current[to + 1] = over;
+    if (rowBest > nearestNameLimit) return over;
+    const swap = previous;
+    previous = current;
+    current = swap;
+  }
+  return previous[right.length]!;
+}
+
 /** Returns the sole nearest spelling within two edits, never an ambiguous guess. */
 function uniqueNearestName(requested: string, candidates: Iterable<string>): string | null {
-  const distance = (left: string, right: string): number => {
-    let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
-    for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
-      const current = [leftIndex];
-      for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
-        current[rightIndex] = Math.min(
-          previous[rightIndex]! + 1,
-          current[rightIndex - 1]! + 1,
-          previous[rightIndex - 1]! + (left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1),
-        );
-      }
-      previous = current;
-    }
-    return previous[right.length]!;
-  };
+  // A Set argument is already deduplicated; copying it again cost one full
+  // rebuild per unresolved name for nothing.
+  const unique = candidates instanceof Set ? (candidates as ReadonlySet<string>) : new Set(candidates);
   let best: string | null = null;
-  let bestDistance = 3;
+  let bestDistance = nearestNameLimit + 1;
   let tied = false;
-  for (const candidate of new Set(candidates)) {
-    if (candidate === requested || Math.abs(candidate.length - requested.length) > 2) continue;
-    const candidateDistance = distance(requested, candidate);
+  for (const candidate of unique) {
+    if (candidate === requested || Math.abs(candidate.length - requested.length) > nearestNameLimit) continue;
+    const candidateDistance = boundedEditDistance(requested, candidate);
     if (candidateDistance < bestDistance) {
       best = candidate;
       bestDistance = candidateDistance;
@@ -546,7 +636,79 @@ function uniqueNearestName(requested: string, candidates: Iterable<string>): str
       tied = true;
     }
   }
-  return bestDistance <= 2 && !tied ? best : null;
+  return bestDistance <= nearestNameLimit && !tied ? best : null;
+}
+
+/**
+ * The roster a "did you mean" reads. It used to be rebuilt — core vocabulary,
+ * extension globals, imports, and every name in every live scope — and then run
+ * through a full edit-distance pass, once per unresolved name, which made a
+ * module of typos quadratic in its own size. The roster is now maintained as
+ * scopes come and go, and each name is filed under the strings left by deleting
+ * up to two of its characters: two spellings within two edits always share one
+ * of those, so a query reads a few buckets instead of the whole roster.
+ */
+class NearestNameRoster {
+  private readonly counts = new Map<string, number>();
+  /** Filled on the first question asked of the roster; a module with no typo never pays for it. */
+  private buckets: Map<string, Set<string>> | null = null;
+
+  add(name: string): void {
+    const seen = this.counts.get(name) ?? 0;
+    this.counts.set(name, seen + 1);
+    if (seen === 0) this.file(name);
+  }
+
+  remove(name: string): void {
+    const seen = this.counts.get(name) ?? 0;
+    if (seen === 0) return;
+    if (seen > 1) {
+      this.counts.set(name, seen - 1);
+      return;
+    }
+    this.counts.delete(name);
+    if (!this.buckets) return;
+    for (const key of deletionKeys(name)) {
+      const bucket = this.buckets.get(key);
+      if (!bucket) continue;
+      bucket.delete(name);
+      if (bucket.size === 0) this.buckets.delete(key);
+    }
+  }
+
+  nearest(requested: string): string | null {
+    if (!this.buckets) {
+      this.buckets = new Map();
+      for (const name of this.counts.keys()) this.file(name);
+    }
+    const candidates = new Set<string>();
+    for (const key of deletionKeys(requested)) {
+      for (const candidate of this.buckets.get(key) ?? []) candidates.add(candidate);
+    }
+    return uniqueNearestName(requested, candidates);
+  }
+
+  private file(name: string): void {
+    if (!this.buckets) return;
+    for (const key of deletionKeys(name)) {
+      const bucket = this.buckets.get(key);
+      if (bucket) bucket.add(name);
+      else this.buckets.set(key, new Set([name]));
+    }
+  }
+}
+
+/** `name` with up to `nearestNameLimit` characters deleted, the shared key of any two near spellings. */
+function deletionKeys(name: string): readonly string[] {
+  const keys = [name];
+  for (let first = 0; first < name.length; first += 1) {
+    const once = name.slice(0, first) + name.slice(first + 1);
+    keys.push(once);
+    for (let second = first; second < once.length; second += 1) {
+      keys.push(once.slice(0, second) + once.slice(second + 1));
+    }
+  }
+  return keys;
 }
 
 const corePrimitiveNames = new Set(["string", "number", "bool", "null", "unknown", "Duration"]);
@@ -618,10 +780,99 @@ const coreGlobalGuidance = new Map([
   ["len", "Use 'value.size'; strings and collections measure with the size member"],
   ["parseInt", "Use 'number(text)', then '.floor()' or '.round()' for an integer; VelarScript has one text-to-number conversion"],
   ["parseFloat", "Use 'number(text)'; VelarScript has one text-to-number conversion"],
+  // D89 (message correction): `enumerate` and `zip` are the two Python loop
+  // reflexes that reached an unadorned "Unknown name" with no successor at all
+  // — `zip` even earned a "did you mean 'Map'?". `enumerate` has a spelling
+  // that needs no import, so the loop is named first; `zip` has none, so its
+  // guidance is the import that makes it exist.
+  ["enumerate", "Use the two-slot loop — 'for value, index in values:' — which binds the value first; 'enumerate' is an import from \"velar/collections\" when you want the '{index, value}' List itself"],
+  ["zip", "Import the builder — 'import {zip} from \"velar/collections\"' — it pairs two Lists as '{first, second}' up to the shorter length"],
   ["stringify", "Use Json.stringify(value) directly; VelarScript's pure namespaces need no import"],
   ["parse", "Use Json.parse(text) directly; VelarScript's pure namespaces need no import"],
+  // D90 (coherence): the rest of the Python builtin surface a model reaches
+  // for. Every one of these had an answer sitting in a roster the compiler
+  // already owns, and reached the author either as a bare "Unknown name" or —
+  // worse — as a confident edit-distance guess at an unrelated name (`sum` ->
+  // `str`, `max` -> `Map`, `map` -> `Map`). Naming the successor also
+  // suppresses the guess, because guidance is consulted first.
+  ["sum", "Use 'values.sum()'; totalling is a List member"],
+  ["min", "Use 'Math.min(a, b)' for two numbers, or 'values.min()' for a List"],
+  ["max", "Use 'Math.max(a, b)' for two numbers, or 'values.max()' for a List"],
+  ["sorted", "Use 'values.sorted()'; it returns a new List and never mutates the receiver"],
+  ["reversed", "Use 'values.reversed()'; it returns a new List and never mutates the receiver"],
+  ["any", "Use 'values.some(test)'; the collection members carry the quantifiers"],
+  ["all", "Use 'values.every(test)'; the collection members carry the quantifiers"],
+  ["filter", "Use 'values.filter(test)'; the collection members carry the transforms"],
+  ["map", "Use 'values.map(transform)'; 'Map' with a capital M is the key-value collection, not the transform"],
+  ["isinstance", "Use the 'is' operator — 'value is Type' — which also narrows the binding inside the branch"],
+  ["pow", "Use 'Math.pow(base, exponent)'"],
+  ["divmod", "Use '(a / b).floor()' for the quotient and 'a % b' for the remainder; VelarScript returns one value per operation"],
+  ["repr", "Use 'print(value)' to inspect a value, 'str(value)' for its text form, or 'Json.stringify(value)' for data text"],
+  ["format", "Use an f-string — 'f\"{value}\"' — and format the value first: 'value.toFixed(2)' for fixed decimals, 'str(value).padStart(size)' for width"],
+  ["type", "Use 'value is Type' to test a value's type, and a 'type' declaration to name one; VelarScript has no runtime type-of function"],
+  ["iter", "Use a 'for' loop over the collection — 'for value in values:' — VelarScript has no 'iter'/'next' iterator pair"],
+  ["next", "Use a 'for' loop over the collection — 'for value in values:' — VelarScript has no 'iter'/'next' iterator pair"],
+  ["tuple", "Use a List — '[a, b]' — for a positional sequence, or a record — '{first: a, second: b}' — for named parts; VelarScript has no tuple type"],
+  ["bytes", "Import the Bytes type — 'import {Bytes} from \"velar/binary\"' — which is VelarScript's immutable byte snapshot"],
+  // The two capability answers. A terminal and a filesystem are target
+  // capabilities rather than prelude names, so the message names the module
+  // and says which extension carries it instead of implying a bare Core
+  // module can import it.
+  ["input", "Use velar/terminal — 'terminal.readLine(prompt)' returns the next line — a terminal is a target capability, so it arrives with the @velarscript/node extension rather than the Core prelude"],
+  ["open", "Use velar/fs to read or write a file, and 'using name = ...' to own a handle that must be released; a filesystem is a target capability, so it arrives with the @velarscript/node extension rather than the Core prelude"],
+  // D90 (coherence): the target-neutral host globals. Each of these is
+  // answered by a name a plain Core module can already reach, so the answer
+  // belongs here rather than in a target extension. `process`, `Buffer`,
+  // `require`, `localStorage` and the rest of the target-specific roster stay
+  // with the extension that owns their successor.
+  ["setTimeout", "Use 'await Promise.sleep(250ms)' and then run the work; VelarScript waits with a Duration rather than a callback and a millisecond number"],
+  ["setInterval", "Use a loop with 'await Promise.sleep(1s)' in it, or velar/task's 'task(work)' when the repetition must be cancellable; VelarScript has no callback scheduler"],
+  ...["clearTimeout", "clearInterval"].map((name) => [
+    name,
+    "There is no callback scheduler to clear; 'await Promise.sleep(250ms)' waits inline, and velar/task's 'task(work)' is the schedule a Cancellation can stop",
+  ] as const),
+  ["structuredClone", "Use 'Json.clone(value, Target)'; it validates against the runtime type as it copies"],
+  ["RegExp", "Use the Text pattern members — 'Text.matches', 'Text.findMatch', 'Text.findMatches', 'Text.replaceMatches' — which take the pattern as text"],
+  ["TextEncoder", "Use 'Text.utf8Size(value)' for the byte count, and \"velar/binary\" for the byte vocabulary itself; VelarScript does not expose the TextEncoder global"],
+  ["TextDecoder", "Use \"velar/binary\" for the byte vocabulary; VelarScript does not expose the TextDecoder global"],
+  ["URL", "Import from \"velar/url\" — 'parse', 'join', 'query', 'withQuery', 'encode' — instead of the URL global"],
+  ["AbortController", "Use the Cancellation that velar/task's 'task(work)' passes into its work; VelarScript cancels through that value rather than a signal object"],
+  ["Symbol", "VelarScript has no symbol type; use an enum for a closed set of names, or a plain string constant for a unique key"],
+  // `velar/worker` is a Core module, so the ambient `Worker` a host offers is
+  // answered once here rather than twice in the two extensions that also carry
+  // a worker surface.
+  ["Worker", "Import the builder — 'import {worker} from \"velar/worker\"' — it starts a typed worker from an entry declared in velar.json, and 'workerPool' runs several of them"],
   ...["length", "char", "slice", "trim", "lower", "upper", "startsWith", "endsWith", "includes", "split", "replace", "replaceAll", "repeat", "padStart", "padEnd", "abs", "round", "floor", "ceil", "isFinite", "isInteger"]
     .map((name) => [name, removedGlobalFunctionGuidance(name)!] as const),
+]);
+
+/**
+ * D90 (coherence): the foreign builtins — Python's and the host's — that a
+ * model writes from prior knowledge. A "did you mean" is an edit-distance
+ * guess over names this module can actually see, and on a foreign builtin it
+ * is confidently wrong: `sum` earned `str`, `max` and `map` earned `Map`,
+ * `dir` earned `str`. docs/ai-skill.md tells the model to do exactly what the
+ * diagnostic says, so a wrong successor is worse than none.
+ *
+ * Every name that has a Vel answer is in `coreGlobalGuidance` above, which is
+ * consulted first and short-circuits the guess on its own. This roster is the
+ * floor under the rest: a foreign builtin with no successor reads as a bare
+ * unknown name and stops there. It is deliberately a suppression rather than a
+ * change to `uniqueNearestName`, whose threshold and roster serve the field-
+ * name hints too.
+ */
+const foreignBuiltinNames: ReadonlySet<string> = new Set([
+  // Python
+  "sum", "min", "max", "sorted", "reversed", "any", "all", "isinstance", "input", "open",
+  "filter", "map", "repr", "dir", "type", "id", "next", "iter", "format", "divmod", "pow",
+  "bytes", "tuple", "frozenset", "globals", "locals", "vars", "hasattr", "getattr", "setattr",
+  "callable", "issubclass", "abs", "round", "ord", "chr", "hex", "oct", "bin", "hash",
+  // Node and browser hosts
+  "setTimeout", "setInterval", "clearTimeout", "clearInterval", "structuredClone", "queueMicrotask",
+  "URL", "URLSearchParams", "RegExp", "TextEncoder", "TextDecoder", "AbortController", "AbortSignal",
+  "Symbol", "Proxy", "Reflect", "WeakMap", "WeakSet", "BigInt", "Intl", "globalThis",
+  "process", "Buffer", "require", "__dirname", "__filename", "module", "exports", "global",
+  "localStorage", "sessionStorage", "fetch", "document", "window", "navigator", "alert",
 ]);
 
 const durationType: ValueType = { kind: "named", name: "Duration" };
@@ -906,10 +1157,120 @@ function externClassContract(info: ClassInfo): string {
   ]);
 }
 
+// D89 A2's two rosters. They are deliberately short: every name here is one a
+// Python author reaches for without thinking, and a name that has to be argued
+// for is a name the advisory would be guessing about.
+const loopIndexSlotNames = new Set(["i", "idx", "index", "pos", "position"]);
+const loopValueSlotNames = new Set(["v", "value", "item", "el", "element"]);
+
+/**
+ * The singular of the iterated collection's own name, so `for i, user in
+ * users` reads as the same swap as `for i, v in users`. Only a plain name is
+ * read; an arbitrary expression has no name to make singular.
+ */
+function singularIterableName(iterable: Expression): string | null {
+  const name = iterable.kind === "IdentifierExpression" ? iterable.name
+    : iterable.kind === "MemberExpression" ? iterable.property
+      : null;
+  if (name === null || !name.endsWith("s") || name.endsWith("ss")) return null;
+  if (name.endsWith("ies")) return `${name.slice(0, -3)}y`;
+  if (/(?:ch|sh|[sxz])es$/u.test(name)) return name.slice(0, -2);
+  return name.slice(0, -1);
+}
+
+/**
+ * D85 rule 207: does this type still carry an unsettled collection — a List or
+ * Set element, or a Map's key and value together, that stayed `unknown`?
+ *
+ * This is the gate on the walk below, and it is what makes rule 208's boundary
+ * fall out of the semantics instead of out of a syntax list. `Set().size` is a
+ * number: nothing the empty `Set()` failed to say reaches the name, so the walk
+ * never descends to it. `[["a"], []]` is a `List<List<string>>`: the sibling
+ * element already said what the empty one holds, so there is nothing left to
+ * report. Only a hole that survives all the way out to the binding is a hole
+ * the author has to close.
+ */
+function carriesUnsettledCollection(type: ValueType, seen: Set<ValueType> = new Set()): boolean {
+  if (seen.has(type)) return false;
+  seen.add(type);
+  switch (type.kind) {
+    case "list":
+    case "set":
+      return type.element.kind === "unknown" || carriesUnsettledCollection(type.element, seen);
+    case "map":
+      // A Map settles when either half does: `Map<string, unknown>` says its
+      // keys are strings, and only `Map()` with nothing at all is unsettled.
+      return (type.key.kind === "unknown" && type.value.kind === "unknown")
+        || carriesUnsettledCollection(type.key, seen)
+        || carriesUnsettledCollection(type.value, seen);
+    case "optional":
+      return carriesUnsettledCollection(type.inner, seen);
+    case "record":
+    case "promise":
+      return carriesUnsettledCollection(type.value, seen);
+    case "object":
+      return [...type.fields.values()].some((field) => carriesUnsettledCollection(field, seen));
+    case "union":
+      return type.members.some((member) => carriesUnsettledCollection(member, seen));
+    default:
+      return false;
+  }
+}
+
+/**
+ * D85 rule 207: the sub-expressions whose value becomes part of this
+ * expression's value, so each of them is a position that has to say what an
+ * empty collection written there holds.
+ *
+ * A receiver and an argument are here, but the caller only asks for them once
+ * `carriesUnsettledCollection` has said the enclosing value still has the hole
+ * in it — so `const a = [].copy()` and `const a = id([])` report at the `[]`
+ * that made the hole, while `print(Set().size)` and `const n = Set().size`
+ * never reach the receiver at all. That is rule 208 stated as a property of the
+ * value rather than as a list of node kinds.
+ */
+function settlingValuePositions(expression: Expression): readonly Expression[] {
+  switch (expression.kind) {
+    case "ConditionalExpression":
+      return [expression.thenValue, expression.elseValue];
+    case "ListExpression":
+      return expression.elements.map((element) => element.kind === "SpreadExpression" ? element.value : element);
+    case "ObjectExpression":
+      return expression.properties.map((entry) => entry.value);
+    case "BinaryExpression":
+      return expression.operator === "??" ? [expression.left, expression.right] : [];
+    case "CallExpression":
+      return [
+        ...(expression.callee.kind === "MemberExpression" ? [expression.callee.object] : []),
+        ...expression.arguments.map((argument) => argument.kind === "SpreadExpression" ? argument.value : argument),
+      ];
+    case "MemberExpression":
+      return [expression.object];
+    case "IndexExpression":
+      return [expression.object];
+    default:
+      return [];
+  }
+}
+
 export class Analyzer implements TypeEnvironment {
   protected readonly diagnostics: Diagnostic[] = [];
+  protected readonly advisories: Advisory[] = [];
+  private readonly advisedIdentities = new Set<string>();
   private readonly scopes: Map<string, Binding>[] = [new Map()];
   private readonly memberNarrowings: Map<string, MemberNarrowing>[] = [new Map()];
+  /** Per scope depth, the names a narrowing has written there; see `narrowingsForVisibleBindings`. */
+  private readonly narrowedNames: Set<string>[] = [new Set()];
+  /** How many loop back-edge passes are running; see `reanalyzeLoopBackEdge`. */
+  private loopReanalysisDepth = 0;
+  /** The "did you mean" roster, and the names each scope depth contributed to it. */
+  private readonly nearestNames = new NearestNameRoster();
+  private readonly scopedNames: string[][] = [[]];
+  private nearestNamesSeeded = false;
+  /** Per scope depth, the bindings flow analysis has written; see `snapshotFlowFacts`. */
+  private readonly flowTouched: Set<Binding>[] = [new Set()];
+  /** What each of those held before its first write, or null for a shadow born mid-flow. */
+  private readonly flowOrigins = new Map<Binding, FlowFactState | null>();
   private readonly namedTypes = new Map<string, ReadonlyMap<string, ValueType>>();
   private readonly namedTypeReadonlyFields = new Map<string, ReadonlySet<string>>();
   private readonly namedTypeIdentities = new Map<string, string>();
@@ -1042,6 +1403,26 @@ export class Analyzer implements TypeEnvironment {
   private readonly inferredFunctionResultSeeds: ReadonlyMap<string, ValueType>;
   private readonly inferredFunctionResultTypes = new Map<string, ValueType>();
   private readonly finalizeFunctionResultInference: boolean;
+  /**
+   * D85 rule 209: one mistake is reported once. A reported VEL4039 hands its
+   * position `invalidType`, and an invalid body-inferred result is otherwise a
+   * convergence failure — so the four collections below carry the *reported*
+   * hole forward, and only that hole, to the place VEL4025 is decided.
+   * `reportedCollectionHoles` are the names bound to one, `reportedResultHoles`
+   * the local function results that are one, `functionResultKeys` maps a
+   * callable name to the result a call to it reaches, and
+   * `deferredConvergenceReports` holds the reports whose answer needs a callee
+   * that may be declared further down the module.
+   */
+  private readonly reportedCollectionHoles = new Set<Binding>();
+  private readonly bindingHoleCauses = new Map<Binding, ReadonlySet<string>>();
+  private readonly reportedResultHoles = new Set<string>();
+  private readonly functionResultKeys = new Map<Binding, string>();
+  private readonly deferredConvergenceReports: {
+    readonly report: Diagnostic;
+    readonly resultKey: string;
+    readonly causes: ReadonlySet<string>;
+  }[] = [];
   private readonly logicalConditionNarrowings = new Map<string, {
     readonly truthy: ReadonlyMap<string, ValueType>;
     readonly falsy: ReadonlyMap<string, ValueType>;
@@ -1078,6 +1459,18 @@ export class Analyzer implements TypeEnvironment {
   /** Namespace import locals by name, known before signature validation runs (ENM-I9 teaching). */
   private readonly namespaceImportLocals = new Map<string, string>();
   private readonly initializationImportReadSites = new Map<string, InitializationImportRead>();
+  /**
+   * D31 item 23's recorded residual: a top-level call of a module-local
+   * function runs that body during module evaluation, so a read of an imported
+   * binding inside it is an initialization-position read reached through one
+   * hop. The stack is the function frame a deferred read belongs to; the map
+   * is that frame by the name it was bound to, so a call resolves to it after
+   * the whole module is analyzed and hoisting order stops mattering.
+   */
+  private readonly deferredReadFrames: DeferredReadFrame[] = [];
+  private readonly localFunctionFrames = new Map<Binding, DeferredReadFrame>();
+  private readonly arrowDeferredFrames = new Map<string, DeferredReadFrame>();
+  private readonly initializationLocalCalls: { readonly binding: Binding; readonly span: Span }[] = [];
   /** Local class bindings mapped to the source offset where their `class` statement evaluates (CLS-D8). */
   private readonly hoistedClassDeclarations = new Map<Binding, number>();
   /** Module-scope names bound to runtime Type objects (local and imported); see LoweringHints.runtimeTypeObjectNames. */
@@ -1148,16 +1541,20 @@ export class Analyzer implements TypeEnvironment {
       staticGetters: new Set(),
       staticMethods: new Map(),
     });
-    // ENM-U4 + COL-U5: the three compiler-raised error types are nameable —
+    // ENM-U4 + COL-U5: the compiler-raised error types are nameable —
     // catchable, `is`-narrowable, and constructible — wired exactly like
     // Error. ValidationError additionally carries the failure detail its
-    // parse sites report (path, field, reason).
+    // parse sites report (path, field, reason). AssertionError joins the
+    // roster because the charter already promises it does: "A `catch` block
+    // still receives all three, because a `catch` is explicit: the author
+    // wrote code to handle it, and `is` names which one it was."
     const builtinErrorDetails: readonly (readonly [string, readonly (readonly [string, ClassField])[]])[] = [
       ["ValidationError", [
         ["path", { mutable: false, type: optionalOf(stringType) }],
         ["field", { mutable: false, type: optionalOf(stringType) }],
         ["reason", { mutable: false, type: optionalOf(stringType) }],
       ]],
+      ["AssertionError", []],
       ["NarrowingError", []],
       ["IndexError", []],
       // D50 rule 89: the capability failures a caller recovers from
@@ -1258,16 +1655,43 @@ export class Analyzer implements TypeEnvironment {
     return this.globalGuidance.get(name);
   }
 
+  /**
+   * D90 (coherence): the one report an unresolved name earns, wherever it was
+   * written. A reserved global names the module that replaced it, a foreign
+   * builtin with no successor stops at the bare message rather than guessing,
+   * and everything else may carry the nearest visible name. Both unresolved-
+   * name sites reach this, because `exports = {run: run}` is the same mistake
+   * as `const value = exports` and used to earn a strictly worse answer for
+   * standing on the left of the `=`.
+   */
+  private reportUnresolvedName(name: string, span: Span): void {
+    const guidance = this.guidanceForGlobal(name);
+    const nearest = guidance || foreignBuiltinNames.has(name) ? null : this.nearestVisibleBindingName(name);
+    this.diagnostics.push(diagnostic(
+      guidance ? "VEL3008" : "VEL3001",
+      guidance ?? `Unknown name '${name}'${nearest ? `; did you mean '${nearest}'?` : ""}`,
+      span,
+    ));
+  }
+
   private nearestVisibleBindingName(name: string): string | null {
-    const candidates = new Set<string>([
-      ...Object.keys(coreVocabularyTypes),
-      ...this.extensionGlobals.keys(),
-      ...this.importBindings.keys(),
-      "Map", "Set", "Error", "ValidationError", "NarrowingError", "IndexError",
-      ...VELAR_HOST_ERROR_NAMES,
-    ]);
-    for (const scope of this.scopes) for (const candidate of scope.keys()) candidates.add(candidate);
-    return uniqueNearestName(name, candidates);
+    if (!this.nearestNamesSeeded) {
+      this.nearestNamesSeeded = true;
+      for (const candidate of [
+        ...Object.keys(coreVocabularyTypes),
+        ...this.extensionGlobals.keys(),
+        ...this.importBindings.keys(),
+        "Map", "Set", "Error", "ValidationError", "AssertionError", "NarrowingError", "IndexError",
+        ...VELAR_HOST_ERROR_NAMES,
+      ]) this.nearestNames.add(candidate);
+    }
+    return this.nearestNames.nearest(name);
+  }
+
+  /** Files a scope's name in the "did you mean" roster and takes it back out when the scope exits. */
+  private recordScopedName(name: string): void {
+    this.nearestNames.add(name);
+    this.scopedNames.at(-1)!.push(name);
   }
 
   private readonly modulePath: string | null;
@@ -1309,7 +1733,21 @@ export class Analyzer implements TypeEnvironment {
     // to know every read the retiring import leaves behind.
     this.reportRetiredNamespaceUses(program);
     this.reportPermanentNamespaceImports(program);
+    this.reportPermanentNamespaceReExports(program);
+    // D85 rule 209 reports last for the same reason: a hole reaches a caller
+    // through a callee the module may not declare until later, so the second
+    // report is deleted once every hole in the module is on record.
+    this.resolveDeferredConvergenceReports();
     return this.diagnostics;
+  }
+
+  /**
+   * D89: the advisories this analysis raised. `analyze` keeps returning the
+   * diagnostics alone, so the caller reads the two channels separately and the
+   * cursor arithmetic over `this.diagnostics` stays exact.
+   */
+  analyzedAdvisories(): readonly Advisory[] {
+    return this.advisories;
   }
 
   private registerExternTypeImports(program: Program): void {
@@ -1536,6 +1974,11 @@ export class Analyzer implements TypeEnvironment {
         this.predeclared.add(statement);
       } else if (statement.kind === "FunctionDeclaration") {
         this.declareBinding(statement.name, false, this.functionType(statement), statement.span);
+        // D85 rule 209: the result a call to this name reaches, recorded before
+        // any body is analyzed so a call to a function declared further down
+        // the module still resolves to it.
+        const callable = this.scopes.at(-1)?.get(statement.name);
+        if (callable) this.functionResultKeys.set(callable, this.functionResultKey(statement));
         this.predeclared.add(statement);
       } else if (this.predeclareExtensionStatement(statement)) {
         this.predeclared.add(statement);
@@ -3056,8 +3499,25 @@ export class Analyzer implements TypeEnvironment {
         const declared = annotationValid ? annotated ?? inferredStorage : invalidType;
         const contract = annotationValid ? annotated ?? inferredStorage : invalidType;
         if (annotationValid) this.requireAssignable(actual, declared, statement.initializer.span);
-        this.requireSettledCollectionElement(statement.initializer, declared, annotated !== null);
-        this.declarePattern(statement.pattern, statement.binding === "let", declared, contract);
+        // D85 rule 209: the construction that just reported is invalid from
+        // here on. Binding the name to the hole instead would reproduce
+        // `Cannot assign List<unknown> to ...` on a later line that has no
+        // `[]` in it — the second, contradicting report the ruling deletes.
+        // D90 R12: `any` may not cross a module boundary. The written spelling
+        // is already refused by validateTypeReference above, so only the
+        // inferred one reaches here — and that asymmetry was the defect, since
+        // the spelling that got refused is the honest one. Checking the
+        // settled type before declarePattern covers every pattern shape at
+        // once, including `export const {a, b} = thing`.
+        if (statement.exported && annotationValid && typeContainsAnyOutput(declared)) {
+          const exported: string[] = [];
+          this.collectPatternNames(statement.pattern, (name) => exported.push(name));
+          this.reportExportedAny(exported, statement.span);
+        }
+        const unsettled = this.requireSettledCollectionElement(statement.initializer, declared, annotated !== null);
+        this.declarePattern(statement.pattern, statement.binding === "let", unsettled ? invalidType : declared, unsettled ? invalidType : contract);
+        if (annotated === null) this.recordBindingHoleSource(statement.pattern, statement.initializer, unsettled);
+        this.claimArrowDeferredFrame(statement.pattern, statement.initializer);
         // D51 rule 101: an alias of an owned handle — or a closure over one —
         // is the same resource under a second name, so it inherits the
         // ownership and the escape check follows it.
@@ -3129,8 +3589,31 @@ export class Analyzer implements TypeEnvironment {
             this.asyncResolvedValues.add(spanIdentity(statement.value.span));
           }
         }
-        if (this.unreachableDiagnosticDepth === 0) (inferredReturns ?? returnContext?.observedReturns)?.push(returned);
-        if (inferredReturns) break;
+        if (inferredReturns) {
+          // D85 rule 207: a body-inferred result has no annotation to settle
+          // an empty collection, and the name that reads it can be in another
+          // module — `export def make(): return []` publishes `List<unknown>`
+          // across the interface. An annotated result is a contextual type and
+          // settles the construction before it ever gets here. Rule 209: a
+          // reported hole contributes `invalidType`, so the caller's
+          // `const values: List<string> = make()` does not report the same
+          // mistake a second time in a line that has no `[]` in it.
+          const unsettled = statement.value !== null && this.requireSettledCollectionElement(statement.value, actual, false);
+          if (returnContext) {
+            // The hole reaches the result through whatever the author wrote
+            // between it and the `return` — a name, a chain of them, or a call
+            // to a local function whose own VEL4039 already reported. Each of
+            // those is the same one mistake, so the convergence failure it
+            // produces below is not a second problem to report.
+            const causes = returnContext.resultHoleCauses ?? new Set<string>();
+            const carried = statement.value !== null && this.collectResultHoleSources(statement.value, causes);
+            if (causes.size > 0) returnContext.resultHoleCauses = causes;
+            if (unsettled || carried) returnContext.unsettledResult = true;
+          }
+          if (this.unreachableDiagnosticDepth === 0) inferredReturns.push(unsettled ? invalidType : returned);
+          break;
+        }
+        if (this.unreachableDiagnosticDepth === 0) returnContext?.observedReturns?.push(returned);
         this.requireAssignable(returned, expected, statement.value?.span ?? statement.span);
         break;
       }
@@ -3491,6 +3974,7 @@ export class Analyzer implements TypeEnvironment {
               : `Cannot iterate over ${describeType(iterable)}${this.iterationGuidance(iterable)}`, statement.iterable.span);
           }
         }
+        if (!statement.asynchronous) this.adviseSwappedLoopSlots(statement, iterable);
         const baseline = this.snapshotFlowFacts();
         this.loopFlowContexts.push({ baseline, visible: this.visibleBindings(), carried: [], backEdges: [], breakFacts: [], sawBreak: false });
         const diagnosticStart = this.diagnostics.length;
@@ -3560,7 +4044,7 @@ export class Analyzer implements TypeEnvironment {
         // FLW-S1: a loop the body can re-enter tests its condition again in
         // the back-edge state, so the exit fact is what both tests agree on.
         let repeatedFalsy: ReadonlyMap<string, ValueType> | null = null;
-        const repeatedFlow = this.reanalyzeLoopBackEdge(baseline, loopFlow.visible, backEdges, statement.body, diagnosticStart, () => {
+        const backEdgePass = this.reanalyzeLoopBackEdge(baseline, loopFlow.visible, backEdges, statement.body, diagnosticStart, () => {
           this.clearCachedFlowTypesInSpan(statement.condition.span);
           const repeatedCondition = this.inferExpression(statement.condition);
           this.requireCondition(repeatedCondition, statement.condition);
@@ -3588,14 +4072,18 @@ export class Analyzer implements TypeEnvironment {
         // that always returns. A break can leave while the condition still
         // holds, so one break drops the fact entirely.
         if (!loopFlow.sawBreak) {
-          this.persistNarrowings(repeatedFalsy === null ? falsy : this.joinedNarrowings(falsy, repeatedFalsy));
+          // A widened exit confirmed nothing about the back edge, so it keeps
+          // nothing: the condition's fact holds only if the second test agrees.
+          this.persistNarrowings(backEdgePass.widened
+            ? new Map()
+            : repeatedFalsy === null ? falsy : this.joinedNarrowings(falsy, repeatedFalsy));
         } else if (statement.condition.kind === "LiteralExpression" && statement.condition.value === true) {
           // FLW-N6: `while true:` has no failing condition, so its breaks are
           // its only exits, and what every one of them proves holds after the
           // loop. A loop whose condition can also fail keeps nothing: that
           // exit proves none of it.
-          const breakFacts = [...loopFlow.breakFacts, ...(repeatedFlow?.breakFacts ?? [])];
-          if (breakFacts.length > 0) this.persistNarrowings(this.commonNarrowings(breakFacts));
+          const breakFacts = [...loopFlow.breakFacts, ...(backEdgePass.repeated?.breakFacts ?? [])];
+          if (breakFacts.length > 0 && !backEdgePass.widened) this.persistNarrowings(this.commonNarrowings(breakFacts));
         }
         break;
       }
@@ -3719,6 +4207,38 @@ export class Analyzer implements TypeEnvironment {
     }
   }
 
+  /**
+   * D89 A2: the two-slot `for` over a List, Set, or string binds
+   * `value, index`, which matches JavaScript's `forEach((v, i) => …)` and
+   * inverts Python's `enumerate`. Python's own spelling is already a loud
+   * error, so nothing silent comes from it; the silence happens when a model
+   * writes `for i, v in nums`, a hybrid neither language has, and both names
+   * quietly hold the other one's value.
+   *
+   * Both rosters must hit. One name alone proves nothing — `for index, total
+   * in scores` may be counting exactly what it says — and a wrong guess here
+   * would tell a correct author to break working code. The value slot also
+   * accepts the singular of the collection's own name, because `for i, user
+   * in users` is the same reflex spelled from the data instead of a letter.
+   */
+  private adviseSwappedLoopSlots(statement: ForStatement, iterable: ValueType): void {
+    if (iterable.kind !== "list" && iterable.kind !== "set" && iterable.kind !== "string") return;
+    const indexSlot = statement.pattern;
+    const valueSlot = statement.secondPattern;
+    if (indexSlot.kind !== "NameBindingPattern" || valueSlot?.kind !== "NameBindingPattern") return;
+    if (!loopIndexSlotNames.has(indexSlot.name)) return;
+    if (!loopValueSlotNames.has(valueSlot.name) && valueSlot.name !== singularIterableName(statement.iterable)) return;
+    this.advise(
+      "A2",
+      `A two-slot 'for' binds 'value, index', so '${indexSlot.name}' receives the element and '${valueSlot.name}' receives the position; write 'for ${valueSlot.name}, ${indexSlot.name} in ...' to bind them the way the names read`,
+      span(indexSlot.span.start, valueSlot.span.end),
+      mechanicalEdits(
+        [{ span: indexSlot.span, text: valueSlot.name }, { span: valueSlot.span, text: indexSlot.name }],
+        `Swap '${indexSlot.name}' and '${valueSlot.name}'`,
+      ),
+    );
+  }
+
   // D32 item 30: a Promise-typed expression statement is a floating promise —
   // nothing waits for it and nothing owns its failure. The diagnostic teaches
   // both current spellings: 'await' waits, the 'async' statement detaches.
@@ -3780,7 +4300,22 @@ export class Analyzer implements TypeEnvironment {
   // The operation tables already prove which method the call lowered to, so
   // the check needs no user-function purity analysis.
   private checkDiscardedPureResult(expression: Expression): void {
-    if (expression.kind !== "CallExpression" || expression.callee.kind !== "MemberExpression") return;
+    if (expression.kind !== "CallExpression") return;
+    // D29 item 14's own rationale reaches `expect(...)` with no matcher:
+    // building an expectation object and never asking it anything throws the
+    // only product away, and the statement reads as an assertion that passes.
+    // D30 item 17's general CallExpression exemption is untouched — a bare
+    // call may perform an effect — because `testExpectOperands` already
+    // proves this one call lowered to `test.expect`, which performs none.
+    if (this.testExpectOperands.has(spanIdentity(expression.span))) {
+      this.diagnostics.push(diagnostic(
+        "VEL4030",
+        "'expect(...)' builds an expectation and asserts nothing on its own; add a matcher such as '.toBe(expected)'",
+        expression.span,
+      ));
+      return;
+    }
+    if (expression.callee.kind !== "MemberExpression") return;
     const collectionOperation = this.collectionCalls.get(expression.callee.span.end);
     const primitiveOperation = this.primitiveCalls.get(expression.callee.span.end);
     const pure = (collectionOperation !== undefined && discardedPureCollectionOperations.has(collectionOperation))
@@ -3877,11 +4412,13 @@ export class Analyzer implements TypeEnvironment {
     const baseName = statement.base?.name ?? null;
     if (baseName) {
       const baseBinding = this.lookup(baseName) ?? this.builtin(baseName);
-      if (baseName === "ValidationError" || baseName === "NarrowingError" || baseName === "IndexError"
+      if (baseName === "ValidationError" || baseName === "AssertionError" || baseName === "NarrowingError"
+        || baseName === "IndexError"
         || (VELAR_HOST_ERROR_NAMES as readonly string[]).includes(baseName)) {
         // The compiler-raised error types are leaf contracts: user subclasses
-        // would dilute what a caught ValidationError/NarrowingError/IndexError
-        // proves. Extend Error for custom hierarchies.
+        // would dilute what a caught ValidationError/AssertionError/
+        // NarrowingError/IndexError proves. Extend Error for custom
+        // hierarchies.
         this.typeError(`The builtin error type '${baseName}' cannot be extended; extend Error and declare your own fields`, statement.base!.span);
       } else if (baseBinding?.type.kind === "classConstructor" && !this.classes.has(baseName)
         && isExternClassIdentity(baseBinding.type.identity ?? null)) {
@@ -3915,7 +4452,18 @@ export class Analyzer implements TypeEnvironment {
     this.enterScope();
     this.flowFrameDepth += 1;
     this.superMemberContext = "instance";
-    for (const parameter of statement.parameters) {
+    for (const [index, parameter] of statement.parameters.entries()) {
+      // D89 (message correction): `constructor(self, ...)` is the same Python
+      // receiver reflex a method's `self` parameter is, and it used to land on
+      // the bare reserved-binding refusal, which names no fix. A field-binding
+      // spelling (`const self`) is excluded because its `const`/`private`
+      // prefix sits outside the parameter span, so the deletion this report
+      // carries would leave the prefix stranded — and D38 §48 admits only
+      // rewrites that land on working source.
+      if (parameter.name === "self" && !parameter.rest && parameter.binding === null && statement.initialization !== null) {
+        this.reportImplicitSelfParameter(statement.parameters, index);
+        continue;
+      }
       const type = this.resolveAnnotation(parameter.type);
       const valid = parameter.type ? this.validateTypeReference(parameter.type) : true;
       if (parameter.defaultValue && valid) {
@@ -4991,6 +5539,34 @@ export class Analyzer implements TypeEnvironment {
     ));
   }
 
+  /**
+   * D89 (message correction): the one report a `self` parameter earns, and the
+   * deletion it names. The removed range reaches to the next parameter's start
+   * (or back to the previous one's end), so the separating comma and its
+   * whitespace come with it without reading the source text — the rewrite is a
+   * spelling change with no judgment in it, which is what D38 §48 requires of
+   * a registered fix.
+   */
+  private reportImplicitSelfParameter(
+    parameters: readonly { readonly name: string; readonly span: Span }[],
+    index: number,
+  ): void {
+    const parameter = parameters[index]!;
+    const next = parameters[index + 1];
+    const previous = parameters[index - 1];
+    const removal = next
+      ? span(parameter.span.start, next.span.start)
+      : previous
+        ? span(previous.span.end, parameter.span.end)
+        : parameter.span;
+    this.diagnostics.push(diagnostic(
+      "VEL3007",
+      "'self' is the receiver a method body already has, not a parameter; delete it from the parameter list",
+      parameter.span,
+      mechanicalFix(removal, "", "Delete the implicit 'self' parameter"),
+    ));
+  }
+
   protected analyzeFunctionDeclaration(
     statement: AnalyzableFunctionDeclaration,
     className: string | null,
@@ -5005,11 +5581,22 @@ export class Analyzer implements TypeEnvironment {
     }
     const candidateBinding = className === null ? this.lookup(statement.name) : null;
     const callableBinding = candidateBinding?.span.start === statement.span.start ? candidateBinding : null;
+    // D85 rule 209: the same registration the top-level predeclaration makes,
+    // for a `def` nested in a body, which nothing predeclares.
+    if (callableBinding && !this.functionResultKeys.has(callableBinding)) {
+      this.functionResultKeys.set(callableBinding, this.functionResultKey(statement as FunctionDeclaration));
+    }
     this.checkTypeParameterDeclarations(statement.typeParameters);
     this.typeParameterFrames.push(this.typeParameterFrame(statement.typeParameters));
     this.enterScope();
     this.flowFrameDepth += 1;
     this.functionDepth += 1;
+    // D31 item 23: this body is deferred, so its reads of imported bindings
+    // become initialization-position reads only when something runs it during
+    // module evaluation. Collect them here and let a top-level call decide.
+    const deferredFrame: DeferredReadFrame = { reads: [], calls: [] };
+    this.deferredReadFrames.push(deferredFrame);
+    if (callableBinding) this.localFunctionFrames.set(callableBinding, deferredFrame);
     const previousLoopDepth = this.loopDepth;
     this.loopDepth = 0;
     const previousFinallyLoopDepths = this.finallyLoopDepths;
@@ -5050,7 +5637,19 @@ export class Analyzer implements TypeEnvironment {
       const selfType: ValueType = { kind: "class", name: className };
       this.declareBinding("self", false, selfType, statement.span, true);
     }
-    for (const parameter of statement.parameters) {
+    for (const [index, parameter] of statement.parameters.entries()) {
+      // D89 (message correction): a method body already has `self`, so writing
+      // it as a parameter is Python's explicit receiver. It used to earn two
+      // reports — "already declared in this scope" and "reserved Core binding"
+      // — neither of which named the fix. Only a declaration that really has
+      // an implicit receiver takes this branch; a plain or static function's
+      // `self` keeps the reserved-binding refusal, which is the truth there.
+      // A rest spelling is not the receiver reflex, and its '...' sits outside
+      // the parameter span, so deleting the name alone would leave a stray one.
+      if (parameter.name === "self" && !parameter.rest && className !== null && declareSelf) {
+        this.reportImplicitSelfParameter(statement.parameters, index);
+        continue;
+      }
       const contextualType = !parameter.type && parameter.defaultValue
         ? this.contextualFunctionParameterDefault(statement, parameter)
         : null;
@@ -5073,13 +5672,31 @@ export class Analyzer implements TypeEnvironment {
       const inferred = this.inferCollectedFunctionResult(inferredReturns, !this.blockAlwaysReturns(statement.body));
       this.inferredFunctionResultTypes.set(resultKey, inferred);
       const seeded = this.inferredFunctionResultSeeds.get(resultKey) ?? inferredResultPlaceholderType;
-      if (this.finalizeFunctionResultInference
+      if (returnContext.unsettledResult === true) {
+        this.reportedResultHoles.add(resultKey);
+      } else if (this.finalizeFunctionResultInference
         && (containsInferredResultPlaceholder(inferred) || isInvalidType(inferred) || !sameInferredResult(seeded, inferred))) {
-        this.diagnostics.push(diagnostic(
+        const report = diagnostic(
           "VEL4025",
           `${declarationKind} '${statement.name}' result inference did not converge; add an explicit result annotation to this recursive contract`,
           statement.signatureSpan,
-        ));
+        );
+        this.diagnostics.push(report);
+        // D85 rule 209: a callee whose hole is reported after this caller is
+        // analyzed is a hole nobody can know about yet, so the report waits
+        // for the whole module before it is kept or deleted as the second
+        // half of one mistake.
+        const causes = returnContext.resultHoleCauses;
+        if (causes && causes.size > 0) this.deferredConvergenceReports.push({ report, resultKey, causes });
+      }
+      // D90 R12: an omitted result annotation publishes whatever the body
+      // inferred, so an exported `def` leaks `any` exactly as an exported
+      // `const` does. Deliberately not gated on finalizeFunctionResultInference:
+      // a probe pass is discarded whole — the driver keeps the first pass's
+      // diagnostics only when nothing was left to converge — which is why the
+      // VEL4006 below is ungated too.
+      if (statement.exported && typeContainsAnyOutput(inferred)) {
+        this.reportExportedAny([statement.name], statement.signatureSpan);
       }
       this.updateInferredCallableResult(statement, className, callableBinding, inferred, asynchronous);
     } else {
@@ -5096,6 +5713,7 @@ export class Analyzer implements TypeEnvironment {
     this.superMemberContext = previousSuperMemberContext;
     this.loopDepth = previousLoopDepth;
     this.finallyLoopDepths = previousFinallyLoopDepths;
+    this.deferredReadFrames.pop();
     this.functionDepth -= 1;
     this.flowFrameDepth -= 1;
     this.exitScope();
@@ -5183,7 +5801,7 @@ export class Analyzer implements TypeEnvironment {
     if (statement.target.kind === "IdentifierExpression") {
       const binding = this.lookup(statement.target.name);
       if (!binding) {
-        this.diagnostics.push(diagnostic("VEL3001", `Unknown name '${statement.target.name}'`, statement.target.span));
+        this.reportUnresolvedName(statement.target.name, statement.target.span);
         return;
       }
       this.checkShadowedRead(statement.target.name, statement.target.span);
@@ -5356,6 +5974,8 @@ export class Analyzer implements TypeEnvironment {
         if (targetBinding?.mutable) {
           const storageBinding = targetBinding.storageBinding ?? targetBinding;
           const rebound = storageBinding.declaredType.kind !== "unknown" ? storageBinding.declaredType : valueType;
+          this.recordFlowFactOrigin(storageBinding);
+          this.recordFlowFactOrigin(targetBinding);
           storageBinding.storageType = rebound;
           if (storageBinding.narrowingFrame === null) storageBinding.type = rebound;
           targetBinding.storageType = rebound;
@@ -5552,13 +6172,7 @@ export class Analyzer implements TypeEnvironment {
               return unknownType;
             }
           }
-          const guidance = this.guidanceForGlobal(expression.name);
-          const nearest = guidance ? null : this.nearestVisibleBindingName(expression.name);
-          this.diagnostics.push(diagnostic(
-            guidance ? "VEL3008" : "VEL3001",
-            guidance ?? `Unknown name '${expression.name}'${nearest ? `; did you mean '${nearest}'?` : ""}`,
-            expression.span,
-          ));
+          this.reportUnresolvedName(expression.name, expression.span);
           return unknownType;
         }
         if (lexical) {
@@ -5695,6 +6309,23 @@ export class Analyzer implements TypeEnvironment {
             }
             if (objectContext?.kind === "named" && expectedFields?.has(property.name)) {
               this.semanticObjectPropertyOwners.set(`${property.span.start}:${property.name}`, objectContext);
+            }
+            // D90 R11: a literal written at a type-annotated position is
+            // closed. Every one of its keys is in front of the compiler here,
+            // so an unrecognised one is a misspelling rather than a value that
+            // happens to be wider — which is why the openness a non-literal
+            // keeps is untouched. Only written keys are checked, so a spread's
+            // surplus fields stay legal and this sits outside the
+            // missing-field guard below rather than inside it. A `Record<T>`
+            // context declares every string key, and leaves `expectedFields`
+            // null, so no key of one is ever unrecognised.
+            if (objectContext && expectedFields && !expectedFields.has(property.name)) {
+              const nearest = uniqueNearestName(property.name, expectedFields.keys());
+              const owner = objectContext.kind === "named" ? `Type '${objectContext.name}'` : "Object";
+              this.typeError(
+                `${owner} has no field '${property.name}'${nearest ? `; did you mean '${nearest}'?` : ""}`,
+                property.span,
+              );
             }
             const expected = expectedFields?.get(property.name) ?? expectedRecordValue ?? unknownType;
             const actual = this.inferExpression(property.value, expected.kind === "optional" ? expected.inner : expected);
@@ -5968,6 +6599,7 @@ export class Analyzer implements TypeEnvironment {
       case "ArrowFunctionExpression":
         return this.inferArrow(expression, contextualType);
       case "CallExpression": {
+        this.recordDeferredCallEdge(expression.callee, expression.span);
         const result = this.inferCall(expression.callee, expression.arguments, expression.argumentNames, expression.span, contextualType, expression.optional);
         if (this.expandAliases(result).kind === "null") this.normalizedNullResults.add(spanIdentity(expression.span));
         return result;
@@ -6137,9 +6769,18 @@ export class Analyzer implements TypeEnvironment {
         this.collectionMemberships.set(spanIdentity(operationSpan), container.kind);
       }
       if (container.kind === "list" || container.kind === "set") {
-        this.requireMembershipIntersection(left, this.readonlyDataViewOf(container.element), leftExpression.span, operator);
+        // COL-I3 second half: `in` is the thirteenth membership probe and the
+        // one that does not route through `checkProbeArgument`, so it carries
+        // the fresh-literal rejection itself — against the probe only, never
+        // the container, because the fresh List in `x in [1, 2, 3]` is the
+        // domain being searched rather than the question being asked.
+        if (!this.requireMembershipIntersection(left, this.readonlyDataViewOf(container.element), leftExpression.span, operator)) {
+          this.rejectFreshCollectionProbe(leftExpression, operator, "element");
+        }
       } else if (container.kind === "map") {
-        this.requireMembershipIntersection(left, this.readonlyDataViewOf(container.key), leftExpression.span, operator);
+        if (!this.requireMembershipIntersection(left, this.readonlyDataViewOf(container.key), leftExpression.span, operator)) {
+          this.rejectFreshCollectionProbe(leftExpression, operator, "key");
+        }
       } else if (container.kind === "record") {
         this.requireMembershipIntersection(left, stringType, leftExpression.span, operator);
       } else if (container.kind === "string") {
@@ -6172,9 +6813,66 @@ export class Analyzer implements TypeEnvironment {
       );
       return stringType;
     }
+    if (operator === "%") this.adviseNegativeLiteralModulo(leftExpression, rightExpression, operationSpan);
     this.requireAssignable(left, numberType, leftExpression.span);
     this.requireAssignable(right, numberType, rightExpression.span);
     return numberType;
+  }
+
+  /**
+   * D89 A3: `%` follows JavaScript and keeps the dividend's sign, so `-7 % 3`
+   * is `-1` where Python answers `2`. Nothing here reports an error — both
+   * languages accept the spelling, they just disagree about the result.
+   *
+   * Only a literal negative dividend triggers. A variable's sign is not
+   * knowable, and advising every `%` whose left side might go negative would
+   * be the noise the tier exists to avoid. The shape matched is a unary minus
+   * wrapping a numeric literal, because that is what `-7` parses as; there is
+   * no negative-valued literal for a value test to find.
+   *
+   * The admission bar is "Vel accepts the spelling as a different meaning", so
+   * every shape whose two answers are the same is silent rather than advised:
+   * a remainder of zero (`-6 % 3`) agrees, `% 0` answers NaN here and raises
+   * in Python so there is no Python answer to name, and a non-finite dividend
+   * answers NaN on both sides. A message that states a disagreement and then
+   * prints the same number twice is a new defect, not a weaker advisory.
+   */
+  private adviseNegativeLiteralModulo(leftExpression: Expression, rightExpression: Expression, operationSpan: Span): void {
+    if (leftExpression.kind !== "UnaryExpression" || leftExpression.operator !== "-") return;
+    const dividend = leftExpression.operand;
+    if (dividend.kind !== "LiteralExpression" || typeof dividend.value !== "number") return;
+    const divisor = rightExpression.kind === "LiteralExpression" && typeof rightExpression.value === "number"
+      ? rightExpression
+      : null;
+    if (divisor !== null) {
+      const divisorValue = Number(divisor.value);
+      if (divisorValue === 0) return;
+      // `-0` renders as `0`, so a zero remainder would print one number on
+      // both sides of a sentence claiming they differ.
+      const remainder = -Number(dividend.value) % divisorValue;
+      if (!Number.isFinite(remainder) || remainder === 0) return;
+      // A literal divisor is always positive — a negative one parses as a
+      // unary minus, not a literal — so Python's answer, which takes the
+      // divisor's sign, is this remainder lifted by one divisor.
+      const python = remainder + divisorValue;
+      // The rewrite the message advertises is its own remedy, so quoting an
+      // answer that rewrite does not produce would be false. The two part ways
+      // only when the lift rounds back onto the divisor; the general sentence
+      // below covers that without naming a number.
+      if ((remainder + divisorValue) % divisorValue === python) {
+        this.advise(
+          "A3",
+          `VelarScript's '%' follows JavaScript and keeps the dividend's sign, so '-${dividend.raw} % ${divisor.raw}' is ${remainder} where Python answers ${python}; write '((a % b) + b) % b' for the Python answer`,
+          operationSpan,
+        );
+        return;
+      }
+    }
+    this.advise(
+      "A3",
+      "VelarScript's '%' follows JavaScript and keeps the dividend's sign, so a negative dividend leaves a remainder that is negative or zero, where Python's takes the divisor's sign; write '((a % b) + b) % b' for the Python answer",
+      operationSpan,
+    );
   }
 
   // D42 item 64: `==`/`!=` require the operand types to intersect. Strict
@@ -6253,15 +6951,42 @@ export class Analyzer implements TypeEnvironment {
   // `remove`, and the Map.get key — asks the question `==` asks, one element
   // at a time, so the probe carries the same intersection requirement and
   // the same enum/string boundary as D42 item 64.
-  private requireMembershipIntersection(probe: ValueType, domain: ValueType, span: Span, operation: string): void {
-    if (isInvalidType(probe) || isInvalidType(domain)) return;
-    if (this.equalityTypesIntersect(probe, domain)) return;
+  private requireMembershipIntersection(probe: ValueType, domain: ValueType, span: Span, operation: string): boolean {
+    if (isInvalidType(probe) || isInvalidType(domain)) return false;
+    if (this.equalityTypesIntersect(probe, domain)) return false;
     this.typeError(
       this.typesIntersect(probe, domain, false)
         ? `${describeType(probe)} can match ${describeType(domain)} only as an enum member against a raw string, and the enum and string domains never meet in '${operation}'${this.equalityGuidance(probe, domain)}`
         : `${describeType(probe)} and ${describeType(domain)} have no values in common, so '${operation}' can never match${this.equalityGuidance(probe, domain)}`,
       span,
     );
+    return true;
+  }
+
+  // COL-I3 second half: the same ruling that rejects a freshly built literal
+  // as an `==` operand governs the membership vocabulary, because a membership
+  // test asks the `==` question one element at a time. A literal written
+  // inside the probe is a new object no element can be identical to, so the
+  // answer is provable from the literal alone.
+  //
+  // Only the probe side is closed, deliberately. The container side is an
+  // ordinary spelling — `x in [1, 2, 3]` builds the fresh List as the domain,
+  // not as the question — and `Set.add`, `Set<Record>` and `Map<Record, V>`
+  // are left alone for the same reason: an identity-keyed container of records
+  // is a legitimate program (adding the same object twice, holding a record as
+  // an identity token), so a diagnostic there would refuse correct code. A
+  // false positive on a correct program is worse than silence; the probe is
+  // the one position where the always-false answer is provable.
+  private rejectFreshCollectionProbe(probe: Expression, operation: string, probes: "element" | "key"): boolean {
+    const fresh = this.freshCollectionOperand(probe);
+    if (!fresh) return false;
+    this.typeError(
+      `A ${fresh.description} built inside the probe is a new object, and '${operation}' compares ${probes} identity, so it can never match; ${probes === "key"
+        ? "hold the key in a binding and probe with that binding, or compare contents with equals(a, b)"
+        : "compare contents with equals(a, b) — 'values.some(item => equals(item, probe))' asks the same question one element at a time"}`,
+      fresh.span,
+    );
+    return true;
   }
 
   // ENM-I1: `is` / `is not` between statically disjoint enum domains is the
@@ -6314,6 +7039,72 @@ export class Analyzer implements TypeEnvironment {
     const probe = this.inferredExpressionTypes.get(spanIdentity(argument.span));
     if (!probe) return;
     this.rejectDisjointEnumTest(probe, target, "is", argument.span);
+  }
+
+  /**
+   * D59 rule 141 settled that `toBe` *is* `==` ("toBe 必须用语言自己的 `==`")
+   * and rule 141.1 settled that `toContain` *is* `values.has(item)`. The
+   * runtime half of both landed; the compile-time half did not travel with
+   * them, so `expect([1]).toBe([1])` compiled and failed at run time with
+   * both operands rendering byte-identically, while `[1] == [1]` is refused
+   * where it is written. This runs the operator's own two gates on the
+   * matcher: D42 item 64's intersection requirement, and COL-I3's rejection
+   * of a freshly built literal in an identity comparison.
+   *
+   * `toBe` and `toEqual` deliberately part company on the fresh-literal gate.
+   * `toBe` asks the `==` question, where a new object can never be identical
+   * to anything, so the literal proves the answer. `toEqual` asks the
+   * `equals(a, b)` question, where a fresh literal is the normal and correct
+   * spelling of the expected value — rejecting it there would refuse the very
+   * repair the `toBe` message teaches. The intersection gate has no such
+   * split: two types with no values in common never deeply equal either.
+   *
+   * `toHaveLength` and `toMatch` are left alone. Neither takes a comparand:
+   * `toHaveLength` takes a count, and `toMatch` takes a regular-expression
+   * pattern whose relation to the subject is matching, not equality.
+   */
+  private checkTestMatcherComparand(calleeExpression: Expression, arguments_: readonly Expression[]): void {
+    if (calleeExpression.kind !== "MemberExpression" || arguments_.length !== 1) return;
+    const matcher = calleeExpression.property;
+    if (matcher !== "toBe" && matcher !== "toEqual" && matcher !== "toContain") return;
+    const receiver = calleeExpression.object;
+    if (receiver.kind !== "CallExpression") return;
+    const operand = this.testExpectOperands.get(spanIdentity(receiver.span));
+    if (operand === undefined) return;
+    const argument = arguments_[0]!;
+    if (argument.kind === "SpreadExpression") return;
+    const probe = this.inferredExpressionTypes.get(spanIdentity(argument.span));
+    if (!probe) return;
+    // `==` leaves through `inferBinary`'s invalid-type exit before either of
+    // these gates runs, so the matcher that inherits the gates leaves there
+    // too: an operand the compiler already refused has been named once, and
+    // the always-false reading of a program that does not yet type-check is
+    // not a second mistake to report.
+    if (isInvalidType(operand) || isInvalidType(probe)) return;
+    if (matcher === "toContain") {
+      // The membership vocabulary's own pair (ENM-I3 and COL-I3's second
+      // half), asked one element at a time. Only a List receiver compares
+      // element identity; text containment is code-point containment, and a
+      // dynamic receiver proves nothing about which of the two it will be.
+      if (operand.kind !== "list") return;
+      const contained = this.readonlyDataViewOf(operand.element);
+      if (!this.requireMembershipIntersection(probe, contained, argument.span, matcher)) {
+        this.rejectFreshCollectionProbe(argument, matcher, "element");
+      }
+      return;
+    }
+    if (this.requireMembershipIntersection(probe, operand, argument.span, matcher)) return;
+    if (matcher !== "toBe") return;
+    // Either side settles it: `expect([1]).toBe(list)` is as constant as
+    // `expect(list).toBe([1])`, exactly as `==` treats its two operands.
+    const actualExpression = receiver.arguments[0];
+    const fresh = this.freshCollectionOperand(argument)
+      ?? (actualExpression && actualExpression.kind !== "SpreadExpression" ? this.freshCollectionOperand(actualExpression) : null);
+    if (!fresh) return;
+    this.typeError(
+      `A ${fresh.description} built inside the expectation is a new object, and 'toBe' compares collection identity, so it can never match; compare contents with 'toEqual(expected)'`,
+      fresh.span,
+    );
   }
 
   private enumTargetOfValidatorObject(object: Expression): Extract<ValueType, { kind: "enum" }> | null {
@@ -6697,6 +7488,13 @@ export class Analyzer implements TypeEnvironment {
     this.enterScope();
     this.flowFrameDepth += 1;
     this.functionDepth += 1;
+    // D31 item 23: an arrow bound to a module-local name is the other deferred
+    // body a top-level call can run, and the binding does not exist until the
+    // declaration finishes, so the frame is filed by the arrow's own span and
+    // the declaration claims it afterwards.
+    const deferredFrame: DeferredReadFrame = { reads: [], calls: [] };
+    this.deferredReadFrames.push(deferredFrame);
+    this.arrowDeferredFrames.set(spanIdentity(expression.span), deferredFrame);
     const previousFinallyLoopDepths = this.finallyLoopDepths;
     this.finallyLoopDepths = [];
     this.asynchronousFunctions.push(expression.asynchronous);
@@ -6743,12 +7541,21 @@ export class Analyzer implements TypeEnvironment {
     if (captured) this.arrowOwnedCaptures.set(spanIdentity(expression.span), captured);
     this.parameterDefaultDepth = outerParameterDefaultDepth;
     this.constructorDepth = outerConstructorDepth;
-    const checkedBodyResult = expected
+    let checkedBodyResult = expected
       && expandedExpectedResult.kind !== "unknown"
       && expandedExpectedResult.kind !== "any"
       && this.contextuallyAssignable(bodyResult, contextualResult, expression.body.span)
       ? contextualResult
       : bodyResult;
+    // D85 rule 207: with no contextual result the arrow's body is the only
+    // thing that says what it returns, so an empty collection written there
+    // has nothing settling it — the same position a body-inferred `return`
+    // occupies, reported the same way. Rule 209: once reported, the arrow's
+    // result is invalid rather than a `List<unknown>` a caller reports again.
+    if (expandedExpectedResult.kind === "unknown"
+      && this.requireSettledCollectionElement(expression.body, checkedBodyResult, false)) {
+      checkedBodyResult = invalidType;
+    }
     const result = expression.asynchronous
       ? { kind: "promise", value: this.resolvedAsyncResult(checkedBodyResult) } satisfies ValueType
       : checkedBodyResult;
@@ -6763,6 +7570,7 @@ export class Analyzer implements TypeEnvironment {
     }
     this.asynchronousFunctions.pop();
     this.finallyLoopDepths = previousFinallyLoopDepths;
+    this.deferredReadFrames.pop();
     this.functionDepth -= 1;
     this.flowFrameDepth -= 1;
     this.exitScope();
@@ -6908,6 +7716,18 @@ export class Analyzer implements TypeEnvironment {
         }
         return source.fields.size === 0 && expectedMap ? expectedMap : { kind: "map", key: stringType, value };
       }
+      // A `Record<V>` is the dynamic-key record, and `__velarCreateMap` has
+      // always read it. Only the structural `object` shape was accepted here,
+      // so the diagnostic below listed "a record" among the forms it takes and
+      // then refused one. Keys of a record are strings by construction.
+      if (source.kind === "record") {
+        const value = source.readonlyView ? this.readonlyDataViewOf(source.value) : source.value;
+        if (expectedMap) {
+          this.requireAssignable(stringType, expectedMap.key, argument.span);
+          this.requireAssignable(value, expectedMap.value, argument.span);
+        }
+        return { kind: "map", key: stringType, value };
+      }
       if (source.kind === "any") return { kind: "map", key: anyType, value: anyType };
       this.typeError(`Map construction requires a Map, a List of [key, value] Lists, or a record, received ${describeType(source)}${this.iterationGuidance(source)}`, argument.span);
       return { kind: "map", key: unknownType, value: unknownType };
@@ -7025,8 +7845,15 @@ export class Analyzer implements TypeEnvironment {
         && arguments_[0]?.kind === "ObjectExpression" && callee.result.kind === "named") {
         this.recordRuntimeObjectShape(arguments_[0], callee.result);
       }
+      const diagnosticsBeforeArguments = this.diagnostics.length;
       this.checkArguments(arguments_, callee.parameters, callSpan, callee.requiredParameters, callee.rest, argumentNames, callee.parameterNames);
       this.rejectDisjointEnumValidatorProbe(calleeExpression, arguments_);
+      // One mistake, one diagnostic: the matcher gate speaks only when the
+      // argument itself checked out, because an unassignable comparand has
+      // already been named in the words the author needs.
+      if (this.diagnostics.length === diagnosticsBeforeArguments) {
+        this.checkTestMatcherComparand(calleeExpression, arguments_);
+      }
       this.reportPromiseCarrierHazard(callee.result, callSpan);
       if (callee.result.kind === "optional") this.optionalCalls.add(spanIdentity(callSpan));
       return callee.result;
@@ -8015,7 +8842,7 @@ export class Analyzer implements TypeEnvironment {
     // Map/Record key of `get`) is judged by intersection with the element or
     // key domain — the per-element `==` question — rather than assignability,
     // whose enum -> string one-way exit would launder a bare-string match.
-    const checkProbeArgument = (domain: ValueType, operation: string): void => {
+    const checkProbeArgument = (domain: ValueType, operation: string, probes: "element" | "key" = "element"): void => {
       requireCount(1);
       const argument = argumentAt(0);
       if (!argument) return;
@@ -8024,7 +8851,12 @@ export class Analyzer implements TypeEnvironment {
         return;
       }
       const probe = namedPreanalyzed ? this.inferredExpressionType(argument) : this.inferExpression(argument, domain);
-      this.requireMembershipIntersection(probe, domain, argument.span, operation);
+      // The domain mismatch is the more precise answer where both apply, so
+      // the fresh-literal rejection speaks only when the probe's type is right
+      // and identity is the sole reason it can never match.
+      if (!this.requireMembershipIntersection(probe, domain, argument.span, operation)) {
+        this.rejectFreshCollectionProbe(argument, operation, probes);
+      }
       if (!namedPreanalyzed) {
         for (const extra of arguments_.slice(1)) {
           if (!omitted(extra)) this.inferExpression(extra.kind === "SpreadExpression" ? extra.value : extra);
@@ -8318,7 +9150,7 @@ export class Analyzer implements TypeEnvironment {
           this.typeError("Use 'get(key) ?? fallback'; Map.get has one optional-result contract", callSpan);
           return optionalOf(readonlyValue!);
         }
-        checkProbeArgument(comparisonKey!, "Map.get");
+        checkProbeArgument(comparisonKey!, "Map.get", "key");
         return optionalOf(readonlyValue!);
       }
       if (member.property === "keys") {
@@ -8338,12 +9170,12 @@ export class Analyzer implements TypeEnvironment {
       }
       if (member.property === "has") {
         this.collectionCalls.set(member.span.end, "mapHas");
-        checkProbeArgument(comparisonKey!, "Map.has");
+        checkProbeArgument(comparisonKey!, "Map.has", "key");
         return boolType;
       }
       if (member.property === "remove") {
         this.collectionCalls.set(member.span.end, "mapRemove");
-        checkProbeArgument(comparisonKey!, "Map.remove");
+        checkProbeArgument(comparisonKey!, "Map.remove", "key");
         return boolType;
       }
       if (member.property === "clear") {
@@ -8365,7 +9197,7 @@ export class Analyzer implements TypeEnvironment {
       }
       if (member.property === "get") {
         this.collectionCalls.set(member.span.end, "recordGet");
-        checkProbeArgument(stringType, "Record.get");
+        checkProbeArgument(stringType, "Record.get", "key");
         return optionalOf(readonlyValue!);
       }
       if (member.property === "keys") {
@@ -8385,12 +9217,12 @@ export class Analyzer implements TypeEnvironment {
       }
       if (member.property === "has") {
         this.collectionCalls.set(member.span.end, "recordHas");
-        checkProbeArgument(stringType, "Record.has");
+        checkProbeArgument(stringType, "Record.has", "key");
         return boolType;
       }
       if (member.property === "remove") {
         this.collectionCalls.set(member.span.end, "recordRemove");
-        checkProbeArgument(stringType, "Record.remove");
+        checkProbeArgument(stringType, "Record.remove", "key");
         return boolType;
       }
       if (member.property === "clear") {
@@ -9345,6 +10177,7 @@ export class Analyzer implements TypeEnvironment {
   ): void {
     if (binding) {
       const type = this.callableWithInferredResult(binding.declaredType, result, asynchronous);
+      this.recordFlowFactOrigin(binding);
       binding.type = type;
       binding.declaredType = type;
       binding.storageType = type;
@@ -10972,6 +11805,32 @@ export class Analyzer implements TypeEnvironment {
     }
   }
 
+  /**
+   * D50 rule 97.3: a retirement that leaves one surviving spelling did not
+   * happen. `export {stringify} from "velar/json"` is an import spelling with
+   * an export in front of it — the barrel republishes the retired bare name
+   * and every downstream `import {stringify} from "./barrel.vel"` is clean
+   * forever after. No mechanical fix: which reads in which other modules
+   * wanted the name is not a rewrite this module can make.
+   */
+  private reportPermanentNamespaceReExports(program: Program): void {
+    for (const statement of program.body) {
+      if (statement.kind !== "ReExportDeclaration") continue;
+      const roster = permanentNamespaceImportRoster(statement.source);
+      if (!roster) continue;
+      for (const specifier of statement.specifiers) {
+        if (!roster.members.has(specifier.imported)) continue;
+        this.diagnostics.push(diagnostic(
+          "VEL3008",
+          roster.namespace === null
+            ? `Use ${specifier.imported}(...) directly; a re-export cannot restore a retired import spelling, and the Core prelude needs none`
+            : `Use ${roster.namespace}.${specifier.imported} directly; a re-export cannot restore a retired import spelling`,
+          specifier.span,
+        ));
+      }
+    }
+  }
+
   /** A member name to show in the rule 106 guidance, so the fix is concrete. */
   private firstNamespaceMember(namespace: PermanentNamespaceName): string {
     const binding = this.builtin(namespace);
@@ -10988,6 +11847,25 @@ export class Analyzer implements TypeEnvironment {
 
   protected recoveredTypeError(message: string, errorSpan: Span, fix?: DiagnosticFix): void {
     this.diagnostics.push(recoveredDiagnostic("VEL4001", message, errorSpan, fix));
+  }
+
+  /**
+   * D89: raises a roster advisory. It cannot reach `this.diagnostics`, so it
+   * cannot fail a build and cannot shift the diagnostic cursors this analyzer
+   * reads as array lengths.
+   *
+   * One report per code and span. `reanalyzeLoopBackEdge` runs a loop body a
+   * second time whenever the back edge invalidates a fact, and its diagnostic
+   * answer is `deduplicateDiagnostics`, which only ever touches
+   * `this.diagnostics`. Deduplicating where the advisory is raised covers that
+   * pass and every other re-analysis without a second pair of cursors, which
+   * is the whole reason the two channels are separate arrays.
+   */
+  protected advise(code: string, message: string, adviceSpan: Span, fix?: DiagnosticFix): void {
+    const identity = `${code}\u0000${adviceSpan.start}\u0000${adviceSpan.end}`;
+    if (this.advisedIdentities.has(identity)) return;
+    this.advisedIdentities.add(identity);
+    this.advisories.push(advisory(code, message, adviceSpan, fix));
   }
 
   private analyzeMatchPattern(
@@ -11467,7 +12345,8 @@ export class Analyzer implements TypeEnvironment {
 
   private builtin(name: string): Binding | null {
     const type = this.extensionGlobals.get(name) ?? coreVocabularyType(name)
-      ?? (name === "Error" || name === "ValidationError" || name === "NarrowingError" || name === "IndexError"
+      ?? (name === "Error" || name === "ValidationError" || name === "AssertionError"
+        || name === "NarrowingError" || name === "IndexError"
         || (VELAR_HOST_ERROR_NAMES as readonly string[]).includes(name)
         ? { kind: "classConstructor", name } satisfies ValueType
         : null)
@@ -11488,21 +12367,138 @@ export class Analyzer implements TypeEnvironment {
    * constructor's own arguments. Nothing infers it from a later mutation, so a
    * binding left with no source is reported at the construction rather than
    * kept as `unknown` for a following line to fill in.
+   *
+   * The value written at this position is not always the construction itself.
+   * A ternary arm, a list element or its spread, a record-literal field, a
+   * `??` fallback, a receiver and an argument all become part of the value the
+   * name holds, so each is its own settling position and each reports at its
+   * own `[]`. What stops the walk is the value, not the syntax: it descends
+   * only while `carriesUnsettledCollection` still sees the hole in the type
+   * arriving here, so `print(Set().size)` and `const n = Set().size` stay
+   * legal per rule 208 — neither of those names holds a collection — while a
+   * spread whose `unknown` the merge absorbs (`["x", ...[]]`) leaves nothing
+   * to report. A sibling settles nothing for its neighbour: `[["a"], []]`
+   * merges through `unionOf`, so the union still carries the hole and the
+   * empty `[]` reports on its own.
+   *
+   * Returns whether it reported, so the caller can hand the name `invalidType`
+   * instead of the hole. Rule 209 requires one mistake to be reported once,
+   * and `List<unknown>` reaching a later line is what produces the second,
+   * contradicting report the ruling exists to delete.
    */
-  protected requireSettledCollectionElement(initializer: Expression, declared: ValueType, annotated: boolean): void {
-    if (annotated) return;
-    const type = this.expandAliases(declared);
-    if (!this.isFreshUnresolvedCollection(initializer, type)) return;
-    const [spelling, holds, example] = type.kind === "list"
-      ? ["[]", "what the List holds", "let items: List<string> = []"]
-      : type.kind === "set"
-        ? ["Set()", "what the Set holds", "const tags: Set<string> = Set()"]
-        : ["Map()", "what the Map holds", "const users: Map<string, User> = Map()"];
-    this.diagnostics.push(diagnostic(
-      "VEL4039",
-      `Empty '${spelling}' requires an explicit type; nothing at this position says ${holds} — write '${example}'`,
-      initializer.span,
-    ));
+  protected requireSettledCollectionElement(initializer: Expression, declared: ValueType, annotated: boolean): boolean {
+    if (annotated) return false;
+    return this.reportUnsettledCollection(initializer, this.expandAliases(declared));
+  }
+
+  /**
+   * D85 rule 209: where the value at this position came from, when it came
+   * from a hole VEL4039 already reported. The answer is two-part because a
+   * callee can be declared after its caller: `true` is a hole already on
+   * record, and `causes` are the local results that make this position a hole
+   * too if theirs turn out to be one.
+   *
+   * Only a name and a call to a local name are modelled — the two shapes an
+   * author writes between an empty collection and the `return` that publishes
+   * it. Anything else contributes nothing, so an unmodelled position keeps the
+   * report it has today rather than losing one.
+   */
+  private collectResultHoleSources(expression: Expression, causes: Set<string>): boolean {
+    if (expression.kind === "IdentifierExpression") {
+      const binding = this.lookup(expression.name);
+      if (!binding) return false;
+      for (const cause of this.bindingHoleCauses.get(binding) ?? []) causes.add(cause);
+      return this.reportedCollectionHoles.has(binding);
+    }
+    if (expression.kind === "CallExpression" && expression.callee.kind === "IdentifierExpression") {
+      const binding = this.lookup(expression.callee.name);
+      const resultKey = binding ? this.functionResultKeys.get(binding) : undefined;
+      // An imported, dynamically dispatched, or method call resolves to no
+      // local result. Its hole — if it has one — was reported in the module
+      // that owns it, and nothing here can say so, so the call is not a cause.
+      if (resultKey === undefined) return false;
+      if (this.reportedResultHoles.has(resultKey)) return true;
+      causes.add(resultKey);
+      return false;
+    }
+    return false;
+  }
+
+  /**
+   * D85 rule 209: a name bound to a reported hole carries it, so `const a = []`
+   * followed by `return a` is the same one mistake `return []` is. Only an
+   * unannotated `const`/`let` of a single name carries anything: an annotation
+   * settles the construction, and a destructuring pattern takes the hole apart
+   * rather than passing it on.
+   */
+  private recordBindingHoleSource(pattern: BindingPattern, initializer: Expression, reported: boolean): void {
+    if (pattern.kind !== "NameBindingPattern") return;
+    const binding = this.scopes.at(-1)?.get(pattern.name);
+    if (!binding) return;
+    const causes = new Set<string>();
+    if (reported || this.collectResultHoleSources(initializer, causes)) {
+      this.reportedCollectionHoles.add(binding);
+      return;
+    }
+    if (causes.size > 0) this.bindingHoleCauses.set(binding, causes);
+  }
+
+  /**
+   * D85 rule 209: delete the convergence report of every function whose result
+   * is invalid only because a hole VEL4039 already explained reached it through
+   * a local call. The set grows until it stops growing, because a chain of
+   * forwarding functions is still one mistake however long it is — and a cycle
+   * with no empty collection anywhere in it never enters the set, so a genuine
+   * convergence failure still reports on both of its halves.
+   */
+  private resolveDeferredConvergenceReports(): void {
+    if (this.deferredConvergenceReports.length === 0) return;
+    const suppressed = new Set<Diagnostic>();
+    for (let growing = true; growing;) {
+      growing = false;
+      for (const entry of this.deferredConvergenceReports) {
+        if (suppressed.has(entry.report)) continue;
+        if (![...entry.causes].some((cause) => this.reportedResultHoles.has(cause))) continue;
+        suppressed.add(entry.report);
+        this.reportedResultHoles.add(entry.resultKey);
+        growing = true;
+      }
+    }
+    for (let index = this.diagnostics.length - 1; index >= 0; index -= 1) {
+      const report = this.diagnostics[index];
+      if (report && suppressed.has(report)) this.diagnostics.splice(index, 1);
+    }
+  }
+
+  private reportUnsettledCollection(expression: Expression, type: ValueType | null): boolean {
+    if (type !== null) {
+      if (this.isFreshUnresolvedCollection(expression, type)) {
+        const [spelling, holds, example] = type.kind === "list"
+          ? ["[]", "what the List holds", "let items: List<string> = []"]
+          : type.kind === "set"
+            ? ["Set()", "what the Set holds", "const tags: Set<string> = Set()"]
+            : ["Map()", "what the Map holds", "const users: Map<string, User> = Map()"];
+        this.diagnostics.push(diagnostic(
+          "VEL4039",
+          `Empty '${spelling}' requires an explicit type; nothing at this position says ${holds} — write '${example}'`,
+          expression.span,
+        ));
+        return true;
+      }
+      if (!carriesUnsettledCollection(type)) return false;
+    }
+    let reported = false;
+    for (const part of settlingValuePositions(expression)) {
+      // A part analyzed under a contextual type that settled it never reaches
+      // here as `unknown`; one that was analyzed at all has its answer on
+      // record. A part with no answer on record was never inferred as a whole
+      // — `Map([[key, value]])` reads the entry's two leaves and never the
+      // entry list itself — so the walk carries on through the gap rather
+      // than stopping at one it did not make.
+      const partType = this.inferredExpressionTypes.get(spanIdentity(part.span));
+      if (this.reportUnsettledCollection(part, partType ? this.expandAliases(partType) : null)) reported = true;
+    }
+    return reported;
   }
 
   private isFreshUnresolvedCollection(expression: Expression, type: ValueType): boolean {
@@ -11601,7 +12597,9 @@ export class Analyzer implements TypeEnvironment {
       storageType: type,
       span: declarationSpan,
       narrowingFrame: null,
+      flowScope: this.scopes.length - 1,
     };
+    this.recordScopedName(name);
     scope.set(name, binding);
     if (this.scopes.length === 1 && type.kind === "typeObject") this.runtimeTypeObjectNames.add(name);
     this.recordSemanticBinding(`${declarationSpan.start}:${name}`, type);
@@ -11627,11 +12625,46 @@ export class Analyzer implements TypeEnvironment {
 
   private recordInitializationImportRead(binding: Binding, local: string, span: Span): void {
     const origin = this.importedBindingSources.get(binding);
-    if (origin === undefined || !this.inModuleInitializationPosition()) return;
-    const key = spanIdentity(span);
-    if (!this.initializationImportReadSites.has(key)) {
-      this.initializationImportReadSites.set(key, { local, source: origin.source, imported: origin.imported, span });
+    if (origin === undefined) return;
+    const read: InitializationImportRead = { local, source: origin.source, imported: origin.imported, span };
+    // D31 item 23: a read inside a deferred body belongs to that body, not to
+    // the module. Whether it runs during module evaluation is decided by
+    // `moduleInitializationImportReads`, once the top-level calls are known.
+    const frame = this.deferredReadFrames.at(-1);
+    if (frame) {
+      frame.reads.push(read);
+      return;
     }
+    if (!this.inModuleInitializationPosition()) return;
+    const key = spanIdentity(span);
+    if (!this.initializationImportReadSites.has(key)) this.initializationImportReadSites.set(key, read);
+  }
+
+  /**
+   * D31 item 23: the call edge. Inside a deferred body it is an edge of the
+   * reachability graph; at module top level it is a root, because that call
+   * runs the callee while the module itself evaluates. The callee is held as
+   * a binding, not as a frame — a `def` is hoisted, so `const x = pull()` can
+   * be analyzed before `def pull()` is.
+   */
+  private recordDeferredCallEdge(callee: Expression, span: Span): void {
+    if (callee.kind !== "IdentifierExpression") return;
+    // The two cheap questions first: every other call would pay for a scope
+    // lookup whose answer nothing reads.
+    const frame = this.deferredReadFrames.at(-1);
+    if (!frame && !this.inModuleInitializationPosition()) return;
+    const binding = this.lookup(callee.name);
+    if (!binding) return;
+    if (frame) frame.calls.push(binding);
+    else this.initializationLocalCalls.push({ binding, span });
+  }
+
+  /** Files an arrow's deferred frame under the module-local name it was bound to. */
+  private claimArrowDeferredFrame(pattern: BindingPattern, initializer: Expression): void {
+    if (initializer.kind !== "ArrowFunctionExpression" || pattern.kind !== "NameBindingPattern") return;
+    const frame = this.arrowDeferredFrames.get(spanIdentity(initializer.span));
+    const binding = this.scopes.at(-1)?.get(pattern.name);
+    if (frame && binding) this.localFunctionFrames.set(binding, frame);
   }
 
   // True while code at this point runs during module evaluation itself:
@@ -11652,9 +12685,49 @@ export class Analyzer implements TypeEnvironment {
       && this.deferredExecutionDepth === 0;
   }
 
-  /** Initialization-position reads of imported bindings, for the project module-cycle check. */
+  /**
+   * Initialization-position reads of imported bindings, for the project
+   * module-cycle check.
+   *
+   * D31 item 23 recorded the indirect shape as a v1 residual: a top-level call
+   * of a module-local function runs that body while the module evaluates, so
+   * an imported binding read inside it is an initialization-position read too
+   * — and following VEL3019's own remediation ("Move this read into a
+   * function") and then calling that function at top level re-created the bare
+   * `ReferenceError` the check exists to delete. The closure below is the
+   * intra-module reachability pass that closes it: one module, one walk over
+   * the call edges already collected, no cross-module analysis.
+   *
+   * An indirect read is reported at the *call*, not at the read. The call is
+   * the line that runs during module evaluation and the line an author can
+   * move; the read inside the body is already in a function, which is what the
+   * remediation asks for.
+   */
   moduleInitializationImportReads(): readonly InitializationImportRead[] {
-    return [...this.initializationImportReadSites.values()];
+    const sites = new Map(this.initializationImportReadSites);
+    const visited = new Set<DeferredReadFrame>();
+    const collect = (frame: DeferredReadFrame, callSpan: Span): void => {
+      if (visited.has(frame)) return;
+      visited.add(frame);
+      for (const read of frame.reads) {
+        const key = `${spanIdentity(callSpan)}\0${read.local}\0${read.source}`;
+        if (!sites.has(key)) sites.set(key, { ...read, span: callSpan });
+      }
+      for (const called of frame.calls) {
+        const next = this.localFunctionFrames.get(called);
+        if (next) collect(next, callSpan);
+      }
+    };
+    for (const call of this.initializationLocalCalls) {
+      const frame = this.localFunctionFrames.get(call.binding);
+      // One root at a time: two roots reaching the same body must each report,
+      // so the visited set is per root rather than per module.
+      if (frame) {
+        visited.clear();
+        collect(frame, call.span);
+      }
+    }
+    return [...sites.values()];
   }
 
   // D32 item 29: the language-wide text-conversion contract (charter
@@ -11905,6 +12978,22 @@ export class Analyzer implements TypeEnvironment {
     }
   }
 
+  /**
+   * D90 R12: the diagnostic has to teach the way out, not only refuse. A
+   * consuming module never writes `unsafe`, so an exported `any` hands it a
+   * value carrying no guarantee at all; the escape is to validate the value
+   * into a declared type in the module that owns the boundary, which is what
+   * `Type.parse` exists for. No new diagnostic code and no unsafe marker: this
+   * is the rule at validateTypeReference finished, not a second rule.
+   */
+  private reportExportedAny(exported: readonly string[], span: Span): void {
+    const names = exported.map((name) => `'${name}'`).join(", ");
+    this.typeError(
+      `${exported.length === 1 ? "Export" : "Exports"} ${names} ${exported.length === 1 ? "is" : "are"} 'any', which cannot cross a module boundary; validate the value into a declared type in this module first — 'const settled = Config.parse(candidate)' — and export that`,
+      span,
+    );
+  }
+
   private collectPatternNames(pattern: BindingPattern, add: (name: string) => void): void {
     if (pattern.kind === "NameBindingPattern") {
       add(pattern.name);
@@ -11965,7 +13054,10 @@ export class Analyzer implements TypeEnvironment {
         : type.kind === "any" ? anyType : unknownType;
       const declaredElement = declaredType.kind === "list" ? declaredType.readonlyView ? this.readonlyDataViewOf(declaredType.element) : declaredType.element
         : declaredType.kind === "any" ? anyType : unknownType;
-      if (type.kind !== "list" && type.kind !== "any") {
+      // An invalid source has already been reported where it went wrong —
+      // D85 rule 209's "one mistake, one report" — and `describeType` would
+      // render it as the bare `unknown` nobody wrote.
+      if (type.kind !== "list" && type.kind !== "any" && !isInvalidType(type)) {
         this.typeError(`Cannot list-destructure ${describeType(type)}`, pattern.span);
       }
       for (const child of pattern.elements) if (child) this.declarePattern(child, mutable, element, declaredElement);
@@ -12103,7 +13195,7 @@ export class Analyzer implements TypeEnvironment {
         memberScope.set(key.slice(memberNarrowingPrefix.length), { type, frame: this.flowFrameDepth });
       } else {
         const binding = this.lookup(key);
-        this.scopes.at(-1)!.set(key, {
+        const shadow: Binding = {
           mutable: binding?.mutable ?? false,
           type,
           declaredType: binding?.declaredType ?? type,
@@ -12111,8 +13203,13 @@ export class Analyzer implements TypeEnvironment {
           ...(binding ? { storageBinding: binding.storageBinding ?? binding } : {}),
           span: binding?.span ?? narrowingSpan,
           narrowingFrame: this.flowFrameDepth,
+          flowScope: this.scopes.length - 1,
           ...(binding?.reactiveKind ? { reactiveKind: binding.reactiveKind } : {}),
-        });
+        };
+        this.trackNarrowingShadow(shadow);
+        this.narrowedNames.at(-1)!.add(key);
+        if (!this.scopes.at(-1)!.has(key)) this.recordScopedName(key);
+        this.scopes.at(-1)!.set(key, shadow);
       }
     }
   }
@@ -12128,13 +13225,15 @@ export class Analyzer implements TypeEnvironment {
       const binding = this.lookup(key);
       if (!binding) continue;
       const local = scope.get(key);
+      this.narrowedNames.at(-1)!.add(key);
       if (local) {
+        this.recordFlowFactOrigin(local);
         local.type = type;
         local.narrowingFrame = this.flowFrameDepth;
         // A persisted (checked or merged) fact is not assignment-established.
         local.assignedFact = false;
       } else {
-        scope.set(key, {
+        const shadow: Binding = {
           mutable: binding.mutable,
           type,
           declaredType: binding.declaredType,
@@ -12142,8 +13241,12 @@ export class Analyzer implements TypeEnvironment {
           storageBinding: binding.storageBinding ?? binding,
           span: binding.span,
           narrowingFrame: this.flowFrameDepth,
+          flowScope: this.scopes.length - 1,
           ...(binding.reactiveKind ? { reactiveKind: binding.reactiveKind } : {}),
-        });
+        };
+        this.trackNarrowingShadow(shadow);
+        this.recordScopedName(key);
+        scope.set(key, shadow);
       }
     }
   }
@@ -12187,6 +13290,7 @@ export class Analyzer implements TypeEnvironment {
     for (const scope of this.scopes) {
       const shadow = scope.get(name);
       if (!shadow || shadow === target || (shadow.storageBinding ?? shadow) !== storage) continue;
+      this.recordFlowFactOrigin(shadow);
       shadow.storageType = storage.storageType;
       shadow.type = storage.storageType;
       shadow.narrowingFrame = null;
@@ -12201,12 +13305,14 @@ export class Analyzer implements TypeEnvironment {
     if (fact === null) return;
     const scope = this.scopes.at(-1)!;
     const local = scope.get(name);
+    this.narrowedNames.at(-1)!.add(name);
     if (local) {
+      this.recordFlowFactOrigin(local);
       local.type = fact;
       local.narrowingFrame = this.flowFrameDepth;
       local.assignedFact = true;
     } else {
-      scope.set(name, {
+      const shadow: Binding = {
         mutable: binding.mutable,
         type: fact,
         declaredType: binding.declaredType,
@@ -12215,8 +13321,12 @@ export class Analyzer implements TypeEnvironment {
         span: binding.span,
         narrowingFrame: this.flowFrameDepth,
         assignedFact: true,
+        flowScope: this.scopes.length - 1,
         ...(binding.reactiveKind ? { reactiveKind: binding.reactiveKind } : {}),
-      });
+      };
+      this.trackNarrowingShadow(shadow);
+      this.recordScopedName(name);
+      scope.set(name, shadow);
     }
   }
 
@@ -12350,6 +13460,7 @@ export class Analyzer implements TypeEnvironment {
   private invalidateAssignmentNarrowings(target: AssignmentStatement["target"], binding: Binding | null): void {
     if (target.kind === "IdentifierExpression") {
       if (binding && binding.narrowingFrame !== null) {
+        this.recordFlowFactOrigin(binding);
         binding.type = binding.storageType;
         binding.narrowingFrame = null;
         binding.assignedFact = false;
@@ -12492,23 +13603,59 @@ export class Analyzer implements TypeEnvironment {
     ));
   }
 
+  /**
+   * A snapshot used to copy every binding of every live scope, which made a
+   * branch cost O(names in the module) and whole-module analysis quadratic in
+   * module size. A binding nothing ever narrows cannot differ between two
+   * moments, so only the bindings flow analysis has actually written are
+   * visited — `flowTouched`, kept per scope depth so an exiting scope drops
+   * its own, and `flowOrigins`, which remembers what each one held before its
+   * first write. `flowOrigins` answers for a binding a *later* write touched
+   * than the snapshot being restored: the snapshot has no entry, and its
+   * pre-write state is exactly the state that snapshot recorded. A narrowing
+   * shadow born after the snapshot stores `null` instead, because a full-scope
+   * snapshot had nothing to restore it to either.
+   */
+  private flowFactState(binding: Binding): FlowFactState {
+    return {
+      type: binding.type,
+      storageType: binding.storageType,
+      frame: binding.narrowingFrame,
+      assigned: binding.assignedFact === true,
+    };
+  }
+
+  /** Called immediately before flow analysis writes a binding, so the recorded state is the pre-write one. */
+  private recordFlowFactOrigin(binding: Binding): void {
+    if (this.flowOrigins.has(binding)) return;
+    this.flowOrigins.set(binding, this.flowFactState(binding));
+    this.trackFlowBinding(binding);
+  }
+
+  /** A narrowing shadow created mid-flow: no older snapshot has a state for it. */
+  private trackNarrowingShadow(shadow: Binding): void {
+    this.flowOrigins.set(shadow, null);
+    this.trackFlowBinding(shadow);
+  }
+
+  private trackFlowBinding(binding: Binding): void {
+    const depth = Math.min(binding.flowScope ?? 0, this.flowTouched.length - 1);
+    this.flowTouched[depth]!.add(binding);
+  }
+
+  /** Every binding whose flow facts may differ from another moment's, outermost scope first. */
+  private *touchedFlowBindings(): Generator<Binding> {
+    for (const level of this.flowTouched) yield* level;
+  }
+
+  /** The state `snapshot` recorded for `binding`, or null when it did not exist yet. */
+  private flowStateIn(snapshot: FlowFactsSnapshot, binding: Binding): FlowFactState | null {
+    return snapshot.bindings.get(binding) ?? this.flowOrigins.get(binding) ?? null;
+  }
+
   private snapshotFlowFacts(): FlowFactsSnapshot {
-    const bindings = new Map<Binding, {
-      readonly type: ValueType;
-      readonly storageType: ValueType;
-      readonly frame: number | null;
-      readonly assigned: boolean;
-    }>();
-    for (const scope of this.scopes) {
-      for (const binding of scope.values()) {
-        bindings.set(binding, {
-          type: binding.type,
-          storageType: binding.storageType,
-          frame: binding.narrowingFrame,
-          assigned: binding.assignedFact === true,
-        });
-      }
-    }
+    const bindings = new Map<Binding, FlowFactState>();
+    for (const binding of this.touchedFlowBindings()) bindings.set(binding, this.flowFactState(binding));
     return {
       bindings,
       members: this.memberNarrowings.map((scope) => new Map(scope)),
@@ -12516,7 +13663,9 @@ export class Analyzer implements TypeEnvironment {
   }
 
   private restoreFlowFacts(snapshot: FlowFactsSnapshot): void {
-    for (const [binding, state] of snapshot.bindings) {
+    for (const binding of this.touchedFlowBindings()) {
+      const state = this.flowStateIn(snapshot, binding);
+      if (!state) continue;
       binding.type = state.type;
       binding.storageType = state.storageType;
       binding.narrowingFrame = state.frame;
@@ -12541,7 +13690,12 @@ export class Analyzer implements TypeEnvironment {
   private flowInvalidationsSince(snapshot: FlowFactsSnapshot): FlowFactInvalidations {
     const bindings = new Set<Binding>();
     const storageTypes = new Map<Binding, ValueType>();
-    for (const [binding, state] of snapshot.bindings) {
+    // Only a written binding can carry a storage type this branch moved. One
+    // nothing wrote merges its own storage type with itself, which is the
+    // identity, so leaving it out of the set is what the merge already did.
+    for (const binding of this.touchedFlowBindings()) {
+      const state = this.flowStateIn(snapshot, binding);
+      if (!state) continue;
       if (state.frame !== null
         && (binding.narrowingFrame !== state.frame || !sameType(binding.type, state.type))) bindings.add(binding);
       storageTypes.set(binding, binding.storageType);
@@ -12559,28 +13713,42 @@ export class Analyzer implements TypeEnvironment {
     return { bindings, members, storageTypes };
   }
 
+  /**
+   * A loop's back-edge pass re-runs the whole body, and a nested loop inside
+   * that pass runs its own, so the work doubled with every level of loop
+   * nesting: fourteen levels of `while` in a 91-line file took 2.4 seconds and
+   * seventeen took 35. The passes are budgeted by how many back-edge passes
+   * are already running. Past the budget a loop analyzes its body once and its
+   * exit keeps nothing — `widened` — which is what the loop would answer if
+   * its back edge had falsified every fact, so the degradation only ever
+   * removes a fact, never invents one. Real code does not nest loops four
+   * deep, so nothing reachable by hand reaches the budget.
+   */
   private reanalyzeLoopBackEdge(
     baseline: FlowFactsSnapshot,
-    visible: ReadonlyMap<string, Binding>,
+    visible: VisibleScopeDepth,
     backEdges: readonly FlowFactInvalidations[],
     body: readonly Statement[],
     diagnosticStart: number,
     analyze: () => void,
-  ): LoopFlowContext | null {
-    if (!this.flowInvalidationsAffectFacts(backEdges)) return null;
+  ): LoopBackEdgeOutcome {
+    if (!this.flowInvalidationsAffectFacts(backEdges)) return { repeated: null, widened: false };
+    if (this.loopReanalysisDepth >= maximumLoopReanalysisDepth) return { repeated: null, widened: true };
     const loopHead = this.flowSnapshotAfterInvalidations(baseline, backEdges);
     this.loopFlowContexts.push({ baseline: loopHead, visible, carried: [], backEdges: [], breakFacts: [], sawBreak: false });
     const secondDiagnosticStart = this.diagnostics.length;
     this.clearCachedFlowTypes(body);
     let repeated: LoopFlowContext | null = null;
+    this.loopReanalysisDepth += 1;
     try {
       this.analyzeIsolatedFlow(loopHead, analyze);
       this.deduplicateDiagnostics(diagnosticStart, secondDiagnosticStart);
     } finally {
+      this.loopReanalysisDepth -= 1;
       repeated = this.loopFlowContexts.pop() ?? null;
       this.restoreFlowFacts(baseline);
     }
-    return repeated;
+    return { repeated, widened: false };
   }
 
   private flowInvalidationsAffectFacts(invalidations: readonly FlowFactInvalidations[]): boolean {
@@ -12642,30 +13810,45 @@ export class Analyzer implements TypeEnvironment {
     return result;
   }
 
-  private visibleBindings(): ReadonlyMap<string, Binding> {
-    const visible = new Map<string, Binding>();
-    for (let index = this.scopes.length - 1; index >= 0; index -= 1) {
-      for (const [name, binding] of this.scopes[index]!) {
-        if (!visible.has(name)) visible.set(name, binding);
-      }
-    }
-    return visible;
+  private visibleBindings(): VisibleScopeDepth {
+    return this.scopes.length;
   }
 
-  private narrowingsForVisibleBindings(visible: ReadonlyMap<string, Binding>): ReadonlyMap<string, ValueType> {
+  /** The binding a name resolved to when `visible` was captured. */
+  private visibleBinding(visible: VisibleScopeDepth, name: string): Binding | null {
+    for (let index = Math.min(visible, this.scopes.length) - 1; index >= 0; index -= 1) {
+      const binding = this.scopes[index]?.get(name);
+      if (binding) return binding;
+    }
+    return null;
+  }
+
+  /**
+   * Only a name a narrowing has written can carry a fact, and `narrowedNames`
+   * is the roster of those per scope — so this walks the narrowings rather
+   * than every name in scope. The member half matches a dotted path against
+   * the binding its root names instead of spreading the whole root set per
+   * path, which is O(one lookup) rather than O(names in the module).
+   */
+  private narrowingsForVisibleBindings(visible: VisibleScopeDepth): ReadonlyMap<string, ValueType> {
     const narrowed = new Map<string, ValueType>();
-    const roots = new Set<string>();
-    for (const [name, original] of visible) {
-      roots.add(`${original.span.start}:${name}`);
-      const current = this.lookup(name);
-      if (current?.narrowingFrame === this.flowFrameDepth
-        && current.span.start === original.span.start
-        && current.span.end === original.span.end) narrowed.set(name, current.type);
+    const seen = new Set<string>();
+    for (let index = this.scopes.length - 1; index >= 0; index -= 1) {
+      for (const name of this.narrowedNames[index]!) {
+        if (seen.has(name)) continue;
+        seen.add(name);
+        const original = this.visibleBinding(visible, name);
+        if (!original) continue;
+        const current = this.lookup(name);
+        if (current?.narrowingFrame === this.flowFrameDepth
+          && current.span.start === original.span.start
+          && current.span.end === original.span.end) narrowed.set(name, current.type);
+      }
     }
     for (let index = this.memberNarrowings.length - 1; index >= 0; index -= 1) {
       for (const [path, fact] of this.memberNarrowings[index]!) {
         if (fact.frame !== this.flowFrameDepth || narrowed.has(`${memberNarrowingPrefix}${path}`)) continue;
-        if ([...roots].some((root) => path === root || path.startsWith(`${root}.`))) {
+        if (this.memberNarrowingRootIsVisible(visible, path)) {
           narrowed.set(`${memberNarrowingPrefix}${path}`, fact.type);
         }
       }
@@ -12673,9 +13856,19 @@ export class Analyzer implements TypeEnvironment {
     return narrowed;
   }
 
+  /** Whether a member path's root — `<declaration offset>:<name>` — names a binding visible then. */
+  private memberNarrowingRootIsVisible(visible: VisibleScopeDepth, path: string): boolean {
+    const separator = path.indexOf(":");
+    if (separator < 0) return false;
+    const dot = path.indexOf(".");
+    const start = Number(path.slice(0, separator));
+    const name = path.slice(separator + 1, dot < 0 ? path.length : dot);
+    return this.visibleBinding(visible, name)?.span.start === start;
+  }
+
   private narrowingsInSnapshot(
     snapshot: FlowFactsSnapshot,
-    visible: ReadonlyMap<string, Binding>,
+    visible: VisibleScopeDepth,
     restore: FlowFactsSnapshot,
   ): ReadonlyMap<string, ValueType> {
     this.restoreFlowFacts(snapshot);
@@ -12721,12 +13914,14 @@ export class Analyzer implements TypeEnvironment {
       for (const binding of bindings) {
         const candidates = branches.map((branch) => branch.storageTypes.get(binding) ?? binding.storageType);
         if (includeBaseline) candidates.unshift(binding.storageType);
+        this.recordFlowFactOrigin(binding);
         binding.storageType = candidates.reduce((merged, candidate) => mergeTypes(merged, candidate));
         if (binding.narrowingFrame === null) binding.type = binding.storageType;
       }
     }
     for (const branch of branches) {
       for (const binding of branch.bindings) {
+        this.recordFlowFactOrigin(binding);
         binding.type = binding.storageType;
         binding.narrowingFrame = null;
         binding.assignedFact = false;
@@ -12743,11 +13938,19 @@ export class Analyzer implements TypeEnvironment {
     this.scopes.push(new Map());
     this.memberNarrowings.push(new Map());
     this.pendingScopeDeclarations.push(new Map());
+    this.narrowedNames.push(new Set());
+    this.scopedNames.push([]);
+    this.flowTouched.push(new Set());
   }
 
   protected exitScope(): void {
     this.scopes.pop();
     this.memberNarrowings.pop();
     this.pendingScopeDeclarations.pop();
+    this.narrowedNames.pop();
+    for (const name of this.scopedNames.pop() ?? []) this.nearestNames.remove(name);
+    // The bindings this scope created are unreachable now, so the flow-fact
+    // working set shrinks with it rather than growing across the module.
+    for (const binding of this.flowTouched.pop() ?? []) this.flowOrigins.delete(binding);
   }
 }

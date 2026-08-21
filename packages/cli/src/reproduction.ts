@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { VelarProjectConfig } from "./config.ts";
 import { isHostErrorCode } from "./host-error.ts";
@@ -174,13 +174,49 @@ function withinProject(root: string, path: string): string | null {
   return segments.join("/");
 }
 
-/** Every absolute path this machine would otherwise leak, rewritten to its project-relative form. */
-function projectRelative(text: string, root: string): string {
+/**
+ * A path as it sits on this machine, in either host spelling: a POSIX path
+ * starting at the filesystem root, a Windows path starting at a drive letter,
+ * or a UNC share. The lookbehind keeps `and/or`, `https://example.com/x`, and
+ * a path already rewritten by the root pass from matching, and a match needs at
+ * least two segments so a lone `/` is never a path.
+ */
+const ABSOLUTE_PATH = /(?<![\w.~:/\\-])(?:[A-Za-z]:[\\/]|\\\\|\/)[^\s"'`<>:|?*]+(?:[\\/][^\s"'`<>:|?*]+)+/gu;
+
+/**
+ * Every absolute path this machine would otherwise leak, rewritten to a form
+ * that carries the same information a maintainer needs and nothing about who
+ * ran the command. Three passes, in this order:
+ *
+ * 1. The project root goes first, because the paths inside it are the ones the
+ *    report is actually about and they must keep their project-relative shape.
+ * 2. Whatever is still absolute is out of the project — a linked package, a
+ *    hoisted `node_modules` above the root — and only its file name is part of
+ *    the defect, so the directories leading to it are dropped. This is the pass
+ *    discipline 2 was missing: the root strip alone left those paths whole.
+ * 3. The home directory is replaced last, as a backstop for a mention that was
+ *    not part of a path run at all.
+ *
+ * Exported so the D66 discipline-2 test can hold each pass on its own; the
+ * bundle itself is the assertion that matters.
+ */
+export function projectRelative(text: string, root: string): string {
   let output = text;
   for (const form of new Set([root, root.split(sep).join("/")])) {
-    output = output.split(`${form}${sep}`).join("").split(`${form}/`).join("").split(form).join(".");
+    // Anchored on a separator: the old unanchored replacement also matched the
+    // prefix of a sibling directory, turning `/home/u/app-backup` into
+    // `.-backup`. The bare root still becomes `.`, but only where the next
+    // character cannot continue a directory name.
+    output = output.split(`${form}${sep}`).join("").split(`${form}/`).join("");
+    output = output.replaceAll(new RegExp(`${escapedPattern(form)}(?![\\w.@+-])`, "gu"), ".");
   }
-  return output;
+  output = output.replaceAll(ABSOLUTE_PATH, (path) => `<external>/${path.split(/[\\/]/u).pop()!}`);
+  const home = homedir();
+  return home ? output.split(home).join("~") : output;
+}
+
+function escapedPattern(text: string): string {
+  return text.replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
 function synthesizedManifest(root: string, entryPath: string): string {
@@ -199,7 +235,14 @@ function synthesizedManifest(root: string, entryPath: string): string {
 function reproductionPackage(config: VelarProjectConfig): string {
   const devDependencies: Record<string, string> = { "@velarscript/cli": VELAR_VERSION };
   for (const name of config.extensions) {
-    devDependencies[name] = config.extensionGraph.find((package_) => package_.name === name)?.version ?? VELAR_VERSION;
+    // A bundle that names the wrong generation reproduces a different defect.
+    // The CLI's own version is not a stand-in for an extension whose version
+    // this run could not resolve, so the reproduction refuses to guess.
+    const version = config.extensionGraph.find((package_) => package_.name === name)?.version;
+    if (version === undefined) {
+      throw new Error(`cannot write a reproduction: the installed version of extension '${name}' is unknown`);
+    }
+    devDependencies[name] = version;
   }
   return `${JSON.stringify({
     name: "velar-reproduction",

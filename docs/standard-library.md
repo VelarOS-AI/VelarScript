@@ -269,6 +269,12 @@ fixed buffer and seals the builder. Safe JavaScript declarations map
 `Float32Buffer`. A JavaScript `Uint8Array` parameter accepts either `Bytes` or
 `UInt8Buffer`; no `Buffer`-specific API enters source.
 
+A standard type carries its members wherever it is handed to you. `velar/fs`'s
+`readBytes` returns a `Bytes`; you can read `.size` and index it without
+importing `velar/binary`. Import the declaring module only when you need to
+write the type's name — in an annotation, a parameter type, or a `Type`
+validator.
+
 ```velar fragment
 import {ByteOrder, Bytes, uint16Buffer, uint16FromBytes} from "velar/binary"
 
@@ -283,7 +289,13 @@ assert restored[0] == 7
 seed. Its `number()`, `int(start, end?)`, `bool(probability=0.5)`, `pick(values)`,
 `shuffle(values)`, and `fork(label)` operations have identical Node/browser
 results. A fork derives an independent stream from the original seed and label;
-it does not consume or couple itself to the parent's current position.
+it does not consume or couple itself to the parent's current position. The seed
+is absorbed into the generator's full internal state, so distinct string or
+safe-integer seeds — and distinct `fork` labels — give distinct streams rather
+than colliding onto a smaller space. `int(start, end?)` accepts the same
+increasing safe-integer range as `Math.randomInt`. `number()` returns a value in
+`[0, 1)` carrying 32 bits of entropy; code that needs a full-mantissa double
+should compose two draws itself.
 
 `velar/task` owns structured asynchronous work. `task(work, parent?)` passes a
 `Cancellation` into `work`, propagates a parent cancellation, and returns an
@@ -390,8 +402,24 @@ an empty List. Stateless pattern operations are `Text.matches`, `Text.findMatch`
 `Text.findMatches`, `Text.replaceMatches`, and `Text.splitPattern`.
 
 `Text.title` treats separators as word boundaries. `Text.truncate` reserves room
-for its suffix. `Text.slug` lowercases Unicode text, removes punctuation, and
-joins word runs with `-`; it does not transliterate non-Latin text.
+for its suffix. `Text.slug` lowercases Unicode text, folds Latin accents, removes
+punctuation, and joins word runs with `-`. The fold is a compatibility fold: the
+text is decomposed as `"NFKD"` before the marks are dropped, so every character
+that carries a compatibility decomposition is replaced by that decomposition —
+`½` becomes `1-2`, the `ﬁ` ligature becomes `fi`, an Arabic presentation form
+becomes the plain letters it stands for, and Thai `ำ` becomes the two signs it
+decomposes to. `Text.slug` does not transliterate: a script that has no Latin
+spelling keeps its own letters, and combining marks that carry meaning in their
+own script — Devanagari and Bengali dependent vowels, Thai vowel and tone marks,
+Hebrew niqqud, Arabic harakat — are kept, so distinct titles do not collapse onto
+one slug. A run of marks with no letter, digit, or mark in front of it is dropped
+rather than kept, because it has nothing to sit on: a variation selector left
+behind by a removed emoji is invisible in a URL, and two slugs that read alike
+would otherwise name different pages. The result is recomposed to NFC, so a slug
+is not a decomposed near-miss of the text it renders as — a Hangul slug is found
+again as a route key, a Map key, and a Set key, and its `size` is the number of
+characters it renders as. Recomposition does not undo the compatibility fold, so
+text a compatibility mapping separates from its own slug does not equal it.
 `Text.normalize(text, form="NFC")` applies one of the four Unicode
 normalization forms — `"NFC"`, `"NFD"`, `"NFKC"`, or `"NFKD"`; any other form
 throws `RangeError`. Text equality is code-point-sequence identity, so
@@ -417,13 +445,24 @@ it can be passed directly to `char` or `slice` without leaking JavaScript UTF-16
 offsets. `Text.findMatches` returns all such records and
 normalizes an unmatched capture to `null`. `Text.replaceMatches` replaces every
 match with one literal string, and `Text.splitPattern` omits capture groups from
-the result. Invalid patterns throw `TypeError` at the VelarScript boundary.
+the result. Invalid patterns throw `TypeError` at the VelarScript boundary,
+carrying the engine's reason for the rejection. Patterns compile in Unicode
+mode, so an identity escape that is tolerated elsewhere in JavaScript — `\@`,
+`\-` outside a character class — is an error here and says so.
 
 Pattern source is limited to 4,096 code units, pattern input/output and returned
 match text to 16 MiB, and list-producing pattern operations to 1,000,000 results.
 Matches are copied from checked data fields, empty Unicode matches always make
 code-point progress, and replacement size is checked before the final string is
-allocated. Patterns
+allocated. Those are size bounds; matching time carries its own. Every operation
+that runs a caller-supplied pattern is given 250 milliseconds, checked after
+each match, and exceeds it with a `RangeError` rather than running for as long
+as a backtracking pattern likes. The engine is not interruptible, so one
+catastrophic match is caught when it returns rather than pre-empted; what the
+budget denies is the amplification a per-match loop would give that match.
+`Text.slug`, `Text.title`, and `Text.normalizeWhitespace` are deliberately not
+charged against it — they run this module's own linear patterns, so a large but
+legal text must not succeed or fail by how busy the machine is. Patterns
 are application code, not a sandbox for executing arbitrary user-supplied
 regular expressions; applications that accept search text should use the
 literal `.has()`/`.startsWith()`/`.endsWith()` operations unless they deliberately
@@ -648,7 +687,7 @@ without exposing mutable `Date` objects.
 | --- | --- |
 | `now` | Current Unix epoch milliseconds. |
 | `monotonic` | Monotonic milliseconds for elapsed-time measurement. |
-| `parse` | Parse deterministic ISO `YYYY-MM-DD` or a `T` datetime with `Z`/numeric offset to epoch milliseconds; return `null` for invalid text. |
+| `parse` | Parse deterministic ISO `YYYY-MM-DD` or a `T` datetime with `Z`/numeric offset to epoch milliseconds, accepting RFC 3339's lowercase `t`/`z` and truncating fractional seconds to milliseconds; return `null` for invalid text. |
 | `iso` | Format epoch milliseconds as an ISO 8601 UTC string; defaults to `now()`. |
 | `format` | Locale-format a time with optional locale and time-zone strings. |
 | `date` | Construct local epoch milliseconds from strict year, month, day, and optional time fields. |
@@ -658,9 +697,29 @@ without exposing mutable `Date` objects.
 `date` and `utc` reject out-of-range or nonexistent calendar values instead of
 using JavaScript `Date` rollover (`2024-02-31` never becomes March). Years are
 0 through 9999 and do not receive JavaScript's special 1900 offset for 0–99.
+One case is deliberately not a rejection: `date(year, month, day)` with no time
+fields names a calendar day, not a wall clock, so in a zone whose
+daylight-saving transition skips local midnight it resolves forward to the first
+instant that exists on that day rather than declaring a real day
+unrepresentable. `date` with explicit time fields still rejects a wall clock
+that does not exist. Where a local wall clock occurs twice — the hour a
+daylight-saving fall-back repeats — `date` returns the earlier, pre-transition
+instant; the later occurrence is not reachable through this API, so a program
+that must distinguish them should hold the instant it was given rather than
+rebuilding it from parts.
+
 `parse` accepts date-only ISO as UTC midnight; a datetime must include `Z` or a
 numeric offset, which keeps results identical across JavaScript engines and
-host time zones. Non-ISO/native locale text is deliberately unsupported.
+host time zones. The offset is written `+HH:MM`, `+HHMM`, or `+HH`, and RFC
+3339's lowercase `t` and `z` are accepted beside the uppercase spellings.
+Fractional seconds are read as a decimal fraction and truncated to
+milliseconds; the number of digits is not bounded separately, because the
+64-character input limit below already bounds it. `:60` is accepted where RFC
+3339 writes an inserted leap second — at the end of a UTC day, whatever local
+hour the offset makes of it — and names the instant that follows, which is what
+a reader of that timestamp means; `:60` anywhere else is a typo rather than a
+timestamp and returns `null`. Non-ISO/native locale text is deliberately
+unsupported.
 Locale and named-time-zone arguments must be actual strings.
 Returned timestamps are checked as finite values inside JavaScript's supported
 date range. Host clock and internationalization results are validated before
@@ -707,7 +766,11 @@ conversion hooks. The crypto object, data method, matching operation, and error
 identity are captured when `velar/id` initializes; replacing globals or
 prototypes afterward cannot redirect generation or validation. `isUuid(value)`
 checks canonical UUID text without changing it and rejects non-36-character
-input before pattern matching.
+input before pattern matching. It answers the textual question only — 36
+characters, hyphenated 8-4-4-4-12, hexadecimal in either case — so the nil and
+max UUIDs of RFC 9562 and GUIDs from variants other than RFC 4122 are accepted
+as the canonical text they are. It is not a claim about which version generated
+the value.
 
 ```velar
 import {isUuid, uuid} from "velar/id"
@@ -749,7 +812,16 @@ component BuildStatus:
   `Map<string, unknown>` values; `error` optionally receives an `Error` and
   additional fields.
 - `setLevel` accepts `debug`, `info`, `warn`, `error`, or `silent`; `level`
-  returns the current threshold.
+  returns the current threshold. The threshold is read on every call, so
+  `setLevel` reaches loggers that already exist.
+- A call below the active level returns before it builds anything: the logger's
+  context is not merged, the message and fields are not validated, and no bound
+  is checked. Turning a level off is therefore free and side-effect-free, and a
+  suppressed call cannot raise. The message and field bounds below apply to
+  records that are actually emitted, and the runtime check that `error(...)`
+  received an actual `Error` sits behind the same gate — the compiler still
+  requires one at that position, so only a value that arrived through `any` can
+  differ.
 - `useSink(sink)` redirects records while at least one custom sink exists and
   returns an explicit cleanup function. The record it hands a sink is
   `LogRecord`, a published type name: `timestamp`, `level`, `scope`, `message`,
@@ -1326,7 +1398,7 @@ failure path finalizes it before propagating a result; an aborted request cannot
 leave a process alive through a forgotten default timer.
 
 HTTP failures have three stable categories on every target. A non-2xx response
-throws `HttpError`; explicit cancellation or deadline expiry throws
+throws `HttpResponseError`; explicit cancellation or deadline expiry throws
 `HttpAbortError`; DNS, connection, socket, or native body-stream failure throws
 `HttpTransportError`. Its `phase` is the typed
 `HttpTransportPhase.request` or `HttpTransportPhase.response` value. A response
@@ -1373,10 +1445,10 @@ only native `Response`, `Headers`, byte-stream, and byte-chunk values; Desktop
 validates the worker's exact response and chunk records again in the renderer.
 Every target requires an integer status from 100 through 599 and requires `ok`
 to equal the 200-through-299 classification. Status zero and contradictory
-metadata are rejected at the host boundary before `HttpError` construction or
-body processing. Headers are limited to 100 fields and 64 KiB, status text to
-64 KiB, and the response URL to 2 MiB. Every target uses that final response
-URL for a non-2xx `HttpError`, so diagnostics identify
+metadata are rejected at the host boundary before `HttpResponseError`
+construction or body processing. Headers are limited to 100 fields and 64 KiB,
+status text to 64 KiB, and the response URL to 2 MiB. Every target uses that
+final response URL for a non-2xx `HttpResponseError`, so diagnostics identify
 the endpoint that actually failed after redirects. Only a synthetic host
 response with an empty URL falls back to the initial request URL. In addition
 to `maxBytes`, all targets
@@ -1502,8 +1574,9 @@ test "a profile keeps its declared name and tags":
   assertion that disagreed with the language's own equality would be the worst
   kind of trap, so neither one restates a comparison.
   - `toBe` is value equality: the same SameValueZero comparison `a == b`
-    lowers to. `expect(nan).toBe(nan)` passes for exactly the reason
-    `nan == nan` is `true`, and `0` and `-0` compare equal.
+    lowers to. With `const missing = 0 / 0`, `expect(missing).toBe(missing)`
+    passes for exactly the reason `missing == missing` is `true`, and `0` and
+    `-0` compare equal.
   - `toEqual` is content equality: the prelude `equals(a, b)`, the same
     implementation and not a matching one. It therefore inherits everything
     `equals` does, including structural Set members and Map keys, `NaN` equal
@@ -1514,7 +1587,9 @@ test "a profile keeps its declared name and tags":
   `toHaveLength` accepts text or a dense List.
 - `toMatch` accepts a Unicode string pattern of at most 4,096 code units. It
   uses the native regular-expression intrinsic captured by the module and does
-  not trust a replaced global `RegExp` constructor.
+  not trust a replaced global `RegExp` constructor. An invalid `toMatch` pattern
+  throws `TypeError` carrying the engine's reason, the same way `Text.matches`
+  does; `toMatch` compiles in Unicode mode too.
 - `toThrow` requires a synchronous function. `toReject` requires an actual
   Promise or a function returning one; arbitrary thenables are rejected without
   reading a `then` accessor.

@@ -75,6 +75,50 @@ package may narrow that list and require a host capability. Missing, empty,
 duplicated, unknown, or incompatible declarations fail package resolution
 instead of leaking a native dependency into another target.
 
+`velar.requires.language` is optional and sits beside `capabilities`. It names
+the language generation the package's source was written against, as one or two
+whitespace-separated clauses over `<major>.<minor>`:
+
+```json
+{
+  "velar": {
+    "entry": "src/index.vel",
+    "targets": ["core"],
+    "requires": { "capabilities": [], "language": ">=0.11 <0.14" }
+  }
+}
+```
+
+A clause is `>=`, `>`, `<=`, or `<` followed by a generation, at most one lower
+bound and one upper bound. A bare generation such as `"0.12"` is that generation
+exactly and never combines with a second clause. A patch component
+(`"0.12.1"`), a caret range, a wildcard, an empty declaration, a repeated bound,
+and a range whose upper bound is below its lower bound — or equal to it without
+both bounds being inclusive — are rejected by name. A well-formed range no
+generation can satisfy, such as `">0.12 <0.13"`, is not: it is checked like any
+other range and reported as an ordinary generation mismatch quoting the range
+back. The generation this toolchain implements is its own version without the
+patch component, because a patch release never moves the language.
+
+The declaration is checked when the package is resolved: before any of the
+package's `.vel` reaches the compiler, and ahead of the `targets` and
+`capabilities` checks, which a manifest written for another generation is in no
+position to be trusted about. A package the current generation does not satisfy
+fails resolution with one message rather than a list of ordinary syntax errors
+that read as if the package were simply broken:
+
+```text
+package 'example-package' requires VelarScript language >=0.9 <0.11; this
+toolchain implements 0.12; install a release of 'example-package' published for
+0.12, or run the toolchain the package asks for — its sources are not wrong,
+they belong to another generation of the language
+```
+
+A package that declares no language keeps today's behaviour exactly: its source
+compiles, and a generation it cannot survive is still reported as its own
+diagnostics. `velar.requires` itself remains mandatory: the language range is
+an optional field inside that section, not a relaxation of it.
+
 An extension package instead declares:
 
 ```json
@@ -93,6 +137,20 @@ to `velar.json.extensions`. `velar remove` removes the extension and its owned
 manifest field. The compiler and optional framework-host exports remain the
 runtime authority; metadata only controls project activation and never bypasses
 protocol validation.
+
+An extension declares its modules under its own package name. That name is a
+convention the project load does not verify; what it verifies is the two claims
+that would take a module away from someone else. The `velar/*` prefix is a
+closed vocabulary owned by the language, and only the official target extensions
+this toolchain ships — `@velarscript/web`, `@velarscript/node`, and
+`@velarscript/desktop` — may name it. That exemption is what a target capability
+is: `@velarscript/node` replaces `velar/worker` with the Node implementation of
+the same contract. Any other extension that declares a `velar/*` module
+interface or module source fails the project load with a message naming the
+extension and the module it tried to claim, and a specifier a different
+extension already owns fails the load naming both owners. The same extension
+publishing the same module under its own prefix loads normally; the gate is
+about the namespace, not about the extension.
 
 ### Package resources
 

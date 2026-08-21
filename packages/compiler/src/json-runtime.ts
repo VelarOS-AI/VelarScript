@@ -48,7 +48,16 @@ const __velarNativeJsonStringify = __velarJsonHost && __velarJsonGetOwnPropertyD
 function __velarJsonRaw(value) {
   const descriptor = __velarJsonGetOwnPropertyDescriptor(globalThis, __velarJsonApply(__velarJsonSymbolFor, undefined, [${JSON.stringify(VELAR_RUNTIME_REGISTRY_KEY)}], "Symbol.for"));
   const runtime = descriptor && "value" in descriptor ? descriptor.value : null;
-  if (!runtime || runtime.version !== ${JSON.stringify(VELAR_RUNTIME_SCHEMA_VERSION)} || typeof runtime.toRaw !== "function") return value;
+  // Absent is the blessed case: a realm with no reactive runtime keeps ordinary
+  // Core behavior. A registry that is present but from another generation is
+  // not that case — reading past it would drop reactivity with no trace — so it
+  // fails closed, and it is tested before the callable duck-check so a schema
+  // bump that also renamed 'toRaw' still reports the version.
+  if (!runtime || (typeof runtime !== "object" && typeof runtime !== "function")) return value;
+  if (runtime.version !== ${JSON.stringify(VELAR_RUNTIME_SCHEMA_VERSION)}) {
+    throw new __velarJsonNativeTypeError("VelarScript reactive runtime schema " + (typeof runtime.version === "string" ? runtime.version : "(unknown)") + " does not match this module's schema ${VELAR_RUNTIME_SCHEMA_VERSION}; one build mixed two generations of @velarscript/* — run 'npm ls @velarscript/compiler' and pin one version");
+  }
+  if (typeof runtime.toRaw !== "function") return value;
   if (typeof runtime.trackDeep === "function") runtime.trackDeep(value);
   return runtime.toRaw(value);
 }
@@ -166,14 +175,29 @@ function __velarJsonIndent(pretty) {
   }
   return pretty;
 }
-function __velarJsonParse(text, name = "JSON text") {
+function __velarJsonDecode(text, name, copy) {
   if (typeof text !== "string") throw new __velarJsonNativeTypeError(name + " must be a string");
   if (text.length > __velarMaxJsonCodeUnits) throw new __velarJsonNativeRangeError(name + " cannot exceed 16 MiB");
   if (typeof __velarNativeJsonParse !== "function" || typeof __velarNativeReflectApply !== "function") {
     throw new __velarJsonNativeTypeError("The host JSON parser is unavailable");
   }
   const value = __velarNativeReflectApply(__velarNativeJsonParse, __velarJsonHost, [text]);
-  return __velarJsonSnapshot(value).value;
+  return __velarInspectJson(value, "$", __velarJsonState(), copy);
+}
+function __velarJsonParse(text, name = "JSON text") {
+  return __velarJsonDecode(text, name, true);
+}
+// Decoding text straight into a runtime Type rebuilds the value twice and keeps
+// only the second rebuild: D90 rule R5's copy builds its result from the Type's
+// declared fields, which discards everything the owned-data rebuild made. This
+// entry runs the same validating walk — the walk is what enforces the depth,
+// node, and encoded size budgets — and skips only the rebuild the Type is about
+// to discard. The host parser's tree is brand new with no second holder, so
+// nothing the Type reads is aliased, and taking the Type here rather than
+// returning the tree is what keeps a value that skipped the rebuild from
+// reaching anyone else.
+function __velarJsonParseTyped(Type, text, name = "JSON text") {
+  return Type.parse(__velarJsonDecode(text, name, false));
 }
 function __velarJsonStringify(value, pretty = false) {
   const snapshot = __velarJsonSnapshot(value);

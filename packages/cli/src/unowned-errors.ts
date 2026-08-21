@@ -25,6 +25,13 @@ export interface UnownedErrorChannel {
    */
   drain(): Promise<readonly string[]>;
   /**
+   * Adds a report the runner observed rather than the program printed — the
+   * failure of a test body that kept running after its bound expired, which
+   * the bound's own `Promise.race` handler would otherwise swallow. It is not
+   * echoed to the host channel, because nothing printed it.
+   */
+  report(text: string): void;
+  /**
    * Waits until the process has no work left to do, so a failure that lands
    * late is still attributed to the work that started it. Resolves true on
    * quiescence and false when the owned upper bound expires — an expiry is
@@ -74,6 +81,9 @@ export function captureUnownedErrors(options: UnownedErrorChannelOptions = {}): 
   if (exitNet !== null) process.on("exit", exitNet);
 
   return {
+    report(text: string): void {
+      reports.push(text);
+    },
     async drain(): Promise<readonly string[]> {
       await new Promise((resolve) => setImmediate(resolve));
       await new Promise((resolve) => setImmediate(resolve));
@@ -109,10 +119,19 @@ export function captureUnownedErrors(options: UnownedErrorChannelOptions = {}): 
 }
 
 /**
+ * The one wording for work that outlived whatever started it. The per-test
+ * bound (in the test worker) and the run-level bound (in the runner) report the
+ * same failure about different subjects, so they share the sentence.
+ */
+export function unsettledWorkFailure(subject: string, settleTimeoutMs: number): string {
+  return `work started ${subject} was still running ${settleTimeoutMs} milliseconds later; a test owns the work it starts, and a failure from work that never finishes can never be reported`;
+}
+
+/**
  * A compiled test module reports its failures with JavaScript stacks. Without
  * source-map support those stacks name the runner's own sandbox
- * (`.velar/test-XXXX/src/a.test.js?run=...`), which is not a place the author
- * can edit; with it they name `src/a.test.vel:6:15`.
+ * (`.velar/test-XXXX/src/a.test.js`), which is not a place the author can
+ * edit; with it they name `src/a.test.vel:6:15`.
  */
 export function mapCompiledStacksToSources(): void {
   process.setSourceMapsEnabled(true);

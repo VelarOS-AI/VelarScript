@@ -247,7 +247,7 @@ mount(<div />, "#app")
   assert.ok(styles.length > 0, "the build must emit a stylesheet");
   const css = (await Promise.all(styles.map((name) => readFile(join(assets, name), "utf8")))).join("\n");
   // The tokens resolve to the same CSS the builders produce in a Look.
-  assert.match(css, /@keyframes velar-kf-[0-9a-f]{8}\{from\{color:rgb\(120 150 255\);opacity:0\.35;box-shadow:inset 0px 1px 2px 0px rgb\(120 150 255\)\}to\{translate:12px;rotate:1turn;opacity:1\}\}/u, css);
+  assert.match(css, /@keyframes velar-kf-[0-9a-f]{32}\{from\{color:rgb\(120 150 255\);opacity:0\.35;box-shadow:inset 0px 1px 2px 0px rgb\(120 150 255\)\}to\{translate:12px;rotate:1turn;opacity:1\}\}/u, css);
 });
 
 test("[D60-151] a stop still rejects what cannot lower to static CSS", { timeout: 300_000 }, async () => {

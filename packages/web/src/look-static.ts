@@ -1,6 +1,8 @@
 import type { Expression, Program } from "@velarscript/compiler/extension";
-import { LOOK_BUILDER_SIGNATURES, LOOK_UNIT_TYPES } from "./look.ts";
+import { LOOK_BORDER_STYLE_NAMES, LOOK_BUILDER_NUMERIC_RANGES, LOOK_BUILDER_SIGNATURES, LOOK_UNIT_TYPES } from "./look.ts";
 import { isWebUnit } from "./ast.ts";
+import { cssString } from "./css-string.ts";
+import { isCssDeclarationValue } from "./css-tokens.ts";
 
 export type LookStaticValue =
   | { readonly kind: "number"; readonly value: number }
@@ -100,6 +102,77 @@ export function lookStaticCssValue(
   expression: Expression,
   values: ReadonlyMap<string, LookStaticValue> = new Map(),
 ): string | null {
+  const css = staticCssValue(expression, values);
+  // LOK-U9: the value vocabulary lets `text`, `filter`, and `transform` hold
+  // arbitrary strings because a Look property reaches the DOM through
+  // setProperty and cannot escape. `keyframes:` reuses that vocabulary on a
+  // path that concatenates into stylesheet text, where a `}` closes the
+  // generated rule and everything after it becomes author-written CSS in the
+  // compiler-owned segment. Lowering answers only with a value that is one
+  // balanced declaration; the null becomes the diagnostic the analyzer
+  // already reports for a value that does not resolve to static CSS.
+  return css === null || !isCssDeclarationValue(css) ? null : css;
+}
+
+/**
+ * The percentage a builder slot lowers to. This reads the folded number rather
+ * than the lowered CSS text because the text is already `calc(1 - 0.4)` by the
+ * time a builder rule sees it, `%` is not a suffix `calc()` wears, and
+ * `Number()` of that text is NaN — which used to reach the stylesheet as a
+ * literal `NaN%` and drop the colour (LOK-U7). `scale` is 100 for a 0..1 weight
+ * and 1 where the number already is the percentage, as hsl's saturation and
+ * lightness are. Ordinary float noise is trimmed so `1 - 0.4` reads `60%`.
+ */
+function staticPercentage(expression: Expression, values: ReadonlyMap<string, LookStaticValue>, scale: 1 | 100): string | null {
+  const folded = evaluateLookStaticExpression(expression, values);
+  if (folded === null || folded.kind !== "number") return null;
+  const percent = folded.value * scale;
+  return Number.isFinite(percent) ? `${Number(percent.toPrecision(12))}%` : null;
+}
+
+/**
+ * The count a slot lowers to where CSS reads a literal `<integer>` rather than
+ * a value: `repeat()` takes a track count, so `repeat(calc(1 + 1), 10px)` is
+ * dead CSS the browser drops along with the whole declaration. Reads the folded
+ * number for the same reason a percentage does (LOK-U7).
+ */
+function staticCount(expression: Expression, values: ReadonlyMap<string, LookStaticValue>): string | null {
+  const folded = evaluateLookStaticExpression(expression, values);
+  return folded === null || folded.kind !== "number" || !Number.isSafeInteger(folded.value) ? null : String(folded.value);
+}
+
+/**
+ * The builders check their numeric domains at run time, and the analyzer
+ * checks literal arguments while the module compiles. Neither reaches a
+ * `keyframes:` stop: the call is lowered away at compile time, so no guard
+ * survives to run, and `rgb(hot, 0, 0)` with a computed `hot` was never a
+ * literal. Every argument on this path is statically known by construction,
+ * so the same range table answers here over the folded value, wherever the
+ * call appears (LOK-U10).
+ */
+function builderRangesHold(
+  name: string,
+  slots: readonly (Expression | undefined)[],
+  values: ReadonlyMap<string, LookStaticValue>,
+): boolean {
+  const ranges = LOOK_BUILDER_NUMERIC_RANGES.get(name);
+  if (!ranges) return true;
+  for (const [index, range] of ranges.entries()) {
+    const slot = slots[index];
+    if (!range || slot === undefined) continue;
+    const folded = evaluateLookStaticExpression(slot, values);
+    // A non-number folds to a unit or CSS text, which is a type error the
+    // analyzer reports in its own terms; only a number has a domain here.
+    if (folded?.kind !== "number") continue;
+    if (folded.value < range[1] || folded.value > range[2]) return false;
+  }
+  return true;
+}
+
+function staticCssValue(
+  expression: Expression,
+  values: ReadonlyMap<string, LookStaticValue>,
+): string | null {
   if (isWebUnit(expression)) return expression.raw;
   if (expression.kind === "LiteralExpression") {
     if (typeof expression.value === "string") return expression.value;
@@ -112,13 +185,13 @@ export function lookStaticCssValue(
     return value === null ? null : lookStaticCss(value);
   }
   if (expression.kind === "UnaryExpression" && (expression.operator === "+" || expression.operator === "-")) {
-    const value = lookStaticCssValue(expression.operand, values);
+    const value = staticCssValue(expression.operand, values);
     if (value === null) return null;
     return expression.operator === "+" ? value : `calc(-1 * (${value}))`;
   }
   if (expression.kind === "BinaryExpression" && ["+", "-", "*", "/"].includes(expression.operator)) {
-    const left = lookStaticCssValue(expression.left, values);
-    const right = lookStaticCssValue(expression.right, values);
+    const left = staticCssValue(expression.left, values);
+    const right = staticCssValue(expression.right, values);
     return left === null || right === null ? null : `calc(${left} ${expression.operator} ${right})`;
   }
   if (expression.kind !== "CallExpression" || expression.callee.kind !== "IdentifierExpression") return null;
@@ -127,31 +200,64 @@ export function lookStaticCssValue(
   if (!signature) return null;
   const slots = builderArguments(expression, signature);
   if (slots === null) return null;
+  if (!builderRangesHold(name, slots, values)) return null;
   // shadow's sixth parameter is a bool flag, not a CSS value, so it is read
   // below rather than lowered.
   const lowered = slots.map((slot, index) => slot === undefined || (name === "shadow" && index === 5)
     ? undefined
-    : lookStaticCssValue(slot, values));
+    : staticCssValue(slot, values));
   if (lowered.some((value) => value === null)) return null;
   const args = lowered as readonly (string | undefined)[];
   const positional = args as readonly string[];
   if (name === "color" && args.length === 1) return positional[0]!;
   if (name === "rgb" && args.length === 3) return `rgb(${positional.join(" ")})`;
   if (name === "rgba" && args.length === 4) return `rgb(${positional.slice(0, 3).join(" ")} / ${positional[3]})`;
-  if (name === "hsl" && args.length === 3) return `hsl(${positional[0]} ${positional[1]}% ${positional[2]}%)`;
-  if (name === "alpha" && args.length === 2) return `color-mix(in srgb, ${positional[0]} ${Number(positional[1]) * 100}%, transparent)`;
-  if (name === "lighten" && args.length === 2) return `color-mix(in srgb, ${positional[0]}, white ${Number(positional[1]) * 100}%)`;
-  if (name === "darken" && args.length === 2) return `color-mix(in srgb, ${positional[0]}, black ${Number(positional[1]) * 100}%)`;
-  if (name === "border" && (args.length === 2 || args.length === 3)) return `${positional[0]} ${args[2] ?? "solid"} ${positional[1]}`;
+  // The hue is a bare `<number>`, where `calc()` is legal, but the saturation
+  // and the lightness are one `<percentage>` token each: `calc(40 + 10)%` is
+  // not a percentage, so those two fold the same way a builder weight does.
+  if (name === "hsl" && args.length === 3) {
+    const saturation = staticPercentage(slots[1]!, values, 1);
+    const lightness = staticPercentage(slots[2]!, values, 1);
+    if (saturation === null || lightness === null) return null;
+    return `hsl(${positional[0]} ${saturation} ${lightness})`;
+  }
+  if (name === "alpha" || name === "lighten" || name === "darken") {
+    if (args.length !== 2) return null;
+    const weight = staticPercentage(slots[1]!, values, 100);
+    if (weight === null) return null;
+    if (name === "alpha") return `color-mix(in srgb, ${positional[0]} ${weight}, transparent)`;
+    return `color-mix(in srgb, ${positional[0]}, ${name === "lighten" ? "white" : "black"} ${weight})`;
+  }
+  // The width and the colour are values `calc()` may appear in; the style is a
+  // `<line-style>` keyword, so the same name table the runtime builder checks
+  // answers for it here (LOK-U10) rather than letting `"da" + "shed"` lower to
+  // a `calc()` the browser drops.
+  if (name === "border" && (args.length === 2 || args.length === 3)) {
+    const style = args[2] ?? "solid";
+    return LOOK_BORDER_STYLE_NAMES.has(style) ? `${positional[0]} ${style} ${positional[1]}` : null;
+  }
   if (name === "shadow" && args.length >= 4 && args.length <= 6) {
     const inset = slots[5];
+    // The flag is read from the literal rather than lowered, so a slot written
+    // any other way has no answer here: dropping `inset` silently emits a valid
+    // declaration for a shadow the author did not ask for.
+    if (inset !== undefined && !(inset.kind === "LiteralExpression" && typeof inset.value === "boolean")) return null;
     const prefix = inset?.kind === "LiteralExpression" && inset.value === true ? "inset " : "";
     return `${prefix}${positional[0]} ${positional[1]} ${positional[2]} ${args[4] ?? "0px"} ${positional[3]}`;
   }
   if (name === "linearGradient" && args.length === 3) return `linear-gradient(${positional.join(", ")})`;
-  if (name === "asset" && args.length === 1) return `url(${JSON.stringify(positional[0])})`;
+  // The path is quoted into the URL rather than dropped, so a slot that lowered
+  // to `calc(a + .png)` addresses that text instead of failing; only a value
+  // that folds to a string is a path.
+  if (name === "asset" && args.length === 1) {
+    const path = evaluateLookStaticExpression(slots[0]!, values);
+    return path === null || path.kind !== "css" ? null : `url(${cssString(path.value)})`;
+  }
   if (name === "minmax" && args.length === 2) return `minmax(${positional.join(", ")})`;
-  if (name === "repeat" && args.length === 2) return `repeat(${positional.join(", ")})`;
+  if (name === "repeat" && args.length === 2) {
+    const count = staticCount(slots[0]!, values);
+    return count === null ? null : `repeat(${count}, ${positional[1]})`;
+  }
   if (name === "tracks" && args.length > 0) return positional.join(" ");
   if (name === "spacing" && args.length > 0 && args.length <= 4) return positional.join(" ");
   if ((name === "min" || name === "max") && args.length === 2) return `${name}(${positional.join(", ")})`;

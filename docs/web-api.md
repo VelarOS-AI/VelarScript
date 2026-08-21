@@ -174,6 +174,18 @@ The directives a native element accepts are `on:event`, `bind:value`,
 `bind:checked`, `bind:group`, `class`, `class:name`, `look`, `look:property`,
 `style:property`, `ref`, `key`, and `unsafe:html`.
 
+A native element also reserves every attribute name beginning with `on`, other
+than the `on:` directive itself. The handler spellings among them — `onclick`,
+`onerror`, `onload`, and the rest — are content attributes the browser compiles
+as script, so any string routed there is executable code in the application's
+origin, which VelarScript reserves for `unsafe:html`. An HTML attribute name is
+matched case-insensitively, so `onclick`, `onClick`, and `ONCLICK` are one
+attribute and all three are refused. The prefix is closed by name rather than
+by a roster of event names, so the next handler attribute the platform adds is
+closed in advance; the same rule also refuses an ordinary word such as `onward`
+that happens to start with the two letters. Events are written with the `on:`
+directive: `on:click={handler}`.
+
 `class:name={condition}` toggles one class name from a `bool`. It composes with
 `class={...}`: the bound list and the toggles are independent contributions to
 the element's class attribute, so a static class, a reactive class list, and
@@ -942,6 +954,15 @@ const Reports = lazy(() => import("./pages/reports.vel"), "Reports", PageLoading
   matches only the application root. Matching remains application-relative
   under `web.base`, normalizes trailing slashes, follows history changes, and
   releases its listener with the component.
+- A `Link` or `NavLink` target is an application path or an `http`/`https` URL.
+  Any other scheme is refused with a `TypeError` naming the scheme, because a
+  `Link` writes its target to a real anchor and lets native activation run it:
+  `javascript:` and `vbscript:` are code rather than locations, and a value that
+  arrived as data must not become code because it reached an anchor. The scheme
+  is read the way the user agent reads it, so leading whitespace and embedded
+  control characters hide nothing — `java\tscript:` is `javascript:` to the
+  browser and to this check alike. Write a plain `<a href={...}>` element for a
+  `mailto:` or `tel:` target; the JSX URL attributes take the wider allowlist.
 - `navigate(to, {replace, scroll})`, `redirect`, `back`, `forward`, and
   `reload` expose intentional history operations. `currentRoute()` returns a
   typed snapshot of the current application-relative route. Navigation options
@@ -951,9 +972,20 @@ const Reports = lazy(() => import("./pages/reports.vel"), "Reports", PageLoading
   and route listeners use the host ABI captured when `velar/web` initializes;
   later global replacement or instance shadowing cannot redirect navigation.
 - `Head` owns `title`, `description`, `canonical`, `robots`, `image`,
-  `themeColor`, and the document `language` tag for its component lifetime and
-  restores prior values on cleanup. The favicon is not among them: it is a
-  build-time document fact and belongs to `web.icon` in the project manifest.
+  `themeColor`, and the document `language` tag: it takes them when it is
+  inserted and gives them back when it is removed. Its props are live, not
+  snapshotted. Document metadata is rendered output, so it follows the ordinary
+  rule that rendered output re-reads the state it depends on:
+  `<Head title={f"Inbox ({unread})"} />` tracks `unread`, and the document
+  title changes with it. The props are validated where they always were — once
+  during construction, before any document write — and validated again on every
+  update. `Router`, `Link`, and `NavLink` are live in the same way and for the
+  same reason: one rule covers all four framework components, so a `Link` whose
+  `to` is state moves with it, a `NavLink` moves its `aria-current` with it, and
+  a routes table built from state re-renders the position it fills. A constant
+  routes table subscribes to nothing and recomputes nothing. The favicon is not among
+  the facts a `Head` owns: it is a build-time document fact and belongs to
+  `web.icon` in the project manifest.
 - `announce(message, priority="polite")` writes to a compiler-owned live
   region; priority is `polite` or `assertive`.
 - `domId(prefix="velar")` returns an application-local, monotonically unique DOM ID
@@ -963,9 +995,16 @@ const Reports = lazy(() => import("./pages/reports.vel"), "Reports", PageLoading
   numbers, `_`, or `-`, and are limited to 64 characters.
 
 Dynamic `Head`, `Router`, `Link`, and `NavLink` prop records accept only their
-documented enumerable data fields. Accessors, symbols, unknown fields, invalid
-booleans, and malformed route Lists fail before DOM or history effects; JSX
-child Lists use the same dense data-element boundary as Core.
+documented enumerable fields, with one field-level allowance: an enumerable
+getter is how a live prop is published, so a getter is accepted and read on
+every update. The rest of the rule holds unchanged — a plain record, no symbol
+fields, no field outside the declared set — and each value is checked and
+bounded on every read rather than once. Symbols, unknown fields, invalid
+booleans, and malformed route Lists still fail before DOM or history effects;
+JSX child Lists use the same dense data-element boundary as Core. The allowance
+is for props and nothing else: a route entry inside a `Router` routes List is an
+ordinary data record and still refuses accessors, as `navigate`'s options record
+does.
 
 ### Native SVG JSX
 
@@ -993,7 +1032,7 @@ fallback contract.
 ## `velar/http`
 
 ```velar fragment
-import {HttpAbortError, HttpError, HttpTransportError, HttpTransportPhase, http} from "velar/http"
+import {HttpAbortError, HttpResponseError, HttpTransportError, HttpTransportPhase, http} from "velar/http"
 
 const request = http.get("/api/profile", {timeout: 5000})
 const profile = await request.parse(Profile)
@@ -1048,7 +1087,7 @@ const result = await http.post("/api/images", {body: body}).parse(UploadResult)
   response status must be an integer from 100 through 599, and `ok` must be
   exactly equivalent to the 200-through-299 range. Opaque or synthetic
   status-zero responses are rejected as invalid host metadata rather than
-  entering `HttpError` or body processing.
+  entering `HttpResponseError` or body processing.
 - The HTTP module captures Fetch, Headers, native Response accessors, abort and
   timer operations, FormData, Blob, TextDecoder, and byte-array construction
   when it initializes. Later JavaScript replacement cannot redirect requests,
@@ -1087,9 +1126,16 @@ const result = await http.post("/api/images", {body: body}).parse(UploadResult)
   created, not later when a body reader starts Fetch. They receive an
   `application/json` content type unless one was supplied. The generated header
   is included in the same 100-field/64-KiB request-header budget. Non-2xx
-  responses throw `HttpError` with `status`, `url`, and an `unknown` body. Its
-  URL is the final response URL after redirects; only a synthetic response
-  without a URL falls back to the initial request URL.
+  responses throw `HttpResponseError` with `status`, `url`, and an `unknown`
+  body. Its URL is the final response URL after redirects; only a synthetic
+  response without a URL falls back to the initial request URL. The name is
+  `HttpResponseError` rather than `HttpError` because `velar/serve` owns an
+  `HttpError` of its own: this one is the non-2xx response a client caught,
+  that one is the failure a route throws outbound. A proxy route holds both, so
+  the two names have to differ: while both were spelled `HttpError`, importing
+  one and testing the other with `is` compiled clean and was always false.
+  Importing `HttpError` from `velar/http` now reports `HttpResponseError` by
+  name rather than an unknown export.
 - A `Bytes` request body is sent as binary without JSON/Base64 conversion. JSON
   request bodies use the same strict lossless data boundary as
   `velar/json`: records, dense Lists, finite primitives, and `null` are accepted;
@@ -1446,6 +1492,28 @@ graphs and the runtime resolves them without exposing bundle URLs. `worker` and
 calls, propagate per-call cancellation and timeout, transfer `Bytes`, and reject
 pending work if the native Worker crashes. A Worker entry uses `serveWorker`.
 
+A pool isolates a failed member. When a member's native Worker crashes, the
+runtime terminates that member, rejects its pending calls, and stops routing to
+it; later `call` requests go to the members still alive, and pool backpressure
+counts only their queued calls. A crashed member is not replaced — a pool's
+size is fixed for its lifetime — so a pool whose members have all crashed
+rejects further calls with `WorkerCrashedError` naming that condition rather
+than reporting the pool as closed.
+
+A `timeout` is a real bound. When it elapses the call rejects with
+`TaskTimeoutError` and gives its capacity slot back, whether or not the worker
+ever answers. The runtime also posts a cancellation to the worker, and
+`serveWorker` acknowledges it as the first thing it does on reaching the
+entry's message loop, so a worker whose message loop is still running is not
+mistaken for a wedged one: it is not terminated and keeps serving later calls.
+The acknowledgement attests to the worker, not to the call. `serveWorker` then
+cancels the handler's own `Cancellation`, so a handler that observes
+cancellation stops rather than running on. A worker that does not acknowledge
+within one second is no longer running that message loop; the runtime
+terminates it and rejects its remaining calls with `WorkerCrashedError`. The
+acknowledgement travels the same private channel as calls and replies and is
+not part of the source surface.
+
 `velar/websocket.connect` returns an owned pull connection whose `send` accepts
 `string | Bytes` and whose `next()` resolves to the next checked message or
 `null` after close. Message size, unread message count, and pending send bytes
@@ -1453,6 +1521,14 @@ are bounded. Binary messages set the native browser socket's array-buffer mode
 and enter source as `Bytes`; native Blob/ArrayBuffer/WebSocket objects remain
 hidden. Plain `ws:` is admitted by generated CSP only for loopback development;
 production origins use `wss:`.
+
+`send` resolves when that message's own bytes have left the socket, not when
+the whole send buffer empties, so an early small message completes before a
+later large one rather than waiting behind it. A connection keeps a single drain
+watcher, shared by every send waiting on it; the watcher backs off while the
+socket makes no progress and stops once nothing is waiting. Closing or failing the
+connection settles every send still waiting: one whose bytes had already left
+resolves, and the rest reject with `WebSocketClosedError`.
 
 The older `velar/realtime.socket` text API remains source-compatible. New
 binary and pull-based protocols use `velar/websocket`; existing text-only code
@@ -1581,9 +1657,18 @@ JSX, `document`, and `velar/storage` are unavailable there; a call that reaches
 for them reports on the worker's host error channel and fails the test through
 the same trust rule, which also covers a detached task the test leaves running.
 Chromium is the local default; Chromium, Firefox, WebKit, or all three may be
-selected explicitly. `namespace(selector)` requires one matched node and
-returns its platform namespace URI so SVG/HTML lowering can be asserted without
-arbitrary page evaluation. Browser binaries remain an explicit Playwright
+selected explicitly. Each engine runs against its own compiled copy of the test
+files, so a module of the project that a test file imports starts fresh for
+Chromium, Firefox, and WebKit alike: a difference between two engines in
+project state is a difference between the engines, not state one engine's pass
+left behind for the next. The `velar/*` standard modules are not copied per
+engine. They are written once, one directory above the per-engine trees, and
+all three engines resolve the same files, so standard-module state a test
+changes — `setLevel` on `velar/log`, for instance — is carried into the
+engines that run after it. A test that changes it restores it itself.
+`namespace(selector)` requires one matched node and returns its platform
+namespace URI so SVG/HTML lowering can be asserted without arbitrary page
+evaluation. Browser binaries remain an explicit Playwright
 install.
 
 The CLI executes the whole browser-test run in a dedicated supervised worker.

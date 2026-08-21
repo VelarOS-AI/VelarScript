@@ -36,6 +36,7 @@ import {
   LOOK_ANIMATION_FILLS,
   LOOK_BORDER_STYLE_NAMES,
   LOOK_BUILDER_NUMERIC_RANGES,
+  LOOK_BUILDER_SIGNATURES,
   LOOK_BUILDERS,
   LOOK_EXCLUDED_PROPERTIES,
   LOOK_HOOKS,
@@ -57,10 +58,18 @@ import {
   nearestLookName,
   type LookPropertyValueKind,
 } from "./look.ts";
-import { collectLookStaticValues, evaluateLookStaticExpression, isLookStaticValue, type LookStaticValue } from "./look-static.ts";
+import { collectLookStaticValues, evaluateLookStaticExpression, isLookStaticValue, lookStaticCss, type LookStaticValue } from "./look-static.ts";
 import { keyframeCssValue } from "./keyframes.ts";
 import { dynamicChildLeaves } from "./emitter.ts";
-import { isWebCustomElementName, WEB_NATIVE_ELEMENTS } from "./elements.ts";
+import {
+  isWebCustomElementName,
+  WEB_ARIA_ATTRIBUTES,
+  WEB_ARIA_ENUMERATED_VALUES,
+  WEB_ARIA_ROLES,
+  WEB_ARIA_ROLE_SYNONYMS,
+  WEB_MISSPELLED_ATTRIBUTES,
+  WEB_NATIVE_ELEMENTS,
+} from "./elements.ts";
 import {
   isWebExpression,
   isWebJsx,
@@ -109,6 +118,33 @@ const nativeDomEventNames = new Set([
   "dragstart", "dragend", "dragover", "dragenter", "dragleave", "drop", "drag",
   "compositionstart", "compositionupdate", "compositionend",
   "copy", "cut", "paste", "load", "error", "transitionend", "animationend", "play", "pause", "ended",
+]);
+// The attribute names an element really compiles as script: the browser turns
+// the attribute's text into a function body in the document's origin. This is a
+// different roster from `nativeDomEventNames` above, which answers "is there an
+// `on:` directive worth naming for this remainder". The two used to be one set,
+// so `onanimationstart` was told its name is merely reserved while the browser
+// was compiling it, and before that `onward` was told the reverse. Lookups
+// lowercase the written name, because an HTML attribute name is matched
+// ASCII-case-insensitively. Window-reflecting handlers (`onstorage`,
+// `onmessage`, `onunload`) stay out: they take effect only on `<body>`, so the
+// clause would be false of the element the author actually wrote.
+const htmlEventHandlerAttributes = new Set([
+  "onabort", "onauxclick", "onbeforeinput", "onbeforematch", "onbeforetoggle", "onblur", "oncancel",
+  "oncanplay", "oncanplaythrough", "onchange", "onclick", "onclose", "oncontextlost", "oncontextmenu",
+  "oncontextrestored", "oncopy", "oncuechange", "oncut", "ondblclick", "ondrag", "ondragend", "ondragenter",
+  "ondragleave", "ondragover", "ondragstart", "ondrop", "ondurationchange", "onemptied", "onended", "onerror",
+  "onfocus", "onformdata", "oninput", "oninvalid", "onkeydown", "onkeypress", "onkeyup", "onload",
+  "onloadeddata", "onloadedmetadata", "onloadstart", "onmousedown", "onmouseenter", "onmouseleave",
+  "onmousemove", "onmouseout", "onmouseover", "onmouseup", "onpaste", "onpause", "onplay", "onplaying",
+  "onprogress", "onratechange", "onreset", "onresize", "onscroll", "onscrollend", "onsecuritypolicyviolation",
+  "onseeked", "onseeking", "onselect", "onslotchange", "onstalled", "onsubmit", "onsuspend", "ontimeupdate",
+  "ontoggle", "onvolumechange", "onwaiting", "onwheel",
+  "onanimationstart", "onanimationend", "onanimationiteration", "onanimationcancel",
+  "ontransitionrun", "ontransitionstart", "ontransitionend", "ontransitioncancel",
+  "onpointerdown", "onpointerup", "onpointermove", "onpointerover", "onpointerout", "onpointerenter",
+  "onpointerleave", "onpointercancel", "ongotpointercapture", "onlostpointercapture",
+  "ontouchstart", "ontouchend", "ontouchmove", "ontouchcancel",
 ]);
 const textualWebPrimitiveNames = new Set(["Length", "Percentage", "LengthPercentage", "TrackFraction", "Color", "Duration", "Angle"]);
 // D72 rule 186: derived from the published table, not restated beside it.
@@ -533,14 +569,59 @@ interface LookValueGuidance {
   readonly named: boolean;
 }
 
-function literalLookStrings(expression: Expression): readonly string[] | null {
+/**
+ * Every string this expression can be when it is written out of literals alone
+ * — one literal, or a ternary whose branches are literals all the way down.
+ * Answers null when a value is decided anywhere else, which is the signal that
+ * a check reading it has nothing static to look at.
+ */
+function literalStringValues(expression: Expression): readonly string[] | null {
   if (expression.kind === "LiteralExpression") return typeof expression.value === "string" ? [expression.value] : [];
   if (expression.kind === "ConditionalExpression") {
-    const thenValues = literalLookStrings(expression.thenValue);
-    const elseValues = literalLookStrings(expression.elseValue);
+    const thenValues = literalStringValues(expression.thenValue);
+    const elseValues = literalStringValues(expression.elseValue);
     return thenValues && elseValues ? [...thenValues, ...elseValues] : null;
   }
   return null;
+}
+
+// WEB-S2: the attributes whose value the browser resolves as a URL and then
+// navigates, fetches, or submits to. A `javascript:`/`vbscript:` string in one
+// of them is script the page runs, which is the boundary the charter reserves
+// for `unsafe:html` — so the scheme is checked wherever it is written down.
+const WEB_URL_ATTRIBUTES = new Set(["href", "src", "action", "formaction", "poster", "data", "xlink:href", "ping", "cite"]);
+const WEB_SCRIPT_URL_SCHEMES = new Set(["javascript", "vbscript"]);
+// A `data:` URL is a document the browser builds from the string itself, so it
+// is inert only for the media types that cannot carry script. `image/svg+xml`
+// is deliberately absent: an SVG document runs script.
+const WEB_INERT_DATA_MEDIA_TYPES = new Set([
+  "image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/bmp", "image/x-icon",
+  "video/mp4", "video/webm", "video/ogg", "audio/mpeg", "audio/ogg", "audio/wav", "audio/webm",
+  "font/woff", "font/woff2", "font/ttf", "font/otf", "text/plain", "text/css",
+]);
+
+/**
+ * The scheme a browser reads out of a URL string. Leading and embedded ASCII
+ * whitespace and control characters are stripped first, because the URL parser
+ * strips them too — `java\tscript:alert(1)` is a `javascript:` URL.
+ */
+function urlAttributeScheme(value: string): { readonly scheme: string; readonly rest: string } | null {
+  const stripped = value.replace(/[\u0000-\u0020]/gu, "");
+  const match = /^([A-Za-z][A-Za-z0-9+.-]*):/u.exec(stripped);
+  return match ? { scheme: match[1]!.toLowerCase(), rest: stripped.slice(match[0].length) } : null;
+}
+
+/** The clause naming why one literal URL is refused, or null when it is fine. */
+function urlSchemeRefusal(value: string): string | null {
+  const parsed = urlAttributeScheme(value);
+  if (!parsed) return null;
+  if (WEB_SCRIPT_URL_SCHEMES.has(parsed.scheme)) {
+    return `'${parsed.scheme}:' is script, not a location — write an 'on:click' handler for behavior, or a real URL for navigation`;
+  }
+  if (parsed.scheme !== "data") return null;
+  const media = (/^([^,;]*)/u.exec(parsed.rest)?.[1] ?? "").toLowerCase();
+  if (WEB_INERT_DATA_MEDIA_TYPES.has(media)) return null;
+  return `a 'data:' URL is only accepted for a media type that cannot carry script${media ? `, and '${media}' can` : ""}; the inert types are ${[...WEB_INERT_DATA_MEDIA_TYPES].join(", ")}`;
 }
 
 function isViewportComparison(expression: Expression): boolean {
@@ -593,21 +674,104 @@ function lookSourceOf(expression: Expression): string {
 }
 
 /**
- * A canonical rendering of one Look condition, so two sibling blocks that lower
- * to the same selector and media query share a duplicate-detection scope.
+ * A syntactic rendering of one condition operand, used for the part of a Look
+ * condition that does not lower to a selector or a media query: a runtime term
+ * keeps its own scope, because two different runtime conditions really are two
+ * different scopes.
  */
-function lookConditionSignature(expression: Expression): string {
+function lookRuntimeSignature(expression: Expression): string {
   if (isWebExpression(expression) && expression.kind === "ExtensionExpression:web:look-hook") return `@${expression.name}`;
-  if (expression.kind === "UnaryExpression" && expression.operator === "not") return `!(${lookConditionSignature(expression.operand)})`;
-  if (expression.kind === "BinaryExpression" && (expression.operator === "and" || expression.operator === "or")) {
-    return `(${lookConditionSignature(expression.left)}${expression.operator}${lookConditionSignature(expression.right)})`;
-  }
-  if (expression.kind === "BinaryExpression") return `(${lookConditionSignature(expression.left)}${expression.operator}${lookConditionSignature(expression.right)})`;
-  if (expression.kind === "MemberExpression") return `${lookConditionSignature(expression.object)}.${expression.property}`;
+  if (expression.kind === "UnaryExpression" && expression.operator === "not") return `!(${lookRuntimeSignature(expression.operand)})`;
+  if (expression.kind === "BinaryExpression") return `(${lookRuntimeSignature(expression.left)}${expression.operator}${lookRuntimeSignature(expression.right)})`;
+  if (expression.kind === "MemberExpression") return `${lookRuntimeSignature(expression.object)}.${expression.property}`;
   if (expression.kind === "IdentifierExpression") return `id:${expression.name}`;
   if (isWebUnit(expression)) return `${expression.value}${expression.unit}`;
   if (expression.kind === "LiteralExpression") return `lit:${expression.raw}`;
   return `span:${expression.span.start}`;
+}
+
+function lookKebab(value: string): string {
+  return value.replace(/[A-Z]/gu, (character) => `-${character.toLowerCase()}`);
+}
+
+const lookOperatorNames: ReadonlyMap<string, string> = new Map([["<", "lt"], ["<=", "lte"], [">", "gt"], [">=", "gte"]]);
+const lookNegatedOperators: ReadonlyMap<string, string> = new Map([["<", ">="], ["<=", ">"], [">", "<="], [">=", "<"]]);
+
+/**
+ * LOK-I5: the duplicate-property scope used to key on the *written* condition,
+ * while the emitter keys its rules on the *lowered* one. `if scheme.dark:` and
+ * `if not scheme.light:` are the same condition by the charter's own words, so
+ * one silently overwrote the other and the loser was never reported. These
+ * atoms mirror the emitter's lowering exactly — a scheme and a reduced-motion
+ * negation name the other side of the query, and a negated breakpoint flips its
+ * operator — so the scope key is the token the rule ends up carrying.
+ */
+function lookConditionAtom(
+  expression: Expression,
+  negated: boolean,
+  staticValues: ReadonlyMap<string, LookStaticValue>,
+): string | null {
+  if (isWebExpression(expression) && expression.kind === "ExtensionExpression:web:look-hook") {
+    return `${negated ? "not-" : ""}${lookKebab(expression.name)}`;
+  }
+  if (expression.kind === "MemberExpression" && expression.object.kind === "IdentifierExpression") {
+    if (expression.object.name === "motion") {
+      return expression.property === "reduced" ? `motion-${negated ? "no-preference" : "reduce"}` : null;
+    }
+    if (expression.object.name === "scheme" && (expression.property === "dark" || expression.property === "light")) {
+      return `scheme-${negated ? (expression.property === "dark" ? "light" : "dark") : expression.property}`;
+    }
+    return null;
+  }
+  if (!isViewportComparison(expression)) return null;
+  const comparison = expression as Extract<Expression, { kind: "BinaryExpression" }>;
+  const threshold = evaluateLookStaticExpression(comparison.right, staticValues);
+  if (threshold?.kind !== "unit" || !LOOK_MEDIA_LENGTH_UNITS.has(threshold.unit)) return null;
+  const property = (comparison.left as Extract<Expression, { kind: "MemberExpression" }>).property;
+  const operator = negated ? lookNegatedOperators.get(comparison.operator)! : comparison.operator;
+  return `viewport-${property}-${lookOperatorNames.get(operator)!}-${lookStaticCss(threshold)!}`;
+}
+
+/**
+ * One Look condition as the set of alternatives it lowers to, each alternative
+ * being the sorted atoms that must hold together. Two conditions share a
+ * duplicate-detection scope exactly when this rendering matches, so a condition
+ * written the other way round, negated into its complement, or spelled with its
+ * operands swapped lands in the scope its rule will actually occupy.
+ */
+function lookConditionKey(
+  expression: Expression,
+  negated: boolean,
+  staticValues: ReadonlyMap<string, LookStaticValue>,
+): string {
+  const terms = lookConditionTerms(expression, negated, staticValues);
+  return terms.map((term) => [...term].sort().join("+")).sort().join("|");
+}
+
+function lookConditionTerms(
+  expression: Expression,
+  negated: boolean,
+  staticValues: ReadonlyMap<string, LookStaticValue>,
+): readonly (readonly string[])[] {
+  if (expression.kind === "UnaryExpression" && expression.operator === "not") {
+    return lookConditionTerms(expression.operand, !negated, staticValues);
+  }
+  if (expression.kind === "BinaryExpression" && (expression.operator === "and" || expression.operator === "or")) {
+    const conjunction = (expression.operator === "and") !== negated;
+    const left = lookConditionTerms(expression.left, negated, staticValues);
+    const right = lookConditionTerms(expression.right, negated, staticValues);
+    if (!conjunction) return [...left, ...right].slice(0, LOOK_CONDITION_TERM_LIMIT);
+    const combined: (readonly string[])[] = [];
+    for (const first of left) {
+      for (const second of right) {
+        combined.push([...first, ...second]);
+        if (combined.length >= LOOK_CONDITION_TERM_LIMIT) return combined;
+      }
+    }
+    return combined;
+  }
+  const atom = lookConditionAtom(expression, negated, staticValues);
+  return [[atom ?? `rt:${negated ? "!" : ""}${lookRuntimeSignature(expression)}`]];
 }
 
 /**
@@ -633,6 +797,70 @@ function collectDerivedReactiveNames(program: Program): ReadonlySet<string> {
   };
   record(program.body);
   return names;
+}
+
+/**
+ * Every `const name = look:` in the module, wherever it is written. A name
+ * declared twice maps to null: two different Look literals under one name make
+ * the composition question unanswerable, so the check that reads this map
+ * declines rather than guessing which one an element received.
+ */
+function collectLookDeclarations(program: Program): ReadonlyMap<string, WebLookExpression | null> {
+  const looks = new Map<string, WebLookExpression | null>();
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    const record = value as Record<string, unknown>;
+    if (record.kind === "VariableDeclaration") {
+      const declaration = record as unknown as Extract<Statement, { kind: "VariableDeclaration" }>;
+      if (declaration.binding === "const" && declaration.pattern.kind === "NameBindingPattern" && isWebLook(declaration.initializer)) {
+        looks.set(declaration.pattern.name, looks.has(declaration.pattern.name) ? null : declaration.initializer);
+      }
+    }
+    for (const [key, child] of Object.entries(record)) if (key !== "span") visit(child);
+  };
+  visit(program.body);
+  return looks;
+}
+
+/**
+ * The properties one Look sets, each keyed by the target it sets them on so a
+ * `@before:` colour and an element colour stay two different decisions. The
+ * condition is deliberately not part of the key: two looks that set one
+ * property under conditions that can both hold are exactly the ambiguity this
+ * serves. A `...spread` of another look is followed, and the names followed are
+ * reported back, because composing is what makes two looks ordered rather than
+ * independent.
+ */
+function lookContributions(
+  look: WebLookExpression,
+  looks: ReadonlyMap<string, WebLookExpression | null>,
+  visited: ReadonlySet<string> = new Set(),
+): { readonly properties: ReadonlySet<string>; readonly composed: ReadonlySet<string> } {
+  const properties = new Set<string>();
+  const composed = new Set<string>();
+  const walk = (entries: WebLookExpression["entries"], target: string): void => {
+    for (const entry of entries) {
+      if (entry.kind === "LookProperty") properties.add(`${target}:${entry.name}`);
+      else if (entry.kind === "LookIf") {
+        walk(entry.thenEntries, target);
+        walk(entry.elseEntries, target);
+      } else if (entry.kind === "LookTarget") walk(entry.entries, entry.name);
+      else if (entry.kind === "LookSpread" && entry.value.kind === "IdentifierExpression" && !visited.has(entry.value.name)) {
+        const source = looks.get(entry.value.name);
+        composed.add(entry.value.name);
+        if (!source) continue;
+        const inner = lookContributions(source, looks, new Set([...visited, entry.value.name]));
+        for (const property of inner.properties) properties.add(property);
+        for (const name of inner.composed) composed.add(name);
+      }
+    }
+  };
+  walk(look.entries, "");
+  return { properties, composed };
 }
 
 /** Local names bound to a velar/look builder, including aliased imports. */
@@ -785,12 +1013,137 @@ interface RetiredAccessorDeclaration {
   readonly bodySpan: Span | null;
 }
 
+/**
+ * D89 A4: what a `map` callback rebuilds, when it returns a newly built record
+ * instead of the row it was handed. Null is the non-trigger answer the ruling
+ * names — a callback that returns its parameter, or anything else that is not a
+ * record literal, builds nothing and moves no identity. A record is reported
+ * even when no field can be named, because it is the rebuilt row's own identity
+ * that the keyed list stops recognising, not any one field it carries.
+ *
+ * A conditional is read through because the React spelling nearly always
+ * carries one, `t.id == id ? {...t, done: true} : t`, and its `else` branch is
+ * the returns-the-original case rather than a second shape. A branch that names
+ * a field is preferred, since a suggestion that names one is the whole product.
+ */
+function keyedRebuiltRecord(body: Expression, row: string): { readonly field: string | null } | null {
+  if (body.kind === "ObjectExpression") {
+    // `{ id: item.id, done: true }` copies the key across and rewrites `done`.
+    // Naming `id` would send the author to write the one field whose value the
+    // keyed list reads, so a field that only carries the row's own value over
+    // is not the field the message is about.
+    for (const property of body.properties) {
+      if (property.kind !== "ObjectProperty") continue;
+      if (rowFieldPassthrough(property.value, row, property.name)) continue;
+      return { field: property.name };
+    }
+    // A pure `{...item}` rewrites no field at all; the copy itself is what
+    // moves the row's identity, so there is no field name for the message.
+    return body.properties.length > 0 ? { field: null } : null;
+  }
+  if (body.kind === "ConditionalExpression") {
+    const thenSide = keyedRebuiltRecord(body.thenValue, row);
+    const elseSide = keyedRebuiltRecord(body.elseValue, row);
+    if (thenSide?.field) return thenSide;
+    if (elseSide?.field) return elseSide;
+    return thenSide ?? elseSide;
+  }
+  return null;
+}
+
+/** `{ id: item.id }` in a callback over `item`: the field carries its own value over unchanged. */
+function rowFieldPassthrough(value: Expression, row: string, name: string): boolean {
+  return value.kind === "MemberExpression" && value.property === name
+    && value.object.kind === "IdentifierExpression" && value.object.name === row;
+}
+
+/**
+ * D90 R1-a: one `state` binding and the `watch` bodies of a single scope that
+ * assign it. A watch is one contender however many times its body writes the
+ * state, because a body's own statements are ordered against each other.
+ */
+interface WatchStateContention {
+  readonly name: string;
+  /** Enclosing watch identity -> that watch's first assignment target span. */
+  readonly contenders: Map<string, Span>;
+}
+
+/**
+ * D90 R1-a revision: what one function of this module does to reactive state,
+ * collected while its body is analyzed in its own lexical scope. The writes are
+ * keyed by the written binding's declaration identity, so a helper whose
+ * parameter or local shadows a state carries no write at all.
+ */
+interface FunctionStateWrites {
+  /** Written state binding identity -> the name that state was written under. */
+  readonly writes: Map<string, string>;
+  /** Binding identity of every function of this module the body calls. */
+  readonly callees: Set<string>;
+}
+
+/** One scope's watch records, held until every declaration of the module is analyzed. */
+interface WatchWriteScope {
+  readonly states: Map<string, WatchStateContention>;
+  /** Enclosing watch identity -> callee binding identity -> that call's span. */
+  readonly calls: Map<string, Map<string, Span>>;
+}
+
+/**
+ * D89 A4: one `list = list.map(item => {…})` rewrite, held until the module's
+ * JSX is analyzed so the advisory is raised only where that same list is what a
+ * keyed list renders.
+ */
+interface KeyedListRebuild {
+  readonly source: string;
+  readonly name: string;
+  /** The rewritten field, or null when the callback copies the row without rewriting one. */
+  readonly field: string | null;
+  readonly span: Span;
+}
+
 export class VelarWebAnalyzer extends Analyzer {
   private componentStates: Set<string> | null = null;
   private mountedDepth = 0;
   private cleanupDepth = 0;
   /** D51 (audit 12): a component `watch` body runs on a change and ends, exactly as a module `watch` body does. */
   private watchBodyDepth = 0;
+  /**
+   * D90 R1-a: the writes to reactive `state` made directly in the `watch`
+   * bodies of the scope being analyzed, keyed by the identity of the written
+   * binding's declaration span. Null outside a scope that can hold watches.
+   *
+   * Scheduling cannot settle two watches that write one state: a flush settles
+   * every watch in a single pass, and between two independent writes there is
+   * no order the source states, so any order the compiler picked would be a
+   * roll of the dice. R1's promise that a watch's declaration order is not
+   * observable holds only once the shape is refused, and this is the record the
+   * refusal is drawn from.
+   */
+  private watchStateWrites: Map<string, WatchStateContention> | null = null;
+  /**
+   * D90 R1-a revision: the calls the `watch` bodies of the scope being analyzed
+   * make to a name of this module, keyed by watch identity. A write performed
+   * inside a helper is the watch's write — the runtime already classifies it
+   * that way when it promotes the watch to a writer — so the call edges are
+   * kept and resolved once every declaration of the module has been seen.
+   */
+  private watchStateCalls: Map<string, Map<string, Span>> | null = null;
+  /**
+   * Every scope's records, reported after the module is analyzed rather than at
+   * the end of the scope: a helper may be declared after the watch that calls
+   * it, and at component scope it usually is.
+   */
+  private readonly pendingWatchScopes: WatchWriteScope[] = [];
+  /** What each `def` of this module writes and calls, keyed by its declaration identity. */
+  private readonly functionStateWrites = new Map<string, FunctionStateWrites>();
+  /** The identity of the `def` whose body is being analyzed, or null outside one. */
+  private functionWriteSubject: string | null = null;
+  /** The identity of the `watch` whose body is being analyzed, or null outside one. */
+  private watchWriteSubject: string | null = null;
+  /** D89 A4: the binding identity of every list a keyed `.map(...)` interpolation renders. */
+  private readonly keyedListSources = new Set<string>();
+  /** D89 A4: every `list = list.map(item => {…})` rewrite of this module, in source order. */
+  private readonly keyedListRebuilds: KeyedListRebuild[] = [];
   private synchronousReactiveDepth = 0;
   private jsxDepth = 0;
   private readonly resources: ReadonlyMap<string, string>;
@@ -805,6 +1158,7 @@ export class VelarWebAnalyzer extends Analyzer {
   private readonly honoredJsxKeys = new Set<JSXElementExpression>();
   private readonly reportedJsxKeys = new Set<JSXElementExpression>();
   private lookBuilderNames: ReadonlyMap<string, string> = new Map();
+  private lookDeclarations: ReadonlyMap<string, WebLookExpression | null> = new Map();
   private lookLiteralDepth = 0;
   /**
    * D71 rule 182: the declaration spans of every `computed` binding in scope.
@@ -844,12 +1198,24 @@ export class VelarWebAnalyzer extends Analyzer {
   override analyze(program: Program): readonly Diagnostic[] {
     this.lookStaticValues = collectLookStaticValues(program, this.importedLookStaticValues);
     this.lookBuilderNames = collectLookBuilderNames(program);
+    this.lookDeclarations = collectLookDeclarations(program);
     for (const name of collectDerivedReactiveNames(program)) this.derivedReactiveNames.add(name);
     this.reportBrowserTestImports(program);
     this.rejectWebOwnedTypeNames(program);
+    this.watchStateWrites = new Map();
+    this.watchStateCalls = new Map();
+    this.functionStateWrites.clear();
+    this.pendingWatchScopes.length = 0;
+    this.keyedListSources.clear();
+    this.keyedListRebuilds.length = 0;
     super.analyze(program);
     this.reportStaticJsxKeys();
     this.reportRetiredComputedFunction();
+    this.closeWatchWriteScope();
+    this.reportWatchWriteContention();
+    this.adviseKeyedListRebuilds();
+    this.watchStateWrites = null;
+    this.watchStateCalls = null;
     return this.diagnostics;
   }
 
@@ -1019,9 +1385,12 @@ export class VelarWebAnalyzer extends Analyzer {
           if (statement.currentName) this.declareBinding(statement.currentName, false, watched, statement.span);
           if (statement.previousName) this.declareBinding(statement.previousName, false, watched, statement.span);
           this.deferredExecutionDepth += 1;
+          const outerWatchSubject = this.watchWriteSubject;
+          this.watchWriteSubject = spanIdentity(statement.span);
           try {
             this.analyzeStatements(statement.body);
           } finally {
+            this.watchWriteSubject = outerWatchSubject;
             this.deferredExecutionDepth -= 1;
           }
           this.exitScope();
@@ -1060,8 +1429,28 @@ export class VelarWebAnalyzer extends Analyzer {
 
   protected override analyzeStatement(statement: Statement): void {
     const readonlyProp = this.directReadonlyPropMutation(statement);
+    this.recordWatchStateWrite(statement);
+    this.recordKeyedListRebuild(statement);
     const firstDiagnostic = this.diagnostics.length;
-    super.analyzeStatement(statement);
+    const outerWatchSubject = this.watchWriteSubject;
+    const outerFunctionSubject = this.functionWriteSubject;
+    // D90 R1-a: a body declared inside a watch is still a body that runs when
+    // it is called, not when the watch settles, so the writes in it are not the
+    // watch's directly. The revision follows the call instead: a `def` collects
+    // its own writes under its declaration, and whatever calls it — from a
+    // watch body here or through another `def` — is charged with them. A class
+    // body and a test body are not reachable that way, so they close the
+    // enclosing record rather than opening one.
+    if (statement.kind === "FunctionDeclaration" || statement.kind === "ClassDeclaration" || statement.kind === "TestDeclaration") {
+      this.watchWriteSubject = null;
+      this.functionWriteSubject = statement.kind === "FunctionDeclaration" ? this.openFunctionWriteRecord(statement.span) : null;
+    }
+    try {
+      super.analyzeStatement(statement);
+    } finally {
+      this.watchWriteSubject = outerWatchSubject;
+      this.functionWriteSubject = outerFunctionSubject;
+    }
     if (!readonlyProp) return;
     for (let index = firstDiagnostic; index < this.diagnostics.length; index += 1) {
       const item = this.diagnostics[index]!;
@@ -1300,7 +1689,10 @@ export class VelarWebAnalyzer extends Analyzer {
       if (retired) return CACHED_INTRINSIC_TYPE;
     }
     const result = super.inferExpression(expression, contextualType);
-    if (expression.kind === "CallExpression") this.checkLookBuilderCall(expression);
+    if (expression.kind === "CallExpression") {
+      this.checkLookBuilderCall(expression);
+      this.recordWatchStateCall(expression);
+    }
     return result;
   }
 
@@ -1365,6 +1757,234 @@ export class VelarWebAnalyzer extends Analyzer {
       `This watch subject never changes, so its body can never run${name === null ? "" : ` — '${name}' is not a reactive source`}; watch a 'state', a 'computed', a prop, or a resource field, or move these statements to where they should run`,
       expression.span,
     ));
+  }
+
+  /**
+   * D90 R1-a: records an assignment to reactive `state` written directly in a
+   * `watch` body, so a state that two watches of one scope both write can be
+   * refused instead of settled by declaration order. No scheduling rule can
+   * answer this one — a flush settles every watch in a single pass, and between
+   * two independent writes there is no order the source states — so the pair is
+   * refused and the author says which write he meant to land last.
+   *
+   * Only a bare-identifier target to a `state` counts. Two member writes
+   * collide only when their paths are the same, and a path runs through dynamic
+   * indices and aliases this analysis cannot decide; the ruling's shape is
+   * `x = ...`, and a narrower rule that is never wrong is worth more here than a
+   * wider one that is usually right. The revision does not widen that shape; it
+   * widens only the reach, so the same write counts wherever this module's own
+   * `def`s perform it on the watch's behalf.
+   *
+   * The same statement inside a `def` is filed under that `def` instead, and
+   * reaches a watch only if one calls it.
+   */
+  private recordWatchStateWrite(statement: Statement): void {
+    if (statement.kind !== "AssignmentStatement" || statement.target.kind !== "IdentifierExpression") return;
+    const name = statement.target.name;
+    // The live lexical scope answers this, so a local that shadows the state
+    // takes the write with it and no shadow-name heuristic is needed.
+    if (!this.writableStateName(name)) return;
+    const binding = this.lookup(name);
+    if (!binding) return;
+    const state = spanIdentity(binding.span);
+    const helper = this.functionWriteSubject;
+    if (helper !== null) {
+      this.functionStateWrites.get(helper)?.writes.set(state, name);
+      return;
+    }
+    const writes = this.watchStateWrites;
+    const watch = this.watchWriteSubject;
+    if (writes === null || watch === null) return;
+    this.recordWatchContender(writes, state, name, watch, statement.target.span);
+  }
+
+  /**
+   * D90 R1-a: one watch is one contender however many times it writes — its own
+   * statements are ordered against each other. Keeping the first write also
+   * absorbs the second visit a loop body receives on its back edge, and it is
+   * what keeps a watch that writes directly anchored on its own assignment
+   * rather than on a later call that reaches the same state.
+   */
+  private recordWatchContender(
+    writes: Map<string, WatchStateContention>,
+    state: string,
+    name: string,
+    watch: string,
+    span: Span,
+  ): void {
+    const contention = writes.get(state) ?? { name, contenders: new Map<string, Span>() };
+    if (!contention.contenders.has(watch)) contention.contenders.set(watch, span);
+    writes.set(state, contention);
+  }
+
+  /** D90 R1-a revision: opens (or reuses) the record a `def` of this module files its writes under. */
+  private openFunctionWriteRecord(span: Span): string {
+    const identity = spanIdentity(span);
+    if (!this.functionStateWrites.has(identity)) {
+      this.functionStateWrites.set(identity, { writes: new Map<string, string>(), callees: new Set<string>() });
+    }
+    return identity;
+  }
+
+  /**
+   * D90 R1-a revision: records one call of a plain name, either as a call edge
+   * of the `def` making it or as a call the watch being analyzed performs.
+   *
+   * The callee is identified by the binding the name resolves to *here*, which
+   * is what keeps the boundary the ruling draws: an import, a parameter holding
+   * a callable, a value typed `any`, and a call on a member all resolve to
+   * something that is not a `def` of this module, so no edge is followed and
+   * the write stays conservatively silent. Only the module's own declarations
+   * answer, exactly as the runtime's own classifier does.
+   */
+  private recordWatchStateCall(expression: Extract<Expression, { kind: "CallExpression" }>): void {
+    if (expression.callee.kind !== "IdentifierExpression") return;
+    const helper = this.functionWriteSubject;
+    const watch = this.watchWriteSubject;
+    const calls = this.watchStateCalls;
+    if (helper === null && (watch === null || calls === null)) return;
+    const binding = this.lookup(expression.callee.name);
+    if (!binding) return;
+    const callee = spanIdentity(binding.span);
+    if (helper !== null) {
+      this.functionStateWrites.get(helper)?.callees.add(callee);
+      return;
+    }
+    const edges = calls!.get(watch!) ?? new Map<string, Span>();
+    if (!edges.has(callee)) edges.set(callee, expression.span);
+    calls!.set(watch!, edges);
+  }
+
+  /**
+   * The states a call of this callee can reach, following the module's own call
+   * edges. The visited set is what makes recursion and mutual recursion
+   * terminate rather than repeat, and an identity with no record — every
+   * callee this module did not declare — simply contributes nothing.
+   */
+  private reachableStateWrites(callee: string): ReadonlyMap<string, string> {
+    const reached = new Map<string, string>();
+    const visited = new Set<string>();
+    const pending = [callee];
+    while (pending.length > 0) {
+      const identity = pending.pop()!;
+      if (visited.has(identity)) continue;
+      visited.add(identity);
+      const record = this.functionStateWrites.get(identity);
+      if (!record) continue;
+      for (const [state, name] of record.writes) reached.set(state, name);
+      for (const next of record.callees) pending.push(next);
+    }
+    return reached;
+  }
+
+  /**
+   * D89 A4: records `list = list.map(item => {…})`, React's immutable update,
+   * where the callback builds a new record rather than changing a field.
+   *
+   * D90 R2 stands — `__velarKeyed` compares identity and that does not move,
+   * and the framework does not accommodate the idiom. This channel is not the
+   * framework taking responsibility; it is the compiler telling the author that
+   * the row he is typing into is about to be destroyed. Nothing is reported
+   * yet: the advisory is owed only if the rewritten list is what a keyed list
+   * renders, and the render usually sits below the update.
+   */
+  private recordKeyedListRebuild(statement: Statement): void {
+    if (statement.kind !== "AssignmentStatement" || statement.operator !== "=") return;
+    if (statement.target.kind !== "IdentifierExpression") return;
+    const value = statement.value;
+    if (value.kind !== "CallExpression" || value.callee.kind !== "MemberExpression" || value.callee.property !== "map") return;
+    // The map has to be over the list being replaced; `rows = source.map(...)`
+    // builds a new list, and a new list has no identity to preserve.
+    if (value.callee.object.kind !== "IdentifierExpression" || value.callee.object.name !== statement.target.name) return;
+    const callback = value.arguments[0];
+    if (!callback || callback.kind !== "ArrowFunctionExpression") return;
+    const [row] = callback.parameters;
+    if (!row || callback.parameters.length !== 1) return;
+    const rebuilt = keyedRebuiltRecord(callback.body, row.name);
+    if (!rebuilt) return;
+    const binding = this.lookup(statement.target.name);
+    if (!binding) return;
+    this.keyedListRebuilds.push({
+      source: spanIdentity(binding.span),
+      name: statement.target.name,
+      field: rebuilt.field,
+      span: statement.span,
+    });
+  }
+
+  /**
+   * D89 A4: raises the advisory for the rewrites whose list a keyed position
+   * really renders. The advisory channel cannot reach `this.diagnostics`, so
+   * nothing here fails a build, changes an emitted byte, or moves a semantic
+   * rule; `// velar-allow A4: <reason>` suppresses it where `map` plus a record
+   * literal is the only spelling, which a `readonly` list or one API response
+   * makes it.
+   */
+  private adviseKeyedListRebuilds(): void {
+    for (const rebuild of this.keyedListRebuilds) {
+      if (!this.keyedListSources.has(rebuild.source)) continue;
+      // The keys do not move; the rows do. `__velarKeyed` finds the entry under
+      // the same key and then drops it because the row it holds is no longer
+      // the same value, so a message blaming the key sends an author to check
+      // `id`, find it unchanged, and conclude the advisory is wrong.
+      const field = rebuild.field ?? "<field>";
+      this.advise(
+        "A4",
+        `This rebuilds every row of '${rebuild.name}', so every row is a new value and the keyed list that renders '${rebuild.name}' no longer recognises any of them: it destroys and rebuilds all of its children — an input being typed into loses focus. Change the field in place instead: '${rebuild.name}[index].${field} = ...'`,
+        rebuild.span,
+      );
+    }
+  }
+
+  /** Files the scope just analyzed, so its watches are reported once the whole module is known. */
+  private closeWatchWriteScope(): void {
+    const states = this.watchStateWrites;
+    const calls = this.watchStateCalls;
+    if (states === null || calls === null) return;
+    this.pendingWatchScopes.push({ states, calls });
+  }
+
+  /**
+   * D90 R1-a: reports the states of every analyzed scope that more than one
+   * `watch` assigns. One diagnostic is emitted per contending watch, anchored on
+   * that watch's own first write: the contenders have no meeting point the way
+   * VEL5068's two Looks meet at one `look=` attribute, so each watch's position
+   * is named by the error that sits on it, and three contenders produce three
+   * errors rather than a pair.
+   *
+   * The revision resolves the call edges here rather than at the end of each
+   * scope, because the module's declarations are all known only now — a helper
+   * declared after the watch that calls it is the ordinary spelling, and at
+   * component scope it is the only one.
+   */
+  private reportWatchWriteContention(): void {
+    for (const scope of this.pendingWatchScopes) {
+      for (const [watch, edges] of scope.calls) {
+        for (const [callee, span] of edges) {
+          // A watch that reaches one state through two helpers is still one
+          // contender: recordWatchContender keeps the first position it was
+          // seen writing from, direct assignment included.
+          for (const [state, name] of this.reachableStateWrites(callee)) {
+            this.recordWatchContender(scope.states, state, name, watch, span);
+          }
+        }
+      }
+      this.reportScopeWatchWriteContention(scope.states);
+    }
+    this.pendingWatchScopes.length = 0;
+  }
+
+  private reportScopeWatchWriteContention(states: ReadonlyMap<string, WatchStateContention>): void {
+    for (const contention of states.values()) {
+      if (contention.contenders.size < 2) continue;
+      for (const span of contention.contenders.values()) {
+        this.diagnostics.push(diagnostic(
+          "VEL5069",
+          `State '${contention.name}' is assigned by ${contention.contenders.size} watch blocks in this scope, and one flush settles every watch in a single pass that states no order between them, so which write lands last is undefined; put every update to '${contention.name}' in one watch, or give each watch a state of its own`,
+          span,
+        ));
+      }
+    }
   }
 
   /** A value that is read by calling it and takes no arguments to do so. */
@@ -1700,6 +2320,13 @@ export class VelarWebAnalyzer extends Analyzer {
     this.flowFrameDepth += 1;
     const previousStates = this.componentStates;
     this.componentStates = new Set(statement.body.filter((item) => item.kind === "ExtensionStatement:web:state").map((item) => item.name));
+    // D90 R1-a: watches contend only with the watches of their own scope, so a
+    // component collects its own writes; two components that each write one
+    // module state are two instances that need not even be co-resident.
+    const previousWatchWrites = this.watchStateWrites;
+    const previousWatchCalls = this.watchStateCalls;
+    this.watchStateWrites = new Map();
+    this.watchStateCalls = new Map();
     const previousExplicitReadonlyProps = this.explicitReadonlyPropBindings;
     const explicitReadonlyProps = new Map<string, number>();
     // Component items are analyzed one by one rather than through
@@ -1757,7 +2384,10 @@ export class VelarWebAnalyzer extends Analyzer {
         if (item.currentName) this.declareBinding(item.currentName, false, watched, item.span);
         if (item.previousName) this.declareBinding(item.previousName, false, watched, item.span);
         this.watchBodyDepth += 1;
+        const outerWatchSubject = this.watchWriteSubject;
+        this.watchWriteSubject = spanIdentity(item.span);
         this.analyzeStatements(item.body);
+        this.watchWriteSubject = outerWatchSubject;
         this.watchBodyDepth -= 1;
         this.exitScope();
         this.synchronousReactiveDepth -= 1;
@@ -1807,6 +2437,9 @@ export class VelarWebAnalyzer extends Analyzer {
     if (exposes > 1) this.diagnostics.push(diagnostic("VEL5056", `Component '${statement.name}' has more than one expose declaration`, statement.span));
     if (statement.handleType && exposes === 0) this.diagnostics.push(diagnostic("VEL5056", `Component '${statement.name}' declares an exposed Handle but does not provide an expose value`, statement.handleType.span));
     if (renderValue && isWebJsx(renderValue)) this.validateComponentHost(renderValue, statement);
+    this.closeWatchWriteScope();
+    this.watchStateWrites = previousWatchWrites;
+    this.watchStateCalls = previousWatchCalls;
     this.componentStates = previousStates;
     this.explicitReadonlyPropBindings = previousExplicitReadonlyProps;
     this.flowFrameDepth -= 1;
@@ -1896,9 +2529,10 @@ export class VelarWebAnalyzer extends Analyzer {
         if (inheritedTerms * Math.max(thenTerms, elseTerms) > LOOK_CONDITION_TERM_LIMIT) {
           this.diagnostics.push(diagnostic("VEL5045", `A Look condition may expand to at most ${LOOK_CONDITION_TERM_LIMIT} selector/runtime terms; split this visual decision into ordinary values`, entry.condition.span));
         }
-        const signature = lookConditionSignature(entry.condition);
-        this.analyzeLookEntries(entry.thenEntries, insideTarget, true, Math.min(LOOK_CONDITION_TERM_LIMIT, inheritedTerms * thenTerms), `${scopeKey}&${signature}`);
-        this.analyzeLookEntries(entry.elseEntries, insideTarget, true, Math.min(LOOK_CONDITION_TERM_LIMIT, inheritedTerms * elseTerms), `${scopeKey}&!${signature}`);
+        const thenKey = lookConditionKey(entry.condition, false, this.lookStaticValues);
+        const elseKey = lookConditionKey(entry.condition, true, this.lookStaticValues);
+        this.analyzeLookEntries(entry.thenEntries, insideTarget, true, Math.min(LOOK_CONDITION_TERM_LIMIT, inheritedTerms * thenTerms), `${scopeKey}&${thenKey}`);
+        this.analyzeLookEntries(entry.elseEntries, insideTarget, true, Math.min(LOOK_CONDITION_TERM_LIMIT, inheritedTerms * elseTerms), `${scopeKey}&${elseKey}`);
         continue;
       }
       if (entry.kind === "LookTarget") {
@@ -2001,13 +2635,25 @@ export class VelarWebAnalyzer extends Analyzer {
       return;
     }
     const ranges = LOOK_BUILDER_NUMERIC_RANGES.get(builder);
+    // A named argument fills the same slot its positional spelling does, so the
+    // position comes from the builder's own signature — the one table the
+    // module interface, the named-argument arity check, and the `keyframes:`
+    // lowering already derive from. Reading `-1` here instead put every check
+    // in this loop out of reach of the named spelling, not only the range
+    // table: `rgba(0, 0, 0, alpha=2)` compiled clean while `rgba(0, 0, 0, 2)`
+    // was refused.
+    const parameters = LOOK_BUILDER_SIGNATURES.get(builder)?.parameters;
     for (const [index, argument] of expression.arguments.entries()) {
       const named = expression.argumentNames?.[index] ?? null;
-      const position = named ? -1 : index;
+      const position = named === null ? index : parameters?.indexOf(named) ?? -1;
       const range = position >= 0 ? ranges?.[position] : undefined;
-      const literal = argument.kind === "LiteralExpression" && typeof argument.value === "number" ? argument.value
-        : argument.kind === "UnaryExpression" && argument.operator === "-" && argument.operand.kind === "LiteralExpression" && typeof argument.operand.value === "number"
-          ? -argument.operand.value : null;
+      // LOK-U8 completed: a `keyframes:` stop lowers its builder calls at
+      // compile time, so no call survives to run the runtime guard. Reading the
+      // folded value rather than the literal node is what makes the promise
+      // "a computed argument keeps the same check" true where the run time the
+      // charter names does not exist.
+      const folded = evaluateLookStaticExpression(argument, this.lookStaticValues);
+      const literal = folded?.kind === "number" ? folded.value : null;
       if (range && literal !== null && (literal < range[1] || literal > range[2])) {
         this.diagnostics.push(diagnostic("VEL5042", `${range[0]} must be from ${range[1]} through ${range[2]}; ${builder} received ${literal}`, argument.span));
       }
@@ -2024,6 +2670,14 @@ export class VelarWebAnalyzer extends Analyzer {
       if (builder === "border" && position === 2 && argument.kind === "LiteralExpression" && typeof argument.value === "string"
         && !LOOK_BORDER_STYLE_NAMES.has(argument.value)) {
         this.diagnostics.push(diagnostic("VEL5042", `Border style '${argument.value}' is not a CSS border style; use one of ${[...LOOK_BORDER_STYLE_NAMES].join(", ")}`, argument.span));
+      }
+      // D60 rule 150 gave `transitionProperty` a real vocabulary and the
+      // charter says the builder takes the same one. It took none, so the
+      // longhand's refusal taught the camelCase spelling the builder accepted
+      // and the browser discarded. Routing the argument through the property's
+      // own checker keeps one vocabulary and one message.
+      if (builder === "transition" && position === 0) {
+        this.validateLookStringVocabulary("transitionProperty", argument, "The transition builder's property argument");
       }
     }
     if (builder === "tracks" && expression.arguments.length > 1024) {
@@ -2058,7 +2712,7 @@ export class VelarWebAnalyzer extends Analyzer {
       this.diagnostics.push(diagnostic("VEL5060", "Animation count must be a positive integer no greater than 1000000", count!.span));
     }
     if (count && loop) {
-      this.diagnostics.push(diagnostic("VEL5060", "animate accepts either count or loop, not both; use loop=true for an infinite animation", expression.span));
+      this.diagnostics.push(diagnostic("VEL5060", "animate accepts either count or loop, not both: count names the number of runs, and loop=true replaces that count with an unbounded one", expression.span));
     }
     this.checkAnimationKeyword(easing, "easing", LOOK_ANIMATION_EASINGS);
     this.checkAnimationKeyword(direction, "direction", LOOK_ANIMATION_DIRECTIONS);
@@ -2093,7 +2747,7 @@ export class VelarWebAnalyzer extends Analyzer {
         if (keyframeCssValue(entry.value, this.lookStaticValues) === null) {
           this.diagnostics.push(diagnostic(
             "VEL5060",
-            "A keyframe value must resolve to static CSS from literals, unit values, arithmetic, or velar/look builders",
+            "A keyframe value must resolve to static CSS from literals, unit values, arithmetic, velar/look builders, or const bindings — local or imported — that hold any of those, and the text it resolves to must read as one declaration value: no ';', '{', '}', or '@' outside a string, with parentheses, strings, and comments all closed",
             entry.value.span,
           ));
         }
@@ -2177,10 +2831,17 @@ export class VelarWebAnalyzer extends Analyzer {
     return true;
   }
 
-  private validateLookStringVocabulary(name: string, value: Expression): boolean {
+  /**
+   * `subject` names the position in the message. It is the property itself
+   * everywhere except the `transition(...)` builder, whose first argument takes
+   * `transitionProperty`'s vocabulary but is not written as that property — a
+   * refusal that named the longhand there would name a spelling the author
+   * never wrote.
+   */
+  private validateLookStringVocabulary(name: string, value: Expression, subject = `Look property '${name}'`): boolean {
     const kind = LOOK_PROPERTY_VALUE_KINDS.get(name);
     if (!kind || kind === "text" || kind === "filter" || kind === "transform" || kind === "animation") return true;
-    const values = literalLookStrings(value);
+    const values = literalStringValues(value) ?? this.foldedLookKeyword(value);
     if (values === null) return true;
     for (const text of values) {
       const normalized = text.trim();
@@ -2230,13 +2891,28 @@ export class VelarWebAnalyzer extends Analyzer {
         // D65 rule 169: a property whose CSS value space no set can hold says
         // what it left out, so the boundary is legible where it is met.
         const partial = expected.named ? undefined : LOOK_PARTIAL_KEYWORD_PROPERTIES.get(name);
-        this.diagnostics.push(diagnostic("VEL5038", `Look property '${name}' does not accept '${normalized}'; ${expected.text}${partial
+        this.diagnostics.push(diagnostic("VEL5038", `${subject} does not accept '${normalized}'; ${expected.text}${partial
           ? `. ${partial}; use a module-level 'import css unsafe "./styles.css" before look' when that boundary is intentional`
           : ""}`, value.span));
         return false;
       }
     }
     return true;
+  }
+
+  /**
+   * D65 rule 168 closed the closed sets against misspelled literals, and D65
+   * item 3 makes a `const` string a first-class design token — so the two have
+   * to agree. A name or a record field that folds to a bare CSS keyword is
+   * checked exactly as the literal spelling of it is; anything that folds to
+   * composed CSS text (a builder result, a unit, a gradient) is not a keyword
+   * and is left to the type and to the builder's own checks.
+   */
+  private foldedLookKeyword(value: Expression): readonly string[] | null {
+    if (value.kind !== "IdentifierExpression" && value.kind !== "MemberExpression") return null;
+    const folded = evaluateLookStaticExpression(value, this.lookStaticValues);
+    if (folded?.kind !== "css" || !/^[A-Za-z][A-Za-z0-9-]*$/u.test(folded.value)) return null;
+    return [folded.value];
   }
 
   /**
@@ -2365,6 +3041,7 @@ export class VelarWebAnalyzer extends Analyzer {
       if (expression.tag === "a" && target === "_blank" && (typeof relation !== "string" || !relation.split(/\s+/u).includes("noopener"))) {
         this.diagnostics.push(diagnostic("VEL5028", "An anchor with target='_blank' requires rel='noopener'", expression.span));
       }
+      if (expression.tag === "iframe" && attributes.has("srcdoc")) this.reportIframeSrcdocSandbox(expression, attributes);
     }
     if (component) this.analyzeComponentElement(expression);
     const key = expression.attributes.find((attribute) => attribute.name === "key");
@@ -2389,6 +3066,58 @@ export class VelarWebAnalyzer extends Analyzer {
     return webNodeType;
   }
 
+  /**
+   * WEB-S3: `srcdoc` builds a whole document out of a string, and that document
+   * inherits this page's origin — so it is a second raw-HTML boundary next to
+   * the one the charter names (`unsafe:html`), reachable with no marker at all.
+   * The marker this one gets is `sandbox`, because sandbox is what actually
+   * takes the origin away; requiring it makes the boundary visible where it is
+   * crossed. `allow-scripts allow-same-origin` together hands the origin back,
+   * so the pair is refused by name rather than accepted as a sandbox.
+   */
+  private reportIframeSrcdocSandbox(expression: JSXElementExpression, attributes: ReadonlyMap<string, JSXAttribute>): void {
+    const sandbox = attributes.get("sandbox");
+    if (!sandbox) {
+      this.diagnostics.push(diagnostic(
+        "VEL5066",
+        "An iframe with srcdoc builds a document from a string, and that document runs script in this page's origin; add a sandbox attribute such as sandbox=\"allow-forms\" — write sandbox=\"\" when the frame needs no capability at all",
+        expression.span,
+      ));
+      return;
+    }
+    const tokens = typeof sandbox.value === "string" ? sandbox.value
+      : sandbox.value && sandbox.value.kind === "LiteralExpression" && typeof sandbox.value.value === "string" ? sandbox.value.value
+        : null;
+    if (tokens === null) return;
+    const granted = new Set(tokens.split(/\s+/u).filter(Boolean));
+    if (granted.has("allow-scripts") && granted.has("allow-same-origin")) {
+      this.diagnostics.push(diagnostic(
+        "VEL5066",
+        "sandbox='allow-scripts allow-same-origin' lets the framed document remove its own sandbox, so a srcdoc frame with both is not sandboxed at all; drop one of the two",
+        sandbox.span,
+      ));
+    }
+  }
+
+  /**
+   * WEB-S2: the analyzer already refuses an anchor that opens a window without
+   * 'noopener', so a URL attribute whose value is a script scheme cannot be the
+   * one URL question it declines to ask. A written-down URL is answered here; a
+   * value that arrives at run time is answered by the runtime attribute check.
+   */
+  private reportUrlAttributeScheme(attribute: JSXAttribute): void {
+    if (!WEB_URL_ATTRIBUTES.has(attribute.name)) return;
+    const value = attribute.value;
+    const written = typeof value === "string" ? [value] : value ? literalStringValues(value) : null;
+    if (written === null) return;
+    for (const text of written) {
+      const refusal = urlSchemeRefusal(text);
+      if (!refusal) continue;
+      this.diagnostics.push(diagnostic("VEL5067", `JSX '${attribute.name}' takes a URL, and ${refusal}`, attribute.span));
+      return;
+    }
+  }
+
   // Mirrors the emitter's keyed-children recognizer (dynamicChildLeaves): a
   // leaf shaped `source.map(item => <… key=… />)` — either the interpolation
   // itself or a '?:' branch of it — compiles to the identity-preserving keyed
@@ -2399,8 +3128,13 @@ export class VelarWebAnalyzer extends Analyzer {
     const honoredKeyRoots = new Set<JSXElementExpression>();
     for (const leaf of dynamicChildLeaves(expression)) {
       if (!leaf.list) continue;
-      if (leaf.list.key) honoredKeyRoots.add(leaf.list.arrow.body);
-      else this.diagnostics.push(diagnostic("VEL5017", "A JSX list rendered with .map() requires a key on its root element", leaf.list.arrow.body.span));
+      if (leaf.list.key) {
+        honoredKeyRoots.add(leaf.list.arrow.body);
+        // D89 A4: the list this keyed position renders by identity. A rewrite
+        // of that same list is what changes every row's identity at once.
+        const source = leaf.list.source.kind === "IdentifierExpression" ? this.lookup(leaf.list.source.name) : null;
+        if (source) this.keyedListSources.add(spanIdentity(source.span));
+      } else this.diagnostics.push(diagnostic("VEL5017", "A JSX list rendered with .map() requires a key on its root element", leaf.list.arrow.body.span));
     }
     for (const root of honoredKeyRoots) this.honoredJsxKeys.add(root);
     this.reportIneffectiveJsxKeys(expression, honoredKeyRoots);
@@ -2442,7 +3176,10 @@ export class VelarWebAnalyzer extends Analyzer {
     const provided = new Set(expression.attributes.filter((attribute) => attribute.name !== "key" && attribute.name !== "ref" && !removedJsxControlAttributes.has(attribute.name)).map((attribute) => attribute.name));
     const hasChildren = expression.children.some((child) => child.kind !== "JSXText" || child.value.trim().length > 0);
     if (hasChildren && provided.has("children")) this.diagnostics.push(diagnostic("VEL5014", `Component '${expression.tag}' receives children both as a prop and as JSX content`, expression.span));
-    else if (hasChildren && !component.properties.has("children")) this.diagnostics.push(diagnostic("VEL5018", `Component '${expression.tag}' does not declare JSX children`, expression.span));
+    // D31 item 26: the message used to state the deficiency and stop. `children`
+    // is an ordinary named prop, so the remedy is one declaration and the
+    // diagnostic is the only place the charter's reader meets its spelling.
+    else if (hasChildren && !component.properties.has("children")) this.diagnostics.push(diagnostic("VEL5018", `Component '${expression.tag}' does not declare JSX children; declare a 'children: WebNode' prop to accept them`, expression.span));
     else if (hasChildren) {
       provided.add("children");
       this.requireAssignable(webNodeType, component.properties.get("children")!, expression.span);
@@ -2537,6 +3274,45 @@ export class VelarWebAnalyzer extends Analyzer {
     }
     const actual = this.inferExpression(value);
     if (!this.isLookInput(actual)) this.diagnostics.push(diagnostic("VEL5040", `JSX look requires Look, Look?, or a list of Look values; received ${describeType(actual)}`, attribute.span));
+    if (value.kind === "ListExpression") this.reportIndependentLookCollisions(value, attribute);
+  }
+
+  /**
+   * Composition is how a Look overrides another one: `...baseLook` puts the two
+   * in an order the reader can see, and everything after it wins. Two looks
+   * placed side by side on one element state no order at all, so a property both
+   * of them set has no answer the source gives — the winner used to fall out of
+   * whichever rule the stylesheet happened to carry last. The shape is refused
+   * rather than ordered by fiat, and the refusal names the spelling that states
+   * the order the author meant.
+   */
+  private reportIndependentLookCollisions(value: Extract<Expression, { kind: "ListExpression" }>, attribute: JSXAttribute): void {
+    const entries: { readonly name: string; readonly look: WebLookExpression }[] = [];
+    for (const element of value.elements) {
+      if (element.kind !== "IdentifierExpression") continue;
+      const look = this.lookDeclarations.get(element.name);
+      if (look) entries.push({ name: element.name, look });
+    }
+    for (const [index, first] of entries.entries()) {
+      for (const second of entries.slice(index + 1)) {
+        if (first.name === second.name) continue;
+        const left = lookContributions(first.look, this.lookDeclarations);
+        const right = lookContributions(second.look, this.lookDeclarations);
+        // A look that composes the other is already ordered against it: the
+        // spread says which one is the base, so nothing here is ambiguous.
+        if (left.composed.has(second.name) || right.composed.has(first.name)) continue;
+        const collision = [...left.properties].find((property) => right.properties.has(property));
+        if (collision === undefined) continue;
+        const property = collision.slice(collision.indexOf(":") + 1);
+        const target = collision.slice(0, collision.indexOf(":"));
+        this.diagnostics.push(diagnostic(
+          "VEL5068",
+          `Look '${first.name}' and Look '${second.name}' both set '${property}'${target ? ` on '@${target}'` : ""}, and placing them side by side states no order between them; write one Look that starts with '...${first.name}' and overrides '${property}' from there, then pass that one`,
+          attribute.span,
+        ));
+        return;
+      }
+    }
   }
 
   private analyzeComponentRef(
@@ -2568,6 +3344,7 @@ export class VelarWebAnalyzer extends Analyzer {
 
   private analyzeNativeJsxAttribute(expression: JSXElementExpression, attribute: JSXAttribute): void {
     const value = attribute.value;
+    this.reportUrlAttributeScheme(attribute);
     const eventName = attribute.name.startsWith("on:") ? attribute.name.slice(3).split(".")[0] ?? "" : "";
     const expectedEvent = eventName ? webEventType(eventName) : null;
     // GRM-A4: the declared handler type returns null. `() => {}` after a fat
@@ -2605,6 +3382,13 @@ export class VelarWebAnalyzer extends Analyzer {
       if (!isInvalidType(inferred) && inferred.kind !== "any" && !this.isOptionalString(inferred)) {
         this.diagnostics.push(diagnostic("VEL5047", `unsafe:html requires string or string?, received ${describeType(inferred)}`, attribute.span));
       }
+    // D90 coherence-3, one step sideways: `unsafe:` is a closed prefix with
+    // exactly one member, so `unsafe:script=` is wrong by construction rather
+    // than merely unrecognised — and it used to be emitted verbatim as a dead
+    // attribute, which is the worst possible answer for a name that reads like
+    // an escape hatch the author believes they opened.
+    } else if (attribute.name.startsWith("unsafe:")) {
+      this.diagnostics.push(diagnostic("VEL5015", `Unknown escape hatch '${attribute.name}'; 'unsafe:html' is the only one an element has, and it takes the HTML text as a string`, attribute.span));
     } else if (attribute.name === "bind:value") {
       if (!this.isWritableBindTarget(value)) {
         this.diagnostics.push(diagnostic("VEL5019", bindTargetGuidance("bind:value"), attribute.span));
@@ -2634,17 +3418,51 @@ export class VelarWebAnalyzer extends Analyzer {
         if (bindingType.kind !== "any" && bindingType.kind !== "optional") this.diagnostics.push(diagnostic("VEL5024", `A <${expression.tag}> ref requires ${expected}? or a parent element type so cleanup can restore null`, attribute.span));
         else if (target.kind !== "any" && (target.kind !== "named" || !accepted.has(target.name))) this.diagnostics.push(diagnostic("VEL5024", `A <${expression.tag}> ref requires ${expected}? or a parent element type`, attribute.span));
       }
-    } else if (attribute.name === "bind") {
-      this.diagnostics.push(diagnostic("VEL5019", "Use 'bind:value={name}'; the bind directive names the bound property, such as bind:value or bind:checked", attribute.span));
-    } else if (/^on[A-Z]/u.test(attribute.name)) {
+    // The three branches above are the whole `bind:` family, so a fourth suffix
+    // names no binding — and it used to reach the attribute emitter and render
+    // a dead `bind:foo` attribute, silently binding nothing. Same shape as the
+    // React-spelling rule: a closed VelarScript vocabulary, so an outside name
+    // is wrong rather than unknown.
+    } else if (attribute.name === "bind" || attribute.name.startsWith("bind:")) {
+      const property = attribute.name.slice("bind:".length);
+      const nearest = property ? nearestLookName(property, ["value", "checked", "group"]) : null;
+      this.diagnostics.push(diagnostic("VEL5019", property
+        ? `Unknown binding 'bind:${property}'${nearest ? `; did you mean 'bind:${nearest}'?` : "; an element binds bind:value for a field, bind:checked for a flag, and bind:group for a set of choices"}`
+        : "Use 'bind:value={name}'; the bind directive names the bound property, such as bind:value or bind:checked", attribute.span));
+    // WEB-S1: the guard used to be anchored on an uppercase letter, which
+    // closed the React reflex `onClick=` and left the lowercase HTML spelling
+    // open. Both are the same attribute — an HTML attribute name is matched
+    // ASCII-case-insensitively, and `setAttribute` lowercases on an HTML
+    // element, so `onClick` and `ONCLICK` reach `onclick` too. That attribute
+    // is the one that matters: the browser compiles its value as script, so any
+    // string routed there is executable code in the application's origin, which
+    // the charter reserves for `unsafe:html`. So a native element reserves the
+    // whole `on` prefix by name rather than by a roster of handler names: a
+    // roster leaves the next handler spelling open, and every event is written
+    // with the `on:` directive anyway. The lookahead keeps that directive out.
+    } else if (/^on(?!:)/iu.test(attribute.name)) {
+      const camel = attribute.name.slice(2);
+      const event = camel === "DoubleClick" || camel === "DblClick" ? "dblclick" : camel.toLowerCase();
+      // Only a name the browser really compiles as script earns the executable
+      // clause; a name that is no event at all is refused by the prefix rule,
+      // not by the browser, and a message that claimed otherwise would state a
+      // rule the author did not hit. The roster answering that question is
+      // HTML's handler attributes, read case-insensitively as the browser reads
+      // them — the `on:` directive vocabulary is a different question and
+      // answered it wrongly in both directions.
+      const executable = htmlEventHandlerAttributes.has(attribute.name.toLowerCase());
+      // A concrete `on:` replacement is worth naming only when the remainder is
+      // a real event; `onward` would otherwise be answered with `on:ward`.
+      const named = executable || nativeDomEventNames.has(event);
+      const script = executable
+        ? ` — an '${attribute.name}' attribute is compiled as script by the browser, so any value written there runs`
+        : "";
       if (attribute.name === "onEnter") {
         this.diagnostics.push(diagnostic("VEL5025", "Use 'on:keydown' with a handler that checks 'event.key == \"Enter\"'; VelarScript has no dedicated enter-key event", attribute.span));
       } else {
-        const camel = attribute.name.slice(2);
-        const event = camel === "DoubleClick" || camel === "DblClick" ? "dblclick" : camel.toLowerCase();
-        this.diagnostics.push(diagnostic("VEL5025", nativeDomEventNames.has(event)
-          ? `Use 'on:${event}'; VelarScript event attributes use the on: directive`
-          : "Use an 'on:event' directive with a native DOM event name, such as 'on:click' or 'on:keydown'", attribute.span));
+        this.diagnostics.push(diagnostic("VEL5025", named
+          ? `Use 'on:${event}'; VelarScript event attributes use the on: directive, written 'on:${event}={handler}'${script}`
+          : "Use an 'on:event' directive with a native DOM event name, such as 'on:click={handler}' or 'on:keydown={handler}'; an element reserves every attribute name beginning with 'on' other than the 'on:' directive itself, because the handler spellings among them — 'onclick', 'onerror', 'onload' — are executable script in the browser", attribute.span));
       }
     } else if (attribute.name.startsWith("on:")) {
       const [event, ...modifiers] = attribute.name.slice(3).split(".");
@@ -2663,11 +3481,129 @@ export class VelarWebAnalyzer extends Analyzer {
       this.requireAssignable(inferred, boolType, attribute.span);
     } else if (attribute.name === "key" && !isInvalidType(inferred) && inferred.kind !== "string" && inferred.kind !== "number" && inferred.kind !== "enum" && inferred.kind !== "enumMember" && inferred.kind !== "any") {
       this.diagnostics.push(diagnostic("VEL5022", "A JSX key must be a string, string-backed enum, or number", attribute.span));
-    } else if (!isInvalidType(inferred) && !this.isJsxAttributeValue(inferred)) {
+    // The name check sits at the tail of the chain so every directive above it
+    // — look:, class:, on:, bind:, ref, key — keeps owning its own spelling and
+    // is never read as an HTML attribute name. It reports at most once per
+    // attribute and short-circuits the value-shape message, so a React spelling
+    // is answered with its successor rather than with two half-answers.
+    } else if (!this.reportNativeAttributeSpelling(expression, attribute)
+      && !isInvalidType(inferred) && !this.isJsxAttributeValue(inferred)) {
       this.diagnostics.push(diagnostic("VEL5047", `Native JSX attributes require text, finite numbers, bool, enums, or null; received ${describeType(inferred)}`, attribute.span));
     }
     if (attribute.name.startsWith("on:click") && !["button", "a", "input", "select", "textarea", "summary"].includes(expression.tag)
       && !expression.attributes.some((item) => item.name === "role")) this.diagnostics.push(diagnostic("VEL5023", `Clickable <${expression.tag}> requires an explicit role`, expression.span));
+  }
+
+  /**
+   * D90 coherence-3: DOM attribute names and ARIA are documented as checked
+   * surfaces, and nothing checked them — `className="panel"` compiled clean and
+   * emitted a dead attribute, while the sibling React reflex `onClick=` on the
+   * same element was already refused. So a model got a clean bill of health on
+   * exactly the half of its React habit that silently breaks the page.
+   *
+   * The rule diagnoses names that are KNOWN wrong, never names that are merely
+   * unknown. HTML lets a document carry attributes no roster can enumerate, so
+   * `foo="bar"`, `data-*`, and a framework's own prefixes stay legal; a false
+   * positive there would block a correct program, which is worse than the
+   * silence it replaces. Three closed rosters answer three closed questions:
+   * the React / JavaScript-property spellings, the ARIA attribute names (ARIA,
+   * unlike HTML, admits no custom names), and the ARIA and role vocabularies.
+   *
+   * D61 bounds the value half. It ruled that an `aria-*` attribute given a
+   * `bool` renders the literal text "true"/"false", and explicitly rejected
+   * making the author write `aria-pressed={x ? "true" : "false"}` as ceremony.
+   * So a token vocabulary is read only against a string literal; an expression
+   * value is a runtime question and is never touched here.
+   *
+   * Returns true when it reported, so the caller does not stack a value-shape
+   * message on an attribute whose name is already answered.
+   */
+  private reportNativeAttributeSpelling(expression: JSXElementExpression, attribute: JSXAttribute): boolean {
+    // A custom element owns its own attribute vocabulary, and an unknown tag was
+    // already reported as a tag; neither is a surface these rosters describe.
+    if (!WEB_NATIVE_ELEMENTS.has(expression.tag)) return false;
+    const name = attribute.name;
+    // The attribute span opens on the name, so the name occupies its first
+    // `name.length` characters — the range a rename rewrites, leaving the value
+    // exactly as written.
+    const nameSpan: Span = { start: attribute.span.start, end: attribute.span.start + name.length };
+    const rename = (write: string) => ({ fix: { title: `Use '${write}'`, edits: [{ span: nameSpan, text: write }] } });
+    const spelling = WEB_MISSPELLED_ATTRIBUTES.get(name);
+    if (spelling) {
+      this.diagnostics.push({
+        code: "VEL5070",
+        message: `'${name}' is not a native attribute name; write '${spelling.write}'${spelling.note ? ` ${spelling.note}` : ""}`,
+        span: attribute.span,
+        ...(spelling.note === undefined ? rename(spelling.write) : {}),
+      });
+      return true;
+    }
+    if (/^aria[A-Z]/u.test(name)) {
+      // Every ARIA attribute is `aria-` followed by one lowercase word, so
+      // lowercasing the remainder recovers the spelling whenever one exists.
+      const hyphenated = `aria-${name.slice(4).toLowerCase()}`;
+      const known = WEB_ARIA_ATTRIBUTES.has(hyphenated);
+      this.diagnostics.push({
+        code: "VEL5070",
+        message: known
+          ? `'${name}' is not a native attribute name; ARIA attribute names are hyphenated — write '${hyphenated}'`
+          : `'${name}' is not a native attribute name; ARIA attribute names are hyphenated and lowercase, such as 'aria-label'`,
+        span: attribute.span,
+        ...(known ? rename(hyphenated) : {}),
+      });
+      return true;
+    }
+    if (name.startsWith("aria-") && !WEB_ARIA_ATTRIBUTES.has(name)) {
+      const nearest = nearestLookName(name, WEB_ARIA_ATTRIBUTES);
+      this.diagnostics.push({
+        code: "VEL5070",
+        message: nearest
+          ? `Unknown ARIA attribute '${name}'; did you mean '${nearest}'?`
+          : `Unknown ARIA attribute '${name}'; ARIA defines a closed set of aria-* names, so a state or property it does not define belongs on a data-* attribute`,
+        span: attribute.span,
+        ...(nearest ? rename(nearest) : {}),
+      });
+      return true;
+    }
+    // Only a literal value is read. A fix is not registered for a value: the
+    // attribute span opens on the name, so the value's own range is not known
+    // here, and the message names the token instead.
+    const literal = attribute.value;
+    // The empty string is not an out-of-vocabulary token: ARIA reads it as the
+    // attribute's own default, so `aria-hidden=""` is an uncommon but correct
+    // spelling of "not hidden" and refusing it would block a working document.
+    // `role=""` is already silent for the same reason — its loop skips empty
+    // tokens — so this keeps the two halves of the value check agreeing.
+    if (typeof literal !== "string" || literal === "") return false;
+    const vocabulary = WEB_ARIA_ENUMERATED_VALUES.get(name);
+    if (vocabulary && !vocabulary.has(literal)) {
+      const nearest = nearestLookName(literal, vocabulary);
+      this.diagnostics.push(diagnostic("VEL5070",
+        `'${name}' takes one of ${[...vocabulary].join(", ")}; '${literal}' is not one of them${nearest ? ` — did you mean '${nearest}'?` : ""}`,
+        attribute.span));
+      return true;
+    }
+    if (name === "role") {
+      // `role` takes a space-separated fallback list, so each token is its own
+      // question and only the unknown ones are named.
+      let reported = false;
+      for (const token of literal.split(/\s+/u)) {
+        if (!token || WEB_ARIA_ROLES.has(token)) continue;
+        // A published second spelling is answered as a synonym rather than as
+        // an unknown name. `image` is ARIA's own later spelling of `img`, and
+        // "Unknown ARIA role 'image'" would assert something false about it.
+        const synonym = WEB_ARIA_ROLE_SYNONYMS.get(token);
+        const nearest = synonym ? null : nearestLookName(token, WEB_ARIA_ROLES);
+        this.diagnostics.push(diagnostic("VEL5070", synonym
+          ? `ARIA publishes '${token}' and '${synonym}' as one role; VelarScript writes '${synonym}'`
+          : nearest
+            ? `Unknown ARIA role '${token}'; did you mean '${nearest}'?`
+            : `Unknown ARIA role '${token}'; role takes an ARIA role name such as 'button', 'dialog', or 'status'`, attribute.span));
+        reported = true;
+      }
+      return reported;
+    }
+    return false;
   }
 
   /**

@@ -12,14 +12,27 @@ export interface ForbiddenSourceIdentifierRule {
    * 'var' offers 'let' or 'const', which is the author's choice to make.
    */
   readonly fix: string | null;
+  /**
+   * D90 (compiler-front-9): the spelling is refused as a binding, a parameter
+   * and a type, but is an ordinary member name and record key. The charter's
+   * reserved-spelling paragraph already promises this of the words JavaScript
+   * reserves — external data and Web APIs do not need renamed fields — and
+   * `int` (velar/random owns `Random.int(...)`) and `with`
+   * (`Array.prototype.with`, `Temporal.PlainDate.prototype.with`, and every
+   * builder API spelled that way) are the two rules here that answer to it.
+   * Execution-capability spellings such as `eval` deliberately do not: the
+   * charter keeps them unavailable through direct member syntax.
+   */
+  readonly memberLegal: boolean;
 }
 
 function forbidden(
   guidance: string,
   recovery: ForbiddenSourceIdentifierRule["recovery"],
   fix: string | null = null,
+  memberLegal = false,
 ): ForbiddenSourceIdentifierRule {
-  return { guidance, recovery, fix };
+  return { guidance, recovery, fix, memberLegal };
 }
 
 /**
@@ -35,12 +48,30 @@ export const forbiddenSourceIdentifiers: ReadonlyMap<string, ForbiddenSourceIden
   ["True", forbidden("Use 'true'; VelarScript keywords are lowercase", [{ kind: "true", value: "true" }], "true")],
   ["False", forbidden("Use 'false'; VelarScript keywords are lowercase", [{ kind: "false", value: "false" }], "false")],
   ["elif", forbidden("Use 'else if'; VelarScript keeps ordinary readable if chains", [{ kind: "else", value: "else" }, { kind: "if", value: "if" }], "else if")],
-  ["int", forbidden("Use 'number'; VelarScript has one JavaScript numeric type", [{ kind: "identifier", value: "number" }], "number")],
+  ["int", forbidden("Use 'number'; VelarScript has one JavaScript numeric type", [{ kind: "identifier", value: "number" }], "number", true)],
   ["float", forbidden("Use 'number'; VelarScript has one JavaScript numeric type", [{ kind: "identifier", value: "number" }], "number")],
   ["switch", forbidden("Use 'match' for strict pattern dispatch", [{ kind: "identifier", value: "match" }], "match")],
   ["this", forbidden("Use explicit 'self' inside methods; VelarScript does not expose dynamic 'this'", [{ kind: "identifier", value: "self" }], "self")],
   ["new", forbidden("Call a class directly; VelarScript does not expose 'new'", [], "")],  ["eval", forbidden("VelarScript does not expose 'eval'", null)],
-  ["with", forbidden("Use a record spread such as '{...value, field: next}' to build an updated record; VelarScript does not expose 'with'", null)],
+  // D89 (message correction): the author who writes 'with' is writing Python's
+  // context manager, not a record update. 'using name = expression' owns the
+  // value and releases it when the scope ends, which is the whole of what
+  // 'with X as y:' does.
+  // D90 (compiler-front-9): the ban is on the infix record-update spelling and
+  // on any binding named 'with'. `value.with(...)`, `{with: 1}` and a member
+  // declared `with` are ordinary code, so `Array.prototype.with` and the
+  // builder APIs spelled that way stay callable.
+  ["with", forbidden("Use 'using name = expression'; it owns the value and releases it when the scope ends, and VelarScript does not expose 'with'", null, null, true)],
+  // D90 (coherence): the last Python statement reflex in this curated list.
+  // `const f = lambda x: x` used to land on the newline diagnostic — a
+  // sentence about statement layout for a spelling that is simply the wrong
+  // word. It carries no fix: rewriting `lambda x: x` into `x => x` means
+  // reading the parameter list and the colon, which is judgment rather than a
+  // mechanical substitution, and a fix that guesses is worse than none.
+  // `memberLegal` for the same reason `int` carries it: a rate or a
+  // regularization weight arrives from external data spelled `lambda`, and a
+  // record key is never the Python statement.
+  ["lambda", forbidden("Use an arrow — 'value => expression'; VelarScript does not expose 'lambda'", null, null, true)],
 ]);
 
 const coreReservedBindings = new Set([
@@ -103,7 +134,10 @@ export function bindingNameRestriction(
 
 export function memberNameRestriction(name: string, owner: "class" | "enum" | "data"): MemberNameRestriction | null {
   if (!isValidSourceIdentifier(name)) return "invalid";
-  if (forbiddenSourceIdentifiers.has(name)) return "source";
+  // A rule that is legal in member position declares as well as it reads:
+  // refusing `def with(...)` while accepting `q.with(...)` would leave an
+  // extern declaration unable to describe the API it is there to describe.
+  if (forbiddenSourceIdentifiers.get(name)?.memberLegal === false) return "source";
   if (forbiddenPrototypeMembers.has(name)) return "prototype";
   if (owner === "class" && name === "constructor") return "constructor";
   if (owner === "enum" && (name === "is" || name === "parse" || name === "values")) return "enum-runtime";
@@ -121,3 +155,27 @@ export function isJavaScriptReservedBinding(name: string): boolean {
 export function isForbiddenPrototypeMember(name: string): boolean {
   return forbiddenPrototypeMembers.has(name);
 }
+
+/**
+ * D90 (compiler-front-15): whether a name standing between `<` and `>` is
+ * evidence that the pair is a type argument list rather than a comparison.
+ * `<` and `>` are comparison operators everywhere the grammar can tell, so the
+ * only names that tip the reading are the ones a type argument list is made of:
+ * a builtin type spelling, or a capitalized name, which is how VelarScript
+ * writes every type it declares.
+ *
+ * Two readers ask this question and both must answer it identically — the
+ * parser, deciding which grammar `Map<string, number>()` is, and the formatter,
+ * deciding whether to space those brackets as operators. When they disagreed,
+ * `velar format` rewrote the line into the spelling of the *other* reading.
+ */
+export function isTypeEvidenceName(value: string): boolean {
+  if (builtinTypeEvidenceNames.has(value)) return true;
+  const first = value[0] ?? "";
+  return first >= "A" && first <= "Z";
+}
+
+const builtinTypeEvidenceNames = new Set([
+  "string", "number", "bool", "null", "unknown", "any",
+  "List", "Set", "Map", "Record", "Promise", "Function", "Type", "readonly",
+]);

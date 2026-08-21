@@ -16,7 +16,7 @@ import {
   type Page,
 } from "playwright";
 import type { VelarProjectConfig } from "./config.ts";
-import { compileProject } from "./project.ts";
+import { compileProject, type ProjectModule, type ProjectResult } from "./project.ts";
 import { standardModuleSource, standardModuleSources } from "./standard-modules.ts";
 import { compiledTestModulePath, portablePath, quoteReportedText, writeCompiledTestProject } from "./test-output.ts";
 import { verifyProductionBuild } from "./production-verifier.ts";
@@ -29,6 +29,7 @@ import {
   observeBrowserWorkerParent,
   superviseBrowserWorker,
   terminateBrowserServer,
+  type BrowserWorkerReport,
 } from "./browser-process-owner.ts";
 
 /**
@@ -415,6 +416,11 @@ async function runBrowserTestsInWorker(
   let activeBrowserServer: BrowserServer | null = null;
   let passed = 0;
   let failed = 0;
+  // A body that outlived its bound cannot be cancelled in this process, so
+  // what it reports afterwards lands on whichever test is running then. Naming
+  // the tests it could have come from is what this process can offer instead
+  // of the thread termination the Node runner uses.
+  const abandonedBodies: string[] = [];
   try {
     const build = await buildProject(config, site, options.executable);
     if (!build.ok) {
@@ -423,9 +429,9 @@ async function runBrowserTestsInWorker(
     }
     const verified = await verifyProductionBuild(site);
     await prepareStandardModules(compiled, config);
-    const entries: Array<{ readonly file: string; readonly output: string; readonly tests: readonly ModuleTest[] }> = [];
+    const entries: BrowserTestEntry[] = [];
     for (const file of files) {
-      const entry = await compileBrowserTest(file, compiled, config);
+      const entry = await compileBrowserTest(file, config);
       if (!entry) {
         failed += 1;
         continue;
@@ -468,11 +474,21 @@ async function runBrowserTestsInWorker(
           engineStarted = true;
           if (lifecycleFailure !== null) throw lifecycleFailure;
           activeBrowser = await browserTypes[engine].connect(activeBrowserServer.wsEndpoint(), { timeout: 30_000 });
+          // Each engine gets its own compiled tree. A cache-buster on the
+          // entry's URL freshens the entry's module record and nothing else, so
+          // firefox and webkit used to inherit whatever chromium's pass left in
+          // every module the entry imports — a state collision an author reads
+          // as a browser-engine difference. A distinct directory per engine
+          // gives every module in the graph its own resolved URL. The standard
+          // modules stay one level up, in `compiled`, where Node's upward
+          // node_modules walk still reaches them.
+          const engineRoot = join(compiled, engine);
           engineEntries:
           for (const entry of entries) {
+            const output = await writeBrowserTestEntry(entry, engineRoot, config);
             let namespace: Record<string, unknown>;
             try {
-              namespace = await import(`${pathToFileURL(entry.output).href}?engine=${engine}&run=${Date.now()}`) as Record<string, unknown>;
+              namespace = await import(pathToFileURL(output).href) as Record<string, unknown>;
             } catch (error) {
               if (lifecycleFailure !== null) throw lifecycleFailure;
               failed += entry.tests.length;
@@ -496,12 +512,21 @@ async function runBrowserTestsInWorker(
               // test, which is the specification a person reads.
               // D51 rule 105: the browser verdict line escapes author text too.
               const name = quoteReportedText(declared.title);
+              const verdictLabel = `${engine} :: ${quoteReportedText(portablePath(relative(config.root, entry.file)))} :: ${name}`;
+              // The bound a synchronously spinning body obeys cannot live in
+              // the process that body wedged, so the supervisor is told which
+              // test is running, and with what counts behind it, before it
+              // starts.
+              announceToSupervisor({ kind: "begin", label: verdictLabel, timeoutMs: limits.testTimeoutMs, passed, failed });
               const test = namespace[declared.name];
               const context = await activeBrowser.newContext();
               const page = await context.newPage();
               page.setDefaultTimeout(30_000);
               page.setDefaultNavigationTimeout(30_000);
               const runtimeFailures: string[] = [];
+              // How many of them the failure already carries, so that what
+              // arrives while the context closes is added and not doubled.
+              let reportedRuntimeFailures = 0;
               let testFailure: unknown = null;
               page.on("pageerror", (error) => runtimeFailures.push(error.stack ?? error.message));
               page.on("console", (message) => {
@@ -529,13 +554,18 @@ async function runBrowserTestsInWorker(
                 );
                 if (typeof test !== "function") throw new Error(`Test ${name} was not emitted`);
                 if (test.length !== 0) throw new Error(`Browser test ${name} cannot declare parameters`);
-                await boundedBrowserOperation(
-                  Promise.resolve().then(() => test()),
+                await boundedBrowserTestBody(
+                  test as () => unknown,
                   limits.testTimeoutMs,
                   `Browser test ${quoteReportedText(portablePath(relative(config.root, entry.file)))} :: ${name}`,
                   lifecycle,
+                  channel,
+                  abandonedBodies,
                 );
-                if (runtimeFailures.length > 0) throw new Error(`Browser runtime failures:\n${runtimeFailures.join("\n")}`);
+                if (runtimeFailures.length > 0) {
+                  reportedRuntimeFailures = runtimeFailures.length;
+                  throw new Error(`Browser runtime failures:\n${runtimeFailures.join("\n")}`);
+                }
               } catch (error) {
                 testFailure = error;
               } finally {
@@ -547,6 +577,9 @@ async function runBrowserTestsInWorker(
                   testFailure = new Error(`${testFailure === null ? "Browser test completed but its context leaked" : stackOf(testFailure)}\n${stackOf(cleanupError)}`);
                 }
               }
+              // The test's own window is over: what follows is the verdict,
+              // and between tests only the run deadline applies.
+              announceToSupervisor({ kind: "idle" });
               // The host error channel is the third way a failure reaches a
               // human here, and the one the runner used to ignore: the test
               // body runs in this process, so a page API it calls, a detached
@@ -555,19 +588,32 @@ async function runBrowserTestsInWorker(
               // than through the page. Draining after the verdict also catches
               // page reports queued while the context closed.
               const hostReports = await channel.drain();
-              if (testFailure === null && (hostReports.length > 0 || runtimeFailures.length > 0)) {
-                const reported = [...runtimeFailures, ...hostReports].join("\n");
-                testFailure = new Error(hostReports.length > 0
-                  ? `Browser runtime failures:\n${reported}\n${browserTestHostGuidance}`
-                  : `Browser runtime failures:\n${reported}`);
+              // A test that has already failed still owns whatever else it
+              // reported. Dropping these because a failure was in hand sends
+              // the author back for a second run to meet the second failure —
+              // the same discard the Node runner made on its failing path. The
+              // two lifecycle errors stay unwrapped, because the run itself
+              // ends on them and the check below reads their type.
+              const pendingRuntimeFailures = runtimeFailures.slice(reportedRuntimeFailures);
+              if ((hostReports.length > 0 || pendingRuntimeFailures.length > 0)
+                && !(testFailure instanceof BrowserTestInterrupted)
+                && !(testFailure instanceof BrowserTestRunTimedOut)) {
+                const reported = [...pendingRuntimeFailures, ...hostReports].join("\n");
+                const source = abandonedBodies.length === 0
+                  ? ""
+                  : `\nA body that outlived its bound is still running in this process and may be the source: ${abandonedBodies.join(", ")}.`;
+                const text = hostReports.length > 0
+                  ? `Browser runtime failures:\n${reported}\n${browserTestHostGuidance}${source}`
+                  : `Browser runtime failures:\n${reported}${source}`;
+                testFailure = testFailure === null ? new Error(text) : new Error(`${stackOf(testFailure)}\n${text}`);
               }
               if (testFailure instanceof BrowserTestInterrupted || testFailure instanceof BrowserTestRunTimedOut) throw testFailure;
               if (testFailure === null) {
                 passed += 1;
-                process.stdout.write(`✓ ${engine} :: ${quoteReportedText(portablePath(relative(config.root, entry.file)))} :: ${name}\n`);
+                process.stdout.write(`✓ ${verdictLabel}\n`);
               } else {
                 failed += 1;
-                process.stderr.write(`✗ ${engine} :: ${quoteReportedText(portablePath(relative(config.root, entry.file)))} :: ${name}\n${stackOf(testFailure)}\n`);
+                process.stderr.write(`✗ ${verdictLabel}\n${stackOf(testFailure)}\n`);
               }
               if (!engineUsable) {
                 process.stderr.write(`✗ ${engine} was retired after context cleanup failed\n`);
@@ -647,6 +693,60 @@ async function runBrowserTestsInWorker(
 }
 
 /**
+ * Tells the supervisor which test this process is running.
+ *
+ * The browser worker is a child process precisely so that one bound lives
+ * outside the body that can wedge it. A run driven in-process by a harness has
+ * no supervisor and simply has no such bound, which is why the report is sent
+ * only when the channel is there.
+ */
+function announceToSupervisor(report: BrowserWorkerReport): void {
+  if (typeof process.send !== "function" || !process.connected) return;
+  process.send(report);
+}
+
+/**
+ * The body is observed before it is raced. A `Promise.race` loser keeps
+ * running — nothing in this process can cancel it — and the handler the race
+ * itself attaches swallows its rejection, so a timed-out browser test's own
+ * later failure used to reach nobody at all. Reporting it on the unowned
+ * channel attributes it to the test that produced it, which is what the Node
+ * runner does with the same shape.
+ */
+async function boundedBrowserTestBody(
+  test: () => unknown,
+  timeoutMs: number,
+  label: string,
+  cancellation: Promise<never>,
+  channel: UnownedErrorChannel,
+  abandonedBodies: string[],
+): Promise<void> {
+  let finished = false;
+  let abandoned = false;
+  const body = Promise.resolve().then(() => test());
+  void body.then(() => { finished = true; }, (error: unknown) => {
+    finished = true;
+    if (!abandoned) return;
+    // Nothing terminates this process between tests, so the report can land
+    // after its own test's verdict was already taken; it names the test rather
+    // than saying "this one".
+    channel.report(`${label} failed after its bound expired\n${stackOf(error)}`);
+  });
+  try {
+    await boundedBrowserOperation(body, timeoutMs, label, cancellation);
+  } catch (error) {
+    // A body that failed within its bound settled on the handler above, which
+    // was attached before the race; only one still running when the bound
+    // expired is abandoned, and nothing in this process can cancel it.
+    if (!finished) {
+      abandoned = true;
+      abandonedBodies.push(label);
+    }
+    throw error;
+  }
+}
+
+/**
  * Work a browser test started outlives the last test exactly as it does in the
  * Node runner, and the worker ends with process.exit, so the run must wait for
  * the process to run out of work before it takes its verdict. The one handle
@@ -676,11 +776,21 @@ async function installBrowserPerformanceRuntime(page: Page): Promise<void> {
   await page.addInitScript({ content: browserPerformanceInitScript });
 }
 
+/**
+ * One compiled test file, held so that every engine's pass can be written from
+ * the same compilation instead of paying for — and re-reporting — its own.
+ */
+interface BrowserTestEntry {
+  readonly file: string;
+  readonly project: ProjectResult;
+  readonly entry: ProjectModule | undefined;
+  readonly tests: readonly ModuleTest[];
+}
+
 async function compileBrowserTest(
   file: string,
-  outputRoot: string,
   config: VelarProjectConfig,
-): Promise<{ readonly file: string; readonly output: string; readonly tests: readonly ModuleTest[] } | null> {
+): Promise<BrowserTestEntry | null> {
   const project = await compileProject(file, new Map(), {
     sourceRoot: config.root,
     projectRoot: config.root,
@@ -698,14 +808,21 @@ async function compileBrowserTest(
     process.stderr.write(`✗ ${portablePath(relative(config.root, file))}\n${errors.join("\n\n")}\n`);
     return null;
   }
-  await writeCompiledTestProject(project, outputRoot);
   const entry = project.modules.find((module) => module.inputPath === file);
   const tests = entry?.result.moduleInterface.tests ?? [];
   if (tests.length === 0) {
     process.stderr.write(`✗ ${portablePath(relative(config.root, file))} declares no tests\n`);
     return null;
   }
-  return { file, output: entry ? compiledTestModulePath(project, entry, outputRoot) : join(outputRoot, relative(config.root, file).replace(/\.vel$/u, ".js")), tests };
+  return { file, project, entry, tests };
+}
+
+/** Writes one compiled test file into an engine's own tree and names its entry. */
+async function writeBrowserTestEntry(entry: BrowserTestEntry, outputRoot: string, config: VelarProjectConfig): Promise<string> {
+  await writeCompiledTestProject(entry.project, outputRoot);
+  return entry.entry
+    ? compiledTestModulePath(entry.project, entry.entry, outputRoot)
+    : join(outputRoot, relative(config.root, entry.file).replace(/\.vel$/u, ".js"));
 }
 
 function installBrowserRuntime(

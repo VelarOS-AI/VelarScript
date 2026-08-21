@@ -519,7 +519,7 @@ for (const phrase of [
   if (!cliSource.includes(phrase)) failures.push(`packages/cli/src/cli.ts: Node build does not materialize compiler runtime requirements '${phrase}'`);
 }
 for (const phrase of [
-  "const staging = await prepareBuildStaging(outputDirectory)",
+  "const staging = await prepareBuildStaging(outputDirectory, replacement)",
   "import { BUILD_STAGING_MARKER } from \"./build-staging.ts\"",
   "await recoverInterruptedBuilds(normalizedOutput)",
   "!processIsAlive(installed.ownerPid)",
@@ -1397,7 +1397,14 @@ for (const [pattern, message] of [
     "iterates with a replaceable iterator instead of an index walk or the captured Set/Map iterator"],
   [/\[\.\.\./u, "copies through the replaceable array iterator"],
   [/[A-Za-z_$][\w$]*\(\.\.\./u, "spreads through the replaceable array iterator instead of the captured apply operation"],
-  [/\.(?:flatMap|filter|map|forEach|join|reverse|concat|sort|push|pop|shift|unshift|splice|indexOf|includes)\s*\(/u,
+  [/\.(?:flatMap|filter|map|forEach|join|reverse|concat|sort|push|pop|shift|unshift|splice)\s*\(/u,
+    "uses a replaceable Array prototype method"],
+  // 'indexOf' and 'includes' also live on String.prototype, and the emitted runtime
+  // uses String methods freely -- '__velarLookProperty' calls 'token.lastIndexOf(":")'
+  // two lines above '__velarLookSurface', and this roster does not ban that. Scoping
+  // by receiver keeps the Array coverage instead of dropping the two shared names, and
+  // follows the DOM rule above, which enumerates its receivers the same way.
+  [/(?<!\btoken)\.(?:indexOf|includes)\s*\(/u,
     "uses a replaceable Array prototype method"],
 ]) {
   const match = pattern.exec(emittedWebRuntimeUseSource);
@@ -1486,7 +1493,10 @@ for (const phrase of [
   "WEB_RUNTIME_FOUNDATION_SHARED_ERROR",
   "this.requireRuntimeModule(VELAR_ERROR_NORMALIZATION_MODULE)",
   "errorApply as __velarErrorApply, errorCode as __velarErrorCode, isError as __velarIsError, normalizeError as __velarNormalizeError",
-  "webRuntime(WEB_RUNTIME_FOUNDATION_SHARED_ERROR)",
+  // No closing paren: the call takes further arguments now (the Look keyword table),
+  // and matching the whole call made this gate fail on an added argument rather than
+  // on a real boundary break.
+  "webRuntime(WEB_RUNTIME_FOUNDATION_SHARED_ERROR",
 ]) {
   if (!webEmitterSource.includes(phrase)) failures.push(`packages/web/src/emitter.ts: project Web runtime does not share error normalization '${phrase}'`);
 }

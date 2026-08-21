@@ -43,7 +43,14 @@ function __velarRegisterRuntimeType(value) {
 }
 function __velarRequireRuntimeType(value, name, optional = false) {
   if (optional && value == null) return null;
-  if (!value || typeof value !== "object" || !__velarTypeCall(__velarTypeWeakSetHas, __velarRuntimeTypeRegistry, [value])) {
+  // Registry membership proves the value was registered somewhere in this
+  // realm; it does not prove it still presents the Type surface. A module built
+  // by another generation registers into the same WeakSet whenever both
+  // generations share the registry key, so the surface itself is asserted here:
+  // 'is' and 'parse' are the two operations every caller of this helper goes on
+  // to invoke.
+  if (!value || typeof value !== "object" || !__velarTypeCall(__velarTypeWeakSetHas, __velarRuntimeTypeRegistry, [value])
+    || typeof value.is !== "function" || typeof value.parse !== "function") {
     throw new __velarTypeNativeTypeError(name + " requires a compiler-known VelarScript runtime type");
   }
   return value;

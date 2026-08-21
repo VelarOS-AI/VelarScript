@@ -97,13 +97,35 @@ __velarHostErrorDefineProperty(__Velar${name}, "name", { value: ${JSON.stringify
 __velarHostErrorDefineProperty(__Velar${name}, "name", { value: ${JSON.stringify(name)}, writable: false, enumerable: false, configurable: true });`).join("\n")}
 `.trimStart();
 
+/**
+ * D50 rule 89 / D51 rule 107: the failure `assert` and `value!` raise is a
+ * compiler-owned class, not a relabelled `Error`. `code` answers with the name
+ * the class the value was constructed from declares, so an assertion failure
+ * that only wrote `name` onto the instance reported "Error" — the language's
+ * own most common failure was indistinguishable from a foreign one. The class
+ * carries its name the same way `NarrowingError` and `IndexError` do.
+ */
+export const VELAR_ASSERTION_ERROR_RUNTIME = String.raw`
+const __velarAssertionNativeError = globalThis.Error;
+const __velarAssertionDefineProperty = globalThis.Object.defineProperty;
+class __VelarAssertionError extends __velarAssertionNativeError {
+  constructor(message) {
+    super(message);
+    this.name = "AssertionError";
+  }
+}
+__velarAssertionDefineProperty(__VelarAssertionError, "name", { value: "AssertionError", writable: false, enumerable: false, configurable: true });
+`.trimStart();
+
 export const VELAR_ERROR_NORMALIZATION_MODULE = "velar/compiler-runtime-errors-v1";
 
 /** Project-shared implementation of compiler-owned foreign Error normalization. */
 export const VELAR_ERROR_NORMALIZATION_MODULE_SOURCE = String.raw`
 ${VELAR_ERROR_NORMALIZATION_RUNTIME}
+${VELAR_ASSERTION_ERROR_RUNTIME}
 ${VELAR_HOST_ERROR_RUNTIME}
 export {
+  __VelarAssertionError as AssertionError,
   __velarErrorApply as errorApply,
   __velarErrorCode as errorCode,
   __velarIsError as isError,

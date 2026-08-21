@@ -31,6 +31,8 @@ import { MAX_VELAR_PROJECT_MODULES, readVelarSourceFile, validateVelarSourceText
 import { readBoundedText } from "./bounded-text.ts";
 import { hostErrorMessage, isHostErrorCode } from "./host-error.ts";
 import { canonicalizePotentialPath } from "./canonical-path.ts";
+import { byCodeUnit } from "./stable-order.ts";
+import { VELAR_VERSION } from "./version.ts";
 
 const MAX_PROJECT_RESOURCES = 1024;
 const MAX_JSON_RESOURCE_BYTES = 4 * 1024 * 1024;
@@ -65,6 +67,34 @@ export interface VelarSourcePackage {
   readonly resources: readonly VelarPackageResource[];
   readonly targets: readonly VelarPackageTarget[];
   readonly requiredCapabilities: readonly string[];
+  /**
+   * D90 R13: the language generation range the package declares it needs, or
+   * null when it declares none. Optional is the ruling's own boundary — a
+   * package that says nothing is checked exactly as it was before.
+   */
+  readonly requiredLanguage: VelarPackageLanguageRange | null;
+}
+
+/**
+ * D90 R13: a declared language generation range, kept alongside the author's
+ * own spelling — whitespace-normalized, nothing else — so the mismatch error
+ * quotes the manifest back rather than a re-rendering of the parsed bounds.
+ */
+export interface VelarPackageLanguageRange {
+  readonly text: string;
+  readonly lower: VelarLanguageBound | null;
+  readonly upper: VelarLanguageBound | null;
+}
+
+export interface VelarLanguageBound {
+  readonly generation: VelarLanguageGeneration;
+  readonly inclusive: boolean;
+}
+
+/** A language generation: `<major>.<minor>`, the two components a patch release never moves. */
+export interface VelarLanguageGeneration {
+  readonly major: number;
+  readonly minor: number;
 }
 
 export type VelarPackageTarget = "core" | "node" | "web" | "desktop";
@@ -264,8 +294,11 @@ export async function compileProjectEntries(
     pending.push(module);
   };
 
-  while (pending.length > 0) {
-    const pendingModule = pending.shift()!;
+  // An index cursor, not `shift()`: the queue is bounded by
+  // MAX_VELAR_PROJECT_MODULES, and shifting each of those entries off the
+  // front costs O(n) apiece, making the dependency walk itself quadratic.
+  for (let cursor = 0; cursor < pending.length; cursor += 1) {
+    const pendingModule = pending[cursor]!;
     const inputPath = pendingModule.inputPath;
     if (visited.has(inputPath)) continue;
     if (visited.size >= MAX_VELAR_PROJECT_MODULES) {
@@ -564,8 +597,10 @@ export async function compileProjectEntries(
   }
 
   const modules: ProjectModule[] = [];
-  const affected = previous ? affectedModules(loaded, velarImports, resourceImports, previous, changedPaths) : new Set(loaded.keys());
   const previousModules = new Map(previous?.modules.map((module) => [module.inputPath, module]));
+  const affected = previous
+    ? affectedModules(loaded, velarImports, resourceImports, previous, previousModules, changedPaths)
+    : new Set(loaded.keys());
   for (const [dependency, importers] of previous?.externalTypeDependencies ?? []) {
     for (const importer of importers) {
       if (!loaded.has(importer) || affected.has(importer)) continue;
@@ -649,7 +684,13 @@ export async function compileProjectEntries(
   }
 
   appendInitializationCycleDiagnostics(modules, loaded, velarImports, entryPath, resolutionDiagnostics);
-  modules.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+  // D90 R3(a): module order decides the concatenated stylesheet's bytes, its
+  // content hash, and `buildId`. `localeCompare` follows the collation the
+  // process environment selects, so it made those outputs — and the cascade
+  // winner between two equal-specificity rules — depend on the build
+  // machine's `LC_ALL`. Order by code unit over the POSIX-normalized
+  // relative path instead.
+  modules.sort((left, right) => byCodeUnit(left.relativePath, right.relativePath));
   if (framework?.host.validateProject) {
     try {
       const messages = framework.host.validateProject({
@@ -863,6 +904,7 @@ function affectedModules(
   velarImports: ReadonlyMap<string, string>,
   resourceImports: ReadonlyMap<string, ProjectResource>,
   previous: ProjectResult,
+  previousModules: ReadonlyMap<string, ProjectModule>,
   changedPaths: ReadonlySet<string>,
 ): Set<string> {
   const affected = new Set([...changedPaths].map((path) => resolve(path)));
@@ -906,16 +948,21 @@ function affectedModules(
     for (const importer of importers) dependents.add(importer);
     reverse.set(dependency, dependents);
   }
+  // An index cursor, not `shift()`: the array shift is O(n) per element, so
+  // the closure walk was quadratic in the number of affected modules.
   const pending = [...affected];
-  while (pending.length > 0) {
-    const path = pending.shift()!;
-    for (const dependent of reverse.get(path) ?? []) {
+  for (let cursor = 0; cursor < pending.length; cursor += 1) {
+    for (const dependent of reverse.get(pending[cursor]!) ?? []) {
       if (affected.has(dependent)) continue;
       affected.add(dependent);
       pending.push(dependent);
     }
   }
-  for (const module of loaded.keys()) if (!previous.modules.some((item) => item.inputPath === module)) affected.add(module);
+  // A module the previous result never held is affected by definition. Asking
+  // that of the previous module *list* was a linear scan per loaded module —
+  // O(M²) string comparisons on every keystroke at the 4096-module cap — for
+  // a question the caller's map already answers in constant time.
+  for (const module of loaded.keys()) if (!previousModules.has(module)) affected.add(module);
   return affected;
 }
 
@@ -929,7 +976,7 @@ function dependencyFirstCompilationGroups(
     (path) => moduleDependencies(loaded.get(path)!, loaded, velarImports, compilerExtensions),
   ).map((group) => group
     .map((path) => loaded.get(path)!)
-    .sort((left, right) => left.inputPath.localeCompare(right.inputPath)));
+    .sort((left, right) => byCodeUnit(left.inputPath, right.inputPath)));
 }
 
 /** Iterative Tarjan: the public 4096-module bound must not depend on host stack depth. */
@@ -1136,20 +1183,30 @@ function appendInitializationCycleDiagnostics(
     const additions: Diagnostic[] = [];
     if (cyclic && (componentSizes.get(componentOf.get(path) ?? -1) ?? 0) > 1) {
       for (const read of compiled.initializationImportReads) {
-        const target = originModule(resolveDependency(path, read.source), read.imported, loaded, resolveDependency);
+        const imported = resolveDependency(path, read.source);
+        const origin = originModule(imported, read.imported, loaded, resolveDependency);
+        const target = origin.module;
         if (target === null || target === path) continue;
         if (componentOf.get(target) !== componentOf.get(path)) continue;
         // A `def` emits a hoisted function declaration that the host
         // initializes at link time, so a cycle member may call one before the
         // defining module evaluates. Every other export shape is in its
         // temporal dead zone until then.
-        if (read.imported !== null && loaded.get(target)?.inspection.moduleInterface.hoistedExports?.has(read.imported)) continue;
+        //
+        // The exemption is a fact about the *origin* module's own export, so
+        // it must be asked with the name that module declares. An aliasing
+        // barrel (`export {value as helper}`) renames on the way through, and
+        // asking with the import-site alias answered about an unrelated
+        // export of the same name: it suppressed a real cycle read whenever
+        // the origin happened to have a `def` under the alias, and reported a
+        // correct program whenever the origin's `def` was renamed.
+        if (origin.name !== null && loaded.get(target)?.inspection.moduleInterface.hoistedExports?.has(origin.name)) continue;
         const modulePosition = order.get(path);
         const targetPosition = order.get(target);
         if (modulePosition === undefined || targetPosition === undefined || targetPosition < modulePosition) continue;
         additions.push(diagnostic(
           INITIALIZATION_CYCLE_DIAGNOSTIC,
-          `Move this read into a function, or extract the shared value into a third module; '${read.source}' has not initialized when this line runs`,
+          `Move this read into a function, or extract the shared value into a third module; ${uninitializedModuleName(read.source, imported, target, loaded)} has not initialized when this line runs`,
           read.span,
         ));
       }
@@ -1182,7 +1239,7 @@ function appendInitializationCycleDiagnostics(
         ...compiled,
         // The compile() contract keeps diagnostics ordered by span.
         diagnostics: [...compiled.diagnostics, ...additions]
-          .sort((left, right) => left.span.start - right.span.start || left.code.localeCompare(right.code)),
+          .sort((left, right) => left.span.start - right.span.start || byCodeUnit(left.code, right.code)),
         // The zero-diagnostics gate for code generation holds after the
         // project-level check as well.
         code: null,
@@ -1198,29 +1255,47 @@ function appendInitializationCycleDiagnostics(
 
 /**
  * The module that declares an imported name, following `export {name} from
- * "source"` barrels. Judging a cycle read by the module the import names would
- * let a barrel hide the defining module, whose binding is the one that is
- * actually uninitialized at run time.
+ * "source"` barrels, together with the name that module declares it under.
+ * Judging a cycle read by the module the import names would let a barrel hide
+ * the defining module, whose binding is the one that is actually
+ * uninitialized at run time; judging it by the import-site alias would ask
+ * the defining module about a name it may not use for this export.
  */
 function originModule(
   target: string | null,
   imported: string | null,
   loaded: ReadonlyMap<string, LoadedModule>,
   resolveDependency: (importerPath: string, source: string) => string | null,
-): string | null {
+): { readonly module: string | null; readonly name: string | null } {
   let current = target;
   let name = imported;
   const seen = new Set<string>();
   while (current !== null && name !== null && !seen.has(`${current}\0${name}`)) {
     seen.add(`${current}\0${name}`);
     const reExport = loaded.get(current)?.inspection.moduleInterface.reExports.get(name);
-    if (reExport === undefined) return current;
+    if (reExport === undefined) return { module: current, name };
     const next = resolveDependency(current, reExport.source);
-    if (next === null) return current;
+    if (next === null) return { module: current, name };
     current = next;
     name = reExport.imported;
   }
-  return current;
+  return { module: current, name };
+}
+
+/**
+ * The module the author must open. Through a re-export barrel the specifier
+ * written at the import site names a module that has fully initialized, so
+ * naming it alone states something false; name the origin and keep the
+ * specifier as the route to it.
+ */
+function uninitializedModuleName(
+  source: string,
+  imported: string | null,
+  origin: string,
+  loaded: ReadonlyMap<string, LoadedModule>,
+): string {
+  if (imported === origin) return `'${source}'`;
+  return `'${loaded.get(origin)?.relativePath ?? origin}' (re-exported by '${source}')`;
 }
 
 export function moduleInterfaceIdentity(
@@ -1231,21 +1306,21 @@ export function moduleInterfaceIdentity(
     `${kind.length}:${kind}${parts.map((part) => `${part.length}:${part}`).join("")}`
   );
   const typeMap = (values: ReadonlyMap<string, ValueType>): string => node("type-map", [...values]
-    .sort(([left], [right]) => left.localeCompare(right))
+    .sort(([left], [right]) => byCodeUnit(left, right))
     .map(([name, type]) => node("type-entry", [name, analysisTypeIdentity(type)])));
   const names = (values: ReadonlySet<string>): string => node("names", [...values].sort());
   const types = (values: readonly ValueType[]): string => node("types", values.map(analysisTypeIdentity));
   const namedTypes = node("named-types", [...interface_.namedTypes]
-    .sort(([left], [right]) => left.localeCompare(right))
+    .sort(([left], [right]) => byCodeUnit(left, right))
     .map(([name, fields]) => node("named-type", [name, typeMap(fields)])));
   const namedTypeReadonlyFields = node("named-type-readonly-fields", [...(interface_.namedTypeReadonlyFields ?? new Map())]
-    .sort(([left], [right]) => left.localeCompare(right))
+    .sort(([left], [right]) => byCodeUnit(left, right))
     .map(([name, fields]) => node("named-type-readonly", [name, names(fields)])));
   const namedTypeIdentities = node("named-type-identities", [...interface_.namedTypeIdentities]
-    .sort(([left], [right]) => left.localeCompare(right))
+    .sort(([left], [right]) => byCodeUnit(left, right))
     .map(([name, identity]) => node("named-type-identity", [name, identity])));
   const namedTypeBases = node("named-type-bases", [...(interface_.namedTypeBases ?? new Map())]
-    .sort(([left], [right]) => left.localeCompare(right))
+    .sort(([left], [right]) => byCodeUnit(left, right))
     .map(([name, base]) => node("named-type-base", [name, analysisTypeIdentity(base)])));
   // D55 rule 120, and batch M's lesson one layer out: a dependent compiled
   // against the parameter list, the bounds, *and* the template's field types.
@@ -1253,7 +1328,7 @@ export function moduleInterfaceIdentity(
   // bound that does not enter this hash is a constraint that silently
   // disappears from every module already built against it.
   const genericTypes = node("generic-types", [...(interface_.genericTypes ?? new Map())]
-    .sort(([left], [right]) => left.localeCompare(right))
+    .sort(([left], [right]) => byCodeUnit(left, right))
     .map(([name, info]) => node("generic-type", [
       name,
       info.identity,
@@ -1263,10 +1338,10 @@ export function moduleInterfaceIdentity(
       names(info.readonlyFields ?? new Set()),
     ])));
   const enums = node("enums", [...interface_.enums]
-    .sort(([left], [right]) => left.localeCompare(right))
+    .sort(([left], [right]) => byCodeUnit(left, right))
     .map(([name, info]) => node("enum", [name, info.identity, names(info.members)])));
   const classes = node("classes", [...interface_.classes]
-    .sort(([left], [right]) => left.localeCompare(right))
+    .sort(([left], [right]) => byCodeUnit(left, right))
     .map(([name, info]) => node("class", [
       name,
       info.identity ?? "",
@@ -1304,14 +1379,14 @@ export function moduleInterfaceIdentity(
     return `${value.length}:${value}`;
   };
   const extensionExports = node("extension-exports", [...interface_.extensionExports]
-    .sort(([left], [right]) => left.localeCompare(right))
+    .sort(([left], [right]) => byCodeUnit(left, right))
     .map(([extensionId, values]) => {
       const identify = extensionOwners.get(extensionId)?.inspection?.interfaceExportIdentity;
       if (!identify) {
         throw new Error(`Compiler extension '${extensionId}' exports cross-module interface data without an interfaceExportIdentity contract`);
       }
       const entries = [...values]
-        .sort(([left], [right]) => left.localeCompare(right))
+        .sort(([left], [right]) => byCodeUnit(left, right))
         .map(([name, value]) => {
           const identity = identify(name, value);
           if (typeof identity !== "string" || identity.length > 1024 * 1024) {
@@ -1333,10 +1408,10 @@ export function moduleInterfaceIdentity(
     enums,
     classes,
     node("reactive", [...interface_.reactiveExports]
-      .sort(([left], [right]) => left.localeCompare(right))
+      .sort(([left], [right]) => byCodeUnit(left, right))
       .map(([name, kind]) => node("reactive-entry", [name, kind]))),
     node("re-exports", [...interface_.reExports]
-      .sort(([left], [right]) => left.localeCompare(right))
+      .sort(([left], [right]) => byCodeUnit(left, right))
       .map(([name, target]) => node("re-export", [name, target.source, target.imported]))),
     node("tests", interface_.tests.map((item) => `${item.name}\u0000${item.title}`).sort()),
     extensionExports,
@@ -1396,6 +1471,7 @@ async function createAnalysisContext(
         readonlyFields: new Set(interface_.exports.keys()),
       });
       importHiddenTypeMetadata(interface_, namedTypes, namedTypeReadonlyFields, namedTypeBases, genericTypes, enums, classes);
+      importReachableStandardTypeMetadata(interface_, compilerExtensions, namedTypes, namedTypeReadonlyFields, namedTypeBases, genericTypes, enums, classes);
       continue;
     }
     if (dependency.reExport) {
@@ -1464,6 +1540,7 @@ async function createAnalysisContext(
     const standard = standardModuleInterface(dependency.source, compilerExtensions);
     if (standard) {
       importInterface(module, dependency, standard, imports, reactiveImports, namedTypes, namedTypeReadonlyFields, namedTypeIdentities, namedTypeBases, genericTypes, typeAliases, enums, classes, extensionImports, failures);
+      importReachableStandardTypeMetadata(standard, compilerExtensions, namedTypes, namedTypeReadonlyFields, namedTypeBases, genericTypes, enums, classes);
       continue;
     }
     const targetPath = dependency.source.startsWith(".") && extname(dependency.source) === ".vel"
@@ -1472,7 +1549,11 @@ async function createAnalysisContext(
     if (!targetPath) continue;
     const target = loaded.get(targetPath);
     if (!target) continue;
-    importInterface(module, dependency, resolvedModuleInterface(target, loaded, velarImports, interfaceCache, compiledInterfaces, compilerExtensions), imports, reactiveImports, namedTypes, namedTypeReadonlyFields, namedTypeIdentities, namedTypeBases, genericTypes, typeAliases, enums, classes, extensionImports, failures);
+    const targetInterface = resolvedModuleInterface(target, loaded, velarImports, interfaceCache, compiledInterfaces, compilerExtensions);
+    importInterface(module, dependency, targetInterface, imports, reactiveImports, namedTypes, namedTypeReadonlyFields, namedTypeIdentities, namedTypeBases, genericTypes, typeAliases, enums, classes, extensionImports, failures);
+    // The same sink one step sideways: a project module can re-export a
+    // signature returning a standard type it never declares either.
+    importReachableStandardTypeMetadata(targetInterface, compilerExtensions, namedTypes, namedTypeReadonlyFields, namedTypeBases, genericTypes, enums, classes);
   }
   return {
     imports,
@@ -1688,7 +1769,9 @@ async function velarPackageAtRoot(name: string, root: string): Promise<VelarSour
   if (escapesRoot(relative(root, entryPath))) throw new Error("'velar.entry' cannot escape the package root");
   if (extname(entryPath) !== ".vel") throw new Error("'velar.entry' must point to a .vel source file");
   const targets = packageTargets(manifest.velar?.targets);
-  const requiredCapabilities = packageRequiredCapabilities(manifest.velar?.requires);
+  const requires = packageRequiresFields(manifest.velar?.requires);
+  const requiredCapabilities = packageRequiredCapabilities(requires);
+  const requiredLanguage = packageRequiredLanguage(requires);
   return {
     name,
     root,
@@ -1696,6 +1779,7 @@ async function velarPackageAtRoot(name: string, root: string): Promise<VelarSour
     resources: packageResources(name, root, manifest.velar!.resources, manifest.exports),
     targets,
     requiredCapabilities,
+    requiredLanguage,
   };
 }
 
@@ -1716,13 +1800,30 @@ function packageTargets(value: unknown): readonly VelarPackageTarget[] {
   return targets;
 }
 
-function packageRequiredCapabilities(value: unknown): readonly string[] {
+/**
+ * D90 R13 asks the 'velar' section for an optional language generation. It is
+ * spelled 'velar.requires.language' because 'velar.requires' is already the
+ * package's "what I need from the toolchain" block: the language generation is
+ * one more thing it needs, and it belongs next to 'capabilities' rather than
+ * beside 'entry' and 'targets', which describe what the package *is*.
+ *
+ * The section is validated once, here, so that the readers below take an object
+ * this function has already proved rather than an `unknown` each of them would
+ * have to re-check.
+ */
+function packageRequiresFields(value: unknown): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("'velar.requires' must be an object");
   }
   const fields = value as Record<string, unknown>;
-  const unknown = Object.keys(fields).filter((field) => field !== "capabilities");
-  if (unknown.length > 0) throw new Error(`'velar.requires' has unknown field '${unknown[0]}'`);
+  const unknown = Object.keys(fields).filter((field) => field !== "capabilities" && field !== "language");
+  if (unknown.length > 0) {
+    throw new Error(`'velar.requires' has unknown field '${unknown[0]}'; the supported fields are 'capabilities' and 'language'`);
+  }
+  return fields;
+}
+
+function packageRequiredCapabilities(fields: Record<string, unknown>): readonly string[] {
   const capabilities = fields.capabilities;
   if (!Array.isArray(capabilities) || capabilities.length > 16) {
     throw new Error("'velar.requires.capabilities' must be a list with at most 16 entries");
@@ -1738,11 +1839,99 @@ function packageRequiredCapabilities(value: unknown): readonly string[] {
   return required;
 }
 
+/**
+ * D90 R13: the language generation this toolchain implements is VELAR_VERSION
+ * without its patch component — a patch release never moves the language.
+ */
+const TOOLCHAIN_LANGUAGE_GENERATION = VELAR_VERSION.split(".").slice(0, 2).join(".");
+
+const languageGenerationPattern = /^(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})$/u;
+
+function parseLanguageGeneration(text: string): VelarLanguageGeneration | null {
+  const match = languageGenerationPattern.exec(text);
+  if (match === null) return null;
+  return { major: Number(match[1]), minor: Number(match[2]) };
+}
+
+function compareLanguageGenerations(left: VelarLanguageGeneration, right: VelarLanguageGeneration): number {
+  return left.major !== right.major ? left.major - right.major : left.minor - right.minor;
+}
+
+/**
+ * D90 R13: reads the optional 'velar.requires.language' range. The grammar is
+ * language-owned and deliberately small — one or two whitespace-separated
+ * clauses over `<major>.<minor>`, because a package declares the *generation*
+ * it was written against and a patch component would promise something the
+ * language does not track.
+ */
+function packageRequiredLanguage(fields: Record<string, unknown>): VelarPackageLanguageRange | null {
+  const declared = fields.language;
+  if (declared === undefined) return null;
+  const malformed = new Error("'velar.requires.language' must be a language generation such as '0.12' or a range such as '>=0.11 <0.14'");
+  if (typeof declared !== "string") throw malformed;
+  // The clauses carry the meaning; the whitespace between them does not. A
+  // manifest is hand-edited JSON, and an invisible trailing space is not a
+  // reason to tell an author that '0.12 ' is not a generation.
+  const text = declared.trim().split(/\s+/u).join(" ");
+  const clauses = text.split(" ");
+  if (clauses.length > 2) throw malformed;
+  let lower: VelarLanguageBound | null = null;
+  let upper: VelarLanguageBound | null = null;
+  for (const clause of clauses) {
+    const operator = /^(>=|<=|>|<)/u.exec(clause)?.[0] ?? "";
+    const generation = parseLanguageGeneration(clause.slice(operator.length));
+    if (generation === null) throw malformed;
+    if (operator === ">=" || operator === ">") {
+      if (lower !== null) throw malformed;
+      lower = { generation, inclusive: operator === ">=" };
+    } else if (operator === "<=" || operator === "<") {
+      if (upper !== null) throw malformed;
+      upper = { generation, inclusive: operator === "<=" };
+    } else {
+      // A bare generation is exactly that generation — it is both bounds at
+      // once, so it never combines with another clause.
+      if (clauses.length !== 1) throw malformed;
+      lower = { generation, inclusive: true };
+      upper = { generation, inclusive: true };
+    }
+  }
+  if (lower !== null && upper !== null) {
+    // A range that admits no generation at all is a typo, not a requirement.
+    const order = compareLanguageGenerations(lower.generation, upper.generation);
+    if (order > 0 || (order === 0 && !(lower.inclusive && upper.inclusive))) throw malformed;
+  }
+  return { text, lower, upper };
+}
+
+function languageRangeAdmits(range: VelarPackageLanguageRange, generation: VelarLanguageGeneration): boolean {
+  if (range.lower !== null) {
+    const order = compareLanguageGenerations(generation, range.lower.generation);
+    if (order < 0 || (order === 0 && !range.lower.inclusive)) return false;
+  }
+  if (range.upper !== null) {
+    const order = compareLanguageGenerations(generation, range.upper.generation);
+    if (order > 0 || (order === 0 && !range.upper.inclusive)) return false;
+  }
+  return true;
+}
+
 function assertVelarPackageCompatibility(
   package_: VelarSourcePackage,
   target: VelarPackageTarget,
   capabilities: ReadonlySet<string>,
 ): void {
+  // D90 R13: the generation comes first. A package written for another
+  // generation of the language is not a package whose target list and
+  // capability list can be trusted, and "it belongs to the previous language"
+  // is the more useful thing for its author to hear.
+  const declaredLanguage = package_.requiredLanguage;
+  if (declaredLanguage !== null) {
+    const current = parseLanguageGeneration(TOOLCHAIN_LANGUAGE_GENERATION);
+    if (current === null) throw new Error(`VelarScript toolchain version '${VELAR_VERSION}' is not a language generation`);
+    if (!languageRangeAdmits(declaredLanguage, current)) {
+      throw new Error(`package '${package_.name}' requires VelarScript language ${declaredLanguage.text}; this toolchain implements ${TOOLCHAIN_LANGUAGE_GENERATION}; install a release of '${package_.name}' published for ${TOOLCHAIN_LANGUAGE_GENERATION}, or run the toolchain the package asks for — its sources are not wrong, they belong to another generation of the language`);
+    }
+  }
   if (!package_.targets.includes(target)) {
     throw new Error(`package '${package_.name}' does not support the '${target}' target; supported targets: ${package_.targets.join(", ")}`);
   }
@@ -1769,7 +1958,9 @@ function packageResources(name: string, root: string, value: unknown, exports: u
     }
     const fields = declaration as Record<string, unknown>;
     const unknown = Object.keys(fields).filter((field) => field !== "path" && field !== "type");
-    if (unknown.length > 0) throw new Error(`'velar.resources.${subpath}' has unknown field '${unknown[0]}'`);
+    if (unknown.length > 0) {
+      throw new Error(`'velar.resources.${subpath}' has unknown field '${unknown[0]}'; the supported fields are 'path' and 'type'`);
+    }
     if (fields.type !== "json") throw new Error(`'velar.resources.${subpath}.type' must be 'json'`);
     if (typeof fields.path !== "string" || fields.path === "" || isAbsolute(fields.path)
       || fields.path.includes("\\") || fields.path.split("/").some((part) => part === "" || part === "." || part === "..")) {
@@ -1940,6 +2131,134 @@ function importHiddenTypeMetadata(
   for (const info of interface_.enums.values()) if (!enums.has(info.identity)) enums.set(info.identity, info);
   for (const info of interface_.classes.values()) {
     if (info.identity && !classes.has(info.identity)) classes.set(info.identity, info);
+  }
+}
+
+/** The type identities a value type mentions, at any depth. */
+function collectTypeIdentities(type: ValueType, into: Set<string>): void {
+  switch (type.kind) {
+    case "named":
+      if (type.identity) into.add(type.identity);
+      if (type.application) {
+        into.add(type.application.declaration);
+        for (const argument of type.application.arguments) collectTypeIdentities(argument, into);
+      }
+      return;
+    case "class":
+    case "classConstructor":
+    case "enum":
+    case "enumMember":
+    case "enumObject":
+      if (type.identity) into.add(type.identity);
+      return;
+    case "typeObject":
+      if (type.value) collectTypeIdentities(type.value, into);
+      return;
+    case "optional":
+      collectTypeIdentities(type.inner, into);
+      return;
+    case "list":
+    case "set":
+      collectTypeIdentities(type.element, into);
+      return;
+    case "map":
+      collectTypeIdentities(type.key, into);
+      collectTypeIdentities(type.value, into);
+      return;
+    case "record":
+    case "promise":
+    case "runtimeType":
+      collectTypeIdentities(type.value, into);
+      return;
+    case "object":
+      for (const field of type.fields.values()) collectTypeIdentities(field, into);
+      return;
+    case "function":
+    case "action":
+    case "intrinsic":
+      for (const parameter of type.parameters) collectTypeIdentities(parameter, into);
+      if (type.rest) collectTypeIdentities(type.rest, into);
+      collectTypeIdentities(type.result, into);
+      return;
+    case "extension":
+      for (const property of type.properties.values()) collectTypeIdentities(property, into);
+      for (const argument of type.arguments) collectTypeIdentities(argument, into);
+      return;
+    case "union":
+      for (const member of type.members) collectTypeIdentities(member, into);
+      return;
+    default:
+  }
+}
+
+const standardTypeOwnerIndexes = new WeakMap<
+  readonly CompilerExtension[],
+  ReadonlyMap<string, ModuleInspection["moduleInterface"]>
+>();
+
+/** Which standard module declares each standard type identity. */
+function standardTypeOwners(
+  extensions: readonly CompilerExtension[],
+): ReadonlyMap<string, ModuleInspection["moduleInterface"]> {
+  const cached = standardTypeOwnerIndexes.get(extensions);
+  if (cached) return cached;
+  const owners = new Map<string, ModuleInspection["moduleInterface"]>();
+  for (const interface_ of standardModuleInterfaces(extensions).values()) {
+    for (const identity of interface_.namedTypeIdentities.values()) if (!owners.has(identity)) owners.set(identity, interface_);
+    for (const info of interface_.genericTypes?.values() ?? []) if (!owners.has(info.identity)) owners.set(info.identity, interface_);
+    for (const info of interface_.enums.values()) if (!owners.has(info.identity)) owners.set(info.identity, interface_);
+    for (const info of interface_.classes.values()) if (info.identity && !owners.has(info.identity)) owners.set(info.identity, interface_);
+  }
+  standardTypeOwnerIndexes.set(extensions, owners);
+  return owners;
+}
+
+/**
+ * A standard module's signatures routinely hand back a type another standard
+ * module declares — `velar/fs`'s `readBytes` returns a `Bytes` owned by
+ * `velar/binary`, `velar/serve`'s `Request.cancellation` is a `Cancellation`
+ * owned by `velar/task`. The field table for such a type travels with its
+ * declaring module, so importing only the module the author wrote left the
+ * analyzer holding a named type it knew no members of, and it reported the
+ * false fact that the type has no such field; adding an otherwise unused
+ * import of the declaring module was the only way to make correct code
+ * compile. Import the hidden metadata of every standard module reachable
+ * through the imported module's own declared signatures instead.
+ *
+ * Only identity-keyed metadata travels, so nothing is bound to a local name
+ * the author did not write — `Bytes` gains its members, and stays unspellable
+ * until `velar/binary` is imported for real.
+ */
+function importReachableStandardTypeMetadata(
+  interface_: ModuleInspection["moduleInterface"],
+  extensions: readonly CompilerExtension[],
+  namedTypes: Map<string, ReadonlyMap<string, ValueType>>,
+  namedTypeReadonlyFields: Map<string, ReadonlySet<string>>,
+  namedTypeBases: Map<string, ValueType>,
+  genericTypes: Map<string, GenericTypeInfo>,
+  enums: Map<string, EnumInfo>,
+  classes: Map<string, ClassInfo>,
+): void {
+  const owners = standardTypeOwners(extensions);
+  if (owners.size === 0) return;
+  const reached = new Set<string>();
+  const seed = (source: ModuleInspection["moduleInterface"]): void => {
+    for (const type of source.exports.values()) collectTypeIdentities(type, reached);
+    for (const fields of source.namedTypes.values()) for (const type of fields.values()) collectTypeIdentities(type, reached);
+    for (const base of source.namedTypeBases?.values() ?? []) collectTypeIdentities(base, reached);
+    for (const info of source.genericTypes?.values() ?? []) for (const type of info.fields.values()) collectTypeIdentities(type, reached);
+  };
+  seed(interface_);
+  const visited = new Set<ModuleInspection["moduleInterface"]>([interface_]);
+  // Transitive: a reachable type's own fields may name a third module's type.
+  // A Set iterator visits entries added while it runs, and each owner is
+  // seeded at most once, so this terminates at the number of standard modules.
+  for (const identity of reached) {
+    const owner = owners.get(identity);
+    if (!owner || visited.has(owner)) continue;
+    visited.add(owner);
+    importHiddenTypeMetadata(owner, namedTypes, namedTypeReadonlyFields, namedTypeBases, genericTypes, enums, classes);
+    seed(owner);
   }
 }
 

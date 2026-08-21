@@ -170,22 +170,32 @@ export async function writeProductionManifest(
   build: ProductionBuildResult,
   deployment: StaticDeploymentSummary,
 ): Promise<ProductionBuildManifest> {
-  const paths: string[] = [];
+  // The two generated names are reserved at the root of the output and nowhere
+  // else, so the exclusion is keyed on the directory rather than the basename:
+  // a public file that happens to be called `velar-build.json` inside a
+  // subdirectory stays in the inventory the verifier compares against.
+  const paths: { readonly relativePath: string; readonly absolutePath: string }[] = [];
   const visit = async (directory: string): Promise<void> => {
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       const path = join(directory, entry.name);
+      const reservedHere = directory === outputDirectory
+        && (entry.name === PRODUCTION_MANIFEST_NAME || entry.name === BUILD_STAGING_MARKER);
       if (entry.isDirectory()) await visit(path);
-      else if (entry.isFile() && entry.name !== PRODUCTION_MANIFEST_NAME && entry.name !== BUILD_STAGING_MARKER) {
-        paths.push(path);
+      else if (entry.isFile() && !reservedHere) {
+        paths.push({ relativePath: relative(outputDirectory, path).replaceAll("\\", "/"), absolutePath: path });
         if (paths.length > MAX_PRODUCTION_ASSETS) throw new RangeError(`A production build cannot contain more than ${MAX_PRODUCTION_ASSETS} assets`);
       }
     }
   };
   await visit(outputDirectory);
+  // The verifier requires the inventory to equal its own sort of the normalized
+  // relative paths, so the producer sorts exactly those strings by code point.
+  // Sorting host paths instead disagrees wherever the separator differs from
+  // '/', and `buildId` is derived from this order.
+  paths.sort((left, right) => byCodePoint(left.relativePath, right.relativePath));
   const assets: ProductionBuildManifest["assets"][number][] = [];
-  for (const path of paths.sort()) {
-    const identity = await fileIdentity(path);
-    const relativePath = relative(outputDirectory, path).replaceAll("\\", "/");
+  for (const { relativePath, absolutePath } of paths) {
+    const identity = await fileIdentity(absolutePath);
     assets.push({
       path: relativePath,
       sizeBytes: identity.sizeBytes,
@@ -237,9 +247,18 @@ function moduleSummary(project: ProjectResult): ProductionModuleSummary {
   const packages = project.velarPackages.map((package_) => ({
     name: package_.name,
     modules: project.modules.filter((module) => isWithin(package_.root, module.inputPath)).length,
-  })).sort((left, right) => left.name.localeCompare(right.name));
+  })).sort((left, right) => byCodePoint(left.name, right.name));
   const packageModules = packages.reduce((total, package_) => total + package_.modules, 0);
   return { total: project.modules.length, application: project.modules.length - packageModules, packages };
+}
+
+/**
+ * Code-point order. `localeCompare` follows the collation the process
+ * environment selects, which would make a build's own bytes — the stylesheet,
+ * its content hash, and `buildId` — depend on the machine's `LC_ALL`.
+ */
+function byCodePoint(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function isWithin(root: string, path: string): boolean {

@@ -288,6 +288,18 @@ desktopWorkerTest("Desktop Node capability host enforces filesystem, process, an
     const largeText = `large:${"界".repeat(400_000)}`;
     assert.equal(await client.call("fs", "writeText", ["large.txt", largeText]), null);
     assert.equal(await client.call("fs", "readText", ["large.txt", 2 * 1024 * 1024]), largeText);
+    // JSON escaping expands a C0 byte sixfold, so a file well inside readText's
+    // own 16 MiB bound still encodes to a response line past the worker's
+    // transport bound. That has to stay a per-request failure: the native host
+    // treats an oversized line as terminal, so a fatal answer here would brick
+    // every later capability call in the process.
+    await writeFile(join(replacementProject, "nul-padded.txt"), Buffer.alloc(11 * 1024 * 1024, 0));
+    await assert.rejects(
+      client.call("fs", "readText", ["nul-padded.txt", 16 * 1024 * 1024]),
+      /Desktop response exceeds its transport bound/u,
+    );
+    assert.equal(await client.call("fs", "readText", ["replacement.txt", 1024]), "replacement");
+    assert.equal(await client.call("fs", "readText", ["large.txt", 2 * 1024 * 1024]), largeText);
     await assert.rejects(client.call("fs", "readText", [configPath, 1024]), /outside granted Desktop file roots/u);
     await assert.rejects(client.call("fs", "exists", [join(directory, "outside-missing.txt")]), /outside granted Desktop file roots/u);
     await assert.rejects(client.call("fs", "info", [join(directory, "outside-missing.txt")]), /outside granted Desktop file roots/u);
@@ -358,6 +370,25 @@ desktopWorkerTest("Desktop Node capability host enforces filesystem, process, an
     assert.deepEqual(await client.call("process", "stop", [longRunning.handle]), { result: null, error: null });
     await assert.rejects(client.call("process", "run", ["sh", ["-c", "echo unsafe"], {}]), /not granted/u);
     await assert.rejects(client.call("process", "run", [basename(process.execPath), ["--version"], { env: [["PATH", project]] }]), /cannot replace PATH/u);
+    // A granted executable is only as narrow as its own environment surface:
+    // each of these names hands the child a command, an interpreter option, a
+    // loader path, or the configuration directory the child reads its own
+    // command settings from, so the process grant must refuse them by name.
+    // The bare spellings are the ones the granted programs actually consult —
+    // `git commit` runs EDITOR and `git log` runs PAGER — and HOME redirects
+    // the whole .gitconfig surface the GIT_ prefix exists to protect.
+    for (const reserved of ["GIT_SSH_COMMAND", "NODE_OPTIONS", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "BASH_ENV", "IFS", "PERL5OPT", "RUBYOPT", "PAGER_OPTS", "VISUAL_EDITOR", "python_startup", "EDITOR", "VISUAL", "PAGER", "MANPAGER", "BROWSER", "LESSOPEN", "SSH_ASKPASS", "XDG_CONFIG_HOME", "HOME", "SHELL", "TMPDIR", "editor"]) {
+      await assert.rejects(
+        client.call("process", "run", [basename(process.execPath), ["--version"], { env: [[reserved, "/bin/sh -c true"]] }]),
+        new RegExp(`transport- or interpreter-controlled variable '${reserved}'`, "u"),
+      );
+    }
+    const benignEnvironment = await client.call("process", "run", [
+      basename(process.execPath),
+      ["-e", "process.stdout.write(process.env.FIRST + ':' + process.env.SECOND)"],
+      { env: [["FIRST", "one"], ["SECOND", "two"]], timeout: 5000, maxOutputBytes: 65536 },
+    ]) as { stdout: string };
+    assert.equal(benignEnvironment.stdout, "one:two");
     const largeStdin = "x".repeat(1200 * 1024);
     const stdinResult = await client.call("process", "run", [basename(process.execPath), ["-e", "let n=0;process.stdin.on('data',c=>n+=c.length);process.stdin.on('end',()=>console.log(n))"], {
       stdin: largeStdin,

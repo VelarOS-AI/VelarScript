@@ -54,7 +54,7 @@ function __velarWsOrigins(value) {
     if (!descriptor?.enumerable || !("value" in descriptor) || typeof descriptor.value !== "string") throw new TypeError("WebSocket origins must contain enumerable text data values");
     const origin = descriptor.value;
     if (origin === "*") { if (wildcard || exactCount !== 0 || value.length !== 1) throw new TypeError("WebSocket origin '*' must be the only whitelist entry"); wildcard = true; continue; }
-    if (origin.length === 0 || origin.length > 2048 || !/^https?:\/\//u.test(origin)) throw new TypeError("WebSocket origins must be exact HTTP or HTTPS origins");
+    if (origin.length === 0 || origin.length > 2048 || !/^https?:\/\//iu.test(origin)) throw new TypeError("WebSocket origins must be exact HTTP or HTTPS origins");
     let normalized;
     try { normalized = __velarWsReflectApply(__velarWsURLOriginGet, __velarWsReflectConstruct(__velarWsURL, [origin]), []); }
     catch { throw new TypeError("WebSocket origins must be exact HTTP or HTTPS origins"); }
@@ -63,6 +63,27 @@ function __velarWsOrigins(value) {
     __velarWsReflectApply(__velarWsSetAdd, exact, [origin]); exactCount += 1;
   }
   return __velarWsObjectFreeze({exact, wildcard});
+}
+// The Origin an accepted connection was upgraded from, canonicalized through the
+// same URL origin getter the whitelist is canonicalized with, or null when the
+// client sent none, sent the opaque null a sandboxed document sends, or sent
+// something that is not exactly one HTTP or HTTPS origin. The scheme test is
+// case-insensitive because a scheme is case-insensitive and the origin getter
+// canonicalizes it anyway; a canonical origin that still contains a comma came
+// from a header carrying more than one, which is not an origin at all. This is
+// the only upgrade header Vel code can read: nothing else about the request
+// crosses into the connection.
+function __velarWsRequestOrigin(request) {
+  const headers = request === null || typeof request !== "object" ? undefined : request.headers;
+  if (headers === null || typeof headers !== "object") return null;
+  const descriptor = __velarWsObjectGetOwnPropertyDescriptor(headers, "origin");
+  if (descriptor === undefined || !("value" in descriptor)) return null;
+  const header = descriptor.value;
+  if (typeof header !== "string" || header.length === 0 || header.length > 2048 || !/^https?:\/\//iu.test(header)) return null;
+  let origin;
+  try { origin = __velarWsReflectApply(__velarWsURLOriginGet, __velarWsReflectConstruct(__velarWsURL, [header]), []); }
+  catch { return null; }
+  return typeof origin !== "string" || origin.length === 0 || /,/u.test(origin) ? null : origin;
 }
 function __velarWsBytes(value) { if (value instanceof Uint8Array) { const output = new Uint8Array(value.byteLength); output.set(value); return output; } return null; }
 function __velarWsMessageBytes(value) { if (typeof value === "string") return Buffer.byteLength(value, "utf8"); if (value instanceof Uint8Array) return value.byteLength; throw new TypeError("WebSocket.send requires text or Bytes"); }
@@ -94,9 +115,9 @@ function __velarWsReceive(state, socket, data, binary) {
   try { if (source) { message = new Uint8Array(size); message.set(source); } state.queue.push(message); state.queuedBytes += size; }
   catch (error) { __velarWsReleaseQueue(size); throw error; }
 }
-function __velarWsWrap(socket, options) {
+function __velarWsWrap(socket, options, origin = null) {
   __velarWsActiveConnections += 1;
-  const value = Object.create(__velarWsConnectionPrototype); const state = { socket, options, queue: [], queuedBytes: 0, queueReleased: false, waiter: null, pendingSendBytes: 0, pendingSends: new Set(), finished: false, active: true, closePromise: null }; __velarWebSocketConnections.set(value, state);
+  const value = Object.create(__velarWsConnectionPrototype); value.origin = origin; const state = { socket, options, queue: [], queuedBytes: 0, queueReleased: false, waiter: null, pendingSendBytes: 0, pendingSends: new Set(), finished: false, active: true, closePromise: null }; __velarWebSocketConnections.set(value, state);
   __velarWsReflectApply(__velarWsFinalizerRegister, __velarWsFinalizer, [value, state]);
   socket.binaryType = "arraybuffer";
   socket.on("message", (data, binary) => { try { __velarWsReceive(state, socket, data, binary); } catch { __velarWsRejectReceive(state, socket, 1011, "Message handling failed"); } });
@@ -202,10 +223,10 @@ export async function listen(options) {
         state.sockets.add(socket); __velarWsActiveHttpSockets += 1; socket.setNoDelay(true); socket.setKeepAlive(true, 5000);
         socket.once("close", () => { if (!state.sockets.delete(socket)) return; __velarWsActiveHttpSockets -= 1; if (__velarWsActiveHttpSockets < 0) __velarWsActiveHttpSockets = 0; });
       });
-      server.on("connection", socket => {
+      server.on("connection", (socket, request) => {
         const willQueue = !state.waiter;
         if (state.stopped || state.connections.size >= maxConnections || __velarWsActiveConnections >= __velarWsActiveConnectionLimit || (willQueue && (state.pendingConnections.size >= maxPendingConnections || __velarWsPendingConnections >= __velarWsPendingConnectionLimit))) { socket.close(1013, "Server busy"); return; }
-        const connection = __velarWsWrap(socket, limits); state.connections.add(connection);
+        const connection = __velarWsWrap(socket, limits, __velarWsRequestOrigin(request)); state.connections.add(connection);
         socket.once("close", () => { state.connections.delete(connection); if (state.pendingConnections.delete(connection)) { __velarWsPendingConnections -= 1; if (__velarWsPendingConnections < 0) __velarWsPendingConnections = 0; __velarWsCompactPendingConnections(state); } });
         if (state.waiter) { const waiter = state.waiter; state.waiter = null; waiter.resolve(connection); }
         else { state.queue.push(connection); state.pendingConnections.add(connection); __velarWsPendingConnections += 1; }

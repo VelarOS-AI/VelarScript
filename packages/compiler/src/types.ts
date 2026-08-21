@@ -72,7 +72,12 @@ export interface GenericApplication {
 }
 
 export type ValueType =
-  | { readonly kind: "unknown"; readonly restricted?: boolean }
+  /**
+   * `restricted` is the recursion placeholder and `boundary` is the `unknown`
+   * a program wrote down — the type of data nobody has checked yet. Neither
+   * may be absorbed by a merge; see `mergeTypes`.
+   */
+  | { readonly kind: "unknown"; readonly restricted?: boolean; readonly boundary?: true }
   /**
    * `textConvertible` marks the compiler-owned text-conversion domain (charter
    * section 14). It is not spellable in source: only the built-in `str`
@@ -145,6 +150,14 @@ export function binaryStorageKind(type: ValueType): BinaryStorageKind | null {
 }
 
 export const unknownType: ValueType = { kind: "unknown" };
+/**
+ * The `unknown` a program wrote in an annotation, and the type every boundary
+ * that hands back unchecked data should carry. It differs from the inference
+ * seed above in exactly one rule — a merge may not absorb it — so `unknown`
+ * arriving from outside stays unassignable until the value is validated,
+ * instead of being retyped as whatever the other branch produced.
+ */
+export const boundaryUnknownType: ValueType = { kind: "unknown", boundary: true };
 export const invalidType: ValueType = Object.freeze({ kind: "unknown" });
 export const anyType: ValueType = { kind: "any" };
 /** The declared parameter domain of the built-in `str`; see `isTextConvertibleType`. */
@@ -278,7 +291,7 @@ export function typeFromSyntax(syntax: TypeSyntax, extension?: ExtensionTypeSynt
         case "number": return numberType;
         case "bool": return boolType;
         case "null": return nullType;
-        case "unknown": return unknownType;
+        case "unknown": return boundaryUnknownType;
         case "any": return anyType;
         case "Promise": return { kind: "promise", value: nullType };
         case "Function": return { kind: "function", parameters: [], requiredParameters: 0, result: nullType };
@@ -497,10 +510,19 @@ export function mergeTypes(left: ValueType, right: ValueType): ValueType {
   if (isInvalidType(left) || isInvalidType(right)) {
     return invalidType;
   }
-  if (left.kind === "unknown" && !left.restricted) {
+  // A written `unknown` is data nobody has checked yet, so a merge may not
+  // absorb it: absorbing retyped `raw ?? { ... }` as the record's own type and
+  // shipped an unvalidated value as a checked one, while the direct assignment
+  // `const c: Config = raw` was refused all along. Falling through leaves
+  // `unknown | T`, which is assignable to nothing until the value is
+  // validated, so the merge is now as fail-closed as `unionOf` already is. The
+  // inference seed keeps its absorption — it means "nothing known yet", not
+  // "known to be unchecked" — and `restricted`, the recursion placeholder,
+  // keeps the exclusion it was given for this same reason.
+  if (left.kind === "unknown" && !left.restricted && !left.boundary) {
     return right;
   }
-  if (right.kind === "unknown" && !right.restricted) {
+  if (right.kind === "unknown" && !right.restricted && !right.boundary) {
     return left;
   }
   if (sameType(left, right)) {
@@ -533,6 +555,7 @@ export function resolvedAsyncType(type: ValueType): ValueType {
 }
 
 export function sameType(left: ValueType, right: ValueType): boolean {
+  if (left === right) return true;
   return semanticTypeIdentity(left) === semanticTypeIdentity(right);
 }
 
@@ -549,6 +572,27 @@ function runtimeTypeValue(type: ValueType): ValueType | null {
   if (type.kind === "enumObject") return { kind: "enum", name: type.name, identity: type.identity };
   return null;
 }
+
+/**
+ * `seen` is the coinduction path guard and has to stay per-branch, so it can
+ * never answer a pair the current path did not open. This is the missing
+ * companion: a memo of pairs that were actually DECIDED, so a structural tree
+ * that reaches the same pair by several routes is answered once instead of
+ * once per route (`invariant` alone asks every field twice, which is what made
+ * nesting exponential).
+ *
+ * The discipline is conservative on both axes. A decision is recorded only
+ * when it consulted no in-progress assumption — `assumedPairsConsulted` counts
+ * the coinductive `true`s, and a decision taken while that counter moved holds
+ * only under the path it was taken on. And the memo lives for exactly one
+ * outermost question: the environment's declaration tables are still being
+ * filled while a module resolves, and one synchronous question is the only
+ * window in which they cannot have grown underneath a recorded verdict.
+ */
+const decidedAssignability = new Map<string, boolean>();
+let decidedAssignabilityEnvironment: TypeEnvironment | null = null;
+let assignabilityDepth = 0;
+let assumedPairsConsulted = 0;
 
 export function isAssignable(actual: ValueType, expected: ValueType, environment: TypeEnvironment, seen: Set<string> = new Set()): boolean {
   if (isInvalidType(actual) || isInvalidType(expected)) {
@@ -569,12 +613,42 @@ export function isAssignable(actual: ValueType, expected: ValueType, environment
   if (actual.kind === "unknown") {
     return false;
   }
-  if (sameType(actual, expected)) {
+  const actualIdentity = semanticTypeIdentity(actual);
+  const expectedIdentity = semanticTypeIdentity(expected);
+  if (actualIdentity === expectedIdentity) {
     return true;
   }
-  const pair = `${semanticTypeIdentity(actual)}\u0000${semanticTypeIdentity(expected)}`;
-  if (seen.has(pair)) return true;
+  const pair = `${actualIdentity}\u0000${expectedIdentity}`;
+  if (seen.has(pair)) {
+    assumedPairsConsulted += 1;
+    return true;
+  }
+  const memoized = decidedAssignabilityEnvironment === environment ? decidedAssignability.get(pair) : undefined;
+  if (memoized !== undefined) return memoized;
   seen.add(pair);
+  if (assignabilityDepth === 0) {
+    decidedAssignability.clear();
+    decidedAssignabilityEnvironment = environment;
+    assumedPairsConsulted = 0;
+  }
+  assignabilityDepth += 1;
+  const assumptionsBefore = assumedPairsConsulted;
+  try {
+    const decided = decideAssignable(actual, expected, environment, seen);
+    if (assumedPairsConsulted === assumptionsBefore && decidedAssignabilityEnvironment === environment) {
+      decidedAssignability.set(pair, decided);
+    }
+    return decided;
+  } finally {
+    assignabilityDepth -= 1;
+    if (assignabilityDepth === 0) {
+      decidedAssignability.clear();
+      decidedAssignabilityEnvironment = null;
+    }
+  }
+}
+
+function decideAssignable(actual: ValueType, expected: ValueType, environment: TypeEnvironment, seen: Set<string>): boolean {
   if (actual.kind === "union") {
     return actual.members.every((member) => isAssignable(member, expected, environment, new Set(seen)));
   }
@@ -728,7 +802,27 @@ export function semanticTypeIdentity(type: ValueType): string {
 
 export const analysisTypeIdentity = semanticTypeIdentity;
 
+/**
+ * Identity is a pure function of the type node, and every producer builds a
+ * node's collections before it builds the node, so a `ValueType` is never
+ * mutated after construction and an identity computed once stays correct for
+ * that object's whole life. The two caches match the two
+ * `includeCallableParameterNames` modes; a rebuilt node is a new object and
+ * therefore a cache miss, so no rebuild is ever served a stale identity.
+ */
+const semanticIdentityCache = new WeakMap<ValueType, string>();
+const callableShapeIdentityCache = new WeakMap<ValueType, string>();
+
 function typeIdentity(type: ValueType, includeCallableParameterNames = true): string {
+  const cache = includeCallableParameterNames ? semanticIdentityCache : callableShapeIdentityCache;
+  const cached = cache.get(type);
+  if (cached !== undefined) return cached;
+  const identity = buildTypeIdentity(type, includeCallableParameterNames);
+  cache.set(type, identity);
+  return identity;
+}
+
+function buildTypeIdentity(type: ValueType, includeCallableParameterNames: boolean): string {
   const nested = (value: ValueType): string => typeIdentity(value, includeCallableParameterNames);
   switch (type.kind) {
     case "unknown":
@@ -977,6 +1071,50 @@ export function typeContainsRuntimeTypeCheck(type: ValueType): boolean {
   }
 }
 
+// D90 R12: `any` may not appear at an export position, written or inferred.
+// Like the two predicates above, this one visits exactly the positions its own
+// rule reasons about — the ones a consuming module can read a value *out of*.
+// A callable's parameters and rest are deliberately absent: the rule exists so
+// a consumer never receives something the compiler makes no promise about, and
+// an input position accepts a value *from* the consumer instead of handing it
+// a guarantee. Measured across this repository's 86 sources, output-position
+// `any` in an export appears zero times and input-only `any` appears once —
+// `chapterEight` in examples/tour/core/08-collections-and-math.vel re-exports
+// the builtin `json.stringify`, whose first parameter is `any` and whose
+// result is `string`, and which therefore leaks nothing.
+export function typeContainsAnyOutput(type: ValueType): boolean {
+  switch (type.kind) {
+    case "any":
+      return true;
+    case "optional":
+      return typeContainsAnyOutput(type.inner);
+    case "list":
+    case "set":
+      return typeContainsAnyOutput(type.element);
+    case "map":
+      return typeContainsAnyOutput(type.key) || typeContainsAnyOutput(type.value);
+    case "record":
+      return typeContainsAnyOutput(type.value);
+    case "promise":
+    case "runtimeType":
+      return typeContainsAnyOutput(type.value);
+    case "object":
+      return [...type.fields.values()].some(typeContainsAnyOutput);
+    case "named":
+      return (type.application?.arguments ?? []).some(typeContainsAnyOutput);
+    case "extension":
+      return [...type.properties.values(), ...type.arguments].some(typeContainsAnyOutput);
+    case "function":
+    case "action":
+    case "intrinsic":
+      return typeContainsAnyOutput(type.result);
+    case "union":
+      return type.members.some(typeContainsAnyOutput);
+    default:
+      return false;
+  }
+}
+
 export function substituteTypeParameters(type: ValueType, bindings: readonly (ValueType | null)[]): ValueType {
   switch (type.kind) {
     case "parameter":
@@ -1110,23 +1248,36 @@ export function unifyTypeParameters(
   unifyInto(pattern, actual, bindings, fieldsOf, unknownParameters);
 }
 
+/**
+ * `readonlyProjection` is the same projection `isAssignable` performs when it
+ * checks a readonly container (`readonlyViewOf` on the element), carried down
+ * to the site that solves a type parameter. Without it `def first<T>(items:
+ * readonly List<T>)` over a `readonly List<List<Check>>` solved `T` to the raw
+ * mutable element and handed the caller write authority through a read-only
+ * view — the widening the concrete, non-generic spelling is refused for. D44
+ * keeps the signature legal (an opaque element offers no member to mutate);
+ * this makes the call site agree with it.
+ */
 function unifyInto(
   pattern: ValueType,
   actual: ValueType,
   bindings: (ValueType | null)[],
   fieldsOf: (identity: string) => ReadonlyMap<string, ValueType> | null,
   unknownParameters: Set<number> | undefined,
+  readonlyProjection = false,
 ): void {
-  const unifyTypeParameters = (nextPattern: ValueType, nextActual: ValueType): void =>
-    unifyInto(nextPattern, nextActual, bindings, fieldsOf, unknownParameters);
+  const unifyTypeParameters = (nextPattern: ValueType, nextActual: ValueType, nextReadonly = readonlyProjection): void =>
+    unifyInto(nextPattern, nextActual, bindings, fieldsOf, unknownParameters, nextReadonly);
+  const through = (container: ValueType): boolean => readonlyProjection || isReadonlyView(container);
   if (isInvalidType(actual)) return;
   if (pattern.kind === "parameter") {
     if (actual.kind === "unknown") {
       unknownParameters?.add(pattern.index);
       return;
     }
+    const solved = readonlyProjection ? readonlyViewOf(actual) : actual;
     const existing = bindings[pattern.index];
-    bindings[pattern.index] = existing ? mergeTypes(existing, actual) : actual;
+    bindings[pattern.index] = existing ? mergeTypes(existing, solved) : solved;
     return;
   }
   if (pattern.kind === "optional") {
@@ -1150,15 +1301,15 @@ function unifyInto(
     return;
   }
   if ((pattern.kind === "list" && actual.kind === "list") || (pattern.kind === "set" && actual.kind === "set")) {
-    return unifyTypeParameters(pattern.element, actual.element);
+    return unifyTypeParameters(pattern.element, actual.element, through(pattern));
   }
   if (pattern.kind === "map" && actual.kind === "map") {
-    unifyTypeParameters(pattern.key, actual.key);
-    unifyTypeParameters(pattern.value, actual.value);
+    unifyTypeParameters(pattern.key, actual.key, through(pattern));
+    unifyTypeParameters(pattern.value, actual.value, through(pattern));
     return;
   }
   if (pattern.kind === "record" && actual.kind === "record") {
-    return unifyTypeParameters(pattern.value, actual.value);
+    return unifyTypeParameters(pattern.value, actual.value, through(pattern));
   }
   if (pattern.kind === "promise" && actual.kind === "promise") {
     return unifyTypeParameters(pattern.value, actual.value);
@@ -1175,7 +1326,7 @@ function unifyInto(
       && pattern.application.declaration === actual.application.declaration) {
       for (let index = 0; index < pattern.application.arguments.length; index += 1) {
         const provided = actual.application.arguments[index];
-        if (provided) unifyTypeParameters(pattern.application.arguments[index]!, provided);
+        if (provided) unifyTypeParameters(pattern.application.arguments[index]!, provided, through(pattern));
       }
       return;
     }
@@ -1188,7 +1339,7 @@ function unifyInto(
     if (!fields || !declared) return;
     for (const [name, field] of declared) {
       const provided = fields.get(name);
-      if (provided) unifyTypeParameters(field, provided);
+      if (provided) unifyTypeParameters(field, provided, through(pattern));
     }
     return;
   }
@@ -1199,7 +1350,7 @@ function unifyInto(
     if (!fields) return;
     for (const [name, field] of pattern.fields) {
       const provided = fields.get(name);
-      if (provided) unifyTypeParameters(field, provided);
+      if (provided) unifyTypeParameters(field, provided, through(pattern));
     }
     return;
   }

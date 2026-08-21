@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import test from "node:test";
 import vm from "node:vm";
 import { velarCompilerExtension } from "../packages/desktop/src/compiler.ts";
+import { desktopExternalNavigationPermitted, velarProjectExtension } from "../packages/desktop/src/config.ts";
 import { VELAR_TYPE_REGISTRY_KEY } from "../packages/compiler/src/runtime-abi.ts";
 import { desktopBrowserTestController, desktopBrowserTestInitScript } from "../packages/desktop/src/test-runtime.ts";
 
@@ -405,6 +406,18 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
     assert.deepEqual(capturedChunks, [{ channel: "stdout", text: "one" }, { channel: "stderr", text: "two" }]);
     assert.deepEqual(capturedResult, { code: 0, signal: null, stdout: "one", stderr: "two" });
 
+    // The renderer refuses the same environment names the capability host does,
+    // so a granted executable cannot be handed a command through its own
+    // environment, and cannot be pointed at a configuration directory that
+    // carries one. Both validators must agree; see the matching worker case.
+    for (const reserved of ["GIT_SSH_COMMAND", "NODE_OPTIONS", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "BASH_ENV", "IFS", "PERL5OPT", "RUBYOPT", "PAGER_OPTS", "VISUAL_EDITOR", "python_startup", "EDITOR", "VISUAL", "PAGER", "MANPAGER", "BROWSER", "LESSOPEN", "SSH_ASKPASS", "XDG_CONFIG_HOME", "HOME", "SHELL", "TMPDIR", "editor"]) {
+      await assert.rejects(
+        processRuntime.start("stream", [], { env: new Map([[reserved, "x"]]) }),
+        new RegExp(`transport- or interpreter-controlled variable '${reserved}'`, "u"),
+      );
+    }
+    await assert.rejects(processRuntime.start("stream", [], { env: new Map([["PATH", "x"]]) }), /cannot replace PATH/u);
+
     const hostileRead = await processRuntime.start("hostile-read");
     await assert.rejects(hostileRead.next(), /enumerable data values/u);
     assert.equal(hostileProcessReads, 0);
@@ -653,11 +666,17 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
         post(url: string, options?: Record<string, unknown>): { text(): Promise<string> };
       };
       HttpAbortError: new (reason: string) => Error & { readonly reason: string };
-      HttpError: new (...args: unknown[]) => Error & { readonly body: unknown; readonly url: string };
+      HttpResponseError: new (...args: unknown[]) => Error & { readonly body: unknown; readonly url: string };
       HttpTransportError: new (...args: unknown[]) => Error & { readonly phase: "request" | "response" };
       HttpTransportPhase: Readonly<{ readonly request: "request"; readonly response: "response" }>;
     }>(directory, "http", "velar/http", (source) => source.replace("const maxResponseChunks = 1000000;", "const maxResponseChunks = 3;"));
+    // D90 fr-6: a registered Type must still present the Type surface, so this
+    // fixture answers `is` the way every Type the compiler emits does rather
+    // than relying on registry membership alone.
     const User = registerRuntimeType(Object.freeze({
+      is(value: unknown): boolean {
+        return !!value && typeof value === "object" && (value as { name?: unknown }).name === "Ada";
+      },
       parse(value: unknown): { name: string } {
         if (!value || typeof value !== "object" || (value as { name?: unknown }).name !== "Ada") throw new TypeError("invalid User");
         return value as { name: string };
@@ -667,8 +686,8 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
     assert.throws(() => httpRuntime.http.request("TRACE", "https://example.test/"), /invalid or forbidden/u);
     assert.throws(() => httpRuntime.http.get("file:///tmp/value"), /must use http or https/u);
     assert.throws(() => httpRuntime.http.get("https://user:secret@example.test/"), /credentials are not allowed/u);
-    assert.throws(() => new httpRuntime.HttpError("x".repeat(65537), 400, "https://example.test/"), RangeError);
-    assert.throws(() => new httpRuntime.HttpError("message", 400, "x".repeat(2 * 1024 * 1024 + 1)), RangeError);
+    assert.throws(() => new httpRuntime.HttpResponseError("x".repeat(65537), 400, "https://example.test/"), RangeError);
+    assert.throws(() => new httpRuntime.HttpResponseError("message", 400, "x".repeat(2 * 1024 * 1024 + 1)), RangeError);
     const oversizedHttpBody = "é".repeat(8 * 1024 * 1024 + 1);
     const fullHttpHeaders = new Map<string, string>();
     for (let index = 0; index < 100; index += 1) fullHttpHeaders.set(`x-header-${index}`, "value");
@@ -719,11 +738,11 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
     await assert.rejects(httpRuntime.http.get("https://example.test/lossy-json").json(), /numbers must be finite/u);
     await assert.rejects(
       httpRuntime.http.get("https://example.test/lossy-error").text(),
-      (error: unknown) => error instanceof httpRuntime.HttpError && error.body === "1e400",
+      (error: unknown) => error instanceof httpRuntime.HttpResponseError && error.body === "1e400",
     );
     await assert.rejects(
       httpRuntime.http.get("https://example.test/redirect-error").text(),
-      (error: unknown) => error instanceof httpRuntime.HttpError
+      (error: unknown) => error instanceof httpRuntime.HttpResponseError
         && error.url === "https://final.example.test/failure"
         && error.message === "HTTP 502 for https://final.example.test/failure"
         && (error.body as { failed?: unknown }).failed === true,
@@ -1017,6 +1036,36 @@ test("Desktop browser-test platform is selected before the first open and then s
     () => controller.invoke("desktop-test", "setPlatform", ["test"], 30_000),
     /before the first browser\.open/u,
   );
+});
+
+test("Desktop external navigation is granted only by an exact desktop.permissions.network origin", () => {
+  const config = velarProjectExtension.parse({
+    productName: "Test",
+    identifier: "dev.velarscript.test",
+    permissions: { network: ["https://docs.velarscript.dev", "https://api.example.com:8443"] },
+  }, "velar.json");
+  assert.equal(desktopExternalNavigationPermitted(config, "https://docs.velarscript.dev/guide?q=1#top"), true);
+  assert.equal(desktopExternalNavigationPermitted(config, "https://docs.velarscript.dev:443/guide"), true);
+  assert.equal(desktopExternalNavigationPermitted(config, "https://api.example.com:8443/v1"), true);
+  // A suffix or substring rule is how allowlists get bypassed, so a host that
+  // merely ends with a granted host is a different host.
+  assert.equal(desktopExternalNavigationPermitted(config, "https://evil.docs.velarscript.dev/"), false);
+  assert.equal(desktopExternalNavigationPermitted(config, "https://docs.velarscript.dev.evil.test/"), false);
+  assert.equal(desktopExternalNavigationPermitted(config, "https://api.example.com/v1"), false);
+  assert.equal(desktopExternalNavigationPermitted(config, "https://api.example.com:9443/v1"), false);
+  assert.equal(desktopExternalNavigationPermitted(config, "http://docs.velarscript.dev/guide"), false);
+  assert.equal(desktopExternalNavigationPermitted(config, "velar-app://app/index.html"), false);
+  assert.equal(desktopExternalNavigationPermitted(config, "file:///etc/passwd"), false);
+  assert.equal(desktopExternalNavigationPermitted(config, "javascript:fetch('https://docs.velarscript.dev')"), false);
+  assert.equal(desktopExternalNavigationPermitted(config, "blob:https://docs.velarscript.dev/8f3c"), false);
+  assert.equal(desktopExternalNavigationPermitted(config, "not a url"), false);
+
+  const ungranted = velarProjectExtension.parse({
+    productName: "Test",
+    identifier: "dev.velarscript.test",
+  }, "velar.json");
+  assert.deepEqual([...ungranted.permissions.network], []);
+  assert.equal(desktopExternalNavigationPermitted(ungranted, "https://docs.velarscript.dev/guide"), false);
 });
 
 async function runtime<T>(directory: string, file: string, moduleName: string, transform: (source: string) => string = (source) => source): Promise<T> {

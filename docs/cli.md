@@ -16,12 +16,52 @@ velar repro [entry.vel | project-directory] [--out-dir <directory>]
 velar lsp
 ```
 
-`check` compiles and reports diagnostics without producing output. `format` is
-the single canonical layout — there are no options, because a second layout
-would be a second spelling. `fix` applies the rewrites that are **provably**
-equivalent, which is why it is safe to run unattended; anything requiring a
-judgment call stays a diagnostic for you to answer. `lsp` speaks the Language
-Server Protocol for editors.
+`check` compiles and reports diagnostics without producing output. It reports
+**advisories** too — the second channel, for a spelling VelarScript accepts
+with a meaning other than the one a Python or JavaScript reflex intended. An
+advisory never fails anything: `check` prints it, names the count in its summary
+line (`Checked 12 modules from src/main.vel — 3 advisories`), and exits 0, and
+`build`, `test`, CI, and release never fail because of one. Answer one by
+writing the spelling it names, or with a `// velar-allow <CODE>: <reason>`
+comment on that line; a suppression with no reason, and one that no longer
+applies, are both ordinary compile errors. The rules are in the
+[language reference](language-charter.md#advisories).
+`format` is the single canonical layout — there are no options, because a
+second layout would be a second spelling, and it preserves a `velar-allow`
+comment and its reason verbatim. `fix` applies the rewrites that are
+**provably** equivalent, which is why it is safe to run unattended; anything
+requiring a judgment call stays a diagnostic for you to answer, and that
+includes every advisory — swapping the two names of a `for` header changes
+which name binds which value, so an editor offers it as a quick fix and `fix`
+leaves it alone. `lsp` speaks the Language Server Protocol for editors, and
+shows an advisory as a warning rather than an error.
+
+Formatting is idempotent, and both `format` and the language server verify it:
+if formatting the result would change it again, the file keeps the bytes you
+wrote, `format` names it and exits non-zero rather than writing an unstable
+layout, and the language server offers no edit at all.
+
+`fix` rewrites only the source the project owns. Installed VelarScript packages
+compile as part of your project, so their diagnostics are reported beside your
+own — on the same channel `check` reports them on — but `fix` never writes a
+file that came out of one: a rewrite there is invisible to git, is destroyed by
+the next `npm ci`, and makes the installed tree diverge from the tarball it was
+published as. The boundary is the real path, so a module reached through a
+symbolic link inside `src/` is left alone as well when the link points into an
+installed tree. Inside the project, a read-only module is refused and named
+rather than replaced, and a module hard-linked under a second name is written in
+place so both names keep pointing at the same file. Every file is re-read
+immediately before it is written, and one that changed since the compile that
+computed the rewrite is left untouched and named as a file `fix` could not
+write — a save that lands mid-pass survives verbatim instead of being reverted
+without a word. A run that could not write a file, or that leaves a diagnostic
+behind, exits non-zero.
+
+`lsp` orders workspace symbols by match quality first, then by name ignoring
+case, then by path. Ignoring case is the Unicode default case mapping rather
+than a locale-tailored one, so `apple` comes before `Banana` on every machine
+and no editor's picker reorders itself because one developer's `LC_ALL` differs
+from a colleague's.
 
 `repro` is for the case where the compiler itself looks wrong. It writes a
 self-contained minimal reproduction — the source the diagnostic touches,
@@ -55,7 +95,37 @@ production runtime behavior and no file watcher.
 instead of hiding internal frames. `test` runs
 `*.test.vel` modules in Node; `--browser` runs `*.browser.test.vel` modules in
 a real browser, which requires the matching Playwright browsers to be
-installed.
+installed. A browser test that does not finish within its bound ends the run:
+the supervisor names the test and the bound it outlived, writes the counts up to
+it, and exits, so the browser tests after it are neither run nor reported. A
+`.test.vel` file resumes past a wedged test instead; see
+[project lifecycle](project-lifecycle.md).
+
+The dev server a Web or Desktop project starts, and `preview`, bind the loopback
+interface and answer only requests that address them as one. A request is
+refused with `403` unless its `Host` header names `127.0.0.1`, `localhost` or
+`[::1]`; unless its `Sec-Fetch-Site` header is absent, `none` or `same-origin`;
+and unless its `Origin` header, when it sends one, is an `http` origin on a
+loopback host **and on the same port the request was addressed to**. The refusal
+body names the header it refused and the value it saw. Binding the interface is
+not the whole defence: a page whose own hostname has been pointed at 127.0.0.1
+is otherwise same-origin with the development server and can read
+`/<module>.js.map`, whose `sourcesContent` carries your verbatim `.vel` source
+and whose `sources` carries its absolute on-disk path. A second local server on
+another port is a different origin, and the `Origin` rule refuses it like any
+other; a tunnel that forwards its own hostname fails the `Host` rule instead —
+run it with host-header rewriting, `ngrok http --host-header=rewrite 5173`, so
+the request reaches the server addressed to localhost.
+
+`dev`'s watcher ignores `node_modules/`, `.git/`, `.velar/` and the project's
+`outDir`, at every depth and on every platform, for a Node project as well as a
+framework one. A `velar build` or `velar test`
+running in a second terminal writes into those directories, and without the
+exclusion each write rebuilt the application and pushed a full-page reload that
+discarded the page state being debugged. Request paths are percent-decoded
+before a public asset is resolved, so `public/my file.txt` and a file with a
+non-ASCII name are reachable in development exactly as they are after
+deployment; a malformed percent escape is answered with `400`.
 
 ## Building and shipping
 
@@ -88,6 +158,28 @@ runs `npm pack --dry-run --json` so the package receipt is checked before
 publication. See [package distribution](package-distribution.md) and
 [static deployment](static-deployment.md).
 
+Build output is fixed by the toolchain, not by the machine that runs it.
+Project modules are ordered by UTF-16 code unit over their POSIX-normalized
+project-relative path, and that order decides the concatenated stylesheet's
+bytes, its content hash, and `buildId`, so two builds of the same source agree
+whatever `LANG` or `LC_ALL` the build machine has set. The manifest inventory,
+the package lists in `velar-build.json`, and every other list the toolchain
+promises to reproduce use that same order — the order a plain
+`Array.prototype.sort` gives, which is the order `verify` checks against.
+
+`velar-deploy.json` states its `headers` rules in order, and they resolve
+**last match wins**. The `<base>*` rule carries the security headers and
+`Cache-Control: no-cache`; the later `<base>assets/*` rule overrides that with
+`public, max-age=31536000, immutable` for the content-hashed output, and the
+enumerated document paths restate `no-cache`. A provider that applies
+first-match-wins instead would give the hashed assets `no-cache`, so project the
+rules in the order the manifest states them. Because `<base>*` states the
+document rule itself rather than `preview` supplying it out of band, every file
+outside `assets/` — public JSON, images, and fonts included — answers
+`no-cache`, a provider that projects the manifest literally is indistinguishable
+from `preview`, and `verify-deployment` checks the resolved value for every file
+it fetches.
+
 ## Projects and dependencies
 
 ```text
@@ -102,6 +194,34 @@ npm still owns dependency resolution and the lockfile. These commands add a
 project-aware surface on top of it and keep extension activation in
 `velar.json` synchronized — they do not replace npm, and they do not introduce
 a second registry. Details in [project lifecycle](project-lifecycle.md).
+
+A manifest this toolchain cannot read is reported in the direction it is wrong
+in. `unsupported formatVersion 3: newer than this toolchain supports (2);
+upgrade @velarscript/cli` means a later toolchain wrote the project.
+`unsupported formatVersion 1: no longer supported by this toolchain (2)` means
+the format is one this compiler no longer reads. There is no migration command,
+and there is deliberately no reader for a legacy format.
+
+A VelarScript toolchain is one generation. `@velarscript/cli` pins every
+official target extension to its own version, and a project resolves its
+extensions before the toolchain does, so a target extension installed from
+another release would otherwise load its own nested compiler with nothing in the
+load path able to tell — `protocolVersion` has never moved, and `apiVersion` is
+compared against the extension's own manifest. Every command that loads a
+project therefore compares the version the project resolves against the version
+this CLI was published against, and refuses a mismatch by name and version:
+
+```text
+node_modules/@velarscript/node/package.json: this project resolves
+@velarscript/node 0.99.0, but @velarscript/cli 0.12.1 is built against
+@velarscript/node 0.12.1; a VelarScript toolchain is one generation, so install
+@velarscript/node 0.12.1 or @velarscript/cli 0.99.0
+```
+
+The path is the manifest the resolution actually read, and the running command
+prefixes its own name to the line. Install either version the message names.
+`create` writes exact versions for this reason: a caret range lets `npm install`
+pair a newer target extension with the pinned CLI.
 
 ## Handing work to a model
 

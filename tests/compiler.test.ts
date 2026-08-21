@@ -601,14 +601,22 @@ type Result:
 async def result() -> Result:
     return {value: 10}
 
+async def supply() -> number:
+    return 5
+
+async def use(value: number) -> number:
+    return value * 3
+
 const load: (number) -> Promise<number> = async value => await next(value)
 const combine = async (left: number, right: number) => next(left + right)
 const member = (await result()).value
 const immediate = await (async () => next(8))()
+const nested = await use(await supply())
 print(await load(2))
 print(await combine(3, 4))
 print(member)
 print(immediate)
+print(nested)
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
@@ -617,10 +625,16 @@ print(immediate)
   assert.match(result.code ?? "", /const load = async value => await __velarNormalizePromiseValue\(next\(value\)\);/u);
   assert.match(result.code ?? "", /const combine = async \(left, right\) => __velarNormalizePromiseValue\(next\(\(left \+ right\)\)\);/u);
   assert.match(result.code ?? "", /const member = \(await __velarNormalizePromiseValue\(result\(\)\)\)\.value;/u);
-  assert.match(result.code ?? "", /const immediate = await __velarNormalizePromiseValue\(\(async \(\) => next\(8\)\)\(\)\);/u);
+  // The wrapper covers exactly the value it wraps, so an inner async arrow
+  // body keeps its own boundary instead of inheriting the outer call's
+  // suppression: the concise `next(8)` is normalized where it is produced.
+  assert.match(result.code ?? "", /const immediate = await __velarNormalizePromiseValue\(\(async \(\) => __velarNormalizePromiseValue\(next\(8\)\)\)\(\)\);/u);
+  // A nested await produces a *different* Promise from the one the outer call
+  // returns, so both boundaries are checked rather than only the outer one.
+  assert.match(result.code ?? "", /const nested = await __velarNormalizePromiseValue\(use\(await __velarNormalizePromiseValue\(supply\(\)\)\)\);/u);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "3\n8\n10\n9\n");
+  assert.equal(execution.stdout, "3\n8\n10\n9\n15\n");
 
   const synchronousAwait = compile(`
 async def task() -> number:
@@ -2611,10 +2625,26 @@ catch error:
   assert.deepEqual(result.diagnostics, []);
   assert.equal(result.semanticIndex.symbols.find((item) => item.kind === "variable" && item.name === "estimate")?.type, "number");
   assert.match(result.code ?? "", /\(\(draft\.estimate \?\? null\) !== null\)/u);
-  assert.match(result.code ?? "", /__velarAssertionError\.name = "AssertionError"/u);
+  // D50 rule 89: `assert` raises a compiler-owned class that carries its name
+  // on the constructor through defineProperty, exactly as NarrowingError and
+  // IndexError do. The former lowering built a plain Error and wrote `name`
+  // onto the instance, which made `code` answer "Error".
+  assert.match(result.code ?? "", /class __VelarAssertionError extends __velarAssertionNativeError \{/u);
+  assert.match(result.code ?? "", /__velarAssertionDefineProperty\(__VelarAssertionError, "name", \{ value: "AssertionError", writable: false, enumerable: false, configurable: true \}\);/u);
+  assert.match(result.code ?? "", /throw new __VelarAssertionError\("Broken invariant"\);/u);
+  assert.doesNotMatch(result.code ?? "", /__velarAssertionError\.name = "AssertionError"/u);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "0::true\nAssertionError:Broken invariant\n");
+
+  // The class is one identity across a project, so a shared-runtime build
+  // imports it from the shared error module rather than inlining a second
+  // class every module would compare unequal against.
+  const sharedAssertion = compile(source, { sharedRuntimeModules: true });
+  assert.deepEqual(sharedAssertion.diagnostics, []);
+  assert.ok(sharedAssertion.runtimeModules.includes(VELAR_ERROR_NORMALIZATION_MODULE), JSON.stringify(sharedAssertion.runtimeModules));
+  assert.match(sharedAssertion.code ?? "", /^import \{ AssertionError as __VelarAssertionError \} from "velar\/compiler-runtime-errors-v1";$/mu);
+  assert.doesNotMatch(sharedAssertion.code ?? "", /class __VelarAssertionError/u);
 
   const invalid = compile(`
 assert 1
@@ -4912,7 +4942,9 @@ test("rejects legacy and discarded design surface with intentional diagnostics",
     ["const value = this\n", /self.*this/],
     ["const value = new Player()\n", /directly.*new/],
     ["eval(\"1\")\n", /does not expose 'eval'/],
-    ["with value\n", /record spread.*\{\.\.\.value, field: next\}.*does not expose 'with'/],
+    // D89 (message correction): 'with' is Python's context manager, and the
+    // successor is the binding that owns and releases a value.
+    ["with value\n", /Use 'using name = expression'.*releases it when the scope ends.*does not expose 'with'/],
     ["const value = Player.prototype\n", /prototype manipulation/],
     ["const value = item.__proto__\n", /prototype manipulation/],
     ["const value = 1 === 1\n", /equality is already strict/],
@@ -8191,7 +8223,7 @@ test("0.10 Web APIs have one versioned typed compiler/runtime contract", async (
   assert.deepEqual(api.modules["velar/config"], ["has", "keys", "publicConfig"]);
   assert.deepEqual(api.modules["velar/web"], ["Head", "Link", "NavLink", "RouteContext", "Router", "announce", "back", "currentRoute", "domId", "forward", "lazy", "navigate", "redirect", "reload", "route"]);
   assert.deepEqual(api.modules["velar/forms"], ["checkedValue", "clearError", "clearErrors", "errors", "fieldValue", "fieldValues", "focusFirstError", "numberValue", "read", "reset", "setError", "setPending", "textValue", "values"]);
-  assert.deepEqual(api.modules["velar/http"], ["HttpAbortError", "HttpError", "HttpTransportError", "HttpTransportPhase", "formBody", "http"]);
+  assert.deepEqual(api.modules["velar/http"], ["HttpAbortError", "HttpResponseError", "HttpTransportError", "HttpTransportPhase", "formBody", "http"]);
   assert.deepEqual(api.modules["velar/storage"], ["StorageQuotaError", "StorageTransactionError", "StorageUpgradeError", "database", "session", "storage"]);
   assert.deepEqual(api.modules["velar/browser"], ["after", "blur", "capturePointer", "clipboardText", "closeDialog", "copyText", "dialogResult", "environment", "every", "focus", "frame", "location", "measure", "media", "open", "readClipboardText", "releasePointer", "scrollElementTo", "scrollIntoView", "scrollMetrics", "scrollTo", "setClipboardText", "setTextSelection", "showDialog", "textSelection", "watchMedia", "watchOnline", "watchVisibility"]);
   assert.deepEqual(api.modules["velar/files"], ["download", "pick", "readDataUrl", "readText"]);
@@ -8564,7 +8596,7 @@ test("fixed Web APIs share the language named-argument ABI", async () => {
   await writeFile(entry, `
 import {publicConfig} from "velar/config"
 import {route, navigate} from "velar/web"
-import {http, HttpAbortError, HttpError} from "velar/http"
+import {http, HttpAbortError, HttpResponseError} from "velar/http"
 import {storage, database} from "velar/storage"
 import {textValue} from "velar/forms"
 import {scrollTo} from "velar/browser"
@@ -8621,7 +8653,7 @@ async def prepare():
     channel.sendJson(data={name: loaded?.name ?? config.name})
     channel.close(reason="done", code=1000)
     const aborted = HttpAbortError(reason="cancelled")
-    const failed = HttpError(body=null, url="/api/items", status=500, message=aborted.message)
+    const failed = HttpResponseError(body=null, url="/api/items", status=500, message=aborted.message)
 `.trimStart(), "utf8");
 
   const project = await compileProject(entry);
@@ -8805,7 +8837,12 @@ console.log([mediaListeners.size, windowListeners.size, documentListeners.size].
   const storageSource = standardModuleSource("velar/storage") ?? "";
   const storageExecution = executeModule(`
 const reports = [];
-globalThis[Symbol.for("velar.runtime.v1")] = { report(error, options) { reports.push(options.phase + ":" + options.detail + ":" + error.message); } };
+// D90 fr-5: storage writes serialize through the JSON bridge, which now
+// refuses a registry from another generation instead of quietly reading past
+// it. The reporting stub therefore has to answer for this generation, as the
+// Router stub below does for the List guard; the remaining registry stubs in
+// this file never reach a version-checked site.
+globalThis[Symbol.for("velar.runtime.v1")] = { version: ${JSON.stringify(VELAR_RUNTIME_SCHEMA_VERSION)}, toRaw: (value) => value, report(error, options) { reports.push(options.phase + ":" + options.detail + ":" + error.message); } };
 const data = new Map(), listeners = new Map();
 globalThis.localStorage = { get length() { return data.size; }, key(index) { return [...data.keys()][index] ?? null; }, getItem(key) { return data.get(key) ?? null; }, setItem(key, value) { data.set(key, value); }, removeItem(key) { data.delete(key); } };
 globalThis.CustomEvent = class { constructor(type, options) { this.type = type; this.detail = options.detail; } };
@@ -8959,7 +8996,24 @@ const listeners = new Map();
 globalThis.addEventListener = (name, listener) => listeners.set(name, listener);
 globalThis.removeEventListener = (name) => listeners.delete(name);
 const reports = [];
+// D90 fr-5: Router reads its routes through the List guard, which now refuses a
+// registry from another generation instead of quietly reading past it. The
+// installer that writes this slot in a real build always writes version, toRaw,
+// collectionRead and report together, so a reporting stub has to answer for
+// this generation the same way — a report-only registry is a shape production
+// never produces, and loosening the runtime to accept one would give Web a
+// tolerance rule no other reader of this slot has.
+// D90 R4-a: a Router reads its routes inside the observer that renders from
+// them, the way Head has always read its metadata, so the stub answers for the
+// observer half of the slot too. These routes are not reactive, so a tracked
+// run is an ordinary call that records nothing.
 globalThis[Symbol.for("velar.runtime.v1")] = {
+  version: ${JSON.stringify(VELAR_RUNTIME_SCHEMA_VERSION)},
+  toRaw: (value) => value,
+  collectionRead: (target, key, value) => value,
+  runTracked: (observer, run) => run(),
+  schedule: (observer) => observer.run(),
+  cleanupObserver: () => {},
   report(error, options) { reports.push(options.phase + ":" + options.detail + ":" + error.message); },
 };
 ${source}
@@ -9006,6 +9060,17 @@ test("Router caps route tables before creating browser nodes", () => {
   const execution = executeModule(`
 let domCalls = 0;
 globalThis.document = { createElement() { domCalls += 1; return {}; } };
+// D90 R4-a: a Router reads its routes inside an observer, so the probe stands
+// in for the runtime an application installs. The cap is still read before the
+// host element exists.
+globalThis[Symbol.for("velar.runtime.v1")] = {
+  version: ${JSON.stringify(VELAR_RUNTIME_SCHEMA_VERSION)},
+  toRaw: (value) => value,
+  collectionRead: (target, key, value) => value,
+  runTracked: (observer, run) => run(),
+  schedule: (observer) => observer.run(),
+  cleanupObserver: () => {},
+};
 ${source}
 const item = route("/", () => null);
 try { Router({ routes: new Array(10001).fill(item) }); console.log("accepted"); }
@@ -9042,6 +9107,18 @@ globalThis.history = {
 globalThis.dispatchEvent = () => true;
 globalThis.PopStateEvent = class {};
 globalThis.requestAnimationFrame = () => { frameCalls += 1; };
+// D90 R4-a: the four framework components read their props inside the observer
+// that consumes them, so a probe that constructs one installs the runtime an
+// application installs. Nothing here is reactive, so a tracked run records
+// nothing.
+globalThis[Symbol.for("velar.runtime.v1")] = {
+  version: ${JSON.stringify(VELAR_RUNTIME_SCHEMA_VERSION)},
+  toRaw: (value) => value,
+  collectionRead: (target, key, value) => value,
+  runTracked: (observer, run) => run(),
+  schedule: (observer) => observer.run(),
+  cleanupObserver: () => {},
+};
 ${source}
 const accessor = (key, value) => Object.defineProperty({}, key, { enumerable: true, get() { getterReads += 1; return value; } });
 const routeAccessor = Object.defineProperty({ component: () => null }, "path", { enumerable: true, get() { getterReads += 1; return "/"; } });
@@ -9049,16 +9126,13 @@ const operations = [
   () => navigate("/", accessor("replace", true)),
   () => navigate("/", { unknown: true }),
   () => navigate("/", { scroll: "yes" }),
-  () => Head(accessor("title", "Title")),
   () => Head({ title: 42 }),
   () => Head({ title: "Title", language: "not a tag!" }),
-  () => Router(accessor("routes", [])),
   () => Router({ routes: new Array(1) }),
   () => Router({ routes: [routeAccessor] }),
   () => Router({ routes: [], fallback: "missing" }),
   () => Link({ to: 42 }),
   () => Link({ to: "/", replace: 1 }),
-  () => Link(accessor("to", "/")),
   () => NavLink({ to: "/", exact: 1 }),
   () => announce(42),
 ];
@@ -9069,9 +9143,26 @@ for (const operation of operations) {
 }
 console.log(failures.join(","));
 console.log([getterReads, domCalls, historyCalls, frameCalls].join(":"));
+// A component prop is not one of those records. D90 R4-a: the emitted
+// instantiation path hands every component a live props store whose fields are
+// tracked getters, so an accessor field is the shape these four are built for,
+// and reading it is what subscribes them to the state behind it. A route entry
+// inside the routes List is still an ordinary data record -- 'routeAccessor'
+// above is refused -- and navigate's options record still is too.
+const live = [];
+for (const operation of [() => Head(accessor("title", "Title")), () => Link(accessor("to", "/"))]) {
+  try { operation(); live.push("accepted"); }
+  catch (error) { live.push(error.name); }
+}
+console.log(live.join(",") + ":" + getterReads);
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, `${new Array(15).fill("TypeError").join(",")}\n0:0:0:0\n`);
+  // Three reads for two components: Head reads its record once, inside its
+  // observer, and Link checks the record's shape once before reading the target
+  // inside its own. Behind a real props store both of Link's reads answer from
+  // the same cached derived value, so the author's prop expression still runs
+  // exactly once -- tests/hardening-closeout-live-props.test.ts counts that.
+  assert.equal(execution.stdout, `${new Array(12).fill("TypeError").join(",")}\n0:0:0:0\naccepted,accepted:3\n`);
 });
 
 test("form boundaries validate descriptors before reading or mutating a form", () => {
@@ -9466,7 +9557,17 @@ globalThis.PopStateEvent = class { constructor(type) { this.type = type; } };
 globalThis.dispatchEvent = () => true;
 globalThis.requestAnimationFrame = (callback) => { callback(0); return 1; };
 globalThis.scrollTo = () => {};
-globalThis[Symbol.for("velar.runtime.v1")] = { report(error, options) { reports.push(options.phase + ":" + options.detail + ":" + error.name); } };
+// D90 R4-a: a Link reads its target inside an observer, so the reporting stub
+// answers for the observer half of this slot as well.
+globalThis[Symbol.for("velar.runtime.v1")] = {
+  version: ${JSON.stringify(VELAR_RUNTIME_SCHEMA_VERSION)},
+  toRaw: (value) => value,
+  collectionRead: (target, key, value) => value,
+  runTracked: (observer, run) => run(),
+  schedule: (observer) => observer.run(),
+  cleanupObserver: () => {},
+  report(error, options) { reports.push(options.phase + ":" + options.detail + ":" + error.name); },
+};
 ${webSource}
 const linked = Link({ to: "/next" });
 linked.__mount();
@@ -10832,8 +10933,13 @@ const optionalPatternMatch = Text.findMatch("b", "(a)?b")
 print(optionalPatternMatch?.groups?.[0] ?? "null")
 print(Text.replaceMatches("x1", "[0-9]", "$&"))
 print(joinItems(Text.splitPattern("a1b", "([0-9])"), "|"))
+// D90 R11: the options record is closed when it is written as a literal at
+// this annotated parameter, so the runtime's unknown-option guard is now
+// reached the only way it still can be — through a value the compiler cannot
+// see every key of.
+const unsupportedOptions = {sticky: true}
 try:
-    Text.matches("42", "[0-9]+", {sticky: true})
+    Text.matches("42", "[0-9]+", unsupportedOptions)
 catch error:
     print(error.name)
 try:
@@ -11089,6 +11195,25 @@ test("Core, Web, and Node own distinct WebSocket surfaces", async () => {
   const node = await compileProjectCore(entry, new Map(), { extensions: [velarNodeCompilerExtension] });
   assert.deepEqual(node.failures, []);
   assert.deepEqual(node.modules.flatMap((module) => module.result.diagnostics), []);
+
+  // D90 fr-4: `listen` and `WebSocketServer` are Node's alone, but the two
+  // targets publish one `velar/websocket#type:WebSocketConnection`, so its
+  // field roster cannot differ between them. A Web connection is always an
+  // outbound `connect()` result, which was never upgraded from an Origin and
+  // reads back null exactly as an outbound Node connection does.
+  await writeFile(
+    entry,
+    'import {connect} from "velar/websocket"\n\nasync def open() -> string:\n    const connection = await connect("wss://example.test")\n    return connection.origin ?? "none"\n',
+    "utf8",
+  );
+  for (const compiled of [
+    await compileProject(entry),
+    await compileProjectCore(entry, new Map(), { extensions: [velarNodeCompilerExtension] }),
+  ]) {
+    assert.deepEqual(compiled.failures, []);
+    assert.deepEqual(compiled.modules.flatMap((module) => module.result.diagnostics), []);
+  }
+  assert.match(standardModuleSource("velar/websocket") ?? "", /value\.origin = null;/u);
 });
 
 test("local filesystem and environment modules keep their runtime boundaries bounded and opaque", async () => {
@@ -13720,8 +13845,8 @@ for (const operation of [
   () => http.get("/items", { cache: "only-if-cached" }),
   () => http.get("/items", { body: "not allowed" }),
   () => http.post("/items", { body: 42 }),
-  () => new HttpError(42, 400, "/items"),
-  () => new HttpError("failed", 99, "/items"),
+  () => new HttpResponseError(42, 400, "/items"),
+  () => new HttpResponseError("failed", 99, "/items"),
 ]) {
   try { operation(); console.log("accepted"); } catch (error) { console.log(error.name); }
 }
@@ -13786,8 +13911,8 @@ for (const headers of [
   catch (error) { console.log(error.name); }
 }
 for (const operation of [
-  () => new HttpError("x".repeat(65537), 400, "/items"),
-  () => new HttpError("failed", 400, "x".repeat(2 * 1024 * 1024 + 1)),
+  () => new HttpResponseError("x".repeat(65537), 400, "/items"),
+  () => new HttpResponseError("failed", 400, "x".repeat(2 * 1024 * 1024 + 1)),
 ]) {
   try { operation(); console.log("accepted"); }
   catch (error) { console.log(error.name); }
@@ -14043,6 +14168,38 @@ console.log(ambientReads);
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "true\ntrue\none,two\n0\n");
+});
+
+test("the Web List guard tells an absent reactive runtime apart from a foreign generation", () => {
+  const http = standardModuleSource("velar/http") ?? "";
+  const execution = executeModule(`const hostDefineProperty = Object.getOwnPropertyDescriptor(Object, "defineProperty").value;
+const registryKey = Symbol.for("velar.runtime.v1");
+${http}
+console.log(__velarRequireList(["one", "two"], "Probe values").join(","));
+hostDefineProperty(globalThis, registryKey, {
+  configurable: true,
+  value: {version: "0.11", toRaw: value => value, collectionRead: () => {}},
+});
+try { __velarRequireList(["one"], "Probe values"); console.log("accepted"); }
+catch (error) { console.log(error.name + ": " + error.message); }
+// D90 fr-5: a generation old enough to have no version field at all is still a
+// generation, and Core, the JSON bridge and the Web reactive foundation all
+// refuse it. The Web List guard reads the same global slot, so it applies the
+// same rule rather than a looser one of its own.
+hostDefineProperty(globalThis, registryKey, {
+  configurable: true,
+  value: {report: () => {}},
+});
+try { __velarRequireList(["one"], "Probe values"); console.log("accepted"); }
+catch (error) { console.log(error.name + ": " + error.message); }
+`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, [
+    "one,two",
+    "TypeError: VelarScript reactive runtime schema 0.11 does not match this module's schema 0.12; one build mixed two generations of @velarscript/* — run 'npm ls @velarscript/compiler' and pin one version",
+    "TypeError: VelarScript reactive runtime schema (unknown) does not match this module's schema 0.12; one build mixed two generations of @velarscript/* — run 'npm ls @velarscript/compiler' and pin one version",
+    "",
+  ].join("\n"), "an absent registry stays silent; every present generation names both schemas");
 });
 
 test("known lossy JSON inputs fail during checking", async () => {
@@ -15048,7 +15205,7 @@ mount(<App />, "#app")
   const assets = await readdir(join(directory, "build", "assets"));
   const javascript = assets.find((name) => /^main-[A-Z0-9]+\.js$/u.test(name));
   assert.ok(javascript);
-  assert.match(await readFile(join(directory, "build", "assets", javascript), "utf8"), /HttpError/);
+  assert.match(await readFile(join(directory, "build", "assets", javascript), "utf8"), /HttpResponseError/);
   assert.match(await readFile(join(directory, "build", "assets", javascript), "utf8"), /https:\/\/api\.example\.com/u);
   assert.ok(assets.includes(`${javascript}.map`));
   const productionManifest = JSON.parse(await readFile(join(directory, "build", "velar-build.json"), "utf8")) as { sourceMaps: boolean };
@@ -15229,8 +15386,11 @@ export const velarProjectExtension = Object.freeze({id: ${JSON.stringify(name)},
   await writeExtension("fixture-parent", "capability", "1.0", { "fixture-child": "2.0" });
   await assert.rejects(resolveVelarProject(directory), /dependency cycle: fixture-child -> fixture-parent -> fixture-child/u);
 
-  await writeExtension("fixture-collision-parent", "application", "1.0", {}, "velar/collision");
-  await writeExtension("fixture-collision-child", "capability", "2.0", { "fixture-collision-parent": "1.0" }, "velar/collision");
+  // The module name here is deliberately NOT under 'velar/'. A third-party extension that
+  // claims a 'velar/*' name now trips the reserved-namespace check first (asserted just
+  // below), which would mask the multi-owner check this case exists to exercise.
+  await writeExtension("fixture-collision-parent", "application", "1.0", {}, "fixture-collision/shared");
+  await writeExtension("fixture-collision-child", "capability", "2.0", { "fixture-collision-parent": "1.0" }, "fixture-collision/shared");
   await writeFile(join(directory, "velar.json"), JSON.stringify({
     formatVersion: 2,
     entry: "main.vel",
@@ -15238,7 +15398,19 @@ export const velarProjectExtension = Object.freeze({id: ${JSON.stringify(name)},
     "fixture-collision-parent": {},
     "fixture-collision-child": {},
   }), "utf8");
-  await assert.rejects(resolveVelarProject(directory), /module 'velar\/collision' has more than one extension owner/u);
+  await assert.rejects(resolveVelarProject(directory), /module 'fixture-collision\/shared' has more than one extension owner/u);
+
+  await writeExtension("fixture-reserved-namespace", "capability", "1.0", {}, "velar/collision");
+  await writeFile(join(directory, "velar.json"), JSON.stringify({
+    formatVersion: 2,
+    entry: "main.vel",
+    extensions: ["fixture-reserved-namespace"],
+    "fixture-reserved-namespace": {},
+  }), "utf8");
+  await assert.rejects(
+    resolveVelarProject(directory),
+    /cannot declare Velar module 'velar\/collision'; 'velar\/\*' belongs to the language/u,
+  );
 
   for (const [index, version] of ["1.0.0+build.7", "1.0.0-alpha.1+build.7", "0.0.0-0"].entries()) {
     const name = `fixture-valid-version-${index}`;
@@ -15655,8 +15827,8 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     devDependencies: Record<string, string>;
   };
-  assert.equal(createdPackage.dependencies["@velarscript/web"], "^0.12.1");
-  assert.equal(createdPackage.devDependencies["@velarscript/cli"], "^0.12.1");
+  assert.equal(createdPackage.dependencies["@velarscript/web"], "0.12.1");
+  assert.equal(createdPackage.devDependencies["@velarscript/cli"], "0.12.1");
   assert.equal(createdPackage.scripts.format, "velar format");
   assert.equal(createdPackage.scripts["format:check"], "velar format --check");
   assert.equal(createdPackage.scripts["test:browser"], "velar test --browser");
@@ -15793,7 +15965,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   assert.equal(componentPackage.scripts["pack:check"], "npm pack --dry-run --json");
   assert.match(componentPackage.scripts.validate ?? "", /npm run pack:check$/u);
   assert.equal(componentPackage.peerDependencies["@velarscript/web"], "^0.12.1");
-  assert.equal(componentPackage.devDependencies["@velarscript/web"], "^0.12.1");
+  assert.equal(componentPackage.devDependencies["@velarscript/web"], "0.12.1");
   assert.match(await readFile(join(componentRoot, "src", "index.vel"), "utf8"), /export component InfoCard/u);
   assert.deepEqual(JSON.parse(await readFile(join(componentRoot, "velar.json"), "utf8")).extensions, ["@velarscript/web"]);
   await linkWorkspaceWebExtension(componentRoot);
@@ -15818,7 +15990,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     scripts: Record<string, string>;
   };
-  assert.equal(nodePackage.dependencies["@velarscript/node"], "^0.12.1");
+  assert.equal(nodePackage.dependencies["@velarscript/node"], "0.12.1");
   assert.equal(nodePackage.scripts.dev, "velar dev");
   assert.equal(nodePackage.scripts.start, "velar serve");
   const nodeManifest = JSON.parse(await readFile(join(nodeRoot, "velar.json"), "utf8"));
@@ -15843,7 +16015,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     scripts: Record<string, string>;
   };
-  assert.equal(desktopPackage.dependencies["@velarscript/desktop"], "^0.12.1");
+  assert.equal(desktopPackage.dependencies["@velarscript/desktop"], "0.12.1");
   assert.equal(desktopPackage.scripts.package, "velar package");
   assert.equal(desktopPackage.scripts["test:browser"], "velar test --browser=all");
   const desktopAgents = await readFile(join(desktopRoot, "AGENTS.md"), "utf8");
@@ -16700,6 +16872,17 @@ globalThis.dispatchEvent = () => true;
 globalThis.requestAnimationFrame = (callback) => { callback(); return 1; };
 globalThis.scrollTo = () => {};
 globalThis.PopStateEvent = class { constructor(type) { this.type = type; } };
+// D90 R4-a: a Router renders from routes it reads inside an observer, so the
+// probe installs the runtime an application installs before importing the
+// module whose captured ABI it is about to test.
+globalThis[Symbol.for("velar.runtime.v1")] = {
+  version: ${JSON.stringify(VELAR_RUNTIME_SCHEMA_VERSION)},
+  toRaw: (value) => value,
+  collectionRead: (target, key, value) => value,
+  runTracked: (observer, run) => run(),
+  schedule: (observer) => observer.run(),
+  cleanupObserver: () => {},
+};
 ${source}
 globalThis.document = new Proxy({}, { get() { throw new Error("ambient document read"); } });
 globalThis.Node = class PoisonedNode {};
@@ -17878,9 +18061,15 @@ try { stale(); } catch (error) { console.log(error.name); }
 
   const shared = compileCore(source, { sharedRuntimeModules: true });
   assert.deepEqual(shared.diagnostics, []);
-  assert.deepEqual(shared.runtimeModules, [VELAR_NARROWING_MODULE]);
+  // The `assert` in this module raises the compiler-owned AssertionError, and
+  // that class lives in the shared error module for the same reason
+  // NarrowingError lives here: one identity across every module that raises
+  // it. So a module that narrows *and* asserts consumes both runtime modules.
+  assert.deepEqual(shared.runtimeModules, [VELAR_ERROR_NORMALIZATION_MODULE, VELAR_NARROWING_MODULE]);
   assert.ok((shared.code ?? "").includes(`from ${JSON.stringify(VELAR_NARROWING_MODULE)}`));
   assert.doesNotMatch(shared.code ?? "", /class __VelarNarrowingError/u);
+  assert.match(shared.code ?? "", /^import \{ AssertionError as __VelarAssertionError \} from "velar\/compiler-runtime-errors-v1";$/mu);
+  assert.doesNotMatch(shared.code ?? "", /class __VelarAssertionError/u);
 
   const directory = await makeTemporaryDirectory("velar-shared-narrowing-runtime-");
   const dependencyPath = join(directory, "dependency.vel");
@@ -17930,7 +18119,14 @@ catch error:
   const runtimeNamespace = await import(runtimeUrl);
   assert.deepEqual(Object.keys(runtimeNamespace).sort(), ["NarrowingError", "narrow"]);
 
-  const sharedSource = (shared.code ?? "").replace(JSON.stringify(VELAR_NARROWING_MODULE), JSON.stringify(runtimeUrl));
+  // The module also raises AssertionError, whose class the shared error module
+  // owns, so the hostile host resolves both runtime specifiers.
+  const errorRuntimeSource = standardModuleSourceCore(VELAR_ERROR_NORMALIZATION_MODULE);
+  assert.ok(errorRuntimeSource);
+  const errorRuntimeUrl = `data:text/javascript;base64,${Buffer.from(errorRuntimeSource).toString("base64")}`;
+  const sharedSource = (shared.code ?? "")
+    .replaceAll(JSON.stringify(VELAR_NARROWING_MODULE), JSON.stringify(runtimeUrl))
+    .replaceAll(JSON.stringify(VELAR_ERROR_NORMALIZATION_MODULE), JSON.stringify(errorRuntimeUrl));
   const hostile = executeModule(`${sharedSource}
 const NativeTypeError = globalThis.TypeError;
 const NativeObject = globalThis.Object;
@@ -18070,11 +18266,14 @@ print(recoverDependency() + ":" + recoverEntry())
   const runtimeNamespace = await import(runtimeUrl);
   // D50 rule 89: the shared error module also owns the nameable capability
   // error classes and the code projection, so every consumer builds the same
-  // class identities.
+  // class identities. `assert` and `value!` raise AssertionError (D86 rule
+  // 212), so that class ships here too rather than being inlined per module.
   assert.deepEqual(Object.keys(runtimeNamespace).sort(), [
-    "AddressInUseError", "FileExistsError", "FileNotFoundError", "NotADirectoryError", "PermissionError",
+    "AddressInUseError", "AssertionError", "FileExistsError", "FileNotFoundError", "NotADirectoryError", "PermissionError",
     "errorApply", "errorCode", "isError", "normalizeError",
   ]);
+  assert.equal(runtimeNamespace.AssertionError.name, "AssertionError");
+  assert.equal(runtimeNamespace.errorCode(new runtimeNamespace.AssertionError("boom")), "AssertionError");
 
   const hostile = executeModule(`
 import {errorApply, isError, normalizeError} from ${JSON.stringify(runtimeUrl)};
@@ -18616,11 +18815,25 @@ print("reached")
 `.trimStart();
   const missing = compile(missingSource);
   assert.deepEqual(missing.diagnostics, []);
-  assert.match(missing.code ?? "", /import \* as __velarExternModule\d+ from "node:process";/u);
-  assert.match(missing.code ?? "", /const on = __velarExternExport\(__velarExternModule\d+, "on", "node:process"\);/u);
+  // Charter section 12: "an `export let` remains a live ES-module value: the
+  // exporting module can reassign it between reads". The name therefore binds
+  // through a real `import`, and the presence probe runs beside it as its own
+  // statement. Reading the namespace into a `const` froze the binding at its
+  // initial value, which is neither what `import js * as` nor `unsafe js` nor
+  // JavaScript itself does with the same declaration.
+  assert.match(missing.code ?? "", /^import \{ on \} from "node:process";$/mu);
+  assert.match(missing.code ?? "", /^import \* as __velarExternModule\d+ from "node:process";$/mu);
+  assert.match(missing.code ?? "", /^__velarExternExport\(__velarExternModule\d+, "on", "node:process"\);$/mu);
+  assert.doesNotMatch(missing.code ?? "", /const on = __velarExternExport\(/u);
   const failed = executeModule(missing.code ?? "");
   assert.notEqual(failed.status, 0);
-  assert.match(String(failed.stderr), /Extern module 'node:process' declares 'on', but the JavaScript module has no such export; prototype methods and instance members belong on a declared class or singleton const, not module exports/u);
+  // Updated with the live-binding emission above: the name binds through a
+  // real `import`, so a host that link-checks named exports refuses before any
+  // statement runs and reports in its own voice, naming the module and the
+  // export. Where the name links to `undefined` instead — bundled CommonJS
+  // interop — the probe beside it is what reports, in the velar voice. Both
+  // refusals are at load and name the export, which is what W-22 promises.
+  assert.match(String(failed.stderr), /does not provide an export named 'on'|Extern module 'node:process' declares 'on', but the JavaScript module has no such export; prototype methods and instance members belong on a declared class or singleton const, not module exports/u);
   assert.doesNotMatch(String(failed.stdout), /reached/u);
 
   // Green path: a declared export that exists imports and runs unchanged.
@@ -18665,7 +18878,10 @@ print(banner)
   assert.deepEqual(missingDefault.diagnostics, []);
   const defaultExecution = executeModule(missingDefault.code ?? "");
   assert.notEqual(defaultExecution.status, 0);
-  assert.match(String(defaultExecution.stderr), /Extern module 'data:text\/javascript,export const value = 1' declares 'default', but the JavaScript module has no default export; declare the module's real named exports instead/u);
+  // Same live-binding consequence as the named case above: the host link step
+  // refuses the absent `default` first and in its own voice; the velar wording
+  // reports where a name links to `undefined` instead of failing to link.
+  assert.match(String(defaultExecution.stderr), /does not provide an export named 'default'|Extern module 'data:text\/javascript,export const value = 1' declares 'default', but the JavaScript module has no default export; declare the module's real named exports instead/u);
 
   const presentDefault = compile(`
 extern module "data:text/javascript,export default 7":
@@ -18680,13 +18896,34 @@ print(seven)
   assert.equal(presentExecution.status, 0, String(presentExecution.stderr));
   assert.equal(presentExecution.stdout, "7\n");
 
+  // The checked bridge keeps the foreign binding live: a declared name whose
+  // JavaScript module reassigns it is read again at every use, exactly as the
+  // namespace and `unsafe js` spellings already were.
+  const liveSource = "data:text/javascript,export let counter = 1; export function bump() { counter = 2 }";
+  const live = compile(`
+extern module ${JSON.stringify(liveSource)}:
+    export const counter: number
+    export def bump() -> null
+
+import js {counter, bump} from ${JSON.stringify(liveSource)}
+
+print(counter)
+bump()
+print(counter)
+`.trimStart());
+  assert.deepEqual(live.diagnostics, []);
+  assert.match(live.code ?? "", /^__velarExternExport\(__velarExternModule\d+, "counter", /mu);
+  const liveExecution = executeModule(live.code ?? "");
+  assert.equal(liveExecution.status, 0, String(liveExecution.stderr));
+  assert.equal(liveExecution.stdout, "1\n2\n");
+
   // velar run reports the same refusal for a project entry.
   const directory = await makeTemporaryDirectory("velar-extern-presence-");
   const entryPath = join(directory, "main.vel");
   await writeFile(entryPath, missingSource, "utf8");
   const ran = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "run", entryPath], { cwd: process.cwd(), encoding: "utf8" });
   assert.equal(ran.status, 1, ran.stdout);
-  assert.match(ran.stderr, /Extern module 'node:process' declares 'on', but the JavaScript module has no such export/u);
+  assert.match(ran.stderr, /does not provide an export named 'on'|Extern module 'node:process' declares 'on', but the JavaScript module has no such export/u);
 });
 
 test("safe JavaScript classes keep constructors, members, aliases, and nominal package identity", () => {
@@ -24803,7 +25040,7 @@ mount(<Counter start={1} />, "#app")
   assert.match(result.code ?? "", /__velarWatch/);
   assert.match(result.code ?? "", /count\.set\(count\.get\(\) \+ 1\)/);
   assert.match(result.code ?? "", /__velarCreateElement\("button", __velarNamespace\)/);
-  assert.match(result.css ?? "", /\[data-velar-look~="hover:color"\]\[data-velar-look\]:where\(:hover\)\{color:var\(--velar-look-hover-color\)\}/);
+  assert.match(result.css ?? "", /\[data-velar-look~="hover:color"\](?:\[data-velar-look\]){4}:where\(:hover\)\{color:var\(--velar-look-hover-color\)\}/);
   assert.match(result.code ?? "", /__velarLookBind/);
   assert.match(result.code ?? "", /proxy = new __velarGraphNativeProxy\(value/u);
   assert.match(result.code ?? "", /nextVersion !== currentVersion/u);
@@ -25381,8 +25618,8 @@ component Card:
 
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.css ?? "", /\[data-velar-look~="base:display"\]\{display:var\(--velar-look-base-display\)\}/u);
-  assert.match(result.css ?? "", /\[data-velar-look~="hover\+not-disabled:translate"\]\[data-velar-look\]:where\(:hover\):where\(:not\(:disabled\):not\(\[aria-disabled="true"\]\)\)/u);
-  assert.match(result.css ?? "", /@media \(width <= 720px\)\{\[data-velar-look~="viewport-width-lte-720px:padding"\]\[data-velar-look\]/u);
+  assert.match(result.css ?? "", /\[data-velar-look~="hover\+not-disabled:translate"\](?:\[data-velar-look\]){5}:where\(:hover\):where\(:not\(:disabled\):not\(\[aria-disabled="true"\]\)\)/u);
+  assert.match(result.css ?? "", /@media \(width <= 720px\)\{\[data-velar-look~="viewport-width-lte-720px:padding"\](?:\[data-velar-look\]){1}/u);
   assert.match(result.css ?? "", /\[data-velar-look~="before:base:content"\]::before/u);
   assert.match(result.code ?? "", /data-velar-look/u);
   assert.match(result.code ?? "", /__velarLookMath\("\*", 72, "1%"\)/u);
@@ -25433,8 +25670,8 @@ component Panel:
     return <div look={panelLook}>panel</div>
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.css ?? "", /@media \(prefers-color-scheme: dark\)\{\[data-velar-look~="scheme-dark:background"\]\[data-velar-look\]\{background:var\(--velar-look-scheme-dark-background\)\}/u);
-  assert.match(result.css ?? "", /@media \(prefers-color-scheme: dark\)\{\[data-velar-look~="hover\+scheme-dark:opacity"\]\[data-velar-look\]:where\(:hover\)/u);
+  assert.match(result.css ?? "", /@media \(prefers-color-scheme: dark\)\{\[data-velar-look~="scheme-dark:background"\](?:\[data-velar-look\]){1}\{background:var\(--velar-look-scheme-dark-background\)\}/u);
+  assert.match(result.css ?? "", /@media \(prefers-color-scheme: dark\)\{\[data-velar-look~="hover\+scheme-dark:opacity"\](?:\[data-velar-look\]){8}:where\(:hover\)/u);
   assert.match(result.css ?? "", /@media \(prefers-color-scheme: dark\) and \(width <= 600px\)\{\[data-velar-look~="scheme-dark\+viewport-width-lte-600px:padding"\]/u);
   // The schemes are complementary: 'not scheme.dark' is the light scheme.
   assert.match(result.css ?? "", /@media \(prefers-color-scheme: light\)\{\[data-velar-look~="scheme-light:color"\]/u);
@@ -25550,7 +25787,7 @@ component App:
     return <Control look={callerLook} />
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.css ?? "", /\[data-velar-look~="hover:color"\]\[data-velar-look\]:where\(:hover\)/u);
+  assert.match(result.css ?? "", /\[data-velar-look~="hover:color"\](?:\[data-velar-look\]){4}:where\(:hover\)/u);
 
   const execution = executeModule(`
 class FakeNode {
@@ -25654,17 +25891,6 @@ await flush();
 console.log("updated:" + read("color") + ":" + read("padding"));
 app.destroy();
 console.log("cleanup:" + read("color") + ":" + read("padding") + ":" + read("--velar-look-base-color"));
-let snapshotReceivedInternalStyle = false;
-function Snapshot(props) {
-  snapshotReceivedInternalStyle = Object.prototype.hasOwnProperty.call(props, "__velarStyle");
-  return { __velarComponent: true, node: new FakeNode(), __mount() {}, destroy() {} };
-}
-Snapshot.__velarSnapshotProps = true;
-const snapshotScope = __velarScope();
-const snapshot = __velarInstantiate(Snapshot, { __velarStyle: () => ({ color: "navy" }) }, undefined, snapshotScope, "html", undefined);
-console.log("snapshot:" + (snapshot.node.style.properties.get("color") ?? "missing") + ":" + snapshotReceivedInternalStyle);
-__velarDestroyScope(snapshotScope);
-console.log("snapshot-cleanup:" + (snapshot.node.style.properties.get("color") ?? "missing"));
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, [
@@ -25672,8 +25898,6 @@ console.log("snapshot-cleanup:" + (snapshot.node.style.properties.get("color") ?
     "removed:missing:12px:blue",
     "updated:orange:12px",
     "cleanup:missing:missing:missing",
-    "snapshot:navy:false",
-    "snapshot-cleanup:missing",
     "",
   ].join("\n"));
   assert.match(formatSource("component Styled:\n    return <div style:color=\"red\" style:padding={12px}>ok</div>\n", webFormatOptions),
@@ -25766,7 +25990,7 @@ component ActionButton:
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /surface\(\.\.\.\(\(__velarNamedArguments\) => \[__velarNamedArguments\[1\], __velarNamedArguments\[0\]\]/u);
   assert.match(result.code ?? "", /__velarLook\(\[/u);
-  assert.match(result.css ?? "", /focus-visible:outline"\]\[data-velar-look\]:where\(:focus-visible\)/u);
+  assert.match(result.css ?? "", /focus-visible:outline"\](?:\[data-velar-look\]){4}:where\(:focus-visible\)/u);
   assert.match(result.css ?? "", /base:resize"\]\{resize:var\(--velar-look-base-resize\)\}/u);
 });
 
@@ -28643,8 +28867,14 @@ export def render(text: string) -> string:
   // The bare import js form is the canonical default import; because the
   // source is governed by an extern module declaration, both shapes lower
   // through the presence-checked namespace bridge (W-22).
-  assert.match(result.code ?? "", /const MarkdownIt = __velarExternExport\(__velarExternModule\d+, "default", "markdown-it"\);/u);
-  assert.match(result.code ?? "", /const hljs = __velarExternExport\(__velarExternModule\d+, "default", "highlight\.js\/lib\/common"\);/u);
+  // Charter section 12: the default name binds through a real `import` so the
+  // foreign binding stays live, and the presence probe runs beside it as its
+  // own statement instead of freezing the value into a `const`.
+  assert.match(result.code ?? "", /^import \{ default as MarkdownIt \} from "markdown-it";$/mu);
+  assert.match(result.code ?? "", /^__velarExternExport\(__velarExternModule\d+, "default", "markdown-it"\);$/mu);
+  assert.match(result.code ?? "", /^import \{ default as hljs \} from "highlight\.js\/lib\/common";$/mu);
+  assert.match(result.code ?? "", /^__velarExternExport\(__velarExternModule\d+, "default", "highlight\.js\/lib\/common"\);$/mu);
+  assert.doesNotMatch(result.code ?? "", /const (?:MarkdownIt|hljs) = __velarExternExport\(/u);
   // The declared contracts stay checked.
   const misuse = compileCore(source.replace("renderer.render(text)", "renderer.render(1)"));
   assert.ok(misuse.diagnostics.some((item) => item.code === "VEL4001"), JSON.stringify(misuse.diagnostics));
@@ -28658,7 +28888,9 @@ import js {default as banner} from "markdown-it"
 print(banner)
 `.trimStart());
   assert.deepEqual(explicit.diagnostics, []);
-  assert.match(explicit.code ?? "", /const banner = __velarExternExport\(__velarExternModule\d+, "default", "markdown-it"\);/u);
+  assert.match(explicit.code ?? "", /^import \{ default as banner \} from "markdown-it";$/mu);
+  assert.match(explicit.code ?? "", /^__velarExternExport\(__velarExternModule\d+, "default", "markdown-it"\);$/mu);
+  assert.doesNotMatch(explicit.code ?? "", /const banner = __velarExternExport\(/u);
   // The formatter accepts both declaration shapes unchanged.
   assert.equal(formatSource(source), source);
 });

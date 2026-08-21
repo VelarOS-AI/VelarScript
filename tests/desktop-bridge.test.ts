@@ -150,3 +150,13 @@ test("Desktop WebView bridge chunks large requests and responses without changin
     id: timedRequest.id,
   });
 });
+
+test("Desktop native host opens an external URL only through the granted network origins", async () => {
+  const hostSource = await readFile(resolve("packages/desktop/native/macos/VelarDesktopHost.swift"), "utf8");
+  assert.match(hostSource, /private struct PermissionConfiguration: Decodable \{\n\s*let files: \[String\]\n\s*let network: \[String\]/u);
+  assert.match(hostSource, /NavigationPolicy\(bridge: bridge, network: host\.permissions\.network\)/u);
+  assert.match(hostSource, /private let externalOrigins: Set<String>/u);
+  const opens = hostSource.split("\n").filter((line) => line.includes("NSWorkspace.shared.open"));
+  assert.equal(opens.length, 1, "the native host hands a URL to the system from exactly one branch");
+  assert.match(hostSource, /\} else if let origin = navigationOrigin\(url\), externalOrigins\.contains\(origin\) \{\n\s*NSWorkspace\.shared\.open\(url\)\n\s*decisionHandler\(\.cancel\)/u);
+});

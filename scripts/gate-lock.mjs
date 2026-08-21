@@ -8,24 +8,29 @@
 // ERR_MODULE_NOT_FOUND on a tree that is perfectly fine. A later gate waits
 // here instead, and the failure a gate reports is always about the code.
 //
-// The lock is keyed by the workspace path, so separate checkouts, git
+// The lock lives inside the workspace it guards, so separate checkouts, git
 // worktrees, CI jobs, and the temporary workspace built by
 // isolated-toolchain-build.mjs never wait on each other. It is re-entrant
 // within one process tree, so a locked gate can call another locked script.
 //
+// It is deliberately not in `tmpdir()`. On a shared host that directory is
+// world-writable, and a path derived from the checkout is not a secret, so any
+// local user could pre-create the lock naming a process that never exits and
+// wedge every gate in this checkout for good. `.velar/` is already ignored by
+// git and already the CLI's own scratch namespace, so nothing else changes.
+//
 // Usage: node scripts/gate-lock.mjs <command> [arguments...]
 
 import { spawn } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { readFileSync, unlinkSync } from "node:fs";
-import { open, readFile, stat, unlink } from "node:fs/promises";
-import { hostname, tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { mkdir, open, readFile, stat, unlink } from "node:fs/promises";
+import { hostname } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const workspaceRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const workspaceKey = createHash("sha256").update(workspaceRoot).digest("hex").slice(0, 16);
-const lockPath = join(tmpdir(), `velar-gate-${workspaceKey}.lock`);
+const lockPath = join(workspaceRoot, ".velar", "gate.lock");
 const heldVariable = "VELAR_GATE_LOCK";
 // A lock file that never received its holder record was abandoned between
 // creation and the first write; only reclaim it once it cannot still be racing.
@@ -66,6 +71,7 @@ try {
 async function acquire() {
   let waitingSince = 0;
   let lastNotice = 0;
+  await mkdir(dirname(lockPath), { recursive: true });
   for (;;) {
     let handle;
     try {
@@ -76,7 +82,15 @@ async function acquire() {
       if (holder === undefined) continue;
       if (isReclaimable(holder)) {
         process.stderr.write(`Reclaiming a stale VelarScript gate lock left by ${describe(holder)}.\n`);
-        await unlink(lockPath).catch(() => {});
+        try {
+          await unlink(lockPath);
+        } catch (error) {
+          // A reclaim that cannot remove the file would otherwise spin here
+          // forever with nothing on screen explaining why.
+          if (error?.code !== "ENOENT") {
+            throw new Error(`cannot reclaim the stale gate lock at ${lockPath}: ${error?.message ?? String(error)}`);
+          }
+        }
         continue;
       }
       const now = Date.now();
@@ -201,10 +215,21 @@ function runGate() {
 
 function describe(holder) {
   if (holder.unwritten === true) return "an unidentified gate";
-  const label = typeof holder.label === "string" && holder.label ? holder.label : "a gate";
+  const label = terminalSafe(typeof holder.label === "string" && holder.label ? holder.label : "") || "a gate";
   const started = Date.parse(holder.startedAt ?? "");
   const age = Number.isNaN(started) ? "" : `, running for ${formatDuration(Date.now() - started)}`;
   return `\`${label}\` (pid ${holder.pid}${age})`;
+}
+
+/**
+ * The lock record is written by whoever holds the lock, and this text goes to a
+ * terminal. C0 and C1 controls carry escape sequences that retitle a window or
+ * rewrite the line above; bidi overrides reorder what is already there. None of
+ * them belong in a gate's own command line, so they are dropped rather than
+ * escaped — the label exists to be recognized, not to round-trip.
+ */
+function terminalSafe(text) {
+  return text.replaceAll(/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu, "").slice(0, 200);
 }
 
 function formatDuration(milliseconds) {

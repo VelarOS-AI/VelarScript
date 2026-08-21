@@ -97,16 +97,22 @@ export class __velarNodeHostHttpTransportError extends __velarNodeHostError {
 const __velarNodeHostPathErrorClasses = __velarNodeHostObjectCreate(null);
 ${VELAR_HOST_ERROR_PATH_NAMES.map((name) => `__velarNodeHostPathErrorClasses[${JSON.stringify(name)}] = __Velar${name};`).join("\n")}
 
+// This function must never throw. Its caller runs inside the port handler,
+// whose catch latches the permanent host failure, closes the port and
+// terminates the worker, so one error record the proxy failed to enumerate
+// would brick velar/fs, velar/http and velar/serve for the whole process. An
+// unrecognised record rejects only its own request instead.
 function __velarNodeHostErrorOf(value, operation) {
-  value = __velarNodeHostRecord(value, "Node host error");
+  try { value = __velarNodeHostRecord(value, "Node host error"); }
+  catch { return new __velarNodeHostTypeError("Node host returned an invalid error"); }
   if (typeof value.message !== "string" || value.message.length === 0 || value.message.length > 65536) {
-    throw new __velarNodeHostTypeError("Node host returned an invalid error");
+    return new __velarNodeHostTypeError("Node host returned an invalid error");
   }
   if (value.name === "HttpTransportError") {
-    if ((operation !== "http.request" && operation !== "http.read")
+    if ((operation !== "http.request" && operation !== "http.read" && operation !== "http.readBytes")
       || (value.phase !== "request" && value.phase !== "response")
       || (operation === "http.request" ? value.phase !== "request" : value.phase !== "response")) {
-      throw new __velarNodeHostTypeError("Node host returned an invalid HTTP transport error");
+      return new __velarNodeHostTypeError("Node host returned an invalid HTTP transport error");
     }
     return new __velarNodeHostHttpTransportError(value.message, value.phase);
   }
@@ -116,7 +122,7 @@ function __velarNodeHostErrorOf(value, operation) {
   const pathed = __velarNodeHostPathErrorClasses[value.name];
   if (pathed) {
     if (typeof value.path !== "string" || value.path.length > 65536) {
-      throw new __velarNodeHostTypeError("Node host returned an invalid error path");
+      return new __velarNodeHostTypeError("Node host returned an invalid error path");
     }
     return new pathed(value.message, value.path.length > 0 ? value.path : null);
   }
@@ -124,7 +130,7 @@ function __velarNodeHostErrorOf(value, operation) {
   if (value.name === "RangeError") return new __velarNodeHostRangeError(value.message);
   if (value.name === "TypeError") return new __velarNodeHostTypeError(value.message);
   if (value.name === "Error") return new __velarNodeHostError(value.message);
-  throw new __velarNodeHostTypeError("Node host returned an invalid error");
+  return new __velarNodeHostTypeError("Node host returned an invalid error");
 }
 
 function __velarNodeHostUpdateReference() {
@@ -301,7 +307,8 @@ export function __velarNodeHostInvoke(operation, args) {
   if (__velarNodeHostFailure) return new __velarNodeHostPromise((_resolve, reject) => reject(__velarNodeHostFailure));
   const id = __velarNodeHostRequestId();
   return new __velarNodeHostPromise((resolve, reject) => {
-    const handle = operation === "http.request" || operation === "http.read" || operation === "http.cancel" || operation === "http.close"
+    const handle = operation === "http.request" || operation === "http.read" || operation === "http.readBytes"
+      || operation === "http.cancel" || operation === "http.close"
       || operation === "fs.watchNext" || operation === "fs.watchClose"
       ? args[0]
       : null;

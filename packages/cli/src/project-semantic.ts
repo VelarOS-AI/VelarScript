@@ -17,6 +17,7 @@ import {
 } from "@velarscript/compiler";
 import type { ProjectModule, ProjectResult } from "./project.ts";
 import { projectImportKey } from "./project.ts";
+import { byCodeUnit } from "./stable-order.ts";
 
 export interface ProjectLocation {
   readonly path: string;
@@ -274,9 +275,20 @@ export function projectWorkspaceSymbols(
     if (symbols.length >= maximum) break;
   }
   return symbols
-    .sort((left, right) => left.score - right.score || left.name.localeCompare(right.name)
-      || left.path.localeCompare(right.path) || left.selectionSpan.start - right.selectionSpan.start)
+    .sort((left, right) => left.score - right.score || byName(left.name, right.name)
+      || byCodeUnit(left.path, right.path) || left.selectionSpan.start - right.selectionSpan.start)
     .map(({ score: _score, ...symbol }) => symbol);
+}
+
+/**
+ * The order a person reads this list in: `apple` before `Banana`, the way the
+ * collation this used to call gave in every Latin locale. `toLowerCase` is the
+ * Unicode default case mapping rather than `toLocaleLowerCase`'s tailored one,
+ * so unlike `localeCompare` it does not follow the machine's `LC_ALL`; the code
+ * unit order breaks the remaining ties so two machines still agree.
+ */
+function byName(left: string, right: string): number {
+  return byCodeUnit(left.toLowerCase(), right.toLowerCase()) || byCodeUnit(left, right);
 }
 
 export function projectSemanticTokens(project: ProjectResult, path: string): readonly ProjectSemanticToken[] {
@@ -1067,7 +1079,7 @@ function uniqueLocations(locations: readonly ProjectLocation[]): readonly Projec
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
-  }).sort((left, right) => left.path.localeCompare(right.path) || left.span.start - right.span.start);
+  }).sort((left, right) => byCodeUnit(left.path, right.path) || left.span.start - right.span.start);
 }
 
 function uniqueTextEdits(edits: readonly ProjectTextEdit[]): readonly ProjectTextEdit[] {
@@ -1077,7 +1089,7 @@ function uniqueTextEdits(edits: readonly ProjectTextEdit[]): readonly ProjectTex
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
-  }).sort((left, right) => left.path.localeCompare(right.path) || left.span.start - right.span.start);
+  }).sort((left, right) => byCodeUnit(left.path, right.path) || left.span.start - right.span.start);
 }
 
 function renameable(symbol: SemanticSymbol): boolean {

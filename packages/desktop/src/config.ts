@@ -106,6 +106,28 @@ function permissionConfig(value: unknown, manifestPath: string): DesktopPermissi
   return Object.freeze({ files: files as DesktopPermissionConfig["files"], processes, network, environment, secrets });
 }
 
+// Handing a renderer URL to the system browser is the same question
+// `desktop.permissions.network` already answers: may this application reach
+// this host. An origin that was never granted is cancelled rather than opened,
+// and only `https` is ever a candidate — every other scheme stays cancelled, as
+// it is in the native host. Matching is exact on scheme, host and port; a
+// suffix or substring rule is how allowlists get bypassed.
+export function desktopExternalNavigationPermitted(config: VelarDesktopConfig, url: string): boolean {
+  const candidate = permissionOrigin(url);
+  if (candidate === null) return false;
+  return config.permissions.network.some((origin) => permissionOrigin(origin) === candidate);
+}
+
+// `https` is read off the parsed URL rather than off the origin text, because a
+// nested scheme such as `blob:https://host/id` reports an `https` origin while
+// naming a scheme the host never opens.
+function permissionOrigin(value: string): string | null {
+  let parsed: URL;
+  try { parsed = new URL(value); }
+  catch { return null; }
+  return parsed.protocol === "https:" ? parsed.origin : null;
+}
+
 function buildConfig(value: unknown, manifestPath: string): VelarDesktopConfig["build"] {
   const build = value === undefined ? {} : objectField(value, "desktop.build", manifestPath);
   knownFields(build, new Set(["outDir", "sizeBudgetBytes"]), "desktop.build", manifestPath);

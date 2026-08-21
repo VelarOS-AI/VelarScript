@@ -44,6 +44,42 @@ export function recoveredDiagnostic(code: string, message: string, span: Span, f
   return fix ? { code, message, span, recovered: true, fix } : { code, message, span, recovered: true };
 }
 
+/**
+ * D89: the second diagnostic channel. An advisory names a spelling VelarScript
+ * accepts with a different meaning than the Python or JavaScript reflex that
+ * wrote it, so it can be neither silenced nor rejected. It never blocks code
+ * generation: `index.ts` gates emission on `diagnostics.length === 0`, and an
+ * advisory is physically incapable of reaching that expression.
+ *
+ * This is a separate type rather than a `severity` field on `Diagnostic`
+ * because the analyzer reads `this.diagnostics.length` as a cursor:
+ * `analyzer.ts:3496` and `:3549` hand the length to `reanalyzeLoopBackEdge` as
+ * the first diagnostic of a loop body, `:6964`/`:6967` compare two lengths to
+ * decide `calleeAlreadyDiagnosed` (which suppresses three reports at `:7058`),
+ * `:12573` pairs with `deduplicateDiagnostics`, and `web/analyzer.ts:1063`
+ * rewrites message text by index over the same range. Every one of those reads
+ * the array's length or index, never the items, so a severity field cannot
+ * keep an interleaved advisory from being mistaken for a diagnostic and
+ * deleting the real error behind it. Separate arrays make that impossible.
+ *
+ * The `tier` discriminant is required so TypeScript rejects an advisory passed
+ * into any `readonly Diagnostic[]` in the repository, which is what keeps the
+ * two channels from merging by accident.
+ */
+export interface Advisory {
+  readonly tier: "advisory";
+  /** The advisory roster id, e.g. "A1". Deliberately not the VELxxxx family. */
+  readonly code: string;
+  readonly message: string;
+  readonly span: Span;
+  /** The mechanical rewrite this advisory names, when it names exactly one. */
+  readonly fix?: DiagnosticFix;
+}
+
+export function advisory(code: string, message: string, span: Span, fix?: DiagnosticFix): Advisory {
+  return fix ? { tier: "advisory", code, message, span, fix } : { tier: "advisory", code, message, span };
+}
+
 /** Builds the one-edit mechanical rewrite of `span` to `text`. */
 export function mechanicalFix(span: Span, text: string, title: string): DiagnosticFix {
   return { edits: [{ span, text }], title };
@@ -55,6 +91,15 @@ export function mechanicalEdits(edits: readonly DiagnosticEdit[], title: string)
 }
 
 export function formatDiagnostic(source: SourceText, item: Diagnostic): string {
+  return formatReport(source, item, "error");
+}
+
+/** The diagnostic block with `advisory` where the label reads `error`. */
+export function formatAdvisory(source: SourceText, item: Advisory): string {
+  return formatReport(source, item, "advisory");
+}
+
+function formatReport(source: SourceText, item: Diagnostic | Advisory, label: string): string {
   const location = source.location(item.span.start);
   const maximumLine = 240;
   const rawLine = source.lineText(location.line);
@@ -71,7 +116,7 @@ export function formatDiagnostic(source: SourceText, item: Diagnostic): string {
   const marker = `${" ".repeat(terminalTextWidth(prefix + clipped.slice(0, localColumn)))}${"^".repeat(Math.max(1, terminalTextWidth(markerSource)))}`;
 
   return [
-    `${source.path.replaceAll("\\", "/")}:${location.line}:${location.column} error ${item.code}: ${item.message}`,
+    `${source.path.replaceAll("\\", "/")}:${location.line}:${location.column} ${label} ${item.code}: ${item.message}`,
     line,
     marker,
   ].join("\n");

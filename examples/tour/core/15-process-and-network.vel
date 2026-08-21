@@ -12,7 +12,7 @@
 import {run, start, Process, ProcessOutputChannel} from "velar/process"
 import {terminal} from "velar/terminal"
 import {fileResponse, serve, RequestBodyTooLargeError, ServeRequest, ServeResponse, Server} from "velar/serve"
-import {http, secretHeader, HttpAbortError, HttpError, HttpTransportError, HttpTransportPhase} from "velar/http"
+import {http, secretHeader, HttpAbortError, HttpResponseError, HttpTransportError, HttpTransportPhase} from "velar/http"
 
 type Report:
     id: string
@@ -253,7 +253,7 @@ export async def httpFailures(url: string) -> string:
     try:
         return await http.get(url).text()
     catch error:
-        if error is HttpError:
+        if error is HttpResponseError:
             return f"{error.status} {error.url} {error.body != null}"
         if error is HttpAbortError:
             return f"aborted: {error.reason}"

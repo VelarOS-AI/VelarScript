@@ -107,8 +107,12 @@ Semicolons and braces are not statement syntax.
 A statement normally ends at its newline. One continuation form exists: a line
 whose first token is `.` or `?.` continues the previous logical line, so
 method chains can span physical lines in the familiar formatted style. The
-canonical indentation is one level past the statement being continued;
-trailing-dot continuation is not supported.
+continuation must follow the line it continues directly — no blank line and no
+comment line between them — and must be indented past the statement being
+continued; the canonical indentation is one level past it. A leading-dot line
+that is not both is rejected rather than silently attached to whatever stands
+above it, because a line beginning with a member step cannot be a statement of
+its own. Trailing-dot continuation is not supported.
 
 ```velar fragment
 const urgent = tasks
@@ -150,6 +154,53 @@ result is computed and thrown away. Each shape is answered with the thing the
 author meant: a bare comparison teaches `=` or using the result, `++i` and
 `--i` teach `+= 1` and `-= 1`, and a bare string teaches `//`, since a string
 on its own line is a docstring habit rather than a comment.
+
+## Advisories
+
+Diagnostics are one channel. Advisories are the second, and they exist for the
+spellings neither channel could honestly take: a spelling VelarScript accepts
+with a meaning other than the one a Python or JavaScript reflex intended.
+`const half = total // 2` binds `total`, because `//` opens a comment. Staying
+silent about that is the trap the language exists to remove; rejecting it would
+refuse a legal comment. So it is reported instead, in a channel of its own.
+
+An advisory **never blocks a build**. It is not a diagnostic with a softer
+label: it travels in a separate list, and code generation is gated on the
+diagnostics alone, so no advisory can stop an emit and no later change can
+quietly promote one. `velar check` prints advisories, names their count in its
+summary line, and exits 0. An editor shows an advisory as a warning, not an
+error. Advisory ids are the `A` roster — `A1`, `A2`, `A3` — and deliberately
+not part of the `VEL` diagnostic family.
+
+An advisory that is right about the line is answered by writing the unambiguous
+spelling it names. An advisory that is wrong about *this* line is answered in
+place, by a line comment that says why:
+
+```text
+const step = total // 2   // velar-allow A1: 2 is a step number, not a divisor
+```
+
+Three rules govern that comment, and each is enforced by an ordinary
+diagnostic, so a badly written suppression fails the build the advisory itself
+never could:
+
+1. **It names one advisory.** `velar-allow` is followed by the id it silences.
+   There is no blanket form; silencing a line wholesale would also silence the
+   next advisory that lands on it.
+2. **It gives a reason.** The text after the colon must be non-empty. A bare
+   `velar-allow A1` is a compile error rather than a quieter advisory: a
+   suppression with no stated reason is exactly the silence this channel
+   replaces, and the reason is what reaches a reader through the diff.
+3. **It expires.** A `velar-allow A1` on a line that does not raise A1 is a
+   compile error too, so a suppression cannot rot in place and mislead a later
+   reader about what the line does.
+
+A suppression sits on the line the advisory is reported on, and covers that
+line and that one id — a multi-line expression does not carry it downward. Only
+a `//` line comment carries one; a `/* */` comment does not. The marker may
+stand anywhere in the comment's text, so the ordinary shape above — the
+advised code, then the clause — is read as one comment and works. The
+formatter preserves the comment and its reason verbatim.
 
 ## 3. Bindings and literals
 
@@ -227,9 +278,10 @@ attempts += 1
   `import`, `export`, `const`, `let`, `try`, `catch`, `finally`, `throw`,
   `async`, `await`, `assert`, `abstract`, `override`, `static`, `private`,
   `extern`, `unsafe`, `pass`, `break`, `continue`, `extends`, `super`, and
-  `self`. Using one as a name is reported by name. `constructor` and `get` are
-  **not** among them: both name a class member in their own shape and are
-  ordinary names everywhere else, which is what puts them on the roster above.
+  `self`. Using one as a binding name is reported by name. `constructor` and
+  `get` are **not** among them: both name a class member in their own shape and
+  are ordinary names everywhere else, which is what puts them on the roster
+  above.
 ```velar
 const event = {type: "ping", from: "worker"}
 const {type, from} = event          // ordinary names
@@ -445,7 +497,20 @@ that is not between two digits — leading, trailing, or doubled — is rejected
 Integer literals also accept the explicit radix prefixes `0x`, `0b`, and `0o`:
 `0xff`, `0b1010`, and `0o17`. Their digits are checked for the selected base,
 their value must remain finite like every other number literal, and formatting
-preserves the author's explicit radix. A legacy leading zero
+preserves the author's explicit radix.
+
+An integer literal must also be exactly representable. A literal written as an
+integer — no fraction part, no exponent, in any radix — whose value cannot be
+held exactly is rejected, so `9007199254740993` and `0x20000000000001` are
+errors rather than silently becoming `9007199254740992`. The report quotes the
+literal as the author wrote it, digit separators and radix prefix included,
+beside the value it would have become. A literal that spells a decimal — one
+carrying a fraction part or an exponent — keeps the ordinary nearest-value
+reading, so `0.1`, `1e21`, and `9007199254740993.0` are unaffected. A language
+whose whole claim is that a silent mistake elsewhere is a compile error here
+cannot compile a literal to a different number than the one on the page.
+
+A legacy leading zero
 (`007`), a point with no digit on one side (`.5`, `5.`), and bare `Infinity` or
 `NaN` remain rejected. The last two values are produced by arithmetic (`1 / 0`,
 `0 / 0`) and detected with `value.isNaN()` rather than written.
@@ -612,11 +677,26 @@ them can disagree. A business order is stated explicitly —
 `sorted(by=row => row.rank)`, an explicit comparator, or a string-backed enum
 whose values encode the order (`low = "1-low"`).
 
-`<`, `<=`, `>`, and `>=` keep IEEE behavior on `NaN`: every ordered
-comparison against `NaN` is `false`. The ordered aggregations (`sum`, `min`,
-`max`, default-ordered and `by=`-keyed `sorted`) refuse `NaN` elements with a
-targeted error instead. Python-style comparison chains evaluate each operand
-once:
+One policy governs `NaN`. A `NaN` may be held, passed, and stored, and
+`value.isNaN()` is the one legitimate way to ask whether you have one. Any
+operation that orders or aggregates a `NaN` raises instead of answering, because
+a plausible-looking answer derived from an unordered value is worse than a stop:
+the ordered aggregations (`sum`, `min`, `max`, default-ordered and `by=`-keyed
+`sorted`), `Math.min`, `Math.max`, and `Math.clamp` all raise, and so does the
+ordering a `Comparable`-bounded type parameter uses — the comparison a generic
+performs when the category of its two values is known only at run time. Each of
+them names `filter(x => not x.isNaN())` as the way out.
+
+The bare relational operators on a plain `number` are the exception, and the
+exception is deliberate. `<`, `<=`, `>`, and `>=` keep IEEE behavior there:
+every ordered comparison against `NaN` is `false`, which is the defined and
+universally known answer, and the compiler can see the category at the site. A
+generic ordering primitive has no such option — it must return an ordering, and
+a `NaN` has none to return. Answering "equal" is what made `NaN <= x` and
+`NaN >= x` both true inside a generic while the identical source on a plain
+`number` answered `false`, and it produced genuinely mis-sorted output.
+
+Python-style comparison chains evaluate each operand once:
 
 ```velar fragment
 assert 0 < percentage <= 100
@@ -647,10 +727,10 @@ if "admin" in roles:
 if route not in ignoredRoutes:
     print("Visible")
 
-if input is User:
-    print(input.name)
+if candidate is User:
+    print(candidate.name)
 
-if input is not Error:
+if candidate is not Error:
     print("Usable")
 ```
 
@@ -868,13 +948,20 @@ promises end.
 
 `readonly` is static discipline, and `unknown` is exactly where that discipline
 stops. A value validated out of an `unknown` is a **fresh, independent
-assertion** about the data: validation asserts a shape, it does not copy, and
-the assertion carries no memory of the view the `unknown` was reached through.
-So a mutable value parsed out of an `unknown` field of a `readonly` record
-aliases the same structure the read-only view was protecting, and writing
-through it writes through that view — with no diagnostic, because there is
-nothing left to check. Validate at the boundary where data enters, and do not
-park `unknown` inside data you intend to hand out as `readonly`.
+assertion** about the data — and it is a fresh value: `parse` returns a copy,
+not the object it was handed. Validated therefore means "and it stays valid",
+not "it was correct at the instant of the check". A write through a binding that
+still names the source cannot falsify a field of the copy; a value reached
+through a `readonly` view does not regain mutable authority by passing through
+`parse`; and a frozen source parses into an ordinary writable value, so a later
+field write does not die with a host `TypeError`. The copy follows the declared
+shape — fields the type names are rebuilt, nested records and collections
+included, while a class instance, a promise, a function, a `Duration`, an enum
+member, and an `unknown` field pass through by reference — and a shared or
+cyclic subgraph is copied once, so the copy preserves the sharing the source
+had. Recovering mutable authority over data still requires an explicit copy, and
+`parse` is where the boundary from untrusted data into checked code pays for
+one.
 
 A field declaration such as `readonly details: Details` forbids replacing the
 field and projects nested data through the same transitive read-only view. This
@@ -1003,10 +1090,24 @@ if form != null:
 
 Calls are intentionally not modeled with a whole-program write-effect system.
 Instead, every later read that relies on a still-active narrowing fact rechecks
-the available runtime evidence. Records and collections use deep validators,
-classes use nominal identity, primitives use their runtime kind, and erased
-generics or opaque capabilities can promise only presence. If an opaque call,
-getter, callback, host boundary, or suspended task made that evidence stale,
+the available runtime evidence. Records and collections use deep validators. A
+declared record answers through the validator its declaration emits; a
+structural object type has no declaration to hang a function on, so the same
+evidence is spelled inline as one expression over the field table the type
+already carries. The two prove the same thing except in three places, all of
+them consequences of being an expression rather than a function, and naming a
+record type strengthens the guard exactly there and nowhere else. The inline
+form is bounded, because an expression can only recurse by growing: a structural
+type already being expanded, or one nested past the emitter's structural
+field-depth limit, falls back to the presence test, while a declared record's
+validator recurses through a call and carries no such bound. It reads its fields
+directly rather than through property descriptors, so unlike a declared record's
+validator it does not distinguish an own data property from an inherited one or
+an accessor. And a field whose own check folds to a constant is dropped from the
+conjunction rather than emitted. Classes use nominal identity, primitives use
+their runtime kind, and erased generics or opaque capabilities can promise only
+presence. If an opaque call, getter, callback, host boundary, or suspended task
+made that evidence stale,
 the read throws `NarrowingError` with the source offset and expected type. This
 keeps ordinary source concise without silently leaking a JavaScript `TypeError`.
 Runtime narrowing guards are separate from `readonly`: the former validates a
@@ -1477,6 +1578,29 @@ such a value. Source literals stay narrower than the value space on purpose:
 `\u{D800}`–`\u{DFFF}` are rejected (section 3), so a lone surrogate can only
 enter a program across a JavaScript boundary, never from Velar text.
 
+The search members count the same unit. `has`, `index`, `count`, `startsWith`,
+`endsWith`, `split`, `replace`, and `replaceAll` accept a match only where it
+begins and ends on a code-point boundary, so the addressing half and the
+searching half speak one language: a position `index` reports can be handed
+straight to `char` or `slice` with no translation, and a count from `count`
+counts in the same unit `size` counts in.
+
+No String operation can produce an unpaired surrogate out of well-formed text. A
+needle that begins or ends with a lone surrogate does not match inside a
+surrogate pair, so `split` cannot hand back half a character and `replace` and
+`replaceAll` cannot cut one out; padding walks its fill by code points for the
+same reason. Half a character is not a value this language will construct for
+you.
+
+Grapheme clusters are deliberately outside Core. A grapheme rule needs a
+segmentation table that moves with every Unicode release, and pinning language
+semantics to a table that moves is the wrong trade for a language that never
+promises compatibility — it would also be heavy for something most programs
+never ask for. Code points are the honest middle: the unit Python 3, Swift's
+`unicodeScalars`, and Rust's `chars` count, and the choice that removes "half a
+character" from the set of values a program can hold. Grapheme segmentation
+belongs to a text library, not to Core.
+
 Text equality is code-point-sequence identity, so canonically equivalent text
 is not equal: a word typed with one precomposed accented character and the same
 word read back from a macOS filename as a plain letter plus a combining accent
@@ -1862,11 +1986,18 @@ characters, List and Set values, or Map/Record keys in order. String iteration f
 JavaScript Unicode code points, so a surrogate pair is one character. Native Map and Set brands are checked
 through their internal slots, so legitimate values from another browser realm
 work without trusting an overridable `instanceof`, `size`, iterator, or method.
-Empty mutable collections can infer
-their element/key/value types from their first checked mutation, but exported
-APIs should annotate them. An optional collection annotation still contextually
-types a present collection value, so empty `[]`, `Set()`, and `Map()` values do
-not lose their element or key/value contracts.
+
+An empty `[]`, `Set()`, or `Map()` must have its element or key/value type
+settled where it is written: by an annotation on the binding, by a contextual
+type — a parameter, a return position, an annotated record field or `state` — or
+by the construction's own arguments. Nothing infers
+it from a later mutation. A position with none of the three is reported at the
+construction itself, and that includes a body-inferred `return`, an unannotated
+record-literal field, a ternary arm, a list element, and a `??` fallback. A
+construction whose element type never reaches a name is outside the rule, so
+`print(Set().size)` stays legal. An optional collection annotation still
+contextually types a present collection value, so `[]`, `Set()`, and `Map()`
+written under one do not lose their element or key/value contracts.
 
 List spread evaluates each ordinary item and spread source once in source order.
 Every spread source is validated and copied by index rather than through a
@@ -1888,8 +2019,12 @@ that spell a non-negative integer come first, in ascending numeric order,
 ahead of every other key. `{"2": …, "1": …, "b": …, "a": …}` therefore iterates
 `1`, `2`, `b`, `a`, and a JSON object keyed by numeric IDs is silently
 reordered by every `for`, `keys()`, and re-serialization. When the order of
-such keys carries meaning, hold them in a `Map` instead — `Map(record)` and
-`Map(entries)` both keep true insertion order for keys of any spelling:
+such keys carries meaning, do not route them through a `Record` at all — build
+the `Map` from entries. `Map(entries)` keeps true insertion order for keys of
+any spelling. `Map(record)` cannot restore it: the record was reordered before
+`Map` ever saw it, so `Map({"2": …, "1": …, "b": …, "a": …})` iterates `1`, `2`,
+`b`, `a` exactly as the record does. Reach for `Map(record)` to gain a Map's
+other guarantees, never to recover an order the record has already lost:
 
 ```velar fragment
 const byId: Record<string> = {"2": "second", "1": "first"}
@@ -1921,9 +2056,46 @@ is defined rather than accidental.
 A JavaScript boundary is not a special case: a foreign function that grows a
 `List` while a Velar loop is walking it extends that loop, and one that
 shortens the List ends the loop early and silently, because the size is read
-per step. Replacing an element with a hole or an accessor is the one foreign
-change that fails instead: the per-element check refuses it rather than reading
-an invented value.
+per step.
+
+How much an element read re-proves depends on who wrote the elements. A `List`
+VelarScript wrote in full is read with a plain load: it either built the value
+itself — every `copy`, `map`, `filter`, `slice`, `sorted`, `reversed`, and
+spread result — or it started from an empty `List` literal written in
+VelarScript source and every element since arrived through a `List` operation.
+Every other `List` re-proves the slot on every element read and refuses one that
+is not an ordinary data element, so a JavaScript accessor installed on an index
+after that `List` was checked is caught at the read instead of running. That
+covers every array arriving from JavaScript, including one handed over empty: at
+run time an empty array from JavaScript and an empty `List` literal are the same
+value, and only the compiler knows which one it wrote.
+
+A hole is refused on every checked `List`, and on a `List` VelarScript wrote in
+full wherever the slot reads as `undefined`. The plain load notices that value —
+no `List` element is ever `undefined` — and falls back to the per-element proof,
+which refuses it in the same voice a checked `List` uses. A hole that something
+on the array's prototype chain answers for does not read as `undefined`, so the
+plain load returns what the prototype answered; that is the foreign-write
+exposure stated below rather than a second one.
+
+Size is what ends ownership. If JavaScript changes the size of a `List`
+VelarScript wrote, that `List` is proved per element from then on and never
+returns to the plain read.
+
+Handing a `List` to JavaScript hands over authority for its contents. While
+JavaScript holds a `List` VelarScript wrote in full, a value it puts in a slot —
+by assigning to it, by installing an accessor on it, or by deleting the slot
+while leaving `length` unchanged so a polluted array prototype answers for that
+index — is the value VelarScript reads back. Emptying the array is not one of
+them: that moves the size, and the paragraph above ends ownership there.
+VelarScript does not re-prove what it wrote itself, so the copy is the boundary:
+pass `values.copy()` when the other side must not be able to change what you
+read. This is the exposure a plain foreign write has always had.
+
+A frozen array is refused on arrival from JavaScript, with the message that
+names the fix. Freezing a `List` VelarScript already holds makes `append`, index
+assignment, `insert`, `pop`, `remove`, and `clear` refuse — on every `List`,
+whoever built it, and never with a bare JavaScript error.
 
 ## 9. Control flow
 
@@ -2495,8 +2667,11 @@ classes expose `path: string?`. Like the three compiler-raised types they are
 reserved Core bindings, need no import, and cannot be extended. Every other
 capability failure stays an ordinary `Error`, because a caller writes the same
 recovery for all of them: none. `velar/http` keeps its own imported
-`HttpError`, `HttpAbortError`, and `HttpTransportError`, whose fields (`status`,
-`reason`, `phase`) a caller branches on directly.
+`HttpResponseError`, `HttpAbortError`, and `HttpTransportError`, whose fields
+(`status`, `reason`, `phase`) a caller branches on directly. The name is
+`HttpResponseError` rather than `HttpError` because `velar/serve` owns an
+`HttpError` of its own — the failure a route throws — and a proxy route holds
+both.
 
 The `try` body and `catch` body are separate execution paths. A mutation in a
 catch that returns cannot erase a fact used only by the normal try continuation,
@@ -2692,6 +2867,22 @@ reads. The module contract records that distinction, and modules with live
 exports must be imported by name rather than through `* as`; namespace fields
 are always read-only.
 
+A checked JavaScript import binds the live ES binding too. `import js {name}`
+emits a real named import and runs its presence probe beside it as a separate
+statement, so `import js {name}`, `import js * as`, and `unsafe js` all observe
+the same value: a `let` the JavaScript module reassigns is read at its current
+value through every spelling. A contract changes what the compiler proves about
+a boundary, never what the program observes across it. The presence probe is
+that boundary's backstop rather than its primary check — a host that link-checks
+named imports refuses a declared-but-absent export before any statement runs, in
+the host's own voice, and where the name links to `undefined` instead, as
+bundled CommonJS interop does, the probe is what reports. One spelling stands
+apart: an inline block that captures VelarScript values receives them as
+parameters to a factory function, so that block's own bindings are function-local
+rather than module-level, and a name read directly holds the value it had when
+the block finished initializing. A function the block exports still closes over
+the live variable and answers with the current one.
+
 A module can re-export another module's named exports without creating local
 bindings, which is how a package entry exposes symbols from its internal
 modules (a barrel). Re-exported names join the module's interface under their
@@ -2769,13 +2960,32 @@ Records remain structurally open: additional own data fields are permitted, so
 decoders can accept forward-compatible protocol metadata, but every declared
 singleton field must equal its exact enum member.
 
+Openness is about what a decoder may *accept*, not about what an author may
+*write*. A record literal written at a position that carries a type annotation
+is closed: every one of its keys is in front of the compiler there, so a key the
+type does not name is a misspelling rather than a value that happens to be
+wider, and it is reported with the nearest declared field name. A value that is
+not a literal keeps the structural openness above, because the compiler cannot
+tell a wider value from a mistake. A spread's surplus fields are untouched for
+the same reason — only the keys written out in the literal are read.
+
 Validation proves the shape a value has at that operation; it does not
 constrain what an unchecked Proxy may do on later reads. Nor does it inherit
 anything from where the value was found: a value validated out of an `unknown`
-is a fresh, independent assertion over the same object, so if that `unknown`
-was reached through a `readonly` view, the validated result is a mutable alias
-of the data that view was protecting (section 5). Validate at the boundary,
-before the data is stored anywhere a read-only promise is made about it.
+is a fresh, independent assertion over that data. It is also a fresh value —
+`parse` returns a copy — so a value reached through a `readonly` view does not
+widen by passing through `parse`, a later write through the source cannot
+falsify a field of what the caller was handed, and a frozen source parses into
+an ordinary writable record rather than one whose first write dies with a host
+`TypeError`. The copy carries the declared shape: fields the type names are
+rebuilt, nested records and collections included, while a class instance, a
+promise, a function, a `Duration`, an enum member, and an `unknown` field pass
+through by reference, because rebuilding an opaque value structurally would
+change what `parse` returns. A shared or cyclic subgraph is copied once, so the
+copy preserves the sharing the source had. Keys the type does not name are not
+carried across: records stay open to what a decoder may accept, but what `parse`
+returns is the shape it proved. Validate at the boundary, before the data is
+stored anywhere a read-only promise is made about it.
 
 Native JavaScript is explicit:
 
@@ -2830,6 +3040,16 @@ export const engine = () => ({arch: globalThis.process.arch});
 `
 ```
 
+A block ends at the first line holding nothing but its declaration's indentation
+and a backtick — for the checked form, that backtick and a `:`. The rule is
+structural, so it does not know what the JavaScript around it means: a template
+literal or a block comment whose own backtick lands alone on such a line is cut
+there, along with everything after it. There is no escape character; write that
+backtick indented past the declaration, or at the end of a content line, and the
+block reads as intended. The compiler names this rule whenever the truncated
+source fails to parse, and cannot name it when the remnant happens to be a legal
+module on its own.
+
 An inline block is **more checked than the `import js unsafe` it replaces**,
 not less: an unsafe import makes a whole module `any` from a distance, while a
 block puts the contract three lines under the source it governs. The
@@ -2876,6 +3096,18 @@ model is three sentences, and every one of them matters:
    An `any` that travels further into the program takes the compiler's
    guarantees with it wherever it stops.
 
+That boundary stops at the module. `any` may not appear at an export position,
+written or inferred. `export const leaked: any = thing` was always refused; so
+now is `export const leaked = thing` whose initializer came out of an
+`unsafe js` block, and so is an exported `def` whose omitted result type infers
+to one.
+The rule reads the positions a consuming module can read a value *out of* — a
+result, an element, a field, a type argument — and not a parameter, which takes
+a value from the consumer rather than handing it a guarantee. A consuming module
+never writes `unsafe`, so an exported `any` would hand it a value carrying no
+promise at all with nothing on the page to say so. Validate into a declared type
+in the module that owns the boundary and export that.
+
 ### Tests
 
 A `*.test.vel` module declares its tests as named blocks:
@@ -2906,9 +3138,14 @@ test module is rejected with the block to write instead.
 
 Core does not contain JSX, components, reactivity, lifecycle, or styling.
 Projects enable those features with `@velarscript/web` in `velar.json`.
-Component JSX follows JavaScript evaluation order: props evaluate from left to
-right, then JSX children, then the component function. Native JSX remains an
-owned DOM construction rather than a hidden Core-language operation.
+Component JSX follows JavaScript evaluation order for props: they evaluate from
+left to right, in the order the invocation writes them, once, before the
+component function begins. Children are the exception, and deliberately so: a
+`children` slot is rendered content owned by the position that shows it, so it
+is built when that position renders and rebuilt whenever it renders again — a
+slot hidden behind a condition costs nothing until the condition admits it.
+Native JSX remains an owned DOM construction rather than a hidden Core-language
+operation.
 
 The source package then exposes the following language extension. This list is
 the complete addition — eleven contextual keywords, two lifecycle hooks, three
@@ -3096,8 +3333,11 @@ the constructor identity destroys the old instance, runs its cleanup, and
 mounts a fresh instance. An instance is otherwise destroyed and recreated only
 when its position unmounts: a conditional branch switches, a keyed list entry's
 key or value disappears, or the enclosing region re-renders away. Runtime-implemented
-components (`Head`, `Router`, `Link`, `NavLink`) snapshot their props once at
-construction.
+components (`Router`, `Link`, `NavLink`) snapshot their props once at
+construction, because their identity semantics depend on it. `Head` does not:
+document metadata is rendered output, so it follows the ordinary rules — its
+props are read on every update, and `<Head title={f"Inbox ({unread})"} />`
+tracks `unread`.
 
 ```velar fragment
 export component TicketBadge(count: number):
@@ -3177,6 +3417,14 @@ root element, and a `key` anywhere else — inside an interpolation or on an
 element in a fixed position — is a diagnostic rather than a silently ignored
 attribute.
 
+Reuse asks two questions, not one: the key must match, and the item the key
+names must still be the same value. Replacing an item with a freshly built
+record of the same shape — the `items.map(item => ({...item, done: true}))`
+habit — replaces the value, so the row is destroyed and built again, and a
+focused input inside it loses focus and an open composition ends. Update the
+item in place instead, `items[index].done = true`; the key still names the same
+value and the row survives.
+
 An event directive may carry modifiers, appended with dots:
 `on:click.prevent.stop={submit}`. There are exactly five, and no others are
 accepted: `prevent` calls `preventDefault`, `stop` calls `stopPropagation`,
@@ -3216,14 +3464,105 @@ between the words while indented markup adds none. A text child that
 normalizes to nothing creates no text node.
 
 `<` begins JSX only where a value can begin. The decision is made from the
-preceding token, and the positions are: the start of a module, after a newline
-or an indent, after `=`, after `return`, after `=>`, after `(`, `[`, or `{`,
-after `,`, `:`, or `?`, and after `??`, `and`, or `or`. Everywhere else `<` is
-the less-than operator. `and` and `or` are in the list so that the React habit
+preceding token, and the positions are: the start of a module, after a newline,
+an indent, or a dedent, after `=`, after `return`, after `=>`, after `(`, `[`,
+or `{`, after `,`, `:`, or `?`, and after `??`, `and`, or `or`. Everywhere else
+`<` is the less-than operator. The three line boundaries are one position stated
+three ways — a statement begins a value, and which of the three precedes its
+first token is decided by the indentation of the line rather than by the
+program. `and` and `or` are in the list so that the React habit
 `{ready and <Panel />}` parses and is answered with the conditional-rendering
 spelling — `{ready ? <Panel /> : null}` — rather than a parse cascade; those two
 operators still combine bool values only. Outside these positions, wrap the
 element in parentheses.
+
+The same positions govern the `look:` and `keyframes:` block openers of section
+17, whose words are otherwise ordinary identifiers. One table decides both
+constructs, so an author learns the rule once: a block opens only where a value
+may begin, and only where the word is followed directly by `:` and an indented
+body. Everywhere else the word is read as written. `case Mode.look:` is a match
+on an enum member and `if m == Mode.keyframes:` is a comparison because a member
+step precedes the word there, and no value begins after one. `record.keyframes`
+and `{look: value}` are the member and the key they name by the other half of
+the rule: a member read is followed by no `:` at all, and a bracketed value
+produces no line boundaries, so a `:` written inside a record literal is never
+followed by the indent an opener requires — a record literal spread over several
+lines names the same key the one-line form does.
+
+### Children
+
+A JSX tag body reaches a component only through an explicitly declared prop
+named `children`, typed `WebNode`. A component written
+`component Card(title: string, children: WebNode):` accepts
+`<Card title="Hi"><p>inner</p></Card>`; a component that does not declare the
+prop reports a diagnostic naming the declaration to add.
+`children: WebNode? = null` is the omittable form. A prop becomes omittable
+through its default value, never through a `?` alone: `children: WebNode?`
+without a default is still required, and the `?` is there so that `null` is a
+value the declared type admits. The prop and the tag body are two spellings of
+one thing, so supplying both is an error rather than a silent choice between
+them.
+
+```velar fragment
+component Card(title: string, children: WebNode? = null):
+    return <section>
+        <h2>{title}</h2>
+        {children}
+    </section>
+
+component Page:
+    return <Card title="Notes"><p>Body</p></Card>
+```
+
+`children` needs no mental model of its own. It is ordinary rendered content and
+follows the ordinary rules: it re-renders when the reactive state it reads
+changes, exactly as any other rendered value does, and `false` means not
+rendered — a slot that goes false and then true renders again rather than coming
+back empty. Hiding a subtree while preserving its state is not a framework
+behavior; write it with `style:display` or a Look.
+
+### Script boundaries in JSX
+
+`<iframe srcdoc={…}>` builds a document out of a string, and that document
+inherits the page's origin, so it is a script boundary in the same family as
+`unsafe:html`. An `<iframe>` carrying `srcdoc` therefore requires a `sandbox`
+attribute; write `sandbox=""` when the framed document needs no capability at
+all. `sandbox="allow-scripts allow-same-origin"` lets the framed document remove
+its own sandbox, so that pair is refused on a `srcdoc` frame.
+
+The attributes a browser resolves as a URL — `href`, `src`, `action`,
+`formaction`, `poster`, `data`, `xlink:href`, `ping`, and `cite` — do not carry
+script. A `javascript:` or `vbscript:` value is refused, and a `data:` value is
+accepted only for a media type that cannot carry script. `image/svg+xml` is
+excluded, because an SVG document runs script. Relative URLs and fragments are
+unaffected. The scheme is read the way the user agent reads it, so leading
+whitespace and embedded control characters do not hide one. Behavior belongs in
+an `on:click` handler, never in a URL.
+
+A value written down in the source is refused while the module compiles; a value
+that arrives at run time is refused by the attribute writer. The two do not
+refuse the same set, and the attribute writer is the stricter of them. The
+compile refuses by name — the two script schemes, and a `data:` URL outside the
+inert media types, which are the raster image types, the audio and video types,
+the font types, `text/plain`, and `text/css` — so any other scheme is written
+down without complaint. The attribute writer admits by name instead: a relative
+URL, `http`, `https`, `mailto`, `tel`, and `blob`, and its inert media types
+stop at the raster image, audio, and video types, `font/woff`, `font/woff2`, and
+`text/plain`. So `href="ftp://example.com/f"` and `href="data:text/css,body{}"`
+compile, and the same two strings are refused at the writer when they arrive
+through a computed value.
+
+A native element also reserves every attribute name that begins with `on`, other
+than the `on:` directive itself. The handler spellings among them — `onclick`,
+`onerror`, `onload` — are content attributes the browser compiles as script, so
+any string routed there is executable code in the application's origin, which
+this language reserves for `unsafe:html`. An HTML attribute name is matched
+ASCII-case-insensitively, so `onClick` and `ONCLICK` are that same attribute.
+The prefix is closed by name rather than by a roster of event names: the next
+handler attribute the platform adds is closed in advance, and so are the React
+reflex `onClick=`, which is merely inert, and an ordinary word such as `onward`
+that happens to begin with the two letters. Events are written with the `on:`
+directive, `on:click={handler}`.
 
 ## 15. State, computed values, resources, and actions
 
@@ -3448,6 +3787,37 @@ refusal is limited to what the compile can prove: a call whose reactivity lives
 in another module, and a field path rooted in an ordinary `const` bound to a
 reactive object, both stay legal, because both really do follow.
 
+Derived values and watches settle to a fixed point before the DOM is written.
+One flush runs every `computed` and every `watch` the change reached, then
+whatever those produced, until nothing is left to run; only then is a single DOM
+commit made. So no watch and no rendered position ever observes a half-updated
+world, and a corrective watch — `watch n: if n > 5: n = 5` — never pushes the
+uncorrected value through the DOM first, which would run every non-idempotent
+side effect on the render path twice. **The declaration order of watches cannot
+change the values a flush settles on or the DOM it commits**: moving one watch
+above another moves the side effects that watch's body performs and nothing
+else. Settling is what fixes that: within one flush a watch whose body writes
+state runs before a watch that only observes, so the order two watches' bodies
+run in is decided by which of them writes, and only watches of the same kind run
+in the order they are written. A watch is classed as a writer the first time its
+body writes, so a watch that writes only on some runs observes on the others.
+Order a side effect by what it reads, never by where its block sits.
+
+That guarantee holds only because the one shape it cannot cover is refused. Two
+`watch` blocks in one scope that both assign the same `state` are a compile
+error. It names the state and how many watches contend for it, and it is
+reported once at each of them: a `watch` has no name to print, and two of them
+have no shared position to report at. Scheduling cannot answer this one: a flush
+settles every watch in a single pass that states no order between them, and
+between two independent writes no order is the right one. Put every update to
+that state in one watch, or give each watch a state of its own.
+The rule reads a direct assignment to a `state` name; a write performed inside a
+function the watch calls is not followed, and two writes through member paths
+are left alone, because a path can run through indices and aliases this analysis
+cannot decide. It is the same shape as the two-independent-looks error in
+section 17, for the same reason: two unrelated sources contending for one thing
+have no winner the source states, so the author says which one he meant.
+
 ## 16. Lifecycle
 
 Lifecycle is component-owned and deliberately small:
@@ -3488,15 +3858,25 @@ than moving DOM silently.
 
 `tick()` answers `Promise<null>` that resolves after the pending reactive flush
 has settled, which is how a test observes the DOM that a state write produces.
-It is also the point where an unowned failure surfaces: if the flush reported a
-failure that no handler claimed, `tick()` rejects with it, so awaiting `tick()`
-cannot step over a broken update.
+It drains the queue to quiescence rather than skipping one microtask: it runs the
+pending flush and yields, and repeats that until no derived value, watch, or DOM
+update is left to run, so work an observer queued asynchronously is picked up
+too. It is also the point where an unowned failure surfaces: if the flush
+reported a failure that no handler claimed, `tick()` rejects with it, so awaiting
+`tick()` cannot step over a broken update.
 
 ## 17. Look: controlled visual language
 
 Look is VelarScript's checked visual language. It uses real DOM-style CSS
 property names, VelarScript expressions, typed unit values, composition, conditions,
 element states, and explicit pseudo-element targets.
+
+A `look:` or `keyframes:` block is a value, so it is written where a value is
+written: after `=`, after `return`, or inside a call, a collection, or a record.
+Section 14 lists those positions in full, and they are the same ones that decide
+whether `<` opens an element — one table, two constructs. Everywhere else `look`
+and `keyframes` are ordinary names, so `case Mode.look:` matches an enum member
+and `record.keyframes` reads a field.
 
 ```velar
 import {alpha, border, rgb, spacing} from "velar/look"
@@ -3552,7 +3932,9 @@ that takes lengths carries both — `backgroundSize` accepts a unit value and
 the placement words. The two transition longhands take the vocabularies the
 matching builders take: `transitionProperty` names an animatable Look property
 in its CSS spelling (or `all`, or `none`), and `transitionTimingFunction` takes
-one of the same seven easings `animate(...)` accepts. A published property whose
+one of the same seven easings `animate(...)` accepts. `transition(property, …)`
+reads exactly the set `transitionProperty` reads, so a camelCase spelling is
+refused there with the CSS spelling it meant. A published property whose
 only writable value is its own default would be a name no author can reach,
 which section 17's appendix treats as worse than not publishing it.
 
@@ -3590,10 +3972,25 @@ records, classes, non-finite numbers, and objects with conversion hooks never
 become CSS text. A dynamic property value of `null` removes that controlled
 value instead of emitting the text `"null"`.
 
-Numeric domains are checked where the argument is written. A literal argument
+Numeric domains are checked where the argument is written. A positional argument
 outside a builder's range — a colour channel above 255, an opacity above 1, a
-division by zero — is a compile error rather than a first-paint failure; a
-computed argument keeps the same check at run time.
+division by zero — is a compile error rather than a first-paint failure whenever
+its value is known while the module compiles: a literal, a `const` design token,
+a field of a const token record, and arithmetic over any of those are all read
+to their value first. An argument that is genuinely unknown until run time keeps
+the same check at run time. That distinction matters most inside a `keyframes:`
+stop and anywhere else a Look value becomes stylesheet text rather than a
+runtime value, because there the call is lowered away and no runtime guard
+survives to run — so an argument that cannot be resolved at compile time cannot
+appear there at all.
+
+The range table is read by position, and `animate` is the only builder that
+resolves its options by name, so a named argument carries no position for the
+table to read: `rgba(0, 0, 0, 2)` is a compile error, and the same out-of-range
+opacity written `alpha=2` is proved at run time instead, like a genuinely
+unknown one. A `keyframes:` stop is unaffected, because a named argument does
+not resolve to static CSS and the stop refuses it on that ground first. Write a
+builder argument positionally where its range is what the value has to satisfy.
 
 ### Unit values and calculations
 
@@ -3704,13 +4101,32 @@ declaration overrides normal Look rules and normal class stylesheet rules for
 the same CSS property, including Look state rules; an external `!important`
 declaration can still override a non-important inline declaration.
 
-Look and class alone have no universal winner. A base Look selector and a
-simple class selector both normally have specificity `(0,1,0)`, so source order
-decides: CSS imported `before look` loses an equal-specificity conflict to Look,
-while CSS imported `after look` wins it. Stateful Look selectors usually add a
-second attribute selector and are therefore more specific than one simple
-class. Compound selectors, IDs, pseudo-elements, and `!important` can change
-that result through the ordinary CSS cascade.
+Look and class alone have no universal winner. An unconditional Look selector is
+one attribute selector, so it and a simple class selector both have specificity
+`(0,1,0)` and source order decides: CSS imported `before look` loses an
+equal-specificity conflict to Look, while CSS imported `after look` wins it. A
+conditional Look selector repeats `[data-velar-look]`, so it is more specific
+than one simple class. Compound selectors, IDs, pseudo-elements, and
+`!important` can change that result through the ordinary CSS cascade.
+
+### Which Look rule wins
+
+Two Look rules that set the same property on the same surface are separated by
+the conditions they name; the order the modules happened to be concatenated in
+decides only where the conditions cannot. A rule's rank is the kind of condition
+it carries — no condition, then a media condition, then an element state, then
+both — and within one rank a rule that names more conditions outranks one that
+names fewer. The
+generated selector encodes that rank by repeating `[data-velar-look]` once per
+rank step, so the ordering is ordinary CSS specificity and an external
+stylesheet can still reason about it. The span within a rank is bounded, so a
+pathological condition count cannot cross a rank boundary: past three conditions
+the encoding saturates, and rules that saturate it — like rules that share a
+rank and a condition count — are emitted in the order they were declared. Where
+declaration order is what is left to decide, it is the order the project's
+stylesheet concatenates, so two such rules in different modules are ordered by
+their modules' paths under *Stable output and external overrides* below. Nothing
+in this ordering depends on the build machine's collation.
 
 ### Composition
 
@@ -3731,15 +4147,44 @@ export const primaryControlLook = look:
 ```
 
 Later declarations in the composed result follow normal CSS cascade order.
-Duplicate properties in the same Look scope are reported instead of hidden.
+Duplicate properties in the same Look scope are reported instead of hidden, and
+the scope is decided by the condition a rule lowers to rather than by the way it
+is written. `if scheme.dark:` and `if not scheme.light:` are one scope, because
+the two schemes are complementary; so are `if motion.reduced:`'s else branch and
+`if not motion.reduced:`, and so are a viewport comparison and the negation of
+its opposite — `viewport.width <= 720px` and `not (viewport.width > 720px)`
+lower to one condition, one media query, and one rule.
+
+Composition decides one property at a time, and the condition a declaration is
+written under is part of the declaration. A later unconditional declaration
+replaces the property outright: every earlier declaration of it disappears,
+whatever condition it was written under, so a caller that writes
+`padding = 40px` reaches a padding the component set behind its own private
+breakpoint. A later conditional declaration refines rather than replaces — it
+wins the property under its own condition and leaves every other condition
+standing, the earlier unconditional value included — so a caller that writes
+only `if @hover: color` changes the hovered colour and keeps the resting colour
+it never mentioned. A property is owned per surface: `@before: content` and a
+bare `content` are two surfaces, and neither overrides the other.
+
+`...spread` inside a look block, a `look:property` directive on an element, and
+a `look` written on a component invocation are each a later source, and each
+owns the properties it names by that rule. Declarations written inside one look
+block are one source, so that block's own conditional declarations coexist and
+the cascade decides between them.
 
 Composition crosses a component boundary in one direction. A `look` written on
 a component invocation composes *after* the look the component applies to its
-own host, so the caller wins every property both of them set, and every property
-only one of them sets survives. That is what makes a component's visual defaults
-overridable without the component declaring a prop for each one; a component
-that must not be restyled that way keeps the look on an inner element instead of
-its host.
+own host. That is what makes a component's visual defaults overridable without
+the component declaring a prop for each one; a component that must not be
+restyled that way keeps the look on an inner element instead of its host.
+
+Two independent looks placed side by side on one element —
+`look={[themeLook, badgeLook]}` — state no order between them, so a property
+both of them set has no answer the source gives. That shape is a compile error
+naming both looks and the property. Write one Look that starts with
+`...themeLook` and overrides the property from there, then pass that one. A look
+that already composes the other is ordered against it and stays legal.
 
 A Look value is an ordinary value with reference identity, so `==` on two Looks
 asks whether they are the same value, never whether they describe the same
@@ -3815,6 +4260,16 @@ other CSS `content` form — `attr(...)`, `counter(...)`, `url(...)`,
 literal text, and generated-content counters have no Look spelling at all.
 Reach those through a module-level `import css unsafe`.
 
+A CSS string is not a JSON string. The two agree on `"` and `\` and on nothing
+else: CSS reads a backslash followed by a non-hex digit as that literal
+character, so a JSON `\n` would render the letter `n` and lose the line break.
+Every code point below `U+0020`, and `U+007F`, is written as a backslash, its
+hexadecimal digits, and one terminating space — the space belongs to the escape,
+or a following hex digit would join it. Every other code point, `•` and an emoji
+alike, is literal text in the UTF-8 stylesheet, so a newline inside a `content`
+value survives as a newline and a path given to `asset` keeps every character
+the author wrote.
+
 A `look:` literal is built once, where it is written: its conditions become CSS
 selectors and media queries, and its values are read at construction. A
 condition or value inside a literal therefore cannot read reactive state — the
@@ -3834,9 +4289,13 @@ animation string is rejected. The appendix to this section defines both.
 ### Stable output and external overrides
 
 Look does not generate random CSS Module class names. It emits readable tokens
-such as `base:background` and `hover:background` on `data-velar-look`, with
-readable `--velar-look-*` variables for dynamic values. Developers can also
-provide their own stable `class` and `data-*` attributes as public hooks.
+such as `base:background` and `hover:background` on `data-velar-look`, with a
+readable `--velar-look-*` custom property behind each token. The custom property
+carries the value whether or not the value is constant, so an element that
+applies a Look with eight properties carries eight inline custom properties; the
+generated stylesheet holds the selector and the `var()` indirection, not the
+value. Developers can also provide their own stable `class` and `data-*`
+attributes as public hooks.
 
 Native CSS is an explicit unsafe boundary:
 
@@ -3849,6 +4308,19 @@ import css unsafe "./overrides.css" after look
 semantic priority. Specificity and `!important` remain the external stylesheet
 author's responsibility. Global native CSS cannot be declared inside a local
 component scope.
+
+Across modules, the project's stylesheet concatenates each module's segments in
+module order, and module order is the UTF-16 code-unit order of each module's
+project-relative path written with `/` separators — the order a comparator-free
+sort gives, so the toolchain that writes a build and the verifier that checks it
+agree on every name. It is deliberately not the host's collation: the same
+sources must produce the same stylesheet bytes, the same content hash, and the
+same `buildId` on every machine, whatever `LANG` or `LC_ALL` that machine has.
+Source order inside a module is what `before look` and `after look` name.
+Between two Look rules it decides only where the rank encoding leaves them
+tied — two rules of one rank naming the same number of conditions, and rules
+that saturate the rank span — and across modules that tie is broken by module
+order. Every other pair is separated by the conditions the two rules carry.
 
 ## 18. Generated JavaScript semantics
 
@@ -4009,11 +4481,13 @@ The source grammar is an allowlist: a syntax addition to JavaScript never
 becomes VelarScript syntax without an explicit language decision, AST node,
 analysis rule, lowering, and proof test. JavaScript reserved words cannot be
 used as binding names because generated modules must remain valid JavaScript;
-`enum` is reserved for exactly that reason, while `type`, `match`, `case`,
-`from`, `as`, and `json` — which JavaScript does not reserve — are contextual keywords
-and stay available as names (section 3). Spellings such as `delete`, `default`,
-and `arguments` remain valid as ordinary record keys and class member names, so
-external data and Web APIs do not need renamed fields. Execution-capability and
+`enum` is reserved for exactly that reason, and so is `case`, which JavaScript
+reserves and section 3 therefore keeps out of the three positions that bind;
+`type`, `match`, `from`, `as`, and `json` — which JavaScript does not reserve —
+are contextual keywords and stay available as names (section 3). Spellings such
+as `delete`, `default`, and `arguments` remain valid as ordinary record keys and
+class member names, so external data and Web APIs do not need renamed fields.
+Execution-capability and
 object-model spellings such as `eval`, `prototype`, and `__proto__` stay
 unavailable through direct member syntax; controlled records may still carry
 those strings as data keys.
@@ -4077,9 +4551,25 @@ lowerable Look properties only. It reuses the Look property and value checker �
 the same literals, unit values, arithmetic, builder calls with positional or
 named arguments, and `const` design tokens declared locally or imported through
 a checked interface — rejects non-interpolating properties, and cannot read
-reactive state. Equal keyframe structures receive one stable generated CSS name
-and one emitted rule, including when used through another module's checked
-interface.
+reactive state. A stop's value is additionally checked as one CSS declaration
+value, because a stop becomes real stylesheet text rather than a value the
+runtime sets on a custom property: `{`, `}`, `;`, and `@` never appear outside a
+string, and parentheses, strings, and comments all close. This is the one place
+where the value vocabulary's deliberate acceptance of arbitrary text for the
+text, filter, transform, and animation kinds does not carry over — on a Look
+property that text reaches the DOM through a custom property and cannot escape,
+while a stop is concatenated into a compiler-owned rule. Native CSS remains an
+explicit unsafe boundary reached only through `import css unsafe`.
+
+Equal keyframe structures receive one stable generated CSS name and one emitted
+rule, including when used through another module's checked interface. The name
+is derived from an injective encoding of the structure — its stops, their
+offsets, their property names, and their lowered values — so no value can spell
+another structure's encoding, and the digest taken over that encoding is wide
+enough that two unrelated animations in one application do not collide by
+accident. It
+is `velar-kf-` followed by lowercase hexadecimal digits; the exact width is
+compiler-owned and not a stable interface.
 
 ```velar
 import {animate} from "velar/look"
@@ -4099,8 +4589,10 @@ export const spinningLook = look:
 
 `animate(frames, duration, easing?, delay?, count?, loop?, direction?, fill?)`
 returns `Animation`. Duration must be positive, delay cannot be negative,
-`count` is a positive integer, and `count` and `loop=true` are mutually
-exclusive. Easing is one of `linear`, `ease`, `ease-in`, `ease-out`,
+`count` is a positive integer no greater than 1,000,000, and `count` and `loop`
+are mutually exclusive whatever `loop` carries: `loop=true` would replace the
+count, and `loop=false` only repeats the default, so writing both states the
+number of runs twice. Easing is one of `linear`, `ease`, `ease-in`, `ease-out`,
 `ease-in-out`, `step-start`, and `step-end`; direction is `normal`, `reverse`,
 `alternate`, or `alternate-reverse`; fill is `none`, `forwards`, `backwards`,
 or `both`. Literal options are checked during compilation. Look `animation`

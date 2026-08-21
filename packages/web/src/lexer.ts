@@ -157,22 +157,39 @@ export function scanWebUnsafeCssLiteral(
 }
 
 /**
- * The token kinds a JSX element may follow. `<` is otherwise the less-than
- * operator, so the decision is made from the previous token: every kind here is
- * a position where a value begins and a comparison cannot. The list is published
- * in charter §14 (GRM-A3); `nullish` and `and` joined it so `{name ?? <Fallback
- * />}` parses and `{ready and <Panel />}` reaches its type rejection instead of
- * an untargeted parse cascade.
+ * The token kinds a value may follow — every kind here opens a position where a
+ * value begins and a continuation of the expression before it cannot. Both Web
+ * constructs whose spelling is otherwise ordinary Core source decide from it:
+ * `<`, which is otherwise the less-than operator continuing a comparison, and
+ * the `look:` / `keyframes:` block opener, whose word is otherwise an ordinary
+ * identifier continuing a member access — `case Mode.look:` follows a `dot`,
+ * which is no value start. The test is that a value may begin, not that an
+ * operand may not: after `nullish`, `and` and `or` the value that begins is the
+ * operator's own right operand. Those three joined the list so
+ * `{name ?? <Fallback />}` parses and `{ready and <Panel />}` reaches its type
+ * rejection instead of an untargeted parse cascade. The list is published in
+ * charter §14.
+ *
+ * The three line-boundary kinds — Core's own `newline`, `indent`, `dedent` set —
+ * belong here as one family, because a statement begins a value and the kind
+ * before its first token is whichever of the three the indentation produced.
+ * `dedent` was the missing one, so a construct opening a line at a lower
+ * indentation than the line above it was read as no value start at all, and a
+ * visual block or an element written there unravelled into exactly the parse
+ * cascade this list exists to prevent, in place of its own directed message.
  */
-export const WEB_JSX_PREVIOUS_TOKEN_KINDS: readonly string[] = [
+export const WEB_VALUE_START_PREVIOUS_TOKEN_KINDS: readonly string[] = [
   "assign", "return", "fatArrow", "leftParen", "leftBracket", "leftBrace",
-  "comma", "colon", "question", "newline", "indent", "nullish", "and", "or",
+  "comma", "colon", "question", "newline", "indent", "dedent", "nullish", "and", "or",
 ];
+
+function startsValue(previous: Token | undefined): boolean {
+  return previous === undefined || WEB_VALUE_START_PREVIOUS_TOKEN_KINDS.includes(previous.kind);
+}
 
 function shouldStartJsx(context: CompilerLexicalScanContext): boolean {
   if (!/[A-Za-z>]/u.test(context.source[context.offset + 1] ?? "")) return false;
-  const previous = context.tokens.at(-1)?.kind;
-  return previous === undefined || WEB_JSX_PREVIOUS_TOKEN_KINDS.includes(previous);
+  return startsValue(context.tokens.at(-1));
 }
 
 // A Look block opens at the first indented line after `look:`. Blank lines and
@@ -190,8 +207,11 @@ function visualBlockKeyword(tokens: readonly Token[]): "look" | "keyframes" | nu
   const word = tokens[index];
   if (word?.kind !== "identifier") return null;
   // `look:` and `keyframes:` are contextual: the block opens only when the word
-  // is immediately followed by ':' and an indented body, which is a shape no
-  // ordinary read of the same name can take.
+  // is immediately followed by ':' and an indented body, and only where a value
+  // may begin, which together are a shape no ordinary read of the same name can
+  // take. Without the second half a member access closing a statement header —
+  // `case Mode.look:`, `if m == Mode.keyframes:` — was swallowed as a block.
+  if (!startsValue(tokens[index - 1])) return null;
   return word.value === "look" || word.value === "keyframes" ? word.value : null;
 }
 

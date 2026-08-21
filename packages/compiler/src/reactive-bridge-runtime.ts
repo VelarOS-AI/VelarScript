@@ -63,7 +63,13 @@ function __velarResolveReactiveBridge() {
   }
   const version = __velarReactiveBridgeField(runtime, "version");
   const toRaw = __velarReactiveBridgeField(runtime, "toRaw");
-  if (version !== ${JSON.stringify(VELAR_RUNTIME_SCHEMA_VERSION)} || typeof toRaw !== "function") {
+  // The generation mismatch gets its own message: it is the one failure an
+  // author can act on, and the shared "values are invalid" wording never named
+  // either version.
+  if (version !== ${JSON.stringify(VELAR_RUNTIME_SCHEMA_VERSION)}) {
+    throw new __velarReactiveBridgeNativeTypeError("VelarScript reactive runtime schema " + (typeof version === "string" ? version : "(unknown)") + " does not match this module's schema ${VELAR_RUNTIME_SCHEMA_VERSION}; one build mixed two generations of @velarscript/* — run 'npm ls @velarscript/compiler' and pin one version");
+  }
+  if (typeof toRaw !== "function") {
     throw new __velarReactiveBridgeNativeTypeError("VelarScript reactive runtime values are invalid");
   }
   __velarReactiveBridge = { runtime, toRaw };

@@ -154,7 +154,7 @@ const concatenated = "left" + "right"
 const product = price * quantity
 const quotient = price / quantity
 const remainder = price % quantity
-const negativeRemainder = -3 % 2
+const negativeRemainder = -3 % 2 // velar-allow A3: this line exists to show the JavaScript sign rule
 
 // ---------------------------------------------------------------------------
 // Level 9 — `not` and unary `+ -`, looser than `**`

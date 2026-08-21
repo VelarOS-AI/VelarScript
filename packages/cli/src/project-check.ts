@@ -1,6 +1,6 @@
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { formatDiagnostic } from "@velarscript/compiler";
+import { formatAdvisory, formatDiagnostic } from "@velarscript/compiler";
 import type { VelarProjectConfig } from "./config.ts";
 import { compileProject, compileProjectEntries, type ProjectResult } from "./project.ts";
 import { MAX_VELAR_PROJECT_MODULES } from "./source-limits.ts";
@@ -13,6 +13,12 @@ import { MAX_VELAR_PROJECT_MODULES } from "./source-limits.ts";
 export interface CheckedProjectRoot {
   readonly result: ProjectResult;
   readonly errors: readonly string[];
+  /**
+   * D89: the advisory channel, kept out of `errors` on purpose. `velar check`
+   * prints these and still exits 0, so nothing that decides pass/fail may read
+   * this field.
+   */
+  readonly advisories: readonly string[];
 }
 
 export interface CheckedProject {
@@ -21,6 +27,7 @@ export interface CheckedProject {
   readonly compiled: ReadonlySet<string>;
   readonly notices: readonly string[];
   readonly errors: readonly string[];
+  readonly advisories: readonly string[];
 }
 
 /**
@@ -53,6 +60,7 @@ export async function checkResolvedProject(config: VelarProjectConfig, input: st
       ...project.failures.map((failure) => `${failure.path}: ${failure.message}`),
       ...project.modules.flatMap((module) => module.result.diagnostics.map((item) => formatDiagnostic(module.result.source, item))),
     ],
+    advisories: project.modules.flatMap((module) => module.result.advisories.map((item) => formatAdvisory(module.result.source, item))),
   }];
   for (const file of testModules) {
     const testProject = await compileProject(file, new Map(), {
@@ -65,12 +73,14 @@ export async function checkResolvedProject(config: VelarProjectConfig, input: st
       exportTestFunctions: true,
     });
     const errors: string[] = testProject.failures.map((failure) => `${failure.path}: ${failure.message}`);
+    const advisories: string[] = [];
     for (const module of testProject.modules) {
       if (compiled.has(module.inputPath)) continue;
       compiled.add(module.inputPath);
       errors.push(...module.result.diagnostics.map((item) => formatDiagnostic(module.result.source, item)));
+      advisories.push(...module.result.advisories.map((item) => formatAdvisory(module.result.source, item)));
     }
-    roots.push({ result: testProject, errors });
+    roots.push({ result: testProject, errors, advisories });
   }
   return {
     project,
@@ -78,13 +88,23 @@ export async function checkResolvedProject(config: VelarProjectConfig, input: st
     compiled,
     notices: project.notices.map((notice) => `${notice.path}: notice: ${notice.message}`),
     errors: roots.flatMap((root) => root.errors),
+    advisories: roots.flatMap((root) => root.advisories),
   };
 }
 
-/** Exactly what a `velar check` run writes to stderr, without the repro hint. */
+/**
+ * Exactly what a `velar check` run writes to stderr, without the repro hint.
+ * D89: advisories print between the notices and the errors — after the
+ * project-level remarks, before the failures — and they print whether or not
+ * the check failed, because an advisory is not a failure and is never the
+ * reason a build stopped.
+ */
 export function formatCheckOutput(checked: CheckedProject): string {
   const notices = checked.notices.map((notice) => `${notice}\n`).join("");
-  return checked.errors.length > 0 ? `${notices}${checked.errors.join("\n\n")}\n` : notices;
+  const advisories = checked.advisories.length > 0 ? `${checked.advisories.join("\n\n")}\n` : "";
+  return checked.errors.length > 0
+    ? `${notices}${advisories}${checked.errors.join("\n\n")}\n`
+    : `${notices}${advisories}`;
 }
 
 /** Every `*.test.vel` root in the project — the modules no import reaches. */

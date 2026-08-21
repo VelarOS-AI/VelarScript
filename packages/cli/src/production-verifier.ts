@@ -170,6 +170,9 @@ function verifyDeploymentManifest(
   for (const [name, value] of Object.entries(requiredSecurityHeaders)) {
     requireDeploymentHeader(deployment, securityPath, name, value);
   }
+  // The document rule covers every deep route the enumerated paths below cannot
+  // name, which is what `verify-deployment` probes through the SPA fallback.
+  requireDeploymentHeader(deployment, securityPath, "Cache-Control", deployment.caching.documents);
   requireDeploymentHeader(deployment, `${deployment.base}assets/*`, "Cache-Control", deployment.caching.assets);
   const documentPaths = [
     deployment.base,

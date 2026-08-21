@@ -118,7 +118,18 @@ export function embeddedJavaScriptHeaderKind(source: string, backtick: number): 
  * Scans one D53 raw block. The closing backtick is deliberately structural:
  * it is the only backtick at the declaration's indentation on an otherwise
  * empty line (apart from the checked block's `:`). JavaScript template
- * literals therefore remain ordinary source bytes and never need escaping.
+ * literals therefore need no escaping in every shape but one, which the rule
+ * cannot avoid and D53 does not record: a literal whose closing backtick sits
+ * alone on a line at that same indentation is indistinguishable from the
+ * terminator and ends the block there. D53 has no escape for it, so
+ * `structuralTerminatorHint` below names the rule when the truncated payload
+ * fails to parse; the remedy is to indent that backtick.
+ *
+ * A truncation whose remnant is *itself* a legal module — `export const t =
+ * String.raw` cut before its tagged literal — cannot be named from here at all,
+ * because the payload this function hands on is indistinguishable from a block
+ * the author meant to end there. Telling those apart needs the lone-backtick
+ * line that follows the block, which only the lexer sees.
  */
 export function scanEmbeddedJavaScriptLiteral(source: string, start: number): EmbeddedJavaScriptLiteralScan | null {
   const kind = embeddedJavaScriptHeaderKind(source, start);
@@ -164,7 +175,7 @@ export function inspectEmbeddedJavaScript(
       bindings: [],
       factoryEdits: [],
       issues: [{
-        message: `JavaScript syntax error: ${message}`,
+        message: `JavaScript syntax error: ${message}${structuralTerminatorHint(message, source)}`,
         span: span(sourceStart + position, sourceStart + Math.min(source.length, position + 1)),
       }],
     };
@@ -350,7 +361,19 @@ function declarationBindings(declaration: Declaration): readonly Identifier[] {
   }
 }
 
+/**
+ * Every name this top-level statement contributes to the module scope. The
+ * lexical half is the statement's own declaration; the other half is `var`,
+ * which is function-scoped and therefore module-scoped from wherever below the
+ * statement it is written.
+ */
 function topLevelStatementBindings(statement: Program["body"][number]): readonly Identifier[] {
+  const lexical = lexicalStatementBindings(statement);
+  const hoisted = hoistedVariableBindings(statement).filter((binding) => !lexical.includes(binding));
+  return hoisted.length === 0 ? lexical : [...lexical, ...hoisted];
+}
+
+function lexicalStatementBindings(statement: Program["body"][number]): readonly Identifier[] {
   if (statement.type === "FunctionDeclaration" || statement.type === "ClassDeclaration" || statement.type === "VariableDeclaration") {
     return declarationBindings(statement);
   }
@@ -359,6 +382,31 @@ function topLevelStatementBindings(statement: Program["body"][number]): readonly
     && (statement.declaration.type === "FunctionDeclaration" || statement.declaration.type === "ClassDeclaration")
     && statement.declaration.id) return [statement.declaration.id];
   return [];
+}
+
+/**
+ * The `var` names a top-level statement hoists into module scope. A `var`
+ * inside a block, `if`, loop, `try`, `switch` case, or label is not a nested
+ * binding: once the checked body is wrapped in `function factory(capture) {…}`
+ * it merges with the factory parameter of the same name and silently discards
+ * the captured value, which is exactly what the capture collision guard exists
+ * to refuse. The walk therefore descends through statements and stops where a
+ * new `var` scope opens — any function body and a class static block.
+ */
+function hoistedVariableBindings(statement: Program["body"][number]): readonly Identifier[] {
+  const found: Identifier[] = [];
+  const visit = (node: AnyNode): void => {
+    if (node.type === "FunctionDeclaration" || node.type === "FunctionExpression"
+      || node.type === "ArrowFunctionExpression" || node.type === "StaticBlock") return;
+    if (node.type === "VariableDeclaration" && node.kind === "var") found.push(...declarationBindings(node));
+    for (const [key, value] of Object.entries(node)) {
+      if (key === "loc" || key === "range" || key === "start" || key === "end") continue;
+      if (isNode(value)) visit(value);
+      else if (Array.isArray(value)) for (const item of value) if (isNode(item)) visit(item);
+    }
+  };
+  visit(statement);
+  return found;
 }
 
 function patternBindings(pattern: Pattern): readonly Identifier[] {
@@ -408,6 +456,63 @@ function isNode(value: unknown): value is AnyNode {
     && typeof (value as Partial<Node>).type === "string"
     && typeof (value as Partial<Node>).start === "number"
     && typeof (value as Partial<Node>).end === "number";
+}
+
+/**
+ * D53's terminator is structural: a line holding nothing but a backtick at the
+ * declaration's indentation ends the block, whatever the JavaScript around it
+ * means. A multi-line construct whose own text contains such a line therefore
+ * loses everything after it, and Acorn's bare "Unterminated template" names
+ * the symptom without naming the rule that caused it.
+ *
+ * The hint states that rule as a *condition* rather than as a fact about this
+ * block, because nothing reaching this function can tell the two causes apart.
+ * The payload stops at the terminator whenever the block closed, so a literal
+ * truncated by the terminator and a literal the author simply never closed
+ * arrive here identical, and a block that never closed at all arrives with the
+ * rest of the module as its payload. An earlier wording asserted "this block
+ * ends at the first line holding nothing but a backtick" and told the author to
+ * indent it: false for an ordinary unclosed literal, where no such backtick
+ * exists, and directly opposed to the VEL1003 an unterminated block already
+ * reports, which correctly asks for a backtick alone at that indentation. A
+ * conditional is true in all three shapes and contradicts none of them.
+ *
+ * An unterminated string constant is left alone: a JavaScript string cannot
+ * hold a raw line break, so the terminator, which only ever removes whole
+ * lines, is not a plausible cause of one.
+ *
+ * Acorn's message alone covers only the literal whose *closing* backtick was
+ * eaten. When the *opening* backtick is the line that sits alone, the payload
+ * stops before the literal starts and Acorn reports a bare "Unexpected token"
+ * that names nothing. `templateWouldComplete` decides that case structurally
+ * rather than by message text: it re-parses the payload with an empty template
+ * literal appended at the truncation point, so the hint is offered exactly when
+ * a template opening there would have made the payload parse. That is the same
+ * question the author is asking, and it stays off for the truncations a
+ * terminator cannot explain — a missing `}` or `)`, a dangling `.`, an open
+ * call — because no template completes those either.
+ */
+function structuralTerminatorHint(message: string, source: string): string {
+  if (message.startsWith("Unterminated template")) {
+    return " — a line holding nothing but a backtick at the declaration's indentation is this block's terminator, whatever the JavaScript around it means; if this literal was meant to continue past such a line, the block ended there instead, so indent that backtick or write it at the end of a content line";
+  }
+  if (message.startsWith("Unterminated comment")) {
+    return " — a line holding nothing but a backtick at the declaration's indentation is this block's terminator, whatever the JavaScript around it means; if this comment was meant to continue past such a line, the block ended there instead of commenting it out, so indent that backtick or take it out of the comment";
+  }
+  if (templateWouldComplete(source)) {
+    return " — a line holding nothing but a backtick at the declaration's indentation is this block's terminator, whatever the JavaScript around it means; if a template literal was meant to open on such a line, the block ended there instead, so indent that backtick or write it at the end of the line before it";
+  }
+  return "";
+}
+
+/** Whether a template literal written where this payload stops would have completed it. */
+function templateWouldComplete(source: string): boolean {
+  try {
+    parse(`${source}\`\``, { ecmaVersion: "latest", sourceType: "module" });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function syntaxErrorPosition(error: unknown): number {

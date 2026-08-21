@@ -136,6 +136,30 @@ rows.append({a: 1, b: "x"})
 不允许它（类字段必须标注，而标注拼不出匿名记录），匿名记录元素在裁决前已经是
 只能活在局部变量里的二等公民。
 
+### 实施记录（2026-08-21）：边界由值决定，不由语法节点决定
+
+本条的边界最终不是靠枚举语法节点表达的，而是靠**值**：检查沿写在这个位置上的
+值下行，**当且仅当**到达那个名字的类型里还留着未定型的洞 —— List / Set 的元素
+是 `unknown`，或者 Map 的键与值**同时**是 `unknown`
+（`isFreshUnresolvedCollection` 与 `carriesUnsettledCollection`）。上面两节的
+「不覆盖」与「保持合法」因此是同一条判据的两个结论，不是两个开口：
+
+- `print(Set().size)` 与 `const n = Set().size` 不报 —— 那个名字拿到的是
+  `number`，洞没有被带出来；
+- 洞被带出来就报，并且报在那个空构造上。实测三处均落在 `[]`：
+  `const a = [].copy()`、`Map([["k", []]])`、以及泛型恒等
+  （`def id<T>(value: T) -> T`）上的 `const out = id([])`。同一个 `id([])`
+  写成 `print(id([]).size)` 不报 —— 判据只有一条。
+
+**兄弟元素不是定型来源。** `[["a"], []]` 与 `[[], ["a"]]` 实测都报在那个空
+`[]` 上，`[[], []]` 报两条。`mergeTypes` 只在**裸** `unknown` 种子上吸收，
+`List<string>` 与 `List<unknown>` 落到 `unionOf`，合出来的是
+`List<List<string> | List<unknown>>` —— 那正是第 207 条理由三要删掉的那种
+「名字拿着一个说不清的类型，读它才报」的形状，所以在构造点就报。
+
+**展开相反。** `["x", ...[]]` 里的 `unknown` 被合并吸收，结果是
+`List<string>`，没有洞，不报。
+
 ---
 
 ## 第 209 条 —— 诊断：VEL4039，说清为什么，不给机械修复
@@ -172,6 +196,31 @@ VEL4039  Empty Set() requires an explicit type; nothing at this position says
    原来的修复只删尖括号，改完仍然编译不过，那种修复比没有更坏。
 
 非空的泛型调用（`mapValues<string, bool>(...)`）文案与机械修复原样不动。
+
+### 实施记录（2026-08-21）：「只报一次」由类型落实
+
+「一个错误只报一次」不是靠在每个下游诊断点加判断，而是靠**类型**：报过
+VEL4039 的位置对外交出 `invalidType`，而不是那个还带着洞的 `List<unknown>`
+——`List<unknown>` 走到下一行去，正是第二条、而且互相打架的诊断的来源。实测
+各只得到一条 VEL4039，没有跟随的 VEL4001：
+
+- `const holder = {items: []}` 之后 `const h: Holder = holder`；
+- `def make(): return []` 之后 `const values: List<string> = make()`。
+
+由此有两处连带抑制：
+
+1. **体推断的返回位。** `return []` 交出 invalid，收集到的结果类型因此是
+   invalid —— 那本来算 VEL4025「结果推断未收敛」（`unsettledResult`）。这里
+   不报：作者已经被告知该写什么，VEL4025 会是同一个错误的第二遍。抑制只覆盖
+   返回的就是那个空构造这一形状；洞先经过一个中间绑定
+   （`const a = []` 后 `return a`）仍然是 VEL4039 加 VEL4025 两条。
+2. **列表解构。** `const pair = []` 之后 `const [x, y] = pair` 只报 VEL4039，
+   不再追一条 `Cannot list-destructure unknown` —— 对象解构本来就有这条豁免，
+   两者就此一致。
+
+VEL2031 的交接照上节实测成立：`const tags = Set<string>()` 只报改写后的
+VEL2031（`an empty 'Set()' takes its type from the binding …`），不报 VEL4039，
+且这一支不带机械修复；非空泛型调用那一支的修复原样保留。
 
 ---
 

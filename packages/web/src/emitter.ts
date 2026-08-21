@@ -3,11 +3,14 @@ import type {
   CompilerEmitterOptions,
   Expression,
   Program,
+  Span,
   Statement,
   LoweringHints,
   ValueType,
 } from "@velarscript/compiler/extension";
-import { cssPropertyName, LOOK_ARITHMETIC_HINT, LOOK_MEDIA_LENGTH_UNITS, LOOK_PROPERTIES } from "./look.ts";
+import { cssPropertyName, LOOK_ARITHMETIC_HINT, LOOK_MEDIA_LENGTH_UNITS, LOOK_PROPERTIES, LOOK_PROPERTY_KEYWORDS, LOOK_PROPERTY_VALUE_KINDS } from "./look.ts";
+import { isCssDeclarationValue } from "./css-tokens.ts";
+import { CSS_STRING_RUNTIME } from "./css-string.ts";
 import { collectLookStaticValues, evaluateLookStaticExpression, isLookStaticValue, lookStaticCss, type LookStaticValue } from "./look-static.ts";
 import { keyframeCssValue, keyframesCanonical, keyframesName } from "./keyframes.ts";
 import { JavaScriptEmitter, spanIdentity, VELAR_ERROR_NORMALIZATION_MODULE, VELAR_RUNTIME_REGISTRY_KEY } from "@velarscript/compiler/extension";
@@ -54,7 +57,11 @@ interface LookRule {
   readonly property: string;
   readonly target: string;
   readonly staticAtoms: readonly LookStaticAtom[];
+  /** Declaration order of the token's first appearance, the last tie-break. */
+  readonly sequence: number;
 }
+
+const WATCH_WRITING_METHODS = new Set(["add", "append", "clear", "extend", "insert", "pop", "remove", "reload", "set", "update"]);
 
 const FILE_TYPE_RUNTIME = String.raw`
 function __velarFileTypeIs(value) {
@@ -96,8 +103,11 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
   private needsLookArithmeticRuntime = false;
   private readonly importedLookStaticValues: ReadonlyMap<string, LookStaticValue>;
   private lookStaticValues: ReadonlyMap<string, LookStaticValue> = new Map();
+  /** CSS names of the closed-keyword properties this module styles, for the runtime guard. */
+  private readonly lookKeywordProperties = new Set<string>();
   private jsxId = 0;
   private readonly keyframeNames = new Map<string, string>();
+  private readonly declaredFunctions = new Map<string, Statement[][]>();
 
   constructor(
     hints: LoweringHints,
@@ -116,6 +126,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
 
   override emit(program: Program): string {
     this.lookStaticValues = collectLookStaticValues(program, this.importedLookStaticValues);
+    this.collectDeclaredFunctions(program);
     this.prepareLooks(program);
     this.webOutput = containsWebSyntax(program);
     this.needsFileTypeHelper = false;
@@ -184,12 +195,26 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
   }
 
   private webRuntimeHelpers(): readonly string[] {
-    if (!this.usesSharedRuntimeModules()) return [webRuntime(WEB_RUNTIME_FOUNDATION)];
+    if (!this.usesSharedRuntimeModules()) return [webRuntime(WEB_RUNTIME_FOUNDATION, this.lookKeywordTable())];
     this.requireRuntimeModule(VELAR_ERROR_NORMALIZATION_MODULE);
     return [
       `import { errorApply as __velarErrorApply, errorCode as __velarErrorCode, isError as __velarIsError, normalizeError as __velarNormalizeError } from ${JSON.stringify(VELAR_ERROR_NORMALIZATION_MODULE)};`,
-      webRuntime(WEB_RUNTIME_FOUNDATION_SHARED_ERROR),
+      webRuntime(WEB_RUNTIME_FOUNDATION_SHARED_ERROR, this.lookKeywordTable()),
     ];
+  }
+
+  /**
+   * The closed keyword sets of the properties this module styles, so a value
+   * the compiler could not read is still checked before it reaches the DOM.
+   * Only the properties written here ship: the whole table is 17 KiB, and a
+   * module pays for the properties it uses.
+   */
+  private lookKeywordTable(): string {
+    const entries = [...this.lookKeywordProperties].sort()
+      .map((name) => `  ${JSON.stringify(cssPropertyName(name))}: ${JSON.stringify([...LOOK_PROPERTY_KEYWORDS.get(name) ?? []])},`);
+    return entries.length === 0
+      ? "const __velarLookKeywords = { __proto__: null };"
+      : `const __velarLookKeywords = {\n  __proto__: null,\n${entries.join("\n")}\n};`;
   }
 
   protected override reactiveBridgeHelpers(needsJavaScriptCallBoundary: boolean, needsCollections: boolean): readonly string[] {
@@ -347,7 +372,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
         const indentation = "  ".repeat(depth);
         const parameters = [statement.currentName, statement.previousName].filter((name): name is string => name !== null).join(", ");
         const body = this.emitStatementLines(statement.body, depth + 1).join("\n");
-        return `${indentation}__velarWatch(() => ${this.emitMappedExpression(statement.expression)}, (${parameters}) => {${body ? `\n${body}\n${indentation}` : ""}}, __velarGlobalScope);`;
+        return `${indentation}__velarWatch(() => ${this.emitMappedExpression(statement.expression)}, (${parameters}) => {${body ? `\n${body}\n${indentation}` : ""}}, __velarGlobalScope, ${this.watchWritesState(statement.body)});`;
       }
     }
     if (statement.kind === "AssignmentStatement") {
@@ -500,7 +525,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       } else if (item.kind === "ExtensionStatement:web:watch") {
         const parameters = [item.currentName, item.previousName].filter((name): name is string => name !== null).join(", ");
         const watchLines = this.emitStatementLines(item.body, depth + 3).join("\n");
-        lines.push(`${bodyIndent}__velarWatch(() => ${this.emitMappedExpression(item.expression)}, (${parameters}) => {${watchLines ? `\n${watchLines}\n${bodyIndent}` : ""}}, __velarComponentScope);`);      } else if (item.kind === "ExtensionStatement:web:expose") {
+        lines.push(`${bodyIndent}__velarWatch(() => ${this.emitMappedExpression(item.expression)}, (${parameters}) => {${watchLines ? `\n${watchLines}\n${bodyIndent}` : ""}}, __velarComponentScope, ${this.watchWritesState(item.body)});`);      } else if (item.kind === "ExtensionStatement:web:expose") {
         expose ??= item.value;
       } else if (item.kind === "ExtensionStatement:web:mounted") {
         mountedBody = item.body;
@@ -534,7 +559,10 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     lines.push(`${bodyIndent}const __velarHandle = ${expose ? `__velarComponentHandle(${this.emitMappedExpression(expose)}, ${JSON.stringify(statement.name)})` : "null"};`);
     lines.push(`${bodyIndent}if (__velarProps.class !== undefined) __velarClassBindRoot(__velarRoot, () => __velarProps.class, __velarComponentScope);`);
     lines.push(`${bodyIndent}if (__velarProps.look !== undefined) __velarLookBindRoot(__velarRoot, () => __velarProps.look, __velarComponentScope);`);
-    lines.push(`${bodyIndent}if (__velarProps.__velarStyle !== undefined) __velarStyleBindRoot(__velarRoot, () => __velarProps.__velarStyle, __velarComponentScope);`);
+    // 'class' and 'look' are fields a component may declare and read, so they
+    // arrive as props. The 'style:' slot is not: it is bound to the instance
+    // root by whoever wrote it, at the instantiation site, for every component
+    // alike -- see __velarInstantiate.
     const mounted = this.emitStatementLines(mountedBody, depth + 3).join("\n");    const cleanup = cleanupBody.map((child) => {
       if (["VariableDeclaration", "FunctionDeclaration", "ClassDeclaration", "TypeDeclaration", "EnumDeclaration"].includes(child.kind)) {
         return this.emitMappedStatement(child, depth + 3);
@@ -612,9 +640,11 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
         }
         // Children stay a thunk so the charter's evaluation order holds at
         // the runtime boundary: props left to right, then children, then the
-        // component function.
+        // component function. The thunk takes the scope to build into, so the
+        // position that shows the slot owns what it built and destroys it when
+        // it stops showing it.
         const children = hasMeaningfulChildren(expression.children)
-          ? `() => (${this.emitJsxChildren(expression.children, componentScope, namespace)})`
+          ? `(__velarChildrenScope = ${componentScope}) => (${this.emitJsxChildrenCode(expression.children, namespace)})`
           : "undefined";
         const ref = expression.attributes.find((attribute) => attribute.name === "ref")?.value;
         const refSetter = ref && typeof ref !== "string" && ref.kind === "IdentifierExpression"
@@ -712,10 +742,89 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     return `(() => { ${lines.join(" ")} })()`;
   }
 
+  // Every function this module declares, by name, so a watch body that spells
+  // its write through a helper is classified by what the helper does. Names are
+  // collected across scopes and every declaration of a name is kept: a name
+  // that writes state anywhere in the module reports its callers as writers,
+  // which over-reports at worst and only puts a watch back in plain queue
+  // order.
+  private collectDeclaredFunctions(program: Program): void {
+    this.declaredFunctions.clear();
+    const visit = (node: unknown, depth: number): void => {
+      if (depth > 64 || node === null || typeof node !== "object") return;
+      if (Array.isArray(node)) {
+        for (const item of node) visit(item, depth + 1);
+        return;
+      }
+      const entry = node as { readonly kind?: unknown; readonly name?: unknown; readonly body?: unknown };
+      if (entry.kind === "FunctionDeclaration" && typeof entry.name === "string" && Array.isArray(entry.body)) {
+        const declared = this.declaredFunctions.get(entry.name);
+        if (declared === undefined) this.declaredFunctions.set(entry.name, [entry.body as Statement[]]);
+        else declared.push(entry.body as Statement[]);
+      }
+      for (const value of Object.values(entry)) visit(value, depth + 1);
+    };
+    visit(program.body, 0);
+  }
+
+  // A watch whose body writes reactive state settles the graph rather than
+  // merely observing it, so the flush runs it before the watches that only
+  // observe -- which is what keeps watch declaration order out of the program's
+  // output. Extracting an effect into a named function is an ordinary spelling
+  // rather than a corner case, so a call to a function this module declares is
+  // read too, and a cycle of helpers is walked once. A write through a helper
+  // this module cannot see -- an imported one, or one reached through a value
+  // -- is still caught at runtime the first time the body performs it.
+  private watchWritesState(body: readonly Statement[]): boolean {
+    const writesReactive = (target: unknown): boolean => {
+      let current = target as { readonly kind?: unknown; readonly object?: unknown; readonly span?: Span } | null;
+      for (let depth = 0; current !== null && typeof current === "object" && depth < 64; depth += 1) {
+        if (current.kind === "IdentifierExpression") {
+          return current.span !== undefined && this.hints.reactiveReferences.get(spanIdentity(current.span)) === "state";
+        }
+        if (current.kind !== "MemberExpression" && current.kind !== "IndexExpression") return false;
+        current = current.object as typeof current;
+      }
+      return false;
+    };
+    const walked = new Set<string>();
+    const visit = (node: unknown, depth: number): boolean => {
+      if (depth > 64 || node === null || typeof node !== "object") return false;
+      if (Array.isArray(node)) return node.some((item) => visit(item, depth + 1));
+      const entry = node as { readonly kind?: unknown; readonly target?: unknown; readonly callee?: unknown };
+      if (entry.kind === "AssignmentStatement" && writesReactive(entry.target)) return true;
+      if (entry.kind === "CallExpression") {
+        const callee = entry.callee as { readonly kind?: unknown; readonly name?: unknown; readonly property?: unknown; readonly object?: unknown } | null;
+        if (callee && callee.kind === "MemberExpression" && typeof callee.property === "string"
+          && WATCH_WRITING_METHODS.has(callee.property) && writesReactive(callee.object)) return true;
+        if (callee && callee.kind === "IdentifierExpression" && typeof callee.name === "string" && !walked.has(callee.name)) {
+          walked.add(callee.name);
+          const declared = this.declaredFunctions.get(callee.name) ?? [];
+          if (declared.some((statements) => statements.some((statement) => visit(statement, 0)))) return true;
+        }
+      }
+      return Object.values(entry).some((value) => visit(value, depth + 1));
+    };
+    return body.some((statement) => visit(statement, 0));
+  }
+
   private emitJsxChildren(children: JSXElementExpression["children"], scope: string, namespace: string): string {
     const fragmentSpan = children[0]?.span ?? { start: 0, end: 0 };
     const fragment: JSXElementExpression = { kind: "ExtensionExpression:web:jsx", tag: "", tagSpan: { start: fragmentSpan.start, end: fragmentSpan.start }, attributes: [], children, span: fragmentSpan };
     return this.emitJsx(fragment, scope, true, namespace);
+  }
+
+  // The slot body builds into whichever scope the consuming position hands it,
+  // so every observer, ref and cleanup it registers dies with that position
+  // rather than accumulating on the caller for the component's whole lifetime.
+  private emitJsxChildrenCode(children: JSXElementExpression["children"], namespace: string): string {
+    const previousScope = this.currentScope;
+    this.currentScope = "__velarChildrenScope";
+    try {
+      return this.emitJsxChildren(children, "__velarChildrenScope", namespace);
+    } finally {
+      this.currentScope = previousScope;
+    }
   }
 
   private emitDynamicChild(parent: string, expression: Expression, scope: string, namespace: string): string {
@@ -819,19 +928,35 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
   private prepareLooks(program: Program): void {
     const rules = new Map<string, LookRule>();
     const keyframeRules = new Map<string, string>();
+    const keyframeCanonicals = new Map<string, string>();
     this.keyframeNames.clear();
+    this.lookKeywordProperties.clear();
+    // A token's stylesheet position used to be wherever it first appeared
+    // anywhere in the module, because a Map keeps first-insertion order. The
+    // sequence records that first appearance explicitly so emission can sort by
+    // condition rank first and fall back to declaration order, rather than
+    // letting an unrelated earlier look decide a later one's winner (LOK-U8).
+    let sequence = 0;
+    const addRule = (token: string, property: string, target: string, staticAtoms: readonly LookStaticAtom[]): void => {
+      if (rules.has(token)) return;
+      rules.set(token, { token, property, target, staticAtoms, sequence: sequence += 1 });
+    };
+    const noteKeywordProperty = (name: string): void => {
+      if (LOOK_PROPERTY_VALUE_KINDS.get(name) === "keyword") this.lookKeywordProperties.add(name);
+    };
     const visit = (value: unknown): void => {
       if (!value || typeof value !== "object") return;
       const record = value as Record<string, unknown>;
       if (record.kind === "ExtensionExpression:web:jsx") {
         const element = record as unknown as JSXElementExpression;
         for (const attribute of element.attributes) {
-          if (!attribute.name.startsWith("look:")) continue;
-          const name = attribute.name.slice("look:".length);
+          if (!attribute.name.startsWith("look:") && !attribute.name.startsWith("style:")) continue;
+          const name = attribute.name.slice(attribute.name.indexOf(":") + 1);
           if (!LOOK_PROPERTIES.has(name)) continue;
+          noteKeywordProperty(name);
+          if (!attribute.name.startsWith("look:")) continue;
           const property = cssPropertyName(name);
-          const token = lookToken([], "", property);
-          rules.set(token, { token, property, target: "", staticAtoms: [] });
+          addRule(lookToken([], "", property), property, "", []);
         }
       }
       if (record.kind === "ExtensionExpression:web:look") {
@@ -839,9 +964,9 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
           for (const entry of entries) {
             if (entry.kind === "LookProperty") {
               const property = cssPropertyName(entry.name);
+              noteKeywordProperty(entry.name);
               for (const context of contexts) {
-                const token = lookToken(context.staticAtoms, target, property);
-                rules.set(token, { token, property, target, staticAtoms: context.staticAtoms });
+                addRule(lookToken(context.staticAtoms, target, property), property, target, context.staticAtoms);
               }
             } else if (entry.kind === "LookIf") {
               collect(entry.thenEntries, combineLookTerms(contexts, lookConditionTerms(entry.condition, false, this.lookStaticValues)), target);
@@ -858,7 +983,16 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
         const canonical = keyframesCanonical(expression, this.lookStaticValues);
         const name = keyframesName(canonical);
         this.keyframeNames.set(spanIdentity(expression.span), name);
-        if (!keyframeRules.has(name)) {
+        const reused = keyframeCanonicals.get(name);
+        // The name is a promise that equal structures share one rule. Reusing
+        // it for a structure that is not equal would make one animation play
+        // another's motion, so the reuse path proves the identity rather than
+        // trusting the digest (LOK-U11).
+        if (reused !== undefined && reused !== canonical) {
+          throw new Error(`Generated keyframes name ${name} collides between two different keyframe structures`);
+        }
+        if (reused === undefined) {
+          keyframeCanonicals.set(name, canonical);
           const stops = [...expression.stops]
             .sort((left, right) => Math.min(...left.offsets) - Math.min(...right.offsets))
             .map((stop) => {
@@ -867,7 +1001,13 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
                 .join(",");
               const declarations = stop.entries.map((entry) => {
                 const css = keyframeCssValue(entry.value, this.lookStaticValues);
-                return css === null ? "" : `${cssPropertyName(entry.name)}:${css}`;
+                // A value the lowering could not prove is one balanced
+                // declaration never reaches the concatenation: `}` in a stop
+                // closed the at-rule and turned the rest into author-owned CSS
+                // in the compiler-owned segment (LOK-U9). The analyzer already
+                // reports the same null as a diagnostic, so emission only has
+                // to stay structurally incapable of writing the escape.
+                return css === null || !isCssDeclarationValue(css) ? "" : `${cssPropertyName(entry.name)}:${css}`;
               }).filter(Boolean).join(";");
               return `${selectors}{${declarations}}`;
             }).join("");
@@ -881,16 +1021,22 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     };
     visit(program);
 
-    const lookCss: string[] = [];
-    for (const rule of rules.values()) {
-      const hookAtoms = rule.staticAtoms.filter((atom) => atom.kind === "hook");
-      const mediaAtoms = rule.staticAtoms.filter((atom) => atom.kind === "media" || atom.kind === "scheme" || atom.kind === "motion");
-      const base = `[data-velar-look~=${JSON.stringify(rule.token)}]${rule.staticAtoms.length > 0 ? "[data-velar-look]" : ""}`;
-      const selectors = lookSelectors(base, hookAtoms, rule.target);
-      const css = `${selectors.join(",")}{${lookDeclaration(rule.token, rule.property)}}`;
-      const query = mediaAtoms.map(lookMediaQuery).join(" and ");
-      lookCss.push(query ? `@media ${query}{${css}}` : css);
-    }
+    const lookCss: string[] = [...rules.values()]
+      .map((rule) => ({ rule, depth: lookConditionDepth(rule.staticAtoms) }))
+      // Rank decides, and declaration order only separates rules that share a
+      // rank. Emission used to follow the Map, so the sheet's byte order — and
+      // through it the per-module concatenation order the CLI sorts by
+      // filename — could pick the winner of a tie (LOK-U8, LOK-U10).
+      .sort((left, right) => left.depth - right.depth || left.rule.sequence - right.rule.sequence)
+      .map(({ rule, depth }) => {
+        const hookAtoms = rule.staticAtoms.filter((atom) => atom.kind === "hook");
+        const mediaAtoms = rule.staticAtoms.filter((atom) => atom.kind === "media" || atom.kind === "scheme" || atom.kind === "motion");
+        const base = `[data-velar-look~=${JSON.stringify(rule.token)}]${"[data-velar-look]".repeat(depth)}`;
+        const selectors = lookSelectors(base, hookAtoms, rule.target);
+        const css = `${selectors.join(",")}{${lookDeclaration(rule.token, rule.property)}}`;
+        const query = mediaAtoms.map(lookMediaQuery).join(" and ");
+        return query ? `@media ${query}{${css}}` : css;
+      });
 
     const before: string[] = [];
     const after: string[] = [];
@@ -991,18 +1137,28 @@ function lookConditionTerms(
   return [{ staticAtoms: [], runtimeAtoms: [{ expression, negated }] }];
 }
 
+// A breakpoint is complementary the way the schemes and the motion preference
+// are: `not (width <= X)` is `width > X`, one condition with one media query.
+// The atom therefore folds the negation into its operator at construction, so
+// the two spellings reach `lookToken` as the same token instead of as two
+// rules that tie on specificity and are separated by source order.
+const LOOK_NEGATED_MEDIA_OPERATORS: ReadonlyMap<string, "<" | "<=" | ">" | ">="> = new Map([
+  ["<", ">="], ["<=", ">"], [">", "<="], [">=", "<"],
+]);
+
 function viewportAtom(expression: Expression, negated: boolean, staticValues: ReadonlyMap<string, LookStaticValue>): LookStaticAtom | null {
   if (expression.kind !== "BinaryExpression" || !["<", "<=", ">", ">="].includes(expression.operator)) return null;
   if (expression.left.kind !== "MemberExpression" || expression.left.object.kind !== "IdentifierExpression" || expression.left.object.name !== "viewport") return null;
   if (expression.left.property !== "width" && expression.left.property !== "height") return null;
   const threshold = evaluateLookStaticExpression(expression.right, staticValues);
   if (threshold?.kind !== "unit" || !LOOK_MEDIA_LENGTH_UNITS.has(threshold.unit)) return null;
+  const written = expression.operator as "<" | "<=" | ">" | ">=";
   return {
     kind: "media",
     name: expression.left.property,
-    operator: expression.operator as "<" | "<=" | ">" | ">=",
+    operator: negated ? LOOK_NEGATED_MEDIA_OPERATORS.get(written)! : written,
     value: lookStaticCss(threshold)!,
-    negated,
+    negated: false,
   };
 }
 
@@ -1042,10 +1198,38 @@ function lookToken(atoms: readonly LookStaticAtom[], target: string, property: s
     if (atom.kind === "hook") return `${atom.negated ? "not-" : ""}${kebab(atom.name)}`;
     if (atom.kind === "scheme") return `scheme-${atom.name}`;
     if (atom.kind === "motion") return `motion-${atom.name}`;
-    return `viewport-${atom.name}-${atom.negated ? "not-" : ""}${lookOperatorName(atom.operator!)}-${atom.value}`;
+    return `viewport-${atom.name}-${lookOperatorName(atom.operator!)}-${atom.value}`;
   }).sort();
   const prefix = [target ? kebab(target) : "", conditions.length > 0 ? conditions.join("+") : "base"].filter(Boolean).join(":");
   return `${prefix}:${property}`;
+}
+
+/**
+ * How many extra `[data-velar-look]` selectors a rule carries, so that the
+ * winner between two Look rules is decided by the conditions they name rather
+ * than by their position in the sheet.
+ *
+ * The bump used to be a single flat `+1` for any non-empty condition set, which
+ * made every conditional rule specificity `(0,2,0)`: a state rule tied with a
+ * media rule, and a two-condition refinement tied with the one-condition
+ * fallback it refines. Ties then fell through to source order, and source order
+ * is per-module concatenation order, which the CLI sorts by filename — so the
+ * rendered colour could change when a file was renamed (LOK-U8, LOK-U10,
+ * LOK-U12).
+ *
+ * The rank is base < media < state < media+state, and within a rank a rule that
+ * names more conditions outranks one that names fewer. The per-rank span is
+ * bounded so a pathological condition count cannot cross a rank boundary; rules
+ * that saturate it fall back to declaration order, which is stable.
+ */
+const LOOK_RANK_SPAN = 3;
+
+function lookConditionDepth(atoms: readonly LookStaticAtom[]): number {
+  if (atoms.length === 0) return 0;
+  const hooks = atoms.filter((atom) => atom.kind === "hook").length;
+  const media = atoms.length - hooks;
+  const rank = hooks > 0 ? (media > 0 ? 2 : 1) : 0;
+  return rank * LOOK_RANK_SPAN + Math.min(atoms.length, LOOK_RANK_SPAN);
 }
 
 function lookVariable(token: string): string {
@@ -1064,10 +1248,7 @@ function lookOperatorName(operator: "<" | "<=" | ">" | ">="): string {
 function lookMediaQuery(atom: LookStaticAtom): string {
   if (atom.kind === "scheme") return `(prefers-color-scheme: ${atom.name})`;
   if (atom.kind === "motion") return `(prefers-reduced-motion: ${atom.name})`;
-  const operator = atom.negated
-    ? atom.operator === "<" ? ">=" : atom.operator === "<=" ? ">" : atom.operator === ">" ? "<=" : "<"
-    : atom.operator!;
-  return `(${atom.name} ${operator} ${atom.value})`;
+  return `(${atom.name} ${atom.operator!} ${atom.value})`;
 }
 
 function lookSelectors(base: string, atoms: readonly LookStaticAtom[], target: string): readonly string[] {
@@ -1259,48 +1440,121 @@ function __velarEventCall(value, name, nativeMethod) {
 // observers schedule correctly no matter which module stamped the registry.
 // Both sides drain the same shared queues under the shared flushPending flag;
 // their budgets and overflow behavior must stay identical.
+
+// Counts the scheduling a turn caused, which is how a watch body is found to
+// have written state after the fact.
+let __velarScheduleEpoch = 0;
+
+// The identity a flush stamps its run counts with, carried by an overrun into
+// the flush it schedules and consumed by the first flush that starts.
+let __velarOverflowToken = null;
+
+// A queue that outgrows its bound is the flush budget's failure to own, not an
+// exception thrown out of the assignment that happened to cross the line:
+// throwing here left the writing cell's subscriber walk half finished, with the
+// remaining observers subscribed and never notified again.
 function __velarSchedule(observer) {
-  const queue = observer.mode === "watch" ? __velarRuntime.watchQueue : __velarRuntime.domQueue;
-  if (!__velarGraphSetContains(queue, observer) && __velarGraphSetCount(queue) >= 100000) throw new RangeError("VelarScript reactive queues cannot exceed 100000 observers");
-  __velarGraphSetInsert(queue, observer);
-  if (!__velarRuntime.flushPending) {
-    __velarRuntime.flushPending = true;
-    __velarEnqueue(__velarFlush);
-  }
+  __velarScheduleEpoch += 1;
+  __velarGraphSetInsert(observer.mode === "watch" ? __velarRuntime.watchQueue : __velarRuntime.domQueue, observer);
+  __velarScheduleFlush();
 }
 
 // Both queues are drained live: an observer that re-schedules itself or another
 // observer is picked up by the same walk. Two observers that invalidate each
 // other therefore never leave this function, which froze the page with nothing
 // on the error channel. The per-flush budget gives that case the same owned
-// ending as the single-observer cap: stop the observers still queued, report
-// once through velar/app, and let the turn finish.
-function __velarFlushOverflow() {
+// ending as the single-observer cap: stop the observers that actually re-entered
+// the queue during the overrun, report once through velar/app, and let the turn
+// finish. An observer queued once by an unrelated write in the same turn is
+// innocent, and stopping is irreversible, so it goes back on the queue instead.
+//
+// Every overrun must still remove something, or the requeue turns the microtask
+// chain into the freeze the budget exists to end: a cycle spread across more
+// observers than the budget can run four times over re-enters none of them four
+// times, so a fixed threshold of four stops nobody and the next flush repeats it
+// forever. Two rules make the progress unconditional. The threshold falls to the
+// highest run count actually present, so any queued observer this flush chain
+// has already run is stopped; and the token is carried into the flush the
+// overrun schedules, so run counts accumulate across the chain and the observers
+// the chain has not reached yet are a pool that only shrinks.
+function __velarFlushOverflow(token) {
   const stalled = [];
   for (const observer of __velarGraphSetItems(__velarRuntime.domQueue)) stalled[stalled.length] = observer;
   for (const observer of __velarGraphSetItems(__velarRuntime.watchQueue)) stalled[stalled.length] = observer;
   __velarGraphSetEmpty(__velarRuntime.domQueue);
   __velarGraphSetEmpty(__velarRuntime.watchQueue);
+  let threshold = 0;
   for (let index = 0; index < stalled.length; index += 1) {
     const observer = stalled[index];
-    if (typeof observer.stop === "function") observer.stop();
-    else observer.stopped = true;
+    if (observer.flushToken === token && observer.flushRuns > threshold) threshold = observer.flushRuns;
+  }
+  if (threshold > 4) threshold = 4;
+  let requeued = false;
+  for (let index = 0; index < stalled.length; index += 1) {
+    const observer = stalled[index];
+    if (threshold > 0 && observer.flushToken === token && observer.flushRuns >= threshold) {
+      if (typeof observer.stop === "function") observer.stop();
+      else observer.stopped = true;
+      continue;
+    }
+    if (observer.stopped) continue;
+    __velarGraphSetInsert(observer.mode === "watch" ? __velarRuntime.watchQueue : __velarRuntime.domQueue, observer);
+    requeued = true;
   }
   __velarReport(new RangeError("Reactive updates cannot run more than 100000 observers in one flush"), "update", null);
+  if (requeued) {
+    __velarOverflowToken = token;
+    __velarScheduleFlush();
+  }
 }
 
+// Glitch-free order: every derived value and every watch settles to a fixed
+// point before a single DOM node is written, so no watch and no rendered
+// position can read a half-updated world and no corrective watch can push an
+// invalid value through the DOM first. Within the settle, a watch whose body
+// writes state runs before a watch that only observes, which is what makes
+// watch declaration order unobservable in the output.
 function __velarFlush() {
   __velarRuntime.flushPending = false;
+  const token = __velarOverflowToken === null ? {} : __velarOverflowToken;
+  __velarOverflowToken = null;
   let budget = 100000;
-  for (const observer of __velarGraphSetItems(__velarRuntime.domQueue)) {
-    __velarGraphSetRemove(__velarRuntime.domQueue, observer);
-    if ((budget -= 1) < 0) { __velarFlushOverflow(); return; }
+  const step = (observer) => {
+    __velarGraphSetRemove(observer.mode === "watch" ? __velarRuntime.watchQueue : __velarRuntime.domQueue, observer);
+    if (observer.flushToken === token) observer.flushRuns += 1;
+    else { observer.flushToken = token; observer.flushRuns = 1; }
     observer.run();
-  }
-  for (const observer of __velarGraphSetItems(__velarRuntime.watchQueue)) {
-    __velarGraphSetRemove(__velarRuntime.watchQueue, observer);
-    if ((budget -= 1) < 0) { __velarFlushOverflow(); return; }
-    observer.run();
+  };
+  while (__velarGraphSetCount(__velarRuntime.domQueue) || __velarGraphSetCount(__velarRuntime.watchQueue)) {
+    while (true) {
+      let ran = false;
+      for (const observer of __velarGraphSetItems(__velarRuntime.domQueue)) {
+        if (observer.mode !== "computed") continue;
+        if ((budget -= 1) < 0) { __velarFlushOverflow(token); return; }
+        step(observer);
+        ran = true;
+      }
+      if (ran) continue;
+      for (const observer of __velarGraphSetItems(__velarRuntime.watchQueue)) {
+        if (observer.produces !== true) continue;
+        if ((budget -= 1) < 0) { __velarFlushOverflow(token); return; }
+        step(observer);
+        ran = true;
+      }
+      if (ran) continue;
+      for (const observer of __velarGraphSetItems(__velarRuntime.watchQueue)) {
+        if (observer.produces === true) break;
+        if ((budget -= 1) < 0) { __velarFlushOverflow(token); return; }
+        step(observer);
+        ran = true;
+      }
+      if (!ran) break;
+    }
+    for (const observer of __velarGraphSetItems(__velarRuntime.domQueue)) {
+      if (observer.mode === "computed") break;
+      if ((budget -= 1) < 0) { __velarFlushOverflow(token); return; }
+      step(observer);
+    }
   }
   if (__velarGraphSetCount(__velarRuntime.domQueue) || __velarGraphSetCount(__velarRuntime.watchQueue)) __velarScheduleFlush();
 }
@@ -1342,6 +1596,7 @@ function __velarObserver(read, mode, scope) {
     mode,
     stopped: false,
     running: false,
+    produces: false,
     selfInvalidations: 0,
     dependencies: __velarGraphCreateSet(),
     run() {
@@ -1415,8 +1670,8 @@ function __velarSetupEnd(value) {
 }
 
 // The framework's own reads on the author's behalf -- checking a prop is
-// present, capturing the one-time snapshot a runtime component documents,
-// reading a handler thunk. None of them freezes anything the author wrote: the
+// present, building the content a children slot holds, reading a handler
+// thunk. None of them freezes anything the author wrote: the
 // prop handle behind them stays live. Reporting them would be the false-positive
 // flood D70 rule 180 rejected, in its most literal form.
 function __velarInternalRead(read) {
@@ -1699,19 +1954,32 @@ function __velarCleanupStep(run, scope) {
   } catch (error) { __velarReport(error, "cleanup", scope); }
 }
 
-function __velarWatch(read, callback, scope) {
+function __velarWatch(read, callback, scope, produces = false) {
   let current;
   let currentVersion = 0;
   let initialized = false;
-  __velarObserver(() => {
+  let observer = null;
+  observer = __velarObserver(() => {
     const next = read();
     __velarRuntime.trackDeep(next);
     const nextVersion = __velarRuntime.versionOf(next);
-    if (initialized && (!__velarGraphSame(next, current) || nextVersion !== currentVersion)) callback(next, current);
+    if (initialized && (!__velarGraphSame(next, current) || nextVersion !== currentVersion)) {
+      // The body is the author's effect, not part of the watched expression:
+      // its own reactive reads must never become dependencies of what is being
+      // watched, or one write re-evaluates the expression twice and an
+      // unwatched value re-runs the watch.
+      const scheduled = __velarScheduleEpoch;
+      __velarUntracked(() => callback(next, current));
+      // A body that turns out to write state settles the graph rather than
+      // merely observing it, so from here on it runs before the observing
+      // watches even when the compiler could not see the write.
+      if (__velarScheduleEpoch !== scheduled) observer.produces = true;
+    }
     current = next;
     currentVersion = nextVersion;
     initialized = true;
   }, "watch", scope);
+  observer.produces = produces;
 }
 
 function __velarComponentHandle(value, componentName) {
@@ -1743,6 +2011,15 @@ function __velarComponent(node, scope, mounted, cleanup, handleState) {
   let destroyed = false;
   const refCleanups = [];
   const ownedNodes = node && __velarDomNodeType(node) === 11 ? __velarDomChildNodes(node) : [node];
+  // An enclosing component forwards to a nested component's host only when that
+  // component's root sits at its own root level. Marking the nodes here is what
+  // lets the enclosing scan walk past a nested host buried inside one of its
+  // own elements instead of counting it as a second host of its own.
+  for (let index = 0; index < ownedNodes.length; index += 1) {
+    if (ownedNodes[index] && __velarDomNodeType(ownedNodes[index]) === 1) {
+      __velarGraphDefine(ownedNodes[index], "__velarComponentNode", { value: true, enumerable: true, configurable: true });
+    }
+  }
   if (mounted) __velarAppendOwned(scope.mounts, mounted);
   return {
     __velarComponent: true,
@@ -1912,6 +2189,17 @@ function __velarAppend(parent, value, state = null) {
   throw new TypeError("JSX can render only text, finite numbers, bool, enums, WebNode values, and Lists of those values");
 }
 
+// The rendering region currently being constructed. A 'children' slot is built
+// by the position that shows it and must be destroyed with it, so the slot is
+// owned by this scope rather than by the caller's component scope, which would
+// keep every hidden build's observers alive for the component's whole lifetime.
+let __velarBuildScope = null;
+
+function __velarChildrenNode(build, scope) {
+  const owner = __velarBuildScope === null ? scope : __velarBuildScope;
+  return __velarInternalRead(() => build(owner));
+}
+
 function __velarDynamic(parent, read, scope, rootState = null) {
   const start = __velarDomCreateComment("velar:start");
   const end = __velarDomCreateComment("velar:end");
@@ -1923,11 +2211,14 @@ function __velarDynamic(parent, read, scope, rootState = null) {
     const nextScope = __velarScope(scope.component);
     const fragment = __velarDomCreateFragment();
     let nextHost = null;
+    const previousBuildScope = __velarBuildScope;
+    __velarBuildScope = nextScope;
     try {
       __velarAppend(fragment, read(nextScope));
       if (rootState) nextHost = __velarRootHost(fragment, "dynamic component");
     }
     catch (error) { __velarDestroyScope(nextScope); throw error; }
+    finally { __velarBuildScope = previousBuildScope; }
     const nextNodes = __velarDomChildNodes(fragment);
     if (childScope) __velarDestroyScope(childScope);
     for (let index = 0; index < nodes.length; index += 1) __velarDomRemove(nodes[index]);
@@ -1984,9 +2275,25 @@ function __velarKeyed(parent, read, keyOf, render, scope) {
         if (!entry) {
           const childScope = __velarScope(scope.component);
           const fragment = __velarDomCreateFragment();
+          const previousBuildScope = __velarBuildScope;
+          __velarBuildScope = childScope;
           try { __velarAppend(fragment, render(trackedValue, childScope)); }
           catch (error) { __velarDestroyScope(childScope); throw error; }
-          entry = { value: rawValue, scope: childScope, nodes: __velarDomChildNodes(fragment), fragment };
+          finally { __velarBuildScope = previousBuildScope; }
+          // A row is held by its first and last top-level nodes, never by a
+          // snapshot of the list between them: every dynamic construct brackets
+          // itself with comments created once, so those two nodes are stable
+          // while everything between them is replaced over time. Caching the
+          // whole list put destroyed nodes back into the document on a later
+          // reorder and stranded the live ones outside their own markers.
+          const rowNodes = __velarDomChildNodes(fragment);
+          entry = {
+            value: rawValue,
+            scope: childScope,
+            first: rowNodes.length > 0 ? rowNodes[0] : null,
+            last: rowNodes.length > 0 ? rowNodes[rowNodes.length - 1] : null,
+            fragment,
+          };
           created[created.length] = entry;
         }
         __velarGraphMapWrite(next, key, entry);
@@ -1999,7 +2306,13 @@ function __velarKeyed(parent, read, keyOf, render, scope) {
       const entry = __velarGraphMapRead(entries, key);
       if (__velarGraphMapRead(next, key) === entry) continue;
       __velarDestroyScope(entry.scope);
-      for (let index = 0; index < entry.nodes.length; index += 1) __velarDomRemove(entry.nodes[index]);
+      let node = entry.first;
+      while (node !== null && node !== end) {
+        const following = __velarDomNextSibling(node);
+        __velarDomRemove(node);
+        if (node === entry.last) break;
+        node = following;
+      }
     }
     // A row already standing in its final position must not be detached and
     // reattached: that moves focus off a live <input>, ends IME composition,
@@ -2013,10 +2326,13 @@ function __velarKeyed(parent, read, keyOf, render, scope) {
         if (scope.mounted) __velarMountScope(entry.scope);
         continue;
       }
-      for (let index = 0; index < entry.nodes.length; index += 1) {
-        const node = entry.nodes[index];
+      let node = entry.first;
+      while (node !== null && node !== end) {
+        const following = __velarDomNextSibling(node);
         if (node === cursor) cursor = __velarDomNextSibling(cursor);
         else __velarDomBefore(cursor === null ? end : cursor, node);
+        if (node === entry.last) break;
+        node = following;
       }
     }
     entries = next;
@@ -2052,6 +2368,55 @@ function __velarAttr(element, name, read, scope) {
   }, "dom", scope);
 }
 
+// The attributes whose value the user agent navigates or fetches. For these the
+// scheme is part of what the value means, so it is checked; every other
+// attribute takes its text unchanged.
+const __velarUrlAttributes = ["href", "src", "action", "formaction", "poster", "data", "xlink:href", "ping", "cite"];
+const __velarUrlSchemes = ["http", "https", "mailto", "tel", "blob"];
+// 'data:' carries its own payload, so it is admitted only for media types the
+// user agent cannot execute. 'image/svg+xml' is deliberately absent: an SVG
+// document can carry script.
+const __velarInertDataTypes = [
+  "image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/bmp", "image/x-icon",
+  "video/mp4", "video/webm", "video/ogg", "audio/mpeg", "audio/ogg", "audio/wav", "audio/webm",
+  "font/woff", "font/woff2", "text/plain",
+];
+
+// 'javascript:' and 'vbscript:' are code, not locations. A value that arrived as
+// data must never become code because it reached an href, so an unknown scheme
+// is refused rather than passed through.
+function __velarUrlAttributeValue(value, name) {
+  let scheme = "";
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    // The user agent strips ASCII whitespace and control characters before it
+    // parses the scheme, so "java\tscript:" reads as "javascript:" to it and
+    // has to read that way here too.
+    if (code <= 0x20 || code === 0x7f) continue;
+    if (code === 58 && scheme.length > 0) {
+      const lowered = scheme.toLowerCase();
+      if (lowered === "data") {
+        const payload = value.slice(index + 1).toLowerCase();
+        for (let type = 0; type < __velarInertDataTypes.length; type += 1) {
+          if (payload.startsWith(__velarInertDataTypes[type])) return value;
+        }
+        throw new TypeError("JSX attribute '" + name + "' rejected a 'data:' URL whose media type is not a known inert one");
+      }
+      if (__velarHasName(__velarUrlSchemes, lowered)) return value;
+      throw new TypeError("JSX attribute '" + name + "' rejected the '" + lowered + ":' URL scheme");
+    }
+    const letter = (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+    if (letter || (scheme.length > 0 && ((code >= 48 && code <= 57) || code === 43 || code === 45 || code === 46))) {
+      scheme += value[index];
+      continue;
+    }
+    // Anything else this early means the value names no scheme: it is a
+    // relative URL, which is always the application's own origin.
+    return value;
+  }
+  return value;
+}
+
 function __velarAttributeValue(value, name) {
   if (value === true) return __velarAriaState(name) ? "true" : "";
   if (typeof value === "number") {
@@ -2060,6 +2425,7 @@ function __velarAttributeValue(value, name) {
   }
   if (typeof value !== "string") throw new TypeError("JSX attribute '" + name + "' requires text, a finite number, bool, an enum, or null");
   if (value.length > 1024 * 1024) throw new RangeError("JSX attribute '" + name + "' cannot exceed 1 MiB");
+  if (__velarHasName(__velarUrlAttributes, name)) return __velarUrlAttributeValue(value, name);
   return value;
 }
 
@@ -2089,23 +2455,86 @@ function __velarClass(element, name, read, scope) {
   __velarClassBind(element, () => read() ? name : null, scope);
 }
 
-function __velarMergeRules(rules, source) {
+// The property a token carries. A token is '[target:]conditions:property' and
+// a CSS property name never contains ':', so the last segment is the property.
+function __velarLookProperty(token) {
+  return token.slice(token.lastIndexOf(":") + 1);
+}
+
+// The surface a token writes on: its pseudo-element target, if it has one, plus
+// its property. Composition overrides a property on the surface that owns it —
+// '@before: content' and a bare 'content' are two surfaces, not one property
+// written under two conditions.
+function __velarLookSurface(token) {
+  const first = token.indexOf(":");
+  const last = token.lastIndexOf(":");
+  return (first === last ? "" : token.slice(0, first + 1)) + token.slice(last + 1);
+}
+
+// Whether a token declares its property unconditionally: an unconditional
+// declaration spells its condition segment 'base', so the segment in front of
+// the property is what says a token stands on its own.
+function __velarLookUnconditional(token) {
+  const last = token.lastIndexOf(":");
+  return token.slice(token.lastIndexOf(":", last - 1) + 1, last) === "base";
+}
+
+// Composition is property-level across sources and token-level inside one look
+// block. A later unconditional declaration wins its property outright, so it
+// drops every condition the earlier sources wrote it under: the caller of a
+// component could otherwise not reach a padding the component set behind its
+// own private breakpoint, and 'the caller wins every property both of them set'
+// was true only under the identical condition (LOK-U10). A later conditional
+// declaration refines rather than replaces — it overwrites the identical token
+// and leaves the earlier unconditional value standing, because a caller that
+// writes only 'if @hover: color' never mentioned the resting colour and must
+// not delete it. Declarations written in one block are one source, so a block's
+// own 'if scheme.dark:' and 'if @hover:' still coexist and the cascade decides
+// between them.
+function __velarMergeRules(rules, groups, source, group) {
   const names = __velarGraphOwnNames(source);
+  const owned = __velarGraphOwnNames(rules);
   for (let index = 0; index < names.length; index += 1) {
     const descriptor = __velarGraphOwnDescriptor(source, names[index]);
     if (!descriptor || !("value" in descriptor)) continue;
-    if (descriptor.value == null) delete rules[names[index]];
-    else rules[names[index]] = descriptor.value;
+    if (!__velarLookUnconditional(names[index])) continue;
+    const surface = __velarLookSurface(names[index]);
+    for (let other = 0; other < owned.length; other += 1) {
+      const token = owned[other];
+      if (groups[token] === group || __velarLookSurface(token) !== surface) continue;
+      delete rules[token];
+      delete groups[token];
+    }
+  }
+  for (let index = 0; index < names.length; index += 1) {
+    const descriptor = __velarGraphOwnDescriptor(source, names[index]);
+    if (!descriptor || !("value" in descriptor)) continue;
+    if (descriptor.value == null) { delete rules[names[index]]; delete groups[names[index]]; continue; }
+    rules[names[index]] = descriptor.value;
+    groups[names[index]] = group;
   }
 }
 
 function __velarLook(parts) {
   const rules = __velarGraphCreateRecord();
+  const groups = __velarGraphCreateRecord();
+  // A built Look is one source. A bare rules record is a run of declarations
+  // written in one look block, so consecutive ones share a source and a spread
+  // between them opens the next.
+  let group = 0;
+  let run = 0;
   const add = (part) => {
     if (part == null || part === false) return;
     if (__velarGraphIsList(part)) { for (let index = 0; index < part.length; index += 1) add(part[index]); return; }
-    if (part.__velarLook === true || (part.rules && typeof part.rules === "object")) {
-      __velarMergeRules(rules, part.rules);
+    if (part.__velarLook === true) {
+      group += 1;
+      run = 0;
+      __velarMergeRules(rules, groups, part.rules, group);
+      return;
+    }
+    if (part.rules && typeof part.rules === "object") {
+      if (run === 0) { group += 1; run = group; }
+      __velarMergeRules(rules, groups, part.rules, run);
       return;
     }
     throw new TypeError("look composition accepts only Look, Look?, or lists of Look values");
@@ -2115,7 +2544,7 @@ function __velarLook(parts) {
 }
 
 function __velarKeyframesValue(name) {
-  if (typeof name !== "string" || !/^velar-kf-[0-9a-f]{8}$/.test(name)) throw new TypeError("Generated keyframes name is invalid");
+  if (typeof name !== "string" || !/^velar-kf-[0-9a-f]{8,32}$/.test(name)) throw new TypeError("Generated keyframes name is invalid");
   return __velarGraphFreeze({ __velarKeyframes: true, name });
 }
 
@@ -2131,7 +2560,17 @@ function __velarLookValue(token, value) {
   }
   if (typeof value !== "string") throw new TypeError("Look properties require text, finite numbers, typed visual values, or null");
   if (value.length > 1024 * 1024) throw new RangeError("A Look property value cannot exceed 1 MiB");
-  if (token.endsWith(":content") && typeof value === "string" && value !== "none" && value !== "normal") return __velarQuotedText(value);
+  if (token.endsWith(":content") && typeof value === "string" && value !== "none" && value !== "normal") return __velarCssString(value);
+  // A closed keyword set is the property's whole string vocabulary, so a value
+  // the compiler could not read — a prop, a record field, a call result — is
+  // checked here instead. Without this a 'display' bound to "grdi" reached the
+  // browser as a declaration it silently discards (LOK-U14).
+  const keywords = __velarLookKeywords[__velarLookProperty(token)];
+  if (keywords !== undefined && !__velarHasName(keywords, value.trim())) {
+    let expected = "";
+    for (let index = 0; index < keywords.length; index += 1) expected += (expected === "" ? "" : ", ") + keywords[index];
+    throw new TypeError("Look property '" + __velarLookProperty(token) + "' does not accept '" + value + "'; use one of " + expected);
+  }
   return value;
 }
 
@@ -2320,33 +2759,80 @@ function __velarElementState(element, name, create) {
 function __velarApplyLooks(element) {
   const sources = __velarGraphWeakMapRead(__velarRuntime.lookSources, element);
   const merged = __velarGraphCreateRecord();
+  const groups = __velarGraphCreateRecord();
   if (sources) {
+    // Each attached source is one Look, so a source that sets a property
+    // unconditionally drops the property's other conditions from the sources
+    // before it: the caller of a component composes after the component's own
+    // host look and wins every property both of them set, whatever condition
+    // either wrote it under. A source that writes the property only under a
+    // condition refines that condition alone — the identical token is
+    // overwritten and the earlier unconditional value stays, so the caller does
+    // not delete a resting value it never mentioned.
+    //
     // A null rule keeps its token: the token drives the generated selector and
     // only the custom property behind it disappears.
+    let group = 0;
     for (const source of __velarGraphSetItems(sources)) {
+      group += 1;
       const names = __velarGraphOwnNames(source.rules);
+      const owned = __velarGraphOwnNames(merged);
+      for (let index = 0; index < names.length; index += 1) {
+        // A rule the assignment pass below refuses to read must not clear the
+        // earlier sources either, or the property disappears with nothing put
+        // in its place — the same 'a source deletes a value it never replaces'
+        // shape the conditional guard above closes. '__velarMergeRules' spells
+        // the test the same way.
+        const descriptor = __velarGraphOwnDescriptor(source.rules, names[index]);
+        if (!descriptor || !("value" in descriptor)) continue;
+        if (!__velarLookUnconditional(names[index])) continue;
+        const surface = __velarLookSurface(names[index]);
+        for (let other = 0; other < owned.length; other += 1) {
+          if (groups[owned[other]] === group || __velarLookSurface(owned[other]) !== surface) continue;
+          delete merged[owned[other]];
+          delete groups[owned[other]];
+        }
+      }
       for (let index = 0; index < names.length; index += 1) {
         const descriptor = __velarGraphOwnDescriptor(source.rules, names[index]);
-        if (descriptor && "value" in descriptor) merged[names[index]] = descriptor.value;
+        if (!descriptor || !("value" in descriptor)) continue;
+        merged[names[index]] = descriptor.value;
+        groups[names[index]] = group;
       }
     }
   }
-  const state = __velarElementState(element, "__velarLookTokens", () => __velarGraphFreeze({ tokens: __velarGraphCreateSet() }));
+  // The last value written per token, so a reactive change to one dynamic
+  // property costs one DOM write instead of one per token plus a full attribute
+  // rewrite (LOK-U15).
+  const state = __velarElementState(element, "__velarLookTokens", () => __velarGraphFreeze({
+    tokens: __velarGraphCreateSet(), written: { record: __velarGraphCreateRecord(), attribute: undefined },
+  }));
+  const written = state.written.record;
   const tokens = __velarGraphOwnNames(merged);
   const next = __velarGraphCreateSet(tokens);
   for (const token of __velarGraphSetItems(state.tokens)) {
-    if (!__velarGraphSetContains(next, token)) __velarDomStyleClear(element, __velarLookVariable(token));
+    if (__velarGraphSetContains(next, token)) continue;
+    __velarDomStyleClear(element, __velarLookVariable(token));
+    delete written[token];
   }
   let attribute = "";
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index];
     const value = __velarGraphOwnDescriptor(merged, token)?.value;
-    if (value == null) __velarDomStyleClear(element, __velarLookVariable(token));
-    else __velarDomStyleWrite(element, __velarLookVariable(token), __velarLookValue(token, value));
+    const text = value == null ? null : __velarLookValue(token, value);
+    if (!(token in written) || written[token] !== text) {
+      if (text === null) __velarDomStyleClear(element, __velarLookVariable(token));
+      else __velarDomStyleWrite(element, __velarLookVariable(token), text);
+      written[token] = text;
+    }
     attribute = attribute === "" ? token : attribute + " " + token;
   }
-  if (tokens.length > 0) __velarDomSetAttribute(element, "data-velar-look", attribute);
-  else __velarDomRemoveAttribute(element, "data-velar-look");
+  const desired = tokens.length === 0 ? null : attribute;
+  if (state.written.attribute !== desired) {
+    if (desired === null) __velarDomRemoveAttribute(element, "data-velar-look");
+    else __velarDomSetAttribute(element, "data-velar-look", desired);
+    state.written.attribute = desired;
+  }
   __velarGraphSetEmpty(state.tokens);
   for (let index = 0; index < tokens.length; index += 1) __velarGraphSetInsert(state.tokens, tokens[index]);
 }
@@ -2387,27 +2873,72 @@ function __velarApplyExternalLook(element, value) {
 
 __velarRuntime.installLook(__velarApplyExternalLook);
 
-function __velarRootHost(root, capability) {
-  if (root == null) throw new TypeError("A component with multiple roots must mark exactly one native element with 'host'");
-  if (__velarDomNodeType(root) === 1) return root;
+// One resolution per root, shared by every capability bound to it: look, class
+// and style used to pay a fresh O(subtree) walk each.
+const __velarRootHosts = __velarGraphCreateWeakMap();
+
+function __velarRootHostResolve(root) {
   const elements = [];
   const children = __velarDomChildNodes(root);
   for (let index = 0; index < children.length; index += 1) {
     if (__velarDomNodeType(children[index]) === 1) __velarAppendOwned(elements, children[index]);
   }
   const explicit = [];
+  const forwarded = [];
   for (let index = 0; index < elements.length; index += 1) {
     const element = elements[index];
-    if (__velarDomOwnData(element, "__velarHost") === true) __velarAppendOwned(explicit, element);
-    const descendants = __velarDomCollectionSnapshot(__velarDomQuerySelectorAll(element, "*"), "Element.querySelectorAll");
-    for (let child = 0; child < descendants.length; child += 1) {
-      if (__velarDomOwnData(descendants[child], "__velarHost") === true) __velarAppendOwned(explicit, descendants[child]);
+    // A nested component's own, perfectly legal host is that component's, not
+    // this one's, at the root level exactly as below it. Every root-level node
+    // of a nested component carries the marker and this component's own nodes
+    // do not yet — construction marks them after a caller's look binds — so
+    // the marker is what separates the two. Reading 'host' first counted a
+    // nested component's marked root as a second host of the enclosing one and
+    // collapsed the whole region, which is the buried-host defect standing at
+    // the root level instead of below it. Such a node is not this component's
+    // host but the host this component forwards to when it declares none of
+    // its own, so it is collected apart rather than dropped.
+    if (__velarDomOwnData(element, "__velarComponentNode") === true) {
+      if (__velarDomOwnData(element, "__velarHost") === true) __velarAppendOwned(forwarded, element);
+      continue;
+    }
+    if (__velarDomOwnData(element, "__velarHost") === true) { __velarAppendOwned(explicit, element); continue; }
+    // A walk that refuses to enter a marked node stops at a nested component's
+    // boundary whatever depth its host sits at; a flat 'querySelectorAll' scan
+    // could only skip the marked node itself and still counted a host one level
+    // below it.
+    const pending = [element];
+    for (let cursor = 0; cursor < pending.length; cursor += 1) {
+      const nodes = __velarDomChildNodes(pending[cursor]);
+      for (let child = 0; child < nodes.length; child += 1) {
+        const node = nodes[child];
+        if (__velarDomNodeType(node) !== 1) continue;
+        if (__velarDomOwnData(node, "__velarComponentNode") === true) continue;
+        if (__velarDomOwnData(node, "__velarHost") === true) __velarAppendOwned(explicit, node);
+        __velarAppendOwned(pending, node);
+      }
     }
   }
   if (explicit.length === 1) return explicit[0];
-  if (explicit.length > 1) throw new TypeError("A component can declare only one host element");
+  if (explicit.length > 1) return "A component can declare only one host element";
+  // Nothing of this component's own is marked, so a single nested component
+  // root hands its host on. Two of them leave nothing to forward to, and the
+  // component has to mark a native element of its own to settle it.
+  if (forwarded.length === 1) return forwarded[0];
+  if (forwarded.length > 1) return "A component with multiple roots must mark exactly one native element with 'host'";
   if (elements.length === 1) return elements[0];
-  throw new TypeError("A component with multiple roots must mark exactly one native element with 'host'");
+  return "A component with multiple roots must mark exactly one native element with 'host'";
+}
+
+function __velarRootHost(root, capability) {
+  if (root == null) throw new TypeError("A component with multiple roots must mark exactly one native element with 'host'");
+  if (__velarDomNodeType(root) === 1) return root;
+  let resolved = __velarGraphWeakMapRead(__velarRootHosts, root);
+  if (resolved === undefined) {
+    resolved = __velarRootHostResolve(root);
+    __velarGraphWeakMapWrite(__velarRootHosts, root, resolved);
+  }
+  if (typeof resolved === "string") throw new TypeError(resolved);
+  return resolved;
 }
 
 function __velarLookBindRoot(root, read, scope) {
@@ -2535,7 +3066,13 @@ function __velarHtml(element, read, scope) {
 function __velarOn(element, event, read, scope, modifiers = []) {
   if (typeof __velarInternalRead(read) !== "function") throw new TypeError("Event '" + event + "' requires a function");
   const capture = __velarHasName(modifiers, "capture");
-  const options = { capture, once: __velarHasName(modifiers, "once") };
+  const once = __velarHasName(modifiers, "once");
+  let removed = false;
+  const remove = () => {
+    if (removed) return;
+    removed = true;
+    __velarDomRemoveListener(element, event, listener, capture);
+  };
   const listener = (value) => {
     try {
       if (__velarHasName(modifiers, "self")) {
@@ -2543,6 +3080,13 @@ function __velarOn(element, event, read, scope, modifiers = []) {
         if (target === __velarEventMissingField) throw new TypeError("DOM event does not expose a native target");
         if (target !== element) return;
       }
+      // 'once' is spent here rather than through the native option, so the
+      // documented order -- self, then prevent, then stop, then the handler --
+      // holds for it too. The native option removes the registration on the
+      // first dispatch that merely reaches the element, which for 'self' is
+      // exactly the dispatch the handler must not see: 'on:click.self.once'
+      // could then never run at all.
+      if (once) remove();
       if (__velarHasName(modifiers, "prevent")) __velarEventCall(value, "preventDefault", __velarEventPreventDefault);
       if (__velarHasName(modifiers, "stop")) __velarEventCall(value, "stopPropagation", __velarEventStopPropagation);
       // The handler expression is re-read per dispatch so handlers routed
@@ -2553,8 +3097,8 @@ function __velarOn(element, event, read, scope, modifiers = []) {
       __velarObservePromise(result, (error) => __velarReportEvent(error, scope, event));
     } catch (error) { __velarReportEvent(error, scope, event); }
   };
-  __velarDomAddListener(element, event, listener, options);
-  __velarAppendOwned(scope.cleanups, () => __velarDomRemoveListener(element, event, listener, capture));
+  __velarDomAddListener(element, event, listener, { capture });
+  __velarAppendOwned(scope.cleanups, remove);
 }
 
 function __velarBindValue(element, state, scope, numeric = false, parse = null) {
@@ -2651,10 +3195,6 @@ function __velarProp(props, name, fallback) {
   });
 }
 
-// Instantiates a component with a live props store: each prop thunk runs in
-// its own observer that writes a reactive cell, and the props object exposes
-// tracked getters over those cells. The component call itself is untracked so
-// construction can never subscribe an enclosing dynamic region to prop reads.
 function __velarBindComponentRef(instance, setRef) {
   if (setRef === undefined) return instance;
   if (!instance || typeof instance.__bindRef !== "function") throw new TypeError("This component does not expose a Handle");
@@ -2662,32 +3202,74 @@ function __velarBindComponentRef(instance, setRef) {
   return instance;
 }
 
+// Holds every prop's cache open for the length of one construction. The graph
+// records a dependency for whichever observer is running, so forcing the props
+// under this one keeps them clean while the component function runs: a read
+// during construction is served from the value the force produced, and a
+// tracked read still subscribes the observer that made it. Releasing the hold
+// hands each prop over to whatever actually observes it, which is the second
+// half of the rule -- recomputed on demand, cached while observed.
+function __velarConstructionHold() {
+  return {
+    mode: "computed",
+    stopped: false,
+    running: false,
+    selfInvalidations: 0,
+    dependencies: __velarGraphCreateSet(),
+    spareDependencies: null,
+    notify() {},
+    run() {},
+  };
+}
+
+// Instantiates a component with a live props store: each prop is a cached
+// derived value the props object exposes as a tracked getter, so a prop
+// expression that nothing reads costs nothing after construction. The component
+// call itself is untracked so construction can never subscribe an enclosing
+// dynamic region to prop reads.
 function __velarInstantiate(component, thunks, children, scope, namespace, setRef) {
-  if (component != null && component.__velarSnapshotProps === true) {
-    // Runtime-implemented components (Head, Router, Link, NavLink) consume a
-    // one-time plain snapshot so their strict record validation still holds.
-    const snapshot = {};
-    const styleRead = thunks.__velarStyle;
-    const snapshotNames = __velarGraphOwnNames(thunks);
-    for (let index = 0; index < snapshotNames.length; index += 1) {
-      if (snapshotNames[index] !== "__velarStyle") snapshot[snapshotNames[index]] = __velarInternalRead(thunks[snapshotNames[index]]);
-    }
-    if (children !== undefined) snapshot.children = __velarInternalRead(children);
-    const instance = __velarUntracked(() => component(snapshot, namespace));
-    if (styleRead !== undefined) __velarStyleBindRoot(instance.node, styleRead, scope);
-    return __velarBindComponentRef(instance, setRef);
-  }
   const props = {};
+  // 'style:' on a component host is the caller decorating the instance's root,
+  // the way it decorates a native element. The slot the compiler inserts for it
+  // is not a field the component declares, so it is bound here rather than
+  // handed inward -- a component the runtime implements validates its props
+  // against the fields it does declare and would refuse an unknown one.
+  const styleRead = thunks.__velarStyle;
   const propNames = __velarGraphOwnNames(thunks);
+  const accesses = [];
   for (let index = 0; index < propNames.length; index += 1) {
     const name = propNames[index];
-    const read = thunks[name];
-    const cell = __velarState(undefined);
-    __velarObserver(() => cell.set(read()), "dom", scope);
-    __velarGraphDefine(props, name, { enumerable: true, get: () => cell.get() });
+    if (name === "__velarStyle") continue;
+    // A prop is a derived value, not an eagerly pushed one: an unconditional
+    // observer per prop re-ran every prop expression on every dependency
+    // change, including the expensive ones behind props the component never
+    // reads. The cache is the same one a declared derived value uses.
+    const access = __velarComputed(thunks[name]);
+    accesses[accesses.length] = access;
+    __velarGraphDefine(props, name, { enumerable: true, get: () => access.get() });
   }
-  if (children !== undefined) __velarGraphDefine(props, "children", { enumerable: true, value: __velarInternalRead(children) });
-  return __velarBindComponentRef(__velarUntracked(() => component(props, namespace)), setRef);
+  // 'children' follows Vel's ordinary rules: it is rendered content owned by
+  // the position that shows it, rebuilt whenever that position renders again.
+  // As a one-shot fragment value it could be shown exactly once, and the first
+  // time a conditional position hid it the content was destroyed for good.
+  if (children !== undefined) __velarGraphDefine(props, "children", { enumerable: true, get: () => __velarChildrenNode(children, scope) });
+  const instance = __velarUntracked(() => {
+    if (accesses.length === 0) return component(props, namespace);
+    // Component JSX evaluates the way the charter says a JavaScript object
+    // literal does: every prop expression runs once, in the order the caller
+    // wrote it, and only then does the component function run. 'children' is
+    // not one of them -- it is rendered content owned by the position that
+    // shows it, so a position that never shows it never builds it.
+    const hold = __velarConstructionHold();
+    try {
+      __velarRuntime.runTracked(hold, () => {
+        for (let index = 0; index < accesses.length; index += 1) accesses[index].get();
+      });
+      return component(props, namespace);
+    } finally { __velarCleanupObserver(hold); }
+  });
+  if (styleRead !== undefined) __velarStyleBindRoot(instance.node, styleRead, scope);
+  return __velarBindComponentRef(instance, setRef);
 }
 
 // A component element in child position: one stable instance whose prop
@@ -2709,8 +3291,24 @@ function __velarChild(component, thunks, children, scope, namespace, setRef) {
   }
 }
 
-function __velarSettled() {
+// tick() promises the settled flush, so it drains the reactive queues instead
+// of hopping one microtask and hoping. Each round runs the pending flush and
+// yields, so work an observer queued asynchronously is picked up too; the round
+// count is bounded for the same reason the flush budget is, and the flush's own
+// budget is what ends a runaway cycle.
+function __velarSettledStep() {
   return __velarManagedAsyncCreate((resolve) => __velarEnqueue(resolve));
+}
+
+function __velarSettled(rounds = 10000) {
+  return __velarManagedAsyncThen(__velarSettledStep(), () => {
+    if (__velarRuntime.flushPending) __velarFlush();
+    if (rounds > 1 && (__velarGraphSetCount(__velarRuntime.domQueue)
+      || __velarGraphSetCount(__velarRuntime.watchQueue) || __velarRuntime.flushPending)) {
+      return __velarSettled(rounds - 1);
+    }
+    return null;
+  });
 }
 
 function __velarTakeUnhandledFailure() {
@@ -2735,6 +3333,9 @@ function __velarTick() {
 }
 `.trim();
 
-function webRuntime(foundation: string): string {
-  return `${foundation}\n${WEB_RUNTIME_BODY}`;
+function webRuntime(foundation: string, lookKeywords: string): string {
+  // `content` is written as a CSS string, which is not a JSON string, so the
+  // runtime carries the serializer css-string.ts publishes rather than a second
+  // spelling of it (LOK-U13).
+  return `${foundation}\n${CSS_STRING_RUNTIME.trim()}\n${lookKeywords}\n${WEB_RUNTIME_BODY}`;
 }

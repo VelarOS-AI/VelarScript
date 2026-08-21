@@ -394,6 +394,12 @@ const webSocketConnectionIdentity = "velar/websocket#type:WebSocketConnection";
 const webSocketConnectionType: ValueType = { kind: "named", name: "WebSocketConnection", identity: webSocketConnectionIdentity };
 const webSocketMessageType: ValueType = { kind: "union", members: [stringType, bytesType] };
 const webSocketConnectionFields = new Map<string, ValueType>([
+  // D90 fr-4: one identity, one field roster. A Web connection is always an
+  // outbound `connect()` result, which was never upgraded from an Origin and
+  // therefore reads back null — the same value the Node runtime gives an
+  // outbound connection. Leaving the field off Web instead would make
+  // `velar/websocket#type:WebSocketConnection` mean two different things.
+  ["origin", optional(stringType)],
   ["state", namedFunction([], [], stringType)],
   ["send", namedFunction(["message"], [webSocketMessageType], promise(nullType))],
   ["next", namedFunction([], [], promise(optional(webSocketMessageType)))],
@@ -480,7 +486,7 @@ export const webModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map
     ["formBody", namedFunction([], [], formBodyType)],
     ["HttpTransportPhase", { kind: "enumObject", name: "HttpTransportPhase", identity: httpTransportPhaseIdentity, members: httpTransportPhaseMembers }],
     ["HttpAbortError", { kind: "classConstructor", name: "HttpAbortError" }],
-    ["HttpError", { kind: "classConstructor", name: "HttpError" }],
+    ["HttpResponseError", { kind: "classConstructor", name: "HttpResponseError" }],
     ["HttpTransportError", { kind: "classConstructor", name: "HttpTransportError", identity: httpTransportErrorIdentity }],
   ]), new Map([
     ["HttpAbortError", {
@@ -498,7 +504,7 @@ export const webModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map
       staticGetters: new Set(),
       staticMethods: new Map(),
     }],
-    ["HttpError", {
+    ["HttpResponseError", {
       parameters: [stringType, numberType, stringType, unknownType],
       parameterNames: ["message", "status", "url", "body"],
       requiredParameters: 3,
@@ -704,6 +710,17 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       ["location", "Use velar/browser location() or velar/web navigation instead of the location global"],
       ["history", "Use velar/web navigation instead of the history global"],
       ["fetch", "Use velar/http instead of the raw fetch global"],
+      // D90 coherence-6c: the storage guidance used to live only in the
+      // browser-test map below, so an ordinary component — the place the reflex
+      // is actually written — got a bare "Unknown name". `guidanceForGlobal`
+      // consults the path-suffix map first per name, so the browser-test
+      // answers keep winning inside a `.browser.test.vel` body.
+      ["localStorage", 'Use \'import {storage} from "velar/storage"\' — it is a typed, validated key/value area instead of the untyped string store'],
+      ["sessionStorage", 'Use \'import {session} from "velar/storage"\' — it is a typed, validated key/value area that lasts for the tab'],
+      // `velar/websocket` is extension-owned rather than Core's, so each
+      // surface answers this one for itself. A browser can only `connect`;
+      // the Node extension's sentence names `listen` as well.
+      ["WebSocket", 'Use "velar/websocket" — \'connect\' opens a connection — instead of the WebSocket global'],
     ]),
     // A `.browser.test.vel` body runs in the test process and drives a page
     // that already runs the built application, so the DOM globals do not point

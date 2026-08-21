@@ -145,6 +145,12 @@ function urlOf(value) {
   if (urlUsername(url) || urlPassword(url)) throw new NativeTypeError("HTTP URL credentials are not allowed; use an Authorization header");
   return urlHref(url);
 }
+// The transport owns message framing and routing, so an application header map
+// may never restate them: a caller-supplied content-length, transfer-encoding
+// or host lands on the wire beside the host's own framing and is a
+// request-smuggling primitive. Cookie and proxy credentials are ordinary
+// application headers here; they are forbidden only as secretHeader names.
+const transportOwnedHttpHeaders = setOf(["connection", "content-length", "expect", "host", "keep-alive", "proxy-connection", "te", "trailer", "transfer-encoding", "upgrade"]);
 function headersOf(value) {
   if (value == null) { requireHttpHost(); return new NativeMap(); }
   let size;
@@ -156,6 +162,9 @@ function headersOf(value) {
   nativeReflectApply(nativeMapForEach, value, [(item, name) => {
     if (typeof name !== "string" || typeof item !== "string" || !patternMatches(headerNamePattern, name) || patternMatches(lineBreakPattern, item)) {
       throw new NativeTypeError("HTTP headers must use valid string names and single-line values");
+    }
+    if (call(nativeSetHas, transportOwnedHttpHeaders, [stringLower(name)])) {
+      throw new NativeTypeError("HTTP header '" + name + "' is transport-controlled");
     }
     units += name.length + item.length;
     if (units > 65536) throw new NativeRangeError("HTTP headers cannot exceed 64 KiB");
@@ -391,7 +400,7 @@ export class HttpTransportError extends NativeError {
     this.phase = phase;
   }
 }
-export class HttpError extends NativeError {
+export class HttpResponseError extends NativeError {
   constructor(message, status, url, body = null) {
     if (typeof message !== "string") throw new NativeTypeError("HTTP error message must be text");
     if (message.length > 65536) throw new NativeRangeError("HTTP error messages cannot exceed 64 KiB");
@@ -399,7 +408,7 @@ export class HttpError extends NativeError {
     if (typeof url !== "string") throw new NativeTypeError("HTTP error URL must be text");
     if (url.length > 2 * 1024 * 1024) throw new NativeRangeError("HTTP error URLs cannot exceed 2 MiB");
     super(message);
-    this.name = "HttpError";
+    this.name = "HttpResponseError";
     this.status = status;
     this.url = url;
     this.body = body;
@@ -520,7 +529,7 @@ class HttpResponse {
     const text = await this.text();
     return parseJsonText(text);
   }
-  async parse(Type) { Type = runtimeHttpType(Type); return Type.parse(await this.json()); }
+  async parse(Type) { Type = runtimeHttpType(Type); return __velarJsonParseTyped(Type, await this.text(), "HTTP JSON text"); }
 }
 
 class Request {
@@ -585,7 +594,7 @@ class Request {
           let body = text;
           try { body = text ? parseJsonText(text) : null; } catch {}
           const errorUrl = wrapped.url || this.url;
-          throw new HttpError("HTTP " + wrapped.status + " for " + errorUrl, wrapped.status, errorUrl, body);
+          throw new HttpResponseError("HTTP " + wrapped.status + " for " + errorUrl, wrapped.status, errorUrl, body);
         }
         return wrapped;
       } catch (error) {
@@ -600,7 +609,7 @@ class Request {
   async bytes() { return (await this.response()).bytes(); }
   async json() { return (await this.response()).json(); }
   async streamText(consumer) { return (await this.response()).streamText(consumer); }
-  async parse(Type) { Type = runtimeHttpType(Type); return Type.parse(await this.json()); }
+  async parse(Type) { Type = runtimeHttpType(Type); return (await this.response()).parse(Type); }
   cancel() { this.abort("cancelled"); return null; }
 }
 

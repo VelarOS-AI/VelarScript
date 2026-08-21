@@ -141,14 +141,51 @@ therefore means no test printed an error anywhere, not merely that every awaited
 assertion passed.
 
 Work a test starts is work the test owns, so the rule reaches past the test's
-own return. Each runner waits for the process to have nothing left to do before
-it takes a verdict, which is what attributes a late failure to the test that
-started it rather than to whichever test happens to be running when it lands. A
-fixed grace window cannot do that job: a failure one millisecond past it is a
-failure nobody counts. The wait carries an owned upper bound, and its expiry is
-itself a failure — work that never finishes is work whose failure could never be
-reported. A test that does not finish within its own bound is reported the same
-way, so a hung test ends the run instead of holding it open forever.
+own return. The Node runner waits for the thread a test ran in to have nothing
+left to do before it takes that test's verdict, which is what attributes a
+late failure to the test that started it rather than to whichever test happens
+to be running when it lands. A fixed grace window cannot do that job: a
+failure one millisecond past it is a failure nobody counts. The wait carries
+an owned upper bound, and its expiry is itself a failure — work that never
+finishes is work whose failure could never be reported. A test that does not
+finish within its own bound is reported the same way: the bound reports the
+failure the test could not.
+
+The bound a synchronously spinning test obeys cannot live in the thread that
+test wedged, because the timer that would report it is work that thread never
+yields to. Each `.test.vel` file therefore runs in its own worker thread, and
+the runner ends that thread. The test is reported failed, and the file resumes
+in a fresh thread one test past the one that ended its predecessor, so the
+tests after it are still judged. Ending the thread also ends the abandoned
+body, which is what stops a timed-out test from going on mutating state a later
+test asserts against; the runner waits for that body's own last failure before
+it moves on, so a failure the body produces after its bound expired is charged
+to the test that produced it rather than to whichever test it lands during.
+
+A thread per test file is also what resets the module graph. A fresh thread
+evaluates every module the file imports again, not only the file itself, so a
+file that passes on its own passes whatever its neighbours are named and
+whichever order discovery ran them in. Tests inside one file still share their
+file's module state, which is what a module-level fixture is for. The cost is
+one thread startup and one full evaluation of that import graph per test file,
+paid before the file's first test runs.
+
+A file that resumes past a wedged test initializes its modules a second time.
+Module work that can only be done once fails the resumed thread as a load
+failure, and the report says which test the file resumed at.
+
+A `.browser.test.vel` body runs in the browser-test worker process rather than
+in the page, and a process cannot be resumed the way a thread can. Its
+supervisor names the wedged test, writes the counts through it, and ends the
+run there, so the browser tests after it are not reported. One process also
+runs every browser test in the run, so that runner cannot wait for it to have
+nothing left to do between tests without ending the process the remaining tests
+need. It flushes the reports already queued before each verdict instead, and
+waits for the process to have nothing left to do once, under its own bound,
+after the last test of the run. A failure from work a browser test left running
+is therefore charged to whichever test is running when it lands, or reported
+against the run when it lands after the last one; an expired wait fails the run
+in its own right.
 
 `velar test` and `velar run` compile into a short-lived sandbox inside the
 project — `.velar/test-*` and `.velar/run-*` — rather than the system

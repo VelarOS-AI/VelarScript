@@ -49,14 +49,15 @@ import type {
   VariableDeclaration,
 } from "./ast.ts";
 import { CORE_STATEMENT_HEAD_KEYWORDS, CORE_WORDS, TYPE_PARAMETER_DECLARATION_FORMS, typeParameterDeclarationFormsPhrase } from "./core-vocabulary.ts";
-import { diagnostic, mechanicalEdits, mechanicalFix, recoveredDiagnostic, type Diagnostic } from "./diagnostic.ts";
+import { diagnostic, mechanicalEdits, mechanicalFix, recoveredDiagnostic, type Advisory, type Diagnostic, type DiagnosticFix } from "./diagnostic.ts";
 import { inspectEmbeddedJavaScript, isEmbeddedJavaScriptTokenPayload } from "./embedded-javascript.ts";
 import type { CompilerLexicalExtension } from "./extension.ts";
 import { findInterpolatedExpressionEnd, scanStringEscape, scanStringLiteral, type StringTokenPayload } from "./interpolated-string.ts";
 import { declarationKeywordGuidance, sourceTypeNameGuidance, REST_PARAMETER_ELEMENT_TYPE_MESSAGE } from "./language-guidance.ts";
 import { Lexer } from "./lexer.ts";
 import { span, type Span } from "./source.ts";
-import { keywordKinds, type Token, type TokenKind } from "./token.ts";
+import { isTypeEvidenceName } from "./source-names.ts";
+import { keywordKinds, type NumberTokenPayload, type Token, type TokenKind } from "./token.ts";
 import { formatTypeSyntax } from "./types.ts";
 
 const memberNameKinds = new Set<TokenKind>(["identifier", ...Object.values(keywordKinds)]);
@@ -74,7 +75,35 @@ const statementStarterWords = new Set<string>(CORE_STATEMENT_HEAD_KEYWORDS);
 // Token kinds that legally appear at the top level of a record literal's
 // field list: field names, shorthand entries, and their separators.
 const recordFieldLevelKinds = new Set<TokenKind>(["identifier", "string", "comma", ...Object.values(keywordKinds)]);
+// A generic close that runs into the next operator lexes as one token: `>>`,
+// `>>>`, and — where a default value or an assignment follows the annotation —
+// `>=`, `>>=`, `>>>=`. Each maps to what is left after one `>` is taken for
+// the close, so `List<number>=[1]` reads as the annotation and the `=` the
+// author wrote. The lexer keeps emitting the compound operators, so the
+// expression grammar is untouched.
+const typeGreaterRemainderKinds = new Map<TokenKind, TokenKind>([
+  ["rightShift", "greater"],
+  ["unsignedRightShift", "rightShift"],
+  ["greaterEqual", "assign"],
+  ["rightShiftAssign", "greaterEqual"],
+  ["unsignedRightShiftAssign", "rightShiftAssign"],
+]);
+// The token kinds a type argument list can contain: names and the punctuation
+// of optional, union, function, qualified and nested types. Anything else
+// between `<` and `>` leaves the comparison reading as the only one.
+const typeArgumentTokenKinds = new Set<TokenKind>([
+  "identifier", "null", "comma", "dot", "question", "pipe", "arrow", "fatArrow",
+  "leftParen", "rightParen", "leftBracket", "rightBracket", "colon", "ellipsis",
+]);
 const MAX_PARSE_DEPTH = 512;
+// An interpolation re-enters the compiler — a fresh lex and a fresh parse of
+// the fragment — so one nest holds far more JavaScript stack than one ordinary
+// expression level. Charging it a block of the budget keeps
+// PARSER_COMPLEXITY_FAILURE ahead of the stack, which is what turns a
+// pathological f-string into one diagnostic instead of seconds of work ended
+// by a stack overflow. 64 nested interpolations remain available, which is
+// orders of magnitude past any spelling a reader can follow.
+const NESTED_EXPRESSION_PARSE_COST = 8;
 const PARSER_COMPLEXITY_FAILURE = Object.freeze({ kind: "VelarParserComplexityFailure" });
 
 export function isParserComplexityFailure(value: unknown): boolean {
@@ -84,11 +113,14 @@ export function isParserComplexityFailure(value: unknown): boolean {
 export interface ParseResult {
   readonly program: Program;
   readonly diagnostics: readonly Diagnostic[];
+  /** D89: the advisory channel, accumulated beside the diagnostics and never merged into them. */
+  readonly advisories: readonly Advisory[];
 }
 
 export interface ExpressionParseResult {
   readonly expression: Expression;
   readonly diagnostics: readonly Diagnostic[];
+  readonly advisories: readonly Advisory[];
 }
 
 const binaryPrecedence: Partial<Record<TokenKind, number>> = {
@@ -140,6 +172,14 @@ function describeStatementToken(token: Token): string {
   return text.length > 24 ? `${text.slice(0, 24)}…` : text;
 }
 
+// D90 R6: the spelling a numeric token was written with. The lexer keeps it
+// only where it differs from the value the token carries — digit separators and
+// an uppercase radix prefix — so a representability report quotes the author's
+// own line rather than the normalized digits it was read from.
+function writtenNumber(token: Token): string {
+  return (token.payload as NumberTokenPayload | undefined)?.written ?? token.value;
+}
+
 const assignmentOperators: Partial<Record<TokenKind, AssignmentStatement["operator"]>> = {
   assign: "=",
   plusAssign: "+=",
@@ -163,6 +203,7 @@ export class Parser {
   private readonly tokens: Token[];
   protected readonly lexicalExtensions: readonly CompilerLexicalExtension[];
   protected readonly diagnostics: Diagnostic[] = [];
+  protected readonly advisories: Advisory[] = [];
   private readonly genericCallableNames = new Set<string>();
   /** Extension-owned contextual keywords: names until a shape claims them. */
   protected readonly contextualKeywords: ReadonlySet<string>;
@@ -213,6 +254,7 @@ export class Parser {
     return {
       program: { kind: "Program", body, span: span(0, end) },
       diagnostics: this.diagnostics,
+      advisories: this.advisories,
     };
   }
 
@@ -223,7 +265,7 @@ export class Parser {
     if (!this.check("eof")) {
       this.diagnostics.push(diagnostic("VEL2006", "Unexpected tokens in interpolated expression", this.current().span));
     }
-    return { expression, diagnostics: this.diagnostics };
+    return { expression, diagnostics: this.diagnostics, advisories: this.advisories };
   }
 
   // An assignment written where only an expression is valid (an interpolated
@@ -411,6 +453,28 @@ export class Parser {
         removed,
       ));
       return { kind: "PassStatement", span: removed };
+    }
+
+    // D89 (message correction): 'raise E(...)' is Python's spelling of the
+    // statement VelarScript writes with 'throw'. Left alone it falls into the
+    // unknown-declaration-keyword message below, which lists 'def', 'type',
+    // 'enum', 'class', 'const', and 'let' and never names the one word that
+    // was wrong. 'raise' stayed an ordinary identifier, so only the Python
+    // statement's own shape — the bare word followed by the error value — is
+    // claimed here; 'raise(...)', 'raise.field', and 'raise = ...' keep their
+    // ordinary meanings. The recovery parses the rest as the throw it meant,
+    // so the thrown value is checked in the same compile.
+    if (this.check("identifier") && this.current().value === "raise" && this.peekKind(1) === "identifier") {
+      const keyword = this.current();
+      this.diagnostics.push(recoveredDiagnostic(
+        "VEL2026",
+        "Use 'throw'; VelarScript raises an error with 'throw value'",
+        keyword.span,
+        mechanicalFix(keyword.span, "throw", "Use 'throw'"),
+      ));
+      this.advance();
+      const value = this.parseExpression();
+      return { kind: "ThrowStatement", value, span: span(keyword.span.start, value.span.end) };
     }
 
     if (this.check("identifier") && this.peekKind(1) === "identifier") {
@@ -3059,37 +3123,50 @@ export class Parser {
     const callableName = expression.kind === "IdentifierExpression" ? expression.name
       : expression.kind === "MemberExpression" ? expression.property
         : null;
-    if (callableName === null || !this.check("less") || this.current().span.start !== expression.span.end) return null;
+    if (callableName === null || !this.check("less")) return null;
     // Beyond the same-file generic-name list, the recovery extends to any
     // callee — imported generics and methods — when the angle content carries
     // type evidence: a builtin type name, a capitalized name, optional or
     // union syntax, or nested generics. Without that evidence the comparison
     // reading wins, so `a<b>(c)` over three numbers stays a chain (rule #41).
+    //
+    // D90: the reading does not depend on the spacing around `<` and `>`, so a
+    // formatter pass that adds or removes a space can never move a line
+    // between the two grammars — `Map < string, number > ()` earns the same
+    // teaching diagnostic as `Map<string, number>()`. What stands in for the
+    // adjacency is grammar evidence, on two axes. Every token inside the
+    // angles must be one a type argument list can contain, so
+    // `a < Limit and g > (c)` stays the pair of comparisons it is. And every
+    // argument of a `,`-separated list must carry evidence of its own, so
+    // `two(a < Limit, g > (c))` stays two ordinary arguments — a program that
+    // works — while `mapValues<string, bool>([1])` is still claimed.
     const knownGeneric = this.genericCallableNames.has(callableName);
     const typeEvidence = (token: Token): boolean => {
       if (token.kind === "question" || token.kind === "pipe" || token.kind === "arrow") return true;
-      if (token.kind !== "identifier") return false;
-      if (["string", "number", "bool", "null", "unknown", "any", "List", "Set", "Map", "Record", "Promise", "Function", "Type", "readonly"].includes(token.value)) return true;
-      const first = token.value[0] ?? "";
-      return first >= "A" && first <= "Z";
+      return token.kind === "identifier" && isTypeEvidenceName(token.value);
     };
-    let sawTypeEvidence = false;
+    let everyArgumentIsTyped = true;
+    let argumentIsTyped = false;
     let depth = 0;
     for (let index = this.index; index < this.tokens.length; index += 1) {
       const token = this.tokens[index]!;
       if (token.kind === "newline" || token.kind === "eof") return null;
       if (token.kind === "less") {
         depth += 1;
-        if (depth >= 2) sawTypeEvidence = true;
+        if (depth >= 2) argumentIsTyped = true;
       } else if (token.kind === "greater") {
         depth -= 1;
         if (depth === 0) {
-          const call = this.tokens[index + 1];
-          if (call?.kind !== "leftParen" || call.span.start !== token.span.end) return null;
-          return knownGeneric || sawTypeEvidence ? index : null;
+          if (this.tokens[index + 1]?.kind !== "leftParen") return null;
+          return knownGeneric || (everyArgumentIsTyped && argumentIsTyped) ? index : null;
         }
+      } else if (!typeArgumentTokenKinds.has(token.kind)) {
+        return null;
+      } else if (token.kind === "comma" && depth === 1) {
+        everyArgumentIsTyped &&= argumentIsTyped;
+        argumentIsTyped = false;
       } else if (typeEvidence(token)) {
-        sawTypeEvidence = true;
+        argumentIsTyped = true;
       }
     }
     return null;
@@ -3143,10 +3220,11 @@ export class Parser {
           return { kind: "LiteralExpression", value: 0, raw: "0", span: token.span };
         }
         const value = Number(match[1]);
+        const exact = Number.isFinite(value) && this.checkExactIntegerLiteral(match[1]!, writtenNumber(token).slice(0, -match[2]!.length), token.span);
         if (!Number.isFinite(value)) this.diagnostics.push(diagnostic("VEL2017", "Numeric literals must be finite", token.span));
         const extensionExpression = this.parseExtensionNumericLiteral(
           token,
-          Number.isFinite(value) ? value : 0,
+          exact ? value : 0,
           match[2]!,
         );
         if (extensionExpression) return extensionExpression;
@@ -3467,13 +3545,41 @@ export class Parser {
 
   private numberLiteral(token: Token, negative = false, literalSpan: Span = token.span): Extract<Expression, { kind: "LiteralExpression" }> {
     const value = Number(token.value) * (negative ? -1 : 1);
+    const exact = Number.isFinite(value) && this.checkExactIntegerLiteral(token.value, writtenNumber(token), literalSpan, negative);
     if (!Number.isFinite(value)) this.diagnostics.push(diagnostic("VEL2017", "Numeric literals must be finite", literalSpan));
     return {
       kind: "LiteralExpression",
-      value: Number.isFinite(value) ? value : 0,
+      value: exact ? value : 0,
       raw: `${negative ? "-" : ""}${token.value}`,
       span: literalSpan,
     };
+  }
+
+  /**
+   * D90 R6: an integer literal whose value cannot be held exactly is rejected
+   * rather than rounded, so `9007199254740993` is an error instead of silently
+   * becoming `9007199254740992`. Only a literal *written* as an integer is one
+   * here: a fraction part or an exponent spells a decimal value, which keeps
+   * the ordinary nearest-value reading. An explicit radix takes the same test,
+   * because a hex literal is written precisely when the exact bit pattern is
+   * the point.
+   *
+   * The report quotes the author's own spelling — the token carries it when the
+   * two differ — so a source line reading `1_000_000_000_000_000_000_1` is
+   * quoted with its separators rather than as the normalized digits the value
+   * was read from.
+   */
+  private checkExactIntegerLiteral(text: string, written: string, literalSpan: Span, negative = false): boolean {
+    if (!/^(?:[0-9]+|0[xXbBoO][0-9a-fA-F]+)$/u.test(text)) return true;
+    const rounded = Number(text);
+    if (BigInt(text) === BigInt(rounded)) return true;
+    const sign = negative ? "-" : "";
+    this.diagnostics.push(diagnostic(
+      "VEL2017",
+      `Numeric literals must be exactly representable; '${sign}${written}' becomes ${sign}${rounded}`,
+      literalSpan,
+    ));
+    return false;
   }
 
   // TXT-I2: the offset of a top-level ':' in an interpolation fragment, or
@@ -3562,15 +3668,39 @@ export class Parser {
     const mappedSpan = (local: Span): Span => sourceOffsets
       ? span(sourceOffsets[local.start] ?? offset, sourceOffsets[local.end] ?? sourceOffsets.at(-1) ?? offset)
       : span(local.start + offset, local.end + offset);
+    // A report carries two coordinate systems: its own span and the spans of
+    // the rewrite it names. Both are fragment-local here, so both are mapped;
+    // mapping only the span leaves `velar fix` splicing an interpolation
+    // offset into module text, which rewrites whatever happens to sit there.
+    const mappedFix = <T extends { readonly fix?: DiagnosticFix }>(item: T): T => item.fix
+      ? { ...item, fix: { ...item.fix, edits: item.fix.edits.map((edit) => ({ ...edit, span: mappedSpan(edit.span) })) } }
+      : item;
     const shiftedTokens = lexed.tokens.map((item) => ({ ...item, span: mappedSpan(item.span) }));
-    const shiftedDiagnostics = lexed.diagnostics.map((item) => ({ ...item, span: mappedSpan(item.span) }));
-    const parsed = this.createNestedParser(shiftedTokens).parseExpressionFragment();
+    const shiftedDiagnostics = lexed.diagnostics.map((item) => mappedFix({ ...item, span: mappedSpan(item.span) }));
+    const shiftedAdvisories = lexed.advisories.map((item) => mappedFix({ ...item, span: mappedSpan(item.span) }));
+    const nested = this.createNestedParser(shiftedTokens);
+    nested.inheritParseBudget(this);
+    const parsed = nested.parseExpressionFragment();
     this.diagnostics.push(...shiftedDiagnostics, ...parsed.diagnostics);
+    this.advisories.push(...shiftedAdvisories, ...parsed.advisories);
     return parsed.expression;
   }
 
   protected createNestedParser(tokens: readonly Token[]): Parser {
     return new Parser(tokens, this.lexicalExtensions);
+  }
+
+  /**
+   * An interpolation is parsed by a nested parser, so the nest continues the
+   * budget rather than restarting it: without this, `MAX_PARSE_DEPTH` resets
+   * at every level and only a JavaScript stack overflow ends a deeply nested
+   * f-string, after the superlinear work is already paid. It is a method
+   * rather than a constructor argument because `packages/web` and
+   * `packages/node` override `createNestedParser`, so an added argument would
+   * be silently dropped for exactly the modules that build one.
+   */
+  protected inheritParseBudget(parent: Parser): void {
+    this.parseDepth = parent.parseDepth + NESTED_EXPRESSION_PARSE_COST;
   }
 
   private withParseDepth<T>(parse: () => T): T {
@@ -3832,16 +3962,16 @@ export class Parser {
   }
 
   private checkTypeGreater(): boolean {
-    return this.check("greater") || this.check("rightShift") || this.check("unsignedRightShift");
+    return typeGreaterRemainderKinds.has(this.current().kind) || this.check("greater");
   }
 
   /** Consume one `>` from a generic close without changing shift lexing. */
   private expectTypeGreater(message: string): Token {
     if (this.check("greater")) return this.advance();
     const token = this.current();
-    if (token.kind === "rightShift" || token.kind === "unsignedRightShift") {
+    const remainderKind = typeGreaterRemainderKinds.get(token.kind);
+    if (remainderKind) {
       const close = { kind: "greater", value: ">", span: span(token.span.start, token.span.start + 1) } satisfies Token;
-      const remainderKind: TokenKind = token.kind === "rightShift" ? "greater" : "rightShift";
       this.tokens[this.index] = {
         kind: remainderKind,
         value: token.value.slice(1),

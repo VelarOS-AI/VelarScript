@@ -52,6 +52,26 @@ required by its chosen host, but VelarScript does not ship provider packages or
 provider-specific release workflows. Such code cannot acquire a `velar/*`
 module, compiler hook, manifest keyword, or hidden release coupling.
 
+## Headers and caching
+
+`velar-deploy.json` states the entire header contract, the document caching
+rule included. Its `headers` rules are ordered and resolve **last match wins**.
+A `<base>*` rule carries the security headers; a second `<base>*` rule assigns
+`Cache-Control: no-cache`; `<base>assets/*` then overrides it with
+`public, max-age=31536000, immutable`; the enumerated document paths — the
+base, `index.html`, both manifests, and the SPA fallback when there is one —
+repeat `no-cache` last. So the content-hashed assets keep their immutable year
+and every deep route the enumerated paths cannot name revalidates.
+
+Because the `<base>*` rule states the document caching itself, every file
+outside `assets/` answers `no-cache` — public JSON, images, and fonts
+included. `velar preview` supplies no cache header out of band; it applies
+these rules in order, which is what makes a provider that projects the manifest
+literally and the preview server indistinguishable to `velar verify-deployment`.
+A provider that resolves first match wins instead would not give the hashed
+assets their immutable year: project the rules in the order the manifest
+states them.
+
 ## Security and public configuration
 
 Production source maps are off by default because they contain source text.

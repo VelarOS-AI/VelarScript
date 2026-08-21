@@ -25,7 +25,11 @@ const checksumName = "SHA256SUMS";
 // Derived from packages/*, never restated here. Project-owned libraries,
 // concrete adapters, and provider integrations do not live in this repository.
 const workspaces = await velarToolchainPackageNames(root);
-const excludedTreeNames = new Set([".git", "node_modules", "dist", "release", "coverage"]);
+// Build products and scratch state, not source. `.velar/` is the CLI's own
+// scratch namespace and holds the gate lock a release build runs under, so
+// hashing it would make `source.treeSha256` — a value whose whole purpose is
+// that an auditor can recompute it — differ on every run.
+const excludedTreeNames = new Set([".git", ".velar", "node_modules", "dist", "release", "coverage"]);
 
 async function main(arguments_) {
   const [command, ...rest] = arguments_;
@@ -94,7 +98,10 @@ export async function createToolchainRelease(outputDirectory, mode = "rehearse")
         fileCount: packed.files.length,
       });
     }
-    packages.sort((left, right) => left.name.localeCompare(right.name));
+    // Code-point order: a release manifest is an attested artifact, so its
+    // package order must not follow the collation the build machine's locale
+    // selects. The same comparator orders the production build manifest.
+    packages.sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
     const manifest = {
       formatVersion: 1,
       kind: "velar-toolchain-release",
@@ -251,6 +258,16 @@ async function readPackageManifests() {
   }
   if (cli.dependencies?.["create-velar"] !== rootManifest.version) {
     throw new Error("@velarscript/cli must pin the exact project creator version");
+  }
+  // VELAR_VERSION is a hand-edited literal that stamps build manifests, the
+  // `.velar/dev-deps` cache key, and every reproduction bundle. Nothing else
+  // reads it against its own manifest, so a release that bumped package.json
+  // and forgot version.ts would record the previous generation everywhere and
+  // agree with itself while doing it.
+  const versionSource = await readFile(join(root, "packages", "cli", "src", "version.ts"), "utf8");
+  const declaredVersion = /^export const VELAR_VERSION = "([^"]*)";$/mu.exec(versionSource)?.[1];
+  if (declaredVersion !== cli.version) {
+    throw new Error(`packages/cli/src/version.ts declares VELAR_VERSION ${declaredVersion ?? "(unreadable)"}, but @velarscript/cli is ${cli.version}`);
   }
   return { root: rootManifest, packages, compiler, core, node, web, create, cli, desktop };
 }

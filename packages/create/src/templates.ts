@@ -9,18 +9,23 @@ export function createTemplateFiles(
 ): ReadonlyMap<string, string> {
   const displayName = basename(root);
   const name = packageName(displayName);
-  const dependencyVersion = version.includes("-") ? version : `^${version}`;
+  // Installed ranges are exact, never widened. Every dependency a template
+  // writes is a `@velarscript/*` package, and those are one toolchain
+  // generation: a caret range lets `npm install` pair a newer target extension
+  // with the pinned CLI, which puts two compiler generations into one emitted
+  // program with nothing in the load path able to tell. `peerDependencies` is
+  // the exception, handled in `componentTemplate`.
   return template === "library"
-    ? libraryTemplate(name, displayName, dependencyVersion, formatVersion)
+    ? libraryTemplate(name, displayName, version, formatVersion)
     : template === "component"
-      ? componentTemplate(name, displayName, dependencyVersion, formatVersion)
+      ? componentTemplate(name, displayName, version, formatVersion)
       : template === "docs"
-        ? docsTemplate(name, displayName, dependencyVersion, formatVersion)
+        ? docsTemplate(name, displayName, version, formatVersion)
         : template === "desktop"
-          ? desktopTemplate(name, displayName, dependencyVersion, formatVersion)
+          ? desktopTemplate(name, displayName, version, formatVersion)
           : template === "node"
-            ? nodeTemplate(name, displayName, dependencyVersion, formatVersion)
-            : webTemplate(name, displayName, dependencyVersion, formatVersion);
+            ? nodeTemplate(name, displayName, version, formatVersion)
+            : webTemplate(name, displayName, version, formatVersion);
 }
 
 function webTemplate(name: string, displayName: string, version: string, formatVersion: number): ReadonlyMap<string, string> {
@@ -357,8 +362,14 @@ function componentTemplate(name: string, displayName: string, version: string, f
       "pack:check": "npm pack --dry-run --json",
       validate: "npm run format:check && npm run check && npm test && npm run build && npm run verify && npm run pack:check",
     },
+    // A peer range installs nothing. It states to a consumer which target this
+    // package needs present, and the copy that actually loads is pinned by the
+    // consumer's own toolchain, so it cannot pair two generations the way an
+    // installed range can. Pinning it exactly would only refuse the install of
+    // a component that would have compiled fine. A prerelease stays exact,
+    // because a caret over one accepts the whole release it precedes.
     peerDependencies: {
-      "@velarscript/web": version,
+      "@velarscript/web": version.includes("-") ? version : `^${version}`,
     },
     devDependencies: {
       "@velarscript/cli": version,

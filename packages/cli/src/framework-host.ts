@@ -40,15 +40,29 @@ export function projectStyles(project: ProjectResult): string {
     const segments = module.result.styleSegments;
     if (segments) {
       if (segments.before) before.push(segments.before);
-      if (segments.controlled) controlled.push(segments.controlled);
+      // A controlled segment is the module's generated rules joined by a blank
+      // line, so splitting on that separator recovers the rules themselves.
+      if (segments.controlled) controlled.push(...segments.controlled.split("\n\n"));
       if (segments.after) after.push(segments.after);
     } else if (module.result.css) {
       controlled.push(module.result.css);
     }
   }
-  const raw = [...before, ...controlled, ...after].filter(Boolean).join("\n\n");
+  const raw = [...before, ...lastOfEach(controlled), ...after].filter(Boolean).join("\n\n");
   const styles = raw ? `${raw}\n` : "";
   return project.framework?.host.prepareStyles?.(project.framework.config, styles) ?? styles;
+}
+
+/**
+ * A generated rule means the same thing in every module that produced it, so
+ * the stylesheet carries each distinct rule once. Keeping the last occurrence
+ * rather than the first leaves the document-order cascade winner exactly where
+ * it was: a duplicate that used to decide a tie by coming last still does.
+ */
+function lastOfEach(rules: readonly string[]): string[] {
+  const last = new Map<string, number>();
+  rules.forEach((rule, index) => last.set(rule, index));
+  return rules.filter((rule, index) => last.get(rule) === index);
 }
 
 export function frameworkBase(framework: ResolvedFrameworkHost | null): string {

@@ -765,14 +765,23 @@ function __velarCreateRuntime() {
   };
   const link = (child, parent) => {
     if (child === null || (typeof child !== "object" && typeof child !== "function")) return;
-    linkOwner(toRaw(child), parent);
+    linkOwner(toRaw(child), parent, true);
   };
-  const linkOwner = (child, parent) => {
+  // 'structural' separates a slot being filled from a slot merely being read.
+  // A read proves the child is in the parent right now; only a write adds an
+  // occurrence, and only a write can create the duplicate the running count
+  // cannot see for itself.
+  const linkOwner = (child, parent, structural = false) => {
     parent = toRaw(parent);
     if (parent === null || (typeof parent !== "object" && typeof parent !== "function") || child === parent) return;
     let owners = __velarGraphWeakMapRead(parents, child);
     if (!owners) { owners = __velarGraphCreateSet(); __velarGraphWeakMapWrite(parents, child, owners); }
+    const known = __velarGraphSetContains(owners, parent);
     __velarGraphSetInsert(owners, parent);
+    const counts = __velarGraphWeakMapRead(containment, parent);
+    if (!counts) return;
+    if (structural && known) { __velarGraphWeakMapRemove(containment, parent); return; }
+    if ((__velarGraphMapRead(counts, child) ?? 0) < 1) __velarGraphMapWrite(counts, child, 1);
   };
   // Removing the last owner of a value detaches everything only that value
   // owned. Without the cascade, replacing a state root leaves every surviving
@@ -859,43 +868,74 @@ function __velarCreateRuntime() {
       if (value !== null && (typeof value === "object" || typeof value === "function")) visit(value);
     }
   };
-  const contains = (parent, child) => {
-    parent = toRaw(parent);
-    child = toRaw(child);
+  // Containment used to be re-derived by scanning the whole container on every
+  // element write, which made one assignment into a rendered List cost O(list
+  // length). The occurrence index answers the same question -- does the parent
+  // still reference this child anywhere? -- in constant time: it is built once
+  // from the container's real contents and then maintained by the same link and
+  // release calls that change them.
+  const containment = __velarGraphCreateWeakMap();
+  const countOccurrence = (counts, value) => {
+    value = toRaw(value);
+    if (value === null || (typeof value !== "object" && typeof value !== "function")) return;
+    __velarGraphMapWrite(counts, value, (__velarGraphMapRead(counts, value) ?? 0) + 1);
+  };
+  // Mirrors exactly what the old scan looked at, Map keys included as owned
+  // values are, so the index cannot answer a question the scan answered
+  // differently.
+  const buildContainment = (parent) => {
+    const counts = __velarGraphCreateMap();
     if (__velarGraphIsList(parent)) {
-      for (let index = 0; index < parent.length; index += 1) {
-        if (toRaw(__velarGraphOwnDescriptor(parent, index)?.value) === child) return true;
-      }
-      return false;
+      for (let index = 0; index < parent.length; index += 1) countOccurrence(counts, __velarGraphOwnDescriptor(parent, index)?.value);
+      return counts;
     }
     const brand = collectionBrand(parent);
     if (brand === 1) {
-      for (const value of __velarGraphMapItems(parent)) if (toRaw(value) === child) return true;
-      return false;
+      for (const value of __velarGraphMapItems(parent)) countOccurrence(counts, value);
+      return counts;
     }
     if (brand === 2) {
-      for (const value of __velarGraphSetItems(parent)) if (toRaw(value) === child) return true;
-      return false;
+      for (const value of __velarGraphSetItems(parent)) countOccurrence(counts, value);
+      return counts;
     }
-    if (!parent || typeof parent !== "object") return false;
+    if (!parent || typeof parent !== "object") return counts;
     for (const name of __velarGraphOwnNames(parent)) {
       const descriptor = __velarGraphOwnDescriptor(parent, name);
-      if (descriptor && "value" in descriptor && toRaw(descriptor.value) === child) return true;
+      if (descriptor && "value" in descriptor) countOccurrence(counts, descriptor.value);
     }
-    return false;
+    return counts;
   };
   // The one guard every detach path shares: a primitive was never linked, and
   // an object with no owners has nothing to release, so neither may reach the
-  // O(fields) containment scan.
+  // containment bookkeeping.
   const releaseChild = (parent, child) => {
     if (child === null || (typeof child !== "object" && typeof child !== "function")
       || !__velarGraphWeakMapContains(parents, child)) return;
-    if (!contains(parent, child)) unlink(child, parent);
+    parent = toRaw(parent);
+    if (parent === null || (typeof parent !== "object" && typeof parent !== "function")) return;
+    child = toRaw(child);
+    // A freshly built index already reflects the slot that was just cleared;
+    // a maintained one still counts it, so only that one takes the decrement.
+    let counts = __velarGraphWeakMapRead(containment, parent);
+    let remaining;
+    if (counts) remaining = (__velarGraphMapRead(counts, child) ?? 0) - 1;
+    else {
+      counts = buildContainment(parent);
+      __velarGraphWeakMapWrite(containment, parent, counts);
+      remaining = __velarGraphMapRead(counts, child) ?? 0;
+    }
+    if (remaining > 0) { __velarGraphMapWrite(counts, child, remaining); return; }
+    __velarGraphMapRemove(counts, child);
+    unlink(child, parent);
   };
-  const reactive = (value, parent = null) => {
+  // The registry operation stays exactly two parameters wide; 'structural'
+  // belongs to the internal call, which knows whether a slot is being filled or
+  // merely read, and every caller outside this file fills one.
+  const reactive = (value, parent = null) => reactiveValue(value, parent, true);
+  const reactiveValue = (value, parent, structural) => {
     if (value === null || (typeof value !== "object" && typeof value !== "function")) return value;
     value = toRaw(value);
-    if (parent !== null) linkOwner(value, parent);
+    if (parent !== null) linkOwner(value, parent, structural);
     if (typeof value !== "object" || __velarGraphIsList(value) || !__velarGraphIsExtensible(value)) return value;
     const prototype = __velarGraphPrototype(value);
     if (prototype !== __velarGraphNativeObject.prototype && prototype !== null) return value;
@@ -904,7 +944,7 @@ function __velarCreateRuntime() {
     proxy = new __velarGraphNativeProxy(value, {
       get(target, key) {
         track(target, key);
-        return reactive(__velarGraphGet(target, key, target), target);
+        return reactiveValue(__velarGraphGet(target, key, target), target, false);
       },
       set(target, key, next) {
         next = toRaw(next);
@@ -950,7 +990,7 @@ function __velarCreateRuntime() {
     // through them. Fresh derived Lists (filter/map/etc.) stay ephemeral and
     // cannot become strongly retained parents of every item merely by being
     // iterated during rendering.
-    return reactive(child, __velarGraphWeakMapContains(parents, value) ? value : null);
+    return reactiveValue(child, __velarGraphWeakMapContains(parents, value) ? value : null, false);
   };
   const collectionTrigger = (value, key, iterate = true, structure = false, indexFrom = null, allKeys = false) => trigger(toRaw(value), key, iterate, structure, indexFrom, allKeys);
   const collectionUnlink = (value, child) => {
@@ -1137,38 +1177,110 @@ function __velarCreateRuntime() {
     runtime.flushPending = true;
     __velarEnqueue(flush);
   };
-  const flushOverflow = () => {
+  // The identity a flush stamps its run counts with, carried by an overrun into
+  // the flush it schedules and consumed by the first flush that starts.
+  let overflowToken = null;
+  // Only the observers that actually re-entered the queue during the overrun
+  // belong to the runaway cycle. An observer queued once by an unrelated write
+  // in the same turn is innocent, and stopping it is irreversible, so it is
+  // put back for the next microtask instead.
+  //
+  // Every overrun must still remove something, or the requeue turns the
+  // microtask chain into the freeze the budget exists to end: a cycle spread
+  // across more observers than the budget can run four times over re-enters
+  // none of them four times, so a fixed threshold of four stops nobody and the
+  // next flush repeats it forever. Two rules make the progress unconditional.
+  // The threshold falls to the highest run count actually present, so any
+  // queued observer this flush chain has already run is stopped; and the token
+  // is carried into the flush the overrun schedules, so run counts accumulate
+  // across the chain and the observers the chain has not reached yet are a
+  // pool that only shrinks.
+  const flushOverflow = (token) => {
     const stalled = [];
     for (const observer of __velarGraphSetItems(domQueue)) stalled[stalled.length] = observer;
     for (const observer of __velarGraphSetItems(watchQueue)) stalled[stalled.length] = observer;
     __velarGraphSetEmpty(domQueue);
     __velarGraphSetEmpty(watchQueue);
+    let threshold = 0;
     for (let index = 0; index < stalled.length; index += 1) {
       const observer = stalled[index];
-      if (typeof observer.stop === "function") observer.stop();
-      else observer.stopped = true;
+      if (observer.flushToken === token && observer.flushRuns > threshold) threshold = observer.flushRuns;
+    }
+    if (threshold > 4) threshold = 4;
+    let requeued = false;
+    for (let index = 0; index < stalled.length; index += 1) {
+      const observer = stalled[index];
+      if (threshold > 0 && observer.flushToken === token && observer.flushRuns >= threshold) {
+        if (typeof observer.stop === "function") observer.stop();
+        else observer.stopped = true;
+        continue;
+      }
+      if (observer.stopped) continue;
+      __velarGraphSetInsert(observer.mode === "watch" ? watchQueue : domQueue, observer);
+      requeued = true;
     }
     report(new RangeError("Reactive updates cannot run more than 100000 observers in one flush"), { phase: "update", detail: "", component: "", unhandled: true });
+    if (requeued) {
+      overflowToken = token;
+      scheduleFlush();
+    }
   };
+  // Glitch-free order: every derived value and every watch settles to a fixed
+  // point before a single DOM node is written, so no watch and no rendered
+  // position can read a half-updated world and no corrective watch can push an
+  // invalid value through the DOM first. Within the settle, a watch whose body
+  // writes state runs before a watch that only observes, which is what makes
+  // watch declaration order unobservable in the output.
   const flush = () => {
     runtime.flushPending = false;
+    const token = overflowToken === null ? {} : overflowToken;
+    overflowToken = null;
     let budget = 100000;
-    for (const observer of __velarGraphSetItems(domQueue)) {
-      __velarGraphSetRemove(domQueue, observer);
-      if ((budget -= 1) < 0) { flushOverflow(); return; }
+    const step = (observer) => {
+      __velarGraphSetRemove(observer.mode === "watch" ? watchQueue : domQueue, observer);
+      if (observer.flushToken === token) observer.flushRuns += 1;
+      else { observer.flushToken = token; observer.flushRuns = 1; }
       observer.run();
-    }
-    for (const observer of __velarGraphSetItems(watchQueue)) {
-      __velarGraphSetRemove(watchQueue, observer);
-      if ((budget -= 1) < 0) { flushOverflow(); return; }
-      observer.run();
+    };
+    while (__velarGraphSetCount(domQueue) || __velarGraphSetCount(watchQueue)) {
+      while (true) {
+        let ran = false;
+        for (const observer of __velarGraphSetItems(domQueue)) {
+          if (observer.mode !== "computed") continue;
+          if ((budget -= 1) < 0) { flushOverflow(token); return; }
+          step(observer);
+          ran = true;
+        }
+        if (ran) continue;
+        for (const observer of __velarGraphSetItems(watchQueue)) {
+          if (observer.produces !== true) continue;
+          if ((budget -= 1) < 0) { flushOverflow(token); return; }
+          step(observer);
+          ran = true;
+        }
+        if (ran) continue;
+        for (const observer of __velarGraphSetItems(watchQueue)) {
+          if (observer.produces === true) break;
+          if ((budget -= 1) < 0) { flushOverflow(token); return; }
+          step(observer);
+          ran = true;
+        }
+        if (!ran) break;
+      }
+      for (const observer of __velarGraphSetItems(domQueue)) {
+        if (observer.mode === "computed") break;
+        if ((budget -= 1) < 0) { flushOverflow(token); return; }
+        step(observer);
+      }
     }
     if (__velarGraphSetCount(domQueue) || __velarGraphSetCount(watchQueue)) scheduleFlush();
   };
+  // A queue that outgrows its bound is the flush budget's failure to own, not
+  // an exception thrown out of the assignment that happened to cross the line:
+  // throwing here left the writing cell's subscriber walk half finished, with
+  // the remaining observers subscribed and never notified again.
   const schedule = (observer) => {
-    const queue = observer.mode === "watch" ? watchQueue : domQueue;
-    if (!__velarGraphSetContains(queue, observer) && __velarGraphSetCount(queue) >= 100000) throw new RangeError("VelarScript reactive queues cannot exceed 100000 observers");
-    __velarGraphSetInsert(queue, observer);
+    __velarGraphSetInsert(observer.mode === "watch" ? watchQueue : domQueue, observer);
     scheduleFlush();
   };
   const applyLook = (...arguments_) => {
@@ -1197,7 +1309,18 @@ function __velarCreateRuntime() {
 }
 
 function __velarRequireRuntime(value) {
-  if (!value || typeof value !== "object" || Object.getPrototypeOf(value) !== null || Object.isExtensible(value)
+  if (!value || typeof value !== "object") throw new TypeError("VelarScript Web runtime ownership is invalid");
+  // The schema comparison comes first, ahead of ownership and the field roster:
+  // a schema bump normally changes the roster too, so leaving it last reported
+  // "fields are invalid" and never named the one fact that identifies the
+  // cause. The version is read through its descriptor rather than the property
+  // so an unvalidated object cannot answer it with a getter.
+  const __velarVersionDescriptor = Object.getOwnPropertyDescriptor(value, "version");
+  const __velarVersion = __velarVersionDescriptor && "value" in __velarVersionDescriptor ? __velarVersionDescriptor.value : undefined;
+  if (__velarVersion !== ${JSON.stringify(VELAR_RUNTIME_SCHEMA_VERSION)}) {
+    throw new TypeError("VelarScript Web runtime schema " + (typeof __velarVersion === "string" ? __velarVersion : "(unknown)") + " does not match this module's schema ${VELAR_RUNTIME_SCHEMA_VERSION}; one build mixed two generations of @velarscript/* — run 'npm ls @velarscript/compiler' and pin one version");
+  }
+  if (Object.getPrototypeOf(value) !== null || Object.isExtensible(value)
     || Object.getOwnPropertySymbols(value).length > 0) throw new TypeError("VelarScript Web runtime ownership is invalid");
   const names = Object.getOwnPropertyNames(value);
   if (names.length !== __velarRuntimeFields.length || __velarRuntimeFields.some((name) => !names.includes(name))) {
@@ -1210,8 +1333,7 @@ function __velarRequireRuntime(value) {
       throw new TypeError("VelarScript Web runtime field '" + name + "' is invalid");
     }
   }
-  if (value.version !== ${JSON.stringify(VELAR_RUNTIME_SCHEMA_VERSION)}
-    || !__velarRuntimeCollection(value.domQueue, "Set") || !__velarRuntimeCollection(value.watchQueue, "Set")
+  if (!__velarRuntimeCollection(value.domQueue, "Set") || !__velarRuntimeCollection(value.watchQueue, "Set")
     || typeof value.flushPending !== "boolean" || (value.activeObserver !== null && typeof value.activeObserver !== "object")
     || !__velarRuntimeCollection(value.errorHandlers, "Set") || !__velarRuntimeCollection(value.actionFailures, "WeakSet")
     || !__velarRuntimeCollection(value.unhandledFailures, "Set")

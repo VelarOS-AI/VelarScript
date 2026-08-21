@@ -1,12 +1,14 @@
+import { scanAdvisorySuppressions, type AdvisorySuppression } from "./advisory-suppression.ts";
 import { CORE_NUMERIC_SUFFIXES } from "./core-vocabulary.ts";
-import { diagnostic, mechanicalFix, recoveredDiagnostic, type Diagnostic, type DiagnosticFix } from "./diagnostic.ts";
+import { advisory, diagnostic, mechanicalFix, recoveredDiagnostic, type Advisory, type Diagnostic, type DiagnosticFix } from "./diagnostic.ts";
 import { scanEmbeddedJavaScriptLiteral, type EmbeddedJavaScriptTokenPayload } from "./embedded-javascript.ts";
 import type { CompilerLexicalExtension } from "./extension.ts";
 import { findInterpolatedExpressionEnd, scanStringEscape, scanStringLiteral, type StringLiteralScan, type StringTokenPayload } from "./interpolated-string.ts";
 import { webNumericUnitOwner } from "./language-guidance.ts";
+import { MAX_LEX_DIAGNOSTICS } from "./limits.ts";
 import { forbiddenSourceIdentifiers, isForbiddenPrototypeMember, isSourceIdentifierPart, isSourceIdentifierStart } from "./source-names.ts";
-import { span } from "./source.ts";
-import { keywordKinds, type Token, type TokenKind } from "./token.ts";
+import { span, type Span } from "./source.ts";
+import { keywordKinds, type NumberTokenPayload, type Token, type TokenKind } from "./token.ts";
 const MAX_TOKENS = 250000;
 const MAX_NESTING = 512;
 /**
@@ -32,9 +34,154 @@ const chainContinuationEndKinds = new Set<TokenKind>([
   "extensionToken",
 ]);
 
+// D89 A1 reads back the primary expression its comment follows. These are the
+// kinds a primary tail is made of outside brackets — names, literals, member
+// steps, and the two postfix marks; brackets themselves are matched by depth.
+// Anything else ends the walk, which is what keeps the advisory's rewrite from
+// reaching across an operator that binds looser than `//` does.
+//
+// A literal is here for its interior reading, not its final one: `"abc".size`
+// and `f"{a}".size` are dividends whose walk passes back through the literal
+// on the way to the name that ends them. What may *end* a dividend is the
+// narrower question `floorDivisionDividendEndKinds` answers.
+const primaryTailKinds = new Set<TokenKind>([
+  "identifier", "number", "unitNumber", "string", "fstring", "extensionToken",
+  "true", "false", "null", "super", "dot", "optionalDot", "bang",
+]);
+
+// D90: the token a floor-division mistake can actually stand on. A1 used to
+// borrow `chainContinuationEndKinds`, which answers a different question — a
+// string, an f-string, `true`, `false`, `null`, `super` and a record's `}` all
+// end an expression that a leading-dot line may continue, and none of them can
+// be divided, so `const s = "x" // 2` drew an advisory suggesting
+// `("x" / 2).floor()`, which the author cannot act on. D89 admits an advisory
+// only when its trigger narrows to near-zero false positives, which makes that
+// disqualifying. What remains: a name, a plain numeric literal, `)` closing a
+// call or a group, `]` closing an index (`xs[0] // 2`), and `!` closing a
+// required-value unwrap (`total! // 2`).
+//
+// A unit number is not here either. `10s` is a Duration, `(10s / 2).floor()`
+// does not typecheck (Duration has no `floor`), and nobody reaches for Python's
+// floor division on a duration literal — so the rewrite would be one the author
+// cannot use, which is the same disqualification the string tail carried.
+const floorDivisionDividendEndKinds = new Set<TokenKind>([
+  "identifier", "number", "rightParen", "rightBracket", "bang",
+]);
+
+// The tokens that end one logical line's token run, and the words a class
+// header may carry ahead of `class`. Both are read when a block opens, to
+// decide whether the block being entered is a class body.
+const lineBoundaryKinds = new Set<TokenKind>(["newline", "indent", "dedent"]);
+const classHeaderModifierKinds = new Set<TokenKind>(["export", "abstract"]);
+/** How far back the receiver-parameter walk reads before giving the name up. */
+const RECEIVER_PARAMETER_SCAN_LIMIT = 4096;
+
+// D90 (compiler-front-14): the words that open a declaration or a statement.
+// A physical line inside an open bracket that begins with one of these, at or
+// below the indentation of the line that opened the bracket, is the evidence
+// that the bracket was never closed rather than still being filled in.
+const statementHeadWords = new Set([
+  "export", "def", "class", "const", "let", "enum", "import", "return",
+  "if", "for", "while", "match", "type",
+]);
+
+// What may stand after one of those words when the line is *not* a statement
+// head: a record key's ':', the separators and closers that finish a read of a
+// binding named `type` or `match`, the '=' of a named argument written
+// `type=1`, and the '.' of a member step. None of them can follow a real
+// declaration keyword, so withholding recovery on them refuses nothing.
+const statementReadFollowers = new Set([":", ",", ")", "]", "}", "=", "."]);
+
+/**
+ * D89 A1's comment body, split into what Python's `//` would have divided by
+ * and what it would have gone on to do. `//` binds as tightly as `*`, so the
+ * Python author who wrote `total // 2 + 3` divided by 2 and *then* added 3.
+ * Both readings that came before this were wrong: quoting the body verbatim
+ * gave `(total / 2 + 3).floor()`, and wrapping the whole body gave
+ * `(total / (2 + 3)).floor()`, which for `total = 10` answers 2 where Python
+ * answers 8. The divisor is the leading primary alone — a number or an
+ * already-parenthesised group — and the tail is re-emitted after `.floor()`,
+ * where it binds exactly as it did after Python's `//`.
+ *
+ * `null` withholds the advisory. D89's admission bar, item 4, requires that a
+ * zero-cost rewrite exist and that the advisory name that one unambiguous
+ * spelling, which makes an advisory that cannot name a correct rewrite
+ * inadmissible. A body this cannot translate by a single substitution therefore
+ * reports nothing at all: unbalanced parentheses (`// 2)` is as
+ * likely a stray keystroke as a divisor), a body that does not open with a
+ * primary (`// 2 3` does not parse either way), a tail that is not one
+ * arithmetic step (`+`, `-`, `*` and then something), and a second `/` or `%`
+ * anywhere in the tail — a second floor division or a modulo cannot be
+ * expressed by one substitution, and `//` inside the suggested text would open
+ * a comment in the very line it is telling the author to write. Silence is the
+ * safe half of that trade; a wrong suggestion is a new defect.
+ */
+function floorDivisionRewrite(body: string): { readonly divisor: string; readonly tail: string } | null {
+  let depth = 0;
+  let primaryEnd = -1;
+  for (let index = 0; index < body.length; index += 1) {
+    if (body[index] === "(") depth += 1;
+    else if (body[index] === ")") {
+      depth -= 1;
+      if (depth < 0) return null;
+      if (depth === 0 && primaryEnd < 0 && body.startsWith("(")) primaryEnd = index + 1;
+    }
+  }
+  if (depth !== 0) return null;
+  if (!body.startsWith("(")) {
+    const primary = /^[0-9]+(?:\.[0-9]+)?/u.exec(body);
+    if (primary === null) return null;
+    primaryEnd = primary[0].length;
+  }
+
+  const divisor = body.slice(0, primaryEnd);
+  if (divisor.includes("//")) return null;
+  const rest = body.slice(primaryEnd).trim();
+  if (rest === "") return { divisor, tail: "" };
+  if (!/^[+\-*]\s*\S/u.test(rest) || rest.includes("/") || rest.includes("%")) return null;
+  return { divisor, tail: ` ${rest[0]} ${rest.slice(1).trim().replace(/\s+/gu, " ")}` };
+}
+
+/**
+ * The diagnostics of one lex, capped. Pathological input reports once per
+ * character — a minified JavaScript file pasted into a `.vel` buffer that the
+ * language server re-lexes on every keystroke — and millions of retained
+ * reports help nobody. The cap never drops the tail silently: its last slot
+ * says that it closed, so a real error can never hide behind the truncation.
+ */
+class DiagnosticLog {
+  private readonly entries: Diagnostic[] = [];
+  private closed = false;
+
+  push(...reports: readonly Diagnostic[]): void {
+    for (const report of reports) {
+      if (this.entries.length < MAX_LEX_DIAGNOSTICS - 1) {
+        this.entries.push(report);
+        continue;
+      }
+      if (this.closed) return;
+      this.closed = true;
+      this.entries.push(diagnostic(
+        "VEL1013",
+        `This module reported ${MAX_LEX_DIAGNOSTICS - 1} lexical errors, which is as many as VelarScript reports at once; fix these and compile again to see the rest`,
+        report.span,
+      ));
+      return;
+    }
+  }
+
+  get reports(): readonly Diagnostic[] {
+    return this.entries;
+  }
+}
+
 export interface LexResult {
   readonly tokens: readonly Token[];
   readonly diagnostics: readonly Diagnostic[];
+  /** D89: the advisory channel, accumulated beside the diagnostics and never merged into them. */
+  readonly advisories: readonly Advisory[];
+  /** D89: the reasoned `velar-allow` suppressions this module's line comments carry. */
+  readonly suppressions: readonly AdvisorySuppression[];
 }
 
 export class Lexer {
@@ -48,12 +195,39 @@ export class Lexer {
   // extension republishing them.
   private readonly numericSuffixes = new Set<string>(CORE_NUMERIC_SUFFIXES);
   private readonly tokens: Token[] = [];
-  private readonly diagnostics: Diagnostic[] = [];
+  private readonly diagnostics = new DiagnosticLog();
+  private readonly advisories: Advisory[] = [];
+  private readonly suppressions: AdvisorySuppression[] = [];
   private readonly diagnosedBidirectionalOffsets = new Set<number>();
   private readonly indentStack = [0];
+  // D90 (compiler-front-9): whether each open block is a class body, kept in
+  // step with `indentStack`. A member may be spelled `with` or `int`; a binding
+  // may not, and `def with(...)` at module scope would emit `function with`,
+  // which is not JavaScript. Only the enclosing block tells the two apart.
+  private readonly classBodyStack = [false];
+  // D90 (compiler-front-14): the brackets still open, with the indentation of
+  // the physical line each one was opened on.
+  private readonly openBrackets: { readonly span: Span; readonly text: string; readonly lineIndent: number; readonly arrowBody: boolean }[] = [];
   private index = 0;
   private atLineStart = true;
+  // A physical line began while brackets were open, where no newline token is
+  // emitted and no indentation is read. The unclosed-bracket recovery is the
+  // only thing that looks at those lines.
+  private bracketLineStart = false;
   private nesting = 0;
+  // The indentation of the physical line that opened the current logical line.
+  // A leading-dot continuation is measured against this rather than against the
+  // previous physical line, so every line of one chain answers to one rule.
+  private logicalLineIndent = 0;
+  // The forward line scan `lineStart` and `lineEnd` share; see `lineStart`.
+  private scannedLineStart = 0;
+  private scannedTo = 0;
+  private cachedLineEndFrom = -1;
+  private cachedLineEnd = -1;
+  // The end of the run of semicolons and blanks a trailing-semicolon fix last
+  // measured. Every semicolon in one run reaches the same offset, so the run is
+  // walked once rather than once per semicolon.
+  private semicolonRunEnd = -1;
   // A bracket fragment is an expression lexed inside an enclosing bracket
   // context, such as an extension-owned bracket interpolation: newlines are insignificant
   // and physical-line indentation never opens or closes blocks, exactly as
@@ -90,6 +264,10 @@ export class Lexer {
         this.diagnostics.push(diagnostic("VEL1006", `Delimiter nesting cannot exceed ${MAX_NESTING} levels`, span(this.index, this.index)));
         this.index = this.text.length;
         break;
+      }
+      if (this.bracketLineStart) {
+        this.bracketLineStart = false;
+        this.recoverUnclosedBrackets();
       }
       if (this.atLineStart && this.nesting === 0 && !this.bracketFragment) {
         this.readIndentation();
@@ -167,27 +345,27 @@ export class Lexer {
       switch (character) {
         case "(":
           this.simple("leftParen", start, 1);
-          this.nesting += 1;
+          this.openBracket(start);
           break;
         case ")":
           this.simple("rightParen", start, 1);
-          this.nesting = Math.max(0, this.nesting - 1);
+          this.closeBracket();
           break;
         case "[":
           this.simple("leftBracket", start, 1);
-          this.nesting += 1;
+          this.openBracket(start);
           break;
         case "]":
           this.simple("rightBracket", start, 1);
-          this.nesting = Math.max(0, this.nesting - 1);
+          this.closeBracket();
           break;
         case "{":
           this.simple("leftBrace", start, 1);
-          this.nesting += 1;
+          this.openBracket(start);
           break;
         case "}":
           this.simple("rightBrace", start, 1);
-          this.nesting = Math.max(0, this.nesting - 1);
+          this.closeBracket();
           break;
         case ":":
           if (this.peek(1) === "=") {
@@ -349,7 +527,7 @@ export class Lexer {
     }
 
     this.tokens.push({ kind: "eof", value: "", span: span(this.index, this.index) });
-    return { tokens: this.tokens, diagnostics: this.diagnostics };
+    return { tokens: this.tokens, diagnostics: this.diagnostics.reports, advisories: this.advisories, suppressions: this.suppressions };
   }
 
   private readIndentation(): void {
@@ -381,12 +559,25 @@ export class Lexer {
     // A leading-dot line continues the previous logical line: the newline
     // tokens that ended it are withdrawn and this line's indentation does not
     // open or close a block, so '.filter(...)' chains span physical lines.
-    if (this.isChainContinuation()) {
-      while (this.tokens.at(-1)?.kind === "newline") this.tokens.pop();
-      return;
+    const dotWidth = this.leadingDotWidth();
+    if (dotWidth > 0) {
+      if (this.isChainContinuation(width)) {
+        this.tokens.pop();
+        return;
+      }
+      // The line looked like a continuation and is not one, so it is read as
+      // its own statement — which it cannot be, because no statement begins
+      // with a member step. Saying so here is the whole point of tightening
+      // the rule: the alternative is the silent reattachment this replaces.
+      this.diagnostics.push(diagnostic(
+        "VEL1004",
+        `A line beginning with '${dotWidth === 2 ? "?." : "."}' continues the line above it, so it must follow that line directly and be indented past the statement it continues`,
+        span(start, this.index + dotWidth),
+      ));
     }
 
     const current = this.indentStack.at(-1) ?? 0;
+    this.logicalLineIndent = width;
     if (width > current) {
       if (this.indentStack.length > MAX_NESTING) {
         this.diagnostics.push(diagnostic("VEL1006", `Indentation nesting cannot exceed ${MAX_NESTING} levels`, span(start, this.index)));
@@ -394,6 +585,7 @@ export class Lexer {
         return;
       }
       this.indentStack.push(width);
+      this.classBodyStack.push(this.opensClassBody());
       this.tokens.push({ kind: "indent", value: "", span: span(start, this.index) });
       return;
     }
@@ -401,6 +593,7 @@ export class Lexer {
     if (width < current) {
       while (this.indentStack.length > 1 && width < (this.indentStack.at(-1) ?? 0)) {
         this.indentStack.pop();
+        this.classBodyStack.pop();
         this.tokens.push({ kind: "dedent", value: "", span: span(start, this.index) });
       }
 
@@ -410,14 +603,52 @@ export class Lexer {
     }
   }
 
-  private isChainContinuation(): boolean {
-    const dotWidth = this.peek() === "." ? 1 : this.peek() === "?" && this.peek(1) === "." ? 2 : 0;
-    if (dotWidth === 0 || !this.isIdentifierStart(this.peek(dotWidth))) return false;
-    let index = this.tokens.length - 1;
+  /** The width of a leading member step, or 0 where the line does not open with one. */
+  private leadingDotWidth(): number {
+    const width = this.peek() === "." ? 1 : this.peek() === "?" && this.peek(1) === "." ? 2 : 0;
+    // '.5' is a decimal literal with its leading digit missing, not a member
+    // step, and it carries its own diagnostic.
+    return width > 0 && this.isIdentifierStart(this.peek(width)) ? width : 0;
+  }
+
+  /**
+   * Whether the leading-dot line at `width` joins the line above it. Two
+   * conditions, and the file's own contract has always claimed both:
+   *
+   * - It is the *next* line. The backward walk used to skip an unbounded run of
+   *   `newline` tokens, so a chain joined a value that appeared any number of
+   *   blank lines and whole-line comments earlier — the case the header comment
+   *   says "never join accidentally" (D90, compiler-front-10). One `newline`
+   *   token is the line that ended the statement; a second is a blank or
+   *   comment line, and the statement ended there.
+   * - It is indented past the statement it continues. The charter called the
+   *   deeper indentation canonical and nothing enforced it, so a column-0
+   *   `.sorted()` dedented out of a function body and silently became part of
+   *   it. `logicalLineIndent` is the *statement's* indentation rather than the
+   *   previous physical line's, so every line of one chain answers to one rule.
+   */
+  private isChainContinuation(width: number): boolean {
+    const index = this.tokens.length - 1;
     if (this.tokens[index]?.kind !== "newline") return false;
-    while (this.tokens[index]?.kind === "newline") index -= 1;
-    const previous = this.tokens[index];
-    return previous !== undefined && chainContinuationEndKinds.has(previous.kind);
+    if (this.tokens[index - 1]?.kind === "newline") return false;
+    const previous = this.tokens[index - 1];
+    if (previous === undefined || !chainContinuationEndKinds.has(previous.kind)) return false;
+    return width > this.logicalLineIndent;
+  }
+
+  /**
+   * Whether the logical line that just ended opens a class body. Read by the
+   * member-name exemption: `def with(...)` declares a member here and a binding
+   * anywhere else, and only the enclosing block distinguishes them.
+   */
+  private opensClassBody(): boolean {
+    let index = this.tokens.length - 1;
+    while (index >= 0 && this.tokens[index]!.kind === "newline") index -= 1;
+    if (this.tokens[index]?.kind !== "colon") return false;
+    while (index >= 0 && !lineBoundaryKinds.has(this.tokens[index]!.kind)) index -= 1;
+    let head = index + 1;
+    while (classHeaderModifierKinds.has(this.tokens[head]?.kind ?? "eof")) head += 1;
+    return this.tokens[head]?.kind === "class";
   }
 
   private readNewline(): void {
@@ -431,13 +662,225 @@ export class Lexer {
     if (this.nesting === 0 && !this.bracketFragment) {
       this.tokens.push({ kind: "newline", value: "", span: span(start, this.index) });
       this.atLineStart = true;
+    } else if (!this.bracketFragment) {
+      this.bracketLineStart = true;
     }
   }
 
+  /**
+   * D90 (compiler-front-14): an unclosed bracket used to swallow the rest of
+   * the module. While `nesting > 0` no newline token is emitted and no
+   * indentation is read, so one mistyped `(` turned every declaration below it
+   * into a continuation of one logical line — a file of fifty exports became
+   * one symbol, and none of the reported diagnostics named the bracket.
+   *
+   * Recovery is narrow because line breaks inside brackets really are
+   * insignificant: `compute(` with its arguments at column 0 is legal and must
+   * keep compiling, so indentation alone decides nothing. What decides is a
+   * physical line that begins a declaration or a statement — a word no
+   * bracketed expression can continue with — at or below the indentation of the
+   * line that opened the bracket. An indentation-significant language can read
+   * on from there; a brace language cannot.
+   */
+  private recoverUnclosedBrackets(): void {
+    const opening = this.openBrackets[0];
+    if (opening === undefined) return;
+    let cursor = this.index;
+    let width = 0;
+    while (cursor < this.text.length && (this.text[cursor] === " " || this.text[cursor] === "\t")) {
+      width += this.text[cursor] === "\t" ? 4 : 1;
+      cursor += 1;
+    }
+    // An arrow body's statements are the parser's to report: VEL2030 names the
+    // remedy, and a '}' one line down means the bracket was never unclosed in
+    // the first place. Recovering here would trade a teaching diagnostic for a
+    // structural one.
+    if (opening.arrowBody) return;
+    if (width > opening.lineIndent) return;
+    let end = cursor;
+    while (end < this.text.length && this.isIdentifierPart(this.text[end] ?? "")) end += 1;
+    if (!statementHeadWords.has(this.text.slice(cursor, end))) return;
+    // Two of those words are ordinary names as well — `type` and `match` are
+    // contextual keywords the charter keeps available (section 3) — and any of
+    // them may spell a record key. What follows the word tells a declaration
+    // from a read: a declaration continues with its subject (`type Name =`,
+    // `match value:`, `const x`), while a read is finished, so the next thing
+    // it can carry is the punctuation that separates or closes it. A statement
+    // head is never followed by one of those, which is what makes withholding
+    // on them cost nothing.
+    if (statementReadFollowers.has(this.text[this.skipHorizontalWhitespace(end)] ?? "")) return;
+
+    this.diagnostics.push(diagnostic(
+      "VEL1003",
+      `Unclosed '${opening.text}'; the line below it starts a new declaration, so VelarScript reads on from there rather than to the end of the module`,
+      opening.span,
+    ));
+    this.openBrackets.length = 0;
+    this.nesting = 0;
+    this.tokens.push({ kind: "newline", value: "", span: span(this.index, this.index) });
+    this.atLineStart = true;
+  }
+
+  private openBracket(start: number): void {
+    this.nesting += 1;
+    if (this.bracketFragment) return;
+    const lineStart = this.lineStart(start);
+    let width = 0;
+    for (let cursor = lineStart; cursor < start; cursor += 1) {
+      if (this.text[cursor] === " ") width += 1;
+      else if (this.text[cursor] === "\t") width += 4;
+      else break;
+    }
+    // A '{' straight after '=>' is an arrow body, and a statement inside one is
+    // exactly what VEL2030 exists to report — a message that names the fix
+    // ("move multi-statement logic into a named 'def'") where VEL1003 only
+    // reports structure. Recovery yields to it; see recoverUnclosedBrackets.
+    // The '{' token is pushed by the caller before this runs, so the arrow — if
+    // there is one — sits one further back.
+    const arrowBody = (this.text[start] ?? "") === "{" && this.tokens[this.tokens.length - 2]?.kind === "fatArrow";
+    this.openBrackets.push({ span: span(start, start + 1), text: this.text[start] ?? "(", lineIndent: width, arrowBody });
+  }
+
+  private closeBracket(): void {
+    this.nesting = Math.max(0, this.nesting - 1);
+    this.openBrackets.pop();
+  }
+
+  // D89: a line comment carries no token, but it may carry a `velar-allow`
+  // suppression, so its text is read once here. A malformed suppression is a
+  // diagnostic rather than an advisory: an unreasoned one may not pass.
   private readComment(): void {
+    const start = this.index;
+    const bodyStart = this.text.startsWith("//", start) ? start + 2 : start;
     while (!this.isAtEnd() && this.peek() !== "\n" && this.peek() !== "\r") {
       this.advance();
     }
+    const scanned = scanAdvisorySuppressions(this.text, start, bodyStart, this.index);
+    this.suppressions.push(...scanned.suppressions);
+    this.diagnostics.push(...scanned.diagnostics);
+    if (bodyStart !== start) this.adviseFloorDivisionComment(start, bodyStart, scanned.contentEnd);
+  }
+
+  /**
+   * D89 A1: `//` is VelarScript's only comment spelling, so a Python author's
+   * floor division reads as a finished line followed by a comment and the
+   * compiler has nothing to object to. The spelling cannot be removed — `#`
+   * already means something else (VEL1005) — so an advisory is the only
+   * remaining move.
+   *
+   * The trigger is narrow on both sides. D89 asks for a syntactically complete
+   * expression or assignment ahead of the `//`, which here means three things:
+   * the line carries code, every bracket *this physical line* opened is closed
+   * before the comment (an unclosed one leaves the line unfinished, so
+   * `print(   // 2` is silent), and the last token can end a dividend. The
+   * bracket test counts opens and closes on the line itself rather than reading
+   * `nesting`: a bracket opened on an earlier line and closed on a later one
+   * leaves the text before `//` complete, so `print(` / `    total // 2` / `)`
+   * is exactly the mistake this advisory exists for and used to compile in
+   * silence (D90). The comment's own text — with any `velar-allow` clause
+   * removed, which is what `contentEnd` is for — must then be a bare arithmetic
+   * body carrying a digit and no letter anywhere, so `// TODO`,
+   * `// 2. then handle X`, a bare `//`, and a whole-line comment are all
+   * silent.
+   *
+   * A bracket fragment is exempt because its lexer holds the fragment's text
+   * rather than the module's: `lineStart` there answers with the fragment's own
+   * beginning, and "the rest of this line is a comment" would be a claim about
+   * an interpolation rather than about a physical line.
+   *
+   * No mechanical fix is registered: deciding that the comment really was a
+   * divisor is the judgment D38 §48 keeps out of the fix registry.
+   */
+  private adviseFloorDivisionComment(start: number, bodyStart: number, contentEnd: number): void {
+    if (this.bracketFragment) return;
+    const lineStart = this.lineStart(start);
+    if (this.text.slice(lineStart, start).trim() === "") return;
+    const previous = this.tokens.at(-1);
+    if (!previous || previous.span.end <= lineStart || !floorDivisionDividendEndKinds.has(previous.kind)) return;
+    if (this.hasBracketOpenedOnLine(lineStart)) return;
+    const body = this.text.slice(bodyStart, contentEnd).trim();
+    if (!/[0-9]/u.test(body) || !/^[0-9\s+\-*/%()]+$/u.test(body)) return;
+    const division = floorDivisionRewrite(body);
+    if (division === null) return;
+
+    const dividend = this.dividendBeforeComment(lineStart, start);
+    if (!dividend) return;
+    const rewrite = `(${dividend.value} / ${division.divisor}).floor()${division.tail}`;
+    this.advisories.push(advisory(
+      "A1",
+      dividend.target === null
+        ? `'//' is VelarScript's comment spelling, so the rest of this line is a comment and nothing divides '${dividend.value}'; write '${rewrite}' for Python's floor division`
+        : `'//' is VelarScript's comment spelling, so '${dividend.target}' receives '${dividend.value}' and the rest of this line is a comment; write '${rewrite}' for Python's floor division`,
+      span(start, contentEnd),
+    ));
+  }
+
+  /**
+   * Whether a bracket opened on this physical line is still open at the
+   * comment. This is the "syntactically complete" half of A1's trigger that
+   * `nesting` was standing in for: `nesting` also counts a bracket opened three
+   * lines up, whose text before the `//` is complete all the same.
+   */
+  private hasBracketOpenedOnLine(lineStart: number): boolean {
+    const innermost = this.openBrackets.at(-1);
+    return innermost !== undefined && innermost.span.start >= lineStart;
+  }
+
+  /**
+   * What Python's `//` would have divided: the primary expression the comment
+   * follows, read back from the source so the advisory quotes the author's own
+   * spelling. The walk stops at the first operator or keyword outside brackets,
+   * because `//` binds as tightly as `*` — in `a + b // 2` the dividend is `b`,
+   * and naming `a + b` would hand back a rewrite that changes the result.
+   *
+   * A leading unary sign belongs to the dividend. Python's `-7 // 2` is -4, so
+   * quoting `7` and suggesting `(7 / 2).floor()` — which answers 3 — is the same
+   * class of wrong rewrite the divisor side used to hand back. The sign is unary
+   * exactly when nothing that could end an operand stands in front of it, which
+   * keeps the binary reading in `a - 7 // 2`, where the dividend is still `7`.
+   *
+   * `target` is the name the value lands in, and only a plain `=` produces one:
+   * a compound assignment reads its target as well as writing it, so calling it
+   * the receiver would be a second claim this advisory has not checked.
+   */
+  private dividendBeforeComment(lineStart: number, commentStart: number): { readonly target: string | null; readonly value: string } | null {
+    let index = this.tokens.length - 1;
+    let depth = 0;
+    while (index >= 0 && this.tokens[index]!.span.end > lineStart) {
+      const kind = this.tokens[index]!.kind;
+      if (kind === "rightParen" || kind === "rightBracket" || kind === "rightBrace") depth += 1;
+      else if (kind === "leftParen" || kind === "leftBracket" || kind === "leftBrace") {
+        if (depth === 0) break;
+        depth -= 1;
+      } else if (depth === 0 && !primaryTailKinds.has(kind)) break;
+      index -= 1;
+    }
+    if (depth !== 0) return null;
+    const sign = this.tokens[index];
+    if (sign !== undefined && sign.span.end > lineStart && (sign.kind === "minus" || sign.kind === "plus")) {
+      const before = this.tokens[index - 1];
+      const operandStandsBefore = before !== undefined
+        && before.span.end > lineStart
+        && !lineBoundaryKinds.has(before.kind)
+        && (floorDivisionDividendEndKinds.has(before.kind) || before.kind === "rightBrace");
+      if (!operandStandsBefore) index -= 1;
+    }
+
+    const first = this.tokens[index + 1];
+    if (!first || first.span.end <= lineStart) return null;
+    // A leading-dot continuation line holds only the tail of its dividend: the
+    // walk is bounded by this physical line, so on `const c = xs` / `.size // 2`
+    // it stops at the line's own first token, the `.`. Quoting from there gave
+    // `'.size'` and suggested `(.size / 2).floor()`, which does not parse. The
+    // head lives on a line this advisory does not read, so there is no rewrite
+    // to name and D89's admission bar withholds the advisory (D90).
+    if (first.kind === "dot" || first.kind === "optionalDot") return null;
+    const value = this.text.slice(first.span.start, commentStart).trim();
+    if (value === "") return null;
+    const boundary = this.tokens[index];
+    const name = this.tokens[index - 1];
+    const assigned = boundary !== undefined && boundary.span.end > lineStart && boundary.kind === "assign";
+    return { target: assigned && name?.kind === "identifier" ? name.value : null, value };
   }
 
   private readBlockComment(): void {
@@ -507,11 +950,27 @@ export class Lexer {
     }
     const value = this.text.slice(start, this.index);
     const previous = this.tokens.at(-1)?.kind;
-    // `int` remains forbidden as a type or binding, but velar/random owns the
-    // method spelling Random.int(...). Member names are not type vocabulary.
-    const rule = value === "int" && (previous === "dot" || previous === "optionalDot")
-      ? undefined
-      : forbiddenSourceIdentifiers.get(value);
+    // D90 (compiler-front-9): a rule's ban is on the spelling as a binding, a
+    // parameter and a type; some of them are ordinary member names and record
+    // keys. `int` remains forbidden as a type, but velar/random owns the method
+    // spelling Random.int(...); `with` remains forbidden as the infix record
+    // update, but `Array.prototype.with` and every builder API spelled that way
+    // must be callable, and `{with: 1}` must be writable. The exemption is a
+    // property of the rule (`memberLegal`) rather than a name spelled here, so
+    // `eval` — which the charter keeps unavailable through direct member
+    // syntax — does not travel with them.
+    const declared = forbiddenSourceIdentifiers.get(value);
+    // D90 (coherence): `def close(this)` used to earn two mechanical fixes on
+    // one span — this rule's `this` -> `self` rewrite and the analyzer's
+    // delete-the-implicit-receiver rewrite — whose texts contradict each
+    // other. Applying the first produces `def close(self)`, which is itself an
+    // error, so a `velar fix` pass never reaches a clean source. The receiver
+    // parameter is the analyzer's report to make: it knows the declaration has
+    // an implicit receiver, and its fix deletes the parameter outright. The
+    // recovery token is still emitted, so the parameter arrives as `self` and
+    // lands on exactly that report.
+    const receiverParameter = value === "this" && this.isReceiverParameterPosition(previous);
+    const rule = declared?.memberLegal === true && this.isMemberNamePosition(previous) ? undefined : declared;
     const extensionGuidance = rule ? undefined : this.extensionForbiddenIdentifiers.get(value);
     if ((value === "Infinity" || value === "NaN") && previous !== "dot" && previous !== "optionalDot") {
       this.diagnostics.push(diagnostic(
@@ -528,7 +987,7 @@ export class Lexer {
       if (rule.recovery) {
         // The rule carries its successor only when the guidance names exactly
         // one ('var' names 'let' or 'const', so it names none).
-        this.diagnostics.push(recoveredDiagnostic("VEL1005", rule.guidance, span(start, this.index),
+        if (!receiverParameter) this.diagnostics.push(recoveredDiagnostic("VEL1005", rule.guidance, span(start, this.index),
           rule.fix === null ? undefined : mechanicalFix(
             span(start, rule.fix === "" ? this.skipHorizontalWhitespace(this.index) : this.index),
             rule.fix,
@@ -547,6 +1006,76 @@ export class Lexer {
     }
     const keyword = Object.hasOwn(keywordKinds, value) ? keywordKinds[value] : undefined;
     this.tokens.push({ kind: keyword ?? "identifier", value, span: span(start, this.index) });
+  }
+
+  /**
+   * The three positions in which a name is a member name rather than a binding:
+   * after a member step, as a record-literal key, and as the name of a member
+   * declared in a class body. The first two are the reads — `q.with("cte")`,
+   * `{with: 1}` — and the third is the declaration an extern module needs to
+   * describe such an API at all.
+   *
+   * A class body is the only place the declaration is legal: `def with(...)`
+   * outside one binds a name, and the generated module would say
+   * `function with`, which is not JavaScript.
+   */
+  private isMemberNamePosition(previous: TokenKind | undefined): boolean {
+    if (previous === "dot" || previous === "optionalDot") return true;
+    // A record key is followed by ':' — `{with: 1}` and `{a: 1, with: 2}`. The
+    // preceding '{' or ',' is what separates a key from an argument in a call.
+    if ((previous === "leftBrace" || previous === "comma")
+      && this.text[this.skipHorizontalWhitespace(this.index)] === ":") return true;
+    const declaring = previous === "def"
+      || (previous === "identifier" && (this.tokens.at(-1)?.value === "get" || this.tokens.at(-1)?.value === "set"));
+    return declaring && (this.classBodyStack.at(-1) ?? false);
+  }
+
+  /**
+   * D90 (coherence): the one position where `this` is the Python receiver
+   * reflex rather than JavaScript's dynamic receiver — a parameter name in the
+   * list of an instance method or a constructor inside a class body. The
+   * analyzer owns that report, because only it knows the declaration carries
+   * an implicit receiver, and its rewrite deletes the parameter instead of
+   * renaming it to a spelling that is an error in the same position.
+   *
+   * The walk is paren-balanced so a default value cannot be mistaken for the
+   * list that encloses it — `def m(a = f(this))` is an ordinary receiver read
+   * — and `static def make(this)` is excluded because a static method has no
+   * receiver to delete, so the rename is still the honest answer there.
+   */
+  private isReceiverParameterPosition(previous: TokenKind | undefined): boolean {
+    if (previous !== "leftParen" && previous !== "comma") return false;
+    if (!(this.classBodyStack.at(-1) ?? false)) return false;
+    let depth = 0;
+    let index = this.tokens.length - 1;
+    for (let steps = 0; index >= 0 && steps < RECEIVER_PARAMETER_SCAN_LIMIT; steps += 1, index -= 1) {
+      const kind = this.tokens[index]!.kind;
+      if (kind === "rightParen") depth += 1;
+      else if (kind === "leftParen") {
+        if (depth === 0) break;
+        depth -= 1;
+      } else if (lineBoundaryKinds.has(kind) && depth === 0 && kind !== "newline") return false;
+    }
+    if (index < 0 || this.tokens[index]?.kind !== "leftParen") return false;
+    let head = index - 1;
+    // A generic method writes its parameters after the type parameter list, so
+    // `def m<T>(this)` has to walk back over a balanced '<...>' to reach the
+    // name that says which declaration this list belongs to.
+    if (this.tokens[head]?.kind === "greater") {
+      let angle = 0;
+      for (let steps = 0; head >= 0 && steps < RECEIVER_PARAMETER_SCAN_LIMIT; steps += 1, head -= 1) {
+        const kind = this.tokens[head]!.kind;
+        if (kind === "greater") angle += 1;
+        else if (kind === "less" && (angle -= 1) === 0) {
+          head -= 1;
+          break;
+        }
+      }
+    }
+    const name = this.tokens[head];
+    if (name?.kind !== "identifier") return false;
+    if (name.value === "constructor") return true;
+    return this.tokens[head - 1]?.kind === "def" && this.tokens[head - 2]?.kind !== "static";
   }
 
   private readNumber(): void {
@@ -597,7 +1126,7 @@ export class Lexer {
     else while (this.isIdentifierPart(this.peek())) this.advance();
     const suffix = this.text.slice(numberEnd, this.index);
     if (suffix && this.numericSuffixes.has(suffix)) {
-      this.tokens.push({ kind: "unitNumber", value: `${value}${suffix}`, span: span(start, this.index) });
+      this.pushNumber("unitNumber", `${value}${suffix}`, span(start, this.index));
       return;
     }
     if (suffix) {
@@ -620,7 +1149,7 @@ export class Lexer {
         span(numberEnd, this.index),
       ));
     }
-    this.tokens.push({ kind: "number", value, span: span(start, numberEnd) });
+    this.pushNumber("number", value, span(start, numberEnd));
   }
 
   private readRadixNumber(): void {
@@ -657,7 +1186,25 @@ export class Lexer {
       this.diagnostics.push(diagnostic("VEL1007", `${radixName[0]!.toUpperCase()}${radixName.slice(1)} integer literals require at least one digit`, span(start, this.index)));
       digits = "0";
     }
-    this.tokens.push({ kind: "number", value: `0${prefix}${digits}`, span: span(start, this.index) });
+    this.pushNumber("number", `0${prefix}${digits}`, span(start, this.index));
+  }
+
+  /**
+   * A number token, carrying the author's own spelling whenever the value it
+   * holds is spelled differently — `1_000` loses its separators and `0X20`
+   * loses its uppercase prefix on the way to the token. D90 R6 quotes the
+   * literal back when it is not exactly representable, and it must quote what
+   * was written: reporting `'10000000000000000001'` for a source line that
+   * reads `1_000_000_000_000_000_000_1` sends the author looking for text that
+   * is not there.
+   */
+  private pushNumber(kind: "number" | "unitNumber", value: string, tokenSpan: Span): void {
+    const written = this.text.slice(tokenSpan.start, tokenSpan.end);
+    if (written === value) {
+      this.tokens.push({ kind, value, span: tokenSpan });
+      return;
+    }
+    this.tokens.push({ kind, value, span: tokenSpan, payload: { written } satisfies NumberTokenPayload });
   }
 
   private isRadixDigit(character: string, radix: number): boolean {
@@ -695,7 +1242,7 @@ export class Lexer {
       span(start, this.index),
       mechanicalFix(span(start, this.index), value, `Write '${value}'`),
     ));
-    this.tokens.push({ kind: "number", value, span: span(start, this.index) });
+    this.pushNumber("number", value, span(start, this.index));
   }
 
   private readDigitsWithSeparators(): string {
@@ -916,6 +1463,7 @@ export class Lexer {
       }
       this.tokens.push(result.token);
       this.diagnostics.push(...result.diagnostics ?? []);
+      this.advisories.push(...result.advisories ?? []);
       this.index = result.nextOffset;
       this.atLineStart = result.startsLine ?? false;
       return true;
@@ -954,7 +1502,12 @@ export class Lexer {
    */
   private trailingSemicolonFix(start: number): DiagnosticFix | undefined {
     let end = start + 1;
-    while (this.text[end] === ";" || this.text[end] === " " || this.text[end] === "\t") end += 1;
+    if (end < this.semicolonRunEnd) {
+      end = this.semicolonRunEnd;
+    } else {
+      while (this.text[end] === ";" || this.text[end] === " " || this.text[end] === "\t") end += 1;
+      this.semicolonRunEnd = end;
+    }
     const rest = this.text.slice(end, this.lineEnd(end));
     if (rest.length > 0 && !rest.startsWith("//") && !rest.startsWith("/*")) return undefined;
     let from = start;
@@ -1053,14 +1606,46 @@ export class Lexer {
       || (codePoint >= 0x7f && codePoint <= 0x9f);
   }
 
+  /**
+   * The start of the physical line `index` sits on. D90 (compiler-front-2): the
+   * backward scan this used to be is O(column) per call, and its callers — A1,
+   * the block-comment reader, the semicolon fix, and every opening bracket —
+   * run once per token, so one long physical line cost O(n²). A line of 20000
+   * semicolons took 673 ms and a 4 MiB one would have taken hours, with nothing
+   * to stop it: a ';' produces no token, so `MAX_TOKENS` never fires.
+   *
+   * The offsets those callers ask about only move forward, so the scan is
+   * carried across the file once and each call pays for the characters since
+   * the last one. An earlier offset still falls back to the backward scan,
+   * which is correct and, being off the hot path, is not the cost.
+   */
   private lineStart(index: number): number {
-    while (index > 0 && this.text[index - 1] !== "\n" && this.text[index - 1] !== "\r") index -= 1;
-    return index;
+    if (index < this.scannedTo) {
+      let cursor = index;
+      while (cursor > 0 && this.text[cursor - 1] !== "\n" && this.text[cursor - 1] !== "\r") cursor -= 1;
+      return cursor;
+    }
+    while (this.scannedTo < index) {
+      const character = this.text[this.scannedTo];
+      this.scannedTo += 1;
+      if (character === "\n" || character === "\r") this.scannedLineStart = this.scannedTo;
+    }
+    return this.scannedLineStart;
   }
 
+  /**
+   * The end of the physical line `index` sits on. Every offset between a line's
+   * start and its end shares that end, so one line answers every call about it
+   * once — which is what keeps a line of N semicolons from paying N forward
+   * scans of its own tail.
+   */
   private lineEnd(index: number): number {
-    while (index < this.text.length && this.text[index] !== "\n" && this.text[index] !== "\r") index += 1;
-    return index;
+    if (index >= this.cachedLineEndFrom && index <= this.cachedLineEnd) return this.cachedLineEnd;
+    let cursor = index;
+    while (cursor < this.text.length && this.text[cursor] !== "\n" && this.text[cursor] !== "\r") cursor += 1;
+    this.cachedLineEndFrom = index;
+    this.cachedLineEnd = cursor;
+    return cursor;
   }
 
   private invalidCharacter(character: string, start: number): void {

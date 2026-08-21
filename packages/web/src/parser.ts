@@ -1,6 +1,7 @@
 import { typeParameterDeclarationFormsPhrase, type Diagnostic, type Span } from "@velarscript/compiler";
 import {
   Parser,
+  scanStringLiteral,
   type CompilerLexicalExtension,
   type Expression,
   type Parameter,
@@ -860,24 +861,19 @@ class LookSourceParser {
   private parseLookCondition(text: string, absoluteOffset: number): Expression {
     const hooks = new Map<number, string>();
     let rewritten = "";
-    let quote = "";
+    // Every rewrite here is length-preserving, because `hooks` is keyed by an
+    // offset into `text` and `replaceLookHooks` looks those keys up against
+    // spans parsed out of `rewritten`. `@name` becomes `_name` and a string
+    // literal is copied verbatim, so the two offsets stay equal.
     for (let index = 0; index < text.length;) {
-      const character = text[index]!;
-      if (quote) {
-        rewritten += character;
-        if (character === "\\" && index + 1 < text.length) {
-          rewritten += text[index + 1]!;
-          index += 2;
-          continue;
-        }
-        if (character === quote) quote = "";
-        index += 1;
-        continue;
-      }
-      if (character === '"' || character === "'") {
-        quote = character;
-        rewritten += character;
-        index += 1;
+      // A string literal is Core's to define — prefixes, escapes, raw content
+      // and every delimiter — so the `@` rewrite steps over whatever Core
+      // scans rather than keeping a second spelling of string lexing here.
+      const literal = scanStringLiteral(text, index);
+      if (literal) {
+        const end = Math.max(literal.end, index + 1);
+        rewritten += text.slice(index, end);
+        index = end;
         continue;
       }
       const match = /^@([A-Za-z][A-Za-z0-9]*)/u.exec(text.slice(index));
@@ -887,7 +883,7 @@ class LookSourceParser {
         index += match[0].length;
         continue;
       }
-      rewritten += character;
+      rewritten += text[index]!;
       index += 1;
     }
     const parsed = this.parseExpression(rewritten, absoluteOffset);

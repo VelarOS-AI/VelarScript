@@ -215,8 +215,13 @@ const cssWideKeywordSet: ReadonlySet<string> = new Set(cssWideKeywords);
  * way CSS spells it, plus the two aggregate keywords. A property that does not
  * participate in interpolation is excluded for the same reason `keyframes:`
  * rejects it.
+ *
+ * The set is published because the longhand is not its only reader: charter
+ * section 3549 says the `transition(property, ...)` builder takes the same
+ * vocabulary, so the analyzer's literal-argument check and the builder's own
+ * runtime guard read this table rather than restating it.
  */
-const transitionPropertyKeywords = keywords("none", "all", ...[...LOOK_PROPERTIES]
+export const LOOK_TRANSITION_PROPERTY_KEYWORDS: ReadonlySet<string> = keywords("none", "all", ...[...LOOK_PROPERTIES]
   .filter((property) => !LOOK_NON_ANIMATABLE_PROPERTIES.has(property))
   .map(cssPropertyName));
 
@@ -339,7 +344,7 @@ export const LOOK_PROPERTY_KEYWORDS: ReadonlyMap<string, ReadonlySet<string>> = 
   ["backgroundPosition", keywords(...positionKeywords)],
   ["transformOrigin", keywords(...positionKeywords)],
   ["objectPosition", keywords(...positionKeywords)],
-  ["transitionProperty", transitionPropertyKeywords],
+  ["transitionProperty", LOOK_TRANSITION_PROPERTY_KEYWORDS],
   ["transitionTimingFunction", keywords(...LOOK_ANIMATION_EASINGS)],
   ["position", keywords("static", "relative", "absolute", "fixed", "sticky")],
   ["boxSizing", keywords("content-box", "border-box")],

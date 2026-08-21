@@ -40,7 +40,15 @@ print(text)
 print(range(3))
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /__velarPromiseNamespace\.all\(\{ name: pending, count: count\(\) \}\)/u);
+  // D90 promise normalization: every value handed to `Promise.all` now passes
+  // through `__velarNormalizePromiseValue` first, so the record's fields carry
+  // the wrapper. The assertion is updated rather than loosened — it still pins
+  // that the two fields reach the namespace call in written order, under the
+  // permanent-namespace binding.
+  assert.match(
+    result.code ?? "",
+    /__velarPromiseNamespace\.all\(\{ name: __velarNormalizePromiseValue\(pending\), count: __velarNormalizePromiseValue\(count\(\)\) \}\)/u,
+  );
   const execution = execute(result.code ?? "");
   assert.equal(execution.status, 0, execution.stderr);
   assert.equal(execution.stdout, '{"count":2,"name":"Ada"}\n[ 0, 1, 2 ]\n');

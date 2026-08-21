@@ -23,6 +23,15 @@ const toolchainExtensionPackages = new Set([
   "@velarscript/node",
   "@velarscript/desktop",
 ]);
+
+/**
+ * The official target extensions this toolchain ships. They are the only
+ * packages allowed to name a `velar/*` module, because that vocabulary belongs
+ * to the language rather than to whoever installed a package.
+ */
+export function isToolchainExtensionPackage(name: string): boolean {
+  return toolchainExtensionPackages.has(name);
+}
 /**
  * BLD-U1: the official web application extension's package identity, exported
  * so configuration diagnostics can teach a complete manifest while the CLI
@@ -104,11 +113,70 @@ export async function resolveExtensionPackages(
       }
     }
   }
+  await assertToolchainGeneration(ordered.map((name) => packages.get(name)!));
+
   const applications = ordered.map((name) => packages.get(name)!).filter((item) => item.kind === "application");
   if (applications.length > 1) {
     throw new Error(`A VelarScript project can activate only one application extension; found ${applications.map((item) => item.name).join(", ")}`);
   }
   return Object.freeze(ordered.map((name) => packages.get(name)!));
+}
+
+interface ToolchainIdentity {
+  readonly version: string;
+  readonly pins: Readonly<Record<string, string>>;
+}
+
+let toolchainIdentity: ToolchainIdentity | null = null;
+
+/**
+ * This CLI's own version and the exact versions it was published against.
+ * `@velarscript/cli` pins every official target extension to its own version
+ * and the release gate refuses a candidate whose pins drift, so these are the
+ * versions whose compiler generation is the one running here.
+ */
+async function readToolchainIdentity(): Promise<ToolchainIdentity> {
+  if (toolchainIdentity) return toolchainIdentity;
+  try {
+    const manifestPath = new URL("../package.json", import.meta.url);
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
+      readonly version?: unknown;
+      readonly dependencies?: Readonly<Record<string, unknown>>;
+    };
+    const pins: Record<string, string> = {};
+    for (const [name, range] of Object.entries(manifest.dependencies ?? {})) {
+      if (typeof range === "string" && PACKAGE_VERSION.test(range)) pins[name] = range;
+    }
+    toolchainIdentity = Object.freeze({
+      version: typeof manifest.version === "string" ? manifest.version : "unknown",
+      pins: Object.freeze(pins),
+    });
+  } catch {
+    // A toolchain whose own manifest is unreadable cannot claim a generation;
+    // it must not turn that into a refusal of the project's extensions.
+    toolchainIdentity = Object.freeze({ version: "unknown", pins: Object.freeze({}) });
+  }
+  return toolchainIdentity;
+}
+
+/**
+ * An extension is resolved from the project before the toolchain, deliberately,
+ * so the CLI's exact pin does not constrain what actually loads. That routes
+ * around the only thing keeping the two halves of an emitted program on one
+ * compiler generation: an official target extension from another release brings
+ * its own nested `@velarscript/compiler`, and `validateLoadedExtension` cannot
+ * see the difference — `protocolVersion` has never moved and `apiVersion` is
+ * compared against the extension's own manifest. The npm versions are the one
+ * generation marker both sides do carry, so they are compared here.
+ */
+async function assertToolchainGeneration(packages: readonly ResolvedExtensionPackage[]): Promise<void> {
+  const toolchain = await readToolchainIdentity();
+  for (const package_ of packages) {
+    if (package_.resolution !== "project") continue;
+    const pinned = toolchain.pins[package_.name];
+    if (pinned === undefined || pinned === package_.version) continue;
+    throw new Error(`${package_.manifestPath}: this project resolves ${package_.name} ${package_.version}, but @velarscript/cli ${toolchain.version} is built against ${package_.name} ${pinned}; a VelarScript toolchain is one generation, so install ${package_.name} ${pinned} or @velarscript/cli ${package_.version}`);
+  }
 }
 
 export function validateLoadedExtension(
@@ -265,7 +333,13 @@ function objectField(value: unknown, field: string, manifestPath: string): Recor
 }
 
 function knownFields(value: Record<string, unknown>, allowed: ReadonlySet<string>, field: string, manifestPath: string): void {
-  for (const key of Object.keys(value)) if (!allowed.has(key)) throw new Error(`${manifestPath}: '${field}' contains unknown field '${key}'`);
+  // The rejection names what the section does accept: an author who misspells a
+  // field is otherwise told only that their spelling is wrong, never which one
+  // it should have been. Same shape as 'velar.requires' in project.ts (D90 R13).
+  const supported = [...allowed].sort().map((name) => `'${name}'`).join(", ");
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) throw new Error(`${manifestPath}: '${field}' contains unknown field '${key}'; the supported fields are ${supported}`);
+  }
 }
 
 function sameStringRecord(left: Readonly<Record<string, string>>, right: Readonly<Record<string, string>>): boolean {

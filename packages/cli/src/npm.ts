@@ -11,6 +11,11 @@ import { resolveInstalledPackageRoot } from "./installed-package.ts";
 import { VELAR_VERSION } from "./version.ts";
 
 const MAX_BROWSER_NPM_PACKAGES = 4096;
+// npm's own package-name grammar, the same one the extension loader applies to
+// an extension's identity. A dependency's self-declared `name` reaches a cache
+// directory that is later removed recursively, a dev-server route, and an
+// import-map key, so it is untrusted input until it parses as a package name.
+const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*|[a-z0-9][a-z0-9._-]*)$/u;
 const MAX_PACKAGE_MANIFEST_BYTES = 1024 * 1024;
 const MAX_DEV_DEPENDENCY_META_BYTES = 1024 * 1024;
 
@@ -132,17 +137,18 @@ export async function resolveBrowserNpm(
       try {
         const resolvedImport = await resolveInstalledBrowserImport(specifier, require);
         const { requestedName, subpath, root, manifest, entry } = resolvedImport;
-        const name = manifest.name ?? requestedName;
+        const name = browserPackageIdentity(manifest, requestedName);
         let state = states.get(name);
         if (!state) {
           const version = typeof manifest.version === "string" && manifest.version !== "" ? manifest.version : "0.0.0";
+          const cacheDir = prebundleCacheDirectory(cacheRoot, name, version);
           state = {
             name,
             version,
             root,
             manifest,
             route: `/@npm/${name}/`,
-            cacheDir: join(cacheRoot, `${name.replaceAll("/", "+")}@${version}`),
+            cacheDir,
             entries: new Map(),
             meta: null,
             bundled: false,
@@ -226,6 +232,38 @@ export async function npmAsset(packages: readonly BrowserNpmPackage[], pathname:
   } catch {
     return null;
   }
+}
+
+/**
+ * The identity a resolved package is cached, routed, and imported under. The
+ * manifest's own `name` is whatever the dependency wrote about itself — a
+ * backslash in it is a path separator `join` honours on Windows — so it is
+ * taken only when it parses as an npm package name and names the package that
+ * was actually resolved. Every other reader of an installed manifest in this
+ * CLI makes the same comparison (extension-metadata.ts:173, project.ts:1679,
+ * typescript-declarations.ts:89); this one was missed.
+ */
+export function browserPackageIdentity(manifest: PackageManifest, requestedName: string): string {
+  const declared = manifest.name;
+  if (typeof declared === "string" && declared === requestedName && PACKAGE_NAME.test(declared)) return declared;
+  return requestedName;
+}
+
+/**
+ * Where one package version is prebundled. `ensurePackageBundle` removes this
+ * path recursively before writing, and the version half of the name is as
+ * unvalidated as the name half was — a dependency declaring
+ * `"version": "../../build"` walks out of the cache just as a hostile name
+ * would. The same containment the resolved entry gets is applied here, so the
+ * directory a build deletes is always inside the cache this project owns.
+ */
+export function prebundleCacheDirectory(cacheRoot: string, name: string, version: string): string {
+  const cacheDir = join(cacheRoot, `${name.replaceAll("/", "+")}@${version}`);
+  const fromRoot = relative(cacheRoot, cacheDir);
+  if (!fromRoot || fromRoot.startsWith("..") || isAbsolute(fromRoot)) {
+    throw new Error(`the prebundle directory for '${name}@${version}' escapes ${cacheRoot}`);
+  }
+  return cacheDir;
 }
 
 async function resolveInstalledBrowserImport(specifier: string, require: NodeJS.Require): Promise<InstalledBrowserImport> {

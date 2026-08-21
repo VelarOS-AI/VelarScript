@@ -289,12 +289,46 @@ function buildLayoutContent(
   return { content, offsets };
 }
 
-function nextLineStart(source: string, start: number): { readonly newlineStart: number; readonly nextStart: number } {
+interface LineBoundary {
+  readonly newlineStart: number;
+  readonly nextStart: number;
+}
+
+// Every inline literal asks for the end of the physical line it sits on, so a
+// line carrying many literals paid one forward scan per literal — quadratic in
+// that line for a long record or a minified paste. The last boundary is kept
+// instead: an offset at or before a known newline, and no earlier than the
+// scan that found it, sits on the same line and shares that answer.
+//
+// The memo is keyed on the source *content*, not on identity, which is what
+// makes one slot shared by the whole process safe: two texts that compare
+// equal have the same line structure, so a boundary found in one is the
+// boundary in the other. That covers both ways a second text reaches here —
+// another module compiled in the same process, and the separate lex of an
+// f-string fragment, whose `source` is the fragment text rather than the
+// module's. Key this on identity, or widen it with a field the content does
+// not determine, and both of those become wrong answers. See
+// tests/hardening-d90-front-end-performance.test.ts.
+let lineBoundarySource: string | null = null;
+let lineBoundaryFrom = 0;
+let lineBoundary: LineBoundary = { newlineStart: 0, nextStart: 0 };
+
+function nextLineStart(source: string, start: number): LineBoundary {
+  if (source === lineBoundarySource && start >= lineBoundaryFrom && start <= lineBoundary.newlineStart) {
+    return lineBoundary;
+  }
   for (let index = start; index < source.length; index += 1) {
     const length = newlineLength(source, index);
-    if (length > 0) return { newlineStart: index, nextStart: index + length };
+    if (length > 0) return rememberLineBoundary(source, start, { newlineStart: index, nextStart: index + length });
   }
-  return { newlineStart: source.length, nextStart: source.length };
+  return rememberLineBoundary(source, start, { newlineStart: source.length, nextStart: source.length });
+}
+
+function rememberLineBoundary(source: string, from: number, boundary: LineBoundary): LineBoundary {
+  lineBoundarySource = source;
+  lineBoundaryFrom = from;
+  lineBoundary = boundary;
+  return boundary;
 }
 
 function previousLineStart(source: string, index: number): number {

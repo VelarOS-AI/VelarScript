@@ -99,7 +99,11 @@ Object.defineProperty(globalThis, Symbol.for(${JSON.stringify(VELAR_RUNTIME_REGI
 ${web.code ?? ""}
 `);
   assert.notEqual(execution.status, 0);
-  assert.match(String(execution.stderr), /VelarScript Web runtime (?:ownership|values) is invalid/u);
+  // D90 fr-7: the schema comparison now runs ahead of the ownership and roster
+  // checks and names both generations, because a schema bump usually moves the
+  // roster too and "fields are invalid" named neither.
+  assert.match(String(execution.stderr), /VelarScript Web runtime schema incompatible does not match this module's schema 0\.12/u);
+  assert.match(String(execution.stderr), /npm ls @velarscript\/compiler/u);
 });
 
 test("the Web registry raw bridge retries a missing runtime and caches a valid immutable provider", () => {
@@ -219,9 +223,13 @@ console.log(reads);
   const capturedHosts = executeModule(`
 ${VELAR_TYPE_REGISTRY_RUNTIME}
 const NativeTypeError = TypeError;
-const known = __velarRegisterRuntimeType(Object.freeze({ name: "known" }));
-const later = Object.freeze({ name: "later" });
-const forged = Object.freeze({ name: "forged" });
+// D90 fr-6: registry membership is no longer sufficient on its own -- a value
+// must still present the Type surface its caller is about to invoke -- so these
+// fixtures answer 'is' and 'parse' the way every registered Type does.
+const surface = { is: () => true, parse: (value) => value };
+const known = __velarRegisterRuntimeType(Object.freeze({ name: "known", ...surface }));
+const later = Object.freeze({ name: "later", ...surface });
+const forged = Object.freeze({ name: "forged", ...surface });
 let poisonCalls = 0;
 const poison = () => { poisonCalls += 1; throw new Error("poisoned host"); };
 WeakSet.prototype.has = poison;

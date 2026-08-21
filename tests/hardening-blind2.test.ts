@@ -296,7 +296,10 @@ test "this test never finishes":
   assert.ok(Date.now() - started < 60_000, "a bounded run must not wait out the test's own sleep");
   assert.match(result.output, /✗ "src\/hang\.test\.vel" :: "this test never finishes"/u);
   assert.match(result.output, /did not finish within its 500 millisecond bound/u);
-  assert.match(result.output, /work started during this run was still running 1000 milliseconds later/u);
+  // The leftover sleep is reported against the test that started it, not
+  // against the run: the timed-out body now runs in the test file's own thread,
+  // which is settled and then ended before the next file starts.
+  assert.match(result.output, /work started by this test was still running 1000 milliseconds later/u);
 });
 
 test("[BLIND2-1] a passing suite still settles immediately", { timeout: 120_000 }, async () => {

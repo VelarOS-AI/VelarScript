@@ -364,3 +364,81 @@ class CssScanner {
 export function cssTokens(source: string): Generator<CssToken> {
   return new CssScanner(source).tokens();
 }
+
+/**
+ * True when `value` is one balanced CSS declaration value: text a generated
+ * rule can place after `property:` with no way to end that declaration, the
+ * rule around it, or the stylesheet segment the rule lives in.
+ *
+ * A Look property's value reaches the DOM through `setProperty` on a custom
+ * property and cannot escape, which is why the value vocabulary deliberately
+ * accepts arbitrary text for the `text`, `filter`, `transform`, and
+ * `animation` kinds (D73 rule 187). `keyframes:` reuses that same checker on a
+ * path that concatenates into stylesheet text instead, so a `}` in a stop's
+ * value closed the generated rule and everything after it became author-owned
+ * CSS in the compiler-owned segment. This is the gate for the concatenating
+ * path only: `{`, `}`, `;`, and `@` never appear outside a string, parens
+ * balance, and strings and comments terminate.
+ */
+export function isCssDeclarationValue(value: string): boolean {
+  let index = 0;
+  let depth = 0;
+  while (index < value.length) {
+    const character = value[index]!;
+    if (character === "/" && value[index + 1] === "*") {
+      const end = value.indexOf("*/", index + 2);
+      // An unterminated comment swallows whatever follows it in the sheet.
+      if (end === -1) return false;
+      index = end + 2;
+      continue;
+    }
+    if (character === "\"" || character === "'") {
+      const end = skipString(value, index, character);
+      if (end === null) return false;
+      index = end;
+      continue;
+    }
+    if (character === "\\") {
+      const next = value[index + 1];
+      // Outside a string `\` has nothing to continue onto: at the end of the
+      // value or before a newline it is a parse error, not an escape.
+      if (next === undefined || isNewline(next)) return false;
+      index += 1 + next.length;
+      continue;
+    }
+    if (character === "(") {
+      depth += 1;
+      index += 1;
+      continue;
+    }
+    if (character === ")") {
+      if (depth === 0) return false;
+      depth -= 1;
+      index += 1;
+      continue;
+    }
+    if (character === "{" || character === "}" || character === ";" || character === "@") return false;
+    index += 1;
+  }
+  return depth === 0;
+}
+
+/** The index just past the string opened at `start`, or null when it never closes. */
+function skipString(value: string, start: number, quote: string): number | null {
+  let index = start + 1;
+  while (index < value.length) {
+    const character = value[index]!;
+    if (character === quote) return index + 1;
+    if (isNewline(character)) return null;
+    if (character === "\\") {
+      const next = value[index + 1];
+      if (next === undefined) return null;
+      // `\` before a newline is a line continuation inside a string, and CRLF
+      // is one break rather than two.
+      index += next === "\r" && value[index + 2] === "\n" ? 3 : 1 + next.length;
+      continue;
+    }
+    index += 1;
+  }
+  return null;
+}

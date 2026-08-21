@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 
 import { lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
-import { tmpdir } from "node:os";
+import { basename, dirname, extname, isAbsolute, join, parse as parsePath, relative, resolve } from "node:path";
+import { homedir, tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { formatSource } from "@velarscript/compiler";
 import type { CompileResult, CompilerExtension } from "@velarscript/compiler";
 import type { VelarNodeConfig } from "@velarscript/node/compiler";
 import { createVelarProject, parseCreateArguments } from "create-velar";
@@ -25,7 +24,8 @@ import { standardModuleClosure, standardModuleSource, standardModuleSources } fr
 import { runTests } from "./test-runner.ts";
 import { runProgram } from "./program-runner.ts";
 import type { BrowserEngineSelection } from "./browser-test-runner.ts";
-import { buildProductionFramework, writeProductionManifest } from "./production-build.ts";
+import { buildProductionFramework, PRODUCTION_MANIFEST_NAME, writeProductionManifest } from "./production-build.ts";
+import { formatSourceChecked } from "./format-guard.ts";
 import { VELAR_VERSION } from "./version.ts";
 import { assertRequiredPublicAssets, copyPublicAssets, writeStaticDeployment } from "./static-deployment.ts";
 import { verifyProductionBuild } from "./production-verifier.ts";
@@ -53,6 +53,7 @@ interface CommandArguments {
   readonly input: string | null;
   readonly output: string | null;
   readonly outputDirectory: string | null;
+  readonly force: boolean;
 }
 
 interface FormatArguments {
@@ -397,16 +398,31 @@ async function main(arguments_: readonly string[]): Promise<number> {
       return 1;
     }
     const changed: string[] = [];
+    const unstable: string[] = [];
     try {
       for (const input of inputs) {
         const source = await readVelarSourceFile(input);
-        const formatted = formatSource(source, { extensions: formattingExtensions });
+        const { text: formatted, stable } = formatSourceChecked(source, { extensions: formattingExtensions });
+        // Formatting is idempotent by contract. A result the formatter would
+        // change again is a formatter defect, and writing it would replace a
+        // module that compiles with one that may not, so the file keeps the
+        // bytes the author wrote and the command reports the defect.
+        if (!stable) {
+          unstable.push(input);
+          continue;
+        }
         if (formatted === source) continue;
         changed.push(input);
         if (!parsed.check) await writeFile(input, formatted, "utf8");
       }
     } catch (error) {
       process.stderr.write(`velar format: ${hostErrorMessage(error)}\n`);
+      return 1;
+    }
+    if (unstable.length > 0) {
+      for (const input of unstable) {
+        process.stderr.write(`velar format: ${displayPath(input)}: the formatter did not reach a fixed point; the file was left unchanged\n`);
+      }
       return 1;
     }
     if (parsed.check && changed.length > 0) {
@@ -493,7 +509,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
     return runTests(projectConfig, parsed.input);
   }
 
-  const parsed = command === "package" ? parsePackageArguments(rest) : parseCommandArguments(rest);
+  const parsed = command === "package" ? parsePackageArguments(rest) : parseCommandArguments(rest, command === "build");
   if (typeof parsed === "string") {
     process.stderr.write(`velar ${command}: ${parsed}\n`);
     return 2;
@@ -522,7 +538,15 @@ async function main(arguments_: readonly string[]): Promise<number> {
 
   if (command === "check") {
     const count = checked.compiled.size;
-    process.stdout.write(`Checked ${count} module${count === 1 ? "" : "s"} from ${displayInput(parsed.input, projectConfig)}\n`);
+    // D89: a passing check that carried advisories says how many. Folding them
+    // into a silent "checked N modules" would hide the one thing the advisory
+    // channel exists to make impossible to miss; the exit code stays 0 either
+    // way, because an advisory is not a failure.
+    const advisories = checked.advisories.length;
+    process.stdout.write(
+      `Checked ${count} module${count === 1 ? "" : "s"} from ${displayInput(parsed.input, projectConfig)}`
+      + `${advisories > 0 ? ` — ${advisories} advisor${advisories === 1 ? "y" : "ies"}` : ""}\n`,
+    );
     return 0;
   }
 
@@ -542,7 +566,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
           buildRequests += 1;
           if (buildRequests > 1) throw new Error("application package host requested more than one framework build");
           const outputDirectory = packageFrameworkOutput(projectConfig.root, requestedOutput);
-          frameworkBuild = writeFrameworkProductionApplication(project, outputDirectory);
+          frameworkBuild = writeFrameworkProductionApplication(project, outputDirectory, { forced: false, declared: false });
           await frameworkBuild;
         },
       });
@@ -585,9 +609,15 @@ async function main(arguments_: readonly string[]): Promise<number> {
   }
 
   const outputDirectory = parsed.outputDirectory ? resolve(parsed.outputDirectory) : projectConfig.outDir;
+  // `outDir` is the project manifest's own declaration of a directory velar
+  // owns, and config.ts already refuses one that is the project root or that
+  // overlaps the entry or the public directory. `--out-dir` carries no such
+  // declaration, so a path it names has to prove ownership before the build
+  // replaces what is there.
+  const replacement: BuildOutputReplacement = { forced: parsed.force, declared: outputDirectory === projectConfig.outDir };
   if (project.framework) {
     try {
-      await writeFrameworkProductionApplication(project, outputDirectory);
+      await writeFrameworkProductionApplication(project, outputDirectory, replacement);
     } catch (error) {
       process.stderr.write(`velar build: ${hostErrorMessage(error)}\n`);
       return 1;
@@ -598,7 +628,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
   const nodeConfig = nodeApplicationConfig(projectConfig);
   if (nodeConfig) {
     try {
-      await writeNodeProductionApplication(project, outputDirectory, nodeConfig);
+      await writeNodeProductionApplication(project, outputDirectory, nodeConfig, replacement);
     } catch (error) {
       process.stderr.write(`velar build: ${hostErrorMessage(error)}\n`);
       return 1;
@@ -606,7 +636,13 @@ async function main(arguments_: readonly string[]): Promise<number> {
     process.stdout.write(`Built production Node app -> ${outputDirectory}\n`);
     return 0;
   }
-  const staging = await prepareBuildStaging(outputDirectory);
+  let staging: string;
+  try {
+    staging = await prepareBuildStaging(outputDirectory, replacement);
+  } catch (error) {
+    process.stderr.write(`velar build: ${hostErrorMessage(error)}\n`);
+    return 1;
+  }
   try {
     assertUniqueEmbeddedModuleOutputs(project.modules.map((module) => ({
       ownerPath: join(staging, module.relativePath.replace(/\.vel$/, ".js")),
@@ -630,7 +666,11 @@ async function main(arguments_: readonly string[]): Promise<number> {
   return 0;
 }
 
-async function writeFrameworkProductionApplication(project: ProjectResult, outputDirectory: string): Promise<void> {
+async function writeFrameworkProductionApplication(
+  project: ProjectResult,
+  outputDirectory: string,
+  replacement: BuildOutputReplacement,
+): Promise<void> {
   if (!project.framework) throw new Error("the checked project has no framework host");
   const framework = project.framework;
   await assertRequiredPublicAssets(
@@ -638,7 +678,7 @@ async function writeFrameworkProductionApplication(project: ProjectResult, outpu
     project.projectRoot,
     framework.host.requiredPublicAssets?.(framework.config) ?? [],
   );
-  const staging = await prepareBuildStaging(outputDirectory);
+  const staging = await prepareBuildStaging(outputDirectory, replacement);
   try {
     await copyPublicAssets(project.publicRoot, staging);
     const production = await buildProductionFramework(project, staging);
@@ -663,14 +703,18 @@ async function writeFrameworkProductionApplication(project: ProjectResult, outpu
   }
 }
 
+/** The receipt a node build leaves in its output; it also proves velar owns the directory. */
+const NODE_BUILD_MANIFEST_NAME = "velar-node.json";
+
 async function writeNodeProductionApplication(
   project: ProjectResult,
   outputDirectory: string,
   config: VelarNodeConfig,
+  replacement: BuildOutputReplacement,
 ): Promise<void> {
   const application = nodeApplicationEntry(project, config);
   const entry = application.entry;
-  const staging = await prepareBuildStaging(outputDirectory);
+  const staging = await prepareBuildStaging(outputDirectory, replacement);
   try {
     assertUniqueEmbeddedModuleOutputs(project.modules.map((module) => ({
       ownerPath: join(staging, module.relativePath.replace(/\.vel$/u, ".js")),
@@ -689,7 +733,7 @@ async function writeNodeProductionApplication(
     const launcher = ".velar-node-entry.mjs";
     await writeFile(join(staging, launcher), nodeApplicationLauncherSource(entryPath, config, {}, false, application.kind), "utf8");
     await writeFile(join(staging, "package.json"), `${JSON.stringify({ name: "velar-node-build", private: true, type: "module" }, null, 2)}\n`, "utf8");
-    await writeFile(join(staging, "velar-node.json"), `${JSON.stringify({
+    await writeFile(join(staging, NODE_BUILD_MANIFEST_NAME), `${JSON.stringify({
       formatVersion: 1,
       kind: "velar-node-build",
       entry: launcher,
@@ -716,6 +760,14 @@ function packageFrameworkOutput(root: string, input: string): string {
   return output;
 }
 
+/** How much of the output directory's current contents this build may replace. */
+interface BuildOutputReplacement {
+  /** `--force` was passed: replace the directory even without an ownership marker. */
+  readonly forced: boolean;
+  /** The path is the project manifest's own `outDir`, which declares velar owns it. */
+  readonly declared: boolean;
+}
+
 interface BuildStagingOwnership {
   readonly formatVersion: 1;
   readonly kind: "velar-build-staging";
@@ -729,8 +781,9 @@ interface BuildStagingOwnership {
  * output. A process cut can happen before or after either rename, so recovery
  * also finishes restoring the previous output when installation never began.
  */
-async function prepareBuildStaging(outputDirectory: string): Promise<string> {
+async function prepareBuildStaging(outputDirectory: string, replacement: BuildOutputReplacement): Promise<string> {
   const normalizedOutput = resolve(outputDirectory);
+  await assertReplaceableBuildOutput(normalizedOutput, replacement);
   const parent = dirname(normalizedOutput);
   await mkdir(parent, { recursive: true });
   await recoverInterruptedBuilds(normalizedOutput);
@@ -744,6 +797,59 @@ async function prepareBuildStaging(outputDirectory: string): Promise<string> {
   };
   await writeFile(join(staging, BUILD_STAGING_MARKER), `${JSON.stringify(ownership, null, 2)}\n`, "utf8");
   return staging;
+}
+
+/**
+ * A build replaces its output directory wholesale, so the path is accepted only
+ * when velar owns it: absent, empty, carrying a manifest a previous build wrote,
+ * or named by the project manifest's own `outDir`. Every other destructive path
+ * in this repository makes the same test first — `assertReplaceableReleaseOutput`
+ * in scripts/release-toolchain.mjs, `prepareDirectory` in reproduction.ts, and
+ * `createVelarProject` — and `--out-dir` was the one an author runs daily that
+ * did not. `--force` waives the ownership test and nothing else: the home
+ * directory, the filesystem root and a symbolic link stay refused.
+ */
+async function assertReplaceableBuildOutput(outputDirectory: string, replacement: BuildOutputReplacement): Promise<void> {
+  const directory = resolve(outputDirectory);
+  if (directory === parsePath(directory).root || directory === resolve(homedir())) {
+    throw new Error(`refusing to replace '${directory}': a build output cannot be the filesystem root or the home directory`);
+  }
+  let metadata;
+  try {
+    metadata = await lstat(directory);
+  } catch (error) {
+    if (isHostErrorCode(error, "ENOENT") || isHostErrorCode(error, "ENOTDIR")) return;
+    throw error;
+  }
+  if (metadata.isSymbolicLink()) throw new Error(`refusing to replace '${directory}': it is a symbolic link`);
+  if (!metadata.isDirectory()) throw new Error(`refusing to replace '${directory}': it is not a directory`);
+  if (replacement.forced || replacement.declared) return;
+  if ((await readdir(directory)).length === 0) return;
+  if (await isBuildOutputDirectory(directory)) return;
+  throw new Error(`refusing to replace '${directory}': it is not empty and was not produced by velar build (pass --force to overwrite)`);
+}
+
+/**
+ * The three build shapes leave three different receipts: a framework build
+ * writes `velar-build.json`, a node build writes `velar-node.json`, and a build
+ * cut between the two renames leaves the staging marker naming this same output.
+ */
+async function isBuildOutputDirectory(directory: string): Promise<boolean> {
+  if (await buildStagingOwnership(directory, directory, null)) return true;
+  return await buildManifestKind(join(directory, PRODUCTION_MANIFEST_NAME)) === "velar-framework-build"
+    || await buildManifestKind(join(directory, NODE_BUILD_MANIFEST_NAME)) === "velar-node-build";
+}
+
+async function buildManifestKind(path: string): Promise<string | null> {
+  try {
+    const metadata = await lstat(path);
+    if (!metadata.isFile() || metadata.isSymbolicLink()) return null;
+    const parsed = JSON.parse(await readFile(path, "utf8")) as { formatVersion?: unknown; kind?: unknown };
+    return Number.isSafeInteger(parsed.formatVersion) && typeof parsed.kind === "string" ? parsed.kind : null;
+  } catch (error) {
+    if (isHostErrorCode(error, "ENOENT") || isHostErrorCode(error, "ENOTDIR") || error instanceof SyntaxError) return null;
+    throw error;
+  }
 }
 
 async function recoverInterruptedBuilds(outputDirectory: string): Promise<void> {
@@ -1031,14 +1137,17 @@ function parseFormatArguments(arguments_: readonly string[]): FormatArguments | 
   return { input, check };
 }
 
-function parseCommandArguments(arguments_: readonly string[]): CommandArguments | string {
+function parseCommandArguments(arguments_: readonly string[], allowForce = false): CommandArguments | string {
   let input: string | null = null;
   let output: string | null = null;
   let outputDirectory: string | null = null;
+  let force = false;
 
   for (let index = 0; index < arguments_.length; index += 1) {
     const argument = arguments_[index]!;
-    if (argument === "--out" || argument === "--out-dir") {
+    if (allowForce && argument === "--force") {
+      force = true;
+    } else if (argument === "--out" || argument === "--out-dir") {
       const value = arguments_[index + 1];
       if (!value || value.startsWith("--")) {
         return `${argument} requires a path`;
@@ -1059,7 +1168,7 @@ function parseCommandArguments(arguments_: readonly string[]): CommandArguments 
     }
   }
 
-  return { input, output, outputDirectory };
+  return { input, output, outputDirectory, force };
 }
 
 function parseReproArguments(arguments_: readonly string[]): ReproArguments | string {
@@ -1091,7 +1200,7 @@ function parseReproArguments(arguments_: readonly string[]): ReproArguments | st
 function parsePackageArguments(arguments_: readonly string[]): CommandArguments | string {
   if (arguments_.length > 1) return `unexpected extra input '${arguments_[1]}'`;
   if (arguments_[0]?.startsWith("-")) return `unknown option '${arguments_[0]}'`;
-  return { input: arguments_[0] ?? null, output: null, outputDirectory: null };
+  return { input: arguments_[0] ?? null, output: null, outputDirectory: null, force: false };
 }
 
 function parseDevArguments(arguments_: readonly string[]): DevArguments | string {
@@ -1283,7 +1392,7 @@ function printHelp(output: NodeJS.WritableStream = process.stdout): void {
     "  velar update [package...]",
     "  velar dev [entry.vel | project-directory] [--port <port>]",
     "  velar serve [project-directory] [--host <host>] [--port <port>]",
-    "  velar build [entry.vel | project-directory] [--out-dir <directory>]",
+    "  velar build [entry.vel | project-directory] [--out-dir <directory>] [--force]",
     "  velar run [entry.vel | project-directory] [--stack] [-- <program-arguments>...]",
     "  velar verify [project-directory | build-directory]",
     "  velar preview [project-directory | build-directory] [--port <port>]",
@@ -1317,7 +1426,7 @@ function printCommandHelp(command: string, output: NodeJS.WritableStream = proce
     update: ["Usage: velar update [package...]", "Updates all or selected direct dependencies within package.json ranges through npm."],
     dev: ["Usage: velar dev [entry.vel | project-directory] [--port <1-65535>]", "Watches a framework app or last-good Node ServeApp; Web defaults to 5173 and Node reads node.port."],
     serve: ["Usage: velar serve [project-directory] [--host <host>] [--port <1-65535>]", "Checks and runs a Node ServeApp with production runtime behavior; node.host and node.port provide the defaults."],
-    build: ["Usage: velar build [entry.vel | project-directory] [--out-dir <directory>]", "       velar build <single.vel> --out <file.js>", "Builds isolated Web/Desktop output, a standalone Node application, or JavaScript modules."],
+    build: ["Usage: velar build [entry.vel | project-directory] [--out-dir <directory>] [--force]", "       velar build <single.vel> --out <file.js>", "Builds isolated Web/Desktop output, a standalone Node application, or JavaScript modules.", "--out-dir refuses a directory that is not empty and was not produced by a previous build; --force replaces one anyway."],
     package: ["Usage: velar package [project-directory]", "Packages an application through its target-owned native packaging host."],
     run: ["Usage: velar run [entry.vel | project-directory] [--stack] [-- <program-arguments>...]", "Compiles the resolved Core project and executes its entry module once on Node.js; arguments after '--' reach the program.", "--stack prints the full Node.js trace behind an uncaught program error instead of the VelarScript frames."],
     verify: ["Usage: velar verify [project-directory | build-directory]", "Verifies the exact production manifest, inventory, sizes, hashes, and relationships."],

@@ -603,8 +603,15 @@ const __velarListRangeError = RangeError;
 function __velarListReactiveRuntime() {
   const descriptor = __velarListGetOwnPropertyDescriptor(globalThis, __velarListSymbolFor(${JSON.stringify(VELAR_RUNTIME_REGISTRY_KEY)}));
   const runtime = descriptor && "value" in descriptor ? descriptor.value : null;
-  return runtime && runtime.version === ${JSON.stringify(VELAR_RUNTIME_SCHEMA_VERSION)} && typeof runtime.toRaw === "function"
-    && typeof runtime.collectionRead === "function" ? runtime : null;
+  // No registry means no reactive runtime in this realm, which is ordinary Core
+  // behavior. A registry from another generation is a mixed build: reading past
+  // it would copy raw values and silently lose every collectionRead dependency,
+  // so it fails closed ahead of the callable duck-checks.
+  if (!runtime || (typeof runtime !== "object" && typeof runtime !== "function")) return null;
+  if (runtime.version !== ${JSON.stringify(VELAR_RUNTIME_SCHEMA_VERSION)}) {
+    throw new __velarListTypeError("VelarScript reactive runtime schema " + (typeof runtime.version === "string" ? runtime.version : "(unknown)") + " does not match this module's schema ${VELAR_RUNTIME_SCHEMA_VERSION}; one build mixed two generations of @velarscript/* — run 'npm ls @velarscript/compiler' and pin one version");
+  }
+  return typeof runtime.toRaw === "function" && typeof runtime.collectionRead === "function" ? runtime : null;
 }
 function __velarRequireList(value, name) {
   const reactive = __velarListReactiveRuntime();
@@ -717,6 +724,9 @@ function __velarCollectionsCodePointCompare(left, right) {
 }
 function __velarCollectionsOrderedCompare(kind, left, right) {
   if (kind === "string") return __velarCollectionsCodePointCompare(left, right);
+  // R1: comparable() already fences NaN upstream, so this is defence in depth —
+  // the ordering primitive must never answer "equal" for an unordered value.
+  if (left !== left || right !== right) throw new __velarCollectionsNativeTypeError("ordered comparison found NaN, which has no ordering");
   return left < right ? -1 : left > right ? 1 : 0;
 }
 function requireList(value, name) {
@@ -917,7 +927,7 @@ function extremeBy(values, key, direction, name) {
 
 export function minBy(values, key) { return extremeBy(values, key, -1, "minBy"); }
 export function maxBy(values, key) { return extremeBy(values, key, 1, "maxBy"); }
-export function sum(values) { values = requireList(values, "sum"); let total = 0; for (let index = 0; index < values.length; index += 1) { if (typeof values[index] !== "number") throw new __velarCollectionsNativeTypeError("sum requires numbers"); total += values[index]; } return total; }
+export function sum(values) { values = requireList(values, "sum"); let total = 0; for (let index = 0; index < values.length; index += 1) { if (typeof values[index] !== "number") throw new __velarCollectionsNativeTypeError("sum requires numbers"); if (values[index] !== values[index]) throw new __velarCollectionsNativeTypeError("sum found NaN, which poisons the total; drop it with filter(x => not x.isNaN()) or fix the upstream computation"); total += values[index]; } return total; }
 export function join(values, separator = "") {
   if (typeof separator !== "string") throw new __velarCollectionsNativeTypeError("join separator must be a string");
   values = requireList(values, "join");
@@ -944,6 +954,7 @@ ${VELAR_TEXT_METHOD_RUNTIME}
 ${VELAR_UTF8_RUNTIME}
 const maxTextCodeUnits = __velarMaxTextCodeUnits;
 const maxTextItems = __velarMaxTextItems;
+const maxTextPatternMillis = 250;
 const __velarTextGetOwnPropertyNames = __velarTextGetOwnPropertyDescriptor(__velarTextNativeObject, "getOwnPropertyNames")?.value;
 const __velarTextGetOwnPropertySymbols = __velarTextGetOwnPropertyDescriptor(__velarTextNativeObject, "getOwnPropertySymbols")?.value;
 const __velarTextGetPrototypeOf = __velarTextGetOwnPropertyDescriptor(__velarTextNativeObject, "getPrototypeOf")?.value;
@@ -955,6 +966,8 @@ const __velarTextArrayJoin = __velarTextGetOwnPropertyDescriptor(__velarTextArra
 const __velarTextStringTrimStart = __velarTextGetOwnPropertyDescriptor(__velarTextStringPrototype, "trimStart")?.value;
 const __velarTextStringTrimEnd = __velarTextGetOwnPropertyDescriptor(__velarTextStringPrototype, "trimEnd")?.value;
 const __velarTextStringNormalize = __velarTextGetOwnPropertyDescriptor(__velarTextStringPrototype, "normalize")?.value;
+const __velarTextNativeDate = globalThis.Date;
+const __velarTextDateNow = __velarTextGetOwnPropertyDescriptor(__velarTextNativeDate, "now")?.value;
 const nativeRegExpPrototype = __velarTextGetPrototypeOf(/(?:)/u);
 const NativeRegExp = __velarTextGetOwnPropertyDescriptor(nativeRegExpPrototype, "constructor")?.value;
 const nativeRegExpExec = __velarTextGetOwnPropertyDescriptor(nativeRegExpPrototype, "exec")?.value;
@@ -965,12 +978,30 @@ const __velarTextTitleSeparators = /[_\-/]+/gu;
 const __velarTextTitleWords = /(^|\s)([\p{L}\p{N}])/gu;
 const __velarTextLines = /\r?\n/gu;
 const __velarTextWords = /\s+/gu;
-const __velarTextMarks = /\p{M}/gu;
-const __velarTextSlugSeparators = /[^\p{L}\p{N}]+/gu;
+const __velarTextLatinMarks = /(?<=\p{Script=Latin})\p{M}+/gu;
+const __velarTextBaselessMarks = /(?<![\p{L}\p{N}\p{M}])\p{M}+/gu;
+const __velarTextSlugSeparators = /[^\p{L}\p{N}\p{M}]+/gu;
 const __velarTextSlugEdges = /^-+|-+$/gu;
 const __velarTextWhitespace = /\s+/gu;
+const __velarTextPatternPrefix = /^Invalid regular expression: (?:\/[\s\S]*\/[a-z]*: )?/u;
 function __velarTextAppend(values, value) { values[values.length] = value; }
 function __velarTextJoin(values, separator) { return __velarTextCall(__velarTextArrayJoin, values, [separator]); }
+// TXT-P2: bounded work is already the promise on this surface — the code-unit
+// and item caps are here — and time was the dimension that was missed, so a
+// backtracking pattern over hostile input could run for as long as it liked.
+// Every operation that runs a pattern the author supplied gets a fresh budget,
+// checked at every exec boundary. The engine is not interruptible, so one
+// catastrophic exec is caught when it returns rather than pre-empted; that
+// still turns a silent unbounded hang into a loud bounded failure and stops
+// the amplification a per-match loop would otherwise give it. The budget is
+// deliberately not charged to slug, title or normalizeWhitespace: they run
+// this module's own linear patterns, so their only bound is on size, and a
+// wall clock would otherwise make a large but legal text succeed or fail by
+// how busy the machine is.
+function patternDeadline() { return __velarTextCall(__velarTextDateNow, __velarTextNativeDate, []) + maxTextPatternMillis; }
+function checkPatternDeadline(deadline) {
+  if (__velarTextCall(__velarTextDateNow, __velarTextNativeDate, []) > deadline) throw new __velarTextNativeRangeError("text pattern matching cannot exceed " + maxTextPatternMillis + " ms");
+}
 function __velarTextRegexReplace(value, pattern, replacement) {
   pattern.lastIndex = 0;
   const output = []; let end = 0, units = 0;
@@ -1042,6 +1073,22 @@ function patternOptions(value) {
   }
   return output;
 }
+// TXT-P1: the engine's reason is the only actionable half of an invalid-pattern
+// failure. Patterns compile in 'u' mode, so an identity escape that is tolerated
+// everywhere else in JavaScript is an error here, and "[a-z" and "\\@" are
+// otherwise byte-identical failures. The host-shaped prefix is stripped so the
+// engine's own text does not travel verbatim, and a caught value that is not an
+// Error, or carries no usable message, falls back to the bare message.
+function patternReason(error) {
+  if (typeof error !== "object" || error === null) return "";
+  const descriptor = __velarTextGetOwnPropertyDescriptor(error, "message");
+  if (!descriptor || !("value" in descriptor) || typeof descriptor.value !== "string") return "";
+  const message = descriptor.value;
+  const prefix = __velarTextCall(nativeRegExpExec, __velarTextPatternPrefix, [message]);
+  const head = prefix === null ? null : __velarTextGetOwnPropertyDescriptor(prefix, 0);
+  const reason = head && typeof head.value === "string" ? __velarTextCall(__velarNativeStringSlice, message, [head.value.length]) : message;
+  return reason === "" || reason.length > 200 ? "" : ": " + reason;
+}
 function patternOf(expression, options, global = false) {
   expression = valueOf(expression); options = patternOptions(options);
   if (expression.length > 4096) throw new __velarTextNativeRangeError("text patterns cannot exceed 4096 code units");
@@ -1051,7 +1098,7 @@ function patternOf(expression, options, global = false) {
   if (options.multiline === true) flags += "m";
   if (options.dotAll === true) flags += "s";
   try { return new NativeRegExp(expression, flags); }
-  catch { throw new __velarTextNativeTypeError("Invalid text pattern"); }
+  catch (error) { throw new __velarTextNativeTypeError("Invalid text pattern" + patternReason(error)); }
 }
 function checkedMatchValue(match, input) {
   if (!__velarTextCall(__velarTextArrayIsArray, __velarTextNativeArray, [match]) || match.length < 1 || match.length > 4097) throw new __velarTextNativeTypeError("The regular expression engine returned an invalid match");
@@ -1078,9 +1125,11 @@ function nextTextIndex(value, index) {
   return index >= value.length ? index + 1 : __velarTextNextCodePointOffset(value, index);
 }
 function eachMatch(value, pattern, visit) {
+  const deadline = patternDeadline();
   let count = 0, units = 0, previousUnitIndex = 0, previousCodePointIndex = 0;
   while (true) {
     const raw = __velarTextCall(nativeRegExpExec, pattern, [value]);
+    checkPatternDeadline(deadline);
     if (raw === null) return;
     if (count >= maxTextItems) throw new __velarTextNativeRangeError("Text patterns cannot produce more than " + maxTextItems + " matches");
     count += 1;
@@ -1138,7 +1187,18 @@ export function chunks(value, size) {
   return textList(output, "chunks");
 }
 export function words(value) { const cleaned = __velarTextCall(__velarNativeStringTrim, valueOf(value), []); return cleaned ? textList(__velarTextRegexSplit(cleaned, __velarTextWords, maxTextItems + 1), "words") : []; }
-export function slug(value) { let output = __velarTextCall(__velarTextStringNormalize, valueOf(value), ["NFKD"]); output = __velarTextRegexReplace(output, __velarTextMarks, ""); output = __velarTextCall(__velarNativeStringLower, output, []); output = __velarTextCall(__velarNativeStringTrim, output, []); output = __velarTextRegexReplace(output, __velarTextSlugSeparators, "-"); output = __velarTextRegexReplace(output, __velarTextSlugEdges, ""); return textOutput(output, "slug"); }
+// TXT-U4: the NFKD pass is folding machinery, not a result. Text equality is
+// code-point-sequence identity, so a decomposed slug misses the text it renders
+// as — a Hangul syllable comes back as conjoining jamo and never matches the
+// title it was made from. The output is recomposed to NFC before it leaves.
+// Folding only reaches marks sitting on a Latin base, because dropping a mark
+// is meaning-preserving there and meaning-destroying everywhere else: every
+// other script keeps its marks, and those slugs are percent-encoded in a URL.
+// Marks the separator pass now has to keep must still have something to sit
+// on: a mark run with no letter or digit before it — a variation selector left
+// behind by a dropped emoji, a stray accent — is invisible in a URL, so two
+// slugs that read alike would name different pages. Those runs go.
+export function slug(value) { let output = __velarTextCall(__velarTextStringNormalize, valueOf(value), ["NFKD"]); output = __velarTextRegexReplace(output, __velarTextLatinMarks, ""); output = __velarTextRegexReplace(output, __velarTextBaselessMarks, ""); output = __velarTextCall(__velarNativeStringLower, output, []); output = __velarTextCall(__velarNativeStringTrim, output, []); output = __velarTextRegexReplace(output, __velarTextSlugSeparators, "-"); output = __velarTextRegexReplace(output, __velarTextSlugEdges, ""); return textOutput(__velarTextCall(__velarTextStringNormalize, output, ["NFC"]), "slug"); }
 // TXT-U3: text equality is code-point-sequence identity, so "café" typed on a
 // keyboard (NFC) and the same name read back from a macOS filename (NFD) are
 // different values with different sizes. This is the boundary tool that makes
@@ -1194,8 +1254,8 @@ export function fromCodePoint(value) {
   if (value >= 0xD800 && value <= 0xDFFF) throw new __velarTextNativeRangeError("fromCodePoint refuses surrogate halves; they are not characters on their own");
   return __velarTextCall(__velarTextStringFromCodePoint, __velarTextNativeString, [value]);
 }
-export function matches(value, expression, options = {}) { value = valueOf(value); return __velarTextCall(nativeRegExpExec, patternOf(expression, options), [value]) !== null; }
-export function findMatch(value, expression, options = {}) { value = valueOf(value); const match = __velarTextCall(nativeRegExpExec, patternOf(expression, options), [value]); return match === null ? null : publicMatchValue(checkedMatchValue(match, value), value); }
+export function matches(value, expression, options = {}) { value = valueOf(value); const pattern = patternOf(expression, options); const deadline = patternDeadline(); const found = __velarTextCall(nativeRegExpExec, pattern, [value]) !== null; checkPatternDeadline(deadline); return found; }
+export function findMatch(value, expression, options = {}) { value = valueOf(value); const pattern = patternOf(expression, options); const deadline = patternDeadline(); const match = __velarTextCall(nativeRegExpExec, pattern, [value]); checkPatternDeadline(deadline); return match === null ? null : publicMatchValue(checkedMatchValue(match, value), value); }
 export function findMatches(value, expression, options = {}) { value = valueOf(value); const output = []; eachMatch(value, patternOf(expression, options, true), match => __velarTextAppend(output, match)); return output; }
 export function replaceMatches(value, expression, replacement, options = {}) {
   value = valueOf(value); replacement = valueOf(replacement);
@@ -1215,7 +1275,7 @@ export function replaceMatches(value, expression, replacement, options = {}) {
 export function splitPattern(value, expression, options = {}) {
   value = valueOf(value); const output = []; let end = 0;
   eachMatch(value, patternOf(expression, options, true), (match, unitIndex) => { if (output.length >= maxTextItems) throw new __velarTextNativeRangeError("splitPattern cannot produce more than " + maxTextItems + " items"); __velarTextAppend(output, __velarTextCall(__velarNativeStringSlice, value, [end, unitIndex])); end = unitIndex + match.value.length; });
-  __velarTextAppend(output, __velarTextCall(__velarNativeStringSlice, value, [end])); return output;
+  __velarTextAppend(output, __velarTextCall(__velarNativeStringSlice, value, [end])); return textList(output, "splitPattern");
 }
 `.trimStart()],
   ["velar/math", String.raw`
@@ -1259,15 +1319,18 @@ const __velarMathNumberIsSafeInteger = __velarMathHostOperation(__velarMathNativ
 if (typeof __velarMathApply !== "function") throw new __velarMathNativeTypeError("The JavaScript Reflect.apply math API is unavailable");
 function __velarMathCall(operation, arguments_) { return __velarMathApply(operation, undefined, arguments_); }
 function requireNumber(value, name) { if (typeof value !== "number") throw new __velarMathNativeTypeError(name + " requires numbers"); return value; }
+// R1: a NaN may be held and tested with .isNaN(), but nothing compares or
+// aggregates it. The self-inequality test cannot be redirected by a host.
+function requireOrderedNumber(value, name) { requireNumber(value, name); if (value !== value) throw new __velarMathNativeTypeError(name + " found NaN, which has no ordering; drop it with filter(x => not x.isNaN()) or fix the upstream computation"); return value; }
 function unary(value, operation, name) { return __velarMathCall(operation, [requireNumber(value, name)]); }
 function binary(left, right, operation, name) { return __velarMathCall(operation, [requireNumber(left, name), requireNumber(right, name)]); }
 export const pi = __velarMathHostData(__velarMathNativeMath, "PI", "number");
 export const e = __velarMathHostData(__velarMathNativeMath, "E", "number");
 export const tau = pi * 2;
 export const infinity = __velarMathHostData(__velarMathNativeNumber, "POSITIVE_INFINITY", "number");
-export function min(...values) { if (!values.length) throw new __velarMathNativeRangeError("min requires at least one number"); let result = requireNumber(values[0], "min"); for (let index = 1; index < values.length; index += 1) result = __velarMathCall(__velarMathMin, [result, requireNumber(values[index], "min")]); return result; }
-export function max(...values) { if (!values.length) throw new __velarMathNativeRangeError("max requires at least one number"); let result = requireNumber(values[0], "max"); for (let index = 1; index < values.length; index += 1) result = __velarMathCall(__velarMathMax, [result, requireNumber(values[index], "max")]); return result; }
-export function clamp(value, minimum, maximum) { value = requireNumber(value, "clamp"); minimum = requireNumber(minimum, "clamp"); maximum = requireNumber(maximum, "clamp"); if (minimum > maximum) throw new __velarMathNativeRangeError("clamp minimum cannot exceed maximum"); return __velarMathCall(__velarMathMin, [maximum, __velarMathCall(__velarMathMax, [minimum, value])]); }
+export function min(...values) { if (!values.length) throw new __velarMathNativeRangeError("min requires at least one number"); let result = requireOrderedNumber(values[0], "Math.min"); for (let index = 1; index < values.length; index += 1) result = __velarMathCall(__velarMathMin, [result, requireOrderedNumber(values[index], "Math.min")]); return result; }
+export function max(...values) { if (!values.length) throw new __velarMathNativeRangeError("max requires at least one number"); let result = requireOrderedNumber(values[0], "Math.max"); for (let index = 1; index < values.length; index += 1) result = __velarMathCall(__velarMathMax, [result, requireOrderedNumber(values[index], "Math.max")]); return result; }
+export function clamp(value, minimum, maximum) { value = requireOrderedNumber(value, "Math.clamp"); minimum = requireOrderedNumber(minimum, "Math.clamp"); maximum = requireOrderedNumber(maximum, "Math.clamp"); if (minimum > maximum) throw new __velarMathNativeRangeError("clamp minimum cannot exceed maximum"); return __velarMathCall(__velarMathMin, [maximum, __velarMathCall(__velarMathMax, [minimum, value])]); }
 export function sign(value) { return unary(value, __velarMathSign, "sign"); }
 export function trunc(value) { return unary(value, __velarMathTrunc, "trunc"); }
 export function sqrt(value) { return unary(value, __velarMathSqrt, "sqrt"); }
@@ -1598,18 +1661,26 @@ function __velarRandomCall(operation, receiver, arguments_) { return __velarRand
 function __velarRandomImul(left, right) { return __velarRandomCall(__velarRandomMathImul, __velarRandomNativeMath, [left, right]); }
 function __velarRandomRotl(value, count) { return (value << count | value >>> (32 - count)) >>> 0; }
 function __velarRandomHash(text) {
-  let value = (1779033703 ^ text.length) >>> 0;
+  let first = (1779033703 ^ text.length) >>> 0;
+  let second = (3144134277 ^ text.length) >>> 0;
+  let third = (1013904242 ^ text.length) >>> 0;
+  let fourth = (2773480762 ^ text.length) >>> 0;
   for (let index = 0; index < text.length; index += 1) {
-    value = __velarRandomImul(value ^ __velarRandomCall(__velarRandomStringCharCodeAt, text, [index]), 3432918353);
-    value = __velarRandomRotl(value, 13);
+    const code = __velarRandomCall(__velarRandomStringCharCodeAt, text, [index]);
+    first = second ^ __velarRandomImul(first ^ code, 597399067);
+    second = third ^ __velarRandomImul(second ^ code, 2869860233);
+    third = fourth ^ __velarRandomImul(third ^ code, 951274213);
+    fourth = first ^ __velarRandomImul(fourth ^ code, 2716044179);
   }
+  first = __velarRandomImul(third ^ first >>> 18, 597399067);
+  second = __velarRandomImul(fourth ^ second >>> 22, 2869860233);
+  third = __velarRandomImul(first ^ third >>> 17, 951274213);
+  fourth = __velarRandomImul(second ^ fourth >>> 19, 2716044179);
   const output = new __velarRandomNativeArray(4);
-  for (let index = 0; index < 4; index += 1) {
-    value = __velarRandomImul(value ^ value >>> 16, 2246822507);
-    value = __velarRandomImul(value ^ value >>> 13, 3266489909);
-    value = (value ^ value >>> 16) >>> 0;
-    output[index] = value;
-  }
+  output[0] = first >>> 0;
+  output[1] = second >>> 0;
+  output[2] = third >>> 0;
+  output[3] = fourth >>> 0;
   if ((output[0] | output[1] | output[2] | output[3]) === 0) output[0] = 1;
   return output;
 }
@@ -1641,8 +1712,8 @@ function __velarRandomRange(start, end) {
   if (!__velarRandomCall(__velarRandomNumberIsSafeInteger, __velarRandomNativeNumber, [start])
     || !__velarRandomCall(__velarRandomNumberIsSafeInteger, __velarRandomNativeNumber, [end])
     || !__velarRandomCall(__velarRandomNumberIsSafeInteger, __velarRandomNativeNumber, [width])
-    || width <= 0 || width > 4294967296) {
-    throw new __velarRandomNativeRangeError("Random.int requires an increasing safe-integer range no wider than 2^32");
+    || width <= 0) {
+    throw new __velarRandomNativeRangeError("Random.int requires an increasing safe-integer range");
   }
   return [start, width];
 }
@@ -1650,8 +1721,13 @@ const __velarRandomPrototype = {
   number() { return __velarRandomNext(this) / 4294967296; },
   int(start, end = null) {
     const range = __velarRandomRange(start, end);
-    const limit = __velarRandomCall(__velarRandomMathFloor, __velarRandomNativeMath, [4294967296 / range[1]]) * range[1];
-    let value; do { value = __velarRandomNext(this); } while (value >= limit);
+    if (range[1] <= 4294967296) {
+      const limit = __velarRandomCall(__velarRandomMathFloor, __velarRandomNativeMath, [4294967296 / range[1]]) * range[1];
+      let value; do { value = __velarRandomNext(this); } while (value >= limit);
+      return range[0] + value % range[1];
+    }
+    const limit = __velarRandomCall(__velarRandomMathFloor, __velarRandomNativeMath, [9007199254740992 / range[1]]) * range[1];
+    let value; do { value = __velarRandomNext(this) * 2097152 + (__velarRandomNext(this) >>> 11); } while (value >= limit);
     return range[0] + value % range[1];
   },
   bool(probability = 0.5) {
@@ -2232,6 +2308,7 @@ export function normalize(value, base = "") { const url = urlOf(value, base); re
 `.trimStart()],
   ["velar/time", String.raw`
 const maximumDateMilliseconds = 8_640_000_000_000_000;
+const localDayWindowMilliseconds = 108_000_000;
 const __velarTimeNativeObject = globalThis.Object;
 const __velarTimeNativeArray = globalThis.Array;
 const __velarTimeNativeNumber = globalThis.Number;
@@ -2269,11 +2346,12 @@ const __velarTimeDatePrototype = __velarTimeHostData(__velarTimeNativeDate, "pro
 const __velarTimeIntl = __velarTimeHostData(globalThis, "Intl", "object");
 const __velarTimeDateTimeFormat = __velarTimeHostOperation(__velarTimeIntl, "DateTimeFormat");
 const __velarTimeDateTimeFormatPrototype = __velarTimeHostData(__velarTimeDateTimeFormat, "prototype", "object");
-const __velarTimeRegExpPattern = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?(Z|[+-]\d{2}:\d{2}))?$/u;
+const __velarTimeRegExpPattern = /^(\d{4})-(\d{2})-(\d{2})(?:[Tt](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?([Zz]|[+-]\d{2}(?::?\d{2})?))?$/u;
 const __velarTimeDigitsPattern = /^\d{1,6}$/u;
 const __velarTimeRegExpPrototype = __velarTimeGetPrototypeOf(__velarTimeRegExpPattern);
 const __velarTimeDateNow = __velarTimeHostOperation(__velarTimeNativeDate, "now");
 const __velarTimeMathAbs = __velarTimeHostOperation(__velarTimeNativeMath, "abs");
+const __velarTimeMathFloor = __velarTimeHostOperation(__velarTimeNativeMath, "floor");
 const __velarTimeNumberIsFinite = __velarTimeHostOperation(__velarTimeNativeNumber, "isFinite");
 const __velarTimeNumberIsInteger = __velarTimeHostOperation(__velarTimeNativeNumber, "isInteger");
 const __velarTimeNumberIsSafeInteger = __velarTimeHostOperation(__velarTimeNativeNumber, "isSafeInteger");
@@ -2288,6 +2366,7 @@ const __velarTimeSetUTCFullYear = __velarTimeHostOperation(__velarTimeDateProtot
 const __velarTimeSetUTCHours = __velarTimeHostOperation(__velarTimeDatePrototype, "setUTCHours");
 const __velarTimeSetFullYear = __velarTimeHostOperation(__velarTimeDatePrototype, "setFullYear");
 const __velarTimeSetHours = __velarTimeHostOperation(__velarTimeDatePrototype, "setHours");
+const __velarTimeSetTime = __velarTimeHostOperation(__velarTimeDatePrototype, "setTime");
 const __velarTimeGetUTCFullYear = __velarTimeHostOperation(__velarTimeDatePrototype, "getUTCFullYear");
 const __velarTimeGetUTCMonth = __velarTimeHostOperation(__velarTimeDatePrototype, "getUTCMonth");
 const __velarTimeGetUTCDate = __velarTimeHostOperation(__velarTimeDatePrototype, "getUTCDate");
@@ -2407,7 +2486,15 @@ function calendarParts(year, month, day, hour = 0, minute = 0, second = 0, milli
   if (millisecond < 0 || millisecond > 999) throw new __velarTimeNativeRangeError("velar/time millisecond must be from 0 through 999");
   return [year, month, day, hour, minute, second, millisecond];
 }
-function build(utc, year, month, day, hour = 0, minute = 0, second = 0, millisecond = 0) {
+function localDayOrder(value, year, month, day) {
+  const currentYear = __velarTimeCall(__velarTimeGetFullYear, value, []);
+  if (currentYear !== year) return currentYear < year ? -1 : 1;
+  const currentMonth = __velarTimeCall(__velarTimeGetMonth, value, []) + 1;
+  if (currentMonth !== month) return currentMonth < month ? -1 : 1;
+  const currentDay = __velarTimeCall(__velarTimeGetDate, value, []);
+  return currentDay === day ? 0 : currentDay < day ? -1 : 1;
+}
+function build(utc, year, month, day, hour = 0, minute = 0, second = 0, millisecond = 0, resolveGap = false) {
   calendarParts(year, month, day, hour, minute, second, millisecond);
   const value = new __velarTimeNativeDate(0);
   if (utc) {
@@ -2418,11 +2505,31 @@ function build(utc, year, month, day, hour = 0, minute = 0, second = 0, millisec
       throw new __velarTimeNativeRangeError("velar/time date parts do not form a real UTC date");
     }
   } else {
+    // A local wall clock that a daylight-saving fall-back repeats names two real
+    // instants and round-trips for both, so this resolves to the earlier,
+    // pre-transition one, which is the ECMAScript LocalTZA default.
     __velarTimeCall(__velarTimeSetFullYear, value, [year, month - 1, day]);
     __velarTimeCall(__velarTimeSetHours, value, [hour, minute, second, millisecond]);
-    if (__velarTimeCall(__velarTimeGetFullYear, value, []) !== year || __velarTimeCall(__velarTimeGetMonth, value, []) !== month - 1 || __velarTimeCall(__velarTimeGetDate, value, []) !== day
+    if (localDayOrder(value, year, month, day) !== 0
       || __velarTimeCall(__velarTimeGetHours, value, []) !== hour || __velarTimeCall(__velarTimeGetMinutes, value, []) !== minute || __velarTimeCall(__velarTimeGetSeconds, value, []) !== second || __velarTimeCall(__velarTimeGetMilliseconds, value, []) !== millisecond) {
-      throw new __velarTimeNativeRangeError("velar/time date parts do not form a real local date");
+      // A caller who supplied a wall clock still gets the rejection. A caller who
+      // named a calendar day and nothing else did not, so where a transition skips
+      // local midnight the day resolves forward to its first existing instant
+      // rather than becoming unrepresentable. A gap opens at 00:15 or 00:45 as
+      // readily as at 01:00, so the window around the requested day is searched
+      // to the millisecond for the least instant that has reached the day.
+      if (!resolveGap) throw new __velarTimeNativeRangeError("velar/time date parts do not form a real local date");
+      const anchor = __velarTimeCall(__velarTimeGetTime, value, []);
+      let low = anchor - localDayWindowMilliseconds, high = anchor + localDayWindowMilliseconds;
+      while (low < high) {
+        const middle = low + __velarTimeCall(__velarTimeMathFloor, __velarTimeNativeMath, [(high - low) / 2]);
+        __velarTimeCall(__velarTimeSetTime, value, [middle]);
+        if (localDayOrder(value, year, month, day) < 0) low = middle + 1; else high = middle;
+      }
+      __velarTimeCall(__velarTimeSetTime, value, [low]);
+      // The search answers the first instant at or after the requested day, so a
+      // day the zone skipped whole lands on the next one and is still rejected.
+      if (localDayOrder(value, year, month, day) !== 0) throw new __velarTimeNativeRangeError("velar/time date parts do not form a real local date");
     }
   }
   return valid(__velarTimeCall(__velarTimeGetTime, value, []));
@@ -2438,22 +2545,38 @@ export function parse(value) {
     const year = __velarTimeNumber(match[1]), month = __velarTimeNumber(match[2]), day = __velarTimeNumber(match[3]);
     if (!match[4]) return build(true, year, month, day);
     const hour = __velarTimeNumber(match[4]), minute = __velarTimeNumber(match[5]), second = __velarTimeNumber(match[6] ?? 0);
-    const millisecond = __velarTimeNumber(__velarTimeCall(__velarTimeStringPadEnd, match[7] ?? "", [3, "0"]) || 0);
+    const millisecond = __velarTimeNumber(__velarTimeCall(__velarTimeStringPadEnd, __velarTimeCall(__velarTimeStringSlice, match[7] ?? "", [0, 3]), [3, "0"]) || 0);
     const zone = match[8];
     let offset = 0;
-    if (zone !== "Z") {
+    if (zone !== "Z" && zone !== "z") {
+      // Three spellings name one offset: '+HH:MM', the basic-format '+HHMM' that
+      // log lines and databases emit, and the hour-only '+HH'. The minutes sit
+      // at the end whenever they are written at all.
       const sign = zone[0] === "+" ? 1 : -1;
       const offsetHour = __velarTimeNumber(__velarTimeCall(__velarTimeStringSlice, zone, [1, 3]));
-      const offsetMinute = __velarTimeNumber(__velarTimeCall(__velarTimeStringSlice, zone, [4, 6]));
+      const offsetMinute = zone.length === 3 ? 0 : __velarTimeNumber(__velarTimeCall(__velarTimeStringSlice, zone, [zone.length - 2]));
       if (offsetHour > 23 || offsetMinute > 59) return null;
       offset = sign * (offsetHour * 60 + offsetMinute);
     }
-    return valid(build(true, year, month, day, hour, minute, second, millisecond) - offset * 60_000);
+    // RFC 3339 §5.7 writes an inserted leap second as ':60'. No JavaScript clock
+    // counts it, so it names the second that follows it, which is the instant a
+    // reader of the timestamp means. A leap second is only ever inserted at the
+    // end of a UTC day, which is the local 23:59 in 'Z' and some other wall
+    // clock under an offset, so the rule is checked on the UTC instant rather
+    // than on the written hour. Elsewhere ':60' is a typo, not a timestamp, and
+    // still answers null instead of being absorbed as a one-second shift.
+    const leap = second === 60;
+    const instant = build(true, year, month, day, hour, minute, leap ? 59 : second, millisecond) - offset * 60_000;
+    if (leap) {
+      const second59 = instant - millisecond;
+      if (second59 - __velarTimeCall(__velarTimeMathFloor, __velarTimeNativeMath, [second59 / 86_400_000]) * 86_400_000 !== 86_399_000) return null;
+    }
+    return valid(instant + (leap ? 1000 : 0));
   } catch { return null; }
 }
 export function iso(value = now()) { const date = new __velarTimeNativeDate(valid(value)); return timeResultText(__velarTimeCall(__velarTimeToISOString, date, []), "Date.toISOString", 64); }
 export function format(value, locale = "", timeZone = "") { locale = timeText(locale, "Time locale"); timeZone = timeText(timeZone, "Time zone"); const formatter = new __velarTimeDateTimeFormat(locale || undefined, timeZone ? { dateStyle: "medium", timeStyle: "medium", timeZone } : { dateStyle: "medium", timeStyle: "medium" }); const boundFormat = __velarTimeCall(__velarTimeFormatGetter, formatter, []); if (typeof boundFormat !== "function") throw new __velarTimeNativeTypeError("Intl.DateTimeFormat.format must be a function"); const output = __velarTimeCall(boundFormat, undefined, [new __velarTimeNativeDate(valid(value))]); return timeResultText(output, "Intl.DateTimeFormat.format"); }
-export function date(year, month, day, hour = 0, minute = 0, second = 0) { return build(false, year, month, day, hour, minute, second); }
+export function date(year, month, day, hour = null, minute = null, second = null) { return build(false, year, month, day, hour ?? 0, minute ?? 0, second ?? 0, 0, hour === null && minute === null && second === null); }
 export function utc(year, month, day, hour = 0, minute = 0, second = 0) { return build(true, year, month, day, hour, minute, second); }
 export function parts(value, timeZone = "") {
   const date = new __velarTimeNativeDate(valid(value));
@@ -2473,7 +2596,12 @@ export function parts(value, timeZone = "") {
 `.trimStart()],
   ["velar/id", String.raw`
 ${VELAR_ERROR_NORMALIZATION_RUNTIME}
-const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+// D7: 'isUuid' answers the textual question its name and documentation ask —
+// 36 characters, hyphenated 8-4-4-4-12, hexadecimal in either case. Constraining
+// the version and variant nibbles rejected canonical text a caller cannot fix:
+// the nil and max UUIDs of RFC 9562 and every GUID from a variant other than
+// RFC 4122, which is what a .NET 'Guid.Empty' or an older partner system sends.
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 const __velarIdNativeTypeError = globalThis.TypeError;
 const __velarIdGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
 const __velarIdGetPrototypeOf = Object.getPrototypeOf;
@@ -2694,6 +2822,10 @@ function __velarLogRank(value) {
 }
 function createLogger(scope, base = null) {
   const context = fieldsOf(base);
+  const debugRank = __velarLogRank("debug");
+  const infoRank = __velarLogRank("info");
+  const warnRank = __velarLogRank("warn");
+  const errorRank = __velarLogRank("error");
   const merged = (fields) => {
     const output = __velarLogCloneMap(context);
     const items = __velarLogMapItems(fieldsOf(fields));
@@ -2705,11 +2837,16 @@ function createLogger(scope, base = null) {
     }
     return output;
   };
+  // A call below the active level returns before it builds anything: the
+  // context is not merged, the message and fields are not validated, and no
+  // bound is checked, so turning a level off is both free and side-effect-free.
+  // 'threshold' is read per call, so 'setLevel' keeps reaching loggers that
+  // already exist. The gate inside 'emit' stays as the belt to these braces.
   return __velarLogFreezeValue({
-    debug(message, fields = null) { return emit(scope, "debug", message, merged(fields)); },
-    info(message, fields = null) { return emit(scope, "info", message, merged(fields)); },
-    warn(message, fields = null) { return emit(scope, "warn", message, merged(fields)); },
-    error(message, error = null, fields = null) { return emit(scope, "error", message, merged(fields), error); },
+    debug(message, fields = null) { if (debugRank < __velarLogRank(threshold)) return null; return emit(scope, "debug", message, merged(fields)); },
+    info(message, fields = null) { if (infoRank < __velarLogRank(threshold)) return null; return emit(scope, "info", message, merged(fields)); },
+    warn(message, fields = null) { if (warnRank < __velarLogRank(threshold)) return null; return emit(scope, "warn", message, merged(fields)); },
+    error(message, error = null, fields = null) { if (errorRank < __velarLogRank(threshold)) return null; return emit(scope, "error", message, merged(fields), error); },
   });
 }
 
@@ -2796,8 +2933,24 @@ const __velarTestPromiseThen = __velarDeepGetOwnPropertyDescriptor(__velarTestPr
 const __velarTestRegExpPrototype = __velarDeepGetPrototypeOf(/(?:)/u);
 const __velarTestNativeRegExp = __velarDeepGetOwnPropertyDescriptor(__velarTestRegExpPrototype, "constructor")?.value;
 const __velarTestRegExpExec = __velarDeepGetOwnPropertyDescriptor(__velarTestRegExpPrototype, "exec")?.value;
+const __velarTestPatternPrefix = /^Invalid regular expression: (?:\/[\s\S]*\/[a-z]*: )?/u;
+const __velarTestNativeDate = globalThis.Date;
+const __velarTestDateNow = __velarDeepGetOwnPropertyDescriptor(__velarTestNativeDate, "now")?.value;
+const maxTestPatternMillis = 250;
 function __velarTestAppend(items, value) { items[items.length] = value; }
 function __velarTestJoin(items) { return __velarDeepCall(__velarTestArrayJoin, items, [", "]); }
+// The same reason-carrying treatment patternOf gives velar/text: toMatch compiles
+// in 'u' mode too, so an identity escape rejected only here needs to say so.
+function __velarTestPatternReason(error) {
+  if (typeof error !== "object" || error === null) return "";
+  const descriptor = __velarDeepGetOwnPropertyDescriptor(error, "message");
+  if (!descriptor || !("value" in descriptor) || typeof descriptor.value !== "string") return "";
+  const message = descriptor.value;
+  const prefix = __velarDeepCall(__velarTestRegExpExec, __velarTestPatternPrefix, [message]);
+  const head = prefix === null ? null : __velarDeepGetOwnPropertyDescriptor(prefix, 0);
+  const reason = head && typeof head.value === "string" ? __velarDeepCall(__velarTestStringSlice, message, [head.value.length]) : message;
+  return reason === "" || reason.length > 200 ? "" : ": " + reason;
+}
 function __velarTestString(value) { return __velarDeepCall(__velarTestNativeString, undefined, [value]); }
 function display(value, state = null) {
   state ??= { active: new __velarDeepNativeWeakSet(), nodes: 0, depth: 0 };
@@ -2898,8 +3051,14 @@ export function expect(actual) {
       if (typeof actual !== "string" || typeof expected !== "string") throw new __velarTestNativeTypeError("toMatch requires text and a string pattern");
       if (expected.length > 4096) throw new __velarTestNativeRangeError("toMatch patterns cannot exceed 4096 code units");
       let pattern;
-      try { pattern = new __velarTestNativeRegExp(expected, "u"); } catch { throw new __velarTestNativeTypeError("Invalid toMatch pattern"); }
-      if (__velarDeepCall(__velarTestRegExpExec, pattern, [actual]) === null) throw new __velarTestNativeError("Expected " + display(actual) + " to match " + display(expected));
+      try { pattern = new __velarTestNativeRegExp(expected, "u"); } catch (error) { throw new __velarTestNativeTypeError("Invalid toMatch pattern" + __velarTestPatternReason(error)); }
+      // The same time budget velar/text puts on its pattern operations: this is
+      // that operation under another name, and an assertion that never returns
+      // is a hung suite rather than a failing one.
+      const deadline = __velarDeepCall(__velarTestDateNow, __velarTestNativeDate, []) + maxTestPatternMillis;
+      const matched = __velarDeepCall(__velarTestRegExpExec, pattern, [actual]) !== null;
+      if (__velarDeepCall(__velarTestDateNow, __velarTestNativeDate, []) > deadline) throw new __velarTestNativeRangeError("toMatch pattern matching cannot exceed " + maxTestPatternMillis + " ms");
+      if (!matched) throw new __velarTestNativeError("Expected " + display(actual) + " to match " + display(expected));
     },
     toHaveLength(expected) {
       if (!__velarDeepCall(__velarTestNumberIsSafeInteger, __velarTestNativeNumber, [expected]) || expected < 0) throw new __velarTestNativeRangeError("Expected length must be a non-negative safe integer");

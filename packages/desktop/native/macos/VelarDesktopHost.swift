@@ -228,6 +228,7 @@ private struct HostConfiguration: Decodable {
 
 private struct PermissionConfiguration: Decodable {
     let files: [String]
+    let network: [String]
     let environment: [String]
     let secrets: [String]
 }
@@ -646,6 +647,11 @@ private final class NodeCapabilityHost {
         while let newline = buffer.firstIndex(of: 0x0A) {
             let line = buffer.prefix(upTo: newline)
             buffer.removeSubrange(...newline)
+            // A line past this bound is a terminal host failure, so the worker
+            // keeps its own response line strictly below it: MAX_RESPONSE_BYTES
+            // is 64 MiB in packages/desktop/native/node/worker.js, and an
+            // oversized response is reported there as a per-request error. The
+            // two bounds must not drift back together.
             guard line.count <= 65 * 1024 * 1024,
                   let value = try? JSONSerialization.jsonObject(with: line),
                   let object = value as? [String: Any] else {
@@ -1068,10 +1074,25 @@ private final class DesktopBridge: NSObject, WKScriptMessageHandler {
     }
 }
 
+// Handing a renderer URL to the system browser is the same question
+// `desktop.permissions.network` already answers, so the granted origins govern
+// it: an origin that was never granted is cancelled rather than opened. The
+// match is exact on scheme, host and port, and mirrors
+// `desktopExternalNavigationPermitted` in packages/desktop/src/config.ts.
+private func navigationOrigin(_ url: URL) -> String? {
+    guard url.scheme?.lowercased() == "https", let host = url.host?.lowercased(), !host.isEmpty else { return nil }
+    if let port = url.port, port != 443 { return "https://\(host):\(port)" }
+    return "https://\(host)"
+}
+
 private final class NavigationPolicy: NSObject, WKNavigationDelegate {
     private weak var bridge: DesktopBridge?
+    private let externalOrigins: Set<String>
 
-    init(bridge: DesktopBridge) { self.bridge = bridge }
+    init(bridge: DesktopBridge, network: [String]) {
+        self.bridge = bridge
+        self.externalOrigins = Set(network.compactMap { URL(string: $0).flatMap(navigationOrigin) })
+    }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         bridge?.retireDocument()
@@ -1081,7 +1102,7 @@ private final class NavigationPolicy: NSObject, WKNavigationDelegate {
         guard let url = action.request.url else { decisionHandler(.cancel); return }
         if url.scheme == "velar-app" && url.host == "app" {
             decisionHandler(.allow)
-        } else if url.scheme == "https" {
+        } else if let origin = navigationOrigin(url), externalOrigins.contains(origin) {
             NSWorkspace.shared.open(url)
             decisionHandler(.cancel)
         } else {
@@ -1134,7 +1155,7 @@ private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
                 projectFilesGranted: projectFilesGranted,
                 worker: nodeHost
             )
-            let navigationPolicy = NavigationPolicy(bridge: bridge)
+            let navigationPolicy = NavigationPolicy(bridge: bridge, network: host.permissions.network)
             let webConfiguration = WKWebViewConfiguration()
             webConfiguration.setURLSchemeHandler(schemeHandler, forURLScheme: "velar-app")
             let projectDirectoryData = try JSONSerialization.data(withJSONObject: launchDirectory, options: [.fragmentsAllowed])

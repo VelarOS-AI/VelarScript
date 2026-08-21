@@ -1,6 +1,6 @@
-import { createReadStream, readdirSync, statSync, watch } from "node:fs";
+import { createReadStream, type FSWatcher, lstatSync, readdirSync, statSync, watch } from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
-import { posix, resolve } from "node:path";
+import { isAbsolute, posix, relative, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { formatDiagnostic } from "@velarscript/compiler";
@@ -13,6 +13,7 @@ import type { VelarProjectConfig } from "./config.ts";
 import { standardModuleAsset } from "./standard-modules.ts";
 import { asHostError, hostErrorMessage } from "./host-error.ts";
 import { assertUniqueEmbeddedModuleOutputs } from "./embedded-modules.ts";
+import { localRequestRefusal } from "./local-request-guard.ts";
 
 interface Snapshot {
   readonly project: ProjectResult;
@@ -25,6 +26,14 @@ interface Snapshot {
 
 interface DirectoryTreeWatcher {
   close(): void;
+}
+
+export interface BranchDirectoryTreeWatcher extends DirectoryTreeWatcher {
+  /**
+   * The directories that hold a watch. The exclusion is structural here, so an
+   * excluded tree never appears — which is the whole point of this branch.
+   */
+  watchedDirectories(): readonly string[];
 }
 
 export async function runDevServer(config: VelarProjectConfig, port: number): Promise<void> {
@@ -114,15 +123,31 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
   };
 
   const server = createServer(async (request, response) => {
+    // Before routing: a page that has rebound its own hostname to 127.0.0.1 is
+    // otherwise same-origin with this server and can read `/main.js.map`, whose
+    // `sourcesContent` is the project's verbatim source.
+    const refusal = localRequestRefusal(request.headers);
+    if (refusal) {
+      send(response, refusal.status, `Refused: ${refusal.message}\n`, "text/plain; charset=utf-8");
+      return;
+    }
     if (request.method !== "GET" && request.method !== "HEAD") {
       response.setHeader("Allow", "GET, HEAD");
       send(response, 405, "Method not allowed\n", "text/plain; charset=utf-8");
       return;
     }
     let url: URL;
+    // The Host header has already been judged above, so the fixed base here only
+    // supplies a scheme and authority for path parsing.
     try { url = new URL(request.url ?? "/", "http://127.0.0.1"); }
     catch { send(response, 400, "Bad request path\n", "text/plain; charset=utf-8"); return; }
-    const pathname = url.pathname;
+    let pathname: string;
+    // Everything downstream reads a filesystem-shaped path: `publicAsset` and
+    // the module routes resolve the pathname literally, so `public/my file.txt`
+    // is unreachable until the escape is decoded. `publicAsset` keeps its `..`
+    // and `relative()` confinement, which runs after this decoding.
+    try { pathname = decodeURIComponent(url.pathname); }
+    catch { send(response, 400, "Bad request path\n", "text/plain; charset=utf-8"); return; }
     const routedPath = stripBase(pathname, base);
     if (routedPath === "/__velar/events") {
       if (request.method === "HEAD") { response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" }).end(); return; }
@@ -246,18 +271,36 @@ function watchDirectoryTree(
   listener: (event: string, fileName: string | null) => void,
   excludedDirectories: ReadonlySet<string> = new Set(),
 ): DirectoryTreeWatcher {
-  if (process.platform !== "win32") {
-    return watch(root, { recursive: true }, (event, fileName) => listener(event, fileName === null ? null : String(fileName)));
+  // Every platform drops the same paths. Without them the dev server rebuilds
+  // and full-page-reloads on its own `.velar/` prebundles and on a `dist/`
+  // write from a second terminal running `velar build` or `velar test`.
+  // `fs.watch` cannot express an exclusion, so a branch that hands it a whole
+  // tree has to enforce the set on the way out instead of at the walk.
+  const report = (event: string, fileName: string | null): void => {
+    if (fileName !== null && isExcludedWatchPath(root, fileName, excludedDirectories)) return;
+    listener(event, fileName);
+  };
+  // macOS watches a whole tree with one FSEvents stream, so the exclusion is
+  // only ever a filter there. Linux has no kernel-side recursive watch: Node
+  // walks the tree and allocates one inotify watch per directory, so a
+  // recursive watch on a project root spends `fs.inotify.max_user_watches` on
+  // `node_modules` and fails `velar dev` with ENOSPC before any event is
+  // filtered. Walking it ourselves is what keeps an excluded tree unwatched
+  // rather than watched and then ignored. Every platform Node does not
+  // implement a recursive watch on takes the same branch.
+  if (process.platform === "darwin") {
+    return watch(root, { recursive: true }, (event, fileName) => report(event, fileName === null ? null : String(fileName)));
   }
+  if (process.platform !== "win32") return watchDirectoryBranches(root, report, excludedDirectories);
 
   let snapshot = snapshotDirectoryTree(root, excludedDirectories);
   const timer = setInterval(() => {
     const next = snapshotDirectoryTree(root, excludedDirectories);
     for (const [path, signature] of next) {
-      if (snapshot.get(path) !== signature) listener(snapshot.has(path) ? "change" : "rename", path);
+      if (snapshot.get(path) !== signature) report(snapshot.has(path) ? "change" : "rename", path);
     }
     for (const path of snapshot.keys()) {
-      if (!next.has(path)) listener("rename", path);
+      if (!next.has(path)) report("rename", path);
     }
     snapshot = next;
   }, 80);
@@ -268,6 +311,118 @@ function watchDirectoryTree(
       snapshot.clear();
     },
   };
+}
+
+/** The directory names no walk here descends into, at any depth. */
+const alwaysExcludedWatchSegments = new Set(["node_modules", ".git", ".velar"]);
+
+function isExcludedWatchPath(root: string, fileName: string, excludedDirectories: ReadonlySet<string>): boolean {
+  const segments = fileName.replaceAll("\\", "/").split("/").filter(Boolean);
+  if (segments.length === 0) return false;
+  // Every segment, not only the first: a monorepo's `packages/ui/node_modules`
+  // and a sub-package's `.git` storm exactly as the root's do, and an
+  // `npm install` one directory down is the common way to meet them.
+  if (segments.some((segment) => alwaysExcludedWatchSegments.has(segment))) return true;
+  if (excludedDirectories.size === 0) return false;
+  const path = resolve(root, fileName);
+  for (const excluded of excludedDirectories) {
+    if (path === excluded) return true;
+    const inside = relative(excluded, path);
+    if (inside && !inside.startsWith("..") && !isAbsolute(inside)) return true;
+  }
+  return false;
+}
+
+/**
+ * A recursive watch assembled from one non-recursive watch per directory. It
+ * exists so an excluded tree costs no watch at all: `fs.watch` cannot express
+ * an exclusion, and on Linux the recursive watch it would otherwise use spends
+ * one inotify watch on every directory it walks, `node_modules` included.
+ */
+export function watchDirectoryBranches(
+  root: string,
+  report: (event: string, fileName: string | null) => void,
+  excludedDirectories: ReadonlySet<string>,
+): BranchDirectoryTreeWatcher {
+  const watchers = new Map<string, FSWatcher>();
+  let closed = false;
+  const isExcludedBranch = (absolute: string, name: string): boolean =>
+    alwaysExcludedWatchSegments.has(name) || excludedDirectories.has(absolute);
+  // Only the POSIX branches reach here, so a `/` separator is the whole story.
+  const closeBranch = (absolute: string): void => {
+    const prefix = `${absolute}/`;
+    for (const [path, watcher] of watchers) {
+      if (path !== absolute && !path.startsWith(prefix)) continue;
+      watcher.close();
+      watchers.delete(path);
+    }
+  };
+  // `announce` reports what the walk finds. A directory that arrives already
+  // populated — a `git checkout` that adds a folder of modules, an editor that
+  // renames a finished directory into place — exists in full before this watch
+  // can attach, so its contents would otherwise never be reported at all.
+  const watchBranch = (absolute: string, relativePath: string, announce: boolean): void => {
+    if (closed || watchers.has(absolute)) return;
+    let watcher: FSWatcher;
+    try {
+      watcher = watch(absolute);
+    } catch {
+      // A directory can vanish between the walk that found it and this watch.
+      return;
+    }
+    watchers.set(absolute, watcher);
+    watcher.on("error", () => {
+      watcher.close();
+      watchers.delete(absolute);
+    });
+    watcher.on("change", (event, fileName) => {
+      if (closed) return;
+      if (fileName === null || fileName === undefined) {
+        report(String(event), relativePath === "" ? null : relativePath);
+        return;
+      }
+      const name = String(fileName);
+      const childAbsolute = resolve(absolute, name);
+      const childRelative = relativePath === "" ? name : `${relativePath}/${name}`;
+      // A directory created after the walk holds no watch yet, and this event is
+      // the only notice of it; one that was removed has to give its watches back.
+      if (isDirectoryPath(childAbsolute)) {
+        if (!isExcludedBranch(childAbsolute, name)) watchBranch(childAbsolute, childRelative, true);
+      } else {
+        closeBranch(childAbsolute);
+      }
+      report(String(event), childRelative);
+    });
+    let entries;
+    try {
+      entries = readdirSync(absolute, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const childAbsolute = resolve(absolute, entry.name);
+      const childRelative = relativePath === "" ? entry.name : `${relativePath}/${entry.name}`;
+      if (entry.isDirectory() && !entry.isSymbolicLink()) {
+        if (!isExcludedBranch(childAbsolute, entry.name)) watchBranch(childAbsolute, childRelative, announce);
+        continue;
+      }
+      if (announce) report("rename", childRelative);
+    }
+  };
+  watchBranch(root, "", false);
+  return {
+    watchedDirectories: () => [...watchers.keys()].sort(),
+    close(): void {
+      closed = true;
+      for (const watcher of watchers.values()) watcher.close();
+      watchers.clear();
+    },
+  };
+}
+
+/** A symbolic link is not descended into, exactly as the walks above do not. */
+function isDirectoryPath(path: string): boolean {
+  return lstatSync(path, { throwIfNoEntry: false })?.isDirectory() ?? false;
 }
 
 function snapshotDirectoryTree(root: string, excludedDirectories: ReadonlySet<string>): Map<string, string> {
@@ -286,7 +441,7 @@ function snapshotDirectoryTree(root: string, excludedDirectories: ReadonlySet<st
       const absolute = resolve(directory.absolute, entry.name);
       const relative = directory.relative ? `${directory.relative}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
-        if (entry.name !== "node_modules" && entry.name !== ".git" && !excludedDirectories.has(absolute)) {
+        if (!alwaysExcludedWatchSegments.has(entry.name) && !excludedDirectories.has(absolute)) {
           pending.push({ absolute, relative });
         }
         continue;

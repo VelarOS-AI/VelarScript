@@ -4,11 +4,11 @@ import {
   compile,
   CORE_CONTEXTUAL_KEYWORD_WORDS,
   CORE_PRELUDE_NAMES,
-  formatSource,
   isSourceIdentifierPart,
   keywordKinds,
   PERMANENT_NAMESPACE_NAMES,
   permanentNamespaceCoveringModule,
+  type Advisory,
   type CorePreludeName,
   type Diagnostic,
   type PermanentNamespaceName,
@@ -20,6 +20,7 @@ import type { ProjectModule, ProjectResult } from "./project.ts";
 import { VelarProjectSessions } from "./project-session.ts";
 import { VELAR_VERSION } from "./version.ts";
 import { hostErrorMessage } from "./host-error.ts";
+import { formatSourceChecked } from "./format-guard.ts";
 import { canonicalizePotentialPath, canonicalPathWithinCanonicalRoot } from "./canonical-path.ts";
 import { buildOwnershipGraph, ownershipGraphRevision } from "./ownership-graph.ts";
 import {
@@ -308,6 +309,7 @@ export async function runLanguageServer(): Promise<void> {
       return;
     }
     let diagnostics: readonly Diagnostic[] = [];
+    let advisories: readonly Advisory[] = [];
     let notices: readonly string[] = [];
     let source: SourceText;
     try {
@@ -322,21 +324,25 @@ export async function runLanguageServer(): Promise<void> {
               .filter((failure) => failure.path === path)
               .map((failure) => ({ code: "VEL9001", message: failure.message, span: { start: 0, end: 1 } })),
           ];
+          advisories = module.result.advisories;
           notices = (project?.notices ?? []).filter((notice) => notice.path === path).map((notice) => notice.message);
           source = module.result.source;
         } else {
           const result = compile(document.text, { path });
           diagnostics = result.diagnostics;
+          advisories = result.advisories;
           source = result.source;
         }
       } else {
         const result = compile(document.text, { path: document.uri });
         diagnostics = result.diagnostics;
+        advisories = result.advisories;
         source = result.source;
       }
     } catch (error) {
       const result = compile(document.text, { path: document.uri });
       diagnostics = [{ code: "VEL9001", message: hostErrorMessage(error), span: { start: 0, end: 1 } }];
+      advisories = [];
       source = result.source;
     }
     if (documents.get(document.uri)?.version !== document.version) return;
@@ -346,7 +352,7 @@ export async function runLanguageServer(): Promise<void> {
       params: {
         uri: document.uri,
         version: document.version,
-        diagnostics: boundedDiagnostics(source, diagnostics, notices),
+        diagnostics: boundedDiagnostics(source, diagnostics, notices, advisories),
       },
     });
   };
@@ -753,7 +759,7 @@ export async function runLanguageServer(): Promise<void> {
           generatedChars: code?.length ?? 0,
           sourceMapChars: sourceMap?.length ?? 0,
           limitReached: (code?.length ?? 0) > limit || (sourceMap?.length ?? 0) > limit,
-          diagnostics: boundedDiagnostics(module.result.source, module.result.diagnostics, []),
+          diagnostics: boundedDiagnostics(module.result.source, module.result.diagnostics, [], module.result.advisories),
         });
         break;
       }
@@ -968,8 +974,12 @@ export async function runLanguageServer(): Promise<void> {
           break;
         }
         const project = await projectFor(document);
-        const formatted = formatSource(document.text, { extensions: project?.compilerExtensions ?? [] });
-        respond(message.id, formatted === document.text ? [] : [{ range: fullRange(document.text), newText: formatted }]);
+        const { text: formatted, stable } = formatSourceChecked(document.text, { extensions: project?.compilerExtensions ?? [] });
+        // Formatting is idempotent by contract, so a result the formatter would
+        // change again is a formatter defect. Offering it as an edit hands
+        // format-on-save a module the next save corrupts, and an editor cannot
+        // undo what it never saw as a change; no edits is the honest answer.
+        respond(message.id, !stable || formatted === document.text ? [] : [{ range: fullRange(document.text), newText: formatted }]);
         break;
       }
       default:
@@ -1053,17 +1063,25 @@ function boundedDiagnostics(
   source: SourceText,
   diagnostics: readonly Diagnostic[],
   notices: readonly string[],
+  advisories: readonly Advisory[],
 ): unknown[] {
   const output: unknown[] = [];
   for (const diagnostic of diagnostics) {
     if (output.length >= MAX_LSP_RESULT_ITEMS) break;
     output.push(lspDiagnostic(source, diagnostic));
   }
+  // D89: advisories are published on the same channel the protocol gives an
+  // editor, one severity below an error, so the squiggle a reader sees says
+  // "this spelling means something else" without claiming the file failed.
+  for (const item of advisories) {
+    if (output.length >= MAX_LSP_RESULT_ITEMS) break;
+    output.push(lspAdvisory(source, item));
+  }
   for (const notice of notices) {
     if (output.length >= MAX_LSP_RESULT_ITEMS) break;
     output.push(lspNotice(source, notice));
   }
-  if (diagnostics.length + notices.length > MAX_LSP_RESULT_ITEMS) {
+  if (diagnostics.length + advisories.length + notices.length > MAX_LSP_RESULT_ITEMS) {
     if (output.length >= MAX_LSP_RESULT_ITEMS) output.pop();
     output.push(lspNotice(source, `Diagnostics were truncated to ${MAX_LSP_RESULT_ITEMS} items`));
   }
@@ -1100,6 +1118,22 @@ function lspDiagnostic(source: SourceText, item: Diagnostic): unknown {
       end,
     },
     severity: 1,
+    code: item.code,
+    source: "velar",
+    message: clipLspText(item.message),
+  };
+}
+
+/** D89: severity 2 is Warning — an advisory is reported, never a failure. */
+function lspAdvisory(source: SourceText, item: Advisory): unknown {
+  const start = lspSourcePosition(source, item.span.start);
+  const end = lspSourcePosition(source, Math.max(item.span.start + 1, item.span.end));
+  return {
+    range: {
+      start,
+      end,
+    },
+    severity: 2,
     code: item.code,
     source: "velar",
     message: clipLspText(item.message),
@@ -1205,12 +1239,15 @@ function semanticTokenData(source: SourceText, tokens: readonly ProjectSemanticT
  * D38 §48: an editor quick fix is the same mechanical rewrite `velar fix`
  * applies, read from the diagnostic that named it. The compiler registers the
  * rewrite where it reports the diagnostic, so the editor never re-derives one
- * from message text and the two surfaces can never drift apart.
+ * from message text and the two surfaces can never drift apart. D89: an
+ * advisory that names one rewrite registers it the same way, so the editor
+ * offers A2's swap as an ordinary quick fix; `velar fix` still reads
+ * diagnostics only, because which name binds which value is a judgment.
  */
 function quickFixes(document: TextDocument, module: ProjectModule | null, diagnostics: readonly unknown[]): unknown[] {
   if (!module) return [];
   const source = module.result.source;
-  const registered = module.result.diagnostics
+  const registered = [...module.result.diagnostics, ...module.result.advisories]
     .filter((item) => item.fix && item.fix.edits.length > 0)
     .map((item) => ({ code: item.code, range: lspRange(source, boundedDiagnosticSpan(source, item.span)), fix: item.fix! }));
   if (registered.length === 0) return [];

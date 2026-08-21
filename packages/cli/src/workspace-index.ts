@@ -2,6 +2,7 @@ import { readdir, stat } from "node:fs/promises";
 import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { readBoundedText } from "./bounded-text.ts";
 import { isHostErrorCode } from "./host-error.ts";
+import { byCodeUnit } from "./stable-order.ts";
 
 export const WORKSPACE_TEXT_EXTENSIONS = Object.freeze([
   ".vel", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx", ".json", ".md", ".css",
@@ -92,7 +93,7 @@ export class WorkspaceTextIndex {
 
   configure(roots: readonly string[]): void {
     const normalized: string[] = [];
-    for (const root of [...new Set(roots.map((value) => resolve(value)))].sort((left, right) => left.length - right.length || left.localeCompare(right))) {
+    for (const root of [...new Set(roots.map((value) => resolve(value)))].sort((left, right) => left.length - right.length || byCodeUnit(left, right))) {
       if (!normalized.some((owner) => within(owner, root))) normalized.push(root);
     }
     if (normalized.length === this.roots.length && normalized.every((root, index) => root === this.roots[index])) return;
@@ -202,7 +203,7 @@ export class WorkspaceTextIndex {
     const activity = emptyActivity();
     activity.changesReceived = resolvedChanges.length;
     const normalizedChanges = new Set<string>();
-    for (const value of resolvedChanges.sort((left, right) => left.length - right.length || left.localeCompare(right))) {
+    for (const value of resolvedChanges.sort((left, right) => left.length - right.length || byCodeUnit(left, right))) {
       const root = this.workspaceRootFor(value);
       if (!root || changedBy(value, normalizedChanges, root)) continue;
       normalizedChanges.add(value);
@@ -256,7 +257,7 @@ export class WorkspaceTextIndex {
     }
     const bounded = new Map<string, IndexedDocument>();
     let bytes = 0;
-    for (const [path, document] of [...next].sort(([left], [right]) => left.localeCompare(right))) {
+    for (const [path, document] of [...next].sort(([left], [right]) => byCodeUnit(left, right))) {
       if (bounded.size >= MAX_WORKSPACE_TEXT_FILES) {
         throw new RangeError(`A language-server workspace cannot contain more than ${MAX_WORKSPACE_TEXT_FILES} indexed text files`);
       }
@@ -288,21 +289,39 @@ export class WorkspaceTextIndex {
     const matcher = new RegExp(escapeRegularExpression(query), options.caseSensitive ? "gu" : "giu");
     const matches: WorkspaceTextMatch[] = [];
     let filesSearched = 0;
+    let sinceYield = 0;
     for (const document of this.documents.values()) {
       if (options.cancelled?.()) throw new WorkspaceIndexCancelledError();
       if (filesSearched > 0 && filesSearched % 128 === 0) await yieldToHost();
       filesSearched += 1;
       matcher.lastIndex = 0;
       let lineStarts: readonly number[] | null = null;
+      // One cursor per file. `positionAt` counted code points from the start
+      // of the line on every call, so a file with very long lines — a minified
+      // bundle, a single-line JSON, both indexed extensions — cost O(offset)
+      // per match and O(matches x size) per file. Matches arrive in increasing
+      // offset order, so a cursor that only ever advances makes the file one
+      // O(size) pass.
+      let cursor: CodePointCursor | null = null;
       while (true) {
         const match = matcher.exec(document.text);
         if (!match) break;
         lineStarts ??= lineStartsFor(document.text);
-        const start = positionAt(document.text, lineStarts, match.index);
-        const end = positionAt(document.text, lineStarts, match.index + match[0].length);
-        matches.push({ path: document.path, start, end, preview: previewAt(document.text, lineStarts, match.index) });
+        cursor ??= { line: -1, offset: 0, count: 0 };
+        const start = positionAt(document.text, lineStarts, match.index, cursor);
+        const end = positionAt(document.text, lineStarts, match.index + match[0].length, cursor);
+        matches.push({ path: document.path, start, end, preview: previewAt(document.text, lineStarts, start.line) });
         if (matches.length >= maximumResults) {
           return this.searchResult(matches, true, filesSearched, started);
+        }
+        // A file with thousands of matches is one host turn's worth of work on
+        // its own, so the poll cannot live only in the per-file loop: a single
+        // large file answered no cancellation and served no other request.
+        sinceYield += 1;
+        if (sinceYield >= 128) {
+          sinceYield = 0;
+          if (options.cancelled?.()) throw new WorkspaceIndexCancelledError();
+          await yieldToHost();
         }
       }
     }
@@ -404,7 +423,7 @@ export class WorkspaceTextIndex {
       if (isHostErrorCode(error, "ENOENT") || isHostErrorCode(error, "ENOTDIR")) return;
       throw error;
     }
-    entries.sort((left, right) => left.name.localeCompare(right.name));
+    entries.sort((left, right) => byCodeUnit(left.name, right.name));
     for (const entry of entries) {
       const path = join(directory, entry.name);
       if (entry.isDirectory()) {
@@ -490,7 +509,23 @@ function lineStartsFor(text: string): readonly number[] {
   return lineStarts;
 }
 
-function positionAt(text: string, lineStarts: readonly number[], offset: number): WorkspaceIndexPosition {
+/**
+ * How far into its line the last position was, in code points. Advancing it
+ * is only valid forward within one line, so a request that moves backwards or
+ * changes line restarts it at that line's start.
+ */
+interface CodePointCursor {
+  line: number;
+  offset: number;
+  count: number;
+}
+
+function positionAt(
+  text: string,
+  lineStarts: readonly number[],
+  offset: number,
+  cursor: CodePointCursor | null = null,
+): WorkspaceIndexPosition {
   let low = 0;
   let high = lineStarts.length;
   while (low + 1 < high) {
@@ -499,17 +534,22 @@ function positionAt(text: string, lineStarts: readonly number[], offset: number)
     else high = middle;
   }
   const lineStart = lineStarts[low] ?? 0;
-  return {
-    line: low,
-    utf16Character: offset - lineStart,
-    utf32Character: codePointCount(text, lineStart, offset),
-  };
+  if (cursor === null) {
+    return { line: low, utf16Character: offset - lineStart, utf32Character: codePointCount(text, lineStart, offset) };
+  }
+  if (cursor.line !== low || cursor.offset > offset) {
+    cursor.line = low;
+    cursor.offset = lineStart;
+    cursor.count = 0;
+  }
+  cursor.count += codePointCount(text, cursor.offset, offset);
+  cursor.offset = offset;
+  return { line: low, utf16Character: offset - lineStart, utf32Character: cursor.count };
 }
 
-function previewAt(text: string, lineStarts: readonly number[], offset: number): string {
-  const position = positionAt(text, lineStarts, offset);
-  const start = lineStarts[position.line] ?? 0;
-  const next = lineStarts[position.line + 1] ?? text.length;
+function previewAt(text: string, lineStarts: readonly number[], lineIndex: number): string {
+  const start = lineStarts[lineIndex] ?? 0;
+  const next = lineStarts[lineIndex + 1] ?? text.length;
   const end = next > start && text[next - 1] === "\n"
     ? next > start + 1 && text[next - 2] === "\r" ? next - 2 : next - 1
     : next;

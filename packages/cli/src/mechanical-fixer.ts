@@ -1,8 +1,12 @@
-import { writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { constants } from "node:fs";
+import { access, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { applyMechanicalFixes, formatDiagnostic } from "@velarscript/compiler";
 import type { VelarProjectConfig } from "./config.ts";
 import { hostErrorMessage } from "./host-error.ts";
-import { compileProject, type ProjectResult } from "./project.ts";
+import { compileProject, type ProjectModule, type ProjectResult } from "./project.ts";
+import { readVelarSourceFile } from "./source-limits.ts";
 
 export interface MechanicalFixReport {
   /** One line per applied rewrite, in source order, already display-formatted. */
@@ -68,6 +72,12 @@ export async function applyProjectMechanicalFixes(
     for (const module of projects.flatMap((result) => result.modules)) {
       if (visited.has(module.inputPath)) continue;
       visited.add(module.inputPath);
+      // The module graph reaches installed VelarScript packages, and their
+      // diagnostics carry the same mechanical fixes. Their source is not the
+      // author's to rewrite, so it is left alone; the diagnostics still reach
+      // the author through `remainingDiagnostics` below, which is the same
+      // channel `velar check` reports them on.
+      if (!await ownedByProject(config, module)) continue;
       const source = module.result.source;
       const result = applyMechanicalFixes(source.text, module.result.diagnostics);
       if (result.applied.length === 0) continue;
@@ -75,7 +85,7 @@ export async function applyProjectMechanicalFixes(
         const location = source.location(fix.offset);
         return `${displayPath(module.inputPath)}:${location.line}:${location.column} fixed ${fix.code}: ${fix.title}`;
       });
-      writes.push({ path: module.inputPath, lines, write: writeFile(module.inputPath, result.text, "utf8") });
+      writes.push({ path: module.inputPath, lines, write: replaceSourceFile(module.inputPath, source.text, result.text) });
     }
     pending = writes.length > 0;
     if (!pending) break;
@@ -114,4 +124,107 @@ export async function applyProjectMechanicalFixes(
     }
   }
   return { changes, changedFiles: [...changedFiles].sort(), remainingDiagnostics: remaining, writeFailures, passes };
+}
+
+/**
+ * The project driver builds this prefix for every module that came out of an
+ * installed VelarScript package (project.ts assembles
+ * `join("__velar_packages__", <package name>, <path within the package>)`),
+ * so a module carrying it is a dependency rather than source the author wrote.
+ */
+const PACKAGE_MODULE_PREFIX = "__velar_packages__/";
+
+function pathSegments(path: string): readonly string[] {
+  return path.split(/[\\/]/u);
+}
+
+/**
+ * `velar fix` rewrites source in place, so it may only touch the source the
+ * author owns. Installed VelarScript packages are enqueued into the same module
+ * graph as the project's own modules, and an edit to one of them is invisible to
+ * git, destroyed by the next `npm ci`, and makes the installed tree diverge from
+ * its published tarball. `velar format` already draws this boundary in its
+ * directory walk; the two commands now agree.
+ *
+ * The tests are deliberately independent rather than several spellings of one
+ * idea: `relativePath` names a module the driver resolved through a package
+ * manifest, containment names a file outside the project whatever its
+ * provenance, and a `node_modules` segment names an installed tree even when it
+ * sits inside the project root. Containment is then asked a second time about
+ * the real path, because the write follows the link rather than replacing it:
+ * `src/lib.vel` pointing into an installed package is a module whose own path
+ * passes every test above and whose rewrite still lands in the dependency.
+ */
+async function ownedByProject(config: VelarProjectConfig, module: ProjectModule): Promise<boolean> {
+  if (module.relativePath.startsWith(PACKAGE_MODULE_PREFIX)) return false;
+  if (!containedByProject(config.root, module.inputPath)) return false;
+  // The project root is resolved as well: a root reached through a symbolic link
+  // — `/tmp` and `/var` on macOS are two — would otherwise fail its own
+  // containment test and no module in the project would be rewritten at all.
+  const [root, target] = await Promise.all([resolvedPath(config.root), resolvedPath(module.inputPath)]);
+  return containedByProject(root, target);
+}
+
+function containedByProject(root: string, path: string): boolean {
+  const within = relative(root, path);
+  if (within.length === 0 || isAbsolute(within)) return false;
+  const segments = pathSegments(within);
+  return !segments.includes("..") && !segments.includes("node_modules");
+}
+
+/** A path that does not exist is its own real path; the write reports the rest. */
+async function resolvedPath(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch {
+    return path;
+  }
+}
+
+/**
+ * The rewrite was computed from the text `compile()` read, so a save that landed
+ * since then is not in it and writing the whole file would revert it without a
+ * word. The file is re-read immediately before the write and left untouched when
+ * it no longer matches the snapshot; the conflict is reported on the same
+ * channel as a failed write, so the author is told rather than quietly losing
+ * the edit. The replacement itself goes through a sibling temporary plus
+ * `rename`, because a torn write on this path destroys the module.
+ */
+async function replaceSourceFile(path: string, expected: string, text: string): Promise<void> {
+  const current = await readVelarSourceFile(path);
+  if (current !== expected) {
+    throw new Error("the file changed on disk during this fix pass; nothing was written");
+  }
+  // A rename replaces the name, not the file behind it, so the two things a
+  // plain `writeFile` preserved for free have to be carried across by hand: the
+  // rewrite lands on the file a symlinked module points at rather than
+  // replacing the link, and the temporary is created with the mode the module
+  // already had rather than the process umask's.
+  const target = await realpath(path);
+  const metadata = await stat(target);
+  // A rename needs only a writable directory, so a module the author marked
+  // read-only would be rewritten through one without ever being consulted. The
+  // marker is checked directly and reported on the write channel, which is where
+  // the failed `writeFile` used to land it.
+  try {
+    await access(target, constants.W_OK);
+  } catch {
+    throw new Error("the file is read-only; nothing was written");
+  }
+  if (metadata.nlink > 1) {
+    // A rename replaces the name rather than the file behind it, so a module the
+    // author hard-linked under a second name would come apart: one name would
+    // carry the rewrite and the other the original bytes. The link is the
+    // author's, so this rare module is written in place and keeps its identity.
+    await writeFile(target, text, "utf8");
+    return;
+  }
+  const temporary = join(dirname(target), `.${basename(target)}.velar-fix-${randomUUID()}`);
+  await writeFile(temporary, text, { encoding: "utf8", mode: metadata.mode & 0o777 });
+  try {
+    await rename(temporary, target);
+  } catch (error) {
+    await rm(temporary, { force: true });
+    throw error;
+  }
 }

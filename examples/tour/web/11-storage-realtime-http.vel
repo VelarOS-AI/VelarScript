@@ -15,7 +15,7 @@
 // nothing calls; `using` is what releases them, because each publishes `close()`
 // and is therefore a standard capability handle.
 
-import {HttpAbortError, HttpError, HttpTransportError, HttpTransportPhase, formBody, http} from "velar/http"
+import {HttpAbortError, HttpResponseError, HttpTransportError, HttpTransportPhase, formBody, http} from "velar/http"
 import {eventStream, socket} from "velar/realtime"
 import {StorageQuotaError, StorageTransactionError, StorageUpgradeError, database, session, storage} from "velar/storage"
 
@@ -178,7 +178,7 @@ export def describeHttpFailure(error: Error) -> string:
                 return "transport failed while sending the request"
             case HttpTransportPhase.response:
                 return "transport failed while reading the response"
-    if error is HttpError:
+    if error is HttpResponseError:
         return f"http {error.status} from {error.url}"
     return f"unclassified: {error.message}"
 

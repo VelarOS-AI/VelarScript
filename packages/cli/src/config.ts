@@ -8,9 +8,11 @@ import {
   VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION,
   type FrameworkHostExtension,
 } from "@velarscript/compiler/framework-host";
+import { standardModuleInterfaces, standardModuleSources } from "@velarscript/core";
 import { hostErrorCode, hostErrorMessage, isHostErrorCode } from "./host-error.ts";
 import {
   OFFICIAL_WEB_EXTENSION_PACKAGE,
+  isToolchainExtensionPackage,
   resolveExtensionPackages,
   validateLoadedExtension,
   type ResolvedExtensionPackage,
@@ -19,6 +21,7 @@ import {
   CORE_WORKER_CONFIG_KEY,
   CORE_PROJECT_MANIFEST_FIELDS,
   CURRENT_PROJECT_FORMAT_VERSION,
+  unsupportedProjectFormat,
 } from "./project-format.ts";
 import { bundledExtension } from "./bundled-extension-registry.ts";
 
@@ -125,7 +128,7 @@ async function loadManifest(manifestPath: string, entryOverride: string | null =
   if (manifest.formatVersion === undefined) throw new Error(`${manifestPath}: 'formatVersion' is required; this compiler does not load legacy project formats — ${MINIMAL_MANIFEST_EXAMPLE}`);
   const formatVersion = integerField(manifest.formatVersion, "formatVersion");
   if (formatVersion !== CURRENT_PROJECT_FORMAT_VERSION) {
-    throw new Error(`${manifestPath}: unsupported formatVersion ${formatVersion}; this compiler supports ${CURRENT_PROJECT_FORMAT_VERSION} — ${MINIMAL_MANIFEST_EXAMPLE}`);
+    throw new Error(`${manifestPath}: ${unsupportedProjectFormat(formatVersion)} — ${MINIMAL_MANIFEST_EXAMPLE}`);
   }
   const root = dirname(manifestPath);
   const entry = entryOverride ?? resolveProjectPath(root, stringField(manifest.entry, "entry", "src/main.vel"), "entry");
@@ -284,21 +287,45 @@ async function loadExtensions(root: string, names: readonly string[], manifestPa
   return { packages, compiler: Object.freeze(compiler), project: Object.freeze(project), hosts: Object.freeze(hosts) };
 }
 
+/**
+ * `velar/*` is a closed vocabulary owned by the language, so Core's own roster
+ * is in the table before any extension is, and no package outside the official
+ * toolchain may name that prefix at all. Without both halves an extension named
+ * in `velar.json` could declare `velar/id` and have the compiler type-check
+ * against its contract and emit its source with no diagnostic anywhere, because
+ * `standardModuleInterface` consults extensions before Core.
+ *
+ * An official target extension may still take a Core name: `@velarscript/node`
+ * replaces `velar/worker` with the Node implementation of the same contract,
+ * which is what target capabilities are for. That is the only exemption.
+ */
 function validateModuleOwnership(extensions: readonly CompilerExtension[], manifestPath: string): void {
   const owners = new Map<string, string>();
+  for (const specifier of coreModuleRoster()) owners.set(specifier, CORE_MODULE_OWNER);
   for (const extension of extensions) {
+    const official = isToolchainExtensionPackage(extension.id);
     const specifiers = new Set([
       ...(extension.modules?.interfaces.keys() ?? []),
       ...(extension.modules?.sources.keys() ?? []),
     ]);
     for (const specifier of specifiers) {
+      if (!official && specifier.startsWith("velar/")) {
+        throw new Error(`${manifestPath}: extension '${extension.id}' cannot declare Velar module '${specifier}'; 'velar/*' belongs to the language — an extension publishes its modules under its own package name`);
+      }
       const owner = owners.get(specifier);
-      if (owner && owner !== extension.id) {
+      if (owner && owner !== extension.id && !(official && owner === CORE_MODULE_OWNER)) {
         throw new Error(`${manifestPath}: Velar module '${specifier}' has more than one extension owner (${owner}, ${extension.id})`);
       }
       owners.set(specifier, extension.id);
     }
   }
+}
+
+const CORE_MODULE_OWNER = "core";
+
+/** Core's roster is what the standard-module tables hold with no extension active. */
+function coreModuleRoster(): ReadonlySet<string> {
+  return new Set([...standardModuleInterfaces().keys(), ...standardModuleSources().keys()]);
 }
 
 async function loadFrameworkHost(require: NodeJS.Require, name: string): Promise<unknown | null> {

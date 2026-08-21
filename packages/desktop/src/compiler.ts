@@ -630,6 +630,25 @@ function argumentsOf(value) {
 function recordOf(value, name, allowed) {
   return __velarProcessRecord(value, name, allowed);
 }
+// An executable grant is only as narrow as that executable's own environment
+// surface: many granted programs take a command, an interpreter option, or a
+// loader path from their environment, so those names are not caller data. The
+// identical predicate is duplicated host-side as reservedEnvironmentName in
+// packages/desktop/native/node/worker.js; the two must not drift. PATH keeps
+// its own longer-standing message. The bare spellings matter as much as the
+// prefixed ones: git commit runs EDITOR, git log runs PAGER, and HOME moves the
+// whole configuration surface — including the .gitconfig whose own core.editor
+// runs a command — into a directory the caller chooses. The host's base
+// environment snapshot owns HOME, SHELL and TMPDIR, so those are not caller
+// data either.
+const processReservedEnvironmentNames = /^(?:PATH|HOME|USERPROFILE|SHELL|TMPDIR|IFS|ENV|BASH_ENV|SHELLOPTS|BASHOPTS|PS4|EDITOR|VISUAL|PAGER|MANPAGER|MANOPT|BROWSER|SSH_ASKPASS|SUDO_ASKPASS|NODE_OPTIONS|NODE_REPL_EXTERNAL_MODULE)$/iu;
+const processReservedEnvironmentPrefixes = /^(?:LD_|DYLD_|GIT_|XDG_|PYTHON|PERL|RUBY|LESS)/iu;
+const processReservedEnvironmentSuffixes = /(?:_COMMAND|_EDITOR|_PAGER|_OPTS)$/iu;
+function __velarProcessReservedEnvironmentName(name) {
+  return __velarProcessCall(__velarProcessRegExpTest, processReservedEnvironmentNames, [name])
+    || __velarProcessCall(__velarProcessRegExpTest, processReservedEnvironmentPrefixes, [name])
+    || __velarProcessCall(__velarProcessRegExpTest, processReservedEnvironmentSuffixes, [name]);
+}
 function mapEntries(value) {
   if (value == null) return null;
   const snapshot = __velarProcessMapSnapshot(value);
@@ -641,6 +660,9 @@ function mapEntries(value) {
     const item = snapshot.entries[index][1];
     if (!__velarProcessEnvironmentName(name) || name === "PATH" || typeof item !== "string" || __velarProcessIncludes(item, "\0")) {
       throw new __velarProcessNativeTypeError("Desktop process env must contain valid string variables and cannot replace PATH");
+    }
+    if (__velarProcessReservedEnvironmentName(name)) {
+      throw new __velarProcessNativeTypeError("Process env cannot set the transport- or interpreter-controlled variable '" + name + "'");
     }
     units += name.length + item.length;
     if (units > 1024 * 1024) throw new __velarProcessNativeRangeError("Process env cannot exceed 1 MiB");
@@ -923,14 +945,14 @@ export class HttpTransportError extends Error {
     super(message); this.name = "HttpTransportError"; this.phase = phase;
   }
 }
-export class HttpError extends Error {
+export class HttpResponseError extends Error {
   constructor(message, status, url, body = null) {
     if (typeof message !== "string") throw new TypeError("HTTP error message must be text");
     if (message.length > 65536) throw new RangeError("HTTP error messages cannot exceed 64 KiB");
     if (!Number.isInteger(status) || status < 100 || status > 599) throw new RangeError("HTTP error status must be an integer from 100 through 599");
     if (typeof url !== "string") throw new TypeError("HTTP error URL must be text");
     if (url.length > 2 * 1024 * 1024) throw new RangeError("HTTP error URLs cannot exceed 2 MiB");
-    super(message); this.name = "HttpError"; this.status = status; this.url = url; this.body = body;
+    super(message); this.name = "HttpResponseError"; this.status = status; this.url = url; this.body = body;
   }
 }
 function headersOf(value) {
@@ -1193,7 +1215,7 @@ class DesktopRequest {
           let body = text;
           try { body = text ? parseJsonText(text) : null; } catch {}
           const errorUrl = response.url || this.url;
-          throw new HttpError("HTTP " + response.status + " for " + errorUrl, response.status, errorUrl, body);
+          throw new HttpResponseError("HTTP " + response.status + " for " + errorUrl, response.status, errorUrl, body);
         }
         return response;
       } catch (error) {

@@ -152,6 +152,15 @@ const removedStandardFunctionGuidanceEntries = new Map<string, ReadonlyMap<strin
     ["isFinite", "Use 'value.isFinite()'; finite-number checks are checked members"],
     ["isInteger", "Use 'value.isInteger()'; integer checks are checked members"],
   ])],
+  // D90 R14: `velar/http`'s non-2xx failure is now `HttpResponseError`, while
+  // `velar/serve`'s `HttpError` is unchanged. The old spelling is what every
+  // model wrote before the rename, so it earns the successor by name rather
+  // than a bare "no export named" followed by a cascade of unknown-type
+  // errors — and it must say which module still owns `HttpError`, because a
+  // proxy route imports both.
+  ["velar/http", new Map([
+    ["HttpError", "Use 'HttpResponseError'; velar/serve's HttpError is the outbound failure a route throws, and a proxy route holds both"],
+  ])],
 ]);
 
 /**

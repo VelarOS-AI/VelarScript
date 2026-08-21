@@ -28,13 +28,23 @@ framework host, and cannot silently activate language syntax.
 - `velar.entry` is the one public source entry resolved by the compiler.
 - `velar.targets` is the complete list of application targets that may compile
   the source. `velar.requires.capabilities` lists additional host capabilities
-  the implementation actually calls; it is empty for a portable component.
+  the implementation actually calls; it is empty for a portable component. The
+  optional `velar.requires.language` beside it declares the language generation
+  the source was written against; see
+  [package distribution](package-distribution.md).
 - `files` contains the public source and required package documentation. Demo
   applications, browser tests, screenshots, and local project manifests remain
   outside the published inventory.
 - `@velarscript/web` is a peer contract because the consuming application owns
   the framework instance and compiler extension. A component library must not
-  hide a second Web runtime inside itself.
+  hide a second Web runtime inside itself. A peer range is also the one
+  `@velarscript/*` range a template does not pin exactly. It installs nothing:
+  it states which target the package needs present, and the copy that actually
+  loads is pinned by the consuming application's own toolchain, so a peer can
+  never pair two compiler generations the way an installed range can. Pinning it
+  would only refuse the install of a component whose source would have compiled
+  fine. A prerelease toolchain states its peer exactly, because a caret over a
+  prerelease accepts the whole release it precedes.
 - Runtime JavaScript dependencies remain ordinary npm dependencies. Framework
   and toolchain dependencies are not smuggled through VelarScript metadata.
 - Public JSON data uses the exact `velar.resources` plus npm `exports`

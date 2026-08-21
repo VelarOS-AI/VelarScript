@@ -1,7 +1,7 @@
 import type { AnalysisContext, ClassInfo, FormReadField, LoweringHints } from "./analyzer.ts";
 import type { Analyzer } from "./analyzer.ts";
 import type { CoreExpression, CoreStatement, Expression, Parameter, Program, Statement, TypeReference, TypeSyntax } from "./ast.ts";
-import type { Diagnostic } from "./diagnostic.ts";
+import type { Advisory, Diagnostic } from "./diagnostic.ts";
 import type { Parser } from "./parser.ts";
 import type { SourceText, Span } from "./source.ts";
 import type { CompilerSemanticExtension, SemanticSymbol } from "./semantic.ts";
@@ -16,7 +16,7 @@ export { JavaScriptEmitter } from "./emitter.ts";
 export { scanOpaqueEmbeddedSource } from "./embedded-source.ts";
 export type { OpaqueEmbeddedSourceScan } from "./embedded-source.ts";
 export { findInterpolatedExpressionEnd, scanStringLiteral } from "./interpolated-string.ts";
-export { VELAR_ERROR_NORMALIZATION_MODULE, VELAR_ERROR_NORMALIZATION_MODULE_SOURCE, VELAR_ERROR_NORMALIZATION_RUNTIME, VELAR_HOST_ERROR_NAMES, VELAR_HOST_ERROR_PATH_NAMES, VELAR_HOST_ERROR_RUNTIME } from "./error-runtime.ts";
+export { VELAR_ASSERTION_ERROR_RUNTIME, VELAR_ERROR_NORMALIZATION_MODULE, VELAR_ERROR_NORMALIZATION_MODULE_SOURCE, VELAR_ERROR_NORMALIZATION_RUNTIME, VELAR_HOST_ERROR_NAMES, VELAR_HOST_ERROR_PATH_NAMES, VELAR_HOST_ERROR_RUNTIME } from "./error-runtime.ts";
 export { VELAR_STRICT_JSON_RUNTIME } from "./json-runtime.ts";
 export { VELAR_NUMBER_METHOD_RUNTIME } from "./number-runtime.ts";
 export { VELAR_NARROWING_MODULE, VELAR_NARROWING_MODULE_SOURCE, VELAR_NARROWING_RUNTIME } from "./narrowing-runtime.ts";
@@ -157,6 +157,8 @@ export interface CompilerLexicalScanResult {
   readonly token: Token;
   readonly nextOffset: number;
   readonly diagnostics?: readonly Diagnostic[];
+  /** D89: an extension scanner reaches the advisory channel on the same terms as the diagnostic one. */
+  readonly advisories?: readonly Advisory[];
   readonly startsLine?: boolean;
 }
 

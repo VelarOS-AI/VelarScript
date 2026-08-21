@@ -282,8 +282,9 @@ test "toContain still refuses a value the List does not hold":
 
 test "toContain stays reference identity for values the language compares by reference":
     const inner = [1, 2]
+    const twin = [1, 2]
     expect([inner]).toContain(inner)
-    expect(() => expect([inner]).toContain([1, 2])).toThrow()
+    expect(() => expect([inner]).toContain(twin)).toThrow()
 
 test "text containment is unchanged: it is code-point identity, not a value comparison":
     expect("VelarScript").toContain("Script")

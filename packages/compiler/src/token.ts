@@ -114,6 +114,18 @@ export interface Token {
 }
 
 /**
+ * A number token's payload, carried only when the author's own spelling differs
+ * from the value the token holds — digit separators (`1_000_000_1`) and an
+ * uppercase radix prefix (`0X20`) are the two differences the lexer makes.
+ * D90 R6's representability report quotes the literal back at the author, and
+ * quoting the normalized spelling would show them text that appears nowhere in
+ * their source.
+ */
+export interface NumberTokenPayload {
+  readonly written: string;
+}
+
+/**
  * Hard reserved words: spellings the lexer always turns into a keyword token,
  * so they can never name a binding. D30 item 16 softened the statement-head
  * words that JavaScript does not reserve — including `type`, `match`, `from`,

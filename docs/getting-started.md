@@ -107,7 +107,7 @@ A unit test is a named block in a `*.test.vel` module:
 import {expect} from "velar/test"
 
 export def slug(title: string) -> string:
-    return title.lower().replace(" ", "-")
+    return title.lower().replaceAll(" ", "-")
 
 test "a title becomes a url slug":
     expect(slug("Release Notes")).toBe("release-notes")

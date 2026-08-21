@@ -138,6 +138,53 @@ server api:
   assert.ok(wrongFallback.diagnostics.some((item) => /parameter must be Request/u.test(item.message)));
 });
 
+test("Routes that share a path without a more specific winner are rejected", () => {
+  const ambiguous = compileNode(`
+server api:
+    @get(p"/a/{x:string}/b") => {ok: true}
+    @get(p"/a/b/{y:string}") => {ok: true}
+`);
+  assert.deepEqual(ambiguous.diagnostics.map((item) => item.message), [
+    "Route 'GET /a/{x:string}/b' overlaps 'GET /a/b/{y:string}'; both match '/a/b/b' and neither is more specific — narrow or remove one",
+  ]);
+
+  const captures = compileNode(`
+server api:
+    @get(p"/a/{x:string}/b/{p:string}") => {ok: true}
+    @get(p"/a/b/{y:string}/{q:string}") => {ok: true}
+`);
+  assert.deepEqual(captures.diagnostics.map((item) => item.message), [
+    "Route 'GET /a/{x:string}/b/{p:string}' overlaps 'GET /a/b/{y:string}/{q:string}'; both match '/a/b/b/p' and neither is more specific — narrow or remove one",
+  ]);
+
+  const specific = compileNode(`
+server api:
+    @get(p"/users/me") => {ok: true}
+    @get(p"/users/{id:string}") => {ok: true}
+    @get(p"/users/{id:string}/settings") => {ok: true}
+    @get(p"/users/{id:string}/{section:string}") => {ok: true}
+`);
+  assert.deepEqual(specific.diagnostics, []);
+
+  const unrealizable = compileNode(`
+server api:
+    @get(p"/a/{n:number}/b") => {ok: true}
+    @get(p"/a/b/{m:string}") => {ok: true}
+    @get(p"/a/{f:bool}/c") => {ok: true}
+    @get(p"/a/c/{m:string}") => {ok: true}
+`);
+  assert.deepEqual(unrealizable.diagnostics, []);
+
+  const separate = compileNode(`
+server api:
+    @get(p"/a/{x:string}") => {ok: true}
+    @get(p"/a/b/{y:string}") => {ok: true}
+    @post(p"/a/{x:string}/b") => {ok: true}
+    @get(p"/a/true/{y:string}") => {ok: true}
+`);
+  assert.deepEqual(separate.diagnostics.map((item) => item.message), []);
+});
+
 test("Node owns and validates path-pattern strings without changing Core strings", () => {
   const fullWidth = compileNode(`server api:\n    @get(p"/articles/{id：string}") => {id}\n`);
   const separator = fullWidth.diagnostics.find((item) => /half-width ':'/u.test(item.message));

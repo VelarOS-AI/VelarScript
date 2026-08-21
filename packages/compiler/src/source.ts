@@ -61,6 +61,18 @@ export class SourceText {
     if (start === undefined) {
       return "";
     }
+    const nextStart = this.lineStarts[line];
+    if (nextStart !== undefined) {
+      // The index already holds where the next line begins, so the terminator
+      // is the one or two characters in front of it. Searching for it again
+      // makes every diagnostic render scan the rest of the file, because
+      // `indexOf("\r")` on a text with no carriage return never stops early.
+      let end = nextStart - 1;
+      if (this.text[end] === "\n" && this.text[end - 1] === "\r") end -= 1;
+      return this.text.slice(start, end);
+    }
+    // The last line has no successor to bound it, and an unindexed SourceText
+    // has no successors at all; both scan, and both stop inside their own line.
     const carriageReturn = this.text.indexOf("\r", start);
     const lineFeed = this.text.indexOf("\n", start);
     const end = carriageReturn === -1

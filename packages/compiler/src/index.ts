@@ -1,7 +1,8 @@
+import { resolveAdvisorySuppressions, type AdvisorySuppression } from "./advisory-suppression.ts";
 import { Analyzer, inferredResultPlaceholderType, isCorePrimitiveName, type AnalysisContext, type ClassField, type ClassInfo, type InitializationImportRead } from "./analyzer.ts";
 import { astNodesOfKind, blockContainsDirectAwait, testFunctionName } from "./ast.ts";
 import type { BindingPattern, DynamicImportExpression, Expression, FunctionDeclaration, Program, Statement, TypeReference } from "./ast.ts";
-import { diagnostic, type Diagnostic } from "./diagnostic.ts";
+import { diagnostic, type Advisory, type Diagnostic } from "./diagnostic.ts";
 import { JavaScriptEmitter } from "./emitter.ts";
 import { programWithEmbeddedJavaScriptImports } from "./embedded-module.ts";
 import type { CompilerEmbeddedJavaScriptModule, CompilerEmitter, CompilerEmitterOptions, CompilerExtension, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface, ModuleTest } from "./extension.ts";
@@ -32,7 +33,8 @@ import {
   type ValueType,
 } from "./types.ts";
 
-export { diagnostic, formatDiagnostic, mechanicalEdits, mechanicalFix, type Diagnostic, type DiagnosticEdit, type DiagnosticFix } from "./diagnostic.ts";
+export { advisory, diagnostic, formatAdvisory, formatDiagnostic, mechanicalEdits, mechanicalFix, type Advisory, type Diagnostic, type DiagnosticEdit, type DiagnosticFix } from "./diagnostic.ts";
+export { resolveAdvisorySuppressions, scanAdvisorySuppressions, type AdvisoryResolution, type AdvisorySuppression, type AdvisorySuppressionScan } from "./advisory-suppression.ts";
 export { applyMechanicalFixes, type AppliedMechanicalFix, type MechanicalFixResult } from "./mechanical-fix.ts";
 export { formatSource } from "./formatter.ts";
 export { collectionMemberGuidance, removedStandardFunctionGuidance, sourceTypeNameGuidance, type CollectionKind, type CollectionMemberGuidance, type SourceTypeGuidance } from "./language-guidance.ts";
@@ -87,6 +89,11 @@ export interface CompileResult {
   readonly runtimeModules: readonly string[];
   readonly extensions: readonly string[];
   readonly diagnostics: readonly Diagnostic[];
+  /**
+   * D89: the advisory channel. Advisories are reported beside the diagnostics
+   * and never counted with them, so they never withhold `code`.
+   */
+  readonly advisories: readonly Advisory[];
   readonly source: SourceText;
   readonly dependencies: readonly ModuleDependency[];
   readonly resources: readonly CompilerResourceDependency[];
@@ -120,6 +127,8 @@ export interface ModuleDependency {
 
 export interface ModuleInspection {
   readonly diagnostics: readonly Diagnostic[];
+  /** D89: the lexical and syntactic advisories of this module. */
+  readonly advisories: readonly Advisory[];
   readonly source: SourceText;
   readonly dependencies: readonly ModuleDependency[];
   readonly resources: readonly CompilerResourceDependency[];
@@ -131,8 +140,13 @@ export function inspectModule(text: string, options: Pick<CompileOptions, "path"
   const extensions = normalizedExtensions(options.extensions ?? []);
   const parsed = parseModule(text, options.path ?? "<source>", extensions);
   const semanticProgram = programWithEmbeddedJavaScriptImports(parsed.program, parsed.source.path);
+  // An inspection stops after parsing, so the analyzer's advisories are absent
+  // by construction: suppressions still apply, and a suppression that matched
+  // nothing here is unanswerable rather than stale.
+  const resolved = resolveAdvisorySuppressions(parsed.source, parsed.advisories, parsed.suppressions, { reportStale: false });
   return {
     diagnostics: parsed.diagnostics,
+    advisories: resolved.advisories,
     source: parsed.source,
     dependencies: dependenciesOf(parsed.program),
     resources: resourcesOf(parsed.program, extensions),
@@ -155,6 +169,7 @@ function compileUnchecked(text: string, options: CompileOptions): CompileResult 
   const parsed = parseModule(text, options.path ?? "<source>", extensions);
   const semanticProgram = programWithEmbeddedJavaScriptImports(parsed.program, parsed.source.path);
   const diagnostics = [...parsed.diagnostics];
+  const advisories: Advisory[] = [...parsed.advisories];
   const analysisExtensions = extensions.flatMap((extension) => extension.analysis ? [extension.analysis] : []);
   const analyzerExtensions = extensions.filter((extension) => extension.analyzer);
   if (analyzerExtensions.length > 1) throw new Error("Only one compiler extension may own semantic analysis");
@@ -189,6 +204,7 @@ function compileUnchecked(text: string, options: CompileOptions): CompileResult 
     let inferredResults = analyzer.inferredFunctionResults();
     if (inferredResults.size === 0) {
       diagnostics.push(...initialDiagnostics);
+      advisories.push(...analyzer.analyzedAdvisories());
     } else {
       const maximumPasses = Math.min(Math.max(inferredResults.size + 2, 4), 256);
       for (let pass = 0; pass < maximumPasses; pass += 1) {
@@ -201,10 +217,25 @@ function compileUnchecked(text: string, options: CompileOptions): CompileResult 
       }
       analyzer = createAnalyzer(inferredResults, true);
       diagnostics.push(...analyzer.analyze(semanticProgram));
+      // The advisories are read off the same analyzer whose diagnostics were
+      // kept; the probe passes above are discarded whole.
+      advisories.push(...analyzer.analyzedAdvisories());
     }
   }
 
+  // D89: the reasoned suppressions are applied here, between the last producer
+  // and the emission gate. A stale one is a diagnostic, so it must join
+  // `diagnostics` before the gate reads the array — but only once the module
+  // otherwise compiles, because an earlier failure can keep the stage that
+  // would have reported the advisory from running at all.
+  const resolved = resolveAdvisorySuppressions(parsed.source, advisories, parsed.suppressions, {
+    reportStale: diagnostics.length === 0,
+  });
+  diagnostics.push(...resolved.diagnostics);
+  const reportedAdvisories = [...resolved.advisories];
+
   diagnostics.sort((left, right) => left.span.start - right.span.start || left.code.localeCompare(right.code));
+  reportedAdvisories.sort((left, right) => left.span.start - right.span.start || left.code.localeCompare(right.code));
   const emitterExtensions = extensions.filter((extension) => extension.createEmitter);
   if (emitterExtensions.length > 1) throw new Error("Only one compiler extension may own JavaScript emission");
   const emitterOptions: CompilerEmitterOptions = {
@@ -251,6 +282,7 @@ function compileUnchecked(text: string, options: CompileOptions): CompileResult 
     runtimeModules,
     extensions: extensions.map((extension) => extension.id),
     diagnostics,
+    advisories: reportedAdvisories,
     source: parsed.source,
     dependencies: dependenciesOf(parsed.program),
     resources: resourcesOf(parsed.program, extensions),
@@ -284,6 +316,7 @@ function complexityFailureResult(text: string, options: CompileOptions): Compile
     runtimeModules: [],
     extensions: extensions.map((extension) => extension.id),
     diagnostics: [diagnostic("VEL2008", "VelarScript source nesting is too complex to process safely", { start: 0, end: Math.min(1, text.length) })],
+    advisories: [],
     source,
     dependencies: [],
     resources: [],
@@ -313,7 +346,7 @@ function resourcesOf(program: Program, extensions: readonly CompilerExtension[])
   return output;
 }
 
-function parseModule(text: string, path: string, extensions: readonly CompilerExtension[]): { source: SourceText; program: Program; diagnostics: readonly Diagnostic[] } {
+function parseModule(text: string, path: string, extensions: readonly CompilerExtension[]): { source: SourceText; program: Program; diagnostics: readonly Diagnostic[]; advisories: readonly Advisory[]; suppressions: readonly AdvisorySuppression[] } {
   if (text.length > MAX_VELAR_SOURCE_CODE_UNITS) {
     const source = new SourceText(path, text, false);
     return {
@@ -324,6 +357,8 @@ function parseModule(text: string, path: string, extensions: readonly CompilerEx
         `A VelarScript source module cannot exceed ${MAX_VELAR_SOURCE_CODE_UNITS / 1024 / 1024} MiB`,
         { start: 0, end: Math.min(1, text.length) },
       )],
+      advisories: [],
+      suppressions: [],
     };
   }
   const source = new SourceText(path, text);
@@ -337,6 +372,8 @@ function parseModule(text: string, path: string, extensions: readonly CompilerEx
         source,
         program: { kind: "Program", body: [], span: { start: 0, end: text.length } },
         diagnostics: lexed.diagnostics,
+        advisories: lexed.advisories,
+        suppressions: lexed.suppressions,
       };
     }
     const parserExtensions = extensions.filter((extension) => extension.parser);
@@ -344,13 +381,21 @@ function parseModule(text: string, path: string, extensions: readonly CompilerEx
     const parser = parserExtensions[0]?.parser?.create(lexed.tokens, lexicalExtensions)
       ?? new Parser(lexed.tokens, lexicalExtensions);
     const parsed = parser.parse();
-    return { source, program: parsed.program, diagnostics: [...lexed.diagnostics, ...parsed.diagnostics] };
+    return {
+      source,
+      program: parsed.program,
+      diagnostics: [...lexed.diagnostics, ...parsed.diagnostics],
+      advisories: [...lexed.advisories, ...parsed.advisories],
+      suppressions: lexed.suppressions,
+    };
   } catch (error) {
     if (!isParserComplexityFailure(error) && !isJavaScriptStackOverflow(error)) throw error;
     return {
       source,
       program: { kind: "Program", body: [], span: { start: 0, end: 0 } },
       diagnostics: [diagnostic("VEL2008", "VelarScript source nesting is too complex to parse safely", { start: 0, end: Math.min(1, text.length) })],
+      advisories: [],
+      suppressions: [],
     };
   }
 }

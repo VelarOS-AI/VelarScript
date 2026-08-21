@@ -250,7 +250,14 @@ blindly. The path:
    a self-contained directory — the source the diagnostic touches, `velar.json`,
    the verbatim output, the versions, and a `README.md` already laid out in the
    three sections below — then prints the path. It uploads nothing and collects
-   nothing about your machine; sending it is your decision.
+   nothing about your machine; sending it is your decision. In the recorded
+   output, paths inside the project keep their project-relative shape, and a
+   module from outside it — a linked package, a `node_modules` tree above the
+   project root — is named by its file alone, as `<external>/<name>`; the
+   directories leading to it are not part of the defect. That module is still
+   named in full, relative to the project, where the `README.md` lists what the
+   bundle could not carry, because that list is what tells you which package to
+   install.
 2. **File the issue with three sections** (the same structure the project's
    blind-test ledger uses, and the fields the repository's defect template
    asks for):

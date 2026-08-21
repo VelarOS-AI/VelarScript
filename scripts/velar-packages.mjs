@@ -32,7 +32,11 @@ async function workspacePackages(root) {
     });
   }
   if (found.length === 0) throw new Error("no workspace packages found under packages/");
-  return found.sort((left, right) => left.name.localeCompare(right.name));
+  // Code-point order: this list decides the order packages are built,
+  // published, and written into a release manifest, so it must not follow the
+  // collation the build machine's locale selects. Same comparator as the
+  // release manifest and the production build manifest.
+  return found.sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
 }
 
 /** Compiler, CLI, official targets, and other toolchain implementation packages. */

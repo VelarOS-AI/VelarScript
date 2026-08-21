@@ -74,6 +74,27 @@ received only through an explicitly declared `children: WebNode` prop.
 Conditional rendering is an expression, and repeated children need stable
 `key` values.
 
+A native element rejects every attribute name beginning with `on` other than
+the `on:` directive itself. `onclick`, `onClick`, and `ONCLICK` are one
+attribute to the browser, and the browser compiles that attribute's value as
+script in the application's origin, which VelarScript reserves for
+`unsafe:html`. The prefix is reserved by name rather than by a roster of
+handler names, so the next handler spelling the platform adds is closed in
+advance. A component prop may still be named `onSave`; the reservation belongs
+to the native element.
+
+`host` marks the element that receives what an invocation attaches to a
+component — `class`, `look`, `look:*`, and `style:*`. `class:*` is a native
+element directive and is not among them; an invocation that writes it is
+reported as an unknown prop. A component whose root is a single native element
+or a single component needs no marker. A nested component's `host` names that
+component's host and never the enclosing one's, wherever the nested component
+sits: buried inside one of the enclosing component's elements, or standing
+directly among its roots. An enclosing component forwards to a nested
+component's host only when it marks no native element of its own, so a
+component whose roots are two nested components must mark a native element of
+its own to say which one receives the invocation.
+
 Props are live reactive inputs. Their data is mutable unless the author writes
 an explicit `readonly` view.
 
@@ -101,6 +122,12 @@ or a typed `look:color={...}` binding. Checked motion is a module-level
 `keyframes:` value passed to `animate` from `velar/look`; do not use a raw CSS
 animation string. Unsupported styling uses explicit `import css unsafe
 "./file.css" before look` or `after look`.
+
+A `look` written on a component invocation composes after the look the
+component applies to its own host, per property and per condition: declare a
+property unconditionally to override the component's outright, and declare it
+under a condition to refine that condition alone and leave the component's
+other values standing.
 
 ## Storage and tests
 

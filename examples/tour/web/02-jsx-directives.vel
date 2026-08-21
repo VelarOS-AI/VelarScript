@@ -4,7 +4,7 @@
 // five event modifiers and their fixed order, and the `<`-starts-JSX position
 // list. The compiler's own tables are `nativeDomEventNames` and
 // `webEventTypeNames` in packages/web/src/analyzer.ts (the six event types) and
-// `WEB_JSX_PREVIOUS_TOKEN_KINDS` in packages/web/src/lexer.ts (the positions).
+// `WEB_VALUE_START_PREVIOUS_TOKEN_KINDS` in packages/web/src/lexer.ts (the positions).
 //
 // Chapter 01 owns the declaration face; this chapter is the invocation face.
 // JSX has no comment form, so every note here sits outside the markup.

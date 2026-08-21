@@ -1,6 +1,25 @@
 import { VELAR_PROMISE_NORMALIZATION_REGISTRY_KEY } from "./runtime-abi.ts";
 
-/** Compiler-owned Promise normalization and async-result host ABI. */
+/**
+ * Compiler-owned Promise normalization and async-result host ABI.
+ *
+ * Normalization proves its input by invoking the captured `then` intrinsic on
+ * it and then builds the normalized value with the captured `%Promise%`
+ * constructor rather than returning what `then` handed back: `then` derives
+ * its result through `SpeciesConstructor`, so one assignment to a Promise's
+ * `constructor` would otherwise make the normalized identity an arbitrary
+ * foreign thenable. The hostile species is still constructed by `then` and its
+ * capability discarded; only the `%Promise%`-owned value is cached.
+ *
+ * The cache is one immutable per-realm WeakMap found under
+ * `VELAR_PROMISE_NORMALIZATION_REGISTRY_KEY`, whose trailing `v` component is
+ * the generation in `VELAR_PROMISE_NORMALIZATION_REGISTRY_VERSION`. Whichever
+ * module of a generation loads first installs that generation's WeakMap; a
+ * generation with a different normalized identity bumps the version and gets
+ * its own slot rather than reading entries a foreign generation cached. Nothing
+ * evicts, and nothing should: the map is keyed by the source Promise, so an
+ * entry lives exactly as long as the Promise it normalizes.
+ */
 export const VELAR_PROMISE_NORMALIZATION_RUNTIME = String.raw`
 const __velarNormalizeGlobal = globalThis;
 const __velarNormalizeNativeObject = globalThis.Object;
@@ -44,13 +63,29 @@ const __velarNormalizedPromiseValues = (() => {
   }]);
   return registry;
 })();
+function __velarNormalizeOwnsPromise(candidate) {
+  if ((typeof candidate !== "object" && typeof candidate !== "function") || candidate === null) return false;
+  let prototype;
+  try { prototype = __velarNormalizeCall(__velarNormalizeGetPrototypeOf, __velarNormalizeNativeObject, [candidate]); }
+  catch { return false; }
+  return prototype === __velarNormalizePromisePrototype;
+}
 function __velarNormalizePromiseValue(value) {
   if ((typeof value !== "object" && typeof value !== "function") || value === null) throw new __velarNormalizeTypeError("Expected an actual Promise");
   const known = __velarNormalizeCall(__velarNormalizeWeakMapGet, __velarNormalizedPromiseValues, [value]);
   if (known) return known;
-  let normalized;
-  try { normalized = __velarNormalizeCall(__velarNormalizePromiseThen, value, [(resolved) => resolved ?? null]); }
+  let settle;
+  let fail;
+  try {
+    __velarNormalizeCall(__velarNormalizePromiseThen, value, [
+      (resolved) => { if (typeof settle === "function") settle(resolved ?? null); },
+      (reason) => { if (typeof fail === "function") fail(reason); },
+    ]);
+  }
   catch { throw new __velarNormalizeTypeError("Expected an actual Promise"); }
+  if (typeof __velarNormalizeNativePromise !== "function") throw new __velarNormalizeTypeError("The JavaScript Promise normalization runtime is unavailable");
+  const normalized = new __velarNormalizeNativePromise((resolve, reject) => { settle = resolve; fail = reject; });
+  if (typeof settle !== "function" || typeof fail !== "function" || !__velarNormalizeOwnsPromise(normalized)) throw new __velarNormalizeTypeError("The JavaScript Promise normalization runtime is unavailable");
   __velarNormalizeCall(__velarNormalizeWeakMapSet, __velarNormalizedPromiseValues, [value, normalized]);
   __velarNormalizeCall(__velarNormalizeWeakMapSet, __velarNormalizedPromiseValues, [normalized, normalized]);
   return normalized;

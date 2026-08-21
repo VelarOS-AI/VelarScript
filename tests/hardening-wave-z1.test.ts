@@ -611,10 +611,14 @@ print(str(Node().read()))
 `.trimStart()), "7\n");
 });
 
-test("[RDO-1] a value validated out of an unknown aliases what the readonly view protected", () => {
-  // D47 rule 85: this is documented, not diagnosed — `unknown` is where the
-  // static promise ends, and the validated value is a fresh assertion over the
-  // same object. Charter sections 5 and 12 now say so.
+test("[RDO-1] a value validated out of an unknown cannot write through the readonly view", () => {
+  // D47 rule 85 documented rather than diagnosed this: `unknown` is where the
+  // static promise ends, and the validated value used to be a fresh assertion
+  // over the *same* object, so writing through it reached what `readonly`
+  // protected. D90 R5 closed that: 「`parse` 返回新值。「已校验」从此意味着
+  // 「而且它保持有效」」, so the write lands on the copy and the source is
+  // untouched. Updated deliberately — the old expectation pinned the defect
+  // R5 exists to delete, not a rule the language still holds.
   assert.equal(run(`
 type Holder:
     payload: unknown
@@ -629,7 +633,7 @@ const holder: Holder = {payload: {name: "original"}}
 const escaped = leak(holder)
 escaped.name = "mutated"
 print(Json.stringify(holder.payload))
-`.trimStart()), "{\"name\":\"mutated\"}\n");
+`.trimStart()), "{\"name\":\"original\"}\n");
 });
 
 test("[FLW-N5] an index or Map.get read is not a fact subject; a const is", () => {

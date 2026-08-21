@@ -84,7 +84,7 @@ if raw is User:
 `.trimStart());
 
   assert.ok(result.diagnostics.some((item) =>
-    item.code === "VEL4001" && /has no member 'name'|without validation/u.test(item.message)));
+    item.code === "VEL4001" && /has no member 'name'|without validation|has no common field 'name'/u.test(item.message)));
   assert.equal(result.code, null);
 });
 

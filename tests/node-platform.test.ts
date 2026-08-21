@@ -17,7 +17,7 @@ import WebSocket from "ws";
 import { compileProject } from "../packages/cli/src/project.ts";
 import { VELAR_TYPE_REGISTRY_KEY } from "../packages/compiler/src/runtime-abi.ts";
 import { standardModuleApi, standardModuleDependencies, standardModuleSource } from "../packages/cli/src/standard-modules.ts";
-import { nodeModuleDependencies, nodeModuleSources, VELAR_NODE_HOST_MODULE } from "../packages/node/src/compiler.ts";
+import { nodeModuleDependencies, nodeModuleSources, velarNodeCompilerExtension, VELAR_NODE_HOST_MODULE } from "../packages/node/src/compiler.ts";
 import { VELAR_NODE_HOST_WORKER_SOURCE } from "../packages/node/src/node-host-worker-runtime.ts";
 import { VELAR_NODE_PROCESS_WORKER_SOURCE } from "../packages/node/src/process-worker-runtime.ts";
 import { VELAR_NODE_TERMINAL_WORKER_SOURCE } from "../packages/node/src/terminal-worker-runtime.ts";
@@ -126,7 +126,7 @@ test("Node path, filesystem, process, terminal, and HTTP modules expose typed Co
   assert.deepEqual(api.modules["velar/path"], ["basename", "contains", "dirname", "extension", "fromFileUrl", "isAbsolute", "join", "normalize", "relative", "resolve", "toFileUrl"]);
   assert.deepEqual(api.modules["velar/process"], ["Process", "ProcessOutputChannel", "run", "start"]);
   assert.deepEqual(api.modules["velar/terminal"], ["terminal"]);
-  assert.deepEqual(api.modules["velar/http"], ["HttpAbortError", "HttpError", "HttpTransportError", "HttpTransportPhase", "http", "secretHeader"]);
+  assert.deepEqual(api.modules["velar/http"], ["HttpAbortError", "HttpResponseError", "HttpTransportError", "HttpTransportPhase", "http", "secretHeader"]);
   assert.ok(api.modules["velar/fs"]?.includes("appendText"));
   assert.ok(api.modules["velar/fs"]?.includes("createText"));
   assert.ok(api.modules["velar/fs"]?.includes("replaceTextIfMatches"));
@@ -135,7 +135,7 @@ test("Node path, filesystem, process, terminal, and HTTP modules expose typed Co
   assert.ok(api.modules["velar/fs"]?.includes("watchFiles"));
 
   const webApi = standardModuleApi([velarCompilerExtension]);
-  assert.deepEqual(webApi.modules["velar/http"], ["HttpAbortError", "HttpError", "HttpTransportError", "HttpTransportPhase", "formBody", "http"]);
+  assert.deepEqual(webApi.modules["velar/http"], ["HttpAbortError", "HttpResponseError", "HttpTransportError", "HttpTransportPhase", "formBody", "http"]);
   assert.match(standardModuleSource("velar/http", {}, [velarCompilerExtension]) ?? "", /export function formBody/u);
   assert.doesNotMatch(standardModuleSource("velar/http", {}, [velarCompilerExtension]) ?? "", /HTTP URL credentials are not allowed/u);
 
@@ -147,7 +147,7 @@ import {FileWatchBatch, FileWatcher, appendText, canonical, copyFile, createText
 import {basename, contains, extension, join, resolve} from "velar/path"
 import {Process, ProcessOutputChannel, run, start} from "velar/process"
 import {terminal} from "velar/terminal"
-import {HttpAbortError, HttpError, HttpTransportError, HttpTransportPhase, http, secretHeader} from "velar/http"
+import {HttpAbortError, HttpResponseError, HttpTransportError, HttpTransportPhase, http, secretHeader} from "velar/http"
 import {ServeRequest} from "velar/serve"
 
 type User:
@@ -218,6 +218,31 @@ async def parseIncoming(request: ServeRequest) -> Dangerous:
   assert.deepEqual(project.failures, []);
   assert.ok(project.modules.flatMap((module) => module.result.diagnostics)
     .some((item) => item.code === "VEL4024" && /magic thenable/u.test(item.message)));
+});
+
+test("Upload.save requires its containment root at the call site", async () => {
+  const entry = join(tmpdir(), "velar-node-upload-save", "main.vel");
+  // The root is a required argument, not an option: an upload that is written
+  // without naming the directory it belongs in cannot be checked at all, so the
+  // omission has to be a compile error rather than a runtime default.
+  const source = (call: string): string => `
+import {Upload} from "velar/serve"
+
+async def store(image: Upload) -> string:
+    ${call}
+    return image.filename
+`.trimStart();
+
+  const contained = await compileProject(entry, new Map([[entry, source(`await image.save(image.filename, "uploads")`)]]), { extensions: [velarNodeCompilerExtension] });
+  assert.deepEqual(contained.failures, []);
+  assert.deepEqual(contained.modules.flatMap((module) => module.result.diagnostics), [], "a rooted save compiles");
+
+  const unrooted = await compileProject(entry, new Map([[entry, source("await image.save(image.filename)")]]), { extensions: [velarNodeCompilerExtension] });
+  assert.deepEqual(unrooted.failures, []);
+  const diagnostics = unrooted.modules.flatMap((module) => module.result.diagnostics);
+  assert.equal(diagnostics.length, 1, "omitting the root is the only reported problem");
+  assert.equal(diagnostics[0]?.code, "VEL4001");
+  assert.match(diagnostics[0]?.message ?? "", /Expected 2 arguments but received 1/u);
 });
 
 test("compiled VelarScript CLI reads arguments and terminal input without a JavaScript bridge", async () => {
@@ -765,7 +790,11 @@ test("Node serve types and JSON stay on the strict owned-data boundary", async (
   assert.equal(serveRuntime.ServeResponse.is({ status: 200, json: { value: Number.POSITIVE_INFINITY } }), false);
   assert.equal(serveRuntime.ServeResponse.is({ status: 200, json: { value: 1 } }), true);
 
+  // D90 fr-6: registry membership alone no longer admits a value; a Type must
+  // still present the surface its caller invokes, so `is` is answered here the
+  // way every Type the compiler emits answers it.
   const User = registerRuntimeType(Object.freeze({
+    is(value: unknown): boolean { return !!value && typeof value === "object" && (value as { name?: unknown }).name === "Ada"; },
     parse(value: unknown): { name: string } {
       if (!value || typeof value !== "object" || (value as { name?: unknown }).name !== "Ada") throw new TypeError("invalid User");
       return value as { name: string };
@@ -1126,12 +1155,14 @@ test("Node form and upload inputs parse bounded multipart and URL-encoded bodies
     createApp(name: string, items: readonly unknown[]): unknown;
   };
   const Metadata = registerRuntimeType(Object.freeze({
+    is(value: unknown): boolean { return !!value && typeof value === "object" && typeof (value as {title?: unknown}).title === "string" && typeof (value as {public?: unknown}).public === "boolean"; },
     parse(value: unknown): {title: string; public: boolean} {
       if (!value || typeof value !== "object" || typeof (value as {title?: unknown}).title !== "string" || typeof (value as {public?: unknown}).public !== "boolean") throw new TypeError("invalid metadata");
       return value as {title: string; public: boolean};
     },
   }));
   const RepeatedFields = registerRuntimeType(Object.freeze({
+    is(value: unknown): boolean { return !!value && typeof value === "object" && Array.isArray((value as {tag?: unknown}).tag); },
     parse(value: unknown): {tag: string[]} {
       if (!value || typeof value !== "object" || !Array.isArray((value as {tag?: unknown}).tag) || !(value as {tag: unknown[]}).tag.every((item) => typeof item === "string")) throw new TypeError("invalid repeated fields");
       return value as {tag: string[]};
@@ -1220,7 +1251,7 @@ test("Node server-test client runs in process with lifespan, cookies, and depend
     {name: "session", source: "cookie", kind: "string", required: true, check: () => true, input: serveRuntime.input.cookie("session", null)},
     {name: "theme", source: "cookie", kind: "string", required: true, check: () => true, input: serveRuntime.input.cookie("theme", null)},
   ], async (current: {id: string}, session: string | null, theme: string | null) => ({id: current.id, session, theme}));
-  const Metadata = registerRuntimeType(Object.freeze({parse(value: unknown) { return value as {title: string}; }}));
+  const Metadata = registerRuntimeType(Object.freeze({is(value: unknown) { return !!value && typeof value === "object"; }, parse(value: unknown) { return value as {title: string}; }}));
   const upload = bridge.createRoute("POST", "/upload", [
     {name: "metadata", source: "form", kind: "data", required: true, check: () => true, schema: {type: "object", properties: {title: {type: "string"}}, required: ["title"]}, input: serveRuntime.input.form(Metadata)},
     {name: "image", source: "upload", kind: "upload", required: true, check: () => true, input: serveRuntime.input.upload("image", 64)},
@@ -1526,6 +1557,40 @@ test("Node docs and built-in middleware provide offline OpenAPI, security, CORS,
   }
 });
 
+test("an accepted WebSocket connection exposes the upgrade Origin as string?", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-websocket-origin-"));
+  try {
+    const entry = join(directory, "main.vel");
+    const source = `
+import {listen} from "velar/websocket"
+
+async def start():
+    const server = await listen({port: 0, origins: ["https://client.test"]})
+    const connection = await server.next()
+    if connection != null:
+        const origin: REQUIRED = connection.origin
+        if origin != null:
+            print(origin)
+    return null
+`.trimStart();
+    await writeFile(entry, source.replace("REQUIRED", "string?"), "utf8");
+    const accepted = await compileProject(entry, new Map(), {extensions: [velarNodeCompilerExtension]});
+    assert.deepEqual(accepted.failures, []);
+    assert.deepEqual(accepted.modules.flatMap((module) => module.result.diagnostics), []);
+    assert.match(accepted.modules[0]?.result.code ?? "", /\)\(connection\)\.origin \?\? null\)/u);
+
+    await writeFile(entry, source.replace("REQUIRED", "string"), "utf8");
+    const refused = await compileProject(entry, new Map(), {extensions: [velarNodeCompilerExtension]});
+    assert.equal(
+      refused.modules.flatMap((module) => module.result.diagnostics)[0]?.message,
+      "Cannot assign string? to string",
+      "the Origin is absent whenever the client sent none, so it cannot be read as string",
+    );
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
 test("Node WebSocket listen composes one ServeApp lifecycle and keeps queues globally bounded", async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-websocket-compose-"));
   try {
@@ -1541,8 +1606,8 @@ test("Node WebSocket listen composes one ServeApp lifecycle and keeps queues glo
       lifecycle(app: unknown, startup: () => Promise<null>, shutdown: () => Promise<null>): unknown;
     };
     const websocket = await import(`${pathToFileURL(websocketPath).href}?compose=${Date.now()}`) as {
-      listen(options: Record<string, unknown>): Promise<{port: number; next(): Promise<{send(value: string): Promise<null>; next(): Promise<string | Uint8Array | null>; close(): Promise<null>} | null>; stop(): Promise<null>}>;
-      connect(url: string): Promise<{send(value: string): Promise<null>; next(): Promise<string | Uint8Array | null>; close(): Promise<null>}>;
+      listen(options: Record<string, unknown>): Promise<{port: number; next(): Promise<{origin: string | null; send(value: string): Promise<null>; next(): Promise<string | Uint8Array | null>; close(): Promise<null>} | null>; stop(): Promise<null>}>;
+      connect(url: string): Promise<{origin: string | null; send(value: string): Promise<null>; next(): Promise<string | Uint8Array | null>; close(): Promise<null>}>;
     };
     const bridge = Object.getOwnPropertyDescriptor(serve.ServeApp, "__velarCompilerBridge")?.value as {
       createRoute(method: string, path: string, parameters: readonly unknown[], handler: (...arguments_: never[]) => Promise<unknown>): unknown;
@@ -1572,6 +1637,8 @@ test("Node WebSocket listen composes one ServeApp lifecycle and keeps queues glo
       const serviceClient = await websocket.connect(`ws://127.0.0.1:${defaultServer.port}/default`);
       const serviceConnection = await defaultServer.next();
       assert.ok(serviceConnection, "a non-browser client without Origin remains available by default");
+      assert.equal(serviceConnection.origin, null, "a client that sent no Origin reads back null");
+      assert.equal(serviceClient.origin, null, "an outbound connection was never upgraded from an Origin");
       await serviceClient.close();
     } finally {
       await defaultServer.stop();
@@ -1581,8 +1648,30 @@ test("Node WebSocket listen composes one ServeApp lifecycle and keeps queues glo
       const wildcardClient = await openedWebSocket(`ws://127.0.0.1:${wildcardServer.port}/wildcard`, "https://unlisted.test");
       const wildcardConnection = await wildcardServer.next();
       assert.ok(wildcardConnection, "the explicit wildcard policy accepts browser Origins");
+      assert.equal(wildcardConnection.origin, "https://unlisted.test", "an accepted connection reads back the Origin it was upgraded from");
       wildcardClient.close();
       await wildcardConnection.close();
+      // D90 fr-4: the field means "the origin this client was upgraded from, or
+      // null", so every value has to land on the side the sentence claims. A
+      // scheme is case-insensitive, so an uppercase one is an origin and must
+      // canonicalize rather than read as "sent none"; a port that is the
+      // scheme's default is not part of an origin; a single header carrying two
+      // origins is not an origin at all and must read null rather than the
+      // attacker-chosen text URL parsing leaves in the host; and the opaque
+      // `null` a sandboxed document sends is not an origin either.
+      for (const [sent, expected] of [
+        ["HTTPS://Unlisted.Test", "https://unlisted.test"],
+        ["https://unlisted.test:443", "https://unlisted.test"],
+        ["https://unlisted.test,https://evil.test", null],
+        ["null", null],
+      ] as const) {
+        const client = await openedWebSocket(`ws://127.0.0.1:${wildcardServer.port}/wildcard`, sent);
+        const connection = await wildcardServer.next();
+        assert.ok(connection, `the wildcard policy accepts Origin ${sent}`);
+        assert.equal(connection.origin, expected, `Origin ${sent} reads back ${String(expected)}`);
+        client.close();
+        await connection.close();
+      }
     } finally {
       await wildcardServer.stop();
     }
@@ -1597,6 +1686,7 @@ test("Node WebSocket listen composes one ServeApp lifecycle and keeps queues glo
       const browserClient = await openedWebSocket(`ws://127.0.0.1:${server.port}/ws`, "https://client.test");
       const browserAccepted = await server.next();
       assert.ok(browserAccepted, "the exact allowed Origin must reach the connection queue");
+      assert.equal(browserAccepted.origin, "https://client.test");
       browserClient.close();
       await browserAccepted.close();
       const client = await websocket.connect(`ws://127.0.0.1:${server.port}/ws`);
@@ -1630,6 +1720,8 @@ test("Node WebSocket listen composes one ServeApp lifecycle and keeps queues glo
       /state\.queue\.length = 0/u,
       /state\.stopPromise/u,
       /__velarWsReleasePendingSends/u,
+      /function __velarWsRequestOrigin\(request\)/u,
+      /__velarWsWrap\(socket, limits, __velarWsRequestOrigin\(request\)\)/u,
     ]) assert.match(websocketSource, contract);
   } finally {
     await rm(directory, {recursive: true, force: true});
@@ -1716,9 +1808,15 @@ test("Node serve enforces one aggregate byte budget and releases ownership after
       return {status: 200, text: "ok"};
     }, 0);
     try {
-      const held = fetch(`http://127.0.0.1:${server.port}/held`, {method: "POST", body: "h".repeat(64 * 1024)});
+      // A buffered body owns the chunks it has received and, for the instant
+      // that assembles them, the contiguous copy as well: a declared
+      // Content-Length is a claim and buys no reservation, so the held body
+      // stays under half the budget while it waits. The competing body is
+      // sized so that it fits on its own and only the held body's retained
+      // ownership pushes it past the budget.
+      const held = fetch(`http://127.0.0.1:${server.port}/held`, {method: "POST", body: "h".repeat(32 * 1024)});
       await heldReady;
-      const competing = await fetch(`http://127.0.0.1:${server.port}/competing`, {method: "POST", body: "c".repeat(64 * 1024)});
+      const competing = await fetch(`http://127.0.0.1:${server.port}/competing`, {method: "POST", body: "c".repeat(56 * 1024)});
       assert.equal(competing.status, 503);
       assert.equal(await competing.text(), "");
       releaseHeld();
@@ -1726,9 +1824,14 @@ test("Node serve enforces one aggregate byte budget and releases ownership after
       assert.equal(heldResponse.status, 200);
       assert.equal(await heldResponse.text(), "");
 
+      // Exhausting the aggregate budget is a load condition, not a server fault,
+      // so it answers the way admission already answers it — 503 with the header
+      // a load balancer and a client can both act on — rather than the opaque
+      // 500 every other late failure gets.
       const largeResponse = await fetch(`http://127.0.0.1:${server.port}/large-response`);
-      assert.equal(largeResponse.status, 500);
-      assert.equal(await largeResponse.text(), "Internal server error");
+      assert.equal(largeResponse.status, 503);
+      assert.equal(largeResponse.headers.get("retry-after"), "1");
+      assert.deepEqual(await largeResponse.json(), {error: "outbound_budget_exhausted"});
       const largeFile = await fetch(`http://127.0.0.1:${server.port}/large-file`);
       assert.equal(largeFile.status, 200, "static files stream without reserving their full size");
       assert.equal((await largeFile.text()).length, 128 * 1024 + 1);
@@ -2584,7 +2687,7 @@ setInterval(() => {}, 1000);
 
   const http = await runtime<{
     readonly HttpAbortError: new (...args: unknown[]) => Error;
-    readonly HttpError: new (...args: unknown[]) => Error & { readonly body: unknown };
+    readonly HttpResponseError: new (...args: unknown[]) => Error & { readonly body: unknown };
     readonly HttpTransportError: new (...args: unknown[]) => Error & { readonly phase: "request" | "response" };
     readonly HttpTransportPhase: Readonly<{ readonly request: "request"; readonly response: "response" }>;
     secretHeader(name: string, environment: string, prefix?: string): Readonly<{ name: string; environment: string; prefix: string }>;
@@ -2599,7 +2702,11 @@ setInterval(() => {}, 1000);
       post(url: string, options?: Record<string, unknown>): { text(): Promise<string> };
     };
   }>("velar/http");
+  // D90 fr-6: registry membership alone no longer admits a value; a Type must
+  // still present the surface its caller invokes, so `is` is answered here the
+  // way every Type the compiler emits answers it.
   const User = registerRuntimeType(Object.freeze({
+    is(value: unknown): boolean { return !!value && typeof value === "object" && (value as { name?: unknown }).name === "Ada"; },
     parse(value: unknown): { name: string } {
       if (!value || typeof value !== "object" || (value as { name?: unknown }).name !== "Ada") throw new TypeError("invalid User");
       return value as { name: string };
@@ -2728,7 +2835,7 @@ setInterval(() => {}, 1000);
     const finalErrorUrl = `http://127.0.0.1:${redirectAddress.port}/error-target`;
     await assert.rejects(
       http.http.get(`${base}/redirect-error`).text(),
-      (error: unknown) => error instanceof http.HttpError
+      (error: unknown) => error instanceof http.HttpResponseError
         && (error as Error & { readonly url?: unknown }).url === finalErrorUrl
         && error.message === `HTTP 502 for ${finalErrorUrl}`
         && (error.body as { failed?: unknown }).failed === true,
@@ -2745,7 +2852,7 @@ setInterval(() => {}, 1000);
     await assert.rejects(http.http.get(`${base}/lossy-json`).json(), /numbers must be finite/u);
     await assert.rejects(
       http.http.get(`${base}/lossy-error`).text(),
-      (error: unknown) => error instanceof http.HttpError && error.body === "1e400",
+      (error: unknown) => error instanceof http.HttpResponseError && error.body === "1e400",
     );
     const timed = http.http.get(`${base}/slow`, { timeout: 20 });
     const timedResponse = await timed.response();
@@ -2910,7 +3017,7 @@ test("Node HTTP bounds isolated host metadata, UTF-8, declared lengths, and resp
     server.listen(0, "127.0.0.1", resolveListen);
   });
   let http: {
-    HttpError: new (message: unknown, status: unknown, url: unknown) => Error;
+    HttpResponseError: new (message: unknown, status: unknown, url: unknown) => Error;
     http: {
       get(url: string, options?: Record<string, unknown>): {
         text(): Promise<string>;
@@ -2954,9 +3061,9 @@ test("Node HTTP bounds isolated host metadata, UTF-8, declared lengths, and resp
     const chunked = await http.http.get(`${base}/chunks`).response();
     await assert.rejects(chunked.streamText(async () => null), /cannot exceed 1000000 chunks/u);
 
-    assert.throws(() => new http.HttpError("message", 99, "https://example.test/"), /100 through 599/u);
-    assert.throws(() => new http.HttpError("x".repeat(65537), 400, "https://example.test/"), RangeError);
-    assert.throws(() => new http.HttpError("message", 400, "x".repeat(2 * 1024 * 1024 + 1)), RangeError);
+    assert.throws(() => new http.HttpResponseError("message", 99, "https://example.test/"), /100 through 599/u);
+    assert.throws(() => new http.HttpResponseError("x".repeat(65537), 400, "https://example.test/"), RangeError);
+    assert.throws(() => new http.HttpResponseError("message", 400, "x".repeat(2 * 1024 * 1024 + 1)), RangeError);
   } finally {
     server.closeAllConnections();
     await new Promise<void>((resolveClose) => server.close(() => resolveClose()));

@@ -10,6 +10,9 @@ export const VELAR_COLLECTION_LOWERING_EXPORTS = [
   "__velarSameValueZero",
   "__velarEquals",
   "__velarValidateDenseList",
+  // COL-P1: the emitter names this one directly, for the empty List literal
+  // whose ownership only the compiler can vouch for.
+  "__velarAdoptList",
   "__velarReactiveListIterator",
   "__velarReactiveSetIterator",
   "__velarReactiveMapKeyIterator",
@@ -134,7 +137,30 @@ const __velarListWeakMapSetOperation = __velarCollectionListGetOwnPropertyDescri
 // check. Without the memo every index read on a List the compiler did not
 // build (a literal, anything velar/collections returns) revalidated every
 // element, making 'for i in range(n): values[i]' quadratic.
-const __velarOwnedLists = new __velarListNativeWeakMap();
+//
+// COL-P1: the memo also records who wrote the elements, because that is what
+// decides how much a later read still has to prove. An *owned* List holds only
+// elements this runtime wrote: it either allocated and filled the array itself
+// (every copy, map, filter, slice, and sorted result) or started from the empty
+// List literal the compiler emitted __velarAdoptList for and took every element
+// since through a List mutation. Every slot is then an ordinary data element by
+// construction, and reading one is a plain load -- the same load List.sorted
+// already performs on its own copy. A *checked* List held elements this runtime
+// did not write when it first saw it, so every element read re-proves the slot
+// with a descriptor, and an accessor installed after validation is still
+// refused. Every array that arrives from JavaScript is checked, including one
+// handed over empty: the runtime cannot tell that array from a List literal, so
+// only the compiler ever adopts an empty array.
+//
+// Before the split every element read of every List allocated two property
+// descriptors, so summing a 1,000,000-element List by index ran ~7x slower
+// than the identical plain-JavaScript loop and 'for x in xs' ~9x slower.
+//
+// One registry answers both halves in one lookup, because a second WeakMap read
+// on the checked tier cost every literal-built List ~10% for nothing: an owned
+// List records the proved length, a checked List records its bitwise
+// complement, and a length is never negative, so the sign is the tier.
+const __velarListMemos = new __velarListNativeWeakMap();
 const __velarListIsFrozenOperation = __velarCollectionListGetOwnPropertyDescriptor(__velarCollectionNativeObject, "isFrozen")?.value;
 // COL-U4: a frozen host array fails every mutability probe below; without
 // this check the author sees "requires ordinary mutable List data elements"
@@ -145,46 +171,121 @@ function __velarListRejectFrozen(value, name) {
     throw new __velarCollectionNativeTypeError(name + " received a frozen JavaScript array; copy it on the JavaScript side — [...values] — before passing it to VelarScript");
   }
 }
-function __velarListOwnedLength(value) { return __velarCollectionHostCall(__velarListWeakMapGetOperation, __velarOwnedLists, [value]); }
-function __velarMarkOwnedList(value) { __velarCollectionHostCall(__velarListWeakMapSetOperation, __velarOwnedLists, [value, value.length]); return value; }
+function __velarListMemo(value) { return __velarCollectionHostCall(__velarListWeakMapGetOperation, __velarListMemos, [value]); }
+// The owned half of __velarListTier, for the callers that have already
+// validated the List and only need to know which element read to use.
+function __velarListIsOwned(value) { const memo = __velarListMemo(value); return memo !== undefined && memo === value.length; }
+function __velarAdoptList(value) { __velarCollectionHostCall(__velarListWeakMapSetOperation, __velarListMemos, [value, value.length]); return value; }
+function __velarMarkCheckedList(value) { __velarCollectionHostCall(__velarListWeakMapSetOperation, __velarListMemos, [value, ~value.length]); return value; }
+// A mutation re-records the proved length; it never changes which side of the
+// boundary the List came from, so a host List stays checked for its whole life.
+function __velarMarkOwnedList(value) {
+  const memo = __velarListMemo(value);
+  return memo !== undefined && memo < 0 ? __velarMarkCheckedList(value) : __velarAdoptList(value);
+}
+// COL-U4/COL-P1: freezing is the one foreign change that revokes the right to
+// mutate without moving the length, so it survives every memo hit. Every
+// operation that writes re-proves this descriptor -- one descriptor per
+// operation, never per element -- and no read has to, because reading a slot
+// does not require a mutable length. Without it a frozen List answers append,
+// index assignment, and pop with the host's own "Cannot assign to read only
+// property 'length'" instead of a VelarScript refusal.
+function __velarListRequireMutableLength(value, name) {
+  const lengthDescriptor = __velarCollectionListGetOwnPropertyDescriptor(value, "length");
+  if (!lengthDescriptor || !lengthDescriptor.writable || lengthDescriptor.enumerable || lengthDescriptor.configurable || !("value" in lengthDescriptor)) throw new __velarCollectionNativeTypeError(name + " requires an ordinary mutable List length");
+}
 function __velarValidateDenseList(value, name) {
   value = __velarReactiveRaw(value);
   if (!__velarCollectionListIsArray(value) || value.length > __velarMaxCollectionItems || __velarCollectionListOwnSymbols(value).length > 0 || __velarCollectionListOwnNames(value).length !== value.length + 1) {
     throw new __velarCollectionNativeTypeError(name + " requires a dense VelarScript List");
   }
   __velarListRejectFrozen(value, name);
-  const lengthDescriptor = __velarCollectionListGetOwnPropertyDescriptor(value, "length");
-  if (!lengthDescriptor || !lengthDescriptor.writable || lengthDescriptor.enumerable || lengthDescriptor.configurable || !("value" in lengthDescriptor)) throw new __velarCollectionNativeTypeError(name + " requires an ordinary mutable List length");
+  __velarListRequireMutableLength(value, name);
   for (let index = 0; index < value.length; index += 1) {
     const descriptor = __velarCollectionListGetOwnPropertyDescriptor(value, index);
     if (!descriptor?.enumerable || !descriptor.configurable || !descriptor.writable || !("value" in descriptor)) throw new __velarCollectionNativeTypeError(name + " requires ordinary mutable List data elements");
   }
-  return __velarMarkOwnedList(value);
+  // COL-P1: this runtime can vouch for a slot it wrote and for no other, and
+  // full validation only ever runs on an array whose slots it did not write --
+  // one that arrived from JavaScript, or one whose length moved behind its
+  // back, which is itself proof the host is holding the array. The arrays this
+  // runtime did write are adopted where they are built, and the empty List
+  // literal is adopted by the code the compiler emitted for it, so nothing that
+  // reaches here is owned, including an array the host handed over empty.
+  return __velarMarkCheckedList(value);
+}
+// 0 = no memo this runtime can still stand behind, 1 = owned, 2 = checked.
+// The registry answers undefined for a primitive, and the recorded length is
+// only compared once it exists, so the length is never read off a non-object.
+function __velarListTier(value) {
+  const memo = __velarListMemo(value);
+  if (memo === undefined) return 0;
+  if (memo === value.length) return 1;
+  return ~memo === value.length ? 2 : 0;
+}
+function __velarValidateListTier(value, name, tier) {
+  // An owned memo hit answers every probe below at once: this runtime wrote
+  // every element, proved the array dense with an ordinary mutable length, and
+  // re-recorded the length after each of its own mutations since. Reading is
+  // all this entry point promises, so it does not re-prove the mutable length;
+  // __velarValidateMutableList is the entry point for everything that writes.
+  if (tier === 1) return value;
+  if (tier === 0) return __velarValidateDenseList(value, name);
+  // A checked memo hit already proved the array dense and in range; the length
+  // descriptor is the one part of that verdict a foreign write can undo
+  // without moving the length itself.
+  __velarListRequireMutableLength(value, name);
+  return value;
 }
 function __velarValidateOwnedList(value, name) {
   value = __velarReactiveRaw(value);
-  if (!__velarCollectionListIsArray(value) || value.length > __velarMaxCollectionItems) throw new __velarCollectionNativeTypeError(name + " requires a dense VelarScript List");
-  if (__velarListOwnedLength(value) !== value.length) return __velarValidateDenseList(value, name);
-  const lengthDescriptor = __velarCollectionListGetOwnPropertyDescriptor(value, "length");
-  if (!lengthDescriptor || !lengthDescriptor.writable || lengthDescriptor.enumerable || lengthDescriptor.configurable || !("value" in lengthDescriptor)) throw new __velarCollectionNativeTypeError(name + " requires an ordinary mutable List length");
+  return __velarValidateListTier(value, name, __velarListTier(value));
+}
+// The entry point for every operation that writes: it proves what a read
+// proves and re-proves the mutable length on top of it, on both memo tiers, so
+// a frozen List refuses in the same voice whoever built it.
+function __velarValidateMutableList(value, name) {
+  value = __velarReactiveRaw(value);
+  const tier = __velarListTier(value);
+  if (tier === 0) return __velarValidateDenseList(value, name);
+  __velarListRequireMutableLength(value, name);
   return value;
 }
-function __velarOwnedListElement(value, index, name) {
+function __velarCheckedListElement(value, index, name) {
   const descriptor = __velarCollectionListGetOwnPropertyDescriptor(value, index);
   if (!descriptor?.enumerable || !descriptor.configurable || !descriptor.writable || !("value" in descriptor)) throw new __velarCollectionNativeTypeError(name + " requires ordinary mutable List data elements");
   return descriptor.value;
 }
-function* __velarReactiveListIterator(value) { __velarReactiveCollectionTrack(value); value = __velarValidateOwnedList(value, "List iteration"); for (let index = 0; index < value.length; index += 1) yield __velarReactiveCollectionRead(value, __velarReactiveIterateKey, __velarOwnedListElement(value, index, "List iteration")); }
+// The load is the whole check on an owned List: this runtime wrote every slot,
+// so there is nothing left to prove about the shape of one. A slot that reads
+// as undefined is the one tamper the load still notices for free -- no List
+// element is ever undefined -- so that case pays for the descriptor probe and
+// reports the same refusal a checked List would. What it notices is a value
+// the load cannot account for, not every foreign edit: a host that keeps a
+// reference to a List this runtime owns and then rewrites a slot, installs an
+// accessor on it, or empties it while a polluted array prototype answers for
+// that index, gets its own value back. That is the residual the split accepts,
+// the same one a plain foreign write always had, and [COL-P1] pins it.
+function __velarOwnedListElement(value, index, name) {
+  const element = value[index];
+  return element === undefined ? __velarCheckedListElement(value, index, name) : element;
+}
+function __velarListElement(value, index, name, owned) {
+  return owned ? __velarOwnedListElement(value, index, name) : __velarCheckedListElement(value, index, name);
+}
+function* __velarReactiveListIterator(value) { __velarReactiveCollectionTrack(value); value = __velarValidateOwnedList(value, "List iteration"); const owned = __velarListIsOwned(value); for (let index = 0; index < value.length; index += 1) yield __velarReactiveCollectionRead(value, __velarReactiveIterateKey, __velarListElement(value, index, "List iteration", owned)); }
 function* __velarReactiveSetIterator(value) { const size = __velarCollectionSetMapSetSize(value); if (size > __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A Set cannot exceed 1000000 items"); __velarReactiveCollectionTrack(value); const iterator = __velarCollectionSetMapSetValues(value); while (true) { const step = __velarCollectionSetMapSetNext(iterator); if (step.done) return; yield __velarReactiveCollectionRead(value, __velarReactiveIterateKey, step.value); } }
 function* __velarReactiveMapKeyIterator(value) { const size = __velarCollectionSetMapMapSize(value); if (size > __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A Map cannot exceed 1000000 entries"); __velarReactiveCollectionTrack(value, __velarReactiveStructureKey); const iterator = __velarCollectionSetMapMapKeys(value); while (true) { const step = __velarCollectionSetMapMapNext(iterator); if (step.done) return; yield __velarReactiveCollectionRead(value, __velarReactiveStructureKey, step.value); } }
 function* __velarReactiveRecordIterator(value) { const fields = __velarRecordFields(value, "Record iteration"); __velarReactiveCollectionTrack(value, __velarReactiveStructureKey); for (let index = 0; index < fields.length; index += 1) yield __velarReactiveCollectionRead(value, __velarReactiveStructureKey, fields[index]); }
 function __velarCopyList(value, name) {
-  // Every callback operation snapshots through here, so the owned fast path is
-  // what keeps map from revalidating the whole List before the first call.
+  // Every callback operation snapshots through here, so this loop is what
+  // decides what map costs before its first call: the ownership memo answers
+  // the whole-List validation, and on an owned List each element is a load.
   value = __velarValidateOwnedList(value, name);
+  const owned = __velarListIsOwned(value);
   const output = [];
-  for (let index = 0; index < value.length; index += 1) output[index] = __velarCollectionValue(__velarOwnedListElement(value, index, name));
-  return __velarMarkOwnedList(output);
+  for (let index = 0; index < value.length; index += 1) output[index] = __velarCollectionValue(__velarListElement(value, index, name, owned));
+  return __velarAdoptList(output);
 }
 // TXT-D1: ordered string comparison is code-point order (= UTF-8 binary
 // order) everywhere. UTF-16 code-unit order agrees exactly when neither
@@ -310,10 +411,11 @@ function __velarCreateList(parts) {
       continue;
     }
     const values = __velarValidateOwnedList(read(), "List spread");
+    const spreadOwned = __velarListIsOwned(values);
     if (output.length + values.length > __velarMaxCollectionItems) throw new __velarCollectionListNativeRangeError("A List cannot exceed 1000000 items");
-    for (let index = 0; index < values.length; index += 1) output[output.length] = __velarCollectionValue(__velarOwnedListElement(values, index, "List spread"));
+    for (let index = 0; index < values.length; index += 1) output[output.length] = __velarCollectionValue(__velarListElement(values, index, "List spread", spreadOwned));
   }
-  return __velarMarkOwnedList(output);
+  return __velarAdoptList(output);
 }
 async function __velarCreateListAsync(parts) {
   const output = [];
@@ -329,10 +431,11 @@ async function __velarCreateListAsync(parts) {
       continue;
     }
     const values = __velarValidateOwnedList(asynchronous ? await read() : read(), "List spread");
+    const spreadOwned = __velarListIsOwned(values);
     if (output.length + values.length > __velarMaxCollectionItems) throw new __velarCollectionListNativeRangeError("A List cannot exceed 1000000 items");
-    for (let index = 0; index < values.length; index += 1) output[output.length] = __velarCollectionValue(__velarOwnedListElement(values, index, "List spread"));
+    for (let index = 0; index < values.length; index += 1) output[output.length] = __velarCollectionValue(__velarListElement(values, index, "List spread", spreadOwned));
   }
-  return __velarMarkOwnedList(output);
+  return __velarAdoptList(output);
 }
 
 // Members and keys are stored raw. Every membership and key lookup unwraps
@@ -343,7 +446,7 @@ function __velarCreateSet(value) {
   const output = new __velarCollectionNativeSet();
   if (value === undefined) return output;
   value = __velarReactiveRaw(value);
-  if (__velarCollectionListIsArray(value)) { const values = __velarValidateOwnedList(value, "Set construction"); for (let index = 0; index < values.length; index += 1) __velarCollectionSetMapSetAdd(output, __velarCollectionValue(__velarReactiveRaw(__velarOwnedListElement(values, index, "Set construction")))); return output; }
+  if (__velarCollectionListIsArray(value)) { const values = __velarValidateOwnedList(value, "Set construction"); const owned = __velarListIsOwned(values); for (let index = 0; index < values.length; index += 1) __velarCollectionSetMapSetAdd(output, __velarCollectionValue(__velarReactiveRaw(__velarListElement(values, index, "Set construction", owned)))); return output; }
   if (!__velarIsSet(value)) throw new __velarCollectionNativeTypeError("Set construction requires a List or Set");
   if (__velarCollectionSetMapSetSize(value) > __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A Set cannot exceed 1000000 items");
   const iterator = __velarCollectionSetMapSetValues(value); while (true) { const step = __velarCollectionSetMapSetNext(iterator); if (step.done) return output; __velarCollectionSetMapSetAdd(output, __velarCollectionValue(__velarReactiveRaw(step.value))); }
@@ -359,10 +462,12 @@ function __velarCreateMap(value) {
   }
   if (__velarCollectionListIsArray(value)) {
     const entries = __velarValidateOwnedList(value, "Map construction");
+    const entriesOwned = __velarListIsOwned(entries);
     for (let index = 0; index < entries.length; index += 1) {
-      const entry = __velarValidateOwnedList(__velarOwnedListElement(entries, index, "Map construction"), "Map entry construction");
+      const entry = __velarValidateOwnedList(__velarListElement(entries, index, "Map construction", entriesOwned), "Map entry construction");
       if (entry.length !== 2) throw new __velarCollectionNativeTypeError("Map entry construction requires exactly [key, value]");
-      __velarCollectionSetMapMapSet(output, __velarCollectionValue(__velarReactiveRaw(__velarOwnedListElement(entry, 0, "Map entry construction"))), __velarCollectionValue(__velarReactiveRaw(__velarOwnedListElement(entry, 1, "Map entry construction"))));
+      const entryOwned = __velarListIsOwned(entry);
+      __velarCollectionSetMapMapSet(output, __velarCollectionValue(__velarReactiveRaw(__velarListElement(entry, 0, "Map entry construction", entryOwned))), __velarCollectionValue(__velarReactiveRaw(__velarListElement(entry, 1, "Map entry construction", entryOwned))));
     }
     return output;
   }
@@ -385,7 +490,7 @@ function __velarListGet(value, key) {
   value = __velarValidateOwnedList(value, "List.get");
   if (!__velarCollectionListIsInteger(key)) throw new __VelarIndexError("List.get index must be an integer");
   const index = key < 0 ? value.length + key : key;
-  if (index >= 0 && index < value.length) return __velarReactiveCollectionRead(value, index, __velarOwnedListElement(value, index, "List.get"));
+  if (index >= 0 && index < value.length) return __velarReactiveCollectionRead(value, index, __velarListElement(value, index, "List.get", __velarListIsOwned(value)));
   __velarReactiveCollectionTrack(value, key < 0 ? __velarReactiveIterateKey : index);
   __velarReactiveCollectionTrack(value);
   return null;
@@ -425,9 +530,10 @@ function __velarCollectionSlice(value, start = 0, end = null) {
   const length = value.length;
   const first = start < 0 ? __velarCollectionListMaximum(length + start, 0) : __velarCollectionListMinimum(start, length);
   const last = end < 0 ? __velarCollectionListMaximum(length + end, 0) : __velarCollectionListMinimum(end, length);
+  const owned = __velarListIsOwned(value);
   const output = [];
-  for (let index = first; index < __velarCollectionListMaximum(first, last); index += 1) output[output.length] = __velarReactiveCollectionRead(value, index, __velarOwnedListElement(value, index, "List.slice"));
-  return __velarMarkOwnedList(output);
+  for (let index = first; index < __velarCollectionListMaximum(first, last); index += 1) output[output.length] = __velarReactiveCollectionRead(value, index, __velarListElement(value, index, "List.slice", owned));
+  return __velarAdoptList(output);
 }
 
 class __VelarIndexError extends __velarCollectionListNativeRangeError {
@@ -446,9 +552,20 @@ function __velarStrictListIndex(value, requested) {
   return index;
 }
 function __velarListIndexGet(value, index) {
-  value = __velarValidateOwnedList(value, "List index");
+  value = __velarReactiveRaw(value);
+  // The hottest read in the language, so it resolves the tier itself rather
+  // than through __velarValidateOwnedList, which would read the owned registry
+  // a second time. Past this branch the List is checked: a tier-0 value that
+  // full validation adopts as owned was empty, and an empty List has no index
+  // to read.
+  const tier = __velarListTier(value);
+  if (tier === 1) {
+    index = __velarStrictListIndex(value, index);
+    return __velarReactiveCollectionRead(value, index, __velarOwnedListElement(value, index, "List index"));
+  }
+  value = __velarValidateListTier(value, "List index", tier);
   index = __velarStrictListIndex(value, index);
-  return __velarReactiveCollectionRead(value, index, __velarOwnedListElement(value, index, "List index"));
+  return __velarReactiveCollectionRead(value, index, __velarCheckedListElement(value, index, "List index"));
 }
 function __velarRecordIndexGet(value, index) {
   value = __velarReactiveRaw(value);
@@ -465,9 +582,9 @@ function __velarOptionalIndex(value, index) {
   return value == null ? null : __velarIndex(value, index());
 }
 function __velarListIndexSet(value, index, next) {
-  value = __velarValidateOwnedList(value, "List index assignment");
+  value = __velarValidateMutableList(value, "List index assignment");
   index = __velarStrictListIndex(value, index);
-  const previous = __velarOwnedListElement(value, index, "List index assignment");
+  const previous = __velarListElement(value, index, "List index assignment", __velarListIsOwned(value));
   next = __velarReactiveRaw(next);
   if (__velarCollectionListObjectIs(__velarReactiveRaw(previous), next)) return next;
   value[index] = next;
@@ -498,7 +615,7 @@ function __velarSetIndex(value, index, next) {
 }
 
 function __velarListAppend(value, item) {
-  value = __velarValidateOwnedList(value, "List.append");
+  value = __velarValidateMutableList(value, "List.append");
   if (value.length >= __velarMaxCollectionItems) throw new __velarCollectionListNativeRangeError("A List cannot exceed 1000000 items");
   item = __velarReactiveRaw(item);
   const index = value.length;
@@ -510,26 +627,31 @@ function __velarListAppend(value, item) {
 }
 
 function __velarListExtend(value, items) {
-  value = __velarValidateOwnedList(value, "List.extend");
+  value = __velarValidateMutableList(value, "List.extend");
   items = __velarValidateOwnedList(items, "List.extend");
   if (value.length + items.length > __velarMaxCollectionItems) throw new __velarCollectionListNativeRangeError("A List cannot exceed 1000000 items");
   const start = value.length;
   const count = items.length;
-  for (let index = 0; index < count; index += 1) { const item = __velarReactiveRaw(__velarOwnedListElement(items, index, "List.extend")); __velarCollectionListDefineProperty(value, value.length, { value: item, writable: true, enumerable: true, configurable: true }); __velarReactiveCollectionLink(value, item); }
+  const itemsOwned = __velarListIsOwned(items);
+  for (let index = 0; index < count; index += 1) { const item = __velarReactiveRaw(__velarListElement(items, index, "List.extend", itemsOwned)); __velarCollectionListDefineProperty(value, value.length, { value: item, writable: true, enumerable: true, configurable: true }); __velarReactiveCollectionLink(value, item); }
   if (count > 0) __velarReactiveCollectionTrigger(value, start, true, true, start);
   __velarMarkOwnedList(value);
   return null;
 }
 
 function __velarListInsert(value, index, item) {
-  value = __velarValidateOwnedList(value, "List.insert");
+  value = __velarValidateMutableList(value, "List.insert");
   // COL-I2: every List position error is an IndexError, and the accepted
   // range 0..size (inclusive) is the charter's insert contract.
   if (!__velarCollectionListIsInteger(index) || index < 0 || index > value.length) throw new __VelarIndexError("List.insert index must be an integer from 0 through size");
   if (value.length >= __velarMaxCollectionItems) throw new __velarCollectionListNativeRangeError("A List cannot exceed 1000000 items");
   item = __velarReactiveRaw(item);
+  // COL-P1: the tier is read before the new slot lands, because appending it
+  // moves the length past the recorded one, and every shift below would then
+  // take the descriptor path on a List this runtime wrote in full.
+  const owned = __velarListIsOwned(value);
   __velarCollectionListDefineProperty(value, value.length, { value: item, writable: true, enumerable: true, configurable: true });
-  for (let cursor = value.length - 1; cursor > index; cursor -= 1) value[cursor] = __velarOwnedListElement(value, cursor - 1, "List.insert");
+  for (let cursor = value.length - 1; cursor > index; cursor -= 1) value[cursor] = __velarListElement(value, cursor - 1, "List.insert", owned);
   value[index] = item;
   __velarMarkOwnedList(value);
   __velarReactiveCollectionLink(value, item);
@@ -538,30 +660,31 @@ function __velarListInsert(value, index, item) {
 }
 
 function __velarListPop(value, requested = -1) {
-  value = __velarValidateOwnedList(value, "List.pop");
+  value = __velarValidateMutableList(value, "List.pop");
   if (!__velarCollectionListIsInteger(requested)) throw new __VelarIndexError("List.pop index must be an integer");
   const index = requested < 0 ? value.length + requested : requested;
   if (value.length === 0) throw new __VelarIndexError("List.pop requires a non-empty List");
   if (index < 0 || index >= value.length) throw new __VelarIndexError("List.pop index must be an in-range integer");
-  const item = __velarOwnedListElement(value, index, "List.pop");
-  for (let cursor = index; cursor < value.length - 1; cursor += 1) value[cursor] = __velarOwnedListElement(value, cursor + 1, "List.pop");
+  const owned = __velarListIsOwned(value);
+  const item = __velarListElement(value, index, "List.pop", owned);
+  for (let cursor = index; cursor < value.length - 1; cursor += 1) value[cursor] = __velarListElement(value, cursor + 1, "List.pop", owned);
   value.length -= 1;
   __velarMarkOwnedList(value);
   __velarReactiveCollectionUnlink(value, item);
   __velarReactiveCollectionTrigger(value, index, true, true, index);
   return item;
 }
-function __velarListRemove(value, item) { value = __velarValidateOwnedList(value, "List.remove"); item = __velarReactiveRaw(item); for (let index = 0; index < value.length; index += 1) if (__velarSameValueZero(__velarReactiveRaw(__velarOwnedListElement(value, index, "List.remove")), item)) { __velarListPop(value, index); return true; } return false; }
+function __velarListRemove(value, item) { value = __velarValidateOwnedList(value, "List.remove"); item = __velarReactiveRaw(item); const owned = __velarListIsOwned(value); for (let index = 0; index < value.length; index += 1) if (__velarSameValueZero(__velarReactiveRaw(__velarListElement(value, index, "List.remove", owned)), item)) { __velarListPop(value, index); return true; } return false; }
 function __velarListCopy(value) { __velarReactiveCollectionTrack(value); return __velarCopyList(value, "List.copy"); }
-function __velarListCount(value, item) { value = __velarValidateOwnedList(value, "List.count"); item = __velarReactiveRaw(item); __velarReactiveCollectionTrack(value); let count = 0; for (let index = 0; index < value.length; index += 1) if (__velarSameValueZero(__velarReactiveRaw(__velarOwnedListElement(value, index, "List.count")), item)) count += 1; return count; }
+function __velarListCount(value, item) { value = __velarValidateOwnedList(value, "List.count"); item = __velarReactiveRaw(item); __velarReactiveCollectionTrack(value); const owned = __velarListIsOwned(value); let count = 0; for (let index = 0; index < value.length; index += 1) if (__velarSameValueZero(__velarReactiveRaw(__velarListElement(value, index, "List.count", owned)), item)) count += 1; return count; }
 function __velarListFind(value, predicate) { const items = __velarCopyList(value, "List.find"); __velarReactiveCollectionTrack(value); for (let index = 0; index < items.length; index += 1) { const item = __velarReactiveCollectionRead(value, index, items[index]); const accepted = predicate(item); if (typeof accepted !== "boolean") throw new __velarCollectionNativeTypeError("List.find predicate must return bool"); if (accepted) return item; } return null; }
-function __velarListIndex(value, item) { value = __velarValidateOwnedList(value, "List.index"); item = __velarReactiveRaw(item); __velarReactiveCollectionTrack(value); for (let index = 0; index < value.length; index += 1) if (__velarSameValueZero(__velarReactiveRaw(__velarOwnedListElement(value, index, "List.index")), item)) return index; return null; }
+function __velarListIndex(value, item) { value = __velarValidateOwnedList(value, "List.index"); item = __velarReactiveRaw(item); __velarReactiveCollectionTrack(value); const owned = __velarListIsOwned(value); for (let index = 0; index < value.length; index += 1) if (__velarSameValueZero(__velarReactiveRaw(__velarListElement(value, index, "List.index", owned)), item)) return index; return null; }
 function __velarListSome(value, predicate) { const items = __velarCopyList(value, "List.some"); __velarReactiveCollectionTrack(value); for (let index = 0; index < items.length; index += 1) { const accepted = predicate(__velarReactiveCollectionRead(value, index, items[index])); if (typeof accepted !== "boolean") throw new __velarCollectionNativeTypeError("List.some predicate must return bool"); if (accepted) return true; } return false; }
 function __velarListEvery(value, predicate) { const items = __velarCopyList(value, "List.every"); __velarReactiveCollectionTrack(value); for (let index = 0; index < items.length; index += 1) { const accepted = predicate(__velarReactiveCollectionRead(value, index, items[index])); if (typeof accepted !== "boolean") throw new __velarCollectionNativeTypeError("List.every predicate must return bool"); if (!accepted) return false; } return true; }
-function __velarListMap(value, transform) { const items = __velarCopyList(value, "List.map"); __velarReactiveCollectionTrack(value); const output = new __velarCollectionNativeArray(items.length); for (let index = 0; index < items.length; index += 1) { const item = transform(__velarReactiveCollectionRead(value, index, items[index])); output[index] = item === undefined ? null : __velarReactiveRaw(item); } return __velarMarkOwnedList(output); }
-function __velarListFilter(value, predicate) { const items = __velarCopyList(value, "List.filter"); __velarReactiveCollectionTrack(value); const output = []; for (let index = 0; index < items.length; index += 1) { const item = __velarReactiveCollectionRead(value, index, items[index]); const accepted = predicate(item); if (typeof accepted !== "boolean") throw new __velarCollectionNativeTypeError("List.filter predicate must return bool"); if (accepted) output[output.length] = __velarReactiveRaw(item); } return __velarMarkOwnedList(output); }
+function __velarListMap(value, transform) { const items = __velarCopyList(value, "List.map"); __velarReactiveCollectionTrack(value); const output = new __velarCollectionNativeArray(items.length); for (let index = 0; index < items.length; index += 1) { const item = transform(__velarReactiveCollectionRead(value, index, items[index])); output[index] = item === undefined ? null : __velarReactiveRaw(item); } return __velarAdoptList(output); }
+function __velarListFilter(value, predicate) { const items = __velarCopyList(value, "List.filter"); __velarReactiveCollectionTrack(value); const output = []; for (let index = 0; index < items.length; index += 1) { const item = __velarReactiveCollectionRead(value, index, items[index]); const accepted = predicate(item); if (typeof accepted !== "boolean") throw new __velarCollectionNativeTypeError("List.filter predicate must return bool"); if (accepted) output[output.length] = __velarReactiveRaw(item); } return __velarAdoptList(output); }
 function __velarListReduce(value, combine, initial) { const items = __velarCopyList(value, "List.reduce"); __velarReactiveCollectionTrack(value); let result = initial; for (let index = 0; index < items.length; index += 1) { const next = combine(result, __velarReactiveCollectionRead(value, index, items[index])); result = next === undefined ? null : next; } return result; }
-function __velarListJoin(value, separator = "") { value = __velarValidateOwnedList(value, "List.join"); __velarReactiveCollectionTrack(value); if (typeof separator !== "string") throw new __velarCollectionNativeTypeError("List.join separator must be string"); for (let index = 0; index < value.length; index += 1) if (typeof __velarOwnedListElement(value, index, "List.join") !== "string") throw new __velarCollectionNativeTypeError("List.join requires string values"); return __velarCollectionListHostJoin(value, separator); }
+function __velarListJoin(value, separator = "") { value = __velarValidateOwnedList(value, "List.join"); __velarReactiveCollectionTrack(value); if (typeof separator !== "string") throw new __velarCollectionNativeTypeError("List.join separator must be string"); const owned = __velarListIsOwned(value); for (let index = 0; index < value.length; index += 1) if (typeof __velarListElement(value, index, "List.join", owned) !== "string") throw new __velarCollectionNativeTypeError("List.join requires string values"); return __velarCollectionListHostJoin(value, separator); }
 function __velarOrderedListValue(value, name, kind = null) { const current = typeof value; if (current === "number" && __velarCollectionListIsNaN(value)) throw new __velarCollectionNativeTypeError(name + " found NaN, which has no ordering; drop it with filter(x => not x.isNaN()) or fix the upstream computation"); if ((current !== "string" && current !== "number") || (kind !== null && current !== kind)) throw new __velarCollectionNativeTypeError(name + " requires uniform numbers or strings"); return current; }
 function __velarListSorted(value, compare = null, by = null) {
   if (compare !== null && by !== null) throw new __velarCollectionNativeTypeError("List.sorted accepts either a comparator or by, not both");
@@ -576,7 +699,7 @@ function __velarListSorted(value, compare = null, by = null) {
     __velarCollectionListHostSort(decorated, (left, right) => __velarOrderedCompare(kind, left.key, right.key));
     const selected = new __velarCollectionNativeArray(decorated.length);
     for (let index = 0; index < decorated.length; index += 1) selected[index] = decorated[index].item;
-    return __velarMarkOwnedList(selected);
+    return __velarAdoptList(selected);
   }
   let kind = null;
   if (compare === null) { for (let index = 0; index < output.length; index += 1) kind = __velarOrderedListValue(output[index], "List.sorted()", kind); }
@@ -598,10 +721,11 @@ function __velarListFlatMap(value, transform) {
   for (let index = 0; index < items.length; index += 1) {
     const part = transform(__velarReactiveCollectionRead(value, index, items[index]));
     const values = __velarValidateOwnedList(part, "List.flatMap transform result");
+    const partOwned = __velarListIsOwned(values);
     if (output.length + values.length > __velarMaxCollectionItems) throw new __velarCollectionListNativeRangeError("A List cannot exceed 1000000 items");
-    for (let cursor = 0; cursor < values.length; cursor += 1) output[output.length] = __velarCollectionValue(__velarReactiveRaw(__velarOwnedListElement(values, cursor, "List.flatMap")));
+    for (let cursor = 0; cursor < values.length; cursor += 1) output[output.length] = __velarCollectionValue(__velarReactiveRaw(__velarListElement(values, cursor, "List.flatMap", partOwned)));
   }
-  return __velarMarkOwnedList(output);
+  return __velarAdoptList(output);
 }
 
 function __velarSetAdd(value, item) {
@@ -741,7 +865,7 @@ function __velarRecordCopy(value) {
   return output;
 }
 
-function __velarListHas(value, item) { value = __velarValidateOwnedList(value, "List.has"); item = __velarReactiveRaw(item); __velarReactiveCollectionTrack(value); for (let index = 0; index < value.length; index += 1) if (__velarSameValueZero(__velarReactiveRaw(__velarOwnedListElement(value, index, "List.has")), item)) return true; return false; }
+function __velarListHas(value, item) { value = __velarValidateOwnedList(value, "List.has"); item = __velarReactiveRaw(item); __velarReactiveCollectionTrack(value); const owned = __velarListIsOwned(value); for (let index = 0; index < value.length; index += 1) if (__velarSameValueZero(__velarReactiveRaw(__velarListElement(value, index, "List.has", owned)), item)) return true; return false; }
 function __velarRecordHas(value, item) { value = __velarReactiveRaw(value); item = __velarReactiveRaw(item); if (typeof item !== "string") throw new __velarCollectionNativeTypeError("Record.has requires a string key"); __velarRecordFields(value, "Record.has"); __velarReactiveCollectionTrack(value, item); return __velarCollectionRecordGetOwnPropertyDescriptor(value, item) !== undefined; }
 function __velarMapHas(value, item) { value = __velarReactiveRaw(value); item = __velarReactiveRaw(item); const size = __velarCheckedMapSize(value, "Map.has"); if (size > __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A Map cannot exceed 1000000 entries"); __velarReactiveCollectionTrack(value, item); return __velarCollectionSetMapMapHas(value, item); }
 function __velarSetHas(value, item) { value = __velarReactiveRaw(value); item = __velarReactiveRaw(item); const size = __velarCheckedSetSize(value, "Set.has"); if (size > __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A Set cannot exceed 1000000 items"); __velarReactiveCollectionTrack(value, item); return __velarCollectionSetMapSetHas(value, item); }
@@ -800,8 +924,10 @@ function __velarEqualsVisit(left, right, active, depth) {
       __velarReactiveCollectionTrack(leftList);
       __velarReactiveCollectionTrack(rightList);
       if (leftList.length !== rightList.length) return false;
+      const leftOwned = __velarListIsOwned(leftList);
+      const rightOwned = __velarListIsOwned(rightList);
       for (let index = 0; index < leftList.length; index += 1) {
-        if (!__velarEqualsVisit(__velarOwnedListElement(leftList, index, "equals"), __velarOwnedListElement(rightList, index, "equals"), active, depth + 1)) return false;
+        if (!__velarEqualsVisit(__velarListElement(leftList, index, "equals", leftOwned), __velarListElement(rightList, index, "equals", rightOwned), active, depth + 1)) return false;
       }
       return true;
     }
@@ -970,6 +1096,7 @@ function __velarListClear(value) {
   value = __velarReactiveRaw(value);
   const previous = __velarCopyList(value, "List.clear");
   if (previous.length === 0) return null;
+  __velarListRequireMutableLength(value, "List.clear");
   value.length = 0;
   __velarMarkOwnedList(value);
   for (let index = 0; index < previous.length; index += 1) __velarReactiveCollectionUnlink(value, previous[index]);
@@ -1028,14 +1155,14 @@ function __velarRecordKeys(value) {
   const fields = __velarRecordFields(value, "Record.keys");
   const output = new __velarCollectionNativeArray(fields.length);
   for (let index = 0; index < fields.length; index += 1) output[index] = __velarReactiveCollectionRead(value, __velarReactiveStructureKey, fields[index]);
-  return __velarMarkOwnedList(output);
+  return __velarAdoptList(output);
 }
 function __velarMapKeys(value) {
   value = __velarReactiveRaw(value); __velarReactiveCollectionTrack(value, __velarReactiveStructureKey);
   const size = __velarCheckedMapSize(value, "Map.keys");
   if (size > __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A Map cannot exceed 1000000 entries");
   const output = new __velarCollectionNativeArray(size); const iterator = __velarCollectionSetMapMapKeys(value); let index = 0;
-  while (true) { const step = __velarCollectionSetMapMapNext(iterator); if (step.done) return __velarMarkOwnedList(output); output[index++] = __velarReactiveCollectionRead(value, __velarReactiveStructureKey, step.value); }
+  while (true) { const step = __velarCollectionSetMapMapNext(iterator); if (step.done) return __velarAdoptList(output); output[index++] = __velarReactiveCollectionRead(value, __velarReactiveStructureKey, step.value); }
 }
 function __velarCollectionKeys(value) { value = __velarReactiveRaw(value); return __velarIsRecord(value) ? __velarRecordKeys(value) : __velarMapKeys(value); }
 
@@ -1043,19 +1170,19 @@ function __velarRecordValues(value) {
   value = __velarReactiveRaw(value); __velarReactiveCollectionTrack(value);
   const fields = __velarRecordFields(value, "Record.values"); const output = new __velarCollectionNativeArray(fields.length);
   for (let index = 0; index < fields.length; index += 1) { const field = fields[index]; output[index] = __velarReactiveCollectionRead(value, field, __velarCollectionRecordGetOwnPropertyDescriptor(value, field).value); }
-  return __velarMarkOwnedList(output);
+  return __velarAdoptList(output);
 }
 function __velarMapValues(value) {
   value = __velarReactiveRaw(value); __velarReactiveCollectionTrack(value);
   const size = __velarCheckedMapSize(value, "Map.values"); if (size > __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A Map cannot exceed 1000000 entries");
   const output = new __velarCollectionNativeArray(size); const iterator = __velarCollectionSetMapMapValues(value); let index = 0;
-  while (true) { const step = __velarCollectionSetMapMapNext(iterator); if (step.done) return __velarMarkOwnedList(output); output[index++] = __velarReactiveCollectionRead(value, __velarReactiveIterateKey, step.value); }
+  while (true) { const step = __velarCollectionSetMapMapNext(iterator); if (step.done) return __velarAdoptList(output); output[index++] = __velarReactiveCollectionRead(value, __velarReactiveIterateKey, step.value); }
 }
 function __velarSetValues(value) {
   value = __velarReactiveRaw(value); __velarReactiveCollectionTrack(value);
   const size = __velarCheckedSetSize(value, "Set.values"); if (size > __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A Set cannot exceed 1000000 items");
   const output = new __velarCollectionNativeArray(size); const iterator = __velarCollectionSetMapSetValues(value); let index = 0;
-  while (true) { const step = __velarCollectionSetMapSetNext(iterator); if (step.done) return __velarMarkOwnedList(output); output[index++] = __velarReactiveCollectionRead(value, __velarReactiveIterateKey, step.value); }
+  while (true) { const step = __velarCollectionSetMapSetNext(iterator); if (step.done) return __velarAdoptList(output); output[index++] = __velarReactiveCollectionRead(value, __velarReactiveIterateKey, step.value); }
 }
 function __velarCollectionValues(value) {
   value = __velarReactiveRaw(value);
@@ -1068,13 +1195,13 @@ function __velarRecordEntries(value) {
   value = __velarReactiveRaw(value); __velarReactiveCollectionTrack(value);
   const fields = __velarRecordFields(value, "Record.entries"); const output = new __velarCollectionNativeArray(fields.length);
   for (let index = 0; index < fields.length; index += 1) { const field = fields[index]; output[index] = __velarCollectionRecordFreeze({ key: __velarReactiveCollectionRead(value, __velarReactiveIterateKey, field), value: __velarReactiveCollectionRead(value, field, __velarCollectionRecordGetOwnPropertyDescriptor(value, field).value) }); }
-  return __velarMarkOwnedList(output);
+  return __velarAdoptList(output);
 }
 function __velarMapEntries(value) {
   value = __velarReactiveRaw(value); __velarReactiveCollectionTrack(value);
   const size = __velarCheckedMapSize(value, "Map.entries"); if (size > __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A Map cannot exceed 1000000 entries");
   const output = new __velarCollectionNativeArray(size); const iterator = __velarCollectionSetMapMapEntries(value); let index = 0;
-  while (true) { const step = __velarCollectionSetMapMapNext(iterator); if (step.done) return __velarMarkOwnedList(output); const entry = step.value; output[index++] = __velarCollectionSetMapFreeze({ key: __velarReactiveCollectionRead(value, __velarReactiveIterateKey, entry[0]), value: __velarReactiveCollectionRead(value, entry[0], entry[1]) }); }
+  while (true) { const step = __velarCollectionSetMapMapNext(iterator); if (step.done) return __velarAdoptList(output); const entry = step.value; output[index++] = __velarCollectionSetMapFreeze({ key: __velarReactiveCollectionRead(value, __velarReactiveIterateKey, entry[0]), value: __velarReactiveCollectionRead(value, entry[0], entry[1]) }); }
 }
 function __velarCollectionEntries(value) { value = __velarReactiveRaw(value); return __velarIsRecord(value) ? __velarRecordEntries(value) : __velarMapEntries(value); }
 function __velarOptionalCollection(value, operation) { return value == null ? null : operation(value); }`;

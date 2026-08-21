@@ -974,3 +974,491 @@ test("[N-2c] the reactive Look forms, Look lengths, bind paths, and bind groups 
   const output = await runBrowserFixture(surfaceApplication, surfaceTests);
   assert.match(output, /4 passed, 0 failed/u);
 });
+
+// ---------------------------------------------------------------------------
+// Wave web — the compile-time half of the Web surface audit.
+// ---------------------------------------------------------------------------
+
+// web-19: the `on*` guard was anchored on an uppercase letter, so it caught the
+// React reflex that does nothing and let through the HTML spelling the browser
+// compiles as script.
+test("[web-19] a lowercase HTML handler attribute is refused as the executable spelling it is", () => {
+  for (const [attribute, event] of [["onclick", "click"], ["onmouseover", "mouseover"], ["onerror", "error"], ["onload", "load"]]) {
+    const reported = only(`
+component App(u: string):
+    return <div ${attribute}={u} data-x={u}>hi</div>
+
+mount(<App u="x" />, "#app")
+`);
+    assert.match(reported, new RegExp(`^VEL5025 Use 'on:${event}';`, "u"));
+    assert.match(reported, /compiled as script by the browser/u);
+    assert.match(reported, new RegExp(`on:${event}=\\{handler\\}`, "u"));
+  }
+  // The camelCase spelling reaches the same attribute — an HTML attribute name
+  // is matched ASCII-case-insensitively — so it earns the clause too. This
+  // assertion used to read `doesNotMatch(/compiled as script/)` on the strength
+  // of a comment calling `onClick=` a spelling that merely does nothing; the
+  // DOM says otherwise, and `ONCLICK` below already carried the clause, so the
+  // old expectation split one attribute across two rules.
+  const camel = only(`
+component App:
+    return <div role="button" onClick={() => null}>hi</div>
+
+mount(<App />, "#app")
+`);
+  assert.match(camel, /^VEL5025 Use 'on:click';/u);
+  assert.match(camel, /an 'onClick' attribute is compiled as script by the browser/u);
+  clean(`
+component App:
+    return <div role="button" on:click={() => null}>hi</div>
+
+mount(<App />, "#app")
+`);
+
+  // wr-6: the guard closes the whole `on` prefix, so a name that is no event at
+  // all reaches it too. The message states the prefix rule for those names and
+  // does not tell the author the browser compiles their attribute as script,
+  // because it does not.
+  for (const attribute of ["onward", "once"]) {
+    const reported = only(`
+component App(u: string):
+    return <div ${attribute}={u} data-x={u}>hi</div>
+
+mount(<App u="x" />, "#app")
+`);
+    assert.match(reported, /^VEL5025 Use an 'on:event' directive with a native DOM event name/u);
+    assert.match(reported, /reserves every attribute name beginning with 'on'/u);
+    assert.doesNotMatch(reported, new RegExp(`'${attribute}' attribute is compiled as script`, "u"));
+  }
+
+  // An HTML attribute name is matched case-insensitively, so every casing of a
+  // handler name is the executable spelling. The clause is right to fire on all
+  // of them, and must not call the name the author wrote lowercase when it is
+  // not. `onCLICK` used to be silent because the suppressor was `/^on[A-Z]/`,
+  // which is a test for camelCase and not for what the browser does.
+  for (const attribute of ["ONCLICK", "Onclick", "onCLICK", "onClick"]) {
+    const reported = only(`
+component App(u: string):
+    return <div ${attribute}={u} data-x={u}>hi</div>
+
+mount(<App u="x" />, "#app")
+`);
+    assert.match(reported, new RegExp(`an '${attribute}' attribute is compiled as script by the browser`, "u"));
+    assert.doesNotMatch(reported, /lowercase/u);
+  }
+
+  // wr-6: the clause's roster is HTML's handler attributes, not the `on:`
+  // directive vocabulary. These names are absent from that vocabulary and are
+  // real handler attributes, so pinning them to the directive list told the
+  // author the browser leaves their attribute alone while it compiles it.
+  for (const [attribute, event] of [
+    ["onanimationstart", "animationstart"], ["onabort", "abort"], ["onauxclick", "auxclick"],
+    ["onresize", "resize"], ["ontimeupdate", "timeupdate"], ["onbeforetoggle", "beforetoggle"],
+  ]) {
+    const reported = only(`
+component App(u: string):
+    return <div ${attribute}={u} data-x={u}>hi</div>
+
+mount(<App u="x" />, "#app")
+`);
+    assert.match(reported, new RegExp(`^VEL5025 Use 'on:${event}';`, "u"));
+    assert.match(reported, new RegExp(`an '${attribute}' attribute is compiled as script by the browser`, "u"));
+  }
+
+  // The prefix rule's own message named the `on:` directive as the remedy and
+  // then claimed every `on` name is reserved, which makes the remedy a
+  // counterexample to the sentence recommending it. The guard is `/^on(?!:)/`.
+  const reserved = only(`
+component App(u: string):
+    return <div onward={u} data-x={u}>hi</div>
+
+mount(<App u="x" />, "#app")
+`);
+  assert.match(reserved, /beginning with 'on' other than the 'on:' directive itself/u);
+});
+
+// web-20: srcdoc builds a document that inherits this page's origin, so it is a
+// second raw-HTML boundary with no marker on it.
+test("[web-20] an iframe with srcdoc requires a sandbox that really takes the origin away", () => {
+  assert.match(only(`
+component App(doc: string):
+    return <iframe srcdoc={doc} title="t" />
+
+mount(<App doc="x" />, "#app")
+`), /^VEL5066 An iframe with srcdoc .*runs script in this page's origin; add a sandbox attribute/u);
+
+  assert.match(only(`
+component App(doc: string):
+    return <iframe srcdoc={doc} sandbox="allow-scripts allow-same-origin" title="t" />
+
+mount(<App doc="x" />, "#app")
+`), /^VEL5066 sandbox='allow-scripts allow-same-origin' lets the framed document remove its own sandbox/u);
+
+  clean(`
+component App(doc: string):
+    return <iframe srcdoc={doc} sandbox="allow-forms" title="t" />
+
+mount(<App doc="x" />, "#app")
+`);
+  // An ordinary framed URL is not this boundary and gains no requirement.
+  clean(`
+component App:
+    return <iframe src="https://example.com/embed" title="t" />
+
+mount(<App />, "#app")
+`);
+});
+
+// web-4, literal half: the analyzer already refuses an anchor that opens a
+// window without 'noopener', so a written-down script URL cannot be the one URL
+// question it declines to ask.
+test("[web-4] a literal script URL is refused in every URL-bearing attribute", () => {
+  for (const source of [
+    `mount(<a href="javascript:alert(1)">x</a>, "#app")`,
+    `mount(<a href="JaVaScRiPt:alert(1)">x</a>, "#app")`,
+    `mount(<a href="vbscript:msgbox">x</a>, "#app")`,
+    `mount(<img src="javascript:alert(1)" alt="x" />, "#app")`,
+    `mount(<form action="javascript:alert(1)"><button>go</button></form>, "#app")`,
+  ]) {
+    const reported = messages(source);
+    assert.ok(reported.some((message) => message.startsWith("VEL5067")), JSON.stringify(reported));
+  }
+  // The URL parser strips control characters before it reads the scheme, so a
+  // split spelling is the same URL and gets the same answer.
+  assert.ok(messages(`mount(<a href="java\tscript:alert(1)">x</a>, "#app")`).some((message) => message.startsWith("VEL5067")));
+
+  // A data: URL is refused for the media types that can carry script and
+  // accepted for the ones that cannot.
+  assert.match(only(`mount(<iframe src="data:text/html,<script>x</script>" title="t" />, "#app")`), /^VEL5067 .*'data:' URL is only accepted for a media type that cannot carry script/u);
+  assert.ok(messages(`mount(<img src="data:image/svg+xml,<svg/>" alt="x" />, "#app")`).some((message) => message.startsWith("VEL5067")));
+  clean(`mount(<img src="data:image/png;base64,iVBORw0KGgo=" alt="x" />, "#app")`);
+
+  // Every ordinary URL a page writes stays legal.
+  clean(`mount(<a href="/about">x</a>, "#app")`);
+  clean(`mount(<a href="https://example.com">x</a>, "#app")`);
+  clean(`mount(<a href="mailto:team@example.com">x</a>, "#app")`);
+  clean(`mount(<a href="#section">x</a>, "#app")`);
+});
+
+// web-35 and ruling R3(b): the duplicate scope keys on the lowered condition,
+// which is the one the emitted rule carries.
+test("[web-35] a duplicate property under an equivalent condition is reported, not hidden", () => {
+  assert.equal(only(`
+export const a = look:
+    if scheme.dark:
+        color = "red"
+    if not scheme.light:
+        color = "blue"
+
+mount(<div look={a}>x</div>, "#app")
+`), "VEL5039 Look property 'color' is defined more than once in the same scope");
+
+  // The same holds for reduced motion, for a negated hook, and for a breakpoint
+  // written as the negation of its complement.
+  assert.equal(only(`
+export const a = look:
+    if motion.reduced:
+        color = "red"
+    if not motion.reduced:
+        color = "blue"
+    if motion.reduced:
+        color = "green"
+
+mount(<div look={a}>x</div>, "#app")
+`), "VEL5039 Look property 'color' is defined more than once in the same scope");
+
+  assert.equal(only(`
+export const a = look:
+    if @hover:
+        color = "red"
+    else:
+        color = "blue"
+    if not @hover:
+        color = "green"
+
+mount(<div look={a}>x</div>, "#app")
+`), "VEL5039 Look property 'color' is defined more than once in the same scope");
+
+  // Genuinely different conditions keep their own scopes.
+  clean(`
+export const a = look:
+    if scheme.dark:
+        color = "red"
+    if scheme.light:
+        color = "blue"
+
+mount(<div look={a}>x</div>, "#app")
+`);
+});
+
+// Ruling R3(c): two looks placed side by side state no order, so a property both
+// of them set has no answer the source gives.
+function lookCollisions(source: string): readonly string[] {
+  return messages(source).filter((message) => message.startsWith("VEL5068"));
+}
+
+test("[R3c] two independent looks that set one property are refused and taught the composing spelling", () => {
+  const reported = lookCollisions(`
+export const themeLook = look:
+    if scheme.dark:
+        color = "blue"
+
+export const badgeLook = look:
+    if @hover:
+        color = "red"
+
+mount(<div look={[themeLook, badgeLook]}>x</div>, "#app")
+`);
+  assert.equal(reported.length, 1, JSON.stringify(reported));
+  assert.match(reported[0]!, /Look 'themeLook' and Look 'badgeLook' both set 'color'/u);
+  assert.match(reported[0]!, /write one Look that starts with '\.\.\.themeLook' and overrides 'color' from there/u);
+
+  // Composition is the explicit override spelling and stays legal.
+  assert.deepEqual(lookCollisions(`
+export const themeLook = look:
+    if scheme.dark:
+        color = "blue"
+
+export const badgeLook = look:
+    ...themeLook
+    if @hover:
+        color = "red"
+
+mount(<div look={[themeLook, badgeLook]}>x</div>, "#app")
+`), []);
+
+  // Two looks that set different properties are independent and stay legal, and
+  // one property on two different targets is two different decisions.
+  assert.deepEqual(lookCollisions(`
+export const themeLook = look:
+    color = "blue"
+
+export const badgeLook = look:
+    padding = 4px
+
+mount(<div look={[themeLook, badgeLook]}>x</div>, "#app")
+`), []);
+  assert.deepEqual(lookCollisions(`
+export const themeLook = look:
+    color = "blue"
+
+export const badgeLook = look:
+    @before:
+        color = "red"
+
+mount(<div look={[themeLook, badgeLook]}>x</div>, "#app")
+`), []);
+});
+
+// web-27: a `keyframes:` stop lowers its builder calls at compile time, so the
+// runtime range guard the charter points at never runs there.
+test("[web-27] a const-folded builder argument is range-checked wherever it is written", () => {
+  const stop = messages(`
+import {rgb, alpha} from "velar/look"
+
+const hot = 200 + 200
+const over = 0.5 + 0.9
+
+export const kf = keyframes:
+    from:
+        color = rgb(hot, 0, 0)
+    to:
+        color = alpha(rgb(0, 0, 0), over)
+
+mount(<div />, "#app")
+`);
+  assert.ok(stop.includes("VEL5042 RGB channel 1 must be from 0 through 255; rgb received 400"), JSON.stringify(stop));
+  assert.ok(stop.includes("VEL5042 Color opacity must be from 0 through 1; alpha received 1.4"), JSON.stringify(stop));
+
+  // The same folded argument inside an ordinary Look block reports too, and an
+  // in-range token still compiles.
+  assert.ok(messages(`
+import {rgb} from "velar/look"
+
+const hot = 200 + 200
+
+export const l = look:
+    color = rgb(hot, 0, 0)
+
+mount(<div look={l} />, "#app")
+`).includes("VEL5042 RGB channel 1 must be from 0 through 255; rgb received 400"));
+
+  clean(`
+import {rgb, alpha} from "velar/look"
+
+const warm = 100 + 20
+const soft = 0.2 + 0.3
+
+export const kf = keyframes:
+    from:
+        color = rgb(warm, 0, 0)
+    to:
+        color = alpha(rgb(0, 0, 0), soft)
+
+mount(<div />, "#app")
+`);
+});
+
+// web-28: the charter says the two transition longhands take the vocabularies
+// the matching builders take, which presumes the builder has one.
+test("[web-28] the transition builder's property argument takes the longhand's vocabulary", () => {
+  assert.equal(only(`
+import {transition} from "velar/look"
+
+export const l = look:
+    transition = transition("backgroundColor", 200ms)
+
+mount(<div look={l} />, "#app")
+`), "VEL5038 The transition builder's property argument does not accept 'backgroundColor'; did you mean 'background-color'?");
+
+  assert.match(only(`
+import {transition} from "velar/look"
+
+export const l = look:
+    transition = transition("bakcground", 200ms)
+
+mount(<div look={l} />, "#app")
+`), /^VEL5038 The transition builder's property argument does not accept 'bakcground';/u);
+
+  clean(`
+import {transition} from "velar/look"
+
+export const l = look:
+    transition = transition("background-color", 200ms)
+
+mount(<div look={l} />, "#app")
+`);
+  // A design token in the same position is checked the same way.
+  assert.match(only(`
+import {transition} from "velar/look"
+
+const animated = "backgroundColor"
+
+export const l = look:
+    transition = transition(animated, 200ms)
+
+mount(<div look={l} />, "#app")
+`), /^VEL5038 The transition builder's property argument does not accept 'backgroundColor';/u);
+});
+
+// web-15 / D31 item 26: the diagnostic is the only place the reader meets the
+// spelling that accepts children, so it names it.
+test("[web-15] the children diagnostic teaches the prop that accepts them", () => {
+  assert.equal(only(`
+component Card(title: string):
+    return <div>{title}</div>
+
+component App:
+    return <Card title="Hi"><p>inner</p></Card>
+
+mount(<App />, "#app")
+`), "VEL5018 Component 'Card' does not declare JSX children; declare a 'children: WebNode' prop to accept them");
+
+  clean(`
+component Card(title: string, children: WebNode):
+    return <div>{title}{children}</div>
+
+component App:
+    return <Card title="Hi"><p>inner</p></Card>
+
+mount(<App />, "#app")
+`);
+});
+
+// wr-5: two VEL5060 messages stated a rule the code does not enforce. The
+// keyframe message left const bindings out of the list of things that resolve
+// and then named only the sources, never the shape the same checker also
+// demands, while D60 rule 151 is precisely the ruling that made a design token
+// usable in a stop; the count/loop message prescribed `loop=true` to an author
+// who wrote `loop=false`, and then described `loop` as the infinite one, which
+// is false of exactly the value that motivated the finding.
+const KEYFRAME_STATIC_MESSAGE = "VEL5060 A keyframe value must resolve to static CSS from literals, unit values,"
+  + " arithmetic, velar/look builders, or const bindings — local or imported — that hold any of those, and the text"
+  + " it resolves to must read as one declaration value: no ';', '{', '}', or '@' outside a string, with"
+  + " parentheses, strings, and comments all closed";
+
+test("[wr-5] the keyframe static-CSS message names every spelling that resolves", () => {
+  assert.equal(only(`
+def pick() -> number:
+    return 1
+
+const computed = pick()
+
+export const kf = keyframes:
+    from:
+        opacity = computed
+    to:
+        opacity = 1
+
+mount(<div />, "#app")
+`), KEYFRAME_STATIC_MESSAGE);
+
+  // The checker is `staticCssValue` AND `isCssDeclarationValue`, so a plain
+  // string literal — a spelling the first half of the message says resolves —
+  // is still refused when its text is not one declaration value. The message
+  // states that half too, or it denies a spelling while telling the author it
+  // is accepted.
+  for (const value of [`"a}|100{transform:b"`, `"none; color: red"`, `"translate(1px"`, `"a @media b"`]) {
+    assert.equal(only(`
+export const kf = keyframes:
+    from:
+        transform = ${value}
+    to:
+        transform = "none"
+
+mount(<div />, "#app")
+`), KEYFRAME_STATIC_MESSAGE);
+  }
+
+  // The const spelling the message now names really is accepted, so the message
+  // and the behaviour are pinned together.
+  clean(`
+import {rgb} from "velar/look"
+
+const ink = rgb(10, 20, 30)
+const lift = 12px
+
+export const kf = keyframes:
+    from:
+        color = ink
+        translate = lift
+    to:
+        color = ink
+        translate = 0px
+
+mount(<div />, "#app")
+`);
+});
+
+test("[wr-5] the count/loop message states the rule instead of prescribing loop=true", () => {
+  const both = `
+import {animate} from "velar/look"
+
+export const kf = keyframes:
+    from:
+        opacity = 0
+    to:
+        opacity = 1
+
+component App:
+    return <div look:animation={animate(kf, 1s, count=3, loop=REPETITION)}>hi</div>
+
+mount(<App />, "#app")
+`;
+  // Writing both arguments is ambiguous authoring whatever the value, so the
+  // guard fires for `loop=false` as well; only the message changed. `loop` is a
+  // bool and the runtime lowers it as `loop ? "infinite" : String(count)`, so
+  // `loop=false` names a finite run and the message must not describe `loop`
+  // itself as the infinite one — it is `loop=true` that replaces the count.
+  for (const repetition of ["true", "false"]) {
+    const reported = only(both.replace("REPETITION", repetition));
+    assert.equal(reported,
+      "VEL5060 animate accepts either count or loop, not both: count names the number of runs, and loop=true replaces that count with an unbounded one");
+    assert.doesNotMatch(reported, /loop an infinite one|use loop=true/u);
+  }
+
+  // Each argument on its own still compiles, `loop=false` included.
+  for (const repetition of ["count=3", "loop=true", "loop=false"]) {
+    clean(both.replace("count=3, loop=REPETITION", repetition));
+  }
+});

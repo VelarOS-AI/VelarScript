@@ -39,6 +39,39 @@ velar run   → ReferenceError: Cannot access 'a' before initialization（裸 JS
 （需要初始化期可达性分析，D1/D2 已裁决不做全程序效应系统）。运行期兜底仍是
 裸 ReferenceError。记入对抗搜捕的模块维度；等真实证据再议加深。
 
+### 实施记录（2026-08-21）：上面这条残余已关闭（模块内）
+
+分析器为每个延迟体（`def`，以及绑定到模块名的箭头）记下它读到的导入绑定与它
+调用的本地名；模块分析结束后沿这些调用边做一次**模块内**可达性闭包，顶层调用
+是根。不需要跨模块分析，也不需要效应系统 —— D1/D2 的裁决不受影响。
+
+诊断落在**调用**那一行，而不是函数体里的那次读：调用才是模块求值期真正运行的
+那一行，也是作者能移动的那一行；体内的读已经在函数里，那正是 VEL3019 的补救
+所要求的形状。
+
+实测（环内 `b.vel` 先于 `main.vel` 求值）：
+
+```
+// main.vel（入口）
+import {b} from "./b.vel"
+export const a = "A"
+print(b)
+
+// b.vel（环内，求值在前）
+import {a} from "./main.vel"
+def get() -> string:
+    return a
+
+export const b = "B" + get()
+```
+
+由「零诊断、出码、运行期裸 ReferenceError」变为 `get()` 处一条 VEL3019。
+`def` 调 `def` 的传递闭包成立，`const get = () => a` 与 `def` 同待遇。
+
+**仍不追**（运行期兜底仍是裸 ReferenceError）：经由方法的调用
+（`Box().get()`）、先把函数存进另一个名字再调用（`const alias = get` 后
+`alias()`），以及跨模块的间接可达性 —— 闭包只沿本模块的调用边走。
+
 ---
 
 ## 第 24 条 —— 支持 JSX 展开 `<Chip {...attrs} />`（用户裁决，推翻保守建议）

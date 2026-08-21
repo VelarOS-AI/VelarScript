@@ -5,6 +5,7 @@ import { extname, isAbsolute, join, relative, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
 import type { VerifiedProductionBuild } from "./production-verifier.ts";
 import { asHostError, hostErrorMessage } from "./host-error.ts";
+import { localRequestRefusal } from "./local-request-guard.ts";
 
 export interface ProductionPreviewHandle {
   readonly server: Server;
@@ -19,12 +20,22 @@ export async function startProductionPreview(
 ): Promise<ProductionPreviewHandle> {
   const server = createServer(async (request, response) => {
     try {
+      // The preview server answers the same loopback-only contract the dev
+      // server does; the Host header below is a request path input, so it is
+      // judged before anything reads it.
+      const refusal = localRequestRefusal(request.headers);
+      if (refusal) {
+        response.writeHead(refusal.status, { "Content-Type": "text/plain; charset=utf-8" }).end(`Refused: ${refusal.message}\n`);
+        return;
+      }
       if (request.method !== "GET" && request.method !== "HEAD") {
         response.setHeader("Allow", "GET, HEAD");
         response.writeHead(405).end("Method not allowed");
         return;
       }
-      const encodedPathname = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`).pathname;
+      // The Host header has already been judged above; a fixed base keeps the
+      // parse independent of anything the client chose to send.
+      const encodedPathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
       let pathname: string;
       try {
         pathname = decodeURIComponent(encodedPathname);
@@ -75,9 +86,6 @@ export async function startProductionPreview(
       const contentType = mimeType(servedPath);
       response.setHeader("Content-Type", contentType);
       response.setHeader("Content-Length", String(servedSize));
-      if (!response.hasHeader("Cache-Control") && contentType.startsWith("text/html")) {
-        response.setHeader("Cache-Control", build.deployment.caching.documents);
-      }
       response.writeHead(200);
       if (request.method === "HEAD") response.end();
       else await pipeline(createReadStream(servedFile), response);

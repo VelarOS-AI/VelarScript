@@ -6,7 +6,7 @@ import { __velarNodeHostInvoke, __velarNodeHostOn } from "velar/node-host-v1";
 import { normalizeError as __velarServeNormalizeError } from "velar/compiler-runtime-errors-v1";
 import { __velarValidateDenseList as __velarServeValidateDenseList } from "velar/compiler-runtime-collection-lowering-v1";
 import { Bytes as __velarServeBytesType } from "velar/binary";
-import { writeBytes as __velarServeWriteBytes } from "velar/fs";
+import { canonical as __velarServeFsCanonical, info as __velarServeFsInfo, writeBytes as __velarServeWriteBytes } from "velar/fs";
 import { Cancellation as __velarServeCancellation } from "velar/task";
 
 const __velarServeArray = globalThis.Array;
@@ -186,9 +186,8 @@ function __velarServeIsSafeInteger(value) {
 }
 
 function __velarServeReserveOutbound(bytes) {
-  if (!__velarServeIsSafeInteger(bytes) || bytes < 0 || __velarServeOutboundBytes + bytes > __velarServeMaxOutboundBytes) {
-    throw new __velarServeRangeError("ServeResponse aggregate outbound byte budget is exhausted");
-  }
+  if (!__velarServeIsSafeInteger(bytes) || bytes < 0) throw new __velarServeRangeError("ServeResponse outbound byte reservation must be a non-negative integer");
+  if (__velarServeOutboundBytes + bytes > __velarServeMaxOutboundBytes) throw new __velarServeOutboundBudgetError();
   __velarServeOutboundBytes += bytes;
 }
 
@@ -430,6 +429,19 @@ export class HttpError extends __velarServeError {
   }
 }
 
+// Exhausting the aggregate outbound budget is a temporary load condition, not a
+// server fault: 503 with retry-after is what a load balancer and a client both
+// know how to act on, and 500 is what neither can. Most reserves happen while a
+// response is already on its way out, past the HttpError catch in
+// __velarServeHandleRequest, so both send paths recognize this one error by
+// identity and answer it themselves. The shed answer reserves nothing: it is a
+// fixed, tiny payload, and reserving for it would fail by construction.
+class __velarServeOutboundBudgetError extends HttpError {
+  constructor() {
+    super(503, {error: "outbound_budget_exhausted"}, new __velarServeMap([["retry-after", "1"]]));
+  }
+}
+
 function __velarServeIsFileResponse(value) {
   if (!value || typeof value !== "object") return false;
   const descriptor = __velarServeOwnDescriptor(value, __velarServeFileMarker);
@@ -600,6 +612,74 @@ function __velarServeIsUpload(value) {
 
 export const Upload = __velarServeTypeObject(__velarServeIsUpload, "Upload values are created from multipart route inputs");
 
+// Upload.save takes its containment root as a required argument and refuses any
+// target that resolves outside it. The host operations bag __velarServeNativeFile
+// uses for static files is not reachable from this Realm, so containment is
+// composed from velar/fs instead of a new host operation: fail-closed textual
+// rules on the caller's path, then a canonical check of the directory that will
+// hold the file so a symbolic link cannot lead out of the root. That is the
+// smaller of the two shapes and adds no trust boundary. This is complementary to
+// the basename reduction in __velarServeUploadBasename, which bounds only what a
+// client can put into Upload.filename.
+function __velarServeUploadSegments(path) {
+  if (typeof path !== "string" || path.length === 0) throw new __velarServeTypeError("Upload.save path must be a non-empty path relative to its root");
+  if (path.length > __velarServeMaxPathCodeUnits || __velarServeCall(__velarServeStringIncludes, path, ["\0"])) {
+    throw new __velarServeRangeError("Upload.save path is outside the supported bounds");
+  }
+  // The root's separator is a host detail this Realm cannot consult, so both
+  // separators are refused, exactly as __velarServeNativeEscapes refuses both.
+  // Only '..' and an absolute path genuinely leave the root; a backslash, an
+  // empty segment and a '.' are refused because this Realm will not normalize a
+  // path on the caller's behalf, so each refusal says which of the two it is
+  // rather than naming an escape that did not happen.
+  if (__velarServeCall(__velarServeStringIncludes, path, ["\\"])) throw new __velarServeError("Upload.save path cannot contain a backslash: it is a path separator on some hosts");
+  if (__velarServeCall(__velarServeStringStartsWith, path, ["/"])) throw new __velarServeError("Upload.save path escapes its root: it is absolute");
+  const segments = __velarServeCall(__velarServeStringSplit, path, ["/"]);
+  for (let index = 0; index < segments.length; index += 1) {
+    const segment = segments[index];
+    if (segment === "..") throw new __velarServeError("Upload.save path escapes its root: it has a '..' segment");
+    if (segment === "") throw new __velarServeError("Upload.save path must be normalized: it has an empty segment");
+    if (segment === ".") throw new __velarServeError("Upload.save path must be normalized: it has a '.' segment");
+  }
+  return segments;
+}
+
+function __velarServeUploadContains(root, target) {
+  if (target === root) return true;
+  if (target.length <= root.length || __velarServeCall(__velarServeStringSlice, target, [0, root.length]) !== root) return false;
+  const boundary = __velarServeCall(__velarServeStringSlice, target, [root.length, root.length + 1]);
+  return boundary === "/" || boundary === "\\";
+}
+
+async function __velarServeUploadTarget(path, root) {
+  const segments = __velarServeUploadSegments(path);
+  if (typeof root !== "string" || root.length === 0) throw new __velarServeTypeError("Upload.save root must be a non-empty directory path");
+  // Resolution failures arrive from the host as an errno naming an absolute path
+  // the caller never wrote, so both are answered in the caller's own terms: the
+  // root it named, or the relative directory it asked for.
+  let base;
+  try { base = await __velarServeFsCanonical(root); }
+  catch { throw new __velarServeError("Upload.save root does not resolve to an existing directory"); }
+  let directory = base;
+  let relative = "";
+  for (let index = 0; index + 1 < segments.length; index += 1) {
+    directory += "/" + segments[index];
+    relative += relative === "" ? segments[index] : "/" + segments[index];
+  }
+  if (directory !== base) {
+    try { directory = await __velarServeFsCanonical(directory); }
+    catch { throw new __velarServeError("Upload.save path names a directory that does not exist under the root: " + relative); }
+    if (!__velarServeUploadContains(base, directory)) throw new __velarServeError("Upload.save path escapes its root through a symbolic link");
+  }
+  const target = directory + "/" + segments[segments.length - 1];
+  // A write follows a symbolic link at the target itself, so the last segment is
+  // canonicalized by kind rather than by path: refusing the link is fail-closed
+  // and needs no second containment test.
+  const existing = await __velarServeFsInfo(target);
+  if (existing !== null && existing.kind === "symlink") throw new __velarServeError("Upload.save refuses to write through a symbolic link");
+  return target;
+}
+
 function __velarServeUploadValue(name, filename, contentType, data, states) {
   if (!__velarServeBytesType.is(data)) throw new __velarServeTypeError("Upload data must be Bytes");
   const state = {data};
@@ -620,7 +700,11 @@ function __velarServeUploadValue(name, filename, contentType, data, states) {
       catch { throw new __velarServeTypeError("Upload is not valid UTF-8 text"); }
     },
     bytes: async () => __velarServeBytesType.parse(current()),
-    save: async path => { await __velarServeWriteBytes(path, current()); return null; },
+    save: async (path, root) => {
+      const value = current();
+      await __velarServeWriteBytes(await __velarServeUploadTarget(path, root), value);
+      return null;
+    },
   }]);
 }
 
@@ -1336,6 +1420,7 @@ function __velarServeCors(origins = ["*"], methods = ["GET", "POST", "PUT", "PAT
   methods = __velarServeStringList(methods, "middleware.cors methods");
   headers = __velarServeStringList(headers, "middleware.cors headers");
   if (typeof credentials !== "boolean" || !__velarServeIsSafeInteger(maxAge) || maxAge < 0 || maxAge > 86400) throw new __velarServeTypeError("middleware.cors options are invalid");
+  if (credentials && __velarServeCall(__velarServeArrayIncludes, origins, ["*"])) throw new __velarServeTypeError("middleware.cors cannot combine credentials with the '*' origin wildcard");
   return async (request, next) => {
     const origin = __velarServeCall(__velarServeMapHas, request.headers, ["origin"]) ? __velarServeCall(__velarServeMapGet, request.headers, ["origin"]) : null;
     const wildcard = __velarServeCall(__velarServeArrayIncludes, origins, ["*"]);
@@ -1466,18 +1551,26 @@ function __velarServeTimeout(milliseconds) {
     if (__velarServeActiveTimeouts >= __velarServeMaxActiveTimeouts) {
       return {status: 503, json: {error: "server_busy"}, headers: new __velarServeMap([["retry-after", "1"]])};
     }
-    __velarServeActiveTimeouts += 1;
     let timer = null;
-    let detached = false;
-    let pending;
-    try { pending = next(); }
-    catch (error) { __velarServeActiveTimeouts -= 1; throw error; }
+    const pending = next();
     const expired = new __velarServePromise(resolve => { timer = __velarServeCall(__velarServeSetTimeout, globalThis, [() => resolve(__velarServeMissing), milliseconds]); });
     try {
       const result = await __velarServeCall(__velarServePromiseRace, __velarServePromise, [__velarServeCall(__velarServeObjectFreeze, __velarServeObject, [[pending, expired]])]);
       if (result !== __velarServeMissing) return result;
-      detached = true;
       __velarServeCancellation.__velarCancel(request.cancellation, "Request timed out");
+      // The published bound counts unfinished timed-out continuations, and the
+      // background reservation at __velarServeRunBackground subtracts exactly
+      // this many slots from the process total. Admission alone cannot hold
+      // that count: a burst admitted while nothing was detached can expire
+      // together. When the detached budget is full the request has already been
+      // cancelled, so wait for it to unwind here instead of detaching work the
+      // process no longer accounts for.
+      if (__velarServeActiveTimeouts >= __velarServeMaxActiveTimeouts) {
+        try { await pending; }
+        catch (error) { __velarServeReportFailure(error); }
+        return {status: 504, json: {error: "request_timeout"}};
+      }
+      __velarServeActiveTimeouts += 1;
       __velarServeActiveBackgroundTasks += 1;
       const settlement = (async () => {
         try { await pending; }
@@ -1500,7 +1593,6 @@ function __velarServeTimeout(milliseconds) {
       };
     } finally {
       if (timer !== null) __velarServeCall(__velarServeClearTimeout, globalThis, [timer]);
-      if (!detached) __velarServeActiveTimeouts -= 1;
     }
   };
 }
@@ -1604,15 +1696,19 @@ function __velarServeDecodeScalar(raw, parameter) {
 function __velarServeCookieValue(request, name) {
   if (!__velarServeCall(__velarServeMapHas, request.headers, ["cookie"])) return __velarServeMissing;
   const pieces = __velarServeCall(__velarServeStringSplit, __velarServeCall(__velarServeMapGet, request.headers, ["cookie"]), [";"]);
+  let encoded = null;
+  let matches = 0;
   for (let index = 0; index < pieces.length; index += 1) {
     const piece = __velarServeCall(__velarServeStringTrim, pieces[index], []);
     const separator = __velarServeCall(__velarServeStringIndexOf, piece, ["="]);
     if (separator < 0 || __velarServeCall(__velarServeStringSlice, piece, [0, separator]) !== name) continue;
-    const encoded = __velarServeCall(__velarServeStringSlice, piece, [separator + 1]);
-    try { return __velarServeCall(__velarServeDecodeURIComponent, undefined, [encoded]); }
-    catch { throw new HttpError(400, {error: "invalid_cookie", parameter: name}); }
+    matches += 1;
+    if (matches > 1) throw new HttpError(400, {error: "duplicate_cookie", parameter: name});
+    encoded = __velarServeCall(__velarServeStringSlice, piece, [separator + 1]);
   }
-  return __velarServeMissing;
+  if (matches === 0) return __velarServeMissing;
+  try { return __velarServeCall(__velarServeDecodeURIComponent, undefined, [encoded]); }
+  catch { throw new HttpError(400, {error: "invalid_cookie", parameter: name}); }
 }
 
 function __velarServeNamedInputRaw(descriptor, parameterName, request) {
@@ -1813,6 +1909,17 @@ function __velarServeMultipartHeaders(text) {
   return output;
 }
 
+function __velarServeUploadBasename(filename) {
+  // A client may send a full path, including a Windows path with backslashes.
+  // An Upload name is one file name, never a path an application can compose
+  // into a directory it did not intend to write.
+  const slashed = __velarServeCall(__velarServeStringSplit, filename, ["/"]);
+  const separated = __velarServeCall(__velarServeStringSplit, slashed[slashed.length - 1], ["\\"]);
+  const base = separated[separated.length - 1];
+  if (base === "" || base === "." || base === ".." || __velarServeCall(__velarServeStringIncludes, base, ["\0"])) throw new HttpError(400, {error: "invalid_multipart"});
+  return base;
+}
+
 function __velarServeMultipart(data, boundary) {
   const opening = __velarServeBytePattern("--" + boundary);
   const separator = __velarServeBytePattern("\r\n\r\n");
@@ -1844,8 +1951,9 @@ function __velarServeMultipart(data, boundary) {
       __velarServeAddFormField(fields, name, __velarServeDecodeBytes(part));
     } else {
       if (filename.length > 1024 || __velarServeCall(__velarServeMapHas, files, [name])) throw new HttpError(400, {error: "invalid_multipart"});
+      const base = __velarServeUploadBasename(filename);
       const contentType = typeof headers["content-type"] === "string" ? headers["content-type"] : "application/octet-stream";
-      __velarServeCall(__velarServeMapSet, files, [name, __velarServeUploadValue(name, filename, contentType, part, uploadStates)]);
+      __velarServeCall(__velarServeMapSet, files, [name, __velarServeUploadValue(name, base, contentType, part, uploadStates)]);
     }
     parts += 1;
     if (parts > 128) throw new HttpError(413, {error: "too_many_form_parts"});
@@ -2024,14 +2132,22 @@ function __velarServeJsonContentType(headers) {
     || __velarServeCall(__velarServeStringStartsWith, value, ["application/"]) && __velarServeCall(__velarServeStringEndsWith, value, ["+json"]);
 }
 
+function __velarServeIsResponseAttempt(value) {
+  if (!value || typeof value !== "object" || __velarServeIsArray(value)) return false;
+  if (!__velarServeOwnDescriptor(value, "status")) return false;
+  return !!(__velarServeOwnDescriptor(value, "json") || __velarServeOwnDescriptor(value, "text") || __velarServeOwnDescriptor(value, "stream"));
+}
+
 function __velarServeAutomaticResponse(value) {
   if (__velarServeIsFileResponse(value)) return value;
+  if (__velarServeIsResponseAttempt(value)) return __velarServeResponse(value);
   try { return __velarServeResponse(value); }
   catch { return __velarServeResponse({status: 200, json: value}); }
 }
 
 function __velarServeNotFoundResponse(value) {
   if (__velarServeIsFileResponse(value)) return value;
+  if (__velarServeIsResponseAttempt(value)) return __velarServeResponse(value);
   try { return __velarServeResponse(value); }
   catch { return __velarServeResponse({status: 404, json: value}); }
 }
@@ -2613,6 +2729,16 @@ function __velarServeRequest(value) {
   }])};
 }
 
+// The budget error can also surface after a response has started, where the host
+// refuses a second terminal response; that attempt fails and the request falls
+// through to the opaque failure exactly as any other late error does.
+async function __velarServeShedOutbound(handle) {
+  try {
+    await __velarNodeHostInvoke("serve.respond", [handle, 503, [["retry-after", "1"]], "json", '{"error":"outbound_budget_exhausted"}', null, null, []]);
+    return true;
+  } catch { return false; }
+}
+
 async function __velarServeWriteResponse(handle, value) {
   let cleanup = null;
   let backgroundTasks = null;
@@ -2752,14 +2878,49 @@ function __velarServeNativeSetHeaders(response, headers, cookies = []) {
   for (let index = 0; index < cookies.length; index += 1) allCookies[allCookies.length] = cookies[index];
   if (allCookies.length > 0) response.setHeader("Set-Cookie", allCookies);
 }
+// Every error branch of __velarServeHandleNative answers with a body of its own,
+// so it has to start from an empty header set: a content-length staged for the
+// response that failed makes the client wait for bytes that will never arrive,
+// and a Set-Cookie staged by a handler whose request was never served hands out
+// a session for nothing. The isolated-host transport gets this for free — it
+// sheds before the host ever sets a header — so this is the native transport
+// reaching the same state.
+function __velarServeNativeResetHeaders(response) {
+  const names = response.getHeaderNames();
+  for (let index = 0; index < names.length; index += 1) response.removeHeader(names[index]);
+}
+class __velarServeNativeNotFound extends __velarServeError {}
+function __velarServeNativeMissing(error) {
+  const code = error?.code;
+  return code === "ENOENT" || code === "ENOTDIR" || code === "EISDIR";
+}
+// A relative path carries .. only as a whole segment, so a bare two-dot prefix
+// test also refuses an ordinary top-level file whose own name begins with two
+// dots — the same over-strict form the host worker's containment check carried.
+// The operations bag has no separator to consult and may come from a bridge
+// embedding, so both separators are refused: fail closed on Windows rather than
+// trust a default.
+function __velarServeNativeEscapes(path, operations) {
+  return path === ".." || path.startsWith("../") || path.startsWith("..\\") || operations.isAbsolute(path);
+}
 async function __velarServeNativeFile(value, operations) {
-  const root = await operations.realpath(operations.resolve(value.root));
+  let root;
+  // A static root that does not exist is the same miss as a file that does not
+  // exist: reporting it as a failure would answer 500 and write the absolute
+  // deployment path to stderr, which the host transport never does.
+  try { root = await operations.realpath(operations.resolve(value.root)); }
+  catch (error) { if (__velarServeNativeMissing(error)) throw new __velarServeNativeNotFound("fileResponse root does not name a directory"); throw error; }
   const load = async path => {
-    const target = await operations.realpath(operations.resolve(root, path.startsWith("/") ? "." + path : path));
+    let target;
+    try { target = await operations.realpath(operations.resolve(root, path.startsWith("/") ? "." + path : path)); }
+    catch (error) { if (__velarServeNativeMissing(error)) throw new __velarServeNativeNotFound("fileResponse path does not name a file"); throw error; }
     const relative = operations.relative(root, target);
-    if (relative.startsWith("..") || operations.isAbsolute(relative)) throw new __velarServeTypeError("fileResponse path escapes its root");
-    const info = await operations.stat(target);
-    if (!info.isFile() || info.size > 64 * 1024 * 1024) throw new __velarServeRangeError("fileResponse file exceeds 64 MiB");
+    if (__velarServeNativeEscapes(relative, operations)) throw new __velarServeNativeNotFound("fileResponse path escapes its root");
+    let info;
+    try { info = await operations.stat(target); }
+    catch (error) { if (__velarServeNativeMissing(error)) throw new __velarServeNativeNotFound("fileResponse path does not name a file"); throw error; }
+    if (!info.isFile()) throw new __velarServeNativeNotFound("fileResponse path does not name a file");
+    if (info.size > 64 * 1024 * 1024) throw new __velarServeRangeError("fileResponse file exceeds 64 MiB");
     return {target, info};
   };
   try { return await load(value.path); } catch (error) { if (value.fallback === null) throw error; return load(value.fallback); }
@@ -2852,13 +3013,29 @@ async function __velarServeHandleNative(handler, request, response, operations, 
     const result = await checked.stream(write); if (result !== null) throw new __velarServeTypeError("ServeResponse.stream producer must resolve to null"); if (writing) throw new __velarServeError("ServeResponse stream producer returned before its write completed"); await __velarServeNativeEnd(response); return null;
   } catch (error) {
     if (error instanceof RequestBodyTooLargeError && !response.headersSent) {
+      __velarServeNativeResetHeaders(response);
       response.statusCode = 413;
       response.setHeader("content-type", "application/json; charset=utf-8");
       response.end(request.method === "HEAD" ? undefined : '{"error":"request_too_large"}');
       return null;
     }
+    if (error instanceof __velarServeNativeNotFound && !response.headersSent) {
+      __velarServeNativeResetHeaders(response);
+      response.statusCode = 404;
+      response.setHeader("content-type", "text/plain; charset=utf-8");
+      response.end(request.method === "HEAD" ? undefined : "Not found");
+      return null;
+    }
+    if (error instanceof __velarServeOutboundBudgetError && !response.headersSent) {
+      __velarServeNativeResetHeaders(response);
+      response.statusCode = 503;
+      response.setHeader("retry-after", "1");
+      response.setHeader("content-type", "application/json; charset=utf-8");
+      response.end(request.method === "HEAD" ? undefined : '{"error":"outbound_budget_exhausted"}');
+      return null;
+    }
     __velarServeReportFailure(error);
-    if (!response.headersSent) { response.statusCode = 500; response.setHeader("content-type", "text/plain; charset=utf-8"); response.end("Internal server error"); }
+    if (!response.headersSent) { __velarServeNativeResetHeaders(response); response.statusCode = 500; response.setHeader("content-type", "text/plain; charset=utf-8"); response.end("Internal server error"); }
     else response.destroy();
     return null;
   }
@@ -3143,6 +3320,7 @@ async function __velarServeDispatch(event) {
   if (typeof handler !== "function") { __velarServeReportFailure(new __velarServeError("Node host requested an unknown server token")); await __velarNodeHostInvoke("serve.fail", [value.handle]); return; }
   try { await __velarServeWriteResponse(value.handle, await handler(value.request)); }
   catch (error) {
+    if (error instanceof __velarServeOutboundBudgetError && await __velarServeShedOutbound(value.handle)) return;
     __velarServeReportFailure(error);
     try { await __velarNodeHostInvoke("serve.fail", [value.handle]); }
     catch {}

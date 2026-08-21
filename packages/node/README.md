@@ -13,10 +13,10 @@ references an environment variable without placing its value in VelarScript
 application state; creating a lazy request retains only its validated descriptor,
 the official runtime resolves the current value at the first effect and sends it
 only across the private host transport, and cross-origin redirects strip it.
-`HttpError`, `HttpAbortError`, and `HttpTransportError` separately represent
-non-2xx responses, owned cancel/deadline outcomes, and request/response network
-transport failure. The transport phase is typed; retry and replay policy stays
-with the provider or application.
+`HttpResponseError`, `HttpAbortError`, and `HttpTransportError` separately
+represent non-2xx responses, owned cancel/deadline outcomes, and
+request/response network transport failure. The transport phase is typed; retry
+and replay policy stays with the provider or application.
 
 The package also owns Node's native server syntax and application target. A
 project activates `@velarscript/node`, configures its exported application once

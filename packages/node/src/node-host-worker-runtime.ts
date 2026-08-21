@@ -7,7 +7,7 @@ import { createReadStream, watch as watchNode } from "node:fs";
 import { appendFile, copyFile, lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, request as createHttpRequest } from "node:http";
 import { request as createHttpsRequest } from "node:https";
-import { basename, dirname, extname, isAbsolute, relative, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, relative, resolve, sep } from "node:path";
 import { URL as NodeURL } from "node:url";
 import { brotliCompress as brotliCompressNode, gzip as gzipNode } from "node:zlib";
 import { promisify } from "node:util";
@@ -87,10 +87,18 @@ function advanceHandle(handle) {
   return handle >= Number.MAX_SAFE_INTEGER ? 1 : handle + 1;
 }
 
+// Exhausting the aggregate budget is a temporary load condition, not a server
+// fault: admission already answers it with 503 at rejectIncomingRequest, and a
+// response that cannot be reserved now gets the same answer instead of the
+// opaque 500 that every other late failure gets. The identity is a class rather
+// than the message so the send path can tell it apart from a genuine fault.
+class ServeBudgetError extends RangeError {
+  constructor() { super("Node serve aggregate byte budget is exhausted"); }
+}
+
 function reserveServeBytes(task, bytes) {
-  if (!Number.isSafeInteger(bytes) || bytes < 0 || reservedServeBytes + bytes > maxServeAggregateBytes) {
-    throw new RangeError("Node serve aggregate byte budget is exhausted");
-  }
+  if (!Number.isSafeInteger(bytes) || bytes < 0) throw new RangeError("Node serve byte reservation must be a non-negative integer");
+  if (reservedServeBytes + bytes > maxServeAggregateBytes) throw new ServeBudgetError();
   reservedServeBytes += bytes;
   task.reservedBytes += bytes;
 }
@@ -104,9 +112,8 @@ function releaseServeBytes(task, bytes = task.reservedBytes) {
 }
 
 function reserveTransientServeBytes(bytes) {
-  if (!Number.isSafeInteger(bytes) || bytes < 0 || reservedServeBytes + bytes > maxServeAggregateBytes) {
-    throw new RangeError("Node serve aggregate byte budget is exhausted");
-  }
+  if (!Number.isSafeInteger(bytes) || bytes < 0) throw new RangeError("Node serve byte reservation must be a non-negative integer");
+  if (reservedServeBytes + bytes > maxServeAggregateBytes) throw new ServeBudgetError();
   reservedServeBytes += bytes;
 }
 
@@ -425,6 +432,15 @@ const forbiddenHttpSecretHeaders = new Set([
   "connection", "content-length", "cookie", "cookie2", "host", "proxy-authorization",
   "te", "trailer", "transfer-encoding", "upgrade",
 ]);
+// Framing and routing belong to the transport, not to the caller. An
+// application that could set these beside Node's own framing could put two
+// disagreeing lengths, a second encoding, or a forged authority on the wire.
+// Credential names stay legal here: they are the caller's to send, and remain
+// forbidden only for the secret-header path above.
+const transportOwnedHttpHeaders = new Set([
+  "connection", "content-length", "expect", "host", "keep-alive", "proxy-connection",
+  "te", "trailer", "transfer-encoding", "upgrade",
+]);
 
 function httpMethod(value) {
   if (typeof value !== "string") throw new TypeError("HTTP method must be text");
@@ -458,6 +474,7 @@ function httpHeaderRecord(value) {
       || !httpHeaderNamePattern.test(pair[0]) || httpLineBreakPattern.test(pair[1])) {
       throw new TypeError("HTTP headers must use valid string names and single-line values");
     }
+    if (transportOwnedHttpHeaders.has(pair[0].toLowerCase())) throw new TypeError("HTTP header '" + pair[0] + "' is transport-controlled");
     units += pair[0].length + pair[1].length;
     if (units > 65536) throw new RangeError("HTTP headers cannot exceed 64 KiB");
     headers[pair[0].toLowerCase()] = pair[1];
@@ -732,8 +749,12 @@ function requestPath(value) {
 }
 
 function inside(root, target) {
+  // relative() emits ".." only as a whole segment, so the escape test compares
+  // whole segments too: a prefix test also rejects an ordinary top-level file
+  // whose own name begins with two dots. The separator is the platform's,
+  // because relative() writes an escape with a backslash on Windows.
   const path = relative(root, target);
-  return path === "" || !path.startsWith("..") && !isAbsolute(path);
+  return path === "" || path !== ".." && !path.startsWith(".." + sep) && !isAbsolute(path);
 }
 
 async function staticFile(rootValue, pathValue, fallbackValue) {
@@ -864,6 +885,15 @@ function responseHasNoBody(task, status) {
   return task.request.method === "HEAD" || status >= 100 && status < 200 || status === 204 || status === 304;
 }
 
+async function shedServeResponse(task) {
+  task.response.statusCode = 503;
+  task.response.setHeader("Retry-After", "1");
+  task.response.setHeader("Content-Type", "application/json; charset=utf-8");
+  await endServeResponse(task, responseHasNoBody(task, 503) ? undefined : '{"error":"outbound_budget_exhausted"}');
+  completeRequest(task);
+  return null;
+}
+
 async function endServeResponse(task, value) {
   await new Promise((resolveEnd, rejectEnd) => {
     let settled = false;
@@ -893,27 +923,19 @@ function rawBodyOf(task, maximum) {
         return {data: null, bytes: maximum, tooLarge: true};
       }
     }
-    if (declared !== null) {
-      const output = Buffer.allocUnsafe(declared);
-      reserveServeBytes(task, declared);
-      let offset = 0;
-      try {
-        for await (const chunk of task.request) {
-          const data = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
-          if (offset + data.byteLength > declared) { task.request.resume(); releaseServeBytes(task, declared); return {data: null, bytes: maximum, tooLarge: true}; }
-          data.copy(output, offset);
-          offset += data.byteLength;
-        }
-        if (offset !== declared) throw new TypeError("Request body length does not match Content-Length");
-        return {data: output, bytes: declared, tooLarge: false};
-      } catch (error) { if (task.reservedBytes >= declared) releaseServeBytes(task, declared); throw error; }
-    }
+    // A declared Content-Length is a client claim, not a delivered body, so it
+    // buys no allocation and no budget reservation up front: a header-only
+    // socket that declares 16 MiB and sends nothing would otherwise spend the
+    // process-global aggregate budget for the whole request timeout. The
+    // declaration is only the effective ceiling; the bytes that actually arrive
+    // are charged as they arrive.
+    const limit = declared === null ? maximum : declared;
     const chunks = [];
     let total = 0;
     try {
       for await (const chunk of task.request) {
         const data = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
-        if (total + data.byteLength > maximum) {
+        if (total + data.byteLength > limit) {
           task.request.resume();
           releaseServeBytes(task, total);
           return {data: null, bytes: maximum, tooLarge: true};
@@ -922,6 +944,7 @@ function rawBodyOf(task, maximum) {
         total += data.byteLength;
         chunks.push(data);
       }
+      if (declared !== null && total !== declared) throw new TypeError("Request body length does not match Content-Length");
       reserveTransientServeBytes(total);
       try { return {data: Buffer.concat(chunks, total), bytes: total, tooLarge: false}; }
       finally { releaseTransientServeBytes(total); }
@@ -1354,14 +1377,19 @@ async function dispatch(operation, args) {
       if (compression !== null && compression !== "gzip" && compression !== "br") throw new TypeError("ServeResponse compression is invalid");
       const suppressBody = responseHasNoBody(task, status);
       let output = body;
-      if (!suppressBody && compression !== null) {
-        const inputBytes = Buffer.byteLength(body, "utf8");
-        reserveTransientServeBytes(inputBytes * 2);
-        try { output = await (compression === "br" ? brotliCompress(body) : gzip(body)); }
-        finally { releaseTransientServeBytes(inputBytes * 2); }
-        if (output.byteLength > maxServeBodyBytes) throw new RangeError("Compressed ServeResponse exceeds 16 MiB");
+      try {
+        if (!suppressBody && compression !== null) {
+          const inputBytes = Buffer.byteLength(body, "utf8");
+          reserveTransientServeBytes(inputBytes * 2);
+          try { output = await (compression === "br" ? brotliCompress(body) : gzip(body)); }
+          finally { releaseTransientServeBytes(inputBytes * 2); }
+          if (output.byteLength > maxServeBodyBytes) throw new RangeError("Compressed ServeResponse exceeds 16 MiB");
+        }
+        if (!suppressBody) reserveServeBytes(task, typeof output === "string" ? Buffer.byteLength(output, "utf8") : output.byteLength);
+      } catch (error) {
+        if (!(error instanceof ServeBudgetError)) throw error;
+        return await shedServeResponse(task);
       }
-      if (!suppressBody) reserveServeBytes(task, typeof output === "string" ? Buffer.byteLength(output, "utf8") : output.byteLength);
       task.response.statusCode = status;
       setHeaders(task.response, headers, cookies);
       if (!task.response.hasHeader("Content-Type") && (task.request.method === "HEAD" || !suppressBody)) {

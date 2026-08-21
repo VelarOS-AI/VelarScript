@@ -5,6 +5,7 @@ import type {
   EmbeddedJavaScriptDeclaration,
   EnumDeclaration,
   Expression,
+  ExternModuleContract,
   ImportDeclaration,
   MatchPattern,
   Program,
@@ -22,7 +23,7 @@ import { VELAR_COLLECTION_HOST_EXPORTS, VELAR_COLLECTION_HOST_MODULE, VELAR_COLL
 import { VELAR_COLLECTION_LOWERING_EXPORTS, VELAR_COLLECTION_LOWERING_MODULE, VELAR_COLLECTION_LOWERING_RUNTIME } from "./collection-lowering-runtime.ts";
 import { describeType, formatTypeReference, formatTypeSyntax, mapNestedTypes, resolveTypeReference, semanticTypeIdentity, typeContainsParameter, type BinaryStorageKind, type GenericApplication, type ValueType } from "./types.ts";
 import { disposeMemberKey, iterateMemberKey, type LoweringHints } from "./analyzer.ts";
-import { VELAR_ERROR_NORMALIZATION_MODULE, VELAR_ERROR_NORMALIZATION_RUNTIME, VELAR_HOST_ERROR_NAMES, VELAR_HOST_ERROR_RUNTIME } from "./error-runtime.ts";
+import { VELAR_ASSERTION_ERROR_RUNTIME, VELAR_ERROR_NORMALIZATION_MODULE, VELAR_ERROR_NORMALIZATION_RUNTIME, VELAR_HOST_ERROR_NAMES, VELAR_HOST_ERROR_RUNTIME } from "./error-runtime.ts";
 import { embeddedJavaScriptSpecifier } from "./embedded-module.ts";
 import type { CompilerEmbeddedJavaScriptModule, CompilerEmitterOptions } from "./extension.ts";
 import { VELAR_NARROWING_MODULE, VELAR_NARROWING_RUNTIME } from "./narrowing-runtime.ts";
@@ -62,11 +63,21 @@ interface PreparedEmbeddedJavaScriptModule {
 
 const javaScriptNodeMarker = /\u0000VELAR_MAP_(\d+)\u0000/gu;
 
+/**
+ * How deep a structural record's inline field proof nests before it degrades
+ * to the presence test. A generated validator recurses through a function
+ * call; an expression can only recurse by growing, so the depth is what keeps
+ * a deeply nested (or self-referential) structural type from expanding without
+ * bound.
+ */
+const maximumStructuralFieldDepth = 4;
+
 // ENM-U4 + COL-U5: the compiler-raised error types are nameable in source;
 // their runtime classes carry compiler-owned names. The source names are
 // reserved Core bindings, so a bare reference is always the builtin.
 const builtinErrorRuntimeNames: ReadonlyMap<string, string> = new Map([
   ["ValidationError", "__VelarValidationError"],
+  ["AssertionError", "__VelarAssertionError"],
   ["NarrowingError", "__VelarNarrowingError"],
   ["IndexError", "__VelarIndexError"],
 ]);
@@ -111,9 +122,11 @@ export class JavaScriptEmitter {
   private needsIntegrityFailureHelper = false;
   private needsRequiredValueHelper = false;
   private needsNarrowingErrorClass = false;
-  private suppressPromiseNormalization = 0;
+  private needsAssertionErrorClass = false;
+  private readonly suppressedPromiseValues = new Set<string>();
   private nextJavaScriptNodeId = 0;
   private readonly javaScriptNodeSpans = new Map<number, Span>();
+  private readonly structuralFieldChecks = new Set<ValueType>();
   private generatedMappings: readonly GeneratedMapping[] = [];
   private generatedCode = "";
   private readonly sourcePath: string;
@@ -363,6 +376,17 @@ export class JavaScriptEmitter {
     }
     if (this.needsDisposalHelper) {
       helpers.push(...this.disposalHelpers());
+    }
+    // D86 rule 212: `assert` and `value!` raise one compiler-owned class, so
+    // the class is emitted wherever either lowering is, independently of the
+    // error-normalization runtime a module may or may not also need.
+    if (this.needsAssertionErrorClass) {
+      if (this.sharedRuntimeModules) {
+        this.requireRuntimeModule(VELAR_ERROR_NORMALIZATION_MODULE);
+        helpers.push(`import { AssertionError as __VelarAssertionError } from ${JSON.stringify(VELAR_ERROR_NORMALIZATION_MODULE)};`);
+      } else {
+        helpers.push(VELAR_ASSERTION_ERROR_RUNTIME);
+      }
     }
     if (this.needsIntegrityFailureHelper) {
       helpers.push(...this.integrityFailureHelpers());
@@ -635,9 +659,13 @@ export class JavaScriptEmitter {
       const markerIndex = marker.index;
       code += node.code.slice(cursor, markerIndex);
       const sourceSpan = this.javaScriptNodeSpans.get(Number(marker[1]));
-      if (!sourceSpan) throw new Error("A generated JavaScript mapping marker has no source node");
-      mappings.push({ offset: code.length, sourceSpan });
       cursor = markerIndex + marker[0].length;
+      // A marker id this emit never issued cannot come from a marked node, so
+      // it is text that only looks like emitter metadata. Markers are
+      // invisible by construction: the render drops the sequence and keeps one
+      // mapping fewer rather than failing the whole compile with a host throw.
+      if (!sourceSpan) continue;
+      mappings.push({ offset: code.length, sourceSpan });
     }
     code += node.code.slice(cursor);
     return { code, mappings };
@@ -758,12 +786,25 @@ export class JavaScriptEmitter {
   protected integrityFailureHelpers(): readonly string[] {
     return [[
       "const __velarIntegrityDescriptor = Object.getOwnPropertyDescriptor;",
+      "const __velarIntegrityPrototypeOf = Object.getPrototypeOf;",
       "function __velarIsIntegrityFailure(value) {",
       "  if (value === null || (typeof value !== \"object\" && typeof value !== \"function\")) return false;",
       "  const descriptor = __velarIntegrityDescriptor(value, \"name\");",
       "  if (!descriptor || !(\"value\" in descriptor)) return false;",
       "  const name = descriptor.value;",
-      "  return name === \"AssertionError\" || name === \"NarrowingError\" || name === \"IndexError\";",
+      "  if (name !== \"AssertionError\" && name !== \"NarrowingError\" && name !== \"IndexError\") return false;",
+      // D51 rule 107: the class a value was constructed from is what decides
+      // here, exactly as it decides `code`. A relabelled host error carries
+      // the name but no class declaring it, and must not pass through `try`
+      // as though the language had raised it. The comparison is on the
+      // declared name rather than on the class object because a module that
+      // inlines its runtime holds its own copy of each class, and a failure
+      // raised inside another module is still the same language failure.
+      "  const prototype = __velarIntegrityPrototypeOf(value);",
+      "  const constructor = prototype === null ? null : __velarIntegrityDescriptor(prototype, \"constructor\");",
+      "  if (!constructor || !(\"value\" in constructor) || typeof constructor.value !== \"function\") return false;",
+      "  const declared = __velarIntegrityDescriptor(constructor.value, \"name\");",
+      "  return !!declared && \"value\" in declared && declared.value === name;",
       "}",
     ].join("\n")];
   }
@@ -777,9 +818,7 @@ export class JavaScriptEmitter {
     return [[
       "function __velarRequired(value, description, offset) {",
       "  if (value === null || value === undefined) {",
-      "    const __velarRequiredError = new Error(\"Required value \" + description + \" is absent at source offset \" + offset);",
-      "    __velarRequiredError.name = \"AssertionError\";",
-      "    throw __velarRequiredError;",
+      "    throw new __VelarAssertionError(\"Required value \" + description + \" is absent at source offset \" + offset);",
       "  }",
       "  return value;",
       "}",
@@ -1016,6 +1055,7 @@ export class JavaScriptEmitter {
 
   private markRuntimeType(type: ValueType): void {
     this.needsRuntimeTypeHelpers = true;
+    const structural = new Set<ValueType>();
     const visit = (value: ValueType): void => {
       // D55 rule 121: `Box<string>` needs `Box`'s factory emitted and every
       // argument's own runtime types marked; the application's display name is
@@ -1060,18 +1100,37 @@ export class JavaScriptEmitter {
         visit(value.value);
       } else if (value.kind === "union") {
         value.members.forEach(visit);
+      } else if (value.kind === "object") {
+        // A structural field is proved inline, so whatever its own check needs
+        // — a collection's `TypeIs` helper, a declared record's validator — is
+        // this module's dependency exactly as a named field's would be.
+        if (structural.has(value)) return;
+        structural.add(value);
+        value.fields.forEach(visit);
+        structural.delete(value);
       }
     };
     visit(type);
   }
 
-  private markRuntimeNarrowingType(type: ValueType): void {
+  private markRuntimeNarrowingType(type: ValueType, structural: Set<ValueType> = new Set()): void {
     if (type.kind === "optional") {
-      this.markRuntimeNarrowingType(type.inner);
+      this.markRuntimeNarrowingType(type.inner, structural);
       return;
     }
     if (type.kind === "union") {
-      for (const member of type.members) this.markRuntimeNarrowingType(member);
+      for (const member of type.members) this.markRuntimeNarrowingType(member, structural);
+      return;
+    }
+    // A structural object's recheck spells its field table inline, so every
+    // field's own evidence is emitted into this module and its helpers must be
+    // required here. The expansion the emitter bounds is the *expression*; the
+    // dependency walk only has to terminate, so one visit per object suffices.
+    if (type.kind === "object") {
+      if (structural.has(type)) return;
+      structural.add(type);
+      for (const field of type.fields.values()) this.markRuntimeNarrowingType(field, structural);
+      structural.delete(type);
       return;
     }
     if (type.kind === "list" || type.kind === "set" || type.kind === "map" || type.kind === "record"
@@ -1203,12 +1262,11 @@ export class JavaScriptEmitter {
       case "ThrowStatement":
         return `${indentation}throw ${this.emitMappedExpression(statement.value)};`;
       case "AssertStatement": {
+        this.needsAssertionErrorClass = true;
         const message = statement.message ? this.emitMappedExpression(statement.message) : JSON.stringify("Assertion failed");
         return [
           `${indentation}if (!(${this.emitCondition(statement.condition)})) {`,
-          `${indentation}  const __velarAssertionError = new Error(${message});`,
-          `${indentation}  __velarAssertionError.name = "AssertionError";`,
-          `${indentation}  throw __velarAssertionError;`,
+          `${indentation}  throw new __VelarAssertionError(${message});`,
           `${indentation}}`,
         ].join("\n");
       }
@@ -1528,10 +1586,27 @@ export class JavaScriptEmitter {
     }
     if (checked.length > 0) {
       this.needsExternExportHelper = true;
+      // Charter section 12, line 2737: "an `export let` remains a live
+      // ES-module value: the exporting module can reassign it between reads".
+      // So the name binds through a real `import` and the presence probe runs
+      // beside it as its own statement. Reading the namespace *into* a `const`
+      // would have frozen the foreign binding at its initial value, which is
+      // neither what `import js * as`, nor `unsafe js`, nor JavaScript itself
+      // does with the same declaration.
+      //
+      // W-22's probe survives as the interop backstop rather than the primary
+      // check: a host that link-checks named imports refuses a missing export
+      // before any statement runs, and where the name links to `undefined`
+      // instead — bundled CommonJS interop — the probe beside it is what
+      // reports, in the velar voice.
+      const names = checked
+        .map((specifier) => specifier.imported === specifier.local ? specifier.imported : `${specifier.imported} as ${specifier.local}`)
+        .join(", ");
       const namespaceName = `__velarExternModule${statement.span.start}`;
+      lines.push(`${indentation}import { ${names} } from ${JSON.stringify(emittedSource)};`);
       lines.push(`${indentation}import * as ${namespaceName} from ${JSON.stringify(emittedSource)};`);
       for (const specifier of checked) {
-        lines.push(`${indentation}const ${specifier.local} = __velarExternExport(${namespaceName}, ${JSON.stringify(specifier.imported)}, ${JSON.stringify(source)});`);
+        lines.push(`${indentation}__velarExternExport(${namespaceName}, ${JSON.stringify(specifier.imported)}, ${JSON.stringify(source)});`);
       }
     }
     return lines.join("\n");
@@ -1544,11 +1619,15 @@ export class JavaScriptEmitter {
       if (statement.kind !== "EmbeddedJavaScriptDeclaration") continue;
       const specifier = embeddedJavaScriptSpecifier(this.sourcePath, ordinal);
       const occupiedJavaScriptNames = new Set(statement.bindings.map((binding) => binding.name));
-      let factoryName = statement.contract ? `__velarEmbeddedFactory_${ordinal}` : null;
+      // A factory exists to hand the block its captures. With no captures
+      // there is nothing to hand over, so the block stays a real ES module and
+      // its exports stay live bindings — see `emitEmbeddedJavaScript`.
+      const needsFactory = statement.contract !== null && statement.captures.length > 0;
+      let factoryName = needsFactory ? `__velarEmbeddedFactory_${ordinal}` : null;
       while (factoryName && occupiedJavaScriptNames.has(factoryName)) factoryName += "_";
-      const localFactoryName = statement.contract ? `__velarEmbeddedFactoryBinding_${ordinal}` : null;
-      const generated = statement.contract
-        ? emitCheckedEmbeddedJavaScript(statement, factoryName!)
+      const localFactoryName = needsFactory ? `__velarEmbeddedFactoryBinding_${ordinal}` : null;
+      const generated = factoryName
+        ? emitCheckedEmbeddedJavaScript(statement, factoryName)
         : mappedSource(statement.source, statement.sourceSpan.start);
       this.embeddedJavaScript.set(statement, {
         statement,
@@ -1565,14 +1644,24 @@ export class JavaScriptEmitter {
   private emitEmbeddedJavaScript(statement: EmbeddedJavaScriptDeclaration, indentation: string): string {
     const prepared = this.embeddedJavaScript.get(statement);
     if (!prepared) throw new Error("An embedded JavaScript declaration has no prepared sibling module");
-    if (!statement.contract) {
+    if (!prepared.factoryName) {
+      // Charter section 12, line 2737: an `export let` the block reassigns is
+      // a live ES-module value. A block with no captures needs no factory to
+      // receive them, so its sibling module keeps its own `export`
+      // declarations and the names arrive here as real imported bindings —
+      // the same value `unsafe js` and `import js * as` observe. A contract changes what the
+      // compiler proves about a block, never what the program observes.
+      const declared = statement.contract ? contractExportNames(statement.contract) : null;
+      const exported = declared
+        ? statement.exports.filter((item) => declared.has(item.name))
+        : statement.exports;
       const imported: ImportDeclaration = {
         kind: "ImportDeclaration",
         source: prepared.specifier,
         sourceSpan: statement.sourceSpan,
         javascript: true,
         unsafe: true,
-        specifiers: statement.exports.map((item) => ({
+        specifiers: exported.map((item) => ({
           imported: item.name,
           local: item.name,
           namespace: false,
@@ -1582,11 +1671,8 @@ export class JavaScriptEmitter {
       };
       return this.emitImport(imported, indentation);
     }
-    const names = [
-      ...statement.contract.functions.map((item) => item.name),
-      ...statement.contract.constants.map((item) => item.name),
-      ...statement.contract.classes.map((item) => item.name),
-    ];
+    // A factory only exists for a checked block, and only when it has captures.
+    const names = statement.contract ? [...contractExportNames(statement.contract)] : [];
     const captureValues = statement.captures.map((capture) => this.emitMappedExpression({
       kind: "IdentifierExpression",
       name: capture.name,
@@ -1628,6 +1714,13 @@ export class JavaScriptEmitter {
       type: this.resolveDeclarationType(field.type),
       syntax: field.type.syntax,
     }));
+    // D90 rule R5: the predicate stays the charter's "present own enumerable
+    // data properties" and deliberately does not demand `writable` and
+    // `configurable` the way `__velarRecordFields` does. Since parse now
+    // returns a copy whose every field is an ordinary mutable data property, a
+    // frozen source can no longer make a later write to the validated record
+    // fail — so refusing frozen host configuration would cost expressiveness
+    // and buy nothing.
     const checks = fields.map(({ descriptor, type }) => {
       const present = `${descriptor}?.enumerable && "value" in ${descriptor} && ${this.emitTypeCheck(type, `${descriptor}.value`, guarded ? "__state" : "undefined")}`;
       return type.kind === "optional" ? `(${descriptor} === undefined || (${present}))` : present;
@@ -1651,6 +1744,7 @@ export class JavaScriptEmitter {
     // type the author wrote and the memo still answers with one Type object per
     // instantiation.
     const argumentsParameter = generic ? ", __velarArguments" : "";
+    const copyName = this.runtimeTypeCopyName(statement.name);
     const displayName = generic ? "__velarArguments.name" : JSON.stringify(statement.name);
     const pathText = (suffix: string): string => generic
       ? (suffix === "" ? displayName : `${displayName} + ${JSON.stringify(suffix)}`)
@@ -1709,7 +1803,14 @@ export class JavaScriptEmitter {
       `${indentation}      const __velarDetail = ${explainName}(value${generic ? ", __velarArguments" : ""});`,
       `${indentation}      throw new __VelarValidationError(${generic ? `"Value does not match " + ${displayName}` : JSON.stringify(`Value does not match ${statement.name}`)} + (__velarDetail.reason ? " — " + __velarDetail.reason : "") + __velarValidationRejectionHint(value), __velarDetail);`,
       `${indentation}    }`,
-      `${indentation}    return value;`,
+      // D90 rule R5: parse hands back a fresh value built from the validated
+      // shape, so a later write through the argument cannot falsify a field
+      // the caller was handed, and a value reached through a readonly view
+      // does not widen by passing through parse.
+      `${indentation}    return ${copyName}(value, __velarValidationState()${generic ? ", __velarArguments" : ""});`,
+      `${indentation}  },`,
+      `${indentation}  copy(value, __state = __velarValidationState()) {`,
+      `${indentation}    return ${copyName}(value, __state${generic ? ", __velarArguments" : ""});`,
       `${indentation}  },`,
     ];
     if (generic) {
@@ -1717,6 +1818,8 @@ export class JavaScriptEmitter {
       return [
         ...explainLines,
         ...this.recordCheckFunctionLines(fields, predicate, checkName, indentation, argumentsParameter, guarded),
+        "",
+        ...this.recordCopyFunctionLines(fields, copyName, baseExpression, indentation, argumentsParameter),
         "",
         `${indentation}const ${instances} = [];`,
         // The instantiation memo: one frozen Type object per set of arguments,
@@ -1746,6 +1849,8 @@ export class JavaScriptEmitter {
     return [
       ...explainLines,
       ...this.recordCheckFunctionLines(fields, predicate, checkName, indentation, "", guarded),
+      "",
+      ...this.recordCopyFunctionLines(fields, copyName, baseExpression, indentation, ""),
       "",
       `${indentation}${exportPrefix}const ${statement.name} = __velarRegisterRuntimeType(__velarValidationFreeze({`,
       ...typeObject,
@@ -1801,6 +1906,119 @@ export class JavaScriptEmitter {
     ];
   }
 
+  private runtimeTypeCopyName(name: string): string {
+    return `__velarTypeCopy_${name}`;
+  }
+
+  /**
+   * D90 rule R5: the record's copy — one fresh object per source object, with
+   * every declared field rebuilt. A base builds the object and records it in
+   * the memo, and the derived fields are written onto that same copy, so one
+   * source object still maps to exactly one copy however deep the chain is.
+   */
+  private recordCopyFunctionLines(
+    fields: readonly { readonly name: string; readonly type: ValueType }[],
+    copyName: string,
+    baseExpression: string | null,
+    indentation: string,
+    argumentsParameter: string,
+  ): readonly string[] {
+    const fresh = baseExpression ? `${baseExpression}.copy(value, __state)` : `__state.copy.object(__state, value)`;
+    return [
+      `${indentation}function ${copyName}(value, __state${argumentsParameter}) {`,
+      `${indentation}  const __velarCopySeen = __state.copy.seen(__state, value);`,
+      `${indentation}  if (__velarCopySeen !== undefined) return __velarCopySeen;`,
+      `${indentation}  const __velarCopy = ${fresh};`,
+      ...fields.flatMap(({ name, type }) => {
+        const descriptor = "__velarCopyField";
+        const copied = this.typeCopyExpression(type, `${descriptor}.value`, "__state");
+        return [
+          `${indentation}  {`,
+          `${indentation}    const ${descriptor} = __velarValidationOwnDescriptor(value, ${JSON.stringify(name)});`,
+          `${indentation}    if (${descriptor} !== undefined) __state.copy.field(__velarCopy, ${JSON.stringify(name)}, ${copied ?? `${descriptor}.value`});`,
+          `${indentation}  }`,
+        ];
+      }),
+      `${indentation}  return __velarCopy;`,
+      `${indentation}}`,
+    ];
+  }
+
+  /**
+   * D90 rule R5: the expression that rebuilds one validated position, or null
+   * when the position has nothing to copy — a primitive, an enum member, a
+   * class instance, or an opaque `unknown`. The copy follows the declared
+   * shape rather than the value, so an `unknown` field keeps handing back the
+   * reference the author was given: copying an opaque value structurally would
+   * change what parse returns.
+   */
+  private typeCopyExpression(type: ValueType, value: string, state: string): string | null {
+    switch (type.kind) {
+      case "unknown":
+      case "any":
+      case "null":
+      case "string":
+      case "number":
+      case "bool":
+      case "promise":
+      case "class":
+      case "enum":
+      case "enumMember":
+      case "function":
+      case "action":
+      case "intrinsic":
+      case "typeObject":
+      case "runtimeType":
+      case "enumObject":
+      case "classConstructor":
+      case "extension":
+        return null;
+      case "optional": {
+        const inner = this.typeCopyExpression(type.inner, value, state);
+        return inner === null ? null : `(${value} == null ? ${value} : ${inner})`;
+      }
+      case "list":
+        return `${state}.copy.listOf(${value}, ${state}, ${this.typeCopyCallback(type.element)})`;
+      case "set":
+        return `${state}.copy.setOf(${value}, ${state}, ${this.typeCopyCallback(type.element)})`;
+      case "map":
+        return `${state}.copy.mapOf(${value}, ${state}, ${this.typeCopyCallback(type.key)}, ${this.typeCopyCallback(type.value)})`;
+      case "record":
+        return `${state}.copy.recordOf(${value}, ${state}, ${this.typeCopyCallback(type.value)})`;
+      case "named":
+        // An instantiation's copy is the declaration's, reached through the
+        // same memoized Type object its predicate is reached through.
+        if (type.application && this.genericTypeBinding(type.application.name)) {
+          this.needsRuntimeTypeHelpers = true;
+          return `${this.genericInstanceExpression(type.application)}.copy(${value}, ${state})`;
+        }
+        // Duration is text, an enum member is text, and a class instance is
+        // not plain data — none of them can or should be rebuilt.
+        if (type.name === "Duration") return null;
+        if (this.hints.enumNames.has(type.name)) return null;
+        if (this.hints.classNames.has(type.name)) return null;
+        if (this.enumAliasTarget(type.name) !== null) return null;
+        if (this.typeDeclarations.has(type.name)) return `${type.name}.copy(${value}, ${state})`;
+        return this.runtimeTypeBinding(type.name) ? `${state}.copy.through(${type.name}, ${value}, ${state})` : null;
+      // A union, a structural object, and an erased type parameter are all
+      // positions the predicate did not fully decide, so the copy is the
+      // structural one: plain data recurses and anything else passes through.
+      case "union":
+        return type.members.every((member) => this.typeCopyExpression(member, value, state) === null)
+          ? null
+          : `${state}.copy.plain(${value}, ${state})`;
+      case "object":
+      case "parameter":
+        return `${state}.copy.plain(${value}, ${state})`;
+    }
+  }
+
+  /** The per-element copy a container hands its runtime helper, or `null` when the element position has nothing to copy. */
+  private typeCopyCallback(type: ValueType): string {
+    const item = this.typeCopyExpression(type, "__velarCopyItem", "__velarCopyState");
+    return item === null ? "null" : `(__velarCopyItem, __velarCopyState) => ${item}`;
+  }
+
   private emitTypeAliasDeclaration(statement: TypeAliasDeclaration, depth: number): string {
     const indentation = "  ".repeat(depth);
     // ENM-I4: identities follow aliases, so an alias whose target resolves to
@@ -1823,6 +2041,10 @@ export class JavaScriptEmitter {
     const checkName = this.runtimeTypeCheckName(statement.name);
     const guarded = this.runtimeTypeNeedsTraversalGuard(statement.name);
     const predicate = this.emitTypeCheck(resolveTypeReference(statement.target), "value", guarded ? "__state" : "undefined");
+    // D90 rule R5: an alias copies whatever its target copies. An alias of a
+    // primitive has nothing to rebuild, so its parse still returns the same
+    // value and allocates nothing.
+    const copied = this.typeCopyExpression(resolveTypeReference(statement.target), "value", "__state");
     const exportPrefix = statement.exported ? "export " : "";
     return [
       guarded
@@ -1841,8 +2063,11 @@ export class JavaScriptEmitter {
       `${indentation}    if (!${checkName}(value)) {`,
       `${indentation}      throw new __VelarValidationError(${JSON.stringify(`Value does not match ${statement.name}`)}, { path: ${JSON.stringify(statement.name)} });`,
       `${indentation}    }`,
-      `${indentation}    return value;`,
+      `${indentation}    return ${copied === null ? "value" : `${statement.name}.copy(value)`};`,
       `${indentation}  },`,
+      ...(copied === null
+        ? [`${indentation}  copy(value) {`, `${indentation}    return value;`, `${indentation}  },`]
+        : [`${indentation}  copy(value, __state = __velarValidationState()) {`, `${indentation}    return ${copied};`, `${indentation}  },`]),
       `${indentation}}));`,
     ].join("\n");
   }
@@ -1864,6 +2089,12 @@ export class JavaScriptEmitter {
       `${indentation}    if (!${statement.name}.is(value)) {`,
       `${indentation}      throw new __VelarValidationError(${JSON.stringify(`Value does not match ${statement.name}`)}, { path: ${JSON.stringify(statement.name)} });`,
       `${indentation}    }`,
+      `${indentation}    return value;`,
+      `${indentation}  },`,
+      // D90 rule R5: every runtime Type object answers `copy`, so a record
+      // field typed by an imported enum reaches the same ABI a record does. An
+      // enum member is text, so the copy is the value itself.
+      `${indentation}  copy(value) {`,
       `${indentation}    return value;`,
       `${indentation}  },`,
       // ENM-U1: the members in declaration order, a fresh mutable List per call.
@@ -1930,7 +2161,7 @@ export class JavaScriptEmitter {
       case "union":
         return `(${type.members.map((member) => this.emitTypeCheck(member, value, state)).join(" || ")})`;
       case "object":
-        return `${value} !== null && typeof ${value} === "object"`;
+        return this.emitObjectTypeCheck(type, value, (field, read) => this.emitTypeCheck(field, read, state));
       case "function":
       case "action":
       case "intrinsic":
@@ -1986,6 +2217,8 @@ export class JavaScriptEmitter {
         if (type.application && this.genericTypeBinding(type.application.name)) return this.emitTypeCheck(type, value, state);
         if (!this.runtimeTypeBinding(type.name)) return `${value} != null`;
         return this.emitTypeCheck(type, value, state);
+      case "object":
+        return this.emitObjectTypeCheck(type, value, (field, read) => this.emitNarrowingCheck(field, read, state));
       case "parameter":
       case "typeObject":
       case "runtimeType":
@@ -1995,6 +2228,47 @@ export class JavaScriptEmitter {
         return `${value} != null`;
       default:
         return this.emitTypeCheck(type, value, state);
+    }
+  }
+
+  /**
+   * Charter section 5: a record proves its fields, not merely its presence. A
+   * declared record answers through the deep validator its declaration emits;
+   * a structural one has no declaration to hang a function on, so the same
+   * evidence is spelled inline as one expression over the field table the type
+   * already carries. `check` is the caller's own recursion, so a narrowing
+   * recheck keeps degrading a field it cannot prove rather than refusing it.
+   *
+   * The expansion is bounded, because an expression cannot recurse the way a
+   * generated function can: a structural type already being expanded, or one
+   * nested deeper than `maximumStructuralFieldDepth`, falls back to the
+   * presence test — the same evidence charter line 1006 allows an erased
+   * position. A field whose own check is a constant is dropped from the
+   * conjunction for the same reason: `false` there would refuse a value the
+   * language cannot inspect, and `true` proves nothing worth emitting.
+   */
+  private emitObjectTypeCheck(
+    type: Extract<ValueType, { readonly kind: "object" }>,
+    value: string,
+    check: (field: ValueType, read: string) => string,
+  ): string {
+    const presence = `${value} !== null && typeof ${value} === "object"`;
+    if (type.fields.size === 0 || this.structuralFieldChecks.has(type)
+      || this.structuralFieldChecks.size >= maximumStructuralFieldDepth) {
+      return presence;
+    }
+    this.structuralFieldChecks.add(type);
+    try {
+      const fields: string[] = [];
+      for (const [name, field] of type.fields) {
+        const read = `${value}${javaScriptMemberAccess(name)}`;
+        const proof = check(field, read);
+        if (proof === "true" || proof === "false") continue;
+        fields.push(type.optionalFields?.has(name) ? `(${read} === undefined || ${proof})` : proof);
+      }
+      return fields.length === 0 ? presence : `(${presence} && ${fields.join(" && ")})`;
+    } finally {
+      this.structuralFieldChecks.delete(type);
     }
   }
 
@@ -2212,6 +2486,7 @@ export class JavaScriptEmitter {
     const runtime = builtinErrorRuntimeNames.get(name);
     if (!runtime) return null;
     if (name === "ValidationError") this.needsRuntimeTypeHelpers = true;
+    else if (name === "AssertionError") this.needsAssertionErrorClass = true;
     else if (name === "NarrowingError") this.needsNarrowingErrorClass = true;
     else this.needsCollectionHelpers = true;
     return runtime;
@@ -2380,15 +2655,21 @@ export class JavaScriptEmitter {
   protected emitMappedExpression(expression: Expression, normalizeNull = true): string {
     return this.emitMappedJavaScript(expression.span, () => {
       const key = spanIdentity(expression.span);
-      const normalizePromise = normalizeNull
-        && this.suppressPromiseNormalization === 0
-        && this.hints.normalizedPromiseValues.has(key);
-      if (normalizePromise) this.suppressPromiseNormalization += 1;
+      // The wrapper covers exactly the value it wraps, so suppression follows
+      // the value rather than the whole subtree: an `await` in an argument
+      // position produces a *different* Promise and keeps its own boundary,
+      // which is what makes `await use(await supply())` check both of them.
+      const suppressed = this.suppressedPromiseValues.delete(key);
+      const normalizePromise = normalizeNull && !suppressed && this.hints.normalizedPromiseValues.has(key);
+      const passThrough = normalizePromise || suppressed
+        ? promiseValuePassThrough(expression).map((item) => spanIdentity(item.span))
+        : [];
+      for (const item of passThrough) this.suppressedPromiseValues.add(item);
       let emitted: string;
       try {
         emitted = this.emitExpression(expression);
       } finally {
-        if (normalizePromise) this.suppressPromiseNormalization -= 1;
+        for (const item of passThrough) this.suppressedPromiseValues.delete(item);
       }
       const narrowing = this.hints.runtimeNarrowings.get(key);
       if (narrowing) {
@@ -2482,6 +2763,15 @@ export class JavaScriptEmitter {
           });
           return `${asynchronous ? "await __velarCreateListAsync" : "__velarCreateList"}([${parts.join(", ")}])`;
         }
+        if (expression.elements.length === 0) {
+          // COL-P1: an empty List literal is the one array the runtime cannot
+          // tell from an array JavaScript handed over empty, and the difference
+          // decides whether every later element read re-proves its slot. The
+          // compiler knows which one this is, so it is the compiler that says
+          // so; a `[]` that arrives from the host is never adopted.
+          this.needsCollectionHelpers = true;
+          return "__velarAdoptList([])";
+        }
         return `[${expression.elements.map((element) => this.emitMappedExpression(element)).join(", ")}]`;
       case "ObjectExpression": {
         const needsControlledConstruction = expression.properties.some((property) => property.kind === "ObjectSpread"
@@ -2511,6 +2801,7 @@ export class JavaScriptEmitter {
       // absence is, not ten lines later where the `undefined` would surface.
       case "RequiredExpression": {
         this.needsRequiredValueHelper = true;
+        this.needsAssertionErrorClass = true;
         const description = JSON.stringify(requiredValueDescription(expression.value));
         return `__velarRequired(${this.emitMappedExpression(expression.value)}, ${description}, ${expression.span.start})`;
       }
@@ -3297,7 +3588,14 @@ export class JavaScriptEmitter {
   }
 
   private escapeTemplateText(value: string): string {
-    return value.replaceAll("\\", "\\\\").replaceAll("\r", "\\r").replaceAll("`", "\\`").replaceAll("${", "\\${");
+    return value.replaceAll("\\", "\\\\").replaceAll("\r", "\\r").replaceAll("`", "\\`").replaceAll("${", "\\${")
+      // `\u{0}` is a sanctioned source spelling, so a C0 control reaches here
+      // as a raw byte. U+0000 delimits this emitter's own source-map markers
+      // (see `javaScriptNodeMarker`), so author text could otherwise spell a
+      // marker the renderer would delete out of the program. Every C0 control
+      // leaves as an escape sequence instead of a byte, which no scan of the
+      // generated text can mistake for emitter metadata.
+      .replaceAll(/[\u0000-\u001F]/gu, (control) => `\\u${control.codePointAt(0)!.toString(16).padStart(4, "0")}`);
   }
 
   protected blockAlwaysReturns(statements: readonly Statement[]): boolean {
@@ -3314,6 +3612,23 @@ export class JavaScriptEmitter {
     }
     return false;
   }
+}
+
+/**
+ * The sub-expressions whose value *is* this expression's value. A Promise
+ * wrapper on the outer node already normalizes whatever these produce, so they
+ * skip a second one; every other position — an argument, a receiver, a
+ * function body — carries a Promise of its own and keeps its own boundary.
+ */
+function promiseValuePassThrough(expression: Expression): readonly Expression[] {
+  if (expression.kind === "ConditionalExpression") return [expression.thenValue, expression.elseValue];
+  if (expression.kind === "BinaryExpression" && expression.operator === "??") return [expression.left, expression.right];
+  return [];
+}
+
+/** The member-read suffix for a field name: a dot when the name is spellable, a subscript otherwise. */
+function javaScriptMemberAccess(name: string): string {
+  return /^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(name) ? `.${name}` : `[${JSON.stringify(name)}]`;
 }
 
 function javaScriptIdentifiers(sources: readonly string[]): ReadonlySet<string> {
@@ -3471,6 +3786,15 @@ function mappedSource(source: string, sourceStart: number): { readonly code: str
     });
   }
   return { code: source, mappings };
+}
+
+/** The names a checked block's contract publishes into VelarScript scope. */
+function contractExportNames(contract: ExternModuleContract): ReadonlySet<string> {
+  return new Set([
+    ...contract.functions.map((item) => item.name),
+    ...contract.constants.map((item) => item.name),
+    ...contract.classes.map((item) => item.name),
+  ]);
 }
 
 function emitCheckedEmbeddedJavaScript(

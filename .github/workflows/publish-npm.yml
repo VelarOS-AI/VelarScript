@@ -38,20 +38,33 @@ jobs:
         run: |
           test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$(git rev-parse HEAD)"
           test "$RELEASE_TAG" = "v$(node -p "require('./package.json').version")"
+      # No registry-url here on purpose. setup-node would write
+      # `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`, and npm attaches
+      # that token to every request to that registry — so a plain `npm ci` would
+      # send this job's GitHub token to npm, Inc. with each tarball fetch. The
+      # registry credential is configured for the publish step alone, below.
       - uses: actions/setup-node@v6
         with:
           node-version: "24.x"
-          registry-url: https://registry.npmjs.org
           package-manager-cache: false
       - name: Install release dependencies
         run: npm ci
         env:
-          NODE_AUTH_TOKEN: ${{ github.token }}
+          # The repository .npmrc resolves this for `//npm.pkg.github.com/`, and
+          # npm errors on an unresolvable environment reference, so it is set
+          # and empty rather than removed. Nothing here installs from GitHub
+          # Packages, so an empty value is all the install needs.
+          NODE_AUTH_TOKEN: ""
       - name: Create and verify strict candidate
         run: |
           npm run build:packages
           node scripts/release-toolchain.mjs candidate --output-dir release/toolchain
           npm run release:verify -- release/toolchain
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24.x"
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
       - name: Publish complete toolchain with provenance
         run: npm run release:publish -- --directory release/toolchain --staging-tag next --promote-tag latest
         env:

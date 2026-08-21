@@ -1,13 +1,15 @@
 import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
-import { pathToFileURL } from "node:url";
+import type { Readable } from "node:stream";
+import { Worker } from "node:worker_threads";
 import { formatDiagnostic } from "@velarscript/compiler";
 import type { VelarProjectConfig } from "./config.ts";
 import { compileProject } from "./project.ts";
 import { standardModuleSource, standardModuleSources } from "./standard-modules.ts";
 import { compiledTestModulePath, createCompiledSandbox, portablePath, quoteReportedText, removeCompiledSandbox, writeCompiledTestProject } from "./test-output.ts";
+import type { TestWorkerInput, TestWorkerReport } from "./test-worker.ts";
 import { hostErrorStack } from "./host-error.ts";
-import { captureUnownedErrors, flushOutput, mapCompiledStacksToSources } from "./unowned-errors.ts";
+import { captureUnownedErrors, flushOutput, mapCompiledStacksToSources, unsettledWorkFailure } from "./unowned-errors.ts";
 
 export interface TestRunnerOptions {
   readonly testTimeoutMs?: number;
@@ -27,6 +29,26 @@ interface TestLimits {
 
 const defaultTestTimeoutMs = 120_000;
 const defaultTestSettleTimeoutMs = 10_000;
+
+/**
+ * Room a report needs to cross the thread boundary. The thread owns the bound
+ * it can honour — an asynchronous hang, reported in order next to the test that
+ * caused it — and this process steps in only for the synchronous one, which no
+ * timer inside that thread will ever see.
+ */
+const workerReportGraceMs = 1_000;
+
+/** Upper bound on waiting for a terminated thread's piped output to arrive. */
+const workerOutputFlushMs = 1_000;
+
+/*
+ * `tsc` rewrites a relative import specifier, but not a URL built at run time,
+ * so the worker entry is named with the extension this module itself has.
+ */
+const testWorkerEntry = new URL(
+  import.meta.url.endsWith(".ts") ? "./test-worker.ts" : "./test-worker.js",
+  import.meta.url,
+);
 
 function testLimits(options: TestRunnerOptions): TestLimits {
   const bounded = (value: number | undefined, fallback: number, name: string): number => {
@@ -62,23 +84,11 @@ export async function runTests(
   let passed = 0;
   let failed = 0;
   // The runner keeps running: an unowned failure belongs to the test, never to
-  // the process. The channel is shared with the browser runner so that the one
-  // stance has one implementation.
+  // the process. Each test file runs in its own thread, which owns the channel
+  // for its own tests; this one covers what happens in the runner itself, and
+  // is what the run-level settle below reads.
   const channel = captureUnownedErrors();
-  const drainUnowned = (): Promise<readonly string[]> => channel.drain();
-  // Work a test started is work the test owns. Waiting for the process to run
-  // out of work before reading the verdict is what makes a late failure belong
-  // to the test that started it instead of whichever later test happens to be
-  // running when it lands — and what stops it from being dropped entirely.
-  // A fixed sleep cannot do this job: a failure one millisecond past the sleep
-  // is a failure nobody counts.
   let stuck = false;
-  const settleWork = async (subject: string): Promise<string | null> => {
-    if (stuck) return null;
-    if (await channel.settle(limits.settleTimeoutMs)) return null;
-    stuck = true;
-    return `work started ${subject} was still running ${limits.settleTimeoutMs} milliseconds later; a test owns the work it starts, and a failure from work that never finishes can never be reported`;
-  };
   try {
     await prepareStandardModules(temporary, config);
     for (const file of files) {
@@ -111,61 +121,46 @@ export async function runTests(
         continue;
       }
       const outputEntry = entry ? compiledTestModulePath(project, entry, temporary) : join(temporary, relative(config.root, file).replace(/\.vel$/u, ".js"));
-      let namespace: Record<string, unknown>;
-      try {
-        namespace = await import(`${pathToFileURL(outputEntry).href}?run=${Date.now()}`) as Record<string, unknown>;
-      } catch (error) {
-        failed += tests.length;
-        process.stderr.write(`✗ ${portablePath(relative(config.root, file))} failed to load\n${stackOf(error)}\n`);
-        await drainUnowned();
-        continue;
-      }
-      // A module initialization error that surfaced on the host channel
-      // instead of the import's own await (BLD-D1's exact shape) fails the
-      // file's tests before any of them can run green.
-      const loadTimeErrors = await drainUnowned();
-      if (loadTimeErrors.length > 0) {
-        failed += tests.length;
-        process.stderr.write(`✗ ${portablePath(relative(config.root, file))} reported an unowned error while loading\n${loadTimeErrors.join("\n")}\n`);
-        continue;
-      }
-      for (const declared of tests) {
-        // D39 item 53 + D51 rule 105: the reporter quotes the author's name for
-        // the test, escaped, because a verdict line must say what it means on
-        // every terminal.
-        const name = quoteReportedText(declared.title);
-        const test = namespace[declared.name];
-        try {
-          if (typeof test !== "function") throw new Error(`Test ${name} was not emitted`);
-          if (test.length !== 0) throw new Error(`Test ${name} cannot declare parameters`);
-          await boundedTest(test as () => unknown, limits.testTimeoutMs);
-          const leftover = await settleWork("by this test");
-          const testErrors = await drainUnowned();
-          if (testErrors.length > 0) {
-            throw new Error(`an unowned error was reported while this test ran\n${testErrors.join("\n")}`);
-          }
-          if (leftover !== null) throw new Error(leftover);
-          passed += 1;
-          process.stdout.write(`✓ ${quoteReportedText(portablePath(relative(config.root, file)))} :: ${name}\n`);
-        } catch (error) {
-          failed += 1;
-          await drainUnowned();
-          process.stderr.write(`✗ ${quoteReportedText(portablePath(relative(config.root, file)))} :: ${name}\n${stackOf(error)}\n`);
-        }
+      // D39 item 53 + D51 rule 105: author text — the file's path and each
+      // test's name — is escaped here, once, and the thread reports what it is
+      // given.
+      const path = portablePath(relative(config.root, file));
+      const input = {
+        entry: outputEntry,
+        label: quoteReportedText(path),
+        path,
+        tests: tests.map((declared) => ({ name: declared.name, title: quoteReportedText(declared.title) })),
+        testTimeoutMs: limits.testTimeoutMs,
+        settleTimeoutMs: limits.settleTimeoutMs,
+      };
+      // A thread that a test wedged cannot judge the tests after it, so the
+      // file resumes past that test in a fresh thread. Every resume starts
+      // beyond the test that ended its predecessor, so the file always
+      // finishes.
+      let firstIndex = 0;
+      for (;;) {
+        const outcome = await runTestFileInThread({ ...input, firstIndex });
+        passed += outcome.passed;
+        failed += outcome.failed;
+        if (outcome.resumeAt === null) break;
+        firstIndex = outcome.resumeAt;
       }
     }
-    // Work a test left behind (a straggling timer, a task that outlived its
-    // test) still fails the run instead of crashing it after the guards come
-    // down.
-    const leftover = await settleWork("during this run");
-    const trailing = await drainUnowned();
+    // Work the runner itself left behind still fails the run instead of
+    // crashing it after the guards come down. A test's own leftover work is no
+    // longer among it: the thread that started it was terminated with it. The
+    // settle comes first so that a report landing during it is still drained
+    // and printed rather than discarded when the channel is released.
+    const settled = await channel.settle(limits.settleTimeoutMs);
+    const trailing = await channel.drain();
     if (trailing.length > 0) {
       failed += 1;
       process.stderr.write(`✗ an unowned error was reported after the last test\n${trailing.join("\n")}\n`);
     }
-    if (leftover !== null) {
+    if (!settled) {
+      stuck = true;
       failed += 1;
-      process.stderr.write(`✗ ${leftover}\n`);
+      process.stderr.write(`✗ ${unsettledWorkFailure("during this run", limits.settleTimeoutMs)}\n`);
     }
   } finally {
     channel.release();
@@ -174,9 +169,9 @@ export async function runTests(
   process.stdout.write(`\n${passed} passed, ${failed} failed\n`);
   const code = failed === 0 ? 0 : 1;
   if (stuck && limits.exitWhenStuck) {
-    // The process cannot end on its own — work a test started still holds the
-    // event loop. The verdict is already written; ending the run beats hanging
-    // a gate forever on a failure that has already been reported.
+    // The process cannot end on its own — work started during this run still
+    // holds the event loop. The verdict is already written; ending the run
+    // beats hanging a gate forever on a failure that has already been reported.
     await flushOutput(process.stdout);
     await flushOutput(process.stderr);
     process.exit(code);
@@ -184,25 +179,157 @@ export async function runTests(
   return code;
 }
 
+interface TestFileOutcome {
+  readonly passed: number;
+  readonly failed: number;
+  /** Where a replacement thread resumes the file, or null when the file is done. */
+  readonly resumeAt: number | null;
+}
+
 /**
- * A test that never settles is a failure that never reaches a human. The bound
- * makes the hang a reported failure; the work itself keeps whatever handles it
- * holds, which the run-level settle then reports in its own right.
+ * Runs one test file in its own thread.
+ *
+ * Two bounds a test cannot reach live here. The hard one is termination: a
+ * synchronously spinning test never yields to the timer that would report it,
+ * so the only bound it obeys is the end of its thread. The quieter one is
+ * isolation: a fresh thread evaluates every module in the file's import graph
+ * again, so a test file's verdict no longer depends on which files ran before
+ * it.
  */
-async function boundedTest(test: () => unknown, timeoutMs: number): Promise<void> {
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  const deadline = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(
-      () => reject(new Error(`this test did not finish within its ${timeoutMs} millisecond bound`)),
-      timeoutMs,
-    );
+async function runTestFileInThread(input: TestWorkerInput): Promise<TestFileOutcome> {
+  const worker = new Worker(testWorkerEntry, { workerData: input, stdout: true, stderr: true });
+  worker.stdout.pipe(process.stdout, { end: false });
+  worker.stderr.pipe(process.stderr, { end: false });
+  let passed = 0;
+  let failed = 0;
+  let resumeAt: number | null = null;
+  // Tests up to this index have a verdict. Anything left when the thread ends
+  // is a test nobody judged.
+  let judged = input.firstIndex;
+  let bound: ReturnType<typeof setTimeout> | null = null;
+  let failure: unknown = null;
+  const disarm = (): void => {
+    if (bound !== null) clearTimeout(bound);
+    bound = null;
+  };
+  const arm = (timeoutMs: number, expire: () => void): void => {
+    disarm();
+    bound = setTimeout(expire, timeoutMs + workerReportGraceMs);
+  };
+  // Nothing this thread holds can be trusted and nothing more will be reported
+  // from it. Termination is the only bound synchronous work obeys, and reports
+  // already in flight are ignored so that a verdict cannot be counted twice.
+  let ended = false;
+  const abandon = (): void => {
+    ended = true;
+    disarm();
+    void worker.terminate();
+  };
+  // The parent is never left waiting without a bound. Between the last report
+  // it expects and the thread's own `exit` there is still a wait, and a module
+  // whose initialization armed a timer before it failed holds that thread's
+  // loop open forever — a hang through a different door than the one the
+  // per-test bound closes. Every path that stops expecting reports arms this
+  // instead of disarming into an unbounded wait.
+  const expectExit = (): void => {
+    arm(input.settleTimeoutMs, abandon);
+  };
+  const failTest = (index: number, text: string): void => {
+    failed += 1;
+    judged = index + 1;
+    resumeAt = judged < input.tests.length ? judged : null;
+    process.stderr.write(`✗ ${input.label} :: ${input.tests[index]!.title}\n${text}\n`);
+    abandon();
+  };
+  const failFile = (text: string): void => {
+    failed += input.tests.length - judged;
+    judged = input.tests.length;
+    process.stderr.write(`✗ ${input.path} ${text}\n`);
+    abandon();
+  };
+
+  // A thread that never reports `ready` never armed a bound of its own.
+  arm(input.testTimeoutMs, () => failFile(`did not start within its ${input.testTimeoutMs} millisecond bound`));
+
+  await new Promise<void>((resolve) => {
+    worker.on("message", (message: TestWorkerReport) => {
+      if (ended) return;
+      switch (message.kind) {
+        case "ready":
+          // The thread is up, so the bound from here measures the file's own
+          // module initialization rather than thread startup. It stays armed
+          // until the first test begins.
+          arm(input.testTimeoutMs, () => failFile(`did not finish loading within its ${input.testTimeoutMs} millisecond bound`));
+          break;
+        case "load":
+          // The thread reported the failure itself and is ending; only the
+          // count is owed here — and a bound on the ending, because a module
+          // that failed after arming a timer never lets the thread end.
+          if (!message.ok) {
+            failed += input.tests.length - judged;
+            judged = input.tests.length;
+            expectExit();
+          }
+          break;
+        case "begin":
+          arm(input.testTimeoutMs, () => failTest(message.index, `this test did not finish within its ${input.testTimeoutMs} millisecond bound`));
+          break;
+        case "settling":
+          arm(input.settleTimeoutMs, () => failTest(message.index, unsettledWorkFailure("by this test", input.settleTimeoutMs)));
+          break;
+        case "verdict":
+          judged = message.index + 1;
+          if (message.passed) passed += 1;
+          else failed += 1;
+          if (message.usable) {
+            // The next test's `begin` re-arms; after the last one this is the
+            // wait for the thread to end, which is bounded like any other.
+            expectExit();
+            break;
+          }
+          resumeAt = judged < input.tests.length ? judged : null;
+          abandon();
+          break;
+      }
+    });
+    worker.once("error", (error: unknown) => { failure = error; });
+    worker.once("exit", () => {
+      disarm();
+      resolve();
+    });
   });
-  void deadline.catch(() => {});
-  try {
-    await Promise.race([Promise.resolve().then(() => test()), deadline]);
-  } finally {
-    if (timer !== null) clearTimeout(timer);
+
+  // Piped output has to reach this process before the runner writes anything of
+  // its own, or a verdict overtakes the `print` output of the test it belongs
+  // to. A terminated thread may never end its pipes, so the wait is bounded.
+  await Promise.all([drainedOutput(worker.stdout), drainedOutput(worker.stderr)]);
+  worker.stdout.unpipe(process.stdout);
+  worker.stderr.unpipe(process.stderr);
+
+  if (judged < input.tests.length && resumeAt === null) {
+    failed += input.tests.length - judged;
+    process.stderr.write(`✗ ${input.path} ended before its tests were judged${failure === null ? "" : `\n${hostErrorStack(failure)}`}\n`);
   }
+  return { passed, failed, resumeAt };
+}
+
+function drainedOutput(stream: Readable): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (stream.readableEnded || stream.destroyed) {
+      resolve();
+      return;
+    }
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const finish = (): void => {
+      if (timer !== null) clearTimeout(timer);
+      stream.off("end", finish);
+      stream.off("close", finish);
+      resolve();
+    };
+    timer = setTimeout(finish, workerOutputFlushMs);
+    stream.once("end", finish);
+    stream.once("close", finish);
+  });
 }
 
 async function discoverTestFiles(root: string, excluded: ReadonlySet<string>): Promise<string[]> {
@@ -232,8 +359,4 @@ export async function prepareStandardModules(root: string, config: VelarProjectC
     await writeFile(join(packageRoot, `${name}.js`), standardModuleSource(source, config.extensionConfig, config.compilerExtensions) ?? code, "utf8");
   }
   await writeFile(join(packageRoot, "package.json"), JSON.stringify({ name: "velar", private: true, type: "module", exports }), "utf8");
-}
-
-function stackOf(error: unknown): string {
-  return hostErrorStack(error);
 }

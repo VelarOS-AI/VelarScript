@@ -9,6 +9,8 @@ import {
   VELAR_TYPE_REGISTRY_RUNTIME,
   VELAR_UTF8_RUNTIME,
 } from "@velarscript/compiler/extension";
+import { CSS_STRING_RUNTIME } from "./css-string.ts";
+import { LOOK_TRANSITION_PROPERTY_KEYWORDS } from "./look.ts";
 import { WEB_DOM_HOST_RUNTIME, WEB_ERROR_HOST_RUNTIME, WEB_RUNTIME_FOUNDATION } from "./runtime-foundation.ts";
 import { VELAR_WEB_WORKER_RUNTIME } from "./worker-runtime.ts";
 import { VELAR_WEB_WEBSOCKET_RUNTIME } from "./websocket-runtime.ts";
@@ -109,8 +111,18 @@ function __velarListReactiveRuntime() {
   __velarRequireListIntrinsics();
   const descriptor = __velarListReflectApply(__velarListGetOwnPropertyDescriptor, __velarListNativeObject, [globalThis, __velarListRuntimeKey]);
   const runtime = descriptor && "value" in descriptor ? descriptor.value : null;
-  return runtime && runtime.version === ${JSON.stringify(VELAR_RUNTIME_SCHEMA_VERSION)} && typeof runtime.toRaw === "function"
-    && typeof runtime.collectionRead === "function" ? runtime : null;
+  // No registry means no reactive runtime in this realm, which is ordinary Web
+  // behavior. A registry from another generation is a mixed build: reading past
+  // it would copy raw values and silently lose every collectionRead dependency,
+  // so it fails closed ahead of the callable duck-checks. The one installer
+  // that writes this slot always writes version, toRaw, collectionRead and
+  // report together, so this test is the same one Core, the JSON bridge and the
+  // Web foundation apply to the same slot — one tolerance rule per realm.
+  if (!runtime || (typeof runtime !== "object" && typeof runtime !== "function")) return null;
+  if (runtime.version !== ${JSON.stringify(VELAR_RUNTIME_SCHEMA_VERSION)}) {
+    throw new TypeError("VelarScript reactive runtime schema " + (typeof runtime.version === "string" ? runtime.version : "(unknown)") + " does not match this module's schema ${VELAR_RUNTIME_SCHEMA_VERSION}; one build mixed two generations of @velarscript/* — run 'npm ls @velarscript/compiler' and pin one version");
+  }
+  return typeof runtime.toRaw === "function" && typeof runtime.collectionRead === "function" ? runtime : null;
 }
 function __velarRequireList(value, name) {
   __velarRequireListIntrinsics();
@@ -185,6 +197,17 @@ function __velarFreezeOptionsValue(value) {
   return __velarOptionsReflectApply(__velarOptionsFreeze, __velarOptionsNativeObject, [value]);
 }
 function __velarOptions(value, name, allowed) {
+  return __velarOptionsRecord(value, name, allowed, false);
+}
+// A live props store publishes every prop as a tracked getter, so the rule that
+// a field holds a data value cannot hold for it -- and the read through that
+// getter is exactly what subscribes the reader to the prop. Every other part of
+// the strict record rule still does: a plain record, no symbol fields, and no
+// field outside the declared set.
+function __velarLiveOptions(value, name, allowed) {
+  return __velarOptionsRecord(value, name, allowed, true);
+}
+function __velarOptionsRecord(value, name, allowed, live) {
   __velarRequireOptionsIntrinsics();
   let prototype = null;
   if (value && typeof value === "object") {
@@ -204,8 +227,10 @@ function __velarOptions(value, name, allowed) {
     const key = keys[index];
     if (!__velarOptionsReflectApply(__velarOptionsSetHas, allowed, [key])) throw new TypeError("Unknown " + name + " field '" + key + "'");
     const descriptor = __velarOptionsReflectApply(__velarOptionsGetOwnPropertyDescriptor, __velarOptionsNativeObject, [value, key]);
-    if (!descriptor?.enumerable || !("value" in descriptor)) throw new TypeError(name + " field '" + key + "' must be an enumerable data value");
-    output[key] = descriptor.value;
+    if (!descriptor?.enumerable || (!live && !("value" in descriptor))) {
+      throw new TypeError(name + " field '" + key + "' must be an enumerable " + (live ? "field" : "data value"));
+    }
+    output[key] = "value" in descriptor ? descriptor.value : value[key];
   }
   return __velarFreezeOptionsValue(output);
 }
@@ -533,6 +558,32 @@ function lookResult(value) {
   if (value.length > 1024 * 1024) throw new RangeError("A constructed Look value cannot exceed 1 MiB");
   return value;
 }
+// A standard module ships to the browser as its own source, so it carries the
+// CSS string serializer rather than reaching for the emitted runtime's copy.
+// css-string.ts publishes the one implementation both spellings read.
+${CSS_STRING_RUNTIME.trim()}
+// charter section 3549: the two transition longhands take the vocabularies the
+// matching builders take. The longhand read a closed set while the builder read
+// nothing, so 'backgroundColor' -- the camelCase spelling every other Look
+// property is written with -- compiled clean and reached the browser as a
+// declaration it discards. The set is the analyzer's, derived from the Look
+// property table rather than restated here.
+const transitionProperties = ${JSON.stringify([...LOOK_TRANSITION_PROPERTY_KEYWORDS])};
+function lookTransitionProperty(value) {
+  value = lookText(value, "Transition property");
+  if (transitionProperties.includes(value)) return value;
+  // The longhand's diagnostic teaches the CSS spelling, so the rejection here
+  // teaches the same one rather than only naming the value.
+  let dashed = "";
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    dashed += code >= 65 && code <= 90 ? "-" + value[index].toLowerCase() : value[index];
+  }
+  if (dashed !== value && transitionProperties.includes(dashed)) {
+    throw new TypeError("Transition property '" + value + "' is not a CSS property name; did you mean '" + dashed + "'?");
+  }
+  throw new TypeError("Transition property '" + value + "' is not an animatable CSS property name");
+}
 function lookType(name, predicate) {
   return __velarRegisterRuntimeType(Object.freeze({
     is(value) { return predicate(value); },
@@ -606,7 +657,7 @@ export function shadow(x, y, blur, value, spread = "0px", inset = false) {
 export function linearGradient(angle, start, end) {
   return lookResult("linear-gradient(" + lookVisual(angle, "Gradient angle") + ", " + lookText(start, "Gradient start") + ", " + lookText(end, "Gradient end") + ")");
 }
-export function asset(path) { return lookResult("url(" + JSON.stringify(lookText(path, "Asset path")) + ")"); }
+export function asset(path) { return lookResult("url(" + __velarCssString(lookText(path, "Asset path")) + ")"); }
 export function minmax(minimum, maximum) { return lookResult("minmax(" + lookVisual(minimum, "Minimum track") + ", " + lookVisual(maximum, "Maximum track") + ")"); }
 export function repeat(count, size) { return lookResult("repeat(" + lookVisual(count, "Repeat count") + ", " + lookVisual(size, "Repeat size") + ")"); }
 export function tracks(first, ...rest) {
@@ -616,7 +667,7 @@ export function tracks(first, ...rest) {
 }
 export function transition(property, duration, easing = "ease", delay) {
   const suffix = delay === undefined ? "" : " " + lookVisual(delay, "Transition delay");
-  return lookResult(lookText(property, "Transition property") + " " + lookVisual(duration, "Transition duration") + " " + lookText(easing, "Transition easing") + suffix);
+  return lookResult(lookTransitionProperty(property) + " " + lookVisual(duration, "Transition duration") + " " + lookText(easing, "Transition easing") + suffix);
 }
 export function spacing(first, second, third, fourth) {
   return lookResult([first, second, third, fourth].filter((value) => value !== undefined)
@@ -739,7 +790,7 @@ function reportLinkEventFailure(failure) {
   const error = __velarNormalizeError(failure);
   const runtime = globalThis[Symbol.for(${JSON.stringify(VELAR_RUNTIME_REGISTRY_KEY)})];
   if (runtime && typeof runtime.report === "function") runtime.report(error, { phase: "event", detail: "link", unhandled: true });
-  else __velarEnqueue(() => { throw error; });
+  else __velarBrowserCallCaptured(__velarBrowserQueueMicrotask, __velarBrowserWindow, [() => { throw error; }], "queueMicrotask");
 }
 
 export function domId(prefix = "velar") {
@@ -955,8 +1006,10 @@ export function currentRoute() {
   return Object.freeze({ path, params: new Map(), query: queryValues(), hash: routeHash() });
 }
 
-export function Head(props) {
-  props = __velarOptions(props, "Head props", __velarOptionFields(["title", "description", "canonical", "robots", "image", "themeColor", "language"]));
+const headPropFields = __velarOptionFields(["title", "description", "canonical", "robots", "image", "themeColor", "language"]);
+
+function headMetadata(props) {
+  props = __velarLiveOptions(props, "Head props", headPropFields);
   let { title, description = "", canonical = "", robots = "", image = "", themeColor = "", language = "" } = props;
   title = __velarString(title, "Head title");
   description = __velarString(description, "Head description");
@@ -974,30 +1027,121 @@ export function Head(props) {
   if (language && !/^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$/u.test(language)) {
     throw new TypeError("Head language must be a simple BCP 47 language tag");
   }
-  const node = document.createComment("velar head");
+  return { title, description, canonical, robots, image, themeColor, language };
+}
+
+// Head follows Vel's ordinary rules: its props are read inside a DOM observer,
+// so a title built from state tracks that state. Reading each prop exactly once
+// at construction froze '<Head title={f"Inbox ({unread})"} />' at whatever
+// count the first render saw, and the frozen-read report that exists to catch
+// exactly that is muted on the snapshot path by construction.
+// The observer is created at construction so the props are validated where they
+// always were, and the document is not touched until mount: what a Head owns it
+// takes on insertion and gives back on removal.
+export function Head(props) {
+  let live = false;
+  let pending = null;
+  let applied = null;
   let previousTitle = "";
   let previousLanguage = null;
   let restorers = [];
-  return component(node, () => {
-    previousTitle = document.title;
-    document.title = title;
-    previousLanguage = document.documentElement.getAttribute("lang");
-    if (language) document.documentElement.setAttribute("lang", language);
-    restorers = [
-      ownHead('meta[name="description"]', "meta", "name", "description", "content", description),
-      ownHead('link[rel="canonical"]', "link", "rel", "canonical", "href", canonical),
-      ownHead('meta[name="robots"]', "meta", "name", "robots", "content", robots),
-      ownHead('meta[property="og:image"]', "meta", "property", "og:image", "content", image),
-      ownHead('meta[name="theme-color"]', "meta", "name", "theme-color", "content", themeColor),
-    ];
-  }, () => {
-    if (document.title === title) document.title = previousTitle;
-    if (language && document.documentElement.getAttribute("lang") === language) {
+  const release = () => {
+    if (applied === null) return;
+    if (document.title === applied.title) document.title = previousTitle;
+    if (applied.language && document.documentElement.getAttribute("lang") === applied.language) {
       if (previousLanguage == null) document.documentElement.removeAttribute("lang");
       else document.documentElement.setAttribute("lang", previousLanguage);
     }
     for (const restore of restorers.reverse()) restore();
+    restorers = [];
+    applied = null;
+  };
+  const take = (next) => {
+    previousTitle = document.title;
+    document.title = next.title;
+    previousLanguage = document.documentElement.getAttribute("lang");
+    if (next.language) document.documentElement.setAttribute("lang", next.language);
+    restorers = [
+      ownHead('meta[name="description"]', "meta", "name", "description", "content", next.description),
+      ownHead('link[rel="canonical"]', "link", "rel", "canonical", "href", next.canonical),
+      ownHead('meta[name="robots"]', "meta", "name", "robots", "content", next.robots),
+      ownHead('meta[property="og:image"]', "meta", "property", "og:image", "content", next.image),
+      ownHead('meta[name="theme-color"]', "meta", "name", "theme-color", "content", next.themeColor),
+    ];
+    applied = next;
+  };
+  // The observer runs once here, so an invalid Head is still rejected before a
+  // single DOM call is made -- and the validating read happens inside the
+  // observer, where D70's frozen-read report correctly ignores it.
+  const observer = webObserve(() => {
+    pending = headMetadata(props);
+    if (!live) return;
+    release();
+    take(pending);
+  }, "head", "Head");
+  const node = document.createComment("velar head");
+  return component(node, () => {
+    live = true;
+    take(pending);
+  }, () => {
+    observer.stop();
+    release();
   });
+}
+
+// A DOM-phase observer built from the shared runtime registry. A component the
+// runtime implements is rendered content like any other, so its reads belong in
+// the queue every other rendered position uses: the reactive graph settles
+// first, then the document is written once.
+function webObserve(run, detail, componentName) {
+  const runtime = globalThis[Symbol.for(${JSON.stringify(VELAR_RUNTIME_REGISTRY_KEY)})];
+  if (!runtime || typeof runtime.runTracked !== "function" || typeof runtime.schedule !== "function"
+    || typeof runtime.cleanupObserver !== "function") {
+    throw new TypeError("A VelarScript Web component requires the VelarScript Web runtime");
+  }
+  let initial = true;
+  const observer = {
+    mode: "dom",
+    produces: false,
+    stopped: false,
+    dependencies: new Set(),
+    run() {
+      if (observer.stopped) return;
+      // The first run happens while the component is being constructed, and
+      // construction is transactional: that failure belongs to the caller.
+      // Every later run is an update, whose failure is reported.
+      try { runtime.runTracked(observer, run); }
+      catch (failure) {
+        // Construction is transactional, and now that these components read
+        // live props the first run has already subscribed to whatever it read
+        // on the way to failing. A component that never came into existence
+        // leaves nothing behind that a later write could re-run.
+        if (initial) { observer.stop(); throw failure; }
+        const error = __velarNormalizeError(failure);
+        if (typeof runtime.report === "function") runtime.report(error, { phase: "render", detail, component: componentName, unhandled: true });
+        else __velarBrowserCallCaptured(__velarBrowserQueueMicrotask, __velarBrowserWindow, [() => { throw error; }], "queueMicrotask");
+      }
+      finally { initial = false; }
+    },
+    notify() { if (!observer.stopped) runtime.schedule(observer); },
+    stop() { observer.stopped = true; runtime.cleanupObserver(observer); },
+  };
+  observer.run();
+  return observer;
+}
+
+// Reading props inside an observer is what makes a component follow its state;
+// building a subtree there is not. A component the runtime implements calls
+// another component directly rather than through the emitted instantiation
+// path, so it needs that path's guard: the reactive graph records a dependency
+// only for an observer it will run again, and a stopped one is exactly the
+// shape it refuses to record.
+function webUntracked(run) {
+  const runtime = globalThis[Symbol.for(${JSON.stringify(VELAR_RUNTIME_REGISTRY_KEY)})];
+  if (!runtime || typeof runtime.runTracked !== "function") {
+    throw new TypeError("A VelarScript Web component requires the VelarScript Web runtime");
+  }
+  return runtime.runTracked({ mode: "dom", stopped: true, dependencies: new Set(), spareDependencies: null, notify() {} }, run);
 }
 
 function ownHead(selector, tag, identityName, identityValue, valueName, value) {
@@ -1038,8 +1182,10 @@ export function announce(message, priority = "polite") {
   return null;
 }
 
-export function Router(props) {
-  props = __velarOptions(props, "Router props", __velarOptionFields(["routes", "fallback"]));
+const routerPropFields = __velarOptionFields(["routes", "fallback"]);
+
+function routerTable(props) {
+  props = __velarLiveOptions(props, "Router props", routerPropFields);
   let { routes, fallback = null } = props;
   const routeItems = __velarRequireList(routes, "Router routes");
   if (routeItems.length > 10000) throw new RangeError("A Router cannot contain more than 10000 routes");
@@ -1050,7 +1196,15 @@ export function Router(props) {
     return Object.freeze({ path: item.path, component: item.component, matcher: compileRoutePath(item.path) });
   });
   if (fallback != null && typeof fallback !== "function") throw new TypeError("A Router fallback must be a component");
-  const node = __velarDomCreateElement("velar-router");
+  return { routes, fallback };
+}
+
+export function Router(props) {
+  // The host element is created by the observer's first run, after the routes
+  // table has been checked: a refused table must not leave a browser node
+  // behind on its way out.
+  let node = null;
+  let table = null;
   let active = null;
   let mounted = false;
   const notFound = ({ route }) => {
@@ -1066,9 +1220,9 @@ export function Router(props) {
   const render = () => {
     try {
       const path = applicationPath(webLocationField("pathname", __velarBrowserLocationPathname));
-      const match = path === null ? null : matchRoute(routes, path);
+      const match = path === null ? null : matchRoute(table.routes, path);
       const context = match?.context ?? { path: path ?? "/", params: new Map(), query: queryValues(), hash: routeHash() };
-      const next = match ? match.item.component({ route: context }) : (fallback ?? notFound)({ route: context });
+      const next = webUntracked(() => (match ? match.item.component({ route: context }) : (table.fallback ?? notFound)({ route: context })));
       if (!next || !next.__velarComponent) throw new TypeError("A VelarScript Router target must render a component");
       if (active) active.destroy();
       active = next;
@@ -1081,35 +1235,69 @@ export function Router(props) {
       if (runtime && typeof runtime.report === "function") {
         runtime.report(error, { phase: "render", detail: "router", component: "Router", unhandled: true });
       } else {
-        __velarEnqueue(() => { throw error; });
+        __velarBrowserCallCaptured(__velarBrowserQueueMicrotask, __velarBrowserWindow, [() => { throw error; }], "queueMicrotask");
       }
     }
   };
   const changed = () => render();
   let removeRouteListener = null;
-  render();
+  // The routes table is read inside the observer that renders from it, so a
+  // table or fallback built from state re-renders the position that shows it.
+  // A constant table subscribes to nothing and recomputes nothing.
+  const observer = webObserve(() => {
+    table = routerTable(props);
+    if (node === null) node = __velarDomCreateElement("velar-router");
+    render();
+  }, "router", "Router");
   return component(node, () => {
     mounted = true;
     removeRouteListener = __velarBrowserListenGlobal("popstate", changed);
     if (active) active.__mount();
   }, () => {
+    observer.stop();
     if (removeRouteListener) removeRouteListener();
     if (active) active.destroy(false);
   });
 }
 
-export function Link(props) {
-  props = __velarOptions(props, "Link props", __velarOptionFields(["to", "replace", "class", "look", "children"]));
-  let { to, replace = false, children } = props;
-  to = __velarString(to, "Link target");
+const linkPropFields = __velarOptionFields(["to", "replace", "class", "look", "children"]);
+
+function linkTarget(props) {
+  const to = __velarString(props.to, "Link target");
   if (to.length > 2 * 1024 * 1024) throw new RangeError("Link targets cannot exceed 2 MiB");
+  requireNavigableTarget(to, "Link target");
+  const replace = props.replace === undefined ? false : props.replace;
   __velarBool(replace, "Link replace");
   const external = isExternal(to);
-  const href = external ? to : internalHref(to);
-  const node = __velarDomCreateElement("a");
-  const releaseHost = forwardHost(node, props);
-  node.href = href;
-  append(node, children);
+  return { to, replace, external, href: external ? to : internalHref(to) };
+}
+
+// Which fields a Link carries is fixed where the Link is written, so the record
+// shape is checked once; the values behind those fields are read inside the
+// observer that consumes them, which is what makes '<Link to={path}>' follow
+// the state 'path' holds. 'children' is rendered content owned by the position
+// that shows it, so it is taken once, where that position builds it -- that is
+// why the shape check sits here rather than inside the observer the way Head's
+// does: reading the slot again on every update would build content nothing
+// shows. Behind a live props store both reads answer from the same cached
+// derived value, so the author's prop expression still runs exactly once.
+export function Link(props) {
+  const children = __velarLiveOptions(props, "Link props", linkPropFields).children;
+  // The anchor is created by the observer's first run, after the target has
+  // been checked: a refused target must not leave a browser node behind.
+  let node = null;
+  let target = null;
+  let releaseHost = null;
+  const observer = webObserve(() => {
+    const next = linkTarget(props);
+    if (node === null) node = __velarDomCreateElement("a");
+    if (releaseHost) { releaseHost(); releaseHost = null; }
+    releaseHost = forwardHost(node, props);
+    node.href = next.href;
+    target = next;
+  }, "link", "Link");
+  try { append(node, children); }
+  catch (failure) { observer.stop(); if (releaseHost) releaseHost(); throw failure; }
   const clicked = (event) => {
     try {
       const defaultPrevented = webEventField(event, "defaultPrevented", webEventDefaultPrevented);
@@ -1125,52 +1313,79 @@ export function Link(props) {
         throw new TypeError("Link received an invalid click event");
       }
       if (defaultPrevented || button !== 0 || metaKey || ctrlKey || shiftKey || altKey) return;
-      if (external) return;
+      if (target.external) return;
       if (webUrlField(webUrl(node.href, webLocationField("href", __velarBrowserLocationHref)), "origin", __velarBrowserUrlOrigin)
         !== webLocationField("origin", __velarBrowserLocationOrigin)) return;
       webEventCall(event, "preventDefault", webEventPreventDefault);
-      navigate(to, { replace });
+      navigate(target.to, { replace: target.replace });
     } catch (failure) { reportLinkEventFailure(failure); }
   };
   let removeClick = null;
-  return component(node, () => { removeClick = __velarBrowserListen(node, "click", clicked); }, () => { if (removeClick) removeClick(); releaseHost(); });
+  return component(node, () => { removeClick = __velarBrowserListen(node, "click", clicked); }, () => {
+    observer.stop();
+    if (removeClick) removeClick();
+    if (releaseHost) releaseHost();
+  });
 }
 
-export function NavLink(props) {
-  props = __velarOptions(props, "NavLink props", __velarOptionFields(["to", "exact", "replace", "class", "look", "children"]));
-  let { to, exact = false, replace = false, children } = props;
-  to = __velarString(to, "NavLink target");
+const navLinkPropFields = __velarOptionFields(["to", "exact", "replace", "class", "look", "children"]);
+
+function navLinkTarget(props) {
+  const to = __velarString(props.to, "NavLink target");
+  requireNavigableTarget(to, "NavLink target");
+  const exact = props.exact === undefined ? false : props.exact;
+  const replace = props.replace === undefined ? false : props.replace;
   __velarBool(exact, "NavLink exact");
   __velarBool(replace, "NavLink replace");
   internalHref(to);
-  const linked = Link({ to, replace, class: props.class, look: props.look, children });
-  const target = normalizeApplicationPath(webUrlField(webUrl(to, "https://velar.invalid"), "pathname", __velarBrowserUrlPathname));
+  return { exact, path: normalizeApplicationPath(webUrlField(webUrl(to, "https://velar.invalid"), "pathname", __velarBrowserUrlPathname)) };
+}
+
+export function NavLink(props) {
+  const children = __velarLiveOptions(props, "NavLink props", navLinkPropFields).children;
+  let linked = null;
+  let target = null;
   const update = () => {
     const application = applicationPath(webLocationField("pathname", __velarBrowserLocationPathname));
     const current = application === null ? null : normalizeApplicationPath(application);
-    const active = current !== null && (current === target || (!exact && target !== "/" && current.startsWith(target + "/")));
+    const active = current !== null
+      && (current === target.path || (!target.exact && target.path !== "/" && current.startsWith(target.path + "/")));
     if (active) __velarDomSetAttribute(linked.node, "aria-current", "page");
     else __velarDomRemoveAttribute(linked.node, "aria-current");
   };
+  // A NavLink rejects its own target before the Link it wraps sees it, so the
+  // observer runs first and the message names NavLink. Its first run has no
+  // Link to mark yet; the update below is that run's second half.
+  const observer = webObserve(() => {
+    target = navLinkTarget(props);
+    if (linked !== null) update();
+  }, "navlink", "NavLink");
+  // The Link is handed the same live fields, not a copy of their values, so a
+  // NavLink built from state moves its href as well as its aria-current.
   let removeRouteListener = null;
-  update();
+  try {
+    linked = Link({
+      get to() { return props.to; },
+      get replace() { return props.replace; },
+      get class() { return props.class; },
+      get look() { return props.look; },
+      children,
+    });
+    update();
+  } catch (failure) {
+    observer.stop();
+    if (linked) linked.destroy(false);
+    throw failure;
+  }
   return component(linked.node, () => {
     linked.__mount();
     removeRouteListener = __velarBrowserListenGlobal("popstate", update);
   }, () => {
+    observer.stop();
     if (removeRouteListener) removeRouteListener();
     linked.destroy(false);
   });
 }
-
-// These runtime-implemented components read their props exactly once at
-// construction; the emitted instantiation path snapshots each prop thunk for
-// them instead of building a live reactive props store, so their strict
-// record validation keeps rejecting accessor fields.
-Head.__velarSnapshotProps = true;
-Router.__velarSnapshotProps = true;
-Link.__velarSnapshotProps = true;
-NavLink.__velarSnapshotProps = true;
 
 function forwardHost(node, props) {
   const cleanups = [];
@@ -1228,6 +1443,40 @@ function internalHref(to) {
 
 function isExternal(to) {
   return typeof to === "string" && (/^[a-z][a-z\d+.-]*:/i.test(to) || to.startsWith("//"));
+}
+
+// The scheme policy a JSX URL attribute enforces, narrowed to what a Link is
+// for. 'javascript:' and 'vbscript:' are code, not locations: a Link classified
+// one as external, wrote it to node.href, and its click handler then let native
+// anchor activation run it. Only the two schemes a page can be served over are
+// navigation targets; anything else belongs to a plain <a> element.
+const navigableSchemes = ["http", "https"];
+function targetScheme(to) {
+  let scheme = "";
+  for (let index = 0; index < to.length; index += 1) {
+    const code = to.charCodeAt(index);
+    // The user agent strips ASCII whitespace and control characters before it
+    // parses the scheme, so "java\tscript:" reads as "javascript:" to it and
+    // has to read that way here too.
+    if (code <= 0x20 || code === 0x7f) continue;
+    if (code === 58 && scheme.length > 0) return scheme.toLowerCase();
+    const letter = (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+    if (letter || (scheme.length > 0 && ((code >= 48 && code <= 57) || code === 43 || code === 45 || code === 46))) {
+      scheme += to[index];
+      continue;
+    }
+    // Anything else this early means the value names no scheme: it is a
+    // relative path, which is always the application's own origin.
+    return "";
+  }
+  return "";
+}
+function requireNavigableTarget(to, label) {
+  const scheme = targetScheme(to);
+  if (scheme !== "" && !navigableSchemes.includes(scheme)) {
+    throw new TypeError(label + " rejected the '" + scheme + ":' URL scheme; only http and https targets navigate, so write a plain <a> element for another scheme");
+  }
+  return to;
 }
 
 function queryValues() {
@@ -2087,7 +2336,7 @@ export function formBody() {
   return __velarFreezeOptionsValue(body);
 }
 
-export class HttpError extends Error {
+export class HttpResponseError extends Error {
   constructor(message, status, url, body = null) {
     message = __velarString(message, "HTTP error message");
     url = __velarString(url, "HTTP error URL");
@@ -2095,7 +2344,7 @@ export class HttpError extends Error {
     if (url.length > 2 * 1024 * 1024) throw new RangeError("HTTP error URLs cannot exceed 2 MiB");
     if (!Number.isInteger(status) || status < 100 || status > 599) throw new RangeError("HTTP error status must be an integer from 100 through 599");
     super(message);
-    this.name = "HttpError";
+    this.name = "HttpResponseError";
     this.status = status;
     this.url = url;
     this.body = body;
@@ -2292,7 +2541,7 @@ class HttpResponse {
     }
   }
   async blob() { return new NativeBlob([await this.bytes()], { type: this.contentType }); }
-  async parse(Type) { Type = runtimeHttpType(Type); return Type.parse(await this.json()); }
+  async parse(Type) { Type = runtimeHttpType(Type); return __velarJsonParseTyped(Type, await this.text(), "HTTP JSON text"); }
 }
 
 class Request {
@@ -2361,7 +2610,7 @@ class Request {
         let parsed = text;
         try { parsed = text ? __velarJsonParse(text, "HTTP error JSON text") : null; } catch { parsed = text; }
         const errorUrl = wrapped.url || this.url;
-        throw new HttpError("HTTP " + wrapped.status + " for " + errorUrl, wrapped.status, errorUrl, parsed);
+        throw new HttpResponseError("HTTP " + wrapped.status + " for " + errorUrl, wrapped.status, errorUrl, parsed);
       }
       return wrapped;
     } catch (error) {
@@ -2375,7 +2624,7 @@ class Request {
   async bytes() { return (await this.response()).bytes(); }
   async streamText(consume) { return (await this.response()).streamText(consume); }
   async blob() { return (await this.response()).blob(); }
-  async parse(Type) { Type = runtimeHttpType(Type); return Type.parse(await this.json()); }
+  async parse(Type) { Type = runtimeHttpType(Type); return (await this.response()).parse(Type); }
   cancel() { this.abort("cancelled"); return null; }
 }
 
@@ -2466,7 +2715,7 @@ function parsed(raw, Type, fallback, maxBytes) {
   Type = storageType(Type);
   if (raw == null) return fallback;
   if (typeof raw !== "string" || __velarUtf8ByteLength(raw) > maxBytes) return fallback;
-  try { return Type.parse(__velarJsonParse(raw, "Stored JSON text")); } catch { return fallback; }
+  try { return __velarJsonParseTyped(Type, raw, "Stored JSON text"); } catch { return fallback; }
 }
 
 function createStore(storageArea, prefix = "", areaName = "local") {
@@ -2653,7 +2902,7 @@ export function database(name) {
   };
   const keyOf = (key) => storageText(key, "Database key");
   return Object.freeze({
-    async get(key, Type, fallback = null, maxBytes = storageMaxValueBytes) { Type = storageType(Type); maxBytes = storageByteBudget(maxBytes); const name = keyOf(key); const encoded = await request("readonly", (store) => objectOperation(store, "get", [name])); if (encoded === undefined || typeof encoded !== "string" || __velarUtf8ByteLength(encoded) > maxBytes) return fallback; try { return Type.parse(__velarJsonParse(encoded, "Stored JSON text")); } catch { return fallback; } },
+    async get(key, Type, fallback = null, maxBytes = storageMaxValueBytes) { Type = storageType(Type); maxBytes = storageByteBudget(maxBytes); const name = keyOf(key); const encoded = await request("readonly", (store) => objectOperation(store, "get", [name])); if (encoded === undefined || typeof encoded !== "string" || __velarUtf8ByteLength(encoded) > maxBytes) return fallback; try { return __velarJsonParseTyped(Type, encoded, "Stored JSON text"); } catch { return fallback; } },
     async set(key, value, maxBytes = storageMaxValueBytes) {
       const name = keyOf(key);
       maxBytes = storageByteBudget(maxBytes);
@@ -3052,6 +3301,7 @@ function requireDialog(value) {
 }
 `.trimStart()],
   ["velar/files", String.raw`
+${VELAR_ERROR_NORMALIZATION_RUNTIME}
 ${optionsRuntime}
 ${fileRegistryRuntime}
 const defaultFileReadBytes = 16 * 1024 * 1024;

@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { chromium, type Page } from "playwright";
 import { compile as compileCore } from "@velarscript/compiler";
 import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
 import { repositoryRoot } from "./repository-root.ts";
@@ -542,3 +543,482 @@ async function run(
 });
   });
 }
+
+// ---------------------------------------------------------------------------
+// Wave web (rulings R1 and the queue-budget rulings): the flush settles every
+// derived value and every watch to a fixed point before it writes the DOM, and
+// the queue bound is the budget's failure to own rather than an exception
+// thrown out of the assignment that happened to cross it. The reactive queue is
+// a browser-lifetime thing, so these run the emitted application in Chromium.
+// ---------------------------------------------------------------------------
+
+async function mountInChromium(
+  source: string,
+  visit: (page: Page, failures: readonly string[]) => Promise<void>,
+): Promise<void> {
+  const result = compile(source);
+  assert.deepEqual(result.diagnostics, []);
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    const failures: string[] = [];
+    page.on("pageerror", (error) => {
+      failures.push(String(error));
+    });
+    await page.setContent(
+      '<!doctype html><html><body><div id="app"></div></body></html>',
+    );
+    await page.addScriptTag({
+      content: result.code ?? "",
+      type: "module",
+    });
+    await page.waitForFunction(
+      "document.querySelector('#app').childNodes.length > 0",
+    );
+    await visit(page, failures);
+  } finally {
+    await browser.close();
+  }
+}
+
+// Six render-driven stages: each one writes state from a rendered position, so
+// reaching the last of them takes six alternating settle-and-commit rounds. A
+// tick() that is one microtask hop resolves at the first of them.
+const tickCascadeStages = 6;
+
+const settlingApplication = `
+let watchLog = ""
+let renderLog = ""
+let evalLog = ""
+
+state a: number = 0
+state b: number = 0
+state secondA: number = 0
+state secondB: number = 0
+state corrected: number = 0
+state revision: number = 0
+state subjectValue: number = 0
+state unwatched: number = 0
+state sink: number = 0
+state trigger: number = 0
+state tickReport = ""
+${Array.from(
+  { length: tickCascadeStages },
+  (_, index) => `state rendered${index}: number = 0\nstate settled${index}: number = 0`,
+).join("\n")}
+
+// The observing watch is declared first here and second below: the output must
+// be the same either way, and it must never carry an unsettled value.
+watch a + b as sum, _:
+    watchLog = watchLog + "one=" + str(sum) + ";"
+
+watch a:
+    b = a * 2
+
+watch secondA:
+    secondB = secondA * 2
+
+watch secondA + secondB as total, _:
+    watchLog = watchLog + "two=" + str(total) + ";"
+
+watch corrected:
+    if corrected > 5:
+        corrected = 5
+
+def subject() -> number:
+    evalLog = evalLog + "e"
+    return subjectValue
+
+watch subject() as value, _:
+    sink = value + unwatched
+
+${Array.from({ length: tickCascadeStages }, (_, index) =>
+  index === 0
+    ? `watch trigger:\n    settled0 = trigger`
+    : `watch rendered${index - 1}:\n    settled${index} = rendered${index - 1}`,
+).join("\n\n")}
+
+${Array.from(
+  { length: tickCascadeStages },
+  (_, index) =>
+    `def stage${index}(value: number) -> string:\n    rendered${index} = value\n    return str(value)`,
+).join("\n\n")}
+
+def show(value: number) -> string:
+    renderLog = renderLog + "n=" + str(value) + ";"
+    return str(value)
+
+def at(_: number, text: string) -> string:
+    return text
+
+component App:
+    action runCascade():
+        trigger = 1
+        await tick()
+        tickReport = str(rendered${tickCascadeStages - 1}) + "/" + str(settled${tickCascadeStages - 1})
+
+    def runWatches():
+        a = 1
+        secondA = 1
+
+    def correct():
+        corrected = 10
+
+    def bumpSubject():
+        subjectValue = subjectValue + 1
+
+    def bumpUnwatched():
+        unwatched = unwatched + 1
+
+    def refresh():
+        revision = revision + 1
+
+    return <main>
+        <p data-watch-log>{at(revision, watchLog)}</p>
+        <p data-render-log>{at(revision, renderLog)}</p>
+        <p data-eval-log>{at(revision, evalLog)}</p>
+        <p data-corrected>{show(corrected)}</p>
+        <p data-tick>{tickReport}</p>
+${Array.from(
+  { length: tickCascadeStages },
+  (_, index) => `        <p data-stage${index}>{stage${index}(settled${index})}</p>`,
+).join("\n")}
+        <button data-run on:click={runWatches}>run</button>
+        <button data-correct on:click={correct}>correct</button>
+        <button data-subject on:click={bumpSubject}>subject</button>
+        <button data-unwatched on:click={bumpUnwatched}>unwatched</button>
+        <button data-cascade on:click={runCascade}>cascade</button>
+        <button data-refresh on:click={refresh}>refresh</button>
+    </main>
+
+mount(<App />, "#app")
+`.trimStart();
+
+test(
+  "[R1] reactive updates settle before the DOM and keep watch declaration order out of the output",
+  { timeout: 120_000 },
+  async () => {
+    await mountInChromium(settlingApplication, async (page, failures) => {
+      await page.click("[data-run]");
+      await page.click("[data-correct]");
+      await page.click("[data-subject]");
+      await page.click("[data-unwatched]");
+      await page.click("[data-cascade]");
+      await page.waitForFunction(
+        "document.querySelector('[data-tick]').textContent !== ''",
+      );
+      await page.click("[data-refresh]");
+      await page.waitForFunction(
+        "document.querySelector('[data-watch-log]').textContent !== ''",
+      );
+
+      // Both pairs settle to 3 and report it once. Before the fix the pair whose
+      // observing watch was declared first reported the half-updated 1 as well,
+      // so moving the two blocks past each other changed the program's output.
+      assert.equal(
+        await page.textContent("[data-watch-log]"),
+        "one=3;two=3;",
+      );
+      // A corrective watch settles before the DOM is written, so the invalid 10
+      // is never rendered.
+      assert.equal(
+        await page.textContent("[data-render-log]"),
+        "n=0;n=5;",
+      );
+      assert.equal(await page.textContent("[data-corrected]"), "5");
+      // The watch body's own reads belong to the body: one write to the watched
+      // subject evaluates it once, and the write to the value only the body
+      // reads evaluates it not at all.
+      assert.equal(await page.textContent("[data-eval-log]"), "ee");
+      // tick() drains the queues instead of hopping one microtask.
+      assert.equal(await page.textContent("[data-tick]"), "1/1");
+      assert.deepEqual(failures, []);
+    });
+  },
+);
+
+const overflowApplication = `
+state stormA: number = 0
+state stormB: number = 0
+state unrelated: number = 0
+state unrelatedRuns: number = 0
+
+watch stormA:
+    stormB = stormB + 1
+
+watch stormB:
+    stormA = stormA + 1
+
+watch unrelated:
+    unrelatedRuns = unrelatedRuns + 1
+
+component App:
+    def storm():
+        stormA = stormA + 1
+        unrelated = unrelated + 1
+
+    def bumpUnrelated():
+        unrelated = unrelated + 1
+
+    return <main>
+        <p data-runs>{unrelatedRuns}</p>
+        <button data-storm on:click={storm}>storm</button>
+        <button data-unrelated on:click={bumpUnrelated}>unrelated</button>
+    </main>
+
+mount(<App />, "#app")
+`.trimStart();
+
+test(
+  "[R1] a runaway flush stops the observers that ran away and keeps the innocent ones",
+  { timeout: 120_000 },
+  async () => {
+    await mountInChromium(overflowApplication, async (page, failures) => {
+      await page.click("[data-storm]");
+      await page.waitForFunction(
+        "document.querySelector('[data-runs]').textContent === '1'",
+        undefined,
+        { timeout: 60_000 },
+      );
+      await page.click("[data-unrelated]");
+      // The watch queued by an unrelated write in the same turn ran at most
+      // once during the overrun, so it survives it: before the fix the overflow
+      // stopped it for good and it never fired again.
+      await page.waitForFunction(
+        "document.querySelector('[data-runs]').textContent === '2'",
+        undefined,
+        { timeout: 60_000 },
+      );
+      assert.equal(failures.length, 1);
+      assert.match(
+        failures[0] ?? "",
+        /Reactive updates cannot run more than 100000 observers in one flush/u,
+      );
+    });
+  },
+);
+
+// The budget stops a runaway by run count, so a cycle wide enough that the
+// budget cannot run any of its observers four times reached the threshold
+// nowhere: every observer was put back, the next flush repeated the pass, and
+// the microtask chain never yielded. 100000 / 4 is 25000, so a cycle wider than
+// that is the case, and it must end the same way a two-observer cycle does.
+const wideCycleObservers = 30000;
+
+const wideCycleApplication = `
+state ticks: List<number> = []
+state cells: List<number> = []
+state unrelated: number = 0
+state unrelatedRuns: number = 0
+
+watch unrelated:
+    unrelatedRuns = unrelatedRuns + 1
+
+component Cell(index: number, total: number):
+    watch ticks[index] as value, _:
+        if value > 0:
+            ticks[(index + 1) % total] = value + 1
+    return <i></i>
+
+component App:
+    def build():
+        let nextTicks: List<number> = []
+        let ids: List<number> = []
+        let index = 0
+        while index < ${String(wideCycleObservers)}:
+            nextTicks.append(0)
+            ids.append(index)
+            index = index + 1
+        ticks = nextTicks
+        cells = ids
+
+    def storm():
+        ticks[0] = ticks[0] + 1
+
+    def bumpUnrelated():
+        unrelated = unrelated + 1
+
+    return <main>
+        <p data-runs>{unrelatedRuns}</p>
+        <div data-cells>{cells.map(id => <Cell key={str(id)} index={id} total={${String(wideCycleObservers)}} />)}</div>
+        <button data-build on:click={build}>build</button>
+        <button data-storm on:click={storm}>storm</button>
+        <button data-unrelated on:click={bumpUnrelated}>unrelated</button>
+    </main>
+
+mount(<App />, "#app")
+`.trimStart();
+
+test(
+  "[R1] a runaway wider than the budget's run count still ends the turn",
+  { timeout: 300_000 },
+  async () => {
+    await mountInChromium(wideCycleApplication, async (page, failures) => {
+      await page.click("[data-build]");
+      await page.waitForFunction(
+        `document.querySelectorAll('[data-cells] i').length === ${String(wideCycleObservers)}`,
+        undefined,
+        { timeout: 120_000 },
+      );
+      await page.click("[data-storm]");
+      // The page answers again, and an unrelated write still reaches its watch:
+      // before the fix this click never landed, because the overrun stopped no
+      // observer and rescheduled itself forever.
+      await page.click("[data-unrelated]", { timeout: 60_000 });
+      await page.waitForFunction(
+        "document.querySelector('[data-runs]').textContent === '1'",
+        undefined,
+        { timeout: 60_000 },
+      );
+      assert.equal(failures.length, 1);
+      assert.match(
+        failures[0] ?? "",
+        /Reactive updates cannot run more than 100000 observers in one flush/u,
+      );
+    });
+  },
+);
+
+test("[R1] both flush drains carry the same overrun progress rules", async () => {
+  // The registry drain in runtime-foundation.ts and the prelude drain in the
+  // emitter template share the queues, so an overrun that made progress in one
+  // and not the other would freeze the page whenever velar/app stamped the
+  // registry first. Only their identifiers may differ.
+  const drains = [
+    await readFile(join(root, "packages", "web", "src", "runtime-foundation.ts"), "utf8"),
+    await readFile(join(root, "packages", "web", "src", "emitter.ts"), "utf8"),
+  ];
+  for (const drain of drains) {
+    // The threshold falls to the highest run count present, so an overrun that
+    // ran nobody four times still stops the observers it did run.
+    assert.match(drain, /if \(observer\.flushToken === token && observer\.flushRuns > threshold\) threshold = observer\.flushRuns;/u);
+    assert.match(drain, /if \(threshold > 4\) threshold = 4;/u);
+    assert.match(drain, /if \(threshold > 0 && observer\.flushToken === token && observer\.flushRuns >= threshold\)/u);
+    // The token carries into the flush the overrun schedules, so run counts
+    // accumulate across the chain and the unreached observers only shrink.
+    assert.match(drain, /(?:__velarOverflowToken|overflowToken) = token;\n/u);
+    assert.match(drain, /const token = (?:__velarOverflowToken|overflowToken) === null \? \{\} : (?:__velarOverflowToken|overflowToken);\n\s*(?:__velarOverflowToken|overflowToken) = null;/u);
+  }
+});
+
+test("[R1] a watch that writes through a helper is classified as a writer", () => {
+  // D90's R1-a revision made the compile ask the same question this runtime
+  // classifier answers, so the two writing watches below must reach *different*
+  // states or the fixture is itself the VEL5069 contention the revision
+  // introduced. `relay` still reaches its write through a second helper, which
+  // is what the third classification line is here to prove.
+  const result = compile(
+    `
+state a: number = 0
+state b: number = 0
+state c: number = 0
+let log = ""
+
+def bump(value: number):
+    b = value * 2
+
+def shift(value: number):
+    c = value * 3
+
+def relay(value: number):
+    shift(value)
+
+def loops(value: number):
+    loops(value)
+
+def quiet(value: number):
+    log = log + str(value)
+
+watch a + b as sum, _:
+    log = log + str(sum)
+
+watch a:
+    bump(a)
+
+watch a:
+    relay(a)
+
+watch a:
+    loops(a)
+
+watch a:
+    quiet(a)
+
+mount(<i>{log}{c}</i>, "#app")
+`.trimStart(),
+  );
+  assert.deepEqual(result.diagnostics, []);
+  const produces = (result.code ?? "").split("\n")
+    .filter((line) => line.includes("__velarGlobalScope,"))
+    .map((line) => line.trim());
+  // The observing watch, the direct helper, the helper's own helper, a helper
+  // that only recurses, and a helper that writes no state -- in that order.
+  assert.deepEqual(produces, [
+    "}, __velarGlobalScope, false);",
+    "}, __velarGlobalScope, true);",
+    "}, __velarGlobalScope, true);",
+    "}, __velarGlobalScope, false);",
+    "}, __velarGlobalScope, false);",
+  ]);
+});
+
+// R1 again, for the spelling that puts the write in a named function: moving
+// the two watch blocks past each other must not change what the program prints,
+// on the first firing as much as on every later one. The runtime promotes a
+// watch to a writer only after it has been seen writing, so the first firing is
+// the compile-time classifier's to get right.
+function helperOrderApplication(writerFirst: boolean): string {
+  const observing = `watch a + b as sum, _:\n    log = log + "sum=" + str(sum) + ";"`;
+  const writing = `watch a:\n    bump(a)`;
+  return `
+let log = ""
+
+state a: number = 0
+state b: number = 0
+state revision: number = 0
+
+def bump(value: number):
+    b = value * 2
+
+${writerFirst ? writing : observing}
+
+${writerFirst ? observing : writing}
+
+def at(_: number, text: string) -> string:
+    return text
+
+component App:
+    def run():
+        a = 1
+
+    def refresh():
+        revision = revision + 1
+
+    return <main>
+        <p data-log>{at(revision, log)}</p>
+        <button data-run on:click={run}>run</button>
+        <button data-refresh on:click={refresh}>refresh</button>
+    </main>
+
+mount(<App />, "#app")
+`.trimStart();
+}
+
+test(
+  "[R1] a watch that writes through a helper settles before the watches that observe",
+  { timeout: 120_000 },
+  async () => {
+    const logs: string[] = [];
+    for (const writerFirst of [false, true]) {
+      await mountInChromium(helperOrderApplication(writerFirst), async (page, failures) => {
+        await page.click("[data-run]");
+        await page.click("[data-refresh]");
+        logs.push((await page.textContent("[data-log]")) ?? "");
+        assert.deepEqual(failures, []);
+      });
+    }
+    // Before the fix the observing watch fired on the half-settled world when
+    // it was declared first: ["sum=1;sum=3;", "sum=3;"].
+    assert.deepEqual(logs, ["sum=3;", "sum=3;"]);
+  },
+);

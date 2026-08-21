@@ -23,7 +23,13 @@ one round.
 The working loop:
 
 1. Write ordinary code the way a fluent JS/Python author would.
-2. Run `velar check`. Do exactly what each diagnostic says.
+2. Run `velar check`. Do exactly what each diagnostic says. It reports
+   **advisories** as well — a second channel for a spelling Vel accepts with a
+   meaning other than the one your JS/Python reflex intended. An advisory never
+   fails the check, and leaving one unresolved means the work is not done:
+   either write the spelling it names, or put `// velar-allow <CODE>: <reason>`
+   on that line saying why the code is right as written. A suppression with no
+   reason, and one that no longer applies, are both compile errors.
 3. Run `velar fix` to apply every rewrite the diagnostics already named
    (retired spellings with one successor, line-ending semicolons, and the rest
    of that family); it never rewrites anything that needs a decision, so what
@@ -91,19 +97,27 @@ module; the body may `await` directly and needs no `export`. A file that declare
 
 ## The traps your reflexes will hit
 
-Everything in this table was hit by real models writing Vel blind. All but
-the first two rows produce a teaching diagnostic, so `velar check` will catch
-them; the first two are the **silent traps** in the list — read them twice.
+Everything in this table was hit by real models writing Vel blind. Most rows
+produce a teaching diagnostic, so `velar check` will catch them; the rows
+marked **A1**, **A2**, and **A3** are answered by an advisory instead, which
+reports without failing the check. Read the **silent** rows twice — nothing is
+reported at all and the program runs with the other meaning: template
+interpolation, `a // b` where the divisor is a name rather than arithmetic, and
+`[1, 2] == [1, 2]`. The `Type.parse` row is silent as well, but it is a
+guarantee rather than a trap.
 
 | Your reflex | Write instead |
 | --- | --- |
 | `"${value}"` or `` `${value}` `` template interpolation | `f"{value}"` or `` f`{value}` ``. Only the `f` prefix interpolates, in either delimiter; `${...}` is legal literal text in every string — including a backtick one — so nothing warns you. |
-| `a // b` floor division | `//` starts a comment, so the rest of the line disappears and `const c = a // b` silently binds `a`. Write `(a / b).floor()`. |
+| `a // b` floor division (**A1**) | `//` starts a comment, so the rest of the line disappears and `const c = a // b` silently binds `a`. Write `(a / b).floor()`. The advisory reaches only a comment body made of digits and arithmetic — `a // 2` reports, `a // b` does not, because a body carrying letters is an ordinary comment. |
+| `for i, v in nums:` (**A2**) | `for v, i in nums:` — the two-slot `for` gives `value, index`, like JS `forEach((v, i) => …)` and unlike Python's `enumerate`. |
+| `-7 % 3` expecting `2` (**A3**) | Vel's `%` is JavaScript's, so it is `-1`. Python's non-negative modulo is `((a % b) + b) % b`. |
 | `# comment` | `// comment` (`///` documents the following declaration). |
 | `function f(...)`, `fn f(...)` | `def f(...) -> Result:` |
 | `interface X:`, `record X:`, `struct X:` | `type X:` — one keyword for record shapes and aliases. |
 | `items.length` | `items.size` (also on strings, Sets, Maps). |
 | `items.push(x)` | `items.append(x)`. There is no `splice`/`shift`/`unshift`/mutating `sort`; use `insert`, `pop`, `remove`, `extend`, and the copying `sorted()`/`reversed()`. |
+| `{retry: 1, timeoutMs: 30}` where the type declares `timeout` | A record literal written at an annotated position is closed: an undeclared key is reported, and the nearest declared field named when one is near enough — `Type 'Options' has no field 'timeoutMs'; did you mean 'timeout'?`, against a bare `Type 'Options' has no field 'extra'` when no declared name is close. The annotation may sit on the binding, the parameter, the result, or the collection the literal is written into. A value that is not a literal stays structurally open, so passing a record that happens to carry more is unaffected. |
 | `const items = []`, `const tags = Set()` | An empty collection takes its type where it is written: `const items: List<string> = []`. A later `append`/`add`/`set` never types the declaration. A contextual position supplies it too, so `take(Set())` and `return Map()` need no annotation. |
 | `if value:` truthiness | Conditions accept only `bool`/`bool?`. Test presence explicitly: `if value != null:`. |
 | `value is null` | `value == null` / `value != null` — `is` tests runtime types, `null` is a value. |
@@ -118,6 +132,7 @@ them; the first two are the **silent traps** in the list — read them twice.
 | `"""triple-quoted"""` for a block of text | A layout string: a double quote followed immediately by a newline opens it; a quote back at the opening line's indentation closes it. Backtick strings are real, but always single-line. |
 | Escaping `\"` through a JSON, HTML, or selector string | Use backticks: `` `{"name":"Nova"}` `` is the same `string` value, with `"` as ordinary text. Prefixes are orthogonal (`` f` ``, `` r` ``, `` rf` ``), and `velar format` picks the delimiter for you (`"` by default, backticks when the text contains `"`), so write whichever is convenient. |
 | `007`, `.5` | Write `7`, `0.5`. Explicit `0xFF`, `0b1010`, and `0o17` integers are supported; legacy leading-zero octal is not. Group long digits with `_` — `1_000_000`. `Infinity` and `NaN` are not literals: write `1 / 0` and `0 / 0`. |
+| Pasting a wide id or an exact bit pattern as a number literal | An integer literal `number` cannot hold exactly is refused rather than rounded: `9007199254740993` and `0x20000000000001` both report instead of becoming `9007199254740992`. Carry an identifier that wide as a `string`. Only a literal written as an integer is tested — a fraction or exponent spelling keeps the ordinary nearest-value reading. |
 | `a == b == c` | Equality never chains: `a == b and b == c`. Ordered chains work but must point one way — `0 < index <= size` is fine, `a < b > c` is not. An `in` or `is` test inside a comparison needs parentheses. |
 | A line that is only a value — `x == 5`, `items[0]`, `"a note"` | A statement must do something: call, assign, `await`, or `async`. A computed-and-discarded value is a compile error, and a bare string is not a docstring — use `//`. |
 | A block comment that starts or ends beside code on a multi-line span | `/* */` exists and nests — commenting out a region that already holds a comment works — but a multi-line one takes whole lines: only `/*` on its opening line, only `*/` on its closing line. Within a single line it can sit anywhere: `call(/* why */ value)`. |
@@ -129,12 +144,15 @@ them; the first two are the **silent traps** in the list — read them twice.
 | `map[key]` reads | `map.get(key)` returns `T?`. On Lists, `[index]` throws on a bug; `.get(index)` returns `null` when absence is an expected answer. |
 | `[...text]` or `list(text)` for characters | `text.split("")` — the empty separator splits per Unicode code point. |
 | `x !== x` or `Number.isNaN(x)` | Number predicates are members: `x.isNaN()`, `x.isFinite()`, `x.isInteger()`. `NaN == NaN` is `true` — equality is SameValueZero. |
+| `Math.min(a, b)` or `values.sorted()` where a NaN may be present | A NaN may be held and tested, and one policy governs the rest: `Math.min`, `Math.max`, `Math.clamp`, `sorted()`, `sorted(by=)`, `min()`, `max()`, `sum()`, and the ordering a `Comparable`-bounded type parameter performs all raise instead of answering. The bare `<`, `<=`, `>`, and `>=` on a plain `number` are the one exception and keep IEEE behavior, so every comparison against a NaN is `false` and `if a < b:` reports nothing. Drop it first — `values.filter(v => not v.isNaN())`. |
 | `text.trim().size == 0` blank test | `text.isBlank()` — `true` for empty or whitespace-only text. |
 | `while true:` plus a `pop()` null check to drain a List | `pop(index=-1)` returns `T` and throws `IndexError` when empty or out of range, so drain with `while items.size > 0:`. |
 | `1 == "1"`, `user == "a"`, `A.member == B.member`, `raw == Kind.member` | `==`/`!=` require the operand types to intersect. Compare enums with `Kind.parse(raw) == Kind.member` when the text must name a member — `parse` throws otherwise — or `str(Kind.member) == raw` when unknown values must be ignored, as on an open wire protocol. `value == null` on an optional is always fine. |
 | `[1, 2] == [1, 2]` content comparison | Collection `==` is identity; `equals(a, b)` compares data deeply (Lists ordered, Sets/Maps by members, SameValueZero leaves) with no import. |
 | Iterating or spreading an enum object | `Status.values()` returns the members in declaration order as a fresh `List<Status>`. |
 | `sorted()`, `min()`, or `sorted(by=)` over enums | Only `number`, `string`, and single-category unions are ordered. Give the order explicitly with `sorted(by=row => row.rank)` or a string-backed enum (`low = "1-low"`). |
+| Writing through the value you handed to `Type.parse` | `parse` returns a copy, so "validated" means "and it stays valid" rather than "it was correct at that instant": neither side's later writes reach the other. Positions the type leaves opaque — an `unknown` field, a class instance — stay shared. |
+| `export const client = thing`, where `thing` came out of `unsafe js` | `any` may not stand at an export position, inferred as readily as written: a consuming module never writes `unsafe`, so it would inherit a value carrying no guarantee at all. Validate into a declared type in this module and export that. An exported `def` with no result annotation publishes whatever its body inferred, so it is refused the same way. |
 
 The long tail is deliberately not in this table: the diagnostic will name
 the current spelling when you hit it.

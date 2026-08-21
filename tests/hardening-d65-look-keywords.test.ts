@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import { compile as compileCore } from "@velarscript/compiler";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
 import { repositoryRoot } from "./repository-root.ts";
-import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
+import { velarCompilerExtension, webModuleInterfaces } from "../packages/web/src/compiler.ts";
 import {
   LOOK_KEYWORD_DECIDED_KINDS,
   LOOK_PARTIAL_KEYWORD_PROPERTIES,
@@ -72,6 +72,31 @@ async function webProject(prefix: string, main: string): Promise<string> {
 function lookOf(name: string, entries: readonly (readonly [string, string])[]): string {
   return `export const ${name} = look:\n${entries.map(([property, value]) => `    ${property} = "${value}"`).join("\n")}\n`;
 }
+
+function webMessages(source: string): readonly string[] {
+  const imports = new Map<string, unknown>();
+  const lookExports = webModuleInterfaces.get("velar/look")?.exports;
+  for (const match of source.matchAll(/import\s*\{([^}]*)\}\s*from\s*"velar\/look"/gu)) {
+    for (const raw of match[1]!.split(",")) {
+      const name = raw.trim();
+      const type = name ? lookExports?.get(name) : undefined;
+      if (type) imports.set(name, type);
+    }
+  }
+  const result = compileCore(source, { analysis: { imports: imports as never }, extensions: [velarCompilerExtension] });
+  return result.diagnostics.map((item) => `${item.code} ${item.message}`);
+}
+
+// D65 item 3 makes a `const` string a design token, so the same value written
+// as a token and as a record field has to meet the same closed set the literal
+// meets. The probes below were literal-only, which is exactly the shape the
+// checker could see: a token spelling compiled clean and reached the browser as
+// a declaration it discards, which is the failure rule 168 exists to stop.
+const lookValueSpellings: readonly (readonly [label: string, spell: (property: string, value: string) => string])[] = [
+  ["literal", (property, value) => `export const probe = look:\n    ${property} = "${value}"\n`],
+  ["const token", (property, value) => `const token = "${value}"\nexport const probe = look:\n    ${property} = token\n`],
+  ["record field", (property, value) => `const tokens = {shade: "${value}"}\nexport const probe = look:\n    ${property} = tokens.shade\n`],
+];
 
 // Every property this ruling closed, with a value its CSS grammar really has
 // and a value only the shared fallback list ever had. Each `wrong` below is a
@@ -249,4 +274,44 @@ mount(<div />, "#app")
   // The boundary is named next to the escape that reaches past it, the same
   // pairing a wholly excluded property already gets.
   assert.match(checked.output, /import css unsafe/u);
+});
+
+// ---------------------------------------------------------------------------
+// Rule 168, the spelling half — the closed set is the property's, not the
+// literal's. Wave web, web-10.
+// ---------------------------------------------------------------------------
+
+test("[D65-168] a const design token and a record field meet the same closed set the literal meets", () => {
+  for (const [property, right, wrong] of closedProperties) {
+    for (const [label, spell] of lookValueSpellings) {
+      assert.deepEqual(webMessages(spell(property, right)), [], `${property} / ${label}`);
+      const reported = webMessages(spell(property, wrong));
+      assert.ok(
+        reported.some((message) => message.startsWith("VEL5038") && message.includes(`does not accept '${wrong}'`)),
+        `${property} / ${label}: ${JSON.stringify(reported)}`,
+      );
+    }
+  }
+});
+
+test("[D65-168] a misspelled design token gets the suggestion its literal gets", () => {
+  const literal = webMessages(`
+export const probe = look:
+    display = "grdi"
+`.trimStart());
+  const token = webMessages(`
+const layout = "grdi"
+export const probe = look:
+    display = layout
+`.trimStart());
+  assert.deepEqual(token, literal);
+  assert.deepEqual(token, ["VEL5038 Look property 'display' does not accept 'grdi'; did you mean 'grid'?"]);
+  // A token that folds to composed CSS text rather than to a keyword is not a
+  // keyword and keeps its builder's own checks instead of this one.
+  assert.deepEqual(webMessages(`
+import {rgb} from "velar/look"
+const brand = rgb(120, 150, 255)
+export const probe = look:
+    color = brand
+`.trimStart()), []);
 });

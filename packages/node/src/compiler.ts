@@ -319,7 +319,7 @@ const httpTransportPhaseIdentity = "velar/http#enum:HttpTransportPhase";
 const httpTransportPhaseMembers = new Set(["request", "response"]);
 const httpTransportPhaseType: ValueType = { kind: "enum", name: "HttpTransportPhase", identity: httpTransportPhaseIdentity };
 const httpAbortErrorIdentity = "velar/http#class:HttpAbortError";
-const httpErrorIdentity = "velar/http#class:HttpError";
+const httpResponseErrorIdentity = "velar/http#class:HttpResponseError";
 const httpTransportErrorIdentity = "velar/http#class:HttpTransportError";
 const httpAbortErrorClass: ClassInfo = {
   identity: httpAbortErrorIdentity,
@@ -329,8 +329,8 @@ const httpAbortErrorClass: ClassInfo = {
   getters: new Set(), abstractGetters: new Set(), methods: new Map(), abstractMethods: new Set(),
   staticFields: new Map(), staticGetters: new Set(), staticMethods: new Map(),
 };
-const httpErrorClass: ClassInfo = {
-  identity: httpErrorIdentity,
+const httpResponseErrorClass: ClassInfo = {
+  identity: httpResponseErrorIdentity,
   parameters: [stringType, numberType, stringType, unknownType], parameterNames: ["message", "status", "url", "body"], requiredParameters: 3,
   base: "Error", abstract: false,
   fields: new Map([
@@ -356,6 +356,7 @@ const webSocketConnectionType: ValueType = { kind: "named", name: "WebSocketConn
 const webSocketServerType: ValueType = { kind: "named", name: "WebSocketServer", identity: webSocketServerIdentity };
 const webSocketMessageType: ValueType = { kind: "union", members: [stringType, bytesType] };
 const webSocketConnectionFields = new Map<string, ValueType>([
+  ["origin", optional(stringType)],
   ["state", functionType([], [], stringType)],
   ["send", functionType(["message"], [webSocketMessageType], promise(nullType))],
   ["next", functionType([], [], promise(optional(webSocketMessageType)))],
@@ -525,7 +526,7 @@ export const nodeModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Ma
         ["size", numberType],
         ["text", functionType([], [], promise(stringType))],
         ["bytes", functionType([], [], promise(bytesType))],
-        ["save", functionType(["path"], [stringType], promise(nullType))],
+        ["save", functionType(["path", "root"], [stringType, stringType], promise(nullType))],
       ])],
     ]),
     new Map([
@@ -619,7 +620,7 @@ export const nodeModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Ma
       ["secretHeader", functionType(["name", "environment", "prefix"], [stringType, stringType, stringType], httpSecretHeaderType, 2)],
       ["HttpTransportPhase", { kind: "enumObject", name: "HttpTransportPhase", identity: httpTransportPhaseIdentity, members: httpTransportPhaseMembers }],
       ["HttpAbortError", { kind: "classConstructor", name: "HttpAbortError", identity: httpAbortErrorIdentity }],
-      ["HttpError", { kind: "classConstructor", name: "HttpError", identity: httpErrorIdentity }],
+      ["HttpResponseError", { kind: "classConstructor", name: "HttpResponseError", identity: httpResponseErrorIdentity }],
       ["HttpTransportError", { kind: "classConstructor", name: "HttpTransportError", identity: httpTransportErrorIdentity }],
     ]),
     new Map(),
@@ -627,7 +628,7 @@ export const nodeModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Ma
     new Map(),
     new Map([
       ["HttpAbortError", httpAbortErrorClass],
-      ["HttpError", httpErrorClass],
+      ["HttpResponseError", httpResponseErrorClass],
       ["HttpTransportError", httpTransportErrorClass],
     ]),
     new Map([["HttpTransportPhase", { identity: httpTransportPhaseIdentity, members: httpTransportPhaseMembers }]]),
@@ -1238,6 +1239,67 @@ export const velarNodeCompilerExtension: CompilerExtension = Object.freeze({
   analysis: Object.freeze({
     directAwaitStatement: nodeServerStatementContainsDirectAwait,
     inferIntrinsic: inferNodeIntrinsic,
+    // The Node guide already rules that the ambient Node globals are not the
+    // door — "use velar/fs, velar/path, velar/process, velar/env,
+    // velar/terminal, velar/http, velar/worker, and velar/websocket instead of
+    // ambient Node globals" — but the rule had no enforcement arm, so every
+    // one of those names fell through to a bare `Unknown name`. The Web
+    // surface answers the same class of mistake with the module that replaced
+    // it; this is the Node half of that answer.
+    //
+    // Only the names a Node reflex reaches for live here. The target-neutral
+    // globals (setTimeout, structuredClone, URL, RegExp, TextEncoder,
+    // AbortController, Symbol) are answered once in Core's own roster, and
+    // localStorage/sessionStorage belong to Web — one mistake keeps one
+    // answer, in one file.
+    //
+    // `module` is not listed: it is a VelarScript keyword, so it never reaches
+    // name resolution and already reports that it cannot be a name.
+    globalGuidance: new Map([
+      // The three uses a Node author spells `process` for are three different
+      // modules, so the message names all three rather than guessing. There is
+      // no argv or cwd successor in the registry, so it names none.
+      ["process", `Use "velar/env" 'get'/'require' for environment variables, "velar/process" 'run'/'start' to run a child process, and "velar/host" 'exit' to stop this one; VelarScript has no ambient process global`],
+      ["Buffer", `Import from "velar/binary" — 'Bytes' and the typed buffers — instead of the Buffer global`],
+      ["require", `VelarScript modules use 'import {name} from "..."'; there is no require`],
+      ["exports", `VelarScript modules use 'export' on the declaration itself; there is no exports object`],
+      ["global", "VelarScript has no ambient global object; import the capability you need"],
+      ["__dirname", `Use "velar/path" — 'resolve', 'join', 'dirname', 'basename' — to build a path; a module's own address is not an ambient global`],
+      ["__filename", `Use "velar/path" — 'resolve', 'join', 'dirname', 'basename' — to build a path; a module's own address is not an ambient global`],
+      // Word for word the Web extension's sentence: one mistake, one answer,
+      // on both surfaces.
+      ["fetch", "Use velar/http instead of the raw fetch global"],
+      // The sentence quoted above names velar/websocket too, and Node 22 does
+      // carry an ambient `WebSocket`, so the reflex reaches this surface the
+      // same way `fetch` does. The successor is extension-owned rather than
+      // Core's, which is why it is answered here: a browser can only
+      // `connect`, while this surface can `listen` as well.
+      ["WebSocket", `Use "velar/websocket" — 'connect' opens a connection and 'listen' accepts them — instead of the WebSocket global`],
+      // The `const path = require("path")` reflex reaches this surface as a
+      // bare *module specifier* rather than as a global, and it is the one
+      // shape in this file that answered wrongly rather than emptily: `path`
+      // earned `did you mean 'Math'?`, a confident guess at an unrelated
+      // namespace, which is the worst way a rejection can miss.
+      //
+      // These names are Node's own — a Core author never writes
+      // `worker_threads` — so the Node extension answers them even where the
+      // successor module belongs to Core. Core's roster holds none of them, so
+      // no mistake gains a second answer; the test asserts that boundary.
+      ["path", `Import what you need — 'import {join, resolve, dirname, basename} from "velar/path"' — VelarScript has no bare module names`],
+      ["fs", `Import what you need — 'import {readText, writeText, exists, list} from "velar/fs"' — VelarScript has no bare module names`],
+      ["http", `Import the client — 'import {http} from "velar/http"' — then call 'http.get(url)'; VelarScript has no bare module names`],
+      ["url", `Import what you need — 'import {parse, join, withQuery, encode} from "velar/url"' — VelarScript has no bare module names`],
+      ["child_process", `Import from "velar/process" — 'run' waits for a command and 'start' keeps a child running — VelarScript has no bare module names`],
+      ["worker_threads", `Import from "velar/worker" — 'worker' starts one typed worker and 'workerPool' runs several — VelarScript has no bare module names`],
+      // Hashing and ciphers have no successor in the registry, so the message
+      // names only the two doors that exist and says the module does not.
+      ["crypto", `Use 'import {uuid} from "velar/id"' for an identifier and "velar/random" 'random(seed)' for a reproducible stream; VelarScript has no crypto module, so hashing and ciphers have no successor`],
+      // Core answers `setTimeout`/`setInterval` because both hosts carry them.
+      // `setImmediate` is Node's alone, so its answer is here rather than a
+      // second copy there.
+      ["setImmediate", "Use 'await Promise.sleep(0ms)' to yield before the work, or velar/task's 'task(work)' to run it alongside; VelarScript has no callback scheduler"],
+      ["clearImmediate", "There is no callback scheduler to clear; 'await Promise.sleep(0ms)' yields inline, and velar/task's 'task(work)' is the schedule a Cancellation can stop"],
+    ]),
   }),
   modules: Object.freeze({
     apiVersion: VELAR_NODE_API_VERSION,

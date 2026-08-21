@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { lstat, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, parse, resolve } from "node:path";
 import { CURRENT_PROJECT_FORMAT_VERSION, resolveVelarProject } from "./config.ts";
+import { unsupportedProjectFormat } from "./project-format.ts";
 import { hostErrorMessage, isHostErrorCode } from "./host-error.ts";
 import {
   resolveExtensionPackages,
@@ -244,7 +245,9 @@ async function locatePackageProject(cwd: string): Promise<PackageProject> {
       if (!await ordinaryFile(packagePath)) throw new Error(`${current} contains velar.json but no ordinary package.json`);
       const { source: manifestSource, value: manifest } = await readJsonObject(manifestPath, "VelarScript project manifest");
       if (manifest.formatVersion !== CURRENT_PROJECT_FORMAT_VERSION) {
-        throw new Error(`${manifestPath}: package commands require formatVersion ${CURRENT_PROJECT_FORMAT_VERSION}`);
+        throw new Error(typeof manifest.formatVersion === "number"
+          ? `${manifestPath}: ${unsupportedProjectFormat(manifest.formatVersion)}`
+          : `${manifestPath}: package commands require formatVersion ${CURRENT_PROJECT_FORMAT_VERSION}`);
       }
       extensionNames(manifest);
       return { root: current, manifestPath, packagePath, manifestSource, manifest };
