@@ -54,5 +54,39 @@ long tail.
   Advisories never fail a build, `velar check`, CI, or a release — the rule
   above is what enforces them, not the exit code.
 
+## Three shapes review keeps finding
+
+An audit filed 269 defects against this repository and confirmed 205. These
+three shapes account for a large share of them — and for most of what the fix
+waves themselves got wrong on the first pass. Check for each before calling a
+change done.
+
+- **One concept, two definitions.** The runtime classified a watch that writes
+  through a helper as a writer and the compile-time check did not, so the rule
+  it enforced was defeated by extracting a function. `->` lexes as `arrow` and
+  `=>` as `fatArrow`. Four line models disagreed about what a line is. Two
+  classes were both spelled `HttpError`, so `is` against the wrong one compiled
+  clean and was always false. When you add a check, find where the same question
+  is already answered and answer it the same way.
+
+- **A promise wider than the code.** The charter said props evaluate left to
+  right, then children, then the component function; all three clauses were
+  false. A source comment cited "charter §14 (GRM-A3)" — no such section
+  existed, and the only `GRM-A3` in the tree was an unfinished plan item in an
+  archived audit. A test named "an open group is bounded by the history byte
+  budget" asserted no bound on the group. State the claim you can demonstrate,
+  and verify prose against code, never code against prose.
+
+- **The example fixed, the class left open.** `rgba` gained a range check while
+  `hsl` two lines above did not. A nested `host` was resolved at root level but
+  not one node deeper. A guard was broadened past its own message. Close the
+  sink, not the spelling: after the named case, look for its neighbours in the
+  same file and report what you found, fixed or not.
+
+The rulings behind the current language are in
+[docs/decisions/D90-AUDIT-SEMANTIC-RULINGS.md](docs/decisions/D90-AUDIT-SEMANTIC-RULINGS.md),
+and the advisory channel in
+[docs/decisions/D89-ADVISORY-CHANNEL.md](docs/decisions/D89-ADVISORY-CHANNEL.md).
+
 The full Core guide is [docs/ai-skill.md](docs/ai-skill.md). Target code must
 follow its nearer guide as well as this repository contract.
