@@ -1,4 +1,5 @@
 import type { TypeReference, TypeSyntax } from "./ast.ts";
+import { byCodeUnit } from "./stable-order.ts";
 
 export interface EnumInfo {
   readonly identity: string;
@@ -902,7 +903,7 @@ function buildTypeIdentity(type: ValueType, includeCallableParameterNames: boole
         .map(([name, value]) => identityNode("property", [name, value])),
       identityNode("required-properties", [...type.requiredProperties].sort()),
       identityNode("arguments", type.arguments.map(nested)),
-      identityNode("metadata", Object.entries(type.metadata ?? {}).sort(([left], [right]) => left.localeCompare(right)).map(([name, value]) => identityNode("entry", [name, value]))),
+      identityNode("metadata", Object.entries(type.metadata ?? {}).sort(([left], [right]) => byCodeUnit(left, right)).map(([name, value]) => identityNode("entry", [name, value]))),
     ]);
     case "union":
       return identityNode("union", type.members.map(nested).sort());

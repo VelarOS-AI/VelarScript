@@ -11,6 +11,7 @@ import { isParserComplexityFailure, Parser } from "./parser.ts";
 import { SourceText, type Span } from "./source.ts";
 import { bindingNameRestriction, memberNameRestriction } from "./source-names.ts";
 import { buildSemanticIndex, type SemanticIndex } from "./semantic.ts";
+import { byCodeUnit } from "./stable-order.ts";
 import { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
 import {
   bindNamedTypeParameters,
@@ -234,8 +235,8 @@ function compileUnchecked(text: string, options: CompileOptions): CompileResult 
   diagnostics.push(...resolved.diagnostics);
   const reportedAdvisories = [...resolved.advisories];
 
-  diagnostics.sort((left, right) => left.span.start - right.span.start || left.code.localeCompare(right.code));
-  reportedAdvisories.sort((left, right) => left.span.start - right.span.start || left.code.localeCompare(right.code));
+  diagnostics.sort((left, right) => left.span.start - right.span.start || byCodeUnit(left.code, right.code));
+  reportedAdvisories.sort((left, right) => left.span.start - right.span.start || byCodeUnit(left.code, right.code));
   const emitterExtensions = extensions.filter((extension) => extension.createEmitter);
   if (emitterExtensions.length > 1) throw new Error("Only one compiler extension may own JavaScript emission");
   const emitterOptions: CompilerEmitterOptions = {

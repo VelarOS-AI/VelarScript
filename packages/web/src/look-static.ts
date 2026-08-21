@@ -3,6 +3,7 @@ import { LOOK_BORDER_STYLE_NAMES, LOOK_BUILDER_NUMERIC_RANGES, LOOK_BUILDER_SIGN
 import { isWebUnit } from "./ast.ts";
 import { cssString } from "./css-string.ts";
 import { isCssDeclarationValue } from "./css-tokens.ts";
+import { byCodeUnit } from "./stable-order.ts";
 
 export type LookStaticValue =
   | { readonly kind: "number"; readonly value: number }
@@ -345,7 +346,7 @@ export function lookStaticCss(value: LookStaticValue): string | null {
 export function lookStaticIdentity(value: unknown): string {
   if (!isLookStaticValue(value)) throw new TypeError("Invalid Look static interface value");
   const normalized = (entry: LookStaticValue): unknown => entry.kind === "object"
-    ? { kind: "object", properties: Object.fromEntries(Object.entries(entry.properties).sort(([left], [right]) => left.localeCompare(right)).map(([name, child]) => [name, normalized(child)])) }
+    ? { kind: "object", properties: Object.fromEntries(Object.entries(entry.properties).sort(([left], [right]) => byCodeUnit(left, right)).map(([name, child]) => [name, normalized(child)])) }
     : entry;
   return JSON.stringify(normalized(value));
 }

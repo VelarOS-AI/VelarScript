@@ -9,6 +9,7 @@ import {
 import { hostErrorMessage, isHostErrorCode } from "./host-error.ts";
 import { isReservedExtensionManifestKey } from "./project-format.ts";
 import { bundledExtension } from "./bundled-extension-registry.ts";
+import { byCodeUnit } from "./stable-order.ts";
 
 const MAX_JSON_BYTES = 1024 * 1024;
 const MAX_EXTENSION_GRAPH_SIZE = 64;
@@ -343,7 +344,7 @@ function knownFields(value: Record<string, unknown>, allowed: ReadonlySet<string
 }
 
 function sameStringRecord(left: Readonly<Record<string, string>>, right: Readonly<Record<string, string>>): boolean {
-  const leftEntries = Object.entries(left).sort(([a], [b]) => a.localeCompare(b));
-  const rightEntries = Object.entries(right).sort(([a], [b]) => a.localeCompare(b));
+  const leftEntries = Object.entries(left).sort(([a], [b]) => byCodeUnit(a, b));
+  const rightEntries = Object.entries(right).sort(([a], [b]) => byCodeUnit(a, b));
   return JSON.stringify(leftEntries) === JSON.stringify(rightEntries);
 }

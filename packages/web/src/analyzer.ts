@@ -1136,6 +1136,13 @@ export class VelarWebAnalyzer extends Analyzer {
   private readonly pendingWatchScopes: WatchWriteScope[] = [];
   /** What each `def` of this module writes and calls, keyed by its declaration identity. */
   private readonly functionStateWrites = new Map<string, FunctionStateWrites>();
+  /**
+   * D90 R1-a revision: `const chosen = bump`, mapping the alias binding's
+   * identity to the identity of the binding it names. A call of the alias is a
+   * call of that declaration, so the call graph reads through this map before
+   * it decides a callee is nothing this module declared.
+   */
+  private readonly functionAliases = new Map<string, string>();
   /** The identity of the `def` whose body is being analyzed, or null outside one. */
   private functionWriteSubject: string | null = null;
   /** The identity of the `watch` whose body is being analyzed, or null outside one. */
@@ -1205,6 +1212,7 @@ export class VelarWebAnalyzer extends Analyzer {
     this.watchStateWrites = new Map();
     this.watchStateCalls = new Map();
     this.functionStateWrites.clear();
+    this.functionAliases.clear();
     this.pendingWatchScopes.length = 0;
     this.keyedListSources.clear();
     this.keyedListRebuilds.length = 0;
@@ -1326,6 +1334,7 @@ export class VelarWebAnalyzer extends Analyzer {
     if (statement.kind === "AssignmentStatement" && this.rejectComputedAssignment(statement)) return true;
     if (statement.kind === "VariableDeclaration") {
       this.recordRetiredAccessorDeclaration(statement);
+      this.recordFunctionAlias(statement);
       this.reportExportedCachedContract(statement);
     }
     if (!isWebStatement(statement)) return false;
@@ -1827,6 +1836,46 @@ export class VelarWebAnalyzer extends Analyzer {
   }
 
   /**
+   * D90 R1-a revision: records `const chosen = bump`, the one alias spelling a
+   * module can decide on its own. The name is resolved in the scope the
+   * declaration sits in, before the core walk declares the pattern, so the
+   * alias names the binding the initializer really reads.
+   *
+   * `const` and a bare name are the whole shape. A `let` may be reassigned
+   * anywhere below it, and a destructured, member, conditional, or call
+   * initializer names something this pass cannot decide, so each of those stays
+   * unrecorded and a call through it stays conservatively silent. Recording the
+   * identity is also all this does: an import, a parameter holding a callable,
+   * and a JavaScript value typed `any` file no write record of their own, so an
+   * alias of one still reaches nothing.
+   */
+  private recordFunctionAlias(statement: Extract<Statement, { readonly kind: "VariableDeclaration" }>): void {
+    if (statement.binding !== "const" || statement.pattern.kind !== "NameBindingPattern") return;
+    if (statement.initializer.kind !== "IdentifierExpression") return;
+    const target = this.lookup(statement.initializer.name);
+    if (!target) return;
+    this.functionAliases.set(spanIdentity(statement.pattern.span), spanIdentity(target.span));
+  }
+
+  /**
+   * Follows a chain of aliases — `const a = bump`, then `const b = a` — to the
+   * declaration it finally names. The visited set is what makes a cycle
+   * terminate rather than repeat; stopping inside one returns an identity that
+   * declares nothing, which is exactly what every callee outside this module's
+   * own `def`s already contributes.
+   */
+  private aliasedDeclaration(identity: string): string {
+    const visited = new Set<string>([identity]);
+    let current = identity;
+    for (;;) {
+      const next = this.functionAliases.get(current);
+      if (next === undefined || visited.has(next)) return current;
+      visited.add(next);
+      current = next;
+    }
+  }
+
+  /**
    * D90 R1-a revision: records one call of a plain name, either as a call edge
    * of the `def` making it or as a call the watch being analyzed performs.
    *
@@ -1835,7 +1884,11 @@ export class VelarWebAnalyzer extends Analyzer {
    * a callable, a value typed `any`, and a call on a member all resolve to
    * something that is not a `def` of this module, so no edge is followed and
    * the write stays conservatively silent. Only the module's own declarations
-   * answer, exactly as the runtime's own classifier does.
+   * answer, exactly as the runtime's own classifier does. A `const` alias of
+   * one of those declarations is that declaration under a second name, and
+   * reachableStateWrites reads the edge recorded here through the alias map;
+   * the boundary is unchanged, because an alias of an import or of a parameter
+   * still lands on a binding that declares nothing.
    */
   private recordWatchStateCall(expression: Extract<Expression, { kind: "CallExpression" }>): void {
     if (expression.callee.kind !== "IdentifierExpression") return;
@@ -1860,13 +1913,18 @@ export class VelarWebAnalyzer extends Analyzer {
    * edges. The visited set is what makes recursion and mutual recursion
    * terminate rather than repeat, and an identity with no record — every
    * callee this module did not declare — simply contributes nothing.
+   *
+   * An alias is resolved here rather than where each call was recorded, so this
+   * one path answers both callers of recordWatchStateCall at once: a call a
+   * watch makes itself and a call one `def` makes of another arrive here the
+   * same way, and neither has to know that aliases exist.
    */
   private reachableStateWrites(callee: string): ReadonlyMap<string, string> {
     const reached = new Map<string, string>();
     const visited = new Set<string>();
     const pending = [callee];
     while (pending.length > 0) {
-      const identity = pending.pop()!;
+      const identity = this.aliasedDeclaration(pending.pop()!);
       if (visited.has(identity)) continue;
       visited.add(identity);
       const record = this.functionStateWrites.get(identity);

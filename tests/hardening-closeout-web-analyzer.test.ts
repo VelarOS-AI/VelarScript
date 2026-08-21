@@ -271,9 +271,14 @@ watch t:
 });
 
 test("[co-2] a call through a value is dynamic dispatch and stays silent", () => {
-  // The name resolves to a binding that holds a callable, not to a declaration
-  // of this module, so there is no edge to follow -- the same answer a member
-  // call and a value typed `any` get.
+  // codex-review cr-3 overturned the `const chosen = bump` half of this case.
+  // A `const` bound to a bare name this module declares is that declaration
+  // under a second name: nothing about it is undecided, and calling it silent
+  // let `const chosenBump = bump` defeat the rule outright. What stays silent is
+  // dispatch this module really cannot decide -- a parameter holding a callable,
+  // a binding that may be reassigned -- alongside the member call and the value
+  // typed `any` the cases below and above already cover. The alias half now
+  // lives in tests/hardening-wave-r1a.test.ts under `[cr-3]`.
   assert.deepEqual(messages(`
 state t = 0
 state x = 1
@@ -281,7 +286,27 @@ state x = 1
 def bump():
     x = x + 1
 
-const chosen = bump
+def run(action: () -> null):
+    action()
+
+watch t:
+    run(bump)
+
+watch t:
+    x = 2
+`), []);
+  assert.deepEqual(messages(`
+state t = 0
+state x = 1
+
+def bump():
+    x = x + 1
+
+def scale():
+    x = x * 10
+
+let chosen = bump
+chosen = scale
 
 watch t:
     chosen()

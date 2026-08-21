@@ -205,6 +205,68 @@ export async function verifyToolchainRelease(outputDirectory) {
   return manifest;
 }
 
+/**
+ * A hand-edited version literal is a second copy of a package's generation.
+ * `VELAR_VERSION` stamps build manifests, the `.velar/dev-deps` cache key, and
+ * every reproduction bundle; `VELAR_CREATE_VERSION` is what create-velar pins
+ * the Web and CLI dependencies of every generated project to. Nothing else
+ * reads either against its own manifest, so a release that bumped package.json
+ * and forgot the literal would record the previous generation everywhere and
+ * agree with itself while doing it. Every literal of this kind belongs on this
+ * list; a package whose generation nothing here checks is a release the
+ * manifest cannot speak for.
+ *
+ * A generation that is deliberately independent of any package version does
+ * not: `VELAR_RUNTIME_SCHEMA_VERSION`, `VELAR_TYPE_REGISTRY_VERSION`,
+ * `VELAR_PROMISE_NORMALIZATION_REGISTRY_VERSION` and `VELAR_STANDARD_API_VERSION`
+ * each move on their own schedule and have no manifest to disagree with, and
+ * the `VELAR_*_API_VERSION` of each target is checked against its own package
+ * metadata every time an extension loads. What belongs here is a literal that
+ * must equal something a manifest already states.
+ */
+export const DECLARED_VERSIONS = Object.freeze([
+  Object.freeze({ file: "packages/cli/src/version.ts", name: "VELAR_VERSION", package: "@velarscript/cli" }),
+  Object.freeze({ file: "packages/create/src/types.ts", name: "VELAR_CREATE_VERSION", package: "create-velar" }),
+]);
+
+/**
+ * A version literal that pins a third-party runtime dependency one of our own
+ * manifests declares. `WEBSOCKET_VERSION` is the `ws` the CLI will accept in a
+ * generated project's node_modules; the range that decides which `ws` we ship
+ * is in packages/node/package.json, and nothing read the two against each
+ * other. Either side moving alone leaves every generated WebSocket project
+ * refusing its own runtime dependency at install time, with a green release
+ * behind it. These pin a dependency rather than a package's own generation, so
+ * they are checked against that dependency's declared range, not a version.
+ */
+export const PINNED_DEPENDENCY_VERSIONS = Object.freeze([
+  Object.freeze({ file: "packages/cli/src/node-runtime-dependencies.ts", name: "WEBSOCKET_VERSION", package: "@velarscript/node", dependency: "ws" }),
+]);
+
+/** The `const NAME = "…"` literal a source file declares on one line, exported or not, or null. */
+async function sourceLiteral(directory, file, name) {
+  const source = await readFile(join(directory, file), "utf8");
+  return new RegExp(`^(?:export )?const ${name} = "([^"]*)";$`, "mu").exec(source)?.[1] ?? null;
+}
+
+/** The consistency failure a declared version literal reports, or null when it matches its package. */
+export async function declaredVersionFailure(directory, file, name, manifest) {
+  const declared = await sourceLiteral(directory, file, name);
+  return declared === manifest.version ? null
+    : `${file} declares ${name} ${declared ?? "(unreadable)"}, but ${manifest.name} is ${manifest.version}`;
+}
+
+/** The consistency failure a pinned dependency literal reports, or null when it matches the declared range. */
+export async function pinnedDependencyFailure(directory, file, name, dependency, manifest) {
+  const declared = await sourceLiteral(directory, file, name);
+  const range = manifest.dependencies?.[dependency];
+  if (!range) return `${file} pins ${name}, but ${manifest.name} no longer depends on '${dependency}'`;
+  const pinned = /^[\^~]?(\d+\.\d+\.\d+)$/u.exec(range)?.[1];
+  if (!pinned) return `${manifest.name} depends on ${dependency}@${range}, which names no single version for ${file} to pin`;
+  return declared === pinned ? null
+    : `${file} declares ${name} ${declared ?? "(unreadable)"}, but ${manifest.name} depends on ${dependency}@${range}`;
+}
+
 async function readPackageManifests() {
   const rootManifest = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
   const packages = (await velarPublishedToolchainPackages(root)).map((entry) => entry.manifest);
@@ -259,15 +321,13 @@ async function readPackageManifests() {
   if (cli.dependencies?.["create-velar"] !== rootManifest.version) {
     throw new Error("@velarscript/cli must pin the exact project creator version");
   }
-  // VELAR_VERSION is a hand-edited literal that stamps build manifests, the
-  // `.velar/dev-deps` cache key, and every reproduction bundle. Nothing else
-  // reads it against its own manifest, so a release that bumped package.json
-  // and forgot version.ts would record the previous generation everywhere and
-  // agree with itself while doing it.
-  const versionSource = await readFile(join(root, "packages", "cli", "src", "version.ts"), "utf8");
-  const declaredVersion = /^export const VELAR_VERSION = "([^"]*)";$/mu.exec(versionSource)?.[1];
-  if (declaredVersion !== cli.version) {
-    throw new Error(`packages/cli/src/version.ts declares VELAR_VERSION ${declaredVersion ?? "(unreadable)"}, but @velarscript/cli is ${cli.version}`);
+  for (const declaration of DECLARED_VERSIONS) {
+    const failure = await declaredVersionFailure(root, declaration.file, declaration.name, required(declaration.package));
+    if (failure) throw new Error(failure);
+  }
+  for (const pin of PINNED_DEPENDENCY_VERSIONS) {
+    const failure = await pinnedDependencyFailure(root, pin.file, pin.name, pin.dependency, required(pin.package));
+    if (failure) throw new Error(failure);
   }
   return { root: rootManifest, packages, compiler, core, node, web, create, cli, desktop };
 }

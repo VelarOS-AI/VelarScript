@@ -237,9 +237,84 @@ interface AnalyzableFunctionDeclaration {
   readonly body: FunctionDeclaration["body"];
   readonly span: Span;
   readonly asynchronous?: boolean;
-  // Optional because only a module-level `def` can carry it; a method never
-  // does, and D90 R12 only reasons about what leaves the module.
+  // Optional because only a module-level declaration can carry it. A method
+  // never does — which is why D90 R12 goes through `recordExportedAny` rather
+  // than reading this flag: a public member of a class this module publishes
+  // leaves the module just as an exported `def` does, with no keyword of its
+  // own.
   readonly exported?: boolean;
+  // Class members only. A `private` member is module-internal, and R12 leaves
+  // module-internal `any` legal.
+  readonly private?: boolean;
+}
+
+/**
+ * D90 R12: the class and record names a consumer can read a value *out of*
+ * this type, collected into two frontiers so `exportReachableClasses` can walk
+ * a record's fields without recursing through a cyclic record here.
+ *
+ * It visits output positions for the reason `typeContainsAnyOutput` (types.ts)
+ * does: an input position accepts a value *from* the consumer, so a class
+ * named there is one the consumer already had. The one deliberate difference
+ * is an extension type's `properties`, documented at that case.
+ */
+function collectOutputTypeNames(type: ValueType, classes: string[], records: string[]): void {
+  switch (type.kind) {
+    case "class":
+    case "classConstructor":
+      classes.push(type.name);
+      return;
+    case "optional":
+      collectOutputTypeNames(type.inner, classes, records);
+      return;
+    case "list":
+    case "set":
+      collectOutputTypeNames(type.element, classes, records);
+      return;
+    case "map":
+      collectOutputTypeNames(type.key, classes, records);
+      collectOutputTypeNames(type.value, classes, records);
+      return;
+    case "record":
+    case "promise":
+    case "runtimeType":
+      collectOutputTypeNames(type.value, classes, records);
+      return;
+    case "object":
+      for (const field of type.fields.values()) collectOutputTypeNames(field, classes, records);
+      return;
+    case "named":
+    case "typeObject":
+      // A `named` may still denote a class before resolveNamedClasses runs, so
+      // the name joins both frontiers; the one that does not match a
+      // declaration simply finds nothing.
+      classes.push(type.name);
+      records.push(type.name);
+      for (const argument of type.kind === "named" ? type.application?.arguments ?? [] : []) {
+        collectOutputTypeNames(argument, classes, records);
+      }
+      return;
+    case "extension":
+      // An extension family's `properties` are its *named parameters* — a Web
+      // component's props are supplied by whoever renders it — so they are the
+      // `function` case's `parameters` under another spelling, and are skipped
+      // for the same reason. Walking them made `export component Panel(inner:
+      // Inner)` report `Inner`'s inferred member while `export def take(box:
+      // Inner)` stayed silent: one question, two answers. `arguments` carry
+      // the family's payload — a component's exposed Handle, a route input's
+      // validated value, a provider's result — which a consumer does read out.
+      for (const argument of type.arguments) collectOutputTypeNames(argument, classes, records);
+      return;
+    case "function":
+    case "action":
+    case "intrinsic":
+      collectOutputTypeNames(type.result, classes, records);
+      return;
+    case "union":
+      for (const member of type.members) collectOutputTypeNames(member, classes, records);
+      return;
+    default:
+  }
 }
 
 function continuesOptionalChain(expression: Expression): boolean {
@@ -1473,6 +1548,17 @@ export class Analyzer implements TypeEnvironment {
   private readonly initializationLocalCalls: { readonly binding: Binding; readonly span: Span }[] = [];
   /** Local class bindings mapped to the source offset where their `class` statement evaluates (CLS-D8). */
   private readonly hoistedClassDeclarations = new Map<Binding, number>();
+  /**
+   * D90 R12: public class members whose omitted annotation inferred an output
+   * `any`. Whether the member is at an export position depends on whether a
+   * consumer can reach its class, which is not settled until the whole module
+   * is analyzed, so the report waits for reportExportPositionAny.
+   */
+  private readonly exportPositionCandidates: {
+    readonly className: string;
+    readonly member: string;
+    readonly span: Span;
+  }[] = [];
   /** Module-scope names bound to runtime Type objects (local and imported); see LoweringHints.runtimeTypeObjectNames. */
   private readonly runtimeTypeObjectNames = new Set<string>();
   private staticFieldInitialization: {
@@ -1727,6 +1813,10 @@ export class Analyzer implements TypeEnvironment {
     for (const statement of program.body) {
       this.analyzeStatement(statement);
     }
+    // D90 R12 reports last for the same reason: whether a class member is at
+    // an export position is a question about the module's whole export
+    // surface, which no single declaration can answer as it is analyzed.
+    this.reportExportPositionAny(program);
     // D52 rules 114/116: both namespace migrations report last, because both
     // rewrites need the whole module before they can be written down — one has
     // to know every name the new import would have to clear, and the other has
@@ -5127,6 +5217,15 @@ export class Analyzer implements TypeEnvironment {
     this.exitScope();
     const answered = this.inferCollectedFunctionResult(inferredReturns, !this.blockAlwaysReturns(block.body));
     const source = this.validatedIterationSource(statement, block, answered, baseName);
+    // D90 R12: `@iterate:` is the class's other inferred public contract. A
+    // consumer writing `for item in box` reads the element straight out of
+    // this block, so an element the compiler makes no promise about crosses
+    // the boundary exactly as a method result does. The block has no
+    // annotation to refuse and no `private` spelling, so the class's own
+    // reachability is the whole question.
+    if (typeContainsAnyOutput(source)) {
+      this.exportPositionCandidates.push({ className: statement.name, member: "@iterate", span: block.span });
+    }
     this.inferredFunctionResultTypes.set(this.iterationResultKey(block), source);
     const info = this.classes.get(statement.name);
     if (info) this.classes.set(statement.name, { ...info, iterate: source });
@@ -5695,9 +5794,7 @@ export class Analyzer implements TypeEnvironment {
       // a probe pass is discarded whole — the driver keeps the first pass's
       // diagnostics only when nothing was left to converge — which is why the
       // VEL4006 below is ungated too.
-      if (statement.exported && typeContainsAnyOutput(inferred)) {
-        this.reportExportedAny([statement.name], statement.signatureSpan);
-      }
+      if (typeContainsAnyOutput(inferred)) this.recordExportedAny(statement, className, statement.signatureSpan);
       this.updateInferredCallableResult(statement, className, callableBinding, inferred, asynchronous);
     } else {
       const effectiveResult = returnValid ? declaredReturn : invalidType;
@@ -12976,6 +13073,103 @@ export class Analyzer implements TypeEnvironment {
         if (extension && !pending.has(extension.name)) pending.set(extension.name, { span: extension.span, loopHead: false });
       }
     }
+  }
+
+  /**
+   * D90 R12: "exported" is a property of the declaration a consumer can reach,
+   * not of the `def` keyword. A module-level declaration carries the flag
+   * itself and is judged here and now. A class member carries none — a public
+   * member of a class this module publishes is read by a consumer exactly as
+   * an exported `const` is — but whether the class is published is a question
+   * about the whole module, so the member waits for reportExportPositionAny. A
+   * `private` member is never reachable, and R12's boundary does not move:
+   * module-internal `any` stays legal.
+   */
+  private recordExportedAny(statement: AnalyzableFunctionDeclaration, className: string | null, span: Span): void {
+    if (statement.exported === true) {
+      this.reportExportedAny([statement.name], span);
+      return;
+    }
+    if (className === null || statement.private === true) return;
+    this.exportPositionCandidates.push({ className, member: statement.name, span });
+  }
+
+  /**
+   * D90 R12: the class members that turned out to be at an export position.
+   * Reported once the module is analyzed, because the answer is reachability
+   * and reachability is a property of the module, not of the declaration.
+   */
+  private reportExportPositionAny(program: Program): void {
+    if (this.exportPositionCandidates.length === 0) return;
+    const reachable = this.exportReachableClasses(program);
+    for (const candidate of this.exportPositionCandidates) {
+      if (reachable.has(candidate.className)) {
+        this.reportExportedAny([`${candidate.className}.${candidate.member}`], candidate.span);
+      }
+    }
+  }
+
+  /**
+   * D90 R12: which class declarations a consuming module can reach. Exported
+   * classes seed the set; from there it follows every position a consumer can
+   * read a value *out of* — the type of anything else this module exports, the
+   * base a reachable class names, and the public surface of a class already
+   * reachable. `export class Box extends Base:` publishes `Base`'s members,
+   * and `def make() -> Inner` publishes `Inner`'s, whether or not either name
+   * is exported.
+   *
+   * Input positions are deliberately absent, for the same reason
+   * `typeContainsAnyOutput` omits them: a consumer that has to *supply* an
+   * instance obtained it from an output position first, and that position is
+   * what makes the class reachable.
+   */
+  private exportReachableClasses(program: Program): ReadonlySet<string> {
+    const classes: string[] = [];
+    const records: string[] = [];
+    const reach = (type: ValueType | undefined): void => {
+      if (type) collectOutputTypeNames(type, classes, records);
+    };
+    // The same walk validateReExports makes over the module's export surface,
+    // so the two cannot disagree about what "this module exports" means.
+    const publish = (name: string): void => {
+      reach(this.scopes[0]!.get(name)?.type);
+      records.push(name);
+    };
+    for (const statement of program.body) {
+      if (statement.kind === "ReExportDeclaration" || !("exported" in statement) || !statement.exported) continue;
+      if (statement.kind === "ClassDeclaration") classes.push(statement.name);
+      else if (statement.kind === "VariableDeclaration") this.collectPatternNames(statement.pattern, publish);
+      else if ("name" in statement && typeof statement.name === "string") publish(statement.name);
+    }
+    const reachable = new Set<string>();
+    const visitedRecords = new Set<string>();
+    while (classes.length > 0 || records.length > 0) {
+      if (records.length > 0) {
+        const name = records.pop()!;
+        if (visitedRecords.has(name)) continue;
+        visitedRecords.add(name);
+        // A record a consumer holds is read field by field, so a class in a
+        // field is reachable even when the record type itself is not exported.
+        for (const field of this.namedTypes.get(name)?.values() ?? []) reach(field);
+        reach(this.typeAliases.get(name));
+        continue;
+      }
+      const name = classes.pop()!;
+      if (reachable.has(name)) continue;
+      reachable.add(name);
+      const info = this.classes.get(name);
+      if (!info) continue;
+      if (info.base) classes.push(info.base);
+      reach(info.iterate);
+      // ClassInfo is exactly the public surface — private members live in
+      // their own tables — and `fields` carries the getters' result types.
+      // The constructor's parameters are inputs, so they are not followed.
+      for (const field of info.fields.values()) reach(field.type);
+      for (const field of info.staticFields.values()) reach(field.type);
+      for (const method of info.methods.values()) reach(method);
+      for (const method of info.staticMethods.values()) reach(method);
+    }
+    return reachable;
   }
 
   /**

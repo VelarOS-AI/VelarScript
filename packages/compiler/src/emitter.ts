@@ -72,6 +72,15 @@ const javaScriptNodeMarker = /\u0000VELAR_MAP_(\d+)\u0000/gu;
  */
 const maximumStructuralFieldDepth = 4;
 
+/**
+ * D90 rule R5: the placeholder a container's copy plan carries where its own
+ * identity goes, until interning has decided the name that identity is spelled
+ * with. A container's plan is both the callback it hands the runtime helper
+ * and the key that helper's memo files the copy under, so the body has to name
+ * itself before it has a name.
+ */
+const copyPlanSelfReference = "__velarCopyPlanSelf";
+
 // ENM-U4 + COL-U5: the compiler-raised error types are nameable in source;
 // their runtime classes carry compiler-owned names. The source names are
 // reserved Core bindings, so a bare reference is always the builtin.
@@ -97,6 +106,30 @@ export class JavaScriptEmitter {
   private genericTypeParameters: readonly string[] | null = null;
   /** Hoisted `function __velarTypeOf_N()` bodies for instantiations written outside a generic. */
   private readonly hoistedGenericInstances = new Map<string, string>();
+  /**
+   * D90 rule R5: one hoisted `function __velarCopyPlanN` per distinct copy
+   * plan, found by the plan's own emitted text. The memo a copy keeps is keyed
+   * by source object *and* plan, so a plan needs an identity that is the same
+   * object at every visit; a module-level function declaration is that identity
+   * and the element callback in one, and it hoists past any temporal dead zone.
+   */
+  private readonly copyPlans = new Map<string, string>();
+  private readonly copyPlanDeclarations: string[] = [];
+  /**
+   * The copy plans of the generic record currently being emitted. A plan that
+   * reads `__velarArguments` cannot hoist to module level and must not be
+   * shared between instantiations, so it is interned onto the instantiation's
+   * own arguments object instead — one array per instantiation, built once.
+   */
+  private genericCopyPlans: string[] | null = null;
+  private genericCopyPlanNames: Map<string, string> | null = null;
+  /**
+   * The plan array the generic record whose copy was emitted last needs on its
+   * arguments object, empty when every one of its plans hoisted to module level.
+   */
+  private pendingGenericCopyPlans: readonly string[] = [];
+  /** Whether a copy plan is being asked about rather than emitted, so nothing is interned. */
+  private copyPlanProbe = false;
   private readonly externModuleExports = new Map<string, ReadonlySet<string>>();
   private needsExternExportHelper = false;
   protected readonly hints: LoweringHints;
@@ -605,6 +638,10 @@ export class JavaScriptEmitter {
     const chunks: readonly { readonly code: string; readonly mappings: readonly GeneratedMapping[] }[] = [
       ...helpers.map((code) => ({ code, mappings: [] })),
       ...instances.map((code) => ({ code, mappings: [] })),
+      // D90 rule R5: the interned copy plans. They are `function` declarations
+      // for the same reason the instantiation accessors are — a plan names the
+      // Type objects declared below it and is only ever called after they exist.
+      ...this.copyPlanDeclarations.map((code) => ({ code, mappings: [] })),
       ...statements.map((node) => this.renderJavaScriptNode(node)),
     ];
     let output = "";
@@ -1745,6 +1782,12 @@ export class JavaScriptEmitter {
     // instantiation.
     const argumentsParameter = generic ? ", __velarArguments" : "";
     const copyName = this.runtimeTypeCopyName(statement.name);
+    // The copy plan this declaration files its own copies under. It has to be
+    // the same value at every visit within one parse and a different value for
+    // every other declared shape: the copy function itself is that for a plain
+    // record, and the arguments object is that for an instantiation, exactly as
+    // the traversal guard already reads them.
+    const ownCopyPlan = generic ? "__velarArguments" : copyName;
     const displayName = generic ? "__velarArguments.name" : JSON.stringify(statement.name);
     const pathText = (suffix: string): string => generic
       ? (suffix === "" ? displayName : `${displayName} + ${JSON.stringify(suffix)}`)
@@ -1806,20 +1849,31 @@ export class JavaScriptEmitter {
       // D90 rule R5: parse hands back a fresh value built from the validated
       // shape, so a later write through the argument cannot falsify a field
       // the caller was handed, and a value reached through a readonly view
-      // does not widen by passing through parse.
-      `${indentation}    return ${copyName}(value, __velarValidationState()${generic ? ", __velarArguments" : ""});`,
+      // does not widen by passing through parse. The copy memo is keyed by
+      // source object and plan, and this type's own plan is the identity that
+      // is one per declaration — its arguments for an instantiation, since two
+      // instantiations of one generic are two different declared shapes.
+      `${indentation}    return ${copyName}(value, __velarValidationState(), ${ownCopyPlan}${generic ? ", __velarArguments" : ""});`,
       `${indentation}  },`,
-      `${indentation}  copy(value, __state = __velarValidationState()) {`,
-      `${indentation}    return ${copyName}(value, __state${generic ? ", __velarArguments" : ""});`,
+      // A derived type calls this with the plan it is itself copying under, so
+      // the inherited prefix lands on the derived copy instead of on a base
+      // copy another position in the same parse may already be holding.
+      `${indentation}  copy(value, __state = __velarValidationState(), __velarCopyPlan = ${ownCopyPlan}) {`,
+      `${indentation}    return ${copyName}(value, __state, __velarCopyPlan${generic ? ", __velarArguments" : ""});`,
       `${indentation}  },`,
     ];
     if (generic) {
       const instances = `__velarGenericInstances_${statement.name}`;
+      const copyLines = this.recordCopyFunctionLines(fields, copyName, baseExpression, indentation, argumentsParameter);
+      // A plan that reads the instantiation's arguments cannot hoist to module
+      // level and must not be shared between instantiations, so it is built
+      // once here, beside the arguments object it belongs to and reads.
+      const plans = this.pendingGenericCopyPlans;
       return [
         ...explainLines,
         ...this.recordCheckFunctionLines(fields, predicate, checkName, indentation, argumentsParameter, guarded),
         "",
-        ...this.recordCopyFunctionLines(fields, copyName, baseExpression, indentation, argumentsParameter),
+        ...copyLines,
         "",
         `${indentation}const ${instances} = [];`,
         // The instantiation memo: one frozen Type object per set of arguments,
@@ -1837,6 +1891,11 @@ export class JavaScriptEmitter {
         `${indentation}    for (let __velarIndex = 0; __velarIndex < __velarTexts.length; __velarIndex += 1) __velarName += (__velarIndex === 0 ? "" : ", ") + __velarTexts[__velarIndex];`,
         `${indentation}    __velarName += ">";`,
         `${indentation}    const __velarArguments = { keys: __velarKeys, texts: __velarTexts, checks: __velarChecks, name: __velarName };`,
+        ...(plans.length > 0 ? [
+          `${indentation}    __velarArguments.plans = [`,
+          ...plans.map((plan) => `${indentation}      ${plan},`),
+          `${indentation}    ];`,
+        ] : []),
         `${indentation}    const __velarType = __velarRegisterRuntimeType(__velarValidationFreeze({`,
         ...typeObject.map((line) => `${indentation}  ${line}`),
         `${indentation}    }));`,
@@ -1911,10 +1970,14 @@ export class JavaScriptEmitter {
   }
 
   /**
-   * D90 rule R5: the record's copy — one fresh object per source object, with
-   * every declared field rebuilt. A base builds the object and records it in
-   * the memo, and the derived fields are written onto that same copy, so one
-   * source object still maps to exactly one copy however deep the chain is.
+   * D90 rule R5: the record's copy — one fresh object per source object *and*
+   * declared type, with every declared field rebuilt. The plan the caller is
+   * copying under is threaded in and passed on to the base, so a value reached
+   * once as `Base` and once as `Derived` in the same parse is two copies, each
+   * complete for its own type, rather than the base's copy with the derived
+   * fields written over it. Within one plan a base still builds the object and
+   * records it, and the derived fields land on that same copy, so one source
+   * object still maps to exactly one copy however deep the chain is.
    */
   private recordCopyFunctionLines(
     fields: readonly { readonly name: string; readonly type: ValueType }[],
@@ -1923,25 +1986,99 @@ export class JavaScriptEmitter {
     indentation: string,
     argumentsParameter: string,
   ): readonly string[] {
-    const fresh = baseExpression ? `${baseExpression}.copy(value, __state)` : `__state.copy.object(__state, value)`;
+    const fresh = baseExpression
+      ? `${baseExpression}.copy(value, __state, __velarCopyPlan)`
+      : `__state.copy.object(__state, value, __velarCopyPlan)`;
+    const previousPlans = this.genericCopyPlans;
+    const previousNames = this.genericCopyPlanNames;
+    this.genericCopyPlans = argumentsParameter ? [] : null;
+    this.genericCopyPlanNames = argumentsParameter ? new Map() : null;
+    const fieldLines = fields.flatMap(({ name, type }) => {
+      const descriptor = "__velarCopyField";
+      const copied = this.typeCopyExpression(type, `${descriptor}.value`, "__state");
+      return [
+        `${indentation}  {`,
+        `${indentation}    const ${descriptor} = __velarValidationOwnDescriptor(value, ${JSON.stringify(name)});`,
+        `${indentation}    if (${descriptor} !== undefined) __state.copy.field(__velarCopy, ${JSON.stringify(name)}, ${copied ?? `${descriptor}.value`});`,
+        `${indentation}  }`,
+      ];
+    });
+    this.pendingGenericCopyPlans = this.genericCopyPlans ?? [];
+    this.genericCopyPlans = previousPlans;
+    this.genericCopyPlanNames = previousNames;
     return [
-      `${indentation}function ${copyName}(value, __state${argumentsParameter}) {`,
-      `${indentation}  const __velarCopySeen = __state.copy.seen(__state, value);`,
+      `${indentation}function ${copyName}(value, __state, __velarCopyPlan${argumentsParameter}) {`,
+      `${indentation}  const __velarCopySeen = __state.copy.seen(__state, value, __velarCopyPlan);`,
       `${indentation}  if (__velarCopySeen !== undefined) return __velarCopySeen;`,
       `${indentation}  const __velarCopy = ${fresh};`,
-      ...fields.flatMap(({ name, type }) => {
-        const descriptor = "__velarCopyField";
-        const copied = this.typeCopyExpression(type, `${descriptor}.value`, "__state");
-        return [
-          `${indentation}  {`,
-          `${indentation}    const ${descriptor} = __velarValidationOwnDescriptor(value, ${JSON.stringify(name)});`,
-          `${indentation}    if (${descriptor} !== undefined) __state.copy.field(__velarCopy, ${JSON.stringify(name)}, ${copied ?? `${descriptor}.value`});`,
-          `${indentation}  }`,
-        ];
-      }),
+      ...fieldLines,
       `${indentation}  return __velarCopy;`,
       `${indentation}}`,
     ];
+  }
+
+  /**
+   * D90 rule R5: the module-level function that carries one copy plan, or null
+   * when the position rebuilds nothing. Interning is by the plan's own emitted
+   * text — which is what the plan means, module-locally — so two positions that
+   * copy the same shape share one plan and one memo entry, and two that copy
+   * different shapes can never be handed each other's copy.
+   */
+  private copyPlanName(type: ValueType): string | null {
+    const body = this.copyPlanBody(type);
+    if (body === null) return null;
+    if (this.copyPlanProbe) return copyPlanSelfReference;
+    const generic = this.genericCopyPlans;
+    const genericNames = this.genericCopyPlanNames;
+    if (generic !== null && genericNames !== null && body.includes("__velarArguments")) {
+      const interned = genericNames.get(body);
+      if (interned !== undefined) return interned;
+      const name = `__velarArguments.plans[${generic.length}]`;
+      genericNames.set(body, name);
+      generic.push(`(__velarCopyItem, __velarCopyState) => ${body.replaceAll(copyPlanSelfReference, name)}`);
+      return name;
+    }
+    const known = this.copyPlans.get(body);
+    if (known !== undefined) return known;
+    const name = `__velarCopyPlan${this.copyPlans.size}`;
+    this.copyPlans.set(body, name);
+    this.copyPlanDeclarations.push([
+      `function ${name}(__velarCopyItem, __velarCopyState) {`,
+      `  return ${body.replaceAll(copyPlanSelfReference, name)};`,
+      "}",
+    ].join("\n"));
+    return name;
+  }
+
+  /**
+   * One copy plan's body. A container names itself where its memo key goes,
+   * because the copy it files is the one a later visit under the same plan must
+   * find — including the visit that reaches it through its own elements.
+   */
+  private copyPlanBody(type: ValueType): string | null {
+    switch (type.kind) {
+      case "list":
+        return `__velarCopyState.copy.listOf(__velarCopyItem, __velarCopyState, ${this.typeCopyCallback(type.element)}, ${copyPlanSelfReference})`;
+      case "set":
+        return `__velarCopyState.copy.setOf(__velarCopyItem, __velarCopyState, ${this.typeCopyCallback(type.element)}, ${copyPlanSelfReference})`;
+      case "map":
+        return `__velarCopyState.copy.mapOf(__velarCopyItem, __velarCopyState, ${this.typeCopyCallback(type.key)}, ${this.typeCopyCallback(type.value)}, ${copyPlanSelfReference})`;
+      case "record":
+        return `__velarCopyState.copy.recordOf(__velarCopyItem, __velarCopyState, ${this.typeCopyCallback(type.value)}, ${copyPlanSelfReference})`;
+      default:
+        return this.typeCopyExpression(type, "__velarCopyItem", "__velarCopyState");
+    }
+  }
+
+  /** Whether a position rebuilds anything, asked without interning the plan it would need. */
+  private typeCopiesAnything(type: ValueType): boolean {
+    const previous = this.copyPlanProbe;
+    this.copyPlanProbe = true;
+    try {
+      return this.typeCopyExpression(type, "__velarCopyItem", "__velarCopyState") !== null;
+    } finally {
+      this.copyPlanProbe = previous;
+    }
   }
 
   /**
@@ -1977,14 +2114,16 @@ export class JavaScriptEmitter {
         const inner = this.typeCopyExpression(type.inner, value, state);
         return inner === null ? null : `(${value} == null ? ${value} : ${inner})`;
       }
+      // A container copies through its own interned plan, because the plan is
+      // the identity its memo files the copy under and a fresh closure at every
+      // visit would be a different identity every time.
       case "list":
-        return `${state}.copy.listOf(${value}, ${state}, ${this.typeCopyCallback(type.element)})`;
       case "set":
-        return `${state}.copy.setOf(${value}, ${state}, ${this.typeCopyCallback(type.element)})`;
       case "map":
-        return `${state}.copy.mapOf(${value}, ${state}, ${this.typeCopyCallback(type.key)}, ${this.typeCopyCallback(type.value)})`;
-      case "record":
-        return `${state}.copy.recordOf(${value}, ${state}, ${this.typeCopyCallback(type.value)})`;
+      case "record": {
+        const plan = this.copyPlanName(type);
+        return plan === null ? null : `${plan}(${value}, ${state})`;
+      }
       case "named":
         // An instantiation's copy is the declaration's, reached through the
         // same memoized Type object its predicate is reached through.
@@ -2004,7 +2143,7 @@ export class JavaScriptEmitter {
       // positions the predicate did not fully decide, so the copy is the
       // structural one: plain data recurses and anything else passes through.
       case "union":
-        return type.members.every((member) => this.typeCopyExpression(member, value, state) === null)
+        return type.members.every((member) => !this.typeCopiesAnything(member))
           ? null
           : `${state}.copy.plain(${value}, ${state})`;
       case "object":
@@ -2015,8 +2154,7 @@ export class JavaScriptEmitter {
 
   /** The per-element copy a container hands its runtime helper, or `null` when the element position has nothing to copy. */
   private typeCopyCallback(type: ValueType): string {
-    const item = this.typeCopyExpression(type, "__velarCopyItem", "__velarCopyState");
-    return item === null ? "null" : `(__velarCopyItem, __velarCopyState) => ${item}`;
+    return this.copyPlanName(type) ?? "null";
   }
 
   private emitTypeAliasDeclaration(statement: TypeAliasDeclaration, depth: number): string {
@@ -2043,8 +2181,15 @@ export class JavaScriptEmitter {
     const predicate = this.emitTypeCheck(resolveTypeReference(statement.target), "value", guarded ? "__state" : "undefined");
     // D90 rule R5: an alias copies whatever its target copies. An alias of a
     // primitive has nothing to rebuild, so its parse still returns the same
-    // value and allocates nothing.
-    const copied = this.typeCopyExpression(resolveTypeReference(statement.target), "value", "__state");
+    // value and allocates nothing. An alias of a declared record is that
+    // record's copy, so it passes on the plan it was called under too — an
+    // alias is a legal base, and the derived fields must not land on a copy
+    // the aliased record filed under its own plan.
+    const aliasTarget = resolveTypeReference(statement.target);
+    const copied = this.typeCopyExpression(aliasTarget, "value", "__state");
+    const forwarded = copied !== null && aliasTarget.kind === "named" && this.typeDeclarations.has(aliasTarget.name)
+      ? `${aliasTarget.name}.copy(value, __state, __velarCopyPlan)`
+      : copied;
     const exportPrefix = statement.exported ? "export " : "";
     return [
       guarded
@@ -2067,7 +2212,7 @@ export class JavaScriptEmitter {
       `${indentation}  },`,
       ...(copied === null
         ? [`${indentation}  copy(value) {`, `${indentation}    return value;`, `${indentation}  },`]
-        : [`${indentation}  copy(value, __state = __velarValidationState()) {`, `${indentation}    return ${copied};`, `${indentation}  },`]),
+        : [`${indentation}  copy(value, __state = __velarValidationState(), __velarCopyPlan) {`, `${indentation}    return ${forwarded};`, `${indentation}  },`]),
       `${indentation}}));`,
     ].join("\n");
   }

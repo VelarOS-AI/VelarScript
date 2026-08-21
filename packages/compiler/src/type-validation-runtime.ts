@@ -27,6 +27,7 @@ const __velarValidationFunctionHasInstanceOperation = __velarCollectionGetOwnPro
 const __velarValidationFreezeOperation = __velarCollectionGetOwnPropertyDescriptor(__velarCollectionNativeObject, "freeze")?.value;
 const __velarValidationDefinePropertyOperation = __velarCollectionGetOwnPropertyDescriptor(__velarCollectionNativeObject, "defineProperty")?.value;
 const __velarValidationMapSetOperation = __velarCollectionGetOwnPropertyDescriptor(__velarCollectionMapPrototype, "set")?.value;
+const __velarValidationMapGetOperation = __velarCollectionGetOwnPropertyDescriptor(__velarCollectionMapPrototype, "get")?.value;
 // D90 rule R5: the per-call graph state carries both the validator's cycle
 // guard and the copy memo, because parse runs one then the other over the same
 // object graph. 'copies' stays null until something is actually copied.
@@ -35,6 +36,8 @@ function __velarValidationSet() { return new __velarValidationNativeSet(); }
 function __velarValidationWeakMapGet(value, key) { return __velarCollectionHostCall(__velarValidationWeakMapGetOperation, value, [key]); }
 function __velarValidationWeakMapSet(value, key, item) { return __velarCollectionHostCall(__velarValidationWeakMapSetOperation, value, [key, item]); }
 function __velarValidationWeakMapDelete(value, key) { return __velarCollectionHostCall(__velarValidationWeakMapDeleteOperation, value, [key]); }
+function __velarValidationMapGet(value, key) { return __velarCollectionHostCall(__velarValidationMapGetOperation, value, [key]); }
+function __velarValidationMapSet(value, key, item) { return __velarCollectionHostCall(__velarValidationMapSetOperation, value, [key, item]); }
 function __velarValidationSetHas(value, item) { return __velarCollectionHostCall(__velarValidationSetHasOperation, value, [item]); }
 function __velarValidationSetAdd(value, item) { return __velarCollectionHostCall(__velarValidationSetAddOperation, value, [item]); }
 function __velarValidationSetDelete(value, item) { return __velarCollectionHostCall(__velarValidationSetDeleteOperation, value, [item]); }
@@ -57,23 +60,33 @@ function __velarValidationIsPlainObject(value) {
 // D90 rule R5: parse returns a copy, so "validated" means "and it stays
 // valid" rather than "it was correct at the instant of the check". The copy
 // follows the declared shape — the generated validators supply one callback
-// per element position — and the memo is a WeakMap from source object to its
-// copy, so a shared or cyclic subgraph is copied once and the copy preserves
-// the sharing the source had. The four container members are spelled with an
-// "Of" suffix because this runtime reaches every host collection through a
-// captured operation: no member call inside it may read as a get, set, has,
-// add, or delete call, which is the boundary gate's rule for this file.
+// per element position — and the memo answers per source object *and* copy
+// plan, so a shared or cyclic subgraph is copied once per declared shape and
+// the copy preserves the sharing the source had. Keying on the source alone
+// would hand the second projection of one object the first projection's copy:
+// a value the caller never wrote and no declared type ever accepted. The four
+// container members are spelled with an "Of" suffix because this runtime
+// reaches every host collection through a captured operation: no member call
+// inside it may read as a get, set, has, add, or delete call, which is the
+// boundary gate's rule for this file.
 const __velarValidationCopy = {
-  seen(state, value) {
-    return state.copies === null ? undefined : __velarValidationWeakMapGet(state.copies, value);
+  seen(state, value, plan) {
+    if (state.copies === null) return undefined;
+    const plans = __velarValidationWeakMapGet(state.copies, value);
+    return plans === undefined ? undefined : __velarValidationMapGet(plans, plan);
   },
-  remember(state, value, copy) {
+  remember(state, value, copy, plan) {
     if (state.copies === null) state.copies = new __velarValidationNativeWeakMap();
-    __velarValidationWeakMapSet(state.copies, value, copy);
+    let plans = __velarValidationWeakMapGet(state.copies, value);
+    if (plans === undefined) {
+      plans = new __velarCollectionNativeMap();
+      __velarValidationWeakMapSet(state.copies, value, plans);
+    }
+    __velarValidationMapSet(plans, plan, copy);
     return copy;
   },
-  object(state, value) {
-    return __velarValidationCopy.remember(state, value, {});
+  object(state, value, plan) {
+    return __velarValidationCopy.remember(state, value, {}, plan);
   },
   // Fields are written through defineProperty so a field literally named
   // '__proto__' lands as an own data property instead of retargeting the
@@ -84,10 +97,13 @@ const __velarValidationCopy = {
   },
   // A null element callback means the element position has nothing to copy —
   // a primitive, an enum member, a class instance, or an opaque 'unknown'.
-  listOf(value, state, item) {
-    const found = __velarValidationCopy.seen(state, value);
+  // 'plan' is the container position's own stable identity: the emitter hoists
+  // one function per distinct copy plan and hands it in as both the element
+  // callback and the key this memo files the copy under.
+  listOf(value, state, item, plan) {
+    const found = __velarValidationCopy.seen(state, value, plan);
     if (found !== undefined) return found;
-    const result = __velarValidationCopy.remember(state, value, []);
+    const result = __velarValidationCopy.remember(state, value, [], plan);
     const length = __velarValidationOwnDescriptor(value, "length")?.value ?? 0;
     for (let index = 0; index < length; index += 1) {
       const descriptor = __velarValidationOwnDescriptor(value, index);
@@ -95,10 +111,10 @@ const __velarValidationCopy = {
     }
     return result;
   },
-  setOf(value, state, item) {
-    const found = __velarValidationCopy.seen(state, value);
+  setOf(value, state, item, plan) {
+    const found = __velarValidationCopy.seen(state, value, plan);
     if (found !== undefined) return found;
-    const result = __velarValidationCopy.remember(state, value, __velarValidationSet());
+    const result = __velarValidationCopy.remember(state, value, __velarValidationSet(), plan);
     const iterator = __velarCollectionSetTypeIterator(value);
     while (true) {
       const step = __velarCollectionSetTypeNext(iterator);
@@ -107,23 +123,23 @@ const __velarValidationCopy = {
     }
     return result;
   },
-  mapOf(value, state, key, item) {
-    const found = __velarValidationCopy.seen(state, value);
+  mapOf(value, state, key, item, plan) {
+    const found = __velarValidationCopy.seen(state, value, plan);
     if (found !== undefined) return found;
-    const result = __velarValidationCopy.remember(state, value, new __velarCollectionNativeMap());
+    const result = __velarValidationCopy.remember(state, value, new __velarCollectionNativeMap(), plan);
     const iterator = __velarCollectionMapTypeIterator(value);
     while (true) {
       const step = __velarCollectionMapTypeNext(iterator);
       if (step.done) break;
       const entry = step.value;
-      __velarCollectionHostCall(__velarValidationMapSetOperation, result, [key === null ? entry[0] : key(entry[0], state), item === null ? entry[1] : item(entry[1], state)]);
+      __velarValidationMapSet(result, key === null ? entry[0] : key(entry[0], state), item === null ? entry[1] : item(entry[1], state));
     }
     return result;
   },
-  recordOf(value, state, item) {
-    const found = __velarValidationCopy.seen(state, value);
+  recordOf(value, state, item, plan) {
+    const found = __velarValidationCopy.seen(state, value, plan);
     if (found !== undefined) return found;
-    const result = __velarValidationCopy.remember(state, value, {});
+    const result = __velarValidationCopy.remember(state, value, {}, plan);
     const keys = __velarCollectionHostCall(__velarCollectionOwnKeys, __velarCollectionNativeReflect, [value]);
     for (let index = 0; index < keys.length; index += 1) {
       const name = keys[index];
@@ -142,16 +158,19 @@ const __velarValidationCopy = {
   // passes through by reference.
   plain(value, state) {
     if (value === null || typeof value !== "object") return value;
-    const found = __velarValidationCopy.seen(state, value);
+    const found = __velarValidationCopy.seen(state, value, __velarValidationCopy.plain);
     if (found !== undefined) return found;
-    if (__velarValidationIsArray(value)) return __velarValidationCopy.listOf(value, state, __velarValidationCopy.plain);
-    if (__velarIsMap(value)) return __velarValidationCopy.mapOf(value, state, __velarValidationCopy.plain, __velarValidationCopy.plain);
-    if (__velarIsSet(value)) return __velarValidationCopy.setOf(value, state, __velarValidationCopy.plain);
+    if (__velarValidationIsArray(value)) return __velarValidationCopy.listOf(value, state, __velarValidationCopy.plain, __velarValidationCopy.plain);
+    if (__velarIsMap(value)) return __velarValidationCopy.mapOf(value, state, __velarValidationCopy.plain, __velarValidationCopy.plain, __velarValidationCopy.plain);
+    if (__velarIsSet(value)) return __velarValidationCopy.setOf(value, state, __velarValidationCopy.plain, __velarValidationCopy.plain);
     if (!__velarValidationIsPlainObject(value)) return value;
-    return __velarValidationCopy.recordOf(value, state, __velarValidationCopy.plain);
+    return __velarValidationCopy.recordOf(value, state, __velarValidationCopy.plain, __velarValidationCopy.plain);
   },
   // A Type object from a target extension, or one emitted by an older build,
   // may carry no copy plan; the structural copy is what is left to fall back on.
+  // A Type that does answer 'copy' owns its own plan identity — a declared
+  // record files under its copy function, an instantiation under its arguments
+  // — so nothing is threaded in from here.
   through(type, value, state) {
     const operation = type === null || type === undefined ? undefined : type.copy;
     if (typeof operation !== "function") return __velarValidationCopy.plain(value, state);

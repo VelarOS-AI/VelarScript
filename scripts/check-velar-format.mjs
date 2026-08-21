@@ -5,7 +5,7 @@ import { formatSource } from "@velarscript/compiler";
 import { velarCompilerExtension as nodeCompilerExtension } from "@velarscript/node/compiler";
 import { velarCompilerExtension as webCompilerExtension } from "@velarscript/web/compiler";
 import { createTemplateFiles } from "../packages/create/src/templates.ts";
-import { VELAR_PROJECT_TEMPLATES } from "../packages/create/src/types.ts";
+import { VELAR_CREATE_VERSION, VELAR_PROJECT_FORMAT_VERSION, VELAR_PROJECT_TEMPLATES } from "../packages/create/src/types.ts";
 import { velarSources } from "./velar-projects.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -48,7 +48,7 @@ for (const file of files) {
 // comes from them, so they answer to the formatter like every other example.
 let templateCount = 0;
 for (const template of VELAR_PROJECT_TEMPLATES) {
-  for (const [name, source] of createTemplateFiles(template, join(root, "example-app"), "0.12.1", 2)) {
+  for (const [name, source] of createTemplateFiles(template, join(root, "example-app"), VELAR_CREATE_VERSION, VELAR_PROJECT_FORMAT_VERSION)) {
     if (!name.endsWith(".vel")) continue;
     templateCount += 1;
     if (!isFormatted(source)) failures.push(`packages/create template ${template}: ${name}`);

@@ -10,6 +10,7 @@ import { browserPackageIdentity, prebundleCacheDirectory } from "../packages/cli
 import { projectRelative } from "../packages/cli/src/reproduction.ts";
 import { unsupportedProjectFormat } from "../packages/cli/src/project-format.ts";
 import { VELAR_VERSION } from "../packages/cli/src/version.ts";
+import { DECLARED_VERSIONS, PINNED_DEPENDENCY_VERSIONS, declaredVersionFailure, pinnedDependencyFailure } from "../scripts/release-toolchain.mjs";
 
 // ---------------------------------------------------------------------------
 // The supply-chain half of the CLI audit: everything that decides which
@@ -194,11 +195,72 @@ test("cli-35 VELAR_VERSION matches the version the CLI is published under", asyn
   assert.equal(VELAR_VERSION, manifest.version,
     "VELAR_VERSION stamps build manifests, dev-dep cache keys, and reproduction bundles");
   // The release gate is what keeps them equal at release time; it checks every
-  // other intra-toolchain pin and never opened this one.
+  // other intra-toolchain pin and never opened this one. cr-6: the gate now
+  // holds a roster of these literals rather than one open-coded read, and
+  // create-velar's own generation is on it — a create-velar one generation
+  // behind used to pass the manifest check while pinning the wrong Web and CLI
+  // versions into every generated project.
   const gate = await readFile(join(repositoryRoot, "scripts", "release-toolchain.mjs"), "utf8");
-  assert.match(gate, /join\(root, "packages", "cli", "src", "version\.ts"\)/u,
+  assert.match(gate, /file: "packages\/cli\/src\/version\.ts", name: "VELAR_VERSION"/u,
     "the release gate must read packages/cli/src/version.ts");
-  assert.match(gate, /VELAR_VERSION/u, "the release gate must compare the declared VELAR_VERSION");
+  assert.match(gate, /file: "packages\/create\/src\/types\.ts", name: "VELAR_CREATE_VERSION"/u,
+    "the release gate must read packages/create/src/types.ts");
+  const create = JSON.parse(await readFile(join(repositoryRoot, "packages", "create", "package.json"), "utf8")) as { version: string };
+  for (const declaration of DECLARED_VERSIONS) {
+    assert.equal(
+      await declaredVersionFailure(repositoryRoot, declaration.file, declaration.name, {
+        name: declaration.package,
+        version: declaration.package === "create-velar" ? create.version : manifest.version,
+      }),
+      null,
+    );
+  }
+  // And it is an assertion, not a formality: a literal one generation behind fails.
+  const stale = await makeTemporaryDirectory("velar-declared-version");
+  await mkdir(join(stale, "packages", "create", "src"), { recursive: true });
+  await writeFile(join(stale, "packages", "create", "src", "types.ts"), 'export const VELAR_CREATE_VERSION = "0.0.1";\n', "utf8");
+  assert.equal(
+    await declaredVersionFailure(stale, "packages/create/src/types.ts", "VELAR_CREATE_VERSION", { name: "create-velar", version: create.version }),
+    `packages/create/src/types.ts declares VELAR_CREATE_VERSION 0.0.1, but create-velar is ${create.version}`,
+  );
+});
+
+test("cli-35a a version literal pinning one of our dependencies is held to the range we declare", async () => {
+  // A literal need not name one of our own packages to be a second copy of a
+  // version. WEBSOCKET_VERSION decides which 'ws' the CLI will accept in a
+  // generated project's node_modules, and the range that decides which 'ws' we
+  // ship is packages/node/package.json's. Neither the roster above nor any
+  // other gate read the two against each other: bumping the dependency alone
+  // left every generated WebSocket project refusing its own runtime at install
+  // time, behind a green release.
+  const node = JSON.parse(await readFile(join(repositoryRoot, "packages", "node", "package.json"), "utf8")) as {
+    readonly name: string;
+    readonly dependencies?: Readonly<Record<string, string>>;
+  };
+  assert.deepEqual(PINNED_DEPENDENCY_VERSIONS.map((pin) => [pin.file, pin.name, pin.package, pin.dependency]), [
+    ["packages/cli/src/node-runtime-dependencies.ts", "WEBSOCKET_VERSION", "@velarscript/node", "ws"],
+  ]);
+  for (const pin of PINNED_DEPENDENCY_VERSIONS) {
+    assert.equal(await pinnedDependencyFailure(repositoryRoot, pin.file, pin.name, pin.dependency, node), null);
+  }
+  const gate = await readFile(join(repositoryRoot, "scripts", "release-toolchain.mjs"), "utf8");
+  assert.match(gate, /for \(const pin of PINNED_DEPENDENCY_VERSIONS\)/u, "the release gate must run the pinned dependency roster");
+
+  // And each way the two can part is an assertion, not a formality.
+  const drifted = await makeTemporaryDirectory("velar-pinned-dependency");
+  const file = "packages/cli/src/node-runtime-dependencies.ts";
+  await mkdir(join(drifted, "packages", "cli", "src"), { recursive: true });
+  await writeFile(join(drifted, file), 'const WEBSOCKET_PACKAGE = "ws";\nconst WEBSOCKET_VERSION = "8.21.1";\n', "utf8");
+  const bumped = { name: "@velarscript/node", dependencies: { ws: "^8.22.0" } };
+  assert.equal(await pinnedDependencyFailure(drifted, file, "WEBSOCKET_VERSION", "ws", bumped),
+    `${file} declares WEBSOCKET_VERSION 8.21.1, but @velarscript/node depends on ws@^8.22.0`);
+  assert.equal(await pinnedDependencyFailure(drifted, file, "WEBSOCKET_VERSION", "ws", { name: "@velarscript/node", dependencies: {} }),
+    `${file} pins WEBSOCKET_VERSION, but @velarscript/node no longer depends on 'ws'`);
+  assert.equal(await pinnedDependencyFailure(drifted, file, "WEBSOCKET_VERSION", "ws", { name: "@velarscript/node", dependencies: { ws: ">=8" } }),
+    `@velarscript/node depends on ws@>=8, which names no single version for ${file} to pin`);
+  await writeFile(join(drifted, file), 'const WEBSOCKET_PACKAGE = "ws";\n', "utf8");
+  assert.equal(await pinnedDependencyFailure(drifted, file, "WEBSOCKET_VERSION", "ws", node),
+    `${file} declares WEBSOCKET_VERSION (unreadable), but @velarscript/node depends on ws@${node.dependencies?.ws}`);
 });
 
 test("cli-36 a newer and an older project format are told apart", () => {

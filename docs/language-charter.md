@@ -789,9 +789,10 @@ Member access on a number literal needs no ceremony either — `1.abs()`,
 swallow the dot.
 
 `//` is always a comment, in every position. There is no floor-division
-operator, and `7 // 2` is not a mistake the compiler can see: the comment
-starts at `//`, the statement before it is already complete, and the value is
-`7`. Floor division is `(a / b).floor()`.
+operator, and `7 // 2` binds `7`: the comment starts at `//`, and the statement
+before it is already complete. The compiler cannot rule the line out — a comment
+is legal there — so it advises instead, and advisory `A1` reports the line while
+still emitting. Floor division is `(a / b).floor()`.
 
 ## 5. Core types
 
@@ -2981,8 +2982,12 @@ an ordinary writable record rather than one whose first write dies with a host
 rebuilt, nested records and collections included, while a class instance, a
 promise, a function, a `Duration`, an enum member, and an `unknown` field pass
 through by reference, because rebuilding an opaque value structurally would
-change what `parse` returns. A shared or cyclic subgraph is copied once, so the
-copy preserves the sharing the source had. Keys the type does not name are not
+change what `parse` returns. A shared or cyclic subgraph is copied once per
+declared type, so the copy preserves the sharing the source had wherever the
+source's sharing was sharing of the same shape. One object reached at two
+positions that declare two different types is two different proofs, so it yields
+two copies — projecting it once and reusing that copy would hand the second
+position a value missing the fields its own type names. Keys the type does not name are not
 carried across: records stay open to what a decoder may accept, but what `parse`
 returns is the shape it proved. Validate at the boundary, before the data is
 stored anywhere a read-only promise is made about it.
@@ -3332,12 +3337,11 @@ constructor identity retains the instance and its live prop cells; changing
 the constructor identity destroys the old instance, runs its cleanup, and
 mounts a fresh instance. An instance is otherwise destroyed and recreated only
 when its position unmounts: a conditional branch switches, a keyed list entry's
-key or value disappears, or the enclosing region re-renders away. Runtime-implemented
-components (`Router`, `Link`, `NavLink`) snapshot their props once at
-construction, because their identity semantics depend on it. `Head` does not:
-document metadata is rendered output, so it follows the ordinary rules — its
-props are read on every update, and `<Head title={f"Inbox ({unread})"} />`
-tracks `unread`.
+key or value disappears, or the enclosing region re-renders away. The runtime-implemented components
+`Head`, `Router`, `Link` and `NavLink` follow the ordinary rules like any other:
+their props are read on every update, so `<Head title={f"Inbox ({unread})"} />`
+tracks `unread` and `<Link to={path}>` follows `path`. One rule covers all four —
+a reader should not have to remember which of them is the exception.
 
 ```velar fragment
 export component TicketBadge(count: number):
@@ -3811,10 +3815,13 @@ have no shared position to report at. Scheduling cannot answer this one: a flush
 settles every watch in a single pass that states no order between them, and
 between two independent writes no order is the right one. Put every update to
 that state in one watch, or give each watch a state of its own.
-The rule reads a direct assignment to a `state` name; a write performed inside a
-function the watch calls is not followed, and two writes through member paths
-are left alone, because a path can run through indices and aliases this analysis
-cannot decide. It is the same shape as the two-independent-looks error in
+The rule reads a direct assignment to a `state` name, and it follows the calls
+it can resolve within the module: a write inside a `def` the watch calls counts
+as that watch's write, and so does one reached through a name statically bound
+to such a `def`. It stops where the answer stops being certain — a call across a
+module boundary, through `any`, or through a value this analysis cannot resolve
+is left alone, as are two writes through member paths, because a path can run
+through indices and aliases no analysis here can decide. It is the same shape as the two-independent-looks error in
 section 17, for the same reason: two unrelated sources contending for one thing
 have no winner the source states, so the author says which one he meant.
 

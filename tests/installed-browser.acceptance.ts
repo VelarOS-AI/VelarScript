@@ -41,7 +41,9 @@ const applicationWebModules = [...webModuleInterfaces]
     assert.ok(probe, `${specifier} publishes no function export to probe the installed module with`);
     return { specifier, probe };
   })
-  .sort((left, right) => left.specifier.localeCompare(right.specifier));
+  // D90 R3(a): code-unit order, the same order the bare `.sort()` above gives,
+  // so the probe roster does not reorder with the machine's `LC_ALL`.
+  .sort((left, right) => left.specifier < right.specifier ? -1 : left.specifier > right.specifier ? 1 : 0);
 
 try {
   // A-024: this file held the fifth copy of the eight-package roster — one

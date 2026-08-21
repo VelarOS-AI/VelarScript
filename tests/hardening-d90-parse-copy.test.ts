@@ -234,3 +234,236 @@ console.log(copy.kind);
 `);
   assert.equal(output, "false base derived kind,label\nbase\n");
 });
+
+test("one source object projected at two declared types is two copies, each complete for its own type", () => {
+  // codex-review cr-1: the copy memo was keyed on the source object alone, so
+  // the second projection was handed the first projection's copy — a value
+  // declared `b: string` arrived as `undefined` with zero diagnostics, which is
+  // the one thing `parse` exists to make impossible.
+  const output = run(`
+type Left:
+    a: string
+
+type Right:
+    b: string
+
+type Pair:
+    left: Left
+    right: Right
+
+export def take(input: unknown) -> Pair:
+    return Pair.parse(input)
+`, `
+const shared = { a: "A", b: "B" };
+const copy = take({ left: shared, right: shared });
+console.log(copy.left.a, copy.right.b, copy.left === copy.right, copy.left === shared);
+`);
+  assert.equal(output, "A B false false\n");
+});
+
+test("two container positions over one source differ by element plan, and one element plan still shares", () => {
+  const output = run(`
+type Left:
+    a: string
+
+type Right:
+    b: string
+
+type Holder:
+    listLeft: List<Left>
+    listRight: List<Right>
+    mapLeft: Map<string, Left>
+    mapRight: Map<string, Right>
+    bagLeft: Record<Left>
+    bagRight: Record<Right>
+    alsoListLeft: List<Left>
+
+export def take(input: unknown) -> Holder:
+    return Holder.parse(input)
+`, `
+const shared = { a: "A", b: "B" };
+const list = [shared];
+const map = new Map([["k", shared]]);
+const bag = { k: shared };
+const copy = take({
+  listLeft: list, listRight: list, mapLeft: map, mapRight: map,
+  bagLeft: bag, bagRight: bag, alsoListLeft: list,
+});
+console.log(copy.listLeft[0].a, copy.listRight[0].b, copy.listLeft === copy.listRight);
+console.log(copy.mapLeft.get("k").a, copy.mapRight.get("k").b, copy.mapLeft === copy.mapRight);
+console.log(copy.bagLeft.k.a, copy.bagRight.k.b, copy.bagLeft === copy.bagRight);
+console.log(copy.alsoListLeft === copy.listLeft, copy.alsoListLeft[0] === copy.listLeft[0]);
+`);
+  assert.equal(output, "A B false\nA B false\nA B false\ntrue true\n");
+});
+
+test("a shared object deep inside nested containers is still copied once under one plan", () => {
+  const output = run(`
+type Check:
+    id: string
+
+type Deep:
+    one: List<Map<string, Check>>
+    two: List<Map<string, Check>>
+
+export def take(input: unknown) -> Deep:
+    return Deep.parse(input)
+`, `
+const shared = { id: "shared" };
+const inner = new Map([["k", shared]]);
+const outer = [inner];
+const copy = take({ one: outer, two: outer });
+console.log(copy.one === copy.two, copy.one[0] === copy.two[0], copy.one[0].get("k") === copy.two[0].get("k"));
+console.log(copy.one === outer, copy.one[0].get("k") === shared, copy.one[0].get("k").id);
+`);
+  assert.equal(output, "true true true\nfalse false shared\n");
+});
+
+test("a base-position and a derived-position copy of one source do not write over each other", () => {
+  // The memo is type-keyed, so a derived copy borrowing the base's memo entry
+  // would leave the base position holding the derived fields. The base is
+  // asked to file its work under the caller's plan for exactly that reason.
+  const source = `
+type Base:
+    kind: string
+
+type Derived extends Base:
+    label: string
+`;
+  const epilogue = `
+const shared = { kind: "base", label: "derived" };
+const copy = take({ plain: shared, full: shared });
+console.log(Object.keys(copy.plain).join(","), Object.keys(copy.full).join(","));
+console.log(copy.plain === copy.full, copy.full.kind, copy.full.label);
+`;
+  const expected = "kind kind,label\nfalse base derived\n";
+  assert.equal(run(`${source}
+type Holder:
+    plain: Base
+    full: Derived
+
+export def take(input: unknown) -> Holder:
+    return Holder.parse(input)
+`, epilogue), expected);
+  // The other write order reaches the derived copy first, and the base copy
+  // must still be the base's own object rather than the derived one.
+  assert.equal(run(`${source}
+type Holder:
+    full: Derived
+    plain: Base
+
+export def take(input: unknown) -> Holder:
+    return Holder.parse(input)
+`, epilogue), expected);
+});
+
+test("an alias standing in for a base still files the inherited prefix under the derived plan", () => {
+  const output = run(`
+type Pair:
+    a: string
+
+type Named = Pair
+
+type Derived extends Named:
+    b: string
+
+type Holder:
+    one: Named
+    two: Derived
+
+export def take(input: unknown) -> Holder:
+    return Holder.parse(input)
+`, `
+const shared = { a: "A", b: "B" };
+const copy = take({ one: shared, two: shared });
+console.log(Object.keys(copy.one).join(","), Object.keys(copy.two).join(","), copy.one === copy.two);
+`);
+  assert.equal(output, "a a,b false\n");
+});
+
+test("two instantiations of one generic over one source object are two copies", () => {
+  // A generic record's copy plan is one function shared by every
+  // instantiation, so the plan it files under is the instantiation's arguments
+  // — the same identity the traversal guard already reads.
+  const output = run(`
+type Left:
+    a: string
+
+type Right:
+    b: string
+
+type Box<T>:
+    inner: T
+
+type Pair:
+    left: Box<Left>
+    right: Box<Right>
+
+export def take(input: unknown) -> Pair:
+    return Pair.parse(input)
+`, `
+const shared = { inner: { a: "A", b: "B" } };
+const copy = take({ left: shared, right: shared });
+console.log(copy.left.inner.a, copy.right.inner.b, copy.left === copy.right);
+`);
+  assert.equal(output, "A B false\n");
+});
+
+test("a generic body's parameter-dependent plans are one per instantiation, not one per call", () => {
+  // A plan that reads `__velarArguments` cannot hoist to module level, so it is
+  // built once beside the arguments object. Sharing one across instantiations
+  // would be cr-1 again; rebuilding one per call would lose the memo entirely.
+  const output = run(`
+type Left:
+    a: string
+
+type Right:
+    b: string
+
+type Box<T>:
+    inner: T
+
+type Wrapper<T>:
+    one: Box<T>
+    many: List<Box<T>>
+
+type Both:
+    left: Wrapper<Left>
+    right: Wrapper<Right>
+
+export def take(input: unknown) -> Both:
+    return Both.parse(input)
+`, `
+const boxed = { inner: { a: "A", b: "B" } };
+const shared = { one: boxed, many: [boxed] };
+const copy = take({ left: shared, right: shared });
+console.log(copy.left.one.inner.a, copy.right.one.inner.b);
+console.log(copy.left.many[0].inner.a, copy.right.many[0].inner.b);
+console.log(copy.left === copy.right, copy.left.many === copy.right.many, copy.left.one === copy.left.many[0]);
+`);
+  assert.equal(output, "A B\nA B\nfalse false true\n");
+});
+
+test("a cyclic structural graph reached twice in one parse terminates under each plan", () => {
+  // The structural copy is the one plan a cycle can reach, and it is a single
+  // stable identity, so a second visit is a memo hit rather than a recursion.
+  const output = run(`
+type Box<T>:
+    inner: T
+
+type Twice:
+    first: Box<Record<unknown>>
+    second: Box<Record<unknown>>
+
+export def take(input: unknown) -> Twice:
+    return Twice.parse(input)
+`, `
+const cyclic = { name: "self" };
+cyclic.self = cyclic;
+const shared = { inner: cyclic };
+const copy = take({ first: shared, second: shared });
+console.log(copy.first === copy.second, copy.first.inner.self === copy.first.inner);
+console.log(copy.first.inner === cyclic, copy.first.inner.name);
+`);
+  assert.equal(output, "true true\nfalse self\n");
+});

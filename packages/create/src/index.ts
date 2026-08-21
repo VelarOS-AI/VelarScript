@@ -38,7 +38,13 @@ export async function createVelarProject(input: string, options: CreateProjectOp
   const staging = await mkdtemp(join(dirname(root), ".velar-create-"));
   try {
     const files = createTemplateFiles(template, root, VELAR_CREATE_VERSION, VELAR_PROJECT_FORMAT_VERSION);
-    for (const [relativePath, contents] of [...files].sort(([left], [right]) => left.localeCompare(right))) {
+    // Code-unit order, not localeCompare: collation follows the process
+    // environment, so the same template would be written in a different order
+    // under a different LC_ALL. This package ships no dependencies, so the
+    // comparison is inlined rather than imported; the reasoning is spelled out
+    // once at byCodeUnit in packages/cli/src/stable-order.ts.
+    const byCodeUnit = (left: string, right: string): number => (left < right ? -1 : left > right ? 1 : 0);
+    for (const [relativePath, contents] of [...files].sort(([left], [right]) => byCodeUnit(left, right))) {
       const path = join(staging, relativePath);
       await mkdir(dirname(path), { recursive: true });
       await writeFile(path, contents, { encoding: "utf8", flag: "wx" });

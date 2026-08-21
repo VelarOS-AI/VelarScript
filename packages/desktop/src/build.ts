@@ -4,6 +4,7 @@ import { chmod, cp, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, sta
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { VelarDesktopConfig } from "./config.ts";
+import { byCodeUnit } from "./stable-order.ts";
 
 export interface DesktopBuildManifest {
   readonly formatVersion: 3;
@@ -330,7 +331,7 @@ async function treeSize(root: string): Promise<number> {
 async function hashTree(root: string): Promise<string> {
   const hash = createHash("sha256");
   const visit = async (directory: string): Promise<void> => {
-    const entries = (await readdir(directory, { withFileTypes: true })).sort((left, right) => left.name.localeCompare(right.name));
+    const entries = (await readdir(directory, { withFileTypes: true })).sort((left, right) => byCodeUnit(left.name, right.name));
     for (const entry of entries) {
       const path = join(directory, entry.name);
       const name = relative(root, path).replaceAll("\\", "/");

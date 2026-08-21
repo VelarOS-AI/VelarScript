@@ -413,7 +413,9 @@ for (const [category, entry] of [...categories].sort()) {
     failures.push(`Category '${category}' required only ${entry.required.size} names; expected at least ${floor}. A vocabulary table read short or empty.`);
   }
   summary.push(`  ${category.padEnd(22)} ${String(entry.required.size - missing.length).padStart(4)}/${String(entry.required.size).padEnd(4)} from ${entry.required.size === 0 ? "-" : tablesOf(entry)}`);
-  for (const [key, item] of missing.sort((left, right) => left[1].spelling.localeCompare(right[1].spelling))) {
+  // D90 R3(a): code-unit order, so this gate's report reads the same on two
+  // machines that differ only in `LC_ALL`.
+  for (const [key, item] of missing.sort((left, right) => left[1].spelling < right[1].spelling ? -1 : left[1].spelling > right[1].spelling ? 1 : 0)) {
     const imported = unusedImports.get(key);
     failures.push(`${category}: ${item.spelling} — declared by ${[...item.tables].sort().join(", ")}, and no module in ${display(tourRoot)} uses it`
       + (imported ? ` (${[...imported].sort().join(", ")} import${imported.size === 1 ? "s" : ""} the name and never reference${imported.size === 1 ? "s" : ""} it — an import is not a usage)` : ""));

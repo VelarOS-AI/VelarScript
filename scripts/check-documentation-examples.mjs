@@ -156,7 +156,9 @@ if (failures.length > 0) {
 function coverageReport() {
   if (fragments === 0) return [];
   if (partialFragments === 0) return [`Coverage: all ${fragments} fragments were checked in full`];
-  const worst = [...partialFiles].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 5);
+  // D90 R3(a): code-unit order breaks the count tie, so this gate's report reads
+  // the same on two machines that differ only in `LC_ALL`.
+  const worst = [...partialFiles].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)).slice(0, 5);
   return [
     `Coverage: ${partialFragments} of ${fragments} fragments were NOT checked in full — ${suppressedDiagnostics} diagnostic${suppressedDiagnostics === 1 ? " was" : "s were"} suppressed as inherent to a fragment,`,
     "  and every unresolved reference also types itself `unknown` and stops the analyzer downstream, so defects after one are never reported at all.",

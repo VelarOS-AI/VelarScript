@@ -11,12 +11,15 @@ import {
   type AnalysisContext,
   type CompilerAnalysisExtension,
   type CompilerIntrinsicAnalysisContext,
+  type Expression,
   type Parameter,
   type Program,
+  type Span,
+  spanIdentity,
   type Statement,
   type ValueType,
 } from "@velarscript/compiler/extension";
-import { isNodeServerStatement, type NodeNotFoundDeclaration, type NodeRouteDeclaration, type NodeServerDeclaration } from "./server-ast.ts";
+import { isNodeServerStatement, type NodeNotFoundDeclaration, type NodeRouteDeclaration, type NodeServerDeclaration, type NodeServerSpread } from "./server-ast.ts";
 import {
   isNodeProviderType,
   isNodeRouteInputType,
@@ -37,6 +40,16 @@ const sseEventType: ValueType = {kind: "object", fields: new Map([
   ["data", stringType], ["event", optionalOf(stringType)], ["id", optionalOf(stringType)], ["retry", optionalOf(numberType)],
 ]), optionalFields: new Set(["event", "id", "retry"])};
 const sseSendType: ValueType = {kind: "function", parameterNames: ["event"], parameters: [{kind: "union", members: [stringType, sseEventType]}], requiredParameters: 1, result: {kind: "promise", value: nullType}};
+/**
+ * A route or fallback as this server sees it: written here (`spread` null, empty origin) or composed
+ * in by a spread, in which case `origin` names the servers from the spread expression inward to the
+ * one that declares it.
+ */
+type ComposedRoute = {readonly route: NodeRouteDeclaration; readonly spread: NodeServerSpread | null; readonly origin: readonly string[]};
+type ComposedFallback = {readonly fallback: NodeNotFoundDeclaration; readonly spread: NodeServerSpread | null; readonly origin: readonly string[]};
+/** A module-level `const name = target` binding of one bare identifier to another. */
+type ServerAlias = {readonly name: string; readonly target: string; readonly span: Span};
+
 type NodeResponseMetadata = {readonly status: number | null; readonly contentType: string};
 type NodeResponseValueType = ValueType & {readonly nodeResponse?: NodeResponseMetadata};
 
@@ -89,6 +102,10 @@ export function parseRouteResultHint(value: string | undefined): {readonly schem
 export class VelarNodeAnalyzer extends Analyzer {
   private readonly contextualRouteParameters = new Map<string, ValueType>();
   private readonly routeInputs = new Map<string, NodeRouteInputType>();
+  /** Servers declared by the module under analysis, the only spread targets this analyzer can resolve. */
+  private readonly moduleServers = new Map<string, NodeServerDeclaration>();
+  /** Module-level `const alias = name` bindings, so a spread of an alias resolves to the server it names. */
+  private readonly moduleServerAliases = new Map<string, ServerAlias>();
   private readonly nodeModulePath: string | null;
 
   constructor(context: AnalysisContext = {}, extensions: readonly CompilerAnalysisExtension[] = []) {
@@ -97,6 +114,16 @@ export class VelarNodeAnalyzer extends Analyzer {
   }
 
   override analyze(program: Program) {
+    this.moduleServers.clear();
+    this.moduleServerAliases.clear();
+    for (const statement of program.body) {
+      if (isNodeServerStatement(statement)) {
+        if (!this.moduleServers.has(statement.name)) this.moduleServers.set(statement.name, statement);
+        continue;
+      }
+      const alias = moduleServerAlias(statement);
+      if (alias && !this.moduleServerAliases.has(alias.name)) this.moduleServerAliases.set(alias.name, alias);
+    }
     if (!(this.nodeModulePath ?? "").endsWith(".test.vel")) {
       for (const statement of program.body) {
         if ((statement.kind === "ImportDeclaration" || statement.kind === "ReExportDeclaration") && statement.source === "velar/server-test") {
@@ -142,50 +169,140 @@ export class VelarNodeAnalyzer extends Analyzer {
     }
     if (!this.isPredeclared(statement)) this.declareBinding(statement.name, false, serveAppType, statement.span);
 
-    const routes = new Map<string, NodeRouteDeclaration>();
-    let notFound: NodeNotFoundDeclaration | null = null;
+    const routes = new Map<string, ComposedRoute>();
+    let notFound: ComposedFallback | null = null;
     for (const item of statement.items) {
       if (item.kind === "NodeServerSpread") {
         this.requireAssignable(this.inferExpression(item.value, serveAppType), serveAppType, item.value.span);
+        const composed = this.composedItems(statement, item);
+        if (!composed) continue;
+        if (composed.notFound) {
+          if (notFound) this.typeError(describeFallbackCollision(notFound, composed.notFound), item.span);
+          else notFound = composed.notFound;
+        }
+        for (const entry of composed.routes) this.recordRoute(entry, routes, item.span);
         continue;
       }
       if (item.kind === "NodeNotFoundDeclaration") {
-        if (notFound) this.typeError("A server can declare only one @notFound fallback", item.span);
-        else notFound = item;
+        const written: ComposedFallback = {fallback: item, spread: null, origin: []};
+        if (notFound) this.typeError(describeFallbackCollision(notFound, written), item.span);
+        else notFound = written;
         this.analyzeNotFound(item);
         continue;
       }
-      const shape = routeShape(item.path);
-      const key = `${item.method} ${shape}`;
-      const previous = routes.get(key);
-      if (previous) {
-        this.typeError(
-          `Route '${item.method} ${item.path}' conflicts with '${previous.method} ${previous.path}'; parameter names do not make two route shapes distinct`,
-          item.pathSpan,
-        );
-      } else {
-        // Two routes of one method can share a concrete path. Where one declares a literal at every
-        // position the other does and more, the router's literal-beats-capture score picks it every
-        // time, which is the intended precedence behind '/users/me' beside '/users/{id:string}'.
-        // Where neither is more specific the winner is declaration order alone and the loser can
-        // never run, so the overlap is an error. A pair whose shared path is unrealizable — a
-        // '{n:number}' capture against the literal 'b' — is not an overlap.
-        const segments = routeSegments(item.path);
-        for (const other of routes.values()) {
-          if (other.method !== item.method) continue;
-          const declared = routeSegments(other.path);
-          if (routeSpecificityDecides(declared, segments)) continue;
-          const shared = routeSharedPath(declared, segments);
-          if (shared === null) continue;
-          this.typeError(
-            `Route '${other.method} ${other.path}' overlaps '${item.method} ${item.path}'; both match '${shared}' and neither is more specific — narrow or remove one`,
-            item.pathSpan,
-          );
-        }
-        routes.set(key, item);
-      }
+      this.recordRoute({route: item, spread: null, origin: []}, routes, item.pathSpan);
       this.analyzeRoute(item);
     }
+  }
+
+  /**
+   * Enters one route into this server's shape map and compares it against every route already
+   * entered, whether that route was written here or composed in by a spread. Composition is why the
+   * entries carry an origin: a conflicting route the author cannot see in his own file has to name
+   * the server it came from.
+   */
+  private recordRoute(entry: ComposedRoute, routes: Map<string, ComposedRoute>, span: Span): void {
+    const key = `${entry.route.method} ${routeShape(entry.route.path)}`;
+    const previous = routes.get(key);
+    if (previous) {
+      this.typeError(describeRouteCollision(previous, entry), span);
+      return;
+    }
+    // Two routes of one method can share a concrete path. Where one declares a literal at every
+    // position the other does and more, the router's literal-beats-capture score picks it every
+    // time, which is the intended precedence behind '/users/me' beside '/users/{id:string}'.
+    // Where neither is more specific the winner is declaration order alone and the loser can
+    // never run, so the overlap is an error. A pair whose shared path is unrealizable — a
+    // '{n:number}' capture against the literal 'b' — is not an overlap.
+    const segments = routeSegments(entry.route.path);
+    for (const other of routes.values()) {
+      if (other.route.method !== entry.route.method) continue;
+      // Two routes one spread composed in were already compared against each other while that
+      // server was analyzed; reporting them again here would duplicate its diagnostic.
+      if (entry.spread !== null && other.spread === entry.spread) continue;
+      const declared = routeSegments(other.route.path);
+      if (routeSpecificityDecides(declared, segments)) continue;
+      const shared = routeSharedPath(declared, segments);
+      if (shared === null) continue;
+      this.typeError(
+        `Route ${describeComposedRoute(other)} overlaps ${describeComposedRoute(entry)}; both match '${shared}' and neither is more specific — narrow or remove one`,
+        span,
+      );
+    }
+    routes.set(key, entry);
+  }
+
+  /**
+   * The routes and fallback a spread composes into the server that writes it, or null when the
+   * spread is not statically resolvable. This analyzer sees one module, so a spread contributes
+   * only when its value is a plain identifier naming a server declared in this module: an imported
+   * server, a `prefix(...)` call, or any other expression is let through unchecked, because a false
+   * conflict here would block a correct program. Composition is followed transitively; the visited
+   * set bounds a cycle and starts holding the composing server, so a cycle never folds a server's
+   * own routes back into itself and reports each as conflicting with itself.
+   */
+  private composedItems(
+    statement: NodeServerDeclaration,
+    spread: NodeServerSpread,
+  ): {readonly routes: readonly ComposedRoute[]; readonly notFound: ComposedFallback | null} | null {
+    const target = this.resolveComposedServer(spread.value);
+    if (!target) return null;
+    const routes: ComposedRoute[] = [];
+    const shapes = new Set<string>();
+    const visited = new Set<NodeServerDeclaration>([statement]);
+    let notFound: ComposedFallback | null = null;
+    const collect = (server: NodeServerDeclaration, origin: readonly string[]): void => {
+      if (visited.has(server)) return;
+      visited.add(server);
+      for (const item of server.items) {
+        if (item.kind === "NodeServerSpread") {
+          const nested = this.resolveComposedServer(item.value);
+          if (nested) collect(nested, [...origin, nested.name]);
+          continue;
+        }
+        if (item.kind === "NodeNotFoundDeclaration") {
+          notFound ??= {fallback: item, spread, origin};
+          continue;
+        }
+        // A server that conflicts with itself already reported it; one entry per shape is what
+        // reaches the composing server, exactly as one entry per shape reaches its own map.
+        const shape = `${item.method} ${routeShape(item.path)}`;
+        if (shapes.has(shape)) continue;
+        shapes.add(shape);
+        routes.push({route: item, spread, origin});
+      }
+    };
+    collect(target, [target.name]);
+    return {routes, notFound};
+  }
+
+  /**
+   * The server declaration a spread value names, or null when it is anything else. A
+   * `const other = base` alias chain of this module's own servers resolves too, because the alias
+   * holds exactly that ServeApp; a `let`, a member path, a conditional, an import, or a parameter
+   * does not, and contributes nothing.
+   */
+  private resolveComposedServer(value: Expression): NodeServerDeclaration | null {
+    if (value.kind !== "IdentifierExpression") return null;
+    let name = value.name;
+    const followed = new Set<string>();
+    while (!this.moduleServers.has(name)) {
+      const alias = this.moduleServerAliases.get(name);
+      if (!alias || followed.has(name) || !this.resolvesTo(name, alias.span)) return null;
+      followed.add(name);
+      name = alias.target;
+    }
+    const declaration = this.moduleServers.get(name)!;
+    return this.resolvesTo(name, declaration.span) ? declaration : null;
+  }
+
+  /**
+   * Whether a name still reaches the declaration this module recorded for it. An import, a
+   * shadowing binding, or a parameter of the same name reaches a different binding.
+   */
+  private resolvesTo(name: string, span: Span): boolean {
+    const binding = this.lookup(name);
+    return binding !== null && spanIdentity(binding.span) === spanIdentity(span);
   }
 
   private analyzeNotFound(fallback: NodeNotFoundDeclaration): void {
@@ -694,6 +811,70 @@ function openApiObjectSchema(
     ...(required.length > 0 ? { required } : {}),
     additionalProperties: false,
   };
+}
+
+/**
+ * A module-level `const name = other` binding, the one indirect spelling of a spread target that is
+ * still exactly the value it names. `let` is excluded because it can be reassigned, and a pattern
+ * or any other initializer is excluded because it is no longer that value.
+ */
+function moduleServerAlias(statement: Statement): ServerAlias | null {
+  if (statement.kind !== "VariableDeclaration") return null;
+  const declaration = statement as Statement & {
+    readonly binding: "const" | "let";
+    readonly pattern: {readonly kind: string; readonly name: string; readonly span: Span};
+    readonly initializer: Expression;
+  };
+  if (declaration.binding !== "const" || declaration.pattern.kind !== "NameBindingPattern" || declaration.initializer.kind !== "IdentifierExpression") return null;
+  return {name: declaration.pattern.name, target: declaration.initializer.name, span: declaration.pattern.span};
+}
+
+function describeComposedOrigin(entry: ComposedRoute | ComposedFallback): string {
+  return entry.origin.map((name) => `'${name}'`).join(" → ");
+}
+
+function describeComposedRoute(entry: ComposedRoute): string {
+  const route = `'${entry.route.method} ${entry.route.path}'`;
+  return entry.origin.length === 0 ? route : `${route} (composed in from ${describeComposedOrigin(entry)})`;
+}
+
+/**
+ * Why two routes claim one method and shape. Three causes reach this point and each names a
+ * different repair, so the message has to tell them apart: one server composed in along two paths
+ * declares its route once and cannot be narrowed at all, two routes spelling the same path have no
+ * parameter names to blame, and only the third is the shape collision parameter names hide.
+ */
+function describeRouteCollision(previous: ComposedRoute, entry: ComposedRoute): string {
+  // One declaration reaching this server twice is only reachable through spreads: a server's own
+  // items are never collected back into it, so both sides carry an origin.
+  const declaring = entry.origin[entry.origin.length - 1];
+  if (previous.route === entry.route && declaring !== undefined) {
+    const paths = describeComposedOrigin(previous) === describeComposedOrigin(entry)
+      ? `both times from ${describeComposedOrigin(entry)}`
+      : `from ${describeComposedOrigin(previous)} and from ${describeComposedOrigin(entry)}`;
+    return `Route '${entry.route.method} ${entry.route.path}' is composed in twice, ${paths}; '${declaring}' declares it once — remove one spread`;
+  }
+  if (previous.route.path === entry.route.path) {
+    return `Route ${describeComposedRoute(entry)} duplicates ${describeComposedRoute(previous)}; one method and path answer from a single route`;
+  }
+  return `Route ${describeComposedRoute(entry)} conflicts with ${describeComposedRoute(previous)}; parameter names do not make two route shapes distinct`;
+}
+
+/**
+ * Both sides of a duplicate @notFound. A fallback a spread composes in is invisible in the author's
+ * own file, so naming one contributor and not the other leaves him looking for a declaration that
+ * is not there; two spreads each composing one name neither by default.
+ */
+function describeFallbackCollision(previous: ComposedFallback, entry: ComposedFallback): string {
+  const rule = "A server can declare only one @notFound fallback";
+  if (previous.origin.length === 0 && entry.origin.length === 0) return rule;
+  const source = (fallback: ComposedFallback, second: boolean): string => {
+    const article = second ? "another" : "one";
+    return fallback.origin.length === 0
+      ? `this server declares ${article}`
+      : `${describeComposedOrigin(fallback)} composes ${article} in`;
+  };
+  return `${rule}; ${source(previous, false)} and ${source(entry, true)}`;
 }
 
 function routeShape(path: string): string {
