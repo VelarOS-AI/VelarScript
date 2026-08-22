@@ -617,10 +617,10 @@ computed sum = a + b
 watch sum as current, _:
     watchLog = watchLog + "one=" + str(current) + ";"
 
-watch a:
+watch a writes b:
     b = a * 2
 
-watch secondA:
+watch secondA writes secondB:
     secondB = secondA * 2
 
 computed total = secondA + secondB
@@ -628,7 +628,7 @@ computed total = secondA + secondB
 watch total as current, _:
     watchLog = watchLog + "two=" + str(current) + ";"
 
-watch corrected:
+watch corrected writes corrected:
     if corrected > 5:
         corrected = 5
 
@@ -643,13 +643,13 @@ def subject() -> number:
 // and the write to the value only the body reads still evaluates it not at all.
 computed subjectDerived = subject()
 
-watch subjectDerived as value, _:
+watch subjectDerived as value, _ writes sink:
     sink = value + unwatched
 
 ${Array.from({ length: tickCascadeStages }, (_, index) =>
   index === 0
-    ? `watch trigger:\n    settled0 = trigger`
-    : `watch rendered${index - 1}:\n    settled${index} = rendered${index - 1}`,
+    ? `watch trigger writes settled0:\n    settled0 = trigger`
+    : `watch rendered${index - 1} writes settled${index}:\n    settled${index} = rendered${index - 1}`,
 ).join("\n\n")}
 
 ${Array.from(
@@ -757,13 +757,13 @@ state stormB: number = 0
 state unrelated: number = 0
 state unrelatedRuns: number = 0
 
-watch stormA:
+watch stormA writes stormB:
     stormB = stormB + 1
 
-watch stormB:
+watch stormB writes stormA:
     stormA = stormA + 1
 
-watch unrelated:
+watch unrelated writes unrelatedRuns:
     unrelatedRuns = unrelatedRuns + 1
 
 component App:
@@ -825,11 +825,11 @@ state cells: List<number> = []
 state unrelated: number = 0
 state unrelatedRuns: number = 0
 
-watch unrelated:
+watch unrelated writes unrelatedRuns:
     unrelatedRuns = unrelatedRuns + 1
 
 component Cell(index: number, total: number):
-    watch ticks[index] as value, _:
+    watch ticks[index] as value, _ writes ticks:
         if value > 0:
             ticks[(index + 1) % total] = value + 1
     return <i></i>
@@ -884,43 +884,63 @@ test(
         undefined,
         { timeout: 60_000 },
       );
-      assert.equal(failures.length, 1);
-      assert.match(
-        failures[0] ?? "",
-        /Reactive updates cannot run more than 100000 observers in one flush/u,
-      );
+      // The budget is still reported exactly once, which is the progress rule
+      // this test exists for. What it is no longer alone is D90 R1-a-scope's
+      // doing: every Cell in the ring is a live instance of one `watch`
+      // declaration and they all declare `writes ticks`, so from the second one
+      // on each run of the ring also earns the contention refusal -- in its
+      // multi-instance wording, because that is what these contenders are. The
+      // ring is a program the ruling now refuses; the turn still ends, the page
+      // still answers, and the unrelated write still reaches its watch.
+      const budget = failures.filter((item) => /Reactive updates cannot run more than 100000 observers in one flush/u.test(item));
+      assert.equal(budget.length, 1, JSON.stringify(failures.slice(0, 2)));
+      for (const failure of failures) {
+        if (budget.includes(failure)) continue;
+        assert.match(failure, /Two live instances of component 'Cell' both ran the watch on '[^']*' and wrote state 'ticks' in one flush/u);
+      }
     });
   },
 );
 
-test("[R1] both flush drains carry the same overrun progress rules", async () => {
-  // The registry drain in runtime-foundation.ts and the prelude drain in the
-  // emitter template share the queues, so an overrun that made progress in one
-  // and not the other would freeze the page whenever velar/app stamped the
-  // registry first. Only their identifiers may differ.
-  const drains = [
-    await readFile(join(root, "packages", "web", "src", "runtime-foundation.ts"), "utf8"),
-    await readFile(join(root, "packages", "web", "src", "emitter.ts"), "utf8"),
-  ];
-  for (const drain of drains) {
-    // The threshold falls to the highest run count present, so an overrun that
-    // ran nobody four times still stops the observers it did run.
-    assert.match(drain, /if \(observer\.flushToken === token && observer\.flushRuns > threshold\) threshold = observer\.flushRuns;/u);
-    assert.match(drain, /if \(threshold > 4\) threshold = 4;/u);
-    assert.match(drain, /if \(threshold > 0 && observer\.flushToken === token && observer\.flushRuns >= threshold\)/u);
-    // The token carries into the flush the overrun schedules, so run counts
-    // accumulate across the chain and the unreached observers only shrink.
-    assert.match(drain, /(?:__velarOverflowToken|overflowToken) = token;\n/u);
-    assert.match(drain, /const token = (?:__velarOverflowToken|overflowToken) === null \? \{\} : (?:__velarOverflowToken|overflowToken);\n\s*(?:__velarOverflowToken|overflowToken) = null;/u);
+test("[rw-3] there is exactly one flush drain, and it carries the overrun progress rules", async () => {
+  // This test used to read both files and assert that the two drains matched.
+  // It existed only because there were two: the registry drain in
+  // runtime-foundation.ts and a twin in the emitted prelude, sharing the queues
+  // under one flushPending flag, with the scheduling epoch a watch used to be
+  // classified by living in only one of them. The emitted prelude is inlined
+  // into the same module scope as the foundation, so one definition serves
+  // both, and the assertion is now that the second one is gone.
+  const foundation = await readFile(join(root, "packages", "web", "src", "runtime-foundation.ts"), "utf8");
+  const emitter = await readFile(join(root, "packages", "web", "src", "emitter.ts"), "utf8");
+  // The threshold falls to the highest run count present, so an overrun that
+  // ran nobody four times still stops the observers it did run.
+  assert.match(foundation, /if \(observer\.flushToken === token && observer\.flushRuns > threshold\) threshold = observer\.flushRuns;/u);
+  assert.match(foundation, /if \(threshold > 4\) threshold = 4;/u);
+  assert.match(foundation, /if \(threshold > 0 && observer\.flushToken === token && observer\.flushRuns >= threshold\)/u);
+  // The token carries into the flush the overrun schedules, so run counts
+  // accumulate across the chain and the unreached observers only shrink.
+  assert.match(foundation, /__velarOverflowToken = token;\n/u);
+  assert.match(foundation, /const token = __velarOverflowToken === null \? \{\} : __velarOverflowToken;\n\s*__velarOverflowToken = null;/u);
+  // One definition of each, and the emitter defines none of them.
+  for (const name of ["__velarFlush", "__velarScheduleFlush", "__velarFlushOverflow"]) {
+    assert.equal((foundation.match(new RegExp(`function ${name}\\(`, "gu")) ?? []).length, 1, name);
+    assert.equal(emitter.match(new RegExp(`function ${name}\\(`, "gu")), null, name);
   }
+  assert.equal(emitter.includes("__velarOverflowToken ="), false);
+  assert.equal(emitter.includes("function __velarSchedule("), false);
 });
 
-test("[R1] a watch that writes through a helper is classified as a writer", () => {
-  // D90's R1-a revision made the compile ask the same question this runtime
-  // classifier answers, so the two writing watches below must reach *different*
-  // states or the fixture is itself the VEL5069 contention the revision
-  // introduced. `relay` still reaches its write through a second helper, which
-  // is what the third classification line is here to prove.
+test("[R1/R16] a watch is classified a writer by its header, not by an inference over its body", () => {
+  // The runtime used to promote a watch to a writer after the fact, from a
+  // scheduling epoch, while the emitter inferred the same thing from a
+  // hardcoded roster of mutating methods and the analyzer inferred it a third
+  // way -- three answers to one question, and they disagreed. The header
+  // answers it once now: the emitted argument is the list of cells the clause
+  // named, and `produces` is whether that list is non-empty.
+  //
+  // The two writing watches below still reach *different* states, or the
+  // fixture would be the VEL5069 contention itself. `relay` still reaches its
+  // write through a second helper, which is what the third line proves.
   const result = compile(
     `
 state a: number = 0
@@ -948,10 +968,10 @@ computed sum = a + b
 watch sum as current, _:
     log = log + str(current)
 
-watch a:
+watch a writes b:
     bump(a)
 
-watch a:
+watch a writes c:
     relay(a)
 
 watch a:
@@ -970,27 +990,33 @@ mount(<i>{log}{c}</i>, "#app")
   // The observing watch, the direct helper, the helper's own helper, a helper
   // that only recurses, and a helper that writes no state -- in that order. The
   // `computed` D90 R15(a) puts in front of the observing watch is not an
-  // observer of this kind and contributes no line of its own.
+  // observer of this kind and contributes no line of its own. The two writers
+  // carry the cells their headers named; the three observers carry an empty
+  // list, which is what puts them in the observer tier of one flush. D90
+  // R1-a-scope adds the declaration's site to the two writers -- one object per
+  // `watch` in the source, so the runtime referee can tell two declarations
+  // from two live instances of one. An observer can never contend, so it needs
+  // no site.
   assert.deepEqual(produces, [
-    "}, __velarGlobalScope, false);",
-    "}, __velarGlobalScope, true);",
-    "}, __velarGlobalScope, true);",
-    "}, __velarGlobalScope, false);",
-    "}, __velarGlobalScope, false);",
+    `}, __velarGlobalScope, [], "sum");`,
+    `}, __velarGlobalScope, [b], "a", __velarWatchSite0);`,
+    `}, __velarGlobalScope, [c], "a", __velarWatchSite1);`,
+    `}, __velarGlobalScope, [], "a");`,
+    `}, __velarGlobalScope, [], "a");`,
   ]);
 });
 
 // R1 again, for the spelling that puts the write in a named function: moving
 // the two watch blocks past each other must not change what the program prints,
-// on the first firing as much as on every later one. The runtime promotes a
-// watch to a writer only after it has been seen writing, so the first firing is
-// the compile-time classifier's to get right.
+// on the first firing as much as on every later one. Under R16 the header
+// settles the classification before the first firing, so there is no run in
+// which the writer has not yet been recognised.
 function helperOrderApplication(writerFirst: boolean): string {
   // The `computed` D90 R15(a) requires travels with the watch that observes it,
   // so the two arrangements stay mirror images: whichever block is written
   // first, the observing watch still reads a value derived from both states.
   const observing = `computed sum = a + b\n\nwatch sum as current, _:\n    log = log + "sum=" + str(current) + ";"`;
-  const writing = `watch a:\n    bump(a)`;
+  const writing = `watch a writes b:\n    bump(a)`;
   return `
 let log = ""
 

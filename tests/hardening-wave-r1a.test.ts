@@ -12,8 +12,19 @@ import type { ValueType } from "../packages/compiler/src/types.ts";
 // The owner ruled the shape a compile error, on the reasoning R3(c) already
 // applies to two independent Looks setting one property (VEL5068).
 //
-// The false-positive rate is what decides whether this rule is worth having, so
-// the "stays legal" half below is the hard requirement, not the courtesy half.
+// D90 R16 kept the ruling and changed what answers it. The rule used to be
+// drawn from an inference over the body, which a helper call defeated, then a
+// `const` alias defeated, then a `let` bounded it -- three rounds of chasing.
+// Now the header declares the write set, the contention is the intersection of
+// two declarations, and the body is governed by two referees: compile time
+// reports the writes it can see that the header does not declare (VEL5072), and
+// the runtime refuses the rest exactly, at the moment the write lands.
+//
+// So this file's two halves changed meaning together. The contention half now
+// pairs declarations; the "stays silent" half is no longer a roster of correct
+// programs but a roster of writes compile time cannot see -- each one is a
+// runtime error under R16, and the silence asserted here is only the absence of
+// a compile-time guess.
 
 function compile(text: string) {
   return compileCore(text.trimStart(), { extensions: [velarCompilerExtension] });
@@ -22,6 +33,13 @@ function compile(text: string) {
 function contentions(source: string): readonly string[] {
   return compile(source).diagnostics
     .filter((item) => item.code === "VEL5069")
+    .map((item) => item.message);
+}
+
+/** D90 R16: the writes compile time saw and the header did not declare. */
+function undeclared(source: string): readonly string[] {
+  return compile(source).diagnostics
+    .filter((item) => item.code === "VEL5072")
     .map((item) => item.message);
 }
 
@@ -42,16 +60,16 @@ const voidFunction: ValueType = { kind: "function", parameters: [], requiredPara
 // The shape the ruling names
 // ---------------------------------------------------------------------------
 
-test("[R1-a] two watches that assign one state are refused, each on its own write", () => {
+test("[R1-a/R16] two watches that declare one state are refused, each on its own target", () => {
   // The ruling's program, in the block spelling module-scope `watch` accepts.
   const source = `
 state t = 0
 state x = 1
 
-watch t:
+watch t writes x:
     x = x + 1
 
-watch t:
+watch t writes x:
     x = x * 10
 `;
   const reported = contentions(source);
@@ -62,11 +80,34 @@ watch t:
     assert.match(message, /put every update to 'x' in one watch, or give each watch a state of its own/u);
   }
 
-  // One error per contender, anchored on that watch's own first write: the two
-  // watches have no meeting point the way VEL5068's two Looks meet at one
+  // One error per contender, anchored on that watch's own declared target: the
+  // two watches have no meeting point the way VEL5068's two Looks meet at one
   // `look=` attribute, so each watch's position is named by the error on it.
   const spans = compile(source).diagnostics.filter((item) => item.code === "VEL5069").map((item) => item.span.start);
   assert.equal(new Set(spans).size, 2, JSON.stringify(spans));
+  for (const start of spans) assert.equal(source.trimStart().slice(start, start + 1), "x");
+});
+
+test("[R16] the same program without the clause is refused for the missing declaration", () => {
+  const source = `
+state t = 0
+state x = 1
+
+watch t:
+    x = x + 1
+
+watch t:
+    x = x * 10
+`;
+  const reported = undeclared(source);
+  assert.equal(reported.length, 2, JSON.stringify(messages(source)));
+  for (const message of reported) {
+    assert.match(message, /This watch writes state 'x', which its header does not declare/u);
+    assert.match(message, /'watch t writes x:'/u);
+    assert.match(message, /a watch with no 'writes' clause only observes/u);
+  }
+  // The error sits on the write, which is the line the author has to change.
+  const spans = compile(source).diagnostics.filter((item) => item.code === "VEL5072").map((item) => item.span.start);
   for (const start of spans) assert.equal(source.trimStart().slice(start, start + 1), "x");
 });
 
@@ -77,13 +118,22 @@ state b = 0
 state c = true
 state x = 1
 
-watch a:
+watch a writes x:
     if c:
         x = 1
 
-watch b:
+watch b writes x:
     x = 2
 `).length, 2);
+  assert.equal(undeclared(`
+state a = 0
+state c = true
+state x = 1
+
+watch a:
+    if c:
+        x = 1
+`).length, 1);
 });
 
 test("[R1-a] three contenders produce three errors, not a pair", () => {
@@ -91,13 +141,13 @@ test("[R1-a] three contenders produce three errors, not a pair", () => {
 state t = 0
 state x = 1
 
-watch t:
+watch t writes x:
     x = 1
 
-watch t:
+watch t writes x:
     x = 2
 
-watch t:
+watch t writes x:
     x = 3
 `).length, 3);
 });
@@ -107,22 +157,20 @@ test("[R1-a] a compound assignment contends exactly as a plain one does", () => 
 state t = 0
 state x = 1
 
-watch t:
+watch t writes x:
     x += 1
 
-watch t:
+watch t writes x:
     x = 2
 `).length, 2);
-  assert.equal(contentions(`
+  // And an undeclared compound assignment is the same write to the header rule.
+  assert.equal(undeclared(`
 state t = 0
 state x = 1
 
 watch t:
     x += 1
-
-watch t:
-    x *= 10
-`).length, 2);
+`).length, 1);
 });
 
 test("[R1-a] a component's own watches contend over the component's own state", () => {
@@ -131,10 +179,10 @@ component App:
     state t = 0
     state x = 1
 
-    watch t:
+    watch t writes x:
         x = x + 1
 
-    watch t:
+    watch t writes x:
         x = x * 10
 
     return <p>{x}</p>
@@ -153,7 +201,7 @@ test("[R1-a] a watch that owns its state is untouched while others read it", () 
 state t = 0
 state x = 1
 
-watch t:
+watch t writes x:
     x = x + 1
 
 watch x:
@@ -167,7 +215,7 @@ state t = 0
 state c = true
 state x = 1
 
-watch t:
+watch t writes x:
     x = 1
     if c:
         x = 2
@@ -190,22 +238,21 @@ component App:
     def reset():
         x = 0
 
-    watch t:
+    watch t writes x:
         x = x * 2
 
     return <button on:click={reset}>{x}</button>
 `), []);
 });
 
-// The two tests below asserted the opposite until D90's R1-a revision. The
-// original boundary ("a call is never followed") was written to hold the false
-// positive rate at zero, but it was not a guess the analyzer had to make: the
-// runtime already promotes a watch that writes through a helper to a writer, so
-// the compile was asking a weaker question about the same program. Extracting a
-// helper defeated the rule outright. The revision follows the calls this module
-// can resolve; the cases below that stay legal are the boundary that remains.
-test("[R1-a revision] a write reached through a called function is the calling watch's write", () => {
-  assert.equal(contentions(`
+// The two tests below asserted the opposite until D90's R1-a revision, and
+// changed sides once more under R16. The original boundary ("a call is never
+// followed") let a helper defeat the rule outright; the revision followed the
+// calls this module can resolve; R16 keeps that machinery and repoints it, so a
+// resolvable call reaching an undeclared state is now named at compile time
+// rather than silently rescheduled.
+test("[R1-a revision/R16] a write reached through a called function is the calling watch's write", () => {
+  assert.equal(undeclared(`
 state t = 0
 state x = 1
 
@@ -214,13 +261,23 @@ def bump():
 
 watch t:
     bump()
+`).length, 1);
+  assert.equal(contentions(`
+state t = 0
+state x = 1
 
-watch t:
+def bump():
+    x = x + 1
+
+watch t writes x:
+    bump()
+
+watch t writes x:
     x = 2
 `).length, 2);
 });
 
-test("[R1-a revision] a function declared inside a watch body contends only once the watch calls it", () => {
+test("[R1-a revision] a function declared inside a watch body reaches the header only once the watch calls it", () => {
   // Declaring it is not running it: the body runs when it is called, so a `def`
   // nobody calls carries its writes and hands them to nobody.
   assert.deepEqual(messages(`
@@ -231,10 +288,10 @@ watch t:
     def bump():
         x = x + 1
 
-watch t:
+watch t writes x:
     x = 2
 `), []);
-  assert.equal(contentions(`
+  assert.equal(undeclared(`
 state t = 0
 state x = 1
 
@@ -242,10 +299,7 @@ watch t:
     def bump():
         x = x + 1
     bump()
-
-watch t:
-    x = 2
-`).length, 2);
+`).length, 1);
 });
 
 test("[R1-a] a local that shadows the state takes the write with it", () => {
@@ -260,8 +314,25 @@ watch t:
         let x = 1
         x = 2
 
-watch u:
+watch u writes x:
     x = 5
+`), []);
+});
+
+test("[R16] a state declared inside the body being analyzed is not a state the header could declare", () => {
+  // The compile-time half of the runtime's own exemption: a cell created during
+  // a watch's run is created fresh on every run, so there is no enclosing header
+  // it could ever have been named in.
+  assert.deepEqual(messages(`
+state t = 0
+
+def counted() -> number:
+    state inner = 0
+    inner = inner + 1
+    return inner
+
+watch t:
+    print(f"{counted()}")
 `), []);
 });
 
@@ -271,13 +342,13 @@ state x = 1
 
 component A:
     state t = 0
-    watch t:
+    watch t writes x:
         x = 1
     return <p>a</p>
 
 component B:
     state u = 0
-    watch u:
+    watch u writes x:
         x = 2
     return <p>b</p>
 `), []);
@@ -290,10 +361,10 @@ test("[R1-a] two watches writing different states stay legal, cycle included", (
 state stormA = 0
 state stormB = 0
 
-watch stormA:
+watch stormA writes stormB:
     stormB = stormB + 1
 
-watch stormB:
+watch stormB writes stormA:
     stormA = stormA + 1
 `), []);
 });
@@ -329,18 +400,21 @@ component App:
     @cleanup:
         x = 2
 
-    watch t:
+    watch t writes x:
         x = 3
 
     return <p>{x}</p>
 `), []);
 });
 
-test("[R1-a] only a bare-identifier target is recorded", () => {
-  // Two member writes collide only when their paths are the same, and a path
-  // runs through dynamic indices and aliases this analysis cannot decide, so
-  // the rule stops at the shape the ruling names.
-  assert.deepEqual(messages(`
+test("[R16] a member path and a mutating method are writes the header must declare", () => {
+  // This test asserted the opposite until R16. The old rule recorded only a
+  // bare-identifier target, because a member path was being used to decide
+  // scheduling and a wrong decision there was worse than a missed one. The
+  // decision is gone -- the header makes it -- so the widened shape can only
+  // report earlier, and both shapes defeated R1's promise while they were
+  // silent.
+  const undeclaredWrites = undeclared(`
 state t = 0
 state user = { name: "a" }
 state items = [1, 2]
@@ -348,11 +422,36 @@ state items = [1, 2]
 watch t:
     user.name = "b"
     items[0] = 3
+`);
+  assert.equal(undeclaredWrites.length, 2, JSON.stringify(undeclaredWrites));
+  assert.equal(undeclared(`
+state t = 0
+state items = [1, 2]
 
 watch t:
-    user.name = "c"
+    items.append(4)
+`).length, 1);
+  // Declared, both shapes are legal, and two watches declaring one of them
+  // contend exactly as two bare assignments do.
+  assert.deepEqual(messages(`
+state t = 0
+state user = { name: "a" }
+state items = [1, 2]
+
+watch t writes user, items:
+    user.name = "b"
     items.append(4)
 `), []);
+  assert.equal(contentions(`
+state t = 0
+state user = { name: "a" }
+
+watch t writes user:
+    user.name = "b"
+
+watch t writes user:
+    user.name = "c"
+`).length, 2);
 });
 
 // ---------------------------------------------------------------------------
@@ -360,15 +459,18 @@ watch t:
 //
 // The revision above followed the call and left the alias of the call open, so
 // `const chosenBump = bump` then `chosenBump()` reported nothing and the order
-// dependence R1-a exists to end came back whole. A `const` bound to a bare name
+// dependence R1-a exists to end came back whole. A binding bound to a bare name
 // this module declares is that declaration under a second name -- it is not
-// dynamic dispatch, and nothing about it is undecided. The boundary the ruling
-// draws is unchanged: an import, a parameter, a reassignable binding, a member
-// path, and a JavaScript value typed `any` are all still let through, and the
-// battery below is that half.
+// dynamic dispatch, and nothing about it is undecided.
+//
+// Under R16 what the alias buys is the earlier report: the write it reaches is
+// named at compile time instead of waiting for the runtime backstop. The
+// boundary below is unchanged in shape but no longer in meaning -- an import, a
+// parameter, a reassigned binding, a member path and a JavaScript value are
+// still let through by the compile, and the runtime is what refuses them.
 // ---------------------------------------------------------------------------
 
-test("[cr-3] a const alias of a helper is the helper, and reports the direct spelling's pair", () => {
+test("[cr-3] a const alias of a helper is the helper, and reports the direct spelling's error", () => {
   const direct = `
 state t = 0
 state x = 1
@@ -404,11 +506,11 @@ watch t:
 watch t:
     chosenScale()
 `;
-  assert.equal(contentions(direct).length, 2, JSON.stringify(messages(direct)));
-  assert.deepEqual(contentions(aliased), contentions(direct));
+  assert.equal(undeclared(direct).length, 2, JSON.stringify(messages(direct)));
+  assert.deepEqual(undeclared(aliased), undeclared(direct));
   // The alias call is still the anchor, so each watch is named by the error on
   // its own line exactly as a direct write is.
-  const spans = compile(aliased).diagnostics.filter((item) => item.code === "VEL5069").map((item) => item.span.start);
+  const spans = compile(aliased).diagnostics.filter((item) => item.code === "VEL5072").map((item) => item.span.start);
   assert.equal(new Set(spans).size, 2, JSON.stringify(spans));
   for (const start of spans) assert.match(aliased.trimStart().slice(start, start + 11), /^chosen(Bump|Scal)/u);
 });
@@ -416,7 +518,7 @@ watch t:
 test("[cr-3] swapping the two aliased watches changes nothing", () => {
   // The whole point of R1-a: the result may not depend on which watch is written
   // first. Before this fix both orders were silent and the emitted value moved.
-  assert.equal(contentions(`
+  assert.equal(undeclared(`
 state t = 0
 state x = 1
 
@@ -435,10 +537,30 @@ watch t:
 watch t:
     chosenBump()
 `).length, 2);
+  // Declared, the same pair is the contention the ruling refuses.
+  assert.equal(contentions(`
+state t = 0
+state x = 1
+
+def bump():
+    x = x + 1
+
+def scale():
+    x = x * 10
+
+const chosenBump = bump
+const chosenScale = scale
+
+watch t writes x:
+    chosenScale()
+
+watch t writes x:
+    chosenBump()
+`).length, 2);
 });
 
 test("[cr-3] an alias chain is followed to the declaration at its end", () => {
-  assert.equal(contentions(`
+  assert.equal(undeclared(`
 state t = 0
 state x = 1
 
@@ -451,16 +573,13 @@ const third = second
 
 watch t:
     third()
-
-watch t:
-    x = 2
-`).length, 2);
+`).length, 1);
 });
 
 test("[cr-3] an alias called inside a helper is followed as well as one called in the watch", () => {
   // Both callers of the call-graph recorder read through the same map: the
   // watch->callee edge and the def->def edge resolve at the same place.
-  assert.equal(contentions(`
+  assert.equal(undeclared(`
 state t = 0
 state x = 1
 
@@ -474,17 +593,14 @@ def outer():
 
 watch t:
     outer()
-
-watch t:
-    x = 2
-`).length, 2);
+`).length, 1);
 });
 
 test("[cr-3] an alias of a recursive helper terminates", () => {
   // A cycle of aliases is not constructible -- VEL3017 refuses `const a = a` --
   // so recursion through the aliased declaration is the shape that has to
   // terminate, and the visited set is what makes it.
-  assert.equal(contentions(`
+  assert.equal(undeclared(`
 state t = 0
 state x = 1
 
@@ -497,14 +613,11 @@ const second = first
 
 watch t:
     second()
-
-watch t:
-    x = 2
-`).length, 2);
+`).length, 1);
 });
 
-test("[cr-3] one watch calling one helper under two aliases is one contender", () => {
-  assert.deepEqual(messages(`
+test("[cr-3] one watch calling one helper under two aliases reports it once", () => {
+  assert.equal(undeclared(`
 state t = 0
 state x = 1
 
@@ -515,6 +628,20 @@ const first = bump
 const second = bump
 
 watch t:
+    first()
+    second()
+`).length, 1);
+  assert.deepEqual(messages(`
+state t = 0
+state x = 1
+
+def bump():
+    x = x + 1
+
+const first = bump
+const second = bump
+
+watch t writes x:
     first()
     second()
 `), []);
@@ -535,21 +662,25 @@ component App:
     const chosenBump = bump
     const chosenScale = scale
 
-    watch t:
+    watch t writes x:
         chosenBump()
 
-    watch t:
+    watch t writes x:
         chosenScale()
 
     return <p>{x}</p>
 `).length, 2);
 });
 
-// The boundary. Every case below is a correct program, and a diagnostic on any
-// of them is a false positive -- which is the one failure this rule cannot
-// afford, because it blocks a build.
+// The boundary. Every case below reaches a write compile time cannot resolve,
+// so the compile says nothing about it -- and under R16 that silence is no
+// longer a verdict of "correct". The runtime backstop is the referee for every
+// one of them: the write lands inside the watch's frame, the cell is not in the
+// declared list, and it fails loudly naming the watch and the state. What these
+// tests pin is that the compile does not GUESS, which is what would produce a
+// false positive on a build.
 
-test("[cr-3] an alias bound to a parameter holding a callable stays silent", () => {
+test("[cr-3] an alias bound to a parameter holding a callable stays silent at compile time", () => {
   assert.deepEqual(messages(`
 state t = 0
 state x = 1
@@ -564,14 +695,14 @@ def run(action: () -> null):
 watch t:
     run(bump)
 
-watch t:
+watch t writes x:
     x = 2
 `), []);
 });
 
-test("[cr-3] an alias bound to an imported function stays silent", () => {
-  // The write is in another module. R1-a's revision says a cross-module write is
-  // let through, and an alias does not make it visible.
+test("[cr-3] an alias bound to an imported function stays silent at compile time", () => {
+  // The write is in another module, so this module's call graph reaches nothing;
+  // an alias does not make it visible.
   assert.deepEqual(importingMessages(`
 import { bump } from "./helpers"
 
@@ -583,14 +714,14 @@ const chosen = bump
 watch t:
     chosen()
 
-watch t:
+watch t writes x:
     x = 2
 `, new Map([["bump", voidFunction]])), []);
 });
 
 test("[cr-3] a 'let' alias that is reassigned stays silent", () => {
-  // A reassignable binding is not statically determined: which declaration it
-  // names depends on what ran, so no `let` is followed at all.
+  // A reassigned binding is not statically determined: which declaration it
+  // names depends on what ran, so it is not followed.
   assert.deepEqual(messages(`
 state t = 0
 state x = 1
@@ -607,8 +738,39 @@ chosen = scale
 watch t:
     chosen()
 
-watch t:
+watch t writes x:
     x = 2
+`), []);
+});
+
+test("[rw-4] a 'let' alias that is never reassigned is followed like a const", () => {
+  // The audit's fourth root cause: a `let` is not categorically unstable, it is
+  // unstable exactly when something reassigns it, and Core publishes the
+  // predicate that decides it for one module. The reassigned twin above is the
+  // other half of the pair.
+  assert.equal(undeclared(`
+state t = 0
+state x = 1
+
+def bump():
+    x = x + 1
+
+let chosen = bump
+
+watch t:
+    chosen()
+`).length, 1);
+  assert.deepEqual(messages(`
+state t = 0
+state x = 1
+
+def bump():
+    x = x + 1
+
+let chosen = bump
+
+watch t writes x:
+    chosen()
 `), []);
 });
 
@@ -629,7 +791,7 @@ const chosen = c ? bump : scale
 watch t:
     chosen()
 
-watch t:
+watch t writes x:
     x = 2
 `;
   const member = `
@@ -664,7 +826,7 @@ const { bump: chosen } = table
 watch t:
     chosen()
 
-watch t:
+watch t writes x:
     x = 2
 `;
   assert.deepEqual(messages(conditional), []);
@@ -711,15 +873,16 @@ const chosen = bump
 watch t:
     chosen()
 
-watch t:
+watch t writes x:
     x = 2
 `), []);
 });
 
-test("[cr-3] the alias widens the reach of the rule, never its write shape", () => {
-  // A member write is not a contender directly, and reaching one through an
-  // alias does not make it one.
-  assert.deepEqual(messages(`
+test("[cr-3/R16] the alias widens the reach of the rule, and R16 widened its write shape", () => {
+  // A member write was not recorded at all until R16, so reaching one through
+  // an alias reported nothing. Both halves changed together: the shape is a
+  // write now, and the alias still carries it.
+  assert.equal(undeclared(`
 state t = 0
 state user = { name: "a" }
 
@@ -737,7 +900,26 @@ watch t:
 
 watch t:
     second()
-`), []);
+`).length, 2);
+  assert.equal(contentions(`
+state t = 0
+state user = { name: "a" }
+
+def rename():
+    user.name = "b"
+
+def relabel():
+    user.name = "c"
+
+const first = rename
+const second = relabel
+
+watch t writes user:
+    first()
+
+watch t writes user:
+    second()
+`).length, 2);
   // A plain module `let` is out of reach whichever way it is written to.
   assert.deepEqual(messages(`
 state t = 0

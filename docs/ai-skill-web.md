@@ -73,6 +73,16 @@ a reactive derived value. A `const` inside a component is not a second one: its
 initializer is evaluated once at construction and never recomputes, and no
 diagnostic marks it.
 
+A watch that writes state declares the target in its header: `watch query
+writes history:`. A watch with no `writes` clause only observes, and a body
+write is refused with the spelling to declare. The clause names cells, not
+spellings: `writes hits, h` where `h` is an alias of `hits` is one declaration
+made twice and is refused, as is the same pair reached through a re-export. A
+module-level `state` is one cell shared by every mounted instance of a
+component that writes it; if a component can mount twice, declare the `state`
+inside it, or the runtime refuses the second write of a flush and names the
+component and the state.
+
 `@mounted:` runs after insertion and may await. `@cleanup:` runs before removal
 and is synchronous. A component may still declare ordinary methods named
 `mounted` or `cleanup` because compiler-owned names occupy a separate namespace.

@@ -171,8 +171,8 @@ export def engineDescription() -> string:
 //    callable has no shape to narrow into, so calling across the boundary
 //    always goes through a declaration — an `extern module` contract or a
 //    contracted `extern js` block. `any` cannot be written as an annotation
-//    ("'any' is reserved for explicit unsafe JavaScript boundaries"), and
-//    since this ruling no boundary produces one either.
+//    ("'any' is not a VelarScript type"), and since this ruling no boundary
+//    produces one either.
 export def validatesUnknown(value: unknown) -> string:
     if value is Config:
         return str(value.retries)

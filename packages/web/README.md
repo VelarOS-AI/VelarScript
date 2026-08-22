@@ -76,8 +76,8 @@ contract crosses WebSocket and Worker boundaries. Worker source entries come
 from the project manifest, so application source does not construct bundle URLs.
 Requests and responses are checked with runtime `Type` values; pools, call
 queues, message queues, transfers, cancellation, timeout, and crash convergence
-are bounded by the shared Core contracts. The existing `velar/realtime` text
-surface remains available unchanged.
+are bounded by the shared Core contracts. `velar/realtime` keeps
+`eventStream`; the WebSocket client is `velar/websocket.connect`.
 
 The package also owns Look, the checked visual language integrated with VelarScript
 values and JSX. `look:` values, ordinary functions, imports/exports, named

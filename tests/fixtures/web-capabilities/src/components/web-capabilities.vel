@@ -8,7 +8,8 @@ import {publicConfig} from "velar/config"
 import {logger, useSink} from "velar/log"
 
 import {formBody, http} from "velar/http"
-import {eventStream, socket} from "velar/realtime"
+import {eventStream} from "velar/realtime"
+import {WebSocketConnection, connect} from "velar/websocket"
 import {border, rgb, spacing} from "velar/look"
 
 type CapabilityStatus:
@@ -70,18 +71,14 @@ const eventInputLook = look:
     color = "inherit"
     background = rgb(21, 28, 54)
 
+// D90 R20: the WebSocket half of this probe reads `velar/websocket`, the one
+// WebSocket client. It is pull-based, so the connection is drained by a loop
+// in `@mounted` instead of by a `message` handler; the event stream keeps its
+// handlers, because `velar/realtime` is unchanged.
 component RealtimeProbe(socketUrl: string, eventsUrl: string):
     state socketLabel = "connecting"
     state eventLabel = "connecting"
-
-    def socketOpened():
-        socketLabel = "open"
-
-    def socketMessage(value: string):
-        socketLabel = value
-
-    def socketFailed(message: string):
-        socketLabel = f"error:{message}"
+    state connection: WebSocketConnection? = null
 
     def eventOpened():
         eventLabel = "open"
@@ -92,19 +89,30 @@ component RealtimeProbe(socketUrl: string, eventsUrl: string):
     def eventFailed(message: string):
         eventLabel = f"error:{message}"
 
-    const channel = socket(socketUrl, {
-        open: socketOpened,
-        message: socketMessage,
-        error: socketFailed,
-    })
     const events = eventStream(eventsUrl, {
         open: eventOpened,
         message: eventMessage,
         error: eventFailed,
     })
 
+    @mounted:
+        try:
+            const live = await connect(socketUrl)
+            connection = live
+            socketLabel = "open"
+            while true:
+                const message = await live.next()
+                if message == null:
+                    break
+                if message is string:
+                    socketLabel = message
+        catch failure:
+            socketLabel = f"error:{failure.message}"
+
     @cleanup:
-        channel.close()
+        const live = connection
+        if live != null:
+            async live.close()
         events.close()
 
     return <span data-realtime>{socketLabel}/{eventLabel}</span>

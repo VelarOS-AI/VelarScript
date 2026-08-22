@@ -2,6 +2,7 @@ import { semanticTypeIdentity, type Diagnostic, type Span } from "@velarscript/c
 import {
   Analyzer,
   anyType,
+  bindingNeverReassigned,
   boolType,
   describeType,
   expressionContainsDirectAwait,
@@ -27,6 +28,12 @@ import {
   type ValueType,
 } from "@velarscript/compiler/extension";
 import { BROWSER_TEST_MODULE, BROWSER_TEST_SOURCE_SUFFIX, browserTestImportGuidance } from "./browser-test.ts";
+// `compiler.ts` imports this module, so this edge closes a cycle. It is safe
+// and deliberate: the roster is read inside a function, never while either
+// module body evaluates, and `compiler.ts` is the only entry into this one.
+// The alternative was re-listing the response's fields here, which is the
+// drift this repository keeps filing defects against.
+import { webHttpResponseType } from "./compiler.ts";
 import { cssTokens } from "./css-tokens.ts";
 import {
   LOOK_ABSENT_MEDIA_SUBJECTS,
@@ -85,6 +92,7 @@ import {
   type WebKeyframesExpression,
   type WebLookExpression,
   type WebResourceDeclaration as ResourceDeclaration,
+  type WebWatchDeclaration as WatchDeclaration,
 } from "./ast.ts";
 import {
   isWebComponentConstructor,
@@ -146,6 +154,14 @@ const htmlEventHandlerAttributes = new Set([
   "ontouchstart", "ontouchend", "ontouchmove", "ontouchcancel",
 ]);
 const textualWebPrimitiveNames = new Set(["Length", "Percentage", "LengthPercentage", "TrackFraction", "Color", "Duration", "Angle"]);
+/**
+ * D90 R16: the methods that write the reactive value they are called on. The
+ * emitted `produces` used to own this roster and decide scheduling from it;
+ * scheduling now reads the header's declaration, so the roster is left with the
+ * one job that survives — naming, at compile time, a mutation the header does
+ * not declare. What it misses the runtime backstop still catches exactly.
+ */
+const WATCH_WRITING_METHODS = new Set(["add", "append", "clear", "extend", "insert", "pop", "remove", "reload", "set", "update"]);
 
 // D72 rule 186: derived from the published table, not restated beside it.
 const webEventTypeNames = WEB_EVENT_TYPE_NAMES;
@@ -240,7 +256,7 @@ export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): Va
       inferAt(0, stringType);
       const component = inferAt(1);
       const path = argumentAt(0);
-      if (path?.kind === "LiteralExpression" && typeof path.value === "string") checkRoutePath(path.value, path.span, context);
+      if (path?.kind === "LiteralExpression" && typeof path.value === "string") checkRoutePath(path.value, path.span, context.typeError);
       checkRouteComponent(component, argumentAt(1)?.span ?? callSpan, "A route", context);
       return { kind: "object", fields: new Map([["path", stringType], ["component", component]]) };
     }
@@ -256,11 +272,16 @@ export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): Va
         return anyType;
       }
       if (isInvalidType(loader)) return loader;
-      if (loader.kind !== "function" && loader.kind !== "any") {
+      // No `any` arm on either line: the gate above has already established
+      // that argument 0 is a zero-parameter arrow, and the core analyzer infers
+      // an arrow on one return path that always answers `kind: "function"`
+      // (`inferArrow`). The loader is therefore never `any`, and D90 R17 —
+      // which retired the JavaScript boundary that used to hand one back — left
+      // nothing that could make it one.
+      if (loader.kind !== "function") {
         if (loaderExpression) context.typeError(`Expected a module loader, received ${describeType(loader)}`, loaderExpression.span);
         return anyType;
       }
-      if (loader.kind === "any") return anyType;
       if (isInvalidType(loader.result)) return loader.result;
       if (loader.parameters.length !== 0) context.typeError("A lazy module loader cannot receive parameters", loaderExpression?.span ?? callSpan);
       const moduleType = loader.result.kind === "promise" ? loader.result.value : null;
@@ -334,13 +355,6 @@ export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): Va
         context.typeError(`Storage values accept only records, Lists, enums, primitives, and optionals; received ${describeType(value)}`, valueExpression.span);
       }
       return intrinsic.result;
-    }
-    case "realtime.sendJson": {
-      arity(1, 1);
-      const value = inferAt(0);
-      const valueExpression = argumentAt(0);
-      if (context.jsonSerializable(value) === false && valueExpression) context.typeError(`Realtime JSON accepts only records, Lists, enums, primitives, and optionals; received ${describeType(value)}`, valueExpression.span);
-      return nullType;
     }
     case "config.public":
       arity(1, 1);
@@ -880,6 +894,45 @@ function collectLookBuilderNames(program: Program): ReadonlyMap<string, string> 
   return names;
 }
 
+/** Where an imported binding comes from: the module, and the name it is exported under there. */
+interface ImportedSpecifierSource {
+  readonly source: string;
+  /** null for a namespace import, which binds an object rather than one exported name. */
+  readonly imported: string | null;
+}
+
+/**
+ * What `cellIdentity` needs of a binding. Core's `Binding` is not exported, and
+ * these two members are the whole question: where the binding was created, and
+ * whether a narrowed copy is standing in for the storage it belongs to.
+ */
+interface CellBinding {
+  readonly span: Span;
+  readonly storageBinding?: CellBinding;
+}
+
+/**
+ * D90 R16-a: which module each imported name comes from and which name it is
+ * there, keyed by the identity of the specifier span the binding is created at
+ * — the same key the Core analyzer records an import origin under, so a local
+ * that shadows the name never answers as the import.
+ *
+ * The exported name is carried beside the module because the pair is the cell's
+ * identity: `hits` and `hits as h` are two specifiers, two spans and two
+ * bindings, and one cell. A namespace import binds an object rather than a
+ * cell, so it records no exported name.
+ */
+function collectImportedSpecifierSources(program: Program): ReadonlyMap<string, ImportedSpecifierSource> {
+  const sources = new Map<string, ImportedSpecifierSource>();
+  for (const statement of program.body) {
+    if (statement.kind !== "ImportDeclaration") continue;
+    for (const specifier of statement.specifiers) {
+      sources.set(spanIdentity(specifier.span), { source: statement.source, imported: specifier.namespace ? null : specifier.imported });
+    }
+  }
+  return sources;
+}
+
 function lookConditionTermCount(expression: Expression, negated = false): number {
   if (expression.kind === "UnaryExpression" && expression.operator === "not") return lookConditionTermCount(expression.operand, !negated);
   if (expression.kind === "BinaryExpression" && (expression.operator === "and" || expression.operator === "or")) {
@@ -951,26 +1004,26 @@ function checkRouteComponent(type: ValueType, sourceSpan: Span, subject: string,
   if (routeProp && !context.isAssignable({ kind: "named", name: "RouteContext", identity: routeContextIdentity }, routeProp)) context.typeError(`${subject} component's route prop must accept RouteContext, received ${describeType(routeProp)}`, sourceSpan);
 }
 
-function checkRoutePath(path: string, sourceSpan: Span, context: CompilerIntrinsicAnalysisContext): void {
-  if (!path.startsWith("/")) context.typeError("A route path must start with '/'", sourceSpan);
-  if (path.includes("?") || path.includes("#")) context.typeError("A route path describes only a pathname; read query and hash from RouteContext", sourceSpan);
-  if (path.includes("\\")) context.typeError("A route path cannot contain a backslash", sourceSpan);
-  if (path.length > 1 && path.endsWith("/")) context.typeError("A route path cannot end with '/'; matching already accepts one trailing slash", sourceSpan);
+function checkRoutePath(path: string, sourceSpan: Span, report: (message: string, span: Span) => void): void {
+  if (!path.startsWith("/")) report("A route path must start with '/'", sourceSpan);
+  if (path.includes("?") || path.includes("#")) report("A route path describes only a pathname; read query and hash from RouteContext", sourceSpan);
+  if (path.includes("\\")) report("A route path cannot contain a backslash", sourceSpan);
+  if (path.length > 1 && path.endsWith("/")) report("A route path cannot end with '/'; matching already accepts one trailing slash", sourceSpan);
   const segments = path.split("/").slice(1);
   const parameters = new Set<string>();
   for (const [index, segment] of segments.entries()) {
-    if (segment.length === 0 && path !== "/") context.typeError("A route path cannot contain an empty segment", sourceSpan);
+    if (segment.length === 0 && path !== "/") report("A route path cannot contain an empty segment", sourceSpan);
     if (segment === "*") {
-      if (index !== segments.length - 1) context.typeError("A route wildcard must be the final segment", sourceSpan);
-      if (parameters.has("wildcard")) context.typeError("A route parameter named 'wildcard' conflicts with the '*' capture", sourceSpan);
+      if (index !== segments.length - 1) report("A route wildcard must be the final segment", sourceSpan);
+      if (parameters.has("wildcard")) report("A route parameter named 'wildcard' conflicts with the '*' capture", sourceSpan);
       parameters.add("wildcard");
       continue;
     }
-    if (segment.includes("*")) context.typeError("A route wildcard must occupy its whole final segment", sourceSpan);
+    if (segment.includes("*")) report("A route wildcard must occupy its whole final segment", sourceSpan);
     if (!segment.startsWith(":")) continue;
     const name = segment.slice(1);
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name)) context.typeError("A route parameter requires a valid name", sourceSpan);
-    else if (parameters.has(name)) context.typeError(`Route parameter '${name}' is repeated`, sourceSpan);
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name)) report("A route parameter requires a valid name", sourceSpan);
+    else if (parameters.has(name)) report(`Route parameter '${name}' is repeated`, sourceSpan);
     parameters.add(name);
   }
 }
@@ -1035,6 +1088,17 @@ const RETIRED_ACCESSOR_TYPE: ValueType = Object.freeze({
 function isRetiredAccessorName(name: string): boolean {
   return name === "computed" || name === "cached";
 }
+
+/**
+ * D90 R20: `HttpResponse.ok` was always true, because `response()` throws
+ * `HttpResponseError` for every non-2xx before an author can hold the value.
+ * The field is gone, and its read is answered the same way `cached` is: the
+ * name keeps the type it always had, so `if not response.ok:` reads exactly
+ * one message — the one naming the failure path that does exist — instead of
+ * "no field 'ok'" followed by a condition complaining about unknown. The read
+ * and the write reach it by different routes and say the same sentence.
+ */
+const RETIRED_HTTP_RESPONSE_OK = "An HTTP response has no 'ok': a non-2xx status throws 'HttpResponseError' before 'response()' answers, so every response you can hold succeeded. Handle the failure where it is raised — 'catch failure:' then 'if failure is HttpResponseError:' — and read 'failure.status' there";
 
 /**
  * D90 R15(a): a watch subject names a place in the reactive graph — the name of
@@ -1311,6 +1375,120 @@ function keyedRebuiltRecord(body: Expression, row: string): { readonly field: st
   return null;
 }
 
+/**
+ * The reactive declarations a `def` body may not hold when the `def` answers
+ * `WebNode`. `watch`, `resource` and `action` are already refused outside a
+ * module or component scope (VEL3010/VEL3012/VEL3013); they stay listed because
+ * the defect is the declaration, not which of them the author reached for.
+ */
+const WEB_REACTIVE_DECLARATION_LABELS: ReadonlyMap<string, string> = new Map([
+  ["ExtensionStatement:web:state", "'state'"],
+  ["ExtensionStatement:web:computed", "'computed'"],
+  ["ExtensionStatement:web:resource", "'resource'"],
+  ["ExtensionStatement:web:watch", "'watch'"],
+  ["ExtensionStatement:web:mounted", "'@mounted'"],
+  ["ExtensionStatement:web:cleanup", "'@cleanup'"],
+]);
+
+/**
+ * The first reactive declaration a body holds, in source order. A nested `def`
+ * or `component` owns its own declarations, so the walk stops at one.
+ */
+function firstReactiveDeclaration(body: readonly Statement[]): { readonly label: string; readonly span: Span } | null {
+  let found: { readonly label: string; readonly span: Span } | null = null;
+  const pending: unknown[] = [...body];
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (Array.isArray(value)) {
+      for (const entry of value) pending.push(entry);
+      continue;
+    }
+    if (value === null || typeof value !== "object") continue;
+    const node = value as Record<string, unknown>;
+    const kind = typeof node.kind === "string" ? node.kind : null;
+    if (kind === "FunctionDeclaration" || kind === "ExtensionStatement:web:component") continue;
+    const label = kind === null ? undefined : WEB_REACTIVE_DECLARATION_LABELS.get(kind);
+    if (label !== undefined) {
+      const span = node.span as Span;
+      if (found === null || span.start < found.span.start) found = { label, span };
+      continue;
+    }
+    for (const key of Object.keys(node)) pending.push(node[key]);
+  }
+  return found;
+}
+
+/**
+ * Whether a type answers markup. `WebNode` is the value, and `WebNode?` and
+ * `List<WebNode>` are the two shapes markup legitimately travels in — a helper
+ * that answers "this row, or nothing" and one that answers a row per item.
+ * Reading only the bare annotation closed the spelling instead of the sink:
+ * the identical body under `-> WebNode?` reached the same defect unreported.
+ */
+function carriesWebNode(type: ValueType): boolean {
+  if (isWebNodeType(type)) return true;
+  if (type.kind === "optional") return carriesWebNode(type.inner);
+  if (type.kind === "list") return carriesWebNode(type.element);
+  return false;
+}
+
+/**
+ * Whether a body's own `return`s carry JSX. A return type is optional on a
+ * `def`, and an omitted one left the same defective helper unreported, so the
+ * markup the body returns answers for the annotation that was never written.
+ * A nested `def` or `component` owns its own returns, exactly as it owns its
+ * own declarations.
+ */
+function bodyReturnsJsx(body: readonly Statement[]): boolean {
+  const pending: unknown[] = [...body];
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (Array.isArray(value)) {
+      for (const entry of value) pending.push(entry);
+      continue;
+    }
+    if (value === null || typeof value !== "object") continue;
+    const node = value as Record<string, unknown>;
+    const kind = typeof node.kind === "string" ? node.kind : null;
+    if (kind === "FunctionDeclaration" || kind === "ExtensionStatement:web:component") continue;
+    if (kind === "ReturnStatement") {
+      if (subtreeHoldsJsx(node.value)) return true;
+      continue;
+    }
+    for (const key of Object.keys(node)) pending.push(node[key]);
+  }
+  return false;
+}
+
+/**
+ * A returned expression that builds markup anywhere inside it — bare, inside a
+ * List, behind a condition, or built by the callback of a `.map(...)` that
+ * answers a row per item. The arrow is walked rather than skipped for the same
+ * reason the optional and List annotations are unwrapped: `rows()` returning
+ * `items.map(item => <li>…</li>)` is a markup helper by every measure except
+ * the one spelling that was being read.
+ */
+function subtreeHoldsJsx(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  while (pending.length > 0) {
+    const entry = pending.pop();
+    if (Array.isArray(entry)) {
+      for (const item of entry) pending.push(item);
+      continue;
+    }
+    if (entry === null || typeof entry !== "object") continue;
+    const node = entry as Record<string, unknown>;
+    if (node.kind === "ExtensionExpression:web:jsx") return true;
+    for (const key of Object.keys(node)) pending.push(node[key]);
+  }
+  return false;
+}
+
+/** The component spelling of a helper's name: components render as a PascalCase tag. */
+function componentSpelling(name: string): string {
+  return name.length === 0 ? name : `${name[0]!.toUpperCase()}${name.slice(1)}`;
+}
+
 /** `{ id: item.id }` in a callback over `item`: the field carries its own value over unchanged. */
 function rowFieldPassthrough(value: Expression, row: string, name: string): boolean {
   return value.kind === "MemberExpression" && value.property === name
@@ -1341,11 +1519,30 @@ interface FunctionStateWrites {
   readonly callees: Set<string>;
 }
 
+/**
+ * D90 R16: one `watch` header's declared write set — the single source of truth
+ * for what that watch writes. The emitted `produces`, the VEL5069 intersection
+ * and the runtime backstop all read this one declaration instead of each
+ * inferring the answer for itself.
+ */
+interface WatchWriteDeclaration {
+  /** Declared state binding identity -> the name it was declared under. */
+  readonly declared: Map<string, string>;
+  /** The declared names in header order, so a message can show the whole clause. */
+  readonly names: string[];
+  /** The subject as the author wrote it, for the message that teaches the spelling. */
+  readonly subject: string;
+  /** The states already reported undeclared here, so one watch names each state once. */
+  readonly reported: Set<string>;
+}
+
 /** One scope's watch records, held until every declaration of the module is analyzed. */
 interface WatchWriteScope {
   readonly states: Map<string, WatchStateContention>;
   /** Enclosing watch identity -> callee binding identity -> that call's span. */
   readonly calls: Map<string, Map<string, Span>>;
+  /** D90 R16: enclosing watch identity -> that watch's declared write set. */
+  readonly declarations: Map<string, WatchWriteDeclaration>;
 }
 
 /**
@@ -1380,6 +1577,10 @@ export class VelarWebAnalyzer extends Analyzer {
    * refusal is drawn from.
    */
   private watchStateWrites: Map<string, WatchStateContention> | null = null;
+  /** D90 R16: the declared write set of every watch of the scope being analyzed, keyed by watch identity. */
+  private watchWriteDeclarations: Map<string, WatchWriteDeclaration> | null = null;
+  /** D90 R16: the declaration of the watch whose body is being analyzed, or null outside one. */
+  private watchWriteDeclaration: WatchWriteDeclaration | null = null;
   /**
    * D90 R1-a revision: the calls the `watch` bodies of the scope being analyzed
    * make to a name of this module, keyed by watch identity. A write performed
@@ -1403,10 +1604,22 @@ export class VelarWebAnalyzer extends Analyzer {
    * it decides a callee is nothing this module declared.
    */
   private readonly functionAliases = new Map<string, string>();
+  /** The Program being analyzed, for the `let`-stability predicate; null before `analyze` runs. */
+  private moduleProgram: Program | null = null;
+  /** Alias pattern identity -> whether that `let` is never reassigned, asked once per binding. */
+  private readonly stableLetAliases = new Map<string, boolean>();
   /** The identity of the `def` whose body is being analyzed, or null outside one. */
   private functionWriteSubject: string | null = null;
   /** The identity of the `watch` whose body is being analyzed, or null outside one. */
   private watchWriteSubject: string | null = null;
+  /**
+   * D90 R16: the span of the `def` or `watch` body whose writes are being
+   * collected. A `state` declared inside that body is created fresh on every
+   * run, so there is no header its writes could have been declared in — which
+   * is the compile-time half of the runtime's own exemption for a cell created
+   * during a watch's execution.
+   */
+  private stateWriteOwnerSpan: Span | null = null;
   /** D89 A4: the binding identity of every list a keyed `.map(...)` interpolation renders. */
   private readonly keyedListSources = new Set<string>();
   /** D89 A4: every `list = list.map(item => {…})` rewrite of this module, in source order. */
@@ -1433,6 +1646,8 @@ export class VelarWebAnalyzer extends Analyzer {
    * name resolves to even where a narrowed copy answers the lookup.
    */
   private readonly computedBindingSpans = new Set<string>();
+  /** D90 R16-a: the module and exported name each imported binding of this program comes from, keyed by its specifier span. */
+  private importedSpecifierSources: ReadonlyMap<string, ImportedSpecifierSource> = new Map();
   /** Local names bound to an imported `export computed`, from the Web interface. */
   private readonly importedComputedNames: ReadonlySet<string>;
   /** The resolved spans of those imports, so a local shadow of the name is not one. */
@@ -1463,14 +1678,18 @@ export class VelarWebAnalyzer extends Analyzer {
   }
 
   override analyze(program: Program): readonly Diagnostic[] {
+    this.moduleProgram = program;
+    this.stableLetAliases.clear();
     this.lookStaticValues = collectLookStaticValues(program, this.importedLookStaticValues);
     this.lookBuilderNames = collectLookBuilderNames(program);
     this.lookDeclarations = collectLookDeclarations(program);
+    this.importedSpecifierSources = collectImportedSpecifierSources(program);
     for (const name of collectDerivedReactiveNames(program)) this.derivedReactiveNames.add(name);
     this.reportBrowserTestImports(program);
     this.rejectWebOwnedTypeNames(program);
     this.watchStateWrites = new Map();
     this.watchStateCalls = new Map();
+    this.watchWriteDeclarations = new Map();
     this.functionStateWrites.clear();
     this.functionAliases.clear();
     this.pendingWatchScopes.length = 0;
@@ -1484,6 +1703,7 @@ export class VelarWebAnalyzer extends Analyzer {
     this.adviseKeyedListRebuilds();
     this.watchStateWrites = null;
     this.watchStateCalls = null;
+    this.watchWriteDeclarations = null;
     return this.diagnostics;
   }
 
@@ -1596,6 +1816,7 @@ export class VelarWebAnalyzer extends Analyzer {
       this.recordRetiredAccessorDeclaration(statement);
       this.recordFunctionAlias(statement);
     }
+    if (statement.kind === "FunctionDeclaration") this.rejectStatefulWebNodeFunction(statement);
     if (!isWebStatement(statement)) return false;
     switch (statement.kind) {
       case "ExtensionStatement:web:component":
@@ -1649,16 +1870,25 @@ export class VelarWebAnalyzer extends Analyzer {
           // for the module-initialization-cycle classification.
           const watched = this.inferExpression(statement.expression);
           this.rejectFrozenWatchSubject(statement.expression, watched, statement.currentName, statement.previousName);
+          // D90 R16: the header's write set is read in the enclosing scope, before
+          // `as` names can shadow a state of the same name.
+          const declaration = this.openWatchWrites(statement);
           this.enterScope();
           if (statement.currentName) this.declareBinding(statement.currentName, false, watched, statement.span);
           if (statement.previousName) this.declareBinding(statement.previousName, false, watched, statement.span);
           this.deferredExecutionDepth += 1;
           const outerWatchSubject = this.watchWriteSubject;
+          const outerWatchDeclaration = this.watchWriteDeclaration;
+          const outerWriteOwner = this.stateWriteOwnerSpan;
           this.watchWriteSubject = spanIdentity(statement.span);
+          this.watchWriteDeclaration = declaration;
+          this.stateWriteOwnerSpan = statement.span;
           try {
             this.analyzeStatements(statement.body);
           } finally {
             this.watchWriteSubject = outerWatchSubject;
+            this.watchWriteDeclaration = outerWatchDeclaration;
+            this.stateWriteOwnerSpan = outerWriteOwner;
             this.deferredExecutionDepth -= 1;
           }
           this.exitScope();
@@ -1697,11 +1927,14 @@ export class VelarWebAnalyzer extends Analyzer {
 
   protected override analyzeStatement(statement: Statement): void {
     const readonlyProp = this.directReadonlyPropMutation(statement);
+    const retiredResponseWrite = this.retiredResponseFieldWrite(statement);
     this.recordWatchStateWrite(statement);
     this.recordKeyedListRebuild(statement);
     const firstDiagnostic = this.diagnostics.length;
     const outerWatchSubject = this.watchWriteSubject;
+    const outerWatchDeclaration = this.watchWriteDeclaration;
     const outerFunctionSubject = this.functionWriteSubject;
+    const outerWriteOwner = this.stateWriteOwnerSpan;
     // D90 R1-a: a body declared inside a watch is still a body that runs when
     // it is called, not when the watch settles, so the writes in it are not the
     // watch's directly. The revision follows the call instead: a `def` collects
@@ -1711,14 +1944,27 @@ export class VelarWebAnalyzer extends Analyzer {
     // enclosing record rather than opening one.
     if (statement.kind === "FunctionDeclaration" || statement.kind === "ClassDeclaration" || statement.kind === "TestDeclaration") {
       this.watchWriteSubject = null;
+      this.watchWriteDeclaration = null;
       this.functionWriteSubject = statement.kind === "FunctionDeclaration" ? this.openFunctionWriteRecord(statement.span) : null;
+      this.stateWriteOwnerSpan = statement.span;
     }
     try {
       super.analyzeStatement(statement);
     } finally {
       this.watchWriteSubject = outerWatchSubject;
+      this.watchWriteDeclaration = outerWatchDeclaration;
       this.functionWriteSubject = outerFunctionSubject;
+      this.stateWriteOwnerSpan = outerWriteOwner;
     }
+    if (retiredResponseWrite) {
+      for (let index = firstDiagnostic; index < this.diagnostics.length; index += 1) {
+        const item = this.diagnostics[index]!;
+        if (item.code !== "VEL4001" || !item.message.startsWith("Object has no field 'ok'")) continue;
+        this.diagnostics[index] = { ...item, code: "VEL5075", message: RETIRED_HTTP_RESPONSE_OK };
+        break;
+      }
+    }
+    this.teachRetiredResponseDestructure(statement, firstDiagnostic);
     if (!readonlyProp) return;
     for (let index = firstDiagnostic; index < this.diagnostics.length; index += 1) {
       const item = this.diagnostics[index]!;
@@ -1728,6 +1974,63 @@ export class VelarWebAnalyzer extends Analyzer {
         message: `Cannot mutate prop '${readonlyProp}': this component's author explicitly declared it 'readonly'. ${item.message}`,
       };
     }
+  }
+
+  /**
+   * D90 R20 on the assignment side. `response.ok = true` never reaches the read
+   * hook: the core analyzes a member assignment target through its member path
+   * directly, so the write collected "Object has no field 'ok'" — the one
+   * answer that teaches nothing. The receiver is inferred here, before the core
+   * reaches it, so the core's own path reads that inference from its cache; the
+   * message it then produces is the one replaced above, which keeps the write
+   * at exactly one diagnostic instead of a migration stacked on a refusal.
+   */
+  private retiredResponseFieldWrite(statement: Statement): boolean {
+    if (statement.kind !== "AssignmentStatement") return false;
+    const target = statement.target;
+    if (target.kind !== "MemberExpression" || target.property !== "ok") return false;
+    if (!this.receiverInferableBeforeMember(target.object)) return false;
+    return this.isHttpResponseObject(this.retiredFieldReceiver(target.object));
+  }
+
+  /**
+   * D90 R20's third route to the retired field. `const {ok} = response` is a
+   * read of `ok` that never passes through a `MemberExpression`, so it reached
+   * neither the read hook nor the write one and kept the bare "Object has no
+   * field 'ok'" — the migration was closed for one spelling of the sink and
+   * left open for its neighbour.
+   *
+   * It is answered after the core has run, not before: the declaration path
+   * infers its initializer directly rather than through the member cache, so
+   * inferring it first would analyze the initializer twice and double whatever
+   * it reports. The type is read back with the same speculative call
+   * `checkWebRouteRecords` uses — everything the re-inference says is a repeat
+   * of what the author already has, and is dropped.
+   *
+   * Only the message is rewritten. The binding still carries `unknown`, so a
+   * use of it can still report on its own; that half needs the core to hand a
+   * declared type back, which R20 did not rule on.
+   */
+  private teachRetiredResponseDestructure(statement: Statement, firstDiagnostic: number): void {
+    if (statement.kind !== "VariableDeclaration" || statement.pattern.kind !== "ObjectBindingPattern") return;
+    const entries = new Set(statement.pattern.entries.filter((item) => item.property === "ok").map((item) => item.span.start));
+    if (entries.size === 0) return;
+    let response: boolean | null = null;
+    for (let index = firstDiagnostic; index < this.diagnostics.length; index += 1) {
+      const item = this.diagnostics[index]!;
+      if (item.code !== "VEL4001" || item.message !== "Object has no field 'ok'" || !entries.has(item.span.start)) continue;
+      response ??= this.isHttpResponseObject(this.speculativeType(statement.initializer));
+      if (!response) return;
+      this.diagnostics[index] = { ...item, code: "VEL5075", message: RETIRED_HTTP_RESPONSE_OK };
+    }
+  }
+
+  /** The type of an expression the core has already inferred and reported on, read back without repeating either. */
+  private speculativeType(expression: Expression): ValueType {
+    const reported = this.diagnostics.length;
+    const type = this.expandAliases(this.inferExpression(expression));
+    this.diagnostics.splice(reported);
+    return type.kind === "optional" ? this.expandAliases(type.inner) : type;
   }
 
   private directReadonlyPropMutation(statement: Statement): string | null {
@@ -1956,18 +2259,124 @@ export class VelarWebAnalyzer extends Analyzer {
       // call around it still type-checks against the signature it always had.
       if (retired) return RETIRED_ACCESSOR_TYPE;
     }
+    // D90 R20: the retired `ok` field, answered before the core reaches it so
+    // the migration is the only message. Inferring the receiver here is what
+    // identifies the response, and the core's own member path re-reads that
+    // inference from its cache rather than analyzing the receiver twice.
+    if (expression.kind === "MemberExpression" && expression.property === "ok"
+      && this.receiverInferableBeforeMember(expression.object)
+      && this.isHttpResponseObject(this.retiredFieldReceiver(expression.object))) {
+      this.diagnostics.push(diagnostic("VEL5075", RETIRED_HTTP_RESPONSE_OK, expression.span));
+      return boolType;
+    }
     const result = super.inferExpression(expression, contextualType);
     if (expression.kind === "CallExpression") {
       this.checkLookBuilderCall(expression);
       this.recordWatchStateCall(expression);
+      this.recordWatchStateMutation(expression);
     }
     return result;
+  }
+
+  /**
+   * The receiver of a retired `ok`, resolved the way the read itself resolves
+   * it: aliases expanded, and an optional chain answered by the value behind
+   * the `?`, so `maybe?.ok` reads the same message a plain read does.
+   */
+  private retiredFieldReceiver(receiver: Expression): ValueType {
+    const owner = this.expandAliases(this.inferExpression(receiver));
+    return owner.kind === "optional" ? this.expandAliases(owner.inner) : owner;
+  }
+
+  /**
+   * Whether the receiver can be inferred *before* the core's member path runs.
+   * That path registers its receiver as a member-access position on the way
+   * down, and the core refuses two names read outside one: a permanent
+   * namespace ("'Json' is a namespace, not a value", D51 rule 106) and a class
+   * name ("a class name is not a value", D45 rule 75). Both are the same sink
+   * — a name whose only legal expression position is the head of a member
+   * access — so both stand aside here.
+   *
+   * A namespace has no lexical binding, so an identifier ordinary lookup
+   * cannot resolve is left for the core to infer in its own position. A class
+   * name does have one, and its binding says so, which is what a static read
+   * like `Result.ok` is recognised by. Every other receiver shape — a call, a
+   * member chain, an index — registers itself as it descends.
+   */
+  private receiverInferableBeforeMember(receiver: Expression): boolean {
+    if (receiver.kind !== "IdentifierExpression") return true;
+    const binding = this.lookup(receiver.name);
+    return binding !== null && this.expandAliases(binding.type).kind !== "classConstructor";
+  }
+
+  /**
+   * The response is a structural object with no identity of its own, so its
+   * shape is what recognises it. That is the same answer Core gives for this
+   * module's other structural handle (`isHttpFormBody`, which recognises
+   * `formBody()` by the members it publishes) — but the shape is matched
+   * against the declaration itself, field types included. Matching the ten
+   * names alone would report the retirement against any record that happens
+   * to spell them, and a record of ten numbers is not an HTTP response.
+   */
+  private isHttpResponseObject(type: ValueType): boolean {
+    if (webHttpResponseType.kind !== "object") return false;
+    if (type.kind !== "object") return false;
+    // Every target's response shares the same eight-field core; the extras
+    // differ per target (Web adds `blob`). Desktop reuses THIS analyzer with
+    // the Node interface's nine fields, so an exact field count left the
+    // recognizer blind there and a retired `ok` fell back to the bare
+    // VEL4001 pair R20 exists to abolish. The match is therefore
+    // candidate-within-declaration plus a required core, field types still
+    // included — a record of eight numbers is still not an HTTP response.
+    for (const [name, field] of type.fields) {
+      const declared = webHttpResponseType.fields.get(name);
+      if (!declared || !isAssignable(field, declared, this)) return false;
+    }
+    for (const name of ["status", "statusText", "url", "headers", "json", "text", "bytes", "streamText"]) {
+      if (!type.fields.has(name)) return false;
+    }
+    return true;
   }
 
   // A name refers to writable reactive state only when ordinary lexical lookup
   // still resolves it to the state binding; a shadowing local wins instead.
   private writableStateName(name: string): boolean {
     return this.reactiveBindingKind(name) === "state";
+  }
+
+  /**
+   * The audit's seventh root cause: a `def` that declares reactive state and
+   * answers `WebNode` is a component wearing a function's clothes, and calling
+   * it bypasses exactly what the charter already refuses `View(...)` for. Two
+   * things follow from the call, both reproduced: every call runs the `state`
+   * declaration again, so the value resets on every re-render; and the
+   * observers the returned markup registers bind to whatever scope the call
+   * site was building — at module scope the global one, which is never
+   * destroyed, so they are never cleaned up.
+   *
+   * Only DECLARATION is refused. A `def -> WebNode` that merely reads state or a
+   * prop is a legitimate markup helper — examples/app has two — and a `def`
+   * nested inside a component binds its observers to that component's scope, so
+   * nothing about reading is defective.
+   *
+   * What answers "this `def` returns markup" is the sink, not one spelling of
+   * it: `-> WebNode?` and `-> List<WebNode>` are the shapes markup travels in,
+   * and a `def` may carry no return type at all — all three reached the same
+   * defect with the same body while only the bare annotation was read.
+   */
+  private rejectStatefulWebNodeFunction(statement: Extract<Statement, { readonly kind: "FunctionDeclaration" }>): void {
+    const answersMarkup = statement.returnType
+      ? carriesWebNode(this.resolveAnnotation(statement.returnType))
+      : bodyReturnsJsx(statement.body);
+    if (!answersMarkup) return;
+    const declaration = firstReactiveDeclaration(statement.body);
+    if (!declaration) return;
+    const component = componentSpelling(statement.name);
+    this.diagnostics.push(diagnostic(
+      "VEL5074",
+      `'${statement.name}' declares ${declaration.label} and returns WebNode, so calling it bypasses JSX ownership, prop cells, and lifecycle: every call declares the value again, so it resets on each render, and the observers its markup registers belong to whatever scope the call site was building rather than to this value. Write it as a component — 'component ${component}(...)' rendered as '<${component} />'; a 'def' that returns WebNode is a markup helper and may only read.`,
+      declaration.span,
+    ));
   }
 
   /**
@@ -2061,42 +2470,183 @@ export class VelarWebAnalyzer extends Analyzer {
   }
 
   /**
-   * D90 R1-a: records an assignment to reactive `state` written directly in a
-   * `watch` body, so a state that two watches of one scope both write can be
-   * refused instead of settled by declaration order. No scheduling rule can
-   * answer this one — a flush settles every watch in a single pass, and between
-   * two independent writes there is no order the source states — so the pair is
-   * refused and the author says which write he meant to land last.
+   * D90 R16: reads a `watch` header's `writes` clause, which is the single
+   * source of truth for what that watch writes. Three mechanisms used to infer
+   * the answer separately — the VEL5069 call graph, the emitted `produces`, and
+   * a runtime scheduling epoch — and they disagreed; R19's two referees replace
+   * all three with this declaration plus an exact runtime backstop.
    *
-   * Only a bare-identifier target to a `state` counts. Two member writes
-   * collide only when their paths are the same, and a path runs through dynamic
-   * indices and aliases this analysis cannot decide; the ruling's shape is
-   * `x = ...`, and a narrower rule that is never wrong is worth more here than a
-   * wider one that is usually right. The revision does not widen that shape; it
-   * widens only the reach, so the same write counts wherever this module's own
-   * `def`s perform it on the watch's behalf.
+   * A target has to be a `state` the live lexical scope resolves to, so a local
+   * shadowing the name is not the state. The clause is read before the watch's
+   * own scope opens, so an `as` name never shadows a declared target.
    *
-   * The same statement inside a `def` is filed under that `def` instead, and
-   * reaches a watch only if one calls it.
+   * D90 R16-a: an imported `state` resolves the same way and is a legal target.
+   * The clause names cells, and the imported name is the owning module's cell,
+   * so the emitted declaration and the runtime backstop both match on identity
+   * and an alias or a re-export needs nothing extra. Naming it does not make it
+   * assignable — VEL3002 keeps the write travelling through the action the
+   * owning module exports.
    */
-  private recordWatchStateWrite(statement: Statement): void {
-    if (statement.kind !== "AssignmentStatement" || statement.target.kind !== "IdentifierExpression") return;
-    const name = statement.target.name;
+  private openWatchWrites(statement: WatchDeclaration): WatchWriteDeclaration {
+    const declared = new Map<string, string>();
+    const names: string[] = [];
+    for (const target of statement.writes) {
+      const binding = this.writableStateName(target.name) ? this.lookup(target.name) : null;
+      if (!binding) {
+        this.diagnostics.push(diagnostic("VEL5073", this.watchWriteTargetRefusal(target.name), target.span));
+        continue;
+      }
+      const identity = this.cellIdentity(binding);
+      const already = declared.get(identity);
+      if (already !== undefined) {
+        // The clause names cells, so a second spelling of one cell is the same
+        // declaration twice — and saying only "it writes h" reads as a lie when
+        // the header says `hits`, so both spellings are named when they differ.
+        this.diagnostics.push(diagnostic("VEL5073", already === target.name
+          ? `This watch already declares that it writes '${target.name}'`
+          : `This watch already declares that it writes '${already}', and '${target.name}' is a second name for that same state; a 'writes' clause names cells, not spellings, so declare it once`,
+          target.span));
+        continue;
+      }
+      declared.set(identity, target.name);
+      names.push(target.name);
+      // D90 R1-a, now decided by the declaration: two watches of one scope that
+      // declare the same state are the contention, and each is anchored on its
+      // own target so three contenders produce three errors rather than a pair.
+      const writes = this.watchStateWrites;
+      if (writes !== null) this.recordWatchContender(writes, identity, target.name, spanIdentity(statement.span), target.span);
+    }
+    const declaration: WatchWriteDeclaration = {
+      declared,
+      names,
+      subject: renderWatchSubject(statement.expression) ?? "subject",
+      reported: new Set<string>(),
+    };
+    this.watchWriteDeclarations?.set(spanIdentity(statement.span), declaration);
+    return declaration;
+  }
+
+  /**
+   * D90 R16-a: the cell a binding names, which is not the name it was spelled
+   * with. Every import specifier creates its own binding at its own span, so
+   * `hits` and `hits as h` are two spans and one cell — and keying the `writes`
+   * questions on the span made an alias defeat all three of them: two watches
+   * writing one imported cell reported nothing, a write spelled with the other
+   * name was called undeclared, and one cell could be declared twice.
+   *
+   * The owning module plus the name it exports is the identity the runtime
+   * matches on, so it is the key here too. A local binding has no second
+   * spelling to reconcile and a namespace import binds an object rather than a
+   * cell, so both answer with their own span. The storage binding is asked
+   * first because a narrowed copy stands in for the declaration it belongs to.
+   *
+   * What this key does not reach: two import paths to one cell through a
+   * re-export produce two different module specifiers, and the Web analyzer has
+   * no project module graph to fold them with. Per D90 R19 that contention
+   * belongs to the runtime referee in `__velarWatchViolation`.
+   */
+  private cellIdentity(binding: CellBinding): string {
+    const origin = this.importedSpecifierSources.get(spanIdentity((binding.storageBinding ?? binding).span))
+      ?? this.importedSpecifierSources.get(spanIdentity(binding.span));
+    if (origin === undefined || origin.imported === null) return spanIdentity(binding.span);
+    return `import:${origin.source}#${origin.imported}`;
+  }
+
+  /**
+   * D90 R16-a: a `writes` clause may name an imported `state`, so "not a
+   * 'state' of this scope" stopped being the whole promise. An author who
+   * named an imported `computed` or an imported `const` was told about a scope
+   * the name does not live in, and never heard which module owns it or that
+   * the write itself still travels through that module's action — VEL3002
+   * keeps assigning through an import read-only, and R16-a widened only what
+   * the clause may point at.
+   *
+   * The local case keeps its own wording: there is no module to name, and the
+   * edit is to declare the `state` here.
+   */
+  private watchWriteTargetRefusal(name: string): string {
+    const binding = this.lookup(name);
+    const origin = binding === null
+      ? undefined
+      : this.importedSpecifierSources.get(spanIdentity((binding.storageBinding ?? binding).span))
+        ?? this.importedSpecifierSources.get(spanIdentity(binding.span));
+    if (origin === undefined) {
+      return `'${name}' is not a 'state' of this scope, so this watch cannot declare that it writes it; a 'writes' clause names the 'state' bindings the body assigns`;
+    }
+    return `'${name}' is imported from ${JSON.stringify(origin.source)} and is not a 'state' there, so this watch cannot declare that it writes it; `
+      + `a 'writes' clause names a 'state' of this scope or a 'state' another module exports — name that 'state' here, and change it by `
+      + `calling an action its owning module exports, because assigning through an import stays read-only`;
+  }
+
+  /**
+   * The state a write lands on: a bare name, or the root of a member/index path
+   * out of one. Segment types are not checked here the way `bindPathRoot`
+   * checks them — this asks who owns the write, not whether the path is a legal
+   * bind target, and an unwritable path fails on its own.
+   */
+  private stateWriteRoot(target: Expression): string | null {
+    let node: Expression = target;
+    while (node.kind === "MemberExpression" || node.kind === "IndexExpression") node = node.object;
+    if (node.kind !== "IdentifierExpression") return null;
     // The live lexical scope answers this, so a local that shadows the state
     // takes the write with it and no shadow-name heuristic is needed.
-    if (!this.writableStateName(name)) return;
+    return this.writableStateName(node.name) ? node.name : null;
+  }
+
+  /**
+   * D90 R16: one write to reactive state that compile time can see. Inside a
+   * `def` it is filed under that `def` and reaches a watch only through a call;
+   * directly in a watch body it is checked against the header at once.
+   *
+   * This is early reporting only. It no longer decides scheduling, so widening
+   * the shapes it recognises can no longer produce a wrong schedule — only an
+   * earlier error — and what it still misses the runtime backstop catches.
+   */
+  private recordStateWrite(target: Expression, span: Span): void {
+    const name = this.stateWriteRoot(target);
+    if (name === null) return;
     const binding = this.lookup(name);
     if (!binding) return;
-    const state = spanIdentity(binding.span);
+    const owner = this.stateWriteOwnerSpan;
+    if (owner !== null && binding.span.start >= owner.start && binding.span.end <= owner.end) return;
+    const state = this.cellIdentity(binding);
     const helper = this.functionWriteSubject;
     if (helper !== null) {
       this.functionStateWrites.get(helper)?.writes.set(state, name);
       return;
     }
-    const writes = this.watchStateWrites;
-    const watch = this.watchWriteSubject;
-    if (writes === null || watch === null) return;
-    this.recordWatchContender(writes, state, name, watch, statement.target.span);
+    const declaration = this.watchWriteDeclaration;
+    if (declaration === null || declaration.declared.has(state)) return;
+    this.reportUndeclaredWatchWrite(declaration, state, name, span);
+  }
+
+  private recordWatchStateWrite(statement: Statement): void {
+    if (statement.kind !== "AssignmentStatement") return;
+    this.recordStateWrite(statement.target, statement.target.span);
+  }
+
+  /**
+   * D90 R16: `log.append(item)` writes `log` exactly as `log = ...` does. The
+   * mutator roster lived in the emitter, which used it to decide the emitted
+   * `produces`; the emitter no longer asks the question, so the roster moved to
+   * the one place that still does.
+   */
+  private recordWatchStateMutation(expression: Extract<Expression, { kind: "CallExpression" }>): void {
+    const callee = expression.callee;
+    if (callee.kind !== "MemberExpression" || !WATCH_WRITING_METHODS.has(callee.property)) return;
+    this.recordStateWrite(callee.object, expression.span);
+  }
+
+  /** D90 R16: names the state and the clause that would make this write legal. */
+  private reportUndeclaredWatchWrite(declaration: WatchWriteDeclaration, state: string, name: string, span: Span): void {
+    if (declaration.reported.has(state)) return;
+    declaration.reported.add(state);
+    const targets = [...declaration.names, name].join(", ");
+    this.diagnostics.push(diagnostic(
+      "VEL5072",
+      `This watch writes state '${name}', which its header does not declare; a watch that writes says so — 'watch ${declaration.subject} writes ${targets}:' — and a watch with no 'writes' clause only observes`,
+      span,
+    ));
   }
 
   /**
@@ -2142,11 +2692,30 @@ export class VelarWebAnalyzer extends Analyzer {
    * alias of one still reaches nothing.
    */
   private recordFunctionAlias(statement: Extract<Statement, { readonly kind: "VariableDeclaration" }>): void {
-    if (statement.binding !== "const" || statement.pattern.kind !== "NameBindingPattern") return;
+    if (statement.pattern.kind !== "NameBindingPattern") return;
+    if (statement.binding !== "const" && !this.stableLetAlias(statement)) return;
     if (statement.initializer.kind !== "IdentifierExpression") return;
     const target = this.lookup(statement.initializer.name);
     if (!target) return;
     this.functionAliases.set(spanIdentity(statement.pattern.span), spanIdentity(target.span));
+  }
+
+  /**
+   * The audit's fourth root cause: a `let` is not categorically unstable, it is
+   * unstable exactly when something reassigns it, and Core publishes the
+   * predicate that answers the decidable half of that for one module. A `let`
+   * nothing reassigns is followed like a `const`; one that is reassigned stays
+   * unfollowed, and after D90 R16 that is only a loss of precision in the early
+   * report — the runtime backstop catches the write either way.
+   */
+  private stableLetAlias(statement: Extract<Statement, { readonly kind: "VariableDeclaration" }>): boolean {
+    if (statement.binding !== "let" || this.moduleProgram === null) return false;
+    const identity = spanIdentity(statement.pattern.span);
+    const cached = this.stableLetAliases.get(identity);
+    if (cached !== undefined) return cached;
+    const stable = bindingNeverReassigned(this.moduleProgram, (statement.pattern as { readonly name: string }).name, statement.pattern.span);
+    this.stableLetAliases.set(identity, stable);
+    return stable;
   }
 
   /**
@@ -2290,32 +2859,37 @@ export class VelarWebAnalyzer extends Analyzer {
   private closeWatchWriteScope(): void {
     const states = this.watchStateWrites;
     const calls = this.watchStateCalls;
-    if (states === null || calls === null) return;
-    this.pendingWatchScopes.push({ states, calls });
+    const declarations = this.watchWriteDeclarations;
+    if (states === null || calls === null || declarations === null) return;
+    this.pendingWatchScopes.push({ states, calls, declarations });
   }
 
   /**
-   * D90 R1-a: reports the states of every analyzed scope that more than one
-   * `watch` assigns. One diagnostic is emitted per contending watch, anchored on
-   * that watch's own first write: the contenders have no meeting point the way
-   * VEL5068's two Looks meet at one `look=` attribute, so each watch's position
-   * is named by the error that sits on it, and three contenders produce three
-   * errors rather than a pair.
+   * D90 R1-a, decided by D90 R16's declaration: reports the states of every
+   * analyzed scope that more than one `watch` declares it writes. One diagnostic
+   * is emitted per contending watch, anchored on that watch's own target: the
+   * contenders have no meeting point the way VEL5068's two Looks meet at one
+   * `look=` attribute, so each watch's position is named by the error that sits
+   * on it, and three contenders produce three errors rather than a pair.
    *
-   * The revision resolves the call edges here rather than at the end of each
-   * scope, because the module's declarations are all known only now — a helper
-   * declared after the watch that calls it is the ordinary spelling, and at
-   * component scope it is the only one.
+   * The call edges are resolved here rather than at the end of each scope,
+   * because the module's declarations are all known only now — a helper declared
+   * after the watch that calls it is the ordinary spelling, and at component
+   * scope it is the only one. What they answer is no longer scheduling but the
+   * early half of R19's two referees: a write this module can see reaching a
+   * state the header does not declare is named at compile time.
    */
   private reportWatchWriteContention(): void {
     for (const scope of this.pendingWatchScopes) {
       for (const [watch, edges] of scope.calls) {
+        const declaration = scope.declarations.get(watch);
+        if (declaration === undefined) continue;
         for (const [callee, span] of edges) {
-          // A watch that reaches one state through two helpers is still one
-          // contender: recordWatchContender keeps the first position it was
-          // seen writing from, direct assignment included.
+          // A watch that reaches one state through two helpers still reports it
+          // once: reportUndeclaredWatchWrite keeps the first position it saw.
           for (const [state, name] of this.reachableStateWrites(callee)) {
-            this.recordWatchContender(scope.states, state, name, watch, span);
+            if (declaration.declared.has(state)) continue;
+            this.reportUndeclaredWatchWrite(declaration, state, name, span);
           }
         }
       }
@@ -2668,8 +3242,10 @@ export class VelarWebAnalyzer extends Analyzer {
     // module state are two instances that need not even be co-resident.
     const previousWatchWrites = this.watchStateWrites;
     const previousWatchCalls = this.watchStateCalls;
+    const previousWatchDeclarations = this.watchWriteDeclarations;
     this.watchStateWrites = new Map();
     this.watchStateCalls = new Map();
+    this.watchWriteDeclarations = new Map();
     const previousExplicitReadonlyProps = this.explicitReadonlyPropBindings;
     const explicitReadonlyProps = new Map<string, number>();
     // Component items are analyzed one by one rather than through
@@ -2723,14 +3299,21 @@ export class VelarWebAnalyzer extends Analyzer {
         this.synchronousReactiveDepth += 1;
         const watched = this.inferExpression(item.expression);
         this.rejectFrozenWatchSubject(item.expression, watched, item.currentName, item.previousName);
+        const declaration = this.openWatchWrites(item);
         this.enterScope();
         if (item.currentName) this.declareBinding(item.currentName, false, watched, item.span);
         if (item.previousName) this.declareBinding(item.previousName, false, watched, item.span);
         this.watchBodyDepth += 1;
         const outerWatchSubject = this.watchWriteSubject;
+        const outerWatchDeclaration = this.watchWriteDeclaration;
+        const outerWriteOwner = this.stateWriteOwnerSpan;
         this.watchWriteSubject = spanIdentity(item.span);
+        this.watchWriteDeclaration = declaration;
+        this.stateWriteOwnerSpan = item.span;
         this.analyzeStatements(item.body);
         this.watchWriteSubject = outerWatchSubject;
+        this.watchWriteDeclaration = outerWatchDeclaration;
+        this.stateWriteOwnerSpan = outerWriteOwner;
         this.watchBodyDepth -= 1;
         this.exitScope();
         this.synchronousReactiveDepth -= 1;
@@ -2783,6 +3366,7 @@ export class VelarWebAnalyzer extends Analyzer {
     this.closeWatchWriteScope();
     this.watchStateWrites = previousWatchWrites;
     this.watchStateCalls = previousWatchCalls;
+    this.watchWriteDeclarations = previousWatchDeclarations;
     this.componentStates = previousStates;
     this.explicitReadonlyPropBindings = previousExplicitReadonlyProps;
     this.flowFrameDepth -= 1;
@@ -3587,6 +4171,10 @@ export class VelarWebAnalyzer extends Analyzer {
       if (isWebComponentConstructor(component) && webComponentIntrinsic(component) === "web.router" && attribute.name === "fallback" && actual.kind !== "null" && actual.kind !== "any") {
         this.checkWebRouteComponent(actual, attribute.span, "A Router fallback");
       }
+      if (isWebComponentConstructor(component) && webComponentIntrinsic(component) === "web.router" && attribute.name === "routes"
+        && attribute.value !== null && typeof attribute.value !== "string") {
+        this.checkWebRouteRecords(attribute.value);
+      }
       this.requireAssignable(actual, expected, attribute.span);
     }
   }
@@ -4103,10 +4691,66 @@ export class VelarWebAnalyzer extends Analyzer {
     return false;
   }
 
+  /**
+   * The elements of a `<Router routes={...}>` list literal, one at a time.
+   *
+   * A route written as `route("/a", Panel)` is checked at that call; the record
+   * that call returns — `{path: "/a", component: Panel}` — is a legal spelling
+   * of the same value, reaches the same runtime position, and until now was
+   * checked by nothing: `{path: "no-leading-slash", component: 5}` compiled
+   * clean and handed `5` to the Router as a component. Closing the sink rather
+   * than the spelling means asking the same questions wherever a route arrives,
+   * so this reports exactly what `route(...)` reports, word for word.
+   *
+   * The runtime is already the second referee (D90 R19): `routerTable`
+   * validates every path and refuses a component that is not callable. Nothing
+   * here changes which programs run — it moves a refusal the author would have
+   * met at mount to the place the source shows the mistake.
+   *
+   * The `any` component slot is skipped here rather than inside
+   * `checkWebRouteComponent`, which is why that method carries no `any` arm:
+   * this loop and the Router `fallback` attribute are its only two callers, and
+   * both filter first. An `any` reaches this slot for real — `web.lazy` answers
+   * `anyType` from each of its error paths — and it arrives with the author's
+   * real message already reported, so a second "received any" would be a
+   * cascade. The `route(...)` twin skips it for the same reason.
+   */
+  private checkWebRouteRecords(expression: Expression): void {
+    if (expression.kind !== "ListExpression") return;
+    for (const element of expression.elements) {
+      if (element.kind !== "ObjectExpression") continue;
+      for (const entry of element.properties) {
+        if (entry.kind !== "ObjectProperty") continue;
+        if (entry.name === "path") {
+          const path = entry.value;
+          if (path.kind === "LiteralExpression" && typeof path.value === "string") {
+            checkRoutePath(path.value, path.span, (message, span) => this.typeError(message, span));
+          }
+          continue;
+        }
+        if (entry.name !== "component") continue;
+        // The attribute has already been inferred as a whole, so every
+        // sub-expression here has been reported once. This second pass exists
+        // only to read the component slot's type back; anything it says is a
+        // repeat of what the author already has, and is dropped. Advisories
+        // need no such cursor — `advise` is deduplicated by code and span
+        // precisely so a re-analysis cannot raise one twice.
+        const reported = this.diagnostics.length;
+        const type = this.inferExpression(entry.value);
+        this.diagnostics.splice(reported);
+        if (type.kind === "any") continue;
+        this.checkWebRouteComponent(type, entry.value.span, "A route");
+      }
+    }
+  }
+
   private checkWebRouteComponent(type: ValueType, sourceSpan: Span, subject: string): void {
     if (isInvalidType(type)) return;
     if (!isWebComponentType(type)) {
-      if (type.kind !== "any") this.typeError(`${subject} requires a component, received ${describeType(type)}`, sourceSpan);
+      // No `any` arm, unlike the `route(...)` twin above: both callers — the
+      // Router `fallback` attribute and `checkWebRouteRecords` — already filter
+      // `any` out before they call here, so a branch for it could never run.
+      this.typeError(`${subject} requires a component, received ${describeType(type)}`, sourceSpan);
       return;
     }
     const unsupported = [...type.requiredProperties].filter((name) => name !== "route");

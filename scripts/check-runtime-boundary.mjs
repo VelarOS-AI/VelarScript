@@ -591,7 +591,12 @@ const emittedWebRuntimeSource = webEmitterSource.slice(
   webEmitterSource.indexOf("const WEB_RUNTIME_BODY = String.raw`"),
   webEmitterSource.indexOf("`.trim();\n\nfunction webRuntime("),
 );
-const emittedReactivityRuntimeSource = webEmitterSource.slice(webEmitterSource.indexOf("function __velarSchedule"), webEmitterSource.indexOf("function __velarResource"));
+// D90 R16 / rw-3: the emitted prelude no longer defines a flush drain or a
+// scheduler of its own -- runtime-foundation.ts holds the single definition and
+// the prelude, inlined into the same module scope, calls it. So the reactivity
+// slice starts at the first observer helper the prelude still owns, and the one
+// drain's use of the captured graph ABI is asserted against the foundation.
+const emittedReactivityRuntimeSource = webEmitterSource.slice(webEmitterSource.indexOf("function __velarTrack(subscribers)"), webEmitterSource.indexOf("function __velarResource"));
 const emittedManagedAsyncRuntimeSource = webEmitterSource.slice(webEmitterSource.indexOf("const __velarManagedAsyncNativePromise"), webEmitterSource.indexOf("function __velarScope"));
 const emittedDomRuntimeSource = webEmitterSource.slice(webEmitterSource.indexOf("function __velarComponent"), webEmitterSource.indexOf("function __velarLook(parts)"));
 /**
@@ -1348,7 +1353,7 @@ for (const phrase of [
 }
 if (!webFoundationSource.includes("${WEB_REACTIVITY_HOST_RUNTIME}")
   || !emittedReactivityRuntimeSource.includes("__velarGraphCreateSet()")
-  || !emittedReactivityRuntimeSource.includes("__velarGraphSetItems(__velarRuntime.domQueue)")
+  || !webFoundationSource.includes("__velarGraphSetItems(__velarRuntime.domQueue)")
   || !webEmitterSource.includes("!__velarGraphSame(next, current)")) {
   failures.push("packages/web: emitted reactivity does not consume the canonical captured graph ABI");
 }

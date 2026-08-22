@@ -137,8 +137,34 @@ test("[D90 R17] a merge cannot absorb the boundary value into a checked type", (
   assert.ok(laundered.some((item) => /Cannot assign unknown \| number to number/u.test(item)), laundered.join("\n"));
 });
 
-test("[D90 R17] the written 'any' annotation stays refused, unchanged", () => {
+test("[D90 R17] the written 'any' annotation stays refused, toward unknown and Type.parse", () => {
   assert.deepEqual(messages(`${unsafeImport}const held: any = mystery\nprint(held == null)\n`), [
-    "VEL4001 'any' is reserved for explicit unsafe JavaScript boundaries; use 'unknown' in VelarScript",
+    "VEL4001 'any' is not a VelarScript type; a foreign value arrives as 'unknown', which is what you annotate; declare a type naming the shape you rely on — 'type X:' — then validate first: 'const checked = X.parse(value)' and use 'checked' from there",
   ]);
+});
+
+test("[D90 R17] the refused 'any' names the unknown arrival and the parse entrance, at every annotation position", () => {
+  // The refusal used to give its reason as "'any' is reserved for explicit
+  // unsafe JavaScript boundaries". R17 removed the producer that clause named:
+  // no boundary hands back `any` any more, so the reason was false and taught
+  // nothing. The message now teaches the same entrance every other refusal on
+  // an unknown teaches — and it must do so wherever the annotation is written,
+  // not only on the `const` the original report happened to use.
+  const positions = [
+    "def escape(value: any) -> string:\n    return \"x\"\n",
+    "def escape(value: string) -> any:\n    return value\n",
+    "let value: any = 1\nprint(value)\n",
+    "type Holder:\n    held: any\n",
+    "class Box:\n    const held: any = 1\n",
+  ];
+  for (const source of positions) {
+    const reported = messages(source).filter((item) => item.includes("'any'"));
+    assert.equal(reported.length, 1, `${source}\n${reported.join("\n")}`);
+    const message = reported[0]!;
+    assert.match(message, /^VEL4001 'any' is not a VelarScript type;/u);
+    assert.match(message, /arrives as 'unknown'/u);
+    assert.match(message, /'const checked = X\.parse\(value\)'/u);
+    // The retired reason clause names a producer this ruling deleted.
+    assert.doesNotMatch(message, /reserved for explicit unsafe JavaScript boundaries/u);
+  }
 });

@@ -161,6 +161,14 @@ const removedStandardFunctionGuidanceEntries = new Map<string, ReadonlyMap<strin
   ["velar/http", new Map([
     ["HttpError", "Use 'HttpResponseError'; velar/serve's HttpError is the outbound failure a route throws, and a proxy route holds both"],
   ])],
+  // D90 R20: two complete WebSocket clients stood in the tree and disagreed
+  // about which close codes are legal. `velar/websocket` is the one that
+  // survives — a module whose name is its job, with typed failures, binary
+  // messages, and the whole 1000-4999 range — so the retired spelling earns
+  // its successor by name here rather than a bare "no export named".
+  ["velar/realtime", new Map([
+    ["socket", "Use 'connect' from \"velar/websocket\"; velar/realtime.socket is retired and connect is the one WebSocket client — 'using live = await connect(url)', then 'await live.send(text)' and 'await live.next()'. Send JSON with 'Json.stringify(value)', which needs no import"],
+  ])],
 ]);
 
 /**

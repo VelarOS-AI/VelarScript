@@ -11736,8 +11736,15 @@ export class Analyzer implements TypeEnvironment {
       if (extensionResult !== undefined) return extensionResult;
       switch (syntax.kind) {
         case "NamedTypeSyntax": {
+          // D90 R17 removed the boundary that used to produce `any`, so the
+          // old reason clause ("reserved for explicit unsafe JavaScript
+          // boundaries") named a producer that no longer exists. The refusal
+          // now teaches the same entrance every other unknown refusal teaches.
           if (syntax.name === "any") {
-            this.typeError("'any' is reserved for explicit unsafe JavaScript boundaries; use 'unknown' in VelarScript", syntax.span);
+            this.typeError(
+              `'any' is not a VelarScript type; a foreign value arrives as 'unknown', which is what you annotate${this.boundaryValidationGuidance(null, null)}`,
+              syntax.span,
+            );
             return false;
           }
           if (this.invalidDeclaredTypes.has(syntax.name)) return false;

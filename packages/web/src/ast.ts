@@ -73,11 +73,23 @@ export interface WebActionDeclaration {
   readonly span: Span;
 }
 
+/**
+ * D90 R16: one state named by a `watch` header's `writes` clause. The span is
+ * the name's own token, so the contention error, go-to-definition and a rename
+ * all land on what the author wrote rather than on the whole header.
+ */
+export interface WebWatchWriteTarget {
+  readonly name: string;
+  readonly span: Span;
+}
+
 export interface WebWatchDeclaration {
   readonly kind: "ExtensionStatement:web:watch";
   readonly expression: Expression;
   readonly currentName: string | null;
   readonly previousName: string | null;
+  /** D90 R16: the states this watch declares it writes; empty makes it a pure observer. */
+  readonly writes: readonly WebWatchWriteTarget[];
   readonly body: readonly Statement[];
   readonly span: Span;
 }

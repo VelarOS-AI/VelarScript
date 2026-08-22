@@ -419,7 +419,6 @@ class HttpResponse {
   constructor(response, request) {
     this.request = request;
     this.body = response.body;
-    this.ok = response.ok;
     this.status = response.status;
     this.statusText = response.statusText;
     this.url = response.url;
@@ -589,7 +588,11 @@ class Request {
         const response = hostResponse(wire, this.handle);
         if (this.abortError) throw this.abortError;
         const wrapped = new HttpResponse(response, this);
-        if (!wrapped.ok) {
+        // D90 R20: the 2xx question is asked here and nowhere else. The
+        // transport snapshot still carries ok; the response an author holds
+        // does not, because by the time it is returned the answer is always
+        // yes.
+        if (!response.ok) {
           const text = await wrapped.text();
           let body = text;
           try { body = text ? parseJsonText(text) : null; } catch {}

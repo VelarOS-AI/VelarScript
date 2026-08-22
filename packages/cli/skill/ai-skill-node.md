@@ -339,6 +339,13 @@ application integrations are project-owned modules or dependencies. Declare
 third-party boundaries with checked `extern module`; keep `import js unsafe`
 at one narrow validation boundary.
 
+An HTTP response has no `ok` field on any target: `response()` throws
+`HttpResponseError` for every non-2xx status before the value exists, so every
+response the code can hold already succeeded. Wrap the call in `try:` /
+`catch failure:`, narrow with `if failure is HttpResponseError:` —
+`HttpResponseError` is imported from `velar/http` — and read `failure.status`
+there.
+
 Wire-shaped values arrive as `unknown`, not as a checked shape. An
 `HttpError`’s `body`, the payload of a response whose declared type is
 `ServeResponse`, the path items of an `openapi(...)` document, the error handed

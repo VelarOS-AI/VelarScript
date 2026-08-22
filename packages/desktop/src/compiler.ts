@@ -1116,9 +1116,8 @@ function chunkOf(value) {
   return {done: done.value, text: text.value};
 }
 class DesktopResponse {
-  constructor(value, request) {
-    const response = responseOf(value);
-    this.ok = response.ok; this.status = response.status; this.statusText = response.statusText; this.url = response.url;
+  constructor(response, request) {
+    this.status = response.status; this.statusText = response.statusText; this.url = response.url;
     this.headers = response.headers; this.body = response.body; this.request = request; this.cachedText = null; this.textPending = null; this.consuming = false;
     if (!this.body) request.finish();
     Object.seal(this);
@@ -1209,8 +1208,13 @@ class DesktopRequest {
           throw bridgeTransportError(error, HttpTransportPhase.request) ?? error;
         }
         if (this.abortError) throw this.abortError;
-        const response = new DesktopResponse(value, this);
-        if (!response.ok) {
+        const snapshot = responseOf(value);
+        const response = new DesktopResponse(snapshot, this);
+        // D90 R20: the 2xx question is asked here and nowhere else. The
+        // transport snapshot still carries ok; the response an author holds
+        // does not, because by the time it is returned the answer is always
+        // yes.
+        if (!snapshot.ok) {
           const text = await response.text();
           let body = text;
           try { body = text ? parseJsonText(text) : null; } catch {}

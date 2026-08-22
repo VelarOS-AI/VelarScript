@@ -1341,9 +1341,12 @@ of silently losing the lifecycle.
 ### Node `velar/http`
 
 Local programs use the same `http.request/get/post/put/patch/delete/head`
-vocabulary as Web code. Requests expose `response`, `json`, `text`,
+vocabulary as Web code. Requests expose `response`, `json`, `text`, `bytes`,
 `streamText(consume)`, `parse(Type)`, and `cancel`; responses expose checked
-metadata and the same body readers including `parse(Type)`. Typed parsing uses
+metadata and the same body readers including `parse(Type)`. Node's response
+carries the same members Web's does except the browser-only `blob()` and, like
+Web's, has no `ok`: a non-2xx status throws `HttpResponseError` from
+`response()` before the value exists. Typed parsing uses
 the compiler-known runtime Type registry and returns `Promise<T>` without a
 second schema system. A result Type with a callable top-level `then` is rejected
 statically because native Promise resolution would assimilate it. Options

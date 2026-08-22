@@ -875,18 +875,14 @@ async main()
 
   const web = await cliProject({
     "src/main.vel": `
-import {eventStream, socket} from "velar/realtime"
+import {eventStream} from "velar/realtime"
 
 export component App():
-    action connect():
-        using live = socket("wss://example.com")
-        live.send("ping")
-
     action listen():
         using stream = eventStream("https://example.com/events")
         print(stream.state())
 
-    return <button on:click={connect}>connect</button>
+    return <button on:click={listen}>listen</button>
 `.trimStart(),
   }, true);
   try {

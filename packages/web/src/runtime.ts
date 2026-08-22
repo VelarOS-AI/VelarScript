@@ -1102,7 +1102,6 @@ function webObserve(run, detail, componentName) {
   let initial = true;
   const observer = {
     mode: "dom",
-    produces: false,
     stopped: false,
     dependencies: new Set(),
     run() {
@@ -2398,7 +2397,6 @@ class HttpResponse {
     this.bytesValue = null;
     this.bytesPending = null;
     this.streaming = false;
-    this.ok = response.ok;
     this.status = response.status;
     this.statusText = response.statusText;
     this.url = response.url;
@@ -2605,7 +2603,10 @@ class Request {
       const response = await responseSnapshot(transportResponse);
       if (this.abortError) throw this.abortError;
       const wrapped = new HttpResponse(response, this);
-      if (!wrapped.ok) {
+      // D90 R20: the 2xx question is asked here and nowhere else. The
+      // transport snapshot still carries ok; the response an author holds does
+      // not, because by the time it is returned the answer is always yes.
+      if (!response.ok) {
         const text = await wrapped.text();
         let parsed = text;
         try { parsed = text ? __velarJsonParse(text, "HTTP error JSON text") : null; } catch { parsed = text; }
@@ -3426,7 +3427,6 @@ export function download(name, data, mime = "text/plain;charset=utf-8") {
   ["velar/realtime", String.raw`
 ${ownedCallbackRuntime}
 ${optionsRuntime}
-${VELAR_STRICT_JSON_RUNTIME}
 const maxRealtimeTextCodeUnits = 16 * 1024 * 1024;
 const maxRealtimeUrlCodeUnits = 2 * 1024 * 1024;
 const realtimeMissingField = Object.freeze({});
@@ -3449,13 +3449,6 @@ function realtimePrototypeMember(prototype, name, kind) {
   }
   return null;
 }
-const RealtimeWebSocket = realtimeGlobalConstructor("WebSocket");
-const realtimeWebSocketPrototype = realtimePrototype(RealtimeWebSocket);
-const realtimeWebSocketAddEventListener = realtimePrototypeMember(realtimeWebSocketPrototype, "addEventListener", "value");
-const realtimeWebSocketSend = realtimePrototypeMember(realtimeWebSocketPrototype, "send", "value");
-const realtimeWebSocketClose = realtimePrototypeMember(realtimeWebSocketPrototype, "close", "value");
-const realtimeWebSocketUrl = realtimePrototypeMember(realtimeWebSocketPrototype, "url", "get");
-const realtimeWebSocketReadyState = realtimePrototypeMember(realtimeWebSocketPrototype, "readyState", "get");
 const RealtimeEventSource = realtimeGlobalConstructor("EventSource");
 const realtimeEventSourcePrototype = realtimePrototype(RealtimeEventSource);
 const realtimeEventSourceAddEventListener = realtimePrototypeMember(realtimeEventSourcePrototype, "addEventListener", "value");
@@ -3465,9 +3458,6 @@ const realtimeEventSourceReadyState = realtimePrototypeMember(realtimeEventSourc
 const realtimeMessageEventPrototype = realtimePrototype(realtimeGlobalConstructor("MessageEvent"));
 const realtimeMessageEventData = realtimePrototypeMember(realtimeMessageEventPrototype, "data", "get");
 const realtimeMessageEventLastEventId = realtimePrototypeMember(realtimeMessageEventPrototype, "lastEventId", "get");
-const realtimeCloseEventPrototype = realtimePrototype(realtimeGlobalConstructor("CloseEvent"));
-const realtimeCloseEventCode = realtimePrototypeMember(realtimeCloseEventPrototype, "code", "get");
-const realtimeCloseEventReason = realtimePrototypeMember(realtimeCloseEventPrototype, "reason", "get");
 function realtimeOwnDataField(value, name) {
   if (value === null || (typeof value !== "object" && typeof value !== "function")) return realtimeMissingField;
   const descriptor = Object.getOwnPropertyDescriptor(value, name);
@@ -3483,28 +3473,9 @@ function realtimeCall(operation, receiver, arguments_, name) {
   if (typeof operation !== "function" || typeof realtimeReflectApply !== "function") throw new TypeError("The browser does not expose native " + name);
   return realtimeReflectApply(operation, receiver, arguments_);
 }
-function realtimeUtf8Length(value) {
-  let bytes = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code <= 0x7F) bytes += 1;
-    else if (code <= 0x7FF) bytes += 2;
-    else if (code >= 0xD800 && code <= 0xDBFF && index + 1 < value.length) {
-      const next = value.charCodeAt(index + 1);
-      if (next >= 0xDC00 && next <= 0xDFFF) { bytes += 4; index += 1; }
-      else bytes += 3;
-    } else bytes += 3;
-  }
-  return bytes;
-}
 function realtimeUrl(value, name) {
   value = __velarString(value, name);
   if (value.length > maxRealtimeUrlCodeUnits) throw new RangeError(name + " cannot exceed 2 MiB");
-  return value;
-}
-function realtimeMessage(value, name) {
-  value = __velarString(value, name);
-  if (value.length > maxRealtimeTextCodeUnits) throw new RangeError(name + " cannot exceed 16 MiB");
   return value;
 }
 function handler(value, allowed) {
@@ -3515,92 +3486,12 @@ function handler(value, allowed) {
   }
   return value;
 }
-function webSocketState(value) {
-  const readyState = realtimeHostField(value, "readyState", realtimeWebSocketReadyState);
-  if (readyState === 0) return "connecting";
-  if (readyState === 1) return "open";
-  if (readyState === 2) return "closing";
-  if (readyState === 3) return "closed";
-  throw new TypeError("WebSocket returned an invalid state");
-}
 function eventStreamState(value) {
   const readyState = realtimeHostField(value, "readyState", realtimeEventSourceReadyState);
   if (readyState === 0) return "connecting";
   if (readyState === 1) return "open";
   if (readyState === 2) return "closed";
   throw new TypeError("Event stream returned an invalid state");
-}
-export function socket(url, handlers = {}) {
-  handlers = handler(handlers, __velarOptionFields(["open", "message", "error", "close"]));
-  if (!RealtimeWebSocket) throw new TypeError("The browser does not expose native WebSocket");
-  const value = new RealtimeWebSocket(realtimeUrl(url, "WebSocket URL"));
-  let resolvedUrl;
-  try {
-    const hostUrl = realtimeHostField(value, "url", realtimeWebSocketUrl);
-    if (hostUrl === realtimeMissingField) throw new TypeError("WebSocket returned an invalid resolved URL");
-    resolvedUrl = realtimeUrl(hostUrl, "WebSocket resolved URL");
-  }
-  catch (failure) { try { realtimeCall(realtimeWebSocketClose, value, [], "WebSocket close"); } catch {} throw failure; }
-  const opened = () => __velarInvokeOwnedCallback(handlers.open, [], "realtime", "socket:open");
-  const messaged = (event) => {
-    const data = realtimeHostField(event, "data", realtimeMessageEventData);
-    if (data === realtimeMissingField) {
-      __velarReportOwnedCallback(new TypeError("WebSocket message event is invalid"), "realtime", "socket:message");
-      try {
-        const state = webSocketState(value);
-        if (state === "connecting" || state === "open") realtimeCall(realtimeWebSocketClose, value, [1003, "Invalid message event"], "WebSocket close");
-      } catch {}
-      return;
-    }
-    if (typeof data !== "string") {
-      __velarInvokeOwnedCallback(handlers.error, ["Binary WebSocket messages are not supported by VelarScript Web API 0.10"], "realtime", "socket:error");
-      const state = webSocketState(value);
-      if (state === "connecting" || state === "open") realtimeCall(realtimeWebSocketClose, value, [1003, "Text messages only"], "WebSocket close");
-      return;
-    }
-    if (data.length > maxRealtimeTextCodeUnits) {
-      __velarInvokeOwnedCallback(handlers.error, ["WebSocket message exceeded 16 MiB"], "realtime", "socket:error");
-      const state = webSocketState(value);
-      if (state === "connecting" || state === "open") realtimeCall(realtimeWebSocketClose, value, [1009, "Message too large"], "WebSocket close");
-      return;
-    }
-    __velarInvokeOwnedCallback(handlers.message, [data], "realtime", "socket:message");
-  };
-  const failed = () => __velarInvokeOwnedCallback(handlers.error, ["WebSocket connection error"], "realtime", "socket:error");
-  const closed = (event) => {
-    try {
-      const code = realtimeHostField(event, "code", realtimeCloseEventCode);
-      const hostReason = realtimeHostField(event, "reason", realtimeCloseEventReason);
-      if (code === realtimeMissingField || hostReason === realtimeMissingField) throw new TypeError("WebSocket close event is invalid");
-      const reason = realtimeMessage(hostReason, "WebSocket close event reason");
-      if (!Number.isSafeInteger(code) || code < 0 || code > 65535) throw new TypeError("WebSocket close event returned an invalid code");
-      if (reason.length > 123 || realtimeUtf8Length(reason) > 123) throw new RangeError("WebSocket close event reason cannot exceed 123 UTF-8 bytes");
-      __velarInvokeOwnedCallback(handlers.close, [code, reason], "realtime", "socket:close");
-    } catch (failure) { __velarReportOwnedCallback(failure, "realtime", "socket:close"); }
-  };
-  try {
-    realtimeCall(realtimeWebSocketAddEventListener, value, ["open", opened], "WebSocket event listener");
-    realtimeCall(realtimeWebSocketAddEventListener, value, ["message", messaged], "WebSocket event listener");
-    realtimeCall(realtimeWebSocketAddEventListener, value, ["error", failed], "WebSocket event listener");
-    realtimeCall(realtimeWebSocketAddEventListener, value, ["close", closed], "WebSocket event listener");
-  } catch (failure) {
-    try { realtimeCall(realtimeWebSocketClose, value, [], "WebSocket close"); } catch {}
-    throw failure;
-  }
-  return Object.freeze({
-    url: resolvedUrl,
-    state: () => webSocketState(value),
-    send(data) { data = realtimeMessage(data, "WebSocket message"); if (webSocketState(value) !== "open") throw new Error("WebSocket is not open"); realtimeCall(realtimeWebSocketSend, value, [data], "WebSocket send"); return null; },
-    sendJson(data) { const text = __velarJsonStringify(data); if (webSocketState(value) !== "open") throw new Error("WebSocket is not open"); realtimeCall(realtimeWebSocketSend, value, [text], "WebSocket send"); return null; },
-    close(code = 1000, reason = "") {
-      if (!Number.isSafeInteger(code) || (code !== 1000 && (code < 3000 || code > 4999))) throw new RangeError("WebSocket close code must be 1000 or from 3000 through 4999");
-      reason = __velarString(reason, "WebSocket close reason");
-      if (reason.length > 123 || realtimeUtf8Length(reason) > 123) throw new RangeError("WebSocket close reason cannot exceed 123 UTF-8 bytes");
-      const state = webSocketState(value);
-      if (state === "connecting" || state === "open") realtimeCall(realtimeWebSocketClose, value, [code, reason], "WebSocket close");
-      return null;
-    },
-  });
 }
 export function eventStream(url, handlers = {}, credentials = false) {
   handlers = handler(handlers, __velarOptionFields(["open", "message", "error"]));

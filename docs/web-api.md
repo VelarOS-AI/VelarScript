@@ -616,6 +616,19 @@ are required with `as`, so a body that needs only the new value writes
 record the baseline — the body does not run for that first value. For a deep
 mutation, `current` and `previous` are the same reference.
 
+A watch that writes state says so in its header: `writes` follows the subject
+— and the `as` clause, when there is one — and names each state the body
+writes, separated by commas: `watch query as current, _ writes history:`. A
+target may be a local `state` or an imported one. A watch with no clause is a
+pure observer, and a body write it did not declare is refused — at compile
+time where the compiler can see the write (`VEL5072`), by the runtime at the
+moment the write lands otherwise. The declaration is also what makes flush
+order a non-question: two watches of one scope that declare the same state are
+refused at compile time, and where one compile cannot see both — two modules
+writing one imported `state`, two live instances of one component — the
+runtime refuses at the moment the second watch settles that cell in a flush,
+naming both watches and the state.
+
 A component watch is disposed with its component. A **module-scope watch is never
 disposed**: like a module `action`, it lives for the life of the page. That is
 the right lifetime for an application-wide fact — persisting a store to
@@ -928,7 +941,13 @@ const Reports = lazy(() => import("./pages/reports.vel"), "Reports", PageLoading
   `route: RouteContext` prop; invalid path parameters, repeated parameters,
   non-terminal wildcards, non-components, wrong route props, and other required
   props fail checking before browser execution. Dynamic route strings retain
-  the same runtime validation.
+  the same runtime validation. A route is the record `route(...)` returns, so
+  the same record written directly into `routes` —
+  `{path: "/items/:id", component: ItemPage}` — is the same route and is
+  checked the same way: the path pattern where it is a literal, and the
+  component's contract. Where the list is not written out at the `Router`, the
+  checks run when the router builds its table, and a bad path or a component
+  that is not callable refuses the table rather than rendering.
 - `lazy(loader, exportName, loading=null, failed=null)` returns the exported
   component with its original prop contract. It owns one cached successful
   module load, retries after a failed load, mounts only the active child, and
@@ -1102,7 +1121,13 @@ const result = await http.post("/api/images", {body: body}).parse(UploadResult)
   `no-store`, `reload`, `no-cache`, or `force-cache`.
 - Requests expose `response`, `json`, `text`, `bytes`, `streamText`, `blob`,
   `parse(Type)`, and `cancel`. Responses expose typed status, URL, and header
-  fields plus the same body readers. `bytes()` returns the target-neutral
+  fields plus the same body readers. A response has no `ok` field: `response()`
+  throws `HttpResponseError` before it answers for any non-2xx status, so every
+  response an author can hold succeeded, and a field asserting that would be a
+  constant. Handle the failure where it is raised — `catch failure:` then
+  `if failure is HttpResponseError:` — and read `failure.status` there. Reading
+  or writing `ok` on a response reports `VEL5075` on Web and `VEL6007` on Node
+  with that migration. `bytes()` returns the target-neutral
   immutable `Bytes` snapshot. `streamText` incrementally decodes valid
   UTF-8 chunks and awaits each consumer before pulling the next chunk. `blob()`
   returns an opaque checked `Blob`, not `any`; it may be
@@ -1115,7 +1140,10 @@ const result = await http.post("/api/images", {body: body}).parse(UploadResult)
   response status must be an integer from 100 through 599, and `ok` must be
   exactly equivalent to the 200-through-299 range. Opaque or synthetic
   status-zero responses are rejected as invalid host metadata rather than
-  entering `HttpResponseError` or body processing.
+  entering `HttpResponseError` or body processing. The `ok` named here belongs
+  to the validated host record, not to the response an author holds: it is an
+  integrity check that rejects a host contradicting its own status, and it is
+  never exposed as a field.
 - The HTTP module captures Fetch, Headers, native Response accessors, abort and
   timer operations, FormData, Blob, TextDecoder, and byte-array construction
   when it initializes. Later JavaScript replacement cannot redirect requests,
@@ -1163,7 +1191,8 @@ const result = await http.post("/api/images", {body: body}).parse(UploadResult)
   the two names have to differ: while both were spelled `HttpError`, importing
   one and testing the other with `is` compiled clean and was always false.
   Importing `HttpError` from `velar/http` now reports `HttpResponseError` by
-  name rather than an unknown export.
+  name rather than an unknown export. This error is also why a response has no
+  `ok` field: the non-2xx case throws here instead of answering a response.
 - A `Bytes` request body is sent as binary without JSON/Base64 conversion. JSON
   request bodies use the same strict lossless data boundary as
   `velar/json`: records, dense Lists, finite primitives, and `null` are accepted;
@@ -1558,68 +1587,51 @@ socket makes no progress and stops once nothing is waiting. Closing or failing t
 connection settles every send still waiting: one whose bytes had already left
 resolves, and the rest reject with `WebSocketClosedError`.
 
-The older `velar/realtime.socket` text API remains source-compatible. New
-binary and pull-based protocols use `velar/websocket`; existing text-only code
-does not need to migrate merely because the binary transport exists.
+`velar/websocket` is the only WebSocket client. D90 R20 retired
+`velar/realtime.socket`, a second, text-only client that admitted only close
+code `1000` and application codes `3000`–`4999`, reported failure as a bare
+`Error`, and could not carry binary messages. Importing `socket` from
+`velar/realtime` now reports `connect` by name rather than an unknown export;
+`sendJson(value)` becomes `send(Json.stringify(value))`, and `Json` needs no
+import.
 
 ## `velar/realtime`
 
 ```velar
-import {eventStream, socket} from "velar/realtime"
+import {eventStream} from "velar/realtime"
 
 component LiveStatus:
-    const chat = socket("wss://example.test/chat", {
-        message: text => print(text),
-        error: message => print(message),
-    })
     const updates = eventStream("/api/updates", {message: (text, id) => print(text)})
 
     @cleanup:
-        chat.close()
         updates.close()
 
-    return <p>{chat.state()}</p>
+    return <p>{updates.state()}</p>
 ```
 
-- `socket` wraps text WebSocket messages and exposes `state`, `send`,
-  `sendJson`, and `close`. Binary messages are reported to the error handler
-  and close the text-only channel.
-- `sendJson` uses the same strict lossless JSON contract as HTTP and storage.
-  Known non-data types fail checking; dynamic Map/Set/class/function, cyclic,
-  sparse, or non-finite values fail before WebSocket `send` is called.
-- `eventStream` wraps server-sent events and exposes `state` and `close`, with
-  optional credentials. Event streams report `connecting`, `open`, or `closed`;
-  WebSockets additionally expose `closing`. Unknown native state numbers fail
-  rather than being mislabeled. Each state observation reads the native value
-  once, so validation and the returned label cannot describe different states.
+- `eventStream` wraps server-sent events and exposes `url`, `state`, and
+  `close`, with optional credentials. Event streams report `connecting`,
+  `open`, or `closed`. Unknown native state numbers fail rather than being
+  mislabeled. Each state observation reads the native value once, so
+  validation and the returned label cannot describe different states.
 - URLs are strings, EventSource credentials are bool, and handler records
   accept only documented enumerable callable data fields. Accessors and unknown
   fields fail before constructing the native connection. Handler throws and
   rejected promises are reported through `velar/app` with a stable realtime
   phase/detail instead of escaping the native event loop.
-- Realtime URLs are limited to 2 MiB and text messages to 16 MiB. Oversized
-  outbound messages fail before native `send`; oversized inbound WebSocket
-  messages close with code `1009`, and oversized server-sent events close their
-  stream after reporting the boundary error. Server-sent event IDs are limited
-  to 64 KiB on the same checked return path.
+- Realtime URLs are limited to 2 MiB and event text to 16 MiB. An oversized
+  server-sent event closes its stream after reporting the boundary error, and
+  event IDs are limited to 64 KiB on the same checked return path.
 - Resolved native connection URLs are validated again before becoming public
-  fields. Inbound message text, event IDs, and WebSocket close codes/reasons are
-  each snapshotted once through captured native getters before the typed
-  callback runs; malformed or accessor-backed host metadata is reported through
-  `velar/app` without implicit conversion or getter execution. Constructors,
-  listeners, state getters, send, and close operations likewise use the host ABI
-  captured when the module initializes rather than replaceable instance methods.
-- WebSocket close codes are `1000` or application codes `3000`–`4999`; reasons
-  are strings no longer than 123 UTF-8 bytes. A reason above 123 code units is
-  rejected before calculating its encoded size; the runtime owns the bounded
-  UTF-8 byte count instead of consulting mutable `TextEncoder`. Invalid
-  messages, JSON payloads, codes, and reasons fail before native `send` or
-  `close` effects. `sendJson` validates and serializes its argument before
-  observing connection state, matching the ordinary `send` argument-first
-  contract even on a closed channel.
-- Connections are ordinary owned resources. Applications close them explicitly
-  from sibling component `@cleanup`; the API does not introduce React-style
-  effects or hidden lifecycle behavior.
+  fields. Inbound message text and event IDs are each snapshotted once through
+  captured native getters before the typed callback runs; malformed or
+  accessor-backed host metadata is reported through `velar/app` without
+  implicit conversion or getter execution. Constructors, listeners, state
+  getters, and close operations likewise use the host ABI captured when the
+  module initializes rather than replaceable instance methods.
+- Event streams are ordinary owned resources. Applications close them
+  explicitly from sibling component `@cleanup`; the API does not introduce
+  React-style effects or hidden lifecycle behavior.
 
 ## Core `velar/test` and Web `velar/web-test`
 

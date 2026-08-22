@@ -180,8 +180,13 @@ const httpTransportPhaseMembers = new Set(["request", "response"]);
 const httpTransportPhaseType: ValueType = { kind: "enum", name: "HttpTransportPhase", identity: httpTransportPhaseIdentity };
 const httpTransportErrorIdentity = "velar/http#class:HttpTransportError";
 
+// D90 R20: `ok` is gone from the response. `response()` throws
+// `HttpResponseError` for every non-2xx, so the only response an author can
+// hold has `ok === true` — a field that is always true is a lie in the type,
+// and `if not r.ok:` was a dead branch the tour taught twice. The failure
+// path is a `catch` that narrows with `is HttpResponseError`, and the
+// analyzer says so when the old field is read.
 const httpResponseType = object({
-  ok: boolType,
   status: numberType,
   statusText: stringType,
   url: stringType,
@@ -193,6 +198,18 @@ const httpResponseType = object({
   blob: namedFunction([], [], promise(blobType)),
   parse: namedIntrinsic("runtime.parseAsync", ["target"], [anyType], promise(anyType)),
 });
+
+/**
+ * The HTTP response's own declaration, published so the analyzer can recognise
+ * one it is handed and report the retired `ok` against it. The response is a
+ * structural object with no identity of its own, so its shape is the only
+ * thing that names it — the same way Core recognises this module's
+ * `formBody()` handle (`isHttpFormBody`, compiler analyzer). What is published
+ * is the declaration itself rather than a roster re-listed beside it: the
+ * names alone would accept any ten-field record that happens to spell them,
+ * and the field types are what make the match a response.
+ */
+export const webHttpResponseType: ValueType = httpResponseType;
 
 const requestType = object({
   response: namedFunction([], [], promise(httpResponseType)),
@@ -304,23 +321,16 @@ const scrollMetricsType = object({
 });
 const textSelectionType = object({ start: numberType, end: numberType, direction: stringType });
 const fileOptionsType = object({ accept: optional(stringType), multiple: optional(boolType) });
-const socketHandlersType = object({
-  open: optional(functionType([], unknownType)),
-  message: optional(functionType([stringType], unknownType)),
-  error: optional(functionType([stringType], unknownType)),
-  close: optional(functionType([numberType, stringType], unknownType)),
-});
-// D51 (audit 12): both realtime handles are standard capability handles that
-// publish `close()`, so `using` supplies their release contract (charter
-// section 16). They are declared structurally rather than as named types, and
-// the marker is what lets Core see them without ever detecting a shape.
-const socketType = capabilityHandle({
-  url: stringType,
-  state: namedFunction([], [], stringType),
-  send: namedFunction(["data"], [stringType], nullType),
-  sendJson: namedIntrinsic("realtime.sendJson", ["data"], [anyType], nullType),
-  close: namedFunction(["code", "reason"], [numberType, stringType], nullType, 0),
-});
+// D51 (audit 12): the realtime handle is a standard capability handle that
+// publishes `close()`, so `using` supplies its release contract (charter
+// section 16). It is declared structurally rather than as a named type, and
+// the marker is what lets Core see it without ever detecting a shape.
+//
+// D90 R20 retired the second handle this comment used to cover: the WebSocket
+// client is `velar/websocket.connect`, which owns the whole close-code range,
+// types its failures, and carries binary messages. Two complete WebSocket
+// clients that disagreed about which close codes are legal is the duplication
+// rule 3 refuses.
 const eventStreamHandlersType = object({
   open: optional(functionType([], unknownType)),
   message: optional(functionType([stringType, stringType], unknownType)),
@@ -600,7 +610,6 @@ export const webModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map
     ["download", namedFunction(["name", "data", "mime"], [stringType, stringType, stringType], nullType, 2)],
   ]))],
   ["velar/realtime", moduleInterface(new Map([
-    ["socket", namedFunction(["url", "handlers"], [stringType, socketHandlersType], socketType, 1)],
     ["eventStream", namedFunction(["url", "handlers", "credentials"], [stringType, eventStreamHandlersType, boolType], eventStreamType, 1)],
   ]))],
   [BROWSER_TEST_MODULE, moduleInterface(new Map([

@@ -272,8 +272,14 @@ const httpSecretHeaderType = object({
   prefix: stringType,
 });
 const httpSecretHeadersType: ValueType = { kind: "list", element: httpSecretHeaderType };
+// D90 R20, the Node half of the same removal Web made: `ok` is gone from the
+// response. `response()` throws `HttpResponseError` for every non-2xx before
+// an author can hold the value, so the only response that exists has
+// `ok === true` — a field that is always true is a lie in the type, and
+// `if not r.ok:` was a dead branch the tour taught. The failure path is a
+// `catch` narrowed with `is HttpResponseError`, and the Node analyzer says so
+// when the old field is read or written.
 const nodeHttpResponseType = object({
-  ok: boolType,
   status: numberType,
   statusText: stringType,
   url: stringType,
@@ -284,6 +290,13 @@ const nodeHttpResponseType = object({
   streamText: functionType(["consume"], [httpChunkConsumerType], promise(nullType)),
   parse: namedIntrinsic("runtime.parseAsync", ["target"], [unknownType], promise(unknownType)),
 });
+/**
+ * The response shape the Node analyzer matches a retired `ok` receiver
+ * against. It is exported rather than re-listed there, because a second list
+ * of these nine fields is exactly the drift this repository keeps filing
+ * defects against.
+ */
+export const nodeHttpResponseObjectType: ValueType = nodeHttpResponseType;
 const nodeHttpRequestType = object({
   response: functionType([], [], promise(nodeHttpResponseType)),
   json: functionType([], [], promise(unknownType)),

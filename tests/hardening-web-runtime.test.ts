@@ -165,7 +165,7 @@ def noisy() -> number:
 
 computed loud = noisy()
 
-watch loud as current, previous:
+watch loud as current, previous writes reports:
     reports.append(f"watched {current}")
 
 test "computed self invalidation stops at the cap":

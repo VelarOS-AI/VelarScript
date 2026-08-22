@@ -215,6 +215,84 @@ watch 在运行时提升为 writer，`tests/hardening-reactivity.test.ts` 那条
 自己也只能在执行时才知道。
 
 
+## R16-a `writes` 可点名导入的响应式绑定（Claude 依 R16 推论裁定,所有者可推翻）
+
+实施 R16 时顶出一个空档:watch 只能经**导入的函数**写到另一个模块的 state,而
+`writes` 若只接受本地可赋值绑定,这个今天合法的程序在 R16 下变成**没有合法拼写
+可修**的运行时错误——违背 R16 自己的承诺(「运行时是精确兜底」不等于「制造无解
+的错误」)。
+
+**裁定**:`writes` 可以点名导入的响应式绑定——`watch t writes hits:`,`hits`
+是导入的 state。匹配按**cell 身份**而非名字,跨模块零成本,不引入新概念。
+
+## R1-a-scope 跨模块的 watch 争用——运行时裁判接住（Claude 依 R1-a + R19 裁定,可推翻）
+
+R16-a 让「导入的 cell」可被 `writes` 点名之后,暴露一个空档:**两个不同模块**的
+watch 各自声明 `writes hits` 指向同一个导入 cell,两名裁判都放行,一次 flush 里
+无序结算。R1-a 的裁决原文没有「限一个模块」——那是实现注释加的界。
+
+**裁定**:按 R19 分层补齐——单模块编译看得见的仍在编译期拦(现状);编译期看不
+见的跨模块争用,**运行时在 flush 里两个不同 watch 观察者结算同一 cell 的那一刻**
+抛错,点名两个 watch 主语与那个 state,消息形状与现有兜底一致。复用已跨模块的
+watch-frame 机制,零编译期成本。
+
+## R1-a-granularity 运行时争用裁判按 watch 实例计（Claude 依 R1-a 推理裁定,可推翻）
+
+跨模块争用的运行时裁判要回答「同一个 watch」按什么算:按**实例**(每次
+`__velarWatch` 调用,一个组件级 watch 的两个挂载实例是两个争用者),还是按
+**声明**(同一源码 watch 的所有实例算一个)。
+
+**裁定:按实例。** R1-a 的理由本身要求如此——两个互不相干的写之间不存在正确
+顺序,而两个实例就是两次互不相干的写;编译期注释也早已承认「两个各写一个模块
+state 的组件是两个实例,未必共存,编译器拒绝猜共存性」——运行时正是知道共存性
+的那个裁判。代价:一个组件级 watch 的两个共存实例在同一次 flush 里结算同一个
+共享 cell,从今天的编译通过变为运行时错误。
+
+## R17-a web 侧 `velar/*` 接口里残留的 `anyType` 位置——随 R20 规范文本一并定
+
+`httpOptionsType.body` 等作者可见位置仍声明 `anyType`。R12/R17/R20 都没有裁到
+`velar/*` 接口签名;R20 第 1 条恰好说这些面**现在才**纳入 charter 管辖、规范文本
+待写。**本波不动**,随 R20 的规范化一并决定(候选:改 `unknown` 并要求 parse,或
+按面逐个声明具体类型)。记录在案,不许静默遗忘。
+
+## R20 `velar/*` 纳入规则 3 管辖;WebSocket 收敛为一套
+
+**现状（根因分析,四视角汇合）**：`velar/*` 目标模块面不在 charter 里,规则 3
+在那里没有法律效力。树上还站着的每一个重复拼写都在 `velar/*` 里。两个实测实例:
+
+- **`HttpResponse.ok` 恒真**:`response()` 对任何非 2xx 直接抛
+  `HttpResponseError`,能拿到手的响应必然 `ok === true`——但字段还公开着,
+  `if not r.ok:` 零诊断零建议,一条死分支,tour 教了两遍。D69 的形状。
+- **两套完整的 WebSocket 客户端**且互相矛盾:`velar/websocket.connect`
+  (关闭码 1000-4999,类型化 `WebSocketClosedError`)与 `velar/realtime.socket`
+  (只认 1000/3000-4999,抛裸 `Error`)。
+
+**裁决（所有者）**:
+
+1. `velar/*` 模块面纳入 charter 管辖——规则 2、3 对它们有法律效力,每个面的
+   契约要有规范文本,不再只活在 web-api 散文里。
+2. **保留 `velar/websocket`,收掉 `velar/realtime.socket`**。客观标准同 R14:
+   专门模块、名字即职责、错误类型化、关闭码范围完整。`velar/realtime`
+   保留其余能力,只收 socket 这一个重复面。
+3. `HttpResponse.ok` 移除——一个恒真的字段是类型里的一句谎话;诊断教
+   `HttpResponseError` 的 catch 路径。
+
+### 实施记录（追记 2026-08-23,只记落点,不改裁决文本）
+
+- 第 3 条已在三个目标落地:Web 报 VEL5075(`web/analyzer.ts`);Node 报
+  **VEL6007**——不是 VEL6006,那个号归 CLI 的「JavaScript 包导入不可解析」
+  (`cli/src/project.ts`),见 `node/server-analyzer.ts:84-85`;消息与 Web 逐字
+  相同,因为 packages/node 不得依赖 packages/web,只能复制。Desktop 复用 Node
+  的 `velar/http` 接口(`desktop/compiler.ts:1253`),其运行时在 `response()`
+  里问一次且只问一次 2xx,非 2xx 在值到手前抛 `HttpResponseError`。
+- 第 2 条已落地:`velar/realtime` 不再导出 `socket`,导入它会被点名答
+  「用 velar/websocket 的 connect」(`compiler/src/language-guidance.ts`)。
+- R16-a 已实施并验证:匹配按 cell 身份(所属模块 + 导出名),别名折叠为同一
+  cell;双路径 re-export 编译期折不动,依 R19 交 flush 里的运行时裁判;
+  VEL3002 不受影响,经导入直接赋值仍拒绝。
+- R17-a 的 `anyType` 位置原样站着(`httpOptionsType.body` 等),等第 1 条的
+  逐面规范文本一并定。
+
 ## R16 写状态的 watch 必须在头部声明写目标
 
 **现状（根因分析,四个视角独立汇合,全部执行验证）**：watch 体可以写状态,于是
@@ -263,6 +341,10 @@ charter 那句保证按构造成立;R1-a 修订记下的四处沉默（跨模块
 
 **裁决（所有者）**：对齐到声明。`@iterate:` 获得异步形式,类**声明**自己是异步流,
 走 `@dispose:` 已有的解析/校验路径。那两条「不可判定」的假注释一并删除。
+
+**语义确认（所有者,实施后追认）**：异步 `@iterate:` 块是**逐次拉取**——块被逐个
+驱动、可 `await`、答 `T?`、`null` 即耗尽——正是 `async for` 已经消费的那个契约的
+声明式拼写。与同步形式（答一个集合）不对称,但那是真话:流和集合本就是两种答案。
 
 ## R19 判定的层级:编译期 → 运行时 → 汇报
 

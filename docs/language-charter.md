@@ -276,7 +276,8 @@ attempts += 1
   `CORE_CONTEXTUAL_KEYWORDS`, and
   this sentence quotes it rather than keeping a second copy of it. Every word
   the Web extension adds — `component`, `state`, `computed`, `resource`,
-  `action`, `watch`, `look`, `keyframes`, `css`, `expose`, `exposes` — belongs
+  `action`, `watch`, `writes`, `look`, `keyframes`, `css`, `expose`,
+  `exposes` — belongs
   to the same family, and the compiler owns that roster as
   `WEB_CONTEXTUAL_KEYWORDS`.
   All of them are ordinary names anywhere a name can stand: a binding, a
@@ -3222,7 +3223,7 @@ Native JSX remains an owned DOM construction rather than a hidden Core-language
 operation.
 
 The source package then exposes the following language extension. This list is
-the complete addition — eleven contextual keywords, two lifecycle hooks, two
+the complete addition — twelve contextual keywords, two lifecycle hooks, two
 reserved global functions, and the unit literals; nothing else in a Web module
 is new syntax. Every *contextual keyword* here declares only in its own shape
 and remains available as an ordinary name (section 3), `computed` included: it
@@ -3238,7 +3239,7 @@ difference between what a Core module and a Web module accept:
 - `state`
 - `resource`
 - `action`
-- `watch`
+- `watch`, with `writes` on its header
 - `@mounted`
 - `@cleanup`
 - `look`
@@ -3854,6 +3855,27 @@ never disposed — it lives for the life of the page, like a module `action` —
 a module watch is for application-wide facts, not for anything a component
 owns.
 
+A watch that writes state declares it on its header. `writes` follows the
+subject and the `as` names when they are present, and takes the `state` names
+the body assigns, separated by commas: `watch query writes history:`,
+`watch t as current, _ writes x, y:`. The clause is the single source of truth
+for what the watch writes — whether a watch is a writer is declared, never
+inferred from what its body happens to do on some run. A watch with no clause
+only observes, and a write to state from its body is a compile error that
+quotes the clause to add. A write here is a direct assignment, a compound
+assignment, a mutating method such as `append`, or any of those reached through
+a call this module can resolve. Calling an `action` is not such a write: an
+action call only starts an operation — its body runs after the watch's
+synchronous frame has closed — so a `state` the action assigns is the action's
+own later change, never this watch's, and no `writes` clause names it. Only a
+named `state` needs declaring: the cells a `resource` or an `action` maintains
+for itself carry no name a header could speak, so a body that starts a reload
+declares nothing, and a `state` a helper creates while the body runs belongs
+to that run. The corrective idiom and the
+accumulating idiom both keep their spelling: a clamp is
+`watch n writes n: if n > 5: n = 5`, and a search watch declares
+`writes history` and appends to it.
+
 A watch subject names a place in the reactive graph rather than a value to
 compute. It is the name of a `state` or a `computed`, or a read path out of one
 through member access and indexing — `items[0].done`, `user.profile.name`,
@@ -3888,38 +3910,65 @@ Derived values and watches settle to a fixed point before the DOM is written.
 One flush runs every `computed` and every `watch` the change reached, then
 whatever those produced, until nothing is left to run; only then is a single DOM
 commit made. So no watch and no rendered position ever observes a half-updated
-world, and a corrective watch — `watch n: if n > 5: n = 5` — never pushes the
-uncorrected value through the DOM first, which would run every non-idempotent
-side effect on the render path twice. **The declaration order of watches cannot
-change the values a flush settles on or the DOM it commits**: moving one watch
-above another moves the side effects that watch's body performs and nothing
-else. Settling is what fixes that: within one flush a watch whose body writes
-state runs before a watch that only observes, so the order two watches' bodies
-run in is decided by which of them writes, and only watches of the same kind run
-in the order they are written. A watch is classed as a writer the first time its
-body writes, so a watch that writes only on some runs observes on the others.
+world, and a corrective watch — `watch n writes n: if n > 5: n = 5` — never
+pushes the uncorrected value through the DOM first, which would run every
+non-idempotent side effect on the render path twice. **The declaration order of
+watches cannot change the values a flush settles on or the DOM it commits**:
+moving one watch above another moves the side effects that watch's body performs
+and nothing else. Settling is what fixes that: within one flush a watch whose
+header declares that it writes state runs before a watch that only observes, so
+the order two watches' bodies run in is decided by their headers, and only
+watches of the same tier run in the order they are written.
 Order a side effect by what it reads, never by where its block sits.
 
 That guarantee holds only because the one shape it cannot cover is refused. Two
-`watch` blocks in one scope that both assign the same `state` are a compile
-error. It names the state and how many watches contend for it, and it is
-reported once at each of them: a `watch` has no name to print, and two of them
-have no shared position to report at. Scheduling cannot answer this one: a flush
-settles every watch in a single pass that states no order between them, and
-between two independent writes no order is the right one. Put every update to
-that state in one watch, or give each watch a state of its own.
-The rule reads a direct assignment to a `state` name, and it follows the calls
-it can resolve within the module: a write inside a `def` the watch calls counts
-as that watch's write, and so does one reached through a `const` statically
-bound to such a `def`, however long the chain of them runs. It stops where the
-answer stops being certain, and stays silent there rather than guessing: a call
-across a module boundary, or through a value this analysis cannot resolve, is
-left alone, as is a call through a `let`, which any line below it may rebind,
-and as are two writes through member paths, because a path can run through
-indices and aliases no analysis here can decide. It is the same shape as the
-two-independent-looks error in section 17, for the same reason: two unrelated
-sources contending for one thing have no winner the source states, so the
-author says which one he meant.
+`watch` blocks in one scope whose headers declare the same `state` are a compile
+error — the question is the intersection of their declared sets, nothing is
+re-derived from the bodies. It names the state and how many watches contend for
+it, and it is reported once at each of them: a `watch` has no name to print, and
+two of them have no shared position to report at. Scheduling cannot answer this
+one: a flush settles every watch in a single pass that states no order between
+them, and between two independent writes no order is the right one. Put every
+update to that state in one watch, or give each watch a state of its own. It is
+the same shape as the two-independent-looks error in section 17, for the same
+reason: two unrelated sources contending for one thing have no winner the
+source states, so the author says which one he meant.
+
+The declaration is enforced by both referees (section 1.1). Compile time
+reports the writes it can resolve: a direct assignment to a `state`, a
+mutation of one, and a write inside a `def` the watch calls, followed through
+the module however long the chain of calls runs. What it cannot resolve it
+does not guess at, and it does not need to: the runtime enforces the declared
+set exactly, refusing any write to a `state` the header did not declare at the
+moment it lands, naming the watch and the state. A write that slips past the
+analysis is a loud error at run time, never a silent reorder.
+
+A `writes` clause may name an imported `state`. Assignment through the import
+itself stays refused — the write travels through a `def` or an `action` the
+owning module exports — but the watch that reaches the cell through such a
+call declares it under the name the import gives it. The clause names cells,
+not spellings: an import and its alias, or two import paths to one exported
+`state` through a re-export, are one declaration, so naming one cell twice in
+a single clause is refused — at compile time where both spellings resolve to
+one import, and otherwise when the watch is built, before any flush runs. Two
+watches that declare one cell under different spellings contend exactly as if
+they had spelled it the same way.
+
+Compile time reports the contention it can prove: two watches in one scope
+whose declared sets intersect, as above. Everything past that is a question of
+which watches are live together, and that question belongs to the runtime — a
+module watch and a component watch in the same module contend only when an
+instance is mounted, which the compile refuses to guess, and two modules that
+each import the same `state` and declare it share no compile at all. The
+runtime refuses at the moment the second of them settles that cell within a
+flush, naming both watch subjects and the state.
+Contenders are counted per live watch, not per line of source: a component
+mounted more than once has one live watch per instance, and a `state` declared
+outside the component is a single cell all of them share, so two instances
+that write it in one flush are refused, and the message names the component
+and the two edits that exist — declare the `state` inside the component so
+each instance owns its own, or move the update to a watch or an action that
+runs once.
 
 ## 16. Lifecycle
 
@@ -4497,6 +4546,17 @@ chart, or similar tooling — never joins the Standard library. It publishes as
 an ordinary installable package with a `velar.entry` source entry and is
 imported by package name after npm installation. A library's implementation in
 portable VelarScript does not grant it a `velar/*` identity.
+
+Membership also means jurisdiction. Every `velar/*` module surface is under
+this reference's rules with full force — rules 2 and 3 (section 1) bind an
+exported field or function exactly as they bind a keyword — and each surface's
+contract is normative in the target reference that owns it:
+[web-api.md](web-api.md) for the Web modules,
+[standard-library.md](standard-library.md) for the rest. That force has
+already retired two members: `velar/realtime.socket`, a second WebSocket
+client standing beside `velar/websocket.connect`, and `HttpResponse.ok`, a
+field that could only ever be true, because `response()` throws
+`HttpResponseError` for any non-2xx status before the value exists.
 
 A capability module states the host's real semantics rather than a comfortable
 approximation of them. **A watcher reports only the changes that happen after

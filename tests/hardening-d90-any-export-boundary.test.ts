@@ -6,8 +6,8 @@ import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
 // D90 R12: `any` may not appear at an export position, written or inferred.
 //
 // The written spelling was already refused — `export const leaked: any = thing`
-// reports "'any' is reserved for explicit unsafe JavaScript boundaries" — while
-// the inferred `export const leaked = thing` published `leaked: any` with zero
+// reports "'any' is not a VelarScript type" — while the inferred
+// `export const leaked = thing` published `leaked: any` with zero
 // diagnostics. That asymmetry was the whole defect: the spelling that got
 // refused is the honest one. This file pins the completed rule, not a new one —
 // same diagnostic code, no contagious unsafe marker.
@@ -194,7 +194,7 @@ import {thing} from "./x.js"
 export const leaked: any = thing
 `);
   assert.deepEqual(written, [
-    "VEL4001 'any' is reserved for explicit unsafe JavaScript boundaries; use 'unknown' in VelarScript",
+    "VEL4001 'any' is not a VelarScript type; a foreign value arrives as 'unknown', which is what you annotate; declare a type naming the shape you rely on — 'type X:' — then validate first: 'const checked = X.parse(value)' and use 'checked' from there",
   ]);
 });
 
@@ -372,7 +372,7 @@ import {thing} from "./x.js"
 
 export class Box:
     const held: any = thing
-`), ["VEL4001 'any' is reserved for explicit unsafe JavaScript boundaries; use 'unknown' in VelarScript"]);
+`), ["VEL4001 'any' is not a VelarScript type; a foreign value arrives as 'unknown', which is what you annotate; declare a type naming the shape you rely on — 'type X:' — then validate first: 'const checked = X.parse(value)' and use 'checked' from there"]);
 
   // Including the constructor-parameter spelling of a field.
   assert.deepEqual(diagnostics(`
@@ -381,7 +381,7 @@ import {thing} from "./x.js"
 export class Box:
     constructor(let held: any):
         pass
-`), ["VEL4001 'any' is reserved for explicit unsafe JavaScript boundaries; use 'unknown' in VelarScript"]);
+`), ["VEL4001 'any' is not a VelarScript type; a foreign value arrives as 'unknown', which is what you annotate; declare a type naming the shape you rely on — 'type X:' — then validate first: 'const checked = X.parse(value)' and use 'checked' from there"]);
 
   // An abstract method has no body to infer from.
   assert.deepEqual(diagnostics(`
@@ -399,7 +399,7 @@ import {thing} from "./x.js"
 export class Box:
     def leak() -> any:
         return thing
-`), ["VEL4001 'any' is reserved for explicit unsafe JavaScript boundaries; use 'unknown' in VelarScript"]);
+`), ["VEL4001 'any' is not a VelarScript type; a foreign value arrives as 'unknown', which is what you annotate; declare a type naming the shape you rely on — 'type X:' — then validate first: 'const checked = X.parse(value)' and use 'checked' from there"]);
 });
 
 test("a class a published type names is reachable even when it is not exported", () => {

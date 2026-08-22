@@ -22,6 +22,7 @@ import type {
   WebStateDeclaration as StateDeclaration,
   WebUnsafeCssDeclaration as UnsafeCssDeclaration,
   WebWatchDeclaration as WatchDeclaration,
+  WebWatchWriteTarget,
 } from "./ast.ts";
 import {
   WEB_JSX_TOKEN,
@@ -494,6 +495,14 @@ export class VelarWebParser extends Parser {
     };
   }
 
+  /**
+   * D90 R16: the header carries the write set. `writes` is a contextual word
+   * claimed only here, after the optional `as` clause and before the block
+   * colon, and a watch subject cannot reach it: R15 narrowed the subject to a
+   * read path, juxtaposition is not an operator, so `watch t writes x:` parses
+   * the subject as `t` and `watch writes writes writes:` still watches a state
+   * actually named `writes`.
+   */
   private parseWatchDeclaration(start: number): WatchDeclaration {
     const expression = this.parseExpression();
     let currentName: string | null = null;
@@ -503,8 +512,15 @@ export class VelarWebParser extends Parser {
       this.expect("comma", "Expected ',' between watch value names");
       previousName = this.expect("identifier", "Expected the previous watch value name").value;
     }
+    const writes: WebWatchWriteTarget[] = [];
+    if (this.matchWord("writes")) {
+      do {
+        const target = this.expect("identifier", "Expected the name of a state this watch writes");
+        writes.push({ name: target.value, span: target.span });
+      } while (this.match("comma"));
+    }
     const body = this.parseBlock();
-    return { kind: "ExtensionStatement:web:watch", expression, currentName, previousName, body, span: span(start, body.at(-1)?.span.end ?? expression.span.end) };
+    return { kind: "ExtensionStatement:web:watch", expression, currentName, previousName, writes, body, span: span(start, body.at(-1)?.span.end ?? expression.span.end) };
   }
 
   private parseComponent(start: number, exported: boolean): ComponentDeclaration {

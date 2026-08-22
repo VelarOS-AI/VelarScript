@@ -229,9 +229,11 @@ export async def httpOptions(url: string) -> string:
     const parsed = await request.parse(Report)
     return parsed.id
 
+// A response has no `ok`: `response()` throws `HttpResponseError` for every
+// non-2xx status, so a response you can read is one that succeeded.
 export async def httpResponse(url: string) -> string:
     const response = await http.get(url).response()
-    return f"{response.ok} {response.status} {response.statusText} {response.url} {response.headers.size}"
+    return f"{response.status} {response.statusText} {response.url} {response.headers.size}"
 
 let streamedCharacters = 0
 

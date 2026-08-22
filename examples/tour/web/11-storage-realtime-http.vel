@@ -3,21 +3,28 @@
 //
 // Authority: the module export tables in packages/web/src/compiler.ts —
 // `velar/storage` (3 exports, where `storage` and `session` each publish seven
-// members plus `scope`, and `database` publishes six), `velar/realtime` (2
-// handles), and `velar/http`.
+// members plus `scope`, and `database` publishes six), `velar/realtime` (1
+// handle), and `velar/http`.
 //
 // `velar/http` is a shared module whose two targets publish different sets: the
 // Node target adds `secretHeader` and the Web target adds `formBody`. Everything
 // else about `velar/http` is the same in both, so the Core tour walks the shared
 // members and this chapter walks the one the Web target adds.
 //
-// The two realtime handles open real connections, so both live in a `def` that
+// A WebSocket is not a `velar/realtime` handle: `velar/websocket` owns that
+// connection on every target, and chapter 17 of the Core tour walks it in full.
+// This chapter opens one anyway, because a browser page is where a socket
+// usually lives, and because the two connections it opens here are the two a
+// page holds side by side.
+//
+// Both connection handles open real connections, so both live in a `def` that
 // nothing calls; `using` is what releases them, because each publishes `close()`
 // and is therefore a standard capability handle.
 
 import {HttpAbortError, HttpResponseError, HttpTransportError, HttpTransportPhase, formBody, http} from "velar/http"
-import {eventStream, socket} from "velar/realtime"
+import {eventStream} from "velar/realtime"
 import {StorageQuotaError, StorageTransactionError, StorageUpgradeError, database, session, storage} from "velar/storage"
+import {connect} from "velar/websocket"
 
 export type Draft:
     title: string
@@ -138,13 +145,17 @@ component FormBodyRound:
 // A request answers a handle whose five readers each consume the body once, and
 // `parse(Target)` is the one that validates it into a record type. `cancel()`
 // aborts the request, which is what raises `HttpAbortError`.
+//
+// A response has no `ok`: `response()` throws `HttpResponseError` for every
+// non-2xx status, so a response you can read is one that succeeded. The failure
+// is caught below, in `fetchTyped`, and named by `describeHttpFailure`.
 component HttpRound:
     state fetched = "not fetched"
     state failure = "no failure"
 
     action fetchHealth() -> string:
         const response = await http.get("/api/health").response()
-        fetched = f"{response.ok}|{response.status}|{response.statusText}|{response.url != ""}|{response.headers.size >= 0}|{await response.text()}"
+        fetched = f"{response.status}|{response.statusText}|{response.url != ""}|{response.headers.size >= 0}|{await response.text()}"
         return fetched
 
     action fetchTyped() -> string:
@@ -213,20 +224,23 @@ export async def requestSpellings(cover: File):
 def keepBlob(value: Blob):
     print("received a blob")
 
-// Both realtime handles publish `close()`, so `using` supplies their release
+// Both connection handles publish `close()`, so `using` supplies their release
 // contract and each connection is closed at the end of the block.
+//
+// The socket is pull-based: `next()` answers the following message, or `null`
+// once the connection is finished. A message is text or `Bytes`, which is why
+// the read narrows before it prints. There is no `sendJson` — `Json.stringify`
+// is the whole of it, and `Json` needs no import.
 export async def realtimeSpellings():
-    using live = socket("wss://example.test/live", {
-        open: () => print("socket open"),
-        message: text => print(text),
-        error: reason => print(reason),
-        close: (code, reason) => print(f"closed {code}: {reason}"),
-    })
-    live.send("hello")
-    live.sendJson(emptyDraft)
-    print(f"{live.url} {live.state()}")
-    live.close()
-    live.close(1000, "done")
+    using live = await connect("wss://example.test/live", {timeout: 5s})
+    await live.send("hello")
+    await live.send(Json.stringify(emptyDraft))
+    const first = await live.next()
+    if first is string:
+        print(f"first message: {first}")
+    print(f"{live.state()}")
+    await live.close()
+    await live.close(1000, "done")
 
     using feed = eventStream("/api/events", {
         open: () => print("stream open"),

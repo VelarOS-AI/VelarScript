@@ -8,6 +8,11 @@ import { velarCompilerExtension, webModuleInterfaces } from "../packages/web/src
 //
 //   co-2  D90's R1-a revision: VEL5069 was defeated by extracting a helper,
 //         while the runtime already classified the same watch as a writer.
+//         D90 R16 kept the call graph and repointed it: it no longer decides
+//         scheduling, it reports at compile time the writes a watch header did
+//         not declare (VEL5072). Every case below that used to read "these two
+//         contend" now reads "this write is not declared", which is the same
+//         program answered one referee earlier.
 //   co-3  D89's A4: the React immutable-update idiom against a keyed list,
 //         raised on the advisory channel -- no diagnostic, no semantic change,
 //         and `__velarKeyed`'s identity check untouched (D90 R2 stands).
@@ -25,17 +30,23 @@ function contentions(source: string): readonly string[] {
   return compile(source).diagnostics.filter((item) => item.code === "VEL5069").map((item) => item.message);
 }
 
+/** D90 R16: the writes compile time saw and the watch header did not declare. */
+function undeclared(source: string): readonly string[] {
+  return compile(source).diagnostics.filter((item) => item.code === "VEL5072").map((item) => item.message);
+}
+
 /** Every diagnostic of the compile, so a "stays legal" case cannot pass by being broken. */
 function messages(source: string): readonly string[] {
   return compile(source).diagnostics.map((item) => `${item.code} ${item.message}`);
 }
 
 // ---------------------------------------------------------------------------
-// co-2 -- VEL5069 follows the calls this module can resolve
+// co-2 -- the call graph follows the calls this module can resolve, and R16
+// makes it report the undeclared write instead of deciding the schedule
 // ---------------------------------------------------------------------------
 
-test("[co-2] the direct spelling and the extracted spelling report the same pair", () => {
-  const direct = contentions(`
+test("[co-2] the direct spelling and the extracted spelling report the same error", () => {
+  const direct = undeclared(`
 state t = 0
 state x = 1
 
@@ -45,7 +56,7 @@ watch t:
 watch t:
     x = x * 10
 `);
-  const extracted = contentions(`
+  const extracted = undeclared(`
 state t = 0
 state x = 1
 
@@ -65,10 +76,28 @@ watch t:
   // The whole defect was that these two programs mean the same thing and were
   // answered differently, so the messages have to match, not merely the count.
   assert.deepEqual(extracted, direct);
+  // And once both declare the write, the two of them are the contention the
+  // ruling refuses -- again in either spelling.
+  assert.equal(contentions(`
+state t = 0
+state x = 1
+
+def bump():
+    x = x + 1
+
+def scale():
+    x = x * 10
+
+watch t writes x:
+    bump()
+
+watch t writes x:
+    scale()
+`).length, 2);
 });
 
-test("[co-2] one direct write and one write through a helper contend", () => {
-  assert.equal(contentions(`
+test("[co-2] one direct write and one write through a helper both reach the header", () => {
+  assert.equal(undeclared(`
 state t = 0
 state x = 1
 
@@ -84,25 +113,22 @@ watch t:
 });
 
 test("[co-2] a helper declared after the watch that calls it is still followed", () => {
-  // Module functions are hoisted for analysis, and the contention report waits
-  // for the whole module, so declaration order changes nothing here.
-  assert.equal(contentions(`
+  // Module functions are hoisted for analysis, and the report waits for the
+  // whole module, so declaration order changes nothing here.
+  assert.equal(undeclared(`
 state t = 0
 state x = 1
 
 watch t:
     bump()
 
-watch t:
-    x = 2
-
 def bump():
     x = x + 1
-`).length, 2);
+`).length, 1);
 });
 
 test("[co-2] a helper reached through another helper is followed transitively", () => {
-  assert.equal(contentions(`
+  assert.equal(undeclared(`
 state t = 0
 state x = 1
 
@@ -114,10 +140,7 @@ def inner():
 
 watch t:
     outer()
-
-watch t:
-    x = 2
-`).length, 2);
+`).length, 1);
 });
 
 test("[co-2] recursion and mutual recursion terminate", () => {
@@ -132,10 +155,10 @@ def loops():
 watch t:
     loops()
 
-watch t:
+watch t writes x:
     x = 2
 `), []);
-  assert.equal(contentions(`
+  assert.equal(undeclared(`
 state t = 0
 state x = 1
 
@@ -148,14 +171,11 @@ def pong():
 
 watch t:
     ping()
-
-watch t:
-    x = 2
-`).length, 2);
+`).length, 1);
 });
 
-test("[co-2] one watch reaching one state through two helpers is one contender", () => {
-  assert.deepEqual(messages(`
+test("[co-2] one watch reaching one state through two helpers reports it once", () => {
+  assert.equal(undeclared(`
 state t = 0
 state x = 1
 
@@ -166,6 +186,20 @@ def second():
     x = 2
 
 watch t:
+    first()
+    second()
+`).length, 1);
+  assert.deepEqual(messages(`
+state t = 0
+state x = 1
+
+def first():
+    x = 1
+
+def second():
+    x = 2
+
+watch t writes x:
     first()
     second()
 `), []);
@@ -182,13 +216,25 @@ def bump():
 watch t:
     x = 5
     bump()
+`;
+  const spans = compile(source).diagnostics.filter((item) => item.code === "VEL5072").map((item) => item.span.start);
+  assert.equal(spans.length, 1);
+  for (const start of spans) assert.equal(source.trimStart().slice(start, start + 1), "x");
+  // The contention error keeps its own anchor, which is now each watch's own
+  // declared target rather than a write inside the body.
+  const declared = `
+state t = 0
+state x = 1
 
-watch t:
+watch t writes x:
+    x = 5
+
+watch t writes x:
     x = 2
 `;
-  const spans = compile(source).diagnostics.filter((item) => item.code === "VEL5069").map((item) => item.span.start);
-  assert.equal(spans.length, 2);
-  for (const start of spans) assert.equal(source.trimStart().slice(start, start + 1), "x");
+  const targets = compile(declared).diagnostics.filter((item) => item.code === "VEL5069").map((item) => item.span.start);
+  assert.equal(targets.length, 2);
+  for (const start of targets) assert.equal(declared.trimStart().slice(start, start + 1), "x");
 });
 
 // ---------------------------------------------------------------------------
@@ -208,10 +254,10 @@ def first():
 def second():
     y = 2
 
-watch t:
+watch t writes x:
     first()
 
-watch t:
+watch t writes y:
     second()
 `), []);
 });
@@ -230,7 +276,7 @@ def scoped(seed: number):
 watch t:
     scoped(5)
 
-watch t:
+watch t writes x:
     x = 2
 `), []);
 });
@@ -248,7 +294,7 @@ state x = 1
 watch t:
     bump()
 
-watch t:
+watch t writes x:
     x = 2
 `, imports);
   assert.deepEqual(result.diagnostics.map((item) => item.code), []);
@@ -264,7 +310,7 @@ state x = 1
 watch t:
     bump()
 
-watch t:
+watch t writes x:
     x = 2
 `, new Map<string, ValueType>([["bump", { kind: "any" }]]));
   assert.deepEqual(result.diagnostics.map((item) => item.code), []);
@@ -292,7 +338,7 @@ def run(action: () -> null):
 watch t:
     run(bump)
 
-watch t:
+watch t writes x:
     x = 2
 `), []);
   assert.deepEqual(messages(`
@@ -311,7 +357,7 @@ chosen = scale
 watch t:
     chosen()
 
-watch t:
+watch t writes x:
     x = 2
 `), []);
 });
@@ -330,16 +376,19 @@ const box = Box()
 watch t:
     box.run()
 
-watch t:
+watch t writes x:
     x = 2
 `), []);
 });
 
-test("[co-2] the write shape is not widened by the revision", () => {
-  // A member write and a mutating method stay out of reach, through a helper
-  // exactly as they are directly: their paths run through dynamic indices and
-  // aliases this analysis cannot decide.
-  assert.deepEqual(messages(`
+test("[co-2/R16] the write shape the revision left narrow is the shape R16 widened", () => {
+  // This test asserted the opposite. The revision deliberately left a member
+  // write and a mutating method out of reach because the record was deciding
+  // scheduling and a wrong decision there was worse than a missed one. R16 took
+  // the scheduling decision away from it -- the header makes it -- so the
+  // widened shape can only report earlier, and both of these defeated R1's
+  // promise for as long as they were silent.
+  assert.equal(undeclared(`
 state t = 0
 state user = { name: "a" }
 state items = [1, 2]
@@ -353,14 +402,26 @@ def append():
 watch t:
     rename()
     append()
+`).length, 2);
+  assert.deepEqual(messages(`
+state t = 0
+state user = { name: "a" }
+state items = [1, 2]
 
-watch t:
+def rename():
+    user.name = "b"
+
+def append():
+    items.append(4)
+
+watch t writes user, items:
     rename()
+    append()
 `), []);
 });
 
 test("[co-2] a component watch reaches a module helper, and two components still do not contend", () => {
-  assert.equal(contentions(`
+  assert.equal(undeclared(`
 state x = 1
 
 def bump():
@@ -377,6 +438,23 @@ component App:
 
     return <p>{x}</p>
 `).length, 2);
+  assert.equal(contentions(`
+state x = 1
+
+def bump():
+    x = x + 1
+
+component App:
+    state t = 0
+
+    watch t writes x:
+        bump()
+
+    watch t writes x:
+        x = 2
+
+    return <p>{x}</p>
+`).length, 2);
   assert.deepEqual(messages(`
 state x = 1
 
@@ -385,13 +463,13 @@ def bump():
 
 component A:
     state t = 0
-    watch t:
+    watch t writes x:
         bump()
     return <p>a</p>
 
 component B:
     state u = 0
-    watch u:
+    watch u writes x:
         x = 2
     return <p>b</p>
 `), []);

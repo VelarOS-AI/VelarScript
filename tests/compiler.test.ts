@@ -6606,7 +6606,7 @@ component Counter:
   assert.equal(result.moduleInterface.reactiveExports.get("count"), "state");
   assert.equal(result.moduleInterface.reactiveExports.get("doubled"), "state");
   assert.equal(describeType(result.moduleInterface.exports.get("increment")!), "() -> null");
-  assert.match(result.code ?? "", /export const count = __velarState\(0\)/);
+  assert.match(result.code ?? "", /export const count = __velarState\(0, "count"\)/);
   assert.match(result.code ?? "", /export const doubled = __velarComputed\(\(\) => \(\(count\.get\(\) \* 2\)\)\)/);
   assert.match(result.code ?? "", /count\.set\(count\.get\(\) \+ 1\)/);
   assert.match(result.code ?? "", /__velarWatch\(\(\) => count\.get\(\)/);
@@ -7419,7 +7419,7 @@ export async def exercise():
     print(selected.label + ":" + liveFirst.label)
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /const \$updates = __velarState\(0\)/u);
+  assert.match(result.code ?? "", /const \$updates = __velarState\(0, "\$updates"\)/u);
   const execution = executeModule(`${result.code ?? ""}\nawait exercise();\n`);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "first:first:new:6:1\nfirst:new\n");
@@ -8305,7 +8305,7 @@ test("0.10 Web APIs have one versioned typed compiler/runtime contract", async (
   assert.deepEqual(api.modules["velar/storage"], ["StorageQuotaError", "StorageTransactionError", "StorageUpgradeError", "database", "session", "storage"]);
   assert.deepEqual(api.modules["velar/browser"], ["after", "blur", "capturePointer", "clipboardText", "closeDialog", "copyText", "dialogResult", "environment", "every", "focus", "frame", "location", "measure", "media", "open", "readClipboardText", "releasePointer", "scrollElementTo", "scrollIntoView", "scrollMetrics", "scrollTo", "setClipboardText", "setTextSelection", "showDialog", "textSelection", "watchMedia", "watchOnline", "watchVisibility"]);
   assert.deepEqual(api.modules["velar/files"], ["download", "pick", "readDataUrl", "readText"]);
-  assert.deepEqual(api.modules["velar/realtime"], ["eventStream", "socket"]);
+  assert.deepEqual(api.modules["velar/realtime"], ["eventStream"]);
   assert.deepEqual(api.modules["velar/test"], ["expect"]);
   assert.deepEqual(api.modules["velar/web-test"], ["browser", "localStorage", "network", "sessionStorage"]);
   const browserTestController = webModuleInterfaces.get("velar/web-test")?.exports.get("browser");
@@ -8343,7 +8343,7 @@ import {HttpAbortError, formBody, http} from "velar/http"
 import {database, session, storage} from "velar/storage"
 import {after, blur, capturePointer, clipboardText, closeDialog, dialogResult, environment, every, focus, frame, location as browserLocation, measure, media, releasePointer, scrollElementTo, scrollIntoView, scrollMetrics, setClipboardText, setTextSelection, showDialog, textSelection, watchMedia, watchOnline, watchVisibility} from "velar/browser"
 import {download, pick} from "velar/files"
-import {eventStream, socket} from "velar/realtime"
+import {eventStream} from "velar/realtime"
 import {onError, reportError} from "velar/app"
 import {has as hasConfig, keys as configKeys, publicConfig} from "velar/config"
 
@@ -8463,9 +8463,7 @@ upload.remove("unused")
 const uploadRequest = http.post("/api/upload", {body: upload})
 const nextFrame = await frame()
 download("items.txt", "items")
-const channel = socket("wss://example.com/socket", {message: value => print(value)})
 const stream = eventStream("/events", {message: (value, id) => print(f"{id}:{value}")})
-channel.close()
 stream.close()
 stopAfter()
 stopEvery()
@@ -8678,7 +8676,7 @@ import {http, HttpAbortError, HttpResponseError} from "velar/http"
 import {storage, database} from "velar/storage"
 import {textValue} from "velar/forms"
 import {scrollTo} from "velar/browser"
-import {socket} from "velar/realtime"
+import {connect} from "velar/websocket"
 
 type User:
     name: string
@@ -8726,10 +8724,10 @@ async def prepare():
     const pending: Promise<User?> = records.get(maxBytes=1024, target=User, key="current")
     await records.set(maxBytes=1024, value=fallback, key="current")
     scrollTo(behavior="smooth", y=20, x=10)
-    const channel = socket(handlers={}, url="wss://example.com/events")
-    channel.send(data="ping")
-    channel.sendJson(data={name: loaded?.name ?? config.name})
-    channel.close(reason="done", code=1000)
+    using live = await connect(options={timeout: 5s}, url="wss://example.com/events")
+    await live.send(message="ping")
+    await live.send(message=Json.stringify({name: loaded?.name ?? config.name}))
+    await live.close(reason="done", code=1000)
     const aborted = HttpAbortError(reason="cancelled")
     const failed = HttpResponseError(body=null, url="/api/items", status=500, message=aborted.message)
 `.trimStart(), "utf8");
@@ -8963,13 +8961,6 @@ console.log(listeners.size);
   const realtimeExecution = executeModule(`
 const reports = [];
 globalThis[Symbol.for("velar.runtime.v1")] = { report(error, options) { reports.push(options.phase + ":" + options.detail + ":" + error.message); } };
-class FakeSocket {
-  static OPEN = 1; static CLOSING = 2; static last;
-  constructor(url) { this.url = url; this.readyState = 1; this.listeners = new Map(); FakeSocket.last = this; }
-  addEventListener(name, callback) { this.listeners.set(name, callback); }
-  send() {} close() { this.readyState = 3; }
-  emit(name, event = {}) { this.listeners.get(name)?.(event); }
-}
 class FakeEventSource {
   static last;
   constructor(url) { this.url = url; this.readyState = 1; this.listeners = new Map(); FakeEventSource.last = this; }
@@ -8977,19 +8968,16 @@ class FakeEventSource {
   close() { this.readyState = 2; }
   emit(name, event = {}) { this.listeners.get(name)?.(event); }
 }
-globalThis.WebSocket = FakeSocket;
 globalThis.EventSource = FakeEventSource;
 ${realtimeSource}
-socket("wss://example.test", { message: async () => { throw new Error("socket failed"); } });
-FakeSocket.last.emit("message", { data: "hello" });
 eventStream("https://example.test/events", { message: () => { throw new Error("stream failed"); } });
 FakeEventSource.last.emit("message", { data: "hello", lastEventId: "1" });
 await new Promise((resolve) => setTimeout(resolve, 0));
-try { socket("wss://example.test", { message: "invalid" }); console.log("accepted"); } catch (error) { console.log(error.name); }
+try { eventStream("https://example.test/events", { message: "invalid" }); console.log("accepted"); } catch (error) { console.log(error.name); }
 console.log(reports.sort().join("|"));
 `);
   assert.equal(realtimeExecution.status, 0, String(realtimeExecution.stderr));
-  assert.equal(realtimeExecution.stdout, "TypeError\nrealtime:event-stream:message:stream failed|realtime:socket:message:socket failed\n");
+  assert.equal(realtimeExecution.stdout, "TypeError\nrealtime:event-stream:message:stream failed\n");
 });
 
 test("lazy components recover from post-load construction and fallback failures", () => {
@@ -10327,37 +10315,25 @@ console.log(removals, fileListLengthReads, fileListIndexReads);
   assert.equal(execution.stdout, "TypeError\nTypeError\nRangeError\nRangeError\n3 2 0\n");
 });
 
-test("realtime validates handlers, payloads, and close metadata before native effects", () => {
+test("realtime validates event-stream handlers and credentials before native effects", () => {
   const source = standardModuleSource("velar/realtime") ?? "";
   const execution = executeModule(`
 let getterReads = 0;
 let constructed = 0;
-let sent = 0;
 let closed = 0;
-let encodedCloseReasons = 0;
-class FakeSocket {
-  static OPEN = 1;
-  static CLOSING = 2;
-  constructor(url) { constructed += 1; this.url = url; this.readyState = 1; }
-  addEventListener() {}
-  send() { sent += 1; }
-  close() { closed += 1; this.readyState = 3; }
-}
 class FakeEventSource {
   constructor(url) { constructed += 1; this.url = url; this.readyState = 1; }
   addEventListener() {}
   close() { closed += 1; }
 }
-globalThis.WebSocket = FakeSocket;
 globalThis.EventSource = FakeEventSource;
 ${source}
-globalThis.TextEncoder = class { encode() { encodedCloseReasons += 1; return new Uint8Array(); } };
 const handlerAccessor = Object.defineProperty({}, "message", { enumerable: true, get() { getterReads += 1; return () => null; } });
 const invalidOperations = [
-  () => socket(42),
-  () => socket("wss://example.test", handlerAccessor),
-  () => socket("wss://example.test", { unknown() {} }),
   () => eventStream(42),
+  () => eventStream("https://example.test", handlerAccessor),
+  () => eventStream("https://example.test", { unknown() {} }),
+  () => eventStream("https://example.test", { message: "invalid" }),
   () => eventStream("https://example.test", {}, "yes"),
 ];
 const failures = [];
@@ -10365,119 +10341,55 @@ for (const operation of invalidOperations) {
   try { operation(); failures.push("accepted"); }
   catch (error) { failures.push(error.name); }
 }
-const channel = socket("wss://example.test");
-for (const operation of [
-  () => channel.send(42),
-  () => channel.sendJson(new Map([["value", 1]])),
-  () => channel.close(2000),
-  () => channel.close(1000, "x".repeat(124)),
-  () => channel.close(1000, "😀".repeat(31)),
-]) {
-  try { operation(); failures.push("accepted"); }
-  catch (error) { failures.push(error.name); }
-}
 console.log(failures.join(","));
-console.log([getterReads, constructed, sent, closed, encodedCloseReasons].join(":"));
+console.log([getterReads, constructed, closed].join(":"));
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "TypeError,TypeError,TypeError,TypeError,TypeError,TypeError,TypeError,RangeError,RangeError,RangeError\n0:1:0:0:0\n");
+  assert.equal(execution.stdout, "TypeError,TypeError,TypeError,TypeError,TypeError\n0:0:0\n");
 });
 
-test("realtime validates resolved URLs, states, and inbound close metadata", () => {
+test("realtime validates resolved event-stream URLs and states", () => {
   const source = standardModuleSource("velar/realtime") ?? "";
   const execution = executeModule(`
 let coercions = 0;
-let resolvedUrl = { toString() { coercions += 1; return "wss://coerced.test"; } };
-let socketValue;
+let resolvedUrl = { toString() { coercions += 1; return "https://coerced.test"; } };
 let streamValue;
 let invalidCloses = 0;
-let receivedClose = "";
-const reports = [];
-globalThis[Symbol.for("velar.runtime.v1")] = { report(error, options) { reports.push(options.detail + ":" + error.name); } };
-class FakeSocket {
-  constructor() { this.url = resolvedUrl; this.readyState = 1; this.listeners = new Map(); socketValue = this; }
-  addEventListener(name, listener) { this.listeners.set(name, listener); }
-  send() {}
-  close() { invalidCloses += 1; this.readyState = 3; }
-}
 class FakeEventSource {
   constructor() { this.url = resolvedUrl; this.readyState = 1; this.listeners = new Map(); streamValue = this; }
   addEventListener(name, listener) { this.listeners.set(name, listener); }
   close() { invalidCloses += 1; this.readyState = 2; }
 }
-globalThis.WebSocket = FakeSocket;
 globalThis.EventSource = FakeEventSource;
 ${source}
-for (const operation of [() => socket("wss://example.test"), () => eventStream("https://example.test")]) {
-  try { operation(); console.log("accepted"); } catch (error) { console.log(error.name); }
-}
-resolvedUrl = "wss://example.test";
-const channel = socket("wss://example.test", { close(code, reason) { receivedClose = code + ":" + reason; } });
-let readyStateReads = 0;
-Object.defineProperty(socketValue, "readyState", { configurable: true, get() { readyStateReads += 1; return readyStateReads === 1 ? 1 : 4; } });
-try { channel.state(); console.log("accepted"); } catch (error) { console.log(error.name); }
-console.log(readyStateReads);
-Object.defineProperty(socketValue, "readyState", { configurable: true, writable: true, value: 1 });
-console.log(channel.state());
-Object.defineProperty(socketValue, "readyState", { configurable: true, writable: true, value: 4 });
-socketValue.readyState = 4;
-try { channel.state(); console.log("accepted"); } catch (error) { console.log(error.name); }
-socketValue.readyState = 3;
-socketValue.listeners.get("close")({ code: 1000, reason: 0 });
-let closeCodeReads = 0;
-let closeReasonReads = 0;
-socketValue.listeners.get("close")({
-  get code() { closeCodeReads += 1; return closeCodeReads === 1 ? 1000 : 70000; },
-  get reason() { closeReasonReads += 1; return closeReasonReads === 1 ? "done" : 0; },
-});
-socketValue.listeners.get("close")({ code: 1000, reason: "done" });
-console.log(receivedClose, closeCodeReads, closeReasonReads);
+try { eventStream("https://example.test"); console.log("accepted"); } catch (error) { console.log(error.name); }
 resolvedUrl = "https://example.test";
 const stream = eventStream("https://example.test");
 streamValue.readyState = 2;
 console.log(stream.state());
 streamValue.readyState = 3;
 try { stream.state(); console.log("accepted"); } catch (error) { console.log(error.name); }
-console.log(reports.join("|"));
 console.log(coercions + ":" + invalidCloses);
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "TypeError\nTypeError\nTypeError\n0\nopen\nTypeError\n1000:done 0 0\nclosed\nTypeError\nsocket:close:TypeError|socket:close:TypeError\n0:2\n");
+  assert.equal(execution.stdout, "TypeError\nclosed\nTypeError\n0:1\n");
 });
 
-test("realtime closes oversized inbound messages and rejects oversized sends", () => {
+test("realtime closes oversized inbound event-stream messages", () => {
   const source = standardModuleSource("velar/realtime") ?? "";
   const execution = executeModule(`
-let socketValue;
 let streamValue;
-let sent = 0;
-let socketClosed = "";
 let streamClosed = 0;
-let socketDataReads = 0;
 let streamDataReads = 0;
 let streamIdReads = 0;
-class FakeSocket {
-  static OPEN = 1;
-  static CLOSING = 2;
-  constructor(url) { this.url = url; this.readyState = 1; this.listeners = new Map(); socketValue = this; }
-  addEventListener(name, listener) { this.listeners.set(name, listener); }
-  send() { sent += 1; }
-  close(code, reason) { socketClosed = code + ":" + reason; this.readyState = 3; }
-}
 class FakeEventSource {
   constructor(url) { this.url = url; this.readyState = 1; this.listeners = new Map(); streamValue = this; }
   addEventListener(name, listener) { this.listeners.set(name, listener); }
   close() { streamClosed += 1; this.readyState = 2; }
 }
-globalThis.WebSocket = FakeSocket;
 globalThis.EventSource = FakeEventSource;
 ${source}
-let socketErrors = 0;
-let socketMessages = 0;
-const channel = socket("wss://example.test", { message() { socketMessages += 1; }, error() { socketErrors += 1; } });
 const tooLarge = "x".repeat(16 * 1024 * 1024 + 1);
-try { channel.send(tooLarge); console.log("accepted"); } catch (error) { console.log(error.name); }
-socketValue.listeners.get("message")({ data: tooLarge });
 let streamErrors = 0;
 const stream = eventStream("https://example.test", { error() { streamErrors += 1; } });
 streamValue.listeners.get("message")({
@@ -10489,52 +10401,34 @@ streamValue.listeners.get("message")({
   data: "small",
   lastEventId: "x".repeat(65537),
 });
-console.log([sent, socketErrors, socketMessages, socketClosed, streamErrors, streamClosed].join("|"));
-console.log([socketDataReads, streamDataReads, streamIdReads].join(":"));
+console.log([streamErrors, streamClosed].join("|"));
+console.log([streamDataReads, streamIdReads].join(":"));
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "RangeError\n0|1|0|1009:Message too large|2|2\n0:0:0\n");
+  assert.equal(execution.stdout, "2|2\n0:0\n");
 });
 
-test("realtime ignores event accessors and bypasses connection instance overrides", () => {
+test("realtime ignores event accessors and bypasses event-stream instance overrides", () => {
   const source = standardModuleSource("velar/realtime") ?? "";
   const execution = executeModule(`
 const reports = [];
 const calls = [];
-let socketValue;
 let streamValue;
 globalThis[Symbol.for("velar.runtime.v1")] = { report(error, options) { reports.push(options.detail + ":" + error.name); } };
-class FakeSocket {
-  constructor(url) { this.url = url; this.readyState = 1; this.listeners = new Map(); socketValue = this; }
-  addEventListener(name, listener) { this.listeners.set(name, listener); }
-  send(value) { calls.push("prototype-send:" + value); }
-  close(code) { calls.push("prototype-close:" + code); this.readyState = 3; }
-}
 class FakeEventSource {
   constructor(url) { this.url = url; this.readyState = 1; this.listeners = new Map(); streamValue = this; }
   addEventListener(name, listener) { this.listeners.set(name, listener); }
   close() { calls.push("prototype-stream-close"); this.readyState = 2; }
 }
-globalThis.WebSocket = FakeSocket;
 globalThis.EventSource = FakeEventSource;
 ${source}
-const channel = socket("wss://example.test");
 const stream = eventStream("https://example.test");
-socketValue.send = () => calls.push("instance-send");
-socketValue.close = () => calls.push("instance-close");
 streamValue.close = () => calls.push("instance-stream-close");
 let getterReads = 0;
-Object.defineProperty(socketValue, "readyState", { configurable: true, get() { getterReads += 1; return 1; } });
-try { channel.state(); console.log("accepted"); } catch (error) { console.log(error.name); }
-Object.defineProperty(socketValue, "readyState", { configurable: true, writable: true, value: 1 });
-channel.send("ready");
-channel.close();
-try { channel.sendJson(new Map()); console.log("accepted"); } catch (error) { console.log(error.name); }
-socketValue.listeners.get("message")(Object.defineProperty({}, "data", { enumerable: true, get() { getterReads += 1; return "unsafe"; } }));
-socketValue.listeners.get("close")(Object.defineProperties({}, {
-  code: { enumerable: true, get() { getterReads += 1; return 1000; } },
-  reason: { enumerable: true, get() { getterReads += 1; return "done"; } },
-}));
+Object.defineProperty(streamValue, "readyState", { configurable: true, get() { getterReads += 1; return 1; } });
+try { stream.state(); console.log("accepted"); } catch (error) { console.log(error.name); }
+Object.defineProperty(streamValue, "readyState", { configurable: true, writable: true, value: 1 });
+stream.close();
 streamValue.listeners.get("message")(Object.defineProperties({}, {
   data: { enumerable: true, get() { getterReads += 1; return "unsafe"; } },
   lastEventId: { enumerable: true, get() { getterReads += 1; return "1"; } },
@@ -10544,7 +10438,10 @@ console.log(calls.join(","));
 console.log(reports.sort().join("|"));
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "TypeError\nTypeError\n0\nprototype-send:ready,prototype-close:1000,prototype-stream-close\nevent-stream:message:TypeError|socket:close:TypeError|socket:message:TypeError\n");
+  // Two prototype closes and no instance one: the explicit `close()`, and the
+  // close the invalid message event forces. The instance overrides installed
+  // above are never reached, which is the property under test.
+  assert.equal(execution.stdout, "TypeError\n0\nprototype-stream-close,prototype-stream-close\nevent-stream:message:TypeError\n");
 });
 
 test("browser npm assets cannot escape a package through symbolic links", async () => {
@@ -10628,7 +10525,7 @@ import {formBody, http} from "velar/http"
 import {storage} from "velar/storage"
 import {after, blur, every, focus, showDialog, scrollTo} from "velar/browser"
 import {readText} from "velar/files"
-import {socket} from "velar/realtime"
+import {eventStream} from "velar/realtime"
 import {onError, reportError} from "velar/app"
 import {publicConfig} from "velar/config"
 import {RouteContext, Router as WebRouter, route} from "velar/web"
@@ -10670,7 +10567,7 @@ const response = await http.get("/items").parse(42)
 const saved = storage.get("item", 42)
 scrollTo("left", 0)
 const content = await readText({name: "missing"})
-const channel = socket("wss://example.com", {message: numericMessage})
+const channel = eventStream("https://example.com/events", {message: numericMessage})
 const config = publicConfig(42)
 const stop = onError(numericMessage)
 reportError("failure")
@@ -10713,7 +10610,7 @@ blur("missing")
   assert.match(messages, /A Router fallback requires a component, received string/u);
   assert.match(messages, /A Router fallback component cannot require props other than route: required/u);
   assert.match(messages, /A Router fallback component's route prop must accept RouteContext/u);
-  assert.match(messages, /Cannot assign \(value: number\) -> null to \(\(string\) -> unknown\)\?/u);
+  assert.match(messages, /Cannot assign \(value: number\) -> null to \(\(string, string\) -> unknown\)\?/u);
   assert.match(messages, /Runtime parsing requires a VelarScript runtime type/u);
   assert.match(messages, /Cannot assign.*number.*error.*Error/u);
   assert.match(messages, /Cannot assign string to Error/u);
@@ -10927,8 +10824,11 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
   // explicit json response and route-table bodyLimit operations. Concrete
   // codecs, noise, and database engines now live in independently versioned
   // source packages rather than occupying the Standard namespace. This Web
-  // view intentionally excludes every Node-only module.
-  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 283);
+  // view intentionally excludes every Node-only module. D90 R20 then retired
+  // `velar/realtime.socket`: `velar/websocket` was already the WebSocket
+  // client, and a second one that refused half the close-code range is the
+  // duplication rule 3 forbids — so the total falls by one, deliberately.
+  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 282);
   assert.equal(Object.values(api.modules).slice(0, 14).reduce((total, exports_) => total + exports_.length, 0), 156);
   assert.equal(api.modules["velar/collections"]?.length, 28);
   assert.equal(api.modules["velar/text"]?.length, 23);
@@ -12950,7 +12850,7 @@ console.log(ambientReads);
   assert.equal(execution.stdout, "manual:captured:expected\n0\n");
 });
 
-test("JSON, storage, HTTP, and realtime reject lossy JavaScript serialization", () => {
+test("JSON, storage, and HTTP reject lossy JavaScript serialization", () => {
   const json = standardModuleSource("velar/json") ?? "";
   const jsonExecution = executeModule(`${json}
 const shared = { value: 1 };
@@ -13092,27 +12992,6 @@ catch (error) { console.log(error.name); }
   assert.equal(httpExecution.status, 0, String(httpExecution.stderr));
   assert.equal(httpExecution.stdout, "TypeError\nTypeError\n");
 
-  const realtime = standardModuleSource("velar/realtime") ?? "";
-  const realtimeExecution = executeModule(`
-const sent = [];
-class FakeWebSocket {
-  static OPEN = 1;
-  static CLOSING = 2;
-  constructor(url) { this.url = url; this.readyState = FakeWebSocket.OPEN; }
-  addEventListener() {}
-  send(value) { sent.push(value); }
-  close() { this.readyState = 3; }
-}
-globalThis.WebSocket = FakeWebSocket;
-${realtime}
-const channel = socket("wss://example.test");
-channel.sendJson({ value: [1, 2] });
-try { channel.sendJson(new Map([["value", 1]])); console.log("accepted"); }
-catch (error) { console.log(error.name); }
-console.log(sent.length, sent[0]);
-`);
-  assert.equal(realtimeExecution.status, 0, String(realtimeExecution.stderr));
-  assert.equal(realtimeExecution.stdout, 'TypeError\n1 {"value":[1,2]}\n');
 });
 
 test("IndexedDB waits for transaction commit and retries a failed open", () => {
@@ -14285,7 +14164,6 @@ test("known lossy JSON inputs fail during checking", async () => {
   const entry = join(directory, "main.vel");
   await writeFile(entry, `
 import {http} from "velar/http"
-import {socket} from "velar/realtime"
 import {database, storage} from "velar/storage"
 
 type Tree:
@@ -14311,8 +14189,6 @@ const badFunction = Json.stringify(callback)
 const badHttp = http.post("/items", {body: mapping})
 storage.set("mapping", mapping)
 database("cache").set("unique", unique)
-const channel = socket("wss://example.test")
-channel.sendJson(unique)
 `.trimStart(), "utf8");
   const project = await compileProject(entry);
   assert.deepEqual(project.failures, []);
@@ -14326,7 +14202,6 @@ channel.sendJson(unique)
   assert.equal(messages.filter((message) => message.startsWith("Storage values accept only records")).length, 2);
   assert.ok(messages.some((message) => /Storage values.*received Map<string, number>/u.test(message)));
   assert.ok(messages.some((message) => /Storage values.*received Set<number>/u.test(message)));
-  assert.ok(messages.some((message) => /Realtime JSON.*received Set<number>/u.test(message)));
 });
 
 test("velar/id uses secure host UUIDs without an insecure fallback", async () => {
@@ -14577,7 +14452,7 @@ export def exercise():
     print(str(left()) + ":" + str(left()) + ":" + str(right()))
 `.trimStart());
   assert.deepEqual(nested.diagnostics, []);
-  assert.match(nested.code ?? "", /const count = __velarState\(start\)/u);
+  assert.match(nested.code ?? "", /const count = __velarState\(start, "count"\)/u);
   const execution = executeModule(`${nested.code ?? ""}\nexercise();\n`);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "1:2:11\n");
@@ -20503,7 +20378,7 @@ test("documentation example checker analyzes fragments, not just their syntax", 
     ["assignment type", "const x: string = 1\n", /Cannot assign number to string/u],
     ["bare optional condition", "def label(name: string?) -> string:\n    if name:\n        return name\n    return \"anonymous\"\n", /A condition judges truth, not presence/u],
     ["optional operand", "def ready(name: string?, active: bool) -> bool:\n    return name and active\n", /A condition judges truth, not presence/u],
-    ["reserved any annotation", "let value: any = 1\nprint(value)\n", /'any' is reserved for explicit unsafe JavaScript boundaries/u],
+    ["reserved any annotation", "let value: any = 1\nprint(value)\n", /'any' is not a VelarScript type/u],
     [
       "web semantics",
       "type EditorHandle:\n    focus: () -> null\n\ncomponent Page:\n    let editor: EditorHandle? = null\n\n    @mounted:\n        if editor:\n            editor.focus()\n\n    return <Editor ref={editor} />\n",
@@ -25143,12 +25018,12 @@ if fixedName != null:
   assert.ok(rejectedWrites.diagnostics.some((item) => /Cannot assign to const binding 'fixedName'/u.test(item.message)));
 });
 
-test("validates annotations and keeps any behind unsafe boundaries", () => {
+test("validates annotations and refuses 'any' as a written type", () => {
   const missing = compile("const value: Missing = null\n");
   assert.ok(missing.diagnostics.some((item) => /Unknown type 'Missing'/.test(item.message)));
 
   const any = compile("def escape(value: any) -> any:\n    return value\n");
-  assert.ok(any.diagnostics.some((item) => /'any' is reserved/.test(item.message)));
+  assert.ok(any.diagnostics.some((item) => /'any' is not a VelarScript type/.test(item.message)));
 
   const arity = compile("const values: Map<string> = Map()\n");
   assert.ok(arity.diagnostics.some((item) => item.code === "VEL2012"));
@@ -25190,7 +25065,7 @@ mount(<Counter start={1} />, "#app")
 
   assert.deepEqual(result.diagnostics, []);
   assert.deepEqual(result.extensions, ["@velarscript/web"]);
-  assert.match(result.code ?? "", /const count = __velarState\(start\.get\(\)\)/);
+  assert.match(result.code ?? "", /const count = __velarState\(start\.get\(\), "count"\)/);
   assert.match(result.code ?? "", /const doubled = __velarComputed/);
   assert.match(result.code ?? "", /__velarWatch/);
   assert.match(result.code ?? "", /count\.set\(count\.get\(\) \+ 1\)/);
@@ -27513,7 +27388,7 @@ let stamps = 0
 
 component Field(label: string, busy: bool = false):
     state draft = "d0"
-    watch busy:
+    watch busy writes draft:
         draft = draft + "|" + label + ":" + (busy ? "on" : "off")
     watch draft:
         print("draft:" + draft)
