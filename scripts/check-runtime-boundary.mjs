@@ -1146,7 +1146,7 @@ if ((projectCompilerSource.match(/case "record":/gu)?.length ?? 0) < 3
 const serveParseStart = nodeServeRuntimeSource.indexOf("parse: async (Type, maxBytes = __velarServeMaxBodyBytes) => {");
 const serveTypeCheck = nodeServeRuntimeSource.indexOf('__velarRequireRuntimeType(Type, "ServeRequest.parse")', serveParseStart);
 const serveBodyRead = nodeServeRuntimeSource.indexOf("await json(maxBytes)", serveParseStart);
-if (!nodeCompilerSource.includes('["parse", namedIntrinsic("runtime.parseAsync", ["target", "maxBytes"], [anyType, numberType], promise(anyType), 1)]')
+if (!nodeCompilerSource.includes('["parse", namedIntrinsic("runtime.parseAsync", ["target", "maxBytes"], [unknownType, numberType], promise(unknownType), 1)]')
   || !nodeServeRuntimeSource.includes('__velarServeDataField(value, "parse", "ServeRequest")')
   || serveParseStart < 0 || serveTypeCheck < serveParseStart || serveBodyRead < serveTypeCheck) {
   failures.push("packages/node: ServeRequest.parse must infer through Core and validate Type before reading strict JSON");

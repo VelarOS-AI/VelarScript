@@ -1,5 +1,6 @@
 /// Chapter 13 — the JavaScript boundary: `extern module`, `import js`,
-/// `import js unsafe`, the two inline `js` blocks, and what `any` means.
+/// `import js unsafe`, the two inline `js` blocks, and how an undeclared
+/// value enters the typed world.
 ///
 /// Charter section 12's tail and section 18. The specifier is `node:crypto`
 /// so the four keywords `extern`, `module`, `js`, and `unsafe` need no
@@ -47,7 +48,9 @@ import js * as crypto from "node:crypto"
 import js nodeCrypto from "node:crypto"
 import js {default as explicitDefault} from "node:crypto"
 
-// `import js unsafe` admits a value as `any` — no declaration, no promise.
+// `import js unsafe` admits a value as `unknown` — no declaration, no
+// promise, and therefore no access: members, calls, indexing, and operators
+// all refuse an unknown until it is validated into a concrete type.
 import js unsafe {createHash as rawCreateHash} from "node:crypto"
 import js unsafe {webcrypto as rawWebcrypto} from "node:crypto"
 import js unsafe rawDefault from "node:crypto"
@@ -75,10 +78,9 @@ extern js(tokenBytes: number)`
     export def randomToken() -> string
 
 // The block is the *more* checked way to reach raw JavaScript, not the looser
-// one. `import js unsafe` turns a whole module into `any`; here the contract is
-// the one line under the backticks, and `randomToken` is an ordinary checked
-// function from this line on — no import, because there is no other module to
-// name it from.
+// one. Here the contract is the one line under the backticks, and
+// `randomToken` is an ordinary checked function from this line on — no
+// import, because there is no other module to name it from.
 
 // The parenthesised list is the injection channel, and it binds rather than
 // substitutes: `tokenBytes` becomes a real parameter of the emitted module and
@@ -92,13 +94,10 @@ extern js(tokenBytes: number)`
 
 // A block with no contract is the other form, and it must say `unsafe` — the
 // same word as `import js unsafe` and `unsafe:html`, never a second one.
-// Everything it exports is `any`. It is still the more honest of the two:
-// undeclared JavaScript is readable right here, instead of behind a module
-// name that quietly means "no promises about anything inside".
+// Everything it exports arrives as `unknown`: readable right here, honest
+// about carrying no promise, and unusable until the edge validates it.
 unsafe js`
-    export function engineReport() {
-        return { arch: globalThis.process.arch, node: globalThis.process.versions.node }
-    }
+    export const engineRecord = { arch: globalThis.process.arch, node: globalThis.process.versions.node }
 `
 
 // ---------------------------------------------------------------------------
@@ -136,54 +135,44 @@ export def readDefaultExport() -> bool:
     return nodeCrypto == null and explicitDefault == null
 
 // ---------------------------------------------------------------------------
-// What `any` means
+// How a boundary value enters the typed world
 // ---------------------------------------------------------------------------
 
 type Config:
     retries: number
 
-// 1. Operations on `any` are raw JavaScript: member reads and writes, calls,
-//    arithmetic, indexing, `match`, and `is` all pass through with no
-//    adaptation, and the `undefined`-to-`null` normalization does not happen.
-export def rawOperations() -> string:
-    const hasher = rawCreateHash("sha256")
-    const updated = hasher.update("text")
-    const digested = updated.digest("hex")
-    const indexed = rawWebcrypto["subtle"]
-    const fromDefault = rawDefault.randomUUID()
-    return f"{digested is string} {indexed == null} {fromDefault is string}"
+// 1. An undeclared foreign value arrives as `unknown`, and nothing can be
+//    read off it: `rawWebcrypto.subtle`, `rawWebcrypto["subtle"]`, and
+//    `rawCreateHash("sha256")` are all compile errors, and each one teaches
+//    the same way in. The only questions an unvalidated unknown answers are
+//    the ones that need no promise, like a null comparison.
+export def stillOpaque() -> bool:
+    return rawCreateHash != null and rawWebcrypto != null and rawDefault != null
 
-// 2. `any` is assignable to every type with no runtime check, so a leaked
-//    `any` is laundered into a type that then behaves like a lie.
-export def launderedValue() -> string:
-    const believed: string = rawCreateHash("sha256")
-    return believed
-
-// Assigning an `any` into a checked optional normalizes it, which is one more
-// reason the annotation belongs at the boundary.
-export def normalizedAtTheBoundary() -> bool:
-    const value: string? = rawWebcrypto
-    return value == null
-
-// 3. Therefore the import site is the only correctness boundary: validate at
-//    the edge and let only checked values inward.
+// 2. `Type.parse` is the entry ritual: declare a type naming the fields you
+//    rely on, validate at the import site, and let only checked values
+//    inward. The edge is the whole correctness boundary.
 export def validatedAtTheEdge(candidate: unknown) -> number:
     const config = Config.parse(candidate)
     return config.retries
 
-// 4. A block without a contract lands in exactly the same place: `engineReport`
-//    was never declared, so its result is `any` and every field read below it
-//    is raw JavaScript. The edge is still the boundary, so validate here too.
+// 3. A block without a contract lands in exactly the same place:
+//    `engineRecord` was never declared, so it is `unknown` here, and the
+//    edge validates it like any other arrival.
 type EngineReport:
     arch: string
     node: string
 
 export def engineDescription() -> string:
-    const report = EngineReport.parse(engineReport())
+    const report = EngineReport.parse(engineRecord)
     return f"{report.arch} on Node {report.node}"
 
-// An `unknown` is the ordinary spelling for unvalidated dynamic input; `any`
-// is reserved for explicit unsafe JavaScript declarations.
+// 4. Primitives and declared shapes also narrow with `is`; an undeclared
+//    callable has no shape to narrow into, so calling across the boundary
+//    always goes through a declaration — an `extern module` contract or a
+//    contracted `extern js` block. `any` cannot be written as an annotation
+//    ("'any' is reserved for explicit unsafe JavaScript boundaries"), and
+//    since this ruling no boundary produces one either.
 export def validatesUnknown(value: unknown) -> string:
     if value is Config:
         return str(value.retries)

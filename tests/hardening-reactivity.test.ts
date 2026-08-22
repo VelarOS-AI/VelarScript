@@ -608,9 +608,14 @@ ${Array.from(
 ).join("\n")}
 
 // The observing watch is declared first here and second below: the output must
-// be the same either way, and it must never carry an unsettled value.
-watch a + b as sum, _:
-    watchLog = watchLog + "one=" + str(sum) + ";"
+// be the same either way, and it must never carry an unsettled value. D90 R15(a)
+// moved the sum out of the subject and into a computed, which is the same
+// observation through one more node: the computed recomputes once per flush and
+// the watch sees it after it has settled.
+computed sum = a + b
+
+watch sum as current, _:
+    watchLog = watchLog + "one=" + str(current) + ";"
 
 watch a:
     b = a * 2
@@ -618,8 +623,10 @@ watch a:
 watch secondA:
     secondB = secondA * 2
 
-watch secondA + secondB as total, _:
-    watchLog = watchLog + "two=" + str(total) + ";"
+computed total = secondA + secondB
+
+watch total as current, _:
+    watchLog = watchLog + "two=" + str(current) + ";"
 
 watch corrected:
     if corrected > 5:
@@ -629,7 +636,14 @@ def subject() -> number:
     evalLog = evalLog + "e"
     return subjectValue
 
-watch subject() as value, _:
+// The call moved out of the subject the same way (D90 R15(a)), so evalLog
+// now counts evaluations of the computed rather than of the subject expression.
+// The count is what this pins, and it is unchanged: the computed is evaluated
+// once when the watch first reads it and once when the state behind it moves,
+// and the write to the value only the body reads still evaluates it not at all.
+computed subjectDerived = subject()
+
+watch subjectDerived as value, _:
     sink = value + unwatched
 
 ${Array.from({ length: tickCascadeStages }, (_, index) =>
@@ -929,8 +943,10 @@ def loops(value: number):
 def quiet(value: number):
     log = log + str(value)
 
-watch a + b as sum, _:
-    log = log + str(sum)
+computed sum = a + b
+
+watch sum as current, _:
+    log = log + str(current)
 
 watch a:
     bump(a)
@@ -952,7 +968,9 @@ mount(<i>{log}{c}</i>, "#app")
     .filter((line) => line.includes("__velarGlobalScope,"))
     .map((line) => line.trim());
   // The observing watch, the direct helper, the helper's own helper, a helper
-  // that only recurses, and a helper that writes no state -- in that order.
+  // that only recurses, and a helper that writes no state -- in that order. The
+  // `computed` D90 R15(a) puts in front of the observing watch is not an
+  // observer of this kind and contributes no line of its own.
   assert.deepEqual(produces, [
     "}, __velarGlobalScope, false);",
     "}, __velarGlobalScope, true);",
@@ -968,7 +986,10 @@ mount(<i>{log}{c}</i>, "#app")
 // watch to a writer only after it has been seen writing, so the first firing is
 // the compile-time classifier's to get right.
 function helperOrderApplication(writerFirst: boolean): string {
-  const observing = `watch a + b as sum, _:\n    log = log + "sum=" + str(sum) + ";"`;
+  // The `computed` D90 R15(a) requires travels with the watch that observes it,
+  // so the two arrangements stay mirror images: whichever block is written
+  // first, the observing watch still reads a value derived from both states.
+  const observing = `computed sum = a + b\n\nwatch sum as current, _:\n    log = log + "sum=" + str(current) + ";"`;
   const writing = `watch a:\n    bump(a)`;
   return `
 let log = ""

@@ -99,8 +99,8 @@ class Counter:
 test("[CLS-I1] `self` outside a class stays an ordinary unknown name, and instance bodies are untouched", () => {
   assert.deepEqual(messages("def read() -> number:\n    return self.total\n"), [
     "Unknown name 'self'",
-    "Cannot access 'total' on unknown without validation",
-    "Cannot assign unknown to number",
+    "Cannot access 'total' on unknown without validation; declare a type naming the fields you rely on — 'type Self:' with the 'total' field — then validate first: 'const checked = Self.parse(self)' and read 'checked.total'",
+    "Cannot assign unknown to number; a boundary value stays unknown until validated at the edge — narrow it with 'value is number', or parse a declared shape",
   ]);
   assert.equal(run(`
 class Counter:
@@ -275,7 +275,7 @@ class Derived extends Base:
         return super
 `.trimStart()), [
     "'super' must be followed by a base method or getter name",
-    "Cannot assign unknown to number",
+    "Cannot assign unknown to number; a boundary value stays unknown until validated at the edge — narrow it with 'value is number', or parse a declared shape",
   ]);
 });
 
@@ -305,7 +305,7 @@ class Derived extends Base:
         return super.n
 `.trimStart()), [
     "Base class 'Base' has no method or getter 'n'",
-    "Cannot assign unknown to number",
+    "Cannot assign unknown to number; a boundary value stays unknown until validated at the edge — narrow it with 'value is number', or parse a declared shape",
   ]);
 });
 
@@ -583,8 +583,13 @@ class Derived extends Base:
 
 test("[CLS-U8] the injected field-read guard raises, and it raises a host TypeError", () => {
   const missingSource = Buffer.from("export const missing = undefined", "utf8").toString("base64");
+  // D90 R17: the boundary import needs a declared type to initialize a field;
+  // the contract's lie is what the injected runtime guard catches.
   assert.equal(run(`
-import js unsafe {missing} from "data:text/javascript;base64,${missingSource}"
+extern module "data:text/javascript;base64,${missingSource}":
+    export const missing: string
+
+import js {missing} from "data:text/javascript;base64,${missingSource}"
 
 class Box:
     let value: string = missing

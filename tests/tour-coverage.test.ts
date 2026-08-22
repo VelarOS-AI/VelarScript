@@ -274,11 +274,9 @@ test("removing one spelling from the tour turns the gate red and names it", asyn
         {
           file: "core/13-javascript-boundary.vel",
           replace: "unsafe js`\n"
-            + "    export function engineReport() {\n"
-            + "        return { arch: globalThis.process.arch, node: globalThis.process.versions.node }\n"
-            + "    }\n"
+            + "    export const engineRecord = { arch: globalThis.process.arch, node: globalThis.process.versions.node }\n"
             + "`\n",
-          replacement: "def engineReport() -> unknown:\n    return {arch: \"arm64\", node: \"24\"}\n",
+          replacement: "const engineRecord: unknown = {arch: \"arm64\", node: \"24\"}\n",
         },
       ],
     },

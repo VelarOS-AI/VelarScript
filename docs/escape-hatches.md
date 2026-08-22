@@ -15,8 +15,8 @@ The exits, in order:
    walls that remain.
 2. **A missing capability or npm package** → [`extern module`](#1-missing-capability-or-npm-package--extern-module),
    the checked boundary and the first choice.
-3. **Quick raw access to a JavaScript value** → [`import js unsafe`](#2-quick-raw-access--import-js-unsafe),
-   validated at the edge.
+3. **One JavaScript value, validated at the edge** → [`import js unsafe`](#2-one-value-validated-at-the-edge--import-js-unsafe),
+   one `Type.parse` instead of a signature for every export.
 4. **Styling or markup beyond Look** → [`import css unsafe` and `unsafe:html`](#3-styling-and-markup-beyond-look).
 5. **A suspected compiler defect blocking you** → [minimal repro, issue, workaround ladder](#4-a-suspected-compiler-defect).
 6. **The final exit** → [take the emitted readable JavaScript and keep shipping](#5-the-final-exit-readable-javascript).
@@ -124,13 +124,14 @@ print(sessionToken())
 
 The parenthesized list captures Vel bindings of the same name and passes them
 to the emitted module as checked arguments — not text substitution. Drop the
-contract and it becomes `unsafe js`, whose exports are `any` and carry every
-caveat of section 2.
+contract and it becomes `unsafe js`, whose exports are `unknown` and carry
+every caveat of section 2.
 
-**This is the tighter hatch, not the looser one.** `import js unsafe` makes a
-whole module `any` from another file; a block puts the contract three lines
-under the source it governs, and the block compiles to a sibling `.js` with a
-source map back to these lines. If you were reaching for a
+**This is the tighter hatch, not the looser one.** `import js unsafe` leaves a
+whole module's exports `unknown` from another file, with nothing beside the
+import saying what any of them is; a block puts the contract three lines under
+the source it governs, and the block compiles to a sibling `.js` with a source
+map back to these lines. If you were reaching for a
 `data:text/javascript,` import to inline a module, that spelling is now
 rejected with a mechanical rewrite into this one.
 
@@ -140,12 +141,15 @@ the result.
 
 The CSS counterpart is `unsafe css`, in section 3.
 
-## 2. Quick raw access → `import js unsafe`
+## 2. One value, validated at the edge → `import js unsafe`
 
-When a checked declaration is not worth the ceremony yet, `import js unsafe`
-admits the value as `any`. Nothing about it is checked, so treat the import
-statement as the boundary of trust: validate with `Type.parse` at the edge,
-and let only typed values flow inward:
+`import js unsafe` skips the signature ceremony, not the checking. Where
+`extern module` declares a type for every export before any of them can be
+used, an unsafe import declares nothing and admits the value as `unknown`, so
+the value carries no guarantee and the compiler refuses to read a field off it,
+call it, or judge it as a condition. The import statement is the boundary of
+trust: parse one declared shape with `Type.parse` at the edge, and let only
+typed values flow inward:
 
 ```velar
 import js unsafe {legacyValue} from "legacy-package"

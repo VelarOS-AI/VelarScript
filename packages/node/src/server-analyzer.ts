@@ -1,6 +1,6 @@
 import {
   Analyzer,
-  anyType,
+  bindingNeverReassigned,
   boolType,
   describeType,
   nullType,
@@ -19,6 +19,7 @@ import {
   type Statement,
   type ValueType,
 } from "@velarscript/compiler/extension";
+import { routeShape } from "./route-shape.ts";
 import { isNodeServerStatement, type NodeNotFoundDeclaration, type NodeRouteDeclaration, type NodeServerDeclaration, type NodeServerSpread } from "./server-ast.ts";
 import {
   isNodeProviderType,
@@ -45,10 +46,18 @@ const sseSendType: ValueType = {kind: "function", parameterNames: ["event"], par
  * in by a spread, in which case `origin` names the servers from the spread expression inward to the
  * one that declares it.
  */
-type ComposedRoute = {readonly route: NodeRouteDeclaration; readonly spread: NodeServerSpread | null; readonly origin: readonly string[]};
+type ComposedRoute = {readonly route: NodeRouteDeclaration; readonly path: string; readonly spread: NodeServerSpread | null; readonly origin: readonly string[]};
 type ComposedFallback = {readonly fallback: NodeNotFoundDeclaration; readonly spread: NodeServerSpread | null; readonly origin: readonly string[]};
-/** A module-level `const name = target` binding of one bare identifier to another. */
-type ServerAlias = {readonly name: string; readonly target: string; readonly span: Span};
+/**
+ * A module-level `const name = expression` or never-reassigned `let name = expression` binding
+ * whose initializer can still resolve to a server: another name, or a combinator call around one.
+ */
+type ServerAlias = {readonly name: string; readonly initializer: Expression; readonly binding: "const" | "let"; readonly span: Span};
+/** The velar/serve combinators whose result carries its app argument's paths through, or translated. */
+type ServeCombinator = "prefix" | "use" | "bodyLimit" | "docs" | "lifecycle";
+const serveCombinators: ReadonlySet<string> = new Set<ServeCombinator>(["prefix", "use", "bodyLimit", "docs", "lifecycle"]);
+/** A spread target the analyzer resolved: the declaring server, seen through zero or more literal prefixes. */
+type ComposedServer = {readonly server: NodeServerDeclaration; readonly prefix: string};
 
 type NodeResponseMetadata = {readonly status: number | null; readonly contentType: string};
 type NodeResponseValueType = ValueType & {readonly nodeResponse?: NodeResponseMetadata};
@@ -104,8 +113,14 @@ export class VelarNodeAnalyzer extends Analyzer {
   private readonly routeInputs = new Map<string, NodeRouteInputType>();
   /** Servers declared by the module under analysis, the only spread targets this analyzer can resolve. */
   private readonly moduleServers = new Map<string, NodeServerDeclaration>();
-  /** Module-level `const alias = name` bindings, so a spread of an alias resolves to the server it names. */
+  /** Module-level `const alias = name` and `let alias = name` bindings, so a spread of an alias resolves to the server it names. */
   private readonly moduleServerAliases = new Map<string, ServerAlias>();
+  /** Local names imported from velar/serve that name a path-preserving combinator, so a spread of a call resolves through it. */
+  private readonly moduleServeCombinators = new Map<string, {readonly imported: ServeCombinator; readonly span: Span}>();
+  /** One answer per `let` alias name to "was this binding ever reassigned?", because the predicate walks the whole program. */
+  private readonly stableAliases = new Map<string, boolean>();
+  /** The program under analysis, held for the alias-stability walk. */
+  private moduleProgram: Program | null = null;
   private readonly nodeModulePath: string | null;
 
   constructor(context: AnalysisContext = {}, extensions: readonly CompilerAnalysisExtension[] = []) {
@@ -116,9 +131,21 @@ export class VelarNodeAnalyzer extends Analyzer {
   override analyze(program: Program) {
     this.moduleServers.clear();
     this.moduleServerAliases.clear();
+    this.moduleServeCombinators.clear();
+    this.stableAliases.clear();
+    this.moduleProgram = program;
     for (const statement of program.body) {
       if (isNodeServerStatement(statement)) {
         if (!this.moduleServers.has(statement.name)) this.moduleServers.set(statement.name, statement);
+        continue;
+      }
+      if (statement.kind === "ImportDeclaration" && statement.source === "velar/serve") {
+        for (const specifier of statement.specifiers) {
+          if (specifier.namespace || !serveCombinators.has(specifier.imported)) continue;
+          if (!this.moduleServeCombinators.has(specifier.local)) {
+            this.moduleServeCombinators.set(specifier.local, {imported: specifier.imported as ServeCombinator, span: specifier.span});
+          }
+        }
         continue;
       }
       const alias = moduleServerAlias(statement);
@@ -190,7 +217,7 @@ export class VelarNodeAnalyzer extends Analyzer {
         this.analyzeNotFound(item);
         continue;
       }
-      this.recordRoute({route: item, spread: null, origin: []}, routes, item.pathSpan);
+      this.recordRoute({route: item, path: item.path, spread: null, origin: []}, routes, item.pathSpan);
       this.analyzeRoute(item);
     }
   }
@@ -202,7 +229,7 @@ export class VelarNodeAnalyzer extends Analyzer {
    * the server it came from.
    */
   private recordRoute(entry: ComposedRoute, routes: Map<string, ComposedRoute>, span: Span): void {
-    const key = `${entry.route.method} ${routeShape(entry.route.path)}`;
+    const key = `${entry.route.method} ${routeShape(entry.path)}`;
     const previous = routes.get(key);
     if (previous) {
       this.typeError(describeRouteCollision(previous, entry), span);
@@ -214,13 +241,13 @@ export class VelarNodeAnalyzer extends Analyzer {
     // Where neither is more specific the winner is declaration order alone and the loser can
     // never run, so the overlap is an error. A pair whose shared path is unrealizable — a
     // '{n:number}' capture against the literal 'b' — is not an overlap.
-    const segments = routeSegments(entry.route.path);
+    const segments = routeSegments(entry.path);
     for (const other of routes.values()) {
       if (other.route.method !== entry.route.method) continue;
       // Two routes one spread composed in were already compared against each other while that
       // server was analyzed; reporting them again here would duplicate its diagnostic.
       if (entry.spread !== null && other.spread === entry.spread) continue;
-      const declared = routeSegments(other.route.path);
+      const declared = routeSegments(other.path);
       if (routeSpecificityDecides(declared, segments)) continue;
       const shared = routeSharedPath(declared, segments);
       if (shared === null) continue;
@@ -235,11 +262,14 @@ export class VelarNodeAnalyzer extends Analyzer {
   /**
    * The routes and fallback a spread composes into the server that writes it, or null when the
    * spread is not statically resolvable. This analyzer sees one module, so a spread contributes
-   * only when its value is a plain identifier naming a server declared in this module: an imported
-   * server, a `prefix(...)` call, or any other expression is let through unchecked, because a false
-   * conflict here would block a correct program. Composition is followed transitively; the visited
-   * set bounds a cycle and starts holding the composing server, so a cycle never folds a server's
-   * own routes back into itself and reports each as conflicting with itself.
+   * only when its value reaches a server declared in this module: a plain identifier, an alias of
+   * one, or a velar/serve combinator call around one — `use`, `bodyLimit`, `docs` and `lifecycle`
+   * carry paths through unchanged, and `prefix` translates them by its literal path. An imported
+   * server, a computed prefix path, or any other expression is let through unchecked, because a
+   * false conflict here would block a correct program; D90 R19's runtime referee judges the final
+   * table at assembly instead. Composition is followed transitively; the visited set bounds a
+   * cycle and starts holding the composing server, so a cycle never folds a server's own routes
+   * back into itself and reports each as conflicting with itself.
    */
   private composedItems(
     statement: NodeServerDeclaration,
@@ -251,49 +281,86 @@ export class VelarNodeAnalyzer extends Analyzer {
     const shapes = new Set<string>();
     const visited = new Set<NodeServerDeclaration>([statement]);
     let notFound: ComposedFallback | null = null;
-    const collect = (server: NodeServerDeclaration, origin: readonly string[]): void => {
+    const collect = (server: NodeServerDeclaration, prefix: string, origin: readonly string[]): void => {
       if (visited.has(server)) return;
       visited.add(server);
       for (const item of server.items) {
         if (item.kind === "NodeServerSpread") {
           const nested = this.resolveComposedServer(item.value);
-          if (nested) collect(nested, [...origin, nested.name]);
+          if (nested) collect(nested.server, prefix + nested.prefix, [...origin, nested.server.name]);
           continue;
         }
         if (item.kind === "NodeNotFoundDeclaration") {
-          notFound ??= {fallback: item, spread, origin};
+          // The runtime refuses `prefix` around an app with @notFound outright, so a fallback seen
+          // through a prefix never reaches any composed table and composing it here would report
+          // a duplicate the program cannot have.
+          if (prefix === "") notFound ??= {fallback: item, spread, origin};
           continue;
         }
         // A server that conflicts with itself already reported it; one entry per shape is what
         // reaches the composing server, exactly as one entry per shape reaches its own map.
-        const shape = `${item.method} ${routeShape(item.path)}`;
+        const path = prefixedRoutePath(prefix, item.path);
+        const shape = `${item.method} ${routeShape(path)}`;
         if (shapes.has(shape)) continue;
         shapes.add(shape);
-        routes.push({route: item, spread, origin});
+        routes.push({route: item, path, spread, origin});
       }
     };
-    collect(target, [target.name]);
+    collect(target.server, target.prefix, [target.server.name]);
     return {routes, notFound};
   }
 
   /**
    * The server declaration a spread value names, or null when it is anything else. A
    * `const other = base` alias chain of this module's own servers resolves too, because the alias
-   * holds exactly that ServeApp; a `let`, a member path, a conditional, an import, or a parameter
-   * does not, and contributes nothing.
+   * holds exactly that ServeApp — and so does a `let` alias the whole module never reassigns,
+   * because an unwritten `let` holds its initializer exactly as a `const` does. A reassigned or
+   * ambiguous `let`, a member path, a conditional, an import, or a parameter contributes nothing.
+   * A call resolves through the path-preserving velar/serve combinators when the callee still
+   * reaches its velar/serve import: `prefix` with a literal path translates what its app argument
+   * declares, and `use`/`bodyLimit`/`docs`/`lifecycle` pass it through untouched. A computed
+   * prefix path contributes nothing — the assembly-time referee owns it. An alias's initializer
+   * re-enters this resolver whole, so `const scoped = prefix("/api", routes)` resolves exactly as
+   * the spelled-out spread does; the followed set bounds an alias cycle.
    */
-  private resolveComposedServer(value: Expression): NodeServerDeclaration | null {
-    if (value.kind !== "IdentifierExpression") return null;
-    let name = value.name;
-    const followed = new Set<string>();
-    while (!this.moduleServers.has(name)) {
-      const alias = this.moduleServerAliases.get(name);
-      if (!alias || followed.has(name) || !this.resolvesTo(name, alias.span)) return null;
-      followed.add(name);
-      name = alias.target;
+  private resolveComposedServer(value: Expression, followed: Set<string> = new Set()): ComposedServer | null {
+    if (value.kind === "CallExpression" && !value.optional) {
+      if (value.callee.kind !== "IdentifierExpression") return null;
+      const combinator = this.moduleServeCombinators.get(value.callee.name);
+      if (!combinator || !this.resolvesTo(value.callee.name, combinator.span)) return null;
+      const appIndex = combinator.imported === "prefix" ? 1 : 0;
+      const app = value.arguments[appIndex];
+      if (!app || value.argumentNames?.slice(0, appIndex + 1).some((argumentName) => argumentName !== null)) return null;
+      const inner = this.resolveComposedServer(app, followed);
+      if (!inner) return null;
+      if (combinator.imported !== "prefix") return inner;
+      const path = value.arguments[0];
+      if (!path || path.kind !== "LiteralExpression" || typeof path.value !== "string") return null;
+      // The same literal shapes the runtime accepts; anything else is the runtime referee's to
+      // refuse, and claiming routes for it here would report conflicts against a table that
+      // never assembles.
+      if (path.value === "/") return inner;
+      if (!path.value.startsWith("/") || path.value.endsWith("/") || /[{}*?#\\]|\/\//u.test(path.value)) return null;
+      return {server: inner.server, prefix: path.value + inner.prefix};
     }
-    const declaration = this.moduleServers.get(name)!;
-    return this.resolvesTo(name, declaration.span) ? declaration : null;
+    if (value.kind !== "IdentifierExpression") return null;
+    const name = value.name;
+    const declaration = this.moduleServers.get(name);
+    if (declaration) return this.resolvesTo(name, declaration.span) ? {server: declaration, prefix: ""} : null;
+    const alias = this.moduleServerAliases.get(name);
+    if (!alias || followed.has(name) || !this.resolvesTo(name, alias.span)) return null;
+    if (alias.binding === "let" && !this.aliasBindingIsStable(alias)) return null;
+    followed.add(name);
+    return this.resolveComposedServer(alias.initializer, followed);
+  }
+
+  /** Whether a `let` alias has never been reassigned, asked once per name and program. */
+  private aliasBindingIsStable(alias: ServerAlias): boolean {
+    const cached = this.stableAliases.get(alias.name);
+    if (cached !== undefined) return cached;
+    const stable = this.moduleProgram !== null && bindingNeverReassigned(this.moduleProgram, alias.name, alias.span);
+    this.stableAliases.set(alias.name, stable);
+    return stable;
   }
 
   /**
@@ -439,14 +506,14 @@ export function inferNodeIntrinsic(context: CompilerIntrinsicAnalysisContext): V
   switch (intrinsic.name) {
     case "serve.response.json": {
       arity(1, 3);
-      const value = inferAt(0, anyType);
+      const value = inferAt(0, unknownType);
       if (argumentAt(1)) inferAt(1, numberType);
       if (argumentAt(2)) inferAt(2, optionalOf(responseHeadersType));
       return nodeResponseValue("json", value, literalStatus(argumentAt(1), 200), "application/json");
     }
     case "serve.response.created": {
       arity(1, 2);
-      const value = inferAt(0, anyType);
+      const value = inferAt(0, unknownType);
       if (argumentAt(1)) inferAt(1, optionalOf(responseHeadersType));
       return nodeResponseValue("json", value, 201, "application/json");
     }
@@ -814,9 +881,12 @@ function openApiObjectSchema(
 }
 
 /**
- * A module-level `const name = other` binding, the one indirect spelling of a spread target that is
- * still exactly the value it names. `let` is excluded because it can be reassigned, and a pattern
- * or any other initializer is excluded because it is no longer that value.
+ * A module-level `const name = expression` or `let name = expression` binding, the indirect
+ * spellings of a spread target that can still be exactly the value the initializer resolves to: a
+ * bare name, or a velar/serve combinator call the resolver sees through. A `let` alias resolves
+ * only after the stability predicate confirms the module never reassigns it — that check belongs
+ * to the resolver, which is the point that knows the whole program. A pattern binding is excluded
+ * because it never holds the whole value.
  */
 function moduleServerAlias(statement: Statement): ServerAlias | null {
   if (statement.kind !== "VariableDeclaration") return null;
@@ -825,8 +895,9 @@ function moduleServerAlias(statement: Statement): ServerAlias | null {
     readonly pattern: {readonly kind: string; readonly name: string; readonly span: Span};
     readonly initializer: Expression;
   };
-  if (declaration.binding !== "const" || declaration.pattern.kind !== "NameBindingPattern" || declaration.initializer.kind !== "IdentifierExpression") return null;
-  return {name: declaration.pattern.name, target: declaration.initializer.name, span: declaration.pattern.span};
+  if (declaration.pattern.kind !== "NameBindingPattern") return null;
+  if (declaration.initializer.kind !== "IdentifierExpression" && declaration.initializer.kind !== "CallExpression") return null;
+  return {name: declaration.pattern.name, initializer: declaration.initializer, binding: declaration.binding, span: declaration.pattern.span};
 }
 
 function describeComposedOrigin(entry: ComposedRoute | ComposedFallback): string {
@@ -834,7 +905,9 @@ function describeComposedOrigin(entry: ComposedRoute | ComposedFallback): string
 }
 
 function describeComposedRoute(entry: ComposedRoute): string {
-  const route = `'${entry.route.method} ${entry.route.path}'`;
+  // The effective path: a route seen through prefix(...) collides at its translated address, and
+  // that address is the one the author has to narrow.
+  const route = `'${entry.route.method} ${entry.path}'`;
   return entry.origin.length === 0 ? route : `${route} (composed in from ${describeComposedOrigin(entry)})`;
 }
 
@@ -852,9 +925,9 @@ function describeRouteCollision(previous: ComposedRoute, entry: ComposedRoute): 
     const paths = describeComposedOrigin(previous) === describeComposedOrigin(entry)
       ? `both times from ${describeComposedOrigin(entry)}`
       : `from ${describeComposedOrigin(previous)} and from ${describeComposedOrigin(entry)}`;
-    return `Route '${entry.route.method} ${entry.route.path}' is composed in twice, ${paths}; '${declaring}' declares it once — remove one spread`;
+    return `Route '${entry.route.method} ${entry.path}' is composed in twice, ${paths}; '${declaring}' declares it once — remove one spread`;
   }
-  if (previous.route.path === entry.route.path) {
+  if (previous.path === entry.path) {
     return `Route ${describeComposedRoute(entry)} duplicates ${describeComposedRoute(previous)}; one method and path answer from a single route`;
   }
   return `Route ${describeComposedRoute(entry)} conflicts with ${describeComposedRoute(previous)}; parameter names do not make two route shapes distinct`;
@@ -877,8 +950,10 @@ function describeFallbackCollision(previous: ComposedFallback, entry: ComposedFa
   return `${rule}; ${source(previous, false)} and ${source(entry, true)}`;
 }
 
-function routeShape(path: string): string {
-  return path.split("/").map((part) => part.startsWith("{") && part.endsWith("}") ? "{}" : part).join("/");
+/** A composed route's address as the runtime's `prefix` will spell it: the literal prefix, then the path. */
+function prefixedRoutePath(prefix: string, path: string): string {
+  if (prefix === "") return path;
+  return prefix + (path === "/" ? "" : path);
 }
 
 const routeDecimalPattern = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$/u;

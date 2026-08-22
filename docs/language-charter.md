@@ -59,6 +59,19 @@ boundary. These classes apply to operations rather than whole value families;
 for example, records retain JavaScript reference identity while construction,
 validation, and foreign entry use separate controlled boundaries.
 
+Those classes also settle where a correctness question is answered. A question
+the compiler can decide is decided at compile time. A question whose answer
+exists only once a value has taken shape is decided by the runtime at the moment
+it takes shape, loudly and by name: *the compiler cannot see this one* changes
+the referee, it does not cancel the match. A question neither referee can reach
+is a design question and is reported as one, rather than allowed to pass as a
+silence. The rule is visible throughout this reference — a record literal at an
+annotated position is closed because all of its keys are in front of the
+compiler, while a value arriving from outside the program has none of them in
+front of it and is judged by `Type.parse` at the moment it arrives (section 12)
+— and it governs anything a later target adds: a check that moves off the
+compiler moves onto the runtime, never off both.
+
 This reference owns all user-observable semantics. The
 [runtime and JavaScript boundary ledger](contributing/runtime-boundary.md) maps those
 semantics to boundary classes, implementation owners, runtime ABI, failure
@@ -169,8 +182,15 @@ label: it travels in a separate list, and code generation is gated on the
 diagnostics alone, so no advisory can stop an emit and no later change can
 quietly promote one. `velar check` prints advisories, names their count in its
 summary line, and exits 0. An editor shows an advisory as a warning, not an
-error. Advisory ids are the `A` roster — `A1`, `A2`, `A3` — and deliberately
-not part of the `VEL` diagnostic family.
+error. Advisory ids are the `A` roster, deliberately not part of the `VEL`
+diagnostic family. The roster is open-ended: an id joins it whenever a spelling
+a Python or JavaScript reflex produces is accepted here with another meaning
+and an unambiguous rewrite exists. No advisory's rule is stated in this
+section; each is written where the rule it guards is. The roster today is `A1`
+for `//` read as floor division and `A3` for `%` on a negative literal
+(section 4), `A2` for a two-slot `for` written index-first (section 9), `A4`
+for a keyed list rebuilt by `map` (section 14), and `A5` and `A6` for
+JavaScript `${...}` in a string, without and under the `f` prefix (section 3).
 
 An advisory that is right about the line is answered by writing the unambiguous
 spelling it names. An advisory that is wrong about *this* line is answered in
@@ -459,8 +479,17 @@ ordinary content unless they appear as the dedented closing delimiter. Literal
 interpolation braces in an `f` or `rf` string remain `{{` and `}}`. JavaScript
 `${...}` is never interpolation — in a backtick string it is literal text,
 exactly as in a double-quoted one, because generating JavaScript source is a
-real use of these literals. Triple-quoted strings are not part of the language;
-that spelling receives guidance to a quoted layout string.
+real use of these literals. That use is why the spelling cannot be rejected, so
+the compiler points the JavaScript reflex at the `f` prefix instead: advisory
+`A5` reports `${...}` in a string carrying no prefix, and `A6` reports it under
+`f` or `rf`, where the `$` holds the brace after it literal and the
+interpolation the author meant never happens. Each quotes the whole rewritten
+literal — `f"Hello {name}"` — when that rewrite is mechanical and stays short,
+and otherwise teaches only the occurrence it names: the `{name}` the author
+should have written. Either way it reports once per string. A string that really
+is generating JavaScript source answers with a reasoned `velar-allow`.
+Triple-quoted strings are not part of the language; that spelling receives
+guidance to a quoted layout string.
 
 Both delimiters are legal wherever the author writes, but formatted source has
 one spelling per string. `velar format` picks the delimiter from the text:
@@ -794,6 +823,11 @@ before it is already complete. The compiler cannot rule the line out — a comme
 is legal there — so it advises instead, and advisory `A1` reports the line while
 still emitting. Floor division is `(a / b).floor()`.
 
+`%` keeps the dividend's sign for the same reason JavaScript does, so `-7 % 3`
+is `-1` where Python answers `2`. A literal negative dividend draws advisory
+`A3`, which names both answers and gives the Python one as `((a % b) + b) % b`.
+A variable dividend draws nothing: its sign is not on the page.
+
 ## 5. Core types
 
 The built-in Core types are:
@@ -815,8 +849,10 @@ The built-in Core types are:
 - read-only data views such as `readonly User` and `readonly List<User>`
 - `unknown` for unvalidated dynamic input
 
-`any` is reserved for explicit unsafe JavaScript declarations. Ordinary
-VelarScript code uses `unknown` and validates it.
+`any` is not a type VelarScript source may write. The word is refused in every
+annotation position, and the message names `unknown` — which is also what an
+undeclared foreign value arrives as. Ordinary VelarScript code uses `unknown`
+and validates it before use (section 12).
 
 `Promise` and `Function` have bounded convenience spellings that normalize to
 the existing Core types; they do not introduce runtime constructors or a second
@@ -1648,7 +1684,10 @@ exponent with an optional sign. Anything else answers `null` rather than
 throwing or guessing: an empty or blank string, a partial parse (`"12ab"`), a
 digit separator (`"1_000"`), a radix form (`"0x10"`), the words `"Infinity"`
 and `"NaN"`, and a value that overflows to infinity (`"1e999"`). A non-string
-argument is a compile error, or a `TypeError` when it arrives as `any`. The
+argument is a compile error, and an unvalidated boundary value is one too,
+because `unknown` is assignable to no checked type (section 12); the runtime
+keeps its own guard and throws a `TypeError` if a foreign contract that lied
+lands a non-string here anyway. The
 accepted grammar is deliberately wider than the source literal grammar in one
 place — `"4."` and `".5"` parse even though `4.` and `.5` are rejected as
 literals — because the input is data from outside the program, not source a
@@ -2256,7 +2295,14 @@ Map keys. A two-slot `for first, second in value` yields value/index for Lists,
 Sets, and strings (the string index counts code points), and key/value for Maps.
 Both slots accept the complete binding-pattern grammar. Brackets continue to
 mean destructuring one item, so `for [left, right] in pairs` is not a two-slot
-loop; three slots are rejected.
+loop; three slots are rejected. Both slots bind whatever stands in them, so a
+header written index-first — `for i, value in items`, a hybrid neither Python
+nor JavaScript has — cannot be rejected. It draws advisory `A2` when the first
+name reads as an index and the second reads as a value or as the collection's
+own singular; both halves must read that way, because one name alone proves
+nothing. The swap is offered as an editor fix and withheld from `velar fix`:
+which name binds which value is a judgement, and a loop deliberately written
+this way would be silently reversed.
 
 A class joins these loops by declaring `@iterate:` (section 10), which answers
 with a List, Set, Map, or Record. Iterating the class then means iterating that
@@ -2264,16 +2310,33 @@ collection, word for word — the same slots, the same order, the same element
 types. So does every other consumer of an iterable: `value in bag`, the list
 spread `[...bag]`, the call spread `f(...bag)`, and `Set(bag)` / `Map(bag)` all
 read the one contract, and a class either participates in all of them or in
-none. `async for` is outside it deliberately, and refuses a class that declares
-`@iterate:` as clearly as one that does not.
+none.
 
-`async for value in source` consumes one explicit Velar pull contract:
-`source.next()` must have the checked type `() -> Promise<T?>`. The source and
-its data-valued `next` method are captured once; the capture reads a plain
-function — through the prototype for class sources — and never invokes an
-accessor. Each pull must return an
-actual Promise; a resolved `null` ends the loop, a resolved `T` enters the body,
-and rejection leaves the loop unchanged. The optional second slot is a
+`@iterate:` has a second form, and the shape of its answer is what tells the two
+apart. A block answering a List, Set, Map, or Record is the synchronous form the
+consumers above read. A block answering `T?` is the asynchronous pull form: one
+element per pull, `null` for exhaustion, and that block may `await`. `async for`
+drives the asynchronous form and only it, and every synchronous consumer reads
+the synchronous form and only it. Each refusal names the other form, so a class
+and the loop over it are always one message apart. A class declares one form or
+the other, never both, and an override keeps the form and the answer its base
+promised.
+
+`async for value in source` therefore reads one of two declarations. A
+VelarScript class declares the asynchronous `@iterate:`. Every other source
+declares the structural pull contract — a data-valued `next` of the checked type
+`() -> Promise<T?>`, the shape a capability handle, an extern class, or a
+declared record carries. A `next` method written on a VelarScript class is not
+that contract: it is an ordinary member of the author's own namespace, and the
+refusal says so and names the `@iterate:` block its body belongs in. The source
+and its `next` are captured once; the capture reads a plain function — through
+the prototype for a handle whose contract declares `next` as a method, and off
+the value itself for an extern class, whose contract must declare it as a
+function-valued field, because section 12 trusts a checked declaration's member
+kinds and only a field promises a function standing on the value — and never
+invokes an accessor. Each pull must return an actual Promise; a
+resolved `null` ends the loop, a resolved `T` enters the body, and rejection
+leaves the loop unchanged. The optional second slot is a
 zero-based pull index. It advances before the body, so `continue` cannot repeat
 an index. `break` performs no further pull.
 
@@ -2488,18 +2551,26 @@ class Bag:
         return self.items
 ```
 
-The block runs with `self` in scope and must return a `List`, `Set`, `Map`, or
-`Record` — the shapes the language already knows how to iterate. That is the
-whole mechanism: no iterator object, no `next()`, no generator. `for item in
-bag` means what `for item in bag.items` means, including the element type, the
-two-slot meaning, and the `readonly` projection of a read-only answer. It is a
-question the language asks, so it may not `await` — every consumer reads it
-synchronously — and it may not be called as `bag.iterate()`.
+The block runs with `self` in scope, and its answer says which of the two forms
+the class declares (section 9). Answering a `List`, `Set`, `Map`, or `Record` —
+the shapes the language already knows how to iterate — is the synchronous form:
+`for item in bag` means what `for item in bag.items` means, including the
+element type, the two-slot meaning, and the `readonly` projection of a read-only
+answer. Every consumer reads that answer whole and synchronously, so a
+synchronous block may not `await`; await the work before construction and hold
+the finished collection. Answering `T?` is the asynchronous pull form `async for`
+drives — one element per pull, `null` for exhaustion — and that block may
+`await`. Any other answer is refused, and the message names both forms. That is
+the whole mechanism in either form: no iterator object, no generator, and no
+`next()` of the author's own. The block is not callable as `bag.iterate()`.
 
 A derived class inherits the block. Overriding it *replaces* the answer rather
 than composing a chain, because there is only one answer to give; the
-replacement must still be the same collection type the base promised, by the
-same invariance rule every other override follows.
+replacement must still be the same form and the same type the base promised —
+the same collection for the synchronous form, the same element for the
+asynchronous one — by the same invariance rule every other override follows. A
+base-typed binding would otherwise walk a different element type, or stream
+where it was promised a collection.
 
 Inheritance is explicit:
 
@@ -3036,8 +3107,8 @@ them cannot use top-level `await` — await on the Vel side and capture the
 result.
 
 `unsafe js` is the same block without a contract, for source whose shape cannot
-honestly be declared. Its exports are `any` and the rules under *What `any`
-means* apply unchanged:
+honestly be declared. Its exports arrive as `unknown`, under the rules in
+*Entering the type world* below:
 
 ```velar
 unsafe js`
@@ -3056,8 +3127,8 @@ source fails to parse, and cannot name it when the remnant happens to be a legal
 module on its own.
 
 An inline block is **more checked than the `import js unsafe` it replaces**,
-not less: an unsafe import makes a whole module `any` from a distance, while a
-block puts the contract three lines under the source it governs. The
+not less: an unsafe import leaves a whole module unvalidated from a distance,
+while a block puts the contract three lines under the source it governs. The
 `data:text/javascript,` import that used to be the only way to write a module
 inline is now rejected with a mechanical rewrite to the block form, which is
 source-mapped where the data URL was not.
@@ -3066,52 +3137,50 @@ Both forms belong to Core, because JavaScript is the runtime Core already emits
 into. The CSS counterpart, `unsafe css`, belongs to the Web extension and is
 specified in section 13 — Core does not know what a stylesheet is.
 
-### What `any` means
+### Entering the type world
 
-A value imported with `import js unsafe` has the type `any`, and `any` is the
-one place in the language where the compiler makes no promise. Its operational
+A value that crosses in from JavaScript without a declaration — a binding from
+`import js unsafe`, an export of an `unsafe js` block — arrives as `unknown`.
+`unknown` is not a weaker checked type; it is the absence of a claim, and the
+compiler holds the value there until the program makes one. The operational
 model is three sentences, and every one of them matters:
 
-1. **Operations on `any` are raw JavaScript.** Member reads and writes, calls,
-   arithmetic, indexing, `match`, and `is` all pass through to the host with
-   JavaScript's own semantics and no adaptation. In particular the
-   `undefined`-to-`null` normalization every checked type receives does not
-   happen, and that breaks the language's one null test: an `any` holding
-   `undefined` answers `false` to `== null` and `true` to `!= null`, so a
-   missing value reads as present. Assigning it into a checked optional
-   normalizes it — after `const value: string? = raw`, `value == null` is
-   `true` — which is one more reason the annotation belongs at the boundary.
-   Four operations are refused outright rather than passed through. An f-string
-   and `str()` reject `any`, because JavaScript coercion would invent text by
-   running foreign hooks. A condition rejects it, because JavaScript truthiness
-   would send `0` and `""` down the `else` branch while section 9 judges `bool`.
-   And `await` rejects it, because an unchecked thenable runs foreign hooks and
-   can resolve to raw `undefined`.
-2. **`any` is assignable to every type, with no runtime check.** `const label:
-   string = someAny` compiles and does nothing at run time. Nothing verifies the
-   value; the annotation is simply believed. Validation happens only at the
-   operations that already validate — `Type.parse`, `Type.is`, a checked
-   collection operation, a `match` pattern — so a leaked `any` is laundered into
-   a type that then behaves like a lie. That is how a compile error the language
-   otherwise guarantees comes back: after that assignment, `label + "!"` produces
-   `"[object Object]!"`, the exact implicit conversion section 5 exists to
-   reject.
-3. **Therefore the import site is the only correctness boundary.** Validate at
-   the edge — `Config.parse(legacyValue)` — and let only checked values inward.
-   An `any` that travels further into the program takes the compiler's
-   guarantees with it wherever it stops.
+1. **No operation passes through it.** A member read, an index, and a call are
+   each refused, and each refusal names the step that answers it: declare a
+   type naming the fields relied on, parse the value into it, read the result —
+   with the call refusal naming instead the `extern module` or contracted
+   `extern js` declaration that would have given the callee a signature.
+   `await` is refused, because an unchecked thenable runs foreign hooks and can
+   resolve to raw `undefined`. A condition is refused, because JavaScript
+   truthiness would send `0` and `""` down the `else` branch while section 9
+   judges `bool`. An f-string and `str()` are refused, because JavaScript
+   coercion would invent text by running foreign hooks; `print` is how such a
+   value is inspected and `Json.stringify` is how it is rendered as data text.
+   The null test is the exception, and it is normalized like every other, so a
+   foreign `undefined` answers `true` to `== null` rather than reading as
+   present.
+2. **It is assignable to no checked type.** `const label: string = raw` is a
+   compile error, and so is `const value: string? = raw`. There is no position
+   where an unchecked value is laundered into a checked type by being written
+   down next to one, so the implicit conversion section 5 exists to reject
+   cannot come back through this door.
+3. **Therefore the entry site is where the program says what it has.** Narrow
+   the value — `raw is string` — or declare the shape and parse it:
+   `const config = Config.parse(legacyValue)`. What comes out is a checked value
+   of that type, and everything inward of it is ordinary VelarScript. A value
+   that travels further in unvalidated does not carry weakened guarantees; it
+   carries none, and until it is validated nothing may read through it, index
+   it, call it, await it, judge it as a condition, or render it as text.
 
-That boundary stops at the module. `any` may not appear at an export position,
-written or inferred. `export const leaked: any = thing` was always refused; so
-now is `export const leaked = thing` whose initializer came out of an
-`unsafe js` block, and so is an exported `def` whose omitted result type infers
-to one.
-The rule reads the positions a consuming module can read a value *out of* — a
-result, an element, a field, a type argument — and not a parameter, which takes
-a value from the consumer rather than handing it a guarantee. A consuming module
-never writes `unsafe`, so an exported `any` would hand it a value carrying no
-promise at all with nothing on the page to say so. Validate into a declared type
-in the module that owns the boundary and export that.
+This is the rule every other unvalidated input already follows, and that is the
+point: an undeclared foreign value is not a special kind of value with special
+permissions, it is data nobody has checked yet. The export position needs no
+rule of its own. `any` cannot appear there because no annotation may spell it
+anywhere, and a boundary value forwarded out of the module leaves as `unknown`,
+which describes it honestly and binds the importing module to these same three
+rules — which matters, because a consuming module never writes `unsafe` and has
+nothing else on the page to warn it. Validate into a declared type in the module
+that owns the boundary, and export that.
 
 ### Tests
 
@@ -3153,16 +3222,16 @@ Native JSX remains an owned DOM construction rather than a hidden Core-language
 operation.
 
 The source package then exposes the following language extension. This list is
-the complete addition — eleven contextual keywords, two lifecycle hooks, three
+the complete addition — eleven contextual keywords, two lifecycle hooks, two
 reserved global functions, and the unit literals; nothing else in a Web module
 is new syntax. Every *contextual keyword* here declares only in its own shape
 and remains available as an ordinary name (section 3), `computed` included: it
 declares a derived value in `computed name = expression` and is an ordinary
-name everywhere else. The three reserved
-globals are the exception: `cached`, `mount`, and `tick` are real runtime
-entry points, so a Web module refuses them as binding names, as it does the
-media subjects `viewport`, `scheme`, and `motion` (section 17). Those six words
-are the whole difference between what a Core module and a Web module accept:
+name everywhere else. The two reserved
+globals are the exception: `mount` and `tick` are real runtime entry points, so
+a Web module refuses them as binding names, as it does the media subjects
+`viewport`, `scheme`, and `motion` (section 17). Those five words are the whole
+difference between what a Core module and a Web module accept:
 
 - `component`, with `exposes` on its declaration and `expose` in its body
 - JSX expressions, including fragments and the `host` marker
@@ -3176,8 +3245,7 @@ are the whole difference between what a Core module and a Web module accept:
 - `keyframes`
 - `import css unsafe "./file.css" before|after look`
 - `computed name = expression`
-- the reserved globals `cached(() => value)`, `mount(node, target)`, and
-  `tick()`
+- the reserved globals `mount(node, target)` and `tick()`
 - unit literals such as `12px`, `1rem`, and `200ms`
 
 This keeps the compiler independently usable for Core libraries while making
@@ -3427,7 +3495,12 @@ record of the same shape — the `items.map(item => ({...item, done: true}))`
 habit — replaces the value, so the row is destroyed and built again, and a
 focused input inside it loses focus and an open composition ends. Update the
 item in place instead, `items[index].done = true`; the key still names the same
-value and the row survives.
+value and the row survives. The habit is reported rather than left silent:
+advisory `A4` names the list a `map` rebuilds when a keyed position renders it,
+and gives the in-place write. It is also the advisory most often right to
+suppress — a `readonly` list, or a whole table replaced by one API response,
+leaves `map` and a record literal as the only spelling — and a
+`// velar-allow A4: <reason>` on that line is the answer there.
 
 An event directive may carry modifiers, appended with dots:
 `on:click.prevent.stop={submit}`. There are exactly five, and no others are
@@ -3645,11 +3718,12 @@ half of the same row: the name is read bare, and assigning it is an error that
 names the state to change instead. The expression tracks dynamic reactive
 dependencies; its result is evaluated on first access and cached while observed.
 
-`cached(() => expression)` is the same cache as an ordinary value rather than as
-a declaration — for when the reader itself has to be passed to something else.
-It accepts one synchronous zero-argument function and returns a read-only
-accessor `() -> T`, which is read by calling it. The retired `computed(...)`
-function has no compatibility alias.
+There is no second spelling. `computed(...)` and `cached(...)` are both removed
+function forms with no compatibility alias, and a Web module that writes either
+is answered with the declaration that replaces it (section 19). Where a
+*callable* is what a receiver wants, write an ordinary `def` over the derived
+value: the call is then visible at the reading site, and the cache is still the
+`computed`'s.
 
 An invalidated observed result refreshes during the reactive flush; a synchronous access
 before that flush refreshes it immediately and still publishes a changed result
@@ -3765,10 +3839,10 @@ report names the value it froze at, the value the source now holds, the `.vel`
 line it was read on, and `computed name = expression` as the spelling that
 follows. A production build contains none of this.
 
-`watch expression:` runs an explicit side effect when the tracked value changes,
-and `watch expression as current, previous:` names the new and old values. Both
+`watch subject:` runs an explicit side effect when the tracked value changes,
+and `watch subject as current, previous:` names the new and old values. Both
 names are required when `as` is present, so a body that needs only the new value
-writes `as current, _`. The expression is evaluated immediately to establish the
+writes `as current, _`. The subject is evaluated immediately to establish the
 dependency and the baseline value; the body does **not** run for that first
 value, only for later changes. A watch body is synchronous. Async component work
 belongs in an `action`; lifecycle setup that must wait belongs in `@mounted`.
@@ -3780,16 +3854,35 @@ never disposed — it lives for the life of the page, like a module `action` —
 a module watch is for application-wide facts, not for anything a component
 owns.
 
-A watch subject must be able to change. A literal, a plain `const` bound to a
-primitive, and an expression built only from those are refused: the body they
-carry could never run, and a statement that is silently never executed is the
-same defect a bare `5` is already refused for. A reader that was not called —
-`watch total:` where `total` is a `cached(...)` accessor — is refused with the
-call it needed, because that refusal has one correct spelling; a value that can
-never change is refused without one, because no spelling would fix it. The
-refusal is limited to what the compile can prove: a call whose reactivity lives
-in another module, and a field path rooted in an ordinary `const` bound to a
-reactive object, both stay legal, because both really do follow.
+A watch subject names a place in the reactive graph rather than a value to
+compute. It is the name of a `state` or a `computed`, or a read path out of one
+through member access and indexing — `items[0].done`, `user.profile.name`,
+`rows[i].cells[j]` — at any depth, and with an index that may itself be
+reactive, because whether `i` is a constant or another state changes nothing
+about which place is named. No operator and no call belongs in it: `a + b`,
+`not flag`, `flag ? a : b`, `f"{a}"`, and `f()` each derive a new value, and a
+derived value already has a spelling that names it, caches it, and declares its
+dependencies. So `watch a + b as sum, _:` and `watch f():` are refused, and the
+refusal quotes the expression written alongside the line that replaces it —
+`computed sum = a + b`, then `watch sum as current, _:`. Writing the rule as a
+shape rather than as an analysis is the point: which state a watch relates to is
+then declared, never inferred.
+
+A watch subject must also be able to change, and that question is asked first,
+so one subject never draws two messages. A literal, a plain `const` bound to a
+primitive, and an expression built only from those are refused because the body
+they carry could never run, and a statement that is silently never executed is
+the same defect a bare `5` is already refused for — `watch a + b:` over two
+plain `const` bindings is answered by that refusal alone, not by the shape rule
+above. It names no replacement, because no spelling would fix it. A reader that
+was not called is the same refusal with a replacement attached: `watch reader:`
+is sent to `computed name = reader()` and then `watch name:`, not to
+`watch reader():`, which the shape rule no longer admits. Calling a declared
+`computed` has its own answer and its own edit: `watch total():` is told to drop
+the parentheses, because dropping them leaves a legal subject.
+The change rule stays limited to what the compile can prove: a field path rooted
+in an ordinary `const` bound to a reactive object stays legal, because it really
+does follow.
 
 Derived values and watches settle to a fixed point before the DOM is written.
 One flush runs every `computed` and every `watch` the change reached, then
@@ -3820,12 +3913,13 @@ it can resolve within the module: a write inside a `def` the watch calls counts
 as that watch's write, and so does one reached through a `const` statically
 bound to such a `def`, however long the chain of them runs. It stops where the
 answer stops being certain, and stays silent there rather than guessing: a call
-across a module boundary, through `any`, or through a value this analysis cannot
-resolve is left alone, as is a call through a `let`, which any line below it may
-rebind, and as are two writes through member paths, because a path can run
-through indices and aliases no analysis here can decide. It is the same shape as the two-independent-looks error in
-section 17, for the same reason: two unrelated sources contending for one thing
-have no winner the source states, so the author says which one he meant.
+across a module boundary, or through a value this analysis cannot resolve, is
+left alone, as is a call through a `let`, which any line below it may rebind,
+and as are two writes through member paths, because a path can run through
+indices and aliases no analysis here can decide. It is the same shape as the
+two-independent-looks error in section 17, for the same reason: two unrelated
+sources contending for one thing have no winner the source states, so the
+author says which one he meant.
 
 ## 16. Lifecycle
 
@@ -4382,8 +4476,10 @@ destructuring, objects, collections, members, functions, classes, aliases,
 cycles, namespace imports, and dynamic imports. Repeated normalization is
 idempotent. Errors and rejection behavior are unchanged; every checked Promise
 uses one cross-module normalization identity cache and accepts only actual
-Promises at checked JavaScript boundaries, never magic thenables. Unsafe
-JavaScript `any` imports deliberately remain outside this guarantee. A
+Promises at checked JavaScript boundaries, never magic thenables. An `unsafe`
+JavaScript import is inside the normalization rule, because it arrives as
+`unknown`; what it stays outside of is the Promise guarantee, since awaiting an
+unvalidated value is refused rather than normalized (section 12). A
 discarded expression result is not wrapped.
 
 ## Standard library membership boundary
@@ -4466,9 +4562,11 @@ The following are not part of VelarScript:
 - generators, `yield`, or the JavaScript `Symbol.asyncIterator` protocol;
   incremental sources use checked `async for` pull contracts or producer
   callbacks, and JavaScript `for await` is guided to `async for`. A class that
-  declares `@iterate:` (section 10) does not reopen this: it names a collection
-  the language already iterates rather than producing values on demand, so no
-  iteration protocol enters the language
+  declares `@iterate:` (section 10) does not reopen this in either of its forms:
+  the synchronous form names a collection the language already iterates, and the
+  asynchronous form is a block the loop calls for one element at a time. Neither
+  is an object a consumer may hold, resume, or hand on, so no iteration protocol
+  enters the language
 - JavaScript `splice`, `push`, `shift`, `unshift`, mutating `sort`, or mutating
   `reverse`
 - user-defined decorators or declaration annotations. `@name` does not reopen
@@ -4481,6 +4579,15 @@ The following are not part of VelarScript:
   A new compiler-owned contextual role uses `@name`; a new declaration
   attribute uses a modifier keyword. Neither is a user extension point
 - magical JSX control-flow attributes
+- a second spelling of a derived value. `cached(() => value)` and
+  `computed(() => value)` are removed; `computed name = expression` is the
+  declaration, and it already caches its result while observed (section 15), so
+  the function form carried no capability of its own — only a second way to read
+  the same cache. It also cost the compiler its sight: a reader typed `() -> T`
+  is indistinguishable from any other zero-argument function, so nothing marked
+  the value as derived, and a `watch` over one watched a function identity that
+  never moved. Where a callable really has to be handed on, declare the value
+  and write an ordinary `def` that reads it
 - a public `effect` primitive
 - implicit global CSS
 - random class or variable names
@@ -4715,8 +4822,7 @@ exposing JavaScript milliseconds as an untyped number.
 `Kind.is(value)` and record `Type.is(value)` are first-class validators: a true
 branch narrows `value` to the validated type. An exported derived value is
 declared `export computed name = expression` and read bare by every importing
-module; an exported `cached(...)` accessor must declare its public accessor
-result at the export site, for example
-`export const name: () -> T = cached(...)`. Numeric finiteness and integer
-tests use `value.isFinite()` and `value.isInteger()`; the duplicate
-`Math.` spellings are not part of the namespace.
+module; there is no second exported form, because there is no second spelling
+for a derived value. Numeric finiteness and integer tests use
+`value.isFinite()` and `value.isInteger()`; the duplicate `Math.` spellings are
+not part of the namespace.

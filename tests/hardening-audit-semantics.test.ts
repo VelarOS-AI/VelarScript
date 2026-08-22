@@ -319,10 +319,12 @@ test("[GRM-D1] nested `is` operands parenthesize, and a bool subject is a consta
   accepts("def f(flag: bool?) -> bool:\n    return flag is bool\nprint(str(f(null)))\n");
 });
 
-test("[ASY-U2] awaiting `any` is rejected toward validation", () => {
+test("[ASY-U2 + D90 R17] awaiting an unchecked boundary value is rejected toward validation", () => {
+  // D90 R17: the unsafe import arrives as unknown, and the refusal is the
+  // one boundary message `any` and `unknown` now share.
   rejects(
     "import js unsafe {mystery} from \"node:process\"\nasync def f():\n    await mystery\ndef g():\n    async f()\ng()\n",
-    /Cannot await any; validate the value into a checked Promise first/u,
+    /Cannot await unknown; an unchecked thenable runs foreign hooks and can leak raw undefined/u,
   );
 });
 
@@ -332,10 +334,10 @@ test("[ASY-U3] checked Error carries a readable unknown `cause`", () => {
   accepts("try:\n    throw Error(\"x\")\ncatch error:\n    if error.cause is string:\n        print(error.cause)\n");
 });
 
-test("[BRG-N4] `any` in a condition position is rejected toward validation", () => {
+test("[BRG-N4 + D90 R17] an unchecked boundary value in a condition position is rejected toward validation", () => {
   rejects(
     "import js unsafe {mystery} from \"node:process\"\nif mystery:\n    print(\"t\")\n",
-    /A condition judges only bool, and an unchecked any would ride JavaScript truthiness/u,
+    /A condition judges only bool, and an unchecked unknown would ride JavaScript truthiness/u,
   );
 });
 

@@ -421,3 +421,69 @@ test("[D90] the lexer's column scan is linear, and one lex reports a bounded num
   assert.equal(ordinary.diagnostics.length, 3);
   assert.ok(ordinary.diagnostics.every((item) => item.code === "VEL1005"));
 });
+
+// ---------------------------------------------------------------------------
+// D89 A5/A6: the lexer front of the '${...}' advisories. The roster file
+// carries the trigger and message matrix; this file holds the lexer to the
+// two claims only it can break — the reported meaning is the module's real
+// runtime meaning, and the one construct where '${...}' is documented literal
+// JavaScript never reaches the advisory at all.
+// ---------------------------------------------------------------------------
+
+test("[D89] A5 tells the truth at runtime: the literal stays text, and the fixed spelling interpolates", async () => {
+  const { applyMechanicalFixes } = await import("@velarscript/compiler");
+  const source = 'const name = "vel"\nconst s = "Hello ${name}"\nprint(s)';
+  const result = compile(source);
+  assert.deepEqual(codes(result), []);
+  assert.deepEqual(result.advisories.map((item) => item.code), ["A5"]);
+  const ranAsWritten: string[] = [];
+  (new Function("console", result.code ?? "") as (console: { readonly log: (value: string) => void }) => void)({ log: (value) => { ranAsWritten.push(value); } });
+  assert.deepEqual(ranAsWritten, ["Hello ${name}"], "the advisory's 'stays the characters' claim is the emitted meaning");
+
+  const fixed = applyMechanicalFixes(source, result.advisories);
+  const fixedResult = compile(fixed.text);
+  assert.deepEqual(codes(fixedResult), []);
+  assert.deepEqual(fixedResult.advisories, []);
+  const ranFixed: string[] = [];
+  (new Function("console", fixedResult.code ?? "") as (console: { readonly log: (value: string) => void }) => void)({ log: (value) => { ranFixed.push(value); } });
+  assert.deepEqual(ranFixed, ["Hello vel"], "the rewrite the message names computes the interpolation");
+});
+
+test("[D89] an inline JavaScript block never draws A5 — '${...}' there is documented literal JavaScript", () => {
+  const contracted = [
+    "const seed = 1",
+    "extern js(seed: number)`",
+    '    export function shape() { return "wrap ${seed} here" }',
+    "`:",
+    "    export def shape() -> string",
+    "print(shape())",
+  ].join("\n");
+  const contractedResult = compile(contracted);
+  assert.deepEqual(codes(contractedResult), [], contracted);
+  assert.deepEqual(contractedResult.advisories, []);
+
+  const unsafe = [
+    "unsafe js`",
+    '    export const template = "port ${PORT}"',
+    "`",
+    'print("ready")',
+  ].join("\n");
+  const unsafeResult = compile(unsafe);
+  assert.deepEqual(codes(unsafeResult), [], unsafe);
+  assert.deepEqual(unsafeResult.advisories, []);
+});
+
+test("[D89] a string nested in an interpolation still answers in module coordinates", () => {
+  // The interpolation body is lexed from the module's own text, so the
+  // advisory's span lands on the physical line and a reasoned 'velar-allow'
+  // on that line consumes it.
+  const source = 'const y = "b"\nprint(f"{ "${y}" }")';
+  const result = compile(source);
+  assert.deepEqual(codes(result), []);
+  assert.deepEqual(result.advisories.map((item) => item.code), ["A5"]);
+  assert.equal(source.slice(result.advisories[0]!.span.start, result.advisories[0]!.span.end), "${y}");
+
+  const suppressed = compile('const y = "b"\nprint(f"{ "${y}" }") // velar-allow A5: generating a JavaScript template on purpose');
+  assert.deepEqual(suppressed.advisories, []);
+  assert.deepEqual(suppressed.diagnostics, []);
+});

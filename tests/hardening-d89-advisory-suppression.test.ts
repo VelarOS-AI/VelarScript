@@ -65,6 +65,22 @@ test("[D89] the comment's own text stops at the suppression clause, so A1 can st
   assert.equal(plain.slice(plain.indexOf("//") + 2, scan(plain).contentEnd), " 2");
 });
 
+test("[D89] A5 walks the same three suppression states as the rest of the roster", () => {
+  // Reasoned: the advisory is consumed and the build stays clean.
+  const reasoned = compile('const s = "run ${HOME}/bin" // velar-allow A5: a shell template, so the text is the point\nprint(s)');
+  assert.deepEqual(reasoned.advisories, []);
+  assert.deepEqual(reasoned.diagnostics, []);
+
+  // Unreasoned: VEL1011, and the advisory it tried to silence still stands.
+  const unreasoned = compile('const s = "run ${HOME}/bin" // velar-allow A5\nprint(s)');
+  assert.deepEqual(unreasoned.diagnostics.map((item) => item.code), ["VEL1011"]);
+  assert.deepEqual(unreasoned.advisories.map((item) => item.code), ["A5"]);
+
+  // Stale: no A5 fires on the line, so the suppression is VEL1012.
+  const stale = compile('const s = "no template here" // velar-allow A5: claimed and false\nprint(s)');
+  assert.deepEqual(stale.diagnostics.map((item) => item.code), ["VEL1012"]);
+});
+
 test("[D89] a suppression without a reason is a diagnostic, and it fails the build", () => {
   for (const tail of ["// velar-allow A1", "// velar-allow A1:", "// velar-allow A1:   "]) {
     const source = `const total = 10 ${tail}`;

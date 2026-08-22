@@ -99,16 +99,17 @@ module; the body may `await` directly and needs no `export`. A file that declare
 
 Everything in this table was hit by real models writing Vel blind. Most rows
 produce a teaching diagnostic, so `velar check` will catch them; the rows
-marked **A1**, **A2**, and **A3** are answered by an advisory instead, which
-reports without failing the check. Read the **silent** rows twice — nothing is
-reported at all and the program runs with the other meaning: template
-interpolation, `a // b` where the divisor is a name rather than arithmetic, and
-`[1, 2] == [1, 2]`. The `Type.parse` row is silent as well, but it is a
-guarantee rather than a trap.
+marked **A1**, **A2**, **A3**, **A5**, and **A6** are answered by an advisory
+instead, which reports without failing the check. Two rows are still silent —
+nothing is reported at all and the program runs with the other meaning:
+`a // b` where the divisor is a name rather than arithmetic, and a collection
+`==` between two bindings, since only a collection literal written inside the
+comparison is reported. Read those twice. The `Type.parse` row is silent as
+well, but it is a guarantee rather than a trap.
 
 | Your reflex | Write instead |
 | --- | --- |
-| `"${value}"` or `` `${value}` `` template interpolation | `f"{value}"` or `` f`{value}` ``. Only the `f` prefix interpolates, in either delimiter; `${...}` is legal literal text in every string — including a backtick one — so nothing warns you. |
+| `"${value}"` or `` `${value}` `` template interpolation (**A5**), `f"${value}"` (**A6**) | `f"{value}"` or `` f`{value}` ``. Only the `f` prefix interpolates, in either delimiter, and a `$` in front of the brace keeps it literal even under that prefix. `${...}` stays legal text in every string — including a backtick one — so nothing fails: the advisory reports and the build continues. Suppress it with `// velar-allow A5: <reason>` where the characters are what you meant, as they are when the string is JavaScript source; under the `f` prefix the code is `A6`, and naming the one that did not fire is a compile error. A raw `r"..."` never raises A5, since asking for literal text is what the prefix says; `rf` still raises A6. |
 | `a // b` floor division (**A1**) | `//` starts a comment, so the rest of the line disappears and `const c = a // b` silently binds `a`. Write `(a / b).floor()`. The advisory reaches only a comment body made of digits and arithmetic — `a // 2` reports, `a // b` does not, because a body carrying letters is an ordinary comment. |
 | `for i, v in nums:` (**A2**) | `for v, i in nums:` — the two-slot `for` gives `value, index`, like JS `forEach((v, i) => …)` and unlike Python's `enumerate`. |
 | `-7 % 3` expecting `2` (**A3**) | Vel's `%` is JavaScript's, so it is `-1`. Python's non-negative modulo is `((a % b) + b) % b`. |
@@ -152,7 +153,7 @@ guarantee rather than a trap.
 | Iterating or spreading an enum object | `Status.values()` returns the members in declaration order as a fresh `List<Status>`. |
 | `sorted()`, `min()`, or `sorted(by=)` over enums | Only `number`, `string`, and single-category unions are ordered. Give the order explicitly with `sorted(by=row => row.rank)` or a string-backed enum (`low = "1-low"`). |
 | Writing through the value you handed to `Type.parse` | `parse` returns a copy, so "validated" means "and it stays valid" rather than "it was correct at that instant": neither side's later writes reach the other. Positions the type leaves opaque — an `unknown` field, a class instance — stay shared. |
-| `export const client = thing`, where `thing` came out of `unsafe js` | `any` may not stand at an export position, inferred as readily as written: a consuming module never writes `unsafe`, so it would inherit a value carrying no guarantee at all. Validate into a declared type in this module and export that. An exported `def` with no result annotation publishes whatever its body inferred, so it is refused the same way. |
+| `export const client = thing`, where `thing` came out of `unsafe js` | This compiles, and what it publishes is an `unknown`: the JavaScript boundary hands back `unknown`, so a consuming module that never writes `unsafe` is stopped at its own first read — `Cannot access 'name' on unknown without validation`. Nothing leaks, but nothing is usable either. Validate into a declared type in this module and export that, so the shape is named once instead of at every consumer. `any` is not a type source can write at any position — the word names the boundary, and the boundary answers `unknown`. |
 
 The long tail is deliberately not in this table: the diagnostic will name
 the current spelling when you hit it.
@@ -490,12 +491,15 @@ the Vel side observes it — no recompute, no re-render, no refreshed flow fact 
 until some unrelated Vel assignment invalidates. Have the package **return** the
 data and assign the result on the Vel side.
 
-2. **Quick raw access** — `import js unsafe` admits the value as `any`.
-   Operations on an `any` are raw JavaScript with no runtime check anywhere: it
-   is assignable to every type without validation, and an `any` holding
-   `undefined` even answers `false` to `== null`. The import statement is the
-   only correctness boundary — validate with `Type.parse` there, before the
-   value touches typed code.
+2. **A boundary with no contract to write** — `import js unsafe` admits the
+   value as `unknown`, so it needs no `extern module` block. It skips the
+   declaration, not the checking: a member read, a call, an `await`, an
+   f-string or `str()`, and an assignment to a typed binding are each refused
+   by name while the value is still unvalidated. `print`, `Json.stringify`,
+   `== null`, and passing it on as `unknown` are the operations an unvalidated
+   boundary value still answers. Validate at the import — `Type.parse` a
+   declared shape, or narrow with `value is string` — before the value touches
+   typed code.
 3. **A suspected compiler defect blocking you** — run `velar repro` (below),
    then take the final exit: `velar build` output is readable, source-mapped
    JavaScript that runs without the toolchain.

@@ -438,14 +438,14 @@ print(counter.open())
   assert.equal(execution.stdout, "42\n7\n");
 });
 
-test("[D44-74] async for still captures a Velar class next method once", () => {
-  // Methods moved to the prototype; the pull capture still reads a
-  // data-valued function without invoking accessors.
+test("[D90 R18] async for drives a Velar class through its declared asynchronous '@iterate:'", () => {
+  // D90 R18: a user class streams by declaration, not by a structural `next`
+  // method — the block is pulled once per element, and null is exhaustion.
   const output = run(`
 class Pull:
     let position: number = 0
 
-    async def next() -> number?:
+    @iterate:
         if self.position >= 2:
             return null
         self.position += 1

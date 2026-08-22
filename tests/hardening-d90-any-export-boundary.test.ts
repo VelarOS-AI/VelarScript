@@ -12,18 +12,24 @@ import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
 // refused is the honest one. This file pins the completed rule, not a new one —
 // same diagnostic code, no contagious unsafe marker.
 //
-// `any` has exactly one origin in a module, `import js unsafe`, so every case
-// below starts from one.
+// D90 R17 closed the boundary's entry: `import js unsafe` now arrives as
+// `unknown` (pinned in hardening-d90-r17-unknown-boundary.test.ts), so a
+// module-internal `any` can only enter through a host-injected import — the
+// same channel a compiler extension uses. Every case below injects one under
+// the name `thing`, which keeps R12's export boundary pinned while the R17
+// producer change stands.
+
+const injectedAny = () => ({ analysis: { imports: new Map([["thing", { kind: "any" } as const]]) } });
 
 function diagnostics(source: string): string[] {
-  return compile(source.trimStart()).diagnostics.map((item) => `${item.code} ${item.message}`);
+  return compile(source.trimStart(), injectedAny()).diagnostics.map((item) => `${item.code} ${item.message}`);
 }
 
 // The Web extension is the only owner of an extension type whose `properties`
 // are non-empty, so the prop spelling of an input position can only be written
 // through it.
 function webDiagnostics(source: string): string[] {
-  return compile(source.trimStart(), { extensions: [velarCompilerExtension] })
+  return compile(source.trimStart(), { ...injectedAny(), extensions: [velarCompilerExtension] })
     .diagnostics.map((item) => `${item.code} ${item.message}`);
 }
 
@@ -31,7 +37,7 @@ const wayOut = "validate the value into a declared type in this module first";
 
 test("an inferred any at an export position is refused", () => {
   const direct = diagnostics(`
-import js unsafe {thing} from "./x.js"
+import {thing} from "./x.js"
 
 export const leaked = thing
 `);
@@ -42,7 +48,7 @@ export const leaked = thing
   // Vel has no bare `export {a}`, so the indirect spelling is a second
   // declaration whose inferred type is the same `any`.
   const indirect = diagnostics(`
-import js unsafe {thing} from "./x.js"
+import {thing} from "./x.js"
 
 const a = thing
 
@@ -52,7 +58,7 @@ export const b = a
 
   // A container of `any` is read out of by the consumer exactly as a bare one is.
   const inList = diagnostics(`
-import js unsafe {thing} from "./x.js"
+import {thing} from "./x.js"
 
 export const items = [thing]
 `);
@@ -64,14 +70,14 @@ test("the refusal names every binding a pattern exports", () => {
   // declared, covers every pattern shape in one place; both names used to be
   // published as `any`.
   const destructured = diagnostics(`
-import js unsafe {thing} from "./x.js"
+import {thing} from "./x.js"
 
 export const {a, b} = thing
 `);
   assert.ok(destructured.some((item) => item.includes("Exports 'a', 'b' are 'any'")), destructured.join("\n"));
 
   const mutable = diagnostics(`
-import js unsafe {thing} from "./x.js"
+import {thing} from "./x.js"
 
 export let held = thing
 `);
@@ -84,7 +90,7 @@ test("an exported function with an omitted result annotation is refused", () => 
   // `finalizeFunctionResultInference`, and a probe pass is discarded whole,
   // which is why an ungated report cannot duplicate.
   const inferred = diagnostics(`
-import js unsafe {thing} from "./x.js"
+import {thing} from "./x.js"
 
 export def get():
     return thing
@@ -96,7 +102,7 @@ export def get():
   // An async result is a Promise of the inferred value, and the predicate
   // visits what the promise resolves to.
   const asynchronous = diagnostics(`
-import js unsafe {thing} from "./x.js"
+import {thing} from "./x.js"
 
 export async def get():
     return thing
@@ -106,7 +112,7 @@ export async def get():
 
 test("the refusal teaches the way out instead of only announcing itself", () => {
   const reported = diagnostics(`
-import js unsafe {thing} from "./x.js"
+import {thing} from "./x.js"
 
 export const leaked = thing
 `);
@@ -120,7 +126,7 @@ export const leaked = thing
 test("an any that never leaves the module is untouched", () => {
   // The boundary block itself, and every internal use of what it imports.
   const internal = diagnostics(`
-import js unsafe {thing} from "./x.js"
+import {thing} from "./x.js"
 
 const kept = thing
 
@@ -132,7 +138,7 @@ def read() -> string:
 
   // A function that infers `any` but is not exported publishes nothing.
   const privateFunction = diagnostics(`
-import js unsafe {thing} from "./x.js"
+import {thing} from "./x.js"
 
 def get():
     return thing
@@ -144,7 +150,7 @@ const used = get()
 
 test("a value validated into a declared type exports cleanly", () => {
   const validated = diagnostics(`
-import js unsafe {thing} from "./x.js"
+import {thing} from "./x.js"
 
 type Config:
     retries: number
@@ -154,7 +160,7 @@ export const settled = Config.parse(thing)
   assert.deepEqual(validated, []);
 
   const annotatedResult = diagnostics(`
-import js unsafe {thing} from "./x.js"
+import {thing} from "./x.js"
 
 export def get() -> string:
     return thing
@@ -183,7 +189,7 @@ test("the written spelling is still refused by the rule this completes", () => {
   // Unchanged, and quoted here so the two halves of one rule stay visible
   // together: the point of R12 is that these two now agree.
   const written = diagnostics(`
-import js unsafe {thing} from "./x.js"
+import {thing} from "./x.js"
 
 export const leaked: any = thing
 `);
@@ -202,7 +208,7 @@ export const leaked: any = thing
 
 test("a public method of an exported class is at an export position", () => {
   const instance = diagnostics(`
-import js unsafe {thing} from "./x.js"
+import {thing} from "./x.js"
 
 export class Box:
     def leak():
@@ -215,7 +221,7 @@ export class Box:
   // A static method is reached through the class object rather than an
   // instance, and is published the same way.
   const staticMethod = diagnostics(`
-import js unsafe {thing} from "./x.js"
+import {thing} from "./x.js"
 
 export class Box:
     static def leak():
@@ -225,7 +231,7 @@ export class Box:
 
   // A container of `any`, as for an exported `const`.
   const inList = diagnostics(`
-import js unsafe {thing} from "./x.js"
+import {thing} from "./x.js"
 
 export class Box:
     def leak():
@@ -243,7 +249,7 @@ test("an exported subclass publishes the members of the base it names", () => {
   // `leak()` on it, so the base's inferred `any` crosses the boundary too. The
   // report names `Base.leak`, which is the declaration that has to change.
   const inherited = diagnostics(`
-import js unsafe {thing} from "./x.js"
+import {thing} from "./x.js"
 
 class Base:
     def leak():
@@ -258,7 +264,7 @@ export class Box extends Base:
 
   // Reachability is transitive, and it does not depend on declaration order.
   const twoDeep = diagnostics(`
-import js unsafe {thing} from "./x.js"
+import {thing} from "./x.js"
 
 export class Box extends Middle:
     pass
@@ -279,7 +285,7 @@ test("'@iterate:' is the class's other inferred public contract", () => {
   // method result does. The block has no annotation to refuse and no `private`
   // spelling, so the class's own reachability is the whole question.
   const exported = diagnostics(`
-import js unsafe {thing} from "./x.js"
+import {thing} from "./x.js"
 
 export class Box:
     @iterate:
@@ -290,7 +296,7 @@ export class Box:
   ]);
 
   const internal = diagnostics(`
-import js unsafe {thing} from "./x.js"
+import {thing} from "./x.js"
 
 class Box:
     @iterate:
@@ -306,7 +312,7 @@ test("a class member the module keeps to itself is untouched", () => {
   // `private` is not reachable from a consuming module, so it is the same
   // module-internal `any` an unexported `def` holds.
   const hidden = diagnostics(`
-import js unsafe {thing} from "./x.js"
+import {thing} from "./x.js"
 
 export class Box:
     private def leak():
@@ -319,7 +325,7 @@ export class Box:
 
   // A class this module never publishes cannot hand anything across.
   const unexported = diagnostics(`
-import js unsafe {thing} from "./x.js"
+import {thing} from "./x.js"
 
 class Box:
     def leak():
@@ -331,7 +337,7 @@ const box = Box()
 
   // An exported class whose members are annotated exports nothing inferred.
   const annotated = diagnostics(`
-import js unsafe {thing} from "./x.js"
+import {thing} from "./x.js"
 
 export class Box:
     def read() -> string:
@@ -347,7 +353,7 @@ test("the class member positions that can never infer are already refused", () =
   //
   // A getter has no inferred result to publish at all.
   assert.deepEqual(diagnostics(`
-import js unsafe {thing} from "./x.js"
+import {thing} from "./x.js"
 
 export class Box:
     get leak():
@@ -356,13 +362,13 @@ export class Box:
 
   // A field always writes its type, and the written `any` is refused.
   assert.deepEqual(diagnostics(`
-import js unsafe {thing} from "./x.js"
+import {thing} from "./x.js"
 
 export class Box:
     const held = thing
 `), ["VEL2021 Class fields require an explicit type"]);
   assert.deepEqual(diagnostics(`
-import js unsafe {thing} from "./x.js"
+import {thing} from "./x.js"
 
 export class Box:
     const held: any = thing
@@ -370,7 +376,7 @@ export class Box:
 
   // Including the constructor-parameter spelling of a field.
   assert.deepEqual(diagnostics(`
-import js unsafe {thing} from "./x.js"
+import {thing} from "./x.js"
 
 export class Box:
     constructor(let held: any):
@@ -379,7 +385,7 @@ export class Box:
 
   // An abstract method has no body to infer from.
   assert.deepEqual(diagnostics(`
-import js unsafe {thing} from "./x.js"
+import {thing} from "./x.js"
 
 export abstract class Box:
     abstract def leak()
@@ -388,7 +394,7 @@ export abstract class Box:
   // And a written `-> any` on a method is the same refusal an exported `const`
   // annotation gets.
   assert.deepEqual(diagnostics(`
-import js unsafe {thing} from "./x.js"
+import {thing} from "./x.js"
 
 export class Box:
     def leak() -> any:
@@ -402,7 +408,7 @@ test("a class a published type names is reachable even when it is not exported",
   // the boundary. Reachability, not the keyword, is the question — which is
   // why the report waits for the whole module.
   const inner = `
-import js unsafe {thing} from "./x.js"
+import {thing} from "./x.js"
 
 class Inner:
     def deep():
@@ -452,7 +458,7 @@ export class Box:
 
 test("a class no export can hand across stays module-internal", () => {
   const inner = `
-import js unsafe {thing} from "./x.js"
+import {thing} from "./x.js"
 
 class Inner:
     def deep():
@@ -497,7 +503,7 @@ test("the deferred class-member report cannot duplicate across the converge loop
   // analysis pass — rather than across passes — keeps the reasoning the
   // module-level report already relies on: a probe pass is discarded whole.
   const reported = diagnostics(`
-import js unsafe {thing} from "./x.js"
+import {thing} from "./x.js"
 
 def countdown(n: number):
     if n <= 0:
@@ -526,7 +532,7 @@ test("a parameter is an input position in every spelling it has", () => {
   // A consumer cannot name `Inner`, so it can never supply the prop and can
   // never obtain the instance; there is nothing to refuse.
   const inner = `
-import js unsafe {thing} from "./x.js"
+import {thing} from "./x.js"
 
 class Inner:
     def deep():
@@ -564,7 +570,7 @@ test("an extension type's payload is still an output position", () => {
   // `arguments` carry what the family hands back — a component's exposed
   // Handle — so dropping `properties` from the walk must not drop these.
   const inner = `
-import js unsafe {thing} from "./x.js"
+import {thing} from "./x.js"
 
 class Inner:
     def deep():

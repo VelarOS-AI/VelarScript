@@ -62,7 +62,9 @@ print(answer())
     assert.match(checkedCommand.stderr, /Relative JavaScript import target '\.\/helper\.js' cannot be emitted/u);
 
     const inlineEntry = join(directory, "inline.vel");
-    await writeFile(inlineEntry, 'unsafe js`\nexport function answer(){return 42}\n`\nprint(answer())\n', "utf8");
+    // D90 R17: an undeclared inline export is unknown and cannot be called,
+    // so the clean inline case references it without calling.
+    await writeFile(inlineEntry, 'unsafe js`\nexport function answer(){return 42}\n`\nprint(answer == null)\n', "utf8");
     const inline = await compileProject(inlineEntry);
     assert.deepEqual(inline.failures, []);
     assert.deepEqual(inline.modules.flatMap((module) => module.result.diagnostics), []);

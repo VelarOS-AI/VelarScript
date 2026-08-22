@@ -410,7 +410,6 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       }
       if (expression.name === "mount") return "__velarMount";
       if (expression.name === "tick") return "__velarTick";
-      if (expression.name === "cached") return "__velarRuntime.computed";
       const controlled = this.hints.extensionLiterals.get(spanIdentity(expression.span));
       if (controlled !== undefined) return JSON.stringify(controlled);
     }
@@ -1313,7 +1312,7 @@ function containsWebSyntax(value: unknown): boolean {
   const record = value as Record<string, unknown>;
   if (record.kind === "ExtensionStatement:web:component" || record.kind === "ExtensionStatement:web:expose" || record.kind === "ExtensionStatement:web:unsafe-css" || record.kind === "ExtensionExpression:web:look" || record.kind === "ExtensionExpression:web:keyframes" || record.kind === "ExtensionExpression:web:jsx"
     || record.kind === "ExtensionStatement:web:state" || record.kind === "ExtensionStatement:web:computed" || record.kind === "ExtensionStatement:web:resource" || record.kind === "ExtensionStatement:web:action" || record.kind === "ExtensionStatement:web:watch") return true;
-  if (record.kind === "IdentifierExpression" && (record.name === "mount" || record.name === "tick" || record.name === "cached")) return true;
+  if (record.kind === "IdentifierExpression" && (record.name === "mount" || record.name === "tick")) return true;
   return Object.values(record).some((child) => Array.isArray(child) ? child.some(containsWebSyntax) : containsWebSyntax(child));
 }
 
@@ -1788,8 +1787,8 @@ function __velarState(initial) {
 }
 
 // D71 rule 182: a declared derived value reads bare, so it presents the same
-// .get() face a state cell does. The cache underneath is the same one
-// the cached reader returns; only the way it is read differs.
+// .get() face a state cell does. The cache underneath is the runtime's own
+// memo; only the face it is read through differs.
 function __velarComputed(read) {
   const access = __velarRuntime.computed(read);
   if (!__velarFrozenHooks) return __velarGraphFreeze({ get: access });

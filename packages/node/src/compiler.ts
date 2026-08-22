@@ -39,7 +39,6 @@ export { VELAR_PROCESS_HOST_RUNTIME } from "./process-runtime.ts";
 export const VELAR_NODE_API_VERSION = "0.10";
 export const VELAR_NODE_HOST_MODULE = "velar/node-host-v1";
 
-const anyType: ValueType = { kind: "any" };
 const unknownType: ValueType = { kind: "unknown" };
 const nullType: ValueType = { kind: "null" };
 const stringType: ValueType = { kind: "string" };
@@ -78,11 +77,12 @@ function capabilityHandle(fields: Readonly<Record<string, ValueType>>): ValueTyp
   return { kind: "object", fields: new Map(Object.entries(fields)), capabilityHandle: true };
 }
 
-function object(fields: Readonly<Record<string, ValueType>>, optionalFields: readonly string[] = []): ValueType {
+function object(fields: Readonly<Record<string, ValueType>>, optionalFields: readonly string[] = [], readonlyFields: readonly string[] = []): ValueType {
   return {
     kind: "object",
     fields: new Map(Object.entries(fields)),
     ...(optionalFields.length > 0 ? { optionalFields: new Set(optionalFields) } : {}),
+    ...(readonlyFields.length > 0 ? { readonlyFields: new Set(readonlyFields) } : {}),
   };
 }
 
@@ -133,14 +133,14 @@ const requestBodyTooLargeErrorClass: ClassInfo = {
 const serveHttpErrorIdentity = "velar/serve#class:HttpError";
 const serveHttpErrorClass: ClassInfo = {
   identity: serveHttpErrorIdentity,
-  parameters: [numberType, anyType, optional(responseHeadersType)],
+  parameters: [numberType, unknownType, optional(responseHeadersType)],
   parameterNames: ["status", "body", "headers"],
   requiredParameters: 1,
   base: "Error",
   abstract: false,
   fields: new Map([
     ["status", { mutable: false, type: numberType }],
-    ["body", { mutable: false, type: anyType }],
+    ["body", { mutable: false, type: unknownType }],
     ["headers", { mutable: false, type: responseHeadersType }],
   ]),
   getters: new Set(), abstractGetters: new Set(), methods: new Map(), abstractMethods: new Set(),
@@ -156,14 +156,17 @@ const sseEventType = object({
 }, ["event", "id", "retry"]);
 const sseSendType = functionType(["event"], [{ kind: "union", members: [stringType, sseEventType] }], promise(nullType));
 const sseProducerType = functionType(["send"], [sseSendType], promise(nullType));
-const jsonResponseType = object({ status: numberType, json: anyType, headers: responseHeadersType }, ["headers"]);
+// The payload field is readonly: the runtime freezes every response value, and a mutable
+// structural field is invariant, which would make `json: unknown` accept only unknown instead of
+// accepting any payload and answering unknown to readers (D90 R17).
+const jsonResponseType = object({ status: numberType, json: unknownType, headers: responseHeadersType }, ["headers"], ["json"]);
 const textResponseType = object({ status: numberType, text: stringType, contentType: stringType, headers: responseHeadersType }, ["contentType", "headers"]);
 const streamResponseType = object({ status: numberType, stream: streamProducerType, headers: responseHeadersType }, ["headers"]);
 const serveResponseAlias: ValueType = { kind: "union", members: [jsonResponseType, textResponseType, streamResponseType] };
 const openApiDocumentType = object({
   openapi: stringType,
   info: object({ title: stringType, version: stringType }),
-  paths: { kind: "record", value: anyType },
+  paths: { kind: "record", value: unknownType },
 });
 const routeDocumentationType = object({
   summary: optional(stringType),
@@ -188,7 +191,7 @@ const inputType = object({
   query: namedIntrinsic("serve.input.query", ["name", "default"], [stringType, stringOrNullType], routeInputType, 0),
   header: namedIntrinsic("serve.input.header", ["name", "default"], [stringType, stringOrNullType], routeInputType, 0),
   cookie: namedIntrinsic("serve.input.cookie", ["name", "default"], [stringType, stringOrNullType], routeInputType, 0),
-  form: namedIntrinsic("serve.input.form", ["target"], [anyType], routeInputType),
+  form: namedIntrinsic("serve.input.form", ["target"], [unknownType], routeInputType),
   upload: namedIntrinsic("serve.input.upload", ["name", "maxBytes"], [stringType, numberType], routeInputType, 0),
   dependency: namedIntrinsic("serve.input.dependency", ["provider"], [unknownType], routeInputType),
   request: namedIntrinsic("serve.input.request", [], [], routeInputType, 0),
@@ -201,7 +204,7 @@ const securityType = object({
   openId: namedIntrinsic("serve.security.openId", ["url"], [stringType], routeInputType),
 });
 const releaseProviderType = functionType(["value"], [unknownType], unknownType);
-const errorHandlerType = functionType(["error", "request"], [anyType, serveRequestType], promise(serveResponseAlias));
+const errorHandlerType = functionType(["error", "request"], [unknownType, serveRequestType], promise(serveResponseAlias));
 const accessLoggerType = functionType(["entry"], [object({method: stringType, path: stringType, status: numberType, durationMs: numberType})], unknownType);
 const middlewareFactoriesType = object({
   cors: functionType(["origins", "methods", "headers", "credentials", "maxAge"], [listStringType, listStringType, listStringType, boolType, numberType], middlewareType, 0),
@@ -219,13 +222,15 @@ const backgroundTaskType = functionType([], [], unknownType);
 const testResponseType: ValueType = { kind: "named", name: "TestResponse", identity: "velar/server-test#type:TestResponse" };
 const testClientType: ValueType = { kind: "named", name: "TestClient", identity: "velar/server-test#type:TestClient" };
 const testUploadType = object({filename: stringType, contentType: optional(stringType), data: {kind: "union", members: [stringType, bytesType]}}, ["contentType"]);
+// `json` is readonly for the same invariance reason as the response payload: the options record
+// is a request snapshot, and a mutable unknown field would accept only unknown.
 const testRequestOptionsType = object({
   headers: optional(stringMapType),
-  json: optional(anyType),
+  json: optional(unknownType),
   text: optional(stringType),
   form: optional(stringMapType),
   files: optional({kind: "map", key: stringType, value: testUploadType}),
-}, ["headers", "json", "text", "form", "files"]);
+}, ["headers", "json", "text", "form", "files"], ["json"]);
 const testRequestType = functionType(["method", "path", "options"], [stringType, stringType, testRequestOptionsType], promise(testResponseType), 2);
 const testMethodType = functionType(["path", "options"], [stringType, testRequestOptionsType], promise(testResponseType), 1);
 const fileInfoType = object({
@@ -277,7 +282,7 @@ const nodeHttpResponseType = object({
   text: functionType([], [], promise(stringType)),
   bytes: functionType([], [], promise(bytesType)),
   streamText: functionType(["consume"], [httpChunkConsumerType], promise(nullType)),
-  parse: namedIntrinsic("runtime.parseAsync", ["target"], [anyType], promise(anyType)),
+  parse: namedIntrinsic("runtime.parseAsync", ["target"], [unknownType], promise(unknownType)),
 });
 const nodeHttpRequestType = object({
   response: functionType([], [], promise(nodeHttpResponseType)),
@@ -285,7 +290,7 @@ const nodeHttpRequestType = object({
   text: functionType([], [], promise(stringType)),
   bytes: functionType([], [], promise(bytesType)),
   streamText: functionType(["consume"], [httpChunkConsumerType], promise(nullType)),
-  parse: namedIntrinsic("runtime.parseAsync", ["target"], [anyType], promise(anyType)),
+  parse: namedIntrinsic("runtime.parseAsync", ["target"], [unknownType], promise(unknownType)),
   cancel: functionType([], [], nullType),
 });
 const nodeHttpOptionsType = object({
@@ -469,8 +474,8 @@ export const nodeModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Ma
       ["provide", namedIntrinsic("serve.provide", ["inputs", "resolve", "scope", "release", "eager"], [unknownType, unknownType, stringType, releaseProviderType, boolType], providerType, 2)],
       ["middleware", middlewareFactoriesType],
       ["serve", functionType(["app", "port", "host", "maxBodyBytes"], [serveTargetType, numberType, stringType, numberType], promise(serverType), 2)],
-      ["json", namedIntrinsic("serve.response.json", ["value", "status", "headers"], [anyType, numberType, optional(responseHeadersType)], jsonResponseType, 1)],
-      ["created", namedIntrinsic("serve.response.created", ["value", "headers"], [anyType, optional(responseHeadersType)], jsonResponseType, 1)],
+      ["json", namedIntrinsic("serve.response.json", ["value", "status", "headers"], [unknownType, numberType, optional(responseHeadersType)], jsonResponseType, 1)],
+      ["created", namedIntrinsic("serve.response.created", ["value", "headers"], [unknownType, optional(responseHeadersType)], jsonResponseType, 1)],
       ["noContent", namedIntrinsic("serve.response.noContent", ["completion", "headers"], [nullType, optional(responseHeadersType)], textResponseType, 0)],
       ["redirect", namedIntrinsic("serve.response.redirect", ["location", "status", "headers"], [stringType, numberType, optional(responseHeadersType)], textResponseType, 1)],
       ["text", namedIntrinsic("serve.response.text", ["value", "status", "contentType", "headers"], [stringType, numberType, stringType, optional(responseHeadersType)], textResponseType, 1)],
@@ -500,7 +505,7 @@ export const nodeModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Ma
         ["text", functionType(["maxBytes"], [numberType], promise(stringType), 0)],
         ["bytes", functionType(["maxBytes"], [numberType], promise(bytesType), 0)],
         ["json", functionType(["maxBytes"], [numberType], promise(unknownType), 0)],
-        ["parse", namedIntrinsic("runtime.parseAsync", ["target", "maxBytes"], [anyType, numberType], promise(anyType), 1)],
+        ["parse", namedIntrinsic("runtime.parseAsync", ["target", "maxBytes"], [unknownType, numberType], promise(unknownType), 1)],
       ])],
       ["ServeRequest", new Map([
         ["method", stringType],
@@ -512,7 +517,7 @@ export const nodeModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Ma
         ["text", functionType(["maxBytes"], [numberType], promise(stringType), 0)],
         ["bytes", functionType(["maxBytes"], [numberType], promise(bytesType), 0)],
         ["json", functionType(["maxBytes"], [numberType], promise(unknownType), 0)],
-        ["parse", namedIntrinsic("runtime.parseAsync", ["target", "maxBytes"], [anyType, numberType], promise(anyType), 1)],
+        ["parse", namedIntrinsic("runtime.parseAsync", ["target", "maxBytes"], [unknownType, numberType], promise(unknownType), 1)],
       ])],
       ["Server", new Map([
         ["port", numberType],

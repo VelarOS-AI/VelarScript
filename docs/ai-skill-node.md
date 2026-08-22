@@ -201,6 +201,23 @@ and explicit error recovery. A timeout response does not pretend downstream
 work was cancelled: its request resources remain alive until that work really
 ends, and the runtime caps unfinished timed-out tasks.
 
+Overlapping routes are refused by two referees. At compile time the analyzer
+follows the path-preserving combinators: `use`, `bodyLimit`, `docs`, and
+`lifecycle` carry their app argument’s routes through unchanged, and `prefix`
+translates them when its path is a string literal. So
+`...prefix("/api", routes)` is checked against the composing server’s own
+routes at the translated addresses, and the diagnostic names that address and
+the server the route was composed in from. A module-level `const` alias of a
+server resolves, and so does a `let` the module never reassigns. A spread the
+analyzer cannot resolve, such as an imported server, a computed prefix path, or
+an app handed back by a function, is deliberately let through; a false conflict
+here would block a correct program. The final route table exists only at
+assembly, so the runtime judges it there: an overlapping table refuses to build,
+and the failure names both routes, where each one came from, and the method and
+path shape they share. Both referees read one definition of that shape, and a
+program the compiler rejected never reaches assembly, so nothing is reported
+twice.
+
 `lifecycle` owns paired startup and shutdown hooks. Successful startups unwind
 in reverse order; a failed startup does not run its paired shutdown.
 `background(response, task)` keeps request-scoped resources valid until the
@@ -321,6 +338,21 @@ ambient Node globals. Database contracts, drivers, codecs, and other
 application integrations are project-owned modules or dependencies. Declare
 third-party boundaries with checked `extern module`; keep `import js unsafe`
 at one narrow validation boundary.
+
+Wire-shaped values arrive as `unknown`, not as a checked shape. An
+`HttpError`’s `body`, the payload of a response whose declared type is
+`ServeResponse`, the path items of an `openapi(...)` document, the error handed
+to a `middleware.errors` handler, and a test response’s parsed body are all
+`unknown`: validate one with `Type.parse`, or narrow it, before touching a
+member. A middleware reaches no payload at all: `await next()` answers the whole
+`ServeResponse` union, whose three variants share no payload field and no
+discriminant, so `status` and `headers` are the members it can read.
+`request.parse(Report)` is unchanged and stays the checked way in. Constructing
+responses is unchanged too; `json` and `created` accept any payload and hand
+back a response whose payload keeps the type it was given, and that payload
+turns into a read-only `unknown` once the value is widened to `ServeResponse`,
+which is what lets a response carrying a concrete payload still be a
+`ServeResponse`.
 
 Run `velar format --check`, `velar check`, `velar test`, and
 `velar build`. The complete runnable spelling lives in

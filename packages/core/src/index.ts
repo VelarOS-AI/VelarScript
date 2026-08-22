@@ -44,7 +44,6 @@ export const VELAR_STANDARD_API_VERSION = "0.5";
 
 export const VELAR_WORKER_MANIFEST_MODULE = "velar/worker-manifest";
 
-const anyType: ValueType = { kind: "any" };
 const nullType: ValueType = { kind: "null" };
 const stringType: ValueType = { kind: "string" };
 const numberType: ValueType = { kind: "number" };
@@ -78,10 +77,13 @@ function object(fields: Readonly<Record<string, ValueType>>): ValueType {
 const unknownType: ValueType = { kind: "unknown" };
 const errorType: ValueType = { kind: "class", name: "Error" };
 const cleanupType = apiFunction([], [], nullType);
-const listAny: ValueType = { kind: "list", element: anyType };
+// D90 R17: accept-anything positions are `unknown`, the top type for
+// assignment targets; the analyzer's intrinsic handlers compute the real
+// per-call types, so nothing here ever hands back an unchecked `any`.
+const listUnknown: ValueType = { kind: "list", element: unknownType };
 const listNumber: ValueType = { kind: "list", element: numberType };
 const listString: ValueType = { kind: "list", element: stringType };
-const mapAny: ValueType = { kind: "map", key: anyType, value: anyType };
+const mapUnknown: ValueType = { kind: "map", key: unknownType, value: unknownType };
 const mapString = (value: ValueType): ValueType => ({ kind: "map", key: stringType, value });
 const patternOptionsType = object({
   ignoreCase: optional(boolType),
@@ -251,33 +253,33 @@ const workerErrorIdentities = new Map([
 const coreModuleInterfaces = new Map<string, ModuleInterface>([
   ["velar/collections", moduleInterface(new Map([
     ["range", apiIntrinsic("collections.range", ["start", "end", "step"], [numberType, numberType, numberType], listNumber, 1)],
-    ["enumerate", apiIntrinsic("collections.enumerate", ["values", "start"], [listAny, numberType], listAny, 1)],
-    ["zip", apiIntrinsic("collections.zip", ["left", "right"], [listAny, listAny], listAny)],
-    ["unique", apiIntrinsic("collections.unique", ["values"], [listAny], listAny)],
-    ["chunk", apiIntrinsic("collections.chunk", ["values", "size"], [listAny, numberType], listAny)],
-    ["flatten", apiIntrinsic("collections.flatten", ["values"], [listAny], listAny)],
-    ["compact", apiIntrinsic("collections.compact", ["values"], [listAny], listAny)],
-    ["reversed", apiIntrinsic("collections.reversed", ["values"], [listAny], listAny)],
-    ["take", apiIntrinsic("collections.take", ["values", "count"], [listAny, numberType], listAny)],
-    ["drop", apiIntrinsic("collections.drop", ["values", "count"], [listAny, numberType], listAny)],
-    ["first", apiIntrinsic("collections.first", ["values"], [listAny], anyType)],
-    ["last", apiIntrinsic("collections.last", ["values"], [listAny], anyType)],
-    ["find", apiIntrinsic("collections.find", ["values", "test"], [listAny, anyType], anyType)],
-    ["index", apiIntrinsic("collections.index", ["values", "value"], [listAny, anyType], optional(numberType))],
-    ["has", apiIntrinsic("collections.has", ["values", "value"], [listAny, anyType], boolType)],
-    ["count", apiIntrinsic("collections.count", ["values", "value"], [listAny, anyType], numberType)],
-    ["some", apiIntrinsic("collections.some", ["values", "test"], [listAny, anyType], boolType)],
-    ["every", apiIntrinsic("collections.every", ["values", "test"], [listAny, anyType], boolType)],
-    ["partition", apiIntrinsic("collections.partition", ["values", "test"], [listAny, anyType], anyType)],
-    ["groupBy", apiIntrinsic("collections.groupBy", ["values", "key"], [listAny, anyType], mapAny)],
-    ["keyBy", apiIntrinsic("collections.keyBy", ["values", "key"], [listAny, anyType], mapAny)],
-    ["countBy", apiIntrinsic("collections.countBy", ["values", "key"], [listAny, anyType], mapAny)],
-    ["sortBy", apiIntrinsic("collections.sortBy", ["values", "key", "descending"], [listAny, anyType, boolType], listAny, 2)],
-    ["minBy", apiIntrinsic("collections.minBy", ["values", "key"], [listAny, anyType], anyType)],
-    ["maxBy", apiIntrinsic("collections.maxBy", ["values", "key"], [listAny, anyType], anyType)],
+    ["enumerate", apiIntrinsic("collections.enumerate", ["values", "start"], [listUnknown, numberType], listUnknown, 1)],
+    ["zip", apiIntrinsic("collections.zip", ["left", "right"], [listUnknown, listUnknown], listUnknown)],
+    ["unique", apiIntrinsic("collections.unique", ["values"], [listUnknown], listUnknown)],
+    ["chunk", apiIntrinsic("collections.chunk", ["values", "size"], [listUnknown, numberType], listUnknown)],
+    ["flatten", apiIntrinsic("collections.flatten", ["values"], [listUnknown], listUnknown)],
+    ["compact", apiIntrinsic("collections.compact", ["values"], [listUnknown], listUnknown)],
+    ["reversed", apiIntrinsic("collections.reversed", ["values"], [listUnknown], listUnknown)],
+    ["take", apiIntrinsic("collections.take", ["values", "count"], [listUnknown, numberType], listUnknown)],
+    ["drop", apiIntrinsic("collections.drop", ["values", "count"], [listUnknown, numberType], listUnknown)],
+    ["first", apiIntrinsic("collections.first", ["values"], [listUnknown], unknownType)],
+    ["last", apiIntrinsic("collections.last", ["values"], [listUnknown], unknownType)],
+    ["find", apiIntrinsic("collections.find", ["values", "test"], [listUnknown, unknownType], unknownType)],
+    ["index", apiIntrinsic("collections.index", ["values", "value"], [listUnknown, unknownType], optional(numberType))],
+    ["has", apiIntrinsic("collections.has", ["values", "value"], [listUnknown, unknownType], boolType)],
+    ["count", apiIntrinsic("collections.count", ["values", "value"], [listUnknown, unknownType], numberType)],
+    ["some", apiIntrinsic("collections.some", ["values", "test"], [listUnknown, unknownType], boolType)],
+    ["every", apiIntrinsic("collections.every", ["values", "test"], [listUnknown, unknownType], boolType)],
+    ["partition", apiIntrinsic("collections.partition", ["values", "test"], [listUnknown, unknownType], unknownType)],
+    ["groupBy", apiIntrinsic("collections.groupBy", ["values", "key"], [listUnknown, unknownType], mapUnknown)],
+    ["keyBy", apiIntrinsic("collections.keyBy", ["values", "key"], [listUnknown, unknownType], mapUnknown)],
+    ["countBy", apiIntrinsic("collections.countBy", ["values", "key"], [listUnknown, unknownType], mapUnknown)],
+    ["sortBy", apiIntrinsic("collections.sortBy", ["values", "key", "descending"], [listUnknown, unknownType, boolType], listUnknown, 2)],
+    ["minBy", apiIntrinsic("collections.minBy", ["values", "key"], [listUnknown, unknownType], unknownType)],
+    ["maxBy", apiIntrinsic("collections.maxBy", ["values", "key"], [listUnknown, unknownType], unknownType)],
     ["sum", apiIntrinsic("collections.sum", ["values"], [listNumber], numberType)],
     ["join", apiIntrinsic("collections.join", ["values", "separator"], [listString, stringType], stringType, 1)],
-    ["repeat", apiIntrinsic("collections.repeat", ["value", "count"], [anyType, numberType], listAny)],
+    ["repeat", apiIntrinsic("collections.repeat", ["value", "count"], [unknownType, numberType], listUnknown)],
   ]))],
   ["velar/text", moduleInterface(new Map([
     ["trimStart", apiFunction(["value"], [stringType], stringType)],
@@ -425,29 +427,29 @@ const coreModuleInterfaces = new Map<string, ModuleInterface>([
     ]),
   )],
   ["velar/json", moduleInterface(new Map([
-    ["parse", apiIntrinsic("json.parse", ["text", "target"], [stringType, anyType], unknownType, 1)],
-    ["tryParse", apiIntrinsic("json.tryParse", ["text", "target", "fallback"], [stringType, anyType, anyType], unknownType, 1)],
-    ["stringify", apiIntrinsic("json.stringify", ["value", "pretty"], [anyType, { kind: "union", members: [boolType, numberType] }], stringType, 1)],
-    ["stableStringify", apiIntrinsic("json.stableStringify", ["value", "pretty"], [anyType, { kind: "union", members: [boolType, numberType] }], stringType, 1)],
-    ["clone", apiIntrinsic("json.clone", ["value", "target"], [anyType, anyType], anyType, 1)],
-    ["isSerializable", apiFunction(["value"], [anyType], boolType)],
+    ["parse", apiIntrinsic("json.parse", ["text", "target"], [stringType, unknownType], unknownType, 1)],
+    ["tryParse", apiIntrinsic("json.tryParse", ["text", "target", "fallback"], [stringType, unknownType, unknownType], unknownType, 1)],
+    ["stringify", apiIntrinsic("json.stringify", ["value", "pretty"], [unknownType, { kind: "union", members: [boolType, numberType] }], stringType, 1)],
+    ["stableStringify", apiIntrinsic("json.stableStringify", ["value", "pretty"], [unknownType, { kind: "union", members: [boolType, numberType] }], stringType, 1)],
+    ["clone", apiIntrinsic("json.clone", ["value", "target"], [unknownType, unknownType], unknownType, 1)],
+    ["isSerializable", apiFunction(["value"], [unknownType], boolType)],
   ]))],
   ["velar/async", moduleInterface(new Map([
     ["sleep", apiFunction(["duration"], [durationType], promise(nullType))],
-    ["all", apiIntrinsic("async.all", ["values"], [anyType], promise(anyType))],
-    ["race", apiIntrinsic("async.race", ["values"], [listAny], promise(anyType))],
-    ["timeout", apiIntrinsic("async.timeout", ["value", "duration", "message"], [promise(anyType), durationType, stringType], promise(anyType), 2)],
-    ["retry", apiIntrinsic("async.retry", ["task", "attempts", "delay"], [anyType, numberType, durationType], promise(anyType), 1)],
-    ["map", apiIntrinsic("async.map", ["values", "worker", "concurrency"], [listAny, anyType, numberType], promise(listAny), 2)],
-    ["series", apiIntrinsic("async.series", ["tasks"], [listAny], promise(listAny))],
+    ["all", apiIntrinsic("async.all", ["values"], [unknownType], promise(unknownType))],
+    ["race", apiIntrinsic("async.race", ["values"], [listUnknown], promise(unknownType))],
+    ["timeout", apiIntrinsic("async.timeout", ["value", "duration", "message"], [promise(unknownType), durationType, stringType], promise(unknownType), 2)],
+    ["retry", apiIntrinsic("async.retry", ["task", "attempts", "delay"], [unknownType, numberType, durationType], promise(unknownType), 1)],
+    ["map", apiIntrinsic("async.map", ["values", "worker", "concurrency"], [listUnknown, unknownType, numberType], promise(listUnknown), 2)],
+    ["series", apiIntrinsic("async.series", ["tasks"], [listUnknown], promise(listUnknown))],
   ]))],
   ["velar/url", moduleInterface(new Map([
     ["parse", apiFunction(["value", "base"], [stringType, stringType], urlInfoType, 1)],
     // join is a pure rest call, so its segments stay positional.
     ["join", intrinsic("url.join", [stringType], stringType)],
-    ["query", apiFunction(["params"], [anyType], stringType)],
+    ["query", apiFunction(["params"], [unknownType], stringType)],
     ["parseQuery", apiFunction(["value"], [stringType], { kind: "map", key: stringType, value: stringType })],
-    ["withQuery", apiFunction(["value", "params"], [stringType, anyType], stringType)],
+    ["withQuery", apiFunction(["value", "params"], [stringType, unknownType], stringType)],
     ["withHash", apiFunction(["value", "hash"], [stringType, stringType], stringType)],
     ["isExternal", apiFunction(["value", "base"], [stringType, stringType], boolType, 1)],
     ["encode", apiFunction(["value"], [stringType], stringType)],
@@ -482,7 +484,7 @@ const coreModuleInterfaces = new Map<string, ModuleInterface>([
     new Map([["LogRecord", logRecordType]]),
   )],
   ["velar/test", moduleInterface(new Map([
-    ["expect", apiIntrinsic("test.expect", ["actual"], [anyType], anyType)],
+    ["expect", apiIntrinsic("test.expect", ["actual"], [unknownType], unknownType)],
   ]))],
 ]);
 

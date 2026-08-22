@@ -57,14 +57,17 @@ test("[D90] a relabelled host Error wears the name and is still not an Assertion
   // D51 rule 107: the class a value was constructed from is what decides, both
   // for `code` and for `is`. A host error with `.name = "AssertionError"` was
   // not raised by the language, so neither answer may believe the label.
+  // D90 R17: an undeclared export cannot be called, so the hostile thrower is
+  // declared through the contracted block form.
   const output = await run("velar-assertion-costume-", `
-unsafe js\`
+extern js()\`
 export function relabelled() {
     const error = new Error("costume");
     error.name = "AssertionError";
     throw error;
 }
-\`
+\`:
+    export def relabelled() -> null
 
 def main():
     try:

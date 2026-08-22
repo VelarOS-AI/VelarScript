@@ -208,13 +208,20 @@ test("[beta-9] a reused dependency buffer still drops and re-adds subscriptions"
   // runTracked now recycles the previous run's dependency Set instead of
   // allocating one per run. The buffer must be empty when it is handed back,
   // or a stale dependency would keep an observer subscribed forever.
+  //
+  // D90 R15(a) moved the branch out of the watch subject and into a computed,
+  // so the observer whose buffer is recycled here is the computed rather than
+  // the watch. It is the same runTracked and the same redirect: the recorded
+  // sequence below still says the subscription followed the branch.
   const execution = probeModule(`
 state useLeft = true
 state left = "L"
 state right = "R"
 let seen = ""
 
-watch useLeft ? left : right:
+computed shown = useLeft ? left : right
+
+watch shown:
     seen += useLeft ? "l" : "r"
 
 def choose(next: bool):
@@ -448,13 +455,13 @@ import {onError} from "velar/app"
 
 component App:
     state count = 0
-    const label = cached(() => f"count is {count}")
+    computed label = f"count is {count}"
 
     def bump():
         count += 1
 
     return <div>
-        <p data-label>{label()}</p>
+        <p data-label>{label}</p>
         <button data-bump on:click={bump}>inc</button>
     </div>
 

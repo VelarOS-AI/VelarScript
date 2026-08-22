@@ -87,7 +87,6 @@ import {
   type WebResourceDeclaration as ResourceDeclaration,
 } from "./ast.ts";
 import {
-  CACHED_INTRINSIC_TYPE,
   isWebComponentConstructor,
   isWebComponentType,
   isWebComputedExport,
@@ -147,6 +146,7 @@ const htmlEventHandlerAttributes = new Set([
   "ontouchstart", "ontouchend", "ontouchmove", "ontouchcancel",
 ]);
 const textualWebPrimitiveNames = new Set(["Length", "Percentage", "LengthPercentage", "TrackFraction", "Color", "Duration", "Angle"]);
+
 // D72 rule 186: derived from the published table, not restated beside it.
 const webEventTypeNames = WEB_EVENT_TYPE_NAMES;
 const webEventDeadFields = new Set(["target", "currentTarget", "value", "checked"]);
@@ -222,18 +222,17 @@ function storageReadGuidance(call: string): string {
 export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): ValueType | undefined {
   const { intrinsic, argumentAt, callSpan, arity, inferAt, callbackAt, runtimeTypeAt } = context;
   switch (intrinsic.name) {
-    case "reactive.computed": {
+    case RETIRED_ACCESSOR_INTRINSIC: {
+      // D90 R15(b): a call around a retired spelling returns the reader it
+      // always returned, carrying the callback's own result so an annotated
+      // declaration reads its migration message and nothing else. Nothing else
+      // is checked here — the shape is already refused, and a second complaint
+      // about a spelling that no longer exists teaches the author nothing.
       arity(1, 1);
       const callback = callbackAt(0, [], unknownType);
-      if (callback.kind === "any") return { kind: "function", parameters: [], requiredParameters: 0, result: anyType };
-      if (callback.kind !== "function" && callback.kind !== "intrinsic") {
-        context.typeError("cached requires a synchronous zero-argument function", argumentAt(0)?.span ?? callSpan);
-        return { kind: "function", parameters: [], requiredParameters: 0, result: unknownType };
-      }
-      const result = callback.result;
-      if (context.expandAliases(result).kind === "promise") {
-        context.typeError("cached cannot hold a Promise; load asynchronous data with a resource", argumentAt(0)?.span ?? callSpan);
-      }
+      const result = callback.kind === "function" || callback.kind === "intrinsic" || callback.kind === "action"
+        ? callback.result
+        : callback.kind === "any" ? anyType : unknownType;
       return { kind: "function", parameters: [], requiredParameters: 0, result };
     }
     case "web.route": {
@@ -779,6 +778,11 @@ function lookConditionTerms(
  * binding is not itself a state/prop reference: a computed accessor, a resource
  * handle, an action handle. A Look literal that reads one of these freezes it
  * exactly as it freezes a state read (LOK-D1).
+ *
+ * Both retired accessor spellings stay in the callee test even though neither
+ * is a global any more (D90 R15(b) removed `cached`, D71 removed `computed`):
+ * analysis after a migration diagnostic still has to stay coherent, so the name
+ * a retired declaration binds is treated as derived exactly as it was before.
  */
 function collectDerivedReactiveNames(program: Program): ReadonlySet<string> {
   const names = new Set<string>();
@@ -786,7 +790,7 @@ function collectDerivedReactiveNames(program: Program): ReadonlySet<string> {
     for (const statement of statements) {
       if (statement.kind === "VariableDeclaration" && statement.pattern.kind === "NameBindingPattern"
         && statement.initializer.kind === "CallExpression" && statement.initializer.callee.kind === "IdentifierExpression"
-        && (statement.initializer.callee.name === "cached" || statement.initializer.callee.name === "computed")) {
+        && isRetiredAccessorName(statement.initializer.callee.name)) {
         names.add(statement.pattern.name);
         continue;
       }
@@ -1004,9 +1008,265 @@ function hasAccessibleSvgName(expression: JSXElementExpression): boolean {
     && child.tag === "title" && hasAccessibleJsxContent(child));
 }
 
+/**
+ * D90 R15(b): `cached` is removed, so the two retired accessor spellings are
+ * answered with the signature they always had, so a call written around a
+ * retired name still type-checks instead of collapsing into an unknown one —
+ * that is what keeps the migration message the only thing the author reads.
+ * `reactive.computed` itself is gone; this one derives no reactivity and is
+ * never emitted, because every site that produces it also produces an error.
+ * It stays an intrinsic only so the reader it returns carries the callback's
+ * own result: an annotated declaration — `const one: () -> number =
+ * cached(() => 1)` — would otherwise read a second, spurious assignability
+ * error on top of its migration.
+ */
+const RETIRED_ACCESSOR_INTRINSIC = "reactive.retired-accessor";
+const retiredAccessorReaderType: ValueType = Object.freeze({ kind: "function", parameters: [], requiredParameters: 0, result: unknownType });
+const RETIRED_ACCESSOR_TYPE: ValueType = Object.freeze({
+  kind: "intrinsic",
+  name: RETIRED_ACCESSOR_INTRINSIC,
+  parameterNames: ["read"],
+  parameters: [retiredAccessorReaderType],
+  requiredParameters: 1,
+  result: retiredAccessorReaderType,
+});
+
+/** The two retired spellings of a derived value; `computed` the declaration is what both become. */
+function isRetiredAccessorName(name: string): boolean {
+  return name === "computed" || name === "cached";
+}
+
+/**
+ * D90 R15(a): a watch subject names a place in the reactive graph — the name of
+ * a `state` or a `computed`, or a read path out of one — and never computes a
+ * value. The rule is written positively, as this allowlist, because that is
+ * what makes the relation between a watch and its source *declared* rather than
+ * inferred; every earlier attempt to infer it was defeated by one more
+ * indirection. A path is legal at any depth and with any index expression:
+ * `rows[i].cells[j]` still selects a place, and whether `i` is a constant or
+ * another state changes nothing about that. An operator or a call derives a new
+ * value instead, and a derived value already has a spelling that names it,
+ * caches it, and declares its dependencies. The conditional is an operator by
+ * the charter's own vocabulary, and an f-string builds a new string, so neither
+ * needs a clause of its own — they simply are not paths.
+ *
+ * Whether the root of a legal path is reactive is a different question, and
+ * `frozenWatchSubject` keeps it: this answers shape only.
+ */
+function watchSubjectPath(expression: Expression): boolean {
+  switch (expression.kind) {
+    case "IdentifierExpression":
+      return true;
+    case "MemberExpression":
+    case "IndexExpression":
+      return watchSubjectPath(expression.object);
+    default:
+      return false;
+  }
+}
+
+/** The escapes a text literal carries back into source (`scanStringEscape`). */
+const WATCH_SUBJECT_TEXT_ESCAPES: Readonly<Record<string, string>> = {
+  "\\": "\\\\",
+  "\"": "\\\"",
+  "\n": "\\n",
+  "\r": "\\r",
+  "\t": "\\t",
+};
+
+/**
+ * A text literal written back as source. `LiteralExpression.raw` holds the
+ * decoded content without its quotes, so echoing it would quote an expression
+ * the author never wrote and hand him a `computed` line that does not compile —
+ * `watch term + "!":` would read back as `term + !`. The quote the author chose
+ * is not on the node, so every text literal reads back double-quoted; that is a
+ * spelling difference, not a meaning one, and it compiles.
+ */
+function renderWatchTextLiteral(value: string, insideFString: boolean): string {
+  let text = "";
+  for (const character of value) {
+    const escape = WATCH_SUBJECT_TEXT_ESCAPES[character];
+    if (escape !== undefined) {
+      text += escape;
+      continue;
+    }
+    // `{{` and `}}` are how an f-string carries a brace that is not a hole.
+    if (insideFString && (character === "{" || character === "}")) {
+      text += `${character}${character}`;
+      continue;
+    }
+    const code = character.codePointAt(0)!;
+    text += code < 0x20 || code === 0x7f ? `\\u{${code.toString(16)}}` : character;
+  }
+  return text;
+}
+
+/**
+ * The subject as the author wrote it, reconstructed from the AST for exactly
+ * the node kinds a subject can be. The analyzer never sees the module text, and
+ * a refusal that cannot quote what it refused teaches nothing — so the message
+ * quotes this. It is a reconstruction and stays one: it is used in the message
+ * only, never in a `fix`, because rewriting an author's source from a
+ * reconstruction is a worse defect than the one being reported. Null means
+ * "cannot say faithfully", and the message drops the echo rather than guess.
+ *
+ * Faithfulness is the whole point, so grouping is carried across rather than
+ * re-derived: the three nodes that record the author's own parentheses are
+ * printed with them, and the low-precedence nodes that record nothing are
+ * parenthesized wherever a bare printing would re-associate. The reconstruction
+ * therefore parses back to the tree it came from.
+ */
+function renderWatchSubject(expression: Expression): string | null {
+  switch (expression.kind) {
+    case "IdentifierExpression":
+      return expression.name;
+    case "LiteralExpression":
+      return typeof expression.value === "string" ? `"${renderWatchTextLiteral(expression.value, false)}"` : expression.raw;
+    case "MemberExpression": {
+      const object = renderWatchSubjectOperand(expression.object);
+      return object === null ? null : `${object}${expression.optional ? "?." : "."}${expression.property}`;
+    }
+    case "IndexExpression": {
+      const object = renderWatchSubjectOperand(expression.object);
+      const index = renderWatchSubject(expression.index);
+      return object === null || index === null ? null : `${object}${expression.optional ? "?" : ""}[${index}]`;
+    }
+    case "CallExpression": {
+      const callee = renderWatchSubjectOperand(expression.callee);
+      if (callee === null) return null;
+      const argumentTexts: string[] = [];
+      for (const [index, argument] of expression.arguments.entries()) {
+        const rendered = renderWatchSubject(argument);
+        if (rendered === null) return null;
+        const name = expression.argumentNames?.[index] ?? null;
+        argumentTexts.push(name === null ? rendered : `${name} = ${rendered}`);
+      }
+      return `${callee}${expression.optional ? "?" : ""}(${argumentTexts.join(", ")})`;
+    }
+    case "SpreadExpression": {
+      const value = renderWatchSubjectOperand(expression.value);
+      return value === null ? null : `...${value}`;
+    }
+    case "RequiredExpression": {
+      const value = renderWatchSubjectOperand(expression.value);
+      return value === null ? null : `${value}!`;
+    }
+    case "TryExpression": {
+      const value = renderWatchSubjectOperand(expression.value);
+      return value === null ? null : `try ${value}`;
+    }
+    case "ListExpression": {
+      const elements = expression.elements.map((element) => renderWatchSubject(element));
+      if (elements.some((element) => element === null)) return null;
+      return `[${elements.join(", ")}]`;
+    }
+    case "ObjectExpression": {
+      const entries: string[] = [];
+      for (const property of expression.properties) {
+        if (property.kind === "ObjectSpread") {
+          const value = renderWatchSubjectOperand(property.value);
+          if (value === null) return null;
+          entries.push(`...${value}`);
+          continue;
+        }
+        if (property.shorthand === true) {
+          entries.push(property.name);
+          continue;
+        }
+        const value = renderWatchSubject(property.value);
+        if (value === null) return null;
+        entries.push(`${property.name}: ${value}`);
+      }
+      return `{${entries.join(", ")}}`;
+    }
+    case "ArrowFunctionExpression": {
+      // An annotated or defaulted parameter would need a type printer this file
+      // has no business owning; the callback shapes a subject carries do not.
+      if (expression.parameters.some((parameter) => parameter.type !== null || parameter.defaultValue !== null)) return null;
+      const body = renderWatchSubject(expression.body);
+      if (body === null) return null;
+      const parameters = expression.parameters.map((parameter) => `${parameter.rest ? "..." : ""}${parameter.name}`);
+      const head = expression.parameters.length === 1 && !expression.parameters[0]!.rest
+        ? parameters[0]!
+        : `(${parameters.join(", ")})`;
+      return `${expression.asynchronous ? "async " : ""}${head} => ${body}`;
+    }
+    case "UnaryExpression": {
+      const operand = renderWatchSubjectOperand(expression.operand);
+      if (operand === null) return null;
+      const spaced = expression.operator === "not" || expression.operator === "await";
+      return `${expression.operator}${spaced ? " " : ""}${operand}`;
+    }
+    case "BinaryExpression": {
+      const left = renderWatchSubjectOperand(expression.left);
+      const right = renderWatchSubjectOperand(expression.right);
+      if (left === null || right === null) return null;
+      return groupWatchSubject(`${left} ${expression.operator} ${right}`, expression.parenthesized);
+    }
+    case "ComparisonChainExpression": {
+      const operands = expression.operands.map((operand) => renderWatchSubjectOperand(operand));
+      const first = operands[0];
+      if (first === undefined || first === null || operands.some((operand) => operand === null)) return null;
+      const chain = operands.slice(1).reduce<string>((text, operand, index) => `${text} ${expression.operators[index]} ${operand}`, first);
+      return groupWatchSubject(chain, expression.parenthesized);
+    }
+    case "ConditionalExpression": {
+      const condition = renderWatchSubjectOperand(expression.condition);
+      const thenValue = renderWatchSubjectOperand(expression.thenValue);
+      const elseValue = renderWatchSubject(expression.elseValue);
+      if (condition === null || thenValue === null || elseValue === null) return null;
+      return `${condition} ? ${thenValue} : ${elseValue}`;
+    }
+    case "IsExpression": {
+      const value = renderWatchSubjectOperand(expression.value);
+      // Only a plain named type reads back as one word; anything generic or
+      // optional would need a type printer this file has no business owning.
+      if (value === null || expression.type.syntax.kind !== "NamedTypeSyntax") return null;
+      return groupWatchSubject(`${value} ${expression.operator} ${expression.type.syntax.name}`, expression.parenthesized);
+    }
+    case "FStringExpression": {
+      let text = "";
+      for (const part of expression.parts) {
+        if (part.kind === "text") {
+          text += renderWatchTextLiteral(part.value, true);
+          continue;
+        }
+        const value = renderWatchSubject(part.value);
+        if (value === null) return null;
+        text += `{${value}}`;
+      }
+      return `f"${text}"`;
+    }
+    default:
+      return null;
+  }
+}
+
+/**
+ * The same reconstruction in a position where a bare printing would bind
+ * differently than the author's source did — a binary operand, the object of a
+ * member read, the callee of a call. A conditional or an arrow reaches such a
+ * position only through parentheses the author wrote, and neither node records
+ * them, so they are restored here.
+ */
+function renderWatchSubjectOperand(expression: Expression): string | null {
+  const rendered = renderWatchSubject(expression);
+  if (rendered === null) return null;
+  return expression.kind === "ConditionalExpression" || expression.kind === "ArrowFunctionExpression"
+    ? `(${rendered})`
+    : rendered;
+}
+
+/** Restores the parentheses the author wrote, for the three nodes that record them. */
+function groupWatchSubject(rendered: string, parenthesized: true | undefined): string {
+  return parenthesized === true ? `(${rendered})` : rendered;
+}
+
 interface RetiredAccessorDeclaration {
   readonly name: string;
   readonly exported: boolean;
+  /** The named function the argument reads through, when it is one — `cached(readA)`. */
+  readonly readName: string | null;
   readonly declarationSpan: Span;
   readonly callSpan: Span;
   /** The `() => E` body span, or null when the argument is not that shape. */
@@ -1177,10 +1437,10 @@ export class VelarWebAnalyzer extends Analyzer {
   private readonly importedComputedNames: ReadonlySet<string>;
   /** The resolved spans of those imports, so a local shadow of the name is not one. */
   private readonly importedComputedSpans = new Set<string>();
-  /** D71 migration state: retired `const x = computed(...)` sites, their reads, and every other `computed` reference. */
+  /** D71/D90 R15(b) migration state: retired `const x = computed(...)`/`cached(...)` sites, their reads, and every other reference to either name. */
   private readonly retiredAccessorDeclarations = new Map<string, RetiredAccessorDeclaration>();
   private readonly retiredAccessorReads = new Map<string, Span[]>();
-  private readonly retiredComputedReferences = new Map<string, Span>();
+  private readonly retiredComputedReferences = new Map<string, { readonly name: string; readonly span: Span }>();
   private readonly migratedComputedCallees = new Set<string>();
   /** Callee span identity -> call span, for every zero-argument call of a plain name. */
   private readonly plainCallSpans = new Map<string, Span>();
@@ -1335,7 +1595,6 @@ export class VelarWebAnalyzer extends Analyzer {
     if (statement.kind === "VariableDeclaration") {
       this.recordRetiredAccessorDeclaration(statement);
       this.recordFunctionAlias(statement);
-      this.reportExportedCachedContract(statement);
     }
     if (!isWebStatement(statement)) return false;
     switch (statement.kind) {
@@ -1389,7 +1648,7 @@ export class VelarWebAnalyzer extends Analyzer {
           // the body only runs on a later change, so its reads are deferred
           // for the module-initialization-cycle classification.
           const watched = this.inferExpression(statement.expression);
-          this.rejectFrozenWatchSubject(statement.expression, watched);
+          this.rejectFrozenWatchSubject(statement.expression, watched, statement.currentName, statement.previousName);
           this.enterScope();
           if (statement.currentName) this.declareBinding(statement.currentName, false, watched, statement.span);
           if (statement.previousName) this.declareBinding(statement.previousName, false, watched, statement.span);
@@ -1695,7 +1954,7 @@ export class VelarWebAnalyzer extends Analyzer {
       // The retired name is answered here rather than left to fall through as an
       // unknown one: the author gets its migration and nothing else, and the
       // call around it still type-checks against the signature it always had.
-      if (retired) return CACHED_INTRINSIC_TYPE;
+      if (retired) return RETIRED_ACCESSOR_TYPE;
     }
     const result = super.inferExpression(expression, contextualType);
     if (expression.kind === "CallExpression") {
@@ -1742,28 +2001,61 @@ export class VelarWebAnalyzer extends Analyzer {
   /**
    * D69 rule 178: a `watch` body that can never run is a block of statements
    * the compile silently drops — the same defect a bare `5` is already rejected
-   * for (VEL4030), reached from a position the rule could not see. The subject
-   * is refused only where the compile can *prove* nothing behind it moves, so a
-   * call whose reactivity lives inside another module is left alone: a rule that
-   * rejected those would be worse than the hole it closes.
+   * for (VEL4030), reached from a position the rule could not see.
    *
-   * The two refusals are separate because their causes are: a reader that was
-   * not called has one correct spelling to name, and a frozen value has none.
+   * D90 R15(a) adds the third refusal and fixes the order the three are asked
+   * in. A frozen subject is answered before the shape rule so that one shape
+   * never draws two messages: a subject built only from frozen parts has no
+   * reactive source at all, and telling its author to declare a `computed`
+   * would only buy him a dead one. What survives both is either a path — the
+   * name of a reactive binding, or a member/index read out of one — or a
+   * computation, and a computation has a spelling of its own.
+   *
+   * The three refusals are separate because their causes are: a reader that was
+   * not called names a value that never moves, a frozen value has no reactive
+   * source behind it at all, and a computed subject has one but hides which.
    */
-  private rejectFrozenWatchSubject(expression: Expression, watched: ValueType): void {
+  private rejectFrozenWatchSubject(
+    expression: Expression,
+    watched: ValueType,
+    currentName: string | null,
+    previousName: string | null,
+  ): void {
     const name = expression.kind === "IdentifierExpression" ? expression.name : null;
     if (name !== null && this.reactiveBindingKind(name) === null && this.zeroArgumentReader(watched)) {
       this.diagnostics.push(diagnostic(
         "VEL5064",
-        `'${name}' is the reader itself, so watching it watches a value that never changes; write 'watch ${name}():' to watch what it reads`,
+        `'${name}' is the reader itself, so watching it watches a value that never changes; declare the derived value — 'computed name = ${name}()' — then 'watch name:'`,
         expression.span,
       ));
       return;
     }
-    if (!this.frozenWatchSubject(expression)) return;
+    if (this.frozenWatchSubject(expression)) {
+      this.diagnostics.push(diagnostic(
+        "VEL5064",
+        `This watch subject never changes, so its body can never run${name === null ? "" : ` — '${name}' is not a reactive source`}; watch a 'state', a 'computed', a prop, or a resource field, or move these statements to where they should run`,
+        expression.span,
+      ));
+      return;
+    }
+    if (watchSubjectPath(expression)) return;
+    // D69's own shape, `watch total()`, is a called `computed`, and VEL5063 has
+    // already named it with the one-character edit that makes this subject
+    // legal. Stacking the shape rule on top would report one mistake twice and
+    // would hand the author 'computed value = total()' — a line that reports
+    // VEL5063 in its turn. The same reason the frozen rule is asked first.
+    if (this.diagnostics.some((item) => item.code === "VEL5063"
+      && item.span.start === expression.span.start && item.span.end === expression.span.end)) return;
+    const derived = currentName ?? "value";
+    const watchLine = currentName === null
+      ? `watch ${derived}:`
+      : `watch ${derived} as current${previousName === null ? "" : `, ${previousName}`}:`;
+    const rendered = renderWatchSubject(expression);
     this.diagnostics.push(diagnostic(
-      "VEL5064",
-      `This watch subject never changes, so its body can never run${name === null ? "" : ` — '${name}' is not a reactive source`}; watch a 'state', a 'computed', a prop, or a resource field, or move these statements to where they should run`,
+      "VEL5071",
+      rendered === null
+        ? `A watch subject names what to watch, not what to compute. Declare the value — 'computed ${derived} = ...' — then '${watchLine}'`
+        : `A watch subject names what to watch, not what to compute: '${rendered}' computes a value. Declare it — 'computed ${derived} = ${rendered}' — then '${watchLine}'`,
       expression.span,
     ));
   }
@@ -2115,28 +2407,30 @@ export class VelarWebAnalyzer extends Analyzer {
   }
 
   /**
-   * D71 rule 183: `computed(...)` the function is retired in favour of
-   * `cached(...)`, and `const x = computed(() => E)` is retired in favour of the
-   * declaration. The declaration is recorded before the core walks the module so
-   * its reads can be matched against it — the rewrite that removes the call
-   * parentheses is only offered when every read is a plain `x()`.
+   * D71 rule 183, revised by D90 R15(b): both `computed(...)` and `cached(...)`
+   * the functions are retired in favour of the `computed` declaration, which is
+   * now the only spelling of a derived value. The declaration is recorded before
+   * the core walks the module so its reads can be matched against it — the
+   * rewrite that removes the call parentheses is only offered when every read is
+   * a plain `x()`.
    */
   private recordRetiredAccessorDeclaration(statement: Extract<Statement, { readonly kind: "VariableDeclaration" }>): void {
     const initializer = statement.initializer;
     if (initializer.kind !== "CallExpression" || initializer.callee.kind !== "IdentifierExpression"
-      || initializer.callee.name !== "computed" || this.lookup("computed") !== null) return;
+      || !isRetiredAccessorName(initializer.callee.name) || this.lookup(initializer.callee.name) !== null) return;
     if (statement.binding !== "const" || statement.pattern.kind !== "NameBindingPattern") return;
     const read = initializer.arguments.length === 1 && initializer.argumentNames === undefined
       ? initializer.arguments[0]! : null;
     // Only the `() => E` shape has a body that becomes the declaration's
     // initializer verbatim. Every other argument — a named function, a partial
     // application — would need the rewriter to invent an expression, so it is
-    // left to the author with the rename as its only mechanical answer.
+    // left to the author with the call spelled out as its only mechanical answer.
     const body = read?.kind === "ArrowFunctionExpression" && !read.asynchronous && read.parameters.length === 0
       ? read.body : null;
     this.retiredAccessorDeclarations.set(spanIdentity(statement.pattern.span), {
       name: statement.pattern.name,
       exported: statement.exported,
+      readName: read?.kind === "IdentifierExpression" ? read.name : null,
       declarationSpan: statement.span,
       callSpan: initializer.span,
       bodySpan: body ? body.span : null,
@@ -2144,12 +2438,12 @@ export class VelarWebAnalyzer extends Analyzer {
     this.migratedComputedCallees.add(spanIdentity(initializer.callee.span));
   }
 
-  /** Returns true when the name is the retired `computed` global this pass owns. */
+  /** Returns true when the name is one of the retired accessor globals this pass owns. */
   private recordRetiredAccessorRead(expression: Extract<Expression, { readonly kind: "IdentifierExpression" }>): boolean {
-    if (expression.name === "computed") {
-      if (this.lookup("computed") !== null) return false;
+    if (isRetiredAccessorName(expression.name)) {
+      if (this.lookup(expression.name) !== null) return false;
       if (!this.migratedComputedCallees.has(spanIdentity(expression.span))) {
-        this.retiredComputedReferences.set(spanIdentity(expression.span), expression.span);
+        this.retiredComputedReferences.set(spanIdentity(expression.span), { name: expression.name, span: expression.span });
       }
       return true;
     }
@@ -2164,11 +2458,12 @@ export class VelarWebAnalyzer extends Analyzer {
   }
 
   /**
-   * D71 migration: one message per retired site, and a mechanical rewrite only
-   * where the compile can prove the rewrite. Where the accessor is used as a
-   * value the choice between `computed x = E` and `cached(...)` turns on whether
-   * the caller wants the cache, which is the author's decision — so that site
-   * gets the message and no edit.
+   * D71 migration, retargeted by D90 R15(b): one message per retired site, and a
+   * mechanical rewrite only where the compile can prove the rewrite. Where the
+   * accessor is used as a value there is no second spelling left to offer, so
+   * that site is told to declare the value and write an ordinary `def` where a
+   * callable is what the caller wants — and it gets no edit, because moving a
+   * reader out of a value position is the author's decision.
    */
   private reportRetiredComputedFunction(): void {
     for (const [key, accessor] of this.retiredAccessorDeclarations) {
@@ -2183,8 +2478,8 @@ export class VelarWebAnalyzer extends Analyzer {
         ]
         : null;
       const alternative = accessor.bodySpan === null
-        ? ` Where the argument is a function rather than an expression, write the call — 'computed ${accessor.name} = read()' — or keep a passable cached reader with 'cached(...)'`
-        : ` Where the reader itself is passed on rather than read here, keep it a value with 'cached(...)'`;
+        ? ` Where the argument is a function rather than an expression, write the call — 'computed ${accessor.name} = ${accessor.readName ?? "read"}()'`
+        : ` Where the reader itself is passed on rather than read here, declare the value — 'computed ${accessor.name} = ...' — and write an ordinary 'def' where a callable is required`;
       this.diagnostics.push({
         code: "VEL5055",
         message: `A derived value is declared, not called: write 'computed ${accessor.name} = ...' and read '${accessor.name}' bare.${rewritable ? "" : alternative}`,
@@ -2192,32 +2487,22 @@ export class VelarWebAnalyzer extends Analyzer {
         ...(edits ? { fix: { title: `Declare '${accessor.name}' with computed`, edits } } : {}),
       });
     }
-    for (const span of this.retiredComputedReferences.values()) {
-      this.diagnostics.push({
-        code: "VEL5055",
-        message: "'computed' is the keyword that declares a derived value — 'computed name = expression'. The function that returns a cached reader is now 'cached'",
-        span,
-        fix: { title: "Rename computed to cached", edits: [{ span, text: "cached" }] },
-      });
+    // One message serves both retired spellings, because after R15(b) they have
+    // one successor between them; only the leading quote names which one the
+    // author wrote. There is no `fix`: the rewrite is a declaration, not a
+    // rename, and the declaration form is offered above where the compile can
+    // see the whole shape.
+    for (const reference of this.retiredComputedReferences.values()) {
+      this.diagnostics.push(diagnostic(
+        "VEL5055",
+        reference.name === "cached"
+          ? "'cached' is removed: 'computed' declares a derived value — 'computed name = expression'. There is no function form, and 'computed' already caches"
+          : "'computed' declares a derived value — 'computed name = expression'. There is no function form; 'cached' is removed and 'computed' already caches",
+        reference.span,
+      ));
     }
   }
 
-  /**
-   * D71 rule 183 keeps the export-boundary contract the retired spelling had:
-   * an exported cached reader has no inferable public type, so the annotation
-   * is required at the boundary rather than discovered by the importer.
-   */
-  private reportExportedCachedContract(statement: Extract<Statement, { readonly kind: "VariableDeclaration" }>): void {
-    if (!statement.exported || statement.type || statement.pattern.kind !== "NameBindingPattern") return;
-    const initializer = statement.initializer;
-    if (initializer.kind !== "CallExpression" || initializer.callee.kind !== "IdentifierExpression"
-      || initializer.callee.name !== "cached" || this.lookup("cached") !== null) return;
-    this.diagnostics.push(diagnostic(
-      "VEL4025",
-      `Exported cached readers need an explicit contract at the export boundary; write 'export const ${statement.pattern.name}: () -> T = cached(...)', or declare the derived value itself with 'export computed ${statement.pattern.name} = ...'`,
-      statement.span,
-    ));
-  }
 
   protected override extensionFieldsOf(name: string): ReadonlyMap<string, ValueType> | null {
     return webTypeFields(name);
@@ -2437,7 +2722,7 @@ export class VelarWebAnalyzer extends Analyzer {
         this.flowFrameDepth += 1;
         this.synchronousReactiveDepth += 1;
         const watched = this.inferExpression(item.expression);
-        this.rejectFrozenWatchSubject(item.expression, watched);
+        this.rejectFrozenWatchSubject(item.expression, watched, item.currentName, item.previousName);
         this.enterScope();
         if (item.currentName) this.declareBinding(item.currentName, false, watched, item.span);
         if (item.previousName) this.declareBinding(item.previousName, false, watched, item.span);

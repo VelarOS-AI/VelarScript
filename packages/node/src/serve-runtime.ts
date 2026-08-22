@@ -1,3 +1,5 @@
+import { ROUTE_SHAPE_FROM_SEGMENTS_SOURCE } from "./route-shape.ts";
+
 // Application-facing velar/serve contract. HTTP sockets, request streams,
 // backpressure and static-file effects live in the shared isolated Node host;
 // this Realm owns only Velar values, handlers and strict JSON/type boundaries.
@@ -1013,12 +1015,13 @@ function __velarServeRoutePath(path, name = "Route path") {
   return path;
 }
 
+// D90 R19(c): the shape rule is written once, in route-shape.ts, and this
+// module interpolates that one definition. The shared core touches only
+// indexed access and .length, so it stays sound inside this hardened Realm;
+// the split it never performs itself happens here with the captured split.
+const __velarServeRouteShapeFromSegments = ${ROUTE_SHAPE_FROM_SEGMENTS_SOURCE};
 function __velarServeRouteShape(path) {
-  const segments = __velarServeCall(__velarServeStringSplit, path, ["/"]);
-  for (let index = 1; index < segments.length; index += 1) {
-    if (__velarServeCall(__velarServeStringStartsWith, segments[index], ["{"]) && __velarServeCall(__velarServeStringEndsWith, segments[index], ["}"])) segments[index] = "{}";
-  }
-  return __velarServeCall(__velarServeArrayJoin, segments, ["/"]);
+  return __velarServeRouteShapeFromSegments(__velarServeCall(__velarServeStringSplit, path, ["/"]));
 }
 
 function __velarCreateServeRoute(method, path, parameters, handler, metadata = {}) {
@@ -1242,23 +1245,33 @@ function __velarCreateServeApp(name, items) {
   const routes = [];
   const lifecycles = [];
   let notFound = null;
+  // D90 R19(b): assembly is the moment the final table exists, so the final
+  // table is judged here — a conflict names both routes and both origins,
+  // because the statically invisible half of a collision is exactly the one
+  // the author cannot see in his own file.
   const shapes = new __velarServeMap();
-  const append = route => {
+  const describeRoute = entry => "'" + entry.route.method + " " + entry.route.path + "'"
+    + (entry.source === null ? " declared by this server" : " composed in from '" + entry.source + "'");
+  const append = (route, source) => {
     if (routes.length >= __velarServeMaxRoutes) throw new __velarServeRangeError("ServeApp cannot contain more than 4096 routes after composition");
     const key = route.method + " " + __velarServeRouteShape(route.path);
-    if (__velarServeCall(__velarServeMapHas, shapes, [key])) throw new __velarServeTypeError("ServeApp contains conflicting route '" + key + "'");
-    __velarServeCall(__velarServeMapSet, shapes, [key, true]);
+    const previous = __velarServeCall(__velarServeMapGet, shapes, [key]);
+    if (previous !== undefined) {
+      throw new __velarServeTypeError("ServeApp '" + name + "' contains conflicting routes: " + describeRoute({route, source})
+        + " and " + describeRoute(previous) + " both answer '" + key + "' — narrow or remove one");
+    }
+    __velarServeCall(__velarServeMapSet, shapes, [key, {route, source}]);
     routes[routes.length] = route;
   };
   for (let index = 0; index < items.length; index += 1) {
     const item = items[index];
-    if (__velarServeIsRoute(item)) append(item);
+    if (__velarServeIsRoute(item)) append(item, null);
     else if (__velarServeIsNotFound(item)) {
       if (notFound !== null) throw new __velarServeTypeError("ServeApp contains more than one @notFound fallback");
       notFound = item;
     }
     else if (__velarServeIsApp(item)) {
-      for (let route = 0; route < item.routes.length; route += 1) append(item.routes[route]);
+      for (let route = 0; route < item.routes.length; route += 1) append(item.routes[route], item.name);
       for (let hook = 0; hook < item.lifecycles.length; hook += 1) {
         if (lifecycles.length >= __velarServeMaxLifecycles) throw new __velarServeRangeError("ServeApp cannot contain more than 4096 lifecycle pairs after composition");
         lifecycles[lifecycles.length] = item.lifecycles[hook];

@@ -77,12 +77,12 @@ component App(active: bool):
             color = "red"
     return <div look={box}>x</div>
 `],
-    ["computed accessor", `
+    ["computed value", `
 component App:
     state count = 0
-    const hot = cached(() => count > 3)
+    computed hot = count > 3
     const box = look:
-        if hot():
+        if hot:
             color = "red"
     return <div look={box}>x</div>
 `],
@@ -144,8 +144,8 @@ def toneLook(improving: bool) -> Look:
         color = improving ? warm : cool
 
 component Card(value: number):
-    const improving = cached(() => value >= 0)
-    return <p look={toneLook(improving())}>x</p>
+    computed improving = value >= 0
+    return <p look={toneLook(improving)}>x</p>
 `);
 });
 
@@ -575,7 +575,7 @@ component App:
     state count = 0
     state items: List<string> = []
     state form: Form = {name: ""}
-    const doubled = cached(() => count * 2)
+    computed doubled = count * 2
     const label = "fixed"
 
     def read() -> string:

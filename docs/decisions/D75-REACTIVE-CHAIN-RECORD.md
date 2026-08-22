@@ -48,6 +48,8 @@
 - **`cached(() => 5)` / `computed x = 5` 无反应式依赖 —— 不拒绝。**
   它们求值一次，每次读都拿到那个值，**什么也没有被丢弃**。
   `watch` 的缺陷是**一整块语句永不执行**；一个常量派生值**完整地做完了它的活**。
+  （2026-08-22 附注：D90 R15(b) 删除 `cached` 之后，`cached(() => 5)` 已经不是一个
+  拼写；这个答案由 `computed x = 5` 独自承担，实测仍不拒绝。）
 - **`resource` 的 input 非反应式 —— 不是同一形状。**
   它照样在挂载时加载、照样能按需 reload，charter 本来就写明 resource 不自动重取。
 
@@ -97,8 +99,19 @@
 1. **`packages/compiler/src/analyzer.ts:2426` 的 VEL4025 与 `computed` 名字耦合**，
    不随改名走 —— 导出的 `cached(...)` 访问器会静默失去导出边界的契约要求。
    S1 在 web 侧补了一条，**Core 那条现在是只对退役拼写触发的死代码，该删**。
+   （2026-08-22 附注：已了结，但**不是被 R15(b) 了结的**。本项点名的 Core 死分支
+   在 2026-08-16 随提交 `3bb18e2`（「让拥有这个词的扩展拥有它的诊断」）删除，
+   理由正是本项写的那条：Core 不拥有这个词。S1 补在 web 侧的那条替身，才是
+   D90 R15(b) 随 `cached` 一起退役的 —— 见 D71 的取代附记。`VEL4025` 这个码
+   在 Core 里仍然活着，管的是递归结果推断不收敛。）
 2. **`packages/cli/src/project.ts:704-727` 会把导出的 computed 叫作 "state binding"**
    并建议「Export a mutator」。S1 让它不可达，但文案是错的。
+   （2026-08-22 附注：已了结，与上一项同一个提交 `3bb18e2`。今天的消息是
+   「Cannot assign to imported reactive binding '…'; it is read-only here.
+   Export an action from the owning module that changes it and call that
+   instead」——「mutator」不再出现，语言真有的那个词 `action` 出现了；
+   `importedReactiveAssignmentDiagnostics` 上方留了一段契约注释，记着
+   `reactiveExports` 的 `"state"` 是「反应式」这个标记，不是源语言里的名词。）
 
 ---
 

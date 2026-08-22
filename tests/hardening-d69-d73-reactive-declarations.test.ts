@@ -144,56 +144,56 @@ export component App:
   assert.ok(result.diagnostics[0]?.fix);
 });
 
-test("[D71-183] the retired computed function is answered once, with the rename it needs", () => {
-  const result = compile("state count = 1\nconst reader = computed(() => count)\nprint(str(reader()))\n");
+test("[D71-183] the retired computed function is answered once, with the declaration it needs", () => {
+  // The reads are `print(x())` rather than `print(str(x()))`: after D90 R15(b)
+  // the retired name carries one ordinary `(read) -> () -> unknown` signature
+  // instead of an intrinsic, so `str()` over its result would add a second,
+  // unrelated message and hide the thing this test pins — one message per site.
+  const result = compile("state count = 1\nconst reader = computed(() => count)\nprint(reader())\n");
   assert.equal(result.diagnostics.length, 1, JSON.stringify(result.diagnostics));
   assert.equal(result.diagnostics[0]?.code, "VEL5055");
 
-  // In an expression position the migration is a pure rename, and `velar fix`
-  // may take it: `cached` preserves behaviour exactly.
-  const expression = compile("state count = 1\nconst bag = {read: computed(() => count)}\nprint(str(bag.read()))\n");
+  // In an expression position the compile cannot see the whole declaration, so
+  // it names the successor and offers no edit: D90 R15(b) removed `cached`, and
+  // the migration that is left is a declaration rather than a rename.
+  const expression = compile("state count = 1\nconst bag = {read: computed(() => count)}\nprint(bag.read())\n");
   assert.equal(expression.diagnostics.length, 1, JSON.stringify(expression.diagnostics));
-  assert.match(expression.diagnostics[0]?.message ?? "", /The function that returns a cached reader is now 'cached'/u);
-  assert.ok(expression.diagnostics[0]?.fix);
+  assert.match(expression.diagnostics[0]?.message ?? "", /There is no function form; 'cached' is removed and 'computed' already caches/u);
+  assert.equal(expression.diagnostics[0]?.fix, undefined);
 });
 
-test("[D71-186] const bound to cached(...) is legal, because reading it is a visible call", () => {
-  // D71 answers this question explicitly and asks for a test that pins the
-  // answer: the accessor is an ordinary value, and `x()` says so at every read.
+test("[D71-186] a const bound to an ordinary zero-argument function is still legal", () => {
+  // D71 asked whether a const may hold a reader, and answered yes because `x()`
+  // says so at every read. D90 R15(b) removed the reader that made the question
+  // interesting: `computed` is the only spelling of a derived value now. What
+  // the answer still covers is the neighbour — a plain function bound to a
+  // const is an ordinary value, and removing `cached` took nothing from it.
   assert.deepEqual(
     messages(`
 export component App:
     state count = 0
-    const reader = cached(() => count * 2)
-    const bag = {read: cached(() => count)}
+    const reader = () => count * 2
+    const bag = {read: () => count}
     return <p>{reader()} {bag.read()}</p>
 `),
     [],
   );
 });
 
-test("[D71-183] an exported cached reader still needs its contract at the boundary", () => {
-  assert.deepEqual(
-    messages(`export const one = cached(() => 1)\n`),
-    ["VEL4025 Exported cached readers need an explicit contract at the export boundary; write 'export const one: () -> T = cached(...)', or declare the derived value itself with 'export computed one = ...'"],
-  );
-  assert.deepEqual(messages(`export const one: () -> number = cached(() => 1)\n`), []);
-  assert.deepEqual(messages(`export computed one = 1\n`), []);
-});
-
-test("[D71-183] the boundary contract is owned by the extension that owns the word", () => {
-  // The core analyzer used to key this rule on the literal name `computed`.
-  // After the rename that check could only fire on the retired spelling, where
-  // it contradicted the migration standing next to it — it told the author to
-  // annotate and keep writing `computed(...)` while the Web analyzer told them
-  // `computed` is a declaration keyword now. Core owns no reactive vocabulary
-  // at all, so the rule belongs to the extension that publishes `cached`.
+test("[D71-183] the retired spelling is answered by the extension that owns the word", () => {
+  // The core analyzer used to key an exported-contract rule on the literal name
+  // `computed`, where it contradicted the migration standing next to it — it
+  // told the author to annotate and keep writing `computed(...)` while the Web
+  // analyzer told them `computed` is a declaration keyword now. That rule went
+  // out with `cached` (D90 R15(b)), because the annotated reader it asked for no
+  // longer exists; what is left is the migration, and Core owns no reactive
+  // vocabulary at all, so only the extension that publishes `computed` answers.
   assert.deepEqual(
     messages(`export const one = computed(() => 1)\n`),
     ["VEL5055 A derived value is declared, not called: write 'computed one = ...' and read 'one' bare."],
   );
-  // With no extension there is no `computed` and no `cached`, so the only
-  // truthful answer is that the name is unknown.
+  // With no extension there is no `computed` at all, so the only truthful
+  // answer is that the name is unknown.
   assert.deepEqual(
     compileCore(`export const one = computed(() => 1)\n`).diagnostics.map((item) => `${item.code} ${item.message}`),
     ["VEL3001 Unknown name 'computed'"],
@@ -345,13 +345,16 @@ export component Row(task: readonly Task):
 // D69 rule 178 — a watch subject that cannot change.
 // ---------------------------------------------------------------------------
 
-test("[D69-178] a watch subject that can never change is refused, and a reader that was not called is told to call it", () => {
+test("[D69-178] a watch subject that can never change is refused, and a reader is sent to the declaration", () => {
   const module = `
 export component App:
     state count = 0
     computed doubled = count * 2
     const plain = 7
-    const reader = cached(() => count * 2)
+
+    def double() -> number:
+        return count * 2
+    const reader = double
 
     watch reader:
         print("dead")
@@ -368,8 +371,12 @@ export component App:
 
     return <p>{count} {doubled}</p>
 `;
+  // The last subject stays a VEL5064 rather than becoming D90 R15(a)'s VEL5071:
+  // `plain + 1` is built only from frozen parts, so it has no reactive source to
+  // declare a `computed` over, and the frozen answer is asked first for exactly
+  // that reason. One shape, one message.
   assert.deepEqual(messages(module), [
-    "VEL5064 'reader' is the reader itself, so watching it watches a value that never changes; write 'watch reader():' to watch what it reads",
+    "VEL5064 'reader' is the reader itself, so watching it watches a value that never changes; declare the derived value — 'computed name = reader()' — then 'watch name:'",
     "VEL5064 This watch subject never changes, so its body can never run; watch a 'state', a 'computed', a prop, or a resource field, or move these statements to where they should run",
     "VEL5064 This watch subject never changes, so its body can never run; watch a 'state', a 'computed', a prop, or a resource field, or move these statements to where they should run",
     "VEL5064 This watch subject never changes, so its body can never run — 'plain' is not a reactive source; watch a 'state', a 'computed', a prop, or a resource field, or move these statements to where they should run",
@@ -378,17 +385,26 @@ export component App:
   ]);
 });
 
-test("[D69-178] every reactive subject the ruling lists still passes", () => {
+test("[D69-178] every subject the ruling lists still passes, after D90 R15(a) narrowed the list", () => {
+  // Two of the subjects this test carried are gone: R15(a) refuses a call and an
+  // operator in the subject, and the test below pins their new answer. What
+  // R15(a) protects instead is the read path at any depth, with an index that is
+  // itself reactive — `items[0].done` and `tasks[index]` name a place in the
+  // graph rather than computing a value, so they stay legal.
   assert.deepEqual(
     messages(`
+type Item:
+    done: bool
+
 async def load(n: number) -> number:
     return n
 
 export component Panel(title: string):
     state count = 0
     state tasks: List<bool> = [false]
+    state items: List<Item> = [{done: false}]
+    state index = 0
     computed doubled = count * 2
-    const reader = cached(() => count * 2)
     resource data: number = load(count)
 
     watch count:
@@ -399,12 +415,12 @@ export component Panel(title: string):
         print("prop")
     watch tasks[0]:
         print("reactive field path")
+    watch items[0].done:
+        print("a deeper read path")
+    watch tasks[index]:
+        print("an index that is itself a state")
     watch data.value:
         print("resource field")
-    watch reader():
-        print("a called reader")
-    watch count + 1:
-        print("an expression over a reactive read")
     watch count as now, before:
         print("with names")
 
@@ -414,14 +430,45 @@ export component Panel(title: string):
   );
 });
 
-test("[D69-178] the rule refuses only what it can prove, so a call keeps its benefit of the doubt", () => {
-  // The rejection cannot be "no reactive read is visible here": the whole D70
-  // bug is a call whose reactivity lives in another module, and `alias.done` on
-  // a const bound to a reactive element tracks through the deep graph. A rule
-  // that fired on either of those would refuse live code, which is worse than
-  // the hole it closes.
+test("[D90-R15a] the two subjects the ruling narrowed away are refused, and told which computed to declare", () => {
   assert.deepEqual(
     messages(`
+export component Panel:
+    state count = 0
+
+    def double() -> number:
+        return count * 2
+
+    watch double():
+        print("a called reader")
+    watch count + 1:
+        print("an expression over a reactive read")
+
+    return <p>{count}</p>
+`),
+    [
+      "VEL5071 A watch subject names what to watch, not what to compute: 'double()' computes a value."
+      + " Declare it — 'computed value = double()' — then 'watch value:'",
+      "VEL5071 A watch subject names what to watch, not what to compute: 'count + 1' computes a value."
+      + " Declare it — 'computed value = count + 1' — then 'watch value:'",
+    ],
+  );
+});
+
+test("[D69-178] the rule refuses only what it can prove, so a read path keeps its benefit of the doubt", () => {
+  // The rejection cannot be "no reactive read is visible here": `alias.size` on
+  // a const bound to a reactive list tracks through the deep graph, and a rule
+  // that fired on it would refuse live code, which is worse than the hole it
+  // closes. That half of the judgement is still made, and is asserted here.
+  //
+  // The other half is not, any more, and saying so is the point of this test.
+  // D69's harder case was a call whose reactivity lives in another scope, which
+  // the frozen rule had to leave alone. D90 R15(a) retired the question for
+  // subjects by refusing every call there: `locale.text(...)` now gets the
+  // syntax answer and only it — the frozen rule never runs on the shape, so the
+  // two rules cannot both report it, and the `computed` it names is accepted
+  // without either rule looking inside it.
+  const head = `
 type Composer:
     text: (english: string, chinese: string) -> string
 
@@ -434,8 +481,28 @@ export component App:
     const locale = useLocale()
     state tasks: List<string> = []
     const alias = tasks
-
+`;
+  assert.deepEqual(
+    messages(`${head}
     watch locale.text("English", "Chinese"):
+        print("a call into another scope")
+    watch alias.size:
+        print("live through a const alias of a reactive list")
+
+    return <p>{locale.text("English", "Chinese")}</p>
+`),
+    [
+      "VEL5071 A watch subject names what to watch, not what to compute:"
+      + " 'locale.text(\"English\", \"Chinese\")' computes a value. Declare it —"
+      + " 'computed value = locale.text(\"English\", \"Chinese\")' — then 'watch value:'",
+    ],
+  );
+
+  // The exit the message names compiles, and the alias path stays clean beside it.
+  assert.deepEqual(
+    messages(`${head}    computed label = locale.text("English", "Chinese")
+
+    watch label:
         print("live through a call into another scope")
     watch alias.size:
         print("live through a const alias of a reactive list")
@@ -447,11 +514,12 @@ export component App:
 });
 
 test("[D69-178] the neighbours judged with it keep their behaviour, on the record", () => {
-  // A `cached(...)` with no reactive dependency is not the same defect: it
+  // A derived value with no reactive dependency is not the same defect: it
   // evaluates once and every read gets that value. Nothing is discarded, so
   // nothing is refused. The dead `watch` was refused because a *block of
-  // statements* could never run.
-  assert.deepEqual(messages(`export const five: () -> number = cached(() => 5)\nprint(str(five()))\n`), []);
+  // statements* could never run. D90 R15(b) left one spelling of that neighbour
+  // where D69 judged two, so the exported and local forms are both `computed`.
+  assert.deepEqual(messages(`export computed five = 5\nprint(str(five))\n`), []);
   assert.deepEqual(messages(`computed five = 5\nprint(str(five))\n`), []);
   // Likewise a resource whose input is not reactive: it still loads once at
   // mount and still reloads on demand, so its whole job is done.

@@ -546,7 +546,7 @@ operation or an invalid random result fails explicitly.
 Content comparison is one concept with one spelling: the prelude `equals(a, b)`
 (charter section 4). It needs no import, requires its operands to intersect
 statically, rejects class instances, functions, Promises, and unvalidated
-`unknown`/`any` at compile time, compares Set members and Map keys structurally
+`unknown` at compile time, compares Set members and Map keys structurally
 rather than by reference, agrees with `==` on `NaN`, and throws on a cycle
 rather than answering a quiet `false`.
 
@@ -820,8 +820,9 @@ component BuildStatus:
   suppressed call cannot raise. The message and field bounds below apply to
   records that are actually emitted, and the runtime check that `error(...)`
   received an actual `Error` sits behind the same gate — the compiler still
-  requires one at that position, so only a value that arrived through `any` can
-  differ.
+  requires one at that position and a boundary value arrives as `unknown`, so
+  only an `extern` JavaScript contract that declared an `Error` can hand it
+  something else.
 - `useSink(sink)` redirects records while at least one custom sink exists and
   returns an explicit cleanup function. The record it hands a sink is
   `LogRecord`, a published type name: `timestamp`, `level`, `scope`, `message`,
@@ -929,11 +930,21 @@ status=200, contentType="text/plain; charset=utf-8", headers=null)`,
 fallback=null)` express the response cases whose status or transport should be
 visible. `HttpError(status, body, headers=null)` exits a route with a checked
 4xx/5xx JSON response. `prefix(path, app)` and server-body `...app` entries
-compose route tables; `staticFiles(path, root, fallback=null)` adds a bounded,
-root-contained streaming route with `HEAD`, validators, and single byte-range
-support. `bodyLimit(app, maxBytes)` narrows inferred JSON input for that route
-group, and `use(app, middleware)` wraps only that app's routes after composition.
-A middleware `next()` continuation is single-use.
+compose route tables, and a composed table is refereed before it can answer
+anything. The compiler judges whatever the composition resolves to inside one
+module — a spread naming a server declared there, an alias of one, and `prefix`
+with a literal path, `use`, `bodyLimit`, `docs`, or `lifecycle` around one — and
+refuses two routes of one method that collapse to the same path shape, or that
+overlap with neither more specific. An imported server or a computed prefix path
+resolves to nothing there and is let through, because a false conflict would
+block a correct program; assembling the `ServeApp` then applies the shape test
+to the finished table, and two routes of one method that collapse to the same
+shape refuse to build, naming both routes and where each came from.
+`staticFiles(path, root, fallback=null)` adds a bounded, root-contained
+streaming route with `HEAD`, validators, and single byte-range support.
+`bodyLimit(app, maxBytes)` narrows inferred JSON input for that route group,
+and `use(app, middleware)` wraps only that app's routes after composition. A
+middleware `next()` continuation is single-use.
 `openapi(app, title=null, version="1.0.0")` derives an OpenAPI 3.1 document with
 checked parameter, request-body, and response schemas. It also documents the
 framework-generated 400, 401, 413, 415, and 422 responses that apply to each

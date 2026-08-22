@@ -233,12 +233,16 @@ export def breakAndContinue(values: List<number>) -> number:
         total += value
     return total
 
-// `async for` consumes one explicit Velar pull contract: `source.next()` must
-// have the checked type `() -> Promise<T?>`.
+// `async for` drives a declared contract. A class declares itself an
+// asynchronous stream with the asynchronous `@iterate:` form: the block is
+// pulled once per element, it may await, it answers `T?`, and null is
+// exhaustion. (A declared foreign shape — a reply stream, a child process, a
+// watcher — instead exposes `next() -> Promise<T?>` in its own contract;
+// chapters 14 and 15 have the real sites.)
 class ChunkSource:
     let remaining: List<string> = ["a", "b"]
 
-    async def next() -> string?:
+    @iterate:
         if self.remaining.size == 0:
             return null
         return self.remaining.pop(0)

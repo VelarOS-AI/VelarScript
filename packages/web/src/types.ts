@@ -50,24 +50,6 @@ export function isWebComputedExport(value: unknown): boolean {
     && (value as { readonly velarWebExport?: unknown }).velarWebExport === "computed";
 }
 
-/**
- * D71 rule 183: `cached(read)` returns the reader it caches. The retired
- * `computed(...)` spelling is inferred as the same intrinsic while its
- * migration diagnostic is produced, so the rest of the module still type-checks
- * against one truthful signature rather than against an unknown name.
- */
-const cachedUnknownType: ValueType = Object.freeze({ kind: "unknown" });
-const cachedReaderType: ValueType = Object.freeze({ kind: "function", parameters: [], requiredParameters: 0, result: cachedUnknownType });
-
-export const CACHED_INTRINSIC_TYPE: ValueType = Object.freeze({
-  kind: "intrinsic",
-  name: "reactive.computed",
-  parameterNames: ["read"],
-  parameters: [cachedReaderType],
-  requiredParameters: 1,
-  result: cachedReaderType,
-});
-
 export type WebExtensionType = ExtensionValueType & { readonly extensionId: typeof VELAR_WEB_TYPE_EXTENSION_ID };
 export type WebNodeType = WebExtensionType & { readonly family: "node"; readonly role: "value" };
 export type WebComponentType = WebExtensionType & { readonly family: "component"; readonly role: "contract" | "constructor" };

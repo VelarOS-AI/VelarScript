@@ -203,8 +203,9 @@ class Bag:
     @iterate:
         return self.label
 `), [
-    "VEL4038 '@iterate' says which collection iterating 'Bag' means, so it returns a List, Set, Map, or Record"
-      + " — those are the shapes the language already knows how to iterate; this block returns string",
+    "VEL4038 '@iterate' says what iterating 'Bag' means: the synchronous form returns a List, Set, Map, or Record"
+      + " — the shapes the language already knows how to iterate — and the asynchronous pull form answers 'T?',"
+      + " one element per pull with null as exhaustion; this block returns string",
   ]);
 
   // A block that returns nothing answers `null`, which is not a collection
@@ -216,8 +217,9 @@ class Bag:
     @iterate:
         print("nothing")
 `), [
-    "VEL4038 '@iterate' says which collection iterating 'Bag' means, so it returns a List, Set, Map, or Record"
-      + " — those are the shapes the language already knows how to iterate; this block returns null",
+    "VEL4038 '@iterate' says what iterating 'Bag' means: the synchronous form returns a List, Set, Map, or Record"
+      + " — the shapes the language already knows how to iterate — and the asynchronous pull form answers 'T?',"
+      + " one element per pull with null as exhaustion; this block returns null",
   ]);
 });
 
@@ -266,7 +268,10 @@ for item in bag:
 `), "an ordinary method\na\n");
 });
 
-test("[D68 177] iterating is a synchronous question, so the block may not await", () => {
+test("[D90 R18] a block that awaits is the pull form, so a collection answer refuses at the block", () => {
+  // D90 R18: awaiting no longer refuses at the site — it selects the
+  // asynchronous form — so a block that awaits and still answers a collection
+  // is told the two forms apart where the answer is written.
   assert.deepEqual(diagnostics(`
 class Bag:
     let items: List<string> = []
@@ -277,8 +282,9 @@ class Bag:
     @iterate:
         return await self.load()
 `), [
-    "VEL4007 'await' cannot be used in an '@iterate' block; iterating is a synchronous question"
-      + " — await the work before construction and hold the finished collection",
+    "VEL4038 '@iterate' in 'Bag' awaits but answers List<string>; the synchronous form is read whole by the"
+      + " plain consumers, so await the work before construction and hold the finished collection — or answer"
+      + " 'T?' to be the asynchronous pull form 'async for' drives once per element",
   ]);
 
   // A nested arrow inside the block is an ordinary callable and keeps the
@@ -296,25 +302,29 @@ class Bag:
   ]);
 });
 
-test("[D68 177] 'async for' still refuses a user type, and says why the contract does not apply", () => {
+test("[D90 R18] 'async for' refuses each undeclared class with the move that declares it", () => {
+  // D90 R18: the synchronous form and `async for` refuse each other
+  // symmetrically, and each refusal names the other form.
   assert.deepEqual(diagnostics(`${bag}
 async for item in Bag():
     print(item)
 `), [
-    "VEL4001 async for requires next() -> Promise<T?>; Bag does not expose that pull contract"
-      + "; '@iterate' answers the plain 'for', not 'async for' — an async stream is a resource,"
-      + " so pull it from the capability handle that owns the lifetime",
+    "VEL4001 async for pulls a declared asynchronous '@iterate:'; '@iterate' on Bag answers List<string> to"
+      + " the plain 'for' — declare the asynchronous form instead: a block that answers 'T?', one element per"
+      + " pull, null as exhaustion",
   ]);
 
-  // Without the contract the refusal is the plain one: the note exists to stop
-  // an author who declared `@iterate:` from reading this as a missing block.
+  // Without any block the refusal teaches the declaration itself.
   assert.deepEqual(diagnostics(`
 class Bag:
     let items: List<string> = []
 
 async for item in Bag():
     print(item)
-`), ["VEL4001 async for requires next() -> Promise<T?>; Bag does not expose that pull contract"]);
+`), [
+    "VEL4001 async for pulls a declared asynchronous '@iterate:'; Bag does not declare one — a block that"
+      + " answers 'T?' (it may await; one element per pull, null is exhaustion)",
+  ]);
 });
 
 test("[D68 177] the two contract members coexist on one class without interfering", () => {
@@ -511,8 +521,9 @@ class Bag:
 for item in Bag():
     print(item)
 `), [
-    "VEL4038 '@iterate' says which collection iterating 'Bag' means, so it returns a List, Set, Map, or Record"
-      + " — those are the shapes the language already knows how to iterate; this block returns string",
+    "VEL4038 '@iterate' says what iterating 'Bag' means: the synchronous form returns a List, Set, Map, or Record"
+      + " — the shapes the language already knows how to iterate — and the asynchronous pull form answers 'T?',"
+      + " one element per pull with null as exhaustion; this block returns string",
     "VEL4001 Cannot iterate over Bag",
   ]);
 

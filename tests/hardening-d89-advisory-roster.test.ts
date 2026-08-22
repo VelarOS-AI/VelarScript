@@ -4,6 +4,7 @@ import {
   applyMechanicalFixes,
   compile,
   formatAdvisory,
+  formatSource,
   SourceText,
   type CompileResult,
 } from "@velarscript/compiler";
@@ -166,11 +167,122 @@ test("[D89] A3 does not guess at a sign it cannot see", () => {
   for (const [label, source] of silent) assert.deepEqual(codes(source), [], label);
 });
 
+test("[D89] A5 reports JavaScript '${...}' in a plain string and spells the author's own f-string", () => {
+  const double = ['const name = "x"', 'const s = "Hello ${name}"', "print(s)"].join("\n");
+  assert.deepEqual(codes(double), ["A5"]);
+  const reported = message(double);
+  assert.match(reported, /stays the characters '\$\{name\}'/u);
+  assert.match(reported, /write 'f"Hello \{name\}"'/u);
+
+  // The backtick delimiter keeps its own spelling in the rewrite.
+  const backtick = ['const name = "x"', "const s = `Hello ${name}`", "print(s)"].join("\n");
+  assert.deepEqual(codes(backtick), ["A5"]);
+  assert.match(message(backtick), /write 'f`Hello \{name\}`'/u);
+
+  // A member path is quoted as the author wrote it.
+  const dotted = ['const user = {name: "x"}', 'const s = "hi ${user.name}"', "print(s)"].join("\n");
+  assert.match(message(dotted), /'\$\{user\.name\}'/u);
+
+  // A body that is not a plain name path keeps the advisory and the spelled
+  // interpolation, without claiming a whole-literal rewrite it has not checked.
+  const arithmetic = ['const s = "n=${1 + 2}"', "print(s)"].join("\n");
+  assert.deepEqual(codes(arithmetic), ["A5"]);
+  assert.match(message(arithmetic), /write '\{1 \+ 2\}' under an 'f' prefix/u);
+});
+
+test("[D89] A5 stays silent where the literal reading is the asked-for one", () => {
+  const silent: readonly (readonly [string, string])[] = [
+    ["an empty '${}' carries no expression", 'const s = "cash ${}"\nprint(s)'],
+    ["an unclosed '${' carries no expression", 'const s = "open ${name"\nprint(s)'],
+    ["a raw string asks for literal text by name", 'const s = r"raw ${name}"\nprint(s)'],
+    ["a bare '$' is not the reflex", 'const s = "cost $5"\nprint(s)'],
+    ["braces without a '$' are not the reflex", 'const s = "{\\"a\\": 1}"\nprint(s)'],
+  ];
+  for (const [label, source] of silent) assert.deepEqual(codes(source), [], label);
+});
+
+test("[D89] A5's rewrite adds the 'f' prefix and drops each '$', and the fixed source interpolates", () => {
+  const source = ['const a = "1"', 'const b = "2"', 'const s = "${a}-${b}"', "print(s)"].join("\n");
+  const result = compiled(source);
+  assert.equal(result.advisories.length, 1, "one advisory speaks per literal");
+  const fixed = applyMechanicalFixes(source, result.advisories);
+  assert.equal(fixed.text.split("\n")[2], 'const s = f"{a}-{b}"');
+  assert.deepEqual(codes(fixed.text), [], "the fixed spelling has nothing left to advise");
+  // The fixed spelling is already the formatter's own: the rewrite survives a
+  // format pass untouched, so applying the fix and formatting commute.
+  assert.equal(formatSource(`${fixed.text}\n`), `${fixed.text}\n`);
+
+  // D38 §48: the rewrite is withheld where it would involve a judgment — a
+  // body that is not a plain name path might not compile as an interpolation,
+  // and a bare brace outside the occurrences would change meaning under 'f'.
+  const arithmetic = compiled('const s = "n=${1 + 2}"\nprint(s)');
+  assert.equal(arithmetic.advisories[0]?.fix, undefined);
+  const bareBrace = compiled('const name = "x"\nconst s = "{\\"k\\": 1} ${name}"\nprint(s)');
+  assert.deepEqual(bareBrace.advisories.map((item) => item.code), ["A5"]);
+  assert.equal(bareBrace.advisories[0]?.fix, undefined);
+
+  // JavaScript's `$${x}` spells a literal '$' ahead of an interpolation, and
+  // deleting the occurrence's '$' leaves '${x}', whose surviving '$' holds
+  // the brace literal all over again — the rewrite 'f`${x}`' would not
+  // interpolate, and following A6's subsequent fix would then drop the
+  // author's intended literal '$'. Message-only, with no whole-literal quote.
+  const guarded = compiled('const x = "v"\nconst s = `$${x}`\nprint(s)');
+  assert.deepEqual(guarded.advisories.map((item) => item.code), ["A5"]);
+  assert.equal(guarded.advisories[0]?.fix, undefined);
+  assert.match(guarded.advisories[0]?.message ?? "", /write '\{x\}' under an 'f' prefix/u);
+
+  // A '$' that does not touch the occurrence's own '$' holds nothing back,
+  // so the fix stays registered and its rewrite tells the truth.
+  const apart = compiled("const x = \"v\"\nconst s = `cost $5 ${x}`\nprint(s)");
+  assert.match(apart.advisories[0]?.message ?? "", /write 'f`cost \$5 \{x\}`'/u);
+  const fixedApart = applyMechanicalFixes("const x = \"v\"\nconst s = `cost $5 ${x}`\nprint(s)", apart.advisories);
+  assert.deepEqual(codes(fixedApart.text), [], "the fixed spelling has nothing left to advise");
+});
+
+test("[D89] A6 reports '${...}' surviving inside an interpolated string, and its fix drops the '$'", () => {
+  // The author wrote the 'f' prefix *and* the JavaScript spelling, and the
+  // '$' still keeps the brace literal — the same reflex one level deeper.
+  const source = ['const name = "x"', 'print(f"Hi ${name}")'].join("\n");
+  assert.deepEqual(codes(source), ["A6"]);
+  const reported = message(source);
+  assert.match(reported, /'\$' keeps the brace after it literal even under the 'f' prefix/u);
+  assert.match(reported, /drop the '\$' and write 'f"Hi \{name\}"'/u);
+
+  const fixed = applyMechanicalFixes(source, compiled(source).advisories);
+  assert.equal(fixed.text.split("\n")[1], 'print(f"Hi {name}")');
+  assert.deepEqual(codes(fixed.text), []);
+
+  // 'rf' still answers to A6: its rawness is about backslashes, not about
+  // interpolation, so the deliberate-literal reading that exempts r"..." from
+  // A5 does not apply here.
+  assert.deepEqual(codes(['const name = "x"', 'print(rf"Hi ${name}")'].join("\n")), ["A6"]);
+
+  // The '$$' guard holds on this side of the prefix too: dropping the
+  // occurrence's '$' from 'f"$${name}"' leaves '${name}', which is again the
+  // literal spelling, so the fix is withheld and the message quotes only the
+  // interpolating body.
+  const guarded = compiled('const name = "x"\nprint(f"$${name}")');
+  assert.deepEqual(guarded.advisories.map((item) => item.code), ["A6"]);
+  assert.equal(guarded.advisories[0]?.fix, undefined);
+  assert.match(guarded.advisories[0]?.message ?? "", /drop the '\$' and write '\{name\}'/u);
+});
+
+test("[D89] A6 leaves the f-string spellings that already mean what they say", () => {
+  const silent: readonly (readonly [string, string])[] = [
+    ["a real interpolation", 'const name = "x"\nprint(f"Hi {name}")'],
+    ["an empty '${}'", 'print(f"cash ${}")'],
+    ["a '$' that does not touch the brace", 'const x = 1\nprint(f"cost $ {x}")'],
+  ];
+  for (const [label, source] of silent) assert.deepEqual(codes(source), [], label);
+});
+
 test("[D89] every advisory in the roster answers to a reasoned 'velar-allow' on its line", () => {
   const suppressed = [
     "const total = 10\nconst step = total // 2   // velar-allow A1: 2 is a step number, not a divisor\nprint(step)",
     "const nums = [1, 2, 3]\nfor i, v in nums: // velar-allow A2: this List holds indices, so 'i' is the value\n    print(i)",
     "const r = -7 % 3 // velar-allow A3: the negative remainder is the answer this wants\nprint(r)",
+    'const s = "envsubst ${HOME}" // velar-allow A5: this is a shell template, so the text is the point\nprint(s)',
+    'const brace = "x"\nprint(f"${brace}") // velar-allow A6: this line generates a JavaScript template on purpose',
   ];
   for (const source of suppressed) assert.deepEqual(codes(source), [], source);
 

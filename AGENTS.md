@@ -24,23 +24,24 @@ This file governs the repository unless a closer `AGENTS.md` narrows the target.
 ## Python / JavaScript reflex table
 
 Vel's parents are JavaScript and Python. These reflexes land in Vel source as
-something else. `A1`/`A2`/`A3` are **advisories**: Vel accepts the spelling and
+something else. `A1`–`A6` are **advisories**: Vel accepts the spelling and
 means something else, so the compiler reports and still emits. The rest are
-already errors whose message names the successor, except the last row, which
-nothing catches.
+already errors whose message names the successor.
 
 | Reflex | Write instead | Channel |
 | --- | --- | --- |
 | `a // b` floor division | `(a / b).floor()` — `//` opens a comment, so `const c = a // b` binds `a` | `A1` |
 | `for i, v in nums:` | `for v, i in nums:` — the two-slot `for` gives `value, index`, as JS `forEach` does and Python `enumerate` does not | `A2` |
 | `-7 % 3` expecting `2` | Vel's `%` is JavaScript's and yields `-1`; Python's non-negative modulo is `((a % b) + b) % b` | `A3` |
+| `items = items.map(item => { ...item, done: true })` over a keyed list | `items[index].done = true` — a rebuilt record is a new value, so the keyed list stops recognising its rows and destroys and rebuilds all of them, and an input being typed into loses focus (Web target only; the advisory that most needs a reasoned suppression, because `readonly` rows or one API response leave `map` as the only spelling) | `A4` |
+| `"${value}"`, `` `${value}` `` | `f"{value}"` or `` f`{value}` `` — only the `f` prefix interpolates, and `${...}` is legal literal text everywhere else (generating JavaScript source is a real use, and answers with `velar-allow A5`) | `A5` |
+| `f"${value}"` | `f"{value}"` — even under the `f` prefix, `$` keeps the brace after it literal, so `${value}` stays text | `A6` |
 | `enumerate(xs)` | `for value, index in xs:` | error |
 | `with X as y:` | `using y = X` | error |
 | `raise E(...)` | `throw E(...)` | error |
 | `def m(self)` | `self` is implicit; never declare it as a parameter | error |
 | `# comment` | `// comment`; `///` documents the following declaration | error |
 | `if value:` truthiness | conditions take `bool`/`bool?` only — `if value != null:` | error |
-| `"${value}"`, `` `${value}` `` | `f"{value}"` or `` f`{value}` `` — only the `f` prefix interpolates, and `${...}` is legal literal text everywhere else | silent |
 
 The charter states each rule; [docs/ai-skill.md](docs/ai-skill.md) carries the
 long tail.

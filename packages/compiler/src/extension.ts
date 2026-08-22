@@ -35,6 +35,7 @@ export {
 export { VELAR_TEXT_METHOD_RUNTIME } from "./text-runtime.ts";
 export { VELAR_UTF8_RUNTIME } from "./utf8-runtime.ts";
 export { Analyzer, TEXT_NAMESPACE_MEMBERS } from "./analyzer.ts";
+export { bindingNeverReassigned } from "./binding-stability.ts";
 export type {
   CoreExpression,
   CoreStatement,

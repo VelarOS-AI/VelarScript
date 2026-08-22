@@ -162,8 +162,9 @@ declaration merging, recursive aliases, export assignments, external-package
 re-exports, and computed re-export graphs do not
 become a hidden TypeScript compiler. They degrade to `unknown` with a non-blocking
 `VEL9002` notice. Calling or accessing the resulting unknown value remains a
-normal safe-boundary error. `import js unsafe` still provides the explicit
-escape hatch, while `extern module` remains the precise manual adapter.
+normal safe-boundary error. `import js unsafe` escapes the probe rather than
+that error — its binding is `unknown` too — while `extern module` remains the
+precise manual adapter.
 
 Manual adapters describe only runtime exports and never execute declarations:
 
@@ -357,8 +358,8 @@ checked type, not where a value originated, so it remains valid through
 assignment, destructuring, objects, collections, member access, functions,
 classes, aliases, cycles, namespace imports, and dynamic imports. Normalization
 is idempotent, evaluates an expression once, and preserves side effects and
-errors. Explicit `import js unsafe` values remain the caller's responsibility
-because `any` has no checked result contract.
+errors. An `import js unsafe` binding is typed `unknown`, so it normalizes on
+that same rule; no import spelling opts out of it.
 
 Every checked `Promise<T>` is adapted when it enters a VelarScript expression,
 not only when it is awaited. As everywhere else in the language, a JavaScript
@@ -431,44 +432,73 @@ Declaring `loadUser() -> User` instead is an assertion that the JavaScript
 package already owns and guarantees that runtime contract. It is not a request
 for the compiler to wrap the package with implicit validation.
 
-## `any`: the operational model
+## Unchecked values enter as `unknown`
 
-`import js unsafe` admits a value as `any`. The charter's section 12 owns the
-rule; this is what it means while writing code against a package.
+`import js unsafe` admits a value no declaration describes, and the type it
+lands in is `unknown`. The charter's section 12 owns the rule; this is what it
+means while writing code against a package.
 
-**Operations on an `any` are raw JavaScript, with no adaptation.** Member reads
-and writes, calls, indexing, arithmetic, `match`, and `is` go straight to the
-host. The `undefined`-to-`null` normalization that every checked type receives
-does not apply, so the language's one presence test lies about an `any`: an `any`
-holding `undefined` answers `false` to `== null` and `true` to `!= null`.
-Assigning it into a checked optional first — `const value: string? = raw` —
-restores the normalization, which is a reason to annotate at the edge rather than
-to test in place. Four operations are refused instead of passed through, because
-each one would let raw JavaScript semantics back into checked code silently: an
-f-string and `str()` (JavaScript coercion would run foreign conversion hooks), a
-condition (JavaScript truthiness would send `0` and `""` to the `else` branch),
-and `await` (an unchecked thenable runs foreign hooks and can resolve to raw
-`undefined`).
+**`unsafe` names the missing declaration, not a license to use the value.** The
+word buys exactly two things: the TypeScript-declaration probe does not run for
+that import, so none of the degradation notices above are printed, and an
+`extern module` block governing the same source does not apply to it. The
+binding itself carries no privileges. Member reads and writes, indexing, calls,
+`await`, arithmetic, ordered comparison, string concatenation, `match`, a
+condition, an f-string, and `str()` are each refused on it, and it is assignable
+to no checked type — the same refusals every other `unknown` receives, because
+it is one.
 
-**An `any` is assignable to every type, and nothing is checked at run time.**
+What stays legal is what does not depend on the value's shape: testing it for
+equality against `null` or against a literal, passing it where `unknown` is
+declared, `print(value)`, `Json.stringify(value)`, and exporting it. Exporting
+is honest here, because the consuming module reads `unknown` and is held to
+these same rules — the marker travels with the value across the module boundary
+rather than being laundered by the export.
 
-```velar fragment
+The `undefined`-to-`null` normalization follows the checked type, and `unknown`
+is one of the types that receives it, so the language's presence test tells the
+truth about a boundary value: `payload != null` reads through the same
+`?? null` an optional gets.
+
+One rule separates a boundary `unknown` from an `unknown` the compiler merely
+inferred: a merge may not absorb it. With `mystery` imported unsafely,
+`[mystery, 5]` is a `List<unknown | number>`, where the same literal built from
+an inferred `unknown` settles to `List<number>`. A value known to be unchecked
+does not become checked by being put in a container with checked values.
+
+**So a boundary value enters the type world by being validated, and there is no
+other door.** Two exits exist and the compiler names both: parse a declared
+shape, or narrow the value with a type test.
+
+```velar
 import js unsafe {payload} from "legacy-package"
 
-const label: string = payload.title
+type Payload:
+    title: string
+
+const checked = Payload.parse(payload)
+const label: string = checked.title
 ```
 
-That compiles, emits no check, and believes the annotation. If `payload.title` is
-an object, `label + "!"` produces `"[object Object]!"` — the implicit conversion
-the language exists to reject, reintroduced by one unvalidated assignment.
-Validation happens only where validation already happens: `Type.parse`,
-`Type.is`, a checked collection operation, a `match` pattern.
+Validation produces a new value, and `checked` is the one the rest of the
+program reads; `payload` stays `unknown` everywhere it is still in scope.
+Reading through the binding instead is refused where it is written, not where
+the value eventually fails:
 
-**So the import statement is the only correctness boundary that exists.**
-Validate there — `Config.parse(payload)` — and let only checked values inward.
-An `any` carried deeper into a program carries the absence of guarantees with it,
-and the eventual failure appears wherever the value is finally used, not where it
-entered.
+```text
+const label: string = payload.title
+
+VEL4001 Cannot access 'title' on unknown without validation; declare a type
+naming the fields you rely on — 'type Payload:' with the 'title' field — then
+validate first: 'const checked = Payload.parse(payload)' and read 'checked.title'
+VEL4001 Cannot assign unknown to string; a boundary value stays unknown until
+validated at the edge — narrow it with 'value is string', or parse a declared
+shape
+```
+
+The import statement is where a contract belongs, but it is not the only line
+that holds: a value that crosses without one reaches no operation that needs
+one.
 
 ## The adapter module
 

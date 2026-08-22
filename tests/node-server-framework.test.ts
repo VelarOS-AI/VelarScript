@@ -382,11 +382,33 @@ server b:
 `);
   assert.deepEqual(cycle.diagnostics.map((item) => item.message), []);
 
-  const rebound = compileNode(`
+  // A `let` alias the module never reassigns holds its initializer exactly as a `const` does, so
+  // the stability predicate lets it resolve and the genuine overlap is reported (D90 R19).
+  const stableAlias = compileNode(`
 server base:
     @get(p"/a/{x:string}/b") => {ok: "left"}
 
 let other = base
+
+server app:
+    ...other
+    @get(p"/a/b/{y:string}") => {ok: "right"}
+`);
+  assert.deepEqual(stableAlias.diagnostics.map((item) => item.message), [
+    "Route 'GET /a/{x:string}/b' (composed in from 'base') overlaps 'GET /a/b/{y:string}'; both match '/a/b/b' and neither is more specific — narrow or remove one",
+  ]);
+
+  // A `let` that is actually reassigned contributes nothing: which server it holds depends on
+  // execution order, and the assembly-time referee owns that question.
+  const rebound = compileNode(`
+server base:
+    @get(p"/a/{x:string}/b") => {ok: "left"}
+
+server extra:
+    @get(p"/c") => {ok: true}
+
+let other = base
+other = extra
 
 server app:
     ...other
@@ -405,8 +427,10 @@ server app:
 `);
   assert.deepEqual(distinct.diagnostics.map((item) => item.message), []);
 
-  // An imported server and a prefix(...) call are values this analyzer cannot see into. Both stay
-  // conservatively unchecked even where the composed routes would overlap the local ones.
+  // An imported server is a value this analyzer cannot see into. A prefix(...) call is now seen
+  // through (D90 R19), but its app argument here is that same import, so both spreads stay
+  // conservatively unchecked even where the composed routes would overlap the local ones — the
+  // assembly-time referee owns them.
   const root = join(tmpdir(), "velar-node-server-spread-boundary");
   const users = join(root, "users.vel");
   const app = join(root, "app.vel");

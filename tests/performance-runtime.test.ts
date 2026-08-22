@@ -660,10 +660,10 @@ type Form:
 
 state counter = 0
 state form: Form = {fields: {one: "", two: "", three: "", four: "", five: "", six: "", seven: "", eight: ""}}
-const doubled = cached(() => counter * 2)
+computed doubled = counter * 2
 let notifications = 0
 
-watch doubled():
+watch doubled:
     notifications += 1
 
 async def pushRound(updates: number) -> number:
@@ -681,7 +681,7 @@ def pullRound(updates: number) -> number:
     let index = 0
     while index < updates:
         counter += 1
-        total += doubled()
+        total += doubled
         index += 1
     if total < 0:
         print("unreachable")

@@ -106,18 +106,18 @@ def readA() -> number:
         return base + f()
     return base
 
-const a = cached(readA)
+computed a = readA()
 
 def readB() -> number:
-    return base + a()
+    return base + a
 
-const b = cached(readB)
-bRef = b
+computed b = readB()
+bRef = () => b
 
 test "cycle yields the owned error and the flush survives":
     let first = "none"
     try:
-        print(f"unexpected value {a()}")
+        print(f"unexpected value {a}")
     catch error:
         first = error.message
     expect(first).toBe("A computed value cannot read itself recursively")
@@ -126,7 +126,7 @@ test "cycle yields the owned error and the flush survives":
     await tick()
     let second = "none"
     try:
-        print(f"unexpected value {a()}")
+        print(f"unexpected value {a}")
     catch error:
         second = error.message
     expect(second).toBe("A computed value cannot read itself recursively")
@@ -163,13 +163,13 @@ def noisy() -> number:
         step += 1
     return counter
 
-const loud = cached(noisy)
+computed loud = noisy()
 
-watch loud() as current, previous:
+watch loud as current, previous:
     reports.append(f"watched {current}")
 
 test "computed self invalidation stops at the cap":
-    expect(loud()).toBe(150)
+    expect(loud).toBe(150)
     await tick()
     expect(reports.size).toBe(1)
     expect(reports[0]).toBe("update:A computed value cannot invalidate itself more than 100 times")

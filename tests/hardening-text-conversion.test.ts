@@ -75,8 +75,10 @@ test("collections, functions, class instances, unknown, and any are all outside 
     );
   }
 
-  const unsafeAny = contractRejections('import js unsafe {legacyValue} from "legacy-package"\nprint(f"{legacyValue}")\n');
-  assert.match(unsafeAny[0]!, /format any explicitly/u);
+  // D90 R17: the unsafe import arrives as unknown, so the boundary value
+  // gets the same refusal every unknown gets — one contract, one message.
+  const unsafeBoundary = contractRejections('import js unsafe {legacyValue} from "legacy-package"\nprint(f"{legacyValue}")\n');
+  assert.match(unsafeBoundary[0]!, /format unknown explicitly/u);
 });
 
 test("str() enforces the same contract, including through the named-argument spelling", () => {

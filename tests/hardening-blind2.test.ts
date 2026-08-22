@@ -449,8 +449,8 @@ def visible(items: List<Item>) -> List<Item>:
     return items.filter(item => item.title != "")
 
 export component ProjectList(items: readonly List<Item>):
-    const shown = cached(() => visible(items))
-    return <ul>{shown().map(item => <li key={item.title}>{item.title}</li>)}</ul>
+    computed shown = visible(items)
+    return <ul>{shown.map(item => <li key={item.title}>{item.title}</li>)}</ul>
 
 const empty: List<Item> = []
 
@@ -474,8 +474,8 @@ def visible(items: readonly List<Item>) -> List<readonly Item>:
     return items.filter(item => item.title != "")
 
 export component ProjectList(items: readonly List<Item>):
-    const shown = cached(() => visible(items))
-    return <ul>{shown().map(item => <li key={item.title}>{item.title}</li>)}</ul>
+    computed shown = visible(items)
+    return <ul>{shown.map(item => <li key={item.title}>{item.title}</li>)}</ul>
 
 const empty: List<Item> = []
 

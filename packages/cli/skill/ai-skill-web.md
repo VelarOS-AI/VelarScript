@@ -64,6 +64,15 @@ A resource loads once at mount. Refetching after an input changes is an
 explicit `watch` plus detached `async resource.reload()`. Actions do not queue;
 disable or otherwise guard a trigger when concurrent calls are unwanted.
 
+A watch subject is a reactive name — a `state`, a `computed`, a prop, or a
+resource field — or a read path out of one, such as `items[0].done`. An operator
+or a call there is refused; declare the value with `computed` and watch that
+name. A subject that is not reactive is refused as well: `watch total:` over a
+plain `const` is a body that can never run. `computed` is the only spelling for
+a reactive derived value. A `const` inside a component is not a second one: its
+initializer is evaluated once at construction and never recomputes, and no
+diagnostic marks it.
+
 `@mounted:` runs after insertion and may await. `@cleanup:` runs before removal
 and is synchronous. A component may still declare ordinary methods named
 `mounted` or `cleanup` because compiler-owned names occupy a separate namespace.
@@ -72,7 +81,14 @@ Events use `on:click={handler}`. Writable form paths use `bind:value`,
 `bind:checked`, or `bind:group`; do not read `event.target`. A JSX tag body is
 received only through an explicitly declared `children: WebNode` prop.
 Conditional rendering is an expression, and repeated children need stable
-`key` values.
+`key` values. Reuse asks two questions: the key must match, and the row it names
+must still be the same value. `items = items.map(item => { ...item, done: true })`
+rebuilds every row, so the keyed list recognises none of them and destroys and
+rebuilds all of its children — an input being typed into loses focus. Change the
+field in place, `items[index].done = true`. The compiler raises advisory **A4**
+where the rewritten list is the one a keyed position renders; `// velar-allow
+A4: <reason>` suppresses it where a `map` is the only spelling, which a
+`readonly` list or one API response makes it.
 
 A native element rejects every attribute name beginning with `on` other than
 the `on:` directive itself. `onclick`, `onClick`, and `ONCLICK` are one

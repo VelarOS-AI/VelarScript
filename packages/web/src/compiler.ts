@@ -17,7 +17,7 @@ import { scanWebToken, scanWebUnsafeCssLiteral, WEB_CONTEXTUAL_KEYWORDS } from "
 import { webModuleSource, webModuleSources, type VelarWebRuntimeConfig } from "./runtime.ts";
 import { velarWebSemanticExtension } from "./semantic.ts";
 import { LOOK_BUILDER_SIGNATURES, LOOK_BUILDERS, LOOK_MEDIA_SUBJECTS, LOOK_PUBLIC_TYPE_NAMES, LOOK_UNIT_TYPES } from "./look.ts";
-import { CACHED_INTRINSIC_TYPE, isWebTypeAssignable, resolveWebTypeSyntax, WEB_OWNED_TYPE_NAMES, webComponentConstructor, webNodeType } from "./types.ts";
+import { isWebTypeAssignable, resolveWebTypeSyntax, WEB_OWNED_TYPE_NAMES, webComponentConstructor, webNodeType } from "./types.ts";
 
 export const VELAR_WEB_API_VERSION = "0.10";
 const bytesType: ValueType = { kind: "named", name: "Bytes", identity: "velar/binary#type:Bytes" };
@@ -95,11 +95,6 @@ const unknownType: ValueType = { kind: "unknown" };
 const webGlobals = new Map<string, ValueType>([
   ["mount", namedFunction(["node", "target"], [nodeType, mountTargetType], nullType)],
   ["tick", namedFunction([], [], { kind: "promise", value: nullType })],
-  // D71 rule 183: the word `computed` names the declaration; the function that
-  // returns a passable cached reader is `cached`. `computed` is a contextual
-  // keyword now rather than a global, exactly as `state` is — the Web analyzer
-  // answers a leftover `computed(...)` with its migration on the way past.
-  ["cached", CACHED_INTRINSIC_TYPE],
 ]);
 
 const lookModuleExports = new Map<string, ValueType>([
@@ -698,7 +693,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
     // condition, ahead of ordinary lexical resolution. A user binding of the
     // same name used to be reverse-shadowed with no diagnostic anywhere, so the
     // three names are reserved in a Web module.
-    reservedBindings: new Set(["mount", "tick", "cached", ...LOOK_MEDIA_SUBJECTS.keys()]),
+    reservedBindings: new Set(["mount", "tick", ...LOOK_MEDIA_SUBJECTS.keys()]),
     globalGuidance: new Map([
       // D52 rule 114: the destination is the spelling that survives, so the
       // guidance names the import outright rather than a prefix the next
@@ -776,7 +771,6 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       ...["component", "state", "computed", "resource", "action", "watch", "@mounted", "@cleanup", "exposes", "expose", "look", "keyframes"].map((label) => ({ label, kind: 14 })),
       { label: "mount", kind: 3, detail: "mount(node, target) -> null" },
       { label: "tick", kind: 3, detail: "tick() -> Promise<null>" },
-      { label: "cached", kind: 3, detail: "cached(() => T) -> () -> T" },
       { label: "bind:value", kind: 10, detail: "Two-way string state binding" },
       { label: "bind:checked", kind: 10, detail: "Two-way boolean state binding" },
       { label: "bind:group", kind: 10, detail: "Two-way radio or checkbox group binding" },

@@ -7,7 +7,7 @@ import { SourceMap } from "node:module";
 import test, { after } from "node:test";
 import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
-import { compile as compileCore, describeType, formatDiagnostic, formatSource, inspectModule as inspectCoreModule, MAX_VELAR_SOURCE_CODE_UNITS, semanticVisibleSymbolsAt, SourceText, type CompilerExtension } from "@velarscript/compiler";
+import { applyMechanicalFixes, compile as compileCore, describeType, formatDiagnostic, formatSource, inspectModule as inspectCoreModule, MAX_VELAR_SOURCE_CODE_UNITS, semanticVisibleSymbolsAt, SourceText, type CompilerExtension } from "@velarscript/compiler";
 import { VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION } from "@velarscript/compiler/framework-host";
 import { VELAR_CLASS_FIELD_MODULE, VELAR_COLLECTION_HOST_EXPORTS, VELAR_COLLECTION_HOST_MODULE, VELAR_COLLECTION_LOWERING_DEPENDENCIES, VELAR_COLLECTION_LOWERING_EXPORTS, VELAR_COLLECTION_LOWERING_MODULE, VELAR_ERROR_NORMALIZATION_MODULE, VELAR_NARROWING_MODULE, VELAR_PRIMITIVE_METHOD_MODULE, VELAR_PROMISE_NORMALIZATION_MODULE, VELAR_PROMISE_NORMALIZATION_REGISTRY_KEY, VELAR_REACTIVE_BRIDGE_MODULE, VELAR_RUNTIME_SCHEMA_VERSION, VELAR_TYPE_VALIDATION_MODULE, type ExtensionValueType, type TypeSyntax } from "@velarscript/compiler/extension";
 import { isAssignable, sameType, type ValueType } from "../packages/compiler/src/types.ts";
@@ -4598,8 +4598,13 @@ print(describe(event))
 
 test("throws only Error values, normalizes JavaScript failures, and preserves remainder semantics", () => {
   const explodeSource = Buffer.from("export function explode(){throw 'raw failure'}", "utf8").toString("base64");
+  // D90 R17: an undeclared import is unknown and cannot be called, so the
+  // failing function is declared through an extern contract.
   const result = compile(`
-import js unsafe {explode} from "data:text/javascript;base64,${explodeSource}"
+extern module "data:text/javascript;base64,${explodeSource}":
+    export def explode() -> null
+
+import js {explode} from "data:text/javascript;base64,${explodeSource}"
 
 class BucketError extends Error:
     const bucket: string
@@ -4655,8 +4660,14 @@ test("catch normalization cannot execute a hostile thrown object's conversion ho
     "export function explode(){throw {marker:'original',toString(){console.log('conversion hook ran');throw new Error('conversion failure')}}}",
     "export function explodeProxy(){throw new Proxy({marker:'proxy'},{getPrototypeOf(){console.log('prototype trap ran');throw new Error('prototype failure')}})}",
   ].join(";"), "utf8").toString("base64");
+  // D90 R17: an undeclared import is unknown and cannot be called, so the
+  // failing functions are declared through an extern contract.
   const result = compile(`
-import js unsafe {explode, explodeProxy} from "data:text/javascript;base64,${source}"
+extern module "data:text/javascript;base64,${source}":
+    export def explode() -> null
+    export def explodeProxy() -> null
+
+import js {explode, explodeProxy} from "data:text/javascript;base64,${source}"
 
 try:
     explode()
@@ -4683,8 +4694,13 @@ catch error:
 
 test("caught JavaScript failures retain initialization-time Error and String operations", () => {
   const explodeSource = Buffer.from("export function explode(){throw 42}", "utf8").toString("base64");
+  // D90 R17: an undeclared import is unknown and cannot be called, so the
+  // failing function is declared through an extern contract.
   const result = compile(`
-import js unsafe {explode} from "data:text/javascript;base64,${explodeSource}"
+extern module "data:text/javascript;base64,${explodeSource}":
+    export def explode() -> null
+
+import js {explode} from "data:text/javascript;base64,${explodeSource}"
 
 export def exercise() -> string:
     try:
@@ -5535,12 +5551,14 @@ print(iso(0))
   assert.match(failed.stderr, /failing\.vel:1/u);
 
   const exitPath = join(directory, "exits.vel");
-  await writeFile(exitPath, "import js unsafe {exit} from \"node:process\"\n\nexit(7)\n", "utf8");
+  // D90 R17: the boundary import is unknown until declared, so the fixture
+  // declares the two node:process names it calls.
+  await writeFile(exitPath, "extern module \"node:process\":\n    export def exit(code: number) -> null\n\nimport js {exit} from \"node:process\"\n\nexit(7)\n", "utf8");
   const exited = spawnSync(process.execPath, [cli, "run", exitPath], { cwd: process.cwd(), encoding: "utf8" });
   assert.equal(exited.status, 7, exited.stderr);
 
   const argumentsPath = join(directory, "arguments.vel");
-  await writeFile(argumentsPath, "import js unsafe {argv} from \"node:process\"\n\nprint(argv.slice(2).join(\",\"))\n", "utf8");
+  await writeFile(argumentsPath, "extern module \"node:process\":\n    export const argv: List<string>\n\nimport js {argv} from \"node:process\"\n\nprint(argv.slice(2).join(\",\"))\n", "utf8");
   const forwarded = spawnSync(process.execPath, [cli, "run", argumentsPath, "--", "alpha", "--beta=1", "--help"], { cwd: process.cwd(), encoding: "utf8" });
   assert.equal(forwarded.status, 0, forwarded.stderr);
   assert.equal(forwarded.stdout, "alpha,--beta=1,--help\n");
@@ -6385,10 +6403,13 @@ score = "wrong"
 });
 
 test("emits explicit JavaScript imports without leaking import markers", () => {
+  // D90 R17: the unsafe binding is unknown, so the module references it
+  // without calling through the boundary; the emission under test is the
+  // import line itself.
   const result = compile(`
 import js unsafe {randomUUID} from "node:crypto"
 
-const id = randomUUID()
+const id = randomUUID == null
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
@@ -6569,7 +6590,7 @@ mount(<App />, "#app")
 test("module state, computed values, and watches form a reactive module", () => {
   const result = compile(`
 export state count: number = 0
-export const doubled: () -> number = cached(() => count * 2)
+export computed doubled = count * 2
 
 export def increment():
     count += 1
@@ -6578,15 +6599,15 @@ watch count as current, previous:
     print(f"{previous} -> {current}")
 
 component Counter:
-    return <button on:click={increment}>{count} / {doubled()}</button>
+    return <button on:click={increment}>{count} / {doubled}</button>
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
   assert.equal(result.moduleInterface.reactiveExports.get("count"), "state");
-  assert.equal(result.moduleInterface.reactiveExports.has("doubled"), false);
+  assert.equal(result.moduleInterface.reactiveExports.get("doubled"), "state");
   assert.equal(describeType(result.moduleInterface.exports.get("increment")!), "() -> null");
   assert.match(result.code ?? "", /export const count = __velarState\(0\)/);
-  assert.match(result.code ?? "", /export const doubled = __velarRuntime\.computed\(\(\) => \(count\.get\(\) \* 2\)\)/);
+  assert.match(result.code ?? "", /export const doubled = __velarComputed\(\(\) => \(\(count\.get\(\) \* 2\)\)\)/);
   assert.match(result.code ?? "", /count\.set\(count\.get\(\) \+ 1\)/);
   assert.match(result.code ?? "", /__velarWatch\(\(\) => count\.get\(\)/);
 
@@ -6605,17 +6626,31 @@ watch ready:
 async def later() -> bool:
     return true
 
-watch await later():
-    print("changed")
+state ready = false
+watch ready:
+    print(f"{await later()}")
 `.trimStart());
   assert.equal(asynchronousWatchRead.code, null);
   assert.ok(asynchronousWatchRead.diagnostics.some((item) => item.code === "VEL4007" && /watch blocks are synchronous/u.test(item.message)));
+
+  // D90 R15(a) also refuses a call in the subject, but the await there is still
+  // the synchronous-block failure it always was: the newer refusal does not
+  // take VEL4007 off the shape.
+  const asynchronousWatchSubject = compile(`
+async def later() -> bool:
+    return true
+
+watch await later():
+    print("changed")
+`.trimStart());
+  assert.equal(asynchronousWatchSubject.code, null);
+  assert.ok(asynchronousWatchSubject.diagnostics.some((item) => item.code === "VEL4007" && /watch blocks are synchronous/u.test(item.message)));
 
   const asynchronousComputed = compile(`
 async def later() -> number:
     return 1
 
-const value = cached(() => await later())
+computed value = await later()
 `.trimStart());
   assert.equal(asynchronousComputed.code, null);
   assert.ok(asynchronousComputed.diagnostics.some((item) => item.code === "VEL4007" || /computed cannot cache a Promise/u.test(item.message)));
@@ -6679,11 +6714,11 @@ mount(target="#app", node=<App />)
   assert.match(reorderedMount.code ?? "", /__velarNamedArguments\[1\], __velarNamedArguments\[0\]/u);
 });
 
-test("[D71-183] cached alone installs its runtime, and the retired computed function has one migration diagnostic", () => {
-  const result = compile("export const one: () -> number = cached(() => 1)\n");
+test("[D71-183] a computed alone installs its runtime, and both retired accessor spellings have one migration diagnostic", () => {
+  const result = compile("export computed one = 1\n");
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /const __velarRuntimeKey/u);
-  const execution = executeModule(`${result.code ?? ""}\nconsole.log(one());\n`);
+  const execution = executeModule(`${result.code ?? ""}\nconsole.log(one.get());\n`);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "1\n");
 
@@ -6698,12 +6733,49 @@ test("[D71-183] cached alone installs its runtime, and the retired computed func
   assert.match(retired.diagnostics[0]?.message ?? "", /write 'computed doubled = \.\.\.' and read 'doubled' bare/u);
   assert.doesNotMatch(retired.diagnostics.map((item) => item.message).join("\n"), /Unknown name 'computed'/u);
 
+  // D90 R15(b) removed `cached`, so the second spelling joins the first on the
+  // same migration engine: one message, the same declaration, the same edit.
+  const retiredCached = compile("state count = 1\nconst doubled = cached(() => count * 2)\nprint(doubled())\n");
+  assert.equal(retiredCached.code, null);
+  assert.equal(retiredCached.diagnostics.length, 1, JSON.stringify(retiredCached.diagnostics));
+  assert.equal(retiredCached.diagnostics[0]?.code, "VEL5055");
+  assert.match(retiredCached.diagnostics[0]?.message ?? "", /write 'computed doubled = \.\.\.' and read 'doubled' bare/u);
+  assert.doesNotMatch(retiredCached.diagnostics.map((item) => item.message).join("\n"), /Unknown name 'cached'/u);
+  assert.equal(applyMechanicalFixes("state count = 1\nconst doubled = cached(() => count * 2)\nprint(doubled())\n", retiredCached.diagnostics).text, "state count = 1\ncomputed doubled = count * 2\nprint(doubled)\n");
+
+  // An exported reader loses its `() -> T` annotation along with the call: the
+  // declaration infers the type, so the fix rewrites the whole left side. The
+  // annotation is also where a second message would hide -- the migration is
+  // one message whether or not the author wrote the `() -> T` down, so the
+  // count is asserted here and the whole list is handed to the fixer.
+  const retiredExportSource = "export const one: () -> number = cached(() => 1)\n";
+  const retiredExport = compile(retiredExportSource);
+  assert.equal(retiredExport.diagnostics.length, 1, JSON.stringify(retiredExport.diagnostics));
+  assert.equal(retiredExport.diagnostics[0]?.code, "VEL5055");
+  assert.equal(applyMechanicalFixes(retiredExportSource, retiredExport.diagnostics).text, "export computed one = 1\n");
+
+  // The same shape in the other retired spelling: annotating it must not add a
+  // second diagnostic either.
+  const retiredAnnotated = compile("state count = 1\nconst doubled: () -> number = computed(() => count * 2)\nprint(doubled())\n");
+  assert.equal(retiredAnnotated.diagnostics.length, 1, JSON.stringify(retiredAnnotated.diagnostics));
+  assert.equal(retiredAnnotated.diagnostics[0]?.code, "VEL5055");
+
   // Passing the accessor on is the one shape `velar fix` must not decide, so it
   // carries the message and no edit -- D71's migration discipline verbatim.
   const passed = compile("state count = 1\nconst doubled = computed(() => count * 2)\nprint([doubled].size)\n");
   assert.equal(passed.diagnostics.length, 1, JSON.stringify(passed.diagnostics));
   assert.equal(passed.diagnostics[0]?.fix, undefined);
-  assert.match(passed.diagnostics[0]?.message ?? "", /keep it a value with 'cached\(\.\.\.\)'/u);
+  assert.match(passed.diagnostics[0]?.message ?? "", /declare the value — 'computed doubled = \.\.\.' — and write an ordinary 'def' where a callable is required/u);
+
+  // A bare reference to either name is a removed spelling, not an unknown one.
+  const bare = compile("print(cached)\n");
+  assert.equal(bare.diagnostics.length, 1, JSON.stringify(bare.diagnostics));
+  assert.equal(bare.diagnostics[0]?.code, "VEL5055");
+  assert.match(bare.diagnostics[0]?.message ?? "", /'cached' is removed: 'computed' declares a derived value/u);
+
+  // `cached` is an ordinary name again, so a local binding shadows the rule.
+  const shadowed = compile("const cached = 1\nprint(cached)\n");
+  assert.deepEqual(shadowed.diagnostics, []);
 });
 
 test("deep reactivity retires identity memo caches without changing derivation results", () => {
@@ -6738,9 +6810,9 @@ def latestFor(list: List<Message>, sessionId: string) -> Message?:
 def buildEntries(sessionList: List<Session>, messageList: List<Message>) -> List<string>:
     return sessionList.map(session => previewOf(latestFor(messageList, session.id)))
 
-const previews = cached(() => buildEntries(sessions, messages))
+computed previews = buildEntries(sessions, messages)
 
-watch previews() as current, previous:
+watch previews as current, previous:
     print(f"previews:{current.join("|")}")
 
 export def appendChunk(replyId: string, chunk: string):
@@ -6797,9 +6869,9 @@ def previewOf(message: Message) -> string:
     return textOf(message)
 
 state items: List<Message> = [{id: "m1", text: "alpha"}, {id: "m2", text: "beta"}]
-const previews = cached(() => items.map(previewOf))
+computed previews = items.map(previewOf)
 
-watch previews() as current, previous:
+watch previews as current, previous:
     print(f"previews:{current.join("|")}")
 
 export def snapshot() -> List<string>:
@@ -6849,7 +6921,7 @@ def decorate(value: string) -> string:
     return shout(value) + suffix
 
 state items: List<string> = []
-const labels = cached(() => items.map(decorate))
+computed labels = items.map(decorate)
 `.trimStart(), "reactive read");
 
   // (b) Capturing a mutable module binding.
@@ -6863,7 +6935,7 @@ def label(value: string) -> string:
     return shout(value) + str(counter)
 
 state items: List<string> = []
-const labels = cached(() => items.map(label))
+computed labels = items.map(label)
 `.trimStart(), "mutable capture");
 
   // (c) Calling anything unproved — an async def here.
@@ -6879,7 +6951,7 @@ def label(value: string) -> string:
     return shout(value)
 
 state items: List<string> = []
-const labels = cached(() => items.map(label))
+computed labels = items.map(label)
 `.trimStart(), "unproved callee");
 
   // (d) Mutating the argument through member assignment.
@@ -6895,7 +6967,7 @@ def bump(box: Box) -> number:
     return helperOf(box)
 
 state boxes: List<Box> = []
-const values = cached(() => boxes.map(bump))
+computed values = boxes.map(bump)
 `.trimStart(), "argument mutation");
 
   // (e) A trivial non-delegating callback is cheaper than its cache entry.
@@ -6904,7 +6976,7 @@ def double(value: number) -> number:
     return value * 2
 
 state items: List<number> = []
-const doubled = cached(() => items.map(double))
+computed doubled = items.map(double)
 `.trimStart(), "non-delegating callback");
 
   // (f) Actions and event handlers are not derivation contexts.
@@ -6961,9 +7033,9 @@ state latestById: Map<string, Message> = Map()
 def buildPreviews(sessionList: List<Session>, latest: Map<string, Message>) -> List<string>:
     return sessionList.map(session => messagePreview(latest.get(session.id)))
 
-const previews = cached(() => buildPreviews(sessions, latestById))
+computed previews = buildPreviews(sessions, latestById)
 
-mount(<main>{previews().join("|")}</main>, "#app")
+mount(<main>{previews.join("|")}</main>, "#app")
 `.trimStart(), "utf8");
 
   const project = await compileProject(mainPath);
@@ -6994,9 +7066,9 @@ def sumOf(a: number, b: number) -> number:
     print(f"sum:{a}:{b}")
     return a + b
 
-const total = cached(() => sumOf(left, right))
+computed total = sumOf(left, right)
 
-watch total() as current, previous:
+watch total as current, previous:
     print(f"total:{current}")
 
 export def commitBurst():
@@ -7081,7 +7153,7 @@ state byTask: Map<Task, string> = Map()
 state selected: Set<string> = Set()
 state selectedTasks: Set<Task> = Set()
 state session: Session = {title: "old", meta: {count: 0}}
-const doneCount = cached(() => tasks.filter(task => task.done).size)
+computed doneCount = tasks.filter(task => task.done).size
 
 watch tasks as current, previous:
     print("tasks:" + str(current.size) + ":same=" + str(current == previous))
@@ -7099,7 +7171,7 @@ export async def exercise():
     print("size:" + str(tasks.size))
     mark(alias[0])
     await tick()
-    print("done:" + str(doneCount()))
+    print("done:" + str(doneCount))
     byTask.set(alias[0], "first")
     selectedTasks.add(alias[0])
     print("identity:" + str(byTask.get(alias[0])) + ":set=" + str(alias[0] in selectedTasks))
@@ -7165,21 +7237,21 @@ def readScore(key: string) -> number?:
     print("derive:" + key)
     return scores.get(key)
 
-const leftValue = cached(() => readLeft())
-const rightValue = cached(() => readRight())
-const alpha = cached(() => readScore("alpha"))
-const beta = cached(() => readScore("beta"))
+computed leftValue = readLeft()
+computed rightValue = readRight()
+computed alpha = readScore("alpha")
+computed beta = readScore("beta")
 
-watch leftValue() as current, previous:
+watch leftValue as current, previous:
     print("left:" + str(current))
 
-watch rightValue() as current, previous:
+watch rightValue as current, previous:
     print("right:" + str(current))
 
-watch alpha() as current, previous:
+watch alpha as current, previous:
     print("alpha:" + str(current))
 
-watch beta() as current, previous:
+watch beta as current, previous:
     print("beta:" + str(current))
 
 export async def exercise():
@@ -7245,25 +7317,32 @@ console.log(JSON.stringify({
 });
 
 test("reactivity retains captured collection and object operations after module initialization", () => {
+  // `recordTotal` runs after the ambient natives are poisoned, so its body is
+  // the late half of the test: declaring a `computed` there builds a cache
+  // (Object.freeze on the accessor) and appending to a state list drives the
+  // collection operations, both with every global already replaced.
   const result = compile(`
 type Model:
     value: number
 
 state count = 0
 state model: Model = {value: 0}
-const total = cached(() => count + model.value)
+state history: List<number> = []
+computed total = count + model.value
 
-export def makeTotal() -> () -> number:
-    return cached(() => count + model.value)
+export def recordTotal() -> number:
+    computed snapshot = count + model.value
+    history.append(snapshot)
+    return history[history.size - 1]
 
-watch total() as current, previous:
+watch total as current, previous:
     print("total:" + str(current))
 
 export async def exercise():
     count = 1
     model.value = 2
     await tick()
-    print("fresh:" + str(total()))
+    print("fresh:" + str(total))
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
   const execution = executeModule(`${result.code ?? ""}
@@ -7310,8 +7389,7 @@ NativeReflect.has = fail("Reflect.has");
 NativeReflect.deleteProperty = fail("Reflect.deleteProperty");
 globalThis.Reflect = fail("Reflect object");
 await exercise();
-const lateTotal = makeTotal();
-console.log("late:" + lateTotal());
+console.log("late:" + recordTotal());
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "total:3\nfresh:3\nlate:3\n");
@@ -7325,7 +7403,7 @@ type Task:
 state tasks: List<Task> = [{label: "first"}, {label: "second"}]
 const snapshot = tasks[0]
 state selected = tasks[0]
-const liveFirst = cached(() => tasks[0])
+computed liveFirst = tasks[0]
 state price = 2
 state quantity = 3
 state capturedTotal = price * quantity
@@ -7336,9 +7414,9 @@ export async def exercise():
     price = 4
     $updates += 1
     await tick()
-    print(snapshot.label + ":" + selected.label + ":" + liveFirst().label + ":" + str(capturedTotal) + ":" + str($updates))
+    print(snapshot.label + ":" + selected.label + ":" + liveFirst.label + ":" + str(capturedTotal) + ":" + str($updates))
     selected = tasks[1]
-    print(selected.label + ":" + liveFirst().label)
+    print(selected.label + ":" + liveFirst.label)
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /const \$updates = __velarState\(0\)/u);
@@ -7386,9 +7464,9 @@ def selectValue() -> number:
     print("derive:" + str(useLeft ? left : right))
     return useLeft ? left % 2 : right % 2
 
-const selected = cached(selectValue)
+computed selected = selectValue()
 
-watch selected() as current, previous:
+watch selected as current, previous:
     print("watch:" + str(current))
 
 export async def exercise():
@@ -7418,14 +7496,14 @@ export async def exercise():
 test("a synchronous computed read before flush still publishes a changed result", () => {
   const result = compile(`
 state count = 1
-const parity = cached(() => count % 2)
+computed parity = count % 2
 
-watch parity() as current, previous:
+watch parity as current, previous:
     print("watch:" + str(current))
 
 export async def exercise():
     count = 2
-    print("sync:" + str(parity()))
+    print("sync:" + str(parity))
     await tick()
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
@@ -7438,15 +7516,15 @@ test("computed invalidation reaches a synchronously read downstream computed", (
   const result = compile(`
 state items: List<number> = []
 state page = 2
-const count = cached(() => items.size)
-const pages = cached(() => count() > 1 ? count() : 1)
+computed count = items.size
+computed pages = count > 1 ? count : 1
 
-watch pages() as current, previous:
+watch pages as current, previous:
     print("watch:" + str(current))
 
 export async def exercise():
     items = [1, 2]
-    page = page < pages() ? page : pages()
+    page = page < pages ? page : pages
     print("sync:" + str(page))
     await tick()
 `.trimStart());
@@ -7467,10 +7545,10 @@ def derive() -> number:
         throw Error("derived failed")
     return count
 
-const base = cached(derive)
-const doubled = cached(() => base() * 2)
+computed base = derive()
+computed doubled = base * 2
 
-watch doubled() as current, previous:
+watch doubled as current, previous:
     print("watch:" + str(current))
 
 export async def exercise():
@@ -7478,7 +7556,7 @@ export async def exercise():
     await tick()
     shouldFail = false
     await tick()
-    print("recovered:" + str(doubled()))
+    print("recovered:" + str(doubled))
     count = 2
     await tick()
 `.trimStart());
@@ -7519,9 +7597,9 @@ test("dynamic reactive keys release empty dependency slots", () => {
   const result = compile(`
 export state active = "a"
 export state scores: Map<string, number> = Map([["a", 1], ["b", 2]])
-const selected = cached(() => scores.get(active))
+computed selected = scores.get(active)
 
-watch selected() as current, previous:
+watch selected as current, previous:
     print(str(current))
 
 export async def switchKey():
@@ -7554,13 +7632,13 @@ def readKeys() -> string:
     print("derive:keys")
     return lookup.keys().join(",")
 
-const second = cached(readSecond)
-const keys = cached(readKeys)
+computed second = readSecond()
+computed keys = readKeys()
 
-watch second() as current, previous:
+watch second as current, previous:
     print("second:" + str(current))
 
-watch keys() as current, previous:
+watch keys as current, previous:
     print("keys:" + current)
 
 export async def exercise():
@@ -7590,17 +7668,17 @@ state lookup: Map<string, number> = Map([["a", 1]])
 state selected: Set<string> = Set(["a"])
 state fields: Record<number> = {a: 1}
 
-const mapValue = cached(() => lookup.get("a"))
-const hasValue = cached(() => "a" in selected)
-const recordValue = cached(() => fields.get("a"))
+computed mapValue = lookup.get("a")
+computed hasValue = "a" in selected
+computed recordValue = fields.get("a")
 
-watch mapValue() as current, previous:
+watch mapValue as current, previous:
     print("map:" + str(current))
 
-watch hasValue() as current, previous:
+watch hasValue as current, previous:
     print("set:" + str(current))
 
-watch recordValue() as current, previous:
+watch recordValue as current, previous:
     print("record:" + str(current))
 
 export async def exercise():
@@ -7644,7 +7722,7 @@ test("reactive module imports lower reads and reject ambiguous access", async ()
   const mainPath = join(directory, "main.vel");
   await writeFile(storePath, `
 export state count = 0
-export const doubled = cached(() => count * 2)
+export computed doubled = count * 2
 export def increment():
     count += 1
 `.trimStart(), "utf8");
@@ -7652,7 +7730,7 @@ export def increment():
 import {count, doubled, increment} from "./store.vel"
 
 component App:
-    return <button on:click={increment}>{count} / {doubled()}</button>
+    return <button on:click={increment}>{count} / {doubled}</button>
 `.trimStart(), "utf8");
 
   const project = await compileProject(mainPath);
@@ -7661,7 +7739,7 @@ component App:
   assert.ok(main);
   assert.deepEqual(main.result.diagnostics, []);
   assert.match(main.result.code ?? "", /count\.get\(\)/);
-  assert.match(main.result.code ?? "", /doubled\(\)/);
+  assert.match(main.result.code ?? "", /doubled\.get\(\)/);
 
   await writeFile(mainPath, "import * as store from \"./store.vel\"\nprint(store.count)\n", "utf8");
   const namespace = await compileProject(mainPath);
@@ -14542,7 +14620,7 @@ mount(<App />, "#app")
   const component = compile(`
 component App:
     state open = false
-    const title = cached(() => open ? "open" : "closed")
+    computed title = open ? "open" : "closed"
 
     def describe(open: bool) -> string:
         return open ? "yes" : "no"
@@ -14553,14 +14631,14 @@ component App:
     action toggle():
         open = not open
 
-    return <p>{describe(open)} {echo(title())}</p>
+    return <p>{describe(open)} {echo(title)}</p>
 `.trimStart());
   assert.deepEqual(component.diagnostics, []);
   assert.match(component.code ?? "", /function describe\(open\) \{\n {6}return \(open \? "yes" : "no"\);/u);
   assert.match(component.code ?? "", /function echo\(title\) \{\n {6}return title;/u);
   assert.match(component.code ?? "", /open\.set\(!\(open\.get\(\)\)\);/u);
   assert.match(component.code ?? "", /describe\(open\.get\(\)\)/u);
-  assert.match(component.code ?? "", /echo\(title\(\)\)/u);
+  assert.match(component.code ?? "", /echo\(title\.get\(\)\)/u);
 });
 
 test("locals shadow later module reactive bindings independent of declaration order", () => {
@@ -14937,11 +15015,11 @@ component App:
 mount(<App />, "#app")
 `, initializerDirective("count"));
   reports(`
-const title = cached(() => "outer")
+computed title = "outer"
 
 component App:
-    const title = cached(() => title())
-    return <p>{title()}</p>
+    computed title = title
+    return <p>{title}</p>
 
 mount(<App />, "#app")
 `, initializerDirective("title"));
@@ -17678,8 +17756,13 @@ export function seesRaw(value) {
   return runtime.toRaw(value) === value;
 }
 `.trimStart()).toString("base64")}`;
+  // D90 R17: the boundary import is unknown until declared, so the probe
+  // declares the one function it calls.
   const result = compile(`
-import js unsafe {seesRaw} from ${JSON.stringify(source)}
+extern module ${JSON.stringify(source)}:
+    export def seesRaw(value: unknown) -> bool
+
+import js {seesRaw} from ${JSON.stringify(source)}
 
 type Payload:
     value: number
@@ -19597,8 +19680,19 @@ print(value.constructor)
     ["accessor", /cannot copy accessor field 'name'/u],
     ["symbol", /cannot copy symbol fields/u],
   ] as const) {
+    // D90 R17: a spread operand needs a declared shape; the lie about what
+    // the module really exports is exactly what the runtime copy guards
+    // under test exist to catch.
     const rejected = compile(`
-import js unsafe {${name} as payload} from "data:text/javascript;base64,${unsafeSource}"
+type Payload:
+    name: string
+
+extern module "data:text/javascript;base64,${unsafeSource}":
+    export const accessor: Payload
+    export const symbol: Payload
+    export const nullish: Payload
+
+import js {${name} as payload} from "data:text/javascript;base64,${unsafeSource}"
 const copied = {...payload}
 print(copied)
 `.trimStart());
@@ -19610,7 +19704,13 @@ print(copied)
   }
 
   const nullish = compile(`
-import js unsafe {nullish as payload} from "data:text/javascript;base64,${unsafeSource}"
+type Payload:
+    name: string
+
+extern module "data:text/javascript;base64,${unsafeSource}":
+    export const nullish: Payload
+
+import js {nullish as payload} from "data:text/javascript;base64,${unsafeSource}"
 const copied = {...payload}
 `.trimStart());
   assert.deepEqual(nullish.diagnostics, []);
@@ -19767,8 +19867,19 @@ for [left, right] in loadPairs():
     "export const inherited=Object.create({name:'Inherited'})",
     "export const restPayload=Object.defineProperty({name:'Ada'},'secret',{enumerable:true,get(){console.log('rest getter called');return 'hidden'}})",
   ].join(";"), "utf8").toString("base64");
+  // D90 R17: a destructured operand needs a declared shape; the contract's
+  // lie about the fields is exactly what the runtime binding guards under
+  // test exist to catch.
   const accessor = compile(`
-import js unsafe {payload} from "data:text/javascript;base64,${getterSource}"
+type Shape:
+    name: string
+
+extern module "data:text/javascript;base64,${getterSource}":
+    export const payload: Shape
+    export const inherited: Shape
+    export const restPayload: Shape
+
+import js {payload} from "data:text/javascript;base64,${getterSource}"
 const {name} = payload
 print(name)
 `.trimStart());
@@ -19779,7 +19890,15 @@ print(name)
   assert.match(String(accessorExecution.stderr), /Variable object binding requires enumerable data field 'name'/u);
 
   const inherited = compile(`
-import js unsafe {inherited} from "data:text/javascript;base64,${getterSource}"
+type Shape:
+    name: string
+
+extern module "data:text/javascript;base64,${getterSource}":
+    export const payload: Shape
+    export const inherited: Shape
+    export const restPayload: Shape
+
+import js {inherited} from "data:text/javascript;base64,${getterSource}"
 const {name} = inherited
 print(name)
 `.trimStart());
@@ -19789,9 +19908,17 @@ print(name)
   assert.match(String(inheritedExecution.stderr), /Variable object binding requires own data field 'name'/u);
 
   const restAccessor = compile(`
-import js unsafe {restPayload} from "data:text/javascript;base64,${getterSource}"
+type Shape:
+    name: string
+
+extern module "data:text/javascript;base64,${getterSource}":
+    export const payload: Shape
+    export const inherited: Shape
+    export const restPayload: Shape
+
+import js {restPayload} from "data:text/javascript;base64,${getterSource}"
 const {name, ...rest} = restPayload
-print(rest.size)
+print(name)
 `.trimStart());
   assert.deepEqual(restAccessor.diagnostics, []);
   const restExecution = executeModule(restAccessor.code ?? "");
@@ -19874,6 +20001,9 @@ print(reads)
 });
 
 test("async for consumes the explicit Velar pull contract without JavaScript iterator magic", async () => {
+  // D90 R18: a user class declares itself an asynchronous stream through the
+  // asynchronous `@iterate:` form — the block is pulled once per element, may
+  // await, answers `T?`, and null is exhaustion.
   const result = compileCore(`
 let sourceReads = 0
 
@@ -19887,7 +20017,7 @@ class Pull:
         self.position = 0
         self.reads = 0
 
-    async def next() -> string?:
+    @iterate:
         self.reads += 1
         if self.position >= self.values.size:
             return null
@@ -19914,23 +20044,29 @@ print(await drain())
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /const __velarAsyncForSource\d+ = stream;/u);
-  assert.match(result.code ?? "", /__velarAsyncPullNext\(__velarAsyncForSource\d+\)/u);
-  assert.match(result.code ?? "", /await __velarNormalizePromiseValue\(__velarAsyncPullCall/u);
+  assert.match(result.code ?? "", /await __velarNormalizePromiseValue\(__velarAsyncForSource\d+\["__velar:iterateAsync"\]\(\)\)/u);
+  // The structural capture helpers serve the capability-handle shapes; a
+  // declared contract never needs them.
+  assert.doesNotMatch(result.code ?? "", /__velarAsyncPullNext/u);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "0:a;2:stop;|3|1\n");
 
   const invalidContext = compileCore(`
 class Pull:
-    async def next() -> string?:
-        return null
+    @iterate:
+        const done: string? = null
+        return done
 
 def drain(source: Pull):
     async for value in source:
         print(value)
 `.trimStart());
-  assert.ok(invalidContext.diagnostics.some((item) => item.code === "VEL4007" && /async function/u.test(item.message)));
+  assert.ok(invalidContext.diagnostics.some((item) => item.code === "VEL4007" && /async function/u.test(item.message)), JSON.stringify(invalidContext.diagnostics));
 
+  // A class without the declared form is refused with the declaration to
+  // write; a non-class source without the structural pull keeps the
+  // capability-handle refusal.
   const invalidContracts = [
     "async for value in [1]:\n    pass\n",
     "class Missing:\n    pass\n\nasync for value in Missing():\n    pass\n",
@@ -19942,7 +20078,9 @@ def drain(source: Pull):
   ];
   for (const source of invalidContracts) {
     const invalid = compileCore(source);
-    assert.ok(invalid.diagnostics.some((item) => /async for requires next\(\) -> Promise<T\?>/u.test(item.message)), JSON.stringify(invalid.diagnostics));
+    assert.ok(invalid.diagnostics.some((item) =>
+      /async for requires next\(\) -> Promise<T\?>/u.test(item.message)
+      || /async for pulls a declared asynchronous '@iterate:'/u.test(item.message)), JSON.stringify(invalid.diagnostics));
   }
 
   const migrated = compileCore("for await value in source:\n    pass\n", {
@@ -20045,7 +20183,7 @@ export class Pull:
     constructor():
         self.sent = false
 
-    async def next() -> string?:
+    @iterate:
         if self.sent:
             return null
         self.sent = true
@@ -23305,7 +23443,10 @@ else:
 `.trimStart());
   assert.deepEqual(
     missingMember.diagnostics.map((item) => item.message),
-    ["Unknown name 'unknown'", "Cannot access 'field' on unknown without validation"],
+    [
+      "Unknown name 'unknown'",
+      "Cannot access 'field' on unknown without validation; declare a type naming the fields you rely on — 'type Unknown:' with the 'field' field — then validate first: 'const checked = Unknown.parse(unknown)' and read 'checked.field'",
+    ],
   );
 
   const missingTypeCheck = compile(`
@@ -23325,7 +23466,10 @@ else:
 `.trimStart());
   assert.deepEqual(
     missingMemberTypeCheck.diagnostics.map((item) => item.message),
-    ["Unknown name 'unknown'", "Cannot access 'field' on unknown without validation"],
+    [
+      "Unknown name 'unknown'",
+      "Cannot access 'field' on unknown without validation; declare a type naming the fields you rely on — 'type Unknown:' with the 'field' field — then validate first: 'const checked = Unknown.parse(unknown)' and read 'checked.field'",
+    ],
   );
 });
 
@@ -23627,13 +23771,19 @@ test("member receivers are analyzed once across calls and assignments", () => {
   const call = compile("missing.run()\n");
   assert.deepEqual(
     call.diagnostics.map((item) => item.message),
-    ["Unknown name 'missing'", "Cannot access 'run' on unknown without validation"],
+    [
+      "Unknown name 'missing'",
+      "Cannot access 'run' on unknown without validation; declare a type naming the fields you rely on — 'type Missing:' with the 'run' field — then validate first: 'const checked = Missing.parse(missing)' and read 'checked.run'",
+    ],
   );
 
   const assignment = compile("missing.field = 1\n");
   assert.deepEqual(
     assignment.diagnostics.map((item) => item.message),
-    ["Unknown name 'missing'", "Cannot access 'field' on unknown without validation"],
+    [
+      "Unknown name 'missing'",
+      "Cannot access 'field' on unknown without validation; declare a type naming the fields you rely on — 'type Missing:' with the 'field' field — then validate first: 'const checked = Missing.parse(missing)' and read 'checked.field'",
+    ],
   );
 });
 
@@ -23714,8 +23864,13 @@ type Box:
 extern module "host-sdk":
     export def inspect(box: readonly Box) -> null
 
+// D90 R17: calling through the boundary needs a declared signature, so the
+// second boundary call is declared too.
+extern module "unknown-sdk":
+    export def inspectUnknown(box: readonly Box) -> null
+
 import js {inspect} from "host-sdk"
-import js unsafe {inspectUnknown} from "unknown-sdk"
+import js {inspectUnknown} from "unknown-sdk"
 
 def external(box: Box) -> string:
     assert box.user != null
@@ -25014,7 +25169,7 @@ const counterLook = look:
 
 component Counter(start: number = 0):
     state count = start
-    const doubled = cached(() => count * 2)
+    computed doubled = count * 2
 
     def increment():
         count += 1
@@ -25028,7 +25183,7 @@ component Counter(start: number = 0):
     @cleanup:
         print("cleanup")
 
-    return <button class="counter" look={counterLook} class:active={count > 0} on:click={increment}>{count} / {doubled()}</button>
+    return <button class="counter" look={counterLook} class:active={count > 0} on:click={increment}>{count} / {doubled}</button>
 
 mount(<Counter start={1} />, "#app")
 `.trimStart());
@@ -25036,7 +25191,7 @@ mount(<Counter start={1} />, "#app")
   assert.deepEqual(result.diagnostics, []);
   assert.deepEqual(result.extensions, ["@velarscript/web"]);
   assert.match(result.code ?? "", /const count = __velarState\(start\.get\(\)\)/);
-  assert.match(result.code ?? "", /const doubled = __velarRuntime\.computed/);
+  assert.match(result.code ?? "", /const doubled = __velarComputed/);
   assert.match(result.code ?? "", /__velarWatch/);
   assert.match(result.code ?? "", /count\.set\(count\.get\(\) \+ 1\)/);
   assert.match(result.code ?? "", /__velarCreateElement\("button", __velarNamespace\)/);
@@ -26081,9 +26236,15 @@ const broken = look:
   assert.match(String(rangeExecution.stderr), /RGB alpha must be from 0 through 1/u);
 
   const unsafeValueSource = Buffer.from("export const unsafeValue={toString(){console.log('coerced');return '0.5'}}", "utf8").toString("base64");
+  // D90 R17: the boundary value needs a declared type to reach the builder;
+  // the contract's lie is exactly what the runtime coercion guard catches.
   const dynamic = compile(`
 import {color} from "velar/look"
-import js unsafe {unsafeValue} from "data:text/javascript;base64,${unsafeValueSource}"
+
+extern module "data:text/javascript;base64,${unsafeValueSource}":
+    export const unsafeValue: string
+
+import js {unsafeValue} from "data:text/javascript;base64,${unsafeValueSource}"
 
 const broken = look:
     color = color(unsafeValue)
@@ -26437,9 +26598,9 @@ component App:
         catch error:
             label = error.message
 
-    const failure = cached(() => refresh.error)
+    computed failure = refresh.error
 
-    return <main><button type="button" disabled={refresh.pending} on:click={runRefresh}>Refresh</button>{failure() != null ? <p role="alert">{failure()?.message}</p> : null}</main>
+    return <main><button type="button" disabled={refresh.pending} on:click={runRefresh}>Refresh</button>{failure != null ? <p role="alert">{failure?.message}</p> : null}</main>
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
@@ -26523,7 +26684,7 @@ def prepare():
 component App:
     action save() -> string:
         return 1
-    const unsupported = cached(() => save.reload)
+    computed unsupported = save.reload
     return <main>Invalid</main>
 `.trimStart());
   assert.ok(invalid.diagnostics.some((item) => /Cannot assign number to string/u.test(item.message)));
@@ -27839,9 +28000,9 @@ test("language server publishes diagnostics, hover, and completion", async (cont
     "    return \"remote\"",
     "component Summary:",
     "    state count = 1",
-    "    const doubled = cached(() => count * 2)",
+    "    computed doubled = count * 2",
     "    resource remote = loadLabel()",
-    "    return <><p host>{remote.loading ? \"Loading\" : doubled()}</p><button type=\"button\" on:click={() => remote.reload()}>Reload</button></>",
+    "    return <><p host>{remote.loading ? \"Loading\" : doubled}</p><button type=\"button\" on:click={() => remote.reload()}>Reload</button></>",
     "",
   ].join("\n");
   await linkWorkspaceWebExtension(directory);
@@ -28357,7 +28518,7 @@ test("language server publishes diagnostics, hover, and completion", async (cont
   const typeHints = inlayHints.result as Array<{ position: { line: number; character: number }; label: string; kind: number; paddingRight: boolean }>;
   assert.ok(typeHints.some((hint) => hint.position.line === 1 && hint.label === ": string"));
   assert.ok(typeHints.some((hint) => hint.position.line === 6 && hint.label === ": number"));
-  assert.ok(typeHints.some((hint) => hint.position.line === 7 && hint.label === ": () -> number"));
+  assert.ok(typeHints.some((hint) => hint.position.line === 7 && hint.label === ": number"));
   assert.ok(!typeHints.some((hint) => hint.position.line === 2), "explicit annotations must not receive duplicate hints");
   assert.ok(!typeHints.some((hint) => hint.position.line === 8), "resource handle types must not masquerade as source annotations");
   send({ jsonrpc: "2.0", id: 31, method: "textDocument/semanticTokens/full", params: { textDocument: { uri: mainUri } } });
@@ -28385,7 +28546,7 @@ test("language server publishes diagnostics, hover, and completion", async (cont
   const semanticCompletion = await waitFor((message) => message.id === 25);
   const semanticItems = (semanticCompletion.result as { items: Array<{ label: string; kind: number; detail?: string; documentation?: { value?: string } }> }).items;
   assert.ok(semanticItems.some((item) => item.label === "count" && item.kind === 6 && item.detail === "number"));
-  assert.ok(semanticItems.some((item) => item.label === "doubled" && item.kind === 6 && item.detail === "() -> number"));
+  assert.ok(semanticItems.some((item) => item.label === "doubled" && item.kind === 6 && item.detail === "number"));
   assert.ok(semanticItems.some((item) => item.label === "Summary" && item.kind === 7));
   assert.ok(semanticItems.some((item) => item.label === "greet" && item.kind === 6
     && /Greets one visible user/u.test(item.documentation?.value ?? "")));

@@ -133,9 +133,11 @@ which is why there is no `import type` and why `Type.parse(value)` exists at
 every boundary.
 
 `unknown` is the honest type for data that has not been validated yet — you
-cannot use it until you narrow it. `any` is *not* a type you may write; it
-arrives only through an explicit unsafe JavaScript import, and the compiler
-says so if you try.
+cannot use it until you narrow it. `any` is *not* a type you may write, and no
+boundary hands one back either: an unsafe JavaScript import arrives as
+`unknown`, exactly like every other unvalidated value. Foreign data therefore
+obeys one rule, and it is the checked one — narrow it with `value is T`, or
+parse a declared shape.
 
 Numbers and strings carry their operations as **methods**, not as free
 functions: `value.round()`, `value.isNaN()`, `text.isBlank()`,
@@ -561,9 +563,8 @@ The two synchronous ones complete a grid the whole language already had:
 | read-only  | `const`      | `computed` |
 
 `state` is to `let` what `computed` is to `const`. That is what makes `const`
-worth reading: it now promises the value never changes. `cached(() => ...)` is
-the same cache as an ordinary value, for when the reader itself has to be
-passed somewhere; you read it by calling it.
+worth reading: it now promises the value never changes. There is no third
+spelling: a derived value is declared, and the declaration already caches.
 
 Reactivity is deep, so you mutate state directly rather than rebuilding it.
 Two things surprise newcomers, both deliberate: **a resource loads once, at

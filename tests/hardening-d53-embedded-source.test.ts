@@ -143,7 +143,9 @@ test("[D53-117] checked captures exist at module evaluation and emit an executab
   assert.match(checked.stderr, /number/u);
 });
 
-test("[D53-117] unsafe exports propagate as any and raw JavaScript bytes keep dollar braces and slashes", async () => {
+test("[D90 R17] unsafe exports arrive as unknown and raw JavaScript bytes keep dollar braces and slashes", async () => {
+  // D90 R17: the undeclared exports are unknown — validated before use — and
+  // the raw payload bytes still cross untouched.
   const project = await coreProject("velar-d53-unsafe-", source([
     "unsafe js`",
     "const jsValue = \"JS\";",
@@ -153,8 +155,10 @@ test("[D53-117] unsafe exports propagate as any and raw JavaScript bytes keep do
     "export const templated = String.raw`js:${jsValue}|{also}|\\tail`;",
     "`",
     "",
-    "const checked: number = loose",
-    "print(bump(checked))",
+    "let checked: number = 0",
+    "if loose is number:",
+    "    checked = loose + 1",
+    "print(checked)",
     "print(literal)",
     "print(templated)",
   ]));
@@ -241,7 +245,10 @@ test("[D53-117] velar fix rewrites an equivalent data module once and preserves 
   const dataModule = "data:text/javascript,export function answer(){return 42}";
   const project = await coreProject("velar-d53-fix-", source([
     `import js unsafe {answer} from "${dataModule}"`,
-    "print(answer())",
+    // D90 R17: the unsafe import is unknown, so the program references it
+    // without calling through the boundary; the fix under test is the
+    // data-URL rewrite, not the boundary.
+    "print(answer == null)",
   ]));
 
   // Once the migration diagnostic exists, the retired VelarScript source is
@@ -250,10 +257,10 @@ test("[D53-117] velar fix rewrites an equivalent data module once and preserves 
   const before = run(process.execPath, [
     "--input-type=module",
     "--eval",
-    `import {answer} from ${JSON.stringify(dataModule)}; console.log(answer());`,
+    `import {answer} from ${JSON.stringify(dataModule)}; console.log(answer == null);`,
   ], project.root);
   assert.equal(before.status, 0, before.stderr);
-  assert.equal(before.stdout, "42\n");
+  assert.equal(before.stdout, "false\n");
 
   const fixed = runCli(project.root, "fix", project.root);
   assert.equal(fixed.status, 0, fixed.stderr + fixed.stdout);

@@ -109,7 +109,9 @@ const braces = f"{{{title}}}"
 
 // JavaScript `${...}` is never interpolation — it is literal text in both
 // delimiters, because generating JavaScript source is a real use of these.
-const generatedJavaScript = "const name = `${value}`"
+// The compiler still points the JavaScript reflex at the `f` prefix
+// (advisory A5), so a deliberate literal answers with a reasoned suppression.
+const generatedJavaScript = "const name = `${value}`" // velar-allow A5: this line generates JavaScript source, so the template text is the point
 
 // A raw inline string doubles the delimiter it uses instead of escaping it.
 const rawDoubledQuote = r`He said "hello"`

@@ -32,6 +32,8 @@ const advisedSource = [
   "",
   "print(str(step))",
   "print(str(-7 % 3))",
+  "print(\"cash: ${total}\")",
+  "print(f\"still ${total}\")",
   "",
 ].join("\n");
 
@@ -45,9 +47,11 @@ test("[D89] velar check prints every advisory, names the count, and still passes
     assert.match(checked.stderr, /advisory A1:/u);
     assert.match(checked.stderr, /advisory A2:/u);
     assert.match(checked.stderr, /advisory A3:/u);
+    assert.match(checked.stderr, /advisory A5:/u);
+    assert.match(checked.stderr, /advisory A6:/u);
     assert.doesNotMatch(checked.stderr, /error A[0-9]/u);
     // D89 forbids folding the count into a silent pass.
-    assert.match(checked.stdout, /Checked 1 module from .* — 3 advisories\n$/u);
+    assert.match(checked.stdout, /Checked 1 module from .* — 5 advisories\n$/u);
     // A failing check would have named the repro command; a passing one must not.
     assert.doesNotMatch(checked.stderr, /velar repro/u);
   } finally {
@@ -183,7 +187,7 @@ test("[D89] the language server publishes an advisory as a warning and offers it
   const reported = (published.params as { diagnostics: Array<{ code: string; severity: number; range: unknown }> }).diagnostics;
   // Severity 2 is Warning. An advisory shown at severity 1 would claim the
   // file failed, which is the one thing this tier promises never to do.
-  assert.deepEqual(reported.map((item) => [item.code, item.severity]).sort(), [["A1", 2], ["A2", 2], ["A3", 2]]);
+  assert.deepEqual(reported.map((item) => [item.code, item.severity]).sort(), [["A1", 2], ["A2", 2], ["A3", 2], ["A5", 2], ["A6", 2]]);
 
   const swap = reported.find((item) => item.code === "A2")!;
   send({

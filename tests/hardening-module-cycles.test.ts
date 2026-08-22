@@ -210,21 +210,35 @@ test("a module-scope state initializer is an initialization position in web modu
   }
 });
 
-test("a module-scope watch evaluates its expression eagerly but runs its body on change", async () => {
-  // The watched expression reads while the module initializes: flagged.
+test("a module-scope watch evaluates its subject eagerly but runs its body on change", async () => {
+  // The watched subject reads while the module initializes: flagged. D90 R15(a)
+  // narrowed the subject to a named reactive variable, so the import itself is
+  // now the subject -- and the watch alone carries the cycle: delete the watch
+  // line and this module compiles clean, which the next case asserts.
   const eager = await checkProject({
-    "watcher.vel": 'import {seed} from "./origin.vel"\nstate local = "x"\nwatch seed + local as current, previous:\n    print(current + previous)\nexport def read() -> string:\n    return local\n',
-    "origin.vel": 'import {read} from "./watcher.vel"\nexport const seed = "s"\nprint(read())\n',
+    "watcher.vel": 'import {seed} from "./origin.vel"\nstate local = "x"\nwatch seed as current, previous:\n    print(current + previous)\nexport def read() -> string:\n    return local\n',
+    "origin.vel": 'import {read} from "./watcher.vel"\nexport state seed = "s"\nprint(read())\n',
   }, "origin.vel", [velarCompilerExtension]);
   assert.deepEqual(eager.failures, []);
   const failing = diagnosticsOf(eager, "watcher.vel");
   assert.equal(failing.length, 1, failing.map((item) => item.message).join("\n"));
   assert.equal(failing[0]?.code, CYCLE);
 
+  // The same two modules without the watch line: nothing else reads the import
+  // eagerly, so the diagnostic above belongs to the subject and to nothing else.
+  const withoutWatch = await checkProject({
+    "watcher.vel": 'import {seed} from "./origin.vel"\nstate local = "x"\nexport def read() -> string:\n    return local\n',
+    "origin.vel": 'import {read} from "./watcher.vel"\nexport state seed = "s"\nprint(read())\n',
+  }, "origin.vel", [velarCompilerExtension]);
+  assert.deepEqual(withoutWatch.failures, []);
+  for (const module of withoutWatch.modules) {
+    assert.deepEqual(module.result.diagnostics, [], module.inputPath);
+  }
+
   // A body-only read runs on a later change, never during evaluation: legal.
   const bodyOnly = await checkProject({
     "watcher.vel": 'import {seed} from "./origin.vel"\nstate local = "x"\nwatch local as current, previous:\n    print(current + previous + seed)\nexport def read() -> string:\n    return local\n',
-    "origin.vel": 'import {read} from "./watcher.vel"\nexport const seed = "s"\nprint(read())\n',
+    "origin.vel": 'import {read} from "./watcher.vel"\nexport state seed = "s"\nprint(read())\n',
   }, "origin.vel", [velarCompilerExtension]);
   assert.deepEqual(bodyOnly.failures, []);
   for (const module of bodyOnly.modules) {

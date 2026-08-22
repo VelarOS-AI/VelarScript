@@ -383,9 +383,12 @@ export interface ClassDisposeBlock {
  * `@iterate:` is the second compiler-owned class role, and it
  * carries `@dispose:`'s shape for the same reason — it is a question the
  * language asks the type ("what does iterating you mean?"), not a method the
- * author publishes, so it cannot be called from source either. It answers with
- * a List, Set, Map, or Record the language already knows how to iterate; no
- * iterator protocol enters the language (charter section 19 stands).
+ * author publishes, so it cannot be called from source either. It has two
+ * forms, told apart by the answer's shape (D90 R18): the synchronous form
+ * answers with a List, Set, Map, or Record the language already knows how to
+ * iterate, and the asynchronous pull form answers `T?` — `async for` drives
+ * it once per element, it may await, and null is exhaustion. No iterator
+ * protocol enters the language (charter section 19 stands).
  */
 export interface ClassIterateBlock {
   readonly kind: "ClassIterateBlock";

@@ -238,6 +238,19 @@ component SaveButton(saving: bool, pressed: bool):
 While `saving` is false the button carries `aria-busy="false"` and no `disabled`
 attribute; while it is true it carries `aria-busy="true"` and `disabled=""`.
 
+A `key` drives identity-preserving reuse, and reuse asks two questions: the key
+must match, and the item that key names must still be the same value. Rebuilding
+the rows — `items = items.map(item => {...item, done: true})`, the React habit —
+replaces every value, so every row is destroyed and built again, an input being
+typed into loses focus, and an open composition ends. Change the field in place
+instead, `items[index].done = true`; the key still names the same value and the
+row survives. The rebuild is reported rather than left silent: advisory `A4`
+names the list a `map` rebuilds when a keyed position renders it, and gives the
+in-place write. The advisory never fails a build and never moves an emitted
+byte; `// velar-allow A4: <reason>` suppresses it where the mapped spelling is
+the only one available, which a `readonly` list or a set of rows arriving whole
+from one response makes it.
+
 JSX text is normalized before it becomes a text node. Every whitespace run
 inside a text child collapses to one space; whitespace that exists only because
 the source wrapped is then dropped, so a text run beginning at a line break
@@ -567,9 +580,9 @@ application says so: `disabled={save.pending}` on the control, or an explicit
 
 ### Derived expressions are checked for shape, not for purity
 
-`cached` requires a synchronous zero-argument function, and a `computed`
-declaration requires a synchronous expression — that is the whole requirement.
-The expression may write state, and the write publishes like any other.
+A `computed` declaration requires a synchronous expression — that is the whole
+requirement. The expression may write state, and the write publishes like any
+other.
 The compiler does not prove purity, so the runtime budget is what stands between
 an impure derivation and a frozen page: a derived value, render, or watch that
 invalidates itself more than 100 times is stopped and reported through
@@ -579,16 +592,29 @@ out loud.
 
 ### Watch forms and lifetime
 
-`watch expression:` runs its body when the tracked value changes. Its subject
-must be able to change: a literal, a plain `const` of a primitive, and a reader
-that was not called are refused rather than compiled into a body that never
-runs. The refusal for an uncalled reader names the call; the refusal for a value
-that can never change says so, because no spelling would fix it.
-`watch expression as current, previous:` names the new and old values; both names
+`watch subject:` runs its body when the tracked value changes. A subject names a
+place in the reactive graph, not a computation: the name of a `state`, a
+`computed`, a prop, or a `resource` field, or a read path out of one through
+member access and indexing. `watch items[0].done:` and `watch rows[i].cells[j]:`
+are accepted at any depth, and the index may itself be reactive. An operator or
+a call in the subject is refused; the refusal echoes the expression that was
+written and names the `computed` declaration that replaces it. Calling a
+declared `computed` is answered by the rule that reads one bare — the
+parentheses go, and the subject is then legal.
+
+A subject must also be able to change, and that question is asked first, so one
+shape never draws two messages. A literal, a plain `const` of a primitive, and
+an expression built only from those are refused rather than compiled into a body
+that never runs, and that refusal offers no replacement, because no spelling
+would fix it. A reader that was not called names a value that never moves
+either, and it is refused with the declaration it needed —
+`computed name = reader()`, then `watch name:`.
+
+`watch subject as current, previous:` names the new and old values; both names
 are required with `as`, so a body that needs only the new value writes
-`as current, _`. The expression is evaluated immediately to register the
-dependency and record the baseline — the body does not run for that first value.
-For a deep mutation, `current` and `previous` are the same reference.
+`as current, _`. The subject is read immediately to register the dependency and
+record the baseline — the body does not run for that first value. For a deep
+mutation, `current` and `previous` are the same reference.
 
 A component watch is disposed with its component. A **module-scope watch is never
 disposed**: like a module `action`, it lives for the life of the page. That is
@@ -604,18 +630,20 @@ selector string or an element. The root is constructed synchronously, so a direc
 binding first. `tick()` answers `Promise<null>` that resolves after the pending
 reactive flush settles, and rejects if that flush reported a failure no handler
 claimed, so an awaited `tick()` cannot step over a broken update. Those two
-names and `cached` are reserved in a Web module and cannot be shadowed by a
-local binding.
+names are reserved in a Web module and cannot be shadowed by a local binding.
 
 ## Performance contracts
 
-`computed name = value` is the single spelling that declares a derived value,
-and `cached(() => value)` is the same cache as a passable accessor; there is no
-second `memo` spelling and no manual batching API.
+`computed name = value` is the single spelling that declares a derived value:
+there is no function form, no second `memo` spelling, and no manual batching
+API. Where a callable is what a receiver wants, write an ordinary `def` that
+reads the declared value; the cache stays the `computed`'s.
 Repeated-computation and assignment-coalescing behavior below is a compiler and
 runtime contract rather than additional application controls. Removed
 experiments do not remain as aliases — `memo` and `batch` are ordinary
-identifiers.
+identifiers, while the two retired function forms `cached(...)` and
+`computed(...)` are answered with the declaration that replaces them rather than
+with an unknown name.
 
 ### Synchronous assignment bursts publish once
 

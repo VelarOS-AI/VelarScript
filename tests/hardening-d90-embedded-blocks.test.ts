@@ -88,7 +88,7 @@ const blockWithMissingPackage = [
   '    export function go() { return join("a", "b") + String(missing) }',
   "`",
   "",
-  "print(go())",
+  "print(go == null)",
   "",
 ].join("\n");
 
@@ -146,7 +146,7 @@ test("[D90] a bare backtick line that ends a block early names the structural te
     "    export function x() { return fence }",
     "`",
     "",
-    'print(x())',
+    'print(x == null)',
     "",
   ].join("\n");
   assert.deepEqual(compile(indented, { path: "main.vel" }).diagnostics, []);
@@ -228,7 +228,7 @@ test("[D90] the structural terminator hint never asserts a backtick line that is
   // A block that never closed at all: an `unsafe` block mistakenly given the
   // checked block's `:` tail. VEL1003 already states the correct remedy, and
   // the hint alongside it must agree with that remedy rather than contradict it.
-  const neverClosed = messages(["unsafe js`", "    export function j() { return 1 }", "`:", "", "print(j())", ""]);
+  const neverClosed = messages(["unsafe js`", "    export function j() { return 1 }", "`:", "", "print(j == null)", ""]);
   const unterminated = neverClosed.find((item) => item.startsWith("VEL1003"));
   assert.ok(unterminated, JSON.stringify(neverClosed));
   assert.match(unterminated, /close it with '`' alone at the declaration's indentation/u);
@@ -293,8 +293,10 @@ test("[D90] a block's synthetic dependency imports stay out of the project modul
       "    export function decorate(a, b) { return join(a, b) + tag }",
       "`",
       "",
+      // D90 R17: the undeclared export is unknown, so the checked function
+      // keeps to a checked body; the block still contributes its imports.
       "export def label(a: string, b: string) -> string:",
-      "    return decorate(a, b)",
+      '    return f"{a}/{b} {decorate == null}"',
       "",
     ].join("\n"),
   });
@@ -313,7 +315,7 @@ test("[D90] a block's synthetic dependency imports stay out of the project modul
   // (b) The block's own imports reach the sibling module and nothing else: the
   // enclosing module must not gain a side-effect import of the block's package.
   const compiled = compile(
-    ["unsafe js`", '    import { tag } from "real-lib"', "    export function go() { return tag }", "`", "", "print(go())", ""].join("\n"),
+    ["unsafe js`", '    import { tag } from "real-lib"', "    export function go() { return tag }", "`", "", "print(go == null)", ""].join("\n"),
     { path: "main.vel" },
   );
   assert.deepEqual(compiled.diagnostics, []);
@@ -326,7 +328,7 @@ test("[D90] a block cannot name a VelarScript module, so it can forge no cycle",
   // A relative target is refused outright by the D53 emission rule, so the
   // shape that could name a sibling `.vel` file never reaches resolution.
   const relative = await stagedProject({
-    "main.vel": ["unsafe js`", '    import { z } from "./helper.vel"', "    export function go() { return z }", "`", "", "print(go())", ""].join("\n"),
+    "main.vel": ["unsafe js`", '    import { z } from "./helper.vel"', "    export function go() { return z }", "`", "", "print(go == null)", ""].join("\n"),
     "helper.vel": ["export def label() -> string:", '    return "x"', ""].join("\n"),
   });
   assert.deepEqual(relative.modules, ["main.vel"]);
@@ -339,7 +341,7 @@ test("[D90] a block cannot name a VelarScript module, so it can forge no cycle",
   // It is judged as one and enqueues no module, so `helper.vel` never joins
   // the graph twice and no initialization cycle can be manufactured.
   const bare = await stagedProject({
-    "main.vel": ["unsafe js`", '    import { z } from "helper.vel"', "    export function go() { return z }", "`", "", "print(go())", ""].join("\n"),
+    "main.vel": ["unsafe js`", '    import { z } from "helper.vel"', "    export function go() { return z }", "`", "", "print(go == null)", ""].join("\n"),
     "helper.vel": ["export def label() -> string:", '    return "x"', ""].join("\n"),
   });
   assert.deepEqual(bare.modules, ["main.vel"]);
@@ -355,7 +357,7 @@ test("[D90] one unresolvable package in a block reports exactly one VEL6006", as
     "    export function go() { return m + n }",
     "`",
     "",
-    "print(go())",
+    "print(go == null)",
     "",
   ].join("\n");
   // The same missing package named twice in one block is still one verdict,

@@ -277,10 +277,8 @@ print(describeUser({name: "Ada"}))
   assert.equal(execution.stdout, "future\nready\nAda\n");
 });
 
-test("[MIG-2] an untyped exported computed is diagnosed at its export boundary", () => {
-  const missing = compile("export const title = cached(() => \"ready\")\n", { extensions: [velarCompilerExtension] });
-  assert.ok(missing.diagnostics.some((item) => item.code === "VEL4025"
-    && item.message.includes("export const title: () -> T = cached(...)")), JSON.stringify(missing.diagnostics));
-  const explicit = compile("export const title: () -> string = cached(() => \"ready\")\n", { extensions: [velarCompilerExtension] });
-  assert.deepEqual(explicit.diagnostics, []);
-});
+// [MIG-2] The exported-contract rule (VEL4025) is gone with the construct it
+// guarded: D90 R15(b) removed `cached`, so there is no annotated reader left to
+// require an annotation of. The exported derived value is `export computed`,
+// which infers its own type; tests/hardening-d90-r15-watch-subject.test.ts pins
+// that the migrated export reports the migration and no boundary rule of its own.

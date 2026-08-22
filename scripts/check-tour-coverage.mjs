@@ -111,9 +111,13 @@ const FLOORS = Object.freeze({
   // Core's own roster (D62 rule 157). Before that roster existed the floor was
   // 10, and a Core-only checkout required none of Core's own words.
   "contextual-keyword": 21,
-  "reserved-binding": 6,
+  // Five, not six: D90 R15(b) deleted `cached`, so the Web extension no longer
+  // reserves it. A floor that shrinks is a deliberate act, which is why it is
+  // acknowledged here rather than silently lowered.
+  "reserved-binding": 5,
   "numeric-suffix": 13,
-  "extension-global": 3,
+  // Two, not three, for the same reason — `cached` was one of the three.
+  "extension-global": 2,
   "permanent-namespace": 4,
   "prelude-name": 5,
   "namespace-member": 66,

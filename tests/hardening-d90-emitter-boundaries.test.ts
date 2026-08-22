@@ -56,12 +56,18 @@ async function run(source: string, prefix: string): Promise<Execution & { readon
  * on the far side of the recheck.
  */
 function narrowingProgram(wire: string, declared: boolean): string {
+  // D90 R17: an undeclared boundary value is unknown and cannot be assigned,
+  // so the foreign wire enters through a contract that lies about its shape —
+  // which is exactly the laundering the runtime guard under test catches.
   return [
-    "unsafe js`",
+    "extern js()`",
     `export const wire = ${wire};`,
-    "`",
+    "`:",
+    "    export const wire: Cell",
     "",
-    ...declared ? ["type Cell:", "    a: number", ""] : [],
+    "type Cell:",
+    "    a: number",
+    "",
     declared ? "def build(flag: bool) -> Cell?:" : "def build(flag: bool):",
     "    if flag:",
     declared ? "        const cell: Cell = { a: 1 }" : "        const cell = { a: 1 }",
@@ -118,11 +124,19 @@ test("[D90] a structural field's own evidence carries its runtime helpers into t
   // narrowing type has to follow the field table for the same reason the check
   // does, or the guard on a program that narrows correctly dies with a host
   // `ReferenceError: __velarListTypeIs is not defined` before it can answer.
+  // D90 R17: the foreign values enter through a contract that lies about
+  // their shape — the guard under test is what catches the lie.
   const collections = await run(`
-unsafe js\`
+extern js()\`
 export const wire = { items: ["ok"], tags: new Set(["t"]) };
 export const wrong = { items: [1], tags: new Set(["t"]) };
-\`
+\`:
+    export const wire: Wire
+    export const wrong: Wire
+
+type Wire:
+    items: List<string>
+    tags: Set<string>
 
 def build(flag: bool):
     if flag:
@@ -322,11 +336,15 @@ main()
   // computed directly, never through the marker renderer, so escaping its
   // bytes would rewrite code Core does not own — and does not happen.
   const nul = String.fromCodePoint(0);
+  // D90 R17: the sibling exports are declared so the module can call them;
+  // the bytes under test still belong to the sibling alone.
   const { result } = compiled([
-    "unsafe js`",
+    "extern js()`",
     `export const t = "A${nul}VELAR_MAP_0${nul}B";`,
     "export function show(value) { console.log(value.length) }",
-    "`",
+    "`:",
+    "    export const t: string",
+    "    export def show(value: string) -> null",
     "",
     "def main():",
     "    show(t)",
@@ -393,28 +411,14 @@ def main():
     print(f"counter={pkg.counter} read={pkg.read()}")
 main()
 `;
-  // `unsafe js` publishes no contract, so its names arrive without a declared
-  // type; the annotations below are the reader's, not the boundary's.
-  const unchecked = [
-    "unsafe js`",
-    `    ${liveJavaScript}`,
-    "`",
-    "",
-    "def main():",
-    "    bump()",
-    "    bump()",
-    "    const seen: number = counter",
-    "    const total: number = read()",
-    '    print(f"counter={seen} read={total}")',
-    "main()",
-    "",
-  ].join("\n");
-
+  // D90 R17: `unsafe js` publishes no contract, so its names arrive as
+  // unknown and can no longer be read into a `number` or called — the
+  // undeclared spelling left the table with the ruling; the three declared
+  // spellings carry the live-binding guarantee.
   const spellings: Record<string, string> = {
     "extern js() with a contract": checkedBlock,
     "extern module and import js {}": named,
     "extern module and import js * as": namespace,
-    "unsafe js": unchecked,
   };
   for (const [spelling, source] of Object.entries(spellings)) {
     const execution = await run(source, "live-binding");

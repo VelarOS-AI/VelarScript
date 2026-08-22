@@ -325,14 +325,18 @@ test("[wave G] a reserved parameter name reports once instead of cascading", () 
 
 // ---------------------------------------------------------------------------
 // Grid item: '{cached}' silently captured the builtin. D71 rule 183 moved the
-// reserved global from `computed` to `cached`; `computed` is a contextual
-// keyword now, so it is exercised below as a softened word instead.
+// reserved global from `computed` to `cached`, and D90 R15(b) removed `cached`
+// itself — a derived value has one spelling now, the `computed` declaration.
+// Neither word is a reserved global any more, so the rule is exercised on the
+// reserved binding that remains, and both retired spellings are checked below
+// for the answer they owe an author who writes one: the successor, not an
+// unknown name.
 // ---------------------------------------------------------------------------
 
 test("[wave G] a record shorthand naming a reserved binding is refused instead of capturing the builtin", () => {
   assert.deepEqual(
-    messages(`component Panel:\n    const holder = {cached}\n    return <p>x</p>\n`, true),
-    ["VEL3007 Write 'cached: value'; 'cached' is a reserved extension binding, so the shorthand has no binding of that name to read"],
+    messages(`component Panel:\n    const holder = {mount}\n    return <p>x</p>\n`, true),
+    ["VEL3007 Write 'mount: value'; 'mount' is a reserved extension binding, so the shorthand has no binding of that name to read"],
   );
   assert.deepEqual(
     messages(`const holder = {print}\n`, false),
@@ -349,9 +353,18 @@ test("[wave G] a record shorthand naming a reserved binding is refused instead o
   // than with an unknown name.
   assert.deepEqual(
     messages(`component Panel:\n    const holder = {computed}\n    return <p>x</p>\n`, true),
-    ["VEL5055 'computed' is the keyword that declares a derived value — 'computed name = expression'. The function that returns a cached reader is now 'cached'"],
+    ["VEL5055 'computed' declares a derived value — 'computed name = expression'. There is no function form; 'cached' is removed and 'computed' already caches"],
+  );
+  // D90 R15(b): `cached` left the reserved globals with the construct, and a
+  // shorthand that reaches for it must not decay into "unknown name" either.
+  assert.deepEqual(
+    messages(`component Panel:\n    const holder = {cached}\n    return <p>x</p>\n`, true),
+    ["VEL5055 'cached' is removed: 'computed' declares a derived value — 'computed name = expression'. There is no function form, and 'computed' already caches"],
   );
   clean(`const cached = 1\nconst holder = {cached}\nprint(str(holder.cached))\n`, false, "cached is an ordinary Core name");
+  // The Web twin holds now too: the name is the author's in both modules, and
+  // declaring it shadows the retired-spelling diagnostic rather than colliding.
+  clean(`const cached = 1\nconst holder = {cached}\nprint(str(holder.cached))\n`, true, "cached is an ordinary Web name");
 });
 
 // ---------------------------------------------------------------------------

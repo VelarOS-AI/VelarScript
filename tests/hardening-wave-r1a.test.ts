@@ -693,9 +693,15 @@ watch t:
 `), []);
 });
 
-test("[cr-3] an alias of a JavaScript value typed 'any' stays silent", () => {
+test("[cr-3] an alias of a JavaScript boundary function stays silent", () => {
+  // D90 R17: an undeclared unsafe import is unknown and cannot be called, so
+  // the boundary callee the analysis stops at is now the declared extern —
+  // the stopping point the rule names is the boundary, not the spelling.
   assert.deepEqual(messages(`
-import js unsafe { bump } from "helpers"
+extern module "helpers":
+    export def bump() -> null
+
+import js { bump } from "helpers"
 
 state t = 0
 state x = 1

@@ -11,7 +11,13 @@ import {
   VELAR_TYPE_REGISTRY_RUNTIME,
   VELAR_UTF8_RUNTIME,
 } from "@velarscript/compiler/extension";
-import { standardModuleInterfaces, standardModuleSources } from "../packages/cli/src/standard-modules.ts";
+// Core's rosters, not the CLI facade's: this test exists to recompute the
+// numbers the gate prints, and the gate reads Core (its neighbouring checks —
+// "Core must not own the target-specific velar/websocket surface" — depend on
+// `standardModuleInterfaces()` meaning Core alone). The two differ by one:
+// under the facade `velar/serve` carries a Node source and a Desktop source.
+// Reading one roster from two places is what let that difference hide.
+import { standardModuleInterfaces, standardModuleSources } from "../packages/core/src/index.ts";
 import { velarCompilerExtension as velarDesktopCompilerExtension } from "../packages/desktop/src/compiler.ts";
 import { velarNodeCompilerExtension } from "../packages/node/src/compiler.ts";
 import { velarCompilerExtension } from "../packages/web/src/compiler.ts";

@@ -1,6 +1,6 @@
 import { scanAdvisorySuppressions, type AdvisorySuppression } from "./advisory-suppression.ts";
 import { CORE_NUMERIC_SUFFIXES } from "./core-vocabulary.ts";
-import { advisory, diagnostic, mechanicalFix, recoveredDiagnostic, type Advisory, type Diagnostic, type DiagnosticFix } from "./diagnostic.ts";
+import { advisory, diagnostic, mechanicalEdits, mechanicalFix, recoveredDiagnostic, type Advisory, type Diagnostic, type DiagnosticFix } from "./diagnostic.ts";
 import { scanEmbeddedJavaScriptLiteral, type EmbeddedJavaScriptTokenPayload } from "./embedded-javascript.ts";
 import type { CompilerLexicalExtension } from "./extension.ts";
 import { findInterpolatedExpressionEnd, scanStringEscape, scanStringLiteral, type StringLiteralScan, type StringTokenPayload } from "./interpolated-string.ts";
@@ -140,6 +140,102 @@ function floorDivisionRewrite(body: string): { readonly divisor: string; readonl
   if (rest === "") return { divisor, tail: "" };
   if (!/^[+\-*]\s*\S/u.test(rest) || rest.includes("/") || rest.includes("%")) return null;
   return { divisor, tail: ` ${rest[0]} ${rest.slice(1).trim().replace(/\s+/gu, " ")}` };
+}
+
+/**
+ * D89 A5/A6: the interpolation bodies whose rewrite is registered as a
+ * mechanical fix. D38 §48 admits a fix only where no judgment is involved, and
+ * the judgment-free core of "delete the `$`" is a body that is already a Vel
+ * expression: a dotted name path reads identically in JavaScript and in an
+ * `f` string, so the rewrite is a spelling change. Anything wider — a call, an
+ * operator, a JavaScript-only form like `a ?? b.x()` — might not compile once
+ * it becomes an interpolation, and a registered fix that hands back a new
+ * diagnostic is a guess, not a fix. Those bodies keep the advisory and lose
+ * only the one-click edit.
+ */
+const interpolationPathBody = /^[\p{L}_][\p{L}\p{N}_]*(?:\.[\p{L}_][\p{L}\p{N}_]*)*$/u;
+
+interface TemplateInterpolationOccurrence {
+  /** Content index of the `$`. */
+  readonly dollar: number;
+  /** Content index of the matching `}`. */
+  readonly close: number;
+  /** The text between the braces, exactly as written. */
+  readonly body: string;
+}
+
+interface TemplateInterpolationScanResult {
+  /** Each `${...}` with a matching `}` and a non-empty body, in source order. */
+  readonly occurrences: readonly TemplateInterpolationOccurrence[];
+  /** False once a `${` without a matching close or with an empty body appears; the rewrite is withheld. */
+  readonly allWellFormed: boolean;
+  /** Whether a `{` or `}` stands outside every `${...}` — only read for plain strings, where an `f` prefix would change what that brace means. */
+  readonly bareBrace: boolean;
+}
+
+/**
+ * D89 A5/A6: reads the `${...}` occurrences of one string literal's content.
+ * The walk mirrors `diagnoseStringContents` so the two never disagree about
+ * what a brace means: escapes are skipped in non-raw text (`"\u{E9}"` carries
+ * a brace that belongs to the escape), and in an interpolated string a `{{`
+ * pair and a real `{...}` interpolation are stepped over rather than counted,
+ * because there they already mean what the author asked for. Brace matching
+ * inside a `${...}` body is by depth, which is the same reading JavaScript
+ * gives the template it came from.
+ */
+function templateInterpolationScan(content: string, syntax: { readonly raw: boolean; readonly interpolated: boolean }): TemplateInterpolationScanResult {
+  const occurrences: TemplateInterpolationOccurrence[] = [];
+  let allWellFormed = true;
+  let bareBrace = false;
+  for (let index = 0; index < content.length; index += 1) {
+    const character = content[index]!;
+    if (!syntax.raw && character === "\\") {
+      index = scanStringEscape(content, index).end - 1;
+      continue;
+    }
+    if (character !== "{") {
+      if (!syntax.interpolated && character === "}") bareBrace = true;
+      continue;
+    }
+    if (content[index - 1] === "$" && !(syntax.interpolated && content[index + 1] === "{")) {
+      // In an interpolated string `${{x}}` is a literal `$` ahead of a real
+      // interpolation, so the `$` there is not holding anything back and the
+      // next iteration reads the braces the way the lexer does.
+      const close = matchInterpolationClose(content, index + 1);
+      if (close < 0 || content.slice(index + 1, close).trim() === "") {
+        allWellFormed = false;
+        continue;
+      }
+      occurrences.push({ dollar: index - 1, close, body: content.slice(index + 1, close) });
+      index = close;
+      continue;
+    }
+    if (!syntax.interpolated) {
+      bareBrace = true;
+      continue;
+    }
+    if (content[index + 1] === "{") {
+      index += 1;
+      continue;
+    }
+    const close = findInterpolatedExpressionEnd(content, index + 1);
+    if (close < 0) break;
+    index = close;
+  }
+  return { occurrences, allWellFormed, bareBrace };
+}
+
+/** The index of the `}` closing the brace at `open - 1`, matched by depth, or -1. */
+function matchInterpolationClose(content: string, open: number): number {
+  let depth = 1;
+  for (let index = open; index < content.length; index += 1) {
+    if (content[index] === "{") depth += 1;
+    else if (content[index] === "}") {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
 }
 
 /**
@@ -764,9 +860,13 @@ export class Lexer {
   /**
    * D89 A1: `//` is VelarScript's only comment spelling, so a Python author's
    * floor division reads as a finished line followed by a comment and the
-   * compiler has nothing to object to. The spelling cannot be removed — `#`
-   * already means something else (VEL1005) — so an advisory is the only
-   * remaining move.
+   * compiler has nothing to object to. `#` cannot take the comment role over:
+   * of the branches the `#` dispatch reads (`readJavaScriptPrivateIdentifier`,
+   * `readHexColor`, `readHashComment`), `readHexColor` carries bare
+   * hexadecimal colors — a hot path in a language with `look:` — and a `#`
+   * that opened a comment would swallow `#ff0000` and the rest of its line
+   * instead of guiding it to the quoted spelling. With no comment spelling
+   * left to give up, an advisory is the only remaining move.
    *
    * The trigger is narrow on both sides. D89 asks for a syntactically complete
    * expression or assignment ahead of the `//`, which here means three things:
@@ -1296,6 +1396,7 @@ export class Lexer {
         span(start + scanned.prefixLength, Math.min(this.index, start + scanned.prefixLength + 1)),
       ));
     }
+    this.adviseTemplateInterpolation(scanned, start);
     const payload: StringTokenPayload = {
       prefixLength: scanned.prefixLength,
       quote: scanned.quote,
@@ -1348,6 +1449,98 @@ export class Lexer {
         sourceSpan,
       } satisfies EmbeddedJavaScriptTokenPayload,
     });
+  }
+
+  /**
+   * D89 A5/A6: JavaScript's `${...}` never interpolates in VelarScript. The
+   * charter keeps it literal on purpose — generating JavaScript source is a
+   * real use of these literals — so the spelling cannot become an error, and a
+   * string that carries it compiles in silence with a meaning the JavaScript
+   * reflex behind it did not intend. That is D89's admission shape exactly,
+   * on both sides of the `f` prefix:
+   *
+   * - A5, a plain double-quoted or backtick string: nothing interpolates, the
+   *   `${name}` stays text. The way out is the `f` prefix with `{name}`.
+   * - A6, an `f` or `rf` string: the `$` ahead of `{` keeps that brace
+   *   literal, so the author who wrote the prefix *and* the JavaScript
+   *   spelling still gets text. The way out is dropping the `$`.
+   *
+   * The non-triggers, each deliberate: an empty `${}` or an unclosed `${`
+   * carries no expression to interpolate; a raw `r"..."` string is the author
+   * asking for literal text by name, so the deliberate-literal reading wins
+   * there (`rf` still triggers A6 — its rawness is about backslashes, not
+   * about interpolation); a single-quoted string is already VEL1005; an
+   * unterminated string is already VEL1003; and an inline `extern js` /
+   * `unsafe js` block never reaches this method at all — it is scanned by
+   * `readEmbeddedJavaScript`, where `${...}` is documented literal
+   * JavaScript. One advisory speaks per literal: the rewrite names the whole
+   * string, so a second occurrence adds nothing the first did not say.
+   *
+   * The fix is registered only where D38 §48's no-judgment bar holds: every
+   * `${...}` well-formed, every body a plain dotted name path (see
+   * `interpolationPathBody`), no `$` immediately ahead of an occurrence's own
+   * `$` — JavaScript's `$${x}` spells a literal `$` before an interpolation,
+   * and deleting the occurrence's `$` leaves `${x}`, whose surviving `$`
+   * holds the brace literal all over again, so the quoted rewrite would not
+   * interpolate — and, for A5, no bare brace outside the occurrences, because
+   * the `f` prefix would turn `{` into an interpolation opener and `{{` into
+   * a single literal brace. Everything else keeps the message and loses the
+   * one-click edit.
+   *
+   * A bracket fragment is exempt for A1's reason: its lexer holds the
+   * fragment's text rather than the module's, so a span there would not land
+   * on the physical line a `velar-allow` reads.
+   */
+  private adviseTemplateInterpolation(scanned: StringLiteralScan, start: number): void {
+    if (this.bracketFragment || !scanned.closed || scanned.quote === "'") return;
+    if (scanned.raw && !scanned.interpolated) return;
+    const scan = templateInterpolationScan(scanned.content, scanned);
+    const first = scan.occurrences[0];
+    if (!first) return;
+    const sourceOffset = (index: number): number => scanned.contentOffsets?.[index] ?? scanned.contentStart + index;
+    const reportSpan = span(sourceOffset(first.dollar), sourceOffset(first.close) + 1);
+
+    const quotedFirst = scanned.content.slice(first.dollar, first.close + 1);
+    const shown = quotedFirst.length <= 40 ? quotedFirst : `${quotedFirst.slice(0, 39)}…`;
+    const fixable = scan.allWellFormed
+      && (scanned.interpolated || !scan.bareBrace)
+      && scan.occurrences.every((occurrence) => interpolationPathBody.test(occurrence.body.trim())
+        && scanned.content[occurrence.dollar - 1] !== "$");
+
+    const deletions = scan.occurrences.map((occurrence) => ({ span: span(sourceOffset(occurrence.dollar), sourceOffset(occurrence.dollar) + 1), text: "" }));
+    if (scanned.interpolated) {
+      const rewritten = fixable ? this.literalWithoutDollars(start, deletions) : null;
+      this.advisories.push(advisory(
+        "A6",
+        rewritten !== null && rewritten.length <= 60
+          ? `VelarScript interpolation is '{...}', and '$' keeps the brace after it literal even under the 'f' prefix, so this stays the characters '${shown}'; drop the '$' and write '${rewritten}'`
+          : `VelarScript interpolation is '{...}', and '$' keeps the brace after it literal even under the 'f' prefix, so this stays the characters '${shown}'; drop the '$' and write '{${first.body.trim()}}'`,
+        reportSpan,
+        fixable ? mechanicalEdits(deletions, "Drop the '$' and interpolate") : undefined,
+      ));
+      return;
+    }
+    const edits = [{ span: span(start, start), text: "f" }, ...deletions];
+    const rewritten = fixable ? `f${this.literalWithoutDollars(start, deletions)}` : null;
+    this.advisories.push(advisory(
+      "A5",
+      rewritten !== null && rewritten.length <= 60
+        ? `'\${...}' is literal text in a VelarScript string — only the 'f' prefix interpolates — so this stays the characters '${shown}'; write '${rewritten}'`
+        : `'\${...}' is literal text in a VelarScript string — only the 'f' prefix interpolates — so this stays the characters '${shown}'; write '{${first.body.trim()}}' under an 'f' prefix`,
+      reportSpan,
+      fixable ? mechanicalEdits(edits, "Interpolate with an 'f' string") : undefined,
+    ));
+  }
+
+  /** The literal's source text with each occurrence's `$` removed, for the message that quotes the rewrite. */
+  private literalWithoutDollars(start: number, deletions: readonly { readonly span: Span }[]): string {
+    let text = "";
+    let cursor = start;
+    for (const deletion of deletions) {
+      text += this.text.slice(cursor, deletion.span.start);
+      cursor = deletion.span.end;
+    }
+    return text + this.text.slice(cursor, this.index);
   }
 
   private diagnoseStringContents(scanned: StringLiteralScan): void {

@@ -22,7 +22,7 @@ import { VELAR_CLASS_FIELD_MODULE, VELAR_CLASS_FIELD_RUNTIME } from "./class-run
 import { VELAR_COLLECTION_HOST_EXPORTS, VELAR_COLLECTION_HOST_MODULE, VELAR_COLLECTION_IDENTITY_RUNTIME, VELAR_COLLECTION_LIST_RUNTIME, VELAR_COLLECTION_RECORD_RUNTIME, VELAR_COLLECTION_SET_MAP_RUNTIME, VELAR_COLLECTION_TYPE_RUNTIME } from "./collection-runtime.ts";
 import { VELAR_COLLECTION_LOWERING_EXPORTS, VELAR_COLLECTION_LOWERING_MODULE, VELAR_COLLECTION_LOWERING_RUNTIME } from "./collection-lowering-runtime.ts";
 import { describeType, formatTypeReference, formatTypeSyntax, mapNestedTypes, resolveTypeReference, semanticTypeIdentity, typeContainsParameter, type BinaryStorageKind, type GenericApplication, type ValueType } from "./types.ts";
-import { disposeMemberKey, iterateMemberKey, type LoweringHints } from "./analyzer.ts";
+import { disposeMemberKey, iterateAsyncMemberKey, iterateMemberKey, type LoweringHints } from "./analyzer.ts";
 import { VELAR_ASSERTION_ERROR_RUNTIME, VELAR_ERROR_NORMALIZATION_MODULE, VELAR_ERROR_NORMALIZATION_RUNTIME, VELAR_HOST_ERROR_NAMES, VELAR_HOST_ERROR_RUNTIME } from "./error-runtime.ts";
 import { embeddedJavaScriptSpecifier } from "./embedded-module.ts";
 import type { CompilerEmbeddedJavaScriptModule, CompilerEmitterOptions } from "./extension.ts";
@@ -374,7 +374,10 @@ export class JavaScriptEmitter {
         helpers.push(VELAR_PROMISE_NORMALIZATION_RUNTIME);
       }
     }
-    if (this.hints.asyncForStatements.size > 0) {
+    // D90 R18: the structural-pull helpers serve only the capability-handle
+    // shapes; an `async for` over a declared asynchronous `@iterate:` calls
+    // the emitted member directly and needs none of them.
+    if ([...this.hints.asyncForStatements].some((start) => !this.hints.asyncIterationStatements.has(start))) {
       helpers.push([
         "const __velarAsyncPullGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;",
         "const __velarAsyncPullGetPrototypeOf = Object.getPrototypeOf;",
@@ -1365,13 +1368,18 @@ export class JavaScriptEmitter {
           const valueName = `__velarAsyncForValue${suffix}`;
           const indexName = `__velarAsyncForIndex${suffix}`;
           const bodyDepth = depth + 2;
+          // D90 R18: a source whose class declares the asynchronous
+          // `@iterate:` form is pulled through the declared member — no
+          // structural `next` capture, because the contract is a declaration,
+          // not a resemblance.
+          const declared = this.hints.asyncIterationStatements.has(statement.span.start);
           const lines = [
             `${indentation}{`,
             `${"  ".repeat(depth + 1)}const ${sourceName} = ${this.emitMappedExpression(statement.iterable)};`,
-            `${"  ".repeat(depth + 1)}const ${nextName} = __velarAsyncPullNext(${sourceName});`,
+            ...(declared ? [] : [`${"  ".repeat(depth + 1)}const ${nextName} = __velarAsyncPullNext(${sourceName});`]),
             `${"  ".repeat(depth + 1)}let ${indexName} = 0;`,
             `${"  ".repeat(depth + 1)}while (true) {`,
-            `${"  ".repeat(bodyDepth)}const ${valueName} = await __velarNormalizePromiseValue(__velarAsyncPullCall(${sourceName}, ${nextName}));`,
+            `${"  ".repeat(bodyDepth)}const ${valueName} = await __velarNormalizePromiseValue(${declared ? `${sourceName}[${JSON.stringify(iterateAsyncMemberKey)}]()` : `__velarAsyncPullCall(${sourceName}, ${nextName})`});`,
             `${"  ".repeat(bodyDepth)}if (${valueName} === null) break;`,
             ...this.emitBindingPatternStatements(statement.pattern, valueName, "const", false, bodyDepth, "Async for"),
             ...(statement.secondPattern
@@ -2744,8 +2752,12 @@ export class JavaScriptEmitter {
     // D68 rule 177: `@iterate:` lands the same way, under its own unspellable
     // key. It is a plain prototype member, so a derived block simply shadows
     // the base's — overriding replaces, which is what "one answer" means.
+    // D90 R18: the asynchronous pull form is an async method under its own
+    // key — `async for` calls it once per element, and the trailing
+    // `return null` makes falling off the end mean exhaustion.
     const iterate: string[] = [];
     if (statement.iterate) {
+      const asynchronous = this.hints.asyncIterateBlocks.has(spanIdentity(statement.iterate.keywordSpan));
       const iterateDepth = depth + 2;
       const indent = "  ".repeat(iterateDepth);
       const body = [
@@ -2753,7 +2765,7 @@ export class JavaScriptEmitter {
         ...this.emitStatementLines(statement.iterate.body, iterateDepth),
         `${indent}return null;`,
       ];
-      iterate.push(`${indentation}  [${JSON.stringify(iterateMemberKey)}]() {\n${body.join("\n")}\n${indentation}  }`);
+      iterate.push(`${indentation}  ${asynchronous ? "async " : ""}[${JSON.stringify(asynchronous ? iterateAsyncMemberKey : iterateMemberKey)}]() {\n${body.join("\n")}\n${indentation}  }`);
     }
     const extension = statement.base ? ` extends ${statement.base.name}` : "";
     return `${indentation}${statement.exported ? "export " : ""}class ${statement.name}${extension} {\n${[...privateFields, ...staticFields, constructor, ...getters, ...methods, ...dispose, ...iterate].join("\n\n")}\n${indentation}}`;

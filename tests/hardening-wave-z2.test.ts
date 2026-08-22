@@ -359,7 +359,7 @@ def settle(initial: number | string) -> string:
     return value.upper()
 `.trimStart()), [
     "number | string has no common field 'upper'",
-    "Cannot assign unknown to string",
+    "Cannot assign unknown to string; a boundary value stays unknown until validated at the edge — narrow it with 'value is string', or parse a declared shape",
   ]);
 });
 
@@ -377,7 +377,7 @@ def settle(initial: number | string | bool) -> string:
     return ""
 `.trimStart()), [
     "string | bool has no common field 'upper'",
-    "Cannot assign unknown to string",
+    "Cannot assign unknown to string; a boundary value stays unknown until validated at the edge — narrow it with 'value is string', or parse a declared shape",
   ]);
 });
 

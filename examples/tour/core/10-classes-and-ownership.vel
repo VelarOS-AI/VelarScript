@@ -287,8 +287,11 @@ export def callSpread() -> string:
 export def setAndMapConstruction() -> number:
     return Set(basket).size + Map(Prices()).size
 
-// `async for` stays outside the contract: it pulls a capability handle, whose
-// lifetime `using` owns, so an ordinary class never becomes an async stream.
+// `async for` reads the other form of the same declaration: an `@iterate:`
+// block that answers `T?` is the asynchronous pull form, driven once per
+// element with null as exhaustion — chapter 9 declares one. The two forms
+// refuse each other's loop by name, so a class is one kind of iterable, never
+// both by accident.
 
 export const chapterTen = {
     session, openSession, connection, address, scheme, described, closeSession,

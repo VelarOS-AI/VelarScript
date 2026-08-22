@@ -38,6 +38,7 @@ import {
   binaryStorageKind,
   boolType,
   boundGrants,
+  boundaryUnknownType,
   collectGenericBoundViolations,
   collectTypeArgumentBoundViolations,
   describeType,
@@ -346,6 +347,14 @@ export interface ClassInfo {
    * than composes.
    */
   readonly iterate?: ValueType;
+  /**
+   * D90 R18: the element the class's asynchronous `@iterate:` form answers
+   * with. The block is the declared spelling of the pull contract `async for`
+   * consumes — pulled once per element, it may await, it answers `T?`, and
+   * null is exhaustion. A class declares one form or the other; the answer's
+   * shape (a collection against `T?`) is what tells them apart.
+   */
+  readonly iterateAsync?: ValueType;
   readonly parameters: readonly ValueType[];
   readonly parameterNames?: readonly string[];
   readonly requiredParameters: number;
@@ -551,6 +560,18 @@ export interface LoweringHints {
    * returns and every consumer keeps the lowering it already had.
    */
   readonly iterationContracts: ReadonlySet<string>;
+  /**
+   * D90 R18: start offsets of `async for` statements whose source's class
+   * declares the asynchronous `@iterate:` form. The emitter pulls these
+   * through the declared member instead of capturing a structural `next`.
+   */
+  readonly asyncIterationStatements: ReadonlySet<number>;
+  /**
+   * D90 R18: span identities of the `@iterate:` blocks that are the
+   * asynchronous pull form, keyed by their keyword span, so the emitter lands
+   * each one as an async method under its own key.
+   */
+  readonly asyncIterateBlocks: ReadonlySet<string>;
   /**
    * Span identities of JavaScript-boundary calls in synchronous
    * module-initialization position. A non-Error value thrown there would
@@ -813,6 +834,14 @@ export const disposeMemberKey = "__velar:dispose";
  * member can answer it by accident and no author call can reach it.
  */
 export const iterateMemberKey = "__velar:iterate";
+/**
+ * The emitted member behind the asynchronous `@iterate:` form (D90 R18). It is
+ * a separate key because the two forms answer different questions — the
+ * synchronous member returns the finished collection once, this one is an
+ * async method `async for` pulls once per element — so no lowering can confuse
+ * one for the other.
+ */
+export const iterateAsyncMemberKey = "__velar:iterateAsync";
 
 /** How a `using` binding releases its value at scope exit. */
 export interface DisposalContract {
@@ -962,12 +991,12 @@ const promiseOf = (value: ValueType): ValueType => ({ kind: "promise", value });
 const jsonNamespaceType: ValueType = {
   kind: "object",
   fields: new Map([
-    ["parse", namespaceFunction("json.parse", ["text", "target"], [stringType, anyType], unknownType, 1)],
-    ["tryParse", namespaceFunction("json.tryParse", ["text", "target", "fallback"], [stringType, anyType, anyType], unknownType, 1)],
-    ["stringify", namespaceFunction("json.stringify", ["value", "pretty"], [anyType, { kind: "union", members: [boolType, numberType] }], stringType, 1)],
-    ["stableStringify", namespaceFunction("json.stableStringify", ["value", "pretty"], [anyType, { kind: "union", members: [boolType, numberType] }], stringType, 1)],
-    ["clone", namespaceFunction("json.clone", ["value", "target"], [anyType, anyType], anyType, 1)],
-    ["isSerializable", { kind: "function", parameterNames: ["value"], parameters: [anyType], requiredParameters: 1, result: boolType }],
+    ["parse", namespaceFunction("json.parse", ["text", "target"], [stringType, unknownType], unknownType, 1)],
+    ["tryParse", namespaceFunction("json.tryParse", ["text", "target", "fallback"], [stringType, unknownType, unknownType], unknownType, 1)],
+    ["stringify", namespaceFunction("json.stringify", ["value", "pretty"], [unknownType, { kind: "union", members: [boolType, numberType] }], stringType, 1)],
+    ["stableStringify", namespaceFunction("json.stableStringify", ["value", "pretty"], [unknownType, { kind: "union", members: [boolType, numberType] }], stringType, 1)],
+    ["clone", namespaceFunction("json.clone", ["value", "target"], [unknownType, unknownType], unknownType, 1)],
+    ["isSerializable", { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: boolType }],
   ]),
   readonlyFields: new Set(["parse", "tryParse", "stringify", "stableStringify", "clone", "isSerializable"]),
 };
@@ -1039,13 +1068,13 @@ const textNamespaceType: ValueType = {
 const promiseNamespaceType: ValueType = {
   kind: "object",
   fields: new Map([
-    ["all", namespaceFunction("async.all", ["values"], [anyType], promiseOf(anyType))],
-    ["race", namespaceFunction("async.race", ["values"], [{ kind: "list", element: anyType }], promiseOf(anyType))],
+    ["all", namespaceFunction("async.all", ["values"], [unknownType], promiseOf(unknownType))],
+    ["race", namespaceFunction("async.race", ["values"], [{ kind: "list", element: unknownType }], promiseOf(unknownType))],
     ["sleep", { kind: "function", parameterNames: ["duration"], parameters: [durationType], requiredParameters: 1, result: promiseOf(nullType) }],
-    ["timeout", namespaceFunction("async.timeout", ["value", "duration", "message"], [promiseOf(anyType), durationType, stringType], promiseOf(anyType), 2)],
-    ["retry", namespaceFunction("async.retry", ["task", "attempts", "delay"], [anyType, numberType, durationType], promiseOf(anyType), 1)],
-    ["map", namespaceFunction("async.map", ["values", "worker", "concurrency"], [{ kind: "list", element: anyType }, anyType, numberType], promiseOf({ kind: "list", element: anyType }), 2)],
-    ["series", namespaceFunction("async.series", ["tasks"], [{ kind: "list", element: anyType }], promiseOf({ kind: "list", element: anyType }))],
+    ["timeout", namespaceFunction("async.timeout", ["value", "duration", "message"], [promiseOf(unknownType), durationType, stringType], promiseOf(unknownType), 2)],
+    ["retry", namespaceFunction("async.retry", ["task", "attempts", "delay"], [unknownType, numberType, durationType], promiseOf(unknownType), 1)],
+    ["map", namespaceFunction("async.map", ["values", "worker", "concurrency"], [{ kind: "list", element: unknownType }, unknownType, numberType], promiseOf({ kind: "list", element: unknownType }), 2)],
+    ["series", namespaceFunction("async.series", ["tasks"], [{ kind: "list", element: unknownType }], promiseOf({ kind: "list", element: unknownType }))],
   ]),
   readonlyFields: new Set(["all", "race", "sleep", "timeout", "retry", "map", "series"]),
 };
@@ -1115,8 +1144,9 @@ const coreVocabularyTypes: Record<CoreVocabularyName, ValueType> = {
   // `values.map(str)` — is checked against the same whitelist the direct
   // call form uses instead of executing a 'toString' hook.
   str: { kind: "function", parameterNames: ["value"], parameters: [textConvertibleType], requiredParameters: 1, result: stringType },
-  // `print` inspects any value by contract and keeps the `any` domain.
-  print: { kind: "function", parameterNames: ["value"], parameters: [anyType], requiredParameters: 1, result: nullType },
+  // `print` inspects any value by contract; its domain is the top type for
+  // assignment targets (D90 R17 keeps `any` for boundary declarations only).
+  print: { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: nullType },
   // D47 rule 81: equals(a, b) — deep structural comparison over data.
   // Pure computation, so it lives in the prelude beside str/print; the
   // call site owns the domain checks (inferEqualsCall).
@@ -1396,12 +1426,10 @@ export class Analyzer implements TypeEnvironment {
   private readonly classDisposeChains = new Map<string, "sync" | "async">();
   /** D68 rule 177: expression spans a consumer iterates through `@iterate:`. */
   private readonly iterationContracts = new Set<string>();
-  /**
-   * D68 rule 177: the function depth of each `@iterate:` body being analyzed.
-   * A nested arrow inside the block is an ordinary callable and keeps the
-   * ordinary advice, so the contract's own message needs the exact depth.
-   */
-  private readonly iterateContractDepths: number[] = [];
+  /** D90 R18: `async for` statements pulling a declared asynchronous `@iterate:`. */
+  private readonly asyncIterationStatements = new Set<number>();
+  /** D90 R18: `@iterate:` blocks that are the asynchronous pull form, by keyword span. */
+  private readonly asyncIterateBlocks = new Set<string>();
   /** D51 rule 101: arrows that read a `using`-owned binding, by arrow span. */
   private readonly arrowOwnedCaptures = new Map<string, { readonly handle: string; readonly depth: number }>();
   private readonly arrowCaptureFrames: { captured: { readonly handle: string; readonly depth: number } | null }[] = [];
@@ -2315,6 +2343,8 @@ export class Analyzer implements TypeEnvironment {
       usingDisposals: this.usingDisposals,
       classDisposeChains: this.classDisposeChains,
       iterationContracts: this.iterationContracts,
+      asyncIterationStatements: this.asyncIterationStatements,
+      asyncIterateBlocks: this.asyncIterateBlocks,
       moduleTopLevelHostCalls: this.moduleTopLevelHostCalls,
     };
   }
@@ -3305,8 +3335,10 @@ export class Analyzer implements TypeEnvironment {
         // from the body — the same shape as an omitted function result, and it
         // rides the same seeded convergence passes. The shape pre-pass seeds
         // what the previous pass learned so a use written above the class sees
-        // the real collection instead of the placeholder.
-        ...(statement.iterate ? { iterate: this.seededIterationSource(statement.iterate) } : {}),
+        // the real collection instead of the placeholder. D90 R18: an optional
+        // seed is the asynchronous pull form — a collection can never validate
+        // to `T?` — so the seed's shape says which field it belongs in.
+        ...(statement.iterate ? this.seededIterationInfo(statement.iterate) : {}),
         parameters: statement.parameters.map((parameter) => this.resolveValidatedAnnotation(parameter.type)),
         parameterNames: statement.parameters.map((parameter) => parameter.name),
         requiredParameters: statement.parameters.filter((parameter) => !parameter.defaultValue).length,
@@ -4018,11 +4050,10 @@ export class Analyzer implements TypeEnvironment {
           && this.builtinValueReferences.get(spanIdentity(statement.iterable.callee.span)) === "range") {
           this.nativeRangeForStatements.add(statement.span.start);
         }
-        // D68 rule 177: `async for` is deliberately outside the contract. It
-        // pulls a capability handle — a resource with a lifetime that `using`
-        // owns — and a class that answered it would make "does this need
-        // releasing?" undecidable, so the projection happens on the
-        // synchronous side only and `async for` keeps refusing user types.
+        // D68 rule 177 + D90 R18: the eight plain consumers project through
+        // the synchronous `@iterate:` answer; `async for` reads the
+        // asynchronous form's declaration inside asyncPullElementType, so the
+        // asynchronous side takes the operand unprojected.
         const iterable = statement.asynchronous ? inferredIterable : this.iterationSource(statement.iterable, inferredIterable);
         if (!statement.asynchronous
           && (iterable.kind === "list" || iterable.kind === "map" || iterable.kind === "set" || iterable.kind === "record" || iterable.kind === "string")) {
@@ -4046,7 +4077,7 @@ export class Analyzer implements TypeEnvironment {
               statement.span,
             ));
           }
-          first = this.asyncPullElementType(iterable, statement.iterable.span);
+          first = this.asyncPullElementType(iterable, statement.iterable.span, statement.span.start);
           second = numberType;
           this.asyncForStatements.add(statement.span.start);
         } else {
@@ -5181,13 +5212,34 @@ export class Analyzer implements TypeEnvironment {
   }
 
   /**
+   * D90 R18: the seed routed to the field its form owns. An optional seed can
+   * only have come from the asynchronous pull form — the synchronous form
+   * never validates to `T?` — so the shape pre-pass reads the form off the
+   * seed the previous convergence pass learned.
+   */
+  private seededIterationInfo(block: ClassIterateBlock): { readonly iterate: ValueType } | { readonly iterateAsync: ValueType } {
+    const seed = this.seededIterationSource(block);
+    const expanded = this.expandAliases(seed);
+    return expanded.kind === "optional" ? { iterateAsync: expanded.inner } : { iterate: seed };
+  }
+
+  /**
    * `@iterate:` answers the compiler's question "what does
-   * iterating you mean?" with a collection the language already iterates. It
-   * shares `@dispose:`'s compiler-name path, then supplies its own role: it is
-   * a contract, not a method, it produces a value, and it may not `await`,
-   * because every one of the eight consumers reads it synchronously.
+   * iterating you mean?". It shares `@dispose:`'s compiler-name path, then
+   * supplies its own role: it is a contract, not a method, and it produces a
+   * value. D90 R18 gives it two forms, told apart by the answer's shape the
+   * same way `@dispose:`'s async-ness is read off its own body: the
+   * synchronous form answers a collection the language already iterates and
+   * the eight plain consumers read it once; the asynchronous pull form
+   * answers `T?` — `async for` drives it once per element, it may await, and
+   * null is exhaustion.
    */
   private analyzeClassIterate(statement: ClassDeclaration, block: ClassIterateBlock, baseName: string | null): void {
+    const awaits = blockContainsDirectAwait(
+      block.body,
+      (expression, contains) => this.extensionExpressionContainsDirectAwait(expression, contains),
+      (owned, containsExpression, containsBlock) => this.extensionStatementContainsDirectAwait(owned, containsExpression, containsBlock),
+    );
     this.enterScope();
     this.flowFrameDepth += 1;
     this.functionDepth += 1;
@@ -5199,13 +5251,14 @@ export class Analyzer implements TypeEnvironment {
     const previousSuperMemberContext = this.superMemberContext;
     this.currentClass = statement.name;
     this.superMemberContext = "instance";
-    this.asynchronousFunctions.push(false);
-    this.iterateContractDepths.push(this.functionDepth);
+    // A block that awaits is the asynchronous form (the same reading
+    // `@dispose:` gets), so its awaits are legal; a block without one has
+    // nothing for the flag to allow.
+    this.asynchronousFunctions.push(awaits);
     const inferredReturns: ValueType[] = [];
     this.returnContexts.push({ expected: unknownType, inferredReturns, observedReturns: null, declarationKind: "Iteration contract" });
     this.declareBinding("self", false, { kind: "class", name: statement.name }, block.span, true);
     this.analyzeStatements(block.body);
-    this.iterateContractDepths.pop();
     this.returnContexts.pop();
     this.asynchronousFunctions.pop();
     this.currentClass = previousClass;
@@ -5216,58 +5269,112 @@ export class Analyzer implements TypeEnvironment {
     this.flowFrameDepth -= 1;
     this.exitScope();
     const answered = this.inferCollectedFunctionResult(inferredReturns, !this.blockAlwaysReturns(block.body));
-    const source = this.validatedIterationSource(statement, block, answered, baseName);
+    const validated = this.validatedIterationSource(statement, block, answered, baseName, awaits);
     // D90 R12: `@iterate:` is the class's other inferred public contract. A
     // consumer writing `for item in box` reads the element straight out of
     // this block, so an element the compiler makes no promise about crosses
     // the boundary exactly as a method result does. The block has no
     // annotation to refuse and no `private` spelling, so the class's own
     // reachability is the whole question.
-    if (typeContainsAnyOutput(source)) {
+    if (typeContainsAnyOutput(validated.source)) {
       this.exportPositionCandidates.push({ className: statement.name, member: "@iterate", span: block.span });
     }
-    this.inferredFunctionResultTypes.set(this.iterationResultKey(block), source);
+    // The stored result keeps the optional wrapper for the asynchronous form
+    // so the convergence seed round-trips carrying the form (see
+    // seededIterationInfo).
+    this.inferredFunctionResultTypes.set(
+      this.iterationResultKey(block),
+      validated.form === "async" && !isInvalidType(validated.source) ? optionalOf(validated.source) : validated.source,
+    );
+    if (validated.form === "async") this.asyncIterateBlocks.add(spanIdentity(block.keywordSpan));
     const info = this.classes.get(statement.name);
-    if (info) this.classes.set(statement.name, { ...info, iterate: source });
+    if (info) {
+      // Drop the other form's field: an earlier pass may have seeded it before
+      // this pass's answer settled which form the block is.
+      const { iterate: _sync, iterateAsync: _async, ...rest } = info;
+      this.classes.set(statement.name, validated.form === "async"
+        ? { ...rest, iterateAsync: validated.source }
+        : { ...rest, iterate: validated.source });
+    }
   }
 
   /**
-   * The four collections are the whole answer space: the block says "iterating
-   * me is iterating this", and the language already fixed what iterating a
-   * List, Set, Map, or Record means. Anything else would be a second iteration
-   * semantics, which is the thing charter section 19 keeps out.
+   * The answer space is the four collections plus `T?` (D90 R18): the
+   * synchronous form says "iterating me is iterating this", and the language
+   * already fixed what iterating a List, Set, Map, or Record means; the
+   * asynchronous pull form answers one element per pull, null for exhaustion.
+   * Anything else would be a second iteration semantics, which is the thing
+   * charter section 19 keeps out.
    */
   private validatedIterationSource(
     statement: ClassDeclaration,
     block: ClassIterateBlock,
     answered: ValueType,
     baseName: string | null,
-  ): ValueType {
-    if (isInvalidType(answered) || containsInferredResultPlaceholder(answered)) return invalidType;
+    awaits: boolean,
+  ): { readonly form: "sync" | "async"; readonly source: ValueType } {
+    if (isInvalidType(answered) || containsInferredResultPlaceholder(answered)) return { form: "sync", source: invalidType };
     const expanded = this.expandAliases(answered);
-    if (expanded.kind !== "list" && expanded.kind !== "set" && expanded.kind !== "map" && expanded.kind !== "record") {
-      this.diagnostics.push(diagnostic(
-        "VEL4038",
-        `'@iterate' says which collection iterating '${statement.name}' means, so it returns a List, Set, Map, or Record — those are the shapes the language already knows how to iterate; this block returns ${describeType(answered)}`,
-        block.keywordSpan,
-      ));
-      return invalidType;
-    }
     // The override rule every other member already carries (a getter or method
     // override keeps the base result). `@iterate:` replaces rather than chains,
     // but the answer still has to be the one a base-typed binding was promised:
     // `for item in bag` inside a function taking the base would otherwise walk
-    // a different element type at runtime.
+    // a different element type — or a different form — at runtime.
     const inherited = baseName ? this.inheritedIterationSource(baseName) : null;
+    const inheritedAsync = baseName ? this.inheritedAsyncIterationSource(baseName) : null;
+    if (expanded.kind === "optional") {
+      const element = expanded.inner;
+      if (inherited && !isInvalidType(inherited)) {
+        this.diagnostics.push(diagnostic(
+          "VEL4038",
+          `'@iterate' override in '${statement.name}' must keep the base form; '${baseName}' answers ${describeType(inherited)} to the plain 'for', and this block answers ${describeType(answered)} — the asynchronous pull form — so a base-typed binding would stream where it was promised a collection`,
+          block.keywordSpan,
+        ));
+        return { form: "sync", source: inherited };
+      }
+      if (inheritedAsync && !isInvalidType(inheritedAsync) && !sameType(this.expandAliases(element), this.expandAliases(inheritedAsync))) {
+        this.diagnostics.push(diagnostic(
+          "VEL4038",
+          `'@iterate' override in '${statement.name}' must keep the base answer ${describeType(inheritedAsync)}?; '${baseName}' already promised every caller that pulling one of these yields ${describeType(inheritedAsync)}, and a derived value is still one of those`,
+          block.keywordSpan,
+        ));
+        return { form: "async", source: inheritedAsync };
+      }
+      return { form: "async", source: element };
+    }
+    if (expanded.kind !== "list" && expanded.kind !== "set" && expanded.kind !== "map" && expanded.kind !== "record") {
+      this.diagnostics.push(diagnostic(
+        "VEL4038",
+        `'@iterate' says what iterating '${statement.name}' means: the synchronous form returns a List, Set, Map, or Record — the shapes the language already knows how to iterate — and the asynchronous pull form answers 'T?', one element per pull with null as exhaustion; this block returns ${describeType(answered)}`,
+        block.keywordSpan,
+      ));
+      return { form: "sync", source: invalidType };
+    }
+    if (awaits) {
+      this.diagnostics.push(diagnostic(
+        "VEL4038",
+        `'@iterate' in '${statement.name}' awaits but answers ${describeType(answered)}; the synchronous form is read whole by the plain consumers, so await the work before construction and hold the finished collection — or answer 'T?' to be the asynchronous pull form 'async for' drives once per element`,
+        block.keywordSpan,
+      ));
+      return { form: "sync", source: invalidType };
+    }
+    if (inheritedAsync && !isInvalidType(inheritedAsync)) {
+      this.diagnostics.push(diagnostic(
+        "VEL4038",
+        `'@iterate' override in '${statement.name}' must keep the base form; '${baseName}' answers ${describeType(inheritedAsync)}? — the asynchronous pull form — and this block answers ${describeType(answered)}, so a base-typed binding would read a collection where it was promised a stream`,
+        block.keywordSpan,
+      ));
+      return { form: "async", source: inheritedAsync };
+    }
     if (inherited && !isInvalidType(inherited) && !sameType(expanded, this.expandAliases(inherited))) {
       this.diagnostics.push(diagnostic(
         "VEL4038",
         `'@iterate' override in '${statement.name}' must keep the base answer ${describeType(inherited)}; '${baseName}' already promised every caller that iterating one of these walks ${describeType(inherited)}, and a derived value is still one of those`,
         block.keywordSpan,
       ));
-      return inherited;
+      return { form: "sync", source: inherited };
     }
-    return expanded;
+    return { form: "sync", source: expanded };
   }
 
   /** The `@iterate:` answer a class inherits, most derived ancestor first. */
@@ -5281,6 +5388,30 @@ export class Analyzer implements TypeEnvironment {
       current = info?.base ?? null;
     }
     return null;
+  }
+
+  /** D90 R18: the asynchronous `@iterate:` element a class inherits, most derived ancestor first. */
+  private inheritedAsyncIterationSource(className: string): ValueType | null {
+    let current: string | null = className;
+    const visited = new Set<string>();
+    while (current && !visited.has(current)) {
+      visited.add(current);
+      const info: ClassInfo | undefined = this.classes.get(current);
+      if (info?.iterateAsync) return info.iterateAsync;
+      current = info?.base ?? null;
+    }
+    return null;
+  }
+
+  /**
+   * D90 R18: what pulling this value under `async for` means. A class answers
+   * through the asynchronous `@iterate:` form — its own, or the one it
+   * inherits, mirroring the synchronous contract exactly.
+   */
+  private asyncIterationContract(type: ValueType): ValueType | null {
+    const resolved = this.resolveNamedClasses(this.expandAliases(type));
+    if (resolved.kind !== "class") return null;
+    return this.inheritedAsyncIterationSource(resolved.identity ?? resolved.name);
   }
 
   /**
@@ -5320,6 +5451,12 @@ export class Analyzer implements TypeEnvironment {
       return "; an extern class declares the foreign shape and cannot declare '@iterate:' — read the collection out of it and iterate that";
     }
     if (this.iterationContract(resolved) !== null) return "";
+    // D90 R18: the refusal is symmetric with `async for` refusing the
+    // synchronous form — each names the other, so the author is one message
+    // away from the loop that fits the declaration.
+    if (this.asyncIterationContract(resolved) !== null) {
+      return "; '@iterate' on this class is the asynchronous pull form, which 'async for' drives — use 'async for', or answer a List, Set, Map, or Record to iterate here";
+    }
     return "; declare an '@iterate:' block on the class to say which List, Set, Map, or Record iterating it means";
   }
 
@@ -5433,10 +5570,41 @@ export class Analyzer implements TypeEnvironment {
     return null;
   }
 
-  private asyncPullElementType(source: ValueType, sourceSpan: Span): ValueType {
+  private asyncPullElementType(source: ValueType, sourceSpan: Span, statementStart: number): ValueType {
     const expanded = this.resolveNamedClasses(this.expandAliases(source));
     if (expanded.kind === "any") return anyType;
     if (isInvalidType(expanded)) return invalidType;
+
+    // D90 R18: a VelarScript class declares itself an asynchronous stream
+    // through the asynchronous `@iterate:` form, exactly as it declares the
+    // synchronous one — `async for` reads the declaration, never a structural
+    // resemblance. The structural `next() -> Promise<T?>` pull below stays the
+    // contract of the declared foreign shapes: capability handles (a reply
+    // stream, a child process, a watcher) and extern classes whose own
+    // contract declares the pull as a function-valued field.
+    if (expanded.kind === "class" && !isExternClassIdentity(expanded.identity ?? null)) {
+      const declared = this.asyncIterationContract(expanded);
+      if (declared !== null) {
+        if (isInvalidType(declared)) return invalidType;
+        this.asyncIterationStatements.add(statementStart);
+        return declared;
+      }
+      const identity = expanded.identity ?? expanded.name;
+      const synchronous = this.iterationContract(expanded);
+      if (synchronous !== null) {
+        this.typeError(
+          `async for pulls a declared asynchronous '@iterate:'; '@iterate' on ${describeType(source)} ${isInvalidType(synchronous) ? "answers the plain 'for'" : `answers ${describeType(synchronous)} to the plain 'for'`} — declare the asynchronous form instead: a block that answers 'T?', one element per pull, null as exhaustion`,
+          sourceSpan,
+        );
+        return unknownType;
+      }
+      const structuralNext = this.findMethod(identity, "next")?.type ?? this.findMethod(expanded.name, "next")?.type ?? null;
+      this.typeError(
+        `async for pulls a declared asynchronous '@iterate:'; ${describeType(source)} does not declare one — a block that answers 'T?' (it may await; one element per pull, null is exhaustion)${structuralNext ? "; 'next()' is a method of the author's namespace, not the contract — move its body into the '@iterate:' block" : ""}`,
+        sourceSpan,
+      );
+      return unknownType;
+    }
 
     let next: ValueType | null = null;
     if (expanded.kind === "object") {
@@ -5447,25 +5615,19 @@ export class Analyzer implements TypeEnvironment {
         ?? this.fieldsOf(identity)?.get("next")
         ?? null;
     } else if (expanded.kind === "class") {
-      const identity = expanded.identity ?? expanded.name;
-      next = this.findField(identity, "next")?.type
+      // An extern class: its own contract may declare the pull as a
+      // function-valued field; an extern method is never captured (charter
+      // section 12 trusts a checked declaration's member kinds, and only a
+      // field promises a function standing on the value).
+      next = this.findField(expanded.identity ?? expanded.name, "next")?.type
         ?? this.findField(expanded.name, "next")?.type
-        ?? (!identity.startsWith("js:") ? this.findMethod(identity, "next")?.type : null)
-        ?? (!identity.startsWith("js:") ? this.findMethod(expanded.name, "next")?.type : null)
         ?? null;
     }
 
     const callable = next ? this.expandAliases(next) : null;
     if (!callable || callable.kind !== "function" || callable.requiredParameters > 0 || (callable.typeParameterNames?.length ?? 0) > 0) {
-      // D68 rule 177 drew this line deliberately: `@iterate:` answers the
-      // synchronous question. An asynchronous stream is a resource — it has a
-      // lifetime, it fails, it needs releasing — so letting an ordinary class
-      // pose as one would make "does this need `using`?" undecidable.
-      const contractNote = this.iterationContract(source) === null
-        ? ""
-        : "; '@iterate' answers the plain 'for', not 'async for' — an async stream is a resource, so pull it from the capability handle that owns the lifetime";
       this.typeError(
-        `async for requires next() -> Promise<T?>; ${describeType(source)} does not expose that pull contract${contractNote}`,
+        `async for requires next() -> Promise<T?>; ${describeType(source)} does not expose that pull contract`,
         sourceSpan,
       );
       return unknownType;
@@ -6494,13 +6656,10 @@ export class Analyzer implements TypeEnvironment {
           if (this.parameterDefaultDepth === 0 && this.constructorDepth === 0 && (invalidFunctionAwait || invalidExtensionAwait)) {
             this.diagnostics.push(diagnostic(
               "VEL4007",
-              // D68 rule 177: a contract block takes no `async`, so the generic
-              // advice would name a fix that cannot be written. All eight
-              // consumers read `@iterate:` synchronously — `for item in bag`
-              // is a plain loop — so the awaiting work belongs on the way in.
-              this.iterateContractDepths.at(-1) === this.functionDepth
-                ? "'await' cannot be used in an '@iterate' block; iterating is a synchronous question — await the work before construction and hold the finished collection"
-                : invalidExtensionAwait
+              // D90 R18: an `@iterate:` block that awaits is the asynchronous
+              // pull form, so awaiting inside one is never refused here — the
+              // form's own validation owns the answer-shape question.
+              invalidExtensionAwait
                 ? this.invalidExtensionAwaitMessage() ?? "'await' is not valid in this synchronous extension context"
                 : "'await' can only be used in an async function or at module scope",
               expression.span,
@@ -6516,12 +6675,13 @@ export class Analyzer implements TypeEnvironment {
             }
             return result;
           }
-          // ASY-U2: awaiting `any` adopts a foreign thenable — its hooks run
-          // here and a raw undefined result skips null normalization — so the
-          // unchecked domain is rejected exactly like `unknown`.
+          // ASY-U2 + D90 R17: awaiting an unchecked boundary value adopts a
+          // foreign thenable — its hooks run here and a raw undefined result
+          // skips null normalization — so `any` and `unknown` share one
+          // refusal, and it teaches the way in: a declared contract.
           this.typeError(
-            awaited.kind === "any"
-              ? "Cannot await any; validate the value into a checked Promise first — an unchecked thenable runs foreign hooks and can leak raw undefined"
+            awaited.kind === "any" || awaited.kind === "unknown"
+              ? `Cannot await ${describeType(operand)}; an unchecked thenable runs foreign hooks and can leak raw undefined — declare the source in an extern contract so the result is a checked Promise, or validate the resolved data at the edge with 'Type.parse'`
               : `Cannot await ${describeType(operand)}`,
             expression.span,
           );
@@ -6765,7 +6925,9 @@ export class Analyzer implements TypeEnvironment {
           return unknownType;
         }
         if (object.kind !== "any") {
-          this.typeError(`Cannot index ${describeType(object)}`, expression.span);
+          // D90 R17: an unknown is a boundary value, so the refusal teaches
+          // the validation ritual instead of restating the kind.
+          this.typeError(`Cannot index ${describeType(object)}${object.kind === "unknown" && !isInvalidType(object) ? this.boundaryValidationGuidance(expression.object, null) : ""}`, expression.span);
         }
         return object.kind === "any" ? anyType : unknownType;
       }
@@ -7984,7 +8146,13 @@ export class Analyzer implements TypeEnvironment {
         for (const argument of arguments_) {
           this.inferExpression(argument);
         }
-        this.typeError("Cannot call an unknown JavaScript value without a declaration or validation", callSpan);
+        // D90 R17: a call needs a declared signature — `Type.parse` validates
+        // data, so the way in for a callable is the extern contract.
+        const receiver = calleeExpression ? this.boundaryReceiverText(calleeExpression) : null;
+        this.typeError(
+          `Cannot call an unknown JavaScript value without a declaration or validation; declare the signature — an 'extern module' contract or a contracted 'extern js' block gives ${receiver ? `'${receiver}'` : "the value"} a checked type — or validate the data it came from with 'Type.parse' first`,
+          callSpan,
+        );
       }
       return unknownType;
     }
@@ -8249,7 +8417,17 @@ export class Analyzer implements TypeEnvironment {
         const argument = sourceArguments[source]!;
         const value = argument.kind === "SpreadExpression" ? argument.value : argument;
         if (value.kind === "ArrowFunctionExpression") deferredNamedArrows.add(value);
-        else this.inferExpression(value, target === null ? unknownType : intrinsic.parameters[target] ?? intrinsic.rest ?? unknownType);
+        else {
+          const declared = target === null ? unknownType : intrinsic.parameters[target] ?? intrinsic.rest ?? unknownType;
+          // D90 R17: an accept-anything parameter is spelled `List<unknown>`
+          // in the vocabulary tables, and that spelling carries no element
+          // information — preanalyzing a literal against it would launder
+          // `[1, 2]` into a list the handler can read no numbers from, so the
+          // literal keeps its own inferred element and the handler's own
+          // expected type does the checking.
+          const context = declared.kind === "list" && declared.element.kind === "unknown" ? unknownType : declared;
+          this.inferExpression(value, context);
+        }
       }
       if (!named.valid) {
         for (const argument of deferredNamedArrows) this.inferExpression(argument);
@@ -8626,7 +8804,9 @@ export class Analyzer implements TypeEnvironment {
           fields.set("toBeFalsy", { kind: "function", parameters: [], requiredParameters: 0, result: nullType });
         }
         if (matched.kind === "list" || matched.kind === "string" || dynamic) {
-          const contained = matched.kind === "list" ? matched.element : matched.kind === "string" ? stringType : anyType;
+          // D90 R17: an accept-anything parameter position is `unknown`, the
+          // top type for assignment targets; `any` stays a value kind only.
+          const contained = matched.kind === "list" ? matched.element : matched.kind === "string" ? stringType : unknownType;
           fields.set("toContain", { kind: "function", parameterNames: ["expected"], parameters: [contained], requiredParameters: 1, result: nullType });
           fields.set("toHaveLength", { kind: "function", parameterNames: ["length"], parameters: [numberType], requiredParameters: 1, result: nullType });
         }
@@ -9579,7 +9759,7 @@ export class Analyzer implements TypeEnvironment {
       result = anyType;
     } else if (object.kind === "unknown") {
       if (isInvalidType(object)) result = invalidType;
-      else this.typeError(`Cannot access '${property}' on unknown without validation`, memberSpan);
+      else this.typeError(`Cannot access '${property}' on unknown without validation${this.boundaryValidationGuidance(objectExpression, property)}`, memberSpan);
     } else if (object.kind === "string") {
       result = this.stringMember(property) ?? unknownType;
       if (property === "size") this.stringSizes.add(memberSpan.end);
@@ -10445,7 +10625,17 @@ export class Analyzer implements TypeEnvironment {
       if (type.kind === "classConstructor" && type.identity) this.classDisplayNames.set(type.identity, local);
       return type;
     }
-    if (statement.unsafe) return anyType;
+    // D90 R17: an undeclared foreign value arrives as unknown — R12 refused
+    // `any` at export positions, and this closes the entry. The value must be
+    // validated into a concrete type (`Type.parse`) before members, calls, or
+    // operators touch it; `unsafe` names the missing declaration, not a
+    // license to chain through the boundary. A host-injected binding is a
+    // declaration — the host answered for the name — so it still wins. The
+    // boundary marker matters: a bare `unknown` is the inference seed a merge
+    // absorbs, while this value is *known to be unchecked*, so `[mystery, 5]`
+    // must stay `List<unknown | number>` instead of laundering into
+    // `List<number>`.
+    if (statement.unsafe) return this.importBindings.get(local) ?? boundaryUnknownType;
     const declarations = this.externModules.get(statement.source);
     if (namespace) return declarations
       ? { kind: "object", fields: declarations, readonlyFields: new Set(declarations.keys()) }
@@ -10802,17 +10992,18 @@ export class Analyzer implements TypeEnvironment {
   // whether the value is true, so 'false' and null take the same else path and
   // 'if flag:' stays the spelling for both. Any other optional has to say
   // which question it asks, because "holds a value" and "is true" are
-  // different tests. BRG-N4: `any` is rejected too — raw JavaScript
-  // truthiness would judge 0 and "" false, which breaks the owner's ruling
-  // that a condition judges only bool; validate the boundary value first.
+  // different tests. BRG-N4 + D90 R17: an unchecked boundary value — `any` or
+  // `unknown` — is rejected with one message: raw JavaScript truthiness would
+  // judge 0 and "" false, which breaks the owner's ruling that a condition
+  // judges only bool, so the boundary value is validated first.
   protected requireCondition(type: ValueType, condition: Expression): void {
     this.checkGetterNarrowingTest(condition);
     if (isInvalidType(type)) return;
     const expanded = this.expandAliases(type);
     if (expanded.kind === "bool") return;
-    if (expanded.kind === "any") {
+    if (expanded.kind === "any" || expanded.kind === "unknown") {
       this.typeError(
-        "A condition judges only bool, and an unchecked any would ride JavaScript truthiness (0 and \"\" become false); validate the value first, or compare it explicitly",
+        `A condition judges only bool, and an unchecked ${describeType(type)} would ride JavaScript truthiness (0 and "" become false); validate the value at the edge — 'Type.parse' — and judge the checked result, or compare it explicitly`,
         condition.span,
       );
       return;
@@ -10901,6 +11092,47 @@ export class Analyzer implements TypeEnvironment {
     return null;
   }
 
+  /**
+   * D90 R17: the author's own spelling of a boundary value, for the
+   * diagnostics that teach `Type.parse`. Identifier and member paths render
+   * exactly, a simple call renders as `name(...)`, and anything else answers
+   * null so the caller falls back to the word `value`.
+   */
+  private boundaryReceiverText(expression: Expression): string | null {
+    if (expression.kind === "IdentifierExpression") return expression.name;
+    if (expression.kind === "MemberExpression" && !expression.optional) {
+      const owner = this.boundaryReceiverText(expression.object);
+      return owner === null ? null : `${owner}.${expression.property}`;
+    }
+    if (expression.kind === "CallExpression") {
+      const callee = this.boundaryReceiverText(expression.callee);
+      return callee === null ? null : `${callee}(...)`;
+    }
+    return null;
+  }
+
+  /** A type name suggested from the receiver's last name segment, or 'X' when none reads naturally. */
+  private boundaryTypeNameSuggestion(receiver: string | null): string {
+    const segment = receiver?.replace(/\(\.\.\.\)$/u, "").split(".").at(-1) ?? "";
+    return /^[a-zA-Z]/u.test(segment) ? segment[0]!.toUpperCase() + segment.slice(1) : "X";
+  }
+
+  /**
+   * D90 R17: an undeclared foreign value arrives as unknown, and the way into
+   * the typed world is `Type.parse` at the edge. Every refusal on an unknown
+   * teaches that ritual with the author's own expression spelled into it.
+   */
+  private boundaryValidationGuidance(expression: Expression | null, property: string | null): string {
+    const receiver = expression ? this.boundaryReceiverText(expression) : null;
+    const name = this.boundaryTypeNameSuggestion(receiver);
+    const spelled = receiver ?? "value";
+    const declared = property === null
+      ? `declare a type naming the shape you rely on — 'type ${name}:'`
+      : `declare a type naming the fields you rely on — 'type ${name}:' with the '${property}' field`;
+    const read = property === null ? "use 'checked' from there" : `read 'checked.${property}'`;
+    return `; ${declared} — then validate first: 'const checked = ${name}.parse(${spelled})' and ${read}`;
+  }
+
   // Presence guidance names the exact spelling to write whenever the condition
   // is a plain name or a plain member path; anything else is taught the
   // operator without inventing source text for it.
@@ -10957,6 +11189,17 @@ export class Analyzer implements TypeEnvironment {
       const asyncResult = this.asyncResultSpellingGuidance(expandedActual, expectedCore);
       if (asyncResult !== null) {
         this.typeError(`Cannot assign ${actualDescription} to ${expectedDescription}; ${asyncResult}`, valueSpan);
+        return;
+      }
+      // D90 R17: an undeclared foreign value is unknown until validated, so
+      // the mismatch teaches the entry ritual instead of restating the kinds.
+      if (expandedActual.kind === "unknown" && !isInvalidType(expandedActual)) {
+        const named = expectedCore.kind === "named" || expectedCore.kind === "enum"
+          ? `'const checked = ${describeType(expectedCore)}.parse(value)'`
+          : expectedCore.kind === "string" || expectedCore.kind === "number" || expectedCore.kind === "bool"
+            ? `narrow it with 'value is ${describeType(expectedCore)}', or parse a declared shape`
+            : "declare a type naming the shape you rely on and call 'Type.parse' on the value";
+        this.typeError(`Cannot assign ${actualDescription} to ${expectedDescription}; a boundary value stays unknown until validated at the edge — ${named}`, valueSpan);
         return;
       }
       // COL-U10: a value of one collection family in another family's
@@ -12447,7 +12690,10 @@ export class Analyzer implements TypeEnvironment {
         || (VELAR_HOST_ERROR_NAMES as readonly string[]).includes(name)
         ? { kind: "classConstructor", name } satisfies ValueType
         : null)
-      ?? (name === "Map" || name === "Set" ? anyType : null);
+      // D90 R17: `Map`/`Set` as bare values are collection constructors the
+      // call path special-cases; the bare binding itself carries no members,
+      // so it is unknown, never a silent `any`.
+      ?? (name === "Map" || name === "Set" ? unknownType : null);
     return type ? {
       mutable: false,
       type,

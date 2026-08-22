@@ -534,13 +534,17 @@ async function runWebProgram(prefix: string, source: string): Promise<string> {
 test("[beta-2/beta-10] Set.update publishes every member key it adds", { timeout: 180_000 }, async () => {
   // Set.update triggered only the iterate key, so a membership observer --
   // which tracks the member key, exactly as Set.add publishes it -- never
-  // re-ran and `"x" in tags` stayed stale in every rendered view.
+  // re-ran and `"x" in tags` stayed stale in every rendered view. D90 R15(a)
+  // put the membership test in the `computed` a watch subject now has to name;
+  // the computed reads `in` under tracking, so it is still the member key that
+  // has to be published for this observer to re-run.
   const output = await runWebProgram("velar-marathon-set-update-", `
 state tags: Set<string> = Set()
+computed hasX = "x" in tags
 let membershipRuns = 0
 let observed = false
 
-watch "x" in tags as current, previous:
+watch hasX as current, previous:
     membershipRuns += 1
     observed = current
 
