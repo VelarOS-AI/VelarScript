@@ -976,7 +976,12 @@ const __velarTextStringCodePointAt = __velarTextGetOwnPropertyDescriptor(__velar
 const __velarTextStringFromCodePoint = __velarTextGetOwnPropertyDescriptor(__velarTextNativeString, "fromCodePoint")?.value;
 const __velarTextTitleSeparators = /[_\-/]+/gu;
 const __velarTextTitleWords = /(^|\s)([\p{L}\p{N}])/gu;
-const __velarTextLines = /\r?\n/gu;
+// A line ends at CRLF, at a lone CR, or at LF — the same three the language
+// itself accepts as a statement separator and the same three
+// SourceText indexes for diagnostics. A text API that disagreed with its
+// own language would make Text.lineStarts on Vel source compute line
+// numbers the compiler does not report.
+const __velarTextLines = /\r\n|[\r\n]/gu;
 const __velarTextWords = /\s+/gu;
 const __velarTextLatinMarks = /(?<=\p{Script=Latin})\p{M}+/gu;
 const __velarTextBaselessMarks = /(?<![\p{L}\p{N}\p{M}])\p{M}+/gu;
@@ -1157,7 +1162,16 @@ export function lineStarts(value) {
   let unitOffset = 0, codePointOffset = 0;
   while (unitOffset < value.length) {
     const nextUnitOffset = __velarTextNextCodePointOffset(value, unitOffset);
-    if (__velarTextCall(__velarNativeStringCharCodeAt, value, [unitOffset]) === 10) __velarTextAppend(output, codePointOffset + 1);
+    const code = __velarTextCall(__velarNativeStringCharCodeAt, value, [unitOffset]);
+    // CRLF is one break, not two: consume the LF with the CR so the following
+    // line starts once. A lone CR breaks as well — see __velarTextLines.
+    if (code === 13 && __velarTextCall(__velarNativeStringCharCodeAt, value, [nextUnitOffset]) === 10) {
+      __velarTextAppend(output, codePointOffset + 2);
+      unitOffset = __velarTextNextCodePointOffset(value, nextUnitOffset);
+      codePointOffset += 2;
+      continue;
+    }
+    if (code === 10 || code === 13) __velarTextAppend(output, codePointOffset + 1);
     unitOffset = nextUnitOffset;
     codePointOffset += 1;
   }
