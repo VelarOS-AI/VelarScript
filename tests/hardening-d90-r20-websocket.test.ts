@@ -78,7 +78,10 @@ test("[D90 R20] the Web HTTP response publishes no 'ok'", () => {
   assert.equal(response.fields.has("ok"), false);
 });
 
-test("[D90 R20] reading 'ok' teaches the HttpResponseError catch path and nothing else", async () => {
+// D90 R22: no version of this language was ever published, so nobody is
+// migrating off `ok`. Reading it is an ordinary read of a field the response
+// does not declare, which is the true and complete answer.
+test("[D90 R22] reading 'ok' is an ordinary absent field", async () => {
   const reported = await checkProject(`
 import {http} from "velar/http"
 
@@ -87,18 +90,14 @@ export async def check() -> bool:
     return response.ok
 `);
   assert.deepEqual(reported.failures, []);
-  assert.deepEqual(reported.diagnostics, [
-    "VEL5075 An HTTP response has no 'ok': a non-2xx status throws 'HttpResponseError' before 'response()' answers, so every response you can hold succeeded. Handle the failure where it is raised — 'catch failure:' then 'if failure is HttpResponseError:' — and read 'failure.status' there",
-  ]);
+  assert.equal(reported.diagnostics[0], "VEL4001 Object has no field 'ok'");
 });
 
-test("[D90 R20] the spelling VEL5075 teaches is legal VelarScript", async () => {
-  // The message's whole job is to hand the author the successor spelling, so
-  // the successor has to compile. The first draft taught
-  // `catch failure is HttpResponseError:` — a typed catch clause the language
-  // does not have (`parseTry` reads `catch <name>:` and nothing else), so the
-  // author who followed the guidance collected five parse errors. `is` narrows
-  // inside the block, exactly as the charter's error section spells it.
+test("[D90 R20] the catch path the response's failure travels is legal VelarScript", async () => {
+  // A non-2xx throws before `response()` answers, so the failure is handled
+  // where it is raised. `is` narrows inside the block, exactly as the charter's
+  // error section spells it — a typed `catch failure is HttpResponseError:`
+  // clause is not a shape the language has.
   const reported = await checkProject(`
 import {HttpResponseError, http} from "velar/http"
 
@@ -115,7 +114,7 @@ export async def check() -> string:
   assert.deepEqual(reported.diagnostics, []);
 });
 
-test("[D90 R20] the retired field keeps its bool type, so a condition around it reads one message", async () => {
+test("[D90 R22] a condition around the absent field reads the ordinary refusal first", async () => {
   const reported = await checkProject(`
 import {http} from "velar/http"
 
@@ -126,8 +125,7 @@ export async def check() -> string:
     return "ok"
 `);
   assert.deepEqual(reported.failures, []);
-  assert.equal(reported.diagnostics.length, 1);
-  assert.match(reported.diagnostics[0]!, /^VEL5075 /u);
+  assert.equal(reported.diagnostics[0], "VEL4001 Object has no field 'ok'");
 });
 
 test("[D90 R20] an unrelated 'ok' field is untouched", async () => {
@@ -142,11 +140,7 @@ export def read(value: Health) -> bool:
   assert.deepEqual(reported.diagnostics, []);
 });
 
-test("[D90 R20] writing the retired field teaches the same migration, once", async () => {
-  // The read hook cannot see this shape: the core analyzes a member assignment
-  // target through its member path directly, so `response.ok = true` collected
-  // "Object has no field 'ok'" — true, but not the migration. One diagnostic,
-  // and it is the one that names the successor.
+test("[D90 R22] writing the absent field reads the ordinary refusal", async () => {
   const reported = await checkProject(`
 import {http} from "velar/http"
 
@@ -156,9 +150,7 @@ export async def send() -> number:
     return response.status
 `);
   assert.deepEqual(reported.failures, []);
-  assert.deepEqual(reported.diagnostics, [
-    "VEL5075 An HTTP response has no 'ok': a non-2xx status throws 'HttpResponseError' before 'response()' answers, so every response you can hold succeeded. Handle the failure where it is raised — 'catch failure:' then 'if failure is HttpResponseError:' — and read 'failure.status' there",
-  ]);
+  assert.deepEqual(reported.diagnostics, ["VEL4001 Object has no field 'ok'"]);
 });
 
 test("[D90 R20] a record that merely spells the response's field names is not a response", async () => {
@@ -213,11 +205,7 @@ export def probe() -> bool:
   assert.deepEqual(reported.diagnostics, []);
 });
 
-test("[D90 R20] destructuring the retired field teaches the migration too", async () => {
-  // The third route to the same read. `const {ok} = response` never builds a
-  // MemberExpression, so it reached neither the read hook nor the write one and
-  // kept the bare "Object has no field 'ok'" — the migration closed for one
-  // spelling of the sink and open for its neighbour.
+test("[D90 R22] destructuring the absent field reads the ordinary refusal", async () => {
   const reported = await checkProject(`
 import {http} from "velar/http"
 
@@ -227,12 +215,7 @@ export async def probe() -> number:
     return status
 `);
   assert.deepEqual(reported.failures, []);
-  assert.deepEqual(reported.diagnostics, [
-    "VEL5075 An HTTP response has no 'ok': a non-2xx status throws 'HttpResponseError' before 'response()' answers, so every response you can hold succeeded. Handle the failure where it is raised — 'catch failure:' then 'if failure is HttpResponseError:' — and read 'failure.status' there",
-  ]);
-  // The binding still carries `unknown`, so a use of it reports on its own.
-  // That half needs the core to hand a declared type back and R20 did not rule
-  // on it; what the author gets first is the migration.
+  assert.deepEqual(reported.diagnostics, ["VEL4001 Object has no field 'ok'"]);
   const used = await checkProject(`
 import {http} from "velar/http"
 
@@ -241,7 +224,7 @@ export async def probe() -> bool:
     const {ok} = response
     return ok
 `);
-  assert.equal(used.diagnostics[0]?.startsWith("VEL5075 "), true, JSON.stringify(used.diagnostics));
+  assert.equal(used.diagnostics[0], "VEL4001 Object has no field 'ok'", JSON.stringify(used.diagnostics));
   // A record that genuinely lacks the field is not a response, and keeps the
   // ordinary refusal.
   const unrelated = await checkProject(`
@@ -284,7 +267,7 @@ test("[D90 R20] velar/realtime publishes only eventStream", () => {
   assert.deepEqual(standardModuleApi(extensions).modules["velar/realtime"], ["eventStream"]);
 });
 
-test("[D90 R20] importing socket from velar/realtime names velar/websocket.connect", async () => {
+test("[D90 R22] importing socket from velar/realtime is an ordinary missing export", async () => {
   const reported = await checkProject(`
 import {socket} from "velar/realtime"
 
@@ -293,7 +276,7 @@ export def open():
     live.send("hello")
 `);
   assert.deepEqual(reported.failures, [
-    "Use 'connect' from \"velar/websocket\"; velar/realtime.socket is retired and connect is the one WebSocket client — 'using live = await connect(url)', then 'await live.send(text)' and 'await live.next()'. Send JSON with 'Json.stringify(value)', which needs no import",
+    "Module 'velar/realtime' has no export named 'socket'",
   ]);
 });
 

@@ -154,11 +154,11 @@ test("[D71-183] the retired computed function is answered once, with the declara
   assert.equal(result.diagnostics[0]?.code, "VEL5055");
 
   // In an expression position the compile cannot see the whole declaration, so
-  // it names the successor and offers no edit: D90 R15(b) removed `cached`, and
-  // the migration that is left is a declaration rather than a rename.
+  // it names the declaration form and offers no edit: the answer is a
+  // declaration rather than a rename.
   const expression = compile("state count = 1\nconst bag = {read: computed(() => count)}\nprint(bag.read())\n");
   assert.equal(expression.diagnostics.length, 1, JSON.stringify(expression.diagnostics));
-  assert.match(expression.diagnostics[0]?.message ?? "", /There is no function form; 'cached' is removed and 'computed' already caches/u);
+  assert.match(expression.diagnostics[0]?.message ?? "", /There is no function form, and 'computed' already caches/u);
   assert.equal(expression.diagnostics[0]?.fix, undefined);
 });
 

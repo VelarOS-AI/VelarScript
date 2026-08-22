@@ -152,23 +152,6 @@ const removedStandardFunctionGuidanceEntries = new Map<string, ReadonlyMap<strin
     ["isFinite", "Use 'value.isFinite()'; finite-number checks are checked members"],
     ["isInteger", "Use 'value.isInteger()'; integer checks are checked members"],
   ])],
-  // D90 R14: `velar/http`'s non-2xx failure is now `HttpResponseError`, while
-  // `velar/serve`'s `HttpError` is unchanged. The old spelling is what every
-  // model wrote before the rename, so it earns the successor by name rather
-  // than a bare "no export named" followed by a cascade of unknown-type
-  // errors — and it must say which module still owns `HttpError`, because a
-  // proxy route imports both.
-  ["velar/http", new Map([
-    ["HttpError", "Use 'HttpResponseError'; velar/serve's HttpError is the outbound failure a route throws, and a proxy route holds both"],
-  ])],
-  // D90 R20: two complete WebSocket clients stood in the tree and disagreed
-  // about which close codes are legal. `velar/websocket` is the one that
-  // survives — a module whose name is its job, with typed failures, binary
-  // messages, and the whole 1000-4999 range — so the retired spelling earns
-  // its successor by name here rather than a bare "no export named".
-  ["velar/realtime", new Map([
-    ["socket", "Use 'connect' from \"velar/websocket\"; velar/realtime.socket is retired and connect is the one WebSocket client — 'using live = await connect(url)', then 'await live.send(text)' and 'await live.next()'. Send JSON with 'Json.stringify(value)', which needs no import"],
-  ])],
 ]);
 
 /**

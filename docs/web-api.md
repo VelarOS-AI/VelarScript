@@ -616,18 +616,11 @@ are required with `as`, so a body that needs only the new value writes
 record the baseline — the body does not run for that first value. For a deep
 mutation, `current` and `previous` are the same reference.
 
-A watch that writes state says so in its header: `writes` follows the subject
-— and the `as` clause, when there is one — and names each state the body
-writes, separated by commas: `watch query as current, _ writes history:`. A
-target may be a local `state` or an imported one. A watch with no clause is a
-pure observer, and a body write it did not declare is refused — at compile
-time where the compiler can see the write (`VEL5072`), by the runtime at the
-moment the write lands otherwise. The declaration is also what makes flush
-order a non-question: two watches of one scope that declare the same state are
-refused at compile time, and where one compile cannot see both — two modules
-writing one imported `state`, two live instances of one component — the
-runtime refuses at the moment the second watch settles that cell in a flush,
-naming both watches and the state.
+A watch may write state and declares nothing to do so. Within a flush,
+watches run in the order they were written — source order in one module,
+mount order across instances of one component, module initialization order
+across modules — and two watches that write one `state` both take effect in
+that order rather than being refused.
 
 A component watch is disposed with its component. A **module-scope watch is never
 disposed**: like a module `action`, it lives for the life of the page. That is
@@ -653,10 +646,9 @@ API. Where a callable is what a receiver wants, write an ordinary `def` that
 reads the declared value; the cache stays the `computed`'s.
 Repeated-computation and assignment-coalescing behavior below is a compiler and
 runtime contract rather than additional application controls. Removed
-experiments do not remain as aliases — `memo` and `batch` are ordinary
-identifiers, while the two retired function forms `cached(...)` and
-`computed(...)` are answered with the declaration that replaces them rather than
-with an unknown name.
+experiments do not remain as aliases — `memo`, `batch`, and `cached` are
+ordinary identifiers, while `computed(...)` written as a call is answered with
+the declaration form rather than with an unknown name.
 
 ### Synchronous assignment bursts publish once
 
@@ -1125,9 +1117,8 @@ const result = await http.post("/api/images", {body: body}).parse(UploadResult)
   throws `HttpResponseError` before it answers for any non-2xx status, so every
   response an author can hold succeeded, and a field asserting that would be a
   constant. Handle the failure where it is raised — `catch failure:` then
-  `if failure is HttpResponseError:` — and read `failure.status` there. Reading
-  or writing `ok` on a response reports `VEL5075` on Web and `VEL6007` on Node
-  with that migration. `bytes()` returns the target-neutral
+  `if failure is HttpResponseError:` — and read `failure.status` there.
+  `bytes()` returns the target-neutral
   immutable `Bytes` snapshot. `streamText` incrementally decodes valid
   UTF-8 chunks and awaits each consumer before pulling the next chunk. `blob()`
   returns an opaque checked `Blob`, not `any`; it may be
@@ -1590,10 +1581,8 @@ resolves, and the rest reject with `WebSocketClosedError`.
 `velar/websocket` is the only WebSocket client. D90 R20 retired
 `velar/realtime.socket`, a second, text-only client that admitted only close
 code `1000` and application codes `3000`–`4999`, reported failure as a bare
-`Error`, and could not carry binary messages. Importing `socket` from
-`velar/realtime` now reports `connect` by name rather than an unknown export;
-`sendJson(value)` becomes `send(Json.stringify(value))`, and `Json` needs no
-import.
+`Error`, and could not carry binary messages. `velar/realtime` no longer
+exports `socket`.
 
 ## `velar/realtime`
 

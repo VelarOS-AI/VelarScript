@@ -78,9 +78,9 @@ component ReloadSpellings(userId: string):
     resource profile: Profile = loadProfile(userId)
     state detachedStarts = 0
 
-    // The reload needs no clause: a resource's own cells are the resource's,
-    // not state this component declared. The counter is state, so it is declared.
-    watch userId writes detachedStarts:
+    // The reload starts an operation the resource owns; the counter is this
+    // component's own state, and the watch writes it directly.
+    watch userId:
         detachedStarts += 1
         async profile.reload()
 

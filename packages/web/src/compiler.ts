@@ -28,7 +28,6 @@ const bytesType: ValueType = { kind: "named", name: "Bytes", identity: "velar/bi
 // reads both from here instead of spelling them again.
 export { BROWSER_TEST_MODULE, BROWSER_TEST_SOURCE_SUFFIX } from "./browser-test.ts";
 
-const anyType: ValueType = { kind: "any" };
 const nullType: ValueType = { kind: "null" };
 const stringType: ValueType = { kind: "string" };
 const numberType: ValueType = { kind: "number" };
@@ -196,20 +195,8 @@ const httpResponseType = object({
   bytes: namedFunction([], [], promise(bytesType)),
   streamText: namedFunction(["consume"], [httpChunkConsumerType], promise(nullType)),
   blob: namedFunction([], [], promise(blobType)),
-  parse: namedIntrinsic("runtime.parseAsync", ["target"], [anyType], promise(anyType)),
+  parse: namedIntrinsic("runtime.parseAsync", ["target"], [unknownType], promise(unknownType)),
 });
-
-/**
- * The HTTP response's own declaration, published so the analyzer can recognise
- * one it is handed and report the retired `ok` against it. The response is a
- * structural object with no identity of its own, so its shape is the only
- * thing that names it — the same way Core recognises this module's
- * `formBody()` handle (`isHttpFormBody`, compiler analyzer). What is published
- * is the declaration itself rather than a roster re-listed beside it: the
- * names alone would accept any ten-field record that happens to spell them,
- * and the field types are what make the match a response.
- */
-export const webHttpResponseType: ValueType = httpResponseType;
 
 const requestType = object({
   response: namedFunction([], [], promise(httpResponseType)),
@@ -218,13 +205,13 @@ const requestType = object({
   bytes: namedFunction([], [], promise(bytesType)),
   streamText: namedFunction(["consume"], [httpChunkConsumerType], promise(nullType)),
   blob: namedFunction([], [], promise(blobType)),
-  parse: namedIntrinsic("runtime.parseAsync", ["target"], [anyType], promise(anyType)),
+  parse: namedIntrinsic("runtime.parseAsync", ["target"], [unknownType], promise(unknownType)),
   cancel: namedFunction([], [], nullType),
 });
 
 const httpOptionsType = object({
   headers: optional(mapString(stringType)),
-  body: optional(anyType),
+  body: optional(unknownType),
   timeout: optional(numberType),
   maxBytes: optional(numberType),
   credentials: optional(stringType),
@@ -242,13 +229,13 @@ const httpType = object({
 
 function createStorageType(): ValueType {
   const common = (): Map<string, ValueType> => new Map([
-    ["get", namedIntrinsic("storage.get", ["key", "target", "fallback", "maxBytes"], [stringType, anyType, anyType, numberType], anyType, 2)],
-    ["set", namedIntrinsic("storage.set", ["key", "value", "maxBytes"], [stringType, anyType, numberType], nullType, 2)],
+    ["get", namedIntrinsic("storage.get", ["key", "target", "fallback", "maxBytes"], [stringType, unknownType, unknownType, numberType], unknownType, 2)],
+    ["set", namedIntrinsic("storage.set", ["key", "value", "maxBytes"], [stringType, unknownType, numberType], nullType, 2)],
     ["has", namedFunction(["key"], [stringType], boolType)],
     ["keys", namedFunction([], [], arrayString)],
     ["remove", namedFunction(["key"], [stringType], nullType)],
     ["clear", namedFunction([], [], nullType)],
-    ["watch", namedIntrinsic("storage.watch", ["key", "target", "callback", "maxBytes"], [stringType, anyType, anyType, numberType], cleanupType, 3)],
+    ["watch", namedIntrinsic("storage.watch", ["key", "target", "callback", "maxBytes"], [stringType, unknownType, unknownType, numberType], cleanupType, 3)],
   ]);
   const scoped: ValueType = { kind: "object", fields: common() };
   const fields = common();
@@ -259,8 +246,8 @@ function createStorageType(): ValueType {
 const storageType = createStorageType();
 const storageBatchChangeType = object({ key: stringType, bytes: optional(bytesType) });
 const databaseType = object({
-  get: namedIntrinsic("storage.databaseGet", ["key", "target", "fallback", "maxBytes"], [stringType, anyType, anyType, numberType], promise(anyType), 2),
-  set: namedIntrinsic("storage.set", ["key", "value", "maxBytes"], [stringType, anyType, numberType], promise(nullType), 2),
+  get: namedIntrinsic("storage.databaseGet", ["key", "target", "fallback", "maxBytes"], [stringType, unknownType, unknownType, numberType], promise(unknownType), 2),
+  set: namedIntrinsic("storage.set", ["key", "value", "maxBytes"], [stringType, unknownType, numberType], promise(nullType), 2),
   getBytes: namedFunction(["key", "fallback", "maxBytes"], [stringType, optional(bytesType), numberType], promise(optional(bytesType)), 1),
   setBytes: namedFunction(["key", "value", "maxBytes"], [stringType, bytesType, numberType], promise(nullType), 2),
   batch: namedFunction(["changes"], [{ kind: "list", element: storageBatchChangeType }], promise(nullType)),
@@ -280,9 +267,27 @@ function storageErrorClass(identity: string): ClassInfo {
   };
 }
 
+/**
+ * D90 R17-a left exactly one `any` standing in this file, and this is it.
+ *
+ * `component` holds a component constructor, not a rendered node, so
+ * `webNodeType` is the wrong family — the two referees that check this slot
+ * (`checkRouteComponent` and `checkWebRouteComponent`) match it with
+ * `isWebComponentType`, and `isWebTypeAssignable` refuses a component against a
+ * node outright. `unknown`, the answer R17 gives every other boundary position
+ * here, is refused by the shape of assignability rather than by the ruling: a
+ * writable object field and a List element are both compared *invariantly*, and
+ * `unknown` is invariant with nothing, so `List<{path, component: Page}>` — the
+ * type a route list bound to a name actually has — would stop being assignable
+ * to the Router's `routes` prop. `any` is the only spelling that is invariant
+ * with every component type at once, and no published name means "some
+ * component"; R17-a declined to mint one. The slot is checked by its two
+ * referees, not by this declaration.
+ */
+const routeComponentType: ValueType = { kind: "any" };
 const routeType = object({
   path: stringType,
-  component: anyType,
+  component: routeComponentType,
 });
 
 const routeContextFields = new Map<string, ValueType>([
@@ -460,14 +465,14 @@ export const webModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map
     ["reportError", namedFunction(["error", "phase", "detail"], [errorType, stringType, stringType], nullType, 1)],
   ]))],
   ["velar/config", moduleInterface(new Map([
-    ["publicConfig", namedIntrinsic("config.public", ["target"], [anyType], anyType)],
+    ["publicConfig", namedIntrinsic("config.public", ["target"], [unknownType], unknownType)],
     ["has", namedFunction(["key"], [stringType], boolType)],
     ["keys", namedFunction([], [], arrayString)],
   ]))],
   ["velar/web", moduleInterface(new Map([
     ["RouteContext", { kind: "typeObject", name: "RouteContext" }],
-    ["route", namedIntrinsic("web.route", ["path", "view"], [stringType, anyType], routeType)],
-    ["lazy", namedIntrinsic("web.lazy", ["loader", "exportName", "loading", "failed"], [functionType([], promise(anyType)), stringType, anyType, anyType], anyType, 2)],
+    ["route", namedIntrinsic("web.route", ["path", "view"], [stringType, unknownType], routeType)],
+    ["lazy", namedIntrinsic("web.lazy", ["loader", "exportName", "loading", "failed"], [functionType([], promise(unknownType)), stringType, unknownType, unknownType], unknownType, 2)],
     ["navigate", namedFunction(["to", "options"], [stringType, navigationOptionsType], nullType, 1)],
     ["redirect", namedFunction(["to"], [stringType], nullType)],
     ["back", namedFunction([], [], nullType)],
@@ -480,7 +485,7 @@ export const webModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map
       ["title", stringType], ["description", stringType], ["canonical", stringType], ["robots", stringType],
       ["image", stringType], ["themeColor", stringType], ["language", stringType],
     ]), new Set(["title"]), null)],
-    ["Router", webComponentConstructor("Router", new Map<string, ValueType>([["routes", { kind: "list", element: routeType }], ["fallback", anyType]]), new Set(["routes"]), null, "web.router")],
+    ["Router", webComponentConstructor("Router", new Map<string, ValueType>([["routes", { kind: "list", element: routeType }], ["fallback", unknownType]]), new Set(["routes"]), null, "web.router")],
     ["Link", webComponentConstructor("Link", new Map<string, ValueType>([["to", stringType], ["replace", boolType], ["class", optional(stringType)], ["look", optional({ kind: "named", name: "Look" })], ["children", nodeType]]), new Set(["to"]), null)],
     ["NavLink", webComponentConstructor("NavLink", new Map<string, ValueType>([["to", stringType], ["exact", boolType], ["replace", boolType], ["class", optional(stringType)], ["look", optional({ kind: "named", name: "Look" })], ["children", nodeType]]), new Set(["to"]), null)],
   ]), new Map(), new Map([["RouteContext", routeContextFields]]), new Map([
@@ -559,7 +564,7 @@ export const webModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map
   ]))],
   ["velar/forms", moduleInterface(new Map([
     ["values", namedFunction(["form"], [elementType], formValuesType)],
-    ["read", namedIntrinsic("forms.read", ["form", "target"], [elementType, anyType], anyType)],
+    ["read", namedIntrinsic("forms.read", ["form", "target"], [elementType, unknownType], unknownType)],
     ["fieldValue", namedFunction(["form", "name"], [elementType, stringType], optional(unknownType))],
     ["textValue", namedFunction(["form", "name", "fallback"], [elementType, stringType, stringType], stringType, 2)],
     ["numberValue", namedFunction(["form", "name"], [elementType, stringType], optional(numberType))],

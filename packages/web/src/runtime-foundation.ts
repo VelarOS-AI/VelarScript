@@ -438,6 +438,8 @@ const __velarGraphNativeWeakMap = globalThis.WeakMap;
 const __velarGraphNativeProxy = globalThis.Proxy;
 const __velarGraphReflectApply = Object.getOwnPropertyDescriptor(Reflect, "apply")?.value;
 const __velarGraphArrayIsArray = Object.getOwnPropertyDescriptor(Array, "isArray")?.value;
+const __velarGraphArrayPrototype = Object.getOwnPropertyDescriptor(__velarGraphNativeArray, "prototype")?.value;
+const __velarGraphArraySort = __velarGraphArrayPrototype && Object.getOwnPropertyDescriptor(__velarGraphArrayPrototype, "sort")?.value;
 const __velarGraphObjectIs = Object.getOwnPropertyDescriptor(Object, "is")?.value;
 const __velarGraphObjectFreeze = Object.getOwnPropertyDescriptor(Object, "freeze")?.value;
 const __velarGraphObjectDefineProperty = Object.getOwnPropertyDescriptor(Object, "defineProperty")?.value;
@@ -515,6 +517,7 @@ function __velarGraphWeakMapRead(value, key) { return __velarGraphApply(__velarG
 function __velarGraphWeakMapWrite(value, key, item) { return __velarGraphApply(__velarGraphWeakMapSet, value, [key, item], "WeakMap.set"); }
 function __velarGraphWeakMapRemove(value, key) { return __velarGraphApply(__velarGraphWeakMapDelete, value, [key], "WeakMap.delete"); }
 function __velarGraphIsList(value) { return __velarGraphApply(__velarGraphArrayIsArray, __velarGraphNativeArray, [value], "Array.isArray"); }
+function __velarGraphOrder(value, compare) { return __velarGraphApply(__velarGraphArraySort, value, [compare], "Array.sort"); }
 function __velarGraphSame(left, right) { return __velarGraphApply(__velarGraphObjectIs, __velarGraphNativeObject, [left, right], "Object.is"); }
 function __velarGraphFreeze(value) { return __velarGraphApply(__velarGraphObjectFreeze, __velarGraphNativeObject, [value], "Object.freeze"); }
 function __velarGraphDefine(value, key, descriptor) { return __velarGraphApply(__velarGraphObjectDefineProperty, __velarGraphNativeObject, [value, key, descriptor], "Object.defineProperty"); }
@@ -639,191 +642,111 @@ function __velarReportOptions(value) {
   return output;
 }
 
-// D90 R16, R19's second referee: the watch frames in effect right now. A watch
-// declares the state it writes and the runtime enforces that declaration
-// exactly, so the frame has to be visible from wherever a write lands -- a cell
-// built by the emitted prelude of any module, or the shared registry's own
-// "trigger". One module's copy of this runtime cannot own the stack, for the
-// same reason it cannot own the registry: the registry belongs to whichever
-// module loaded first and a state cell to whichever module declared it. So the
-// stack lives on one global slot every copy of this runtime reads.
-const __velarWatchFramesKey = Symbol.for("velar.web.watch.frames.v1");
-const __velarWatchFrames = (() => {
-  const descriptor = __velarGraphOwnDescriptor(globalThis, __velarWatchFramesKey);
+// D90 R21: the number stamped on each observer when it is created, and the
+// order the flush runs the watch tier in -- execution order is the order the
+// author wrote the watches, and "wrote" spans more than one file: watches of
+// one module register as that module initializes, instances of one component
+// register as they mount, and modules register in the order the import graph
+// initializes them. Every one of those is registration order, so one counter
+// answers all three.
+//
+// It has to be application-wide, not per module. Each emitted module carries
+// its own copy of this runtime, so a module-scope counter would restart at zero
+// in the second module and the two modules' watches would compare equal. The
+// counter therefore lives on one global slot every copy reads, the same way the
+// runtime registry itself does.
+const __velarObserverSequenceKey = Symbol.for("velar.web.observer.sequence.v1");
+const __velarObserverSequenceCell = (() => {
+  const descriptor = __velarGraphOwnDescriptor(globalThis, __velarObserverSequenceKey);
   if (descriptor) {
     if (!("value" in descriptor) || descriptor.enumerable || descriptor.configurable || descriptor.writable
       || !__velarGraphIsList(descriptor.value)) {
-      throw new TypeError("VelarScript Web watch frame ownership is invalid");
+      throw new TypeError("VelarScript Web observer sequence ownership is invalid");
     }
     return descriptor.value;
   }
-  const frames = [];
-  __velarGraphDefine(globalThis, __velarWatchFramesKey, {
-    value: frames,
+  const cell = [0];
+  __velarGraphDefine(globalThis, __velarObserverSequenceKey, {
+    value: cell,
     enumerable: false,
     configurable: false,
     writable: false,
   });
-  return frames;
+  return cell;
 })();
 
-// D90 R1-a-scope: which watch settled each state cell in the flush running
-// now. Compile time refuses two watches of one scope that declare the same
-// state (VEL5069), but each module compiles alone: two watches in two modules
-// may both declare one imported cell and neither analyzer can see the other.
-// R19's second referee catches exactly that, at the moment the second of them
-// writes. The registry lives on a global slot for the same reason the frame
-// stack does -- the cell belongs to the module that declared it and the flush
-// may be run by another module's copy of this runtime.
-const __velarWatchFlushWritersKey = Symbol.for("velar.web.watch.flush.writers.v1");
-const __velarWatchFlushWriters = (() => {
-  const descriptor = __velarGraphOwnDescriptor(globalThis, __velarWatchFlushWritersKey);
-  if (descriptor) {
-    if (!("value" in descriptor) || descriptor.enumerable || descriptor.configurable || descriptor.writable
-      || descriptor.value === null || typeof descriptor.value !== "object"
-      || __velarGraphPrototype(descriptor.value) !== __velarGraphMapPrototype) {
-      throw new TypeError("VelarScript Web watch flush writer ownership is invalid");
-    }
-    return descriptor.value;
-  }
-  const writers = __velarGraphCreateMap();
-  __velarGraphDefine(globalThis, __velarWatchFlushWritersKey, {
-    value: writers,
-    enumerable: false,
-    configurable: false,
-    writable: false,
-  });
-  return writers;
-})();
-
-// Opens one watch's frame. The emitted watch closes it in a finally around the
-// synchronous body, so an "async" continuation of that body runs outside it.
-//
-// "identity" is the token the emitted watch created once, outside its observer,
-// so it is the same across that watch's re-runs and re-entries within one
-// flush: a watch that writes its declared cell twice, or runs twice in one
-// flush, is never its own contender.
-//
-// "site" is the emitted object one watch *declaration* owns, shared by every
-// instance of it, so the referee can tell two declarations apart from two live
-// instances of one.
-function __velarWatchEnter(label, writes, identity, site = null) {
-  __velarWatchFrames[__velarWatchFrames.length] = { label, writes, identity, site, owned: __velarGraphCreateSet() };
+function __velarNextObserverSequence() {
+  __velarObserverSequenceCell[0] += 1;
+  return __velarObserverSequenceCell[0];
 }
 
-// D90 R16-a: one cell declared twice under two of its names. Compile time
-// refuses that (VEL5073) whenever both spellings resolve to one import
-// specifier, but two import paths to one cell -- through a re-export -- give
-// the Web analyzer two module specifiers and no project module graph to fold
-// them with. The declared targets are the cells themselves, so the duplicate is
-// exact here. It is asked once, when the watch is built, so the refusal lands
-// before any flush rather than on whichever round happens to write.
-function __velarWatchDeclared(writes, label) {
-  for (let index = 1; index < writes.length; index += 1) {
-    for (let earlier = 0; earlier < index; earlier += 1) {
-      if (writes[index] !== writes[earlier]) continue;
-      const cell = writes[index];
-      const name = cell !== null && typeof cell === "object" && typeof cell.velarStateName === "string" ? cell.velarStateName : "";
-      throw new TypeError("The watch on '" + label + "' declares that it writes state '" + name
-        + "' twice, under two names for one cell; a 'writes' clause names cells, not spellings, so declare it once");
-    }
-  }
-}
-
-// Suspends the innermost frame. The charter blesses a "computed" callback that
-// writes state -- the write publishes normally -- and a lazy derived value is
-// evaluated wherever it is first read, which can be inside a watch body. Those
-// writes are the computed's, not the watch's, so the frame does not see them.
-function __velarWatchSuspend() {
-  __velarWatchFrames[__velarWatchFrames.length] = null;
-}
-
-function __velarWatchLeave() {
-  __velarWatchFrames.length -= 1;
-}
-
-// Records a state cell created while a watch was running. A helper that
-// declares its own state has no header the author could have declared it in,
-// so the run that built it may write it.
-function __velarWatchOwnCell(cell) {
-  const depth = __velarWatchFrames.length;
-  if (depth === 0 || typeof cell.velarStateName !== "string") return;
-  const frame = __velarWatchFrames[depth - 1];
-  if (frame === null) return;
-  __velarGraphSetInsert(frame.owned, cell);
-}
-
-// The error a write owes the running watch, or null when the write is allowed.
-// A cell answers at all only when an author "state" declaration created it: the
-// value/loading/ready/error cells a "resource" builds and the pending/error
-// cells an "action" builds carry no declared name, so the reload a watch body
-// starts is not a write its author could have declared.
-//
-// Both write paths funnel through here -- the state cell's own "set" and the
-// ownership bubble a member-path or mutating-method write walks -- so it is
-// also the one place D90 R1-a-scope's cross-module contention can be seen. A
-// declared write is checked against the flush's writer registry and recorded
-// there; an undeclared one is already refused, and a cell the frame owns is
-// nobody else's business, so neither is recorded.
-function __velarWatchViolation(cell) {
-  const depth = __velarWatchFrames.length;
-  if (depth === 0) return null;
-  const frame = __velarWatchFrames[depth - 1];
-  if (frame === null || cell === null || typeof cell !== "object") return null;
-  const name = cell.velarStateName;
-  if (typeof name !== "string") return null;
-  if (__velarGraphSetContains(frame.owned, cell)) return null;
-  const writes = frame.writes;
-  for (let index = 0; index < writes.length; index += 1) {
-    if (writes[index] === cell) return __velarWatchContention(frame, cell, name);
-  }
-  return new TypeError("The watch on '" + frame.label + "' wrote state '" + name
-    + "', which its header does not declare; declare it -- 'watch " + frame.label + " writes " + name
-    + ":' -- or move the write out of the watch");
-}
-
-// D90 R1-a-scope: the second watch of one flush to settle a cell it legally
-// declares is the contention compile time could not see. Same shape and same
-// remedy as VEL5069, because it is the same rule one referee further out.
-function __velarWatchContention(frame, cell, name) {
-  const recorded = __velarGraphMapRead(__velarWatchFlushWriters, cell);
-  if (recorded === undefined) {
-    __velarGraphMapWrite(__velarWatchFlushWriters, cell, { identity: frame.identity, label: frame.label, site: frame.site });
-    return null;
-  }
-  if (recorded.identity === frame.identity) return null;
-  // Two mounted instances of one component are two contenders -- the writes
-  // really are order-undefined -- but they are not two declarations, and the
-  // wording below is written for two. R1-a is scoped per analyzed scope exactly
-  // because a component can be mounted twice, so compile time passes this shape
-  // on purpose and the runtime message is the author's only guidance: it has to
-  // name a remedy that exists. "Put every update in one watch" is already true
-  // here, and "give each watch a state of its own" is impossible when there is
-  // one watch, so the two edits that do exist are named instead.
-  const owner = frame.site === null ? null : frame.site.owner;
-  if (recorded.site === frame.site && typeof owner === "string") {
-    return new TypeError("Two live instances of component '" + owner + "' both ran the watch on '" + frame.label
-      + "' and wrote state '" + name + "' in one flush, and one flush settles every watch in a single pass that "
-      + "states no order between them, so which write lands last is undefined; '" + name
-      + "' is one cell every instance shares, so declare it inside '" + owner
-      + "' to give each instance its own, or move the update to a watch or an action that runs once");
-  }
-  return new TypeError("The watch on '" + recorded.label + "' and the watch on '" + frame.label
-    + "' both wrote state '" + name + "' in one flush, and one flush settles every watch in a single pass "
-    + "that states no order between them, so which write lands last is undefined; put every update to '"
-    + name + "' in one watch, or give each watch a state of its own");
-}
-
-// D90 R16 leaves exactly one flush, and it is this one. It used to have a twin
-// in the emitted application prelude, each with its own overflow token and its
-// own budget, and only one of the two counted the scheduling epoch a watch was
-// classified by -- one concept with two definitions, which is half of why
-// "does this watch write?" had three answers. The prelude is inlined into this
-// same module scope, so the emitted runtime simply calls these.
-//
 // The identity a flush stamps its run counts with, carried by an overrun into
 // the flush it schedules and consumed by the first flush that starts.
 let __velarOverflowToken = null;
+
+// The three observers that have run most in the settle running now, kept as
+// the run counts are stamped rather than reconstructed afterwards: the queue at
+// the moment the budget runs out holds only whichever half of a cycle has not
+// just run, so it cannot name the ring on its own. An observer that has run
+// once is not a candidate, which is every observer of an ordinary flush.
+const __velarFlushLeaders = [];
+
+function __velarFlushLead(observer) {
+  let kept = 0;
+  for (let index = 0; index < __velarFlushLeaders.length; index += 1) {
+    if (__velarFlushLeaders[index] === observer) continue;
+    __velarFlushLeaders[kept] = __velarFlushLeaders[index];
+    kept += 1;
+  }
+  __velarFlushLeaders.length = kept;
+  let position = kept;
+  while (position > 0 && __velarFlushLeaders[position - 1].flushRuns < observer.flushRuns) {
+    __velarFlushLeaders[position] = __velarFlushLeaders[position - 1];
+    position -= 1;
+  }
+  __velarFlushLeaders[position] = observer;
+  if (__velarFlushLeaders.length > 3) __velarFlushLeaders.length = 3;
+}
+
+// D90 R21: compile time no longer refuses two watches that write one state, so
+// this budget is the only gate left against a mutual-write cycle -- and a
+// report that names nobody hands the author a number with no line to go to.
+// The observers that ran most in this flush chain are the cycle; flushRuns
+// already counts exactly that, so the highest few are named. A watch's label is
+// its subject as the author spelled it, which in a write cycle is also the
+// state each watch is reacting to, and the scope it was registered in supplies
+// the component the report has always had a field for.
+//
+// Nothing here asks who wrote what. That question is gone from the language,
+// and answering it would need the write frames R21 deleted.
+function __velarFlushRunaway(stalled, token) {
+  const ranked = [];
+  const seen = __velarGraphCreateSet();
+  const consider = (observer) => {
+    if (observer.flushToken !== token || __velarGraphSetContains(seen, observer)) return;
+    __velarGraphSetInsert(seen, observer);
+    ranked[ranked.length] = observer;
+  };
+  // A cycle alternates, so the queue at the instant the budget ran out holds
+  // only the half of the ring that has not just run. The leaders carry the
+  // other half.
+  for (let index = 0; index < __velarFlushLeaders.length; index += 1) consider(__velarFlushLeaders[index]);
+  for (let index = 0; index < stalled.length; index += 1) consider(stalled[index]);
+  __velarGraphOrder(ranked, (left, right) => right.flushRuns - left.flushRuns);
+  const limit = ranked.length < 3 ? ranked.length : 3;
+  let detail = "";
+  let component = "";
+  for (let index = 0; index < limit; index += 1) {
+    const observer = ranked[index];
+    const named = observer.mode === "watch" && typeof observer.label === "string" && observer.label !== ""
+      ? "the watch on '" + observer.label + "'"
+      : "a " + observer.mode + " observer";
+    detail += (detail === "" ? "Ran most in this flush: " : ", ") + named
+      + " (" + observer.flushRuns + (observer.flushRuns === 1 ? " run)" : " runs)");
+    if (component === "" && typeof observer.component === "string") component = observer.component;
+  }
+  return { detail, component };
+}
 
 function __velarScheduleFlush() {
   if (__velarRuntime.flushPending) return;
@@ -870,37 +793,52 @@ function __velarFlushOverflow(token) {
     __velarGraphSetInsert(observer.mode === "watch" ? __velarRuntime.watchQueue : __velarRuntime.domQueue, observer);
     requeued = true;
   }
-  __velarRuntime.report(new RangeError("Reactive updates cannot run more than 100000 observers in one flush"), { phase: "update", detail: "", component: "", unhandled: true });
+  const runaway = __velarFlushRunaway(stalled, token);
+  __velarRuntime.report(new RangeError("Reactive updates cannot run more than 100000 observers in one flush"),
+    { phase: "update", detail: runaway.detail, component: runaway.component, unhandled: true });
   if (requeued) {
     __velarOverflowToken = token;
     __velarScheduleFlush();
   }
 }
 
-// D90 R1-a-scope: the writer registry is flush-scoped, because the contention
-// it refuses is "two watches in one flush". Emptying it around the settle is
-// what makes that scope exact on every exit path -- the three overflow returns
-// included -- and what keeps no cell retained between flushes.
+// The one entry point: the microtask __velarScheduleFlush enqueues, and the
+// synchronous drain the emitted tick() performs. It used to open and close D90
+// R1-a-scope's flush-scoped writer registry around the settle; R21 deleted the
+// registry with the referee that read it, so the name is all that remains and
+// it remains because __velarEnqueue and tick() both hold it.
 function __velarFlush() {
-  __velarGraphMapEmpty(__velarWatchFlushWriters);
-  try { __velarFlushSettle(); } finally { __velarGraphMapEmpty(__velarWatchFlushWriters); }
+  __velarFlushSettle();
 }
 
 // Glitch-free order: every derived value and every watch settles to a fixed
 // point before a single DOM node is written, so no watch and no rendered
 // position can read a half-updated world and no corrective watch can push an
-// invalid value through the DOM first. Within the settle, a watch that declares
-// it writes state runs before a watch that only observes, which is what makes
-// watch declaration order unobservable in the output.
+// invalid value through the DOM first. That is D90 R1 and it is unchanged.
+//
+// D90 R21 changed the other axis. Within the settle the watches run in
+// registration order -- source order in a module, mount order across instances
+// of one component, module-initialization order across modules -- and a watch
+// that writes state is not promoted ahead of one that only observes. Whoever is
+// written first runs first, two watches writing one state both take effect in
+// that order, and a later write that clobbers an earlier one is the author's.
+//
+// Queue insertion order is not registration order and cannot stand in for it:
+// two watches on two different states, both dirtied by one action, enter the
+// queue in the order the action wrote the states. So each pass takes the queue
+// as it stands and runs it by sequence number. Watches queued by this pass are
+// picked up by the next one, in their own order.
 function __velarFlushSettle() {
   __velarRuntime.flushPending = false;
   const token = __velarOverflowToken === null ? {} : __velarOverflowToken;
   __velarOverflowToken = null;
+  __velarFlushLeaders.length = 0;
   let budget = 100000;
   const step = (observer) => {
     __velarGraphSetRemove(observer.mode === "watch" ? __velarRuntime.watchQueue : __velarRuntime.domQueue, observer);
     if (observer.flushToken === token) observer.flushRuns += 1;
     else { observer.flushToken = token; observer.flushRuns = 1; }
+    if (observer.flushRuns > 1) __velarFlushLead(observer);
     observer.run();
   };
   while (__velarGraphSetCount(__velarRuntime.domQueue) || __velarGraphSetCount(__velarRuntime.watchQueue)) {
@@ -913,15 +851,15 @@ function __velarFlushSettle() {
         ran = true;
       }
       if (ran) continue;
-      for (const observer of __velarGraphSetItems(__velarRuntime.watchQueue)) {
-        if (observer.produces !== true) continue;
-        if ((budget -= 1) < 0) { __velarFlushOverflow(token); return; }
-        step(observer);
-        ran = true;
-      }
-      if (ran) continue;
-      for (const observer of __velarGraphSetItems(__velarRuntime.watchQueue)) {
-        if (observer.produces === true) break;
+      const pending = [];
+      for (const observer of __velarGraphSetItems(__velarRuntime.watchQueue)) pending[pending.length] = observer;
+      __velarGraphOrder(pending, (left, right) => left.sequence - right.sequence);
+      for (let index = 0; index < pending.length; index += 1) {
+        const observer = pending[index];
+        // A watch this pass already re-ran or stopped is no longer queued; the
+        // snapshot is a plan, and the queue is what says whether it still owes
+        // a run.
+        if (observer.stopped || !__velarGraphSetContains(__velarRuntime.watchQueue, observer)) continue;
         if ((budget -= 1) < 0) { __velarFlushOverflow(token); return; }
         step(observer);
         ran = true;
@@ -1051,23 +989,15 @@ function __velarCreateRuntime() {
     if (!owners) return;
     const visited = __velarGraphCreateSet();
     __velarGraphSetInsert(visited, target);
-    // D90 R16: this walk already ends at the state cell that owns the mutated
-    // value, which makes it the exact place a member-path or mutating-method
-    // write is charged to the state it lands on. The violation is carried out
-    // of the walk rather than thrown inside it: throwing mid-walk would leave
-    // the remaining owners bumped but never notified.
-    let violation = null;
     const bubble = (current) => {
       if (__velarGraphSetContains(visited, current)) return;
       __velarGraphSetInsert(visited, current);
-      if (violation === null) violation = __velarWatchViolation(current);
       bump(current);
       notify(current, deepKey);
       const next = __velarGraphWeakMapRead(parents, current);
       if (next) for (const owner of __velarGraphSetItems(next)) bubble(owner);
     };
     for (const owner of __velarGraphSetItems(owners)) bubble(owner);
-    if (violation !== null) throw violation;
   };
   const link = (child, parent) => {
     if (child === null || (typeof child !== "object" && typeof child !== "function")) return;
@@ -1387,15 +1317,9 @@ function __velarCreateRuntime() {
       recursed = false;
       failed = false;
       failure = undefined;
-      // D90 R16: a derived value is evaluated wherever it is first read, and
-      // that can be inside a watch body. The charter blesses a "computed"
-      // callback that writes state, so those writes are the computed's and the
-      // watch frame is suspended for exactly as long as the callback runs.
-      __velarWatchSuspend();
       try { value = runTracked(observer, read); }
       catch (error) { failed = true; failure = error; }
       finally {
-        __velarWatchLeave();
         evaluating = false;
         initialized = true;
         dirty = false;

@@ -157,13 +157,10 @@ test("[D90 R20] the emitted Desktop velar/http source stops assigning 'ok' but k
   assert.match(source, /fields\.ok !== \(fields\.status >= 200 && fields\.status <= 299\)/u);
 });
 
-// The half this file quietly omitted, which is how the hole survived its
-// packet: the teaching diagnostic. Desktop reuses the Web analyzer against the
-// Node interface's nine fields, and the recognizer's original exact-field-count
-// match made it blind here — a retired `ok` fell back to the bare VEL4001 pair
-// R20 clause 3 exists to abolish. The recognizer now matches
-// candidate-within-declaration plus a required core, so the migration is the
-// one message on every target.
+// D90 R22 removed the teaching diagnostic that briefly stood beside the
+// removal: no version of this language was ever published, so nobody is
+// migrating off `ok`. Reading it on Desktop is an ordinary absent field, the
+// same answer every other target gives.
 
 async function desktopDiagnostics(source: string): Promise<readonly string[]> {
   const directory = await mkdtemp(join(tmpdir(), "velar-d90-r20-desktop-"));
@@ -174,7 +171,7 @@ async function desktopDiagnostics(source: string): Promise<readonly string[]> {
   return project.modules.flatMap((module) => module.result.diagnostics).map((item) => `${item.code} ${item.message.slice(0, 40)}`);
 }
 
-test("[D90 R20] reading 'ok' on a Desktop response reports VEL5075, not the bare field error", async () => {
+test("[D90 R22] reading 'ok' on a Desktop response is an ordinary absent field", async () => {
   const reported = await desktopDiagnostics(`
 import {http} from "velar/http"
 
@@ -183,18 +180,16 @@ export async def probe():
     if not response.ok:
         print("bad")
 `);
-  assert.deepEqual(reported, ["VEL5075 An HTTP response has no 'ok': a non-2xx "]);
+  // The read answers `unknown`, so the condition reports on its own behind it.
+  assert.equal(reported[0], "VEL4001 Object has no field 'ok'");
 });
 
-test("[D90 R20] a record that merely spells the response's field names is not a response", async () => {
-  // The recognizer matches field types, not names alone: eight fields named
-  // like the core but typed as numbers must keep the ordinary answer.
+test("[D90 R22] a record that merely spells the response's field names reads the same answer", async () => {
   const reported = await desktopDiagnostics(`
 const decoy = {status: 1, statusText: 2, url: 3, headers: 4, json: 5, text: 6, bytes: 7, streamText: 8}
 
 export def probe() -> number:
     return decoy.ok
 `);
-  assert.equal(reported.some((item) => item.startsWith("VEL5075")), false, reported.join(" | "));
   assert.equal(reported.some((item) => item.startsWith("VEL4001 Object has no field 'ok'")), true, reported.join(" | "));
 });

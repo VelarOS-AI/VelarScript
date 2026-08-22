@@ -380,14 +380,33 @@ watch total():
 });
 
 // ---------------------------------------------------------------------------
-// (b) `cached` is a removed spelling, and a removed spelling is taught, not
-// left to degrade into an unknown name.
+// (b) `cached` is deleted. D90 R22: no version of this language was ever
+// published, so there is nobody migrating off it — `cached` is an unknown name.
+// The `computed(...)` call shape stays answered, because it is the habit Vue
+// and the signals libraries teach, not a spelling Vel used to have.
 // ---------------------------------------------------------------------------
 
-test("[D90-R15b] a module-scope cached declaration reports VEL5055 and rewrites to the computed declaration", () => {
+test("[D90-R22] cached is an unknown name in every position it once occupied", () => {
+  assert.deepEqual(messages(`
+state n = 1
+const holder = {cached}
+`), ["VEL3001 Unknown name 'cached'"]);
+  assert.deepEqual(messages(`
+state n = 1
+export const one = cached(() => n * 2)
+`), ["VEL3001 Unknown name 'cached'"]);
+  assert.equal(messages(`
+export component App:
+    state n = 1
+    const d = cached(() => n * 2)
+    return <p>{d()}</p>
+`)[0], "VEL3001 Unknown name 'cached'");
+});
+
+test("[D71-183] a module-scope computed call reports VEL5055 and rewrites to the declaration", () => {
   const module = `
 state n = 1
-const doubled = cached(() => n * 2)
+const doubled = computed(() => n * 2)
 
 export def total() -> number:
     return doubled()
@@ -406,11 +425,11 @@ export def total() -> number:
 `);
 });
 
-test("[D90-R15b] a component-scope cached declaration reports the same migration", () => {
+test("[D71-183] a component-scope computed call reports the same answer", () => {
   const module = `
 export component App:
     state n = 1
-    const d = cached(() => n * 2)
+    const d = computed(() => n * 2)
     return <p>{d()}</p>
 `;
   const result = compile(module);
@@ -424,14 +443,14 @@ export component App:
 `);
 });
 
-test("[D90-R15b] a cached argument that is a named function is told to write the call", () => {
+test("[D71-183] a computed argument that is a named function is told to write the call", () => {
   assert.ok(messages(`
 state n = 1
 
 def readA() -> number:
     return n
 
-const one = cached(readA)
+const one = computed(readA)
 
 export def use() -> number:
     return one()
@@ -439,10 +458,10 @@ export def use() -> number:
     + " Where the argument is a function rather than an expression, write the call — 'computed one = readA()'"));
 });
 
-test("[D90-R15b] an exported cached reader gets the migration, and no exported-contract rule of its own", () => {
+test("[D71-183] an exported computed reader gets the answer, and no exported-contract rule of its own", () => {
   const reported = messages(`
 state n = 1
-export const one = cached(() => n * 2)
+export const one = computed(() => n * 2)
 `);
   assert.deepEqual(reported, [
     "VEL5055 A derived value is declared, not called: write 'computed one = ...' and read 'one' bare.",
@@ -450,19 +469,19 @@ export const one = cached(() => n * 2)
   assert.ok(!reported.some((item) => item.startsWith("VEL4025")));
 });
 
-test("[D90-R15b] a bare cached reference is a removed spelling, not an unknown name", () => {
+test("[D71-183] a bare computed reference names the declaration form", () => {
   const reported = messages(`
 state n = 1
-const holder = {cached}
+const holder = {computed}
 `);
   assert.deepEqual(reported, [
-    "VEL5055 'cached' is removed: 'computed' declares a derived value — 'computed name = expression'."
+    "VEL5055 'computed' declares a derived value — 'computed name = expression'."
     + " There is no function form, and 'computed' already caches",
   ]);
   assert.ok(!reported.some((item) => item.startsWith("VEL3001")));
 });
 
-test("[D90-R15b] a user binding named cached is an ordinary Core name and shadows the diagnostic", () => {
+test("[D90-R15b] a user binding named cached is an ordinary Core name", () => {
   assert.deepEqual(messages(`
 const cached = 1
 
@@ -494,8 +513,7 @@ export component App:
   assert.equal(formatSource(formatted, { extensions: [velarCompilerExtension] }), formatted);
   const result = compile(module);
   assert.deepEqual(result.diagnostics, []);
-  // The declaration still lowers through the one derived-value helper: `cached`
-  // took its identifier mapping with it and nothing else moved.
+  // The declaration still lowers through the one derived-value helper.
   assert.match(result.code ?? "", /const doubled = __velarComputed\(/u);
   assert.match(result.code ?? "", /const label = __velarComputed\(/u);
 });

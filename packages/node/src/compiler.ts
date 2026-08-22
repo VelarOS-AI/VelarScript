@@ -290,13 +290,6 @@ const nodeHttpResponseType = object({
   streamText: functionType(["consume"], [httpChunkConsumerType], promise(nullType)),
   parse: namedIntrinsic("runtime.parseAsync", ["target"], [unknownType], promise(unknownType)),
 });
-/**
- * The response shape the Node analyzer matches a retired `ok` receiver
- * against. It is exported rather than re-listed there, because a second list
- * of these nine fields is exactly the drift this repository keeps filing
- * defects against.
- */
-export const nodeHttpResponseObjectType: ValueType = nodeHttpResponseType;
 const nodeHttpRequestType = object({
   response: functionType([], [], promise(nodeHttpResponseType)),
   json: functionType([], [], promise(unknownType)),

@@ -73,23 +73,11 @@ export interface WebActionDeclaration {
   readonly span: Span;
 }
 
-/**
- * D90 R16: one state named by a `watch` header's `writes` clause. The span is
- * the name's own token, so the contention error, go-to-definition and a rename
- * all land on what the author wrote rather than on the whole header.
- */
-export interface WebWatchWriteTarget {
-  readonly name: string;
-  readonly span: Span;
-}
-
 export interface WebWatchDeclaration {
   readonly kind: "ExtensionStatement:web:watch";
   readonly expression: Expression;
   readonly currentName: string | null;
   readonly previousName: string | null;
-  /** D90 R16: the states this watch declares it writes; empty makes it a pure observer. */
-  readonly writes: readonly WebWatchWriteTarget[];
   readonly body: readonly Statement[];
   readonly span: Span;
 }
@@ -356,4 +344,27 @@ export function isWebKeyframes(expression: Expression | WebAwareExpression): exp
 
 export function isWebUnit(expression: Expression | WebAwareExpression): expression is WebUnitLiteralExpression {
   return expression.kind === "ExtensionExpression:web:unit";
+}
+
+/**
+ * The watch subject as the author spelled it. D90 R15(a) narrowed a subject to
+ * a name or a read path out of one, so the walk is short and the default branch
+ * is what the analyzer has already refused.
+ *
+ * It lives here because two positions need the same rendering and one concept
+ * may not have two definitions: the emitted watch carries the label into the
+ * runtime, where the flush overflow names the observers that ran away, and the
+ * parser puts it in the message that teaches away the retired `writes` clause.
+ */
+export function webWatchSubjectLabel(expression: Expression): string {
+  switch (expression.kind) {
+    case "IdentifierExpression":
+      return expression.name;
+    case "MemberExpression":
+      return `${webWatchSubjectLabel(expression.object)}${expression.optional ? "?." : "."}${expression.property}`;
+    case "IndexExpression":
+      return `${webWatchSubjectLabel(expression.object)}[...]`;
+    default:
+      return "subject";
+  }
 }

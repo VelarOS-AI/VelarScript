@@ -39,10 +39,6 @@ function visitJsx(expression: JsxExpression, context: SemanticExtensionContext):
 
 function visitWatch(statement: WebWatchDeclaration, context: SemanticExtensionContext): void {
   context.visitExpression(statement.expression);
-  // D90 R16: a `writes` target names a state of the enclosing scope, so it is
-  // recorded before the watch's own scope opens and go-to-definition, find-all
-  // -references and rename follow it exactly as they follow a read of the name.
-  for (const target of statement.writes) context.reference(target.name, target.span);
   context.enterScope(statement.span);
   let cursor = statement.expression.span.end;
   if (statement.currentName) {

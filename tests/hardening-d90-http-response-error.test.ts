@@ -73,15 +73,13 @@ test("velar/http no longer exports HttpError and velar/serve still does", async 
     "http",
   ]);
 
-  // The old spelling is what every doc, README and skill taught before the
-  // rename, so the refusal names the successor rather than leaving the author
-  // with a bare "no export named" and a cascade of unknown-type errors — and it
-  // says which module still owns `HttpError`, because a proxy route holds both.
+  // D90 R22: no version of this language was ever published, so there is nobody
+  // to migrate off the old spelling. Importing it is an ordinary missing export.
   const stale = await compileNode(`
 import {HttpError} from "velar/http"
 `.trimStart());
   assert.deepEqual(stale.failures.map((failure) => failure.message), [
-    "Use 'HttpResponseError'; velar/serve's HttpError is the outbound failure a route throws, and a proxy route holds both",
+    "Module 'velar/http' has no export named 'HttpError'",
   ]);
 });
 

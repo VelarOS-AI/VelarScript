@@ -116,19 +116,20 @@ component ScopedState:
 // changes. Both names are required when `as` is present, so a body that needs
 // only the new value writes `as current, _`.
 //
-// A watch that writes state says which state, in its header: `writes name`,
-// separated by commas for several. A watch with no `writes` clause only
-// observes, and a write it performs anyway is refused — by the compiler where
-// the compiler can see it, and by the runtime where it cannot.
+// A watch body may write state, and nothing declares it. Watches run in the
+// order they are written, and each write takes effect where it stands. Two
+// watches that write one `state` both take effect, in that order — if that is
+// not what you meant, put the update in one watch, or declare the value as a
+// `computed`.
 component WatchSpellings:
     state query = ""
     state history: List<string> = []
     state changes = 0
 
-    watch query writes changes:
+    watch query:
         changes += 1
 
-    watch query as current, previous writes history:
+    watch query as current, previous:
         history.append(f"{previous}→{current}")
 
     watch query as current, _:
@@ -167,8 +168,7 @@ component WatchSpellings:
 //
 // The body is governed the same way, by the header rather than by inference:
 //
-//     watch trimmed writes effectRuns:   // accepted — the write is declared
-//     watch trimmed:                     // refused — the body writes effectRuns
+//     watch trimmed:                     // a watch body may write state; nothing declares it
 component DerivationVersusEffect:
     state term = ""
     state effectRuns = 0
@@ -177,7 +177,7 @@ component DerivationVersusEffect:
     computed trimmed = term.trim()
     computed shouted = trimmed.upper()
 
-    watch trimmed writes effectRuns:
+    watch trimmed:
         effectRuns += 1
 
     return <div data-derivation>

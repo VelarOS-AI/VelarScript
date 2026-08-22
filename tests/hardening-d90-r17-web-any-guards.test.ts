@@ -99,8 +99,8 @@ test("[D90 R17] the Web target still mints 'any', so the guards that carry it ar
 test("[D90 R17] guards kept: web.lazy, the retired accessor, and the runtime-type reader", () => {
   // `inferWebIntrinsic`, the retired-accessor case — the reader it answers
   // carries the callback's own result, so an `any` callback gives an `any`
-  // reader and the migration message stands alone.
-  assert.deepEqual(reported(`${HEAD}export component App:\n    const R = cached(A)\n    return <p>{R()}</p>\n`), [
+  // reader and the one message about the declaration form stands alone.
+  assert.deepEqual(reported(`${HEAD}export component App:\n    const R = computed(A)\n    return <p>{R()}</p>\n`), [
     LAZY_NAME_REFUSAL,
     "VEL5055 A derived value is declared, not called: write 'computed R = ...' and read 'R' bare. Where the argument is a function rather than an expression, write the call — 'computed R = A()'",
   ]);

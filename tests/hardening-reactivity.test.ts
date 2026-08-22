@@ -607,20 +607,21 @@ ${Array.from(
   (_, index) => `state rendered${index}: number = 0\nstate settled${index}: number = 0`,
 ).join("\n")}
 
-// The observing watch is declared first here and second below: the output must
-// be the same either way, and it must never carry an unsettled value. D90 R15(a)
+// The observing watch is declared first here and second below, and D90 R21 made
+// that difference the point: the first pair reports the half-updated value and
+// then the settled one, the second pair reports only the settled one. D90 R15(a)
 // moved the sum out of the subject and into a computed, which is the same
 // observation through one more node: the computed recomputes once per flush and
-// the watch sees it after it has settled.
+// the watch reads it after it has recomputed, never mid-recomputation.
 computed sum = a + b
 
 watch sum as current, _:
     watchLog = watchLog + "one=" + str(current) + ";"
 
-watch a writes b:
+watch a:
     b = a * 2
 
-watch secondA writes secondB:
+watch secondA:
     secondB = secondA * 2
 
 computed total = secondA + secondB
@@ -628,7 +629,7 @@ computed total = secondA + secondB
 watch total as current, _:
     watchLog = watchLog + "two=" + str(current) + ";"
 
-watch corrected writes corrected:
+watch corrected:
     if corrected > 5:
         corrected = 5
 
@@ -643,13 +644,13 @@ def subject() -> number:
 // and the write to the value only the body reads still evaluates it not at all.
 computed subjectDerived = subject()
 
-watch subjectDerived as value, _ writes sink:
+watch subjectDerived as value, _:
     sink = value + unwatched
 
 ${Array.from({ length: tickCascadeStages }, (_, index) =>
   index === 0
-    ? `watch trigger writes settled0:\n    settled0 = trigger`
-    : `watch rendered${index - 1} writes settled${index}:\n    settled${index} = rendered${index - 1}`,
+    ? `watch trigger:\n    settled0 = trigger`
+    : `watch rendered${index - 1}:\n    settled${index} = rendered${index - 1}`,
 ).join("\n\n")}
 
 ${Array.from(
@@ -709,7 +710,7 @@ mount(<App />, "#app")
 `.trimStart();
 
 test(
-  "[R1] reactive updates settle before the DOM and keep watch declaration order out of the output",
+  "[R1/R21] reactive updates settle before the DOM, and watch declaration order decides the watch log",
   { timeout: 120_000 },
   async () => {
     await mountInChromium(settlingApplication, async (page, failures) => {
@@ -726,12 +727,17 @@ test(
         "document.querySelector('[data-watch-log]').textContent !== ''",
       );
 
-      // Both pairs settle to 3 and report it once. Before the fix the pair whose
-      // observing watch was declared first reported the half-updated 1 as well,
-      // so moving the two blocks past each other changed the program's output.
+      // Both pairs settle to 3, and which of them reports the trip there is
+      // decided by where its observing watch is written. Pair one writes the
+      // observer first, so it runs first on a world where `b` is not yet
+      // written, reports 1, and runs again once the writer has run. Pair two
+      // writes the writer first, so its observer runs once, after. Under R1 this
+      // was required to read "one=3;two=3;" either way; R21 revoked the promise
+      // that made the two orders equal, and this is the order-decides shape at
+      // its plainest.
       assert.equal(
         await page.textContent("[data-watch-log]"),
-        "one=3;two=3;",
+        "one=1;two=3;one=3;",
       );
       // A corrective watch settles before the DOM is written, so the invalid 10
       // is never rendered.
@@ -757,13 +763,13 @@ state stormB: number = 0
 state unrelated: number = 0
 state unrelatedRuns: number = 0
 
-watch stormA writes stormB:
+watch stormA:
     stormB = stormB + 1
 
-watch stormB writes stormA:
+watch stormB:
     stormA = stormA + 1
 
-watch unrelated writes unrelatedRuns:
+watch unrelated:
     unrelatedRuns = unrelatedRuns + 1
 
 component App:
@@ -825,11 +831,11 @@ state cells: List<number> = []
 state unrelated: number = 0
 state unrelatedRuns: number = 0
 
-watch unrelated writes unrelatedRuns:
+watch unrelated:
     unrelatedRuns = unrelatedRuns + 1
 
 component Cell(index: number, total: number):
-    watch ticks[index] as value, _ writes ticks:
+    watch ticks[index] as value, _:
         if value > 0:
             ticks[(index + 1) % total] = value + 1
     return <i></i>
@@ -884,20 +890,17 @@ test(
         undefined,
         { timeout: 60_000 },
       );
-      // The budget is still reported exactly once, which is the progress rule
-      // this test exists for. What it is no longer alone is D90 R1-a-scope's
-      // doing: every Cell in the ring is a live instance of one `watch`
-      // declaration and they all declare `writes ticks`, so from the second one
-      // on each run of the ring also earns the contention refusal -- in its
-      // multi-instance wording, because that is what these contenders are. The
-      // ring is a program the ruling now refuses; the turn still ends, the page
-      // still answers, and the unrelated write still reaches its watch.
+      // The budget is reported exactly once and is the only thing reported,
+      // which is the progress rule this test exists for. D90 R1-a-scope briefly
+      // added a second failure here -- every Cell in the ring is a live instance
+      // of one `watch` declaration writing one module state, which its runtime
+      // referee refused from the second instance on. R21 deleted that referee:
+      // the ring is an ordinary program now, and the budget is the only gate
+      // that stops it. The turn still ends, the page still answers, and the
+      // unrelated write still reaches its watch.
       const budget = failures.filter((item) => /Reactive updates cannot run more than 100000 observers in one flush/u.test(item));
       assert.equal(budget.length, 1, JSON.stringify(failures.slice(0, 2)));
-      for (const failure of failures) {
-        if (budget.includes(failure)) continue;
-        assert.match(failure, /Two live instances of component 'Cell' both ran the watch on '[^']*' and wrote state 'ticks' in one flush/u);
-      }
+      assert.deepEqual(failures, budget);
     });
   },
 );
@@ -930,93 +933,17 @@ test("[rw-3] there is exactly one flush drain, and it carries the overrun progre
   assert.equal(emitter.includes("function __velarSchedule("), false);
 });
 
-test("[R1/R16] a watch is classified a writer by its header, not by an inference over its body", () => {
-  // The runtime used to promote a watch to a writer after the fact, from a
-  // scheduling epoch, while the emitter inferred the same thing from a
-  // hardcoded roster of mutating methods and the analyzer inferred it a third
-  // way -- three answers to one question, and they disagreed. The header
-  // answers it once now: the emitted argument is the list of cells the clause
-  // named, and `produces` is whether that list is non-empty.
-  //
-  // The two writing watches below still reach *different* states, or the
-  // fixture would be the VEL5069 contention itself. `relay` still reaches its
-  // write through a second helper, which is what the third line proves.
-  const result = compile(
-    `
-state a: number = 0
-state b: number = 0
-state c: number = 0
-let log = ""
-
-def bump(value: number):
-    b = value * 2
-
-def shift(value: number):
-    c = value * 3
-
-def relay(value: number):
-    shift(value)
-
-def loops(value: number):
-    loops(value)
-
-def quiet(value: number):
-    log = log + str(value)
-
-computed sum = a + b
-
-watch sum as current, _:
-    log = log + str(current)
-
-watch a writes b:
-    bump(a)
-
-watch a writes c:
-    relay(a)
-
-watch a:
-    loops(a)
-
-watch a:
-    quiet(a)
-
-mount(<i>{log}{c}</i>, "#app")
-`.trimStart(),
-  );
-  assert.deepEqual(result.diagnostics, []);
-  const produces = (result.code ?? "").split("\n")
-    .filter((line) => line.includes("__velarGlobalScope,"))
-    .map((line) => line.trim());
-  // The observing watch, the direct helper, the helper's own helper, a helper
-  // that only recurses, and a helper that writes no state -- in that order. The
-  // `computed` D90 R15(a) puts in front of the observing watch is not an
-  // observer of this kind and contributes no line of its own. The two writers
-  // carry the cells their headers named; the three observers carry an empty
-  // list, which is what puts them in the observer tier of one flush. D90
-  // R1-a-scope adds the declaration's site to the two writers -- one object per
-  // `watch` in the source, so the runtime referee can tell two declarations
-  // from two live instances of one. An observer can never contend, so it needs
-  // no site.
-  assert.deepEqual(produces, [
-    `}, __velarGlobalScope, [], "sum");`,
-    `}, __velarGlobalScope, [b], "a", __velarWatchSite0);`,
-    `}, __velarGlobalScope, [c], "a", __velarWatchSite1);`,
-    `}, __velarGlobalScope, [], "a");`,
-    `}, __velarGlobalScope, [], "a");`,
-  ]);
-});
-
-// R1 again, for the spelling that puts the write in a named function: moving
-// the two watch blocks past each other must not change what the program prints,
-// on the first firing as much as on every later one. Under R16 the header
-// settles the classification before the first firing, so there is no run in
-// which the writer has not yet been recognised.
+// D90 R21, for the spelling that puts the write in a named function: moving the
+// two watch blocks past each other changes what the program prints, and that is
+// now the guarantee rather than the defect. Nothing classifies the writing watch
+// -- not the header, not an inference over the body -- so whichever block is
+// written first is the block that runs first.
 function helperOrderApplication(writerFirst: boolean): string {
   // The `computed` D90 R15(a) requires travels with the watch that observes it,
   // so the two arrangements stay mirror images: whichever block is written
   // first, the observing watch still reads a value derived from both states.
   const observing = `computed sum = a + b\n\nwatch sum as current, _:\n    log = log + "sum=" + str(current) + ";"`;
-  const writing = `watch a writes b:\n    bump(a)`;
+  const writing = `watch a:\n    bump(a)`;
   return `
 let log = ""
 
@@ -1052,7 +979,7 @@ mount(<App />, "#app")
 }
 
 test(
-  "[R1] a watch that writes through a helper settles before the watches that observe",
+  "[R21] a watch that writes through a helper runs where it is written",
   { timeout: 120_000 },
   async () => {
     const logs: string[] = [];
@@ -1064,8 +991,13 @@ test(
         assert.deepEqual(failures, []);
       });
     }
-    // Before the fix the observing watch fired on the half-settled world when
-    // it was declared first: ["sum=1;sum=3;", "sum=3;"].
-    assert.deepEqual(logs, ["sum=3;", "sum=3;"]);
+    // These two strings are the values this file recorded as the behaviour
+    // before R1's fix. Under R21 they are the behaviour: the observing watch
+    // declared first runs first, sees a=1 with b not yet written, and runs again
+    // when the writer has written it; declared second it runs once, after. This
+    // is not a glitch -- the DOM still commits once per turn, and R1's
+    // glitch-free guarantee is a different axis and stays live. What changed is
+    // how many times the observing watch's body runs.
+    assert.deepEqual(logs, ["sum=1;sum=3;", "sum=3;"]);
   },
 );

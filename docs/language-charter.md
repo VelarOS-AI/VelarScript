@@ -276,7 +276,7 @@ attempts += 1
   `CORE_CONTEXTUAL_KEYWORDS`, and
   this sentence quotes it rather than keeping a second copy of it. Every word
   the Web extension adds — `component`, `state`, `computed`, `resource`,
-  `action`, `watch`, `writes`, `look`, `keyframes`, `css`, `expose`,
+  `action`, `watch`, `look`, `keyframes`, `css`, `expose`,
   `exposes` — belongs
   to the same family, and the compiler owns that roster as
   `WEB_CONTEXTUAL_KEYWORDS`.
@@ -3239,7 +3239,7 @@ difference between what a Core module and a Web module accept:
 - `state`
 - `resource`
 - `action`
-- `watch`, with `writes` on its header
+- `watch`
 - `@mounted`
 - `@cleanup`
 - `look`
@@ -3855,120 +3855,23 @@ never disposed — it lives for the life of the page, like a module `action` —
 a module watch is for application-wide facts, not for anything a component
 owns.
 
-A watch that writes state declares it on its header. `writes` follows the
-subject and the `as` names when they are present, and takes the `state` names
-the body assigns, separated by commas: `watch query writes history:`,
-`watch t as current, _ writes x, y:`. The clause is the single source of truth
-for what the watch writes — whether a watch is a writer is declared, never
-inferred from what its body happens to do on some run. A watch with no clause
-only observes, and a write to state from its body is a compile error that
-quotes the clause to add. A write here is a direct assignment, a compound
-assignment, a mutating method such as `append`, or any of those reached through
-a call this module can resolve. Calling an `action` is not such a write: an
-action call only starts an operation — its body runs after the watch's
-synchronous frame has closed — so a `state` the action assigns is the action's
-own later change, never this watch's, and no `writes` clause names it. Only a
-named `state` needs declaring: the cells a `resource` or an `action` maintains
-for itself carry no name a header could speak, so a body that starts a reload
-declares nothing, and a `state` a helper creates while the body runs belongs
-to that run. The corrective idiom and the
-accumulating idiom both keep their spelling: a clamp is
-`watch n writes n: if n > 5: n = 5`, and a search watch declares
-`writes history` and appends to it.
+A watch may write state, and it needs no declaration to do so. Within one
+flush, watches run in the order they were written: two watches in one module
+run in source order, two live instances of one component run in mount order,
+and watches in two modules run in module initialization order. Two watches
+that write one `state` are not an error — both take effect, in that order.
 
-A watch subject names a place in the reactive graph rather than a value to
-compute. It is the name of a `state` or a `computed`, or a read path out of one
-through member access and indexing — `items[0].done`, `user.profile.name`,
-`rows[i].cells[j]` — at any depth, and with an index that may itself be
-reactive, because whether `i` is a constant or another state changes nothing
-about which place is named. No operator and no call belongs in it: `a + b`,
-`not flag`, `flag ? a : b`, `f"{a}"`, and `f()` each derive a new value, and a
-derived value already has a spelling that names it, caches it, and declares its
-dependencies. So `watch a + b as sum, _:` and `watch f():` are refused, and the
-refusal quotes the expression written alongside the line that replaces it —
-`computed sum = a + b`, then `watch sum as current, _:`. Writing the rule as a
-shape rather than as an analysis is the point: which state a watch relates to is
-then declared, never inferred.
+This is the intuition every ordinary language already gives you: whoever is
+defined first runs first. A watch that assigns where an earlier one
+accumulated overwrites it, and that is the author's own mistake to see and
+fix, not something the compiler guesses at on their behalf. There is no
+priority spelling and no contention diagnostic. What a watch's position in the
+source decides is when it runs, and it decides that completely.
 
-A watch subject must also be able to change, and that question is asked first,
-so one subject never draws two messages. A literal, a plain `const` bound to a
-primitive, and an expression built only from those are refused because the body
-they carry could never run, and a statement that is silently never executed is
-the same defect a bare `5` is already refused for — `watch a + b:` over two
-plain `const` bindings is answered by that refusal alone, not by the shape rule
-above. It names no replacement, because no spelling would fix it. A reader that
-was not called is the same refusal with a replacement attached: `watch reader:`
-is sent to `computed name = reader()` and then `watch name:`, not to
-`watch reader():`, which the shape rule no longer admits. Calling a declared
-`computed` has its own answer and its own edit: `watch total():` is told to drop
-the parentheses, because dropping them leaves a legal subject.
-The change rule stays limited to what the compile can prove: a field path rooted
-in an ordinary `const` bound to a reactive object stays legal, because it really
-does follow.
-
-Derived values and watches settle to a fixed point before the DOM is written.
-One flush runs every `computed` and every `watch` the change reached, then
-whatever those produced, until nothing is left to run; only then is a single DOM
-commit made. So no watch and no rendered position ever observes a half-updated
-world, and a corrective watch — `watch n writes n: if n > 5: n = 5` — never
-pushes the uncorrected value through the DOM first, which would run every
-non-idempotent side effect on the render path twice. **The declaration order of
-watches cannot change the values a flush settles on or the DOM it commits**:
-moving one watch above another moves the side effects that watch's body performs
-and nothing else. Settling is what fixes that: within one flush a watch whose
-header declares that it writes state runs before a watch that only observes, so
-the order two watches' bodies run in is decided by their headers, and only
-watches of the same tier run in the order they are written.
-Order a side effect by what it reads, never by where its block sits.
-
-That guarantee holds only because the one shape it cannot cover is refused. Two
-`watch` blocks in one scope whose headers declare the same `state` are a compile
-error — the question is the intersection of their declared sets, nothing is
-re-derived from the bodies. It names the state and how many watches contend for
-it, and it is reported once at each of them: a `watch` has no name to print, and
-two of them have no shared position to report at. Scheduling cannot answer this
-one: a flush settles every watch in a single pass that states no order between
-them, and between two independent writes no order is the right one. Put every
-update to that state in one watch, or give each watch a state of its own. It is
-the same shape as the two-independent-looks error in section 17, for the same
-reason: two unrelated sources contending for one thing have no winner the
-source states, so the author says which one he meant.
-
-The declaration is enforced by both referees (section 1.1). Compile time
-reports the writes it can resolve: a direct assignment to a `state`, a
-mutation of one, and a write inside a `def` the watch calls, followed through
-the module however long the chain of calls runs. What it cannot resolve it
-does not guess at, and it does not need to: the runtime enforces the declared
-set exactly, refusing any write to a `state` the header did not declare at the
-moment it lands, naming the watch and the state. A write that slips past the
-analysis is a loud error at run time, never a silent reorder.
-
-A `writes` clause may name an imported `state`. Assignment through the import
-itself stays refused — the write travels through a `def` or an `action` the
-owning module exports — but the watch that reaches the cell through such a
-call declares it under the name the import gives it. The clause names cells,
-not spellings: an import and its alias, or two import paths to one exported
-`state` through a re-export, are one declaration, so naming one cell twice in
-a single clause is refused — at compile time where both spellings resolve to
-one import, and otherwise when the watch is built, before any flush runs. Two
-watches that declare one cell under different spellings contend exactly as if
-they had spelled it the same way.
-
-Compile time reports the contention it can prove: two watches in one scope
-whose declared sets intersect, as above. Everything past that is a question of
-which watches are live together, and that question belongs to the runtime — a
-module watch and a component watch in the same module contend only when an
-instance is mounted, which the compile refuses to guess, and two modules that
-each import the same `state` and declare it share no compile at all. The
-runtime refuses at the moment the second of them settles that cell within a
-flush, naming both watch subjects and the state.
-Contenders are counted per live watch, not per line of source: a component
-mounted more than once has one live watch per instance, and a `state` declared
-outside the component is a single cell all of them share, so two instances
-that write it in one flush are refused, and the message names the component
-and the two edits that exist — declare the `state` inside the component so
-each instance owns its own, or move the update to a watch or an action that
-runs once.
+Derived values are unaffected by any of this. A `computed` settles to a fixed
+point before a single DOM node is written and never depends on the order
+watches run in — which is why a value that must be correct before anything
+reads it belongs in a `computed`, not in a watch that writes state.
 
 ## 16. Lifecycle
 

@@ -12,7 +12,7 @@ import { WEB_VOID_ELEMENTS } from "./elements.ts";
  * separate closed contextual namespace, so they cannot collide at all.
  */
 export const WEB_CONTEXTUAL_KEYWORDS: ReadonlySet<string> = new Set([
-  "component", "state", "computed", "resource", "action", "watch", "writes", "exposes", "expose", "look", "keyframes", "css",
+  "component", "state", "computed", "resource", "action", "watch", "exposes", "expose", "look", "keyframes", "css",
 ]);
 
 export const WEB_JSX_TOKEN = "@velarscript/web:jsx";

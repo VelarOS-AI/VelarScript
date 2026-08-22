@@ -502,10 +502,10 @@ def capture(phase: string, message: string):
 
 onError(report => capture(report.phase, report.error.message))
 
-watch left writes right:
+watch left:
     right += 1
 
-watch right writes left:
+watch right:
     left += 1
 
 def start():

@@ -6733,29 +6733,21 @@ test("[D71-183] a computed alone installs its runtime, and both retired accessor
   assert.match(retired.diagnostics[0]?.message ?? "", /write 'computed doubled = \.\.\.' and read 'doubled' bare/u);
   assert.doesNotMatch(retired.diagnostics.map((item) => item.message).join("\n"), /Unknown name 'computed'/u);
 
-  // D90 R15(b) removed `cached`, so the second spelling joins the first on the
-  // same migration engine: one message, the same declaration, the same edit.
-  const retiredCached = compile("state count = 1\nconst doubled = cached(() => count * 2)\nprint(doubled())\n");
-  assert.equal(retiredCached.code, null);
-  assert.equal(retiredCached.diagnostics.length, 1, JSON.stringify(retiredCached.diagnostics));
-  assert.equal(retiredCached.diagnostics[0]?.code, "VEL5055");
-  assert.match(retiredCached.diagnostics[0]?.message ?? "", /write 'computed doubled = \.\.\.' and read 'doubled' bare/u);
-  assert.doesNotMatch(retiredCached.diagnostics.map((item) => item.message).join("\n"), /Unknown name 'cached'/u);
-  assert.equal(applyMechanicalFixes("state count = 1\nconst doubled = cached(() => count * 2)\nprint(doubled())\n", retiredCached.diagnostics).text, "state count = 1\ncomputed doubled = count * 2\nprint(doubled)\n");
+  const doubledFixSource = "state count = 1\nconst doubled = computed(() => count * 2)\nprint(doubled())\n";
+  assert.equal(applyMechanicalFixes(doubledFixSource, retired.diagnostics).text, "state count = 1\ncomputed doubled = count * 2\nprint(doubled)\n");
 
   // An exported reader loses its `() -> T` annotation along with the call: the
   // declaration infers the type, so the fix rewrites the whole left side. The
-  // annotation is also where a second message would hide -- the migration is
+  // annotation is also where a second message would hide -- the answer is
   // one message whether or not the author wrote the `() -> T` down, so the
   // count is asserted here and the whole list is handed to the fixer.
-  const retiredExportSource = "export const one: () -> number = cached(() => 1)\n";
+  const retiredExportSource = "export const one: () -> number = computed(() => 1)\n";
   const retiredExport = compile(retiredExportSource);
   assert.equal(retiredExport.diagnostics.length, 1, JSON.stringify(retiredExport.diagnostics));
   assert.equal(retiredExport.diagnostics[0]?.code, "VEL5055");
   assert.equal(applyMechanicalFixes(retiredExportSource, retiredExport.diagnostics).text, "export computed one = 1\n");
 
-  // The same shape in the other retired spelling: annotating it must not add a
-  // second diagnostic either.
+  // Annotating the declaration must not add a second diagnostic either.
   const retiredAnnotated = compile("state count = 1\nconst doubled: () -> number = computed(() => count * 2)\nprint(doubled())\n");
   assert.equal(retiredAnnotated.diagnostics.length, 1, JSON.stringify(retiredAnnotated.diagnostics));
   assert.equal(retiredAnnotated.diagnostics[0]?.code, "VEL5055");
@@ -6767,13 +6759,17 @@ test("[D71-183] a computed alone installs its runtime, and both retired accessor
   assert.equal(passed.diagnostics[0]?.fix, undefined);
   assert.match(passed.diagnostics[0]?.message ?? "", /declare the value — 'computed doubled = \.\.\.' — and write an ordinary 'def' where a callable is required/u);
 
-  // A bare reference to either name is a removed spelling, not an unknown one.
-  const bare = compile("print(cached)\n");
+  // A bare reference to `computed` names the declaration form, not an unknown
+  // name -- a call is the habit Vue and the signals libraries teach.
+  const bare = compile("print(computed)\n");
   assert.equal(bare.diagnostics.length, 1, JSON.stringify(bare.diagnostics));
   assert.equal(bare.diagnostics[0]?.code, "VEL5055");
-  assert.match(bare.diagnostics[0]?.message ?? "", /'cached' is removed: 'computed' declares a derived value/u);
+  assert.match(bare.diagnostics[0]?.message ?? "", /'computed' declares a derived value/u);
 
-  // `cached` is an ordinary name again, so a local binding shadows the rule.
+  // D90 R22: `cached` is nobody's habit -- no version of this language was ever
+  // published, so there is nobody to migrate and it is an ordinary name.
+  const removedSpelling = compile("print(cached)\n");
+  assert.deepEqual(removedSpelling.diagnostics.map((item) => `${item.code} ${item.message}`), ["VEL3001 Unknown name 'cached'"]);
   const shadowed = compile("const cached = 1\nprint(cached)\n");
   assert.deepEqual(shadowed.diagnostics, []);
 });
@@ -27388,7 +27384,7 @@ let stamps = 0
 
 component Field(label: string, busy: bool = false):
     state draft = "d0"
-    watch busy writes draft:
+    watch busy:
         draft = draft + "|" + label + ":" + (busy ? "on" : "off")
     watch draft:
         print("draft:" + draft)

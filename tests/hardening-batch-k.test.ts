@@ -281,4 +281,5 @@ print(describeUser({name: "Ada"}))
 // guarded: D90 R15(b) removed `cached`, so there is no annotated reader left to
 // require an annotation of. The exported derived value is `export computed`,
 // which infers its own type; tests/hardening-d90-r15-watch-subject.test.ts pins
-// that the migrated export reports the migration and no boundary rule of its own.
+// that an exported `computed(...)` call reports one message and no boundary
+// rule of its own.

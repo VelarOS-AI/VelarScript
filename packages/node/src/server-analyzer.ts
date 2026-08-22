@@ -3,7 +3,6 @@ import {
   bindingNeverReassigned,
   boolType,
   describeType,
-  isAssignable,
   nullType,
   numberType,
   optionalOf,
@@ -20,12 +19,6 @@ import {
   type Statement,
   type ValueType,
 } from "@velarscript/compiler/extension";
-// `compiler.ts` imports this module, so this edge closes a cycle. It is safe
-// and deliberate: the declaration is read inside a method, never while either
-// module body evaluates, and `compiler.ts` is the only entry into this one.
-// The alternative was re-listing the response's fields here, which is the
-// drift this repository keeps filing defects against.
-import { nodeHttpResponseObjectType } from "./compiler.ts";
 import { routeShape } from "./route-shape.ts";
 import { isNodeServerStatement, type NodeNotFoundDeclaration, type NodeRouteDeclaration, type NodeServerDeclaration, type NodeServerSpread } from "./server-ast.ts";
 import {
@@ -65,24 +58,6 @@ type ServeCombinator = "prefix" | "use" | "bodyLimit" | "docs" | "lifecycle";
 const serveCombinators: ReadonlySet<string> = new Set<ServeCombinator>(["prefix", "use", "bodyLimit", "docs", "lifecycle"]);
 /** A spread target the analyzer resolved: the declaring server, seen through zero or more literal prefixes. */
 type ComposedServer = {readonly server: NodeServerDeclaration; readonly prefix: string};
-
-/**
- * D90 R20: `HttpResponse.ok` was always true, because `response()` throws
- * `HttpResponseError` for every non-2xx before an author can hold the value.
- * The field is gone from the Node response too, and its read keeps the type it
- * always had, so `if not response.ok:` reads exactly one message — the one
- * naming the failure path that does exist — instead of "no field 'ok'"
- * followed by a condition complaining about the missing type. The read and the
- * write reach it by different routes and say the same sentence.
- *
- * The sentence is the one Web's VEL5075 says, character for character: it is
- * the same fact about the same capability, and two spellings of one message is
- * the shape AGENTS.md warns about. It is duplicated rather than shared because
- * packages/node must not depend on packages/web.
- */
-const RETIRED_HTTP_RESPONSE_OK = "An HTTP response has no 'ok': a non-2xx status throws 'HttpResponseError' before 'response()' answers, so every response you can hold succeeded. Handle the failure where it is raised — 'catch failure:' then 'if failure is HttpResponseError:' — and read 'failure.status' there";
-/** VEL6001-VEL6005 are the server syntax codes and VEL6006 is the CLI's unresolvable JavaScript package import, so this target's next free code is VEL6007. */
-const RETIRED_HTTP_RESPONSE_OK_CODE = "VEL6007";
 
 type NodeResponseMetadata = {readonly status: number | null; readonly contentType: string};
 type NodeResponseValueType = ValueType & {readonly nodeResponse?: NodeResponseMetadata};
@@ -521,145 +496,6 @@ export class VelarNodeAnalyzer extends Analyzer {
         route.returnType?.span ?? route.span,
       );
     }
-  }
-
-  protected override analyzeStatement(statement: Statement): void {
-    const retiredResponseWrite = this.retiredResponseFieldWrite(statement);
-    const firstDiagnostic = this.diagnostics.length;
-    super.analyzeStatement(statement);
-    this.teachRetiredResponseDestructure(statement, firstDiagnostic);
-    if (!retiredResponseWrite) return;
-    for (let index = firstDiagnostic; index < this.diagnostics.length; index += 1) {
-      const item = this.diagnostics[index]!;
-      if (item.code !== "VEL4001" || !item.message.startsWith("Object has no field 'ok'")) continue;
-      this.diagnostics[index] = {...item, code: RETIRED_HTTP_RESPONSE_OK_CODE, message: RETIRED_HTTP_RESPONSE_OK};
-      break;
-    }
-  }
-
-  /**
-   * D90 R20's third route to the retired field, the same one Web answers.
-   * `const {ok} = response` is a read of `ok` that never passes through a
-   * `MemberExpression`, so it reached neither the read hook nor the write one
-   * and kept the bare "Object has no field 'ok'" — the migration was closed for
-   * one spelling of the sink and left open for its neighbour.
-   *
-   * It is answered after the core has run, not before: the declaration path
-   * infers its initializer directly rather than through the member cache, so
-   * inferring it first would analyze the initializer twice and double whatever
-   * it reports. The type is read back speculatively — everything the
-   * re-inference says is a repeat of what the author already has, and is
-   * dropped.
-   *
-   * Only the message is rewritten. The binding still carries `unknown`, so a
-   * use of it can still report on its own; that half needs the core to hand a
-   * declared type back, which R20 did not rule on.
-   */
-  private teachRetiredResponseDestructure(statement: Statement, firstDiagnostic: number): void {
-    if (statement.kind !== "VariableDeclaration") return;
-    const pattern = statement.pattern;
-    if (pattern.kind !== "ObjectBindingPattern") return;
-    const entries = new Set(pattern.entries.filter((item) => item.property === "ok").map((item) => item.span.start));
-    if (entries.size === 0) return;
-    let response: boolean | null = null;
-    for (let index = firstDiagnostic; index < this.diagnostics.length; index += 1) {
-      const item = this.diagnostics[index]!;
-      if (item.code !== "VEL4001" || item.message !== "Object has no field 'ok'" || !entries.has(item.span.start)) continue;
-      response ??= this.isHttpResponseObject(this.speculativeType(statement.initializer));
-      if (!response) return;
-      this.diagnostics[index] = {...item, code: RETIRED_HTTP_RESPONSE_OK_CODE, message: RETIRED_HTTP_RESPONSE_OK};
-    }
-  }
-
-  /** The type of an expression the core has already inferred and reported on, read back without repeating either. */
-  private speculativeType(expression: Expression): ValueType {
-    const reported = this.diagnostics.length;
-    const type = this.expandAliases(this.inferExpression(expression));
-    this.diagnostics.splice(reported);
-    return type.kind === "optional" ? this.expandAliases(type.inner) : type;
-  }
-
-  protected override inferExpression(expression: Expression, contextualType?: ValueType): ValueType {
-    // D90 R20: the retired `ok` field, answered before the core reaches it so
-    // the migration is the only message. Inferring the receiver here is what
-    // identifies the response, and the core's own member path re-reads that
-    // inference from its cache rather than analyzing the receiver twice.
-    if (expression.kind === "MemberExpression" && expression.property === "ok"
-      && this.receiverInferableBeforeMember(expression.object)
-      && this.isHttpResponseObject(this.retiredFieldReceiver(expression.object))) {
-      this.diagnostics.push({code: RETIRED_HTTP_RESPONSE_OK_CODE, message: RETIRED_HTTP_RESPONSE_OK, span: expression.span});
-      return boolType;
-    }
-    return super.inferExpression(expression, contextualType);
-  }
-
-  /**
-   * D90 R20 on the assignment side. `response.ok = true` never reaches the read
-   * hook: the core analyzes a member assignment target through its member path
-   * directly, so the write collected "Object has no field 'ok'" — the one
-   * answer that teaches nothing. The receiver is inferred here, before the core
-   * reaches it, so the core's own path reads that inference from its cache; the
-   * message it then produces is the one replaced above, which keeps the write
-   * at exactly one diagnostic instead of a migration stacked on a refusal.
-   */
-  private retiredResponseFieldWrite(statement: Statement): boolean {
-    if (statement.kind !== "AssignmentStatement") return false;
-    const target = (statement as Statement & {readonly target: Expression}).target;
-    if (target.kind !== "MemberExpression" || target.property !== "ok") return false;
-    if (!this.receiverInferableBeforeMember(target.object)) return false;
-    return this.isHttpResponseObject(this.retiredFieldReceiver(target.object));
-  }
-
-  /**
-   * The receiver of a retired `ok`, resolved the way the read itself resolves
-   * it: aliases expanded, and an optional chain answered by the value behind
-   * the `?`, so `maybe?.ok` reads the same message a plain read does.
-   */
-  private retiredFieldReceiver(receiver: Expression): ValueType {
-    const owner = this.expandAliases(this.inferExpression(receiver));
-    return owner.kind === "optional" ? this.expandAliases(owner.inner) : owner;
-  }
-
-  /**
-   * Whether the receiver can be inferred *before* the core's member path runs.
-   * That path registers its receiver as a member-access position on the way
-   * down, and the core refuses two names read outside one: a permanent
-   * namespace ("'Json' is a namespace, not a value", D51 rule 106) and a class
-   * name ("a class name is not a value", D45 rule 75). Both are the same sink
-   * — a name whose only legal expression position is the head of a member
-   * access — so both stand aside here.
-   *
-   * A namespace has no lexical binding, so an identifier ordinary lookup
-   * cannot resolve is left for the core to infer in its own position. A class
-   * name does have one, and its binding says so, which is what a static read
-   * like `Result.ok` is recognised by. Every other receiver shape — a call, a
-   * member chain, an index — registers itself as it descends.
-   */
-  private receiverInferableBeforeMember(receiver: Expression): boolean {
-    if (receiver.kind !== "IdentifierExpression") return true;
-    const binding = this.lookup(receiver.name);
-    return binding !== null && this.expandAliases(binding.type).kind !== "classConstructor";
-  }
-
-  /**
-   * The response is a structural object with no identity of its own, so its
-   * shape is what recognises it — matched against the declaration itself,
-   * field types included, and read out of `compiler.ts` rather than re-listed
-   * here. Matching the nine names alone would report the retirement against any
-   * record that happens to spell them, and a record of nine numbers is not an
-   * HTTP response. `compiler.ts` imports this module, so that edge closes a
-   * cycle; it is safe and deliberate, because the declaration is read here
-   * while a program is analyzed, never while either module body evaluates.
-   */
-  private isHttpResponseObject(type: ValueType): boolean {
-    const declaration = nodeHttpResponseObjectType;
-    if (declaration.kind !== "object") return false;
-    if (type.kind !== "object" || type.fields.size !== declaration.fields.size) return false;
-    for (const [name, declared] of declaration.fields) {
-      const field = type.fields.get(name);
-      if (!field || !isAssignable(field, declared, this)) return false;
-    }
-    return true;
   }
 }
 

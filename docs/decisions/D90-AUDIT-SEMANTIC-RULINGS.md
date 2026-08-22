@@ -293,6 +293,43 @@ state 的组件是两个实例,未必共存,编译器拒绝猜共存性」——
 - R17-a 的 `anyType` 位置原样站着(`httpOptionsType.body` 等),等第 1 条的
   逐面规范文本一并定。
 
+## R21 执行顺序就是书写顺序;R16 整条撤销（裁决：所有者，2026-08-23）
+
+**被推翻的东西不是一条规则，是一句承诺。** charter 此前承诺「watch 声明顺序在输出里
+不可观察」，运行时为兑现它专门让「声明了写的 watch 先于纯观察者跑」
+（`packages/web/src/runtime-foundation.ts:889-894`）。R1、R1-a、R1-a 修订、R16 四轮
+工作全部是在守这一句。
+
+**所有者裁定**：这句承诺本身有问题。**按正常的代码直觉，谁先定义谁先执行。**
+两个 watch 写同一个 state 不是错误——按顺序都生效。`total += 1` 写两次就是加两次；
+有人写 `total = n` 把前面的覆盖掉，那是他自己写错了，作者负责，编译器只按规则执行。
+
+**后果，逐条：**
+
+1. `writes` 子句删除。VEL5072/5073/5074 三条诊断删除。
+2. VEL5069（两个 watch 写同一 state）删除。R1-a、R1-a-scope、R1-a-granularity
+   连同它们的两个运行时裁判一并撤销——它们守的那句承诺不存在了。
+3. 「写者先于观察者」的调度删除。结算内的执行顺序 = 书写顺序（同模块按源码，
+   组件实例按挂载，跨模块按模块初始化）。
+4. **「这个 watch 写不写」三处推断不许复活。** 编译期不再分析，发射器不再算
+   `produces`，运行时在写发生的那一刻才知道——写了哪个 state 就标脏它、重排它的
+   观察者、继续结算。R16 之前那个「三处各自猜且互相矛盾」的状态产出过四条确认缺陷，
+   删掉声明之后退回去猜比两者都糟。
+5. **R1 的无毛刺保证保留。** 那是「派生值在 DOM 落笔前结算到不动点、只提交一次」，
+   与 watch 之间的写顺序是两件事。变的只有后者。
+6. charter 那句「声明顺序不可观察」改写为「执行顺序就是书写顺序」。
+
+**不加优先级写法（所有者裁定，2026-08-23）**：一度考虑为跨文件场景补一种可选的
+优先级拼写（`runs first` / `runs last`）。所有者裁定**不加**。
+
+理由记下来，免得下次有人再提：那个「修正要先于显示」的场景，正解是把修正写成
+`computed`——它天生无毛刺、与执行顺序无关，是 Vel 里表达派生值的唯一拼写。给
+watch 加优先级等于给「本该是 computed 的 watch」打补丁，等于在语言里加一个词去
+救一种本来就不该那么写的代码。参照：Vue 也没有 watcher 之间的优先级，它的 `flush`
+管的是相对 DOM 更新的先后，那是另一个轴，Vel 已有 `@mounted` 与 `tick()`。
+
+**所以本条的全部内容就是一句话：执行顺序就是书写顺序。没有第二条规则。**
+
 ## R16 写状态的 watch 必须在头部声明写目标
 
 **现状（根因分析,四个视角独立汇合,全部执行验证）**：watch 体可以写状态,于是
@@ -303,7 +340,12 @@ state 的组件是两个实例,未必共存,编译器拒绝猜共存性」——
 `append` 变异方法）都能让上下调换改变结果,零诊断。这个决定已产出四条确认缺陷、
 耗掉三轮修复（R1、R1-a、R1-a 修订、b590eae）。
 
-**裁决（所有者）**：要写状态的 watch **必须在头部声明它写哪个 state**。
+**归属更正（2026-08-23）**：本节原记为「裁决（所有者）」，不实。所有者当时收到的
+全部信息是一行「R16（watch 写目标必须在头部声明）」，回复是「开 R16 那批」——那是
+**批准开工**，不是批准设计。下面这条规则、`writes` 拼写、以及「不声明即编译错误」
+全部由 Claude 定。所有者 2026-08-23 提出反问「为什么要写 writes」，本节处于**待重裁**状态。
+
+**规则（Claude 定，待所有者重裁）**：要写状态的 watch **必须在头部声明它写哪个 state**。
 不声明的 watch 是纯观察者,体内出现对状态的写（赋值、复合赋值、变异方法、
 经模块内可解析调用抵达的写）即编译错误,消息教出声明拼写。
 
@@ -601,3 +643,50 @@ D88 把 `adapters/*`、`libraries/*`、`integrations/*` 移出本仓库。审计
   最重的是 SQLite 连接在自动回滚或流消费之后永久卡死。
 
 代码可从 `aa4723a` 取回。审计结论不随代码作废，只是换了归属。
+
+## R22 不为不存在的用户保留迁移诊断（裁决：所有者，2026-08-23）
+
+**事实**：本项目从未发布到 npm，**目前没有旧版本的使用者**。所有「教旧版本迁移」
+的诊断都是在为不存在的人服务,全部删掉,干净断开。
+
+**判据（唯一一条，删与留都按它判）**：这条诊断教的是「Vel 从前有、现在没了」，
+还是「别的语言有、Vel 没有」——**前者删，后者留**。前者服务的是不存在的旧版本
+用户；后者服务的是从别的语言/框架来的新人，那批人是真实存在的。
+
+### 删掉的五组
+
+1. **`HttpError` → `HttpResponseError`**（`packages/compiler/src/language-guidance.ts`
+   的 `velar/http` 迁移条目）。`import {HttpError} from "velar/http"` 现在报
+   `Module 'velar/http' has no export named 'HttpError'`。
+   `velar/serve` 的 `HttpError` 类本身是活的（它是路由抛出的对外失败），只删这条提示。
+2. **`velar/realtime.socket` → `velar/websocket.connect`**（同一文件的 `velar/realtime`
+   迁移条目）。现在报 `Module 'velar/realtime' has no export named 'socket'`。
+   随之 `removedStandardFunctionGuidanceEntries` 只剩 `velar/text` 与 `velar/math`
+   两族——那两族教的是「Python/JS 有这个函数、Vel 把它做成了成员」，是「别的语言有」，保留。
+3. **退役字段 `HttpResponse.ok` 的教学**：Web 的 `VEL5075`、Node 的 `VEL6007`、
+   两侧的常量 `RETIRED_HTTP_RESPONSE_OK`，以及只为它存在的辅助
+   （`isHttpResponseObject`、`retiredFieldReceiver`、`retiredResponseFieldWrite`、
+   `teachRetiredResponseDestructure`、`receiverInferableBeforeMember`、`speculativeType`），
+   连同为它们导出的 `webHttpResponseType` / `nodeHttpResponseObjectType`。
+   读、写、解构三条路径现在都得到普通的 `VEL4001 Object has no field 'ok'`，那是正确答案。
+   **宿主边界上的 wire-level `ok` 校验（desktop/node 的 `responseOf`、`hostResponse`）
+   是完整性检查，保留。**
+4. **`writes` 旧拼写教学**：`VEL5076`，以及 `packages/web/src/parser.ts` 里为识别
+   这个旧拼写而存在的形状识别（`rejectWatchWritesClause`）。`writes` 现在是普通标识符，
+   `watch t writes x:` 按普通语法报错（`VEL2001 Expected ':' before an indented block`
+   起头的一串），R21 已裁定这就够了。
+5. **`cached` 的退役教学**：`isRetiredAccessorName` 不再认 `cached`，`VEL5055` 的
+   `'cached' is removed: ...` 分支删除。`cached(...)` 现在是 `VEL3001 Unknown name 'cached'`，
+   那是正确答案。
+
+### 判为「保留」的
+
+- **charter 第 3 节那族「刻意不存在的源码特性」**（`onMount` → `@mounted:`、
+  `effect` → `watch`、Python/React 习惯的 A1–A6 建议等）服务的是从别的语言/框架来的
+  新人，**全部保留**。
+- **`computed(...)` 的函数形式（`VEL5055`）保留。** 按判据它是「别的语言有、Vel 没有」：
+  Vue 3 与 signals 系库都写 `computed(() => ...)`，这是新人的习惯而不是旧版本的遗物；
+  而且 `computed` 是活的声明关键字，删掉这条会让 `computed(...)` 掉进语法级联而不是
+  一条清楚的答案。`cached` 没有任何别的语言写，所以它是纯粹的旧版本遗物，删。
+  这一条与本节其余四条的差别就在判据的两侧，记在这里免得下次有人把它们当成一类。
+- `velar/serve` 的 `HttpError` 类、宿主边界的 wire-level `ok` 校验、R21 其余部分。

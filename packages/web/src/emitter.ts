@@ -23,13 +23,13 @@ import {
   isWebUnit,
   webExpressionContainsDirectAwait,
   webStatementContainsDirectAwait,
+  webWatchSubjectLabel,
   type WebComponentDeclaration as ComponentDeclaration,
   type WebJsxAttribute as JSXAttribute,
   type WebJsxElementExpression as JSXElementExpression,
   type WebKeyframesExpression as KeyframesExpression,
   type WebLookEntry as LookEntry,
   type WebLookExpression as LookExpression,
-  type WebWatchDeclaration as WatchDeclaration,
 } from "./ast.ts";
 
 type AssignmentStatement = Extract<Statement, { readonly kind: "AssignmentStatement" }>;
@@ -105,10 +105,6 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
   private readonly lookKeywordProperties = new Set<string>();
   private jsxId = 0;
   private readonly keyframeNames = new Map<string, string>();
-  /** The component whose body is being emitted, for the watch sites declared inside it. */
-  private currentComponent: string | null = null;
-  /** D90 R1-a-scope: one module-level declaration per watch that declares writes. */
-  private readonly watchSites: string[] = [];
 
   constructor(
     hints: LoweringHints,
@@ -191,7 +187,6 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       ...(this.needsLookArithmeticRuntime ? [LOOK_ARITHMETIC_RUNTIME] : []),
       ...(this.webOutput ? this.webRuntimeHelpers() : []),
       ...(this.needsFileTypeHelper ? [FILE_TYPE_RUNTIME] : []),
-      ...(this.watchSites.length > 0 ? [this.watchSites.join("\n")] : []),
     ];
   }
 
@@ -373,7 +368,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
         const indentation = "  ".repeat(depth);
         const parameters = [statement.currentName, statement.previousName].filter((name): name is string => name !== null).join(", ");
         const body = this.emitStatementLines(statement.body, depth + 1).join("\n");
-        return `${indentation}__velarWatch(() => ${this.emitMappedExpression(statement.expression)}, (${parameters}) => {${body ? `\n${body}\n${indentation}` : ""}}, __velarGlobalScope, ${this.emitWatchWrites(statement)});`;
+        return `${indentation}__velarWatch(() => ${this.emitMappedExpression(statement.expression)}, (${parameters}) => {${body ? `\n${body}\n${indentation}` : ""}}, __velarGlobalScope, ${JSON.stringify(webWatchSubjectLabel(statement.expression))});`;
       }
     }
     if (statement.kind === "AssignmentStatement") {
@@ -492,10 +487,8 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     const bodyIndent = "  ".repeat(depth + 2);
     const previousScope = this.currentScope;
     const previousJsxNamespace = this.currentJsxNamespace;
-    const previousComponent = this.currentComponent;
     this.currentScope = "__velarComponentScope";
     this.currentJsxNamespace = "__velarNamespace";
-    this.currentComponent = statement.name;
     // Props are live reactive inputs: every parameter becomes a read-only
     // handle over the per-instance props store, so prop reads lower through
     // .get() exactly like state reads do.
@@ -527,7 +520,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       } else if (item.kind === "ExtensionStatement:web:watch") {
         const parameters = [item.currentName, item.previousName].filter((name): name is string => name !== null).join(", ");
         const watchLines = this.emitStatementLines(item.body, depth + 3).join("\n");
-        lines.push(`${bodyIndent}__velarWatch(() => ${this.emitMappedExpression(item.expression)}, (${parameters}) => {${watchLines ? `\n${watchLines}\n${bodyIndent}` : ""}}, __velarComponentScope, ${this.emitWatchWrites(item)});`);
+        lines.push(`${bodyIndent}__velarWatch(() => ${this.emitMappedExpression(item.expression)}, (${parameters}) => {${watchLines ? `\n${watchLines}\n${bodyIndent}` : ""}}, __velarComponentScope, ${JSON.stringify(webWatchSubjectLabel(item.expression))});`);
       } else if (item.kind === "ExtensionStatement:web:expose") {
         expose ??= item.value;
       } else if (item.kind === "ExtensionStatement:web:mounted") {
@@ -593,7 +586,6 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
 
     this.currentScope = previousScope;
     this.currentJsxNamespace = previousJsxNamespace;
-    this.currentComponent = previousComponent;
     return `${indentation}${statement.exported ? "export " : ""}function ${statement.name}(__velarProps = {}, __velarNamespace = "html") {\n${functionLines.filter(Boolean).join("\n")}\n${indentation}}`;
   }
 
@@ -744,37 +736,6 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     }
     lines.push(`return ${element};`);
     return `(() => { ${lines.join(" ")} })()`;
-  }
-
-  /**
-   * D90 R16: the arguments the emitted watch carries — the cells the header
-   * declares it writes, and the subject as the author spelled it. The cells are
-   * emitted as identifiers rather than names so shadowing, aliasing and member
-   * paths all fall out for free: whatever `x` means at this position is the
-   * object the runtime backstop compares a write against. `produces` is simply
-   * whether the list is non-empty, so the writer/observer tiers of one flush are
-   * decided by the declaration instead of by three separate inferences.
-   *
-   * D90 R1-a-scope: the third argument is this declaration's site — one object
-   * per `watch` in the source, carrying the component the declaration lives in.
-   * The token the runtime creates identifies one *invocation*, and a component
-   * watch is invoked once per mounted instance, so without the site two live
-   * instances of one declaration read as two contending watches: the same
-   * subject named twice, and a remedy ("give each watch a state of its own")
-   * that no spelling satisfies when there is only one watch. The site is
-   * emitted as a module helper rather than beside the component so it is above
-   * every statement: a component may be instantiated above its own declaration,
-   * where a `const` in between would be in its temporal dead zone.
-   */
-  private emitWatchWrites(statement: WatchDeclaration): string {
-    const cells = statement.writes.map((target) => target.name).join(", ");
-    const declaration = `[${cells}], ${JSON.stringify(watchSubjectLabel(statement.expression))}`;
-    // A watch with no clause writes nothing, so it can never contend for a cell
-    // and needs no site.
-    if (statement.writes.length === 0) return declaration;
-    const site = `__velarWatchSite${this.watchSites.length}`;
-    this.watchSites.push(`const ${site} = { owner: ${this.currentComponent === null ? "null" : JSON.stringify(this.currentComponent)} };`);
-    return `${declaration}, ${site}`;
   }
 
   private emitJsxChildren(children: JSXElementExpression["children"], scope: string, namespace: string): string {
@@ -1058,26 +1019,6 @@ export interface DynamicChildLeaf {
 // arrow's root element carries a `key` attribute. The analyzer mirrors this
 // recognizer through dynamicChildLeaves, so anything the emitter demotes to a
 // rebuild-all dynamic region is diagnosed rather than silently forfeited.
-/**
- * D90 R16: the watch subject as the author spelled it, carried into the emitted
- * watch so the runtime backstop can name the watch that wrote an undeclared
- * state. R15(a) narrowed a subject to a name or a read path out of one, so the
- * walk is short and the default branch is what the analyzer has already
- * refused.
- */
-function watchSubjectLabel(expression: Expression): string {
-  switch (expression.kind) {
-    case "IdentifierExpression":
-      return expression.name;
-    case "MemberExpression":
-      return `${watchSubjectLabel(expression.object)}${expression.optional ? "?." : "."}${expression.property}`;
-    case "IndexExpression":
-      return `${watchSubjectLabel(expression.object)}[...]`;
-    default:
-      return "subject";
-  }
-}
-
 export function jsxKeyedList(expression: Expression): JsxKeyedList | null {
   if (expression.kind !== "CallExpression" || expression.callee.kind !== "MemberExpression" || expression.callee.property !== "map") return null;
   const callback = expression.arguments[0];
@@ -1445,7 +1386,12 @@ function __velarCleanupObserver(observer) {
   __velarRuntime.cleanupObserver(observer);
 }
 
-function __velarObserver(read, mode, scope) {
+// D90 R21: "label" names the observer in a report -- a watch carries its
+// subject as the author spelled it -- and "sequence" is its registration
+// number, which is the order the flush runs the watch tier in. The counter is
+// application-wide rather than per module, so two modules' watches order by the
+// order the two modules initialized.
+function __velarObserver(read, mode, scope, label = "") {
   // The first run of a DOM observer executes while its JSX position is being
   // constructed, and construction is transactional: the failure must reach
   // the surrounding owner (the mount transaction at the root, the containing
@@ -1455,9 +1401,11 @@ function __velarObserver(read, mode, scope) {
   let initial = mode === "dom";
   const observer = {
     mode,
+    label,
+    sequence: __velarNextObserverSequence(),
+    component: scope !== null && scope !== undefined && typeof scope.component === "string" ? scope.component : "",
     stopped: false,
     running: false,
-    produces: false,
     selfInvalidations: 0,
     dependencies: __velarGraphCreateSet(),
     run() {
@@ -1621,12 +1569,16 @@ function __velarFrozenText(value) {
   return typeof value === "string" ? __velarQuotedText(value) : __velarDomString(value);
 }
 
-// D90 R16: only a cell an author "state" declaration created is visible to the
-// watch backstop, and the declared name is how it says so. The cells
-// __velarResource and __velarAction build for their own pending/error fields
-// are created without one, which is what keeps "watch userId: async
-// profile.reload()" -- the spelling four charter fences and the tour teach --
-// a pure observer that needs no "writes" clause.
+// "name" is the declared name an author "state" wrote, carried on the cell and
+// visible in the emitted source. The cells __velarResource and __velarAction
+// build for their own pending/error fields are created without one, because
+// they are the runtime's bookkeeping rather than state anyone declared.
+//
+// D90 R21: nothing reads it any more. It existed for the two watch referees --
+// only a cell with a declared name could be a declared write target -- and they
+// are gone with the clause. It is left in place rather than removed with them:
+// it is a fact about the cell, not a mechanism, and it is what a report naming
+// the state a runaway wrote would have to read.
 function __velarState(initial, name) {
   let value = __velarToRaw(initial);
   const subscribers = __velarGraphCreateSet();
@@ -1643,10 +1595,6 @@ function __velarState(initial, name) {
     },
     set(next) {
       next = __velarToRaw(next);
-      // The check comes before the mutation, so a refused write leaves the cell
-      // and its subscriber walk exactly as they were.
-      const violation = __velarWatchViolation(cell);
-      if (violation !== null) throw violation;
       if (__velarGraphSame(value, next)) return next;
       const previous = value;
       value = next;
@@ -1661,7 +1609,6 @@ function __velarState(initial, name) {
     },
   };
   __velarReactive(value, cell);
-  __velarWatchOwnCell(cell);
   return cell;
 }
 
@@ -1832,26 +1779,16 @@ function __velarCleanupStep(run, scope) {
   } catch (error) { __velarReport(error, "cleanup", scope); }
 }
 
-// D90 R16: the header's "writes" clause is the whole answer to "does this watch
-// write?". The argument is the array of cells the clause named -- the cells
-// themselves, not their names, so shadowing, aliasing and member paths all
-// resolve at the emission site -- and "produces" is simply whether it is
-// non-empty, which is what puts this watch in the writer tier of one flush.
-// The scheduling epoch that used to promote a watch after the fact is gone: it
-// was a third inference of a question the declaration now answers once.
-function __velarWatch(read, callback, scope, writes = [], label = "", site = null) {
-  __velarWatchDeclared(writes, label);
+// D90 R21: nothing here asks whether this watch writes. Execution order is
+// source order, so the only thing the flush needs of a watch is when it was
+// registered, and __velarObserver stamps that on it. The label is the subject
+// as the author spelled it, carried so a runaway flush can name the watches
+// that ran away.
+function __velarWatch(read, callback, scope, label = "") {
   let current;
   let currentVersion = 0;
   let initialized = false;
   let observer = null;
-  // D90 R1-a-scope: this watch's identity for the flush's writer registry.
-  // Created once here rather than per run, so re-running or re-entering within
-  // one flush never makes a watch its own contender. Two mounted instances of
-  // one component watch are two contenders -- which is what they are -- and the
-  // site they share is how the referee knows to say so in their own words
-  // instead of the wording written for two separate declarations.
-  const identity = {};
   observer = __velarObserver(() => {
     const next = read();
     __velarRuntime.trackDeep(next);
@@ -1861,19 +1798,12 @@ function __velarWatch(read, callback, scope, writes = [], label = "", site = nul
       // its own reactive reads must never become dependencies of what is being
       // watched, or one write re-evaluates the expression twice and an
       // unwatched value re-runs the watch.
-      //
-      // The frame is R19's second referee: strictly synchronous, so an "async"
-      // continuation of the body runs outside it, and every write to a declared
-      // state cell that lands inside it is checked against this list.
-      __velarWatchEnter(label, writes, identity, site);
-      try { __velarUntracked(() => callback(next, current)); }
-      finally { __velarWatchLeave(); }
+      __velarUntracked(() => callback(next, current));
     }
     current = next;
     currentVersion = nextVersion;
     initialized = true;
-  }, "watch", scope);
-  observer.produces = writes.length > 0;
+  }, "watch", scope, label);
 }
 
 function __velarComponentHandle(value, componentName) {

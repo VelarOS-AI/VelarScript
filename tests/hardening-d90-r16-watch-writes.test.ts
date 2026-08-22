@@ -5,35 +5,37 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import test from "node:test";
 import { chromium } from "playwright";
-import { compile as compileCore, formatSource } from "@velarscript/compiler";
+import { compile as compileCore } from "@velarscript/compiler";
 import { compileProject } from "../packages/cli/src/project.ts";
 import { standardModuleClosure, standardModuleSource } from "../packages/cli/src/standard-modules.ts";
 import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
 
-// D90 R16: a watch that writes state declares which state, in its header.
+// D90 R21: R16 is revoked, and this file is what outlived it.
 //
-// The ruling ends a chase. "Does this watch write?" was inferred in three
-// places -- the analyzer's VEL5069 call graph, the emitted `produces`, and a
-// runtime scheduling epoch -- and the three disagreed, so the charter's
-// promise that a watch's declaration order is unobservable was false for three
-// shapes that compiled clean: a member path, a `let` alias, and a mutating
-// method. R1-a refused the direct spelling, its revision followed a helper
-// call, cr-3 followed a `const` alias; each round found the next spelling.
+// R16 made a watch declare which state it writes, so that the charter's promise
+// -- that a watch's declaration order is unobservable in the output -- could
+// hold by construction. The owner overturned the promise itself on 2026-08-23:
+// by ordinary code intuition whoever is defined first runs first, two watches
+// writing one state is not an error (both take effect, in order), and an author
+// who clobbers his own earlier write owns the mistake. The `writes` clause, its
+// three compile-time diagnostics and the two runtime referees are gone, and
+// tests/hardening-d90-r21-source-order.test.ts states the new guarantee.
 //
-// R16 replaces the inference with a declaration and R19's two referees:
+// Three things stayed here rather than going with them:
 //
-//   compile time reports what it can see -- a direct write, or one reached
-//   through a resolvable intra-module call or alias, that the header does not
-//   declare (VEL5072);
+//   the four cases that asserted "order does not change the result", turned
+//   around to assert that order decides it -- deleting them would erase the
+//   evidence that the behaviour changed, which is the whole reason a reversal
+//   needs tests of its own;
 //
-//   the runtime is the exact backstop -- during a watch's synchronous body, a
-//   write to any state outside its declared list fails loudly, naming the watch
-//   and the state.
+//   the writes R16 was built around -- a member path, a mutating method, a
+//   `computed` evaluated inside a watch body, a mutating method reaching an
+//   imported collection across a module boundary. They are ordinary legal code
+//   now, declared by nothing, and they still have to land;
 //
-// So the four silences the R1-a revision recorded (a `let` alias, a member
-// path, a cross-module write, a write through `any`) stop being holes: what one
-// referee misses the other catches. Neither may be weakened to make the other's
-// job easier, which is why this file tests both at their own level.
+//   rw-5, the audit's seventh root cause -- VEL5074, a `def` that declares
+//   reactive state and answers WebNode. It was closed in the R16 packet but it
+//   is a different rule, R21 says nothing about it, and it stays live.
 
 function compile(text: string) {
   return compileCore(text.trimStart(), { extensions: [velarCompilerExtension] });
@@ -46,300 +48,6 @@ function messages(source: string): readonly string[] {
 function codes(source: string): readonly string[] {
   return compile(source).diagnostics.map((item) => item.code);
 }
-
-function undeclared(source: string): readonly string[] {
-  return compile(source).diagnostics.filter((item) => item.code === "VEL5072").map((item) => item.message);
-}
-
-function format(source: string): string {
-  return formatSource(source.trimStart(), { extensions: [velarCompilerExtension] });
-}
-
-// ---------------------------------------------------------------------------
-// The grammar. `writes` is a contextual word claimed only in a watch header.
-// ---------------------------------------------------------------------------
-
-const bareClause = `
-state t = 0
-state x = 1
-
-watch t writes x:
-    x = x + 1
-`;
-
-const namedClause = `
-state t = 0
-state x = 1
-
-watch t as current, previous writes x:
-    x = current + previous
-`;
-
-const severalTargets = `
-state t = 0
-state x = 1
-state y = 2
-
-watch t writes x, y:
-    x = 1
-    y = 2
-`;
-
-test("[R16] the clause parses bare, beside 'as', and with several targets", () => {
-  for (const source of [bareClause, namedClause, severalTargets]) {
-    assert.deepEqual(messages(source), [], source);
-  }
-});
-
-test("[R16] the clause round-trips through the formatter unchanged", () => {
-  for (const source of [bareClause, namedClause, severalTargets]) {
-    const once = format(source);
-    assert.equal(once, source.trimStart(), JSON.stringify(once));
-    assert.equal(format(once), once);
-  }
-});
-
-test("[R16] 'writes' outside a watch header is an ordinary name", () => {
-  assert.deepEqual(messages(`
-const writes = 3
-print(f"{writes}")
-`), []);
-  assert.deepEqual(messages(`
-def writes(count: number) -> number:
-    return count
-
-print(f"{writes(1)}")
-`), []);
-  assert.deepEqual(messages(`
-const record = { writes: 1 }
-print(f"{record.writes}")
-`), []);
-  // And a state actually named `writes`, watched, writing itself.
-  assert.deepEqual(messages(`
-state writes = 0
-
-watch writes writes writes:
-    writes = writes + 1
-`), []);
-});
-
-test("[R16] a 'writes' target must name a writable state of this scope", () => {
-  const notAState = `
-state t = 0
-const y = 3
-
-watch t writes y:
-    print("hi")
-`;
-  assert.deepEqual(codes(notAState), ["VEL5073"]);
-  assert.match(compile(notAState).diagnostics[0]!.message, /'y' is not a 'state' of this scope/u);
-  const duplicate = `
-state t = 0
-state x = 1
-
-watch t writes x, x:
-    x = 1
-`;
-  assert.deepEqual(codes(duplicate), ["VEL5073"]);
-  assert.match(compile(duplicate).diagnostics[0]!.message, /already declares that it writes 'x'/u);
-});
-
-// ---------------------------------------------------------------------------
-// Compile time reports the writes it can see. Each case below compiled clean
-// before R16.
-// ---------------------------------------------------------------------------
-
-test("[R16] a direct assignment the header does not declare is refused", () => {
-  const reported = undeclared(`
-state t = 0
-state x = 1
-
-watch t:
-    x = x + 1
-`);
-  assert.equal(reported.length, 1);
-  assert.match(reported[0]!, /This watch writes state 'x', which its header does not declare/u);
-  assert.match(reported[0]!, /'watch t writes x:'/u);
-});
-
-test("[R16] shape A: a member path rooted in a state is a write", () => {
-  // The finding's first shape. Two watches writing `box.n` reported nothing and
-  // swapping them changed the value.
-  const shapeA = `
-state t = 0
-state box = { n: 0 }
-
-watch t:
-    box.n = box.n + 1
-
-watch t:
-    box.n = box.n * 10
-`;
-  assert.equal(undeclared(shapeA).length, 2, JSON.stringify(messages(shapeA)));
-  assert.equal(undeclared(`
-state t = 0
-state rows = [1, 2]
-
-watch t:
-    rows[0] = 3
-`).length, 1);
-});
-
-test("[R16] shape B: a write reached through an alias is a write", () => {
-  // The finding's second shape: `let chosen = bump` then `chosen()`. Before
-  // R16 the emitter marked this watch produces=false while the direct one
-  // beside it was produces=true, so the writer ran in the observer tier.
-  const shapeB = `
-state t = 0
-state x = 1
-
-def bump():
-    x = x + 1
-
-watch t:
-    let chosen = bump
-    chosen()
-
-watch t:
-    x = x * 10
-`;
-  assert.equal(undeclared(shapeB).length, 2, JSON.stringify(messages(shapeB)));
-});
-
-test("[R16] shape C: a mutating method on a state is a write", () => {
-  const shapeC = `
-state t = 0
-state log: List<string> = []
-
-watch t:
-    log.append("a")
-
-watch t:
-    log.append("b")
-`;
-  assert.equal(undeclared(shapeC).length, 2, JSON.stringify(messages(shapeC)));
-  assert.deepEqual(messages(`
-state t = 0
-state log: List<string> = []
-
-watch t writes log:
-    log.append("a")
-`), []);
-});
-
-test("[R16] a write through an intra-module 'def' and through a 'const' alias is refused", () => {
-  assert.equal(undeclared(`
-state t = 0
-state x = 1
-
-def bump():
-    x = x + 1
-
-watch t:
-    bump()
-`).length, 1);
-  assert.equal(undeclared(`
-state t = 0
-state x = 1
-
-def bump():
-    x = x + 1
-
-const chosen = bump
-
-watch t:
-    chosen()
-`).length, 1);
-});
-
-test("[rw-4] a 'let' alias nothing reassigns is followed; one that is reassigned is not", () => {
-  // Core's `bindingNeverReassigned` decides the half of this that is decidable
-  // for one module. The failure mode is safe in both directions: a missed
-  // follow costs an earlier report, never a wrong one, and the runtime backstop
-  // is what actually refuses the write.
-  assert.equal(undeclared(`
-state t = 0
-state x = 1
-
-def bump():
-    x = x + 1
-
-let chosen = bump
-
-watch t:
-    chosen()
-`).length, 1);
-  assert.deepEqual(messages(`
-state t = 0
-state x = 1
-
-def bump():
-    x = x + 1
-
-def scale():
-    x = x * 10
-
-let chosen = bump
-chosen = scale
-
-watch t:
-    chosen()
-
-watch t writes x:
-    x = 2
-`), []);
-});
-
-test("[R16] two watches declaring one state is the contention, one error on each target", () => {
-  const source = `
-state t = 0
-state x = 1
-
-watch t writes x:
-    x = x + 1
-
-watch t writes x:
-    x = x * 10
-`;
-  const reported = compile(source).diagnostics.filter((item) => item.code === "VEL5069");
-  assert.equal(reported.length, 2, JSON.stringify(messages(source)));
-  // Each diagnostic sits on that watch's own declared target -- the token the
-  // author would edit -- and the two spans are different.
-  const spans = reported.map((item) => item.span);
-  assert.notEqual(spans[0]!.start, spans[1]!.start);
-  for (const span of spans) assert.equal(source.trimStart().slice(span.start, span.end), "x");
-});
-
-test("[R16] the emitted watch carries the declared cells and the subject, and nothing infers them", () => {
-  const result = compile(`
-state t = 0
-state x = 1
-state y = 2
-
-watch t writes x, y:
-    x = 1
-    y = 2
-
-watch t:
-    print(f"{x}")
-`);
-  assert.deepEqual(result.diagnostics, []);
-  const tails = (result.code ?? "").split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith("}, __velarGlobalScope,"));
-  assert.deepEqual(tails, [
-    // D90 R1-a-scope: the third argument is the declaration's site. Only a
-    // watch with a clause gets one -- a pure observer can never contend.
-    `}, __velarGlobalScope, [x, y], "t", __velarWatchSite0);`,
-    `}, __velarGlobalScope, [], "t");`,
-  ]);
-  assert.match(result.code ?? "", /^const __velarWatchSite0 = \{ owner: null \};$/mu);
-  // Only an author `state` declaration hands the runtime a name, which is what
-  // keeps a resource's and an action's own cells invisible to the backstop.
-  assert.match(result.code ?? "", /const x = __velarState\(1, "x"\);/u);
-  assert.match(result.code ?? "", /const pending = __velarState\(false\);/u);
-  assert.match(result.code ?? "", /const value = __velarState\(null\);\n/u);
-});
 
 // ---------------------------------------------------------------------------
 // The audit's seventh root cause, closed in the same packet: a `def` that
@@ -444,9 +152,8 @@ component App():
 });
 
 // ---------------------------------------------------------------------------
-// The runtime backstop. The finding's evidence was execution-level, so these
-// run the emitted module: the three-way disagreement was only observable by
-// running the program.
+// Execution. The finding's evidence was execution-level and so is the ruling
+// that replaced it: only running the program shows which write landed last.
 // ---------------------------------------------------------------------------
 
 async function runEmitted(source: string): Promise<string> {
@@ -471,97 +178,55 @@ async function runEmitted(source: string): Promise<string> {
   }
 }
 
-/** Two writing watches and one observer, in the two possible orders. */
-function swapApplication(writerFirst: boolean): string {
-  const first = `watch a writes b:\n    b = a * 2`;
-  const second = `watch a writes c:\n    c = a * 3`;
+/**
+ * Two watches that write one state, in the two possible orders, with a derived
+ * value observing the result. Under R16 the two orders were required to print
+ * the same thing; under R21 the second assignment is the one that lands, so
+ * which watch is written second decides `total`.
+ */
+function swapApplication(doubleFirst: boolean): string {
+  const double = `watch a:\n    total = a * 2`;
+  const triple = `watch a:\n    total = a * 3`;
   return `
 state a = 0
-state b = 0
-state c = 0
+state total = 0
 
-computed sum = b + c
+computed scaled = total * 10
 
-watch sum as current, _:
-    print(f"sum={current}")
+watch scaled as current, _:
+    print(f"scaled={current}")
 
-${writerFirst ? first : second}
+${doubleFirst ? double : triple}
 
-${writerFirst ? second : first}
+${doubleFirst ? triple : double}
 
 action main():
     a = 1
     await tick()
-    print(f"b={b} c={c}")
+    print(f"total={total}")
 
 async main()
 `;
 }
 
-test("[R16] swapping two writing watches leaves the output identical", { timeout: 60_000 }, async () => {
-  const outputs = [await runEmitted(swapApplication(true)), await runEmitted(swapApplication(false))];
-  assert.equal(outputs[0], outputs[1], JSON.stringify(outputs));
-  assert.equal(outputs[0], "sum=5\nb=2 c=3\n");
+test("[R21] swapping two writing watches changes the output", { timeout: 60_000 }, async () => {
+  // The turned-around case. Its R16 name was "swapping two writing watches
+  // leaves the output identical" and it asserted the two outputs were equal;
+  // the promise it guarded is the one the owner overturned, so it now asserts
+  // they differ and names both.
+  const doubleFirst = await runEmitted(swapApplication(true));
+  const tripleFirst = await runEmitted(swapApplication(false));
+  assert.notEqual(doubleFirst, tripleFirst);
+  assert.equal(doubleFirst, "scaled=30\ntotal=3\n");
+  assert.equal(tripleFirst, "scaled=20\ntotal=2\n");
 });
 
-test("[R16] an undeclared write compile time cannot see fails loudly at runtime", { timeout: 60_000 }, async () => {
-  // The dispatch here is exactly the boundary the compile leaves alone: the
-  // writer arrives as a parameter, so this module's call graph reaches nothing.
-  // That silence is no longer a hole -- it is the other referee's turn.
-  const output = await runEmitted(`
-state t = 0
-state x = 1
-
-def bump():
-    x = x + 1
-
-def indirect(run: () -> null):
-    run()
-
-watch t:
-    indirect(bump)
-
-action main():
-    t = 1
-    await tick()
-    print(f"x={x}")
-
-async main()
-`);
-  assert.match(output, /The watch on 't' wrote state 'x', which its header does not declare/u);
-  assert.match(output, /'watch t writes x:'/u);
-});
-
-test("[R16] a deep write reached the same way names the state that owns it", { timeout: 60_000 }, async () => {
-  const output = await runEmitted(`
-state t = 0
-state box = { n: 0 }
-
-def bumpBox():
-    box.n = box.n + 1
-
-def indirect(run: () -> null):
-    run()
-
-watch t:
-    indirect(bumpBox)
-
-action main():
-    t = 1
-    await tick()
-    print(f"n={box.n}")
-
-async main()
-`);
-  assert.match(output, /The watch on 't' wrote state 'box', which its header does not declare/u);
-});
-
-test("[R16] a declared write, a computed that writes, and a body-local state do not trip it", { timeout: 60_000 }, async () => {
-  // Three exemptions, each one a promise the charter or the tour already makes.
-  // A `computed` callback may write state and the write publishes normally, so
-  // evaluating a lazy derived value inside a watch body must not charge the
-  // watch with it; a state declared during the watch's own run has no header it
-  // could ever have been named in; and a declared write is simply legal.
+test("[R21] a watch write, a computed that writes, and a body-local state all land once", { timeout: 60_000 }, async () => {
+  // Three shapes the deleted backstop had to carve out by name, and which are
+  // now simply what they always were. A `computed` callback may write state and
+  // the write publishes normally, so evaluating a lazy derived value inside a
+  // watch body runs its writer exactly once; a state declared during the
+  // watch's own run is that run's; and the watch's own write is ordinary code.
   const output = await runEmitted(`
 state t = 0
 state calls = 0
@@ -578,7 +243,7 @@ def helperWithOwnState() -> number:
     inner = inner + 1
     return inner
 
-watch t writes declared:
+watch t:
     declared = declared + 1
     print(f"derived={derived}")
     print(f"inner={helperWithOwnState()}")
@@ -593,16 +258,17 @@ async main()
   assert.equal(output, "derived=1\ninner=1\ncalls=1 declared=1\n");
 });
 
-test("[R16] a declared member-path write and a declared mutating method both land", { timeout: 60_000 }, async () => {
-  // Shapes A and C of the finding, now legal because the header says so. The
-  // backstop compares cell identities, so a path rooted in a declared state and
-  // a mutating method on one both resolve to the cell the clause named.
+test("[R21] a member-path write and a mutating method both land from a watch body", { timeout: 60_000 }, async () => {
+  // Shapes A and C of the finding. Under R16 they were legal because the header
+  // said so; under R21 nothing says so, and they still have to land -- these are
+  // the two spellings the pre-R16 inference could not see, so a reversal that
+  // silently dropped them would reopen the hole from the other side.
   const output = await runEmitted(`
 state t = 0
 state box = { n: 0 }
 state log: List<string> = []
 
-watch t writes box, log:
+watch t:
     box.n = box.n + 1
     log.append("a")
 
@@ -617,25 +283,15 @@ async main()
 });
 
 // ---------------------------------------------------------------------------
-// D90 R16-a: a `writes` clause may name an imported reactive binding.
-//
-// R16 left one program with no legal spelling: a watch may already write
-// another module's state by calling an action that module exports, and if the
-// clause only accepted local bindings that program became a runtime error the
-// author could not declare their way out of. R16-a widens the clause and
-// nothing else -- matching is by cell identity, so an alias and a re-export
-// name the same cell, and assigning *through* the import stays VEL3002.
+// Across modules. R16-a widened the clause to imported cells and R1-a-scope
+// added a runtime referee for the contention compile time could not see; both
+// are revoked. What is left is the program they were built around -- one
+// module's watch writing another module's state -- which is legal, silent, and
+// ordered by the order the modules initialize in.
 //
 // These need more than one module, so they compile through the CLI's project
 // resolver rather than the single-module `compile` above.
 // ---------------------------------------------------------------------------
-
-const counterModule = `
-export state hits = 0
-
-export def bump():
-    hits = hits + 1
-`;
 
 async function withProjectDirectory<T>(
   files: Readonly<Record<string, string>>,
@@ -669,10 +325,10 @@ async function projectMessages(files: Readonly<Record<string, string>>): Promise
  * CLI's wrappers default to the Node extension when none is given, and the Node
  * flavour of `velar/compiler-runtime-reactive-v1` is the *non-reactive* stub --
  * every collection trigger a no-op. Linking that flavour beside Web modules
- * made shape C (a mutating method on an imported collection state) reach
- * neither referee here while the real `velar dev` and the real bundle both
- * refuse it: a harness that disagrees with the product cannot notice a
- * regression in the shape R16 exists for.
+ * made shape C (a mutating method on an imported collection state) publish
+ * nothing here while the real `velar dev` and the real bundle both react to it:
+ * a harness that disagrees with the product cannot notice a regression in the
+ * one shape three rounds of work kept failing to see.
  */
 const standardModuleFlavour = { base: "/" } as const;
 
@@ -708,378 +364,44 @@ async function runProject(files: Readonly<Record<string, string>>): Promise<stri
   });
 }
 
-test("[R16-a] a 'writes' clause names an imported state, plain, aliased, and through a re-export", { timeout: 60_000 }, async () => {
-  // AGENTS.md's third shape: the sink is "a declarable cell", not one spelling
-  // of its name, so the alias and both re-export shapes are asked too.
-  assert.deepEqual(await projectMessages({
-    "counter.vel": counterModule,
-    "main.vel": `
-import {hits, bump} from "./counter.vel"
-
-state t = 0
-
-watch t writes hits:
-    bump()
-`,
-  }), [], "the plain spelling");
-  assert.deepEqual(await projectMessages({
-    "counter.vel": counterModule,
-    "main.vel": `
-import {hits as h, bump} from "./counter.vel"
-
-state t = 0
-
-watch t writes h:
-    bump()
-`,
-  }), [], "an aliased import names the same cell");
-  assert.deepEqual(await projectMessages({
-    "counter.vel": counterModule,
-    "hub.vel": `
-export {hits, bump} from "./counter.vel"
-`,
-    "main.vel": `
-import {hits, bump} from "./hub.vel"
-
-state t = 0
-
-watch t writes hits:
-    bump()
-`,
-  }), [], "a re-export is the same cell one module further away");
-  assert.deepEqual(await projectMessages({
-    "counter.vel": counterModule,
-    "hub.vel": `
-export {hits as clicks, bump} from "./counter.vel"
-`,
-    "main.vel": `
-import {clicks as c, bump} from "./hub.vel"
-
-state t = 0
-
-watch t writes c:
-    bump()
-`,
-  }), [], "renamed twice, still the same cell");
-});
-
-test("[R16-a] 'writes' still refuses an imported computed and an imported const", { timeout: 60_000 }, async () => {
-  const module = `
+/** A counter two other modules both drive, and a clock that wakes their watches. */
+const counterModule = `
 export state hits = 0
-export computed doubled = hits * 2
-export const label = "a"
+export state seed = 0
 
-export def bump():
-    hits = hits + 1
-`;
-  for (const name of ["doubled", "label"]) {
-    const reported = await projectMessages({
-      "counter.vel": module,
-      "main.vel": `
-import {${name}, bump} from "./counter.vel"
-
-state t = 0
-
-watch t writes ${name}:
-    bump()
-`,
-    });
-    assert.equal(reported.length, 1, `${name}: ${JSON.stringify(reported)}`);
-    assert.match(reported[0]!, /^VEL5073 /u);
-    // R16-a widened what the clause may point at, so the refusal has to say
-    // which module owns the name and how a write to that module travels.
-    assert.match(reported[0]!, new RegExp(`'${name}' is imported from "\\./counter\\.vel" and is not a 'state' there`, "u"));
-    assert.match(reported[0]!, /a 'state' of this scope or a 'state' another module exports/u);
-    assert.match(reported[0]!, /calling an action its owning module exports, because assigning through an import stays read-only/u);
-  }
-});
-
-test("[R16-a] assigning through the import is still VEL3002", { timeout: 60_000 }, async () => {
-  // R16-a widened the clause, not the import. The write still has to travel
-  // through the action the owning module exports.
-  const reported = await projectMessages({
-    "counter.vel": counterModule,
-    "main.vel": `
-import {hits} from "./counter.vel"
-
-state t = 0
-
-watch t:
-    hits = hits + 1
-`,
-  });
-  assert.deepEqual(reported.map((item) => item.slice(0, 7)), ["VEL3002", "VEL5072"]);
-  assert.match(reported[0]!, /Cannot assign to imported reactive binding 'hits'/u);
-  assert.match(reported[1]!, /This watch writes state 'hits', which its header does not declare/u);
-});
-
-/** Two watches, one declaring the imported cell and one a local state, in the two possible orders. */
-function crossModuleApplication(importedFirst: boolean): Readonly<Record<string, string>> {
-  const first = `watch t writes hits:\n    bump()`;
-  const second = `watch t writes other:\n    other = other + 1`;
-  return {
-    "counter.vel": counterModule,
-    "main.vel": `
-import {hits, bump} from "./counter.vel"
-
-state t = 0
-state other = 0
-
-${importedFirst ? first : second}
-
-${importedFirst ? second : first}
-
-action main():
-    t = 1
-    await tick()
-    print(f"hits={hits} other={other}")
-
-async main()
-`,
-  };
-}
-
-test("[R16-a] a declared cross-module write lands, and swapping the two watches leaves the output identical", { timeout: 60_000 }, async () => {
-  const outputs = [await runProject(crossModuleApplication(true)), await runProject(crossModuleApplication(false))];
-  assert.equal(outputs[0], outputs[1], JSON.stringify(outputs));
-  assert.equal(outputs[0], "hits=1 other=1\n");
-});
-
-test("[R16-a] an undeclared write through an imported action is named by the runtime backstop", { timeout: 60_000 }, async () => {
-  // The cross-module silence the R1-a revision recorded: this module's call
-  // graph reaches nothing inside counter.vel, so compile time says nothing and
-  // the backstop is the referee. It lives on a global slot precisely so the
-  // owning module's copy of the runtime can raise it.
-  const output = await runProject({
-    "counter.vel": counterModule,
-    "main.vel": `
-import {hits, bump} from "./counter.vel"
-
-state t = 0
-
-watch t:
-    bump()
-
-action main():
-    t = 1
-    await tick()
-    print(f"hits={hits}")
-
-async main()
-`,
-  });
-  assert.match(output, /The watch on 't' wrote state 'hits', which its header does not declare/u);
-  assert.match(output, /'watch t writes hits:'/u);
-});
-
-// ---------------------------------------------------------------------------
-// D90 R16-a, the compile side: the key is the cell, not the spelling.
-//
-// An alias had defeated a rule keyed on a name four times by now -- a helper
-// call, a `const` alias, a `let`, and finally an import specifier's own span.
-// Every import specifier creates its own binding at its own span, so `hits` and
-// `hits as h` were two cells to the analyzer and one cell at runtime, and all
-// three questions the `writes` clause asks fell through the gap: two watches
-// writing one imported cell reported nothing, a write spelled with the other
-// name was called undeclared, and one cell could be declared twice. The key is
-// now the owning module plus the name it exports -- the identity the runtime
-// already matches on.
-// ---------------------------------------------------------------------------
-
-/** Two watches of one module, both writing the imported cell, under the two given spellings. */
-function aliasContention(first: string, second: string, specifiers: string): Readonly<Record<string, string>> {
-  return {
-    "counter.vel": `
-export state hits = 0
-
-export def bump():
-    hits = hits + 1
-
-export def bumpTwice():
-    hits = hits + 2
-`,
-    "main.vel": `
-import {${specifiers}} from "./counter.vel"
-
-state t = 0
-
-watch t writes ${first}:
-    bump()
-
-watch t writes ${second}:
-    bumpTwice()
-`,
-  };
-}
-
-test("[R16-a] two watches writing one imported cell contend under an alias exactly as under one spelling", { timeout: 60_000 }, async () => {
-  const aliased = await projectMessages(aliasContention("hits", "h", "hits, hits as h, bump, bumpTwice"));
-  const control = await projectMessages(aliasContention("hits", "hits", "hits, bump, bumpTwice"));
-  assert.deepEqual(aliased, control, "the alias is the same cell, so it is the same two diagnostics");
-  assert.equal(control.length, 2);
-  for (const message of control) {
-    assert.match(message, /^VEL5069 State 'hits' is assigned by 2 watch blocks in this scope, and one flush settles every watch in a single pass that states no order between them, so which write lands last is undefined; put every update to 'hits' in one watch, or give each watch a state of its own$/u);
-  }
-});
-
-test("[R16-a] a 'writes' clause covers a write spelled with the cell's other name", { timeout: 60_000 }, async () => {
-  const logModule = `
-export state log: List<string> = []
-
-export def note(item: string):
-    log.append(item)
-`;
-  // The false positive the span key produced, and the nonsense remedy it
-  // taught: VEL5072 told the author to write `writes l, log` -- one cell
-  // declared twice -- and the analyzer accepted it.
-  assert.deepEqual(await projectMessages({
-    "logs.vel": logModule,
-    "main.vel": `
-import {log, log as l, note} from "./logs.vel"
-
-state t = 0
-
-watch t writes l:
-    note("a")
-`,
-  }), []);
-  // Silence is only half the answer: the write still has to land.
-  assert.equal(await runProject({
-    "logs.vel": logModule,
-    "main.vel": `
-import {log, log as l, note} from "./logs.vel"
-
-state t = 0
-
-watch t writes l:
-    note("a")
-
-action main():
-    t = 1
-    await tick()
-    print(f"size={log.size} first={log[0]}")
-
-async main()
-`,
-  }), "size=1 first=a\n");
-});
-
-test("[R16-a] declaring one cell under two names is the duplicate refusal, naming both", { timeout: 60_000 }, async () => {
-  const counterWithAlias = (clause: string, specifiers: string): Readonly<Record<string, string>> => ({
-    "counter.vel": counterModule,
-    "main.vel": `
-import {${specifiers}} from "./counter.vel"
-
-state t = 0
-
-watch t writes ${clause}:
-    bump()
-`,
-  });
-  const aliased = await projectMessages(counterWithAlias("hits, h", "hits, hits as h, bump"));
-  assert.deepEqual(aliased, [
-    "VEL5073 This watch already declares that it writes 'hits', and 'h' is a second name for that same state; a 'writes' clause names cells, not spellings, so declare it once",
-  ]);
-  // The same-spelling wording is unchanged: there is no second name to name.
-  assert.deepEqual(await projectMessages(counterWithAlias("hits, hits", "hits, bump")), [
-    "VEL5073 This watch already declares that it writes 'hits'",
-  ]);
-});
-
-// ---------------------------------------------------------------------------
-// D90 R1-a-scope: the runtime referee for the contention compile time cannot
-// see. R1-a is scoped per analyzed scope on purpose -- two components that each
-// write one module state are two instances that need not even be co-resident --
-// so two watches in two modules, or two import paths to one cell, both pass
-// compile time. R19's layering hands that to the runtime, which refuses at the
-// moment two distinct watch observers settle one cell in a single flush.
-// ---------------------------------------------------------------------------
-
-/** The two watch subjects a contention error names, in the order it named them. */
-function contendingSubjects(output: string, state: string): readonly string[] {
-  const matched = new RegExp(`The watch on '([^']*)' and the watch on '([^']*)' both wrote state '${state}' in one flush, `
-    + `and one flush settles every watch in a single pass that states no order between them, so which write lands last `
-    + `is undefined; put every update to '${state}' in one watch, or give each watch a state of its own`, "u").exec(output);
-  assert.ok(matched !== null, output);
-  return [matched[1]!, matched[2]!];
-}
-
-test("[R16-a] two import paths to one cell are refused by the runtime, not by compile time", { timeout: 60_000 }, async () => {
-  // R19's layering, stated as a test: a barrel re-export gives the two watches
-  // two different module specifiers for one cell, and the Web analyzer has no
-  // project module graph to fold them with -- AnalysisContext carries no origin
-  // for values and belongs to Core. So compile time is silent here on purpose
-  // and the second referee is the one that answers.
-  const project = {
-    "counter.vel": counterModule,
-    "hub.vel": `
-export {hits} from "./counter.vel"
-`,
-    "main.vel": `
-import {hits, bump} from "./counter.vel"
-import {hits as h} from "./hub.vel"
-
-state t = 0
-state u = 0
-
-watch t writes hits:
-    bump()
-
-watch u writes h:
-    bump()
-
-action main():
-    t = 1
-    u = 1
-    await tick()
-    print(f"hits={hits}")
-
-async main()
-`,
-  };
-  assert.deepEqual(await projectMessages(project), []);
-  assert.deepEqual([...contendingSubjects(await runProject(project), "hits")].sort(), ["t", "u"]);
-});
-
-/** counter.vel, a clock two modules both observe, and a second module that writes the imported cell. */
-function crossModuleContention(): Readonly<Record<string, string>> {
-  return {
-    "counter.vel": `
-export state hits = 0
-
-export def bump():
-    hits = hits + 1
-
-export def bumpTwice():
-    hits = hits + 2
-`,
-    "clock.vel": `
-export state tick_count = 0
-export state beat = 0
+export def setHits(value: number):
+    hits = value
 
 export def advance():
-    tick_count = tick_count + 1
-    beat = beat + 1
-`,
-    "left.vel": `
-import {hits, bump} from "./counter.vel"
-import {beat} from "./clock.vel"
+    seed = seed + 1
+`;
 
-export const loaded = true
+/** One module whose watch on the shared clock assigns `value` to the shared counter. */
+function writerModule(value: number): string {
+  return `
+import {seed, setHits} from "./counter.vel"
 
-watch beat writes hits:
-    bump()
-`,
+export const ready${value} = true
+
+watch seed:
+    setHits(${value})
+`;
+}
+
+/** The same two writer modules, initialized in the order `main.vel` imports them. */
+function crossModuleApplication(firstWriter: 1 | 2): Readonly<Record<string, string>> {
+  const second = firstWriter === 1 ? 2 : 1;
+  return {
+    "counter.vel": counterModule,
+    "one.vel": writerModule(1),
+    "two.vel": writerModule(2),
     "main.vel": `
-import {hits, bumpTwice} from "./counter.vel"
-import {tick_count, advance} from "./clock.vel"
-import {loaded} from "./left.vel"
-
-watch tick_count writes hits:
-    bumpTwice()
+import {hits, advance} from "./counter.vel"
+import {ready${firstWriter}} from "./${firstWriter === 1 ? "one" : "two"}.vel"
+import {ready${second}} from "./${second === 1 ? "one" : "two"}.vel"
 
 action main():
-    print(f"loaded={loaded}")
+    print(f"ready={ready${firstWriter} and ready${second}}")
     advance()
     await tick()
     print(f"hits={hits}")
@@ -1089,115 +411,20 @@ async main()
   };
 }
 
-test("[R1-a-scope] two modules that both declare one imported cell are refused when the flush settles them", { timeout: 60_000 }, async () => {
-  const project = crossModuleContention();
-  // Each module compiles alone and neither analyzer can see the other's watch,
-  // so both referees at compile time pass.
-  assert.deepEqual(await projectMessages(project), []);
-  assert.deepEqual([...contendingSubjects(await runProject(project), "hits")].sort(), ["beat", "tick_count"]);
-});
-
-test("[R1-a-scope] single-module contention stays exactly the two VEL5069 the compile refuses", { timeout: 60_000 }, async () => {
-  // The runtime must not double-report what compile time already refuses: a
-  // refused module emits no code, so the second referee never sees this one.
-  const reported = await projectMessages(aliasContention("hits", "hits", "hits, bump, bumpTwice"));
-  assert.deepEqual(reported.map((item) => item.slice(0, 7)), ["VEL5069", "VEL5069"]);
-});
-
-test("[R1-a-scope] a watch that only reads the cell another watch settles is not a contender", { timeout: 60_000 }, async () => {
-  const application = (writerFirst: boolean): Readonly<Record<string, string>> => {
-    const writer = `watch t writes hits:\n    bump()`;
-    const reader = `watch t:\n    print(f"seen={hits}")`;
-    return {
-      "counter.vel": counterModule,
-      "main.vel": `
-import {hits, bump} from "./counter.vel"
-
-state t = 0
-
-${writerFirst ? writer : reader}
-
-${writerFirst ? reader : writer}
-
-action main():
-    t = 1
-    await tick()
-    print(f"hits={hits}")
-
-async main()
-`,
-    };
-  };
-  const outputs = [await runProject(application(true)), await runProject(application(false))];
-  assert.equal(outputs[0], outputs[1], JSON.stringify(outputs));
-  assert.equal(outputs[0], "seen=1\nhits=1\n");
-});
-
-test("[R1-a-scope] a watch that declares a cell but does not write it this round is not a contender", { timeout: 60_000 }, async () => {
-  // The same two modules as the contention above, with the second module's
-  // write guarded off: a declaration is not a write, and nothing is recorded
-  // until one lands.
-  const project = { ...crossModuleContention() };
-  const guarded = project["left.vel"]!.replace("watch beat writes hits:\n    bump()", "watch beat writes hits:\n    if beat > 5:\n        bump()");
-  assert.notEqual(guarded, project["left.vel"]);
-  assert.deepEqual(await projectMessages({ ...project, "left.vel": guarded }), []);
-  assert.equal(await runProject({ ...project, "left.vel": guarded }), "loaded=true\nhits=2\n");
-});
-
-test("[R1-a-scope] a watch is never its own contender, writing twice or running twice in one flush", { timeout: 60_000 }, async () => {
-  // The token is created once per `__velarWatch` invocation rather than per
-  // frame, so the second write of one body and the second run of one watch
-  // inside a single flush both carry the identity the first did.
-  assert.equal(await runProject({
-    "counter.vel": `
-export state hits = 0
-
-export def bump():
-    hits = hits + 1
-
-export def bumpTwice():
-    hits = hits + 2
-`,
-    "main.vel": `
-import {hits, bump, bumpTwice} from "./counter.vel"
-
-state t = 0
-
-watch t writes hits:
-    bump()
-    bumpTwice()
-
-action main():
-    t = 1
-    await tick()
-    print(f"hits={hits}")
-
-async main()
-`,
-  }), "hits=3\n");
-  assert.equal(await runProject({
-    "counter.vel": counterModule,
-    "main.vel": `
-import {hits, bump} from "./counter.vel"
-
-state t = 0
-state u = 0
-
-watch t writes hits:
-    bump()
-
-watch u writes t:
-    t = t + 1
-
-action main():
-    t = 1
-    u = 1
-    await tick()
-    print(f"hits={hits} t={t}")
-
-async main()
-`,
-  }), "hits=2 t=2\n");
+test("[R21] a cross-module write lands, and the order the two modules initialize in decides the result", { timeout: 60_000 }, async () => {
+  // The turned-around case. Its R16-a name was "a declared cross-module write
+  // lands, and swapping the two watches leaves the output identical". The first
+  // half is unchanged and needs no clause to say so: a watch may write another
+  // module's state through an action that module exports. The second half is
+  // reversed -- both writers assign rather than accumulate, so the module that
+  // initialized last registered last, runs last, and its value is the one left
+  // standing.
+  assert.deepEqual(await projectMessages(crossModuleApplication(1)), []);
+  const oneFirst = await runProject(crossModuleApplication(1));
+  const twoFirst = await runProject(crossModuleApplication(2));
+  assert.notEqual(oneFirst, twoFirst);
+  assert.equal(oneFirst, "ready=true\nhits=2\n");
+  assert.equal(twoFirst, "ready=true\nhits=1\n");
 });
 
 /** counter.vel, owning a collection state its own exported `def` mutates. */
@@ -1208,31 +435,14 @@ export def note(item: string):
     log.append(item)
 `;
 
-test("[R16] shape C reaches both referees across a module boundary too", { timeout: 60_000 }, async () => {
-  // The blessed accumulating idiom writes through a mutating method, and a
-  // mutating method is the shape R16 exists for. Across modules it lands on the
-  // ownership bubble rather than on the cell's own `set`, so it is asked here
-  // at both referees: undeclared, and declared by two modules at once.
-  const undeclared = await runProject({
-    "counter.vel": collectionModule,
-    "main.vel": `
-import {log, note} from "./counter.vel"
-
-state t = 0
-
-watch t:
-    note("a")
-
-action main():
-    t = 1
-    await tick()
-    print(f"size={log.size}")
-
-async main()
-`,
-  });
-  assert.match(undeclared, /The watch on 't' wrote state 'log', which its header does not declare/u);
-  const contending = await runProject({
+test("[R21] a mutating method on an imported collection lands from each module's watch, in order", { timeout: 60_000 }, async () => {
+  // Shape C -- a mutating method on a state -- was one of the three shapes the
+  // pre-R16 inference could not see, and across a module boundary it lands on
+  // the ownership bubble rather than on the cell's own `set`. R16 asked it at
+  // both referees; with the referees gone the question left is the one that
+  // matters to an author: the write still lands, from either module, and the
+  // two appends are in module-initialization order.
+  const project = {
     "counter.vel": collectionModule,
     "clock.vel": `
 export state tick_count = 0
@@ -1248,7 +458,7 @@ import {beat} from "./clock.vel"
 
 export const loaded = true
 
-watch beat writes log:
+watch beat:
     note("left")
 `,
     "main.vel": `
@@ -1256,171 +466,28 @@ import {log, note} from "./counter.vel"
 import {tick_count, advance} from "./clock.vel"
 import {loaded} from "./left.vel"
 
-watch tick_count writes log:
+watch tick_count:
     note("main")
 
 action main():
     print(f"loaded={loaded}")
     advance()
     await tick()
-    print(f"size={log.size}")
-
-async main()
-`,
-  });
-  assert.deepEqual([...contendingSubjects(contending, "log")].sort(), ["beat", "tick_count"]);
-});
-
-test("[R16-a] one cell declared under two import paths is refused when the watch is built", { timeout: 60_000 }, async () => {
-  // The other half of the re-export residual. Compile time folds two spellings
-  // of one import specifier (VEL5073 above) but not two specifiers for one
-  // cell, and a duplicated declaration is not a write, so the contention
-  // referee never sees it. The declared targets are the cells themselves, so
-  // the duplicate is exact at the moment the watch is constructed -- before any
-  // flush, and without a module graph.
-  const project = {
-    "counter.vel": counterModule,
-    "hub.vel": `
-export {hits} from "./counter.vel"
-`,
-    "main.vel": `
-import {hits, bump} from "./counter.vel"
-import {hits as h} from "./hub.vel"
-
-state t = 0
-
-watch t writes hits, h:
-    bump()
-
-action main():
-    t = 1
-    await tick()
-    print(f"hits={hits}")
+    print(f"log={log.size} {log[0]} {log[1]}")
 
 async main()
 `,
   };
   assert.deepEqual(await projectMessages(project), []);
-  assert.match(await runProject(project), new RegExp("The watch on 't' declares that it writes state 'hits' twice, "
-    + "under two names for one cell; a 'writes' clause names cells, not spellings, so declare it once", "u"));
-  // Two different cells in one clause stay legal: the key is the cell, and
-  // these are two.
-  assert.equal(await runProject({
-    "counter.vel": `
-export state hits = 0
-export state misses = 0
-
-export def bump():
-    hits = hits + 1
-    misses = misses + 2
-`,
-    "main.vel": `
-import {hits, misses, bump} from "./counter.vel"
-
-state t = 0
-
-watch t writes hits, misses:
-    bump()
-
-action main():
-    t = 1
-    await tick()
-    print(f"hits={hits} misses={misses}")
-
-async main()
-`,
-  }), "hits=1 misses=2\n");
-});
-
-/**
- * Mounts one application and clicks `[data-advance]`, answering with the text
- * of `[data-hits]` and every error the page reported. A component instance
- * needs a document, so the multi-instance shape is browser-level.
- */
-async function mountApplication(source: string): Promise<{ readonly hits: string; readonly failures: readonly string[] }> {
-  const result = compile(source);
-  assert.deepEqual(result.diagnostics.map((item) => `${item.code} ${item.message}`), []);
-  const browser = await chromium.launch();
-  try {
-    const page = await browser.newPage();
-    const failures: string[] = [];
-    page.on("pageerror", (error) => { failures.push(String(error)); });
-    await page.setContent('<!doctype html><html><body><div id="app"></div></body></html>');
-    await page.addScriptTag({ content: result.code ?? "", type: "module" });
-    await page.waitForFunction("document.querySelector('[data-hits]') !== null");
-    await page.click("[data-advance]");
-    await page.waitForFunction("document.querySelector('[data-advance]').dataset.clicked === '1'");
-    return { hits: (await page.textContent("[data-hits]")) ?? "", failures };
-  } finally {
-    await browser.close();
-  }
-}
-
-/** Two instances of `Row`, whose watch writes whichever state `sink` names. */
-function multiInstanceApplication(sink: "module" | "instance"): string {
-  return `
-state hits = 0
-
-component Row(seed: string):
-    state seen = 0
-
-    watch seed writes ${sink === "module" ? "hits" : "seen"}:
-        ${sink === "module" ? "hits = hits + 1" : "seen = seen + 1"}
-
-    return <p data-row>{seed}{seen}</p>
-
-component App:
-    state a = "a"
-    state b = "b"
-    state clicked = 0
-
-    def advance():
-        a = "a2"
-        b = "b2"
-        clicked = 1
-
-    return <main>
-        <Row seed={a} />
-        <Row seed={b} />
-        <p data-hits>{hits}</p>
-        <button data-advance data-clicked={clicked} on:click={advance}>go</button>
-    </main>
-
-mount(<App />, "#app")
-`;
-}
-
-test("[R1-a-scope] two live instances of one watch are named as instances, not as two watches", { timeout: 120_000 }, async () => {
-  // One `watch` declaration, mounted twice, writing one module state. Compile
-  // time passes this on purpose -- R1-a is scoped per analyzed scope precisely
-  // because a component can be mounted twice -- so the runtime message is the
-  // only guidance the author gets, and the wording written for two declarations
-  // is a falsehood here: there are not two watches to split the state between,
-  // and every update is already in one watch.
-  const contending = await mountApplication(multiInstanceApplication("module"));
-  assert.deepEqual(contending.failures.map((item) => item.replace(/^TypeError: /u, "")), [
-    "Two live instances of component 'Row' both ran the watch on 'seed' and wrote state 'hits' in one flush, "
-    + "and one flush settles every watch in a single pass that states no order between them, so which write lands "
-    + "last is undefined; 'hits' is one cell every instance shares, so declare it inside 'Row' to give each "
-    + "instance its own, or move the update to a watch or an action that runs once",
-  ]);
-  // Neither half of the message is the VEL5069 remedy, which does not apply.
-  for (const failure of contending.failures) {
-    assert.doesNotMatch(failure, /put every update to '[^']*' in one watch/u);
-    assert.doesNotMatch(failure, /give each watch a state of its own/u);
-  }
-  // The first remedy it does name: a state declared inside the component is one
-  // cell per instance, and the same program is then legal.
-  const perInstance = await mountApplication(multiInstanceApplication("instance"));
-  assert.deepEqual(perInstance.failures, []);
-  assert.equal(perInstance.hits, "0");
+  assert.equal(await runProject(project), "loaded=true\nlog=2 left main\n");
 });
 
 // A resource lives at component scope, so this one needs a document. It is the
 // spelling four charter fences and examples/tour/web/04 teach -- a watch whose
 // whole body is `async profile.reload()` -- and reload synchronously sets the
-// resource's own loading and error cells. Those cells are the resource's, not
-// state the author declared, so the watch stays a pure observer with no clause.
+// resource's own loading and error cells. R16 kept it legal by exempting the
+// resource's own cells from the clause; R21 keeps it legal by having no clause,
+// and the behaviour asserted here is the same either way.
 const resourceApplication = `
 state failure = ""
 
@@ -1450,7 +517,7 @@ component App:
 mount(<App />, "#app")
 `;
 
-test("[R16] a resource reload inside a watch is not a write the author could declare", { timeout: 120_000 }, async () => {
+test("[R21] a resource reload inside a watch is ordinary, silent code", { timeout: 120_000 }, async () => {
   const result = compile(resourceApplication);
   assert.deepEqual(result.diagnostics, []);
   const browser = await chromium.launch();
