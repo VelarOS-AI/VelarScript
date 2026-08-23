@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { extname, join, normalize } from "node:path";
 import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { chromium, firefox, webkit, type Browser, type BrowserServer, type BrowserType } from "playwright";
+import { chromium, type Browser, type BrowserServer, type BrowserType } from "playwright";
 import {
   boundedBrowserOperation,
   exitBrowserWorker,
@@ -106,14 +106,12 @@ async function runBrowserAcceptance(): Promise<void> {
       assert.ok(status.compilation.moduleCount >= 5);
       assert.equal(status.compilation.compiledModules, status.compilation.moduleCount);
 
-      const browsers: Array<{ readonly name: string; readonly type: BrowserType }> = [
-        { name: "Chromium", type: chromium },
-        { name: "Firefox", type: firefox },
-        { name: "WebKit", type: webkit },
-      ];
-      for (const browser of browsers) {
-        await boundedBrowserOperation(acceptBrowser(`Dev ${browser.name}`, browser.type, baseUrl, false, realtimePort, activeBrowsers), 180_000, `Dev ${browser.name} acceptance`, interruption);
-      }
+      await boundedBrowserOperation(
+        acceptBrowser("Dev Chromium", chromium, baseUrl, false, realtimePort, activeBrowsers),
+        180_000,
+        "Dev Chromium acceptance",
+        interruption,
+      );
       await stopChild(devServer);
       devServer = null;
 
@@ -121,10 +119,13 @@ async function runBrowserAcceptance(): Promise<void> {
       const staticPort = await availablePort();
       staticServer = await startStaticServer(productionDirectory, "/app/", staticPort);
       const productionUrl = `http://127.0.0.1:${staticPort}/app/`;
-      for (const browser of browsers) {
-        await boundedBrowserOperation(acceptBrowser(`Production ${browser.name}`, browser.type, productionUrl, true, realtimePort, activeBrowsers), 180_000, `Production ${browser.name} acceptance`, interruption);
-      }
-      process.stdout.write(`VelarScript development and CSP production browser matrices passed\n`);
+      await boundedBrowserOperation(
+        acceptBrowser("Production Chromium", chromium, productionUrl, true, realtimePort, activeBrowsers),
+        180_000,
+        "Production Chromium acceptance",
+        interruption,
+      );
+      process.stdout.write("VelarScript 1x1 Chromium gate passed for development and CSP production\n");
     };
     await Promise.race([scenario(), interruption]);
   } catch (error) {

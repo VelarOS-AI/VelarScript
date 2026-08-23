@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import test from "node:test";
+import { nodeTestFiles } from "../scripts/run-node-tests.mjs";
 import { velarProjects } from "../scripts/velar-projects.mjs";
 import { repositoryRoot } from "./repository-root.ts";
 
@@ -134,10 +135,17 @@ function workflowRunCommands(workflow: string): string[] {
 
 test("default CI stays lightweight while rehearsal and npm publication remain explicit", async () => {
   const workspace = JSON.parse(await readFile("package.json", "utf8")) as { scripts: Record<string, string> };
-  assert.match(resolveScript(workspace.scripts, "test"), /tests\/release\.acceptance\.ts/u);
+  const coreTest = resolveScript(workspace.scripts, "test");
+  assert.match(coreTest, /scripts\/run-node-tests\.mjs quick/u);
+  assert.match(resolveScript(workspace.scripts, "test:full"), /scripts\/run-node-tests\.mjs full/u);
   assert.equal(workspace.scripts["release:rehearse"], "node scripts/release-toolchain.mjs rehearse");
   assert.equal(workspace.scripts["release:publish"], "node scripts/publish-toolchain.mjs");
   assert.equal(workspace.scripts["preview:prepare"], undefined);
+
+  const releaseGate = reachedScripts(workspace.scripts, ["npm run release:check"]);
+  for (const required of ["check", "test", "test:packages", "test:browser"]) {
+    assert.ok(releaseGate.has(required), `release:check does not reach ${required}`);
+  }
 
   // Every gate, derived: a `gate:x` script is the body a public gate `x` runs
   // under the checkout lock. The list this replaces named six by hand.
@@ -170,7 +178,7 @@ test("default CI stays lightweight while rehearsal and npm publication remain ex
   // the former three-OS plus six-browser release suite.
   const reached = reachedScripts(workspace.scripts, workflowRunCommands(ci));
   assert.ok(reached.has("check"), ".github/workflows/ci.yml must reach the source-quality gate");
-  for (const heavy of ["test", "test:packages", "test:browser", "release:rehearse", "release:publish"]) {
+  for (const heavy of ["test", "test:full", "test:packages", "test:browser", "release:check", "release:rehearse", "release:publish"]) {
     assert.equal(reached.has(heavy), false, `.github/workflows/ci.yml must not run ${heavy} on every push`);
   }
   assert.doesNotMatch(ci, /macos-latest|windows-latest|playwright install|npm test|test:packages|test:browser/u);
@@ -217,6 +225,23 @@ test("default CI stays lightweight while rehearsal and npm publication remain ex
 
 });
 
+test("the quick Node suite keeps current coverage and leaves historical hardening explicit", async () => {
+  const directory = resolve(repositoryRoot, "tests");
+  const quick = (await nodeTestFiles(directory, "quick")).map((file) => file.slice(directory.length + 1));
+  const full = (await nodeTestFiles(directory, "full")).map((file) => file.slice(directory.length + 1));
+  for (const required of [
+    "compiler.test.ts",
+    "ci.acceptance.ts",
+    "release.acceptance.ts",
+    "hardening-closeout-live-props.test.ts",
+  ]) {
+    assert.ok(quick.includes(required), `the quick Node suite lost ${required}`);
+  }
+  assert.equal(quick.includes("hardening-blind2.test.ts"), false);
+  assert.ok(full.includes("hardening-blind2.test.ts"));
+  assert.ok(full.length > quick.length, `full=${full.length}, quick=${quick.length}`);
+});
+
 test("[D61-156] the test gates discover example projects instead of naming them", async () => {
   // `examples/app` was written with twenty-one tests and no gate ran any of
   // them, because `gate:test` and `gate:test:browser` each named four projects
@@ -231,6 +256,17 @@ test("[D61-156] the test gates discover example projects instead of naming them"
   assert.doesNotMatch(unit, /examples\//u);
   assert.doesNotMatch(browser, /examples\//u);
   assert.match(resolveScript(workspace.scripts, "check"), /scripts\/check-project-builds\.mjs/u);
+
+  const projectRunner = await readFile(resolve(repositoryRoot, "scripts", "run-project-gate.mjs"), "utf8");
+  assert.match(projectRunner, /\["test", project, "--browser", "chromium"\]/u);
+  assert.doesNotMatch(projectRunner, /\["test", project, "--browser", "all"\]/u);
+
+  const browserAcceptance = await readFile(resolve(repositoryRoot, "tests", "browser.acceptance.ts"), "utf8");
+  assert.match(browserAcceptance, /from "playwright"/u);
+  assert.doesNotMatch(browserAcceptance, /\bfirefox\b|\bwebkit\b/u);
+
+  const installedBrowser = await readFile(resolve(repositoryRoot, "tests", "installed-browser.acceptance.ts"), "utf8");
+  assert.equal(installedBrowser.match(/\["run", "test:browser", "--", "chromium"\]/gu)?.length, 1);
 
   // ...and that the discovery reaches the projects a list would have to be
   // told about, `examples/app` first among them.

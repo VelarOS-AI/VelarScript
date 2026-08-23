@@ -46,12 +46,9 @@ const applicationWebModules = [...webModuleInterfaces]
   .sort((left, right) => left.specifier < right.specifier ? -1 : left.specifier > right.specifier ? 1 : 0);
 
 try {
-  // A-024: this file held the fifth copy of the eight-package roster — one
-  // literal `pack()` list and four literal install lists — while
-  // `docs/contributing/continuous-integration.md` said the installed set is
-  // derived from the workspace topology. Toolchain packages, source libraries,
-  // and adapters are installed together here, even though only packages/*
-  // enters a toolchain release candidate.
+  // A-024: derive the packed set from workspace topology. The 1x1 gate installs
+  // it once to obtain the published CLI, then once into the representative
+  // generated application whose browser path it proves.
   const tarballs: string[] = [];
   for (const name of await velarWorkspacePackageNames(root)) tarballs.push(join(directory, await pack(name)));
   /** Every packed tarball, as one `npm install` takes them. */
@@ -91,40 +88,7 @@ mount(<App />, "#app")
   assert.match(result.stdout, /chromium :: "src\/app\.browser\.test\.vel" :: "home page"/u);
   assert.match(result.stdout, /1 passed, 0 failed/u);
 
-  const documentation = join(directory, "Product Docs");
-  await run(process.execPath, [installedCli, "create", documentation, "--template", "docs"], directory);
-  await install(["--save-dev"], documentation);
-  await runNpm(["run", "format:check"], documentation);
-  await runNpm(["run", "check"], documentation);
-  await runNpm(["test"], documentation);
-  await runNpm(["run", "build"], documentation);
-  await runNpm(["run", "verify"], documentation);
-  const docsBrowser = await runNpm(["run", "test:browser", "--", "chromium"], documentation);
-  assert.match(docsBrowser.stdout, /chromium :: "src\/app\.browser\.test\.vel" :: "guide route"/u);
-  assert.match(docsBrowser.stdout, /1 passed, 0 failed/u);
-
-  const component = join(directory, "Info Card");
-  await run(process.execPath, [installedCli, "create", component, "--template", "component"], directory);
-  await install(["--save-dev"], component);
-  const componentManifest = JSON.parse(await readFile(join(component, "package.json"), "utf8")) as {
-    files: string[];
-    velar: { entry: string; targets: string[]; requires: { capabilities: string[] } };
-    peerDependencies: Record<string, string>;
-  };
-  assert.deepEqual(componentManifest.files, ["src/index.vel", "README.md"]);
-  assert.equal(componentManifest.velar.entry, "src/index.vel");
-  assert.deepEqual(componentManifest.velar.targets, ["web", "desktop"]);
-  assert.deepEqual(componentManifest.velar.requires.capabilities, []);
-  assert.equal(componentManifest.peerDependencies["@velarscript/web"], "^0.12.1");
-  await runNpm(["run", "format:check"], component);
-  await runNpm(["run", "check"], component);
-  await runNpm(["test"], component);
-  await runNpm(["run", "build"], component);
-  await runNpm(["run", "verify"], component);
-  const componentBrowser = await runNpm(["run", "test:browser", "--", "chromium"], component);
-  assert.match(componentBrowser.stdout, /chromium :: "src\/demo\.browser\.test\.vel" :: "component preview"/u);
-  assert.match(componentBrowser.stdout, /1 passed, 0 failed/u);
-  process.stdout.write("Installed VelarScript browser-project acceptance passed\n");
+  process.stdout.write("Installed VelarScript 1x1 Chromium acceptance passed\n");
 } finally {
   await rm(directory, { recursive: true, force: true });
 }

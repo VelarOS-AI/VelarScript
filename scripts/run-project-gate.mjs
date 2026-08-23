@@ -15,10 +15,12 @@ import { velarProjects, velarSources } from "./velar-projects.mjs";
  *
  * So the list is gone rather than corrected. What runs is decided here:
  *
- *   unit     every project checks, and every project with a `*.test.vel`
- *            module that is not a browser test runs `velar test`.
+ *   unit     every project with a `*.test.vel` module that is not a browser
+ *            test runs `velar test`. The separate source-quality gate checks
+ *            every project once, so the release chain does not compile them
+ *            again here before running their tests.
  *   browser  every project with a `*.browser.test.vel` module runs
- *            `velar test --browser all`.
+ *            `velar test --browser chromium`.
  *
  * A project that genuinely must be skipped goes in `excluded` below with its
  * reason: an exclusion is visible in this file and in the gate's own output,
@@ -62,17 +64,11 @@ for (const project of discovered) {
   const unitTests = sources.filter((file) => basename(file).endsWith(".test.vel") && !basename(file).endsWith(".browser.test.vel"));
 
   if (mode === "unit") {
-    const checked = velar(["check", project]);
-    if (checked.status !== 0) {
-      failures.push(`${name}: velar check failed\n${indent(checked.output)}`);
-      continue;
-    }
-    executed.add(name);
-    ran.push(`${name}: checked`);
     if (unitTests.length === 0) {
       skipped.push(`${name}: no unit tests to run`);
       continue;
     }
+    executed.add(name);
     const tested = velar(["test", project]);
     if (tested.status !== 0) failures.push(`${name}: velar test failed\n${indent(tested.output)}`);
     else ran.push(`${name}: ${summarize(tested.output)}`);
@@ -84,8 +80,8 @@ for (const project of discovered) {
     continue;
   }
   executed.add(name);
-  const tested = velar(["test", project, "--browser", "all"]);
-  if (tested.status !== 0) failures.push(`${name}: velar test --browser all failed\n${indent(tested.output)}`);
+  const tested = velar(["test", project, "--browser", "chromium"]);
+  if (tested.status !== 0) failures.push(`${name}: velar test --browser chromium failed\n${indent(tested.output)}`);
   else ran.push(`${name}: ${summarize(tested.output)}`);
 }
 

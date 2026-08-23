@@ -6,6 +6,48 @@ truth for acceptance status.
 
 ## Unreleased
 
+## 0.13.0 — 2026-08-23
+
+### Language semantics and diagnostics
+
+- Added non-blocking advisories for accepted JavaScript and Python reflexes
+  whose VelarScript meaning differs, with exact, reasoned `velar-allow`
+  suppressions and compile errors for bare, blanket, or stale suppressions.
+- Made watch execution follow source, mount, and module-initialization order,
+  while preserving fixed-point `computed` settlement before one DOM commit.
+  Watch subjects are now explicit state or computed read paths, and the
+  duplicate `cached` derived-value spelling has been removed.
+- Made foreign and host values enter as `unknown` instead of `any`, rejected
+  `any` across exported surfaces, and added async `@iterate` declarations.
+- Removed the always-true `HttpResponse.ok` field across Web, Node, and Desktop;
+  non-2xx responses remain explicit `HttpResponseError` failures. WebSocket
+  clients now use `velar/websocket`, while `velar/realtime` owns event streams.
+- Made `Type.parse` return stable validated copies, closed annotated record
+  literals, fenced NaN across numeric and collection operations, and aligned
+  strings and line boundaries with Unicode code points and all VelarScript line
+  endings.
+
+### Compiler, runtime, and tooling
+
+- Closed the 205 confirmed findings from the D90 audit across parsing,
+  analysis, emission, formatting, diagnostics, runtimes, and target tooling,
+  including indirect aliases, exported class methods, composed route overlap,
+  deterministic artifact ordering, and release-version identity checks.
+- Hardened build-output ownership, source fixing, local development admission,
+  HTTP and static-file boundaries, browser and Desktop navigation, worker
+  transport recovery, and package/runtime generation checks.
+- Removed super-linear lexer, nested interpolation, flow-analysis, and
+  assignability paths, and added focused regression and performance coverage
+  for the repaired classes of defect.
+- Prevented required `children` presence checks from constructing the slot
+  before its rendered position, so resources and other owned child content are
+  initialized exactly once.
+- Added one `release:check` entry point, stopped compiling example projects
+  twice, and split the Node tests into a release-default quick suite and an
+  explicit `test:full` historical hardening suite. The browser gate is now one
+  platform and Chromium; development and CSP production paths remain covered,
+  and the packed-toolchain smoke exercises one representative generated app.
+
 ### Node server framework
 
 - Added exact WebSocket Origin admission on shared HTTP/WebSocket listeners.

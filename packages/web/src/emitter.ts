@@ -2998,8 +2998,17 @@ function __velarBindChecked(element, state, scope) {
 // Prop handles give a component body live reads over its props store. The
 // component function still runs exactly once per instance; only reads race
 // ahead, so state initializers can never re-run on a prop update.
+function __velarPropProvided(props, name) {
+  // A children slot is rendered content rather than a value thunk. Asking for
+  // its value to decide whether the required slot exists would build the slot
+  // once here and again at the JSX position that owns it. Its own property is
+  // the presence proof; the first value read remains the one rendering read.
+  if (name === "children") return __velarGraphOwnDescriptor(props, name) !== undefined;
+  return __velarInternalRead(() => props[name]) !== undefined;
+}
+
 function __velarRequiredProp(props, name, component) {
-  if (__velarInternalRead(() => props[name]) === undefined) throw new TypeError("Component " + component + " requires prop " + name);
+  if (!__velarPropProvided(props, name)) throw new TypeError("Component " + component + " requires prop " + name);
   return __velarGraphFreeze({
     get() {
       const value = props[name];
@@ -3010,7 +3019,7 @@ function __velarRequiredProp(props, name, component) {
 }
 
 function __velarProp(props, name, fallback) {
-  const fallbackValue = __velarInternalRead(() => props[name]) === undefined ? fallback() : undefined;
+  const fallbackValue = __velarPropProvided(props, name) ? undefined : fallback();
   return __velarGraphFreeze({
     get() {
       const value = props[name];

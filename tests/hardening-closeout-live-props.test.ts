@@ -173,6 +173,32 @@ console.log("root:" + trace + ":" + readText(root.node));
 `), "root:ba|body|:ab\n");
 });
 
+test("[closeout co-1] a required children slot is built only by the position that renders it", () => {
+  // `children` is rendered content, not an ordinary value prop. The required
+  // prop check must prove the slot is present without building it; otherwise a
+  // resource or other owned child starts once for the check and again for the
+  // actual rendered position.
+  const application = `
+let trace = ""
+
+def note(mark: string) -> string:
+    trace = trace + mark
+    return mark
+
+component Panel(children: WebNode):
+    return <section>{children}</section>
+
+component App:
+    return <Panel>{note("c")}</Panel>
+`.trimStart();
+  const code = emitted(application);
+  assert.match(code, /if \(name === "children"\) return __velarGraphOwnDescriptor\(props, name\) !== undefined;/u);
+  assert.equal(execute(code, `
+const app = App();
+console.log("construct:" + trace + ":" + readText(app.node));
+`), "construct:c:c\n");
+});
+
 test("[closeout co-1] a 'style:' directive decorates the instance root and is not a prop", () => {
   // The slot the compiler inserts for `style:` is not a field any component
   // declares, so it is bound at the instantiation site for every component

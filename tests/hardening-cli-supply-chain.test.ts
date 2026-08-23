@@ -349,16 +349,16 @@ test("cli-9 the official templates pin what they install and only state what the
   // only refuse the install of a component that would have compiled fine.
   let peers = 0;
   for (const template of VELAR_PROJECT_TEMPLATES) {
-    const files = createTemplateFiles(template, join("/tmp", "example-app"), "0.12.1", 2);
+    const files = createTemplateFiles(template, join("/tmp", "example-app"), "0.13.0", 2);
     const manifest = JSON.parse(files.get("package.json") ?? "{}") as Record<string, Record<string, string> | undefined>;
     for (const field of ["dependencies", "devDependencies"]) {
       for (const [name, range] of Object.entries(manifest[field] ?? {})) {
-        assert.equal(range, "0.12.1",
+        assert.equal(range, "0.13.0",
           `${template}: ${field}.${name} must pin one toolchain generation exactly, got ${range}`);
       }
     }
     for (const [name, range] of Object.entries(manifest.peerDependencies ?? {})) {
-      assert.equal(range, "^0.12.1",
+      assert.equal(range, "^0.13.0",
         `${template}: peerDependencies.${name} states a compatibility range, got ${range}`);
       peers += 1;
     }

@@ -98,7 +98,8 @@ npx velar fix
 
 ```sh
 npm test              # unit tests, in Node
-npm run test:browser  # Web/Desktop browser tests, in a real browser
+npm run test:full     # extended historical hardening suite
+npm run test:browser  # Web/Desktop browser tests, in Chromium
 ```
 
 A unit test is a named block in a `*.test.vel` module:

@@ -147,7 +147,7 @@ test "the network controller answers the page's own requests":
     await browser.open()
     await browser.click("[data-fetch-health]")
     await browser.waitForText("[data-fetched]", "healthy")
-    expect(await browser.text("[data-fetched]")).toBe("true|200|OK|true|true|healthy")
+    expect(await browser.text("[data-fetched]")).toBe("200|OK|true|true|healthy")
     await browser.click("[data-fetch-typed]")
     await browser.waitForText("[data-fetched]", "typed:Mocked")
     await network.clear()

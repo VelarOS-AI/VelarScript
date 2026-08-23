@@ -1,6 +1,6 @@
 # VelarScript Toolchain Release Process
 
-Status: VelarScript 0.12.1 released on 2026-08-20
+Status: VelarScript 0.13.0 released on 2026-08-23
 
 VelarScript ships the compiler, target-neutral Core Standard API, official Node
 runtime, official Web and Desktop frameworks, project creator, and CLI as one
@@ -9,14 +9,37 @@ toolchain dependencies; CLI pins Core, compiler, Node, Web, Desktop, and creator
 Application libraries, external-service adapters, and provider integrations are
 not workspaces or release artifacts of this repository.
 
-## Rehearsal
+## Pre-release check
+
+```sh
+npm run release:check
+```
+
+This is the one required local entry point. It runs source quality, the quick
+Node regression suite, packed-package consumer acceptance, and the browser gate
+under one checkout lock. The browser gate is deliberately one platform by one engine:
+Chromium on the current host. It still exercises both the development server
+and the CSP-enabled production build, every discovered project-owned browser
+test, and one generated application installed from the packed toolchain.
+
+The source-quality gate already checks every discovered example project, so the
+unit project runner does not compile those projects a second time before
+running their tests. The quick Node suite keeps current baseline and closeout
+coverage. Historical `hardening-*` waves — many of which deliberately wait for
+process, browser, or regular-expression deadlines — remain available through
+`npm run test:full` for broad language/runtime changes without taxing every
+small release.
+
+## Optional rehearsal
 
 ```sh
 npm run release:rehearse
 npm run release:verify -- release/rehearsal
 ```
 
-A rehearsal runs `npm pack` for all seven toolchain workspaces and writes:
+A rehearsal is useful when changing package contents or release metadata; it is
+not another mandatory pass before every release. It runs `npm pack` for all
+seven toolchain workspaces and writes:
 
 - the seven package tarballs;
 - `SHA256SUMS`;
@@ -52,9 +75,9 @@ registry token and no publication command.
 
 ## Registry publication
 
-`Publish npm toolchain` is a separate manual workflow. Complete compiler,
-package-consumer, and browser gates must pass locally before the release commit
-is tagged. The workflow accepts only an exact release tag plus the literal
+`Publish npm toolchain` is a separate manual workflow. `npm run release:check`
+must pass before the release commit is tagged. The workflow accepts only an
+exact release tag plus the literal
 confirmation `publish`, checks that the tag points at the checked-out source and
 that its workspace version agrees, then creates a fresh strict candidate from
 that tagged source.

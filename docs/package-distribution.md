@@ -92,7 +92,7 @@ whitespace-separated clauses over `<major>.<minor>`:
 A clause is `>=`, `>`, `<=`, or `<` followed by a generation, at most one lower
 bound and one upper bound. A bare generation such as `"0.12"` is that generation
 exactly and never combines with a second clause. A patch component
-(`"0.12.1"`), a caret range, a wildcard, an empty declaration, a repeated bound,
+(`"0.13.0"`), a caret range, a wildcard, an empty declaration, a repeated bound,
 and a range whose upper bound is below its lower bound — or equal to it without
 both bounds being inclusive — are rejected by name. A well-formed range no
 generation can satisfy, such as `">0.12 <0.13"`, is not: it is checked like any
@@ -343,5 +343,5 @@ complete license text, and package acceptance verifies the installed metadata
 and file rather than trusting the source manifest alone. The current rehearsal
 is always marked non-publishable because rehearsal mode is evidence only. A
 strict candidate becomes publishable only from the clean, exactly tagged
-`v0.12.1` source with the matching remote; registry publication remains a
+`v0.13.0` source with the matching remote; registry publication remains a
 separate explicit authority and must carry npm provenance.

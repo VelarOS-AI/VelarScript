@@ -2,16 +2,24 @@
 
 Status: current public release and publication gates
 
-The repository defines four GitHub Actions workflows:
+The repository defines four GitHub Actions workflows. The default push workflow
+stays intentionally small; the complete local release gate is one command:
 
-- `Velar CI` runs Node 24 check, tests, and packed-package consumer validation
-  on Linux, macOS, and Windows. A separate Linux job installs Playwright's
-  Chromium, Firefox, and WebKit dependencies and runs both development-server
-  and CSP-enabled production browser matrices, the project-owned
-  `.browser.test.vel` suite in all engines, and the same generated browser test
-  through the packed toolchain tarballs. Browser-project execution first verifies the exact
-  production asset inventory and uses the public preview server. The toolchain
-  set is derived from `packages/*`:
+```sh
+npm run release:check
+```
+
+- `Velar CI` runs the clean-install Node 24 source-quality gate on Linux. It
+  does not repeat the complete release suite on every push.
+- `release:check` runs source quality, Node tests, packed-package consumer
+  validation, and the browser gate locally. Browser acceptance is 1x1: the
+  current host and Chromium. It covers the development server and CSP-enabled
+  production output, discovered project-owned `.browser.test.vel` modules, and
+  one generated application installed from packed toolchain tarballs.
+- `npm test` discovers the current baseline and closeout Node regression files.
+  `npm run test:full` additionally runs every historical `hardening-*` wave;
+  use it for broad compiler/runtime changes, not as a duplicate release step.
+- The packed-package gate derives the toolchain set from `packages/*`:
   every publishable workspace package is packed and checked against what
   its own manifest promises a consumer — LICENSE, README, and every path named
   by `main`, `types`, `exports`, `bin` or `velar.entry` — installed into the
@@ -34,7 +42,7 @@ The repository defines four GitHub Actions workflows:
   imports all twelve public Web modules from real
   `.vel` source. Its realtime acceptance path creates WebSocket and server-sent
   event resources inside a component, observes their typed callbacks in
-  Chromium, Firefox, and WebKit, and releases both resources through component
+  Chromium, and releases both resources through component
   cleanup. Host-side tests do not bypass that source contract by importing the
   generated realtime JavaScript module directly.
 - Packed-browser acceptance independently creates an application from the
@@ -44,14 +52,17 @@ The repository defines four GitHub Actions workflows:
   fails this acceptance until the installed toolchain serves it — while its
   generated browser test loads `velar/web-test`, which application source may
   not import at all; the installed CLI then checks, tests, builds, verifies,
-  and executes that project.
+  and executes that project in Chromium. Docs and component template structure
+  and compilation remain covered by the packed-package and compiler tests; they
+  are not installed and browser-run again here.
 - Hosted-deployment acceptance runs the public remote verifier against root and
   subpath product servers and proves that byte tampering, wrong cache headers,
   access redirects, and asset-to-HTML fallback are rejected. A real preview
   environment can run the same command with `VELAR_DEPLOYMENT_URL`.
-- `Toolchain release rehearsal` runs the complete compiler gate, creates the
+- `Toolchain release rehearsal` runs the source-quality gate, creates the
   verified non-publishing toolchain artifact, adds an OIDC artifact attestation,
-  and uploads it. A tag switches the packaging step to strict candidate mode.
+  and uploads it. It is an explicit packaging diagnostic, not a mandatory
+  duplicate of `release:check`.
 - `Publish npm toolchain` is manual, requires an exact tag and literal
   publication confirmation, creates a strict candidate, publishes all seven
   toolchain packages with npm provenance under `next`,
@@ -63,15 +74,10 @@ The repository defines four GitHub Actions workflows:
   report, attests that report plus the build/deployment manifests, and uploads
   the evidence. It cannot deploy or publish.
 
-The browser job additionally opens the prepared root external-preview site
-in Chromium, checks its CSP, typed canonical/social metadata, public share
-asset, root/deep navigation, reload, and missing-asset 404. This is separate
-from the existing `/app/` three-engine matrix so deployment-profile bugs cannot
-hide behind the normal subpath fixture.
-
-Browser binaries are installed for the exact locked Playwright version in CI.
-They are not cached independently because browser/system dependency caches can
-drift from Playwright and do not provide a reliable speed advantage.
+The browser gate uses the exact locked Playwright Chromium build. Development
+and production remain separate runtime paths even though they share one engine;
+this preserves CSP and static-output coverage without multiplying every test by
+Firefox and WebKit.
 
 The rehearsal and external-preview workflows remain non-publishing. Only the
 manual toolchain publication workflow has registry authority, and its helper

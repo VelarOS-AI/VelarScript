@@ -76,7 +76,7 @@ test("fr-13 a wrong-generation package is named instead of blamed for syntax err
   const fixture = await makeFixture("velar-package-language-mismatch-");
   const mismatch = await fixture.compile({ capabilities: [], language: ">=0.9 <0.11" }, previousGenerationSource);
   assert.match(mismatch, /requires VelarScript language >=0\.9 <0\.11/u, "the declared range is quoted back verbatim");
-  // The toolchain is 0.12.1 and the generation it implements is 0.12, so the
+  // The toolchain is 0.13.0 and the generation it implements is 0.12, so the
   // sentence says 'implements' — 'this toolchain is 0.12' would name a release
   // that is not the one running.
   assert.match(mismatch, new RegExp(`this toolchain implements ${generation.replace(".", "\\.")}`, "u"), "the current generation is named");
@@ -110,7 +110,7 @@ test("fr-13 a malformed language range is rejected by name", async () => {
   const fixture = await makeFixture("velar-package-language-malformed-");
   const named = /'velar\.requires\.language' must be a language generation such as '0\.12' or a range such as '>=0\.11 <0\.14'/u;
   for (const declared of [
-    "0.12.1",       // a patch component promises something the language does not track
+    "0.13.0",       // a patch component promises something the language does not track
     "",             // an empty declaration is not a declaration
     "  ",
     "0.12 <0.14",   // a bare generation is already both bounds

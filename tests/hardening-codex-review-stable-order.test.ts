@@ -99,7 +99,7 @@ test("an extension contract compares equal to itself whatever order its records 
   const reversed = { [TIED[1]!]: "2", [TIED[0]!]: "1" };
   const package_: ResolvedExtensionPackage = {
     name: "@example/extension",
-    version: "0.12.1",
+    version: "0.13.0",
     manifestPath: "/project/node_modules/@example/extension/package.json",
     kind: "capability",
     apiVersion: "0.10",
