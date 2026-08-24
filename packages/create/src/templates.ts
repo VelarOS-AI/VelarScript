@@ -298,9 +298,11 @@ function libraryTemplate(name: string, displayName: string, version: string, for
     version: "0.1.0",
     private: true,
     type: "module",
-    files: ["src"],
+    files: ["src", "dist"],
+    exports: { ".": "./dist/index.js" },
     velar: {
       entry: "src/index.vel",
+      artifacts: { core: "dist/velar-library.json" },
       targets: ["core", "node", "web", "desktop"],
       requires: { capabilities: [] },
     },
@@ -309,7 +311,7 @@ function libraryTemplate(name: string, displayName: string, version: string, for
       format: "velar format",
       "format:check": "velar format --check",
       test: "velar test",
-      build: "velar build",
+      build: "velar build-library",
       "pack:check": "npm pack --dry-run --json",
       validate: "npm run format:check && npm run check && npm test && npm run build && npm run pack:check",
     },
@@ -318,7 +320,8 @@ function libraryTemplate(name: string, displayName: string, version: string, for
     },
   };
   return new Map([
-    [".gitignore", "node_modules/\ndist/\n.velar/\n"],
+    // The frozen artifact is release input and belongs in Git beside source.
+    [".gitignore", "node_modules/\n.velar/\n"],
     agentsGuideFile("core"),
     ["package.json", json(packageManifest)],
     ["velar.json", json({
@@ -328,7 +331,7 @@ function libraryTemplate(name: string, displayName: string, version: string, for
       publicDir: "public",
       extensions: [],
     })],
-    ["README.md", `# ${displayName}\n\nA reusable VelarScript source library.\n\n\`\`\`sh\nnpm install\nnpm run validate\n\`\`\`\n\nAfter bootstrap, use \`npm exec velar -- add <package>\`, \`remove\`, and \`update\` for project-aware dependency changes. The package is private by default. Remove \`private\` only after choosing a public package name, license, and release policy.\n`],
+    ["README.md", `# ${displayName}\n\nA reusable VelarScript library that publishes its readable \`.vel\` source together with frozen ABI-1 JavaScript and a portable type interface. Consumers load the JavaScript artifact; the source remains available for reading, debugging, and rebuilding.\n\n\`\`\`sh\nnpm install\nnpm run validate\n\`\`\`\n\nAfter bootstrap, use \`npm exec velar -- add <package>\`, \`remove\`, and \`update\` for project-aware dependency changes. The package is private by default. Remove \`private\` only after choosing a public package name, license, and release policy.\n`],
     ["src/index.vel", `export type Greeting:\n    message: string\n    recipient: string\n\nexport def greet(name: string) -> Greeting:\n    const recipient = name.trim()\n    assert recipient != "" else "A greeting requires a name"\n    return {message: f"Hello, {recipient}!", recipient: recipient}\n`],
     ["src/index.test.vel", `import {expect} from "velar/test"\nimport {greet} from "./index.vel"\n\ntest "greeting":\n    const greeting = greet("Velar")\n    expect(greeting.message).toBe("Hello, Velar!")\n    expect(greeting.recipient).toBe("Velar")\n\ntest "greeting rejects blank names":\n    expect(() => greet("   ")).toThrow()\n`],
   ]);

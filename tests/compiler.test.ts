@@ -15872,7 +15872,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     scripts: Record<string, string>;
     devDependencies: Record<string, string>;
   };
-  assert.deepEqual(libraryPackage.files, ["src"]);
+  assert.deepEqual(libraryPackage.files, ["src", "dist"]);
   assert.equal(libraryPackage.velar.entry, "src/index.vel");
   assert.deepEqual(libraryPackage.velar.targets, ["core", "node", "web", "desktop"]);
   assert.deepEqual(libraryPackage.velar.requires.capabilities, []);

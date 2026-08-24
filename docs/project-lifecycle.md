@@ -99,7 +99,8 @@ experience while retaining their target's ordinary project model: Web uses an
 interactive component, Node uses a checked HTTP server, and Desktop remains one
 system-WebView project with no renderer/main source split. Web, Desktop, and
 docs projects include Core tests plus browser tests. `library` is a
-framework-free Core source package. `component` is a Web source package with a
+framework-free Core dual-source/artifact package built with `velar build-library`.
+`component` is a Web source package with a
 single published `velar.entry`, a local preview application, a Core contract
 test, a browser rendering test, and `@velarscript/web` as both a development
 dependency and consumer peer contract. Assertions come from `velar/test`.

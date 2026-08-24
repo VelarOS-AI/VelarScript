@@ -83,3 +83,19 @@ test("every create-velar template scaffolds the AGENTS.md brief pointer", () => 
     assert.ok(lines <= 80, `AGENTS.md must stay a pointer, not a copy of the brief (${template}: ${lines} lines)`);
   }
 });
+
+test("the library template publishes source and a frozen ABI artifact together", () => {
+  const files = createTemplateFiles("library", join(root, "example-library"), VELAR_CREATE_VERSION, VELAR_PROJECT_FORMAT_VERSION);
+  const manifest = JSON.parse(files.get("package.json") ?? "{}") as {
+    files?: string[];
+    exports?: Record<string, string>;
+    velar?: { entry?: string; artifacts?: Record<string, string> };
+    scripts?: Record<string, string>;
+  };
+  assert.deepEqual(manifest.files, ["src", "dist"]);
+  assert.equal(manifest.exports?.["."], "./dist/index.js");
+  assert.equal(manifest.velar?.entry, "src/index.vel");
+  assert.deepEqual(manifest.velar?.artifacts, { core: "dist/velar-library.json" });
+  assert.equal(manifest.scripts?.build, "velar build-library");
+  assert.doesNotMatch(files.get(".gitignore") ?? "", /^dist\/$/mu);
+});

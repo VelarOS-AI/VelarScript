@@ -202,6 +202,34 @@ test("package resource files and matching npm subpath exports are part of the pa
   ));
 });
 
+test("a Velar library artifact receipt is part of the packed contract", async () => {
+  const manifest = {
+    name: "velar-artifact-probe",
+    version: "1.0.0",
+    type: "module",
+    files: ["src", "dist", "README.md"],
+    exports: { ".": "./dist/index.js" },
+    velar: {
+      entry: "src/index.vel",
+      artifacts: { core: "dist/velar-library.json" },
+    },
+  };
+  assert.deepEqual(declaredEntryPaths(manifest), [
+    "dist/index.js",
+    "src/index.vel",
+    "dist/velar-library.json",
+  ]);
+  const { packed } = await packageOf(manifest, {
+    LICENSE: "x\n",
+    "README.md": "x\n",
+    "src/index.vel": "export const value = 1\n",
+    "dist/index.js": "export const value = 1\n",
+  });
+  assert.ok(packageContentFailures(manifest, packed).some((failure) =>
+    failure.includes("dist/velar-library.json")
+  ));
+});
+
 test("[A-024] every publishable toolchain package that declares a build is built, dependencies first", async () => {
   // The third copy of the roster was the `gate:build:packages` npm script, six
   // workspaces chained by hand. A publishable package added with a build script

@@ -41,10 +41,11 @@ if formatting the result would change it again, the file keeps the bytes you
 wrote, `format` names it and exits non-zero rather than writing an unstable
 layout, and the language server offers no edit at all.
 
-`fix` rewrites only the source the project owns. Installed VelarScript packages
-compile as part of your project, so their diagnostics are reported beside your
-own — on the same channel `check` reports them on — but `fix` never writes a
-file that came out of one: a rewrite there is invisible to git, is destroyed by
+`fix` rewrites only the source the project owns. An installed frozen library
+loads its portable interface and never reaches the fixer; a source-fallback
+package compiles as part of your project, so its diagnostics are reported beside
+your own — on the same channel `check` reports them on — but `fix` never writes
+a file that came out of one: a rewrite there is invisible to git, is destroyed by
 the next `npm ci`, and makes the installed tree diverge from the tarball it was
 published as. The boundary is the real path, so a module reached through a
 symbolic link inside `src/` is left alone as well when the link points into an
@@ -134,11 +135,20 @@ deployment; a malformed percent escape is answered with `400`.
 ```text
 velar build [entry.vel | project-directory] [--out-dir <directory>]
 velar build <single.vel> --out <file.js>
+velar build-library [project-directory]
 velar verify [project-directory | build-directory]
 velar preview [project-directory | build-directory] [--port <port>]
 velar verify-deployment [project-directory | build-directory] --url <https-origin> [--json]
 velar package [project-directory]
 ```
+
+`build-library` is the release build for a Core or Node library whose
+`package.json` declares `velar.entry`, one `velar.artifacts` receipt, and a root
+npm export. It replaces that declared artifact directory transactionally with
+frozen ABI-1 JavaScript, a source map, a portable type interface, and their hash
+receipt. The `.vel` source remains a separate published input; consumers use
+the artifact first and compile source only as a fallback. ABI 1 does not build
+Web/Desktop component packages.
 
 `verify` checks that a build is actually deployable rather than merely present.
 For a Node application, `build` instead writes a standalone ESM directory with
@@ -154,9 +164,10 @@ portable ESM wrapper. Package resources must follow the manifest contract in
 [package distribution](package-distribution.md#package-resources).
 `verify-deployment` runs the same checks against a live origin. `package`
 builds the target-owned native application package for a project whose
-framework host implements that operation. Reusable library and component
-source packages are published through npm; their generated `validate` script
-runs `npm pack --dry-run --json` so the package receipt is checked before
+framework host implements that operation. Reusable Core/Node libraries publish
+source and frozen artifacts through npm; Web/Desktop component packages remain
+source packages. Their generated `validate` scripts run the appropriate build
+and `npm pack --dry-run --json` so the package contents are checked before
 publication. See [package distribution](package-distribution.md) and
 [static deployment](static-deployment.md).
 

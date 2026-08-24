@@ -40,7 +40,11 @@ export interface VelarLibraryArtifactReceipt {
   };
 }
 
-type PortableValue = null | boolean | number | string | readonly PortableValue[] | Readonly<Record<string, PortableValue>> | ReadonlyMap<PortableValue, PortableValue> | ReadonlySet<PortableValue>;
+interface PortableObject {
+  readonly [key: string]: PortableValue;
+}
+
+type PortableValue = null | boolean | number | string | readonly PortableValue[] | PortableObject | ReadonlyMap<PortableValue, PortableValue> | ReadonlySet<PortableValue>;
 
 type WireValue = null | boolean | number | string | {
   readonly tag: "array" | "object" | "map" | "set";
@@ -53,6 +57,7 @@ const MAX_WIRE_NODES = 1_000_000;
 const MAX_WIRE_DEPTH = 128;
 const SHA256 = /^[a-f0-9]{64}$/u;
 const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*|[a-z0-9][a-z0-9._-]*)$/u;
+const PACKAGE_VERSION = /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
 
 export function sha256Text(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
@@ -231,20 +236,24 @@ function validateReceipt(value: unknown): VelarLibraryArtifactReceipt {
   }
   const package_ = record(receipt.package, "Velar library artifact package identity");
   exactKeys(package_, ["name", "version"], "Velar library artifact package identity");
-  if (typeof package_.name !== "string" || !PACKAGE_NAME.test(package_.name) || typeof package_.version !== "string" || package_.version === "") {
-    throw new Error("Velar library artifact package identity must contain a package name and version");
+  if (typeof package_.name !== "string" || !PACKAGE_NAME.test(package_.name) || typeof package_.version !== "string" || !PACKAGE_VERSION.test(package_.version)) {
+    throw new Error("Velar library artifact package identity must contain a package name and semantic version");
   }
   if (receipt.target !== "core" && receipt.target !== "node") throw new Error("Velar library ABI 1 target must be 'core' or 'node'");
-  if (typeof receipt.compilerVersion !== "string" || receipt.compilerVersion === "" || typeof receipt.sourceEntry !== "string") {
-    throw new Error("Velar library artifact compilerVersion and sourceEntry must be non-empty strings");
+  if (typeof receipt.compilerVersion !== "string" || !PACKAGE_VERSION.test(receipt.compilerVersion)) {
+    throw new Error("Velar library artifact compilerVersion must be a semantic version");
   }
+  normalizedRelativePath(receipt.sourceEntry, "Velar library artifact sourceEntry");
   if (!Array.isArray(receipt.sources) || receipt.sources.length === 0 || receipt.sources.length > 10_000) {
     throw new Error("Velar library artifact sources must be a non-empty bounded list");
   }
+  const sourcePaths = new Set<string>();
   for (const source of receipt.sources) {
     const item = record(source, "Velar library artifact source");
     exactKeys(item, ["path", "sha256"], "Velar library artifact source");
     normalizedRelativePath(item.path, "Velar library artifact source path");
+    if (sourcePaths.has(item.path as string)) throw new Error(`Velar library artifact repeats source '${String(item.path)}'`);
+    sourcePaths.add(item.path as string);
     hash(item.sha256, "Velar library artifact source hash");
   }
   const entry = record(receipt.entry, "Velar library artifact entry");
@@ -252,6 +261,9 @@ function validateReceipt(value: unknown): VelarLibraryArtifactReceipt {
   normalizedRelativePath(entry.javascript, "Velar library artifact JavaScript path");
   normalizedRelativePath(entry.sourceMap, "Velar library artifact source map path");
   normalizedRelativePath(entry.interface, "Velar library artifact interface path");
+  if (new Set([entry.javascript, entry.sourceMap, entry.interface]).size !== 3) {
+    throw new Error("Velar library artifact JavaScript, source map, and interface paths must be distinct");
+  }
   const hashes = record(entry.sha256, "Velar library artifact hashes");
   exactKeys(hashes, ["javascript", "sourceMap", "interface"], "Velar library artifact hashes");
   hash(hashes.javascript, "Velar library JavaScript hash");
@@ -600,7 +612,7 @@ function nonNegativeInteger(value: unknown, label: string): void {
 }
 
 function normalizedRelativePath(value: unknown, label: string): asserts value is string {
-  if (typeof value !== "string" || value === "" || isAbsolute(value) || value.includes("\\")
+  if (typeof value !== "string" || value === "" || /[\u0000-\u001f\u007f]/u.test(value) || isAbsolute(value) || value.includes("\\")
     || value.split("/").some((part) => part === "" || part === "." || part === "..")) {
     throw new Error(`${label} must be a normalized relative path`);
   }

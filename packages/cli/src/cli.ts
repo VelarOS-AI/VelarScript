@@ -47,6 +47,7 @@ import {
   VELAR_EMBEDDED_MODULE_MARKER,
 } from "./embedded-modules.ts";
 import { resourceOutputRelativePath, writeBuildResourcePackageManifests, writeProjectResources } from "./resource-output.ts";
+import { resolveVelarLibraryBuild, writeVelarLibraryArtifact } from "./library-artifact-build.ts";
 
 
 interface CommandArguments {
@@ -359,6 +360,32 @@ async function main(arguments_: readonly string[]): Promise<number> {
       return 0;
     } catch (error) {
       process.stderr.write(`velar repro: ${hostErrorMessage(error)}\n`);
+      return 1;
+    }
+  }
+
+  if (command === "build-library") {
+    const input = parseSingleOptionalInput(rest);
+    if (input !== null && typeof input === "object") {
+      process.stderr.write(`velar build-library: ${input.error}\n`);
+      return 2;
+    }
+    let staging: string | null = null;
+    try {
+      const config = await resolveVelarProject(input);
+      const library = await resolveVelarLibraryBuild(config);
+      const checked = await checkResolvedProject(library.project, input ?? library.project.root);
+      process.stderr.write(formatCheckOutput(checked));
+      if (checked.errors.length > 0) return 1;
+      staging = await prepareBuildStaging(library.outputRoot, { declared: true, forced: false });
+      await writeVelarLibraryArtifact(library, checked.project, staging);
+      await replaceOutputDirectory(staging, library.outputRoot);
+      staging = null;
+      process.stdout.write(`Built Velar library ABI 1 ${library.packageName}@${library.packageVersion} (${library.target}) -> ${library.receiptPath}\n`);
+      return 0;
+    } catch (error) {
+      if (staging !== null) await rm(staging, { recursive: true, force: true });
+      process.stderr.write(`velar build-library: ${hostErrorMessage(error)}\n`);
       return 1;
     }
   }
@@ -1405,6 +1432,7 @@ function printHelp(output: NodeJS.WritableStream = process.stdout): void {
     "  velar dev [entry.vel | project-directory] [--port <port>]",
     "  velar serve [project-directory]",
     "  velar build [entry.vel | project-directory] [--out-dir <directory>] [--force]",
+    "  velar build-library [project-directory]",
     "  velar run [entry.vel | project-directory] [--stack] [-- <program-arguments>...]",
     "  velar verify [project-directory | build-directory]",
     "  velar preview [project-directory | build-directory] [--port <port>]",
@@ -1424,7 +1452,7 @@ function printHelp(output: NodeJS.WritableStream = process.stdout): void {
 }
 
 const commandNames = new Set([
-  "check", "create", "install", "add", "remove", "update", "dev", "serve", "build", "package", "run", "verify", "preview",
+  "check", "create", "install", "add", "remove", "update", "dev", "serve", "build", "build-library", "package", "run", "verify", "preview",
   "verify-deployment", "test", "format", "fix", "repro", "skill", "lsp",
 ]);
 
@@ -1439,6 +1467,7 @@ function printCommandHelp(command: string, output: NodeJS.WritableStream = proce
     dev: ["Usage: velar dev [entry.vel | project-directory] [--port <1-65535>]", "Watches a framework app or last-good Node server factory; --port applies only to Web and Desktop development servers."],
     serve: ["Usage: velar serve [project-directory]", "Checks and runs a Node server factory with production runtime behavior; host and port belong to velar/server configuration."],
     build: ["Usage: velar build [entry.vel | project-directory] [--out-dir <directory>] [--force]", "       velar build <single.vel> --out <file.js>", "Builds isolated Web/Desktop output, a standalone Node application, or JavaScript modules.", "--out-dir refuses a directory that is not empty and was not produced by a previous build; --force replaces one anyway."],
+    "build-library": ["Usage: velar build-library [project-directory]", "Checks a Core or Node source library, then writes its frozen ABI-1 JavaScript, source map, portable type interface, and integrity receipt to the package-declared artifact directory."],
     package: ["Usage: velar package [project-directory]", "Packages an application through its target-owned native packaging host."],
     run: ["Usage: velar run [entry.vel | project-directory] [--stack] [-- <program-arguments>...]", "Compiles the resolved Core project and executes its entry module once on Node.js; arguments after '--' reach the program.", "--stack prints the full Node.js trace behind an uncaught program error instead of the VelarScript frames."],
     verify: ["Usage: velar verify [project-directory | build-directory]", "Verifies the exact production manifest, inventory, sizes, hashes, and relationships."],

@@ -68,7 +68,10 @@ and algorithms come from project-owned modules or dependencies. A direct
 
 A VelarScript project is a directory containing a `velar.json` manifest. Let
 the toolchain write it — `velar create my-lib --template library` scaffolds a
-Core source library; other templates select their own framework brief. Each writes
+Core library whose release keeps `.vel` source plus a frozen ABI-1 JavaScript
+artifact; `velar build-library` regenerates its JS, source map, portable type
+interface, and hash receipt. Later toolchains load that interface and JS before
+considering source fallback. Other templates select their own framework brief. Each writes
 `velar.json`, a `package.json` whose scripts are the gates, a `src/` tree, a
 passing test, and an `AGENTS.md`.
 

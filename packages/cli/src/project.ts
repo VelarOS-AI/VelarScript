@@ -664,6 +664,7 @@ export async function compileProjectEntries(
           module,
           loaded,
           velarImports,
+          velarArtifactInterfaces,
           failures,
           notices,
           declarationCache,
@@ -672,7 +673,7 @@ export async function compileProjectEntries(
           compiledInterfaces,
           compilerExtensions,
         );
-        const result = importedReactiveAssignmentDiagnostics(compile(module.text, {
+        const compiled = importedReactiveAssignmentDiagnostics(compile(module.text, {
           path: module.inputPath,
           analysis,
           extensions: compilerExtensions,
@@ -680,6 +681,9 @@ export async function compileProjectEntries(
           sharedRuntimeModules: true,
           ...(options.exportTestFunctions ? { exportFunctions: new Set(module.inspection.moduleInterface.tests.map((item) => item.name)) } : {}),
         }), analysis.reactiveImports ?? new Map());
+        const result = module.package === null
+          ? compiled
+          : { ...compiled, moduleInterface: stableSourcePackageInterface(module, compiled.moduleInterface, loaded) };
         nextResults.set(module.inputPath, { inputPath: module.inputPath, relativePath: module.relativePath, result });
       }
       passResults = nextResults;
@@ -710,6 +714,22 @@ export async function compileProjectEntries(
   // machine's `LC_ALL`. Order by code unit over the POSIX-normalized
   // relative path instead.
   modules.sort((left, right) => byCodeUnit(left.relativePath, right.relativePath));
+  // Resolve every public barrel after the final SCC pass. A frozen library
+  // serializes this map, so source mode and artifact mode expose the same
+  // flattened contract even when the package entry only re-exports names.
+  interfaceCache.clear();
+  const moduleInterfaces = new Map<string, ModuleInterface>();
+  for (const module of loaded.values()) {
+    moduleInterfaces.set(module.inputPath, resolvedModuleInterface(
+      module,
+      loaded,
+      velarImports,
+      velarArtifactInterfaces,
+      interfaceCache,
+      compiledInterfaces,
+      compilerExtensions,
+    ));
+  }
   if (framework?.host.validateProject) {
     try {
       const messages = framework.host.validateProject({
@@ -734,10 +754,12 @@ export async function compileProjectEntries(
     framework,
     capabilities,
     modules,
+    moduleInterfaces,
     failures: uniqueFailures(failures),
     notices: uniqueNotices(notices),
     velarPackages: [...velarPackages.values()],
     velarImports,
+    velarArtifactInterfaces,
     resources: [...resources.values()],
     resourceImports,
     externalTypeDependencies,
@@ -1441,6 +1463,7 @@ async function createAnalysisContext(
   module: LoadedModule,
   loaded: ReadonlyMap<string, LoadedModule>,
   velarImports: ReadonlyMap<string, string>,
+  artifactInterfaces: ReadonlyMap<string, ModuleInterface>,
   failures: ProjectFailure[],
   notices: ProjectNotice[],
   declarationCache: Map<string, Promise<TypeScriptDeclarationBridge | null>>,
@@ -1469,15 +1492,24 @@ async function createAnalysisContext(
       extensionModules.set(extensionId, values);
     }
   }
+  for (const interface_ of new Set(artifactInterfaces.values())) {
+    for (const [extensionId, data] of interface_.extensionData) {
+      const values = extensionModules.get(extensionId) ?? [];
+      values.push(data);
+      extensionModules.set(extensionId, values);
+    }
+  }
 
   for (const dependency of module.inspection.dependencies) {
     if (dependency.dynamic) {
+      const artifact = artifactInterfaces.get(projectImportKey(module.inputPath, dependency.source));
       const targetPath = dependency.source.startsWith(".") && extname(dependency.source) === ".vel"
         ? resolve(dirname(module.inputPath), dependency.source)
         : null;
       const target = targetPath ? loaded.get(targetPath) : null;
-      if (!target) continue;
-      const interface_ = resolvedModuleInterface(target, loaded, velarImports, interfaceCache, compiledInterfaces, compilerExtensions);
+      const interface_ = artifact
+        ?? (target ? resolvedModuleInterface(target, loaded, velarImports, artifactInterfaces, interfaceCache, compiledInterfaces, compilerExtensions) : null);
+      if (!interface_) continue;
       if (interface_.reactiveExports.size > 0) {
         failures.push({
           path: module.inputPath,
@@ -1494,12 +1526,13 @@ async function createAnalysisContext(
       continue;
     }
     if (dependency.reExport) {
-      const interface_ = standardModuleInterface(dependency.source, compilerExtensions) ?? (() => {
+      const interface_ = artifactInterfaces.get(projectImportKey(module.inputPath, dependency.source))
+        ?? standardModuleInterface(dependency.source, compilerExtensions) ?? (() => {
         const targetPath = dependency.source.startsWith(".") && extname(dependency.source) === ".vel"
           ? resolve(dirname(module.inputPath), dependency.source)
           : velarImports.get(projectImportKey(module.inputPath, dependency.source));
         const target = targetPath ? loaded.get(targetPath) : null;
-        return target ? resolvedModuleInterface(target, loaded, velarImports, interfaceCache, compiledInterfaces, compilerExtensions) : null;
+        return target ? resolvedModuleInterface(target, loaded, velarImports, artifactInterfaces, interfaceCache, compiledInterfaces, compilerExtensions) : null;
       })();
       if (interface_) {
         for (const specifier of dependency.specifiers) {
@@ -1562,13 +1595,19 @@ async function createAnalysisContext(
       importReachableStandardTypeMetadata(standard, compilerExtensions, namedTypes, namedTypeReadonlyFields, namedTypeBases, genericTypes, enums, classes);
       continue;
     }
+    const artifact = artifactInterfaces.get(projectImportKey(module.inputPath, dependency.source));
+    if (artifact) {
+      importInterface(module, dependency, artifact, imports, reactiveImports, namedTypes, namedTypeReadonlyFields, namedTypeIdentities, namedTypeBases, genericTypes, typeAliases, enums, classes, extensionImports, failures);
+      importReachableStandardTypeMetadata(artifact, compilerExtensions, namedTypes, namedTypeReadonlyFields, namedTypeBases, genericTypes, enums, classes);
+      continue;
+    }
     const targetPath = dependency.source.startsWith(".") && extname(dependency.source) === ".vel"
       ? resolve(dirname(module.inputPath), dependency.source)
       : velarImports.get(projectImportKey(module.inputPath, dependency.source));
     if (!targetPath) continue;
     const target = loaded.get(targetPath);
     if (!target) continue;
-    const targetInterface = resolvedModuleInterface(target, loaded, velarImports, interfaceCache, compiledInterfaces, compilerExtensions);
+    const targetInterface = resolvedModuleInterface(target, loaded, velarImports, artifactInterfaces, interfaceCache, compiledInterfaces, compilerExtensions);
     importInterface(module, dependency, targetInterface, imports, reactiveImports, namedTypes, namedTypeReadonlyFields, namedTypeIdentities, namedTypeBases, genericTypes, typeAliases, enums, classes, extensionImports, failures);
     // The same sink one step sideways: a project module can re-export a
     // signature returning a standard type it never declares either.
@@ -1596,13 +1635,15 @@ function resolvedModuleInterface(
   module: LoadedModule,
   loaded: ReadonlyMap<string, LoadedModule>,
   velarImports: ReadonlyMap<string, string>,
+  artifactInterfaces: ReadonlyMap<string, ModuleInterface>,
   cache: Map<string, ModuleInspection["moduleInterface"]>,
   compiledInterfaces: ReadonlyMap<string, ModuleInspection["moduleInterface"]>,
   compilerExtensions: readonly CompilerExtension[],
 ): ModuleInspection["moduleInterface"] {
   const cached = cache.get(module.inputPath);
   if (cached) return cached;
-  const own = compiledInterfaces.get(module.inputPath) ?? module.inspection.moduleInterface;
+  const rawOwn = compiledInterfaces.get(module.inputPath) ?? module.inspection.moduleInterface;
+  const own = module.package === null ? rawOwn : stableSourcePackageInterface(module, rawOwn, loaded);
   const exports = new Map(own.exports);
   const mutableExports = new Set(own.mutableExports);
   const reactiveExports = new Map(own.reactiveExports);
@@ -1631,14 +1672,15 @@ function resolvedModuleInterface(
 
   for (const dependency of module.inspection.dependencies) {
     if (dependency.javascript) continue;
-    let dependencyInterface = standardModuleInterface(dependency.source, compilerExtensions);
+    let dependencyInterface = artifactInterfaces.get(projectImportKey(module.inputPath, dependency.source))
+      ?? standardModuleInterface(dependency.source, compilerExtensions);
     if (!dependencyInterface) {
       const targetPath = dependency.source.startsWith(".") && extname(dependency.source) === ".vel"
         ? resolve(dirname(module.inputPath), dependency.source)
         : velarImports.get(projectImportKey(module.inputPath, dependency.source));
       const target = targetPath ? loaded.get(targetPath) : null;
       if (!target) continue;
-      dependencyInterface = resolvedModuleInterface(target, loaded, velarImports, cache, compiledInterfaces, compilerExtensions);
+      dependencyInterface = resolvedModuleInterface(target, loaded, velarImports, artifactInterfaces, cache, compiledInterfaces, compilerExtensions);
     }
     const aliases = new Map(dependency.specifiers
       .filter((specifier) => !specifier.namespace && specifier.imported !== "default")
@@ -1730,6 +1772,27 @@ function resolvedModuleInterface(
     ));
   }
   return resolved;
+}
+
+/**
+ * Source fallback and frozen artifacts must agree on nominal identities.
+ * Absolute installation paths would make one record or class a different
+ * type on every machine and would leak a publisher path into the artifact.
+ */
+function stableSourcePackageInterface(
+  module: LoadedModule,
+  interface_: ModuleInterface,
+  loaded: ReadonlyMap<string, LoadedModule>,
+): ModuleInterface {
+  if (module.package === null) return interface_;
+  return rebaseModuleInterfaceIdentities(interface_, [...loaded.values()].flatMap((candidate) => {
+    const owner = candidate.package;
+    if (owner === null) return [];
+    return [{
+      physical: candidate.inputPath,
+      logical: packageStableModulePath(owner.name, owner.version, relative(owner.root, candidate.inputPath)),
+    }];
+  }));
 }
 
 /**
@@ -1850,7 +1913,7 @@ function packageArtifactDescriptors(value: unknown): ReadonlyMap<VelarLibraryArt
   const artifacts = new Map<VelarLibraryArtifactTarget, string>();
   for (const [target, descriptor] of entries) {
     if (target !== "core" && target !== "node") throw new Error(`Velar library ABI 1 does not support artifact target '${target}'; supported targets are core and node`);
-    if (typeof descriptor !== "string" || descriptor === "" || isAbsolute(descriptor) || descriptor.includes("\\")
+    if (typeof descriptor !== "string" || descriptor === "" || /[\u0000-\u001f\u007f]/u.test(descriptor) || isAbsolute(descriptor) || descriptor.includes("\\")
       || descriptor.split("/").some((part) => part === "" || part === "." || part === "..")) {
       throw new Error(`'velar.artifacts.${target}' must be a normalized package-relative receipt path`);
     }
@@ -2008,6 +2071,14 @@ function assertVelarPackageCompatibility(
       throw new Error(`package '${package_.name}' requires VelarScript language ${declaredLanguage.text}; this toolchain implements ${TOOLCHAIN_LANGUAGE_GENERATION}; install a release of '${package_.name}' published for ${TOOLCHAIN_LANGUAGE_GENERATION}, or run the toolchain the package asks for — its sources are not wrong, they belong to another generation of the language`);
     }
   }
+  assertVelarPackageTargetCapabilities(package_, target, capabilities);
+}
+
+function assertVelarPackageTargetCapabilities(
+  package_: VelarSourcePackage,
+  target: VelarPackageTarget,
+  capabilities: ReadonlySet<string>,
+): void {
   if (!package_.targets.includes(target)) {
     throw new Error(`package '${package_.name}' does not support the '${target}' target; supported targets: ${package_.targets.join(", ")}`);
   }

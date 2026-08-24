@@ -108,6 +108,9 @@ export async function resolveBrowserNpm(
   const specifiers = new Set(project.modules.flatMap((module) => module.result.dependencies
     .filter((dependency) => dependency.javascript && !dependency.source.startsWith(".") && !dependency.source.startsWith("/"))
     .map((dependency) => dependency.source)));
+  for (const package_ of project.velarPackages) {
+    if (package_.artifact !== null) specifiers.add(package_.name);
+  }
   const require = createRequire(pathToFileURL(join(project.sourceRoot, "package.json")));
   const cacheRoot = resolve(project.projectRoot, ".velar", "dev-deps");
   const states = new Map<string, PackageState>();
@@ -201,6 +204,10 @@ export async function resolveBrowserNpm(
     imports[specifier] = withBase(base, `${target.state.route}${output}`);
   }
   for (const package_ of project.velarPackages) {
+    // Artifact packages are ordinary ESM packages at runtime and were
+    // prebundled above. Only source-fallback packages need an import-map entry
+    // pointing at the project's compiled module tree.
+    if (package_.artifact !== null) continue;
     const entry = project.modules.find((module) => module.inputPath === package_.entryPath);
     if (!entry) {
       failures.push(`VelarScript package '${package_.name}' entry was not compiled`);

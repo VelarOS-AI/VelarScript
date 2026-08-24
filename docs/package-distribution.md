@@ -66,20 +66,48 @@ registry versions such as `velar add @velarscript-labs/sqlite@0.2.0`. `update`
 follows the ranges already declared in `package.json` rather than silently
 moving every dependency to a new major.
 
-A reusable VelarScript source package declares `velar.entry`, its supported
-`velar.targets`, and a bounded `velar.requires.capabilities` list. Compatibility
-is checked before package source is compiled. A compiler/framework
+A reusable VelarScript package keeps its readable source and may publish a
+frozen runtime artifact beside it. It declares `velar.entry`, its supported
+`velar.targets`, and a bounded `velar.requires.capabilities` list. A compiler/framework
 extension declares `velar.extension`:
 
 ```json
 {
+  "type": "module",
+  "files": ["src", "dist"],
+  "exports": { ".": "./dist/index.js" },
   "velar": {
     "entry": "src/index.vel",
+    "artifacts": { "core": "dist/velar-library.json" },
     "targets": ["core", "node", "web", "desktop"],
     "requires": { "capabilities": [] }
   }
 }
 ```
+
+`velar build-library` checks the source and writes Velar library ABI 1
+JavaScript, its source map, a portable `.veli` public interface, and a receipt
+that hashes all three. The receipt also records the package name/version,
+compiler version, artifact target, source entry, and hashes of the source used
+for the build. npm's tarball/lockfile integrity protects the receipt; the
+consumer verifies every generated-file hash before trusting the interface.
+
+Artifact resolution is deliberately first. When a compatible artifact exists,
+the compiler loads its interface for type checking and leaves the package import
+as an ordinary bare ESM import of `package.json#exports`. It does not open,
+parse, or compile the installed `.vel`, so a later language generation can run
+that release without rewriting its source. `velar.requires.language` governs
+only source fallback. If no compatible artifact exists, the resolver follows
+the source-package rules below exactly as before.
+
+ABI 1 accepts one artifact target per package: `core` or `node`. A `core`
+artifact is target-neutral and may be consumed by Core, Node, Web, or Desktop
+when `velar.targets` permits it; a `node` artifact is admitted only to Node.
+The build bundles the matching `velar/*` implementation support so the artifact
+does not import compiler-private runtime modules, while ordinary npm dependencies
+remain ordinary package imports. Web/Desktop component artifacts require a
+shared reactive/rendering runtime ABI and are not claimed by ABI 1; those
+packages continue to use source mode.
 
 Targets are `core`, `node`, `web`, or `desktop`. An application-owned source
 package may narrow that list and require a host capability. Missing, empty,
@@ -111,7 +139,7 @@ other range and reported as an ordinary generation mismatch quoting the range
 back. The generation this toolchain implements is its own version without the
 patch component, because a patch release never moves the language.
 
-The declaration is checked when the package is resolved: before any of the
+In source fallback, the declaration is checked when the package is resolved: before any of the
 package's `.vel` reaches the compiler, and ahead of the `targets` and
 `capabilities` checks, which a manifest written for another generation is in no
 position to be trusted about. A package the current generation does not satisfy
@@ -125,7 +153,7 @@ toolchain implements 0.12; install a release of 'example-package' published for
 they belong to another generation of the language
 ```
 
-A package that declares no language keeps today's behaviour exactly: its source
+A source-fallback package that declares no language keeps today's behaviour exactly: its source
 compiles, and a generation it cannot survive is still reported as its own
 diagnostics. `velar.requires` itself remains mandatory: the language range is
 an optional field inside that section, not a relaxation of it.

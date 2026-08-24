@@ -15,7 +15,8 @@ import type { VelarPackageManifest } from "../scripts/velar-packages.mjs";
 //
 // So the contract below asks the manifest, not a list. Every path a manifest
 // promises a consumer — `main`, `types`, `bin`, every string leaf of `exports`,
-// `velar.entry`, every declared `velar.resources` path — must be inside the tarball, and every specifier those
+// `velar.entry`, every declared `velar.artifacts` receipt, every declared
+// `velar.resources` path — must be inside the tarball, and every specifier those
 // promises create must resolve after a clean install. A package that publishes
 // a new export subpath is checked for it without anybody editing this file, and
 // a package added to the workspace is checked at all.
@@ -53,6 +54,7 @@ export function declaredEntryPaths(manifest: VelarPackageManifest): string[] {
   if (typeof manifest.bin === "string") add(manifest.bin);
   else for (const value of Object.values(manifest.bin ?? {})) add(value);
   add(manifest.velar?.entry);
+  for (const artifact of Object.values(manifest.velar?.artifacts ?? {})) add(artifact);
   for (const resource of Object.values(manifest.velar?.resources ?? {})) add(resource.path);
   return paths;
 }

@@ -17,6 +17,7 @@ import { VELAR_VERSION } from "./version.ts";
 
 const MAX_PACKAGE_MANIFEST_BYTES = 1024 * 1024;
 const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*|[a-z0-9][a-z0-9._-]*)$/u;
+const PACKAGE_VERSION = /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
 
 export interface VelarLibraryBuildConfig {
   readonly project: VelarProjectConfig;
@@ -40,7 +41,7 @@ export async function resolveVelarLibraryBuild(config: VelarProjectConfig): Prom
   const manifest = JSON.parse(source) as Record<string, unknown>;
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) throw new Error(`${packagePath} must contain a JSON object`);
   if (typeof manifest.name !== "string" || !PACKAGE_NAME.test(manifest.name)) throw new Error(`${packagePath}: a library artifact requires a valid package name`);
-  if (typeof manifest.version !== "string" || manifest.version === "") throw new Error(`${packagePath}: a library artifact requires a package version`);
+  if (typeof manifest.version !== "string" || !PACKAGE_VERSION.test(manifest.version)) throw new Error(`${packagePath}: a library artifact requires a semantic package version`);
   const velar = manifest.velar;
   if (!velar || typeof velar !== "object" || Array.isArray(velar)) throw new Error(`${packagePath}: a library artifact requires the 'velar' package section`);
   const fields = velar as Record<string, unknown>;
@@ -66,6 +67,9 @@ export async function resolveVelarLibraryBuild(config: VelarProjectConfig): Prom
   const outputRoot = dirname(receiptPath);
   const outputFromRoot = relative(config.root, outputRoot);
   if (!outputFromRoot || outputFromRoot.startsWith("..") || isAbsolute(outputFromRoot)) throw new Error(`${packagePath}#velar.artifacts.${target} escapes the package root`);
+  if (resolve(outputRoot) !== resolve(config.outDir)) {
+    throw new Error(`${packagePath}#velar.artifacts.${target} must live directly in the velar.json outDir so library builds cannot replace a source or unrelated directory`);
+  }
   const exports = manifest.exports;
   const expectedEntry = `./${relative(config.root, join(outputRoot, "index.js")).replaceAll("\\", "/")}`;
   const rootExports = packageExportTargets(exports, ".");
@@ -142,48 +146,58 @@ async function bundleLibrary(
   target: VelarLibraryArtifactTarget,
   finalOutputRoot: string,
 ): Promise<{ readonly code: string; readonly sourceMap: string }> {
+  if (entry.result.code === null) throw new Error("The VelarScript library entry did not emit JavaScript");
   const modules = new Map(project.modules.map((module) => [resolve(module.inputPath), module]));
-  const embedded = new Map<string, { readonly owner: ProjectModule; readonly code: string; readonly sourceMap: string }>();
+  const portableModules = new Map(project.modules.map((module) => [portableBundlePath(project, module.inputPath), module]));
+  const embedded = new Map<string, { readonly owner: ProjectModule; readonly code: string; readonly sourceMap: string; readonly portablePath: string }>();
+  const portableEmbedded = new Map<string, { readonly owner: ProjectModule; readonly code: string; readonly sourceMap: string; readonly portablePath: string }>();
   for (const module of project.modules) {
     for (const item of module.result.embeddedModules) {
-      embedded.set(resolve(dirname(module.inputPath), item.specifier), { owner: module, code: item.code, sourceMap: item.sourceMap });
+      const physicalPath = resolve(dirname(module.inputPath), item.specifier);
+      const value = { owner: module, code: item.code, sourceMap: item.sourceMap, portablePath: portableBundlePath(project, physicalPath) };
+      embedded.set(physicalPath, value);
+      portableEmbedded.set(value.portablePath, value);
     }
   }
   const resources = new Map(project.resources.map((resource) => [resolve(resource.inputPath), resource]));
+  const portableResources = new Map(project.resources.map((resource) => [portableBundlePath(project, resource.inputPath), resource]));
   const plugin: Plugin = {
     name: "velar-library-artifact",
     setup(context) {
-      context.onResolve({ filter: /^velar\//u }, (arguments_) => ({ path: arguments_.path, namespace: "velar-standard" }));
+      context.onResolve({ filter: /^velar\// }, (arguments_) => ({ path: arguments_.path, namespace: "velar-standard" }));
       context.onLoad({ filter: /.*/, namespace: "velar-standard" }, (arguments_) => {
         const source = standardModuleSource(arguments_.path, project.extensionConfig, project.compilerExtensions);
-        return source ? { contents: source, loader: "js", resolveDir: project.projectRoot } : { errors: [{ text: `Unknown VelarScript standard module '${arguments_.path}'` }] };
+        return source === null
+          ? { errors: [{ text: `Unknown VelarScript standard module '${arguments_.path}'` }] }
+          : { contents: source, loader: "js", resolveDir: project.projectRoot };
       });
-      context.onResolve({ filter: /^\.\.?\//u }, (arguments_) => {
+      context.onResolve({ filter: /^\.\.?\// }, (arguments_) => {
         const path = resolve(arguments_.resolveDir, arguments_.path);
-        if (embedded.has(path)) return { path, namespace: "velar-embedded" };
+        const embeddedModule = embedded.get(path);
+        if (embeddedModule) return { path: embeddedModule.portablePath, namespace: "velar-embedded" };
         if (arguments_.path.endsWith(".json.js")) {
           const resourcePath = resolve(arguments_.resolveDir, arguments_.path.slice(0, -3));
-          if (resources.has(resourcePath)) return { path: resourcePath, namespace: "velar-resource" };
+          if (resources.has(resourcePath)) return { path: portableBundlePath(project, resourcePath), namespace: "velar-resource" };
         }
         if (arguments_.path.endsWith(".js")) {
           const modulePath = resolve(arguments_.resolveDir, arguments_.path.replace(/\.js$/u, ".vel"));
-          if (modules.has(modulePath)) return { path: modulePath, namespace: "velar-module" };
+          if (modules.has(modulePath)) return { path: portableBundlePath(project, modulePath), namespace: "velar-module" };
         }
         return null;
       });
       context.onLoad({ filter: /.*/, namespace: "velar-module" }, (arguments_) => {
-        const module = modules.get(resolve(arguments_.path));
+        const module = portableModules.get(arguments_.path);
         return module?.result.code ? { contents: module.result.code, loader: "js", resolveDir: dirname(module.inputPath) } : { errors: [{ text: `VelarScript module '${arguments_.path}' was not compiled` }] };
       });
       context.onLoad({ filter: /.*/, namespace: "velar-embedded" }, (arguments_) => {
-        const item = embedded.get(resolve(arguments_.path));
+        const item = portableEmbedded.get(arguments_.path);
         return item ? { contents: item.code, loader: "js", resolveDir: dirname(item.owner.inputPath) } : null;
       });
       context.onLoad({ filter: /.*/, namespace: "velar-resource" }, (arguments_) => {
-        const resource = resources.get(resolve(arguments_.path));
+        const resource = portableResources.get(arguments_.path);
         return resource ? { contents: jsonResourceModule(resource.content), loader: "js", resolveDir: dirname(resource.inputPath) } : null;
       });
-      context.onResolve({ filter: /^[^./]/u }, (arguments_) => {
+      context.onResolve({ filter: /^[^./]/ }, (arguments_) => {
         if (arguments_.path.startsWith("velar/")) return null;
         return { path: arguments_.path, external: true };
       });
@@ -197,6 +211,13 @@ async function bundleLibrary(
     target: target === "node" ? "node24" : "es2022",
     conditions: ["import", "default"],
     packages: "external",
+    // Node's `Worker(..., {eval:true})` executes CommonJS source and exposes
+    // `globalThis.require`. Naming that explicitly prevents esbuild from
+    // closing over its ESM `__require` shim inside a function whose source is
+    // later serialized with `toString()` (the SQLite adapter's bounded Worker
+    // is the concrete case). A top-level require was never valid in the ESM
+    // artifact; embedded modules use imports for their own execution.
+    ...(target === "node" ? { define: { require: "globalThis.require" } } : {}),
     outfile: join(finalOutputRoot, "index.js"),
     sourcemap: "external",
     sourcesContent: true,
@@ -208,13 +229,20 @@ async function bundleLibrary(
       contents: entry.result.code,
       loader: "js",
       resolveDir: dirname(entry.inputPath),
-      sourcefile: entry.inputPath,
+      sourcefile: portableBundlePath(project, entry.inputPath),
     },
   });
   const code = result.outputFiles?.find((file) => resolve(file.path) === resolve(finalOutputRoot, "index.js"));
   const sourceMap = result.outputFiles?.find((file) => resolve(file.path) === resolve(finalOutputRoot, "index.js.map"));
   if (!code || !sourceMap) throw new Error("The Velar library bundler did not emit JavaScript and its source map");
   return { code: code.text, sourceMap: sourceMap.text };
+}
+
+function portableBundlePath(project: ProjectResult, path: string): string {
+  if (inside(project.projectRoot, path)) return relative(project.projectRoot, path).replaceAll("\\", "/");
+  const owner = project.velarPackages.find((package_) => inside(package_.root, path));
+  if (owner) return `__velar_packages__/${owner.name}/${relative(owner.root, path).replaceAll("\\", "/")}`;
+  throw new Error(`Library bundle input '${path}' is outside the project and its declared VelarScript packages`);
 }
 
 function identityReplacements(
@@ -263,7 +291,7 @@ function libraryTarget(config: VelarProjectConfig): VelarLibraryArtifactTarget {
 }
 
 function normalizedRelativePath(value: unknown, label: string): string {
-  if (typeof value !== "string" || value === "" || isAbsolute(value) || value.includes("\\")
+  if (typeof value !== "string" || value === "" || /[\u0000-\u001f\u007f]/u.test(value) || isAbsolute(value) || value.includes("\\")
     || value.split("/").some((part) => part === "" || part === "." || part === "..")) {
     throw new Error(`${label} must be a normalized relative path`);
   }

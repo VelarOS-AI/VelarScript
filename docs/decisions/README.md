@@ -58,6 +58,7 @@ their titles are reproduced verbatim below.
 | [D87](D87-DATABASE-AND-EXTERNAL-ADAPTER-BOUNDARY.md) | 数据库模型与外部适配器边界 | Superseded by D88; records the insufficient repository-local adapter split. |
 | [D88](D88-REPOSITORY-OWNERSHIP-BOUNDARY.md) | 语言、框架与应用所有权边界 | The repository owns only the language, official target frameworks, and required tooling; applications own concrete libraries and integrations. |
 | [D91](D91-OFFICIAL-LIBRARIES-REPOSITORY.md) | 官方非标准库伴生仓库边界 | Optional reusable libraries and adapters may be maintained in an independent companion repository, without re-entering the language toolchain or Standard API. |
+| [D92](D92-FROZEN-LIBRARY-ARTIFACT-ABI.md) | 冻结库产物保留已发布 Vel 代码 | Core and Node libraries publish readable Vel source together with a hashed, portable ABI-1 JavaScript/interface artifact that later language generations load without recompiling package source. |
 
 ## archive/
 

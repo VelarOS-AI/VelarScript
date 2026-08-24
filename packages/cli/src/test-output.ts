@@ -80,7 +80,13 @@ export async function removeCompiledSandbox(sandbox: string): Promise<void> {
 
 export async function writeCompiledTestProject(project: ProjectResult, outputRoot: string): Promise<void> {
   await writeProjectResources(project, outputRoot, "sandbox");
-  for (const package_ of project.velarPackages) await writePackageManifest(project, package_, outputRoot);
+  // A frozen package stays a bare ESM import and resolves to its installed
+  // package.json#exports. Shadow manifests are only for compiled source
+  // fallback; writing one for an artifact would hide the very JS entry the
+  // package published.
+  for (const package_ of project.velarPackages) {
+    if (package_.artifact === null) await writePackageManifest(project, package_, outputRoot);
+  }
   assertUniqueEmbeddedModuleOutputs(project.modules.map((module) => ({
     ownerPath: compiledTestModulePath(project, module, outputRoot),
     embeddedModules: module.result.embeddedModules,
