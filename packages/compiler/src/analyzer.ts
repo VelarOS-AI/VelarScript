@@ -440,14 +440,24 @@ export interface RecordTypeField {
   readonly type: ValueType;
 }
 
+export interface RecordFromHint {
+  readonly target: string;
+  readonly fields: readonly {
+    readonly name: string;
+    readonly optional: boolean;
+  }[];
+}
+
 export interface LoweringHints {
   readonly collectionCalls: ReadonlyMap<number, CollectionOperation>;
   readonly collectionSizes: ReadonlyMap<number, CollectionRuntimeKind>;
   readonly collectionIndexes: ReadonlyMap<string, "list" | "record">;
   readonly collectionMemberships: ReadonlyMap<string, CollectionRuntimeKind | "string">;
   readonly collectionIterations: ReadonlyMap<number, CollectionRuntimeKind | "string">;
+  /** Concrete `Target.from(source, overrides?)` calls lowered as exact record projections. */
+  readonly recordFromCalls: ReadonlyMap<string, RecordFromHint>;
   /** Binary members and indexes lower directly against their typed-array storage. */
-  readonly binaryCalls: ReadonlyMap<number, "bufferCopy" | "bufferSlice" | "bufferToBytes">;
+  readonly binaryCalls: ReadonlyMap<number, "bufferCopy" | "bufferSlice" | "bufferToBytes" | "bufferValues">;
   readonly binarySizes: ReadonlyMap<number, BinaryStorageKind>;
   readonly binaryIndexes: ReadonlyMap<string, BinaryStorageKind>;
   readonly primitiveCalls: ReadonlyMap<number, PrimitiveOperation>;
@@ -1412,7 +1422,8 @@ export class Analyzer implements TypeEnvironment {
   private readonly collectionIndexes = new Map<string, "list" | "record">();
   private readonly collectionMemberships = new Map<string, CollectionRuntimeKind | "string">();
   private readonly collectionIterations = new Map<number, CollectionRuntimeKind | "string">();
-  private readonly binaryCalls = new Map<number, "bufferCopy" | "bufferSlice" | "bufferToBytes">();
+  private readonly recordFromCalls = new Map<string, RecordFromHint>();
+  private readonly binaryCalls = new Map<number, "bufferCopy" | "bufferSlice" | "bufferToBytes" | "bufferValues">();
   private readonly binarySizes = new Map<number, BinaryStorageKind>();
   private readonly binaryIndexes = new Map<string, BinaryStorageKind>();
   private readonly primitiveCalls = new Map<number, PrimitiveOperation>();
@@ -1838,8 +1849,12 @@ export class Analyzer implements TypeEnvironment {
     this.validateReExports(program);
     this.registerPermanentNamespaceImports(program);
     this.predeclareTopLevel(program);
+    let previous: Statement | null = null;
     for (const statement of program.body) {
       this.analyzeStatement(statement);
+      this.adviseManualCollectionConversion(previous, statement);
+      this.adviseManualListSome(previous, statement);
+      previous = statement;
     }
     // D90 R12 reports last for the same reason: whether a class member is at
     // an export position is a question about the module's whole export
@@ -2294,6 +2309,7 @@ export class Analyzer implements TypeEnvironment {
       collectionIndexes: this.collectionIndexes,
       collectionMemberships: this.collectionMemberships,
       collectionIterations: this.collectionIterations,
+      recordFromCalls: this.recordFromCalls,
       binaryCalls: this.binaryCalls,
       binarySizes: this.binarySizes,
       binaryIndexes: this.binaryIndexes,
@@ -4360,6 +4376,308 @@ export class Analyzer implements TypeEnvironment {
     );
   }
 
+  /**
+   * A7: an adjacent empty collection plus an identity-only copy loop has one
+   * compiler-owned spelling. Unlike A1-A6 this is not a foreign-language
+   * spelling with different semantics; it is the deliberately narrow
+   * canonicalization exception admitted after those advisories. The trigger
+   * proves the replacement is the same fresh collection in the same order:
+   *
+   *     const result: List<string> = []
+   *     for value in values:
+   *         result.append(value)
+   *
+   * becomes an initialization from `values.values()`. Any intervening
+   * statement, non-name source, transform, filter, second body statement, or
+   * non-empty destination withholds the advisory. Those shapes need judgment,
+   * and a canonicalization warning that guesses is only lint noise.
+   */
+  private adviseManualCollectionConversion(previous: Statement | null, statement: Statement): void {
+    if (previous?.kind !== "VariableDeclaration" || statement.kind !== "ForStatement") return;
+    if (statement.asynchronous || previous.pattern.kind !== "NameBindingPattern") return;
+    if (statement.iterable.kind !== "IdentifierExpression") return;
+
+    const targetName = previous.pattern.name;
+    if (statement.iterable.name === targetName) return;
+    let shadowsTarget = false;
+    this.collectPatternNames(statement.pattern, (name) => { if (name === targetName) shadowsTarget = true; });
+    if (statement.secondPattern) this.collectPatternNames(statement.secondPattern, (name) => { if (name === targetName) shadowsTarget = true; });
+    if (shadowsTarget) return;
+    const targetBinding = this.lookup(targetName);
+    if (!targetBinding || targetBinding.span.start !== previous.pattern.span.start || targetBinding.span.end !== previous.pattern.span.end) return;
+    const target = this.expandAliases(targetBinding.storageType);
+    if (!this.isEmptyCollectionInitializer(previous.initializer, target.kind)) return;
+
+    if (statement.body.length !== 1 || statement.body[0]!.kind !== "ExpressionStatement") return;
+    const call = statement.body[0]!.expression;
+    if (call.kind !== "CallExpression" || call.optional || call.callee.kind !== "MemberExpression" || call.callee.optional) return;
+    if (call.callee.object.kind !== "IdentifierExpression" || call.callee.object.name !== targetName) return;
+
+    const source = this.expandAliases(this.inferredExpressionType(statement.iterable));
+    const operation = this.collectionCalls.get(call.callee.span.end);
+    const replacement = this.manualCollectionReplacement(target.kind, source.kind, operation, call, statement, statement.iterable.name);
+    if (replacement === null) return;
+
+    this.advise(
+      "A7",
+      `This empty ${describeType(target)} is filled only by copying '${statement.iterable.name}' in iteration order; '${replacement}' already creates the same fresh ${describeType(target)}. Initialize '${targetName}' with '${replacement}' instead of writing this loop`,
+      statement.iterable.span,
+    );
+  }
+
+  private isEmptyCollectionInitializer(initializer: Expression, targetKind: ValueType["kind"]): boolean {
+    if (targetKind === "list") return initializer.kind === "ListExpression" && initializer.elements.length === 0;
+    if (targetKind !== "set" && targetKind !== "map") return false;
+    return initializer.kind === "CallExpression"
+      && !initializer.optional
+      && initializer.arguments.length === 0
+      && initializer.callee.kind === "IdentifierExpression"
+      && initializer.callee.name === (targetKind === "set" ? "Set" : "Map");
+  }
+
+  private manualCollectionReplacement(
+    targetKind: ValueType["kind"],
+    sourceKind: ValueType["kind"],
+    operation: CollectionOperation | undefined,
+    call: Extract<Expression, { kind: "CallExpression" }>,
+    loop: ForStatement,
+    sourceName: string,
+  ): string | null {
+    if (targetKind === "list" && operation === "listAppend") {
+      const [value] = this.orderedDirectCallArguments(call, ["value"]);
+      const slot = value ? this.manualCollectionLoopSlot(loop, value) : null;
+      if (slot === null) return null;
+      if (sourceKind === "list" && slot === "first") return `${sourceName}.copy()`;
+      if (sourceKind === "set" && slot === "first") return `${sourceName}.values()`;
+      if ((sourceKind === "map" || sourceKind === "record") && slot === "first") return `${sourceName}.keys()`;
+      if ((sourceKind === "map" || sourceKind === "record") && slot === "second") return `${sourceName}.values()`;
+      return null;
+    }
+
+    if (targetKind === "set" && operation === "setAdd") {
+      const [value] = this.orderedDirectCallArguments(call, ["value"]);
+      const slot = value ? this.manualCollectionLoopSlot(loop, value) : null;
+      if (slot === null) return null;
+      if (sourceKind === "list" && slot === "first") return `Set(${sourceName})`;
+      if (sourceKind === "set" && slot === "first") return `${sourceName}.copy()`;
+      if ((sourceKind === "map" || sourceKind === "record") && slot === "first") return `Set(${sourceName}.keys())`;
+      if ((sourceKind === "map" || sourceKind === "record") && slot === "second") return `Set(${sourceName}.values())`;
+      return null;
+    }
+
+    if (targetKind === "map" && operation === "mapSet" && (sourceKind === "map" || sourceKind === "record")) {
+      const [key, value] = this.orderedDirectCallArguments(call, ["key", "value"]);
+      if (!key || !value || this.manualCollectionLoopSlot(loop, key) !== "first" || this.manualCollectionLoopSlot(loop, value) !== "second") return null;
+      return sourceKind === "map" ? `${sourceName}.copy()` : `Map(${sourceName})`;
+    }
+
+    return null;
+  }
+
+  private orderedDirectCallArguments(
+    call: Extract<Expression, { kind: "CallExpression" }>,
+    parameterNames: readonly string[],
+  ): readonly (Expression | null)[] {
+    if (call.arguments.length !== parameterNames.length || call.arguments.some((argument) => argument.kind === "SpreadExpression")) {
+      return parameterNames.map(() => null);
+    }
+    const ordered: (Expression | null)[] = parameterNames.map(() => null);
+    let positional = 0;
+    for (const [index, argument] of call.arguments.entries()) {
+      const named = call.argumentNames?.[index] ?? null;
+      const target = named === null ? positional++ : parameterNames.indexOf(named);
+      if (target < 0 || target >= ordered.length || ordered[target] !== null) return parameterNames.map(() => null);
+      ordered[target] = argument;
+    }
+    return ordered;
+  }
+
+  private manualCollectionLoopSlot(loop: ForStatement, expression: Expression): "first" | "second" | null {
+    if (expression.kind !== "IdentifierExpression") return null;
+    if (loop.pattern.kind === "NameBindingPattern" && expression.name === loop.pattern.name) return "first";
+    if (loop.secondPattern?.kind === "NameBindingPattern" && expression.name === loop.secondPattern.name) return "second";
+    return null;
+  }
+
+  /**
+   * A8: the exact existential-query loop has one compiler-owned List spelling:
+   *
+   *     for column in columns:
+   *         if column.name == name:
+   *             return true
+   *     return false
+   *
+   * becomes `return columns.some(column => column.name == name)`. This is a
+   * proof, not a general loop-style preference. The source is a plain List
+   * binding, the loop has one name slot, both boolean returns are literals,
+   * and the predicate is a non-optional bool made only from data reads and
+   * operators. A call or class member can hide a mutation/getter, and List
+   * iteration is live while `some` snapshots its inputs, so either shape keeps
+   * the expanded loop silent.
+   */
+  private adviseManualListSome(previous: Statement | null, statement: Statement): void {
+    if (previous?.kind !== "ForStatement" || statement.kind !== "ReturnStatement") return;
+    if (this.functionDepth === 0 || this.constructorDepth > 0 || this.finallyLoopDepths.length > 0) return;
+    if (previous.asynchronous || previous.secondPattern !== null || previous.pattern.kind !== "NameBindingPattern") return;
+    if (previous.iterable.kind !== "IdentifierExpression" || previous.iterable.name === previous.pattern.name) return;
+    const iterable = this.expandAliases(this.inferredExpressionType(previous.iterable));
+    if (iterable.kind !== "list") return;
+
+    if (previous.body.length !== 1 || previous.body[0]!.kind !== "IfStatement") return;
+    const branch = previous.body[0]!;
+    if (branch.elseBody !== null || branch.thenBody.length !== 1 || branch.thenBody[0]!.kind !== "ReturnStatement") return;
+    if (!this.isBooleanLiteralReturn(branch.thenBody[0]!, true) || !this.isBooleanLiteralReturn(statement, false)) return;
+    const condition = this.expandAliases(this.inferredExpressionType(branch.condition));
+    if (!sameType(condition, boolType)) return;
+    const predicate = this.manualSomePredicateSpelling(branch.condition);
+    if (predicate === null) return;
+
+    const sourceName = previous.iterable.name;
+    const itemName = previous.pattern.name;
+    const replacement = `return ${sourceName}.some(${itemName} => ${predicate})`;
+    this.advise(
+      "A8",
+      `This loop returns true on the first matching List item and false after exhaustion; List.some is the canonical existential query. Write '${replacement}' instead`,
+      previous.iterable.span,
+    );
+  }
+
+  private isBooleanLiteralReturn(statement: Statement, expected: boolean): boolean {
+    return statement.kind === "ReturnStatement"
+      && statement.value?.kind === "LiteralExpression"
+      && statement.value.value === expected;
+  }
+
+  /**
+   * Rebuilds only the expression subset whose evaluation cannot hide a call,
+   * write, await, dynamic import, or class getter. Parenthesizing nested
+   * operators preserves their AST grouping without needing the source text.
+   */
+  private manualSomePredicateSpelling(expression: Expression, nested = false): string | null {
+    switch (expression.kind) {
+      case "LiteralExpression":
+        return expression.raw;
+      case "IdentifierExpression":
+        return expression.name;
+      case "MemberExpression": {
+        if (!this.manualSomeMemberReadIsStable(expression)) return null;
+        const object = this.manualSomePredicateSpelling(expression.object, true);
+        return object === null ? null : `${object}${expression.optional ? "?." : "."}${expression.property}`;
+      }
+      case "UnaryExpression": {
+        if (expression.operator === "await") return null;
+        const operand = this.manualSomePredicateSpelling(expression.operand, true);
+        if (operand === null) return null;
+        const spelling = `${expression.operator === "not" ? "not " : expression.operator}${operand}`;
+        return nested ? `(${spelling})` : spelling;
+      }
+      case "BinaryExpression": {
+        const left = this.manualSomePredicateSpelling(expression.left, true);
+        const right = this.manualSomePredicateSpelling(expression.right, true);
+        if (left === null || right === null) return null;
+        const spelling = `${left} ${expression.operator} ${right}`;
+        return nested ? `(${spelling})` : spelling;
+      }
+      case "ComparisonChainExpression": {
+        const operands = expression.operands.map((operand) => this.manualSomePredicateSpelling(operand, true));
+        if (operands.some((operand) => operand === null)) return null;
+        let spelling = operands[0]!;
+        for (let index = 0; index < expression.operators.length; index += 1) {
+          spelling += ` ${expression.operators[index]} ${operands[index + 1]}`;
+        }
+        return nested ? `(${spelling})` : spelling;
+      }
+      case "ConditionalExpression": {
+        const condition = this.manualSomePredicateSpelling(expression.condition, true);
+        const thenValue = this.manualSomePredicateSpelling(expression.thenValue, true);
+        const elseValue = this.manualSomePredicateSpelling(expression.elseValue, true);
+        if (condition === null || thenValue === null || elseValue === null) return null;
+        const spelling = `${thenValue} if ${condition} else ${elseValue}`;
+        return nested ? `(${spelling})` : spelling;
+      }
+      default:
+        return null;
+    }
+  }
+
+  private manualSomeMemberReadIsStable(expression: Extract<Expression, { kind: "MemberExpression" }>): boolean {
+    const stableOwner = (type: ValueType): boolean => {
+      const owner = this.expandAliases(nonOptional(type));
+      if (owner.kind === "union") return owner.members.every(stableOwner);
+      if (owner.kind === "object") return owner.fields.has(expression.property);
+      if (owner.kind === "named") return this.fieldsOf(owner.identity ?? owner.name)?.has(expression.property) === true;
+      if (owner.kind === "record") return true;
+      if (owner.kind === "enumObject") return true;
+      if (owner.kind === "list" || owner.kind === "set" || owner.kind === "map" || owner.kind === "string") {
+        return expression.property === "size";
+      }
+      return false;
+    };
+    return stableOwner(this.inferredExpressionType(expression.object));
+  }
+
+  /**
+   * A9: a closed target literal that merely mirrors the same record field by
+   * field has the exact projection spelling `Target.from(source, overrides)`.
+   *
+   * This is intentionally narrower than a visual resemblance check. An
+   * override call could mutate the source before a later manual field read,
+   * so the advisory requires every target field, two or more same-name data
+   * reads from one identifier, and only identifiers or literals for the
+   * remaining fields. Optional omissions, computed values, calls, spreads,
+   * and mixed sources all remain ordinary object literals. Authored key order
+   * may differ: the report calls out that `.from` deliberately canonicalizes
+   * the result to target declaration order, so an intentional wire order has
+   * one honest reason to suppress it.
+   */
+  private adviseManualRecordProjection(
+    expression: Extract<Expression, { kind: "ObjectExpression" }>,
+    target: ValueType | null,
+  ): void {
+    if (target?.kind !== "named") return;
+    const shape = this.recordProjectionShape(target);
+    if (!shape || expression.properties.some((property) => property.kind !== "ObjectProperty")) return;
+    const properties = expression.properties as readonly Extract<(typeof expression.properties)[number], { kind: "ObjectProperty" }>[];
+    const targetFields = [...shape.fields.keys()];
+    if (properties.length !== targetFields.length || targetFields.some((name) => !properties.some((property) => property.name === name))) return;
+
+    let sourceName: string | null = null;
+    let mirrors = 0;
+    const overrides: string[] = [];
+    for (const property of properties) {
+      const value = property.value;
+      if (value.kind === "MemberExpression"
+        && !value.optional
+        && value.object.kind === "IdentifierExpression"
+        && value.property === property.name
+        && this.stableDataMember(value.object, value.property)) {
+        if (sourceName !== null && sourceName !== value.object.name) return;
+        sourceName = value.object.name;
+        mirrors += 1;
+        continue;
+      }
+      if (value.kind === "IdentifierExpression") {
+        overrides.push(value.name === property.name ? property.name : `${property.name}: ${value.name}`);
+        continue;
+      }
+      if (value.kind === "LiteralExpression") {
+        overrides.push(`${property.name}: ${value.raw}`);
+        continue;
+      }
+      return;
+    }
+    if (sourceName === null || mirrors < 2) return;
+    const sourceBinding = this.lookup(sourceName);
+    if (!sourceBinding || !this.recordProjectionShape(sourceBinding.type)) return;
+
+    const replacement = `${target.name}.from(${sourceName}${overrides.length > 0 ? `, {${overrides.join(", ")}}` : ""})`;
+    this.advise(
+      "A9",
+      `This ${target.name} literal mirrors ${mirrors} same-name fields from '${sourceName}'; '${replacement}' is the canonical exact projection and keeps ${target.name}'s declared field set and declaration order. Write that instead of copying the fields one by one; suppress A9 only when this literal's authored Record order is intentional`,
+      expression.span,
+    );
+  }
+
   // D32 item 30: a Promise-typed expression statement is a floating promise —
   // nothing waits for it and nothing owns its failure. The diagnostic teaches
   // both current spellings: 'await' waits, the 'async' statement detaches.
@@ -6025,6 +6343,7 @@ export class Analyzer implements TypeEnvironment {
   protected analyzeStatements(statements: readonly Statement[]): void {
     this.prescanScopeDeclarations(statements);
     let completedFlow: FlowFactsSnapshot | null = null;
+    let previous: Statement | null = null;
     for (const statement of statements) {
       if (completedFlow) {
         // Statements after an unconditional exit are analyzed for diagnostics
@@ -6042,6 +6361,9 @@ export class Analyzer implements TypeEnvironment {
           completedFlow = this.snapshotFlowFacts();
         }
       }
+      this.adviseManualCollectionConversion(previous, statement);
+      this.adviseManualListSome(previous, statement);
+      previous = statement;
     }
     if (completedFlow) this.restoreFlowFacts(completedFlow);
   }
@@ -6540,6 +6862,7 @@ export class Analyzer implements TypeEnvironment {
         return inferredList;
       }
       case "ObjectExpression": {
+        const diagnosticsBefore = this.diagnostics.length;
         const objectContext = this.contextualObjectType(contextualType, expression);
         if (objectContext?.kind === "named") {
           const contextKey = spanIdentity(expression.span);
@@ -6635,6 +6958,7 @@ export class Analyzer implements TypeEnvironment {
           }
           this.contextualAssignments.set(spanIdentity(expression.span), contextualType);
         }
+        if (this.diagnostics.length === diagnosticsBefore) this.adviseManualRecordProjection(expression, objectContext);
         return expectedRecordValue
           ? { kind: "record", value: expectedRecordValue }
           : { kind: "object", fields, ...(optionalFields.size > 0 ? { optionalFields } : {}) };
@@ -8027,6 +8351,8 @@ export class Analyzer implements TypeEnvironment {
       // is sanctioned here first (D45 rule 75).
       this.memberAccessReceivers.add(spanIdentity(calleeExpression.object.span));
       this.recordMemberAccessProperty(calleeExpression);
+      const recordFromResult = this.inferRecordFromCall(calleeExpression, arguments_, argumentNames, callSpan);
+      if (recordFromResult) return recordFromResult;
       const primitiveResult = this.inferPrimitiveCall(calleeExpression, arguments_, argumentNames, callSpan);
       if (primitiveResult) return primitiveResult;
       const collectionResult = this.inferCollectionCall(calleeExpression, arguments_, argumentNames, callSpan);
@@ -9582,6 +9908,192 @@ export class Analyzer implements TypeEnvironment {
     return null;
   }
 
+  /**
+   * A concrete record Type owns one compiler-only constructor:
+   *
+   *     Response.from(source, {worldId})
+   *
+   * The source is already typed; this is not validation and therefore never
+   * accepts unknown/any. The target field table is the authority. Overrides
+   * must be a literal so every exception to same-name projection is visible
+   * to the analyzer, and lowering can copy only declared target fields without
+   * exposing an open source record's surplus runtime data.
+   */
+  private inferRecordFromCall(
+    member: Extract<Expression, { kind: "MemberExpression" }>,
+    sourceArguments: readonly Expression[],
+    argumentNames: readonly (string | null)[] | undefined,
+    callSpan: Span,
+  ): ValueType | null {
+    if (member.property !== "from" || member.optional || member.object.kind !== "IdentifierExpression") return null;
+    const binding = this.lookup(member.object.name);
+    if (binding?.type.kind !== "typeObject") return null;
+    const diagnosticsBefore = this.diagnostics.length;
+
+    this.callExpressionCallees.add(spanIdentity(member.span));
+    const receiver = this.inferExpression(member.object);
+    if (isInvalidType(receiver) || receiver.kind !== "typeObject") {
+      for (const argument of sourceArguments) this.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument);
+      return invalidType;
+    }
+
+    const target = this.runtimeTypeObjectValue(receiver);
+    const targetShape = this.recordProjectionShape(target);
+    const callable: ValueType = {
+      kind: "function",
+      parameterNames: ["source", "overrides"],
+      parameters: [unknownType, unknownType],
+      requiredParameters: 1,
+      result: target,
+    };
+    this.semanticExpressionOwners.set(`${member.span.start}:${member.span.end}`, receiver);
+    this.recordSemanticExpression(member, callable);
+    if (!targetShape) {
+      for (const argument of sourceArguments) this.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument);
+      this.typeError(
+        `Type '${receiver.name}' is not a concrete record, so it cannot use '.from'; declare a record type whose fields define the projection`,
+        member.span,
+      );
+      return invalidType;
+    }
+
+    const named = this.planNamedArguments(
+      sourceArguments,
+      argumentNames,
+      [unknownType, unknownType],
+      ["source", "overrides"],
+      1,
+      callSpan,
+    );
+    if (named && !named.valid) {
+      for (const argument of sourceArguments) this.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument);
+      return target;
+    }
+    if (!named && (sourceArguments.length < 1 || sourceArguments.length > 2)) {
+      for (const argument of sourceArguments) this.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument);
+      this.typeError(`Expected 1-2 arguments but received ${sourceArguments.length}`, callSpan);
+      return target;
+    }
+
+    const ordered = named?.ordered ?? sourceArguments;
+    const omitted = (expression: Expression | undefined): boolean => expression?.kind === "IdentifierExpression"
+      && expression.name === "\u0000omitted-named-argument";
+    const sourceExpression = ordered[0];
+    const overridesExpression = omitted(ordered[1]) ? undefined : ordered[1];
+    if (!sourceExpression || omitted(sourceExpression)) return target;
+    if (sourceExpression.kind === "SpreadExpression") {
+      this.inferExpression(sourceExpression.value);
+      if (overridesExpression) this.inferExpression(overridesExpression.kind === "SpreadExpression" ? overridesExpression.value : overridesExpression);
+      this.typeError("A record projection takes one source value; call spread cannot decide that source", sourceExpression.span);
+      return target;
+    }
+
+    const source = this.inferExpression(sourceExpression);
+    const sourceShape = this.recordProjectionShape(source);
+    if (!isInvalidType(source) && (source.kind === "unknown" || source.kind === "any")) {
+      this.typeError(
+        `Cannot build ${describeType(target)} from ${describeType(source)}; validate untrusted data with 'Type.parse' before projecting a typed record`,
+        sourceExpression.span,
+      );
+    } else if (!isInvalidType(source) && !sourceShape) {
+      this.typeError(
+        `Cannot build ${describeType(target)} from ${describeType(source)}; '.from' requires a typed record source`,
+        sourceExpression.span,
+      );
+    }
+
+    const overridden = new Set<string>();
+    if (overridesExpression) {
+      if (overridesExpression.kind === "SpreadExpression") {
+        this.inferExpression(overridesExpression.value);
+        this.typeError("Record projection overrides must be one explicit record literal, not a call spread", overridesExpression.span);
+      } else if (overridesExpression.kind !== "ObjectExpression") {
+        this.inferExpression(overridesExpression);
+        this.typeError(
+          `Overrides for ${describeType(target)}.from must be a record literal so every replacement field is visible`,
+          overridesExpression.span,
+        );
+      } else {
+        for (const property of overridesExpression.properties) {
+          if (property.kind === "ObjectSpread") {
+            this.typeError(
+              `Overrides for ${describeType(target)}.from must name fields explicitly; an override spread can hide extra or misspelled fields`,
+              property.span,
+            );
+          } else {
+            overridden.add(property.name);
+          }
+        }
+        this.inferExpression(overridesExpression, {
+          kind: "object",
+          fields: targetShape.fields,
+          optionalFields: new Set(targetShape.fields.keys()),
+        });
+      }
+    }
+
+    if (sourceShape) {
+      for (const [name, expected] of targetShape.fields) {
+        if (overridden.has(name)) continue;
+        let actual = sourceShape.fields.get(name);
+        if (!actual) {
+          if (targetShape.optionalFields.has(name)) continue;
+          this.typeError(
+            `${describeType(target)}.from cannot fill required field '${name}' from ${describeType(source)}; provide '${name}' in the overrides literal`,
+            sourceExpression.span,
+          );
+          continue;
+        }
+        if (sourceShape.optionalFields.has(name) && actual.kind !== "optional") actual = optionalOf(actual);
+        if (sourceShape.readonlyFields.has(name) || sourceShape.readonlyView) actual = this.readonlyDataViewOf(actual);
+        if (!isAssignable(actual, expected, this)) {
+          this.typeError(
+            `${describeType(target)}.from cannot fill field '${name}': ${describeType(source)} provides ${describeType(actual)}, but the target requires ${describeType(expected)}; override '${name}' explicitly`,
+            sourceExpression.span,
+          );
+        }
+      }
+    }
+
+    if (this.diagnostics.length === diagnosticsBefore) {
+      this.recordFromCalls.set(spanIdentity(callSpan), {
+        target: receiver.name,
+        fields: [...targetShape.fields].map(([name, type]) => ({
+          name,
+          optional: targetShape.optionalFields.has(name) || type.kind === "optional",
+        })),
+      });
+    }
+    return target;
+  }
+
+  private recordProjectionShape(type: ValueType): {
+    readonly fields: ReadonlyMap<string, ValueType>;
+    readonly optionalFields: ReadonlySet<string>;
+    readonly readonlyFields: ReadonlySet<string>;
+    readonly readonlyView: boolean;
+  } | null {
+    const expanded = this.expandAliases(type);
+    if (expanded.kind === "object") {
+      return {
+        fields: expanded.fields,
+        optionalFields: expanded.optionalFields ?? new Set(),
+        readonlyFields: expanded.readonlyFields ?? new Set(),
+        readonlyView: expanded.readonlyView === true,
+      };
+    }
+    if (expanded.kind !== "named") return null;
+    const identity = expanded.identity ?? expanded.name;
+    const fields = this.fieldsOf(identity);
+    if (!fields) return null;
+    return {
+      fields,
+      optionalFields: new Set([...fields].filter(([, field]) => field.kind === "optional").map(([name]) => name)),
+      readonlyFields: this.readonlyFieldsOf(identity) ?? new Set(),
+      readonlyView: expanded.readonlyView === true,
+    };
+  }
+
   private inferPrimitiveCall(
     member: Extract<Expression, { kind: "MemberExpression" }>,
     arguments_: readonly Expression[],
@@ -9732,6 +10244,7 @@ export class Analyzer implements TypeEnvironment {
       if (property === "copy") this.binaryCalls.set(memberSpan.end, "bufferCopy");
       if (property === "slice") this.binaryCalls.set(memberSpan.end, "bufferSlice");
       if (property === "toBytes") this.binaryCalls.set(memberSpan.end, "bufferToBytes");
+      if (property === "values") this.binaryCalls.set(memberSpan.end, "bufferValues");
     }
     const guardedCollectionOperation = object.kind === "list"
       ? listCollectionOperations.get(property) ?? null
@@ -13242,10 +13755,23 @@ export class Analyzer implements TypeEnvironment {
       members.set("values", { kind: "function", parameterNames: [], parameters: [], requiredParameters: 0, result: { kind: "list", element: { kind: "enum", name: type.name, identity: type.identity } } });
       return members;
     }
-    if (type.kind === "typeObject") return new Map([
-      ["is", { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: boolType }],
-      ["parse", { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: this.runtimeTypeObjectValue(type) }],
-    ]);
+    if (type.kind === "typeObject") {
+      const value = this.runtimeTypeObjectValue(type);
+      const members = new Map<string, ValueType>([
+        ["is", { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: boolType }],
+        ["parse", { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: value }],
+      ]);
+      if (this.recordProjectionShape(value)) {
+        members.set("from", {
+          kind: "function",
+          parameterNames: ["source", "overrides"],
+          parameters: [unknownType, unknownType],
+          requiredParameters: 1,
+          result: value,
+        });
+      }
+      return members;
+    }
     if (type.kind === "runtimeType") return new Map([
       ["is", { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: boolType }],
       ["parse", { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: type.value }],

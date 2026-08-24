@@ -634,7 +634,8 @@ export async function compileProjectEntries(
   }
   let compiledModules = 0;
   let reusedModules = 0;
-  for (const group of dependencyFirstCompilationGroups(loaded, velarImports, compilerExtensions)) {
+  const compilationGroups = dependencyFirstCompilationGroups(loaded, velarImports, compilerExtensions);
+  for (const group of compilationGroups) {
     const reusable = group.every((module) => !affected.has(module.inputPath));
     if (reusable) {
       for (const module of group) {
@@ -717,18 +718,23 @@ export async function compileProjectEntries(
   // Resolve every public barrel after the final SCC pass. A frozen library
   // serializes this map, so source mode and artifact mode expose the same
   // flattened contract even when the package entry only re-exports names.
+  // Walk the same dependency-first groups used for compilation: clearing the
+  // cache and starting at the entry would otherwise recurse through one host
+  // frame per module while resolving a legal 3000-module line.
   interfaceCache.clear();
   const moduleInterfaces = new Map<string, ModuleInterface>();
-  for (const module of loaded.values()) {
-    moduleInterfaces.set(module.inputPath, resolvedModuleInterface(
-      module,
-      loaded,
-      velarImports,
-      velarArtifactInterfaces,
-      interfaceCache,
-      compiledInterfaces,
-      compilerExtensions,
-    ));
+  for (const group of compilationGroups) {
+    for (const module of group) {
+      moduleInterfaces.set(module.inputPath, resolvedModuleInterface(
+        module,
+        loaded,
+        velarImports,
+        velarArtifactInterfaces,
+        interfaceCache,
+        compiledInterfaces,
+        compilerExtensions,
+      ));
+    }
   }
   if (framework?.host.validateProject) {
     try {

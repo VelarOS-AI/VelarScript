@@ -150,6 +150,7 @@ const binaryBufferFields = (type: ValueType, ordered: boolean): ReadonlyMap<stri
   ["copy", apiFunction([], [], type)],
   ["slice", apiFunction(["start", "end"], [numberType, numberType], type, 0)],
   ["toBytes", ordered ? apiFunction(["order"], [byteOrderType], bytesType) : apiFunction([], [], bytesType)],
+  ["values", apiFunction([], [], listNumber)],
 ]);
 const binaryBuilderFields = (type: ValueType): ReadonlyMap<string, ValueType> => new Map([
   ["size", numberType],
@@ -170,10 +171,10 @@ const binaryNamedTypes = new Map([
 ]);
 const binaryReadonlyFields = new Map([
   ["Bytes", new Set(["size"])],
-  ["UInt8Buffer", new Set(["size", "copy", "slice", "toBytes"])],
-  ["UInt16Buffer", new Set(["size", "copy", "slice", "toBytes"])],
-  ["UInt32Buffer", new Set(["size", "copy", "slice", "toBytes"])],
-  ["Float32Buffer", new Set(["size", "copy", "slice", "toBytes"])],
+  ["UInt8Buffer", new Set(["size", "copy", "slice", "toBytes", "values"])],
+  ["UInt16Buffer", new Set(["size", "copy", "slice", "toBytes", "values"])],
+  ["UInt32Buffer", new Set(["size", "copy", "slice", "toBytes", "values"])],
+  ["Float32Buffer", new Set(["size", "copy", "slice", "toBytes", "values"])],
   ["UInt32Builder", new Set(["size", "maxElements", "push", "finish"])],
   ["Float32Builder", new Set(["size", "maxElements", "push", "finish"])],
 ]);
@@ -1376,6 +1377,7 @@ import { __VelarIndexError } from ${JSON.stringify(VELAR_COLLECTION_LOWERING_MOD
 ${VELAR_TYPE_REGISTRY_RUNTIME}
 
 const __velarBinaryNativeObject = globalThis.Object;
+const __velarBinaryNativeArray = globalThis.Array;
 const __velarBinaryNativeNumber = globalThis.Number;
 const __velarBinaryNativeUint8Array = globalThis.Uint8Array;
 const __velarBinaryNativeUint16Array = globalThis.Uint16Array;
@@ -1399,7 +1401,7 @@ const __velarBinaryTypedArraySet = __velarBinaryGetOwnPropertyDescriptor(__velar
 if (typeof __velarBinaryApply !== "function" || typeof __velarBinaryNumberIsInteger !== "function"
   || typeof __velarBinaryNumberIsSafeInteger !== "function" || typeof __velarBinaryTypedArrayTag !== "function"
   || typeof __velarBinaryNumberIsFinite !== "function" || typeof __velarBinaryTypedArrayLength !== "function"
-  || typeof __velarBinaryTypedArraySet !== "function" || typeof __velarBinaryNativeDataView !== "function"
+  || typeof __velarBinaryTypedArraySet !== "function" || typeof __velarBinaryNativeArray !== "function" || typeof __velarBinaryNativeDataView !== "function"
   || typeof __velarBinaryNativeWeakMap !== "function") {
   throw new __velarBinaryNativeTypeError("The JavaScript typed-array runtime is unavailable");
 }
@@ -1486,6 +1488,7 @@ export const Bytes = __velarRegisterRuntimeType(__velarBinaryFreeze({
   __velarBufferCopy(value) { return __velarBufferCopy(value); },
   __velarBufferSlice(value, start, end) { return __velarBufferSlice(value, start, end); },
   __velarBufferToBytes(value, order) { return __velarBufferToBytes(value, order); },
+  __velarBufferValues(value) { return __velarBufferValues(value); },
 }));
 export const UInt8Buffer = __velarRegisterRuntimeType(__velarBinaryFreeze({
   is(value) { return __velarBinaryWithinLimit(value, "Uint8Array", 1); },
@@ -1575,6 +1578,14 @@ function __velarFloat32SetIndex(value, index, next) {
   return next;
 }
 function __velarBufferCopy(value) { return __velarBufferSlice(value, 0, __velarBinarySize(value)); }
+function __velarBufferValues(value) {
+  const spec = __velarBinarySpec(value);
+  const length = __velarBinarySize(value);
+  if (length > 1000000) throw new __velarBinaryNativeRangeError(spec.name + ".values cannot produce more than 1000000 List items");
+  const output = new __velarBinaryNativeArray(length);
+  for (let index = 0; index < length; index += 1) output[index] = value[index];
+  return output;
+}
 function __velarBufferSlice(value, start = 0, end = __velarBinarySize(value)) {
   const spec = __velarBinarySpec(value);
   const length = __velarBinarySize(value);

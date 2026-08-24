@@ -62,7 +62,7 @@ protects these names. Capabilities stay explicit imports. Durations use `ms` or
 Use checked binary, random, and task APIs. Project-specific codecs, storage,
 and algorithms come from project-owned modules or dependencies. A direct
 `for index in range(...):` is a native counter; range as a value is a List. Use `UInt16Buffer` for 16-bit numeric state,
-`UInt8Buffer` for compact data, and bounded `UInt32Builder`/`Float32Builder` values for variable-size numeric output.
+`UInt8Buffer` for compact data, and bounded `UInt32Builder`/`Float32Builder` values for variable-size numeric output. A fixed numeric buffer's `values()` returns one fresh `List<number>` snapshot; do not write an index loop just to copy it.
 
 ## Project setup
 
@@ -102,8 +102,11 @@ module; the body may `await` directly and needs no `export`. A file that declare
 
 Everything in this table was hit by real models writing Vel blind. Most rows
 produce a teaching diagnostic, so `velar check` will catch them; the rows
-marked **A1**, **A2**, **A3**, **A5**, and **A6** are answered by an advisory
-instead, which reports without failing the check. Two rows are still silent —
+marked **A1**, **A2**, **A3**, **A5**, **A6**, **A7**, **A8**, and **A9** are
+answered by an advisory instead, which reports without failing the check. A7
+through A9 are canonical-form checks rather than foreign-language traps: they
+fire only for a proven collection conversion, existential List query, or exact
+record projection. Two rows are still silent —
 nothing is reported at all and the program runs with the other meaning:
 `a // b` where the divisor is a name rather than arithmetic, and a collection
 `==` between two bindings, since only a collection literal written inside the
@@ -121,6 +124,9 @@ well, but it is a guarantee rather than a trap.
 | `interface X:`, `record X:`, `struct X:` | `type X:` — one keyword for record shapes and aliases. |
 | `items.length` | `items.size` (also on strings, Sets, Maps). |
 | `items.push(x)` | `items.append(x)`. There is no `splice`/`shift`/`unshift`/mutating `sort`; use `insert`, `pop`, `remove`, `extend`, and the copying `sorted()`/`reversed()`. |
+| Empty collection + identity-only copy loop (**A7**) | Initialize from the built-in conversion. A `Set<T>` becomes a fresh `List<T>` with `set.values()`; a List becomes a Set with `Set(list)`; List/Set/Map snapshots use `.copy()`, `.keys()`, or `.values()`; and a Record becomes a Map with `Map(record)`. The advisory requires the empty declaration immediately before a one-statement loop over a plain source name. It stays silent for transforms, filters, effects, non-empty destinations, computed sources, or any intervening statement. |
+| `for item in items: if test: return true` followed by `return false` (**A8**) | `return items.some(item => test)`. The advisory requires a synchronous single-slot loop over a plain List name, an exact one-`if` body, literal `true`/`false` returns, and a non-optional bool condition built only from data reads and operators. Calls, class getters, effects, `bool?`, wider bodies, computed sources, and non-adjacent returns stay silent. |
+| `return {worldId, position: sample.position, ...}` for a closed response type (**A9**) | `return Response.from(sample, {worldId})`. A concrete record Type projects only its declared fields from a statically typed record; the optional second argument is an explicit override literal. It is shallow construction, not validation: use `Type.parse` for `unknown`. A9 requires every target field, at least two same-name fields from one source, and only identifier/literal overrides; transforms, calls, spreads, partial targets, and mixed sources stay silent. `.from` emits target declaration order, so suppress A9 with a reason only when authored wire order is intentional. |
 | `{retry: 1, timeoutMs: 30}` where the type declares `timeout` | A record literal written at an annotated position is closed: an undeclared key is reported, and the nearest declared field named when one is near enough — `Type 'Options' has no field 'timeoutMs'; did you mean 'timeout'?`, against a bare `Type 'Options' has no field 'extra'` when no declared name is close. The annotation may sit on the binding, the parameter, the result, or the collection the literal is written into. A value that is not a literal stays structurally open, so passing a record that happens to carry more is unaffected. |
 | `const items = []`, `const tags = Set()` | An empty collection takes its type where it is written: `const items: List<string> = []`. A later `append`/`add`/`set` never types the declaration. A contextual position supplies it too, so `take(Set())` and `return Map()` need no annotation. |
 | `if value:` truthiness | Conditions accept only `bool`/`bool?`. Test presence explicitly: `if value != null:`. |
@@ -210,6 +216,28 @@ type UserId = string
 def load(untrusted: unknown) -> User:
     return User.parse(untrusted)
 ```
+
+Build one closed record from another typed record with the target-owned exact
+projection. Overrides are explicit; surplus source fields never enter the
+result:
+
+```velar
+type SourceUser:
+    id: string
+    name: string
+    internalToken: string
+
+type PublicUser:
+    id: string
+    name: string
+    requestId: string
+
+def publicUser(source: SourceUser, requestId: string) -> PublicUser:
+    return PublicUser.from(source, {requestId})
+```
+
+`Type.from` is shallow and compile-time checked. It does not accept `unknown`;
+validate untrusted data with `Type.parse` first.
 
 `enum` declares finite string-backed states; a member may map an external
 wire spelling without losing its nominal identity:

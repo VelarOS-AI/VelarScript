@@ -533,6 +533,29 @@ export class JavaScriptEmitter {
         "  }",
         "  return count;",
         "}",
+        "function __velarRecordFrom(source, overrides, fields, target) {",
+        "  if (source === null || typeof source !== \"object\" || __velarCollectionListIsArray(source)) throw new __velarCollectionNativeTypeError(target + \".from requires a record source\");",
+        "  if (overrides !== null && (typeof overrides !== \"object\" || __velarCollectionListIsArray(overrides))) throw new __velarCollectionNativeTypeError(target + \".from overrides must be a record\");",
+        "  const output = {};",
+        "  let count = 0;",
+        "  for (let index = 0; index < fields.length; index += 1) {",
+        "    const field = fields[index][0];",
+        "    const optional = fields[index][1];",
+        "    let owner = overrides;",
+        "    let descriptor = overrides === null ? undefined : __velarCollectionRecordGetOwnPropertyDescriptor(overrides, field);",
+        "    if (descriptor === undefined) {",
+        "      owner = source;",
+        "      descriptor = __velarCollectionRecordGetOwnPropertyDescriptor(source, field);",
+        "    }",
+        "    if (descriptor === undefined) {",
+        "      if (optional) continue;",
+        "      throw new __velarCollectionNativeTypeError(target + \".from source is missing required field '\" + field + \"'\");",
+        "    }",
+        "    if (!descriptor.enumerable || !(\"value\" in descriptor)) throw new __velarCollectionNativeTypeError(target + \".from cannot read non-data field '\" + field + \"'\");",
+        "    count = __velarSetRecordField(output, field, __velarReactiveCollectionRead(owner, field, descriptor.value), count);",
+        "  }",
+        "  return output;",
+        "}",
         "function __velarCreateRecord(parts) {",
         "  const output = {};",
         "  let count = 0;",
@@ -3080,6 +3103,23 @@ export class JavaScriptEmitter {
           : `(${expression.parameters.map((parameter) => this.emitParameter(parameter.name, parameter.defaultValue, parameter.rest)).join(", ")})`} => ${emittedBody}`;
       }
       case "CallExpression": {
+        const recordFrom = this.hints.recordFromCalls.get(spanIdentity(expression.span));
+        if (recordFrom) {
+          this.needsCollectionHelpers = true;
+          this.needsRecordHelpers = true;
+          const sourceArguments = expression.arguments.map((argument) => this.emitMappedExpression(argument));
+          const namedOrder = this.hints.namedArgumentOrders.get(spanIdentity(expression.span));
+          if (namedOrder) {
+            const source = namedOrder[0] === undefined || namedOrder[0] === -1
+              ? "undefined"
+              : `__velarNamedArguments[${namedOrder[0]}]`;
+            const overrides = namedOrder[1] === undefined || namedOrder[1] === -1
+              ? "null"
+              : `__velarNamedArguments[${namedOrder[1]}]`;
+            return `((__velarNamedArguments) => __velarRecordFrom(${source}, ${overrides}, ${JSON.stringify(recordFrom.fields.map((field) => [field.name, field.optional]))}, ${JSON.stringify(recordFrom.target)}))([${sourceArguments.join(", ")}])`;
+          }
+          return `__velarRecordFrom(${sourceArguments[0]}, ${sourceArguments[1] ?? "null"}, ${JSON.stringify(recordFrom.fields.map((field) => [field.name, field.optional]))}, ${JSON.stringify(recordFrom.target)})`;
+        }
         if (expression.callee.kind === "MemberExpression") {
           const binaryHelper = this.binaryHelper(expression.callee);
           if (binaryHelper) {
@@ -3496,6 +3536,7 @@ export class JavaScriptEmitter {
       case "bufferCopy": return "__velarBinaryRuntime.__velarBufferCopy";
       case "bufferSlice": return "__velarBinaryRuntime.__velarBufferSlice";
       case "bufferToBytes": return "__velarBinaryRuntime.__velarBufferToBytes";
+      case "bufferValues": return "__velarBinaryRuntime.__velarBufferValues";
       default: return null;
     }
   }

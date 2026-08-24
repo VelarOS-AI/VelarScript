@@ -181,12 +181,24 @@ on its own line is a docstring habit rather than a comment.
 
 ## Advisories
 
-Diagnostics are one channel. Advisories are the second, and they exist for the
+Diagnostics are one channel. Advisories are the second. Most exist for the
 spellings neither channel could honestly take: a spelling VelarScript accepts
 with a meaning other than the one a Python or JavaScript reflex intended.
 `const half = total // 2` binds `total`, because `//` opens a comment. Staying
 silent about that is the trap the language exists to remove; rejecting it would
 refuse a legal comment. So it is reported instead, in a channel of its own.
+Three deliberately narrower canonicalization classes join those traps. When an
+adjacent empty collection declaration and one identity-only loop are provably
+the long spelling of an existing collection snapshot or constructor, the
+compiler names that one built-in spelling. When a single-slot List loop does
+nothing but return `true` under one stable bool condition and an adjacent
+statement returns `false`, the compiler names `List.some`. A transform, call,
+getter, side effect, optional condition, wider body, computed source, or
+intervening statement proves nothing and stays silent. When a closed target
+literal mirrors two or more same-name fields from one typed record and every
+remaining field is an identifier or literal override, the compiler names the
+target-owned exact projection `Target.from(source, overrides)`. Partial
+targets, spreads, mixed sources, and effectful overrides stay silent.
 
 An advisory **never blocks a build**. It is not a diagnostic with a softer
 label: it travels in a separate list, and code generation is gated on the
@@ -196,12 +208,17 @@ summary line, and exits 0. An editor shows an advisory as a warning, not an
 error. Advisory ids are the `A` roster, deliberately not part of the `VEL`
 diagnostic family. The roster is open-ended: an id joins it whenever a spelling
 a Python or JavaScript reflex produces is accepted here with another meaning
-and an unambiguous rewrite exists. No advisory's rule is stated in this
-section; each is written where the rule it guards is. The roster today is `A1`
+and an unambiguous rewrite exists, or the exact collection-conversion proof
+above has one canonical built-in replacement. The exact existential-query
+proof and the bounded record-projection proof follow the same bar. No advisory's rule is stated in
+this section; each is written where the rule it guards is. The roster today is `A1`
 for `//` read as floor division and `A3` for `%` on a negative literal
 (section 4), `A2` for a two-slot `for` written index-first (section 9), `A4`
 for a keyed list rebuilt by `map` (section 14), and `A5` and `A6` for
 JavaScript `${...}` in a string, without and under the `f` prefix (section 3).
+`A7` reports a proven manual collection conversion and `A8` a proven manual
+existential List query (section 8). `A9` reports a proven manual exact record
+projection (section 6).
 
 An advisory that is right about the line is answered by writing the unambiguous
 spelling it names. An advisory that is wrong about *this* line is answered in
@@ -1304,6 +1321,54 @@ an alias (`type PublicUser = User`) rather than an empty derived record. There i
 no record `override`, `super`, constructor, abstract member, multiple
 inheritance, or runtime parent object.
 
+A concrete record Type also owns one compiler-checked exact constructor:
+
+```velar fragment
+type SourceUser:
+    id: string
+    name: string
+    internalToken: string
+
+type PublicUser:
+    id: string
+    name: string
+    requestId: string
+
+const response = PublicUser.from(source, {requestId})
+```
+
+`Target.from(source, overrides?)` reads only fields declared by `Target`, in
+the target's inherited-then-local declaration order. Surplus source fields are
+not copied or inspected. Every required target field must exist with an
+assignable type on the statically known source shape or be replaced by the
+override literal; an absent optional target field is omitted. Overrides must
+be one explicit record literal without spreads, so misspellings and hidden
+fields are checked at the call. The operation is shallow: nested record and
+collection values keep their ordinary sharing and readonly boundaries.
+
+The source must already have a statically known record shape. `unknown` and
+`any` are rejected with guidance to validate first; `from` is construction, not
+the untrusted-data boundary owned by `Type.parse`. Only a concrete record name
+or named concrete generic alias owns `from`; it is not a member of the
+first-class `Type<T>` carrier and primitive aliases do not gain it.
+
+Both call arguments are evaluated once in authored call-argument order,
+including named calls, before projection begins. At runtime the projection
+accepts only own enumerable data fields from source and overrides, rejects
+accessors and missing required fields, preserves reactive collection reads,
+and uses the normal bounded record writer. This fail-closed runtime check is
+defence in depth for typed values arriving from a host boundary.
+
+Advisory `A9` catches the closed literal long form when every target field is
+written, at least two fields are direct same-name data reads from one plain
+record binding, and every other value is an identifier or literal. Computed
+values, calls, spreads, optional omissions, mixed sources, a missing target
+context, or only one mirrored field stay silent. Because Record insertion order
+is observable, `from` deliberately canonicalizes even a differently ordered
+literal to target declaration order. The report states that change; a wire
+format that intentionally depends on authored field order keeps the literal
+with `// velar-allow A9: <reason>` on its opening line.
+
 Record types have a runtime validator:
 
 ```velar fragment
@@ -1888,6 +1953,30 @@ List members:
 | `reversed()` | Reversed copy. |
 | `join(separator="")` | Joined string for `List<string>`. |
 
+Advisory `A8` catches the exact long form of `some`: a synchronous single-slot
+loop over a plain List binding, whose sole body statement is an `if` with no
+`else`, whose sole true branch is `return true`, immediately followed by
+`return false` in the same function block. Its condition must have the exact
+type `bool` and consist only of literals, bindings, checked data-field reads,
+and operators. For example:
+
+```velar
+type SchemaColumnRow:
+    name: string
+
+def hasColumn(columns: List<SchemaColumnRow>, name: string) -> bool:
+    return columns.some(column => column.name == name)
+```
+
+The expanded early-return loop reports that spelling. A call, class getter,
+`bool?` condition, second loop slot, async loop, second body statement,
+computed source, `else`, or intervening statement stays ordinary code. Those
+forms can change state or depend on List iteration's live length, while `some`
+uses a stable input snapshot, so the compiler does not claim equivalence. The
+report carries no automatic edit because replacing the loop and following
+return could erase comments; the author writes the named return or keeps the
+loop with a reasoned `velar-allow A8` on its `for` line.
+
 Direct indexing and indexed assignment are strict. Negative indexes count from
 the end; indexes outside `-size` through `size - 1` throw `IndexError`. Use
 `get` for an optional read: an in-range read returns the value, an
@@ -1969,6 +2058,33 @@ accepts a checked dense List whose every item is exactly `[key, value]`;
 `Map(record)` converts own enumerable string data fields into entries. Both
 forms reject accessors, sparse or malformed Lists, symbol fields, and
 overridable collection iterators at their runtime boundary.
+
+Advisory `A7` catches the exact long form of those conversions and snapshots.
+It requires an empty destination declaration immediately followed by a loop
+whose only statement copies the corresponding loop slot into that destination.
+The source must be a plain name, so replacing the two statements cannot move a
+getter, call, or other effect across the destination declaration. The canonical
+forms are:
+
+| Destination | Iterated source and copied slot | Initialize from |
+| --- | --- | --- |
+| List | List values | `source.copy()` |
+| List | Set members | `source.values()` |
+| List | Map/Record keys or values | `source.keys()` / `source.values()` |
+| Set | List values | `Set(source)` |
+| Set | Set members | `source.copy()` |
+| Set | Map/Record keys or values | `Set(source.keys())` / `Set(source.values())` |
+| Map | Map key/value pairs | `source.copy()` |
+| Map | Record key/value pairs | `Map(source)` |
+
+For example, `const result: List<string> = []` followed immediately by
+`for value in values: result.append(value)` over a `Set<string>` reports
+`values.values()`. A non-empty destination, an intervening statement, a
+computed source, a transform such as `append(value.trim())`, a condition, or
+any second loop-body statement stays ordinary code and raises no advisory.
+The report carries no automatic edit: replacing two statements could erase
+comments between them, so the author performs the named initialization or
+keeps the loop with a reasoned `velar-allow A7`.
 
 An empty collection settles its element type where it is written. `Set()`,
 `Map()`, and `[]` carry no items to infer from, so one of three things must

@@ -255,7 +255,8 @@ the captured operation.
 snapshot with `size` and read-only integer indexing. `UInt8Buffer`,
 `UInt16Buffer`, `UInt32Buffer`, and `Float32Buffer` are fixed-size mutable
 working memory for compact state and numeric datasets. They provide checked
-indexing, independent `copy()`/`slice(start=0, end=size)` values, and `toBytes`;
+indexing, independent `copy()`/`slice(start=0, end=size)` values,
+`values() -> List<number>`, and `toBytes`;
 multi-byte buffers require an explicit `ByteOrder`. Matching `*FromBytes`
 functions restore them. Every value, size, slice bound, and index is checked, so
 the API never inherits typed-array truncation, non-finite floats, or
@@ -263,6 +264,12 @@ out-of-bounds no-ops. Constructors and every runtime `Type.is`/`Type.parse`
 boundary enforce one 64 MiB byte ceiling before scanning or copying a typed
 array. The compiler emits direct specialized index operations rather than
 routing these types through reactive Lists or ordinary methods.
+
+`values()` snapshots positions `0` through `size - 1` into one fresh mutable
+List; later writes to either value do not reach the other. It is available on
+mutable and `readonly` fixed buffers and enforces the universal 1,000,000-item
+List ceiling before allocating. `Bytes` remains the immutable byte snapshot and
+does not gain this numeric-working-memory conversion.
 
 `UInt32Builder` and `Float32Builder` grow only up to their required
 `maxElements`; `push(value)` rejects overflow and `finish()` returns one exact
@@ -286,6 +293,7 @@ values[0] = 7
 const snapshot: Bytes = values.toBytes(ByteOrder.little)
 const restored = uint16FromBytes(snapshot, ByteOrder.little)
 assert restored[0] == 7
+const numbers: List<number> = restored.values()
 ```
 
 `velar/random` creates a deterministic `Random` from a string or safe-integer

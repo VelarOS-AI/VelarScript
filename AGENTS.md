@@ -22,12 +22,14 @@ This file governs the repository unless a closer `AGENTS.md` narrows the target.
 - Preserve unrelated work. Run the narrowest relevant checks first, then the
   repository gates appropriate to the changed boundary.
 
-## Python / JavaScript reflex table
+## Python / JavaScript reflex and canonical-form table
 
 Vel's parents are JavaScript and Python. These reflexes land in Vel source as
-something else. `A1`–`A6` are **advisories**: Vel accepts the spelling and
-means something else, so the compiler reports and still emits. The rest are
-already errors whose message names the successor.
+something else. `A1`–`A6` are **advisories** for those traps; `A7`–`A9` are
+canonical-form advisories, raised only when the compiler can prove the longer
+collection or record spelling has one language-owned replacement. The compiler
+reports all nine and still emits. The rest are already errors whose message
+names the successor.
 
 | Reflex | Write instead | Channel |
 | --- | --- | --- |
@@ -37,6 +39,9 @@ already errors whose message names the successor.
 | `items = items.map(item => { ...item, done: true })` over a keyed list | `items[index].done = true` — a rebuilt record is a new value, so the keyed list stops recognising its rows and destroys and rebuilds all of them, and an input being typed into loses focus (Web target only; the advisory that most needs a reasoned suppression, because `readonly` rows or one API response leave `map` as the only spelling) | `A4` |
 | `"${value}"`, `` `${value}` `` | `f"{value}"` or `` f`{value}` `` — only the `f` prefix interpolates, and `${...}` is legal literal text everywhere else (generating JavaScript source is a real use, and answers with `velar-allow A5`) | `A5` |
 | `f"${value}"` | `f"{value}"` — even under the `f` prefix, `$` keeps the brace after it literal, so `${value}` stays text | `A6` |
+| Empty collection + identity-only copy loop | Initialize from the compiler-owned conversion: `set.values()`, `Set(list)`, `map.keys()` / `map.values()`, `Map(record)`, or the matching `.copy()`; transforms, filters, effects, non-empty destinations, computed sources, and non-adjacent loops do not trigger | `A7` |
+| `for item in items: if test: return true` followed by `return false` | `return items.some(item => test)` — only the exact single-slot, pure-boolean, early-return query over a List triggers; calls, getters, effects, optional conditions, wider bodies, computed sources, and non-adjacent returns do not | `A8` |
+| A closed target literal mirrors two or more same-name fields from one typed record | `Target.from(source, {overrides})` — target fields are the authority; computed/effectful overrides, partial targets, spreads, and mixed sources do not trigger. `.from` uses target declaration order, so preserve an intentional authored wire order with a reasoned suppression | `A9` |
 | `enumerate(xs)` | `for value, index in xs:` | error |
 | `with X as y:` | `using y = X` | error |
 | `raise E(...)` | `throw E(...)` | error |
@@ -87,8 +92,13 @@ change done.
 
 The rulings behind the current language are in
 [docs/decisions/D90-AUDIT-SEMANTIC-RULINGS.md](docs/decisions/D90-AUDIT-SEMANTIC-RULINGS.md),
-and the advisory channel in
-[docs/decisions/D89-ADVISORY-CHANNEL.md](docs/decisions/D89-ADVISORY-CHANNEL.md).
+the advisory channel in
+[docs/decisions/D89-ADVISORY-CHANNEL.md](docs/decisions/D89-ADVISORY-CHANNEL.md),
+and its exact collection canonicalization extensions in
+[docs/decisions/D93-CANONICAL-COLLECTION-CONVERSION-ADVISORY.md](docs/decisions/D93-CANONICAL-COLLECTION-CONVERSION-ADVISORY.md)
+and [docs/decisions/D94-CANONICAL-LIST-SOME-ADVISORY.md](docs/decisions/D94-CANONICAL-LIST-SOME-ADVISORY.md),
+and the exact record projection in
+[docs/decisions/D95-EXACT-RECORD-PROJECTION.md](docs/decisions/D95-EXACT-RECORD-PROJECTION.md).
 
 The full Core guide is [docs/ai-skill.md](docs/ai-skill.md). Target code must
 follow its nearer guide as well as this repository contract.

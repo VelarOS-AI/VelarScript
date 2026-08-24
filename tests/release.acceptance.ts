@@ -11,9 +11,9 @@ import { velarWorkspaceBuildOrder } from "../scripts/velar-packages.mjs";
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 
 test("toolchain release identity accepts its exact tag when sibling package tags share HEAD", () => {
-  assert.equal(sourceHasExpectedTag({ tag: null, tags: ["@velarscript/core@0.14.1", "v0.14.1"] }, "v0.14.1"), true);
-  assert.equal(sourceHasExpectedTag({ tag: null, tags: ["@velarscript/core@0.14.1"] }, "v0.14.1"), false);
-  assert.equal(sourceHasExpectedTag({ tag: "v0.14.1" }, "v0.14.1"), true);
+  assert.equal(sourceHasExpectedTag({ tag: null, tags: ["@velarscript/core@0.14.2", "v0.14.2"] }, "v0.14.2"), true);
+  assert.equal(sourceHasExpectedTag({ tag: null, tags: ["@velarscript/core@0.14.2"] }, "v0.14.2"), false);
+  assert.equal(sourceHasExpectedTag({ tag: "v0.14.2" }, "v0.14.2"), true);
 });
 
 test("publication rehearsal emits reproducible verified package identities without publishing", async () => {
@@ -27,7 +27,7 @@ test("publication rehearsal emits reproducible verified package identities witho
     await runRelease(["rehearse", "--output-dir", second]);
     const firstManifest = JSON.parse(await readFile(join(first, "velar-toolchain-release.json"), "utf8"));
     const secondManifest = JSON.parse(await readFile(join(second, "velar-toolchain-release.json"), "utf8"));
-    assert.equal(firstManifest.version, "0.14.1");
+    assert.equal(firstManifest.version, "0.14.2");
     assert.equal(firstManifest.mode, "rehearse");
     assert.equal(firstManifest.publish.performed, false);
     assert.equal(firstManifest.publish.publishable, false);

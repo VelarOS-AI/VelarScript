@@ -6,11 +6,31 @@ truth for acceptance status.
 
 ## Unreleased
 
+## 0.14.2 — 2026-08-24
+
 ### Language syntax
 
 - Generalized the compact branch spelling into Python-shaped suites: ordinary
   executable blocks may keep one non-block statement after the colon, while
   multiple statements and nested blocks remain indentation-owned.
+
+### Language semantics and diagnostics
+
+- Added `Target.from(source, overrides?)` for compiler-checked, target-owned
+  record projection that copies only declared target fields and keeps untrusted
+  data validation at the existing `Type.parse` boundary.
+- Added the exact A7–A9 canonical-form advisories for identity-only collection
+  conversions, pure early-return `List.some` queries, and closed record
+  projections. Wider, effectful, or ambiguous forms remain accepted and silent.
+- Added bounded `values()` snapshots to fixed numeric buffers, returning one
+  independent `List<number>` across every supported numeric width.
+
+### Library distribution
+
+- Added frozen Vel library ABI 1 artifacts: published Core and Node libraries
+  can now ship readable source together with hashed JavaScript, source maps,
+  portable interfaces, and receipts that later toolchains load without
+  recompiling the original source.
 
 ## 0.14.1 — 2026-08-24
 

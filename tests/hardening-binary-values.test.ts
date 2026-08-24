@@ -1,0 +1,82 @@
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import test, { after } from "node:test";
+import { compileProject } from "../packages/cli/src/project.ts";
+import { standardModuleClosure, standardModuleSource } from "../packages/cli/src/standard-modules.ts";
+import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
+
+after(async () => {
+  await removeTemporaryDirectories();
+});
+
+async function run(source: string): Promise<{ readonly code: string; readonly output: string }> {
+  const directory = await makeTemporaryDirectory("velar-binary-values-");
+  const entry = join(directory, "main.vel");
+  const project = await compileProject(entry, new Map([[entry, source.trimStart()]]), {});
+  assert.deepEqual(project.failures.map((item) => item.message), []);
+  assert.deepEqual(project.modules.flatMap((module) => module.result.diagnostics), []);
+  const compiled = project.modules.find((module) => module.inputPath === entry)!.result;
+  const files = new Map([...standardModuleClosure([
+    ...compiled.runtimeModules,
+    ...compiled.dependencies.map((dependency) => dependency.source),
+  ])].map((name, index) => [name, `module-${index}.js`]));
+  const link = (text: string): string => {
+    let linked = text;
+    for (const [name, file] of files) linked = linked.replaceAll(JSON.stringify(name), JSON.stringify(`./${file}`));
+    return linked;
+  };
+  for (const [name, file] of files) await writeFile(join(directory, file), link(standardModuleSource(name) ?? ""), "utf8");
+  await writeFile(join(directory, "main.js"), link(compiled.code ?? ""), "utf8");
+  const execution = spawnSync(process.execPath, [join(directory, "main.js")], { encoding: "utf8" });
+  assert.equal(execution.status, 0, String(execution.stderr));
+  return { code: compiled.code ?? "", output: String(execution.stdout) };
+}
+
+test("fixed numeric buffer values() returns one independent mutable List<number>", async () => {
+  const result = await run(`
+import {uint16Buffer} from "velar/binary"
+
+const buffer = uint16Buffer(3)
+buffer[0] = 5
+buffer[1] = 6
+buffer[2] = 7
+const values: List<number> = buffer.values()
+buffer[1] = 99
+values[0] = 4
+print(values)
+print(buffer[0])
+`);
+  assert.equal(result.output, "[ 4, 6, 7 ]\n5\n");
+  assert.match(result.code, /__velarBinaryRuntime\.__velarBufferValues\(buffer\)/u);
+});
+
+test("values() is available through readonly fixed buffers and every numeric width", async () => {
+  const result = await run(`
+import {Float32Buffer, UInt8Buffer, UInt16Buffer, UInt32Buffer, float32Buffer, uint8Buffer, uint16Buffer, uint32Buffer} from "velar/binary"
+
+def snapshot(value: readonly UInt16Buffer) -> List<number>:
+    return value.values()
+
+const a: UInt8Buffer = uint8Buffer(0)
+const b: UInt16Buffer = uint16Buffer(0)
+const c: UInt32Buffer = uint32Buffer(0)
+const d: Float32Buffer = float32Buffer(0)
+print(a.values().size + snapshot(b).size + c.values().size + d.values().size)
+`);
+  assert.equal(result.output, "0\n");
+});
+
+test("values() enforces the universal List item ceiling before allocating", async () => {
+  const result = await run(`
+import {uint16Buffer} from "velar/binary"
+
+const buffer = uint16Buffer(1000001)
+try:
+    buffer.values()
+catch error:
+    print(error.message)
+`);
+  assert.equal(result.output, "UInt16Buffer.values cannot produce more than 1000000 List items\n");
+});
