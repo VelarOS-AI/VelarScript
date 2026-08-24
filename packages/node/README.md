@@ -102,6 +102,11 @@ deduplicates them, detects cycles, and runs release callbacks at the end of the
 owning scope. `lifecycle`, `background`, cookie helpers, SSE, bounded streaming,
 multipart uploads, route-scoped middleware, offline `docs`, OpenAPI 3.1, and
 the test-only `velar/server-test` client are part of the same checked runtime.
+Security descriptors extract credentials and own their transport-level 401
+challenge; they do not validate token signatures, sessions, passwords, or
+identities. The separate Server extension supplies the provider-neutral
+`authenticate` composition helper, while concrete verification remains an
+installed library or application dependency.
 Repeated scalar query or form fields fail with 422, while checked
 `List<scalar>` inputs preserve all repeated values. Request paths and queries
 are decoded exactly once with invalid UTF-8, encoded separators, NULs, and dot

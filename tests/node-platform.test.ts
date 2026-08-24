@@ -1086,9 +1086,14 @@ test("Node route input values resolve security, cookies, and scoped providers", 
       dependency(provider: unknown): unknown;
     };
     readonly security: { bearer(): unknown };
+    __velarServeAuthenticationCredential(credential: unknown): unknown;
     provide(inputs: Record<string, unknown>, resolve: (values: Record<string, unknown>) => unknown, scope?: string, release?: ((value: unknown) => unknown) | null, eager?: boolean): unknown;
     serve(app: unknown, port: number): Promise<{readonly port: number; stop(): Promise<null>}>;
   }>("velar/serve");
+  assert.throws(
+    () => serveRuntime.__velarServeAuthenticationCredential(serveRuntime.input.cookie("session")),
+    /requires a security credential descriptor/u,
+  );
   const bridge = Object.getOwnPropertyDescriptor(serveRuntime.ServeApp, "__velarCompilerBridge")?.value as {
     createRoute(method: string, path: string, parameters: readonly Record<string, unknown>[], handler: (...arguments_: never[]) => Promise<unknown>): unknown;
     createApp(name: string, items: readonly unknown[]): unknown;

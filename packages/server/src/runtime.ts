@@ -3,7 +3,7 @@
 // configuration discovery, startup assembly, and connection lifetime.
 export const VELAR_SERVER_RUNTIME = String.raw`
 import { exists as __velarServerExists, readText as __velarServerReadText } from "velar/fs";
-import { ServeApp as __velarServerServeApp, provide as __velarServerProvide, serve as __velarServerServe } from "velar/serve";
+import { ServeApp as __velarServerServeApp, __velarServeAuthenticationCredential as __velarServerAuthenticationCredential, __velarServeAuthenticationError as __velarServerAuthenticationError, provide as __velarServerProvide, serve as __velarServerServe } from "velar/serve";
 import { parseDocument as __velarServerParseYamlDocument } from "yaml";
 
 const __velarServerApply = Reflect.apply;
@@ -149,6 +149,20 @@ export function application(app, path = null) {
     const options = __velarServerOptions(await __velarServerReadConfiguration(path, __velarServerDefaultConfigurationBytes, false));
     return await __velarServerServe(app, options.port, options.host, options.maxBodyBytes);
   };
+}
+
+export function authenticate(credential, verify) {
+  if (typeof verify !== "function") throw new __velarServerTypeError("server.authenticate requires a verify function");
+  credential = __velarServerAuthenticationCredential(credential);
+  return __velarServerProvide(
+    {credential},
+    async values => {
+      const identity = await verify(values.credential);
+      if (identity === null) throw __velarServerAuthenticationError(credential);
+      if (identity === undefined) throw new __velarServerTypeError("server.authenticate verify must resolve to an identity or null");
+      return identity;
+    },
+  );
 }
 
 export function database(connect, disconnect) {

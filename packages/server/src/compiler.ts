@@ -18,7 +18,7 @@ import {
 import { inferServerIntrinsic } from "./analyzer.ts";
 import { VELAR_SERVER_RUNTIME } from "./runtime.ts";
 
-export const VELAR_SERVER_API_VERSION = "0.10";
+export const VELAR_SERVER_API_VERSION = "0.11";
 
 const unknownType: ValueType = {kind: "unknown"};
 const stringType: ValueType = {kind: "string"};
@@ -79,6 +79,7 @@ function moduleInterface(exports: ReadonlyMap<string, ValueType>): ModuleInterfa
 
 const serverModuleInterface = moduleInterface(new Map([
     ["application", functionType(["app", "path"], [serveAppType, {kind: "union", members: [stringType, {kind: "null"}]}], functionType([], [], promise(serverType)), 1)],
+    ["authenticate", intrinsic("server.authenticate", ["credential", "verify"], [unknownType, unknownType], providerType)],
     ["configuration", intrinsic("server.configuration", ["target", "path", "maxBytes"], [unknownType, {kind: "union", members: [stringType, {kind: "null"}]}, numberType], promise(unknownType), 1)],
     ["database", intrinsic("server.database", ["connect", "disconnect"], [unknownType, unknownType], providerType)],
   ]));

@@ -164,7 +164,7 @@ try {
   };
   assert.deepEqual(installedServerManifest.velar.extension, {
     kind: "application",
-    apiVersion: "0.10",
+    apiVersion: "0.11",
     manifestKey: "server",
     composes: {"@velarscript/node": "0.10"},
   });
@@ -287,7 +287,7 @@ print(Text.chunks("A😀游戏", 2).join("|"))
   const serverRuntime = await run(process.execPath, [
     "--input-type=module",
     "--eval",
-    "import {VELAR_SERVER_API_VERSION,VELAR_SERVER_CONFIGURATION_FILES,VELAR_SERVER_MODULES,velarServerFramework} from '@velarscript/server'; import {serverModuleSources,velarCompilerExtension} from '@velarscript/server/compiler'; const source=serverModuleSources.get('velar/server') ?? ''; if (VELAR_SERVER_API_VERSION !== '0.10' || VELAR_SERVER_MODULES.length !== 1 || velarServerFramework.name !== '@velarscript/server' || velarCompilerExtension.contract?.kind !== 'application' || velarCompilerExtension.contract?.composes?.['@velarscript/node'] !== '0.10' || !source.includes('application.yml') || !source.includes('export function application') || !source.includes('export function database')) process.exit(1); console.log(VELAR_SERVER_CONFIGURATION_FILES.join(','))",
+    "import {VELAR_SERVER_API_VERSION,VELAR_SERVER_CONFIGURATION_FILES,VELAR_SERVER_MODULES,velarServerFramework} from '@velarscript/server'; import {serverModuleSources,velarCompilerExtension} from '@velarscript/server/compiler'; const source=serverModuleSources.get('velar/server') ?? ''; if (VELAR_SERVER_API_VERSION !== '0.11' || VELAR_SERVER_MODULES.length !== 1 || velarServerFramework.name !== '@velarscript/server' || velarCompilerExtension.contract?.kind !== 'application' || velarCompilerExtension.contract?.composes?.['@velarscript/node'] !== '0.10' || !source.includes('application.yml') || !source.includes('export function application') || !source.includes('export function authenticate') || !source.includes('export function database')) process.exit(1); console.log(VELAR_SERVER_CONFIGURATION_FILES.join(','))",
   ], directory);
   assert.equal(serverRuntime.stdout, "application.yml\n");
 

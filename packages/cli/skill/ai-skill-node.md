@@ -157,7 +157,11 @@ repeated fields for `List<scalar>` properties; duplicate scalar fields fail.
 `input.upload` returns an `Upload` whose bytes are valid only for the request
 lifetime; copy or persist them before retaining data. `security.apiKey`,
 `basic`, `bearer`, `oauth2`, and `openId` parse credentials and also
-feed OpenAPI security schemes.
+feed OpenAPI security schemes. They do not verify a password, token signature,
+issuer, audience, session, or user record. An application using the explicit
+Server extension composes a descriptor with its installed verifier through
+`authenticate`; low-level Node code may perform the same policy in an ordinary
+request Provider.
 
 `provide(inputs, resolve, scope="request", release=null, eager=false)` declares
 a dependency as data. A request-scoped provider resolves once per request even

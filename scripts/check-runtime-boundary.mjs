@@ -273,8 +273,8 @@ if (!webWebSocket || webWebSocket.exports.has("listen") || webWebSocket.exports.
 if (!nodeWebSocket?.exports.has("listen") || !nodeWebSocket.exports.has("WebSocketServer")) {
   failures.push("packages/node/src/compiler.ts: Node must own the WebSocket server surface");
 }
-if (!serverApplication?.exports.has("application") || !serverApplication.exports.has("configuration") || !serverApplication.exports.has("database")) {
-  failures.push("packages/server/src/compiler.ts: Server must own application configuration and connection lifecycle composition");
+if (!serverApplication?.exports.has("application") || !serverApplication.exports.has("authenticate") || !serverApplication.exports.has("configuration") || !serverApplication.exports.has("database")) {
+  failures.push("packages/server/src/compiler.ts: Server must own application configuration, authentication, and connection lifecycle composition");
 }
 if (standardModuleInterfaces([velarNodeCompilerExtension]).has("velar/server")) {
   failures.push("packages/node/src/compiler.ts: the Node capability must not own the convention-based velar/server application module");

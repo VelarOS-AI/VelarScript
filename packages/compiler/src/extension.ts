@@ -51,7 +51,7 @@ export { Parser } from "./parser.ts";
 export { spanIdentity } from "./source.ts";
 export type { Span } from "./source.ts";
 export type { ParseResult } from "./parser.ts";
-export type { CompilerSemanticExtension, SemanticDeclareOptions, SemanticExtensionContext, SemanticFunctionLike } from "./semantic.ts";
+export type { CompilerSemanticExtension, SemanticDeclareOptions, SemanticExtensionContext, SemanticFunctionLike, SemanticSyntaxToken, SemanticSyntaxTokenKind } from "./semantic.ts";
 export type { Token, TokenKind } from "./token.ts";
 export {
   anyType,

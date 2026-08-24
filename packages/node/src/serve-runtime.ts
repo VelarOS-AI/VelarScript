@@ -1742,8 +1742,29 @@ function __velarServeNamedInputRaw(descriptor, parameterName, request) {
   return __velarServeMissing;
 }
 
-function __velarServeUnauthorized(scheme) {
-  throw new HttpError(401, {error: "not_authenticated"}, new __velarServeMap([["www-authenticate", scheme]]));
+function __velarServeAuthenticationChallenge(details) {
+  if (details.kind === "apiKey") return "ApiKey";
+  return details.kind === "basic" ? "Basic" : "Bearer";
+}
+
+export function __velarServeAuthenticationError(credential) {
+  credential = __velarServeAuthenticationCredential(credential);
+  return new HttpError(
+    401,
+    {error: "not_authenticated"},
+    new __velarServeMap([["www-authenticate", __velarServeAuthenticationChallenge(credential.extra)]]),
+  );
+}
+
+export function __velarServeAuthenticationCredential(credential) {
+  if (!__velarServeIsInput(credential) || credential.source !== "security") {
+    throw new __velarServeTypeError("Server authentication requires a security credential descriptor");
+  }
+  return credential;
+}
+
+function __velarServeUnauthorized(descriptor) {
+  throw __velarServeAuthenticationError(descriptor);
 }
 
 function __velarServeSecurityInput(descriptor, request) {
@@ -1751,28 +1772,28 @@ function __velarServeSecurityInput(descriptor, request) {
   if (details.kind === "apiKey") {
     const carrier = __velarServeInputValue(details.source, details.name);
     const value = __velarServeNamedInputRaw(carrier, details.name, request);
-    if (value === __velarServeMissing) __velarServeUnauthorized("ApiKey");
+    if (value === __velarServeMissing) __velarServeUnauthorized(descriptor);
     return value;
   }
   const authorization = __velarServeCall(__velarServeMapHas, request.headers, ["authorization"])
     ? __velarServeCall(__velarServeMapGet, request.headers, ["authorization"])
     : __velarServeMissing;
-  if (authorization === __velarServeMissing) __velarServeUnauthorized(details.kind === "basic" ? "Basic" : "Bearer");
+  if (authorization === __velarServeMissing) __velarServeUnauthorized(descriptor);
   const separator = __velarServeCall(__velarServeStringIndexOf, authorization, [" "]);
-  if (separator < 1) __velarServeUnauthorized(details.kind === "basic" ? "Basic" : "Bearer");
+  if (separator < 1) __velarServeUnauthorized(descriptor);
   const protocol = __velarServeCall(__velarServeStringToLowerCase, __velarServeCall(__velarServeStringSlice, authorization, [0, separator]), []);
   const credential = __velarServeCall(__velarServeStringTrim, __velarServeCall(__velarServeStringSlice, authorization, [separator + 1]), []);
-  if (credential.length === 0) __velarServeUnauthorized(details.kind === "basic" ? "Basic" : "Bearer");
+  if (credential.length === 0) __velarServeUnauthorized(descriptor);
   if (details.kind !== "basic") {
-    if (protocol !== "bearer") __velarServeUnauthorized("Bearer");
+    if (protocol !== "bearer") __velarServeUnauthorized(descriptor);
     return credential;
   }
-  if (protocol !== "basic" || typeof __velarServeAtob !== "function") __velarServeUnauthorized("Basic");
+  if (protocol !== "basic" || typeof __velarServeAtob !== "function") __velarServeUnauthorized(descriptor);
   let decoded;
   try { decoded = __velarServeCall(__velarServeAtob, undefined, [credential]); }
-  catch { __velarServeUnauthorized("Basic"); }
+  catch { __velarServeUnauthorized(descriptor); }
   const split = __velarServeCall(__velarServeStringIndexOf, decoded, [":"]);
-  if (split < 0) __velarServeUnauthorized("Basic");
+  if (split < 0) __velarServeUnauthorized(descriptor);
   return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{
     username: __velarServeCall(__velarServeStringSlice, decoded, [0, split]),
     password: __velarServeCall(__velarServeStringSlice, decoded, [split + 1]),

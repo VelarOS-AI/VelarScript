@@ -965,8 +965,13 @@ as `/articles/{id}` in that document.
 
 The separate `@velarscript/server` application extension composes this Node
 capability. It adds `velar/server`, root `application.yml`
-discovery, `application(app)`, typed `configuration(Type)`, and an abstract
-`database(connect, disconnect)` provider lifecycle. Its conventional entry is
+discovery, `application(app)`, typed `configuration(Type)`, request-scoped
+`authenticate(credential, verify)`, and an abstract `database(connect,
+disconnect)` provider lifecycle. Authentication accepts only Node-owned
+`security` descriptors; its nullable async verifier produces a typed identity
+Provider, and `null` produces the descriptor's opaque 401 challenge. Token,
+session, password, identity-store, and authorization policy implementations are
+installed library or application responsibilities. Its conventional entry is
 an exact zero-argument async `start` function returning `Server` or
 `WebSocketServer`; the launcher supplies no host, port, or body-limit arguments.
 `velar dev` watches and restarts the last-good build, `velar serve` runs checked

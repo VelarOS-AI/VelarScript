@@ -29,6 +29,7 @@ import {
     text,
     use,
 } from "velar/serve"
+import {authenticate} from "velar/server"
 
 type CreateArticle:
     title: string
@@ -39,10 +40,12 @@ type CurrentUser:
 type UploadMetadata:
     title: string
 
-const currentUser = provide(
-    inputs = {token: security.bearer()},
-    resolve = async values => {id: values.token},
-)
+async def verifyTourToken(token: string) -> CurrentUser?:
+    if token != "tour-token": return null
+    return {id: "tour-user"}
+
+const currentUser = authenticate(security.bearer(), verifyTourToken)
+const requestContext = provide(inputs={}, resolve=async _values => {name: "tour"})
 const providerContract = Provider.is(currentUser)
 
 async def chunks(write: (chunk: string) -> Promise<null>):
@@ -83,6 +86,7 @@ server routes:
         user = input.dependency(currentUser),
         session = input.cookie("session", default=null),
     ) => {id: user.id, session}
+    @get(p"/provider", context=input.dependency(requestContext)) => context
     @post(p"/upload",
         metadata = input.form(UploadMetadata),
         image = input.upload("image", maxBytes=1_048_576),

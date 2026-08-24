@@ -114,6 +114,19 @@ export interface SemanticScope {
   readonly span: Span;
 }
 
+/**
+ * Source syntax owned by an active compiler extension that should participate
+ * in an editor's semantic highlighting. Core syntax remains editor-native;
+ * this channel exists for contextual extension forms that a generic editor
+ * cannot classify without the compiler that parsed them.
+ */
+export type SemanticSyntaxTokenKind = "keyword";
+
+export interface SemanticSyntaxToken {
+  readonly span: Span;
+  readonly kind: SemanticSyntaxTokenKind;
+}
+
 export interface SemanticIndex {
   readonly path: string;
   readonly symbols: readonly SemanticSymbol[];
@@ -123,6 +136,7 @@ export interface SemanticIndex {
   readonly moduleReferences: readonly SemanticModuleReference[];
   readonly scopes: readonly SemanticScope[];
   readonly expressions: readonly SemanticExpression[];
+  readonly syntaxTokens: readonly SemanticSyntaxToken[];
 }
 
 export interface SemanticDeclareOptions {
@@ -150,6 +164,7 @@ export interface SemanticFunctionLike {
 }
 
 export interface SemanticExtensionContext {
+  readonly source: string;
   readonly declare: (owner: object, name: string, kind: SemanticSymbolKind, declarationSpan: Span, selectionSpan: Span, options?: SemanticDeclareOptions) => SemanticSymbol;
   readonly hasDeclaration: (owner: object) => boolean;
   readonly nameSpan: (span: Span, name: string, from?: number) => Span;
@@ -163,6 +178,7 @@ export interface SemanticExtensionContext {
   readonly visitStatement: (statement: Statement) => void;
   readonly visitBlock: (body: readonly Statement[], fallbackSpan: Span) => void;
   readonly visitFunction: (statement: SemanticFunctionLike) => void;
+  readonly syntaxToken: (span: Span, kind: SemanticSyntaxTokenKind) => void;
 }
 
 export interface CompilerSemanticExtension {
@@ -202,6 +218,8 @@ export function buildSemanticIndex(
   const imports: SemanticImport[] = [];
   const moduleReferences: SemanticModuleReference[] = [];
   const expressions: SemanticExpression[] = [];
+  const syntaxTokens: SemanticSyntaxToken[] = [];
+  const syntaxTokenIdentities = new Set<string>();
   const expressionKeys = new Set<string>();
   const rootScope: Scope = { id: 0, parentId: null, span: { start: 0, end: source.text.length }, bindings: new Map() };
   const scopes: Scope[] = [rootScope];
@@ -221,6 +239,15 @@ export function buildSemanticIndex(
   const declarations = new WeakMap<object, SemanticSymbol>();
   let extensionContext: SemanticExtensionContext;
   let nextScopeId = 1;
+
+  const syntaxToken = (tokenSpan: Span, kind: SemanticSyntaxTokenKind): void => {
+    if (!Number.isSafeInteger(tokenSpan.start) || !Number.isSafeInteger(tokenSpan.end)
+      || tokenSpan.start < 0 || tokenSpan.end <= tokenSpan.start || tokenSpan.end > source.text.length) return;
+    const identity = `${tokenSpan.start}:${tokenSpan.end}:${kind}`;
+    if (syntaxTokenIdentities.has(identity)) return;
+    syntaxTokenIdentities.add(identity);
+    syntaxTokens.push({ span: tokenSpan, kind });
+  };
 
   const callable = (type: ValueType | undefined): boolean => type?.kind === "function" || type?.kind === "intrinsic" || type?.kind === "action";
 
@@ -872,6 +899,7 @@ export function buildSemanticIndex(
   };
 
   extensionContext = {
+    source: source.text,
     declare(owner, name, kind, declarationSpan, selectionSpan, options = {}) {
       return declare(
         owner,
@@ -906,6 +934,7 @@ export function buildSemanticIndex(
     visitStatement,
     visitBlock,
     visitFunction: (statement) => visitFunction(statement),
+    syntaxToken,
   };
 
   predeclareTopLevel();
@@ -919,6 +948,7 @@ export function buildSemanticIndex(
     moduleReferences,
     scopes: allScopes.map(({ id, parentId, span: scopeSpan }) => ({ id, parentId, span: scopeSpan })),
     expressions,
+    syntaxTokens: syntaxTokens.sort((left, right) => left.span.start - right.span.start || left.span.end - right.span.end),
   };
 }
 

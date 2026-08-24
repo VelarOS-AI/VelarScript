@@ -6,6 +6,23 @@ truth for acceptance status.
 
 ## Unreleased
 
+## 0.14.3 — 2026-08-24
+
+### Server application framework
+
+- Added `authenticate(credential, verify)` to the explicit Server extension.
+  It accepts only checked `security` descriptors, requires a nullable async
+  verifier, injects the verified identity through a request-scoped Provider,
+  and turns rejected credentials into the same opaque 401 challenge used by
+  Node's transport parser. Identity records, authorization policy, sessions,
+  token algorithms, and provider integrations remain application or installed
+  library responsibilities.
+
+### Tooling and editor support
+
+- Added compiler-extension semantic syntax tokens so language-server clients
+  can highlight Server declarations, route roles, and typed path prefixes.
+
 ## 0.14.2 — 2026-08-24
 
 ### Language syntax

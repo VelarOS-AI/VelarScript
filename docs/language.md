@@ -507,6 +507,11 @@ application settings. Other YAML/JSON files require an explicit path.
 behavior, and `velar build` emits the standalone Node application. Direct
 `serve(...)` remains an ordinary Node operation for integration tests and
 embedded servers.
+`authenticate(security.bearer(), verify)` composes Node's checked credential
+input with a nullable async verifier and exposes its non-null identity as a
+request Provider. The framework owns the 401 boundary; installed libraries own
+token/session algorithms, and the application owns user and authorization
+policy.
 `@notFound` is the single application fallback for a path that matches no
 route. Its optional parameter must be `Request`; Data keeps the 404 status,
 while an explicit response may select another status. It does not intercept a

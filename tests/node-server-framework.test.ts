@@ -11,6 +11,12 @@ function compileNode(source: string) {
   return compile(source.trimStart(), { path: "app.vel", extensions: [velarNodeCompilerExtension] });
 }
 
+async function compileServer(source: string) {
+  const path = join(tmpdir(), "velar-server-compile.vel");
+  const project = await compileProject(path, new Map([[path, source.trimStart()]]), {extensions: [velarServerCompilerExtension]});
+  return project.modules[0]!.result;
+}
+
 test("Node application configuration is bounded and rejects unknown fields", () => {
   assert.deepEqual(velarProjectExtension.parse(undefined, "/service/velar.json"), {
     app: "start",
@@ -22,15 +28,15 @@ test("Node application configuration is bounded and rejects unknown fields", () 
   assert.throws(() => velarProjectExtension.parse({workers: 4}, "/service/velar.json"), /unknown 'node' field 'workers'/u);
 });
 
-test("server configuration and database helpers preserve checked application types", async () => {
+test("server configuration, authentication, and database helpers preserve checked application types", async () => {
   assert.deepEqual(serverProjectExtension.parse(undefined, "/service/velar.json"), {
     app: "start",
     build: {sourceMaps: false},
   });
   assert.throws(() => serverProjectExtension.parse({port: 3000}, "/service/velar.json"), /unknown 'server' field 'port'/u);
   const source = `
-import {application, configuration, database} from "velar/server"
-import {input} from "velar/serve"
+import {application, authenticate, configuration, database} from "velar/server"
+import {input, security} from "velar/serve"
 
 type ServerSettings:
     host: string
@@ -45,6 +51,14 @@ type Connection:
     path: string
     close: () -> Promise<null>
 
+type User:
+    id: string
+
+async def verifyToken(token: string) -> User?:
+    if token == "valid":
+        return {id: "user-1"}
+    return null
+
 server routes:
     @get(p"/health") => {ok: true}
 
@@ -53,10 +67,12 @@ const connection = database(
     connect=async () => {path: settings.databasePath, close: async () => null},
     disconnect=async value => await value.close(),
 )
+const currentUser = authenticate(security.bearer(), verifyToken)
 
 server app:
     ...routes
     @get(p"/database", value=input.dependency(connection)) => {path: value.path}
+    @get(p"/me", user=input.dependency(currentUser)) => {id: user.id}
 
 export const start = application(app)
 `.trimStart();
@@ -65,8 +81,35 @@ export const start = application(app)
   const result = project.modules[0]!.result;
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /configuration\(Settings\)/u);
+  assert.match(result.code ?? "", /authenticate\(security\.bearer\(\), verifyToken\)/u);
   assert.match(result.code ?? "", /database\(/u);
   assert.match(result.code ?? "", /application\(app\)/u);
+});
+
+test("server authentication accepts only security credentials and nullable async verifiers", async () => {
+  const ordinaryInput = await compileServer(`
+import {authenticate} from "velar/server"
+import {input} from "velar/serve"
+
+const identity = authenticate(input.header("authorization"), async value => null)
+`);
+  assert.ok(ordinaryInput.diagnostics.some((item) => /credential must be created by security/u.test(item.message)));
+
+  const synchronous = await compileServer(`
+import {authenticate} from "velar/server"
+import {security} from "velar/serve"
+
+const identity = authenticate(security.bearer(), token => token)
+`);
+  assert.ok(synchronous.diagnostics.some((item) => /verify must return a Promise<Identity\?>/u.test(item.message)));
+
+  const nonNullable = await compileServer(`
+import {authenticate} from "velar/server"
+import {security} from "velar/serve"
+
+const identity = authenticate(security.bearer(), async token => {id: token})
+`);
+  assert.ok(nonNullable.diagnostics.some((item) => /verify must return an optional identity/u.test(item.message)));
 });
 
 test("velar/server exists only when the Server application extension is active", () => {

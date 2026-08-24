@@ -16,3 +16,23 @@ test "native server health":
         expect(await response.text()).toContain("ok")
     finally:
         await api.close()
+
+test "server authentication":
+    const api = checkedClient(await client(app))
+    try:
+        const missing = checkedResponse(await api.get("/api/me"))
+        expect(missing.status).toBe(401)
+
+        const invalid = checkedResponse(await api.get("/api/me", {
+            headers: Map([["authorization", "Bearer invalid"]]),
+        }))
+        expect(invalid.status).toBe(401)
+        expect(invalid.headers.get("www-authenticate")).toBe("Bearer")
+
+        const valid = checkedResponse(await api.get("/api/me", {
+            headers: Map([["authorization", "Bearer tour-token"]]),
+        }))
+        expect(valid.status).toBe(200)
+        expect(await valid.text()).toContain("tour-user")
+    finally:
+        await api.close()

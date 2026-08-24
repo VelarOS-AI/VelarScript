@@ -7,6 +7,10 @@
 - `velar/serve` may compose arbitrary application-owned dependencies through
   providers, but Node must not define database models or depend on a concrete
   database engine.
+- Node owns security credential extraction, malformed-input rejection, and HTTP
+  challenges. The Server application extension owns the optional authentication
+  composition helper; concrete verification and identity policy remain installed
+  library or application values.
 - Never restore `velar/sqlite`, publish an official driver, or make an
   application library part of this package.
 - Bound requests, bodies, queues, streams, background work, caches, and shutdown.

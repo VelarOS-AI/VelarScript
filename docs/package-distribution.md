@@ -14,8 +14,9 @@ toolchain and official target frameworks under `packages/`:
   independently of the CLI.
 - `@velarscript/server`: the explicit convention-based Server application
   extension. It composes Node, owns root YAML/JSON application configuration,
-  startup assembly, and abstract connection lifecycle, but no concrete database
-  driver or model layer.
+  startup assembly, provider-neutral request authentication, and abstract
+  connection lifecycle, but no concrete token/session implementation, identity
+  store, authorization model, database driver, or model layer.
 - `@velarscript/web`: the official Web framework's versioned module contract
   and browser runtime, plus independent compiler and framework-host entries.
 - `@velarscript/desktop`: the optional single-project Desktop framework. It

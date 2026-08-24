@@ -1344,3 +1344,4 @@ export const velarNodeCompilerExtension: CompilerExtension = Object.freeze({
 export const velarCompilerExtension = velarNodeCompilerExtension;
 
 export { velarProjectExtension, type VelarNodeConfig } from "./project-config.ts";
+export {isNodeRouteInputType, nodeProviderType, nodeRouteInputValue} from "./server-types.ts";

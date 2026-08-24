@@ -1,6 +1,6 @@
 {
   "name": "@velarscript/node",
-  "version": "0.14.2",
+  "version": "0.14.3",
   "description": "The official VelarScript Node.js module contract and runtime.",
   "license": "Apache-2.0",
   "type": "module",
@@ -33,7 +33,7 @@
     }
   },
   "dependencies": {
-    "@velarscript/compiler": "0.14.2",
+    "@velarscript/compiler": "0.14.3",
     "ws": "^8.21.1"
   },
   "exports": {

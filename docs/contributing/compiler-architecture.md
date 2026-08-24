@@ -768,10 +768,12 @@ initialization therefore cannot change which case is selected.
 - `packages/server` owns the separate application extension that composes the
   Node compiler/runtime contract. It alone publishes `velar/server`, discovers
   root `application.yml`, assembles the conventional zero-argument startup
-  function, and maps an
+  function, maps a Node-owned security descriptor plus nullable async verifier
+  onto a request-scoped typed identity Provider, and maps an
   abstract connect/disconnect pair onto Node's application-scoped Provider
   lifecycle. Node does not read application configuration; Server contains no
-  concrete database driver, model, query, migration, or ORM behavior.
+  concrete token/session implementation, identity or authorization policy,
+  database driver, model, query, migration, or ORM behavior.
 - `packages/create` owns transactional project creation and the complete
   `web`, `docs`, `library`, and `component` template inventory. The component
   template is an ordinary Web source package with a separate preview entry, not

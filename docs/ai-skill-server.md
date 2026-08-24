@@ -103,6 +103,50 @@ types, and application validation still owns domain ranges and invariants.
 Environment variables may form an explicit deployment override layer, but
 secrets do not belong in application configuration.
 
+## Request authentication
+
+Node's `security` values own credential extraction, malformed-input rejection,
+401 challenges, and OpenAPI descriptions. Server's `authenticate` composes one
+of those descriptors with an application- or package-provided verifier:
+
+```velar
+import {authenticate} from "velar/server"
+import {input, security} from "velar/serve"
+
+type Principal:
+    subject: string
+
+const exampleTokens: Map<string, Principal> = Map([
+    ["example-test-token", {subject: "user-1"}],
+])
+
+async def verifyAccessToken(token: string) -> Principal?:
+    // A deployed application replaces this test map with an installed verifier.
+    return exampleTokens.get(token)
+
+const currentPrincipal = authenticate(security.bearer(), verifyAccessToken)
+
+export server accountRoutes:
+    @get(p"/me", principal=input.dependency(currentPrincipal)) => {
+        subject: principal.subject,
+    }
+```
+
+`authenticate(credential, verify)` accepts only a `security.apiKey`, `basic`,
+`bearer`, `oauth2`, or `openId` descriptor. `verify` must return
+`Promise<Identity?>`. It resolves once per request: `null` becomes the same
+opaque `not_authenticated` 401 response and `WWW-Authenticate` challenge as a
+missing credential, while a non-null value becomes the typed request Provider
+result. A thrown verifier failure remains an opaque 500 because a key-service,
+database, or network failure is not proof of an invalid credential.
+
+The verified identity shape belongs to the application. JWT/JWK and OIDC
+verification, password hashing, signed sessions, and vendor integrations are
+explicit installed packages; user storage, tenant membership, roles,
+permissions, revocation, and resource-level authorization remain application
+policy. Do not place secrets in `application.yml`, invent a universal `User`
+record, or turn authentication into new route syntax or `@` roles.
+
 ## Abstract database connection lifecycle
 
 `database(connect, disconnect)` creates an eager application-scoped

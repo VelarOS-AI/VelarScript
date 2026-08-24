@@ -58,7 +58,7 @@ export interface ProjectCompletion {
   readonly presentationKind?: SemanticSymbol["presentationKind"];
 }
 
-export type ProjectSemanticTokenType = "type" | "class" | "enum" | "enumMember" | "function" | "method" | "property" | "variable" | "parameter";
+export type ProjectSemanticTokenType = "type" | "class" | "enum" | "enumMember" | "function" | "method" | "property" | "variable" | "parameter" | "keyword";
 export type ProjectSemanticTokenModifier = "declaration" | "readonly" | "static";
 
 export interface ProjectSemanticToken {
@@ -305,6 +305,10 @@ export function projectSemanticTokens(project: ProjectResult, path: string): rea
     const key = `${span.start}:${span.end}`;
     if ((tokens.get(key)?.priority ?? -1) < priority) tokens.set(key, { token, priority });
   };
+
+  for (const token of module.result.semanticIndex.syntaxTokens) {
+    add(token.span, null, token.kind, false, 4);
+  }
 
   for (const symbol of module.result.semanticIndex.symbols) {
     const resolved = projectSymbolAt(project, path, Math.min(symbol.selectionSpan.end, symbol.selectionSpan.start + 1)) ?? symbol;
