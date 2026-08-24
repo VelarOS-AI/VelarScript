@@ -215,9 +215,9 @@ this CLI was published against, and refuses a mismatch by name and version:
 
 ```text
 node_modules/@velarscript/node/package.json: this project resolves
-@velarscript/node 0.99.0, but @velarscript/cli 0.14.0 is built against
-@velarscript/node 0.14.0; a VelarScript toolchain is one generation, so install
-@velarscript/node 0.14.0 or @velarscript/cli 0.99.0
+@velarscript/node 0.99.0, but @velarscript/cli 0.14.1 is built against
+@velarscript/node 0.14.1; a VelarScript toolchain is one generation, so install
+@velarscript/node 0.14.1 or @velarscript/cli 0.99.0
 ```
 
 The path is the manifest the resolution actually read, and the running command

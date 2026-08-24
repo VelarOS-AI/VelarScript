@@ -25,12 +25,13 @@ compiler names it when you write another.
 
 ## 1. The shape of a file
 
-A VelarScript file is a `.vel` file. A block opens with `:` and a newline and
-is carried by indentation, exactly as in Python — four spaces by convention,
-and `velar format` settles it either way. There are no semicolons and no braces
-around statement blocks. One statement per line; a line that begins with `.` or
-`?.` continues the previous line, which is what lets method chains break
-naturally.
+A VelarScript file is a `.vel` file. A block opens with `:` and is carried by
+indentation, exactly as in Python — four spaces by convention, and `velar
+format` settles it either way. There are no semicolons and no braces around
+statement blocks. One statement per line; as the compact exception, an `if`
+branch or `match` case may put its single non-block statement after the colon.
+A line that begins with `.` or `?.` continues the previous line, which is what
+lets method chains break naturally.
 
 Comments are `//` for a line, `///` for documentation attached to the following
 declaration, and `/* */` for a region — the block form nests, and a multi-line
@@ -279,9 +280,16 @@ direct one-slot `for value in range(...):` is compiled as a checked native
 counter loop; using `range(...)` as a value still returns the ordinary bounded
 `List<number>`.
 
+An `if` or `else` branch with one non-block statement may stay on one line:
+`if animation != null: animations.add(animation)`. Multiple statements and
+nested blocks keep the indented form. Conditional values are still written
+`condition ? then : else`.
+
 `match` is the dispatcher: one subject, `case` branches that may destructure
 records and lists, an optional `if` guard, and `case _:` as the only fallback.
 An `else if` ladder over an enum is the shape `match` exists to replace.
+Like an `if` branch, a case with one non-block statement may stay on its header
+line: `case Status.done: return "done"`.
 
 ```velar
 enum Phase:

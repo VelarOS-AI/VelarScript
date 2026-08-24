@@ -53,12 +53,12 @@ export def conditionShapes(flag: bool, maybeFlag: bool?, values: List<string>, u
         print("true")
     if maybeFlag:
         print("present and true")
-    // A presence test is written `!= null`; an emptiness test is `.size == 0`.
-    if user != null:
-        print(user.name)
+    // A presence test is written `!= null`; a branch with one non-block
+    // statement may share its header's line.
+    if user != null: print(user.name)
     if values.size == 0:
         print("empty")
-    // Inline conditions use the JavaScript-shaped form.
+    // A conditional value still uses the JavaScript-shaped form.
     return flag ? "yes" : "no"
 
 // ---------------------------------------------------------------------------
@@ -69,8 +69,8 @@ export def matchEnum(status: Status) -> string:
     match status:
         case Status.pending, Status.active:
             return "Open"
-        case Status.done:
-            return "Closed"
+        // One non-block case statement may share the header's line.
+        case Status.done: return "Closed"
 
 // An optional enum subject demands every member plus `case null:`.
 export def matchOptionalEnum(status: Status?) -> string:

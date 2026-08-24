@@ -6,6 +6,13 @@ truth for acceptance status.
 
 ## Unreleased
 
+## 0.14.1 — 2026-08-24
+
+### Language syntax
+
+- Added compact single-statement branches for `if`, `else if`, `else`, and
+  `match case`, while keeping multiple or nested statements indentation-owned.
+
 ## 0.14.0 — 2026-08-24
 
 ### Server application framework

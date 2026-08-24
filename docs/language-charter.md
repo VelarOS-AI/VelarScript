@@ -115,7 +115,14 @@ else:
     wait()
 ```
 
-Semicolons and braces are not statement syntax.
+Semicolons and braces are not statement syntax. An `if` branch or `match` case
+has a single-line shorthand: one non-block statement may follow the colon on
+the same logical line. Multiple statements and every nested block use the
+indented form.
+
+```velar fragment
+if animation != null: animations.add(animation)
+```
 
 A statement normally ends at its newline. One continuation form exists: a line
 whose first token is `.` or `?.` continues the previous logical line, so
@@ -2151,6 +2158,16 @@ else:
     grade = "C"
 ```
 
+When a branch has exactly one non-block statement, it may share the header's
+logical line. This applies to `if` and `else` branches, including an `else if`
+branch; it does not extend to `while`, `for`, the `match` header, or any other
+block owner. A comment after the colon does not count as a body, so the
+following statement still uses indentation.
+
+```velar fragment
+if render.animation != null: animations.add(render.animation)
+```
+
 A condition judges truth, not presence. `if`, `else if`, `while`, `assert`, the
 `?:` test, and the operands of `and`/`or`/`not` accept `bool` and `bool?`, where
 an absent `bool?` is `false`. Every other type is rejected, including optionals:
@@ -2159,8 +2176,10 @@ JavaScript truthiness would make `0`, `""`, and an empty collection take the
 test is written `values.size == 0`. The diagnostic names the explicit form for
 the value's type.
 
-Inline conditions use the JavaScript-shaped `condition ? then : else` form.
-Python's sentence-like inline `x if condition else y` form is not used.
+Conditional values use the JavaScript-shaped `condition ? then : else` form.
+Python's sentence-like `x if condition else y` expression form is not used;
+that is separate from the single-statement `if condition: action()` branch
+shorthand above.
 
 ### Match
 
@@ -2268,6 +2287,17 @@ wildcard, exhaustive List length patterns, and irrefutable patterns over
 required typed record fields participate in required-return analysis. `match`
 remains a statement; branches use ordinary `return` or assignments instead of
 introducing a second expression form.
+
+A case with exactly one non-block statement may share its header's logical
+line. The `match` header and its case list remain indentation-owned, and a case
+with multiple statements or a nested block uses the ordinary indented body.
+
+```velar fragment
+match status:
+    case Status.pending: print("Pending")
+    case Status.active: print("Active")
+    case _: print("Done")
+```
 
 `switch` is not VelarScript syntax.
 

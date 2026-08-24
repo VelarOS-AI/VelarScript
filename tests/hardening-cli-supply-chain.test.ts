@@ -227,21 +227,27 @@ test("cli-35 VELAR_VERSION matches the version the CLI is published under", asyn
 
 test("cli-35a a version literal pinning one of our dependencies is held to the range we declare", async () => {
   // A literal need not name one of our own packages to be a second copy of a
-  // version. WEBSOCKET_VERSION decides which 'ws' the CLI will accept in a
-  // generated project's node_modules, and the range that decides which 'ws' we
-  // ship is packages/node/package.json's. Neither the roster above nor any
-  // other gate read the two against each other: bumping the dependency alone
-  // left every generated WebSocket project refusing its own runtime at install
-  // time, behind a green release.
+  // version. WEBSOCKET_VERSION and YAML_VERSION decide which runtime packages
+  // the CLI will accept in a generated project's node_modules, and their owner
+  // manifests decide which versions the toolchain ships. Neither side may move
+  // alone behind a green release.
   const node = JSON.parse(await readFile(join(repositoryRoot, "packages", "node", "package.json"), "utf8")) as {
     readonly name: string;
     readonly dependencies?: Readonly<Record<string, string>>;
   };
+  const server = JSON.parse(await readFile(join(repositoryRoot, "packages", "server", "package.json"), "utf8")) as {
+    readonly name: string;
+    readonly dependencies?: Readonly<Record<string, string>>;
+  };
+  const owners = new Map([[node.name, node], [server.name, server]]);
   assert.deepEqual(PINNED_DEPENDENCY_VERSIONS.map((pin) => [pin.file, pin.name, pin.package, pin.dependency]), [
     ["packages/cli/src/node-runtime-dependencies.ts", "WEBSOCKET_VERSION", "@velarscript/node", "ws"],
+    ["packages/cli/src/node-runtime-dependencies.ts", "YAML_VERSION", "@velarscript/server", "yaml"],
   ]);
   for (const pin of PINNED_DEPENDENCY_VERSIONS) {
-    assert.equal(await pinnedDependencyFailure(repositoryRoot, pin.file, pin.name, pin.dependency, node), null);
+    const owner = owners.get(pin.package);
+    assert.ok(owner, `the test must load ${pin.package}`);
+    assert.equal(await pinnedDependencyFailure(repositoryRoot, pin.file, pin.name, pin.dependency, owner), null);
   }
   const gate = await readFile(join(repositoryRoot, "scripts", "release-toolchain.mjs"), "utf8");
   assert.match(gate, /for \(const pin of PINNED_DEPENDENCY_VERSIONS\)/u, "the release gate must run the pinned dependency roster");

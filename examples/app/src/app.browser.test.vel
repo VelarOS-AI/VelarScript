@@ -61,10 +61,10 @@ test "a release opens from the board and from a deep link":
     await browser.open("/")
     await browser.click(`[data-release="web-0-11"] a`)
     expect(await browser.currentPath()).toBe("/releases/web-0-11")
-    await browser.waitForText("[data-release-name]", "VelarScript Web 0.14.0")
+    await browser.waitForText("[data-release-name]", "VelarScript Web 0.14.1")
     expect(await browser.count("[data-checklist] > li")).toBe(4)
     await browser.open("/releases/compiler-0-11")
-    await browser.waitForText("[data-release-name]", "VelarScript Compiler 0.14.0")
+    await browser.waitForText("[data-release-name]", "VelarScript Compiler 0.14.1")
     expect(await browser.text(`[data-metric="Open checks"] strong`)).toBe("2")
 
 test "an unknown release and an unknown path each explain themselves":
@@ -80,7 +80,7 @@ test "an unknown release and an unknown path each explain themselves":
 
 test "ticking a check republishes every reader of the board":
     await browser.open("/releases/web-0-11")
-    await browser.waitForText("[data-release-name]", "VelarScript Web 0.14.0")
+    await browser.waitForText("[data-release-name]", "VelarScript Web 0.14.1")
     expect(await browser.text(`[data-metric="Readiness"] strong`)).toBe("75%")
     expect(await browser.attribute("[data-release-name] ~ [data-stage]", "data-stage")).toBe("verifying")
     await browser.click(`[data-check-toggle="web-4"]`)
@@ -94,7 +94,7 @@ test "ticking a check republishes every reader of the board":
 
 test "a release advances only once its checklist is clear":
     await browser.open("/releases/web-0-11")
-    await browser.waitForText("[data-release-name]", "VelarScript Web 0.14.0")
+    await browser.waitForText("[data-release-name]", "VelarScript Web 0.14.1")
     expect(await browser.attribute("[data-advance]", "disabled")).toBe("")
     await browser.click(`[data-check-toggle="web-4"]`)
     await browser.waitForText(`[data-metric="Readiness"] strong`, "100%")
@@ -105,7 +105,7 @@ test "a release advances only once its checklist is clear":
 
 test "the add-check form refuses an empty title and keeps its own draft":
     await browser.open("/releases/compiler-0-11")
-    await browser.waitForText("[data-release-name]", "VelarScript Compiler 0.14.0")
+    await browser.waitForText("[data-release-name]", "VelarScript Compiler 0.14.1")
     await browser.click("[data-add-submit]")
     expect(await browser.attribute("[data-check-input]", "aria-invalid")).toBe("true")
     expect(await browser.count("[data-checklist] > li")).toBe(3)
