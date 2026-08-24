@@ -1953,12 +1953,12 @@ def check<T>(value: T) -> bool:
 });
 
 test("generic declarations format idiomatically without touching comparisons", () => {
-  const canonical = "def first<T>(items: List<T>) -> T?:\n    return items.get(0)\n";
+  const canonical = "def first<T>(items: List<T>) -> T?: return items.get(0)\n";
   assert.equal(formatSource(canonical), canonical);
   assert.equal(formatSource("def first < T > (items: List<T>) -> T?:\n    return items.get(0)\n"), canonical);
-  const multiple = "def swap<T, U>(a: T, b: U):\n    return null\n";
+  const multiple = "def swap<T, U>(a: T, b: U): return null\n";
   assert.equal(formatSource(multiple), multiple);
-  const runtimeType = "def decode<T>(value: unknown, target: Type<T>) -> T:\n    return target.parse(value)\n";
+  const runtimeType = "def decode<T>(value: unknown, target: Type<T>) -> T: return target.parse(value)\n";
   assert.equal(formatSource("def decode < T > (value: unknown, target: Type < T >) -> T:\n    return target.parse(value)\n"), runtimeType);
   assert.equal(formatSource("const smaller = a < b\n"), "const smaller = a < b\n");
   assert.equal(formatSource("const chained = a < b > c\n"), "const chained = a < b > c\n");
@@ -2957,7 +2957,7 @@ const mutator: (readonly User) -> null = mutate
     assert.ok(compile(source).diagnostics.some((item) => message.test(item.message)));
   }
 
-  const formatted = `type User:\n    readonly id: string\n    meta: string\ndef read(user: readonly User) -> readonly User:\n    return user\n`;
+  const formatted = `type User:\n    readonly id: string\n    meta: string\ndef read(user: readonly User) -> readonly User: return user\n`;
   assert.equal(formatSource(formatted), formatted);
 });
 
@@ -15777,8 +15777,8 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     devDependencies: Record<string, string>;
   };
-  assert.equal(createdPackage.dependencies["@velarscript/web"], "0.14.2");
-  assert.equal(createdPackage.devDependencies["@velarscript/cli"], "0.14.2");
+  assert.equal(createdPackage.dependencies["@velarscript/web"], "0.14.4");
+  assert.equal(createdPackage.devDependencies["@velarscript/cli"], "0.14.4");
   assert.equal(createdPackage.scripts.format, "velar format");
   assert.equal(createdPackage.scripts["format:check"], "velar format --check");
   assert.equal(createdPackage.scripts["test:browser"], "velar test --browser");
@@ -15914,8 +15914,8 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   assert.deepEqual(componentPackage.velar.requires.capabilities, []);
   assert.equal(componentPackage.scripts["pack:check"], "npm pack --dry-run --json");
   assert.match(componentPackage.scripts.validate ?? "", /npm run pack:check$/u);
-  assert.equal(componentPackage.peerDependencies["@velarscript/web"], "^0.14.2");
-  assert.equal(componentPackage.devDependencies["@velarscript/web"], "0.14.2");
+  assert.equal(componentPackage.peerDependencies["@velarscript/web"], "^0.14.4");
+  assert.equal(componentPackage.devDependencies["@velarscript/web"], "0.14.4");
   assert.match(await readFile(join(componentRoot, "src", "index.vel"), "utf8"), /export component InfoCard/u);
   assert.deepEqual(JSON.parse(await readFile(join(componentRoot, "velar.json"), "utf8")).extensions, ["@velarscript/web"]);
   await linkWorkspaceWebExtension(componentRoot);
@@ -15940,7 +15940,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     scripts: Record<string, string>;
   };
-  assert.equal(nodePackage.dependencies["@velarscript/server"], "0.14.2");
+  assert.equal(nodePackage.dependencies["@velarscript/server"], "0.14.4");
   assert.equal(nodePackage.dependencies["@velarscript/node"], undefined);
   assert.equal(nodePackage.scripts.dev, "velar dev");
   assert.equal(nodePackage.scripts.start, "velar serve");
@@ -15968,7 +15968,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     scripts: Record<string, string>;
   };
-  assert.equal(desktopPackage.dependencies["@velarscript/desktop"], "0.14.2");
+  assert.equal(desktopPackage.dependencies["@velarscript/desktop"], "0.14.4");
   assert.equal(desktopPackage.scripts.package, "velar package");
   assert.equal(desktopPackage.scripts["test:browser"], "velar test --browser=all");
   const desktopAgents = await readFile(join(desktopRoot, "AGENTS.md"), "utf8");
@@ -16032,7 +16032,7 @@ test("CLI help is command-specific and malformed top-level invocations fail clea
   const creator = resolve("packages/create/src/cli.ts");
   const creatorVersion = spawnSync(process.execPath, [creator, "--version"], { encoding: "utf8" });
   assert.equal(creatorVersion.status, 0, creatorVersion.stderr);
-  assert.equal(creatorVersion.stdout, "create-velar 0.14.2\n");
+  assert.equal(creatorVersion.stdout, "create-velar 0.14.4\n");
   const creatorMissing = spawnSync(process.execPath, [creator], { encoding: "utf8" });
   assert.equal(creatorMissing.status, 2);
   assert.match(creatorMissing.stderr, /expected one project directory/u);
@@ -19964,7 +19964,7 @@ def drain(source: Pull):
   assert.ok(migrated.diagnostics.some((item) => /Use 'async for value in source'/u.test(item.message)));
 
   const formatted = formatSource("async for value,index in source:\n  print(value)\n");
-  assert.equal(formatted, "async for value, index in source:\n    print(value)\n");
+  assert.equal(formatted, "async for value, index in source: print(value)\n");
   assert.equal(formatSource(formatted), formatted);
 
   const invalidConstructor = compileCore(`
@@ -20268,16 +20268,14 @@ test("formatter keeps destructuring, grouped conditions, and optional parameter 
 const {name: displayName} = user
 const visible = ready and (active or pending)
 const same = TaskPriority.is(TaskPriority.high)
-def find(value: Ticket?, previous: Ticket?) -> Ticket?:
-    return [ready ? value : previous]
+def find(value: Ticket?, previous: Ticket?) -> Ticket?: return [ready ? value : previous]
 `;
   const formatted = formatSource(source);
   assert.equal(formatted, `import js {format} from "pkg"
 const {name: displayName} = user
 const visible = ready and (active or pending)
 const same = TaskPriority.is(TaskPriority.high)
-def find(value: Ticket?, previous: Ticket?) -> Ticket?:
-    return [ready ? value : previous]
+def find(value: Ticket?, previous: Ticket?) -> Ticket?: return [ready ? value : previous]
 `);
   assert.equal(formatSource(formatted), formatted);
 });
@@ -20320,8 +20318,7 @@ const values: List<Player> = []
 test("formatter keeps structural match patterns compact and unambiguous", () => {
   const formatted = formatSource("match value:\n  case {kind:\"user\",data:[first,...rest],...details} as payload if details.active:\n    print(payload)\n");
   assert.equal(formatted, `match value:
-    case {kind: "user", data: [first, ...rest], ...details} as payload if details.active:
-        print(payload)
+    case {kind: "user", data: [first, ...rest], ...details} as payload if details.active: print(payload)
 `);
   assert.deepEqual(inspectModule(formatted).diagnostics, []);
   assert.equal(formatSource(formatted), formatted);
@@ -20354,7 +20351,7 @@ test("CLI format supports write and check modes", async () => {
   assert.equal(write.status, 0, write.stderr);
   const after = spawnSync(process.execPath, ["packages/cli/src/cli.ts", "format", sourcePath, "--check"], { cwd: process.cwd(), encoding: "utf8" });
   assert.equal(after.status, 0, after.stderr);
-  assert.equal(await readFile(sourcePath, "utf8"), "def main():\n    return null\n");
+  assert.equal(await readFile(sourcePath, "utf8"), "def main(): return null\n");
 });
 
 test("documentation example checker rejects invalid complete examples", async () => {
@@ -21575,16 +21572,14 @@ class Child extends Base:
 test("constructor parameter fields initialize public and private state after super", () => {
   const source = `
 export class Base:
-    constructor(const prefix: string):
-        pass
+    constructor(const prefix: string): pass
 
 export class Session extends Base:
     constructor(prefix: string, private const secret: string, let count: number = 1, label: string = "ready"):
         super(prefix)
         assert label == "ready"
 
-    def reveal() -> string:
-        return f"{self.prefix}:{self.secret}:{self.count}"
+    def reveal() -> string: return f"{self.prefix}:{self.secret}:{self.count}"
 
 const session = Session("agent", "token")
 session.count += 1
@@ -27783,7 +27778,7 @@ test("CLI emits complete Web application assets", async () => {
     apiVersion: "0.10",
     artifactKind: "velar-web-build",
   });
-  assert.deepEqual(manifest.compiler, { name: "velar", version: "0.14.2" });
+  assert.deepEqual(manifest.compiler, { name: "velar", version: "0.14.4" });
   assert.match(manifest.buildId, /^[a-f0-9]{64}$/u);
   assert.equal(manifest.sourceMaps, true);
   assert.equal(manifest.entry, `assets/${javascript}`);
@@ -27984,7 +27979,7 @@ test("language server publishes diagnostics, hover, and completion", async (cont
   assert.equal(initializeResult.capabilities.inlayHintProvider, true);
   assert.equal(initializeResult.capabilities.renameProvider.prepareProvider, true);
   assert.deepEqual(initializeResult.capabilities.semanticTokensProvider.legend.tokenTypes,
-    ["type", "class", "enum", "enumMember", "function", "method", "property", "variable", "parameter", "interface", "comment", "string", "keyword", "number", "regexp", "operator"]);
+    ["type", "class", "enum", "enumMember", "function", "method", "property", "variable", "parameter", "interface", "comment", "string", "keyword", "number", "regexp", "operator", "decorator"]);
   assert.deepEqual(initializeResult.capabilities.semanticTokensProvider.legend.tokenModifiers,
     ["declaration", "readonly", "static"]);
   assert.equal(initializeResult.capabilities.semanticTokensProvider.full, true);
@@ -28895,8 +28890,7 @@ import js hljs from "highlight.js/lib/common"
 
 const renderer = MarkdownIt({html: false})
 
-export def render(text: string) -> string:
-    return renderer.render(text) + hljs.highlight(text, "vel")
+export def render(text: string) -> string: return renderer.render(text) + hljs.highlight(text, "vel")
 `.trimStart();
   const result = compileCore(source);
   assert.deepEqual(result.diagnostics, []);

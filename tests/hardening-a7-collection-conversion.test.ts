@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { compile, formatSource, type CompileResult } from "@velarscript/compiler";
+import { applyMechanicalFixes, compile, formatSource, type CompileResult } from "@velarscript/compiler";
 
 function compiled(source: string): CompileResult {
   const result = compile(source);
@@ -26,12 +26,30 @@ def sortedValues(values: Set<string>) -> readonly List<string>:
   const reported = a7(source);
   assert.match(reported.message, /'values\.values\(\)' already creates the same fresh List<string>/u);
   assert.equal(source.slice(reported.span.start, reported.span.end), "values");
+  assert.equal(reported.fix?.title, "Initialize 'result' with 'values.values()'");
+  assert.equal(applyMechanicalFixes(source, [reported]).text, `
+def sortedValues(values: Set<string>) -> readonly List<string>:
+    const result: List<string> = values.values()
+    return result.sorted()
+`.trimStart());
 
   const canonical = compiled(`
 def sortedValues(values: readonly Set<string>) -> readonly List<string>:
     return values.values().sorted()
 `.trimStart());
   assert.deepEqual(canonical.advisories, []);
+});
+
+test("[A7] the editor fix is withheld when collapsing the loop would erase a comment", () => {
+  const reported = a7(`
+const source: List<string> = ["a"]
+const result: List<string> = []
+for value in source:
+    // Keep this expanded for the teaching narrative.
+    result.append(value)
+print(result.size)
+`.trimStart());
+  assert.equal(reported.fix, undefined);
 });
 
 test("[A7] the same exact check covers the neighbouring collection snapshots and constructors", () => {

@@ -65,10 +65,8 @@ const maybeUser: User? = null
 
 export def logicalOperators() -> bool:
     // The right side receives the facts the reaching path established.
-    if maybeUser != null and maybeUser.active:
-        return true
-    if maybeUser == null or not maybeUser.active:
-        return false
+    if maybeUser != null and maybeUser.active: return true
+    if maybeUser == null or not maybeUser.active: return false
     return enabled or accepted
 
 // An absent `bool?` behaves as `false`.
@@ -79,8 +77,7 @@ const andChain = enabled and accepted and optionalFlag
 // A writable `bool` reverses with ordinary assignment.
 let active = false
 
-export def reverse():
-    active = not active
+export def reverse(): active = not active
 
 // ---------------------------------------------------------------------------
 // Level 6 — the comparison layer: `== != < <= > >=`, `is`, `in`
@@ -125,14 +122,10 @@ const ignoredRoutes: List<string> = ["/health"]
 const route = "/dashboard"
 
 export def membershipAndTypeTests(input: User | Error) -> string:
-    if "admin" in roles:
-        print("Allowed")
-    if route not in ignoredRoutes:
-        print("Visible")
-    if input is User:
-        return input.name
-    if input is not Error:
-        return "Usable"
+    if "admin" in roles: print("Allowed")
+    if route not in ignoredRoutes: print("Visible")
+    if input is User: return input.name
+    if input is not Error: return "Usable"
     return input.message
 
 // Substring membership is the same operator.
@@ -188,8 +181,7 @@ const rightAssociative = 2 ** 3 ** 2
 // Level 11 — `await` and `try`, prefix
 // ---------------------------------------------------------------------------
 
-async def load() -> number:
-    return 1
+async def load() -> number: return 1
 
 export async def prefixLevel() -> number:
     const awaited = await load()

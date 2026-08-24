@@ -104,14 +104,11 @@ unsafe js`
 // Using the checked side
 // ---------------------------------------------------------------------------
 
-export def digest(text: string) -> string:
-    return createHash("sha256").update(text).digest("hex")
+export def digest(text: string) -> string: return createHash("sha256").update(text).digest("hex")
 
-export def identifier() -> string:
-    return randomUUID()
+export def identifier() -> string: return randomUUID()
 
-export def sameLength(left: unknown, right: unknown) -> bool:
-    return constantTimeEqual(left, right)
+export def sameLength(left: unknown, right: unknown) -> bool: return constantTimeEqual(left, right)
 
 export def throughNamespace(text: string) -> string:
     // A namespace import of an extern module reads the same declared contract.
@@ -120,19 +117,16 @@ export def throughNamespace(text: string) -> string:
 // A contracted block's export is checked like any other function: the result is
 // `string` because the contract says so, not because the JavaScript looked like
 // it returned one.
-export def sessionToken() -> string:
-    return digest(randomToken())
+export def sessionToken() -> string: return digest(randomToken())
 
 // A declared `const` export has no VelarScript initializer, and an `unknown`
 // must be validated before use.
 type CryptoSubtle:
     subtle: unknown
 
-export def readDeclaredConstant() -> bool:
-    return webcrypto is CryptoSubtle
+export def readDeclaredConstant() -> bool: return webcrypto is CryptoSubtle
 
-export def readDefaultExport() -> bool:
-    return nodeCrypto == null and explicitDefault == null
+export def readDefaultExport() -> bool: return nodeCrypto == null and explicitDefault == null
 
 // ---------------------------------------------------------------------------
 // How a boundary value enters the typed world
@@ -146,8 +140,7 @@ type Config:
 //    `rawCreateHash("sha256")` are all compile errors, and each one teaches
 //    the same way in. The only questions an unvalidated unknown answers are
 //    the ones that need no promise, like a null comparison.
-export def stillOpaque() -> bool:
-    return rawCreateHash != null and rawWebcrypto != null and rawDefault != null
+export def stillOpaque() -> bool: return rawCreateHash != null and rawWebcrypto != null and rawDefault != null
 
 // 2. `Type.parse` is the entry ritual: declare a type naming the fields you
 //    rely on, validate at the import site, and let only checked values
@@ -174,10 +167,8 @@ export def engineDescription() -> string:
 //    ("'any' is not a VelarScript type"), and since this ruling no boundary
 //    produces one either.
 export def validatesUnknown(value: unknown) -> string:
-    if value is Config:
-        return str(value.retries)
-    if value is string:
-        return value
+    if value is Config: return str(value.retries)
+    if value is string: return value
     return "unusable"
 
 export const chapterThirteen = {chapterName: "the JavaScript boundary"}

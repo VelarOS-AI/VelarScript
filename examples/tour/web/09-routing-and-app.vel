@@ -107,14 +107,11 @@ component ErrorChain:
         stop = onError(record)
 
     @cleanup:
-        if stop != null:
-            stop()
+        if stop != null: stop()
 
-    def raise():
-        reportError(Error("A reported failure"), "event", "chapter 09")
+    def raise(): reportError(Error("A reported failure"), "event", "chapter 09")
 
-    def raiseBare():
-        reportError(Error("A failure with no phase"))
+    def raiseBare(): reportError(Error("A failure with no phase"))
 
     return <div data-error-chain>
         <p data-last-report>{lastReport}</p>
@@ -129,11 +126,9 @@ component ErrorChain:
 export component RoutingPanel:
     const here = currentRoute()
 
-    def goToSection():
-        navigate("/section/units")
+    def goToSection(): navigate("/section/units")
 
-    def replaceWithLazy():
-        navigate("/lazy", {replace: true, scroll: false})
+    def replaceWithLazy(): navigate("/lazy", {replace: true, scroll: false})
 
     return <section data-chapter="09">
         <Head

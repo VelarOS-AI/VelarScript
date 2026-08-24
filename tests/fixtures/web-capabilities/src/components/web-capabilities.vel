@@ -16,8 +16,7 @@ type CapabilityStatus:
     label: string
 
 class CapabilityError extends Error:
-    constructor(message: string):
-        super(message)
+    constructor(message: string): super(message)
 
 type RuntimeFeatures:
     recovery: bool
@@ -37,8 +36,7 @@ let actionAttempts = 0
 
 async def loadResourceLabel() -> string:
     resourceAttempts += 1
-    if resourceAttempts == 1:
-        throw CapabilityError("Resource recovery ready")
+    if resourceAttempts == 1: throw CapabilityError("Resource recovery ready")
     return "resource-ready"
 
 const capabilitiesLook = look:
@@ -80,14 +78,11 @@ component RealtimeProbe(socketUrl: string, eventsUrl: string):
     state eventLabel = "connecting"
     state connection: WebSocketConnection? = null
 
-    def eventOpened():
-        eventLabel = "open"
+    def eventOpened(): eventLabel = "open"
 
-    def eventMessage(value: string, id: string):
-        eventLabel = f"{id}:{value}"
+    def eventMessage(value: string, id: string): eventLabel = f"{id}:{value}"
 
-    def eventFailed(message: string):
-        eventLabel = f"error:{message}"
+    def eventFailed(message: string): eventLabel = f"error:{message}"
 
     const events = eventStream(eventsUrl, {
         open: eventOpened,
@@ -102,17 +97,13 @@ component RealtimeProbe(socketUrl: string, eventsUrl: string):
             socketLabel = "open"
             while true:
                 const message = await live.next()
-                if message == null:
-                    break
-                if message is string:
-                    socketLabel = message
-        catch failure:
-            socketLabel = f"error:{failure.message}"
+                if message == null: break
+                if message is string: socketLabel = message
+        catch failure: socketLabel = f"error:{failure.message}"
 
     @cleanup:
         const live = connection
-        if live != null:
-            async live.close()
+        if live != null: async live.close()
         events.close()
 
     return <span data-realtime>{socketLabel}/{eventLabel}</span>
@@ -156,56 +147,41 @@ export component WebCapabilities:
     state realtimeEnabled = false
     let panel: Element? = null
 
-    def onlineChanged(value: bool):
-        online = value
+    def onlineChanged(value: bool): online = value
 
-    def visibilityChanged(value: bool):
-        visible = value
+    def visibilityChanged(value: bool): visible = value
 
-    def mediaChanged(value: bool):
-        darkScheme = value
+    def mediaChanged(value: bool): darkScheme = value
 
-    def sessionChanged(value: CapabilityStatus?, previous: CapabilityStatus?):
-        sessionLabel = value?.label ?? "missing"
+    def sessionChanged(value: CapabilityStatus?, previous: CapabilityStatus?): sessionLabel = value?.label ?? "missing"
 
-    def captureRuntimeError(phase: string, message: string):
-        runtimeErrorLabel = f"{phase}:{message}"
+    def captureRuntimeError(phase: string, message: string): runtimeErrorLabel = f"{phase}:{message}"
 
-    def captureLog(message: string):
-        logLabel = message
+    def captureLog(message: string): logLabel = message
 
-    def captureKey(event: KeyboardEvent):
-        keyboardLabel = event.key
+    def captureKey(event: KeyboardEvent): keyboardLabel = event.key
 
     def captureInput(event: InputEvent):
         event.preventDefault()
         inputLabel = event.inputType
 
-    def capturePointer(event: PointerEvent):
-        pointerLabel = event.pointerType
+    def capturePointer(event: PointerEvent): pointerLabel = event.pointerType
 
-    def timerReady():
-        timerLabel = "after-ready"
+    def timerReady(): timerLabel = "after-ready"
 
-    def timerTick():
-        timerTicks += 1
+    def timerTick(): timerTicks += 1
 
     def renderStatus() -> string:
-        if renderFails:
-            throw CapabilityError("Render recovery ready")
-        else:
-            return "render-stable"
+        if renderFails: throw CapabilityError("Render recovery ready")
+        else: return "render-stable"
 
-    def failRender():
-        renderFails = true
+    def failRender(): renderFails = true
 
-    async def failEvent():
-        throw CapabilityError("Event recovery ready")
+    async def failEvent(): throw CapabilityError("Event recovery ready")
 
     action recoverAction():
         actionAttempts += 1
-        if actionAttempts == 1:
-            throw CapabilityError("Action recovery ready")
+        if actionAttempts == 1: throw CapabilityError("Action recovery ready")
         actionLabel = "action-ready"
 
     computed actionFailure = recoverAction.error
@@ -234,16 +210,12 @@ export component WebCapabilities:
         databaseLabel = stored?.label ?? "missing"
         await frame()
         frameReady = true
-        if panel != null:
-            layoutWidth = measure(panel).width
+        if panel != null: layoutWidth = measure(panel).width
 
     async def verifyRecovery():
-        try:
-            throw CapabilityError("VelarScript recovery ready")
-        catch error:
-            errorLabel = error.message
-        finally:
-            recoveryLabel = "finalized"
+        try: throw CapabilityError("VelarScript recovery ready")
+        catch error: errorLabel = error.message
+        finally: recoveryLabel = "finalized"
 
     action chooseFile():
         const selected = await pick({accept: ".txt", multiple: false})
@@ -261,11 +233,9 @@ export component WebCapabilities:
         await copyText("VelarScript Web API 0.10")
         clipboardLabel = "Copied"
 
-    def saveStatus():
-        download("velar-status.txt", f"{sessionLabel}/{databaseLabel}")
+    def saveStatus(): download("velar-status.txt", f"{sessionLabel}/{databaseLabel}")
 
-    def connectRealtime():
-        realtimeEnabled = true
+    def connectRealtime(): realtimeEnabled = true
 
     @mounted:
         await loadCapabilities()

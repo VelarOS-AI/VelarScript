@@ -144,8 +144,7 @@ component GuardedAction(profile: Profile):
         finished += 1
 
     def saveOnce():
-        if not save.pending:
-            async save()
+        if not save.pending: async save()
 
     return <div data-guarded-action>
         <p data-pending>{save.pending ? "pending" : "settled"}</p>
@@ -167,8 +166,7 @@ component ActionFailure:
         throw Error("This action always fails")
 
     action recover() -> string:
-        try:
-            return await alwaysFails()
+        try: return await alwaysFails()
         catch error:
             recovered = error.message
             return recovered
@@ -182,8 +180,7 @@ component ActionFailure:
 export component ResourcePanel:
     state userId = "ada"
 
-    def switchUser():
-        userId = userId == "ada" ? "grace" : "ada"
+    def switchUser(): userId = userId == "ada" ? "grace" : "ada"
 
     return <section data-chapter="04">
         <h2>04 — resources and actions</h2>

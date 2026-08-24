@@ -109,8 +109,7 @@ component FrozenVersusLive:
         <span data-live-theme>{describeTheme()}</span>
     </span>
 
-def describeTheme() -> string:
-    return dark ? "night" : "day"
+def describeTheme() -> string: return dark ? "night" : "day"
 
 export component Home:
     return <main class="page" look={pageLook}>

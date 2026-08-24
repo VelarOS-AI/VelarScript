@@ -62,11 +62,9 @@ export component App:
     state failure = ""
     let stopReporting: (() -> null)? = null
 
-    def setFailure(phase: string, message: string):
-        failure = f"{phase}: {message}"
+    def setFailure(phase: string, message: string): failure = f"{phase}: {message}"
 
-    def dismiss():
-        failure = ""
+    def dismiss(): failure = ""
 
     // One place where a failure nothing else claimed becomes visible. Without
     // it, a thrown render is a blank region and a line in a console the reader
@@ -75,12 +73,10 @@ export component App:
         stopReporting = onError(report => setFailure(report.phase, report.error.message))
 
     @cleanup:
-        if stopReporting != null:
-            stopReporting()
+        if stopReporting != null: stopReporting()
 
     def banner() -> WebNode:
-        if failure == "":
-            return <></>
+        if failure == "": return <></>
         return <div look={alertLook} role="alert" data-app-error>
             <span>{failure}</span>
             <button type="button" look={controlLook} on:click={dismiss} data-dismiss-error>Dismiss</button>

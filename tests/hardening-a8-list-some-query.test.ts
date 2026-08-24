@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { compile, formatSource, type CompileResult } from "@velarscript/compiler";
+import { applyMechanicalFixes, compile, formatSource, type CompileResult } from "@velarscript/compiler";
 
 function compiled(source: string): CompileResult {
   const result = compile(source);
@@ -30,7 +30,14 @@ def hasColumn(columns: List<SchemaColumnRow>, name: string) -> bool:
   assert.match(reported.message, /List\.some is the canonical existential query/u);
   assert.match(reported.message, /return columns\.some\(column => column\.name == name\)/u);
   assert.equal(source.slice(reported.span.start, reported.span.end), "columns");
-  assert.equal(reported.fix, undefined, "the cross-statement rewrite does not erase comments automatically");
+  assert.equal(reported.fix?.title, "Use 'columns.some(...)'");
+  assert.equal(applyMechanicalFixes(source, [reported]).text, `
+type SchemaColumnRow:
+    name: string
+
+def hasColumn(columns: List<SchemaColumnRow>, name: string) -> bool:
+    return columns.some(column => column.name == name)
+`.trimStart());
 
   const canonical = compiled(`
 type SchemaColumnRow:
@@ -40,6 +47,18 @@ def hasColumn(columns: List<SchemaColumnRow>, name: string) -> bool:
     return columns.some(column => column.name == name)
 `.trimStart());
   assert.deepEqual(canonical.advisories, []);
+});
+
+test("[A8] the editor fix is withheld when the expanded query contains a comment", () => {
+  const reported = a8(`
+def hasPositive(values: List<number>) -> bool:
+    for value in values:
+        // The expanded spelling documents the short-circuit.
+        if value > 0:
+            return true
+    return false
+`.trimStart());
+  assert.equal(reported.fix, undefined);
 });
 
 test("[A8] pure boolean operators and data reads stay inside the proven query shape", () => {
@@ -165,9 +184,10 @@ def hasPositive(values: List<number>) -> bool:
             return true
     return false
 `.trimStart();
+  const canonical = suppressed.replace("        if value > 0:\n            return true", "        if value > 0: return true");
   assert.deepEqual(compiled(suppressed).advisories, []);
-  assert.equal(formatSource(suppressed), suppressed);
-  assert.equal(formatSource(formatSource(suppressed)), suppressed);
+  assert.equal(formatSource(suppressed), canonical);
+  assert.equal(formatSource(canonical), canonical);
 
   const bare = compile(suppressed.replace(": the expanded early return is clearer in this lesson", ""));
   assert.deepEqual(bare.diagnostics.map((item) => item.code), ["VEL1011"]);

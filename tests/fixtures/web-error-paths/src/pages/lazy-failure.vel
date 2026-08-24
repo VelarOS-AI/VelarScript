@@ -5,8 +5,7 @@
 
 import {every} from "velar/browser"
 
-def failIfLeaked():
-    throw Error("Lazy route timer leaked")
+def failIfLeaked(): throw Error("Lazy route timer leaked")
 
 export component LazyFailure:
     const stopTimer = every(25ms, failIfLeaked)

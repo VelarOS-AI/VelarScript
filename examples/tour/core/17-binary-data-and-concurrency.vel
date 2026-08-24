@@ -55,8 +55,7 @@ async def cancellableWork(cancellation: Cancellation) -> number:
     await cancellation.checkpoint()
     return 17
 
-def taskValue(owner: Task<number>) -> Task<number>:
-    return owner
+def taskValue(owner: Task<number>) -> Task<number>: return owner
 
 export async def taskSpellings(parent: Cancellation?) -> number:
     using owner = task(cancellableWork, parent)
@@ -66,11 +65,9 @@ async def generate(request: DataRequest, cancellation: Cancellation) -> DataRepl
     await cancellation.checkpoint()
     return {checksum: request.x ^ request.y}
 
-def workerValue(value: Worker<DataRequest, DataReply>) -> Worker<DataRequest, DataReply>:
-    return value
+def workerValue(value: Worker<DataRequest, DataReply>) -> Worker<DataRequest, DataReply>: return value
 
-def poolValue(value: WorkerPool<DataRequest, DataReply>) -> WorkerPool<DataRequest, DataReply>:
-    return value
+def poolValue(value: WorkerPool<DataRequest, DataReply>) -> WorkerPool<DataRequest, DataReply>: return value
 
 export async def workerClientSpellings() -> number:
     using single = worker("tour-data", DataRequest, DataReply, 8)
@@ -79,14 +76,11 @@ export async def workerClientSpellings() -> number:
     const second = await poolValue(pool).call({x: 3, y: 4})
     return first.checksum + second.checksum
 
-export def workerServerSpelling():
-    serveWorker(DataRequest, DataReply, generate, 16)
+export def workerServerSpelling(): serveWorker(DataRequest, DataReply, generate, 16)
 
-def connectionValue(value: WebSocketConnection) -> WebSocketConnection:
-    return value
+def connectionValue(value: WebSocketConnection) -> WebSocketConnection: return value
 
-def serverValue(value: WebSocketServer) -> WebSocketServer:
-    return value
+def serverValue(value: WebSocketServer) -> WebSocketServer: return value
 
 export async def websocketSpellings() -> number:
     using connection = await connect("ws://127.0.0.1:8080/socket", {timeout: 2s})
@@ -101,26 +95,16 @@ export async def persistenceSpellings(path: string, snapshot: Bytes) -> number:
     return restored.size
 
 export def concurrencyFailure(error: Error) -> string:
-    if error is CancellationError:
-        return "cancelled"
-    if error is TaskTimeoutError:
-        return "task timeout"
-    if error is WorkerBackpressureError:
-        return "worker backpressure"
-    if error is WorkerCallError:
-        return "worker call"
-    if error is WorkerClosedError:
-        return "worker closed"
-    if error is WorkerCrashedError:
-        return "worker crashed"
-    if error is WebSocketBackpressureError:
-        return "socket backpressure"
-    if error is WebSocketClosedError:
-        return "socket closed"
-    if error is WebSocketProtocolError:
-        return "socket protocol"
-    if error is WebSocketTimeoutError:
-        return "socket timeout"
+    if error is CancellationError: return "cancelled"
+    if error is TaskTimeoutError: return "task timeout"
+    if error is WorkerBackpressureError: return "worker backpressure"
+    if error is WorkerCallError: return "worker call"
+    if error is WorkerClosedError: return "worker closed"
+    if error is WorkerCrashedError: return "worker crashed"
+    if error is WebSocketBackpressureError: return "socket backpressure"
+    if error is WebSocketClosedError: return "socket closed"
+    if error is WebSocketProtocolError: return "socket protocol"
+    if error is WebSocketTimeoutError: return "socket timeout"
     return "other"
 
 export const chapterSeventeen = {bytesType, bufferType, littleEndian}

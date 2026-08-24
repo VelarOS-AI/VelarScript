@@ -52,8 +52,7 @@ const fadeEased: Transition = transition("opacity", 200ms, "ease-in-out", 50ms)
 // function, and called outside a Look block.
 const makeColor = rgb
 
-def buildRamp(build: (number, number, number) -> Color) -> List<Color>:
-    return [build(45, 79, 190), build(90, 120, 220)]
+def buildRamp(build: (number, number, number) -> Color) -> List<Color>: return [build(45, 79, 190), build(90, 120, 220)]
 
 const ramp: Color = makeColor(45, 79, 190)
 const rampColors: List<Color> = buildRamp(rgb)
@@ -643,8 +642,7 @@ export const primaryControlLook: Look = look:
 export component LookPanel:
     state hot = false
 
-    def toggle():
-        hot = not hot
+    def toggle(): hot = not hot
 
     return <section data-chapter="06">
         <h2>06 — Look</h2>

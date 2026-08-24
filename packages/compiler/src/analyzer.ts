@@ -598,6 +598,8 @@ export interface RuntimeNarrowingGuard {
 }
 
 export interface AnalysisContext {
+  /** The module source, used only to withhold mechanical rewrites that would erase comments. */
+  readonly sourceText?: string;
   readonly imports?: ReadonlyMap<string, ValueType>;
   readonly dynamicImports?: ReadonlyMap<string, ValueType>;
   readonly reactiveImports?: ReadonlyMap<string, "state">;
@@ -1620,6 +1622,7 @@ export class Analyzer implements TypeEnvironment {
   private readonly globalGuidance = new Map(coreGlobalGuidance);
   private readonly scopedGlobalGuidance = new Map<string, Map<string, string>>();
   private readonly analysisExtensions: readonly CompilerAnalysisExtension[];
+  private readonly sourceText: string;
   // D52 rule 114: the namespace prefixes an extension has withdrawn, and the
   // module their members went back to.
   private readonly retiredNamespaces = new Map<string, RetiredNamespace>();
@@ -1638,6 +1641,7 @@ export class Analyzer implements TypeEnvironment {
 
   constructor(context: AnalysisContext = {}, extensions: readonly CompilerAnalysisExtension[] = []) {
     this.analysisExtensions = extensions;
+    this.sourceText = context.sourceText ?? "";
     this.inferredFunctionResultSeeds = context.inferredFunctionResults ?? new Map();
     this.finalizeFunctionResultInference = context.finalizeFunctionResultInference === true;
     this.classes.set("Error", {
@@ -4422,6 +4426,11 @@ export class Analyzer implements TypeEnvironment {
       "A7",
       `This empty ${describeType(target)} is filled only by copying '${statement.iterable.name}' in iteration order; '${replacement}' already creates the same fresh ${describeType(target)}. Initialize '${targetName}' with '${replacement}' instead of writing this loop`,
       statement.iterable.span,
+      this.commentPreservingMechanicalFix(
+        span(previous.initializer.span.start, statement.span.end),
+        replacement,
+        `Initialize '${targetName}' with '${replacement}'`,
+      ),
     );
   }
 
@@ -4539,6 +4548,11 @@ export class Analyzer implements TypeEnvironment {
       "A8",
       `This loop returns true on the first matching List item and false after exhaustion; List.some is the canonical existential query. Write '${replacement}' instead`,
       previous.iterable.span,
+      this.commentPreservingMechanicalFix(
+        span(previous.span.start, statement.span.end),
+        replacement,
+        `Use '${sourceName}.some(...)'`,
+      ),
     );
   }
 
@@ -4675,7 +4689,23 @@ export class Analyzer implements TypeEnvironment {
       "A9",
       `This ${target.name} literal mirrors ${mirrors} same-name fields from '${sourceName}'; '${replacement}' is the canonical exact projection and keeps ${target.name}'s declared field set and declaration order. Write that instead of copying the fields one by one; suppress A9 only when this literal's authored Record order is intentional`,
       expression.span,
+      this.commentPreservingMechanicalFix(
+        expression.span,
+        replacement,
+        `Use '${target.name}.from(...)'`,
+      ),
     );
+  }
+
+  /**
+   * A canonical-form advisory may offer an editor fix only when replacing its
+   * proven-equivalent syntax cannot silently discard an authored comment.
+   * VelarScript comments start with `//`; a matching string literal may
+   * conservatively withhold the fix, which is preferable to erasing prose.
+   */
+  private commentPreservingMechanicalFix(rewriteSpan: Span, replacement: string, title: string): DiagnosticFix | undefined {
+    if (this.sourceText.slice(rewriteSpan.start, rewriteSpan.end).includes("//")) return undefined;
+    return mechanicalFix(rewriteSpan, replacement, title);
   }
 
   // D32 item 30: a Promise-typed expression statement is a floating promise —

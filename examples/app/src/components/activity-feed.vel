@@ -41,11 +41,9 @@ export component ActivityFeed:
     resource activity: ActivityPayload = loadActivity()
 
     def status() -> string:
-        if activity.error != null:
-            return "Activity is unavailable"
+        if activity.error != null: return "Activity is unavailable"
         const payload = activity.value
-        if payload == null:
-            return activity.loading ? "Loading activity…" : "No activity yet"
+        if payload == null: return activity.loading ? "Loading activity…" : "No activity yet"
         return f"{payload.entries.size} recent events"
 
     return <section look={cardLook} aria-label="Recent activity" data-activity>

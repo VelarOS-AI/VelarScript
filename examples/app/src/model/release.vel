@@ -39,8 +39,7 @@ export type BoardSummary:
 // Percent of a release's checklist that is done. An empty checklist is 0 rather
 // than a division by zero, because "nothing planned" is not "ready to ship".
 export def readiness(release: readonly Release) -> number:
-    if release.checks.size == 0:
-        return 0
+    if release.checks.size == 0: return 0
     const done = release.checks.filter(check => check.done).size
     return (done / release.checks.size * 100).round()
 
@@ -55,34 +54,24 @@ export def isBlocked(release: readonly Release) -> bool:
 // advance — it asks what the next stage is and compares.
 export def nextStage(stage: Stage) -> Stage:
     match stage:
-        case Stage.planned:
-            return Stage.building
-        case Stage.building:
-            return Stage.verifying
-        case Stage.verifying:
-            return Stage.released
-        case Stage.released:
-            return Stage.released
+        case Stage.planned: return Stage.building
+        case Stage.building: return Stage.verifying
+        case Stage.verifying: return Stage.released
+        case Stage.released: return Stage.released
 
 export def stageLabel(stage: Stage) -> string:
     match stage:
-        case Stage.planned:
-            return "Planned"
-        case Stage.building:
-            return "Building"
-        case Stage.verifying:
-            return "Verifying"
-        case Stage.released:
-            return "Released"
+        case Stage.planned: return "Planned"
+        case Stage.building: return "Building"
+        case Stage.verifying: return "Verifying"
+        case Stage.released: return "Released"
 
 // A release may only leave `verifying` once its checklist is clear. The rule
 // lives here rather than in the store so that a test can state it in one line
 // and the store keeps exactly one job: applying decisions to state.
 export def mayAdvance(release: readonly Release) -> bool:
-    if release.stage == Stage.released:
-        return false
-    if release.stage == Stage.verifying:
-        return not isBlocked(release)
+    if release.stage == Stage.released: return false
+    if release.stage == Stage.verifying: return not isBlocked(release)
     return true
 
 export def summarize(releases: readonly List<Release>) -> BoardSummary:

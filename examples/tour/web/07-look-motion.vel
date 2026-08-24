@@ -157,8 +157,7 @@ export const transitionLonghandLook = look:
 export component MotionPanel:
     state active = false
 
-    def toggle():
-        active = not active
+    def toggle(): active = not active
 
     return <section data-chapter="07">
         <h2>07 — motion</h2>

@@ -1,8 +1,7 @@
 abstract class Entity:
     const id: string
 
-    constructor(id: string):
-        self.id = id
+    constructor(id: string): self.id = id
 
     abstract def describe() -> string
 
@@ -13,11 +12,9 @@ class Player extends Entity:
         super(id)
         self.score = score
 
-    override def describe() -> string:
-        return f"{self.id}: {self.score}"
+    override def describe() -> string: return f"{self.id}: {self.score}"
 
-    static def guest() -> Player:
-        return Player("guest", 1)
+    static def guest() -> Player: return Player("guest", 1)
 
 class FormError extends Error:
     const field: string

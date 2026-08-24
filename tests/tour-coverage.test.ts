@@ -186,8 +186,8 @@ test("removing one spelling from the tour turns the gate red and names it", asyn
       family: "a hard keyword",
       expected: "hard-keyword: continue",
       edits: [
-        { file: "core/09-control-flow.vel", replace: "            continue\n", replacement: "            pass\n" },
-        { file: "core/11-errors-and-assertions.vel", replace: "                continue\n", replacement: "                pass\n" },
+        { file: "core/09-control-flow.vel", replace: "        if value < 0: continue\n", replacement: "        if value < 0: pass\n" },
+        { file: "core/11-errors-and-assertions.vel", replace: "            if value < 0: continue\n", replacement: "            if value < 0: pass\n" },
       ],
     },
     {

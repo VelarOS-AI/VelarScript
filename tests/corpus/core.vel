@@ -15,17 +15,13 @@ class Player:
         self.name = name
         self.score = score
 
-    def addScore(points: number):
-        self.score += points
+    def addScore(points: number): self.score += points
 
-    def label() -> string:
-        return f"{self.name}: {self.score}"
+    def label() -> string: return f"{self.name}: {self.score}"
 
-def activeNames(users: List<User>) -> List<string>:
-    return users.map(user => user.name)
+def activeNames(users: List<User>) -> List<string>: return users.map(user => user.name)
 
-def labelFor(labels: Record<string>, key: string) -> string:
-    return labels[key] ?? "unlabelled"
+def labelFor(labels: Record<string>, key: string) -> string: return labels[key] ?? "unlabelled"
 
 const raw = {
     id: "user-1",
@@ -51,25 +47,19 @@ print(labelFor(workspace.labels, "tier"))
 const player = Player(user.name)
 player.addScore(savedScore ?? 0)
 
-if raw is User:
-    print(player.label())
+if raw is User: print(player.label())
 
 print(f"{displayName}: {str(namedUserCount)}")
 
-for current in users:
-    print(current.name)
+for current in users: print(current.name)
 
-for id in scores:
-    print(id)
+for id in scores: print(id)
 
 let index = 0
 while index < users.size:
     print(users[index].name)
     index += 1
 
-try:
-    print(firstName)
-catch error:
-    print(error.message)
-finally:
-    print("done")
+try: print(firstName)
+catch error: print(error.message)
+finally: print("done")

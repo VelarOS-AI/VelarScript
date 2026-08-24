@@ -32,20 +32,15 @@ component TimersAndSubscriptions:
     state visible = true
     let stops: List<() -> null> = []
 
-    def countTick():
-        ticks += 1
+    def countTick(): ticks += 1
 
-    def settle():
-        settled = "settled"
+    def settle(): settled = "settled"
 
-    def setWide(next: bool):
-        wide = next
+    def setWide(next: bool): wide = next
 
-    def setOnline(next: bool):
-        online = next
+    def setOnline(next: bool): online = next
 
-    def setVisible(next: bool):
-        visible = next
+    def setVisible(next: bool): visible = next
 
     @mounted:
         stops = [
@@ -57,8 +52,7 @@ component TimersAndSubscriptions:
         ]
 
     @cleanup:
-        for stop in stops:
-            stop()
+        for stop in stops: stop()
 
     return <div data-timers>
         <p data-ticks>{ticks}</p>
@@ -123,24 +117,19 @@ component ElementControls:
     let note: TextAreaElement? = null
 
     def focusNote():
-        if note != null:
-            focus(note)
+        if note != null: focus(note)
 
     def focusWithoutScrolling():
-        if note != null:
-            focus(note, true)
+        if note != null: focus(note, true)
 
     def blurNote():
-        if note != null:
-            blur(note)
+        if note != null: blur(note)
 
     def revealTarget():
-        if target != null:
-            scrollIntoView(target)
+        if target != null: scrollIntoView(target)
 
     def revealSmoothly():
-        if target != null:
-            scrollIntoView(target, "smooth")
+        if target != null: scrollIntoView(target, "smooth")
 
     def scrollPanel():
         if target != null:
@@ -187,11 +176,9 @@ component ElementControls:
 component ClipboardEvents:
     state pasted = "nothing pasted"
 
-    def onPaste(event: ClipboardEvent):
-        pasted = clipboardText(event)
+    def onPaste(event: ClipboardEvent): pasted = clipboardText(event)
 
-    def onCopy(event: ClipboardEvent):
-        setClipboardText(event, "copied from the tour")
+    def onCopy(event: ClipboardEvent): setClipboardText(event, "copied from the tour")
 
     return <div data-clipboard-events>
         <input data-paste-target type="text" on:paste={onPaste} on:copy={onCopy} />

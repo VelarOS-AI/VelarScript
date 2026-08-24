@@ -33,12 +33,9 @@ export type Draft:
 const emptyDraft: Draft = {title: "", body: ""}
 
 export def storageFailure(error: Error) -> string:
-    if error is StorageQuotaError:
-        return "quota"
-    if error is StorageTransactionError:
-        return "transaction"
-    if error is StorageUpgradeError:
-        return "upgrade"
+    if error is StorageQuotaError: return "quota"
+    if error is StorageTransactionError: return "transaction"
+    if error is StorageUpgradeError: return "upgrade"
     return "other"
 
 // `storage` and `session` publish the same seven members, and `storage.scope`
@@ -68,8 +65,7 @@ component LocalStorageRound:
         stashed = f"{sessionDraft.title}|{session.has("tour:session")}|{session.keys().size}"
 
     @cleanup:
-        if stopWatch != null:
-            stopWatch()
+        if stopWatch != null: stopWatch()
 
     def clearEverything():
         storage.remove("tour:capped")
@@ -162,8 +158,7 @@ component HttpRound:
         try:
             const draft: Draft = await http.get("/api/draft").parse(Draft)
             fetched = f"typed:{draft.title}"
-        catch error:
-            failure = describeHttpFailure(error)
+        catch error: failure = describeHttpFailure(error)
         return fetched
 
     return <div data-http>
@@ -181,16 +176,12 @@ component HttpRound:
 // keeps its own hierarchy because a caller branches on `status`, `reason`, and
 // `phase` directly.
 export def describeHttpFailure(error: Error) -> string:
-    if error is HttpAbortError:
-        return f"aborted: {error.reason}"
+    if error is HttpAbortError: return f"aborted: {error.reason}"
     if error is HttpTransportError:
         match error.phase:
-            case HttpTransportPhase.request:
-                return "transport failed while sending the request"
-            case HttpTransportPhase.response:
-                return "transport failed while reading the response"
-    if error is HttpResponseError:
-        return f"http {error.status} from {error.url}"
+            case HttpTransportPhase.request: return "transport failed while sending the request"
+            case HttpTransportPhase.response: return "transport failed while reading the response"
+    if error is HttpResponseError: return f"http {error.status} from {error.url}"
     return f"unclassified: {error.message}"
 
 // Every remaining request spelling, including the ones that change server state
@@ -221,8 +212,7 @@ export async def requestSpellings(cover: File):
 
 // `Blob` is produced by `blob()` and has no members of its own, so the only
 // thing a checked program does with one is hand it on.
-def keepBlob(value: Blob):
-    print("received a blob")
+def keepBlob(value: Blob): print("received a blob")
 
 // Both connection handles publish `close()`, so `using` supplies their release
 // contract and each connection is closed at the end of the block.
@@ -236,8 +226,7 @@ export async def realtimeSpellings():
     await live.send("hello")
     await live.send(Json.stringify(emptyDraft))
     const first = await live.next()
-    if first is string:
-        print(f"first message: {first}")
+    if first is string: print(f"first message: {first}")
     print(f"{live.state()}")
     await live.close()
     await live.close(1000, "done")

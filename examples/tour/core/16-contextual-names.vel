@@ -38,8 +38,7 @@ export def describe(type: string, match: string, from: string, as: string, using
 export def describeRest(constructor: string, get: string, json: string, readonly: string) -> string:
     return constructor + get + json + readonly
 
-export def withDefaults(type: string = "a", match: string = "b") -> string:
-    return type + match
+export def withDefaults(type: string = "a", match: string = "b") -> string: return type + match
 
 const arrowParameters = (type: string, match: string) => type + match
 
@@ -52,20 +51,13 @@ const pairs: Map<string, string> = Map([["k", "v"]])
 
 export def loopBindings() -> string:
     let joined = ""
-    for type in rows:
-        joined += type
-    for match, from in rows:
-        joined += f"{match}{from}"
-    for as, using in pairs:
-        joined += f"{as}{using}"
-    for test in rows:
-        joined += test
-    for constructor in rows:
-        joined += constructor
-    for json in rows:
-        joined += json
-    for get, readonly in pairs:
-        joined += f"{get}{readonly}"
+    for type in rows: joined += type
+    for match, from in rows: joined += f"{match}{from}"
+    for as, using in pairs: joined += f"{as}{using}"
+    for test in rows: joined += test
+    for constructor in rows: joined += constructor
+    for json in rows: joined += json
+    for get, readonly in pairs: joined += f"{get}{readonly}"
     return joined
 
 // ---------------------------------------------------------------------------
@@ -134,17 +126,13 @@ class Rule:
     let get: string = "a field named get"
     let json: string = "a field named json"
 
-    def match(value: string) -> string:
-        return self.type + value
+    def match(value: string) -> string: return self.type + value
 
-    def test(value: string) -> bool:
-        return self.match(value).size > 0
+    def test(value: string) -> bool: return self.match(value).size > 0
 
-    get from() -> string:
-        return self.type
+    get from() -> string: return self.type
 
-    get case2() -> string:
-        return self.case
+    get case2() -> string: return self.case
 
 enum Kind:
     type
@@ -184,8 +172,7 @@ const {constructor: readBackConstructor, get: readBackGet, json: readBackJson, r
 // Where the two readings could compete, the name wins
 // ---------------------------------------------------------------------------
 
-def matchFunction(value: string) -> string:
-    return value
+def matchFunction(value: string) -> string: return value
 
 // `match(value)` calls a function; only a header ending in `:` above a block
 // is the declaration.
@@ -200,18 +187,14 @@ export def theNameWins(value: string) -> string:
 
     // `match` as a statement head *is* the declaration.
     match value:
-        case "a":
-            return type
-        case _:
-            return from
+        case "a": return type
+        case _: return from
 
 // `using name = expression` is the declaration; `using` alone is a name.
 class Handle:
-    def close():
-        print("closed")
+    def close(): print("closed")
 
-    @dispose:
-        self.close()
+    @dispose: self.close()
 
 export def ownershipStillWorks() -> string:
     using handle = Handle()
@@ -230,11 +213,9 @@ export def typeStillDeclares() -> string:
 // names a class member in its own shape and is an ordinary name everywhere
 // else, which is what every position above just showed.
 class Session:
-    constructor(const id: string):
-        pass
+    constructor(const id: string): pass
 
-    get label() -> string:
-        return self.id
+    get label() -> string: return self.id
 
 const session = Session("s-1")
 const sessionLabel = session.label

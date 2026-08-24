@@ -33,16 +33,13 @@ def metrics(release: readonly Release) -> List<Metric>:
     ]
 
 export component ReleasePage(route: RouteContext):
-    def releaseId() -> string:
-        return route.params.get("id") ?? ""
+    def releaseId() -> string: return route.params.get("id") ?? ""
 
     def advanceRelease():
         const release = findRelease(releaseId())
-        if release == null:
-            return
+        if release == null: return
         const previous = stageLabel(release.stage)
-        if advance(releaseId()):
-            announce(f"{release.name} moved on from {previous}")
+        if advance(releaseId()): announce(f"{release.name} moved on from {previous}")
 
     def view() -> WebNode:
         const release = findRelease(releaseId())

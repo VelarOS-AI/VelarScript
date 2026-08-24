@@ -1,8 +1,11 @@
 import { CORE_STATEMENT_HEAD_KEYWORDS } from "./core-vocabulary.ts";
+import type { Statement } from "./ast.ts";
 import { scanEmbeddedJavaScriptLiteral } from "./embedded-javascript.ts";
 import { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
 import { findInterpolatedExpressionEnd, scanStringEscape, scanStringLiteral, type StringLiteralScan } from "./interpolated-string.ts";
 import type { CompilerExtension, CompilerFormattingOpaqueSourceScan } from "./extension.ts";
+import { Lexer } from "./lexer.ts";
+import { Parser } from "./parser.ts";
 import { isSourceIdentifierPart, isSourceIdentifierStart, isTypeEvidenceName } from "./source-names.ts";
 import { keywordKinds } from "./token.ts";
 
@@ -40,6 +43,7 @@ const statementHeadKeywordWords = new Set<string>(CORE_STATEMENT_HEAD_KEYWORDS);
  */
 const expressionKeywordWords = new Set(["true", "false", "null", "super", "import"]);
 const nonExpressionKeywordWords = new Set(Object.keys(keywordKinds).filter((word) => !expressionKeywordWords.has(word)));
+const FORMAT_PRINT_WIDTH = 120;
 
 /**
  * Formats VelarScript source without round-tripping through generated JavaScript.
@@ -120,7 +124,147 @@ export function formatSource(text: string, options: FormatOptions = {}): string 
   // adds a newline on every run, and charter line 422 makes formatting
   // idempotent.
   const restored = protectedStrings.restore(formatted.join("\n"));
-  return restored.endsWith("\n") || restored.endsWith("\r") ? restored : `${restored}\n`;
+  const terminated = restored.endsWith("\n") || restored.endsWith("\r") ? restored : `${restored}\n`;
+  return formatCompactSuites(terminated, indentWidth, options.extensions ?? []);
+}
+
+interface CompactSuiteCandidate {
+  readonly ownerStart: number;
+  readonly body: readonly Statement[];
+}
+
+interface CompactSuiteEdit {
+  readonly start: number;
+  readonly end: number;
+  readonly text: string;
+}
+
+/**
+ * Canonicalizes the one-statement executable suites the parser has already
+ * proved. A short simple body shares its header line (`if ready: run()`); once
+ * that complete line would exceed the formatter's print width, the same suite
+ * is expanded after the colon. Structural bodies and nested block statements
+ * never participate, and the whitespace-only gap requirement keeps comments
+ * attached exactly where the author wrote them.
+ */
+function formatCompactSuites(source: string, indentWidth: number, extensions: readonly CompilerExtension[]): string {
+  const lexicalExtensions = extensions.flatMap((extension) => extension.lexical ? [extension.lexical] : []);
+  const lexed = new Lexer(source, lexicalExtensions).lex();
+  if (lexed.diagnostics.length > 0) return source;
+  const parserExtensions = extensions.filter((extension) => extension.parser);
+  if (parserExtensions.length > 1) return source;
+  const parser = parserExtensions[0]?.parser?.create(lexed.tokens, lexicalExtensions)
+    ?? new Parser(lexed.tokens, lexicalExtensions);
+  const parsed = parser.parse();
+  if (parsed.diagnostics.length > 0) return source;
+
+  const candidates: CompactSuiteCandidate[] = [];
+  for (const statement of parsed.program.body) collectCompactSuiteCandidates(statement, candidates);
+  const edits = candidates.flatMap((candidate) => compactSuiteEdit(source, candidate, indentWidth) ?? []);
+  edits.sort((left, right) => right.start - left.start || right.end - left.end);
+
+  let output = source;
+  let previousStart = source.length + 1;
+  for (const edit of edits) {
+    if (edit.end > previousStart) continue;
+    output = `${output.slice(0, edit.start)}${edit.text}${output.slice(edit.end)}`;
+    previousStart = edit.start;
+  }
+  return output;
+}
+
+function collectCompactSuiteCandidates(statement: Statement, output: CompactSuiteCandidate[]): void {
+  const body = (ownerStart: number, statements: readonly Statement[] | null): void => {
+    if (!statements) return;
+    output.push({ ownerStart, body: statements });
+    for (const child of statements) collectCompactSuiteCandidates(child, output);
+  };
+
+  switch (statement.kind) {
+    case "FunctionDeclaration":
+    case "TestDeclaration":
+    case "ForStatement":
+    case "WhileStatement":
+      body(statement.span.start, statement.body);
+      return;
+    case "IfStatement":
+      body(statement.span.start, statement.thenBody);
+      body(statement.span.start, statement.elseBody);
+      return;
+    case "MatchStatement":
+      for (const branch of statement.cases) body(branch.span.start, branch.body);
+      return;
+    case "TryStatement":
+      body(statement.span.start, statement.tryBody);
+      body(statement.span.start, statement.catchBody);
+      body(statement.span.start, statement.finallyBody);
+      return;
+    case "ClassDeclaration":
+      if (statement.initialization) body(statement.initialization.span.start, statement.initialization.body);
+      if (statement.dispose) body(statement.dispose.span.start, statement.dispose.body);
+      if (statement.iterate) body(statement.iterate.span.start, statement.iterate.body);
+      for (const member of [...statement.getters, ...statement.methods]) body(member.span.start, member.body);
+      return;
+    default: {
+      if (!statement.kind.startsWith("ExtensionStatement:")) return;
+      const extensionBody = (statement as Statement & { readonly body?: readonly Statement[] }).body;
+      if (Array.isArray(extensionBody)) {
+        for (const child of extensionBody) collectCompactSuiteCandidates(child, output);
+      }
+    }
+  }
+}
+
+function compactSuiteEdit(source: string, candidate: CompactSuiteCandidate, indentWidth: number): CompactSuiteEdit | null {
+  if (candidate.body.length !== 1) return null;
+  const child = candidate.body[0]!;
+  if (statementOwnsCompactSuite(child)) return null;
+  const childText = source.slice(child.span.start, child.span.end);
+  if (childText.includes("\n") || childText.includes("\r")) return null;
+
+  const colon = source.lastIndexOf(":", child.span.start - 1);
+  if (colon < candidate.ownerStart) return null;
+  const gap = source.slice(colon + 1, child.span.start);
+  if (!/^[\t\r\n ]*$/u.test(gap)) return null;
+
+  const lineStart = Math.max(source.lastIndexOf("\n", colon - 1), source.lastIndexOf("\r", colon - 1)) + 1;
+  const newline = source.indexOf("\n", child.span.end);
+  const lineEnd = newline === -1 ? source.length : newline;
+  const inlineLine = `${source.slice(lineStart, colon + 1)} ${source.slice(child.span.start, lineEnd)}`;
+  const multiline = gap.includes("\n") || gap.includes("\r");
+
+  if (inlineLine.length <= FORMAT_PRINT_WIDTH) {
+    return multiline ? { start: colon + 1, end: child.span.start, text: " " } : null;
+  }
+  if (multiline) return null;
+
+  const leading = /^[ ]*/u.exec(source.slice(lineStart, colon))?.[0] ?? "";
+  return {
+    start: colon + 1,
+    end: child.span.start,
+    text: `\n${leading}${" ".repeat(indentWidth)}`,
+  };
+}
+
+function statementOwnsCompactSuite(statement: Statement): boolean {
+  if (statement.kind.startsWith("ExtensionStatement:")) return true;
+  switch (statement.kind) {
+    case "ExternModuleDeclaration":
+    case "EmbeddedJavaScriptDeclaration":
+    case "TypeDeclaration":
+    case "EnumDeclaration":
+    case "ClassDeclaration":
+    case "TestDeclaration":
+    case "FunctionDeclaration":
+    case "IfStatement":
+    case "MatchStatement":
+    case "ForStatement":
+    case "WhileStatement":
+    case "TryStatement":
+      return true;
+    default:
+      return false;
+  }
 }
 
 function protectMultilineStrings(
@@ -1321,7 +1465,6 @@ function isTernaryColon(tokens: readonly InlineToken[], colonIndex: number): boo
  *    exactly like every other construct in the language: the formatter
  *    canonicalizes spelling, not the author's line breaks.
  */
-const MARKUP_PRINT_WIDTH = 120;
 const MAX_MARKUP_DEPTH = 48;
 
 type MarkupEmbedding = NonNullable<CompilerExtension["formatting"]>["angleBracketEmbedding"] | null;
@@ -1482,7 +1625,7 @@ function scanMarkupElement(
 
 function renderMarkupElement(element: MarkupElement, layout: MarkupLayout, column: number): string {
   const inline = renderInlineMarkup(element, layout);
-  if (!layout.breakable || column + inline.length <= MARKUP_PRINT_WIDTH) return inline;
+  if (!layout.breakable || column + inline.length <= FORMAT_PRINT_WIDTH) return inline;
   if (element.selfClosing) return renderMarkupOpenTag(element, layout, column);
   if (!isBreakableMarkup(element)) return inline;
   const indent = " ".repeat(layout.column);
@@ -1505,7 +1648,7 @@ function renderMarkupElement(element: MarkupElement, layout: MarkupLayout, colum
 
 function renderMarkupOpenTag(element: MarkupElement, layout: MarkupLayout, column: number): string {
   const inline = `<${element.tag}${element.attributes.map((attribute) => ` ${renderMarkupAttribute(attribute, layout)}`).join("")}${element.selfClosing ? " />" : ">"}`;
-  if (!layout.breakable || column + inline.length <= MARKUP_PRINT_WIDTH || element.attributes.length === 0) return inline;
+  if (!layout.breakable || column + inline.length <= FORMAT_PRINT_WIDTH || element.attributes.length === 0) return inline;
   const indent = " ".repeat(layout.column);
   const attributeIndent = " ".repeat(layout.column + layout.indentWidth);
   const attributeLayout = markupLayout(layout.indentWidth, layout.column + layout.indentWidth, layout.embedding);

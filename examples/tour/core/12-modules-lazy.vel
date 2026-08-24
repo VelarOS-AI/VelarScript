@@ -7,8 +7,6 @@
 
 export const title = "Lazy reports"
 
-export def render(rows: List<string>) -> string:
-    return f"{title}: {rows.join(", ")}"
+export def render(rows: List<string>) -> string: return f"{title}: {rows.join(", ")}"
 
-export def install():
-    print("the lazy module installed itself")
+export def install(): print("the lazy module installed itself")

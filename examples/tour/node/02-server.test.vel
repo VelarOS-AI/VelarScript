@@ -2,11 +2,9 @@ import {TestClient, TestResponse, client} from "velar/server-test"
 import {expect} from "velar/test"
 import {app} from "./01-server.vel"
 
-def checkedClient(value: TestClient) -> TestClient:
-    return value
+def checkedClient(value: TestClient) -> TestClient: return value
 
-def checkedResponse(value: TestResponse) -> TestResponse:
-    return value
+def checkedResponse(value: TestResponse) -> TestResponse: return value
 
 test "native server health":
     const api = checkedClient(await client(app))
@@ -14,8 +12,7 @@ test "native server health":
         const response = checkedResponse(await api.get("/api/health"))
         expect(response.status).toBe(200)
         expect(await response.text()).toContain("ok")
-    finally:
-        await api.close()
+    finally: await api.close()
 
 test "server authentication":
     const api = checkedClient(await client(app))
@@ -34,5 +31,4 @@ test "server authentication":
         }))
         expect(valid.status).toBe(200)
         expect(await valid.text()).toContain("tour-user")
-    finally:
-        await api.close()
+    finally: await api.close()

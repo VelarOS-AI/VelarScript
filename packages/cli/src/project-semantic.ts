@@ -58,7 +58,7 @@ export interface ProjectCompletion {
   readonly presentationKind?: SemanticSymbol["presentationKind"];
 }
 
-export type ProjectSemanticTokenType = "type" | "class" | "enum" | "enumMember" | "function" | "method" | "property" | "variable" | "parameter" | "keyword";
+export type ProjectSemanticTokenType = "type" | "class" | "enum" | "enumMember" | "function" | "method" | "property" | "variable" | "parameter" | "keyword" | "decorator";
 export type ProjectSemanticTokenModifier = "declaration" | "readonly" | "static";
 
 export interface ProjectSemanticToken {

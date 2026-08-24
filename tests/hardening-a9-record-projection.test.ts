@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { compile, formatSource, type CompileResult } from "@velarscript/compiler";
+import { applyMechanicalFixes, compile, formatSource, type CompileResult } from "@velarscript/compiler";
 
 function compiled(source: string): CompileResult {
   const result = compile(source.trimStart());
@@ -39,12 +39,31 @@ def response(worldId: string, sample: TerrainSample) -> GenerationSampleResponse
   assert.match(reported.message, /GenerationSampleResponse\.from\(sample, \{worldId\}\)/u);
   assert.match(reported.message, /declared field set and declaration order/u);
   assert.ok(source.slice(reported.span.start, reported.span.end).trimStart().startsWith("{"));
+  assert.equal(reported.fix?.title, "Use 'GenerationSampleResponse.from(...)'");
+  assert.equal(applyMechanicalFixes(source, [reported]).text, `${declarations}
+def response(worldId: string, sample: TerrainSample) -> GenerationSampleResponse:
+    return GenerationSampleResponse.from(sample, {worldId})
+`);
 
   const canonical = compiled(`${declarations}
 def response(worldId: string, sample: TerrainSample) -> GenerationSampleResponse:
     return GenerationSampleResponse.from(sample, {worldId})
 `);
   assert.deepEqual(canonical.advisories, []);
+});
+
+test("[A9] the editor fix is withheld when replacing the literal would erase a comment", () => {
+  const reported = a9(`${declarations}
+def response(worldId: string, sample: TerrainSample) -> GenerationSampleResponse:
+    return {
+        worldId,
+        // Keep the wire projection visible here.
+        position: sample.position,
+        surfaceY: sample.surfaceY,
+        temperature: sample.temperature,
+    }
+`);
+  assert.equal(reported.fix, undefined);
 });
 
 test("[A9] exact all-field mirrors need no override literal", () => {

@@ -11,8 +11,7 @@
 import {expect} from "velar/test"
 import {Check, Release, Stage, blockingTitles, isBlocked, mayAdvance, nextStage, readiness, stageLabel, summarize} from "./release.vel"
 
-def check(id: string, done: bool) -> Check:
-    return {id, title: f"Check {id}", owner: "Ada", done}
+def check(id: string, done: bool) -> Check: return {id, title: f"Check {id}", owner: "Ada", done}
 
 def sample(stage: Stage, checks: List<Check>) -> Release:
     return {id: "sample", name: "Sample", version: "1.0.0", stage, target: "2026-09-01", checks}

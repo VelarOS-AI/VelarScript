@@ -23,11 +23,9 @@ def scale(maximum: number) -> number:
     assert maximum <= 1000000 else "The chart maximum is beyond the supported range"
     return maximum
 
-async def loadLater(id: string) -> string:
-    return id
+async def loadLater(id: string) -> string: return id
 
-async def failLater():
-    throw Error("the task failed")
+async def failLater(): throw Error("the task failed")
 
 // ---------------------------------------------------------------------------
 // toBe and toEqual — available for every value
@@ -84,8 +82,7 @@ test "toMatch reads a Unicode string pattern":
 // toThrow — a synchronous callable
 // ---------------------------------------------------------------------------
 
-test "an oversized chart maximum is rejected":
-    expect(() => scale(1000001)).toThrow()
+test "an oversized chart maximum is rejected": expect(() => scale(1000001)).toThrow()
 
 test "an out-of-range List position throws IndexError":
     const values: List<number> = [1]
@@ -95,8 +92,7 @@ test "an out-of-range List position throws IndexError":
 // toReject — an actual Promise, or a function returning one
 // ---------------------------------------------------------------------------
 
-test "a rejected task is observed with toReject":
-    await expect(failLater()).toReject()
+test "a rejected task is observed with toReject": await expect(failLater()).toReject()
 
 test "a test body is its own async frame and may await directly":
     const loaded = await loadLater("r-1")
@@ -121,11 +117,8 @@ test "chapter 9 matches List shapes and drains a pull source":
     expect(matchOptionalEnum(Status.done)).toBe("done")
     expect(pullLoop(["a", "b"])).toBe("ab")
 
-test "chapter 10 releases an owned resource on the way out":
-    expect(ownedResource()).toBe("true false")
+test "chapter 10 releases an owned resource on the way out": expect(ownedResource()).toBe("true false")
 
-test "chapter 12 reads an export let as a live binding":
-    expect(observeLiveBinding()).toContain("->")
+test "chapter 12 reads an export let as a live binding": expect(observeLiveBinding()).toContain("->")
 
-test "chapter 6 reads a capture group out of a pattern match":
-    expect(readMatch()).toBe("owner: Ada at 0: Ada")
+test "chapter 6 reads a capture group out of a pattern match": expect(readMatch()).toBe("owner: Ada at 0: Ada")

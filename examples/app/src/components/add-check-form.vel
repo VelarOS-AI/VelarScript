@@ -41,8 +41,7 @@ export component AddCheckForm(releaseId: string):
     let form: Element? = null
 
     def add():
-        if form == null:
-            return
+        if form == null: return
         const cleanTitle = title.trim()
         if cleanTitle == "":
             setError(form, "title", "A check needs a title")

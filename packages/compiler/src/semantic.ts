@@ -120,7 +120,7 @@ export interface SemanticScope {
  * this channel exists for contextual extension forms that a generic editor
  * cannot classify without the compiler that parsed them.
  */
-export type SemanticSyntaxTokenKind = "keyword";
+export type SemanticSyntaxTokenKind = "keyword" | "decorator";
 
 export interface SemanticSyntaxToken {
   readonly span: Span;

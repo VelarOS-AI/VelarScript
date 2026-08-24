@@ -148,8 +148,7 @@ const patternSplit = Text.splitPattern("a1b2", r"\d")
 
 export def readMatch() -> string:
     const found = Text.findMatch("owner: Ada", r"owner: (\w+)")
-    if found == null:
-        return "no match"
+    if found == null: return "no match"
     const captured = found.groups.get(0) ?? "none"
     return f"{found.value} at {found.index}: {captured}"
 

@@ -28,10 +28,7 @@ export const velarNodeSemanticExtension: CompilerSemanticExtension = Object.free
         continue;
       }
       const role = item.kind === "NodeNotFoundDeclaration" ? "notFound" : item.method.toLowerCase();
-      context.syntaxToken({ start: item.signatureSpan.start, end: item.signatureSpan.start + role.length + 1 }, "keyword");
-      if (item.kind === "NodeRouteDeclaration" && context.source[item.pathSpan.start] === "p") {
-        context.syntaxToken({ start: item.pathSpan.start, end: item.pathSpan.start + 1 }, "keyword");
-      }
+      context.syntaxToken({ start: item.signatureSpan.start, end: item.signatureSpan.start + role.length + 1 }, "decorator");
       context.enterScope(item.span);
       for (const parameter of item.parameters) {
         if (parameter.defaultValue) context.visitExpression(parameter.defaultValue);

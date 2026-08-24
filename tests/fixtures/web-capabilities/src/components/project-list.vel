@@ -3,10 +3,8 @@ import {rgb, spacing, tracks} from "velar/look"
 
 def isHealthy(status: string) -> bool:
     match status:
-        case "Healthy":
-            return true
-        case _:
-            return false
+        case "Healthy": return true
+        case _: return false
 
 const projectsLook = look:
     display = "grid"

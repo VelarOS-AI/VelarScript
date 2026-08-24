@@ -27,8 +27,7 @@ const inkColor = rgb(24, 31, 46)
 // `event.target`, `event.currentTarget`, `event.value`, and `event.checked` are
 // deliberately absent: the `self` modifier answers the target question and a
 // bound state cell answers the value question.
-def onPlainEvent(event: Event):
-    print(f"plain: {event.type}")
+def onPlainEvent(event: Event): print(f"plain: {event.type}")
 
 def onKeyEvent(event: KeyboardEvent):
     print(f"key: {event.key} {event.code} {event.altKey} {event.ctrlKey} {event.metaKey} {event.shiftKey} {event.repeat}")
@@ -36,14 +35,11 @@ def onKeyEvent(event: KeyboardEvent):
 def onPointerEvent(event: PointerEvent):
     print(f"pointer: {event.pointerType} {event.pointerId} {event.button} {event.clientX} {event.clientY}")
 
-def onInputEvent(event: InputEvent):
-    print(f"input: {event.inputType} {event.data ?? "no data"}")
+def onInputEvent(event: InputEvent): print(f"input: {event.inputType} {event.data ?? "no data"}")
 
-def onCompositionEvent(event: CompositionEvent):
-    print(f"composition: {event.data}")
+def onCompositionEvent(event: CompositionEvent): print(f"composition: {event.data}")
 
-def onClipboardEvent(event: ClipboardEvent):
-    print(f"clipboard: {event.type}")
+def onClipboardEvent(event: ClipboardEvent): print(f"clipboard: {event.type}")
 
 // `on:` carries at most one of each modifier, appended with dots. There are
 // exactly five and they always apply in the order self → prevent → stop, then
@@ -51,8 +47,7 @@ def onClipboardEvent(event: ClipboardEvent):
 component EventDirectives:
     state clicks = 0
 
-    def count():
-        clicks += 1
+    def count(): clicks += 1
 
     return <form data-directive-form on:submit.prevent={onPlainEvent}>
         <button type="button" data-count on:click={count}>Clicked {clicks} times</button>
@@ -81,8 +76,7 @@ component BindDirectives:
 
     const options = ["alpha", "beta", "gamma"]
 
-    def describeRefs():
-        print(f"{field != null} {note != null}")
+    def describeRefs(): print(f"{field != null} {note != null}")
 
     return <fieldset data-bind-directives>
         <input
@@ -126,11 +120,9 @@ component StyleDirectives:
     state highlighted = false
     state tone: Tone = Tone.quiet
 
-    def toggleHighlight():
-        highlighted = not highlighted
+    def toggleHighlight(): highlighted = not highlighted
 
-    def switchTone():
-        tone = tone == Tone.quiet ? Tone.loud : Tone.quiet
+    def switchTone(): tone = tone == Tone.quiet ? Tone.loud : Tone.quiet
 
     return <div data-style-directives>
         <p
@@ -195,11 +187,9 @@ component ChildDirectives:
     state names: List<string> = ["alpha", "beta"]
     state shown = true
 
-    def reverse():
-        names = [...names].reversed()
+    def reverse(): names = [...names].reversed()
 
-    def toggle():
-        shown = not shown
+    def toggle(): shown = not shown
 
     return <div data-child-directives>
         <ul data-keyed>

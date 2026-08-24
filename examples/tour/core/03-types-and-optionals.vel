@@ -59,11 +59,9 @@ const readonlyOptional: readonly User? = null
 // The `Promise` and `Function` shorthand table
 // ---------------------------------------------------------------------------
 
-async def resolvesNull():
-    pass
+async def resolvesNull(): pass
 
-async def resolvesText() -> string:
-    return "a"
+async def resolvesText() -> string: return "a"
 
 const barePromise: Promise = resolvesNull()
 const explicitPromise: Promise<null> = resolvesNull()
@@ -83,8 +81,7 @@ type Profile:
     details: Details
     tags: List<Tag>
 
-def loadProfile() -> Profile:
-    return {id: "p", details: {label: "d"}, tags: []}
+def loadProfile() -> Profile: return {id: "p", details: {label: "d"}, tags: []}
 
 export def display(profile: readonly Profile) -> string:
     // A read-only view is transitive through reads.
@@ -92,8 +89,7 @@ export def display(profile: readonly Profile) -> string:
     const firstTag = profile.tags.get(0)
     return profile.id + nestedLabel + (firstTag?.label ?? "")
 
-export def update(profile: Profile):
-    profile.details.label = "Updated"
+export def update(profile: Profile): profile.details.label = "Updated"
 
 const owned: Profile = loadProfile()
 let selected: readonly Profile = owned
@@ -108,24 +104,19 @@ export def copiedContainer(profile: readonly Profile) -> number:
 // Optional values: `T?` means `T | null`
 // ---------------------------------------------------------------------------
 
-def findUser(id: string) -> User?:
-    return id == "" ? null : {id, name: "Ada", avatar: null}
+def findUser(id: string) -> User?: return id == "" ? null : {id, name: "Ada", avatar: null}
 
 export def presenceTests(id: string) -> string:
     const user: User? = findUser(id)
 
-    if user != null:
-        print(user.name)
+    if user != null: print(user.name)
 
-    if user == null:
-        return "Missing"
-    else:
-        return user.name
+    if user == null: return "Missing"
+    else: return user.name
 
 // A guard whose arm terminates keeps the negated fact on the fall-through path.
 export def terminatingGuard(user: User?) -> string:
-    if user == null:
-        return "Missing"
+    if user == null: return "Missing"
     return user.name
 
 // An assignment establishes a fact of its own.
@@ -137,16 +128,13 @@ export def assignmentFacts() -> string:
 
 // Equality against a literal carries a fact back to its subject.
 export def equalityFacts(flagOrNothing: bool?) -> string:
-    if flagOrNothing == true:
-        return "true"
-    if flagOrNothing == false:
-        return "false"
+    if flagOrNothing == true: return "true"
+    if flagOrNothing == false: return "false"
     return "absent"
 
 // A membership probe narrows the same way.
 export def membershipFacts(candidate: string?, names: List<string>) -> string:
-    if candidate in names:
-        return candidate
+    if candidate in names: return candidate
     return "missing"
 
 // An optional chain that produced a value proves every link along it.
@@ -157,24 +145,20 @@ type Owner:
     profile: Contact?
 
 export def chainFacts(owner: Owner) -> string:
-    if owner.profile?.email != null:
-        return owner.profile.email
+    if owner.profile?.email != null: return owner.profile.email
     return "missing"
 
 // A fact survives calls, but a hot loop should bind the narrowed value once.
 export def boundOnce(user: User?) -> number:
-    if user == null:
-        return 0
+    if user == null: return 0
     const present = user
     let total = 0
-    for _ in range(3):
-        total += present.name.size
+    for _ in range(3): total += present.name.size
     return total
 
 // Narrowing does not flow into a nested function body.
 export def nestedFunction(user: User?) -> (() -> string):
-    if user == null:
-        return () => "missing"
+    if user == null: return () => "missing"
     const present = user
     return () => present.name
 
@@ -182,21 +166,18 @@ export def nestedFunction(user: User?) -> (() -> string):
 class Session:
     let stored: string? = null
 
-    get current() -> string?:
-        return self.stored
+    get current() -> string?: return self.stored
 
 export def getterNarrowing(session: Session) -> string:
     const current = session.current
-    if current == null:
-        return "missing"
+    if current == null: return "missing"
     return current
 
 // An index and a `Map.get` are reads, not locations.
 export def indexNarrowing(values: List<string>, lookup: Map<string, string>) -> string:
     const firstValue = values.get(0)
     const looked = lookup.get("a")
-    if firstValue == null or looked == null:
-        return "missing"
+    if firstValue == null or looked == null: return "missing"
     return firstValue + looked
 
 // ---------------------------------------------------------------------------
@@ -247,14 +228,12 @@ const called = optionalCallback?.(1)
 // absence would mean the program is wrong and there is nothing more to say
 // about it. When the failure has something to tell a reader, the statement
 // form carries the message: `assert value != null else "..."`.
-export def requiredValue(lookup: Map<string, string>, key: string) -> number:
-    return lookup.get(key)!.size
+export def requiredValue(lookup: Map<string, string>, key: string) -> number: return lookup.get(key)!.size
 
 // `!` is postfix and binds with the rest of a postfix chain, so this unwraps
 // the field and then reads through it. An unwrap before an equality test needs
 // its space, because `!=` still wins by longest match.
-export def requiredChain(owner: Owner) -> bool:
-    return owner.profile!.email == "ada@example.com"
+export def requiredChain(owner: Owner) -> bool: return owner.profile!.email == "ada@example.com"
 
 export const chapterThree = {
     text, quantity, flag, nothing, listOfText, setOfNumbers, mapOfUsers,

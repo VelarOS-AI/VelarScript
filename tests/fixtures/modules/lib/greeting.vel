@@ -1,2 +1,1 @@
-export def greet(name: string) -> string:
-    return f"Hello, {name}"
+export def greet(name: string) -> string: return f"Hello, {name}"

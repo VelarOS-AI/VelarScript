@@ -32,10 +32,8 @@ const ready = true
 
 export def openingBlock() -> string:
     // Blocks use a trailing colon and indentation; four spaces are conventional.
-    if ready:
-        return "start"
-    else:
-        return "wait"
+    if ready: return "start"
+    else: return "wait"
 
 const tasks = [{done: false, title: "write the tour"}, {done: true, title: "read the charter"}]
 
@@ -185,8 +183,7 @@ const pairs: List<List<string>> = [["a", "1"], ["b", "2"]]
 
 export def readPairs() -> string:
     let joined = ""
-    for [key, value] in pairs:
-        joined += f"{key}: {value};"
+    for [key, value] in pairs: joined += f"{key}: {value};"
     return joined
 
 // ---------------------------------------------------------------------------
@@ -194,12 +191,10 @@ export def readPairs() -> string:
 // ---------------------------------------------------------------------------
 
 export def bareReturn():
-    if count > 0:
-        return
+    if count > 0: return
     print("unreachable in this file")
 
-export def fallsOffTheEnd():
-    print("nothing to return")
+export def fallsOffTheEnd(): print("nothing to return")
 
 export const chapterOne = {
     applicationName, attempts, $selectedRow, _privateLooking, urgent, total, rows,

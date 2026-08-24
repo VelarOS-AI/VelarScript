@@ -21,11 +21,9 @@ export def bumpRequestCount() -> number:
     requestCount += 1
     return requestCount
 
-export def encode(value: unknown) -> string:
-    return Json.stringify(value)
+export def encode(value: unknown) -> string: return Json.stringify(value)
 
-export async def encodeLater(value: unknown) -> string:
-    return encode(value)
+export async def encodeLater(value: unknown) -> string: return encode(value)
 
 export type User:
     id: string
@@ -38,16 +36,13 @@ export enum Role:
     viewer
 
 export class Badge:
-    constructor(const label: string):
-        pass
+    constructor(const label: string): pass
 
-    def render() -> string:
-        return f"[{self.label}]"
+    def render() -> string: return f"[{self.label}]"
 
 // A name that is never exported stays private to this module; a value may
 // still carry its shape across the graph.
 type Internal:
     seed: number
 
-export def makeInternal(seed: number) -> Internal:
-    return {seed}
+export def makeInternal(seed: number) -> Internal: return {seed}

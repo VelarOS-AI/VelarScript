@@ -90,8 +90,7 @@ export def clock() -> string:
     const broken = parts(milliseconds, "UTC")
     return f"{text} {isoWithoutArgument} {roundTripped} {readable} {localMidnight} {utcMidnight} {elapsed > 0} {broken.year}-{broken.month}-{broken.day} {broken.weekday} {broken.hour}:{broken.minute}:{broken.second}.{broken.millisecond}"
 
-export def namedClock() -> string:
-    return format(value=now(), locale="en-GB", timeZone="UTC")
+export def namedClock() -> string: return format(value=now(), locale="en-GB", timeZone="UTC")
 
 // ---------------------------------------------------------------------------
 // velar/log — reaches the outside world
@@ -130,8 +129,7 @@ let sinkCharacters = 0
 def countRecord(record: LogRecord) -> number:
     sinkCharacters += record.message.size + record.scope.size + record.level.size
     sinkCharacters += record.fields.size + str(record.timestamp).size
-    if record.error != null:
-        sinkCharacters += record.error.message.size
+    if record.error != null: sinkCharacters += record.error.message.size
     return sinkCharacters
 
 export def collectLogRecords() -> number:
@@ -160,15 +158,13 @@ export def environment() -> string:
 // velar/host — process lifetime. `exit` is written, never executed here.
 // ---------------------------------------------------------------------------
 
-export def shutdownHook():
-    onShutdown(async () => print("flushing before exit"))
+export def shutdownHook(): onShutdown(async () => print("flushing before exit"))
 
 export def stopTheProcess(code: number):
     // Calling this really ends the process, so nothing in this tour calls it.
     exit(code)
 
-export def stopSuccessfully():
-    exit()
+export def stopSuccessfully(): exit()
 
 // ---------------------------------------------------------------------------
 // velar/fs — every export, all inside functions the tour never calls
@@ -189,8 +185,7 @@ export async def inspect(path: string) -> string:
     const boundedEntries = await list(path, 10)
     const metadata = await info(path)
     const realPath = await canonical(path)
-    if metadata == null:
-        return f"{present} {entries.size} {boundedEntries.size} {realPath}"
+    if metadata == null: return f"{present} {entries.size} {boundedEntries.size} {realPath}"
     return f"{metadata.name} {metadata.kind} {metadata.size} {metadata.modifiedAt}"
 
 export async def rearrange(source: string, target: string):
@@ -208,12 +203,10 @@ export async def watch(path: string) -> number:
     let batches = 0
     async for batch in watcher:
         batches += 1
-        if batch.rescan or batch.paths.size > 100:
-            break
+        if batch.rescan or batch.paths.size > 100: break
     return batches
 
-def batchSize(batch: FileWatchBatch) -> number:
-    return batch.rescan ? 0 : batch.paths.size
+def batchSize(batch: FileWatchBatch) -> number: return batch.rescan ? 0 : batch.paths.size
 
 async def firstBatch(watcher: FileWatcher) -> number:
     const batch = await watcher.next()
@@ -228,18 +221,14 @@ export async def watchRecursively(path: string) -> number:
 // Each filesystem failure a caller recovers from differently arrives as its
 // own class, carrying the failing path.
 export async def recoverFromFailures(path: string) -> string:
-    try:
-        return await readText(path)
+    try: return await readText(path)
     catch error:
         if error is FileNotFoundError:
             await createText(path, "")
             return ""
-        if error is PermissionError:
-            return f"Cannot read {error.path}: {error.message}"
-        if error is NotADirectoryError:
-            return "the path names a file"
-        if error is FileExistsError:
-            return "choose another name"
+        if error is PermissionError: return f"Cannot read {error.path}: {error.message}"
+        if error is NotADirectoryError: return "the path names a file"
+        if error is FileExistsError: return "choose another name"
         throw error
 
 export const chapterFourteen = {

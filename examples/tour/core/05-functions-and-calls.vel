@@ -10,34 +10,28 @@ import {User} from "./04-records-aliases-enums.vel"
 // `def`: parameters, defaults, and the result annotation
 // ---------------------------------------------------------------------------
 
-export def formatUser(user: User, prefix: string = "@") -> string:
-    return f"{prefix}{user.name}"
+export def formatUser(user: User, prefix: string = "@") -> string: return f"{prefix}{user.name}"
 
 // A body-backed function may omit its result annotation. Where the inferred
 // result is `null`, omitting is required — `-> null` is rejected there.
-export def inferredNull():
-    print("nothing a caller can use")
+export def inferredNull(): print("nothing a caller can use")
 
 export def inferredText(flag: bool):
-    if flag:
-        return "yes"
+    if flag: return "yes"
     return "no"
 
 // A partial `T` return infers `-> T?`.
 export def inferredOptional(flag: bool):
-    if flag:
-        return "yes"
+    if flag: return "yes"
 
 // An explicit `-> T` stays a checked contract: every reachable path returns.
 export def explicitResult(flag: bool) -> string:
-    if flag:
-        return "yes"
+    if flag: return "yes"
     return "no"
 
 // Recursive result dependencies solve to a fixed point.
 def countDown(value: number):
-    if value <= 0:
-        return 0
+    if value <= 0: return 0
     return countDown(value - 1)
 
 // ---------------------------------------------------------------------------
@@ -57,8 +51,7 @@ const reordered = formatUser(prefix="~", user=user)
 
 // Once a fixed parameter has a default, every following fixed parameter does
 // too, so positional and named calls stay identical.
-def label(text: string, prefix: string = "[", suffix: string = "]") -> string:
-    return prefix + text + suffix
+def label(text: string, prefix: string = "[", suffix: string = "]") -> string: return prefix + text + suffix
 
 const defaulted = label("a")
 const oneDefaultGiven = label("a", "<")
@@ -97,14 +90,11 @@ const localName: (request: string) -> string = _request => _request.upper()
 // Rest parameters and call spread
 // ---------------------------------------------------------------------------
 
-export def total(...amounts: number) -> number:
-    return amounts.sum()
+export def total(...amounts: number) -> number: return amounts.sum()
 
-export def totalWithBase(base: number, ...amounts: number) -> number:
-    return base + amounts.sum()
+export def totalWithBase(base: number, ...amounts: number) -> number: return base + amounts.sum()
 
-export def totalWithDefault(base: number = 0, ...amounts: number) -> number:
-    return base + amounts.sum()
+export def totalWithDefault(base: number = 0, ...amounts: number) -> number: return base + amounts.sum()
 
 const summed = total(1, 2, 3)
 const spreadInto = total(...values)
@@ -121,11 +111,9 @@ const restFromContext = contextualRest(1, 2, 3) + contextualFixedAndRest(10, 1, 
 // Async functions
 // ---------------------------------------------------------------------------
 
-def apiUser(id: string) -> User:
-    return {id, name: "Ada", avatar: null}
+def apiUser(id: string) -> User: return {id, name: "Ada", avatar: null}
 
-export async def loadUser(id: string) -> User:
-    return apiUser(id)
+export async def loadUser(id: string) -> User: return apiUser(id)
 
 // Its call type is `Promise<User>`; the *declaration* annotates the resolved
 // value, never `-> Promise<User>`.
@@ -137,8 +125,7 @@ const pending: Promise<User> = loadUser("u-1")
 // other look wrong.
 const asyncDeclarationType: (id: string) -> Promise<User> = loadUser
 
-export async def inferredAsyncResult():
-    print("an async declaration with no value result infers -> null")
+export async def inferredAsyncResult(): print("an async declaration with no value result infers -> null")
 
 export async def awaitsAndDetaches():
     // `await` waits; the `async` statement runs detached and requires a
@@ -157,15 +144,13 @@ const contextuallyTypedAsyncArrow: (string) -> Promise<User> = async id => await
 // Type parameters
 // ---------------------------------------------------------------------------
 
-export def mapValues<T, U>(items: List<T>, transform: (T) -> U) -> List<U>:
-    return items.map(transform)
+export def mapValues<T, U>(items: List<T>, transform: (T) -> U) -> List<U>: return items.map(transform)
 
 const flags: List<bool> = mapValues(["a", ""], value => value != "")
 
 // Type arguments are inferred at each call site; there is no explicit
 // instantiation syntax. A parameter the call leaves unsolved becomes `unknown`.
-export def identity<T>(value: T) -> T:
-    return value
+export def identity<T>(value: T) -> T: return value
 
 const identicalText = identity("a")
 const identicalNumber = identity(1)
@@ -182,32 +167,24 @@ class Registry:
 // The three bounds: `Comparable`, `Text`, `Data`
 // ---------------------------------------------------------------------------
 
-export def label2<T: Text>(value: T) -> string:
-    return f"{value}"
+export def label2<T: Text>(value: T) -> string: return f"{value}"
 
-export def stringified<T: Text>(value: T) -> string:
-    return str(value)
+export def stringified<T: Text>(value: T) -> string: return str(value)
 
-export def ranked<T: Comparable>(values: List<T>) -> List<T>:
-    return values.sorted()
+export def ranked<T: Comparable>(values: List<T>) -> List<T>: return values.sorted()
 
-export def smallest<T: Comparable>(values: List<T>) -> T?:
-    return values.min()
+export def smallest<T: Comparable>(values: List<T>) -> T?: return values.min()
 
-export def largest<T: Comparable>(values: List<T>) -> T?:
-    return values.max()
+export def largest<T: Comparable>(values: List<T>) -> T?: return values.max()
 
 export def orderedByKey<T: Comparable>(left: T, right: T) -> bool:
     return left < right and left <= right and right > left and right >= left
 
-export def encoded<T: Data>(value: T) -> string:
-    return Json.stringify(value)
+export def encoded<T: Data>(value: T) -> string: return Json.stringify(value)
 
-export def stablyEncoded<T: Data>(value: T) -> string:
-    return Json.stableStringify(value)
+export def stablyEncoded<T: Data>(value: T) -> string: return Json.stableStringify(value)
 
-export def cloned<T: Data>(value: T) -> T:
-    return Json.clone(value)
+export def cloned<T: Data>(value: T) -> T: return Json.clone(value)
 
 const labelled = label2(5)
 const rankedText = ranked(["b", "a"])

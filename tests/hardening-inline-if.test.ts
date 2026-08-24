@@ -157,7 +157,7 @@ test("an inline suite refuses a nested block header", () => {
   assert.match(nested.diagnostics[0]?.message ?? "", /inline suite accepts one non-block statement/u);
 });
 
-test("formatting preserves both inline and indented suite choices", () => {
+test("formatting compacts simple one-statement suites", () => {
   const source = [
     "def inline(): return",
     "def indented():",
@@ -167,9 +167,27 @@ test("formatting preserves both inline and indented suite choices", () => {
     "    print(\"indented\")",
     "",
   ].join("\n");
+  const canonical = [
+    "def inline(): return",
+    "def indented(): return",
+    "if true: print(\"inline\")",
+    "if true: print(\"indented\")",
+    "",
+  ].join("\n");
 
-  assert.equal(formatSource(source), source);
-  assert.equal(formatSource(formatSource(source)), source);
+  assert.equal(formatSource(source), canonical);
+  assert.equal(formatSource(canonical), canonical);
+});
+
+test("formatting expands an inline suite when the complete line exceeds 120 columns", () => {
+  const condition = Array.from({ length: 13 }, () => "true").join(" and ");
+  const inline = `if ${condition}: print(\"ready\")\n`;
+  const canonical = `if ${condition}:\n    print(\"ready\")\n`;
+
+  assert.ok(inline.trimEnd().length > 120);
+  assert.ok(`if ${condition}:`.length <= 120);
+  assert.equal(formatSource(inline), canonical);
+  assert.equal(formatSource(canonical), canonical);
 });
 
 test("a match case accepts one non-block statement after its colon", () => {

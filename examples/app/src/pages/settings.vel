@@ -26,8 +26,7 @@ const headingLook: Look = look:
 // right for `disabled` and wrong for an ARIA state, whose vocabulary is the
 // literal text "true" and "false". So these two write the text.
 component AppearanceChoice(value: Appearance, label: string):
-    def choose():
-        setAppearance(value)
+    def choose(): setAppearance(value)
 
     return <button
         type="button"
@@ -40,8 +39,7 @@ component AppearanceChoice(value: Appearance, label: string):
     </button>
 
 component DensityChoice(value: Density, label: string):
-    def choose():
-        setDensity(value)
+    def choose(): setDensity(value)
 
     return <button
         type="button"

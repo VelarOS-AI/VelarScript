@@ -45,19 +45,16 @@ const untrusted: unknown = {id: "u-1", name: "Ada", avatar: null}
 
 export def validate() -> string:
     const user = User.parse(untrusted)
-    if untrusted is User:
-        return untrusted.name
+    if untrusted is User: return untrusted.name
     return user.name
 
 // ---------------------------------------------------------------------------
 // `Type<T>`: validators are first class through a compiler-known carrier
 // ---------------------------------------------------------------------------
 
-export def decode<T>(value: unknown, target: Type<T>) -> T:
-    return target.parse(value)
+export def decode<T>(value: unknown, target: Type<T>) -> T: return target.parse(value)
 
-export def accepts<T>(value: unknown, target: Type<T>) -> bool:
-    return target.is(value)
+export def accepts<T>(value: unknown, target: Type<T>) -> bool: return target.is(value)
 
 const decoded: User = decode(untrusted, User)
 const isUser = accepts(untrusted, User)
@@ -89,8 +86,7 @@ const ranked: Sorted<number> = {items: [3, 1, 2]}
 
 // Every instantiation is its own type: `Box<string>` and `Box<number>` are two
 // types, and assigning one to the other is refused.
-export def unwrap<T>(box: Box<T>) -> T:
-    return box.value
+export def unwrap<T>(box: Box<T>) -> T: return box.value
 
 const unwrapped: string = unwrap(stringBox)
 
@@ -137,8 +133,7 @@ const spreadMembers = [...Status.values()]
 
 export def iterateMembers() -> string:
     let joined = ""
-    for member in Status.values():
-        joined += str(member)
+    for member in Status.values(): joined += str(member)
     return joined
 
 // A `pass` line is the placeholder statement inside an enum body, never a
@@ -189,16 +184,13 @@ export type ToolEvent:
 export type Event = TextEvent | ToolEvent
 
 export def describe(event: Event) -> string:
-    if event.kind == EventKind.text:
-        return event.text
+    if event.kind == EventKind.text: return event.text
     return event.toolId
 
 export def describeByMatch(event: Event) -> string:
     match event:
-        case {kind: EventKind.text}:
-            return event.text
-        case {kind: EventKind.tool}:
-            return event.toolId
+        case {kind: EventKind.text}: return event.text
+        case {kind: EventKind.tool}: return event.toolId
 
 // Reading a field shared by every union member produces the union of its
 // field types.
@@ -206,8 +198,7 @@ type Shared:
     kind: EventKind
     label: string
 
-export def sharedField(event: Event) -> EventKind:
-    return event.kind
+export def sharedField(event: Event) -> EventKind: return event.kind
 
 // `assert` carries a singleton fact back to the owning record too.
 export def assertedVariant(event: Event) -> string:
@@ -220,8 +211,7 @@ export def assertedVariant(event: Event) -> string:
 
 const forwardCompatible: unknown = {id: "u-3", name: "Lin", avatar: null, addedLater: 1}
 
-export def acceptsExtraFields() -> string:
-    return User.parse(forwardCompatible).name
+export def acceptsExtraFields() -> string: return User.parse(forwardCompatible).name
 
 export const chapterFour = {
     identifier, handler, scores, maybe, readonlyUsers, decoded, isUser,

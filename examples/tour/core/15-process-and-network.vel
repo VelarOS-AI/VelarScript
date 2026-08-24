@@ -59,8 +59,7 @@ export def inspectDuration():
     print(subtractedWait)
     print(scaledWait)
 
-async def loadReport(id: string) -> Report:
-    return {id, total: id.size}
+async def loadReport(id: string) -> Report: return {id, total: id.size}
 
 export async def promiseNamespace() -> string:
     await Promise.sleep(shortWait)
@@ -96,10 +95,8 @@ export async def streamOutput() -> string:
     using child = await start("npm", ["run", "build"])
     let joined = f"pid {child.pid}"
     async for output in child:
-        if output.channel == ProcessOutputChannel.stdout:
-            joined += output.text
-        else if output.channel == ProcessOutputChannel.stderr:
-            joined += f"! {output.text}"
+        if output.channel == ProcessOutputChannel.stdout: joined += output.text
+        else if output.channel == ProcessOutputChannel.stderr: joined += f"! {output.text}"
     const result = await child.wait()
     return f"{joined} {result.code}"
 
@@ -113,17 +110,14 @@ export async def stopEarly() -> string:
     print(await summarize(child))
     // The loop never calls a cleanup hook of its own; `using` owns release.
     async for output, index in child:
-        if index > 10:
-            break
+        if index > 10: break
     await child.stop()
     return "stopped"
 
 def describeChannel(channel: ProcessOutputChannel) -> string:
     match channel:
-        case ProcessOutputChannel.stdout:
-            return "stdout"
-        case ProcessOutputChannel.stderr:
-            return "stderr"
+        case ProcessOutputChannel.stdout: return "stdout"
+        case ProcessOutputChannel.stderr: return "stderr"
 
 // ---------------------------------------------------------------------------
 // velar/terminal — a standard capability handle with a compiler-supplied
@@ -146,8 +140,7 @@ export async def interact() -> string:
 // velar/serve — an HTTP server. `serve` really binds a port.
 // ---------------------------------------------------------------------------
 
-async def produce(write: (chunk: string) -> Promise<null>):
-    await write("chunk")
+async def produce(write: (chunk: string) -> Promise<null>): await write("chunk")
 
 async def handle(request: ServeRequest) -> ServeResponse:
     const method = request.method
@@ -167,12 +160,9 @@ async def handle(request: ServeRequest) -> ServeResponse:
     if path == "/report":
         const parsed = await request.parse(Report)
         return {status: 200, json: parsed, headers: Map([["cache-control", "no-store"]])}
-    if path == "/stream":
-        return {status: 200, stream: produce}
-    if path.startsWith("/assets/"):
-        return fileResponse("./public", path)
-    if path == "/page":
-        return fileResponse("./public", path, "index.html")
+    if path == "/stream": return {status: 200, stream: produce}
+    if path.startsWith("/assets/"): return fileResponse("./public", path)
+    if path == "/page": return fileResponse("./public", path, "index.html")
     return {status: 404, text: f"{method} {queryParameters.size} {headers.size} not found"}
 
 export async def startServer() -> string:
@@ -189,15 +179,11 @@ async def shutDown(server: Server) -> number:
     return port
 
 export async def guardsTheBodyBudget(request: ServeRequest) -> string:
-    try:
-        return await request.text(16)
+    try: return await request.text(16)
     catch error:
-        if error is RequestBodyTooLargeError:
-            return f"at most {error.maxBytes} bytes"
-        if error is PermissionError:
-            return "the host refused"
-        if error is AddressInUseError:
-            return "bind another port, or port 0 for any free one"
+        if error is RequestBodyTooLargeError: return f"at most {error.maxBytes} bytes"
+        if error is PermissionError: return "the host refused"
+        if error is AddressInUseError: return "bind another port, or port 0 for any free one"
         throw error
 
 // ---------------------------------------------------------------------------
@@ -237,8 +223,7 @@ export async def httpResponse(url: string) -> string:
 
 let streamedCharacters = 0
 
-async def collectChunk(chunk: string):
-    streamedCharacters += chunk.size
+async def collectChunk(chunk: string): streamedCharacters += chunk.size
 
 export async def httpStreaming(url: string) -> string:
     await http.get(url).streamText(collectChunk)
@@ -252,23 +237,17 @@ export def cancelRequest(url: string):
     request.cancel()
 
 export async def httpFailures(url: string) -> string:
-    try:
-        return await http.get(url).text()
+    try: return await http.get(url).text()
     catch error:
-        if error is HttpResponseError:
-            return f"{error.status} {error.url} {error.body != null}"
-        if error is HttpAbortError:
-            return f"aborted: {error.reason}"
-        if error is HttpTransportError:
-            return describePhase(error.phase)
+        if error is HttpResponseError: return f"{error.status} {error.url} {error.body != null}"
+        if error is HttpAbortError: return f"aborted: {error.reason}"
+        if error is HttpTransportError: return describePhase(error.phase)
         throw error
 
 def describePhase(phase: HttpTransportPhase) -> string:
     match phase:
-        case HttpTransportPhase.request:
-            return "the request never left"
-        case HttpTransportPhase.response:
-            return "the response never arrived"
+        case HttpTransportPhase.request: return "the request never left"
+        case HttpTransportPhase.response: return "the response never arrived"
 
 export const chapterFifteen = {
     encoded, encodedPretty, encodedIndented, stable, stablePretty, cloned,

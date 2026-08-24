@@ -12,14 +12,11 @@
 class Session:
     let active: bool = true
 
-    constructor(const id: string):
-        pass
+    constructor(const id: string): pass
 
-    get label() -> string:
-        return self.active ? self.id : f"{self.id} (closed)"
+    get label() -> string: return self.active ? self.id : f"{self.id} (closed)"
 
-    def close():
-        self.active = false
+    def close(): self.active = false
 
 // Instances are called directly.
 const session = Session("session-1")
@@ -50,21 +47,17 @@ class Connection:
         self.secret = f"{options.retries}"
         self.lastError = null
 
-    get address() -> string:
-        return f"{self.protocol}://{self.host}:{self.port}"
+    get address() -> string: return f"{self.protocol}://{self.host}:{self.port}"
 
-    def rotate(token: string):
-        self.attempts += 1
+    def rotate(token: string): self.attempts += 1
 
     // A method may declare type parameters.
-    def tagged<T>(value: T) -> T:
-        return value
+    def tagged<T>(value: T) -> T: return value
 
     // `static` declares class-owned fields and methods.
     static const scheme: string = "wss"
 
-    static def describe() -> string:
-        return f"connections speak {Connection.scheme}"
+    static def describe() -> string: return f"connections speak {Connection.scheme}"
 
 const connection = Connection("example.test", 443, "t-1", {retries: 3})
 const address = connection.address
@@ -79,33 +72,27 @@ const closeSession = session.close
 // ---------------------------------------------------------------------------
 
 abstract class Entity:
-    constructor(const id: string):
-        pass
+    constructor(const id: string): pass
 
     abstract def describe() -> string
 
     abstract get shortName() -> string
 
-    def shared() -> string:
-        return f"entity {self.id}"
+    def shared() -> string: return f"entity {self.id}"
 
 class Player extends Entity:
-    constructor(id: string, let score: number = 0):
-        super(id)
+    constructor(id: string, let score: number = 0): super(id)
 
     override def describe() -> string:
         // `super.member` reaches the base method a derived definition shadows.
         return f"{super.shared()}: {self.score}"
 
-    override get shortName() -> string:
-        return self.id
+    override get shortName() -> string: return self.id
 
 class Champion extends Player:
-    constructor(id: string, score: number, let titles: number):
-        super(id, score)
+    constructor(id: string, score: number, let titles: number): super(id, score)
 
-    override def describe() -> string:
-        return f"{super.describe()} ({self.titles} titles)"
+    override def describe() -> string: return f"{super.describe()} ({self.titles} titles)"
 
 const champion = Champion("c-1", 10, 2)
 const championDescription = champion.describe()
@@ -116,15 +103,13 @@ class Counter:
     let count: number = 0
 
 class DoubleCounter extends Counter:
-    def bump():
-        self.count += 2
+    def bump(): self.count += 2
 
 // `self` is not a reserved member name.
 class SelfReference:
     let self: string = "a field called self"
 
-    def read() -> string:
-        return self.self
+    def read() -> string: return self.self
 
 // ---------------------------------------------------------------------------
 // `@dispose:` — the release contract, and `using` — ownership
@@ -133,34 +118,28 @@ class SelfReference:
 class Terminal:
     let open: bool = true
 
-    def close():
-        self.open = false
+    def close(): self.open = false
 
     // `@dispose:` is the one compiler-known class member. It is not callable
     // from source, it must be safe to run twice, and a class declares at most
     // one.
-    @dispose:
-        self.close()
+    @dispose: self.close()
 
     // It may coexist with an ordinary method named `dispose`.
-    def dispose() -> string:
-        return "an ordinary method"
+    def dispose() -> string: return "an ordinary method"
 
 class AsyncTerminal:
-    async def stop():
-        print("stopped")
+    async def stop(): print("stopped")
 
     // A `@dispose:` body may `await`; releasing then awaits too.
-    @dispose:
-        await self.stop()
+    @dispose: await self.stop()
 
 // A derived `@dispose:` adds to its base's rather than replacing it: the
 // compiler chains them, derived first and base after.
 class TrackedTerminal extends Terminal:
     let released: bool = false
 
-    @dispose:
-        self.released = true
+    @dispose: self.released = true
 
 export def ownedResource() -> string:
     // Every exit from the enclosing scope releases the value, and several
@@ -190,8 +169,7 @@ export def ownedWithEarlyExit(flag: bool) -> string:
 
 // An owned value may not leave the scope that releases it, but passing it to a
 // function stays legal: a callee borrows, and a borrow is not ownership.
-def borrow(handle: Terminal) -> bool:
-    return handle.open
+def borrow(handle: Terminal) -> bool: return handle.open
 
 export def lendsWithoutGivingAway() -> bool:
     using handle = Terminal()
@@ -210,82 +188,67 @@ export class Basket:
 
     // Like `@dispose:`, it is a contract rather than a method: `self` is in
     // scope, it may not `await`, and `basket.iterate()` names nothing.
-    @iterate:
-        return self.items
+    @iterate: return self.items
 
 // The answer may be a Map, and then the two-slot loop means key/value.
 export class Prices:
     let byName: Map<string, number> = Map([["apple", 2], ["pear", 3]])
 
-    @iterate:
-        return self.byName
+    @iterate: return self.byName
 
 // Or a Record, whose keys are its field names.
 export class Limits:
     let bounds: Record<number> = {small: 1, large: 9}
 
-    @iterate:
-        return self.bounds
+    @iterate: return self.bounds
 
 // A List of Lists is destructured one item at a time, exactly as a plain List
 // of Lists would be.
 class Pairs:
     let rows: List<List<string>> = [["apple", "2"], ["pear", "3"]]
 
-    @iterate:
-        return self.rows
+    @iterate: return self.rows
 
 // A derived class inherits the block; overriding *replaces* the answer rather
 // than chaining, and the replacement keeps the base's collection type.
 export class SortedBasket extends Basket:
-    @iterate:
-        return self.items.sorted()
+    @iterate: return self.items.sorted()
 
 const basket = Basket()
 
-def joinWith(separator: string, ...parts: string) -> string:
-    return parts.join(separator)
+def joinWith(separator: string, ...parts: string) -> string: return parts.join(separator)
 
 // Every consumer of an iterable reads the one contract — a class participates
 // in all eight or in none, so there is no line for a reader to discover.
 export def iterateOneSlot() -> string:
     let seen = ""
-    for item in basket:
-        seen += item
+    for item in basket: seen += item
     return seen
 
 export def iterateTwoSlots() -> string:
     let seen = ""
-    for item, index in basket:
-        seen += f"{index}:{item} "
+    for item, index in basket: seen += f"{index}:{item} "
     return seen.trim()
 
 export def iterateDestructured() -> string:
     let seen = ""
     // Brackets destructure one item, exactly as they do over a plain List.
-    for [name, price] in Pairs():
-        seen += f"{name}={price} "
+    for [name, price] in Pairs(): seen += f"{name}={price} "
     return seen.trim()
 
 export def iterateKeyAndValue() -> string:
     let seen = ""
-    for name, price in Prices():
-        seen += f"{name}={price} "
-    for name, bound in Limits():
-        seen += f"{name}={bound} "
+    for name, price in Prices(): seen += f"{name}={price} "
+    for name, bound in Limits(): seen += f"{name}={bound} "
     return seen.trim()
 
-export def membership() -> bool:
-    return ("apple" in basket) and ("durian" not in basket)
+export def membership() -> bool: return ("apple" in basket) and ("durian" not in basket)
 
-export def listSpread() -> List<string>:
-    return [...basket, "quince"]
+export def listSpread() -> List<string>: return [...basket, "quince"]
 
-export def callSpread() -> string:
-    return joinWith("-", ...basket)
+export def callSpread() -> string: return joinWith("-", ...basket)
 
-export def setAndMapConstruction() -> number:
-    return Set(basket).size + Map(Prices()).size
+export def setAndMapConstruction() -> number: return Set(basket).size + Map(Prices()).size
 
 // `async for` reads the other form of the same declaration: an `@iterate:`
 // block that answers `T?` is the asynchronous pull form, driven once per

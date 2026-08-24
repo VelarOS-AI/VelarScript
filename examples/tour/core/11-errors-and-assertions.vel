@@ -11,33 +11,24 @@ type Config:
 // try / catch / finally
 // ---------------------------------------------------------------------------
 
-async def save():
-    print("saved")
+async def save(): print("saved")
 
-def close():
-    print("closed")
+def close(): print("closed")
 
 export async def tryCatchFinally() -> string:
-    try:
-        await save()
-    catch error:
-        return error.message
-    finally:
-        close()
+    try: await save()
+    catch error: return error.message
+    finally: close()
     return "ok"
 
 // `catch` with no `finally`, and `try`/`finally` with no `catch`.
 export def catchOnly(values: List<number>) -> number:
-    try:
-        return values[99]
-    catch error:
-        return -1
+    try: return values[99]
+    catch error: return -1
 
 export def finallyOnly() -> string:
-    try:
-        return "body"
-    finally:
-        close()
+    try: return "body"
+    finally: close()
 
 // The Error contract's own members.
 export def errorContract(error: Error) -> string:
@@ -60,20 +51,15 @@ export def compilerRaised(untrusted: unknown, values: List<number>) -> string:
         if error is ValidationError:
             // `ValidationError` carries the detail its parse site reports.
             return f"{error.path} {error.field} {error.reason}"
-        if error is NarrowingError:
-            return "a stale flow fact"
-        if error is IndexError:
-            return "an out-of-range position"
+        if error is NarrowingError: return "a stale flow fact"
+        if error is IndexError: return "an out-of-range position"
         throw error
 
 // Each may be constructed and thrown directly.
 export def constructAndThrow(kind: string):
-    if kind == "validation":
-        throw ValidationError("bad shape")
-    if kind == "narrowing":
-        throw NarrowingError("stale fact")
-    if kind == "index":
-        throw IndexError("out of range")
+    if kind == "validation": throw ValidationError("bad shape")
+    if kind == "narrowing": throw NarrowingError("stale fact")
+    if kind == "index": throw IndexError("out of range")
     throw Error("ordinary")
 
 // ---------------------------------------------------------------------------
@@ -81,18 +67,12 @@ export def constructAndThrow(kind: string):
 // ---------------------------------------------------------------------------
 
 export def capabilityRecovery(error: Error) -> string:
-    if error is FileNotFoundError:
-        return f"missing: {error.path}"
-    else if error is PermissionError:
-        return f"refused: {error.path}"
-    else if error is NotADirectoryError:
-        return f"not a directory: {error.path}"
-    else if error is FileExistsError:
-        return f"already there: {error.path}"
-    else if error is AddressInUseError:
-        return "bind another port, or port 0 for any free one"
-    else:
-        return error.message
+    if error is FileNotFoundError: return f"missing: {error.path}"
+    else if error is PermissionError: return f"refused: {error.path}"
+    else if error is NotADirectoryError: return f"not a directory: {error.path}"
+    else if error is FileExistsError: return f"already there: {error.path}"
+    else if error is AddressInUseError: return "bind another port, or port 0 for any free one"
+    else: return error.message
 
 // `code` is the class name in string form, and it always agrees with `is`.
 export def crossesAJsonBoundary(error: Error) -> string:
@@ -103,33 +83,26 @@ export def crossesAJsonBoundary(error: Error) -> string:
 // ---------------------------------------------------------------------------
 
 class TimeoutError extends Error:
-    constructor(message: string, const seconds: number):
-        super(message)
+    constructor(message: string, const seconds: number): super(message)
 
 class SlowTimeoutError extends TimeoutError:
-    constructor(seconds: number):
-        super("far too slow", seconds)
+    constructor(seconds: number): super("far too slow", seconds)
 
 export def customHierarchy(error: Error) -> string:
     // An `Error` subclass reports under its declared name.
-    if error is SlowTimeoutError:
-        return f"{error.name} {error.code} {error.seconds}"
-    if error is TimeoutError:
-        return f"{error.name} after {error.seconds}"
+    if error is SlowTimeoutError: return f"{error.name} {error.code} {error.seconds}"
+    if error is TimeoutError: return f"{error.name} after {error.seconds}"
     return error.name
 
 // `finally` is cleanup, not a control-flow override: a loop wholly inside one
 // may still use its own `break` and `continue`.
 export def loopInsideFinally(values: List<number>) -> number:
     let seen = 0
-    try:
-        seen += 1
+    try: seen += 1
     finally:
         for value in values:
-            if value < 0:
-                continue
-            if value > 10:
-                break
+            if value < 0: continue
+            if value > 10: break
             seen += value
     return seen
 
@@ -137,11 +110,9 @@ export def loopInsideFinally(values: List<number>) -> number:
 // Expected failure as an optional: the `try` expression
 // ---------------------------------------------------------------------------
 
-def readPort() -> number:
-    return 8080
+def readPort() -> number: return 8080
 
-async def load(url: string) -> string:
-    return url
+async def load(url: string) -> string: return url
 
 export async def tryExpression(untrusted: unknown, url: string) -> string:
     const parsed = try Config.parse(untrusted)
@@ -155,8 +126,7 @@ export async def tryExpression(untrusted: unknown, url: string) -> string:
 // The result must be consumed; a bare `try` statement is rejected.
 export def consumedResult(untrusted: unknown) -> number:
     const config = try Config.parse(untrusted)
-    if config == null:
-        return 0
+    if config == null: return 0
     return config.retries
 
 // ---------------------------------------------------------------------------
@@ -169,7 +139,6 @@ export def assertions(width: number, user: Config?) -> number:
     assert user != null else "A configuration is required"
     return user.retries + width
 
-export def bareAssertion(flag: bool):
-    assert flag
+export def bareAssertion(flag: bool): assert flag
 
 export const chapterEleven = {chapterName: "errors and assertions"}

@@ -96,8 +96,7 @@ export async def loadPlugin() -> string:
         const plugin = await import("./12-modules-lazy.vel")
         plugin.install()
         return "installed"
-    catch error:
-        return f"plugin unavailable: {error.message}"
+    catch error: return f"plugin unavailable: {error.message}"
 
 // Caching is the module graph's: the first load initializes the module and
 // every later `import(...)` of the same path answers the same namespace. A

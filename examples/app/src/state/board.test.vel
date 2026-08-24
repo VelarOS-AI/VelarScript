@@ -18,18 +18,15 @@ import {addCheck, advance, findRelease, releases, removeCheck, resetBoard, summa
 
 def readinessOf(id: string) -> number:
     const release = findRelease(id)
-    if release == null:
-        return -1
+    if release == null: return -1
     return readiness(release)
 
 def checkCount(id: string) -> number:
     const release = findRelease(id)
-    if release == null:
-        return -1
+    if release == null: return -1
     return release.checks.size
 
-def stageOf(id: string) -> Stage?:
-    return findRelease(id)?.stage
+def stageOf(id: string) -> Stage?: return findRelease(id)?.stage
 
 test "the seeded board is what the summary reports":
     resetBoard()

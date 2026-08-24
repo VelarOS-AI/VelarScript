@@ -52,14 +52,11 @@ async def chunks(write: (chunk: string) -> Promise<null>):
     await write("first")
     await write("second")
 
-async def events(send: (event: string) -> Promise<null>):
-    await send("ready")
+async def events(send: (event: string) -> Promise<null>): await send("ready")
 
-async def afterResponse():
-    return null
+async def afterResponse(): return null
 
-def uploadName(value: Upload) -> string:
-    return value.filename
+def uploadName(value: Upload) -> string: return value.filename
 
 async def passThrough(request: Request, next: () -> Promise<ServeResponse>):
     print(request.path)
@@ -120,5 +117,4 @@ export const app: ServeApp = docs(
     routes = routeDocs,
 )
 
-export def describeApi(value: ServeApp):
-    openapi(value, title="Article API", version="1.0.0")
+export def describeApi(value: ServeApp): openapi(value, title="Article API", version="1.0.0")

@@ -61,12 +61,9 @@ const systemShell: Look = look:
 
 export def shellLook(appearance: Appearance) -> Look:
     match appearance:
-        case Appearance.light:
-            return lightShell
-        case Appearance.dark:
-            return darkShell
-        case Appearance.system:
-            return systemShell
+        case Appearance.light: return lightShell
+        case Appearance.dark: return darkShell
+        case Appearance.system: return systemShell
 
 export def pageLook(density: Density) -> Look:
     const tight = density == Density.compact

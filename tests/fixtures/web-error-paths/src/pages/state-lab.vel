@@ -14,17 +14,13 @@ state dark = false
 state showFirst = true
 state labRows: List<LabRow> = [{id: "alpha"}, {id: "beta"}, {id: "gamma"}]
 
-def toggleBusy():
-    busy = not busy
+def toggleBusy(): busy = not busy
 
-def toggleTheme():
-    dark = not dark
+def toggleTheme(): dark = not dark
 
-def swapBranch():
-    showFirst = not showFirst
+def swapBranch(): showFirst = not showFirst
 
-def reverseRows():
-    labRows = labRows.reversed()
+def reverseRows(): labRows = labRows.reversed()
 
 component Draft(label: string, busy: bool, dark: bool):
     state draft = ""
@@ -39,8 +35,7 @@ component Draft(label: string, busy: bool, dark: bool):
 component LabRowView(row: readonly LabRow):
     state hits = 0
 
-    def recordHit():
-        hits += 1
+    def recordHit(): hits += 1
 
     return <li data-lab-row={row.id}>
         <button type="button" data-lab-hit={row.id} on:click={recordHit}>{row.id}</button>

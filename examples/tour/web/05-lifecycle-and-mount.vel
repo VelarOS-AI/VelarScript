@@ -20,21 +20,17 @@ component TimerLifecycle:
     let stopTimer: (() -> null)? = null
     let stopDelay: (() -> null)? = null
 
-    def countTick():
-        ticks += 1
+    def countTick(): ticks += 1
 
-    def settle():
-        settled = "settled"
+    def settle(): settled = "settled"
 
     @mounted:
         stopTimer = every(1s, countTick)
         stopDelay = after(120ms, settle)
 
     @cleanup:
-        if stopTimer != null:
-            stopTimer()
-        if stopDelay != null:
-            stopDelay()
+        if stopTimer != null: stopTimer()
+        if stopDelay != null: stopDelay()
 
     return <div data-timer-lifecycle>
         <p data-ticks>{ticks}</p>
@@ -49,8 +45,7 @@ component RefLifecycle:
     let board: CanvasElement? = null
 
     @mounted:
-        if board != null:
-            measured = f"{board.width}x{board.height}"
+        if board != null: measured = f"{board.width}x{board.height}"
 
     @cleanup:
         measured = "unmeasured"
@@ -66,8 +61,7 @@ component RefLifecycle:
 export component LifecycleSwitch:
     state showing = true
 
-    def toggle():
-        showing = not showing
+    def toggle(): showing = not showing
 
     return <div data-lifecycle-switch>
         <button type="button" data-toggle-lifecycle on:click={toggle}>{showing ? "Unmount" : "Mount"}</button>

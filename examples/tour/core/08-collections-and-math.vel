@@ -39,8 +39,7 @@ const namedStep = range(start=0, end=10, step=2)
 
 export def loopOverRange() -> number:
     let total = 0
-    for value in range(4):
-        total += value
+    for value in range(4): total += value
     return total
 
 // ---------------------------------------------------------------------------

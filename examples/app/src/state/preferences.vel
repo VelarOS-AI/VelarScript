@@ -47,8 +47,7 @@ export def restorePreferences():
     appearance = storedAppearance ?? Appearance.system
     density = storedDensity ?? Density.comfortable
 
-def persist():
-    preferences.set("preferences", {appearance: str(appearance), density: str(density)})
+def persist(): preferences.set("preferences", {appearance: str(appearance), density: str(density)})
 
 export def setAppearance(next: Appearance):
     appearance = next

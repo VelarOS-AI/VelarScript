@@ -42,11 +42,9 @@ component DetailedTaskRow(task: Task, compact: bool = false, tracking: string = 
 // `index` keeps the mutable default, and the class prop passes through as the
 // behavioral value it declares.
 export class TaskClock:
-    constructor(private const started: number):
-        pass
+    constructor(private const started: number): pass
 
-    def elapsed(now: number) -> number:
-        return now - self.started
+    def elapsed(now: number) -> number: return now - self.started
 
 component TaskSummary(tasks: readonly List<Task>, index: Map<string, Task>, clock: TaskClock):
     return <p data-summary>{f"{tasks.size} tasks, {index.size} indexed, {clock.elapsed(10)} elapsed"}</p>
@@ -82,11 +80,9 @@ export component LabelledPanel(title: string) exposes PanelHandle:
     let heading: Element? = null
 
     def focus():
-        if heading != null:
-            heading.focus()
+        if heading != null: heading.focus()
 
-    def label() -> string:
-        return title
+    def label() -> string: return title
 
     expose {focus, label}
     return <article data-panel><h3 ref={heading} tabindex="-1">{title}</h3></article>
@@ -126,8 +122,7 @@ component PanelSlot(View: PanelView, title: string):
     let handle: PanelHandle? = null
 
     def focusPanel():
-        if handle != null:
-            handle.focus()
+        if handle != null: handle.focus()
 
     return <div data-panel-slot>
         <View ref={handle} title={title} />
@@ -138,8 +133,7 @@ export component ComponentsPanel:
     let panel: PanelHandle? = null
 
     def focusPanel():
-        if panel != null:
-            panel.focus()
+        if panel != null: panel.focus()
 
     return <section data-chapter="01">
         <h2>01 — components</h2>

@@ -178,6 +178,7 @@ function compileUnchecked(text: string, options: CompileOptions): CompileResult 
   const analysisContext: AnalysisContext = {
     ...options.analysis,
     path: parsed.source.path,
+    sourceText: parsed.source.text,
     ...(analysisResources ? { resources: analysisResources } : {}),
   };
   const createAnalyzer = (

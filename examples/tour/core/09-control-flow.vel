@@ -38,26 +38,20 @@ const limits = {max: 10}
 
 export def grade(score: number) -> string:
     let result = ""
-    if score >= 90:
-        result = "A"
-    else if score >= 80:
-        result = "B"
-    else:
-        result = "C"
+    if score >= 90: result = "A"
+    else if score >= 80: result = "B"
+    else: result = "C"
     return result
 
 export def conditionShapes(flag: bool, maybeFlag: bool?, values: List<string>, user: User?) -> string:
     // `bool` and `bool?` are the only types a condition accepts; an absent
     // `bool?` is `false`.
-    if flag:
-        print("true")
-    if maybeFlag:
-        print("present and true")
+    if flag: print("true")
+    if maybeFlag: print("present and true")
     // A presence test is written `!= null`; a branch with one non-block
     // statement may share its header's line.
     if user != null: print(user.name)
-    if values.size == 0:
-        print("empty")
+    if values.size == 0: print("empty")
     // A conditional value still uses the JavaScript-shaped form.
     return flag ? "yes" : "no"
 
@@ -67,54 +61,39 @@ export def conditionShapes(flag: bool, maybeFlag: bool?, values: List<string>, u
 
 export def matchEnum(status: Status) -> string:
     match status:
-        case Status.pending, Status.active:
-            return "Open"
+        case Status.pending, Status.active: return "Open"
         // One non-block case statement may share the header's line.
         case Status.done: return "Closed"
 
 // An optional enum subject demands every member plus `case null:`.
 export def matchOptionalEnum(status: Status?) -> string:
     match status:
-        case Status.pending:
-            return "pending"
-        case Status.active:
-            return "active"
-        case Status.done:
-            return "done"
-        case null:
-            return "absent"
+        case Status.pending: return "pending"
+        case Status.active: return "active"
+        case Status.done: return "done"
+        case null: return "absent"
 
 // A parenthesized singleton pattern credits the same coverage.
 export def matchParenthesizedSingleton(status: Status) -> string:
     match status:
-        case (Status.pending):
-            return "pending"
-        case (Status.active):
-            return "active"
-        case (Status.done):
-            return "done"
+        case (Status.pending): return "pending"
+        case (Status.active): return "active"
+        case (Status.done): return "done"
 
 export def matchTypes(result: User | Failure | Error | null) -> string:
     match result:
-        case User as user if user.active:
-            return f"active {user.name}"
-        case User as user:
-            return f"archived {user.name}"
-        case Error as error:
-            throw error
-        case null:
-            pass
-        case _:
-            return "Unsupported"
+        case User as user if user.active: return f"active {user.name}"
+        case User as user: return f"archived {user.name}"
+        case Error as error: throw error
+        case null: pass
+        case _: return "Unsupported"
     return "absent"
 
 // A successful pattern narrows the matched identifier without an `as` alias.
 export def matchWithoutAlias(result: User | Failure) -> string:
     match result:
-        case User:
-            return result.name
-        case _:
-            return "not a user"
+        case User: return result.name
+        case _: return "not a user"
 
 type SuccessResponse:
     kind: string
@@ -131,46 +110,34 @@ export def matchRecords(response: Response) -> string:
     match response:
         case {kind: "success", users: [first, ...rest], requestId} as whole:
             return f"{first.name} {rest.size} {whole.kind} {requestId}"
-        case {kind: "failure", message}:
-            return message
-        case _:
-            return "Unsupported response"
+        case {kind: "failure", message}: return message
+        case _: return "Unsupported response"
 
 // Enum singleton fields make a record pattern discriminating.
 export def matchDiscriminated(event: Event) -> string:
     match event:
-        case {kind: EventKind.text}:
-            return event.text
-        case {kind: EventKind.tool}:
-            return event.toolId
+        case {kind: EventKind.text}: return event.text
+        case {kind: EventKind.tool}: return event.toolId
 
 export def matchLists(values: List<number>) -> string:
     match values:
-        case []:
-            return "empty"
-        case [only]:
-            return f"one: {only}"
-        case [first, second]:
-            return f"two: {first} {second}"
-        case [first, ...rest]:
-            return f"many: {first} + {rest.size}"
+        case []: return "empty"
+        case [only]: return f"one: {only}"
+        case [first, second]: return f"two: {first} {second}"
+        case [first, ...rest]: return f"many: {first} + {rest.size}"
 
 // A dotted path is a value pattern at any depth; a bare local binding needs a
 // guard instead.
 export def matchDottedPath(value: number, limit: number) -> string:
     match value:
-        case limits.max:
-            return "at the ceiling"
-        case _ if value == limit:
-            return "at the caller's limit"
-        case _:
-            return "ordinary"
+        case limits.max: return "at the ceiling"
+        case _ if value == limit: return "at the caller's limit"
+        case _: return "ordinary"
 
 // A record pattern may capture the remaining fields.
 export def matchRest(response: SuccessResponse) -> number:
     match response:
-        case {kind, ...rest}:
-            return kind.size + rest.users.size
+        case {kind, ...rest}: return kind.size + rest.users.size
 
 // Keyword member names follow the ordinary member-access grammar in patterns:
 // `case Marker.null:` matches the member named `null`.
@@ -180,17 +147,13 @@ enum Marker:
 
 export def matchKeywordMember(marker: Marker) -> string:
     match marker:
-        case Marker.null:
-            return "the member named null"
-        case Marker.other:
-            return "other"
+        case Marker.null: return "the member named null"
+        case Marker.other: return "other"
 
 export def matchNestedPatterns(rows: List<SuccessResponse>) -> string:
     match rows:
-        case [{kind: "success", users: [first]}]:
-            return first.name
-        case _:
-            return "no match"
+        case [{kind: "success", users: [first]}]: return first.name
+        case _: return "no match"
 
 // ---------------------------------------------------------------------------
 // Loops: the five forms
@@ -202,19 +165,15 @@ const usersById: Map<string, User> = Map([["u-1", {name: "Ada", active: true}]])
 export def loopForms() -> string:
     let joined = ""
 
-    for user in users:
-        joined += user.name
+    for user in users: joined += user.name
 
-    for user, index in users:
-        joined += f"{index}: {user.name}"
+    for user, index in users: joined += f"{index}: {user.name}"
 
     // Both slots accept the complete binding-pattern grammar.
-    for id, {name} in usersById:
-        joined += f"{id}: {name}"
+    for id, {name} in usersById: joined += f"{id}: {name}"
 
     // Brackets mean destructuring one item, not a two-slot loop.
-    for [left, right] in [[1, 2], [3, 4]]:
-        joined += f"{left}{right}"
+    for [left, right] in [[1, 2], [3, 4]]: joined += f"{left}{right}"
 
     let attempts = 0
     // Every ordinary one-statement suite may share its header's line.
@@ -226,10 +185,8 @@ export def loopForms() -> string:
 export def breakAndContinue(values: List<number>) -> number:
     let total = 0
     for value in values:
-        if value < 0:
-            continue
-        if value > 100:
-            break
+        if value < 0: continue
+        if value > 100: break
         total += value
     return total
 
@@ -243,20 +200,17 @@ class ChunkSource:
     let remaining: List<string> = ["a", "b"]
 
     @iterate:
-        if self.remaining.size == 0:
-            return null
+        if self.remaining.size == 0: return null
         return self.remaining.pop(0)
 
 export async def asyncLoop(reply: ChunkSource) -> string:
     let joined = ""
-    async for chunk in reply:
-        joined += chunk
+    async for chunk in reply: joined += chunk
     return joined
 
 export async def asyncLoopWithIndex(reply: ChunkSource) -> string:
     let joined = ""
-    async for chunk, index in reply:
-        joined += f"{index}: {chunk}"
+    async for chunk, index in reply: joined += f"{index}: {chunk}"
     return joined
 
 // A `while true` pull loop: its exhaustion is genuinely reported as `null`.
@@ -265,8 +219,7 @@ export def pullLoop(chunks: List<string>) -> string:
     let cursor = 0
     while true:
         const chunk = chunks.get(cursor)
-        if chunk == null:
-            break
+        if chunk == null: break
         assembled += chunk
         cursor += 1
     return assembled
@@ -274,8 +227,7 @@ export def pullLoop(chunks: List<string>) -> string:
 // A `while` body receives the successful condition's facts on every iteration.
 export def whileFacts(pending: List<number>) -> number:
     let total = 0
-    while pending.size > 0:
-        total += pending.pop(0)
+    while pending.size > 0: total += pending.pop(0)
     return total
 
 export const chapterNine = {users, usersById, limits}

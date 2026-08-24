@@ -22,9 +22,15 @@ export server routes:
 
   const tokens = projectSemanticTokens(project, path);
   const extensionTokens = tokens
-    .filter((token) => token.type === "keyword")
-    .map((token) => source.slice(token.span.start, token.span.end));
-  assert.deepEqual(extensionTokens, ["server", "@get", "p", "@post", "p", "@notFound"]);
+    .filter((token) => token.type === "keyword" || token.type === "decorator")
+    .map((token) => [token.type, source.slice(token.span.start, token.span.end)]);
+  assert.deepEqual(extensionTokens, [
+    ["keyword", "server"],
+    ["decorator", "@get"],
+    ["decorator", "@post"],
+    ["decorator", "@notFound"],
+  ]);
+  assert.ok(!tokens.some((token) => source.slice(token.span.start, token.span.end) === "p"));
 
   for (let index = 1; index < tokens.length; index += 1) {
     assert.ok(tokens[index - 1]!.span.end <= tokens[index]!.span.start, "semantic tokens must not overlap");
@@ -38,9 +44,9 @@ test("an invalid ordinary route string does not masquerade as the Node path-patt
     extensions: [velarNodeCompilerExtension],
   });
   const tokens = projectSemanticTokens(project, path)
-    .filter((token) => token.type === "keyword")
-    .map((token) => source.slice(token.span.start, token.span.end));
+    .filter((token) => token.type === "keyword" || token.type === "decorator")
+    .map((token) => [token.type, source.slice(token.span.start, token.span.end)]);
 
-  assert.deepEqual(tokens, ["server", "@get"]);
+  assert.deepEqual(tokens, [["keyword", "server"], ["decorator", "@get"]]);
   assert.ok(project.modules[0]!.result.diagnostics.some((item) => item.code === "VEL6005"));
 });

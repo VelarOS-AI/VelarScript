@@ -6,6 +6,23 @@ truth for acceptance status.
 
 ## Unreleased
 
+## 0.14.4 — 2026-08-24
+
+### Language semantics and diagnostics
+
+- Added editor quick fixes for the exact A7 collection conversion, A8
+  `List.some` query, and A9 record projection advisories. A fix is withheld
+  whenever collapsing the longer form could erase an authored comment.
+
+### Tooling and editor support
+
+- Split Server extension semantic tokens by role: `server` is a language
+  keyword, route annotations such as `@get` are decorators, and the `p` path
+  prefix keeps its ordinary syntax color.
+- Made one simple executable statement the canonical compact suite: short
+  blocks format as `if ready: run()`, while a complete line over 120 columns
+  expands back to the indented form.
+
 ## 0.14.3 — 2026-08-24
 
 ### Server application framework

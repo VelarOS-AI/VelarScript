@@ -34,16 +34,13 @@ const panelLook = look:
 // string. `test` names the deterministic browser-test host; `macos` names the
 // native host that ships today. A future member appears only with a real host.
 export def platformName(value: DesktopPlatform) -> string:
-    if value == DesktopPlatform.macos:
-        return "macos"
-    if value == DesktopPlatform.test:
-        return "test"
+    if value == DesktopPlatform.macos: return "macos"
+    if value == DesktopPlatform.test: return "test"
     return "test"
 
 // `packaged()` is the other synchronous host read: whether this build is
 // running from a packaged application rather than from `velar dev`.
-export def hostSummary() -> string:
-    return f"{platformName(platform())}|{packaged()}"
+export def hostSummary() -> string: return f"{platformName(platform())}|{packaged()}"
 
 // The three directories every Desktop application eventually needs, each an
 // absolute path validated by the module before it becomes VelarScript text.
@@ -58,11 +55,9 @@ export async def hostDirectories() -> string:
 // what the user has already chosen and answers `null` when nothing is chosen,
 // while `selectProjectDirectory()` *opens the system picker* and answers `null`
 // when the user cancels. One is a query, the other is a dialog.
-export async def readSelectedProject() -> string:
-    return await selectedProjectDirectory() ?? "nothing selected yet"
+export async def readSelectedProject() -> string: return await selectedProjectDirectory() ?? "nothing selected yet"
 
-export async def askForProject() -> string:
-    return await selectProjectDirectory() ?? "the picker was cancelled"
+export async def askForProject() -> string: return await selectProjectDirectory() ?? "the picker was cancelled"
 
 // A capability fails where it is *called*, never where it is imported, so a
 // pure function may live in the same module as the host calls above and stay
@@ -77,8 +72,7 @@ export component HostPanel:
     state directories = "not read"
     state selected = "not read"
 
-    def readSummary():
-        summary = hostSummary()
+    def readSummary(): summary = hostSummary()
 
     action readDirectories() -> string:
         directories = await hostDirectories()

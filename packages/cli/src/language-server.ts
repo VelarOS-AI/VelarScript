@@ -94,7 +94,7 @@ const MAX_OWNERSHIP_GRAPH_NODES = 20_000;
 const MAX_OWNERSHIP_GRAPH_EDGES = 40_000;
 const semanticTokenTypes = [
   "type", "class", "enum", "enumMember", "function", "method", "property", "variable", "parameter",
-  "interface", "comment", "string", "keyword", "number", "regexp", "operator",
+  "interface", "comment", "string", "keyword", "number", "regexp", "operator", "decorator",
 ] as const;
 const semanticTokenModifiers = ["declaration", "readonly", "static"] as const;
 const nonVelarDocumentResults = new Map<string, unknown>([

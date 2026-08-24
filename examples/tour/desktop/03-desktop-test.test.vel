@@ -23,8 +23,7 @@ import {projectName} from "./01-desktop-host.vel"
 
 // A fixture path is ordinary text, so the helper that builds one is pure and
 // can be asserted directly.
-export def fixturePath(root: string, name: string) -> string:
-    return f"{root}/tour-fixtures/{name}"
+export def fixturePath(root: string, name: string) -> string: return f"{root}/tour-fixtures/{name}"
 
 // The whole module, in the order a fixture round actually runs: find a
 // directory the host owns, create a folder inside it, write a file, read it
@@ -44,8 +43,7 @@ export async def fixtureRound() -> string:
 // A browser test may select the native branch it wants to prove before its
 // first browser.open(). The simulation proves source branching; only the
 // native integration suite proves actual operating-system behavior.
-export async def selectMacosBranch():
-    await setPlatform(DesktopPlatform.macos)
+export async def selectMacosBranch(): await setPlatform(DesktopPlatform.macos)
 
 // The seven export names in the order the fixture helpers use them. A Desktop
 // project's `velar test` runs in Node, where no host bridge exists, so a test

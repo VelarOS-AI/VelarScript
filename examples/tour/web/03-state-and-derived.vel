@@ -41,19 +41,15 @@ export computed openTasks = tasks.filter(task => not task.done).size
 watch visits:
     print(f"visit {visits}")
 
-export def recordVisit():
-    visits += 1
+export def recordVisit(): visits += 1
 
 // Helpers may mutate the value owned by a state binding; state does not copy,
 // freeze, or claim linear ownership.
-export def retitle(task: Task, title: string):
-    task.title = title
+export def retitle(task: Task, title: string): task.title = title
 
-export def completeFirst():
-    tasks[0].done = true
+export def completeFirst(): tasks[0].done = true
 
-export def appendTask(task: Task):
-    tasks.append(task)
+export def appendTask(task: Task): tasks.append(task)
 
 // The four cells of the grid, side by side, over one fact. `counted` is a plain
 // number computed once; `draft` is the same number in a cell nobody watches;
@@ -97,11 +93,9 @@ component ScopedState:
     const bump = counterFromBlock()
     state bumped = 0
 
-    def toggle():
-        expanded = not expanded
+    def toggle(): expanded = not expanded
 
-    def bumpLocal():
-        bumped = bump()
+    def bumpLocal(): bumped = bump()
 
     return <div data-scoped-state>
         <p data-label>{label}</p>
@@ -202,13 +196,11 @@ component DerivedAndCallable:
     state amount = 1
     computed doubled = amount * 2
 
-    def readDoubled() -> number:
-        return doubled
+    def readDoubled() -> number: return doubled
 
     const readers = {doubled: readDoubled}
 
-    def raise():
-        amount += 1
+    def raise(): amount += 1
 
     return <div data-derived-callable>
         <p data-doubled>{readers.doubled()}</p>
@@ -218,14 +210,11 @@ component DerivedAndCallable:
 export component ReactivePanel:
     computed summary = f"{openTasks} of {tasks.size} open"
 
-    def complete():
-        completeFirst()
+    def complete(): completeFirst()
 
-    def rename():
-        retitle(tasks[1], "Write two modules")
+    def rename(): retitle(tasks[1], "Write two modules")
 
-    def add():
-        appendTask({id: f"extra-{tasks.size}", title: "An appended task", done: false})
+    def add(): appendTask({id: f"extra-{tasks.size}", title: "An appended task", done: false})
 
     return <section data-chapter="03">
         <h2>03 — state and derived values</h2>

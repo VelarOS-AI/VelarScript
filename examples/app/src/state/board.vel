@@ -67,46 +67,38 @@ export state releases: List<Release> = seed()
 // cell for the life of a test file. A store that can be put back where it
 // started is a store that can be tested more than once, and an application that
 // signs a reader out needs exactly the same call.
-export def resetBoard():
-    releases = seed()
+export def resetBoard(): releases = seed()
 
 // An exported `computed` declares its accessor result at the export site. Every
 // reader of `summary()` recomputes together when the board changes, and the
 // arithmetic itself stays in `model/`.
 export computed summary = summarize(releases)
 
-export def findRelease(id: string) -> Release?:
-    return releases.find(release => release.id == id)
+export def findRelease(id: string) -> Release?: return releases.find(release => release.id == id)
 
 export def toggleCheck(releaseId: string, checkId: string):
     const release = findRelease(releaseId)
-    if release == null:
-        return
+    if release == null: return
     const check = release.checks.find(item => item.id == checkId)
-    if check != null:
-        check.done = not check.done
+    if check != null: check.done = not check.done
 
 export def addCheck(releaseId: string, title: string, owner: string) -> Check?:
     const release = findRelease(releaseId)
-    if release == null:
-        return null
+    if release == null: return null
     const check: Check = {id: uuid(), title, owner, done: false}
     release.checks.append(check)
     return check
 
 export def removeCheck(releaseId: string, checkId: string):
     const release = findRelease(releaseId)
-    if release != null:
-        release.checks = release.checks.filter(check => check.id != checkId)
+    if release != null: release.checks = release.checks.filter(check => check.id != checkId)
 
 // The store applies the decision; `model/release.vel` makes it. Splitting them
 // this way is what lets the rule "a release leaves verifying only once its
 // checklist is clear" be tested without constructing a store.
 export def advance(releaseId: string) -> bool:
     const release = findRelease(releaseId)
-    if release == null:
-        return false
-    if not mayAdvance(release):
-        return false
+    if release == null: return false
+    if not mayAdvance(release): return false
     release.stage = nextStage(release.stage)
     return true

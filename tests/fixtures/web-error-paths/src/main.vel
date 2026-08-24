@@ -33,15 +33,13 @@ component App:
     state runtimeError = "none"
     let stopReporting: (() -> null)? = null
 
-    def capture(phase: string, message: string):
-        runtimeError = f"{phase}:{message}"
+    def capture(phase: string, message: string): runtimeError = f"{phase}:{message}"
 
     @mounted:
         stopReporting = onError(report => capture(report.phase, report.error.message))
 
     @cleanup:
-        if stopReporting != null:
-            stopReporting()
+        if stopReporting != null: stopReporting()
 
     return <div>
         <nav data-fixture-nav aria-label="Fixture pages">

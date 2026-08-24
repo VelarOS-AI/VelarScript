@@ -85,8 +85,7 @@ export def listIndexing() -> number:
 // Draining a List is a size guard, not a null dance — `pop` is strict.
 export def drain(chunks: List<string>) -> string:
     let assembled = ""
-    while chunks.size > 0:
-        assembled += chunks.pop(0)
+    while chunks.size > 0: assembled += chunks.pop(0)
     return assembled
 
 // A checked method is a first-class bound value.
@@ -191,29 +190,19 @@ export def iterate() -> string:
 
     // A one-slot `for` visits List/Set values, Map/Record keys, and string
     // characters.
-    for value in values:
-        joined += value
-    for tag in tags:
-        joined += tag
-    for key in scores:
-        joined += key
-    for key in counts:
-        joined += key
-    for character in "ab":
-        joined += character
+    for value in values: joined += value
+    for tag in tags: joined += tag
+    for key in scores: joined += key
+    for key in counts: joined += key
+    for character in "ab": joined += character
 
     // A two-slot `for` yields value/index for Lists, Sets, and strings, and
     // key/value for Maps and Records.
-    for value, index in values:
-        joined += f"{value}{index}"
-    for tag, index in tags:
-        joined += f"{tag}{index}"
-    for character, index in "ab":
-        joined += f"{character}{index}"
-    for key, score in scores:
-        joined += f"{key}{score}"
-    for key, count in counts:
-        joined += f"{key}{count}"
+    for value, index in values: joined += f"{value}{index}"
+    for tag, index in tags: joined += f"{tag}{index}"
+    for character, index in "ab": joined += f"{character}{index}"
+    for key, score in scores: joined += f"{key}{score}"
+    for key, count in counts: joined += f"{key}{count}"
 
     return joined
 
@@ -230,16 +219,14 @@ export def orderContract() -> string:
     scores.remove("b")
     scores.set("b", 3)
     let joined = ""
-    for key in scores:
-        joined += key
+    for key in scores: joined += key
     return joined
 
 // Mutating a collection while a `for` walks it is defined per family.
 export def mutationDuringIteration() -> number:
     const values: List<number> = [1, 2, 3]
     let seen = 0
-    for value in values.copy():
-        seen += value
+    for value in values.copy(): seen += value
     return seen
 
 // A List spread evaluates each item and spread source once, in source order.

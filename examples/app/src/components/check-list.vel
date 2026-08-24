@@ -43,11 +43,9 @@ const pendingLook: Look = look:
     fontWeight = 500
 
 component CheckRow(releaseId: string, check: readonly Check):
-    def toggle():
-        toggleCheck(releaseId, check.id)
+    def toggle(): toggleCheck(releaseId, check.id)
 
-    def remove():
-        removeCheck(releaseId, check.id)
+    def remove(): removeCheck(releaseId, check.id)
 
     return <li look={rowLook} data-check={check.id}>
         <label look={labelLook}>
