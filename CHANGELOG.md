@@ -6,6 +6,12 @@ truth for acceptance status.
 
 ## Unreleased
 
+### Language syntax
+
+- Generalized the compact branch spelling into Python-shaped suites: ordinary
+  executable blocks may keep one non-block statement after the colon, while
+  multiple statements and nested blocks remain indentation-owned.
+
 ## 0.14.1 — 2026-08-24
 
 ### Language syntax

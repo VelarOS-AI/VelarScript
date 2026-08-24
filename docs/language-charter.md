@@ -115,13 +115,17 @@ else:
     wait()
 ```
 
-Semicolons and braces are not statement syntax. An `if` branch or `match` case
-has a single-line shorthand: one non-block statement may follow the colon on
-the same logical line. Multiple statements and every nested block use the
-indented form.
+Semicolons and braces are not statement syntax. Ordinary executable blocks use
+the same two suite shapes as Python: one non-block statement may follow the
+colon on the same logical line, while multiple statements and every nested
+block use the indented form. This applies uniformly to functions, tests,
+control-flow bodies and clauses, class executable members, and executable
+blocks supplied by an active compiler extension. Structural bodies that list
+members or branches — including `type`, `enum`, `class`, `component`, and the
+`match` case list — remain indentation-owned.
 
 ```velar fragment
-if animation != null: animations.add(animation)
+def stop(): return
 ```
 
 A statement normally ends at its newline. One continuation form exists: a line
@@ -2158,11 +2162,10 @@ else:
     grade = "C"
 ```
 
-When a branch has exactly one non-block statement, it may share the header's
-logical line. This applies to `if` and `else` branches, including an `else if`
-branch; it does not extend to `while`, `for`, the `match` header, or any other
-block owner. A comment after the colon does not count as a body, so the
-following statement still uses indentation.
+As with every ordinary suite, an `if` or `else` branch with exactly one
+non-block statement may share the header's logical line, including an `else
+if` branch. A comment after the colon does not count as a body, so the following
+statement still uses indentation.
 
 ```velar fragment
 if render.animation != null: animations.add(render.animation)
@@ -2288,9 +2291,10 @@ required typed record fields participate in required-return analysis. `match`
 remains a statement; branches use ordinary `return` or assignments instead of
 introducing a second expression form.
 
-A case with exactly one non-block statement may share its header's logical
-line. The `match` header and its case list remain indentation-owned, and a case
-with multiple statements or a nested block uses the ordinary indented body.
+A case body uses the ordinary suite rule, so exactly one non-block statement may
+share its header's logical line. The `match` header and its case list remain
+indentation-owned, and a case with multiple statements or a nested block uses
+the ordinary indented body.
 
 ```velar fragment
 match status:

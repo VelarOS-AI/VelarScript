@@ -217,8 +217,8 @@ export def loopForms() -> string:
         joined += f"{left}{right}"
 
     let attempts = 0
-    while attempts < 3:
-        attempts += 1
+    // Every ordinary one-statement suite may share its header's line.
+    while attempts < 3: attempts += 1
 
     return joined + str(attempts)
 

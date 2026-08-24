@@ -2099,15 +2099,15 @@ export class Parser {
 
   private parseIfBody(start: number): IfStatement {
     const condition = this.parseExpression();
-    const thenBody = this.parseCompactBranch("'if' branch");
-    this.consumeNewlinesBeforeElse();
+    const thenBody = this.parseBlock();
+    this.consumeNewlinesBeforeClause("else");
 
     let elseBody: readonly Statement[] | null = null;
     if (this.match("else")) {
       if (this.match("if")) {
         elseBody = [this.parseIf(this.previous().span.start)];
       } else {
-        elseBody = this.parseCompactBranch("'if' branch");
+        elseBody = this.parseBlock();
       }
     }
 
@@ -2116,48 +2116,19 @@ export class Parser {
   }
 
   /**
-   * An inline branch has no dedent token to preserve its outer statement
+   * An inline suite has no dedent token to preserve its outer statement
    * boundary. Consume its following newline run only when it actually leads to
-   * this if's else clause; otherwise the ordinary statement loop must see the
-   * newline before parsing the next sibling statement.
+   * a clause owned by the current statement; otherwise the ordinary statement
+   * loop must see the newline before parsing the next sibling statement.
    */
-  private consumeNewlinesBeforeElse(): void {
+  private consumeNewlinesBeforeClause(...clauses: readonly TokenKind[]): void {
     let distance = 0;
     while (this.peekKind(distance) === "newline") distance += 1;
-    if (this.peekKind(distance) !== "else") return;
+    if (!clauses.includes(this.peekKind(distance))) return;
     while (distance > 0) {
       this.advance();
       distance -= 1;
     }
-  }
-
-  /**
-   * An if branch or match case has one deliberately narrow shorthand: after
-   * its colon, one non-block statement may stay on the header's logical line.
-   * The ordinary newline-and-indentation form remains the only way to write
-   * multiple statements or nest another block. Keeping the choice here,
-   * rather than in parseBlock, prevents the shorthand from silently spreading
-   * to loops, declarations, or extension-owned block syntax.
-   */
-  private parseCompactBranch(owner: "'if' branch" | "'match' case"): readonly Statement[] {
-    if (!this.check("colon") || this.peekKind(1) === "newline") return this.parseBlock();
-
-    const colon = this.advance();
-    const statement = this.parseStatement();
-    if (!statement) {
-      this.synchronize();
-      return [];
-    }
-
-    if (this.statementOwnsBlock(statement)) {
-      this.diagnostics.push(diagnostic(
-        "VEL2001",
-        `An inline ${owner} accepts one non-block statement; move this block header to the next indented line`,
-        span(colon.span.end, statement.span.end),
-      ));
-    }
-    this.finishStatementBoundary();
-    return [statement];
   }
 
   /** Core declarations and control-flow forms whose syntax owns a body. */
@@ -2196,7 +2167,7 @@ export class Parser {
       if (this.matchWord("case")) {
         const pattern = this.parseMatchPattern(true);
         const guard = this.match("if") ? this.parseExpression() : null;
-        const body = this.parseCompactBranch("'match' case");
+        const body = this.parseBlock();
         cases.push({ pattern, guard, body, span: span(branchStart, body.at(-1)?.span.end ?? this.previous().span.end) });
       } else if (this.match("else")) {
         // D28 item 4: 'case _:' is the only fallback spelling. The removed
@@ -2209,7 +2180,7 @@ export class Parser {
           keyword.span,
           mechanicalFix(keyword.span, "case _", "Use 'case _:' for the fallback case"),
         ));
-        const body = this.parseCompactBranch("'match' case");
+        const body = this.parseBlock();
         cases.push({
           pattern: { kind: "MatchWildcardPattern", span: keyword.span },
           guard: null,
@@ -2406,7 +2377,7 @@ export class Parser {
 
   private parseTry(start: number): Statement {
     const tryBody = this.parseBlock();
-    this.consumeNewlines();
+    this.consumeNewlinesBeforeClause("catch", "finally");
     let catchName: string | null = null;
     let catchBody: readonly Statement[] | null = null;
     let finallyBody: readonly Statement[] | null = null;
@@ -2414,7 +2385,7 @@ export class Parser {
     if (this.match("catch")) {
       catchName = this.check("identifier") ? this.advance().value : "error";
       catchBody = this.parseBlock();
-      this.consumeNewlines();
+      this.consumeNewlinesBeforeClause("finally");
     }
 
     if (this.match("finally")) {
@@ -2430,7 +2401,24 @@ export class Parser {
   }
 
   protected parseBlock(): readonly Statement[] {
-    this.expect("colon", "Expected ':' before an indented block");
+    const hasColon = this.check("colon");
+    const colon = this.expect("colon", "Expected ':' before an indented block");
+    if (hasColon && !this.atStatementEnd()) {
+      const statement = this.parseStatement();
+      if (!statement) {
+        this.synchronize();
+        return [];
+      }
+      if (this.statementOwnsBlock(statement)) {
+        this.diagnostics.push(diagnostic(
+          "VEL2001",
+          "An inline suite accepts one non-block statement; move this block header to the next indented line",
+          span(colon.span.end, statement.span.end),
+        ));
+      }
+      this.finishStatementBoundary();
+      return [statement];
+    }
     this.expect("newline", "Expected a newline before an indented block");
     this.consumeNewlines();
     this.expect("indent", "Expected an indented block");

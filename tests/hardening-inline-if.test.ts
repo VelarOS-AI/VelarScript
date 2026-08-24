@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { compile, formatSource } from "@velarscript/compiler";
+import { velarCompilerExtension as webCompilerExtension } from "../packages/web/src/compiler.ts";
 
 function run(source: string): ReturnType<typeof spawnSync> {
   const result = compile(source);
@@ -102,13 +103,73 @@ test("an inline branch still owns exactly one statement", () => {
   assert.match(result.diagnostics[0]?.message ?? "", /A statement ends at its newline; move 'print' to its own line/u);
 });
 
-test("the shorthand stays on if and refuses a nested block header", () => {
-  const loop = compile("while false: print(1)\n");
-  assert.ok(loop.diagnostics.some((item) => /Expected a newline before an indented block/u.test(item.message)));
+test("ordinary executable suites align on the same single-statement rule", () => {
+  const source = [
+    "def doubled(value: number) -> number: return value * 2",
+    "let total = 0",
+    "for value in [1, 2, 3]: total += value",
+    "let spins = 0",
+    "while spins < 2: spins += 1",
+    "let caught = \"\"",
+    "try: throw Error(\"boom\")",
+    "catch error: caught = error.code",
+    "finally: total += 1",
+    "print(f\"{doubled(total + spins)} {caught}\")",
+    "",
+  ].join("\n");
 
+  assert.equal(formatSource(source), source);
+  const execution = run(source);
+  assert.equal(execution.stdout, "18 Error\n");
+});
+
+test("declaration and class-member executable suites share the rule", () => {
+  const source = [
+    "test \"one line\": pass",
+    "class Box:",
+    "    def value() -> number: return 1",
+    "    constructor(): pass",
+    "    @dispose: pass",
+    "",
+  ].join("\n");
+
+  assert.equal(formatSource(source), source);
+  assert.deepEqual(compile(source, { path: "inline-suite.test.vel" }).diagnostics, []);
+});
+
+test("extension-owned executable suites share the rule", () => {
+  const source = [
+    "component App():",
+    "    action save(): return",
+    "    @mounted: pass",
+    "    return <button on:click={save}>Save</button>",
+    "",
+  ].join("\n");
+  const options = { extensions: [webCompilerExtension] } as const;
+
+  assert.equal(formatSource(source, options), source);
+  assert.deepEqual(compile(source, options).diagnostics, []);
+});
+
+test("an inline suite refuses a nested block header", () => {
   const nested = compile("if true: while false:\n    print(1)\n");
   assert.deepEqual(nested.diagnostics.map((item) => item.code), ["VEL2001"]);
-  assert.match(nested.diagnostics[0]?.message ?? "", /inline 'if' branch accepts one non-block statement/u);
+  assert.match(nested.diagnostics[0]?.message ?? "", /inline suite accepts one non-block statement/u);
+});
+
+test("formatting preserves both inline and indented suite choices", () => {
+  const source = [
+    "def inline(): return",
+    "def indented():",
+    "    return",
+    "if true: print(\"inline\")",
+    "if true:",
+    "    print(\"indented\")",
+    "",
+  ].join("\n");
+
+  assert.equal(formatSource(source), source);
+  assert.equal(formatSource(formatSource(source)), source);
 });
 
 test("a match case accepts one non-block statement after its colon", () => {
@@ -149,5 +210,5 @@ test("an inline match case still owns exactly one statement and no nested block"
     "",
   ].join("\n"));
   assert.deepEqual(nested.diagnostics.map((item) => item.code), ["VEL2001"]);
-  assert.match(nested.diagnostics[0]?.message ?? "", /inline 'match' case accepts one non-block statement/u);
+  assert.match(nested.diagnostics[0]?.message ?? "", /inline suite accepts one non-block statement/u);
 });
