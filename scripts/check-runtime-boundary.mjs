@@ -186,22 +186,24 @@ for (const directory of sourceRoots) {
     }
   }
 }
-const retiredApplicationPackages = new Set([
+const nonStandardPackages = new Set([
   "@velarscript/compression",
   "@velarscript/database",
+  "@velarscript/editor-kit",
   "@velarscript/msgpack",
   "@velarscript/netlify",
   "@velarscript/noise",
   "@velarscript/script-analysis",
   "@velarscript/sqlite",
   "@velarscript/text-buffer",
+  "@velarscript/yaml",
 ]);
 for (const package_ of workspacePackages) {
   const manifestPath = join(package_.directory, "package.json");
   const dependencies = {...package_.manifest.dependencies, ...package_.manifest.optionalDependencies};
-  for (const dependency of retiredApplicationPackages) {
-    if (Object.hasOwn(dependencies, dependency)) {
-      failures.push(`${display(manifestPath)}: application dependency '${dependency}' crosses the toolchain boundary`);
+  for (const dependency of Object.keys(dependencies)) {
+    if (dependency.startsWith("@velarscript-labs/") || nonStandardPackages.has(dependency)) {
+      failures.push(`${display(manifestPath)}: non-standard dependency '${dependency}' crosses the toolchain boundary`);
     }
   }
 }

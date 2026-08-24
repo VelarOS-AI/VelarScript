@@ -8,8 +8,9 @@ This file governs the repository unless a closer `AGENTS.md` narrows the target.
   declaration or structural entry. Do not add unrelated runtime invocation or
   database semantics.
 - Reserve `velar/*` for language semantics and target capabilities shipped by
-  the matching official owner. Project libraries use npm package names,
-  `velar.entry`, or project-relative modules.
+  the matching official owner. Project libraries use installed package names,
+  `velar.entry`, or project-relative modules. Official non-standard experiments
+  use the separate public `@velarscript-labs/*` npm scope.
 - Every package owned by this repository lives under `packages/*` and must
   implement the language, official target frameworks, or their required
   tooling. Database models, drivers, codecs, domain algorithms, and deployment

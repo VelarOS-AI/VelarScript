@@ -124,7 +124,7 @@ Core 保持与目标平台无关；每种目标平台都由显式的软件包负
 | 软件包 | 职责 |
 | --- | --- |
 | `@velarscript/compiler` | Core 语言 |
-| `@velarscript/node` | 文件系统、SQLite、Worker、WebSocket/服务器与 HTTP，且不暴露 Node.js ABI |
+| `@velarscript/node` | 文件系统、Worker、WebSocket/服务器与 HTTP，且不暴露 Node.js ABI |
 | `@velarscript/web` | 组件、JSX、响应式系统、生命周期、Look、浏览器 Worker 与二进制存储/传输 |
 | `@velarscript/desktop` | 在系统 WebView 宿主上沿用相同的 Web 源码模型，并提供受权限范围约束的能力 |
 | `@velarscript/cli` | 项目、构建、测试、开发服务器和语言服务器 |

@@ -26,8 +26,11 @@ installable library, even when it is implemented entirely in VelarScript.
 - Everyday value operations live on checked string, number, and collection
   members. Nothing patches JavaScript prototypes or creates new global names.
 - Implementation language does not determine membership. Reusable domain
-  modules written in VelarScript publish an ordinary npm package with one
-  `velar.entry` source entry and are imported by package name after installation.
+  modules written in VelarScript distribute an ordinary installable package with
+  one `velar.entry` source entry and are imported by package name after
+  installation. Official non-standard experiments use the dedicated public
+  `@velarscript-labs/*` npm scope; `@velarscript/*` stays reserved for Standard
+  owners, official targets, and the language toolchain.
 - Collection transforms return new lists and maps unless their name explicitly
   describes another result. JavaScript reference identity and `number`
   semantics remain unchanged.

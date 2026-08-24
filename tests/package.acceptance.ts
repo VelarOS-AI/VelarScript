@@ -136,6 +136,14 @@ try {
     "@velarscript/netlify",
     "@velarscript/script-analysis",
     "@velarscript/text-buffer",
+    "@velarscript-labs/compression",
+    "@velarscript-labs/database",
+    "@velarscript-labs/editor-kit",
+    "@velarscript-labs/msgpack",
+    "@velarscript-labs/noise",
+    "@velarscript-labs/sqlite",
+    "@velarscript-labs/text-buffer",
+    "@velarscript-labs/yaml",
   ]) {
     assert.equal(installedManifest.dependencies[dependency], undefined, `CLI must not own application package ${dependency}`);
   }
@@ -145,6 +153,7 @@ try {
   };
   assert.equal(installedNodeManifest.dependencies["@velarscript/compiler"], "0.13.0");
   assert.equal(installedNodeManifest.dependencies["@velarscript/sqlite"], undefined);
+  assert.equal(installedNodeManifest.dependencies["@velarscript-labs/sqlite"], undefined);
   const installedWebManifest = JSON.parse(await readFile(join(directory, "node_modules", "@velarscript", "web", "package.json"), "utf8")) as {
     velar?: { extension?: { kind?: string; apiVersion?: string; manifestKey?: string; extends?: Record<string, string> } };
   };

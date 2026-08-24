@@ -169,7 +169,7 @@ compiler behavior.
 | Package | Owns |
 | --- | --- |
 | `@velarscript/compiler` | the Core language |
-| `@velarscript/node` | filesystem, SQLite, workers, WebSocket/server, HTTP — without exposing the Node.js ABI |
+| `@velarscript/node` | filesystem, workers, WebSocket/server, HTTP — without exposing the Node.js ABI |
 | `@velarscript/web` | components, JSX, reactivity, lifecycle, Look, browser workers, binary storage and transport |
 | `@velarscript/desktop` | the same Web source model over a system-WebView host with permission-scoped capabilities |
 | `@velarscript/cli` | projects, builds, tests, dev server, language server |

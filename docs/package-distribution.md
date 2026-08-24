@@ -1,6 +1,6 @@
 # VelarScript Toolchain Distribution
 
-Status: stable package contract for the published VelarScript 0.11 toolchain
+Status: stable package contract for the published VelarScript 0.13 toolchain
 
 The repository contains one npm workspace layer: the version-locked language
 toolchain and official target frameworks under `packages/`:
@@ -39,9 +39,13 @@ Workbench discovers the project-local
 ## Package model
 
 VelarScript does not operate a second registry or invent another dependency graph.
-npm remains authoritative for registry resolution, `package.json`,
-`package-lock.json`, installation, integrity, audit, and update ranges. The CLI
-adds a project-aware layer:
+The npm package manager remains authoritative for `package.json`,
+`package-lock.json`, installation, integrity, audit, and update ranges. The
+public npm registry is the release source for the official language toolchain,
+Standard owners, target frameworks, ordinary third-party packages, and the
+separately named `@velarscript-labs/*` experimental ecosystem. The scope makes
+ownership visible without creating another registry or lockfile. The CLI adds a
+project-aware layer for registry packages:
 
 ```sh
 velar install
@@ -51,9 +55,11 @@ velar update [package...]
 ```
 
 Registry package specifications are passed to npm as argument-array data after
-`--`; paths, Git URLs, aliases, and injected npm flags are intentionally left
-to direct npm usage. `update` follows the ranges already declared in
-`package.json` rather than silently moving every dependency to a new major.
+`--`; paths, Git URLs, remote tarballs, aliases, and injected npm flags are
+intentionally left to direct npm usage. Libraries packages use ordinary exact
+registry versions such as `velar add @velarscript-labs/sqlite@0.2.0`. `update`
+follows the ranges already declared in `package.json` rather than silently
+moving every dependency to a new major.
 
 A reusable VelarScript source package declares `velar.entry`, its supported
 `velar.targets`, and a bounded `velar.requires.capabilities` list. Compatibility
@@ -188,8 +194,9 @@ Every resource key is an exact `./subpath` with no wildcard. `path` is a
 normalized, package-relative `.json` file, and every string leaf under the
 matching npm export condition must name exactly `./<path>`. Declared files
 must be ordinary files contained by the package after symbolic links are
-resolved, valid UTF-8 JSON, no larger than 4 MiB, and present in the published npm
-tarball. npm remains the package and integrity authority; `velar.resources`
+  resolved, valid UTF-8 JSON, no larger than 4 MiB, and present in the installed
+  package tarball. The npm installer and lockfile remain the package and
+  integrity authority; `velar.resources`
 only tells the compiler which data subpaths it is allowed to copy, watch,
 serve, or bundle.
 
@@ -316,9 +323,12 @@ project, an independently owned third-party repository, or the separately
 versioned `VelarScript-Libraries` companion repository. Companion packages are
 officially curated optional dependencies, not VelarScript Core workspaces,
 Standard modules, target frameworks, or toolchain release artifacts. The Core
-repository never imports them. The compiler resolves an installed package's
-`velar.entry` through the same public package protocol used for every other npm
-dependency and never grants it a hidden Standard-module path.
+repository never imports them. Companion packages publish publicly under the
+separate `@velarscript-labs/*` npm scope; they never reuse `@velarscript/*` or a
+`velar/*` module identity. The compiler resolves an installed package's
+`velar.entry` through the same public package
+protocol used for every other installed dependency and never grants it a hidden
+Standard-module path.
 
 The rehearsal builds and packs a private temporary toolchain snapshot. It never
 cleans or rewrites the active workspace's `dist` directories, so release checks
