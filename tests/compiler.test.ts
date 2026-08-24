@@ -15776,8 +15776,8 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     devDependencies: Record<string, string>;
   };
-  assert.equal(createdPackage.dependencies["@velarscript/web"], "0.13.0");
-  assert.equal(createdPackage.devDependencies["@velarscript/cli"], "0.13.0");
+  assert.equal(createdPackage.dependencies["@velarscript/web"], "0.14.0");
+  assert.equal(createdPackage.devDependencies["@velarscript/cli"], "0.14.0");
   assert.equal(createdPackage.scripts.format, "velar format");
   assert.equal(createdPackage.scripts["format:check"], "velar format --check");
   assert.equal(createdPackage.scripts["test:browser"], "velar test --browser");
@@ -15913,8 +15913,8 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   assert.deepEqual(componentPackage.velar.requires.capabilities, []);
   assert.equal(componentPackage.scripts["pack:check"], "npm pack --dry-run --json");
   assert.match(componentPackage.scripts.validate ?? "", /npm run pack:check$/u);
-  assert.equal(componentPackage.peerDependencies["@velarscript/web"], "^0.13.0");
-  assert.equal(componentPackage.devDependencies["@velarscript/web"], "0.13.0");
+  assert.equal(componentPackage.peerDependencies["@velarscript/web"], "^0.14.0");
+  assert.equal(componentPackage.devDependencies["@velarscript/web"], "0.14.0");
   assert.match(await readFile(join(componentRoot, "src", "index.vel"), "utf8"), /export component InfoCard/u);
   assert.deepEqual(JSON.parse(await readFile(join(componentRoot, "velar.json"), "utf8")).extensions, ["@velarscript/web"]);
   await linkWorkspaceWebExtension(componentRoot);
@@ -15939,16 +15939,19 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     scripts: Record<string, string>;
   };
-  assert.equal(nodePackage.dependencies["@velarscript/node"], "0.13.0");
+  assert.equal(nodePackage.dependencies["@velarscript/server"], "0.14.0");
+  assert.equal(nodePackage.dependencies["@velarscript/node"], undefined);
   assert.equal(nodePackage.scripts.dev, "velar dev");
   assert.equal(nodePackage.scripts.start, "velar serve");
   const nodeManifest = JSON.parse(await readFile(join(nodeRoot, "velar.json"), "utf8"));
-  assert.deepEqual(nodeManifest.extensions, ["@velarscript/node"]);
-  assert.deepEqual(nodeManifest.node, {app: "app", host: "127.0.0.1", port: 3000, maxBodyBytes: 16_777_216, build: {sourceMaps: false}});
+  assert.deepEqual(nodeManifest.extensions, ["@velarscript/server"]);
+  assert.equal(nodeManifest.node, undefined);
   const nodeAgents = await readFile(join(nodeRoot, "AGENTS.md"), "utf8");
-  assert.match(nodeAgents, /velar skill core.*velar skill node/su);
+  assert.match(nodeAgents, /velar skill core.*velar skill node.*velar skill server/su);
   assert.doesNotMatch(nodeAgents, /velar skill web|velar skill desktop/u);
   assert.match(await readFile(join(nodeRoot, "src", "app.vel"), "utf8"), /@get\(p"\/api\/hello"\)/u);
+  assert.match(await readFile(join(nodeRoot, "src", "main.vel"), "utf8"), /application\(routes\)/u);
+  assert.match(await readFile(join(nodeRoot, "application.yml"), "utf8"), /port: 3000/u);
   assert.match(await readFile(join(nodeRoot, "public", "index.html"), "utf8"), /velarscript-mark\.svg/u);
   const nodeCheck = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "check", nodeRoot], { cwd: directory, encoding: "utf8" });
   assert.equal(nodeCheck.status, 0, nodeCheck.stderr);
@@ -15964,7 +15967,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     scripts: Record<string, string>;
   };
-  assert.equal(desktopPackage.dependencies["@velarscript/desktop"], "0.13.0");
+  assert.equal(desktopPackage.dependencies["@velarscript/desktop"], "0.14.0");
   assert.equal(desktopPackage.scripts.package, "velar package");
   assert.equal(desktopPackage.scripts["test:browser"], "velar test --browser=all");
   const desktopAgents = await readFile(join(desktopRoot, "AGENTS.md"), "utf8");
@@ -16008,7 +16011,7 @@ test("CLI help is command-specific and malformed top-level invocations fail clea
 
   const serveHelp = spawnSync(process.execPath, [cli, "help", "serve"], { encoding: "utf8" });
   assert.equal(serveHelp.status, 0, serveHelp.stderr);
-  assert.match(serveHelp.stdout, /Node ServeApp.*node\.host and node\.port/u);
+  assert.match(serveHelp.stdout, /Node server factory.*host and port belong to velar\/server configuration/u);
 
   const inlineHelp = spawnSync(process.execPath, [cli, "test", "--help"], { encoding: "utf8" });
   assert.equal(inlineHelp.status, 0, inlineHelp.stderr);
@@ -16028,7 +16031,7 @@ test("CLI help is command-specific and malformed top-level invocations fail clea
   const creator = resolve("packages/create/src/cli.ts");
   const creatorVersion = spawnSync(process.execPath, [creator, "--version"], { encoding: "utf8" });
   assert.equal(creatorVersion.status, 0, creatorVersion.stderr);
-  assert.equal(creatorVersion.stdout, "create-velar 0.13.0\n");
+  assert.equal(creatorVersion.stdout, "create-velar 0.14.0\n");
   const creatorMissing = spawnSync(process.execPath, [creator], { encoding: "utf8" });
   assert.equal(creatorMissing.status, 2);
   assert.match(creatorMissing.stderr, /expected one project directory/u);
@@ -27779,7 +27782,7 @@ test("CLI emits complete Web application assets", async () => {
     apiVersion: "0.10",
     artifactKind: "velar-web-build",
   });
-  assert.deepEqual(manifest.compiler, { name: "velar", version: "0.13.0" });
+  assert.deepEqual(manifest.compiler, { name: "velar", version: "0.14.0" });
   assert.match(manifest.buildId, /^[a-f0-9]{64}$/u);
   assert.equal(manifest.sourceMaps, true);
   assert.equal(manifest.entry, `assets/${javascript}`);

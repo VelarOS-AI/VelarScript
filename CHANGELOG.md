@@ -6,6 +6,21 @@ truth for acceptance status.
 
 ## Unreleased
 
+## 0.14.0 — 2026-08-24
+
+### Server application framework
+
+- Split convention-based server application assembly from the low-level Node
+  capability into the explicitly activated `@velarscript/server` extension.
+  Root `application.yml` is now the sole conventional runtime configuration
+  name and owns host, port, and request-body settings, while `velar.json`
+  retains only build and entry selection. Explicit configuration paths may
+  still use YAML or JSON.
+- Added typed YAML/JSON configuration loading, zero-argument application
+  factories, and a generic application-scoped connection lifecycle. Concrete
+  database connections, drivers, models, queries, and migrations remain
+  application-owned dependencies.
+
 ## 0.13.0 — 2026-08-23
 
 ### Language semantics and diagnostics

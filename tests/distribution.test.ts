@@ -13,6 +13,7 @@ const skillFiles = Object.freeze({
   core: "ai-skill.md",
   web: "ai-skill-web.md",
   node: "ai-skill-node.md",
+  server: "ai-skill-server.md",
   desktop: "ai-skill-desktop.md",
 });
 
@@ -46,12 +47,12 @@ test("velar skill selects and prints each packaged owner brief verbatim", async 
 
   const help = spawnSync(process.execPath, [cli, "help", "skill"], { encoding: "utf8" });
   assert.equal(help.status, 0, help.stderr);
-  assert.match(help.stdout, /core\|web\|node\|desktop/u);
+  assert.match(help.stdout, /core\|web\|node\|server\|desktop/u);
   assert.match(help.stdout, /owner-specific VelarScript AI skill brief/u);
 
   const rejected = spawnSync(process.execPath, [cli, "skill", "unknown"], { encoding: "utf8" });
   assert.equal(rejected.status, 2);
-  assert.match(rejected.stderr, /expected core, web, node, or desktop/u);
+  assert.match(rejected.stderr, /expected core, web, node, server, or desktop/u);
 });
 
 test("every create-velar template scaffolds the AGENTS.md brief pointer", () => {
@@ -60,7 +61,7 @@ test("every create-velar template scaffolds the AGENTS.md brief pointer", () => 
     web: ["core", "web"],
     docs: ["core", "web"],
     component: ["core", "web"],
-    node: ["core", "node"],
+    node: ["core", "node", "server"],
     desktop: ["core", "web", "desktop"],
   });
   for (const template of VELAR_PROJECT_TEMPLATES) {

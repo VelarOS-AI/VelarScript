@@ -18,9 +18,8 @@ represent non-2xx responses, owned cancel/deadline outcomes, and
 request/response network transport failure. The transport phase is typed; retry
 and replay policy stays with the provider or application.
 
-The package also owns Node's native server syntax and application target. A
-project activates `@velarscript/node`, configures its exported application once
-in `velar.json`, then declares anonymous checked routes directly:
+The package also owns Node's native server syntax. A low-level project may
+activate `@velarscript/node` directly, then declare anonymous checked routes:
 
 ```velar
 import {created} from "velar/serve"
@@ -40,45 +39,43 @@ export server app:
   "entry": "src/main.vel",
   "extensions": ["@velarscript/node"],
   "node": {
-    "app": "app",
-    "host": "127.0.0.1",
-    "port": 3000,
-    "maxBodyBytes": 16777216,
+    "app": "start",
     "build": {"sourceMaps": false}
   }
 }
 ```
 
-`velar dev` checks, starts, watches, and restarts the last-good application;
-`velar serve` checks and runs it with production behavior; `velar build` writes
-a standalone production directory whose `.velar-node-entry.mjs` runs with
-Node. Calling `serve(...)` directly remains available for tests, embedded
-servers, and low-level protocol adapters, but it is not required at an
-application entry point.
+The entry is an exact zero-argument async function returning `Server` or
+`WebSocketServer`. Calling `serve(...)` directly remains available for tests,
+embedded servers, and low-level protocol adapters.
 
-When HTTP and WebSocket traffic must share that application port, `node.app`
-instead names an exported startup function with the exact checked type
-`(string, number, number) -> Promise<WebSocketServer>`. The CLI supplies the
-configured host, port, and request-body ceiling consistently in development,
-serve, and production builds:
+An ordinary service activates the separate `@velarscript/server` application
+extension instead. It composes this Node capability and owns root
+root `application.yml`, startup assembly,
+and abstract connection lifecycle. Without that explicit extension,
+`velar/server` is unavailable and application configuration is not loaded.
+Host, port, and request ceilings do not belong in `node` manifest settings.
+
+When low-level HTTP and WebSocket traffic share one port, the entry may return
+`Promise<WebSocketServer>`:
 
 ```velar fragment
 import {app as routes} from "./app.vel"
 import {listen} from "velar/websocket"
 
-export async def start(host: string, port: number, maxBodyBytes: number):
+export async def start():
     return await listen({
-        host,
-        port,
+        host: "127.0.0.1",
+        port: 3000,
         http: routes,
         path: "/api/events",
         origins: ["https://app.example.com"],
-        maxBodyBytes,
+        maxBodyBytes: 16777216,
     })
 ```
 
-Set `node.app` to `"start"` for this form. No second listener or application
-configuration surface is introduced.
+The CLI supplies no host, port, or body-limit arguments. Server applications
+read those values once through `@velarscript/server` conventions.
 
 `p"..."` is scanned and checked only by this extension; Core does not acquire a
 general `p` string prefix. Captures use `{name:type}` with a half-width `:` and

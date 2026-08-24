@@ -4,7 +4,8 @@ import test from "node:test";
 import { tmpdir } from "node:os";
 import { compile, formatSource } from "@velarscript/compiler";
 import { compileProject } from "../packages/cli/src/project.ts";
-import { velarNodeCompilerExtension, velarProjectExtension } from "@velarscript/node/compiler";
+import {nodeModuleInterfaces, velarNodeCompilerExtension, velarProjectExtension} from "@velarscript/node/compiler";
+import {serverModuleInterfaces, velarCompilerExtension as velarServerCompilerExtension, velarProjectExtension as serverProjectExtension} from "@velarscript/server/compiler";
 
 function compileNode(source: string) {
   return compile(source.trimStart(), { path: "app.vel", extensions: [velarNodeCompilerExtension] });
@@ -12,15 +13,65 @@ function compileNode(source: string) {
 
 test("Node application configuration is bounded and rejects unknown fields", () => {
   assert.deepEqual(velarProjectExtension.parse(undefined, "/service/velar.json"), {
-    app: "app",
-    host: "127.0.0.1",
-    port: 3000,
-    maxBodyBytes: 16_777_216,
+    app: "start",
     build: {sourceMaps: false},
   });
-  assert.throws(() => velarProjectExtension.parse({port: 0}, "/service/velar.json"), /node\.port.*1 through 65535/u);
-  assert.throws(() => velarProjectExtension.parse({maxBodyBytes: 16_777_217}, "/service/velar.json"), /node\.maxBodyBytes/u);
+  assert.throws(() => velarProjectExtension.parse({port: 3000}, "/service/velar.json"), /unknown 'node' field 'port'/u);
+  assert.throws(() => velarProjectExtension.parse({host: "127.0.0.1"}, "/service/velar.json"), /unknown 'node' field 'host'/u);
+  assert.throws(() => velarProjectExtension.parse({maxBodyBytes: 16_777_216}, "/service/velar.json"), /unknown 'node' field 'maxBodyBytes'/u);
   assert.throws(() => velarProjectExtension.parse({workers: 4}, "/service/velar.json"), /unknown 'node' field 'workers'/u);
+});
+
+test("server configuration and database helpers preserve checked application types", async () => {
+  assert.deepEqual(serverProjectExtension.parse(undefined, "/service/velar.json"), {
+    app: "start",
+    build: {sourceMaps: false},
+  });
+  assert.throws(() => serverProjectExtension.parse({port: 3000}, "/service/velar.json"), /unknown 'server' field 'port'/u);
+  const source = `
+import {application, configuration, database} from "velar/server"
+import {input} from "velar/serve"
+
+type ServerSettings:
+    host: string
+    port: number
+    maxBodyBytes: number
+
+type Settings:
+    server: ServerSettings
+    databasePath: string
+
+type Connection:
+    path: string
+    close: () -> Promise<null>
+
+server routes:
+    @get(p"/health") => {ok: true}
+
+const settings = await configuration(Settings)
+const connection = database(
+    connect=async () => {path: settings.databasePath, close: async () => null},
+    disconnect=async value => await value.close(),
+)
+
+server app:
+    ...routes
+    @get(p"/database", value=input.dependency(connection)) => {path: value.path}
+
+export const start = application(app)
+`.trimStart();
+  const path = join(tmpdir(), "velar-server-framework-helpers.vel");
+  const project = await compileProject(path, new Map([[path, source]]), {extensions: [velarServerCompilerExtension]});
+  const result = project.modules[0]!.result;
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(result.code ?? "", /configuration\(Settings\)/u);
+  assert.match(result.code ?? "", /database\(/u);
+  assert.match(result.code ?? "", /application\(app\)/u);
+});
+
+test("velar/server exists only when the Server application extension is active", () => {
+  assert.equal(nodeModuleInterfaces.has("velar/server"), false);
+  assert.equal(serverModuleInterfaces.has("velar/server"), true);
 });
 
 test("Node server syntax lowers anonymous async routes without decorator functions", () => {

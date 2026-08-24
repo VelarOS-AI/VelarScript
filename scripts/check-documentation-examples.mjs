@@ -3,6 +3,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inspectModule } from "@velarscript/compiler";
 import { isNodeOnlyModule, velarNodeCompilerExtension } from "@velarscript/node/compiler";
+import {velarCompilerExtension as velarServerCompilerExtension} from "@velarscript/server/compiler";
 import { BROWSER_TEST_MODULE, BROWSER_TEST_SOURCE_SUFFIX, velarCompilerExtension } from "@velarscript/web/compiler";
 import { compileProject } from "../packages/cli/src/project.ts";
 
@@ -228,14 +229,19 @@ function moduleFileName(source) {
  * on Node but not on the Web, where a process environment does not exist. An
  * example the Web target cannot satisfy — it imports a Node-only module, or a
  * name the browser contract does not export — is therefore a Core/CLI
- * illustration and is checked as a Core project. A parsed Node `server` symbol
- * selects the Node extension that owns it; everything else is checked with the
- * Web extension loaded, which owns JSX, components, and Node-module rejection.
+ * illustration and is checked as a Core project. An import from `velar/server`
+ * selects the Server application extension; otherwise a parsed Node `server`
+ * symbol selects the low-level Node extension that owns it. Everything else is
+ * checked with the Web extension loaded, which owns JSX, components, and
+ * Node-module rejection.
  */
 function exampleExtensions(source, file) {
-  const nodeInspection = inspectModule(source, { path: file, extensions: [velarNodeCompilerExtension] });
+  const serverOwned = source.includes('"velar/server"');
+  const nodeExtension = serverOwned ? velarServerCompilerExtension : velarNodeCompilerExtension;
+  if (serverOwned) return [nodeExtension];
+  const nodeInspection = inspectModule(source, { path: file, extensions: [nodeExtension] });
   if (nodeInspection.semanticIndex.symbols.some((symbol) => symbol.kind === "extension:variable:node-server")) {
-    return [velarNodeCompilerExtension];
+    return [nodeExtension];
   }
   const inspection = inspectModule(source, { path: file, extensions: [velarCompilerExtension] });
   const webInterfaces = velarCompilerExtension.modules?.interfaces ?? new Map();

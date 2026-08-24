@@ -4,10 +4,17 @@ Load this after `velar skill core`. This brief contains only the Node owner’s
 contract. Core does not learn server declarations, path-pattern strings, Node
 capabilities, or application configuration.
 
-## Ownership and application entry
+## Ownership and low-level application entry
 
-A Node service activates the extension and names one exported `ServeApp` or
-one typed WebSocket startup function:
+`@velarscript/node` is a capability extension. It owns route syntax,
+path-pattern strings, Node modules, HTTP/WebSocket transport, and low-level
+server lifecycle; it does not own convention-based application configuration.
+An ordinary service activates `@velarscript/server` and then loads
+`velar skill server` for root `application.*`, application assembly, and
+connection lifecycle.
+
+A deliberately low-level Node application may activate Node directly and name
+one exported zero-argument async startup function:
 
 ```json
 {
@@ -17,50 +24,47 @@ one typed WebSocket startup function:
   "publicDir": "public",
   "extensions": ["@velarscript/node"],
   "node": {
-    "app": "app",
-    "host": "127.0.0.1",
-    "port": 3000,
-    "maxBodyBytes": 16777216,
+    "app": "start",
     "build": {"sourceMaps": false}
   }
 }
 ```
 
-The entry exports application data; it does not need a manually named function
-or top-level `serve(...)` call:
+The low-level entry owns its own startup arguments in code:
 
 ```velar fragment
-import {app as routes} from "./app.vel"
+import {serve} from "velar/serve"
+import {app} from "./app.vel"
 
-export const app = routes
+export async def start():
+    return await serve(app, port=3000, host="127.0.0.1")
 ```
 
-For one shared HTTP/WebSocket application port, `node.app` may instead name
-exactly this function shape:
+For one shared HTTP/WebSocket application port, the same exact zero-argument
+shape returns `Promise<WebSocketServer>`:
 
 ```velar fragment
 import {app as routes} from "./app.vel"
 import {listen} from "velar/websocket"
 
-export async def start(host: string, port: number, maxBodyBytes: number):
+export async def start():
     return await listen({
-        host,
-        port,
+        host: "127.0.0.1",
+        port: 3000,
         http: routes,
         path: "/api/events",
         origins: ["https://app.example.com"],
-        maxBodyBytes,
+        maxBodyBytes: 16777216,
     })
 ```
 
-Set `node.app` to `"start"`. The exact result is
-`Promise<WebSocketServer>`; `dev`, `serve`, and the production launcher pass
-the same three configured values.
+The exact result is `Promise<WebSocketServer>`. The launcher supplies no
+host, port, or body-limit parameters.
 
-Use `velar dev` while editing, `velar serve` for checked production runtime
-behavior, and `velar build` for a standalone Node output directory. A direct
-`serve(app, port=0)` call is still correct in integration tests or an embedded
-server.
+Use direct Node activation for tools, embedded adapters, and tests. For an
+application service, activate `@velarscript/server`; it provides the same
+`velar dev`, `velar serve`, and standalone `velar build` workflow without a
+second runtime configuration source.
 
 `@name` keeps its one language-wide role: it qualifies a compiler-owned name
 in the current context. In a `server` block, the available names are `@get`,

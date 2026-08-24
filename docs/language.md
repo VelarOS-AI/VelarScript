@@ -458,7 +458,8 @@ test "a single name keeps one initial":
 
 ## Node services
 
-A Node service activates `@velarscript/node` in `velar.json`. `server` declares
+An application service activates `@velarscript/server` in `velar.json`; that
+application extension composes `@velarscript/node`. `server` declares
 an immutable route table; the five HTTP verbs are compiler-owned `@name` roles,
 not decorators. A Node-owned `p"..."` path pattern declares each path value
 once, with its type, and brings that name directly into the anonymous route
@@ -488,11 +489,13 @@ export server app:
 `p"..."` belongs to the Node extension rather than Core's string system.
 `f"..."` therefore keeps its one job—forward runtime interpolation—while a
 path pattern is a reverse matcher checked entirely at compile time.
-The project’s `node.app`, `node.host`, `node.port`, and `node.maxBodyBytes`
-configuration selects this exported app. `velar dev` watches and restarts it,
-`velar serve` runs it with production behavior, and `velar build` emits the
-standalone Node application. Direct `serve(...)` remains an ordinary library
-operation for integration tests and embedded servers.
+The entry convention is `export const start = application(app)` from
+`velar/server`. Root `application.yml` owns host, port, request limits, and
+application settings. Other YAML/JSON files require an explicit path.
+`velar dev` watches and restarts it, `velar serve` runs it with production
+behavior, and `velar build` emits the standalone Node application. Direct
+`serve(...)` remains an ordinary Node operation for integration tests and
+embedded servers.
 `@notFound` is the single application fallback for a path that matches no
 route. Its optional parameter must be `Request`; Data keeps the 404 status,
 while an explicit response may select another status. It does not intercept a

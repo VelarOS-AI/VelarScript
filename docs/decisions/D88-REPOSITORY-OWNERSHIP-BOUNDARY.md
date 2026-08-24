@@ -27,7 +27,9 @@
 
 框架可以提供路由、中间件、生命周期、依赖提供者、HTTP、文件、Worker、
 WebSocket、浏览器 DOM 和 IndexedDB 等目标能力。框架只负责组合任意的
-应用值，不定义 `Database`、ORM、数据库方言或厂商部署对象。
+应用值，不定义 `Database`、ORM、数据库方言或厂商部署对象。服务器框架可以
+把应用提供的异步 `connect`/`disconnect` 组合成应用作用域 Provider，但连接值
+及其接口仍完全由所安装的数据库包或应用定义。
 
 `velar.entry`、npm 包解析、目标/能力约束、框架扩展协议和 `extern module`
 继续属于语言与工具链。它们允许项目拥有自己的包，但不会使这些包成为官方

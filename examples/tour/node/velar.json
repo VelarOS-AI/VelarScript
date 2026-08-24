@@ -2,12 +2,5 @@
   "formatVersion": 2,
   "entry": "main.vel",
   "outDir": "dist",
-  "extensions": ["@velarscript/node"],
-  "node": {
-    "app": "app",
-    "host": "127.0.0.1",
-    "port": 3000,
-    "maxBodyBytes": 16777216,
-    "build": {"sourceMaps": false}
-  }
+  "extensions": ["@velarscript/server"]
 }

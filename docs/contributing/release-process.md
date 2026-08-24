@@ -1,11 +1,12 @@
 # VelarScript Toolchain Release Process
 
-Status: VelarScript 0.13.0 released on 2026-08-23
+Release line: VelarScript 0.14.0 on 2026-08-24
 
 VelarScript ships the compiler, target-neutral Core Standard API, official Node
-runtime, official Web and Desktop frameworks, project creator, and CLI as one
-seven-package version-locked release set. Node, Web, and Desktop pin their exact
-toolchain dependencies; CLI pins Core, compiler, Node, Web, Desktop, and creator.
+runtime, official Server, Web and Desktop frameworks, project creator, and CLI
+as one eight-package version-locked release set. Node, Server, Web, and Desktop
+pin their exact toolchain dependencies; CLI pins Core, compiler, Node, Server,
+Web, Desktop, and creator.
 Application libraries, external-service adapters, and provider integrations are
 not workspaces or release artifacts of this repository.
 
@@ -39,9 +40,9 @@ npm run release:verify -- release/rehearsal
 
 A rehearsal is useful when changing package contents or release metadata; it is
 not another mandatory pass before every release. It runs `npm pack` for all
-seven toolchain workspaces and writes:
+eight toolchain workspaces and writes:
 
-- the seven package tarballs;
+- the eight package tarballs;
 - `SHA256SUMS`;
 - `velar-toolchain-release.json` containing package name, version, filename,
   byte size, SHA-256, npm integrity, source-tree identity, and publication
@@ -65,8 +66,8 @@ Candidate mode fails unless all of these are true:
 - the exact `v<version>` tag resolves to `HEAD` (independent-package tags may
   resolve to the same commit);
 - `origin` matches package repository metadata;
-- all seven packages have an explicit publishable license;
-- compiler, Core, Node, Web, Desktop, creator, and CLI versions and internal
+- all eight packages have an explicit publishable license;
+- compiler, Core, Node, Server, Web, Desktop, creator, and CLI versions and internal
   toolchain dependencies match exactly.
 
 The GitHub rehearsal workflow adds an OIDC artifact attestation to the packed
@@ -85,7 +86,7 @@ that tagged source.
 The publication helper accepts only that verified candidate on an OIDC-capable
 GitHub Actions runner. It publishes in workspace dependency order with npm
 provenance under the non-default `next` dist-tag, verifies each registry
-integrity, and promotes `latest` only after all seven exact versions are
+integrity, and promotes `latest` only after all eight exact versions are
 available. A partially completed run is resumable: an existing version is
 accepted only when its npm integrity is byte-for-byte identical to the strict
 candidate. Exact-version and dist-tag reads allow up to five minutes for npm's

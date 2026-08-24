@@ -30,6 +30,7 @@ import type { CompilerExtension } from "@velarscript/compiler/extension";
 import { velarCompilerExtension as webCompilerExtension } from "../packages/web/src/compiler.ts";
 import { velarCompilerExtension as desktopCompilerExtension } from "../packages/desktop/src/compiler.ts";
 import { velarCompilerExtension as nodeCompilerExtension } from "../packages/node/src/compiler.ts";
+import {velarCompilerExtension as serverCompilerExtension} from "../packages/server/src/compiler.ts";
 
 const cliPath = fileURLToPath(new URL("../packages/cli/src/cli.ts", import.meta.url));
 const examples = fileURLToPath(new URL("../examples", import.meta.url));
@@ -100,7 +101,7 @@ const corpusDirectories: readonly { readonly directory: string; readonly extensi
   { directory: join(examples, "tour", "core"), extensions: [] },
   { directory: join(examples, "tour", "web"), extensions: [webCompilerExtension] },
   { directory: join(examples, "tour", "desktop"), extensions: [desktopCompilerExtension] },
-  { directory: join(examples, "tour", "node"), extensions: [nodeCompilerExtension] },
+  { directory: join(examples, "tour", "node"), extensions: [serverCompilerExtension] },
   { directory: join(examples, "app", "src"), extensions: [webCompilerExtension] },
 ];
 

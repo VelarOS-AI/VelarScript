@@ -20,6 +20,7 @@ import {
 import { standardModuleInterfaces, standardModuleSources } from "../packages/core/src/index.ts";
 import { velarCompilerExtension as velarDesktopCompilerExtension } from "../packages/desktop/src/compiler.ts";
 import { velarNodeCompilerExtension } from "../packages/node/src/compiler.ts";
+import { velarCompilerExtension as velarServerCompilerExtension } from "../packages/server/src/compiler.ts";
 import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
 import { esModuleExports } from "../scripts/es-module-exports.mjs";
 
@@ -322,7 +323,7 @@ test("the boundary gate reports no number it cannot support", () => {
   const surfaces = new Map<string, Set<string>>();
   let publicSurfaces = 0;
   let internalSurfaces = 0;
-  for (const extensions of [[], [velarCompilerExtension], [velarNodeCompilerExtension], [velarDesktopCompilerExtension]]) {
+  for (const extensions of [[], [velarCompilerExtension], [velarNodeCompilerExtension], [velarServerCompilerExtension], [velarDesktopCompilerExtension]]) {
     const interfaces = standardModuleInterfaces(extensions);
     for (const [name, source] of standardModuleSources(extensions)) {
       const seen = surfaces.get(name) ?? new Set<string>();

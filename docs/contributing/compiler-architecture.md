@@ -765,6 +765,13 @@ initialization therefore cannot change which case is selected.
   Worker acknowledges stream destruction. The Worker itself is ready eagerly,
   but it creates its input stream only for the first `readLine`, so a module
   import or output-only CLI never acquires an active stdin reader.
+- `packages/server` owns the separate application extension that composes the
+  Node compiler/runtime contract. It alone publishes `velar/server`, discovers
+  root `application.yml`, assembles the conventional zero-argument startup
+  function, and maps an
+  abstract connect/disconnect pair onto Node's application-scoped Provider
+  lifecycle. Node does not read application configuration; Server contains no
+  concrete database driver, model, query, migration, or ORM behavior.
 - `packages/create` owns transactional project creation and the complete
   `web`, `docs`, `library`, and `component` template inventory. The component
   template is an ordinary Web source package with a separate preview entry, not
@@ -802,9 +809,9 @@ initialization therefore cannot change which case is selected.
   contribution owns presentation and connection metadata, but never copies or
   embeds compiler semantics.
 
-The compiler, Core Standard API, Node runtime, Web and Desktop frameworks, creator, and CLI build as independent npm packages
-containing emitted JavaScript, source maps, and `.d.ts` declarations. Node and Web pin
-the exact compiler version. CLI pins Core, the compiler, Node, Web, Desktop, and
+The compiler, Core Standard API, Node runtime, Server, Web and Desktop frameworks, creator, and CLI build as independent npm packages
+containing emitted JavaScript, source maps, and `.d.ts` declarations. Node, Server, and Web pin
+their exact toolchain dependencies. CLI pins Core, the compiler, Node, Server, Web, Desktop, and
 creator as its official toolchain fallback; normal projects may still install
 their own matching target, which resolves first. Desktop does not depend on or
 execute CLI.

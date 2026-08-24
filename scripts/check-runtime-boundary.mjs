@@ -52,6 +52,7 @@ import { VELAR_WORKER_MANIFEST_MODULE, standardModuleInterfaces, standardModuleS
 import { esModuleExports } from "./es-module-exports.mjs";
 import { velarCompilerExtension as velarWebCompilerExtension } from "../packages/web/src/compiler.ts";
 import { VELAR_NODE_HOST_MODULE, velarNodeCompilerExtension } from "../packages/node/src/compiler.ts";
+import { velarCompilerExtension as velarServerCompilerExtension } from "../packages/server/src/compiler.ts";
 import { velarCompilerExtension as velarDesktopCompilerExtension } from "../packages/desktop/src/compiler.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -264,12 +265,19 @@ const webTypesSource = await readFile(join(root, "packages", "web", "src", "type
 const coreWebSocket = standardModuleInterfaces().get("velar/websocket");
 const webWebSocket = standardModuleInterfaces([velarWebCompilerExtension]).get("velar/websocket");
 const nodeWebSocket = standardModuleInterfaces([velarNodeCompilerExtension]).get("velar/websocket");
+const serverApplication = standardModuleInterfaces([velarServerCompilerExtension]).get("velar/server");
 if (coreWebSocket) failures.push("packages/core/src/index.ts: Core must not own the target-specific velar/websocket surface");
 if (!webWebSocket || webWebSocket.exports.has("listen") || webWebSocket.exports.has("WebSocketServer")) {
   failures.push("packages/web/src/compiler.ts: Web velar/websocket must remain client-only");
 }
 if (!nodeWebSocket?.exports.has("listen") || !nodeWebSocket.exports.has("WebSocketServer")) {
   failures.push("packages/node/src/compiler.ts: Node must own the WebSocket server surface");
+}
+if (!serverApplication?.exports.has("application") || !serverApplication.exports.has("configuration") || !serverApplication.exports.has("database")) {
+  failures.push("packages/server/src/compiler.ts: Server must own application configuration and connection lifecycle composition");
+}
+if (standardModuleInterfaces([velarNodeCompilerExtension]).has("velar/server")) {
+  failures.push("packages/node/src/compiler.ts: the Node capability must not own the convention-based velar/server application module");
 }
 
 const desktopSources = [];
@@ -2118,7 +2126,7 @@ let publicModuleSurfaces = 0;
 let internalModuleSurfaces = 0;
 const auditedSurfaces = new Map();
 const accountedInternalModules = new Set();
-for (const extensions of [[], [velarWebCompilerExtension], [velarNodeCompilerExtension], [velarDesktopCompilerExtension]]) {
+for (const extensions of [[], [velarWebCompilerExtension], [velarNodeCompilerExtension], [velarServerCompilerExtension], [velarDesktopCompilerExtension]]) {
   const interfaces = standardModuleInterfaces(extensions);
   const sources = standardModuleSources(extensions);
   for (const [name, source] of sources) {

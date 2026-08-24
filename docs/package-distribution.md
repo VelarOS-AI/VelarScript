@@ -12,6 +12,10 @@ toolchain and official target frameworks under `packages/`:
   implementations for local filesystem, paths, shell-free processes,
   environment, lifecycle, bounded terminal I/O, HTTP serving, and HTTP clients. It can be composed
   independently of the CLI.
+- `@velarscript/server`: the explicit convention-based Server application
+  extension. It composes Node, owns root YAML/JSON application configuration,
+  startup assembly, and abstract connection lifecycle, but no concrete database
+  driver or model layer.
 - `@velarscript/web`: the official Web framework's versioned module contract
   and browser runtime, plus independent compiler and framework-host entries.
 - `@velarscript/desktop`: the optional single-project Desktop framework. It
@@ -25,11 +29,12 @@ toolchain and official target frameworks under `packages/`:
   runners, npm-backed dependency workflow, production builder/local and remote
   verifiers/preview server, and LSP server.
 All current packages require Node.js 24 or later and contain no Workbench code.
-Compiler, Node, Web, Desktop, creator, and CLI publish JavaScript and `.d.ts`
+Compiler, Node, Server, Web, Desktop, creator, and CLI publish JavaScript and `.d.ts`
 artifacts from `dist`. Web pins the exact
-matching compiler version. Node pins compiler. Desktop pins compiler, Node,
-and Web, but never imports or executes the CLI. CLI pins compiler, Node, Web,
-Desktop, and creator as one complete official release generation. It resolves
+matching compiler version. Node pins compiler. Server pins compiler and Node.
+Desktop pins compiler, Node,
+and Web, but never imports or executes the CLI. CLI pins Core, compiler, Node,
+Server, Web, Desktop, and creator as one complete official release generation. It resolves
 every compiler/project extension declared by the application's format-v2
 manifest from the project first, then discovers and validates optional
 protocol-v1 `/host` and `/package-host` entries from the same owner.
@@ -148,7 +153,7 @@ An extension declares its modules under its own package name. That name is a
 convention the project load does not verify; what it verifies is the two claims
 that would take a module away from someone else. The `velar/*` prefix is a
 closed vocabulary owned by the language, and only the official target extensions
-this toolchain ships — `@velarscript/web`, `@velarscript/node`, and
+this toolchain ships — `@velarscript/web`, `@velarscript/node`, `@velarscript/server`, and
 `@velarscript/desktop` — may name it. That exemption is what a target capability
 is: `@velarscript/node` replaces `velar/worker` with the Node implementation of
 the same contract. Any other extension that declares a `velar/*` module
@@ -232,11 +237,13 @@ Extension lookup follows Node's nearest `node_modules` search order but never
 falls through an existing malformed, symbolic, or unreadable package manifest
 to an ancestor package with the same name. Only a genuinely missing candidate
 continues the search.
-The CLI-installed official Web, Node, and Desktop extensions form a narrow
+The CLI-installed official Web, Node, Server, and Desktop extensions form a narrow
 toolchain fallback for projects that intentionally contain no `node_modules`.
 The existing Node standard-module capability remains available without syntax
-activation; Node-owned `server`, route roles, and `p"..."` path patterns are
-activated only by naming `@velarscript/node`, like all extension-owned syntax.
+activation; Node-owned route roles and `p"..."` path patterns are activated by
+naming `@velarscript/node` directly or by activating an application extension
+such as `@velarscript/server` that explicitly composes it. `velar/server`
+itself remains owned only by the Server extension.
 A project-local official target always wins, and an invalid local manifest
 fails closed instead of falling back. Third-party extensions never use the
 toolchain fallback and remain project-installed npm dependencies. Thus npm
@@ -336,7 +343,7 @@ cannot race with compiler, editor, or application tests.
 
 Release output replacement refuses repository roots/ancestors, symbolic links,
 and non-release directories. Verification accepts exactly the sorted compiler,
-Node, Web, Desktop, creator, and CLI package identities, canonical tarball
+Node, Server, Web, Desktop, creator, and CLI package identities, canonical tarball
 names, matching versions/sizes/hashes/npm
 integrity, the declared checksum file, and no undeclared files. Downstream
 consumers independently check the required package subset and tarball SHA-256
@@ -348,10 +355,10 @@ than the language toolchain. Such packages may be authored in VelarScript and
 consume this package system, but they are not part of the VelarScript release
 set or Standard API.
 
-The workspace, compiler, Node runtime, Web, Desktop, creator, and CLI use Apache-2.0. Every npm tarball contains the
+The workspace, compiler, Node runtime, Server, Web, Desktop, creator, and CLI use Apache-2.0. Every npm tarball contains the
 complete license text, and package acceptance verifies the installed metadata
 and file rather than trusting the source manifest alone. The current rehearsal
 is always marked non-publishable because rehearsal mode is evidence only. A
 strict candidate becomes publishable only from the clean, exactly tagged
-`v0.13.0` source with the matching remote; registry publication remains a
+`v0.14.0` source with the matching remote; registry publication remains a
 separate explicit authority and must carry npm provenance.

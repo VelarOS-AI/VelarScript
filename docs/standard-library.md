@@ -880,7 +880,7 @@ caller would write different recovery for it.
 
 ### `velar/serve`
 
-The Node extension's native server framework declares an immutable route table
+The Node extension's native serving capability declares an immutable route table
 instead of a controller class or a group of decorated functions:
 
 ```velar
@@ -955,15 +955,15 @@ route; explicit `RouteDocumentation.errors` entries override their
 descriptions. Typed path syntax such as `p"/articles/{id:number}"` is rendered
 as `/articles/{id}` in that document.
 
-The application entry exports either the `ServeApp` named by `node.app` or an
-async WebSocket startup function with the exact checked parameters
-`(host: string, port: number, maxBodyBytes: number)` and a
-`Promise<WebSocketServer>` result. The latter calls `websocket.listen` when HTTP
-and WebSocket traffic must share the configured application port. `node.host`,
-`node.port`, `node.maxBodyBytes`, and `node.build.sourceMaps` configure either
-form. `velar dev` watches and restarts the last-good build, `velar serve` runs
-checked source with production behavior, and `velar build` emits a standalone
-Node directory with the same startup contract. Direct `serve(...)` is the
+The separate `@velarscript/server` application extension composes this Node
+capability. It adds `velar/server`, root `application.yml`
+discovery, `application(app)`, typed `configuration(Type)`, and an abstract
+`database(connect, disconnect)` provider lifecycle. Its conventional entry is
+an exact zero-argument async `start` function returning `Server` or
+`WebSocketServer`; the launcher supplies no host, port, or body-limit arguments.
+`velar dev` watches and restarts the last-good build, `velar serve` runs checked
+source with production behavior, and `velar build` emits a standalone Node
+directory with the same root configuration. Direct `serve(...)` is the
 lower-level operation for tests, embedded servers, and handler adapters.
 
 Explicit route defaults cover the inputs that cannot be inferred:

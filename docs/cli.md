@@ -80,17 +80,19 @@ mechanizes is [escape hatches](escape-hatches.md#4-a-suspected-compiler-defect).
 
 ```text
 velar dev [entry.vel | project-directory] [--port <port>]
-velar serve [project-directory] [--host <host>] [--port <port>]
+velar serve [project-directory]
 velar run [entry.vel | project-directory] [--stack] [-- <program-arguments>...]
 velar test [project-directory | file.test.vel]
 velar test [project-directory] --browser [chromium|firefox|webkit|all]
 ```
 
 `dev` rebuilds on save and serves a Web/Desktop application or restarts the
-last-good exported Node `ServeApp` or typed WebSocket startup function. Web
-defaults to port 5173; Node reads `node.host` and `node.port` unless `--port`
-overrides it. `serve` checks and runs either Node application form with
-production runtime behavior and no file watcher.
+last-good exported Server/Node zero-argument startup function. Web defaults to
+port 5173. Server host, port, and request limits come only from root
+`application.yml`; Node `--port` and `serve --host` are not parallel
+configuration channels. `serve` checks and
+runs the server startup function with production runtime behavior and no file
+watcher.
 `run` executes a framework-free CLI program; `--stack` keeps the full trace
 instead of hiding internal frames. `test` runs
 `*.test.vel` modules in Node; `--browser` runs `*.browser.test.vel` modules in
@@ -213,9 +215,9 @@ this CLI was published against, and refuses a mismatch by name and version:
 
 ```text
 node_modules/@velarscript/node/package.json: this project resolves
-@velarscript/node 0.99.0, but @velarscript/cli 0.13.0 is built against
-@velarscript/node 0.13.0; a VelarScript toolchain is one generation, so install
-@velarscript/node 0.13.0 or @velarscript/cli 0.99.0
+@velarscript/node 0.99.0, but @velarscript/cli 0.14.0 is built against
+@velarscript/node 0.14.0; a VelarScript toolchain is one generation, so install
+@velarscript/node 0.14.0 or @velarscript/cli 0.99.0
 ```
 
 The path is the manifest the resolution actually read, and the running command

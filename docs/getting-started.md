@@ -40,8 +40,9 @@ my-app/
 Two things are worth noticing now.
 
 `velar.json` lists **extensions** explicitly. A Web project activates
-`@velarscript/web`; a Node server project activates `@velarscript/node` for its
-`server`, route, and path-pattern syntax. A framework-free Core project
+`@velarscript/web`; a Server project activates `@velarscript/server`, which
+composes Node's `server`, route, path-pattern, and runtime capabilities. A
+low-level Node tool may activate `@velarscript/node` directly. A framework-free Core project
 activates nothing. The language does not guess what target you are on — see
 [project lifecycle](project-lifecycle.md).
 
@@ -55,10 +56,10 @@ each version-locked document.
 npm run dev
 ```
 
-For Web/Desktop, the dev server rebuilds and serves the renderer. For Node, it
-checks the exported `ServeApp` or typed WebSocket startup function, starts it
-from the shared `node.host`, `node.port`, and `node.maxBodyBytes` configuration,
-and restarts the last-good build after a source change. Edit `src/app.vel`; the
+For Web/Desktop, the dev server rebuilds and serves the renderer. For Server,
+it checks the exported zero-argument startup function, loads the root
+`application.yml`, and restarts the last-good build after a source or
+configuration change. Edit `src/app.vel`; the
 generated Node service answers `/api/hello` and uses `npm start` (`velar serve`)
 when a watcher is not wanted.
 

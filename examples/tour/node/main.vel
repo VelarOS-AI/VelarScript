@@ -1,7 +1,21 @@
+import {application, configuration, database} from "velar/server"
 import {app as routes, describeApi} from "./01-server.vel"
 import {findArticle} from "./03-project-dependencies.vel"
 
-export const app = routes
+type RuntimeServerSettings:
+    host: string
+    port: number
+    maxBodyBytes: number
+
+type ApplicationSettings:
+    server: RuntimeServerSettings
+
+export const start = application(routes)
+export const settings = await configuration(ApplicationSettings)
+export const exampleConnection = database(
+    connect = async () => {name: "tour"},
+    disconnect = async connection => null,
+)
 export const projectDependencyExample = {findArticle}
 
-describeApi(app)
+describeApi(routes)

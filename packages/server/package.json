@@ -1,7 +1,7 @@
 {
-  "name": "@velarscript/core",
+  "name": "@velarscript/server",
   "version": "0.14.0",
-  "description": "The target-neutral VelarScript Standard API contracts and runtime modules.",
+  "description": "The official convention-based VelarScript server application framework.",
   "license": "Apache-2.0",
   "type": "module",
   "files": [
@@ -19,18 +19,34 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/VelarOS-AI/VelarScript.git",
-    "directory": "packages/core"
+    "directory": "packages/server"
   },
   "publishConfig": {
     "access": "public"
   },
+  "velar": {
+    "extension": {
+      "kind": "application",
+      "apiVersion": "0.10",
+      "manifestKey": "server",
+      "composes": {
+        "@velarscript/node": "0.10"
+      }
+    }
+  },
   "dependencies": {
-    "@velarscript/compiler": "0.14.0"
+    "@velarscript/compiler": "0.14.0",
+    "@velarscript/node": "0.14.0",
+    "yaml": "^2.9.0"
   },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./compiler": {
+      "types": "./dist/compiler.d.ts",
+      "default": "./dist/compiler.js"
     }
   }
 }

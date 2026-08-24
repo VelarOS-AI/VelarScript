@@ -60,7 +60,7 @@ function nodeTemplate(name: string, displayName: string, version: string, format
         build: "velar build",
         validate: "npm run format:check && npm run check && npm test && npm run build",
       },
-      dependencies: { "@velarscript/node": version },
+      dependencies: {"@velarscript/server": version},
       devDependencies: { "@velarscript/cli": version },
     })],
     ["velar.json", json({
@@ -68,16 +68,10 @@ function nodeTemplate(name: string, displayName: string, version: string, format
       entry: "src/main.vel",
       outDir: "dist",
       publicDir: "public",
-      extensions: ["@velarscript/node"],
-      node: {
-        app: "app",
-        host: "127.0.0.1",
-        port: 3000,
-        maxBodyBytes: 16_777_216,
-        build: { sourceMaps: false },
-      },
+      extensions: ["@velarscript/server"],
     })],
-    ["README.md", `# ${displayName}\n\nA native VelarScript Node server application.\n\n\`\`\`sh\nnpm install\nnpm run dev\n\`\`\`\n\nOpen \`http://127.0.0.1:3000\`. Edit \`src/app.vel\` to add routes and \`velar.json\` to change the application export, host, port, or request-body ceiling. Use \`npm run build\` for production output and \`npm start\` to run the checked source with production runtime behavior.\n`],
+    ["README.md", `# ${displayName}\n\nA VelarScript Server application on the Node runtime.\n\n\`\`\`sh\nnpm install\nnpm run dev\n\`\`\`\n\nOpen \`http://127.0.0.1:3000\`. Edit \`src/app.vel\` to add routes and root \`application.yml\` to change server settings. It is the only conventional application configuration name; explicit configuration paths may still use YAML or JSON. Use \`npm run build\` for production output and \`npm start\` to run the checked source with production runtime behavior.\n`],
+    ["application.yml", `server:\n  host: 127.0.0.1\n  port: 3000\n  maxBodyBytes: 16777216\n`],
     ["public/index.html", `<!doctype html>
 <html lang="en">
   <head>
@@ -116,9 +110,10 @@ export server app:
 
     ...staticFiles("/", root="public", fallback="index.html")
 `],
-    ["src/main.vel", `import {app as routes, appName as name} from "./app.vel"
+    ["src/main.vel", `import {application} from "velar/server"
+import {app as routes, appName as name} from "./app.vel"
 
-export const app = routes
+export const start = application(routes)
 export const appName = name
 `],
     ["src/app.test.vel", `import {http} from "velar/http"
@@ -460,14 +455,14 @@ type AgentGuideTarget = "core" | "web" | "node" | "desktop";
 const AGENT_SKILL_COMMANDS: Readonly<Record<AgentGuideTarget, string>> = Object.freeze({
   core: "`velar skill core`",
   web: "`velar skill core`, then `velar skill web`",
-  node: "`velar skill core`, then `velar skill node`",
+  node: "`velar skill core`, `velar skill node`, then `velar skill server`",
   desktop: "`velar skill core`, `velar skill web`, then `velar skill desktop`",
 });
 
 const AGENT_TARGET_BOUNDARIES: Readonly<Record<AgentGuideTarget, string>> = Object.freeze({
   core: "This is a Core project. Do not use framework syntax unless the manifest activates its owning extension.",
   web: "This is a Web project. `@velarscript/web` alone owns components, JSX, reactivity, Look, Web units, and browser tests.",
-  node: "This is a Node project. `@velarscript/node` alone owns `server`, route `@` names, and checked `p\"...\"` path patterns.",
+  node: "This is a Server project. `@velarscript/server` owns application conventions and composes `@velarscript/node`, which owns `server`, route `@` names, and checked `p\"...\"` path patterns.",
   desktop: "This is a Desktop project. It composes Web, while `@velarscript/desktop` alone owns native capabilities and the permission manifest.",
 });
 

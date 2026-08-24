@@ -8,6 +8,11 @@ import {
   velarCompilerExtension as nodeCompiler,
   velarProjectExtension as nodeProject,
 } from "@velarscript/node/compiler";
+import {
+  VELAR_SERVER_API_VERSION,
+  velarCompilerExtension as serverCompiler,
+  velarProjectExtension as serverProject,
+} from "@velarscript/server/compiler";
 import { registerBundledExtension } from "./bundled-extension-registry.ts";
 import { VELAR_VERSION } from "./version.ts";
 
@@ -22,6 +27,18 @@ export function installOfficialLanguageServerExtensions(): void {
     composes: Object.freeze({}),
     compiler: nodeCompiler,
     project: nodeProject,
+    host: null,
+  });
+  registerBundledExtension({
+    name: "@velarscript/server",
+    version: VELAR_VERSION,
+    kind: "application",
+    apiVersion: VELAR_SERVER_API_VERSION,
+    manifestKey: "server",
+    extends: Object.freeze({}),
+    composes: Object.freeze({"@velarscript/node": VELAR_NODE_API_VERSION}),
+    compiler: serverCompiler,
+    project: serverProject,
     host: null,
   });
   registerBundledExtension({

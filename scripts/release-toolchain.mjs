@@ -241,6 +241,7 @@ export const DECLARED_VERSIONS = Object.freeze([
  */
 export const PINNED_DEPENDENCY_VERSIONS = Object.freeze([
   Object.freeze({ file: "packages/cli/src/node-runtime-dependencies.ts", name: "WEBSOCKET_VERSION", package: "@velarscript/node", dependency: "ws" }),
+  Object.freeze({ file: "packages/cli/src/node-runtime-dependencies.ts", name: "YAML_VERSION", package: "@velarscript/server", dependency: "yaml" }),
 ]);
 
 /** The `const NAME = "…"` literal a source file declares on one line, exported or not, or null. */
@@ -279,6 +280,7 @@ async function readPackageManifests() {
   const compiler = required("@velarscript/compiler");
   const core = required("@velarscript/core");
   const node = required("@velarscript/node");
+  const server = required("@velarscript/server");
   const web = required("@velarscript/web");
   const create = required("create-velar");
   const cli = required("@velarscript/cli");
@@ -302,6 +304,11 @@ async function readPackageManifests() {
   if (node.dependencies?.["@velarscript/compiler"] !== rootManifest.version) {
     throw new Error("@velarscript/node must pin the exact compiler version");
   }
+  for (const dependency of ["@velarscript/compiler", "@velarscript/node"]) {
+    if (server.dependencies?.[dependency] !== rootManifest.version) {
+      throw new Error(`@velarscript/server must pin the exact ${dependency} version`);
+    }
+  }
   if (cli.dependencies?.["@velarscript/node"] !== rootManifest.version) {
     throw new Error("@velarscript/cli must pin the exact Node runtime version");
   }
@@ -313,7 +320,7 @@ async function readPackageManifests() {
   if (desktop.dependencies?.["@velarscript/cli"] || desktop.peerDependencies?.["@velarscript/cli"]) {
     throw new Error("@velarscript/desktop must not depend on CLI orchestration");
   }
-  for (const dependency of ["@velarscript/web", "@velarscript/desktop"]) {
+  for (const dependency of ["@velarscript/web", "@velarscript/server", "@velarscript/desktop"]) {
     if (cli.dependencies?.[dependency] !== rootManifest.version) {
       throw new Error(`@velarscript/cli must pin the exact official ${dependency} toolchain target`);
     }

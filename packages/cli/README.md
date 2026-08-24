@@ -96,7 +96,7 @@ returns; a copy that stops reproducing is reported as such rather than handed
 over as a clean report. A failing `velar check` ends with the one line naming
 the command.
 
-The distribution carries separate Core, Web, Node, and Desktop AI skill briefs
+The distribution carries separate Core, Web, Node, Server, and Desktop AI skill briefs
 under `skill/`, each kept byte-identical to its repository document by a
 permanent gate. `velar skill [core|web|node|desktop]` prints one verbatim to
 stdout; Core is the default. Generated `AGENTS.md` files name the exact briefs a

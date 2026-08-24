@@ -22,6 +22,7 @@ const kinds = new Set<VelarExtensionKind>(["application", "capability", "languag
 const toolchainExtensionPackages = new Set([
   "@velarscript/web",
   "@velarscript/node",
+  "@velarscript/server",
   "@velarscript/desktop",
 ]);
 
