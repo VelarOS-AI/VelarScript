@@ -6,6 +6,14 @@ truth for acceptance status.
 
 ## Unreleased
 
+## 0.14.6 — 2026-08-25
+
+### Node language tooling
+
+- Path-pattern captures such as `{worldId:string}` now publish separate
+  parameter and type semantic tokens, so editors do not render the declaration
+  as undifferentiated string content.
+
 ## 0.14.5 — 2026-08-25
 
 ### Language tooling and documentation

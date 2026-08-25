@@ -40,12 +40,20 @@ export const velarNodeSemanticExtension: CompilerSemanticExtension = Object.free
       for (const parameter of item.parameters) {
         if (parameter.defaultValue) context.visitExpression(parameter.defaultValue);
         context.typeReferences(parameter.type);
+        const nameSpan = { start: parameter.span.start, end: parameter.span.start + parameter.name.length };
+        const pathCapture = item.kind === "NodeRouteDeclaration"
+          && parameter.span.start >= item.pathSpan.start
+          && parameter.span.end <= item.pathSpan.end;
+        if (pathCapture) {
+          context.syntaxToken(nameSpan, "parameter");
+          if (parameter.type) context.syntaxToken(parameter.type.span, "type");
+        }
         context.declare(
           parameter,
           parameter.name,
           "parameter",
           parameter.span,
-          { start: parameter.span.start, end: parameter.span.start + parameter.name.length },
+          nameSpan,
           { container: item.name },
         );
       }

@@ -32,6 +32,14 @@ export server routes:
     ["decorator", "@notFound"],
   ]);
   assert.ok(!tokens.some((token) => source.slice(token.span.start, token.span.end) === "p"));
+  const firstPathPatternStart = source.indexOf('p"/articles/{id:string}"');
+  const firstPathPatternEnd = firstPathPatternStart + 'p"/articles/{id:string}"'.length;
+  assert.deepEqual(
+    tokens
+      .filter((token) => token.span.start >= firstPathPatternStart && token.span.end <= firstPathPatternEnd)
+      .map((token) => [token.type, token.modifiers, source.slice(token.span.start, token.span.end)]),
+    [["parameter", [], "id"], ["type", [], "string"]],
+  );
 
   const documented = project.modules[0]!.result.semanticIndex.syntaxDocumentation
     .map((item) => [item.key, source.slice(item.span.start, item.span.end)]);
