@@ -6,6 +6,14 @@ truth for acceptance status.
 
 ## Unreleased
 
+## 0.14.7 — 2026-08-25
+
+### Language semantics and diagnostics
+
+- Record fields may use the ordinary member spelling `none` without triggering
+  the retired empty-value diagnostic; `none` remains unavailable as a value or
+  type binding.
+
 ## 0.14.6 — 2026-08-25
 
 ### Node language tooling

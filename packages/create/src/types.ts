@@ -1,4 +1,4 @@
-export const VELAR_CREATE_VERSION = "0.14.6";
+export const VELAR_CREATE_VERSION = "0.14.7";
 export const VELAR_PROJECT_FORMAT_VERSION = 2;
 export const VELAR_PROJECT_TEMPLATES = Object.freeze(["web", "node", "desktop", "docs", "library", "component"] as const);
 

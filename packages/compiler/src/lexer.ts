@@ -301,6 +301,11 @@ export class Lexer {
   // may not, and `def with(...)` at module scope would emit `function with`,
   // which is not JavaScript. Only the enclosing block tells the two apart.
   private readonly classBodyStack = [false];
+  // Record-type fields are member declarations too. Keep their block identity
+  // beside the class identity so a forbidden bare spelling such as `none`
+  // remains rejected as a value/type name while `none: string` is lexed as
+  // the field the declaration actually defines.
+  private readonly typeBodyStack = [false];
   // D90 (compiler-front-14): the brackets still open, with the indentation of
   // the physical line each one was opened on.
   private readonly openBrackets: { readonly span: Span; readonly text: string; readonly lineIndent: number; readonly arrowBody: boolean }[] = [];
@@ -682,6 +687,7 @@ export class Lexer {
       }
       this.indentStack.push(width);
       this.classBodyStack.push(this.opensClassBody());
+      this.typeBodyStack.push(this.opensTypeBody());
       this.tokens.push({ kind: "indent", value: "", span: span(start, this.index) });
       return;
     }
@@ -690,6 +696,7 @@ export class Lexer {
       while (this.indentStack.length > 1 && width < (this.indentStack.at(-1) ?? 0)) {
         this.indentStack.pop();
         this.classBodyStack.pop();
+        this.typeBodyStack.pop();
         this.tokens.push({ kind: "dedent", value: "", span: span(start, this.index) });
       }
 
@@ -745,6 +752,17 @@ export class Lexer {
     let head = index + 1;
     while (classHeaderModifierKinds.has(this.tokens[head]?.kind ?? "eof")) head += 1;
     return this.tokens[head]?.kind === "class";
+  }
+
+  /** Whether the logical line that just ended opens a record-type body. */
+  private opensTypeBody(): boolean {
+    let index = this.tokens.length - 1;
+    while (index >= 0 && this.tokens[index]!.kind === "newline") index -= 1;
+    if (this.tokens[index]?.kind !== "colon") return false;
+    while (index >= 0 && !lineBoundaryKinds.has(this.tokens[index]!.kind)) index -= 1;
+    let head = index + 1;
+    while (classHeaderModifierKinds.has(this.tokens[head]?.kind ?? "eof")) head += 1;
+    return this.tokens[head]?.kind === "identifier" && this.tokens[head]?.value === "type";
   }
 
   private readNewline(): void {
@@ -1124,6 +1142,8 @@ export class Lexer {
     // A record key is followed by ':' — `{with: 1}` and `{a: 1, with: 2}`. The
     // preceding '{' or ',' is what separates a key from an argument in a call.
     if ((previous === "leftBrace" || previous === "comma")
+      && this.text[this.skipHorizontalWhitespace(this.index)] === ":") return true;
+    if ((this.typeBodyStack.at(-1) ?? false)
       && this.text[this.skipHorizontalWhitespace(this.index)] === ":") return true;
     const declaring = previous === "def"
       || (previous === "identifier" && (this.tokens.at(-1)?.value === "get" || this.tokens.at(-1)?.value === "set"));

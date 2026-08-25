@@ -302,6 +302,25 @@ test("[D90] 'with' is a member name and a record key, and stays refused as a bin
   }
 });
 
+test("[D90] an empty-value reflex is ordinary when it names a declared field", () => {
+  const declared = compile([
+    "export type BuiltinSoundKeys:",
+    "    magma: string",
+    "    none: string",
+    "",
+    'const sounds: BuiltinSoundKeys = {magma: "magma", none: "none"}',
+    "print(sounds.none)",
+  ].join("\n"));
+  assert.deepEqual(codes(declared), []);
+  assert.match(declared.code ?? "", /none: "none"/u);
+
+  const binding = compile("const none = 1\nprint(none)\n");
+  assert.ok(binding.diagnostics.some((item) => item.code === "VEL1005"));
+
+  const typeName = compile("export type Wrong:\n    value: none\n");
+  assert.ok(typeName.diagnostics.some((item) => item.code === "VEL1005"));
+});
+
 test("[D90] 'eval' stays unavailable through direct member syntax", () => {
   // The charter's reserved-spelling paragraph separates the two groups:
   // `delete`, `default` and `with` are ordinary member names, while the
