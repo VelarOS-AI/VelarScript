@@ -6,6 +6,14 @@ truth for acceptance status.
 
 ## Unreleased
 
+## 0.14.8 — 2026-08-25
+
+### Embedded JavaScript
+
+- Checked JavaScript blocks with no captures may use the compact `extern js`
+  header. Formatting rewrites the equivalent `extern js()` spelling to this
+  canonical form; capture-bearing blocks continue to use parentheses.
+
 ## 0.14.7 — 2026-08-25
 
 ### Language semantics and diagnostics

@@ -642,6 +642,16 @@ function formatInlineLine(
   preceding: InlineToken | undefined = undefined,
 ): { readonly text: string; readonly trailing: InlineToken | undefined } {
   const tokens = tokenizeInline(source, embedding, layout);
+  if (
+    tokens[0]?.text === "extern"
+    && tokens[1]?.text === "js"
+    && tokens[2]?.text === "("
+    && tokens[3]?.text === ")"
+    && tokens[4]
+    && isAttachedOpaqueSourcePlaceholder(tokens[4])
+  ) {
+    tokens.splice(2, 2);
+  }
   if (tokens.length === 0) return { text: "", trailing: undefined };
   let output = "";
   for (let index = 0; index < tokens.length; index += 1) {

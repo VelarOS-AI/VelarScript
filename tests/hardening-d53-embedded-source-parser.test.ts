@@ -70,6 +70,26 @@ test("D53 checked JS preserves raw offsets and publishes AST-derived factory met
   assert.deepEqual(declaration.contract.functions.map((item) => item.name), ["scale", "describe"]);
 });
 
+test("D53 checked JS permits an omitted empty capture list", () => {
+  const source = [
+    "extern js`",
+    "    export const ready = true",
+    "`:",
+    "    export const ready: bool",
+    "",
+  ].join("\n");
+  const parsed = parseOnly(source);
+  assert.deepEqual(parsed.diagnostics, []);
+  assert.equal(parsed.declarations.length, 1);
+  assert.deepEqual(parsed.declarations[0]!.captures, []);
+  assert.equal(parsed.declarations[0]!.source.trim(), "export const ready = true");
+
+  const explicit = parseOnly(source.replace("extern js`", "extern js()`"));
+  assert.deepEqual(explicit.diagnostics, []);
+  assert.deepEqual(explicit.declarations[0]!.captures, []);
+  assert.equal(formatSource(source.replace("extern js`", "extern js()`")), source);
+});
+
 test("D53 unsafe JS keeps braces, dollar braces, backslashes, and JavaScript template literals opaque", () => {
   const source = [
     "unsafe js`",

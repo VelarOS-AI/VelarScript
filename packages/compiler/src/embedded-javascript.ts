@@ -98,7 +98,9 @@ export function embeddedJavaScriptHeaderKind(source: string, backtick: number): 
   cursor = skipHorizontalWhitespace(source, second.end, backtick);
 
   if (first.value === "unsafe") return cursor === backtick ? "unsafe" : null;
-  if (first.value !== "extern" || source[cursor] !== "(") return null;
+  if (first.value !== "extern") return null;
+  if (cursor === backtick) return "checked";
+  if (source[cursor] !== "(") return null;
   let depth = 0;
   for (; cursor < backtick; cursor += 1) {
     const character = source[cursor]!;

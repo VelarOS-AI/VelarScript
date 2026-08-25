@@ -1013,8 +1013,8 @@ export class Parser {
   }
 
   private parseEmbeddedJavaScriptCaptures(): readonly EmbeddedJavaScriptCapture[] {
-    this.expect("leftParen", "Expected '(' after 'extern js'; checked inline JavaScript declares every captured value and its type");
     const captures: EmbeddedJavaScriptCapture[] = [];
+    if (!this.match("leftParen")) return captures;
     if (!this.check("rightParen")) {
       do {
         const start = this.current().span.start;
