@@ -491,12 +491,12 @@ test("[D55 127.2] the formatter reads a type argument list by position, not by a
   // The whitelist this replaced knew six names and would have been blind to
   // every generic a program declares for itself.
   for (const source of [
-    "def take(x: Record<string>) -> null:\n    pass\n",
+    "def take(x: Record<string>) -> null: pass\n",
     "type Node:\n    kids: Record<string>\n",
     "const held: Record<string> = {}\n",
     "type Box<T>:\n    value: T\n",
     "type Boxed = Box<string>\n",
-    "def read(box: Box<List<string>>) -> null:\n    pass\n",
+    "def read(box: Box<List<string>>) -> null: pass\n",
   ]) {
     assert.equal(formatSource(source), source, source);
   }

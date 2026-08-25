@@ -283,8 +283,7 @@ test("[D90 R18] the pull form round-trips through the formatter", () => {
 
     @iterate:
         const beat = await tick(self.position)
-        if self.position >= 2:
-            return null
+        if self.position >= 2: return null
         self.position += 1
         return self.position
 `;

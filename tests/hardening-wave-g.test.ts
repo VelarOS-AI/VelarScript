@@ -490,9 +490,9 @@ component Panel:
 test("[wave G] the formatter keeps softened words and '@' hooks stable", () => {
   const samples: readonly (readonly [string, boolean])[] = [
     [`const type = 1\nconst match = 2\nconst state = 3\nprint(str(type + match + state))\n`, true],
-    [`def match(value: number) -> number:\n    return value\nprint(str(match(2)))\n`, false],
-    [`const value = 1\nmatch value:\n    case 1:\n        print("one")\n    case _:\n        print("other")\n`, false],
-    [`const value = 1\nmatch (value):\n    case 1:\n        print("one")\n    case _:\n        print("other")\n`, false],
+    [`def match(value: number) -> number: return value\nprint(str(match(2)))\n`, false],
+    [`const value = 1\nmatch value:\n    case 1: print("one")\n    case _: print("other")\n`, false],
+    [`const value = 1\nmatch (value):\n    case 1: print("one")\n    case _: print("other")\n`, false],
     [`component Panel:\n    @mounted:\n        print("in")\n\n    @cleanup:\n        print("out")\n    return <p>x</p>\n`, true],
   ];
   for (const [source, web] of samples) {

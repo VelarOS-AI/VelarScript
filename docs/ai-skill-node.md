@@ -340,7 +340,7 @@ read-modify-write sequence atomic.
 
 ## Node capabilities and finish
 
-Use `velar/fs`, `velar/path`, `velar/process`, `velar/env`,
+Use `velar/fs`, `velar/hash`, `velar/path`, `velar/process`, `velar/env`,
 `velar/terminal`, `velar/http`, `velar/worker`, and `velar/websocket` instead of
 ambient Node globals. Database contracts, drivers, codecs, and other
 application integrations are project-owned modules or dependencies. Declare

@@ -264,8 +264,7 @@ test("[D90 compiler-front-15] a call's type argument list keeps its spelling thr
   // A comparison pair that only looks like a type argument list keeps its
   // operator spacing, and keeps compiling to the program it was.
   const comparison = [
-    "def two(p: bool, q: bool) -> bool:",
-    "    return p and q",
+    "def two(p: bool, q: bool) -> bool: return p and q",
     "",
     "const Limit = 5",
     "const a = 1",

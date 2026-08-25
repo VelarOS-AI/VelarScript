@@ -223,11 +223,11 @@ test("[D57-134] the editor's own vocabulary list is derived from the same two au
 
 test("[D55-127.2] a colon-introduced annotation formats generics for any type name", () => {
   for (const name of ["Record", "List", "Map", "Ledger", "MyOwnBox"]) {
-    const parameter = `def take(x: ${name}<string>):\n    return null\n`;
+    const parameter = `def take(x: ${name}<string>): return null\n`;
     const field = `type Node:\n    kids: ${name}<string>\n`;
     const binding = `const x: ${name}<string> = {}\n`;
     const alias = `type Alias = ${name}<string>\n`;
-    const result = `def make() -> ${name}<string>:\n    return {}\n`;
+    const result = `def make() -> ${name}<string>: return {}\n`;
     for (const canonical of [parameter, field, binding, alias, result]) {
       assert.equal(formatSource(canonical), canonical, canonical);
       assert.equal(formatSource(formatSource(canonical)), canonical, canonical);
@@ -239,7 +239,7 @@ test("[D55-127.2] a colon-introduced annotation formats generics for any type na
 
 test("[D55-127.2] type modifiers and nesting keep the annotation position", () => {
   for (const canonical of [
-    "def inspect(pending: readonly Promise<List<number>>):\n    return null\n",
+    "def inspect(pending: readonly Promise<List<number>>): return null\n",
     "const table: Map<string, Record<List<number>>> = {}\n",
     "const handler: List<() -> Record<string>> = []\n",
     "const optional: Record<string>? = null\n",
@@ -270,8 +270,8 @@ test("[D55-127.2] a comparison that shares the colon position stays a comparison
     "const mixed = {ok: a < b and c > d}\n",
     "render(width: left < right)\n",
     "const pair = {low: a < b, high: c > d}\n",
-    "if count < limit:\n    print(1)\n",
-    "while index < items.size:\n    index += 1\n",
+    "if count < limit: print(1)\n",
+    "while index < items.size: index += 1\n",
   ]) {
     assert.equal(formatSource(canonical), canonical, canonical);
     assert.equal(formatSource(formatSource(canonical)), canonical, canonical);
@@ -291,7 +291,7 @@ test("[D55-127.2] the corpus carries the spellings the format gate reads", async
   const { readFile } = await import("node:fs/promises");
   const source = await readFile(new URL("../tests/corpus/core.vel", import.meta.url), "utf8");
   assert.match(source, /^ {4}labels: Record<string>$/mu);
-  assert.match(source, /^def labelFor\(labels: Record<string>, key: string\) -> string:$/mu);
+  assert.match(source, /^def labelFor\(labels: Record<string>, key: string\) -> string: return labels\[key\] \?\? "unlabelled"$/mu);
   assert.match(source, /^const labels: Record<string> = \{tier: "gold"\}$/mu);
   assert.equal(formatSource(source), source);
 

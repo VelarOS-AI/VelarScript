@@ -29,6 +29,7 @@ import {
     text,
     use,
 } from "velar/serve"
+import {sha256Text} from "velar/hash"
 import {authenticate} from "velar/server"
 
 type CreateArticle:
@@ -47,6 +48,7 @@ async def verifyTourToken(token: string) -> CurrentUser?:
 const currentUser = authenticate(security.bearer(), verifyTourToken)
 const requestContext = provide(inputs={}, resolve=async _values => {name: "tour"})
 const providerContract = Provider.is(currentUser)
+const healthDigest = sha256Text("openvoxel-catalog")
 
 async def chunks(write: (chunk: string) -> Promise<null>):
     await write("first")
@@ -63,7 +65,7 @@ async def passThrough(request: Request, next: () -> Promise<ServeResponse>):
     return await next()
 
 server routes:
-    @get(p"/health") => json({ok: true}, headers=Map([["cache-control", "no-store"]]))
+    @get(p"/health") => json({ok: true, digest: healthDigest}, headers=Map([["cache-control", "no-store"]]))
 
     @get(p"/articles/{id:number}", details: bool = false):
         if id < 1:

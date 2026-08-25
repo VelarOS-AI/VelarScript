@@ -210,7 +210,7 @@ test("[D90] the bare Node module specifiers name the module that replaced them",
     ["fs", ["velar/fs", "readText", "writeText"]],
     ["http", ["velar/http", "http.get(url)"]],
     ["url", ["velar/url", "withQuery"]],
-    ["crypto", ["velar/id", "velar/random", "no crypto module", "hashing and ciphers have no successor"]],
+    ["crypto", ["velar/id", "velar/random", "velar/hash", "sha256Text", "no general cipher module"]],
     ["child_process", ["velar/process", "run", "start"]],
     ["worker_threads", ["velar/worker", "workerPool"]],
   ] as const) {
@@ -233,9 +233,10 @@ test("[D90] the successors the module-specifier guidance names all exist and com
   compilesClean(`import {worker, workerPool} from "velar/worker"\n`);
   compilesClean(`import {uuid} from "velar/id"\n\nconst id: string = uuid()\n`);
   compilesClean(`import {random, Random} from "velar/random"\n\nconst source: Random = random("seed")\n`);
-  // The `crypto` message says the registry has no crypto module; that claim is
-  // only true while it stays true.
-  for (const module of ["velar/crypto", "velar/hash", "velar/os", "velar/events", "velar/stream"]) {
+  compilesClean(`import {sha256Text} from "velar/hash"\n\nconst digest: string = sha256Text("catalog")\n`);
+  // General cryptography still has no umbrella module. The bounded digest is
+  // deliberately published through the narrower velar/hash contract.
+  for (const module of ["velar/crypto", "velar/os", "velar/events", "velar/stream"]) {
     assert.equal(moduleInterfaces.has(module), false, module);
   }
 });

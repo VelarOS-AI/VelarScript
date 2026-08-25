@@ -1,6 +1,6 @@
 {
   "name": "@velarscript/server",
-  "version": "0.14.8",
+  "version": "0.14.9",
   "description": "The official convention-based VelarScript server application framework.",
   "license": "Apache-2.0",
   "type": "module",
@@ -30,13 +30,13 @@
       "apiVersion": "0.11",
       "manifestKey": "server",
       "composes": {
-        "@velarscript/node": "0.10"
+        "@velarscript/node": "0.11"
       }
     }
   },
   "dependencies": {
-    "@velarscript/compiler": "0.14.8",
-    "@velarscript/node": "0.14.8",
+    "@velarscript/compiler": "0.14.9",
+    "@velarscript/node": "0.14.9",
     "yaml": "^2.9.0"
   },
   "exports": {

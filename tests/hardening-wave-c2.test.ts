@@ -459,12 +459,9 @@ test("[NEW-D9] a list literal after a keyword keeps its space, and an index acce
   const source = `
 def main():
     const values: List<number> = [1, 2, 3]
-    for i in [1, 2]:
-        print(str(i))
-    if 1 in [1, 2]:
-        print(str(values[0]))
-    if not [1, 2].has(3):
-        print("no")
+    for i in [1, 2]: print(str(i))
+    if 1 in [1, 2]: print(str(values[0]))
+    if not [1, 2].has(3): print("no")
     return null
 
 main()

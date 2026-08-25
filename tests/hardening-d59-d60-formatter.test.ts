@@ -226,21 +226,21 @@ test("[D59-142] a default value is not a named argument and keeps its spaces", (
   assert.equal(core("const g = run((x = 1) => x)\n"), "const g = run((x = 1) => x)\n");
   // A declaration's parentheses hold parameters as well — by `def` in front of
   // the name, or by standing at the head of a line that opens a block.
-  assert.equal(core("def f(x = 1) -> unknown:\n    return x\n"), "def f(x = 1) -> unknown:\n    return x\n");
-  assert.equal(core("def f(x: number = 1) -> number:\n    return x\n"), "def f(x: number = 1) -> number:\n    return x\n");
+  assert.equal(core("def f(x = 1) -> unknown:\n    return x\n"), "def f(x = 1) -> unknown: return x\n");
+  assert.equal(core("def f(x: number = 1) -> number:\n    return x\n"), "def f(x: number = 1) -> number: return x\n");
   assert.equal(
     core("class P:\n    constructor(x = 1):\n        pass\n"),
-    "class P:\n    constructor(x = 1):\n        pass\n",
+    "class P:\n    constructor(x = 1): pass\n",
   );
   // A call inside a declaration's default value is still a call.
   assert.equal(
     core(`def f(x: string = label("a", prefix = "<")) -> string:\n    return x\n`),
-    `def f(x: string = label("a", prefix="<")) -> string:\n    return x\n`,
+    `def f(x: string = label("a", prefix="<")) -> string: return x\n`,
   );
   // An assignment is a statement; only an argument is an argument.
   assert.equal(core("animation = animate(spin, 2s, loop = true)\n"), "animation = animate(spin, 2s, loop=true)\n");
   // A call in a condition is a call even though the line ends with a colon.
-  assert.equal(core(`if check(name = "a"):\n    pass\n`), `if check(name="a"):\n    pass\n`);
+  assert.equal(core(`if check(name = "a"):\n    pass\n`), `if check(name="a"): pass\n`);
 });
 
 // ---------------------------------------------------------------------------
@@ -252,7 +252,7 @@ test("[D59-143.1] a bracket after a keyword opens a literal; after a name it ind
   assert.equal(core("const[head, ...tail] = values\n"), "const [head, ...tail] = values\n");
   assert.equal(core("let[first, second] = values\n"), "let [first, second] = values\n");
   assert.equal(core("const item = values[0]\n"), "const item = values[0]\n");
-  assert.equal(core("for i in [1, 2]:\n    pass\n"), "for i in [1, 2]:\n    pass\n");
+  assert.equal(core("for i in [1, 2]:\n    pass\n"), "for i in [1, 2]: pass\n");
   assert.equal(core("const item = values.at[0]\n"), "const item = values.at[0]\n");
 });
 
@@ -263,18 +263,18 @@ test("[D59-143.2] parentheses after a keyword are not a call", () => {
   // position, so the parentheses after them belong to them.
   assert.equal(
     core("class P extends E:\n    constructor(id: string):\n        super(id)\n"),
-    "class P extends E:\n    constructor(id: string):\n        super(id)\n",
+    "class P extends E:\n    constructor(id: string): super(id)\n",
   );
   assert.equal(core(`const p = lazy(() => import("./page.vel"), "Page")\n`), `const p = lazy(() => import("./page.vel"), "Page")\n`);
 });
 
 test("[D59-143.3] a sign after a keyword is a sign, not a subtraction", () => {
-  assert.equal(core("def f() -> number:\n    return -1\n"), "def f() -> number:\n    return -1\n");
-  assert.equal(core("def f() -> number:\n    return - 1\n"), "def f() -> number:\n    return -1\n");
-  assert.equal(core("def f(n: number) -> number:\n    return -n\n"), "def f(n: number) -> number:\n    return -n\n");
+  assert.equal(core("def f() -> number:\n    return -1\n"), "def f() -> number: return -1\n");
+  assert.equal(core("def f() -> number:\n    return - 1\n"), "def f() -> number: return -1\n");
+  assert.equal(core("def f(n: number) -> number:\n    return -n\n"), "def f(n: number) -> number: return -n\n");
   assert.equal(
     core(`def f(n: number) -> string:\n    match n:\n        case - 1:\n            return "neg"\n        case _:\n            return "other"\n`),
-    `def f(n: number) -> string:\n    match n:\n        case -1:\n            return "neg"\n        case _:\n            return "other"\n`,
+    `def f(n: number) -> string:\n    match n:\n        case -1: return "neg"\n        case _: return "other"\n`,
   );
   // The subtraction it must not eat.
   assert.equal(core("const d = total - 1\n"), "const d = total - 1\n");

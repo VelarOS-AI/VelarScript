@@ -6,6 +6,17 @@ truth for acceptance status.
 
 ## Unreleased
 
+## 0.14.9 — 2026-08-25
+
+### Node Standard API
+
+- Added `velar/hash.sha256Text(text)` for deterministic build tooling. It hashes
+  at most 16 MiB of UTF-8 text with SHA-256 and returns exactly 64 lowercase
+  hexadecimal characters without exposing Node.js's mutable `Hash` object.
+- Node's unavailable-global guidance now directs text-digest consumers to
+  `velar/hash`, while identifiers and reproducible random streams keep their
+  separate `velar/id` and `velar/random` contracts.
+
 ## 0.14.8 — 2026-08-25
 
 ### Embedded JavaScript

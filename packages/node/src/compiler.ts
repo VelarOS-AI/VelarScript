@@ -16,6 +16,7 @@ import { VELAR_NODE_ENV_RUNTIME } from "./environment-runtime.ts";
 import { VELAR_NODE_FILESYSTEM_RUNTIME } from "./filesystem-runtime.ts";
 import { VELAR_NODE_HTTP_RUNTIME } from "./http-runtime.ts";
 import { VELAR_NODE_HOST_RUNTIME } from "./host-runtime.ts";
+import { VELAR_NODE_HASH_RUNTIME } from "./hash-runtime.ts";
 import { VELAR_NODE_HOST_RUNTIME as VELAR_SHARED_NODE_HOST_RUNTIME } from "./node-host-runtime.ts";
 import { VELAR_NODE_HOST_WORKER_SOURCE } from "./node-host-worker-runtime.ts";
 import { VELAR_PROCESS_HOST_RUNTIME } from "./process-runtime.ts";
@@ -36,7 +37,7 @@ import { serveAppType, serveRequestType } from "./server-types.ts";
 
 export { VELAR_PROCESS_HOST_RUNTIME } from "./process-runtime.ts";
 
-export const VELAR_NODE_API_VERSION = "0.10";
+export const VELAR_NODE_API_VERSION = "0.11";
 export const VELAR_NODE_HOST_MODULE = "velar/node-host-v1";
 
 const unknownType: ValueType = { kind: "unknown" };
@@ -581,6 +582,9 @@ export const nodeModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Ma
     new Map([["FileWatcher", "velar/fs#type:FileWatcher"]]),
     new Map([["FileWatchBatch", fileWatchBatchType]]),
   )],
+  ["velar/hash", moduleInterface(new Map([
+    ["sha256Text", functionType(["text"], [stringType], stringType)],
+  ]))],
   ["velar/env", moduleInterface(new Map([
     ["get", functionType(["name"], [stringType], optional(stringType))],
     ["require", functionType(["name"], [stringType], stringType)],
@@ -660,6 +664,10 @@ export const TestResponse = Object.freeze({is(value) { return !!value && typeof 
   ["velar/fs", String.raw`
 ${VELAR_UTF8_RUNTIME}
 ${VELAR_NODE_FILESYSTEM_RUNTIME}
+`.trimStart()],
+  ["velar/hash", String.raw`
+${VELAR_UTF8_RUNTIME}
+${VELAR_NODE_HASH_RUNTIME}
 `.trimStart()],
   ["velar/path", String.raw`
 import { basename as nodeBasename, dirname as nodeDirname, extname, isAbsolute as nodeIsAbsolute, join as nodeJoin, normalize as nodeNormalize, relative as nodeRelative, resolve as nodeResolve } from "node:path";
@@ -1368,9 +1376,10 @@ export const velarNodeCompilerExtension: CompilerExtension = Object.freeze({
       ["url", `Import what you need — 'import {parse, join, withQuery, encode} from "velar/url"' — VelarScript has no bare module names`],
       ["child_process", `Import from "velar/process" — 'run' waits for a command and 'start' keeps a child running — VelarScript has no bare module names`],
       ["worker_threads", `Import from "velar/worker" — 'worker' starts one typed worker and 'workerPool' runs several — VelarScript has no bare module names`],
-      // Hashing and ciphers have no successor in the registry, so the message
-      // names only the two doors that exist and says the module does not.
-      ["crypto", `Use 'import {uuid} from "velar/id"' for an identifier and "velar/random" 'random(seed)' for a reproducible stream; VelarScript has no crypto module, so hashing and ciphers have no successor`],
+      // 每种密码学相关用途都保留独立、明确的契约：标识符、可复现随机流和有界
+      // 文本摘要不是同一种能力。通用加密接口需要先明确密钥、nonce、字节数据和
+      // 生命周期规则，因此在出现具体需求之前不加入标准 API。
+      ["crypto", `Use 'import {uuid} from "velar/id"' for an identifier, "velar/random" 'random(seed)' for a reproducible stream, or 'import {sha256Text} from "velar/hash"' for a bounded UTF-8 SHA-256 digest; VelarScript has no general cipher module`],
       // Core answers `setTimeout`/`setInterval` because both hosts carry them.
       // `setImmediate` is Node's alone, so its answer is here rather than a
       // second copy there.

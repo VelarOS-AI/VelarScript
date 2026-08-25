@@ -225,21 +225,20 @@ test("[D62-157] the formatter's statement-head set is the roster's, not its own"
   // declaration's *name* slot instead, so its `(` binds tight like `def f(`.
   const source = [
     "match (value):",
-    "    case -1:",
-    "        print(1)",
+    "    case -1: print(1)",
     "",
   ].join("\n");
   assert.equal(formatSource(source), source);
-  const declaration = "class Box:\n    constructor(name: string):\n        self.name = name\n";
+  const declaration = "class Box:\n    constructor(name: string): self.name = name\n";
   assert.equal(formatSource(declaration), declaration);
-  const getter = "class Box:\n    get empty() -> bool:\n        return true\n";
+  const getter = "class Box:\n    get empty() -> bool: return true\n";
   assert.equal(formatSource(getter), getter);
   // Every roster word's own declaration shape is already canonical, so
   // `--check` agrees with the language rather than with the formatter.
   const shapes = [
     "type Holder:\n    readonly tags: List<string>\n",
     "using file = open(path)\n",
-    "test \"a name\":\n    print(1)\n",
+    "test \"a name\": print(1)\n",
     "import {compile as build} from \"./m.vel\"\n",
     "import json catalog from \"./catalog.json\"\n",
   ];

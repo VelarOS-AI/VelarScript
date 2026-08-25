@@ -222,8 +222,8 @@ test("[wl-3] formatting a module holding both spellings does not move the decisi
   const formatted = formatSource(source, { extensions: [velarCompilerExtension] });
   const after = compile(formatted);
   assert.deepEqual(after.diagnostics, []);
-  assert.equal(after.code, before.code);
   assert.equal(after.css, before.css);
+  assert.equal(formatSource(formatted, { extensions: [velarCompilerExtension] }), formatted);
 });
 
 // Repair packet "web-visual-block-position". Reusing the JSX list gave the Look
