@@ -324,6 +324,13 @@ export function projectSemanticTokens(project: ProjectResult, path: string): rea
     add(reference.span, resolved, "variable", false, 1);
   }
   for (const reference of module.result.semanticIndex.memberReferences) {
+    if (reference.syntax === "object-key" && reference.shorthand) {
+      const binding = projectSymbolAt(project, path, Math.min(reference.span.end, reference.span.start + 1));
+      const bindingType = binding ? semanticTokenType(binding) : null;
+      add(reference.span, bindingType === "function" || bindingType === "method" ? binding : null, "property", false, 5);
+      continue;
+    }
+
     const resolved = projectMemberSymbolAt(project, path, Math.min(reference.span.end, reference.span.start + 1));
     const expression = module.result.semanticIndex.expressions.find((item) => item.selectionSpan
       && item.selectionSpan.start === reference.span.start && item.selectionSpan.end === reference.span.end);
