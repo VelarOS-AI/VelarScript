@@ -1220,6 +1220,72 @@ export function nodeModuleDiagnostic(source: string): string {
   return `${source} is a local runtime module and cannot run in a web application`;
 }
 
+const nodeRouteDocumentation = (method: string, usage: string, input: string): string => [
+  `Declares an anonymous ${method} route in the current \`server\`. This is a compiler-owned role, not a decorator, function, or runtime value.`,
+  "",
+  "```velar",
+  usage,
+  "```",
+  "",
+  `The first item is a checked \`p\"/...\"\` path pattern. ${input} The handler may use \`await\` directly and must return Data or a response from \`velar/serve\`.`,
+].join("\n");
+
+const nodeKeywordDocumentation = Object.freeze({
+  server: [
+    "Declares an immutable Node HTTP route table. `server` is contextual syntax owned by `@velarscript/node`, not a class or mutable runtime registry.",
+    "",
+    "```velar",
+    "export server routes:",
+    "    @get(p\"/health\") => {ok: true}",
+    "```",
+    "",
+    "A server body contains route roles, one `@notFound` fallback, and `...otherApp` composition entries.",
+  ].join("\n"),
+  p: [
+    "Starts a Node path-pattern literal. It is parsed and checked by the compiler; it is not a function call or an ordinary string prefix.",
+    "",
+    "```velar",
+    "@get(p\"/articles/{id:number}\") => {id}",
+    "```",
+    "",
+    "Each `{name:type}` capture becomes a typed route-body binding. Static text is matched literally, and the pattern is valid only as the first item of an HTTP route role.",
+  ].join("\n"),
+  "@get": nodeRouteDocumentation(
+    "GET",
+    "@get(p\"/articles/{id:number}\", details: bool = false) => {id, details}",
+    "Path captures come from the URL and additional scalar parameters come from the query string.",
+  ),
+  "@post": nodeRouteDocumentation(
+    "POST",
+    "@post(p\"/articles\", input: CreateArticle) => created(input)",
+    "One Data parameter may receive the checked JSON request body; other scalar parameters come from the query string.",
+  ),
+  "@put": nodeRouteDocumentation(
+    "PUT",
+    "@put(p\"/articles/{id:string}\", input: UpdateArticle) => ok({id, input})",
+    "One Data parameter may receive the checked JSON request body; other scalar parameters come from the query string.",
+  ),
+  "@patch": nodeRouteDocumentation(
+    "PATCH",
+    "@patch(p\"/articles/{id:string}\", input: ArticlePatch) => ok({id, input})",
+    "One Data parameter may receive the checked JSON request body; other scalar parameters come from the query string.",
+  ),
+  "@delete": nodeRouteDocumentation(
+    "DELETE",
+    "@delete(p\"/articles/{id:string}\") => noContent()",
+    "Path captures come from the URL and additional scalar parameters come from the query string.",
+  ),
+  "@notFound": [
+    "Declares the final application's one unmatched-path fallback. It is a compiler-owned server role, not a decorator or ordinary function.",
+    "",
+    "```velar",
+    "@notFound(request: Request) => {error: \"route_not_found\", path: request.path}",
+    "```",
+    "",
+    "The optional parameter must be `Request`. Returning Data keeps status 404; an explicit response may choose another status. It does not catch a matched route's error or method-not-allowed response.",
+  ].join("\n"),
+});
+
 export const velarNodeCompilerExtension: CompilerExtension = Object.freeze({
   id: "@velarscript/node",
   contract: Object.freeze({ protocolVersion: 1, apiVersion: VELAR_NODE_API_VERSION, kind: "capability", extends: Object.freeze({}) }),
@@ -1319,15 +1385,7 @@ export const velarNodeCompilerExtension: CompilerExtension = Object.freeze({
     dependencies: nodeModuleDependencies,
   }),
   editor: Object.freeze({
-    keywordDocumentation: Object.freeze({
-      server: "Declares an immutable Node HTTP route table.",
-      "@get": "Declares an anonymous GET route in the current server.",
-      "@post": "Declares an anonymous POST route in the current server.",
-      "@put": "Declares an anonymous PUT route in the current server.",
-      "@patch": "Declares an anonymous PATCH route in the current server.",
-      "@delete": "Declares an anonymous DELETE route in the current server.",
-      "@notFound": "Declares the application fallback for an unmatched request path.",
-    }),
+    keywordDocumentation: nodeKeywordDocumentation,
   }),
   createEmitter(
     hints: LoweringHints,

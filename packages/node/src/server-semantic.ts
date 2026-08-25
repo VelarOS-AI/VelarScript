@@ -8,7 +8,9 @@ import { isNodeServerStatement } from "./server-ast.ts";
 export const velarNodeSemanticExtension: CompilerSemanticExtension = Object.freeze({
   predeclare(statement: Statement, context: SemanticExtensionContext) {
     if (!isNodeServerStatement(statement)) return false;
-    context.syntaxToken(context.nameSpan(statement.span, "server"), "keyword");
+    const keyword = context.nameSpan(statement.span, "server");
+    context.syntaxToken(keyword, "keyword");
+    context.documentSyntax(keyword, "server");
     context.declare(
       statement,
       statement.name,
@@ -28,7 +30,12 @@ export const velarNodeSemanticExtension: CompilerSemanticExtension = Object.free
         continue;
       }
       const role = item.kind === "NodeNotFoundDeclaration" ? "notFound" : item.method.toLowerCase();
-      context.syntaxToken({ start: item.signatureSpan.start, end: item.signatureSpan.start + role.length + 1 }, "decorator");
+      const roleSpan = { start: item.signatureSpan.start, end: item.signatureSpan.start + role.length + 1 };
+      context.syntaxToken(roleSpan, "decorator");
+      context.documentSyntax(roleSpan, `@${role}`);
+      if (item.kind === "NodeRouteDeclaration" && context.source[item.pathSpan.start] === "p") {
+        context.documentSyntax({ start: item.pathSpan.start, end: item.pathSpan.start + 1 }, "p");
+      }
       context.enterScope(item.span);
       for (const parameter of item.parameters) {
         if (parameter.defaultValue) context.visitExpression(parameter.defaultValue);

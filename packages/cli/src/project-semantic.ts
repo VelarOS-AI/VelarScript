@@ -67,6 +67,11 @@ export interface ProjectSemanticToken {
   readonly modifiers: readonly ProjectSemanticTokenModifier[];
 }
 
+export interface ProjectSyntaxDocumentation {
+  readonly span: Span;
+  readonly key: string;
+}
+
 export type ProjectCompletionContext = "ordinary" | "member" | "object-field" | `extension:${string}`;
 
 export interface ProjectRename {
@@ -326,6 +331,19 @@ export function projectSemanticTokens(project: ProjectResult, path: string): rea
   }
 
   return [...tokens.values()].map((item) => item.token).sort((left, right) => left.span.start - right.span.start || left.span.end - right.span.end);
+}
+
+/** Returns the smallest compiler-recognized documented syntax at an offset. */
+export function projectSyntaxDocumentationAt(
+  project: ProjectResult,
+  path: string,
+  offset: number,
+): ProjectSyntaxDocumentation | null {
+  const module = moduleAt(project, path);
+  if (!module) return null;
+  return module.result.semanticIndex.syntaxDocumentation
+    .filter((item) => contains(item.span, offset))
+    .sort((left, right) => (left.span.end - left.span.start) - (right.span.end - right.span.start))[0] ?? null;
 }
 
 function semanticTokenType(symbol: SemanticSymbol): ProjectSemanticTokenType {

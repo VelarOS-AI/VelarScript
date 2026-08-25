@@ -6,6 +6,16 @@ truth for acceptance status.
 
 ## Unreleased
 
+## 0.14.5 — 2026-08-25
+
+### Language tooling and documentation
+
+- Added a compiler-owned syntax-documentation index so Hover resolves special
+  forms only at positions the active compiler extension actually parsed.
+- Added explanatory Hover content with legal examples and constraints for Core
+  class roles, Node `server` routes and `p` patterns, Web lifecycle and reactive
+  declarations, Look states and targets, and checked JSX directives.
+
 ## 0.14.4 — 2026-08-24
 
 ### Language semantics and diagnostics

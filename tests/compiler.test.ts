@@ -203,6 +203,12 @@ async function linkWorkspaceWebExtension(projectRoot: string): Promise<void> {
   await symlink(resolve("packages/web"), join(scope, "web"), "dir");
 }
 
+async function linkWorkspaceNodeExtension(projectRoot: string): Promise<void> {
+  const scope = join(projectRoot, "node_modules", "@velarscript");
+  await mkdir(scope, { recursive: true });
+  await symlink(resolve("packages/node"), join(scope, "node"), "dir");
+}
+
 async function linkWorkspaceDesktopExtension(projectRoot: string): Promise<void> {
   const scope = join(projectRoot, "node_modules", "@velarscript");
   await mkdir(scope, { recursive: true });
@@ -15777,8 +15783,8 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     devDependencies: Record<string, string>;
   };
-  assert.equal(createdPackage.dependencies["@velarscript/web"], "0.14.4");
-  assert.equal(createdPackage.devDependencies["@velarscript/cli"], "0.14.4");
+  assert.equal(createdPackage.dependencies["@velarscript/web"], "0.14.5");
+  assert.equal(createdPackage.devDependencies["@velarscript/cli"], "0.14.5");
   assert.equal(createdPackage.scripts.format, "velar format");
   assert.equal(createdPackage.scripts["format:check"], "velar format --check");
   assert.equal(createdPackage.scripts["test:browser"], "velar test --browser");
@@ -15914,8 +15920,8 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   assert.deepEqual(componentPackage.velar.requires.capabilities, []);
   assert.equal(componentPackage.scripts["pack:check"], "npm pack --dry-run --json");
   assert.match(componentPackage.scripts.validate ?? "", /npm run pack:check$/u);
-  assert.equal(componentPackage.peerDependencies["@velarscript/web"], "^0.14.4");
-  assert.equal(componentPackage.devDependencies["@velarscript/web"], "0.14.4");
+  assert.equal(componentPackage.peerDependencies["@velarscript/web"], "^0.14.5");
+  assert.equal(componentPackage.devDependencies["@velarscript/web"], "0.14.5");
   assert.match(await readFile(join(componentRoot, "src", "index.vel"), "utf8"), /export component InfoCard/u);
   assert.deepEqual(JSON.parse(await readFile(join(componentRoot, "velar.json"), "utf8")).extensions, ["@velarscript/web"]);
   await linkWorkspaceWebExtension(componentRoot);
@@ -15940,7 +15946,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     scripts: Record<string, string>;
   };
-  assert.equal(nodePackage.dependencies["@velarscript/server"], "0.14.4");
+  assert.equal(nodePackage.dependencies["@velarscript/server"], "0.14.5");
   assert.equal(nodePackage.dependencies["@velarscript/node"], undefined);
   assert.equal(nodePackage.scripts.dev, "velar dev");
   assert.equal(nodePackage.scripts.start, "velar serve");
@@ -15968,7 +15974,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     scripts: Record<string, string>;
   };
-  assert.equal(desktopPackage.dependencies["@velarscript/desktop"], "0.14.4");
+  assert.equal(desktopPackage.dependencies["@velarscript/desktop"], "0.14.5");
   assert.equal(desktopPackage.scripts.package, "velar package");
   assert.equal(desktopPackage.scripts["test:browser"], "velar test --browser=all");
   const desktopAgents = await readFile(join(desktopRoot, "AGENTS.md"), "utf8");
@@ -16032,7 +16038,7 @@ test("CLI help is command-specific and malformed top-level invocations fail clea
   const creator = resolve("packages/create/src/cli.ts");
   const creatorVersion = spawnSync(process.execPath, [creator, "--version"], { encoding: "utf8" });
   assert.equal(creatorVersion.status, 0, creatorVersion.stderr);
-  assert.equal(creatorVersion.stdout, "create-velar 0.14.4\n");
+  assert.equal(creatorVersion.stdout, "create-velar 0.14.5\n");
   const creatorMissing = spawnSync(process.execPath, [creator], { encoding: "utf8" });
   assert.equal(creatorMissing.status, 2);
   assert.match(creatorMissing.stderr, /expected one project directory/u);
@@ -27778,7 +27784,7 @@ test("CLI emits complete Web application assets", async () => {
     apiVersion: "0.10",
     artifactKind: "velar-web-build",
   });
-  assert.deepEqual(manifest.compiler, { name: "velar", version: "0.14.4" });
+  assert.deepEqual(manifest.compiler, { name: "velar", version: "0.14.5" });
   assert.match(manifest.buildId, /^[a-f0-9]{64}$/u);
   assert.equal(manifest.sourceMaps, true);
   assert.equal(manifest.entry, `assets/${javascript}`);
@@ -28196,6 +28202,54 @@ test("language server publishes diagnostics, hover, and completion", async (cont
   send({ jsonrpc: "2.0", id: 2, method: "textDocument/hover", params: { textDocument: { uri: scratchUri }, position: { line: 0, character: 2 } } });
   const hovered = await waitFor((message) => message.id === 2);
   assert.match(JSON.stringify(hovered.result), /compiler-managed Web component/);
+  const webMagicPath = join(directory, "web-magic.vel");
+  const webMagicUri = pathToFileURL(webMagicPath).href;
+  const webMagicText = [
+    "const cardLook = look:",
+    "    if @hover:",
+    "        color = \"blue\"",
+    "component Magic:",
+    "    @mounted:",
+    "        print(\"ready\")",
+    "    return <button look={cardLook} on:click={() => print(\"clicked\")}>Magic</button>",
+    "",
+  ].join("\n");
+  await writeFile(webMagicPath, webMagicText, "utf8");
+  send({ jsonrpc: "2.0", method: "textDocument/didOpen", params: { textDocument: { uri: webMagicUri, languageId: "velar", version: 1, text: webMagicText } } });
+  const webMagicPublished = await waitFor((message) => message.method === "textDocument/publishDiagnostics"
+    && (message.params as { uri?: string }).uri === webMagicUri);
+  assert.deepEqual((webMagicPublished.params as { diagnostics: unknown[] }).diagnostics, []);
+  send({ jsonrpc: "2.0", id: 201, method: "textDocument/hover", params: { textDocument: { uri: webMagicUri }, position: { line: 1, character: 8 } } });
+  const lookHookHover = await waitFor((message) => message.id === 201);
+  assert.match(JSON.stringify(lookHookHover.result), /live CSS state/u);
+  assert.match(JSON.stringify(lookHookHover.result), /if @hover/u);
+  send({ jsonrpc: "2.0", id: 202, method: "textDocument/hover", params: { textDocument: { uri: webMagicUri }, position: { line: 4, character: 7 } } });
+  const mountedHover = await waitFor((message) => message.id === 202);
+  assert.match(JSON.stringify(mountedHover.result), /compiler-owned component lifecycle role/u);
+  assert.match(JSON.stringify(mountedHover.result), /@mounted:/u);
+  send({ jsonrpc: "2.0", id: 203, method: "textDocument/hover", params: { textDocument: { uri: webMagicUri }, position: { line: 6, character: 40 } } });
+  const eventHover = await waitFor((message) => message.id === 203);
+  assert.match(JSON.stringify(eventHover.result), /checked DOM event handler/u);
+
+  const nodeDirectory = join(directory, "node-service");
+  const nodePath = join(nodeDirectory, "main.vel");
+  const nodeUri = pathToFileURL(nodePath).href;
+  const nodeText = "export server routes:\n    @post(p\"/articles\") => {ok: true}\n";
+  await mkdir(nodeDirectory, { recursive: true });
+  await linkWorkspaceNodeExtension(nodeDirectory);
+  await writeFile(join(nodeDirectory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: ["@velarscript/node"] }), "utf8");
+  await writeFile(nodePath, nodeText, "utf8");
+  send({ jsonrpc: "2.0", method: "textDocument/didOpen", params: { textDocument: { uri: nodeUri, languageId: "velar", version: 1, text: nodeText } } });
+  const nodePublished = await waitFor((message) => message.method === "textDocument/publishDiagnostics"
+    && (message.params as { uri?: string }).uri === nodeUri);
+  assert.deepEqual((nodePublished.params as { diagnostics: unknown[] }).diagnostics, []);
+  send({ jsonrpc: "2.0", id: 204, method: "textDocument/hover", params: { textDocument: { uri: nodeUri }, position: { line: 1, character: 7 } } });
+  const postHover = await waitFor((message) => message.id === 204);
+  assert.match(JSON.stringify(postHover.result), /compiler-owned role/u);
+  assert.match(JSON.stringify(postHover.result), /@post\(p/u);
+  send({ jsonrpc: "2.0", id: 205, method: "textDocument/hover", params: { textDocument: { uri: nodeUri }, position: { line: 1, character: 10 } } });
+  const pathPatternHover = await waitFor((message) => message.id === 205);
+  assert.match(JSON.stringify(pathPatternHover.result), /path-pattern literal/u);
   send({ jsonrpc: "2.0", id: 3, method: "textDocument/completion", params: { textDocument: { uri: scratchUri }, position: { line: 0, character: 0 } } });
   const completed = await waitFor((message) => message.id === 3);
   assert.match(JSON.stringify(completed.result), /bind:value/);

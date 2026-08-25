@@ -37,6 +37,7 @@ import {
   projectSemanticTokens,
   projectSignatureAt,
   projectSymbolAt,
+  projectSyntaxDocumentationAt,
   projectWorkspaceSymbols,
 } from "./project-semantic.ts";
 import {
@@ -135,6 +136,32 @@ const keywordDocumentation = new Map<string, string>([
   ["let", "Declares an initialized binding that can be rebound."],
   ["readonly", "Creates a transitive compile-time view over data records and collections without changing runtime identity."],
   ["null", "The only empty value in ordinary VelarScript source; undefined is not exposed."],
+  ["@dispose", [
+    "Defines a class's compiler-owned release contract. It is not a decorator or callable method; `using` runs it on every exit from the owning scope.",
+    "",
+    "```velar",
+    "class Session:",
+    "    @dispose:",
+    "        self.close()",
+    "",
+    "using session = Session()",
+    "```",
+    "",
+    "A class may declare at most one `@dispose:` block. Derived cleanup composes with the base contract in release order.",
+  ].join("\n")],
+  ["@iterate", [
+    "Defines what iterating a class means. It is a compiler-owned class contract, not a decorator, method, or user extension point.",
+    "",
+    "```velar",
+    "class Bag:",
+    "    let items: List<string> = []",
+    "",
+    "    @iterate:",
+    "        return self.items",
+    "```",
+    "",
+    "Return a `List`, `Set`, `Map`, or `Record` for plain `for`. Returning `T?` declares the asynchronous pull form used by `async for`, where one pull returns one item and `null` ends the stream.",
+  ].join("\n")],
 ]);
 
 const builtinTypeDocumentation = new Map<string, string>([
@@ -1157,8 +1184,6 @@ function lspNotice(source: SourceText, message: string): unknown {
 
 async function hover(document: TextDocument, position: Position, project: ProjectResult | null): Promise<unknown> {
   const offset = offsetAt(document.text, position);
-  const word = wordAt(document.text, offset);
-  if (!word) return null;
   const path = pathOf(document.uri);
   const symbol = path && project ? projectSymbolAt(project, path, offset) : null;
   if (symbol) {
@@ -1167,6 +1192,17 @@ async function hover(document: TextDocument, position: Position, project: Projec
     const documentation = symbol.documentation ? `\n\n${symbol.documentation}` : "";
     return { contents: { kind: "markdown", value: clipLspText(`\`\`${declaration} ${symbol.name}${type}\`\`${documentation}`) } };
   }
+  const syntax = path && project ? projectSyntaxDocumentationAt(project, path, offset) : null;
+  if (syntax) {
+    const documentation = keywordDocumentation.get(syntax.key)
+      ?? extensionDocumentation(project, "keywordDocumentation", syntax.key);
+    if (documentation) {
+      const label = document.text.slice(syntax.span.start, syntax.span.end);
+      return { contents: { kind: "markdown", value: clipLspText(`\`\`${label}\`\`\n\n${documentation}`) } };
+    }
+  }
+  const word = wordAt(document.text, offset);
+  if (!word) return null;
   const keyword = keywordDocumentation.get(word) ?? extensionDocumentation(project, "keywordDocumentation", word);
   if (keyword) return { contents: { kind: "markdown", value: `\`\`${word}\`\`\n\n${keyword}` } };
   const expression = path && project ? projectExpressionAt(project, path, offset) : null;

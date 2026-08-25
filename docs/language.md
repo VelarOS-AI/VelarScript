@@ -347,6 +347,22 @@ owning scope — block end, `return`, `break`, `continue`, a throw three frames
 down — in reverse declaration order. An owned value may not leave its scope,
 so return the data you read from it rather than the handle.
 
+The same rule covers every compiler-owned `@name`; the active context decides
+the closed vocabulary and the editor hover explains the exact role and a legal
+example:
+
+| Context | Compiler-owned names | Meaning |
+| --- | --- | --- |
+| Class | `@dispose:`, `@iterate:` | Release and iteration contracts |
+| Node `server` | `@get`, `@post`, `@put`, `@patch`, `@delete`, `@notFound` | Anonymous checked HTTP routes and the final fallback |
+| Web component | `@mounted:`, `@cleanup:` | Component insertion and destruction lifecycle |
+| Web `look:` | `@hover` and the other state names; `@before:` and the other target names | Live CSS states and checked pseudo-element targets |
+
+These names cannot be imported, aliased, passed as values, called, or extended
+by user code. A valid hover comes from the compiler's parsed semantic position,
+so text that merely happens to contain the same spelling is not treated as the
+language feature.
+
 ```velar
 class Session:
     let open: bool = true

@@ -127,6 +127,18 @@ export interface SemanticSyntaxToken {
   readonly kind: SemanticSyntaxTokenKind;
 }
 
+/**
+ * A compiler-owned source form that has editor documentation at this exact
+ * location. The key is resolved against Core or the active compiler
+ * extension's editor documentation; it need not equal the source text, which
+ * lets a concrete extension spelling such as `on:click` share the `on:*`
+ * contract.
+ */
+export interface SemanticSyntaxDocumentation {
+  readonly span: Span;
+  readonly key: string;
+}
+
 export interface SemanticIndex {
   readonly path: string;
   readonly symbols: readonly SemanticSymbol[];
@@ -137,6 +149,7 @@ export interface SemanticIndex {
   readonly scopes: readonly SemanticScope[];
   readonly expressions: readonly SemanticExpression[];
   readonly syntaxTokens: readonly SemanticSyntaxToken[];
+  readonly syntaxDocumentation: readonly SemanticSyntaxDocumentation[];
 }
 
 export interface SemanticDeclareOptions {
@@ -179,6 +192,7 @@ export interface SemanticExtensionContext {
   readonly visitBlock: (body: readonly Statement[], fallbackSpan: Span) => void;
   readonly visitFunction: (statement: SemanticFunctionLike) => void;
   readonly syntaxToken: (span: Span, kind: SemanticSyntaxTokenKind) => void;
+  readonly documentSyntax: (span: Span, key: string) => void;
 }
 
 export interface CompilerSemanticExtension {
@@ -219,7 +233,9 @@ export function buildSemanticIndex(
   const moduleReferences: SemanticModuleReference[] = [];
   const expressions: SemanticExpression[] = [];
   const syntaxTokens: SemanticSyntaxToken[] = [];
+  const syntaxDocumentation: SemanticSyntaxDocumentation[] = [];
   const syntaxTokenIdentities = new Set<string>();
+  const syntaxDocumentationIdentities = new Set<string>();
   const expressionKeys = new Set<string>();
   const rootScope: Scope = { id: 0, parentId: null, span: { start: 0, end: source.text.length }, bindings: new Map() };
   const scopes: Scope[] = [rootScope];
@@ -247,6 +263,16 @@ export function buildSemanticIndex(
     if (syntaxTokenIdentities.has(identity)) return;
     syntaxTokenIdentities.add(identity);
     syntaxTokens.push({ span: tokenSpan, kind });
+  };
+
+  const documentSyntax = (documentedSpan: Span, key: string): void => {
+    if (!Number.isSafeInteger(documentedSpan.start) || !Number.isSafeInteger(documentedSpan.end)
+      || documentedSpan.start < 0 || documentedSpan.end <= documentedSpan.start
+      || documentedSpan.end > source.text.length || key.length === 0 || key.length > 128) return;
+    const identity = `${documentedSpan.start}:${documentedSpan.end}:${key}`;
+    if (syntaxDocumentationIdentities.has(identity)) return;
+    syntaxDocumentationIdentities.add(identity);
+    syntaxDocumentation.push({ span: documentedSpan, key });
   };
 
   const callable = (type: ValueType | undefined): boolean => type?.kind === "function" || type?.kind === "intrinsic" || type?.kind === "action";
@@ -824,8 +850,16 @@ export function buildSemanticIndex(
           if (!field.static && field.initializer) visitExpression(field.initializer);
         }
         if (statement.initialization) visitBlock(statement.initialization.body, statement.initialization.span);
-        if (statement.dispose) visitBlock(statement.dispose.body, statement.dispose.span);
-        if (statement.iterate) visitBlock(statement.iterate.body, statement.iterate.span);
+        if (statement.dispose) {
+          syntaxToken(statement.dispose.keywordSpan, "decorator");
+          documentSyntax(statement.dispose.keywordSpan, "@dispose");
+          visitBlock(statement.dispose.body, statement.dispose.span);
+        }
+        if (statement.iterate) {
+          syntaxToken(statement.iterate.keywordSpan, "decorator");
+          documentSyntax(statement.iterate.keywordSpan, "@iterate");
+          visitBlock(statement.iterate.body, statement.iterate.span);
+        }
         exitScope();
         for (const field of statement.fields) if (field.static && field.initializer) visitExpression(field.initializer);
         for (const getter of statement.getters) visitFunction(getter, true, statement.name, "field", getter.returnType ? formatTypeReference(getter.returnType) : undefined);
@@ -935,6 +969,7 @@ export function buildSemanticIndex(
     visitBlock,
     visitFunction: (statement) => visitFunction(statement),
     syntaxToken,
+    documentSyntax,
   };
 
   predeclareTopLevel();
@@ -949,6 +984,7 @@ export function buildSemanticIndex(
     scopes: allScopes.map(({ id, parentId, span: scopeSpan }) => ({ id, parentId, span: scopeSpan })),
     expressions,
     syntaxTokens: syntaxTokens.sort((left, right) => left.span.start - right.span.start || left.span.end - right.span.end),
+    syntaxDocumentation: syntaxDocumentation.sort((left, right) => left.span.start - right.span.start || left.span.end - right.span.end),
   };
 }
 
