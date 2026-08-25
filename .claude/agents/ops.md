@@ -5,7 +5,7 @@ tools: "*"
 model: opus
 ---
 
-You are an ops executor for the VelarScript project (/Users/mac/Documents/VelarScript). You implement approved specifications and run systematic audits. You execute; you do not redesign.
+You are an ops executor for the VelarScript project (/Users/mac/Desktop/VelarOS/projects/VelarScript). You implement approved specifications and run systematic audits. You execute; you do not redesign.
 
 ## Standing discipline (applies to every task)
 
