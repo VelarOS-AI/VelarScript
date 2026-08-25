@@ -55,6 +55,7 @@ export type { AnalysisContext, ClassField, ClassInfo, InitializationImportRead }
 export {
   CORE_CONTEXTUAL_KEYWORD_WORDS,
   CORE_CONTEXTUAL_KEYWORDS,
+  CORE_COMPILER_CONTEXTUAL_NAMES,
   CORE_NUMERIC_SUFFIXES,
   CORE_PRELUDE_NAMES,
   CORE_STATEMENT_HEAD_KEYWORDS,
@@ -65,6 +66,8 @@ export {
   typeParameterDeclarationFormsPhrase,
   type CoreContextualKeyword,
   type CoreContextualKeywordWord,
+  type CoreCompilerContext,
+  type CoreCompilerContextualName,
   type CoreNumericSuffix,
   type CorePreludeName,
   type CoreVocabularyName,
@@ -79,6 +82,8 @@ export interface CompileOptions {
   readonly extensions?: readonly CompilerExtension[];
   readonly resourceContents?: ReadonlyMap<string, string>;
   readonly sharedRuntimeModules?: boolean;
+  /** 当前源文件是否作为程序入口生成 `@main`；直接编译单个源文件时默认为 true。 */
+  readonly executeMain?: boolean;
 }
 
 export interface CompileResult {
@@ -179,6 +184,7 @@ function compileUnchecked(text: string, options: CompileOptions): CompileResult 
     ...options.analysis,
     path: parsed.source.path,
     sourceText: parsed.source.text,
+    executeMain: options.executeMain !== false,
     ...(analysisResources ? { resources: analysisResources } : {}),
   };
   const createAnalyzer = (
@@ -243,6 +249,7 @@ function compileUnchecked(text: string, options: CompileOptions): CompileResult 
   const emitterOptions: CompilerEmitterOptions = {
     sourcePath: parsed.source.path,
     source: parsed.source,
+    executeMain: options.executeMain !== false,
     ...(options.sharedRuntimeModules === undefined ? {} : { sharedRuntimeModules: options.sharedRuntimeModules }),
   };
   const emitter: CompilerEmitter = emitterExtensions[0]?.createEmitter?.(

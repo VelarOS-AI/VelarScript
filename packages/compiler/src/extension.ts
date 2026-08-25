@@ -120,6 +120,8 @@ export interface CompilerEmbeddedJavaScriptModule {
 
 export interface CompilerEmitterOptions {
   readonly sharedRuntimeModules?: boolean;
+  /** 只有程序选择的入口模块才生成 `@main` 正文；普通导入模块仍保留完整静态检查。 */
+  readonly executeMain?: boolean;
   /** Authoring module path, used to derive collision-free sibling artifacts. */
   readonly sourcePath?: string;
   /** Immutable author source for extension-owned source-derived metadata. */

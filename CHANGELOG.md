@@ -6,6 +6,28 @@ truth for acceptance status.
 
 ## Unreleased
 
+## 0.15.0 — 2026-08-25
+
+### Language syntax
+
+- Added the compiler-owned module entry region `@main:`. It supports both a
+  single inline statement and an indented block, must be the final top-level
+  region, and may appear only once per module. Its declarations remain local,
+  and `return`, `export`, and direct calls to the region are rejected.
+- Project compilation now executes `@main` only for the selected program or
+  worker entry. Imported modules are still parsed and checked, but their entry
+  bodies are not emitted or run. Test modules continue to use named `test`
+  declarations instead of an entry region.
+- Added indented leading binary-operator continuation. The formatter preserves
+  the expression and emits a canonical continuation indentation.
+
+### Tooling and project compilation
+
+- Project graphs now record execution entries and invalidate affected modules
+  when an entry role changes.
+- Language Server hover, semantic tokens, formatting, project templates, the
+  tour, and language documentation now understand and demonstrate `@main`.
+
 ## 0.14.9 — 2026-08-25
 
 ### Node Standard API

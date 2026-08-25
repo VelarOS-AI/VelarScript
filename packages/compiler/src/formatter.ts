@@ -85,17 +85,19 @@ export function formatSource(text: string, options: FormatOptions = {}): string 
     const leading = line.match(/^[ \t]*/u)?.[0] ?? "";
     const width = [...leading].reduce((total, character) => total + (character === "\t" ? indentWidth : 1), 0);
     const content = line.slice(leading.length);
-    // A leading-dot chain continuation keeps its own canonical indentation —
-    // one level past the statement it continues — without opening a block for
-    // the lines that follow it.
-    if (!isEmbeddedLine(embedded) && isChainContinuationLine(content) && formatted.length > 0) {
+    const current = indentation.at(-1) ?? 0;
+    // A leading member step or binary operator keeps its own canonical
+    // indentation — one level past the statement it continues — without
+    // opening a block for the lines that follow it. Inside brackets the
+    // current indentation already belongs to the bracket layout, so an
+    // operator aligned with that content stays aligned there.
+    if (!isEmbeddedLine(embedded) && width > current && isExpressionContinuationLine(content) && formatted.length > 0) {
       const column = (statementLevel + 1) * indentWidth;
       const line = formatInlineLine(content, angleEmbedding, markupLayout(indentWidth, column, angleEmbedding), preceding);
       formatted.push(`${" ".repeat(column)}${line.text}`);
       preceding = line.trailing ?? preceding;
       continue;
     }
-    const current = indentation.at(-1) ?? 0;
     if (width > current) {
       indentation.push(width);
     } else if (width < current) {
@@ -183,6 +185,7 @@ function collectCompactSuiteCandidates(statement: Statement, output: CompactSuit
   switch (statement.kind) {
     case "FunctionDeclaration":
     case "TestDeclaration":
+    case "MainBlock":
     case "ForStatement":
     case "WhileStatement":
       body(statement.span.start, statement.body);
@@ -255,6 +258,7 @@ function statementOwnsCompactSuite(statement: Statement): boolean {
     case "EnumDeclaration":
     case "ClassDeclaration":
     case "TestDeclaration":
+    case "MainBlock":
     case "FunctionDeclaration":
     case "IfStatement":
     case "MatchStatement":
@@ -493,9 +497,11 @@ function reindentLayoutLiteral(value: string, originalIndent: string, formattedI
   }).join("");
 }
 
-function isChainContinuationLine(content: string): boolean {
+function isExpressionContinuationLine(content: string): boolean {
   const member = content.startsWith("?.") ? content[2] : content[1];
-  return (content.startsWith(".") || content.startsWith("?.")) && Boolean(member && isSourceIdentifierStart(member));
+  if ((content.startsWith(".") || content.startsWith("?.")) && Boolean(member && isSourceIdentifierStart(member))) return true;
+  if (/^(?:and|or|in|is)\b/u.test(content) || /^not\s+in\b/u.test(content)) return true;
+  return /^(?:>>>|<<|>>|\?\?|==|!=|<=|>=|[|^&<>+\-*/%])(?![=/*])/u.test(content);
 }
 
 /**

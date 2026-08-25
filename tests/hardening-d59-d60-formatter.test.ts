@@ -118,6 +118,24 @@ test("[D60-147] the element after ?? stays an element instead of becoming four c
   assert.equal(webDiagnostics(wrecked).some((message) => message.startsWith("VEL2006")), true);
 });
 
+test("[D59-143] leading binary continuations use one canonical continuation indent", () => {
+  const source = `
+def all(first: bool, second: bool, third: bool) -> bool:
+    return first
+            and second
+      and third
+`.trimStart();
+  const formatted = core(source);
+  assert.equal(formatted, `
+def all(first: bool, second: bool, third: bool) -> bool:
+    return first
+        and second
+        and third
+`.trimStart());
+  assert.equal(core(formatted), formatted);
+  assert.deepEqual(coreDiagnostics(formatted), []);
+});
+
 test("[D60-147] an element keeps the space of the ',' or ':' in front of it", () => {
   assert.equal(
     web("component Note(flag: bool):\n    return <p>{flag ? <span>yes</span> : <span>no</span>}</p>\n"),

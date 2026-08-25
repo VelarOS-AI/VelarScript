@@ -163,6 +163,7 @@ export class JavaScriptEmitter {
   private generatedMappings: readonly GeneratedMapping[] = [];
   private generatedCode = "";
   private readonly sourcePath: string;
+  private readonly executeMain: boolean;
   private readonly embeddedJavaScript = new Map<EmbeddedJavaScriptDeclaration, PreparedEmbeddedJavaScriptModule>();
 
   constructor(hints: LoweringHints, forcedFunctionExports: ReadonlySet<string> = new Set(), options: CompilerEmitterOptions = {}) {
@@ -170,6 +171,7 @@ export class JavaScriptEmitter {
     this.forcedFunctionExports = forcedFunctionExports;
     this.sharedRuntimeModules = options.sharedRuntimeModules === true;
     this.sourcePath = options.sourcePath ?? "<source>";
+    this.executeMain = options.executeMain !== false;
   }
 
   emit(program: Program): string {
@@ -1037,6 +1039,9 @@ export class JavaScriptEmitter {
       if (this.visitExtensionRuntimeStatement(statement, visitExpression, visitStatement)) return;
       switch (statement.kind) {
         case "VariableDeclaration": visitExpression(statement.initializer); break;
+        case "MainBlock":
+          if (this.executeMain) statement.body.forEach(visitStatement);
+          break;
         case "TestDeclaration": statement.body.forEach(visitStatement); break;
         case "UsingDeclaration":
           // Releasing a resource reports its own failure through the host
@@ -1298,6 +1303,11 @@ export class JavaScriptEmitter {
             "Variable",
           ),
         ].join("\n");
+      }
+      case "MainBlock": {
+        if (!this.executeMain) return "";
+        const body = this.emitStatementLines(statement.body, depth + 1).join("\n");
+        return `${indentation}{${body.length > 0 ? `\n${body}\n${indentation}` : ""}}`;
       }
       // D39 item 53: a test is an exported async function the runner calls by
       // its generated name; the author's name travels in the module interface

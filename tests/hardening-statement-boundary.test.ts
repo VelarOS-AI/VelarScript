@@ -141,6 +141,45 @@ print(check(true))
   assert.deepEqual(headers.diagnostics, []);
 });
 
+test("an indented leading binary operator continues the expression above it", () => {
+  const execution = runClean(`
+def samePosition(
+    chunkX: number,
+    localX: number,
+    chunkY: number,
+    localY: number,
+    chunkZ: number,
+    localZ: number,
+    edge: number,
+    positionX: number,
+    positionY: number,
+    positionZ: number,
+) -> bool:
+    return chunkX * edge + localX == positionX
+        and chunkY * edge + localY == positionY
+        and chunkZ * edge + localZ == positionZ
+
+const arithmetic = 1
+    + 2
+    * 3
+const absent = 4
+    not in [1, 2, 3]
+print(samePosition(2, 3, 4, 5, 6, 7, 16, 35, 69, 103))
+print(arithmetic)
+print(absent)
+`.trimStart());
+
+  assert.equal(execution.stdout, "true\n7\ntrue\n");
+});
+
+test("a leading operator does not cross a blank line or continue without deeper indentation", () => {
+  const blank = compile("const ready = true\n\n    and false\n");
+  assert.notDeepEqual(blank.diagnostics, []);
+
+  const aligned = compile("const ready = true\nand false\n");
+  assert.notDeepEqual(aligned.diagnostics, []);
+});
+
 test("the newly landed negative operators are not read as leftover tokens", () => {
   const result = compile(`
 const list = [1, 2]

@@ -433,8 +433,8 @@ test("[wave G] an unknown compiler-owned name reports the component vocabulary",
   );
   assert.ok(
     messages(`@mounted:\n    print("in")\n`, false)
-      .some((item) => item.includes("'@mounted' is a compiler-owned contextual name and is not valid here")),
-    "'@' outside a declaration body",
+      .some((item) => item.includes("the module namespace contains only '@main:'")),
+    "the module owns a closed compiler namespace",
   );
 });
 

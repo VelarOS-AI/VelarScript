@@ -31,6 +31,7 @@ import type {
   ImportDeclaration,
   ImportSpecifier,
   MemberExpression,
+  MainBlock,
   MatchStatement,
   ObjectProperty,
   Parameter,
@@ -48,7 +49,7 @@ import type {
   UsingDeclaration,
   VariableDeclaration,
 } from "./ast.ts";
-import { CORE_STATEMENT_HEAD_KEYWORDS, CORE_WORDS, TYPE_PARAMETER_DECLARATION_FORMS, typeParameterDeclarationFormsPhrase } from "./core-vocabulary.ts";
+import { CORE_COMPILER_CONTEXTUAL_NAMES, CORE_STATEMENT_HEAD_KEYWORDS, CORE_WORDS, TYPE_PARAMETER_DECLARATION_FORMS, typeParameterDeclarationFormsPhrase } from "./core-vocabulary.ts";
 import { diagnostic, mechanicalEdits, mechanicalFix, recoveredDiagnostic, type Advisory, type Diagnostic, type DiagnosticFix } from "./diagnostic.ts";
 import { inspectEmbeddedJavaScript, isEmbeddedJavaScriptTokenPayload } from "./embedded-javascript.ts";
 import type { CompilerLexicalExtension } from "./extension.ts";
@@ -250,6 +251,8 @@ export class Parser {
       this.consumeNewlines();
     }
 
+    this.validateMainBlocks(body);
+
     const end = this.current().span.end;
     return {
       program: { kind: "Program", body, span: span(0, end) },
@@ -332,11 +335,29 @@ export class Parser {
       this.skipMistypedDeclaration();
       return { kind: "PassStatement", span: this.previous().span };
     }
+    // Core's module entry wins before a target extension examines other
+    // contextual `@name` roles. This keeps `@main` available in Node/Web
+    // entries while leaving route and lifecycle diagnostics with their owner.
+    if (this.check("at") && this.peekKind(1) === "identifier"
+      && this.peekValue(1) === CORE_COMPILER_CONTEXTUAL_NAMES.module[0]) {
+      if (exported) {
+        this.diagnostics.push(diagnostic(
+          "VEL2022",
+          "'@main' is a compiler-owned entry region and cannot be exported",
+          span(start, this.current().span.end),
+        ));
+      }
+      return this.parseCompilerOwnedModuleBlock(start);
+    }
     const abstract = this.match("abstract");
     const asynchronous = this.match("async");
 
     const extensionStatement = this.parseExtensionStatement(start, { exported, abstract, asynchronous });
     if (extensionStatement !== undefined) return extensionStatement;
+
+    // No installed extension claimed this role, so the remaining `@name`
+    // belongs to Core's closed module namespace and receives its vocabulary.
+    if (this.check("at")) return this.parseCompilerOwnedModuleBlock(start);
 
     if (this.match("def")) {
       if (abstract) this.diagnostics.push(diagnostic("VEL2013", "Only class methods can be declared with 'abstract'", this.previous().span));
@@ -641,6 +662,77 @@ export class Parser {
     }
 
     return { kind: "ExpressionStatement", expression, span: expression.span };
+  }
+
+  /**
+   * 解析模块语句位置的编译器角色。目前这个封闭命名空间只有 `@main`。
+   *
+   * 正文复用普通可执行块的解析入口，因此 `@main: run()` 与缩进正文拥有完全
+   * 相同的语句语义；共享入口也会继续拒绝把另一个块头塞进单行正文。
+   */
+  private parseCompilerOwnedModuleBlock(start: number): MainBlock | Statement {
+    const marker = this.expect("at", "Expected '@' before a compiler-owned module name");
+    const name = this.expect("identifier", "Expected a compiler-owned module name after '@'");
+    const keywordSpan = span(marker.span.start, name.span.end);
+    const body = this.parseBlock();
+    const blockSpan = span(start, body.at(-1)?.span.end ?? this.previous().span.end);
+    if (!(CORE_COMPILER_CONTEXTUAL_NAMES.module as readonly string[]).includes(name.value)) {
+      this.diagnostics.push(diagnostic(
+        "VEL2022",
+        `Unknown compiler-owned name '@${name.value}' at statement scope; the module namespace contains only ${CORE_COMPILER_CONTEXTUAL_NAMES.module.map((item) => `'@${item}:'`).join(", ")}`,
+        keywordSpan,
+      ));
+      return { kind: "PassStatement", span: blockSpan };
+    }
+    return { kind: "MainBlock", keywordSpan, body, span: blockSpan };
+  }
+
+  /** `@main` 是模块的最终入口区域；唯一性和位置在完整模块可见后统一检查。 */
+  private validateMainBlocks(body: readonly Statement[]): void {
+    const mainIndexes = body
+      .map((statement, index) => statement.kind === "MainBlock" ? index : -1)
+      .filter((index) => index >= 0);
+    for (const duplicate of mainIndexes.slice(1)) {
+      this.diagnostics.push(diagnostic(
+        "VEL2022",
+        "A module can declare at most one '@main' region",
+        body[duplicate]!.span,
+      ));
+    }
+    const finalMain = mainIndexes.at(-1);
+    if (finalMain !== undefined && finalMain !== body.length - 1) {
+      this.diagnostics.push(diagnostic(
+        "VEL2022",
+        "'@main' must be the module's final top-level region",
+        body[finalMain]!.span,
+      ));
+    }
+
+    if (mainIndexes.length === 0) return;
+    const declarationKinds = new Set<Statement["kind"]>([
+      "ImportDeclaration",
+      "ReExportDeclaration",
+      "ExternModuleDeclaration",
+      "EmbeddedJavaScriptDeclaration",
+      "TypeDeclaration",
+      "TypeAliasDeclaration",
+      "EnumDeclaration",
+      "ClassDeclaration",
+      "VariableDeclaration",
+      "TestDeclaration",
+      "FunctionDeclaration",
+      "MainBlock",
+    ]);
+    for (const statement of body) {
+      // 扩展语句由拥有它的框架定义其声明性质；Core 不能把 component、server
+      // 等合法顶层声明误判成散落执行代码。
+      if (statement.kind.startsWith("ExtensionStatement:") || declarationKinds.has(statement.kind)) continue;
+      this.diagnostics.push(diagnostic(
+        "VEL2022",
+        "Executable module code must be placed inside the module's '@main' region",
+        statement.span,
+      ));
+    }
   }
 
   /**
@@ -1774,11 +1866,11 @@ export class Parser {
         const marker = this.advance();
         const memberName = this.expect("identifier", "Expected a compiler-owned class name after '@'");
         const keywordSpan = span(marker.span.start, memberName.span.end);
-        const known = memberName.value === "dispose" || memberName.value === "iterate";
+        const known = (CORE_COMPILER_CONTEXTUAL_NAMES.class as readonly string[]).includes(memberName.value);
         if (!known) {
           this.diagnostics.push(diagnostic(
             "VEL2022",
-            `Unknown compiler-owned name '@${memberName.value}' in a class; the class namespace contains only '@dispose:' and '@iterate:'`,
+            `Unknown compiler-owned name '@${memberName.value}' in a class; the class namespace contains only ${CORE_COMPILER_CONTEXTUAL_NAMES.class.map((item) => `'@${item}:'`).join(" and ")}`,
             keywordSpan,
           ));
         }
@@ -2141,6 +2233,7 @@ export class Parser {
       case "EnumDeclaration":
       case "ClassDeclaration":
       case "TestDeclaration":
+      case "MainBlock":
       case "FunctionDeclaration":
       case "IfStatement":
       case "MatchStatement":

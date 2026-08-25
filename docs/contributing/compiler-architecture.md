@@ -50,6 +50,12 @@ known names in the wrong context fail closed. Accepted source has no bare-name
 alias for the same role, although a teaching diagnostic may recover from a
 retired spelling while keeping the compile unsuccessful.
 
+Core owns `@main` in the module context. The project driver marks each actual
+program or worker entry when it invokes the compiler; dependency modules still
+parse and analyze their complete `@main` body, while the emitter omits that body.
+This decision belongs to the project graph, not to a generated `__name__`-style
+runtime comparison.
+
 Role-specific AST nodes may differ because their behavior differs; their
 namespace semantics may not. If a role accepts a payload after `@name`, its
 parser must treat that payload as static role syntax rather than an ordinary

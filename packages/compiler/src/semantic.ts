@@ -870,6 +870,13 @@ export function buildSemanticIndex(
         typeReferences(statement.type);
         visitPattern(statement.pattern, "variable", statement.pattern.span, statement.binding === "let", statement.exported, statement.span.start);
         break;
+      case "MainBlock":
+        // `@main` 是模块级编译器角色而不是用户符号：编辑器把它标成角色，并为
+        // 正文建立独立局部作用域，但不会把名为 main 的声明塞进模块符号表。
+        syntaxToken(statement.keywordSpan, "decorator");
+        documentSyntax(statement.keywordSpan, "@main");
+        visitBlock(statement.body, statement.span);
+        break;
       case "TestDeclaration":
         // A test body is an ordinary block for navigation and rename.
         visitBlock(statement.body, statement.span);

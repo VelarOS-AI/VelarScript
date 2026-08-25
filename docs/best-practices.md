@@ -518,8 +518,10 @@ const sample = "
     one two
     three
 "
-const measured = measure(sample)
-print(f"{measured.lines} lines, {measured.words} words")
+
+@main:
+    const measured = measure(sample)
+    print(f"{measured.lines} lines, {measured.words} words")
 ```
 
 ## 12. What elegance means here

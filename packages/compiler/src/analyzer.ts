@@ -622,6 +622,8 @@ export interface AnalysisContext {
   readonly finalizeFunctionResultInference?: boolean;
   /** The module's own path; `test "name":` is only declared in a `*.test.vel` module. */
   readonly path?: string;
+  /** 当前模块是否是一次程序编译的执行入口；普通依赖仍检查 `@main`，但不把它当作模块初始化。 */
+  readonly executeMain?: boolean;
 }
 
 /**
@@ -1623,6 +1625,7 @@ export class Analyzer implements TypeEnvironment {
   private readonly scopedGlobalGuidance = new Map<string, Map<string, string>>();
   private readonly analysisExtensions: readonly CompilerAnalysisExtension[];
   private readonly sourceText: string;
+  private readonly executeMain: boolean;
   // D52 rule 114: the namespace prefixes an extension has withdrawn, and the
   // module their members went back to.
   private readonly retiredNamespaces = new Map<string, RetiredNamespace>();
@@ -1642,6 +1645,7 @@ export class Analyzer implements TypeEnvironment {
   constructor(context: AnalysisContext = {}, extensions: readonly CompilerAnalysisExtension[] = []) {
     this.analysisExtensions = extensions;
     this.sourceText = context.sourceText ?? "";
+    this.executeMain = context.executeMain !== false;
     this.inferredFunctionResultSeeds = context.inferredFunctionResults ?? new Map();
     this.finalizeFunctionResultInference = context.finalizeFunctionResultInference === true;
     this.classes.set("Error", {
@@ -3678,6 +3682,28 @@ export class Analyzer implements TypeEnvironment {
           if (binding?.span.start === statement.pattern.span.start && binding.span.end === statement.pattern.span.end) {
             if (this.expandAliases(actual).kind === "promise") this.promiseInitializerBindings.add(binding);
           }
+        }
+        break;
+      }
+      case "MainBlock": {
+        if (this.scopes.length !== 1) {
+          this.diagnostics.push(diagnostic("VEL3011", "'@main' can only be declared at module scope", statement.keywordSpan));
+        }
+        if ((this.modulePath ?? "").endsWith(".test.vel")) {
+          this.diagnostics.push(diagnostic(
+            "VEL3011",
+            "A test module declares named 'test' blocks and cannot also declare an '@main' program entry",
+            statement.keywordSpan,
+          ));
+        }
+        // 依赖模块的正文仍要完整类型检查，但它不会在这次程序中执行，所以其中的
+        // 导入读取不能被误记成依赖模块的初始化读取。入口模块则保留真实的初始化
+        // 语义，继续参与循环导入检查和宿主错误归一化。
+        if (!this.executeMain) this.deferredExecutionDepth += 1;
+        try {
+          this.analyzeBlock(statement.body);
+        } finally {
+          if (!this.executeMain) this.deferredExecutionDepth -= 1;
         }
         break;
       }
@@ -8214,7 +8240,7 @@ export class Analyzer implements TypeEnvironment {
       // BRG-U10: at module initialization, a synchronous non-Error throw
       // from an extern call would reach the host raw; the emitter wraps
       // these sites so the value is normalized through the owned channel.
-      if (this.functionDepth === 0) this.moduleTopLevelHostCalls.add(spanIdentity(callSpan));
+      if (this.inModuleInitializationPosition()) this.moduleTopLevelHostCalls.add(spanIdentity(callSpan));
     }
     if (calleeExpression.kind === "SuperExpression") {
       if (optionalCall) this.typeError("A base constructor call cannot be optional", callSpan);

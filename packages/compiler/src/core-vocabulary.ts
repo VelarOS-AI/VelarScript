@@ -102,6 +102,22 @@ export const CORE_CONTEXTUAL_KEYWORD_WORDS: readonly CoreContextualKeywordWord[]
   CORE_CONTEXTUAL_KEYWORDS.map((entry) => entry.word);
 
 /**
+ * Core 拥有的 `@name` 封闭词表，按名字出现的语法上下文分区。
+ *
+ * `@` 不是装饰器入口；解析器只能从这里列出的角色中选择。把模块与类放在同一个
+ * 事实源中，可以保证新增角色时未知名字诊断、解析行为和编辑器文档不会各自猜测
+ * 一份词表。扩展包继续拥有各自上下文的独立封闭词表。
+ */
+export const CORE_COMPILER_CONTEXTUAL_NAMES = Object.freeze({
+  module: ["main"],
+  class: ["dispose", "iterate"],
+} as const);
+
+export type CoreCompilerContext = keyof typeof CORE_COMPILER_CONTEXTUAL_NAMES;
+export type CoreCompilerContextualName<Context extends CoreCompilerContext> =
+  (typeof CORE_COMPILER_CONTEXTUAL_NAMES)[Context][number];
+
+/**
  * The words that stand where a keyword stands at the head of a statement line.
  * The formatter's spacing and the parser's arrow-brace scan both read this,
  * rather than each keeping the two-word copy D62 rule 157 found in them.

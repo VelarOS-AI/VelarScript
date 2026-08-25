@@ -18,6 +18,7 @@ export type CoreStatement =
   | VariableDeclaration
   | UsingDeclaration
   | TestDeclaration
+  | MainBlock
   | FunctionDeclaration
   | ReturnStatement
   | ThrowStatement
@@ -87,6 +88,7 @@ export const CORE_STATEMENT_CONSTRUCTS = Object.freeze({
   "VariableDeclaration:let": "let name = value",
   UsingDeclaration: "using name = open(path)",
   TestDeclaration: 'test "a name":',
+  MainBlock: "@main: run()",
   "FunctionDeclaration:def": "def name() -> T:",
   "FunctionDeclaration:async-def": "async def name() -> T:",
   ReturnStatement: "return value",
@@ -472,6 +474,23 @@ export interface TestDeclaration {
   readonly kind: "TestDeclaration";
   readonly title: string;
   readonly titleSpan: Span;
+  readonly body: readonly Statement[];
+  readonly span: Span;
+}
+
+/**
+ * 模块的程序入口区域。
+ *
+ * `@main` 属于编译器拥有的模块角色，不是可以导出或调用的普通函数。编译器仍会
+ * 检查每个模块中的入口代码，但只有项目选中的入口模块会生成并执行这个区域；
+ * 因此一个既能被导入、又能被直接运行的模块不会因为普通导入而启动程序。
+ *
+ * `keywordSpan` 只覆盖 `@main`，供语义高亮、悬浮说明和精确诊断使用；`span`
+ * 覆盖整个区域，`body` 同时承载单行和缩进两种正文形式。
+ */
+export interface MainBlock {
+  readonly kind: "MainBlock";
+  readonly keywordSpan: Span;
   readonly body: readonly Statement[];
   readonly span: Span;
 }
@@ -1129,6 +1148,9 @@ export function statementContainsDirectAwait(
     case "TestDeclaration":
       // A test body is its own async frame.
       return false;
+    case "MainBlock":
+      // `@main` 仍处于入口模块自己的执行帧，正文中的 await 是直接 await。
+      return block(core.body);
     case "ReturnStatement":
       return core.value !== null && expression(core.value);
     case "ThrowStatement":

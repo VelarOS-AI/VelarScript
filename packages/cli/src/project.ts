@@ -130,6 +130,8 @@ export interface ProjectResource {
 
 export interface ProjectResult {
   readonly entryPath: string;
+  /** 本次编译中会生成 `@main` 正文的程序与 Worker 入口。 */
+  readonly executionEntries: ReadonlySet<string>;
   readonly sourceRoot: string;
   readonly projectRoot: string;
   readonly publicRoot: string;
@@ -620,6 +622,13 @@ export async function compileProjectEntries(
   const affected = previous
     ? affectedModules(loaded, velarImports, resourceImports, previous, previousModules, changedPaths)
     : new Set(loaded.keys());
+  if (previous) {
+    const currentExecutionEntries = new Set(initialEntries);
+    const previousExecutionEntries = previous.executionEntries ?? new Set([previous.entryPath]);
+    for (const path of new Set([...currentExecutionEntries, ...previousExecutionEntries])) {
+      if (currentExecutionEntries.has(path) !== previousExecutionEntries.has(path)) affected.add(path);
+    }
+  }
   for (const [dependency, importers] of previous?.externalTypeDependencies ?? []) {
     for (const importer of importers) {
       if (!loaded.has(importer) || affected.has(importer)) continue;
@@ -680,6 +689,7 @@ export async function compileProjectEntries(
           extensions: compilerExtensions,
           resourceContents: module.resourceContents,
           sharedRuntimeModules: true,
+          executeMain: initialEntries.includes(module.inputPath),
           ...(options.exportTestFunctions ? { exportFunctions: new Set(module.inspection.moduleInterface.tests.map((item) => item.name)) } : {}),
         }), analysis.reactiveImports ?? new Map());
         const result = module.package === null
@@ -752,6 +762,7 @@ export async function compileProjectEntries(
   }
   return {
     entryPath,
+    executionEntries: new Set(initialEntries),
     sourceRoot,
     projectRoot,
     publicRoot,

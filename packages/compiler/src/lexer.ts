@@ -25,14 +25,22 @@ const bidirectionalControls = new Set([
 ]);
 
 // A logical line may continue onto the next physical line when that line's
-// first token is '.' or '?.' member access (a leading-dot method chain). The
-// previous line must end with a token that can end an expression, so block
-// headers, operators, and empty lines never join accidentally.
+// first token is '.' / '?.' member access or a binary operator. The previous
+// line must end with a token that can end an expression, so block headers,
+// operators, and empty lines never join accidentally.
 const chainContinuationEndKinds = new Set<TokenKind>([
   "identifier", "number", "unitNumber", "string", "fstring",
   "true", "false", "null", "super", "rightParen", "rightBracket", "rightBrace",
-  "extensionToken",
+  "extensionToken", "bang",
 ]);
+
+// Word operators need a source-word boundary; punctuation operators are
+// ordered longest-first so `>>` is not mistaken for `>`, and assignment forms
+// such as `+=` never become expression continuations.
+const leadingBinaryOperatorWords = new Set(["and", "or", "in", "is"]);
+const leadingBinaryOperatorPunctuation = [
+  ">>>", "<<", ">>", "??", "==", "!=", "<=", ">=", "|", "^", "&", "<", ">", "+", "-", "*", "/", "%",
+] as const;
 
 // D89 A1 reads back the primary expression its comment follows. These are the
 // kinds a primary tail is made of outside brackets — names, literals, member
@@ -657,11 +665,14 @@ export class Lexer {
       return;
     }
 
-    // A leading-dot line continues the previous logical line: the newline
-    // tokens that ended it are withdrawn and this line's indentation does not
-    // open or close a block, so '.filter(...)' chains span physical lines.
+    // A leading member step or binary operator continues the previous logical
+    // line: the newline token that ended it is withdrawn and this line's
+    // indentation does not open or close a block. This admits readable chains
+    // and boolean/arithmetic expressions without making every indented line a
+    // continuation.
     const dotWidth = this.leadingDotWidth();
-    if (dotWidth > 0) {
+    const binaryOperator = this.leadingBinaryOperator();
+    if (dotWidth > 0 || binaryOperator !== null) {
       if (this.isChainContinuation(width)) {
         this.tokens.pop();
         return;
@@ -670,11 +681,13 @@ export class Lexer {
       // its own statement — which it cannot be, because no statement begins
       // with a member step. Saying so here is the whole point of tightening
       // the rule: the alternative is the silent reattachment this replaces.
-      this.diagnostics.push(diagnostic(
-        "VEL1004",
-        `A line beginning with '${dotWidth === 2 ? "?." : "."}' continues the line above it, so it must follow that line directly and be indented past the statement it continues`,
-        span(start, this.index + dotWidth),
-      ));
+      if (dotWidth > 0) {
+        this.diagnostics.push(diagnostic(
+          "VEL1004",
+          `A line beginning with '${dotWidth === 2 ? "?." : "."}' continues the line above it, so it must follow that line directly and be indented past the statement it continues`,
+          span(start, this.index + dotWidth),
+        ));
+      }
     }
 
     const current = this.indentStack.at(-1) ?? 0;
@@ -714,8 +727,33 @@ export class Lexer {
     return width > 0 && this.isIdentifierStart(this.peek(width)) ? width : 0;
   }
 
+  /** The binary operator starting this physical line, or null for a statement head. */
+  private leadingBinaryOperator(): string | null {
+    if (this.isIdentifierStart(this.peek())) {
+      let end = this.index + 1;
+      while (this.isIdentifierPart(this.text[end] ?? "\0")) end += 1;
+      const word = this.text.slice(this.index, end);
+      if (leadingBinaryOperatorWords.has(word)) return word;
+      if (word !== "not") return null;
+      while (this.text[end] === " " || this.text[end] === "\t") end += 1;
+      if (!this.text.startsWith("in", end) || this.isIdentifierPart(this.text[end + 2] ?? "\0")) return null;
+      return "not in";
+    }
+
+    for (const operator of leadingBinaryOperatorPunctuation) {
+      if (!this.text.startsWith(operator, this.index)) continue;
+      const following = this.text[this.index + operator.length] ?? "";
+      if ((operator === "+" || operator === "-" || operator === "*" || operator === "/" || operator === "%" || operator === "|" || operator === "^" || operator === "&")
+        && following === "=") return null;
+      if (operator === "*" && following === "*") return null;
+      if (operator === "/" && (following === "/" || following === "*")) return null;
+      return operator;
+    }
+    return null;
+  }
+
   /**
-   * Whether the leading-dot line at `width` joins the line above it. Two
+   * Whether the leading continuation line at `width` joins the line above it. Two
    * conditions, and the file's own contract has always claimed both:
    *
    * - It is the *next* line. The backward walk used to skip an unbounded run of

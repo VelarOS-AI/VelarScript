@@ -50,6 +50,20 @@ activates nothing. The language does not guess what target you are on — see
 and the exact framework brief this template needs; `velar skill <owner>` prints
 each version-locked document.
 
+The generated `src/main.vel` keeps declarations and imports at module scope and
+puts startup in the compiler-owned entry role. Its startup line has this shape:
+
+<!-- velar-preamble
+component App:
+    return <main>Hello</main>
+-->
+```velar fragment
+@main: mount(<App />, "#app")
+```
+
+`@main` may also own an indented body. It runs only when this source is selected
+as an entry; importing the same module does not start it.
+
 ## 3. Run it
 
 ```sh

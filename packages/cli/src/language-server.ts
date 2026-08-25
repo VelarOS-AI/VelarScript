@@ -136,6 +136,17 @@ const keywordDocumentation = new Map<string, string>([
   ["let", "Declares an initialized binding that can be rebound."],
   ["readonly", "Creates a transitive compile-time view over data records and collections without changing runtime identity."],
   ["null", "The only empty value in ordinary VelarScript source; undefined is not exposed."],
+  ["@main", [
+    "Defines the compiler-owned entry region of a module. It is not a decorator, exported function, or runtime name.",
+    "",
+    "```velar",
+    "@main:",
+    "    const application = createApplication()",
+    "    await application.start()",
+    "```",
+    "",
+    "Only a module selected as a program entry executes this region. Importing the same module checks its declarations without running `@main`. A one-statement body may stay on the header line: `@main: run()`.",
+  ].join("\n")],
   ["@dispose", [
     "Defines a class's compiler-owned release contract. It is not a decorator or callable method; `using` runs it on every exit from the owning scope.",
     "",

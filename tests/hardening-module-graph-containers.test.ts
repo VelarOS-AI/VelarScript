@@ -453,6 +453,13 @@ export async def runContainers() -> List<string>:
         waited += 1
     seen.append(f"detached {detached}")
     return seen
+
+// MainBlock.body is checked and participates in dependency discovery even
+// when this module is imported. Its body is deliberately absent at runtime:
+// only the source selected as the program entry executes an @main region.
+@main:
+    const loaded = await import("./dep-main-body.vel")
+    print(f"container {loaded.name}")
 `.trimStart();
 
 const entryModule = `
@@ -460,8 +467,9 @@ const entryModule = `
 
 import {runContainers} from "./containers.vel"
 
-for name in await runContainers():
-    print(f"container {name}")
+@main:
+    for name in await runContainers():
+        print(f"container {name}")
 `.trimStart();
 
 const testModule = `
@@ -502,8 +510,9 @@ test("every container carries its dynamic import through check, run, build, and 
       const slug = source.replace(/^\.\/dep-/u, "").replace(/\.vel$/u, "");
       await writeFile(join(directory, `dep-${slug}.vel`), depModule(slug), "utf8");
     }
+    const omittedRuntimeSources = new Set(["./dep-test-body.vel", "./dep-main-body.vel"]);
     const runtimeSlugs = [...slots.keys()]
-      .filter((source) => source !== "./dep-test-body.vel")
+      .filter((source) => !omittedRuntimeSources.has(source))
       .map((source) => source.replace(/^\.\/dep-/u, "").replace(/\.vel$/u, ""));
     assert.ok(runtimeSlugs.length > 30, `only ${runtimeSlugs.length} containers were spelled`);
 
@@ -535,12 +544,14 @@ test("every container carries its dynamic import through check, run, build, and 
     const ran = spawnSync(process.execPath, [cliPath, "run", directory], { encoding: "utf8" });
     assert.equal(ran.status, 0, ran.stderr);
     assert.deepEqual(runtimeSlugs.filter((slug) => !ran.stdout.includes(`loaded ${slug}`)), [], "containers whose module never loaded under velar run");
+    assert.doesNotMatch(ran.stdout, /loaded main-body/u, "an imported module must not execute its @main body");
     assert.match(ran.stdout, /container detached true/u);
 
     const tested = spawnSync(process.execPath, [cliPath, "test", directory], { encoding: "utf8" });
     assert.equal(tested.status, 0, tested.stderr);
     assert.match(tested.stdout, /1 passed, 0 failed/u);
     assert.deepEqual([...runtimeSlugs, "test-body"].filter((slug) => !tested.stdout.includes(`loaded ${slug}`)), [], "containers whose module never loaded under velar test");
+    assert.doesNotMatch(tested.stdout, /loaded main-body/u, "a test entry must not execute an imported module's @main body");
 
     const output = join(directory, "dist");
     const built = spawnSync(process.execPath, [cliPath, "build", directory, "--out-dir", output], { encoding: "utf8" });

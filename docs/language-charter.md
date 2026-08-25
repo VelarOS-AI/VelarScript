@@ -357,10 +357,10 @@ match type:                         // a header ending in ':' above a block
 `@` has exactly one responsibility everywhere in VelarScript: it qualifies the
 name immediately after it into the compiler-owned namespace of the current
 syntactic context. The name and that context determine the role; `@` never
-does. A class therefore accepts `@dispose:` and `@iterate:`, a component accepts
-`@mounted:` and `@cleanup:`, and Look accepts names such as `@hover` and
-`@before:` under one namespace rule, not separate decorator, lifecycle,
-selector, or protocol meanings for `@`.
+does. The module context therefore accepts `@main:`, a class accepts `@dispose:`
+and `@iterate:`, a component accepts `@mounted:` and `@cleanup:`, and Look
+accepts names such as `@hover` and `@before:` under one namespace rule, not
+separate entry, decorator, lifecycle, selector, or protocol meanings for `@`.
 
 The contract is closed and static:
 
@@ -388,6 +388,39 @@ The contract is closed and static:
 This rule does not apply to `@` characters inside strings, module specifiers,
 comments, or extension-owned embedded foreign source: those are data for their
 own grammar, not VelarScript `@name` syntax.
+
+At module scope, `@main` is the one compiler-owned program-entry role. A module
+may declare it once, as its final top-level region, with either a one-statement
+suite or an indented body:
+
+```velar
+def run():
+    print("ready")
+
+@main: run()
+```
+
+```velar
+class Application:
+    async def start():
+        return null
+
+def createApplication() -> Application:
+    return Application()
+
+@main:
+    const application = createApplication()
+    await application.start()
+```
+
+Only a source selected as a program entry executes this region. Importing the
+same source checks its complete `@main` body but does not run or emit that body.
+Bindings declared inside the region are local to it; it is not a function, has
+no parameters or return value, and cannot be exported or called. When a module
+declares `@main`, its executable module statements belong inside that region;
+imports, values, types, functions, classes, tests, and extension-owned module
+declarations remain outside it. Test modules use named `test "…":` declarations
+and do not also declare a program entry.
 
 The Node extension applies this same rule to HTTP servers. Directly inside a
 `server` declaration, `@get`, `@post`, `@put`, `@patch`, and `@delete` select
@@ -2978,7 +3011,8 @@ file is one instance, so two import spellings that name the same file (a
 casing variant on a case-insensitive filesystem, a path through a link) are
 rejected rather than silently instantiating the module twice.
 
-Initialization follows the ES modules the program compiles to, and the rules
+Initialization outside `@main` follows the ES modules the program compiles to,
+and the rules
 are worth stating because one of them surprises Python readers. Every module
 initializes at most once per program, however many modules import it: a diamond
 does not run its shared dependency twice, and a module reached both statically
@@ -2997,10 +3031,11 @@ print(f"third: {name}")
 ```
 
 The formatter keeps imports where they are written, so a mid-file import is
-legal and its position never changes what runs first. Write imports at the top
-of the file so the reading order matches the running order. A top-level `await`
-suspends only its own module's completion: the modules that import it wait for
-it, and unrelated modules continue to initialize.
+legal and its position never changes what initializes first. Write imports at
+the top of the file so the reading order matches the initialization order. A
+module that owns program startup places its directly awaited work in `@main`;
+that region runs only for the selected entry after its imported dependencies
+have initialized.
 
 Relative `.vel` modules and package exports are supported. Project modules are
 checked as one dependency graph. A function or value may carry the shape of an

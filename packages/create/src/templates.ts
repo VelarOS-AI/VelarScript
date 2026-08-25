@@ -176,7 +176,7 @@ function desktopTemplate(name: string, displayName: string, version: string, for
     ["README.md", `# ${displayName}\n\nA single-project VelarScript Desktop starter backed by the system WebView.\n\n\`\`\`sh\nnpm install\nnpm run dev\nnpm run package\n\`\`\`\n\n\`npm run dev\` previews the renderer. On macOS, \`npm run package\` creates a native \`.app\` using the default VelarScript application icon.\n`],
     ["src/main.vel", `import {App} from "./app.vel"
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `],
     ["src/app.vel", `import {Head} from "velar/web"
 import {border, clamp, color, rgb, spacing} from "velar/look"
@@ -447,7 +447,7 @@ function commonWebFiles(
         deployment: { spaFallback: true },
       },
     })],
-    ["src/main.vel", `import {App} from "./app.vel"\n\nmount(<App />, "#app")\n`],
+    ["src/main.vel", `import {App} from "./app.vel"\n\n@main: mount(<App />, "#app")\n`],
   ];
 }
 

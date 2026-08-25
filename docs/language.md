@@ -353,6 +353,7 @@ example:
 
 | Context | Compiler-owned names | Meaning |
 | --- | --- | --- |
+| Module | `@main:` | The program entry selected by `run`, an application host, or another executable target |
 | Class | `@dispose:`, `@iterate:` | Release and iteration contracts |
 | Node `server` | `@get`, `@post`, `@put`, `@patch`, `@delete`, `@notFound` | Anonymous checked HTTP routes and the final fallback |
 | Web component | `@mounted:`, `@cleanup:` | Component insertion and destruction lifecycle |
@@ -427,7 +428,9 @@ print(read([1, 2, 3], 99))
 ## 11. Modules, and the JavaScript boundary
 
 Export and import by name. A package's public face is a barrel of explicit
-re-exports. A module's top level runs once, on first import.
+re-exports. Declarations initialize when a module is imported; application
+startup belongs to the module's `@main` region and runs only when that module is
+selected as a program entry.
 
 What a program can *compute* needs no import; what reaches *outside* the
 program must be imported. Four namespaces are permanent because they mirror a
@@ -452,7 +455,7 @@ import js {load} from "some-sdk"
 export def payload() -> Payload:
     return Payload.parse(load())
 
-print(f"{Math.max(1, 2)} {Json.stringify({id: "p-1"})}")
+@main: print(f"{Math.max(1, 2)} {Json.stringify({id: "p-1"})}")
 ```
 
 ↳ charter [§12 Modules and JavaScript boundaries](language-charter.md#12-modules-and-javascript-boundaries)
