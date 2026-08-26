@@ -48,6 +48,7 @@ import {
 } from "./embedded-modules.ts";
 import { resourceOutputRelativePath, writeBuildResourcePackageManifests, writeProjectResources } from "./resource-output.ts";
 import { resolveVelarLibraryBuild, writeVelarLibraryArtifact } from "./library-artifact-build.ts";
+import { renderJavaScriptOutput, type JavaScriptBuildMode } from "./javascript-output.ts";
 
 
 interface CommandArguments {
@@ -55,6 +56,39 @@ interface CommandArguments {
   readonly output: string | null;
   readonly outputDirectory: string | null;
   readonly force: boolean;
+  /** 仅 `build` 接受；null 表示读取项目配置。 */
+  readonly mode: JavaScriptBuildMode | null;
+  /** 仅 `build` 接受；null 表示读取独立的 build.sourceMaps 配置。 */
+  readonly sourceMaps: boolean | null;
+}
+
+interface BuildLibraryArguments {
+  readonly input: string | null;
+  readonly mode: JavaScriptBuildMode | null;
+}
+
+// esbuild 转换和文件写入都可并行，但无界 Promise.all 会让大型项目同时保留
+// 全部模块源码、映射和压缩结果。固定四个 worker 在吞吐与峰值内存之间给出
+// 稳定上界；输出路径彼此独立，完成顺序不影响产物。
+const BUILD_OUTPUT_CONCURRENCY = 4;
+
+async function mapBuildOutputs<T>(items: readonly T[], operation: (item: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  let failure: unknown = null;
+  const worker = async (): Promise<void> => {
+    while (failure === null) {
+      const index = next;
+      if (index >= items.length) return;
+      next += 1;
+      try {
+        await operation(items[index]!);
+      } catch (error) {
+        failure = error;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(BUILD_OUTPUT_CONCURRENCY, items.length) }, worker));
+  if (failure !== null) throw failure;
 }
 
 interface FormatArguments {
@@ -365,20 +399,20 @@ async function main(arguments_: readonly string[]): Promise<number> {
   }
 
   if (command === "build-library") {
-    const input = parseSingleOptionalInput(rest);
-    if (input !== null && typeof input === "object") {
-      process.stderr.write(`velar build-library: ${input.error}\n`);
+    const parsed = parseBuildLibraryArguments(rest);
+    if (typeof parsed === "string") {
+      process.stderr.write(`velar build-library: ${parsed}\n`);
       return 2;
     }
     let staging: string | null = null;
     try {
-      const config = await resolveVelarProject(input);
+      const config = await resolveVelarProject(parsed.input);
       const library = await resolveVelarLibraryBuild(config);
-      const checked = await checkResolvedProject(library.project, input ?? library.project.root);
+      const checked = await checkResolvedProject(library.project, parsed.input ?? library.project.root);
       process.stderr.write(formatCheckOutput(checked));
       if (checked.errors.length > 0) return 1;
       staging = await prepareBuildStaging(library.outputRoot, { declared: true, forced: false });
-      await writeVelarLibraryArtifact(library, checked.project, staging);
+      await writeVelarLibraryArtifact(library, checked.project, staging, parsed.mode ?? config.build.mode);
       await replaceOutputDirectory(staging, library.outputRoot);
       staging = null;
       process.stdout.write(`Built Velar library ABI 1 ${library.packageName}@${library.packageVersion} (${library.target}) -> ${library.receiptPath}\n`);
@@ -548,7 +582,14 @@ async function main(arguments_: readonly string[]): Promise<number> {
     return 1;
   }
 
-  const checked = await checkResolvedProject(projectConfig, parsed.input);
+  // `check` 不会写出 JavaScript，生产构建也可能明确关闭映射。把这一事实传到
+  // 编译器入口，避免先完整生成 Source Map，最后才在输出阶段丢弃它。
+  const requestedSourceMaps = command === "check"
+    ? false
+    : command === "package"
+      ? projectConfig.build.sourceMaps
+      : parsed.sourceMaps ?? projectConfig.build.sourceMaps;
+  const checked = await checkResolvedProject(projectConfig, parsed.input, { emitSourceMaps: requestedSourceMaps });
   const project = checked.project;
   process.stderr.write(formatCheckOutput(checked));
   if (checked.errors.length > 0) {
@@ -591,7 +632,13 @@ async function main(arguments_: readonly string[]): Promise<number> {
           buildRequests += 1;
           if (buildRequests > 1) throw new Error("application package host requested more than one framework build");
           const outputDirectory = packageFrameworkOutput(projectConfig.root, requestedOutput);
-          frameworkBuild = writeFrameworkProductionApplication(project, outputDirectory, { forced: false, declared: false });
+          frameworkBuild = writeFrameworkProductionApplication(
+            project,
+            outputDirectory,
+            { forced: false, declared: false },
+            "production",
+            projectConfig.build.sourceMaps,
+          );
           await frameworkBuild;
         },
       });
@@ -607,6 +654,12 @@ async function main(arguments_: readonly string[]): Promise<number> {
     }
   }
 
+  // JavaScript 表达形式和 Source Map 是两个正交选择。命令行只覆盖本次构建，
+  // 项目配置保存稳定默认；两者不能互相推导，否则切到 readable 会意外改变
+  // 发布目录的文件集合。
+  const buildMode = parsed.mode ?? projectConfig.build.mode;
+  const buildSourceMaps = parsed.sourceMaps ?? projectConfig.build.sourceMaps;
+
   if (parsed.output && project.modules.length !== 1) {
     process.stderr.write("velar build: --out is only valid for a single-file build; use --out-dir for module projects\n");
     return 2;
@@ -619,17 +672,17 @@ async function main(arguments_: readonly string[]): Promise<number> {
       await mkdir(dirname(outputPath), { recursive: true });
       const result = project.modules[0]!.result;
       if (needsStandaloneJavaScriptBundle(result)) {
-        const bundled = await bundleStandaloneJavaScript(outputPath, result, project.resources);
-        await writeCompiled(outputPath, result, true, bundled.code, bundled.sourceMap, false);
+        const bundled = await bundleStandaloneJavaScript(outputPath, result, project.resources, "readable", buildSourceMaps);
+        await writeCompiled(outputPath, result, true, bundled.code, bundled.sourceMap, false, buildSourceMaps, buildMode);
       } else {
-        await writeCompiled(outputPath, result, true);
+        await writeCompiled(outputPath, result, true, null, null, true, buildSourceMaps, buildMode);
       }
-      await writeNodeStandardModules(dirname(outputPath), project, true);
+      await writeNodeStandardModules(dirname(outputPath), project, true, buildMode);
     } catch (error) {
       process.stderr.write(`velar build: ${hostErrorMessage(error)}\n`);
       return 1;
     }
-    process.stdout.write(`Built ${displayInput(parsed.input, projectConfig)} -> ${outputPath}\n`);
+    process.stdout.write(`Built ${buildMode} ${displayInput(parsed.input, projectConfig)} -> ${outputPath}\n`);
     return 0;
   }
 
@@ -642,23 +695,23 @@ async function main(arguments_: readonly string[]): Promise<number> {
   const replacement: BuildOutputReplacement = { forced: parsed.force, declared: outputDirectory === projectConfig.outDir };
   if (project.framework) {
     try {
-      await writeFrameworkProductionApplication(project, outputDirectory, replacement);
+      await writeFrameworkProductionApplication(project, outputDirectory, replacement, buildMode, buildSourceMaps);
     } catch (error) {
       process.stderr.write(`velar build: ${hostErrorMessage(error)}\n`);
       return 1;
     }
-    process.stdout.write(`Built production ${project.framework.host.displayName} app -> ${outputDirectory}\n`);
+    process.stdout.write(`Built ${buildMode} ${project.framework.host.displayName} app -> ${outputDirectory}\n`);
     return 0;
   }
   const nodeConfig = nodeApplicationConfig(projectConfig);
   if (nodeConfig) {
     try {
-      await writeNodeProductionApplication(project, outputDirectory, nodeConfig, replacement);
+      await writeNodeProductionApplication(project, outputDirectory, nodeConfig, replacement, buildMode, buildSourceMaps);
     } catch (error) {
       process.stderr.write(`velar build: ${hostErrorMessage(error)}\n`);
       return 1;
     }
-    process.stdout.write(`Built production Node app -> ${outputDirectory}\n`);
+    process.stdout.write(`Built ${buildMode} Node app -> ${outputDirectory}\n`);
     return 0;
   }
   let staging: string;
@@ -673,21 +726,21 @@ async function main(arguments_: readonly string[]): Promise<number> {
       ownerPath: join(staging, module.relativePath.replace(/\.vel$/, ".js")),
       embeddedModules: module.result.embeddedModules,
     })));
-    for (const module of project.modules) {
+    await mapBuildOutputs(project.modules, async (module) => {
       const outputPath = join(staging, module.relativePath.replace(/\.vel$/, ".js"));
       await mkdir(dirname(outputPath), { recursive: true });
-      await writeCompiled(outputPath, module.result, false, rewriteVelarPackageImports(project, module));
-    }
-    await writeProjectResources(project, staging, "build");
+      await writeCompiled(outputPath, module.result, false, rewriteVelarPackageImports(project, module), null, true, buildSourceMaps, buildMode);
+    });
+    await writeProjectResources(project, staging, "build", buildMode);
     await writeBuildResourcePackageManifests(project, staging);
-    await writeNodeStandardModules(staging, project);
+    await writeNodeStandardModules(staging, project, false, buildMode);
     await replaceOutputDirectory(staging, outputDirectory);
   } catch (error) {
     await rm(staging, { recursive: true, force: true });
     process.stderr.write(`velar build: ${hostErrorMessage(error)}\n`);
     return 1;
   }
-  process.stdout.write(`Built ${project.modules.length} module${project.modules.length === 1 ? "" : "s"} -> ${outputDirectory}\n`);
+  process.stdout.write(`Built ${buildMode} ${project.modules.length} module${project.modules.length === 1 ? "" : "s"} -> ${outputDirectory}\n`);
   return 0;
 }
 
@@ -695,6 +748,8 @@ async function writeFrameworkProductionApplication(
   project: ProjectResult,
   outputDirectory: string,
   replacement: BuildOutputReplacement,
+  mode: JavaScriptBuildMode,
+  sourceMaps: boolean,
 ): Promise<void> {
   if (!project.framework) throw new Error("the checked project has no framework host");
   const framework = project.framework;
@@ -706,7 +761,7 @@ async function writeFrameworkProductionApplication(
   const staging = await prepareBuildStaging(outputDirectory, replacement);
   try {
     await copyPublicAssets(project.publicRoot, staging);
-    const production = await buildProductionFramework(project, staging);
+    const production = await buildProductionFramework(project, staging, mode, sourceMaps);
     const artifacts = createFrameworkArtifacts(project, false, {}, {
       entryPath: production.entryPath,
       stylesheetPath: production.stylesheetPath,
@@ -736,6 +791,8 @@ async function writeNodeProductionApplication(
   outputDirectory: string,
   config: VelarNodeConfig,
   replacement: BuildOutputReplacement,
+  mode: JavaScriptBuildMode,
+  sourceMaps: boolean,
 ): Promise<void> {
   const application = nodeApplicationEntry(project, config);
   const entry = application.entry;
@@ -745,28 +802,39 @@ async function writeNodeProductionApplication(
       ownerPath: join(staging, module.relativePath.replace(/\.vel$/u, ".js")),
       embeddedModules: module.result.embeddedModules,
     })));
-    for (const module of project.modules) {
+    await mapBuildOutputs(project.modules, async (module) => {
       const outputPath = join(staging, module.relativePath.replace(/\.vel$/u, ".js"));
       await mkdir(dirname(outputPath), { recursive: true });
-      await writeCompiled(outputPath, module.result, false, rewriteVelarPackageImports(project, module), null, true, config.build.sourceMaps);
-    }
-    await writeProjectResources(project, staging, "build");
+      await writeCompiled(outputPath, module.result, false, rewriteVelarPackageImports(project, module), null, true, sourceMaps, mode);
+    });
+    await writeProjectResources(project, staging, "build", mode);
     await writeBuildResourcePackageManifests(project, staging);
-    await writeNodeStandardModules(staging, project);
+    await writeNodeStandardModules(staging, project, false, mode);
     await copyPublicAssets(project.publicRoot, join(staging, "public"), true);
     if (requiredNodeStandardModules(project).has("velar/server")) {
       await copyConventionalServerConfiguration(project.projectRoot, staging);
     }
     const entryPath = `./${relative(project.sourceRoot, entry.inputPath).replace(/\.vel$/u, ".js").replaceAll("\\", "/")}`;
     const launcher = ".velar-node-entry.mjs";
-    await writeFile(join(staging, launcher), nodeApplicationLauncherSource(entryPath, config, false, application.kind), "utf8");
+    const launcherPath = join(staging, launcher);
+    const launcherOutput = await renderJavaScriptOutput({
+      code: nodeApplicationLauncherSource(entryPath, config, false, application.kind),
+      sourceMap: null,
+      sourceFile: launcherPath,
+      outputFile: launcherPath,
+      mode,
+      sourceMaps: false,
+      target: "node24",
+    });
+    await writeFile(launcherPath, launcherOutput.code, "utf8");
     await writeFile(join(staging, "package.json"), `${JSON.stringify({ name: "velar-node-build", private: true, type: "module" }, null, 2)}\n`, "utf8");
     await writeFile(join(staging, NODE_BUILD_MANIFEST_NAME), `${JSON.stringify({
-      formatVersion: 2,
+      formatVersion: 3,
       kind: "velar-node-build",
+      mode,
       entry: launcher,
       app: config.app,
-      sourceMaps: config.build.sourceMaps,
+      sourceMaps,
     }, null, 2)}\n`, "utf8");
     await replaceOutputDirectory(staging, outputDirectory);
   } catch (error) {
@@ -1000,12 +1068,17 @@ async function replaceOutputDirectory(staging: string, outputDirectory: string):
 
 const VELAR_GENERATED_RUNTIME_PACKAGE_VERSION = 1;
 
-async function writeNodeStandardModules(outputRoot: string, project: ProjectResult, replaceExisting = false): Promise<void> {
+async function writeNodeStandardModules(
+  outputRoot: string,
+  project: ProjectResult,
+  replaceExisting = false,
+  mode: JavaScriptBuildMode = "readable",
+): Promise<void> {
   const used = requiredNodeStandardModules(project);
   const packageRoot = join(outputRoot, "node_modules", "velar");
   if (!replaceExisting) {
     if (used.size === 0) return;
-    await writeNodeStandardModulePackage(packageRoot, used, project);
+    await writeNodeStandardModulePackage(packageRoot, used, project, mode);
     if (used.has("velar/websocket")) await writeWebSocketDependency(dirname(packageRoot));
     if (used.has("velar/server")) await writeServerConfigurationDependency(dirname(packageRoot));
     return;
@@ -1020,7 +1093,7 @@ async function writeNodeStandardModules(outputRoot: string, project: ProjectResu
   await mkdir(dirname(packageRoot), { recursive: true });
   const staging = await mkdtemp(join(dirname(packageRoot), ".velar-runtime-"));
   try {
-    await writeNodeStandardModulePackage(staging, used, project);
+    await writeNodeStandardModulePackage(staging, used, project, mode);
     if (ownership === "generated") await replaceOutputDirectory(staging, packageRoot);
     else await rename(staging, packageRoot);
     if (used.has("velar/websocket")) await writeWebSocketDependency(dirname(packageRoot));
@@ -1050,21 +1123,38 @@ async function assertNodeStandardModuleOutputAvailable(outputRoot: string, proje
   }
 }
 
-async function writeNodeStandardModulePackage(packageRoot: string, used: ReadonlySet<string>, project: ProjectResult): Promise<void> {
+async function writeNodeStandardModulePackage(
+  packageRoot: string,
+  used: ReadonlySet<string>,
+  project: ProjectResult,
+  mode: JavaScriptBuildMode,
+): Promise<void> {
   await mkdir(packageRoot, { recursive: true });
   const exports: Record<string, string> = {};
-  for (const source of [...used].sort()) {
+  const sources = [...used].sort();
+  for (const source of sources) exports[`./${source.slice("velar/".length)}`] = `./${source.slice("velar/".length)}.js`;
+  await mapBuildOutputs(sources, async (source) => {
     const name = source.slice("velar/".length);
     const moduleSource = standardModuleSource(source, project.extensionConfig, project.compilerExtensions);
     if (moduleSource === null) throw new Error(`Unknown VelarScript standard module '${source}'`);
-    exports[`./${name}`] = `./${name}.js`;
-    await writeFile(join(packageRoot, `${name}.js`), moduleSource, "utf8");
-  }
+    const outputPath = join(packageRoot, `${name}.js`);
+    const output = await renderJavaScriptOutput({
+      code: moduleSource,
+      sourceMap: null,
+      sourceFile: `velar/${name}`,
+      outputFile: outputPath,
+      mode,
+      sourceMaps: false,
+      target: "node24",
+    });
+    await writeFile(outputPath, output.code, "utf8");
+  });
   await writeFile(join(packageRoot, "package.json"), `${JSON.stringify({
     name: "velar",
     private: true,
     type: "module",
     velarGeneratedRuntime: VELAR_GENERATED_RUNTIME_PACKAGE_VERSION,
+    velarBuildMode: mode,
     exports,
   }, null, 2)}\n`, "utf8");
 }
@@ -1099,12 +1189,22 @@ async function writeCompiled(
   sourceMapOverride: string | null = null,
   writeEmbedded = true,
   sourceMaps = true,
+  mode: JavaScriptBuildMode = "readable",
 ): Promise<void> {
   const mapPath = `${outputPath}.map`;
   const rawCode = codeOverride ?? result.code ?? "";
-  const code = !sourceMaps || rawCode.includes(`//# sourceMappingURL=${basename(mapPath)}`)
-    ? rawCode
-    : `${rawCode}//# sourceMappingURL=${basename(mapPath)}\n`;
+  const output = await renderJavaScriptOutput({
+    code: rawCode,
+    sourceMap: sourceMapOverride ?? result.sourceMap,
+    sourceFile: result.source.path,
+    outputFile: outputPath,
+    mode,
+    sourceMaps,
+    target: "node24",
+  });
+  const code = !sourceMaps || output.code.includes(`//# sourceMappingURL=${basename(mapPath)}`)
+    ? output.code
+    : `${output.code}//# sourceMappingURL=${basename(mapPath)}\n`;
   if (writeEmbedded) {
     assertUniqueEmbeddedModuleOutputs([{ ownerPath: outputPath, embeddedModules: result.embeddedModules }]);
     for (const module of result.embeddedModules) {
@@ -1112,18 +1212,28 @@ async function writeCompiled(
       await assertEmbeddedModuleOutputWritable(embeddedPath);
     }
   }
-  const writes = [
+  const embeddedWrites = (await Promise.all((writeEmbedded ? result.embeddedModules : []).map(async (module) => {
+    const embeddedPath = embeddedModuleOutputPath(outputPath, module.specifier);
+    const embeddedOutput = await renderJavaScriptOutput({
+      code: module.code,
+      sourceMap: module.sourceMap,
+      sourceFile: `${result.source.path}:${module.specifier}`,
+      outputFile: embeddedPath,
+      mode,
+      sourceMaps,
+      target: "node24",
+    });
+    const embeddedCode = sourceMaps
+      ? embeddedModuleFileContents(embeddedPath, { ...module, code: embeddedOutput.code })
+      : `${embeddedOutput.code}${VELAR_EMBEDDED_MODULE_MARKER}`;
+    return sourceMaps
+      ? [writeFile(embeddedPath, embeddedCode, "utf8"), writeFile(`${embeddedPath}.map`, embeddedOutput.sourceMap, "utf8")]
+      : [writeFile(embeddedPath, embeddedCode, "utf8"), rm(`${embeddedPath}.map`, { force: true })];
+  }))).flat();
+  const writes: Promise<void>[] = [
     writeFile(outputPath, code, "utf8"),
-    ...(sourceMaps ? [writeFile(mapPath, sourceMapOverride ?? result.sourceMap ?? "", "utf8")] : []),
-    ...(writeEmbedded ? result.embeddedModules : []).flatMap((module) => {
-      const embeddedPath = embeddedModuleOutputPath(outputPath, module.specifier);
-      const embeddedCode = sourceMaps
-        ? embeddedModuleFileContents(embeddedPath, module)
-        : `${module.code.endsWith("\n") || module.code.endsWith("\r") ? module.code : `${module.code}\n`}${VELAR_EMBEDDED_MODULE_MARKER}`;
-      return sourceMaps
-        ? [writeFile(embeddedPath, embeddedCode, "utf8"), writeFile(`${embeddedPath}.map`, module.sourceMap, "utf8")]
-        : [writeFile(embeddedPath, embeddedCode, "utf8")];
-    }),
+    ...(sourceMaps ? [writeFile(mapPath, output.sourceMap, "utf8")] : [rm(mapPath, { force: true })]),
+    ...embeddedWrites,
   ];
   if (writeCss) {
     const cssPath = outputPath.replace(/\.js$/u, ".css");
@@ -1195,11 +1305,22 @@ function parseCommandArguments(arguments_: readonly string[], allowForce = false
   let output: string | null = null;
   let outputDirectory: string | null = null;
   let force = false;
+  let mode: JavaScriptBuildMode | null = null;
+  let sourceMaps: boolean | null = null;
 
   for (let index = 0; index < arguments_.length; index += 1) {
     const argument = arguments_[index]!;
     if (allowForce && argument === "--force") {
       force = true;
+    } else if (allowForce && (argument === "--mode" || argument.startsWith("--mode="))) {
+      if (mode !== null) return "--mode may be provided only once";
+      const value = argument === "--mode" ? arguments_[index + 1] : argument.slice("--mode=".length);
+      if (value !== "production" && value !== "readable") return "--mode must be production or readable";
+      mode = value;
+      if (argument === "--mode") index += 1;
+    } else if (allowForce && (argument === "--source-maps" || argument === "--no-source-maps")) {
+      if (sourceMaps !== null) return "--source-maps and --no-source-maps may be provided only once";
+      sourceMaps = argument === "--source-maps";
     } else if (argument === "--out" || argument === "--out-dir") {
       const value = arguments_[index + 1];
       if (!value || value.startsWith("--")) {
@@ -1221,7 +1342,29 @@ function parseCommandArguments(arguments_: readonly string[], allowForce = false
     }
   }
 
-  return { input, output, outputDirectory, force };
+  return { input, output, outputDirectory, force, mode, sourceMaps };
+}
+
+function parseBuildLibraryArguments(arguments_: readonly string[]): BuildLibraryArguments | string {
+  let input: string | null = null;
+  let mode: JavaScriptBuildMode | null = null;
+  for (let index = 0; index < arguments_.length; index += 1) {
+    const argument = arguments_[index]!;
+    if (argument === "--mode" || argument.startsWith("--mode=")) {
+      if (mode !== null) return "--mode may be provided only once";
+      const value = argument === "--mode" ? arguments_[index + 1] : argument.slice("--mode=".length);
+      if (value !== "production" && value !== "readable") return "--mode must be production or readable";
+      mode = value;
+      if (argument === "--mode") index += 1;
+    } else if (argument.startsWith("--")) {
+      return `unknown option '${argument}'`;
+    } else if (input !== null) {
+      return `unexpected extra input '${argument}'`;
+    } else {
+      input = argument;
+    }
+  }
+  return { input, mode };
 }
 
 function parseReproArguments(arguments_: readonly string[]): ReproArguments | string {
@@ -1253,7 +1396,7 @@ function parseReproArguments(arguments_: readonly string[]): ReproArguments | st
 function parsePackageArguments(arguments_: readonly string[]): CommandArguments | string {
   if (arguments_.length > 1) return `unexpected extra input '${arguments_[1]}'`;
   if (arguments_[0]?.startsWith("-")) return `unknown option '${arguments_[0]}'`;
-  return { input: arguments_[0] ?? null, output: null, outputDirectory: null, force: false };
+  return { input: arguments_[0] ?? null, output: null, outputDirectory: null, force: false, mode: null, sourceMaps: null };
 }
 
 function parseDevArguments(arguments_: readonly string[]): DevArguments | string {
@@ -1431,8 +1574,8 @@ function printHelp(output: NodeJS.WritableStream = process.stdout): void {
     "  velar update [package...]",
     "  velar dev [entry.vel | project-directory] [--port <port>]",
     "  velar serve [project-directory]",
-    "  velar build [entry.vel | project-directory] [--out-dir <directory>] [--force]",
-    "  velar build-library [project-directory]",
+    "  velar build [entry.vel | project-directory] [--out-dir <directory>] [--mode <production|readable>] [--source-maps|--no-source-maps] [--force]",
+    "  velar build-library [project-directory] [--mode <production|readable>]",
     "  velar run [entry.vel | project-directory] [--stack] [-- <program-arguments>...]",
     "  velar verify [project-directory | build-directory]",
     "  velar preview [project-directory | build-directory] [--port <port>]",
@@ -1466,8 +1609,14 @@ function printCommandHelp(command: string, output: NodeJS.WritableStream = proce
     update: ["Usage: velar update [package...]", "Updates all or selected direct dependencies within package.json ranges through npm."],
     dev: ["Usage: velar dev [entry.vel | project-directory] [--port <1-65535>]", "Watches a framework app or last-good Node server factory; --port applies only to Web and Desktop development servers."],
     serve: ["Usage: velar serve [project-directory]", "Checks and runs a Node server factory with production runtime behavior; host and port belong to velar/server configuration."],
-    build: ["Usage: velar build [entry.vel | project-directory] [--out-dir <directory>] [--force]", "       velar build <single.vel> --out <file.js>", "Builds isolated Web/Desktop output, a standalone Node application, or JavaScript modules.", "--out-dir refuses a directory that is not empty and was not produced by a previous build; --force replaces one anyway."],
-    "build-library": ["Usage: velar build-library [project-directory]", "Checks a Core or Node source library, then writes its frozen ABI-1 JavaScript, source map, portable type interface, and integrity receipt to the package-declared artifact directory."],
+    build: [
+      "Usage: velar build [entry.vel | project-directory] [--out-dir <directory>] [--mode <production|readable>] [--source-maps|--no-source-maps] [--force]",
+      "       velar build <single.vel> --out <file.js> [--mode <production|readable>] [--source-maps|--no-source-maps]",
+      "Builds isolated Web/Desktop output, a standalone Node application, or JavaScript modules.",
+      "production is the default and emits compressed deployable JavaScript; readable preserves structured generated JavaScript for inspection and handover.",
+      "--out-dir refuses a directory that is not empty and was not produced by a previous build; --force replaces one anyway.",
+    ],
+    "build-library": ["Usage: velar build-library [project-directory] [--mode <production|readable>]", "Checks a Core or Node source library, then writes its frozen ABI-1 JavaScript, source map, portable type interface, and integrity receipt; production JavaScript is the default."],
     package: ["Usage: velar package [project-directory]", "Packages an application through its target-owned native packaging host."],
     run: ["Usage: velar run [entry.vel | project-directory] [--stack] [-- <program-arguments>...]", "Compiles the resolved Core project and executes its entry module once on Node.js; arguments after '--' reach the program.", "--stack prints the full Node.js trace behind an uncaught program error instead of the VelarScript frames."],
     verify: ["Usage: velar verify [project-directory | build-directory]", "Verifies the exact production manifest, inventory, sizes, hashes, and relationships."],

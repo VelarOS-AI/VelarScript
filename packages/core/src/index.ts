@@ -787,6 +787,23 @@ export function range(start, stop = null, step = 1) {
 function __velarCountedRange(start, stop = null, step = 1) {
   if (stop === null) { stop = start; start = 0; }
   if (!__velarCollectionsCall(__velarCollectionsNumberIsFinite, __velarCollectionsNativeNumber, [start]) || !__velarCollectionsCall(__velarCollectionsNumberIsFinite, __velarCollectionsNativeNumber, [stop]) || !__velarCollectionsCall(__velarCollectionsNumberIsFinite, __velarCollectionsNativeNumber, [step]) || step === 0) throw new __velarCollectionsNativeRangeError("range requires finite numbers and a non-zero step");
+  // World and binary workloads use many small integer ranges. Their iteration
+  // count is exact arithmetic, so validate the million-item bound in constant
+  // time instead of replaying the complete counter before the emitted loop.
+  // Floating-point and very large ranges retain the step-by-step path below,
+  // including its exact non-advancing-number behaviour.
+  if (__velarCollectionsCall(__velarCollectionsNumberIsSafeInteger, __velarCollectionsNativeNumber, [start])
+    && __velarCollectionsCall(__velarCollectionsNumberIsSafeInteger, __velarCollectionsNativeNumber, [stop])
+    && __velarCollectionsCall(__velarCollectionsNumberIsSafeInteger, __velarCollectionsNativeNumber, [step])) {
+    const distance = step > 0 ? stop - start : start - stop;
+    if (distance <= 0) return [start, stop, step];
+    if (__velarCollectionsCall(__velarCollectionsNumberIsSafeInteger, __velarCollectionsNativeNumber, [distance])) {
+      const magnitude = step > 0 ? step : -step;
+      const count = __velarCollectionsCall(__velarCollectionsMathFloor, __velarCollectionsNativeMath, [(distance - 1) / magnitude]) + 1;
+      if (count > __velarMaxListItems) throw new __velarCollectionsNativeRangeError("range cannot produce more than " + __velarMaxListItems + " items");
+      return [start, stop, step];
+    }
+  }
   let count = 0;
   if (step > 0) for (let value = start; value < stop;) {
     if (count >= __velarMaxListItems) throw new __velarCollectionsNativeRangeError("range cannot produce more than " + __velarMaxListItems + " items");
@@ -799,7 +816,11 @@ function __velarCountedRange(start, stop = null, step = 1) {
     if (next === value) throw new __velarCollectionsNativeRangeError("range step is too small to advance at this magnitude");
     value = next;
   }
-  return __velarCollectionsFreeze([start, stop, step]);
+  // The tuple is a compiler-private handoff consumed immediately by generated
+  // scalar locals. It never reaches VelarScript code, so freezing it only adds
+  // allocation work to every nested counter loop without strengthening a
+  // source-visible boundary.
+  return [start, stop, step];
 }
 __velarCollectionsCall(__velarCollectionsObjectDefineProperty, __velarCollectionsNativeObject, [range, "__velarCounted", {
   value: __velarCountedRange,
@@ -1385,12 +1406,15 @@ const __velarBinaryNativeUint32Array = globalThis.Uint32Array;
 const __velarBinaryNativeFloat32Array = globalThis.Float32Array;
 const __velarBinaryNativeDataView = globalThis.DataView;
 const __velarBinaryNativeWeakMap = globalThis.WeakMap;
+const __velarBinaryNativeFunction = globalThis.Function;
 const __velarBinaryNativeTypeError = globalThis.TypeError;
 const __velarBinaryNativeRangeError = globalThis.RangeError;
 const __velarBinaryGetOwnPropertyDescriptor = __velarBinaryNativeObject.getOwnPropertyDescriptor;
 const __velarBinaryGetPrototypeOf = __velarBinaryNativeObject.getPrototypeOf;
 const __velarBinaryFreeze = __velarBinaryNativeObject.freeze;
 const __velarBinaryApply = __velarBinaryGetOwnPropertyDescriptor(globalThis.Reflect, "apply")?.value;
+const __velarBinaryFunctionPrototype = __velarBinaryGetOwnPropertyDescriptor(__velarBinaryNativeFunction, "prototype")?.value;
+const __velarBinaryBind = __velarBinaryGetOwnPropertyDescriptor(__velarBinaryFunctionPrototype, "bind")?.value;
 const __velarBinaryNumberIsInteger = __velarBinaryGetOwnPropertyDescriptor(__velarBinaryNativeNumber, "isInteger")?.value;
 const __velarBinaryNumberIsSafeInteger = __velarBinaryGetOwnPropertyDescriptor(__velarBinaryNativeNumber, "isSafeInteger")?.value;
 const __velarBinaryNumberIsFinite = __velarBinaryGetOwnPropertyDescriptor(__velarBinaryNativeNumber, "isFinite")?.value;
@@ -1398,11 +1422,15 @@ const __velarBinaryTypedArrayPrototype = __velarBinaryGetPrototypeOf(__velarBina
 const __velarBinaryTypedArrayTag = __velarBinaryGetOwnPropertyDescriptor(__velarBinaryTypedArrayPrototype, globalThis.Symbol.toStringTag)?.get;
 const __velarBinaryTypedArrayLength = __velarBinaryGetOwnPropertyDescriptor(__velarBinaryTypedArrayPrototype, "length")?.get;
 const __velarBinaryTypedArraySet = __velarBinaryGetOwnPropertyDescriptor(__velarBinaryTypedArrayPrototype, "set")?.value;
-if (typeof __velarBinaryApply !== "function" || typeof __velarBinaryNumberIsInteger !== "function"
+const __velarBinaryWeakMapPrototype = __velarBinaryGetOwnPropertyDescriptor(__velarBinaryNativeWeakMap, "prototype")?.value;
+const __velarBinaryWeakMapGet = __velarBinaryGetOwnPropertyDescriptor(__velarBinaryWeakMapPrototype, "get")?.value;
+const __velarBinaryWeakMapSet = __velarBinaryGetOwnPropertyDescriptor(__velarBinaryWeakMapPrototype, "set")?.value;
+if (typeof __velarBinaryApply !== "function" || typeof __velarBinaryBind !== "function" || typeof __velarBinaryNumberIsInteger !== "function"
   || typeof __velarBinaryNumberIsSafeInteger !== "function" || typeof __velarBinaryTypedArrayTag !== "function"
   || typeof __velarBinaryNumberIsFinite !== "function" || typeof __velarBinaryTypedArrayLength !== "function"
   || typeof __velarBinaryTypedArraySet !== "function" || typeof __velarBinaryNativeArray !== "function" || typeof __velarBinaryNativeDataView !== "function"
-  || typeof __velarBinaryNativeWeakMap !== "function") {
+  || typeof __velarBinaryNativeWeakMap !== "function" || typeof __velarBinaryWeakMapGet !== "function"
+  || typeof __velarBinaryWeakMapSet !== "function") {
   throw new __velarBinaryNativeTypeError("The JavaScript typed-array runtime is unavailable");
 }
 function __velarBinaryCall(operation, receiver, arguments_) { return __velarBinaryApply(operation, receiver, arguments_); }
@@ -1425,13 +1453,33 @@ function __velarBinaryCheckedIndex(value, index, expected, name) {
   }
   return index;
 }
+// 编译器和标准库创建的定长缓冲区已经在入口处完成了品牌与容量校验。把长度
+// 记录在私有 WeakMap 中，热路径只需一次不可伪造的身份查询和整数边界判断；
+// 来自宿主、尚未经过 parse 的值仍回退到完整品牌检查，安全边界不被放宽。
+const __velarBinaryTrustedLengths = new __velarBinaryNativeWeakMap();
+// 预绑定捕获的 WeakMap 方法，热路径可直接调用原生 bound function，不必为每次
+// 索引重新构造 Reflect.apply 的参数数组。绑定目标和接收者都不再经过可变原型。
+const __velarBinaryTrustedLengthGet = __velarBinaryCall(__velarBinaryBind, __velarBinaryWeakMapGet, [__velarBinaryTrustedLengths]);
+const __velarBinaryTrustedLengthSet = __velarBinaryCall(__velarBinaryBind, __velarBinaryWeakMapSet, [__velarBinaryTrustedLengths]);
+function __velarBinaryTrust(value, length) {
+  __velarBinaryTrustedLengthSet(value, length);
+  return value;
+}
+function __velarBinaryTrustedIndex(value, index, expected, name) {
+  const trustedLength = __velarBinaryTrustedLengthGet(value);
+  if (trustedLength === undefined) return __velarBinaryCheckedIndex(value, index, expected, name);
+  if (!__velarBinaryNumberIsInteger(index) || index < 0 || index >= trustedLength) {
+    throw new __VelarIndexError(name + " index must be an integer from 0 up to but excluding size");
+  }
+  return index;
+}
 function __velarBinarySnapshot(value, expected, Constructor, name) {
   const length = __velarBinaryLength(value, expected, name);
   const bytes = expected === "Uint8Array" ? 1 : expected === "Uint16Array" ? 2 : 4;
   __velarBinarySizeLimit(length, bytes, name);
   const output = new Constructor(length);
   __velarBinaryCall(__velarBinaryTypedArraySet, output, [value]);
-  return output;
+  return __velarBinaryTrust(output, length);
 }
 function __velarBinaryWithinLimit(value, expected, bytes) {
   return __velarBinaryKind(value) === expected
@@ -1452,7 +1500,10 @@ function __velarBinarySizeLimit(size, bytes, name) {
   }
   return size;
 }
-function __velarBinaryAllocate(Constructor, bytes, size, name) { return new Constructor(__velarBinarySizeLimit(size, bytes, name)); }
+function __velarBinaryAllocate(Constructor, bytes, size, name) {
+  const length = __velarBinarySizeLimit(size, bytes, name);
+  return __velarBinaryTrust(new Constructor(length), length);
+}
 function __velarBinaryValue(spec, value) {
   const valid = typeof value === "number" && __velarBinaryCall(__velarBinaryNumberIsFinite, __velarBinaryNativeNumber, [value])
     && value >= spec.minimum && value <= spec.maximum
@@ -1474,21 +1525,21 @@ export const ByteOrder = __velarRegisterRuntimeType(__velarBinaryFreeze({
 export const Bytes = __velarRegisterRuntimeType(__velarBinaryFreeze({
   is(value) { return __velarBinaryWithinLimit(value, "Uint8Array", 1); },
   parse(value) { return __velarBinarySnapshot(value, "Uint8Array", __velarBinaryNativeUint8Array, "Bytes.parse"); },
-  __velarSize(value) { return __velarBinarySize(value); },
-  __velarIndex(value, index) { return __velarBytesIndex(value, index); },
-  __velarSetIndex(value, index, next) { return __velarBytesSetIndex(value, index, next); },
-  __velarUInt8Index(value, index) { return __velarUInt8Index(value, index); },
-  __velarUInt8SetIndex(value, index, next) { return __velarUInt8SetIndex(value, index, next); },
-  __velarUInt16Index(value, index) { return __velarUInt16Index(value, index); },
-  __velarUInt16SetIndex(value, index, next) { return __velarUInt16SetIndex(value, index, next); },
-  __velarUInt32Index(value, index) { return __velarUInt32Index(value, index); },
-  __velarUInt32SetIndex(value, index, next) { return __velarUInt32SetIndex(value, index, next); },
-  __velarFloat32Index(value, index) { return __velarFloat32Index(value, index); },
-  __velarFloat32SetIndex(value, index, next) { return __velarFloat32SetIndex(value, index, next); },
-  __velarBufferCopy(value) { return __velarBufferCopy(value); },
-  __velarBufferSlice(value, start, end) { return __velarBufferSlice(value, start, end); },
-  __velarBufferToBytes(value, order) { return __velarBufferToBytes(value, order); },
-  __velarBufferValues(value) { return __velarBufferValues(value); },
+  __velarSize: __velarBinarySize,
+  __velarIndex: __velarBytesIndex,
+  __velarSetIndex: __velarBytesSetIndex,
+  __velarUInt8Index,
+  __velarUInt8SetIndex,
+  __velarUInt16Index,
+  __velarUInt16SetIndex,
+  __velarUInt32Index,
+  __velarUInt32SetIndex,
+  __velarFloat32Index,
+  __velarFloat32SetIndex,
+  __velarBufferCopy,
+  __velarBufferSlice,
+  __velarBufferToBytes,
+  __velarBufferValues,
 }));
 export const UInt8Buffer = __velarRegisterRuntimeType(__velarBinaryFreeze({
   is(value) { return __velarBinaryWithinLimit(value, "Uint8Array", 1); },
@@ -1523,7 +1574,7 @@ function __velarBinarySize(value) {
   return __velarBinaryCall(__velarBinaryTypedArrayLength, value, []);
 }
 function __velarBytesIndex(value, index) {
-  return value[__velarBinaryCheckedIndex(value, index, "Uint8Array", "Bytes")];
+  return value[__velarBinaryTrustedIndex(value, index, "Uint8Array", "Bytes")];
 }
 function __velarBytesSetIndex() {
   throw new __velarBinaryNativeTypeError("Bytes is a read-only binary snapshot");
@@ -1551,29 +1602,29 @@ function __velarBinaryFloat32Snapshot(value, name) {
   __velarBinarySizeLimit(length, 4, name);
   const output = new __velarBinaryNativeFloat32Array(length);
   for (let index = 0; index < length; index += 1) output[index] = __velarBinaryFloat32Value(value[index]);
-  return output;
+  return __velarBinaryTrust(output, length);
 }
-function __velarUInt8Index(value, index) { return value[__velarBinaryCheckedIndex(value, index, "Uint8Array", "UInt8Buffer")]; }
+function __velarUInt8Index(value, index) { return value[__velarBinaryTrustedIndex(value, index, "Uint8Array", "UInt8Buffer")]; }
 function __velarUInt8SetIndex(value, index, next) {
-  index = __velarBinaryCheckedIndex(value, index, "Uint8Array", "UInt8Buffer");
+  index = __velarBinaryTrustedIndex(value, index, "Uint8Array", "UInt8Buffer");
   value[index] = __velarBinaryIntegerValue(next, 0, 255, "UInt8Buffer");
   return next;
 }
-function __velarUInt16Index(value, index) { return value[__velarBinaryCheckedIndex(value, index, "Uint16Array", "UInt16Buffer")]; }
+function __velarUInt16Index(value, index) { return value[__velarBinaryTrustedIndex(value, index, "Uint16Array", "UInt16Buffer")]; }
 function __velarUInt16SetIndex(value, index, next) {
-  index = __velarBinaryCheckedIndex(value, index, "Uint16Array", "UInt16Buffer");
+  index = __velarBinaryTrustedIndex(value, index, "Uint16Array", "UInt16Buffer");
   value[index] = __velarBinaryIntegerValue(next, 0, 65535, "UInt16Buffer");
   return next;
 }
-function __velarUInt32Index(value, index) { return value[__velarBinaryCheckedIndex(value, index, "Uint32Array", "UInt32Buffer")]; }
+function __velarUInt32Index(value, index) { return value[__velarBinaryTrustedIndex(value, index, "Uint32Array", "UInt32Buffer")]; }
 function __velarUInt32SetIndex(value, index, next) {
-  index = __velarBinaryCheckedIndex(value, index, "Uint32Array", "UInt32Buffer");
+  index = __velarBinaryTrustedIndex(value, index, "Uint32Array", "UInt32Buffer");
   value[index] = __velarBinaryIntegerValue(next, 0, 4294967295, "UInt32Buffer");
   return next;
 }
-function __velarFloat32Index(value, index) { return value[__velarBinaryCheckedIndex(value, index, "Float32Array", "Float32Buffer")]; }
+function __velarFloat32Index(value, index) { return value[__velarBinaryTrustedIndex(value, index, "Float32Array", "Float32Buffer")]; }
 function __velarFloat32SetIndex(value, index, next) {
-  index = __velarBinaryCheckedIndex(value, index, "Float32Array", "Float32Buffer");
+  index = __velarBinaryTrustedIndex(value, index, "Float32Array", "Float32Buffer");
   value[index] = __velarBinaryFloat32Value(next);
   return next;
 }
@@ -1594,7 +1645,7 @@ function __velarBufferSlice(value, start = 0, end = __velarBinarySize(value)) {
   }
   const output = new spec.Constructor(end - start);
   for (let index = start; index < end; index += 1) output[index - start] = value[index];
-  return output;
+  return __velarBinaryTrust(output, end - start);
 }
 function __velarBufferToBytes(value, order = null) {
   const spec = __velarBinarySpec(value);
@@ -1609,7 +1660,7 @@ function __velarBufferToBytes(value, order = null) {
   for (let index = 0; index < length; index += 1) {
     __velarBinaryCall(setter, view, [index * spec.bytes, value[index], order === "little"]);
   }
-  return output;
+  return __velarBinaryTrust(output, length * spec.bytes);
 }
 function __velarBufferFromBytes(snapshot, order, Constructor, bytes, name, operation, validate = null) {
   const length = __velarBinaryLength(snapshot, "Uint8Array", name);
@@ -1628,27 +1679,27 @@ function __velarBufferFromBytes(snapshot, order, Constructor, bytes, name, opera
 }
 const __velarBinaryBuilders = new __velarBinaryNativeWeakMap();
 const __velarBinaryBuilderPrototype = __velarBinaryFreeze({
-  get size() { const state = __velarBinaryBuilders.get(this); if (!state) throw new __velarBinaryNativeTypeError("Builder size requires a binary builder"); return state.size; },
-  get maxElements() { const state = __velarBinaryBuilders.get(this); if (!state) throw new __velarBinaryNativeTypeError("Builder maxElements requires a binary builder"); return state.maximum; },
+  get size() { const state = __velarBinaryCall(__velarBinaryWeakMapGet, __velarBinaryBuilders, [this]); if (!state) throw new __velarBinaryNativeTypeError("Builder size requires a binary builder"); return state.size; },
+  get maxElements() { const state = __velarBinaryCall(__velarBinaryWeakMapGet, __velarBinaryBuilders, [this]); if (!state) throw new __velarBinaryNativeTypeError("Builder maxElements requires a binary builder"); return state.maximum; },
   push(value) {
-    const state = __velarBinaryBuilders.get(this); if (!state || state.finished) throw new __velarBinaryNativeTypeError("Binary builder is finished");
+    const state = __velarBinaryCall(__velarBinaryWeakMapGet, __velarBinaryBuilders, [this]); if (!state || state.finished) throw new __velarBinaryNativeTypeError("Binary builder is finished");
     if (state.size >= state.maximum) throw new __velarBinaryNativeRangeError(state.spec.name + " builder exceeds maxElements");
     if (state.size === state.storage.length) { let capacity = state.storage.length * 2; if (capacity < 8) capacity = 8; if (capacity > state.maximum) capacity = state.maximum; const storage = new state.spec.Constructor(capacity); __velarBinaryCall(__velarBinaryTypedArraySet, storage, [state.storage]); state.storage = storage; }
     state.storage[state.size] = __velarBinaryValue(state.spec, value); state.size += 1; return null;
   },
   finish() {
-    const state = __velarBinaryBuilders.get(this); if (!state || state.finished) throw new __velarBinaryNativeTypeError("Binary builder is finished");
-    const output = new state.spec.Constructor(state.size); for (let index = 0; index < state.size; index += 1) output[index] = state.storage[index]; state.finished = true; state.storage = null; return output;
+    const state = __velarBinaryCall(__velarBinaryWeakMapGet, __velarBinaryBuilders, [this]); if (!state || state.finished) throw new __velarBinaryNativeTypeError("Binary builder is finished");
+    const output = new state.spec.Constructor(state.size); for (let index = 0; index < state.size; index += 1) output[index] = state.storage[index]; state.finished = true; state.storage = null; return __velarBinaryTrust(output, state.size);
   },
 });
 function __velarBinaryBuilder(maximum, Constructor, bytes, name) {
   maximum = __velarBinarySizeLimit(maximum, bytes, name);
   const value = __velarBinaryFreeze(__velarBinaryNativeObject.create(__velarBinaryBuilderPrototype));
   const empty = new Constructor(maximum < 256 ? maximum : 256);
-  __velarBinaryBuilders.set(value, { maximum, size: 0, storage: empty, spec: __velarBinarySpec(empty), finished: false });
+  __velarBinaryCall(__velarBinaryWeakMapSet, __velarBinaryBuilders, [value, { maximum, size: 0, storage: empty, spec: __velarBinarySpec(empty), finished: false }]);
   return value;
 }
-function __velarBinaryBuilderType(name, Constructor) { return __velarRegisterRuntimeType(__velarBinaryFreeze({ is(value) { const state = __velarBinaryBuilders.get(value); return !!state && state.spec.Constructor === Constructor && !state.finished; }, parse(value) { if (!this.is(value)) throw new __velarBinaryNativeTypeError("Value does not match " + name); return value; } })); }
+function __velarBinaryBuilderType(name, Constructor) { return __velarRegisterRuntimeType(__velarBinaryFreeze({ is(value) { const state = __velarBinaryCall(__velarBinaryWeakMapGet, __velarBinaryBuilders, [value]); return !!state && state.spec.Constructor === Constructor && !state.finished; }, parse(value) { if (!this.is(value)) throw new __velarBinaryNativeTypeError("Value does not match " + name); return value; } })); }
 export const UInt32Builder = __velarBinaryBuilderType("UInt32Builder", __velarBinaryNativeUint32Array);
 export const Float32Builder = __velarBinaryBuilderType("Float32Builder", __velarBinaryNativeFloat32Array);
 export function uint32Builder(maxElements) { return __velarBinaryBuilder(maxElements, __velarBinaryNativeUint32Array, 4, "uint32Builder"); }

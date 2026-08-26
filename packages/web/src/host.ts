@@ -190,9 +190,6 @@ export const velarFrameworkHost: FrameworkHostExtension = Object.freeze({
   base(config: unknown) {
     return webConfig(config).base;
   },
-  sourceMaps(config: unknown) {
-    return webConfig(config).build.sourceMaps;
-  },
   prepareStyles(_config: unknown, styles: string) {
     return [WEB_STRUCTURAL_STYLES, styles].filter(Boolean).join("\n\n") + "\n";
   },

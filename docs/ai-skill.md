@@ -69,7 +69,7 @@ and algorithms come from project-owned modules or dependencies. A direct
 A VelarScript project is a directory containing a `velar.json` manifest. Let
 the toolchain write it — `velar create my-lib --template library` scaffolds a
 Core library whose release keeps `.vel` source plus a frozen ABI-1 JavaScript
-artifact; `velar build-library` regenerates its JS, source map, portable type
+artifact; `velar build-library` regenerates its JS, ABI-owned source map, portable type
 interface, and hash receipt. Later toolchains load that interface and JS before
 considering source fallback. Other templates select their own framework brief. Each writes
 `velar.json`, a `package.json` whose scripts are the gates, a `src/` tree, a
@@ -133,7 +133,7 @@ well, but it is a guarantee rather than a trap.
 | `value is null` | `value == null` / `value != null` — `is` tests runtime types, `null` is a value. |
 | `switch`, or an `if`/`else if` ladder over an enum | `match` with `case _:` as the only fallback. |
 | Renaming a binding away from `type`, `json`, `from`, `match`, or `as` | Don't. Declaration words are contextual: each declares only in its own shape, so `const {type, from} = event` is ordinary code. `enum` and `case` are the exceptions — `enum` is a real VelarScript keyword and `case` is reserved by JavaScript — so neither can be a binding name; both stay fine as record fields, member names, and `match` branches. |
-| Treating `@` as a decorator, call, value, or user extension point | `@` has one meaning: `@name` qualifies the name into the closed compiler-owned namespace of the current context. Core or the active syntax-owning compiler extension owns the vocabulary; source cannot declare, import, alias, pass, or construct an `@name`. The module entry `@main:` and class contracts `@dispose:` and `@iterate:` follow this one rule. |
+| Treating `@` as a decorator, call, value, or user extension point | `@` is the annotation introducer and `@name` is a context annotation: it marks the following declaration or structural entry with a compiler-owned compile-time role selected by the current syntax context. The vocabulary is closed; source cannot declare, import, alias, pass, or construct a context annotation. `@main:`, `@dispose:`, and `@iterate:` follow this one rule. |
 | Two statements on one line | One statement per line; there are no semicolons. As in Python, an ordinary executable suite may keep its one non-block statement after the colon, as in `def stop(): return`, `if condition: action()`, or `case pattern: action()`. Multiple statements, nested blocks, and structural member or branch lists use indentation. Formatting preserves the author's single-line or indented choice. A line starting with `.` or `?.` continues the previous line, so method chains format normally. |
 | `count++` | `count += 1` |
 | `call(name: value)` named argument | `call(name=value)` |
@@ -152,6 +152,7 @@ well, but it is a guarantee rather than a trap.
 | Calling an async function and moving on | A dropped Promise is a compile error. `await task()` to wait; `async task()` to run it detached. |
 | `flag or name ?? fallback` | Parenthesize — `??` never shares an unparenthesized chain with `and`/`or`. |
 | `map[key]` reads | `map.get(key)` returns `T?`. On Lists, `[index]` throws on a bug; `.get(index)` returns `null` when absence is an expected answer. |
+| Repeated `Map.get` + null check to build buckets | `map.getOrSet(key, fallback)` inserts only when absent and returns `V` directly. Use it for grouping and caches; collection-valued flow narrowing deliberately deep-checks each relied-on read. |
 | `[...text]` or `list(text)` for characters | `text.split("")` — the empty separator splits per Unicode code point. |
 | `x !== x` or `Number.isNaN(x)` | Number predicates are members: `x.isNaN()`, `x.isFinite()`, `x.isInteger()`. `NaN == NaN` is `true` — equality is SameValueZero. |
 | `Math.min(a, b)` or `values.sorted()` where a NaN may be present | A NaN may be held and tested, and one policy governs the rest: `Math.min`, `Math.max`, `Math.clamp`, `sorted()`, `sorted(by=)`, `min()`, `max()`, `sum()`, and the ordering a `Comparable`-bounded type parameter performs all raise instead of answering. The bare `<`, `<=`, `>`, and `>=` on a plain `number` are the one exception and keep IEEE behavior, so every comparison against a NaN is `false` and `if a < b:` reports nothing. Drop it first — `values.filter(v => not v.isNaN())`. |
@@ -275,7 +276,7 @@ class Session:
 const session = Session("session-1")
 ```
 
-`@name` qualifies a compiler-owned contextual name and can never collide with yours.
+`@name` is a context annotation with a compiler-owned role and can never collide with yours.
 `@dispose:` is the release contract — never called directly — that
 `using name = expression` runs on every exit from the owning scope (block end,
 `return`, `break`, `continue`, throw), in reverse declaration order. A derived
@@ -532,8 +533,9 @@ data and assign the result on the Vel side.
    declared shape, or narrow with `value is string` — before the value touches
    typed code.
 3. **A suspected compiler defect blocking you** — run `velar repro` (below),
-   then take the final exit: `velar build` output is readable, source-mapped
-   JavaScript that runs without the toolchain.
+   then take the final exit: `velar build --mode readable --source-maps` emits structured,
+   source-mapped JavaScript that runs without the toolchain. Ordinary
+   `velar build` defaults to optimized production JavaScript.
 
 The full decision tree, including the honest limits of each hatch, is
 [docs/escape-hatches.md](https://github.com/VelarOS-AI/VelarScript/blob/main/docs/escape-hatches.md).

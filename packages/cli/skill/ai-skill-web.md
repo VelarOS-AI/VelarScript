@@ -23,10 +23,11 @@ modules, and the `web` manifest key. Without that extension these are not Core
 syntax. Web visual builders are named imports from `velar/look`; there is no
 `Look.` namespace.
 
-`@name` keeps the same language-wide role: it qualifies a compiler-owned name
-in the current context. Components own `@mounted:` and `@cleanup:`; Look owns
-conditions such as `@hover` and `@before`. They are not decorators, calls, or
-values, and user code cannot declare new `@` names.
+`@` remains the language-wide annotation introducer, and `@name` is a context
+annotation with a compiler-owned compile-time role. Components own `@mounted:`
+and `@cleanup:`; Look owns conditions such as `@hover` and `@before`. They are
+not decorators, calls, or values, and user code cannot declare new context
+annotations.
 
 The toolchain writes `dist/index.html`; do not author it. `web.title` and
 `web.icon` supply document metadata, `public/` is copied through, and other

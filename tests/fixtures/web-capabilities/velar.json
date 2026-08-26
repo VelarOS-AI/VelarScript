@@ -3,6 +3,9 @@
   "entry": "src/main.vel",
   "outDir": "dist",
   "publicDir": "public",
+  "build": {
+    "sourceMaps": true
+  },
   "extensions": ["@velarscript/web"],
   "web": {
     "title": "VelarScript Web capabilities",
@@ -15,9 +18,6 @@
       "features": {
         "recovery": true
       }
-    },
-    "build": {
-      "sourceMaps": true
     },
     "security": {
       "contentSecurityPolicy": true,

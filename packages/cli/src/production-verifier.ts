@@ -21,8 +21,11 @@ export async function verifyProductionBuild(input: string | null, cwd = process.
   const manifestPath = join(directory, PRODUCTION_MANIFEST_NAME);
   const actualFiles = await productionFiles(directory);
   const manifest = await readJson(manifestPath, "production build manifest") as ProductionBuildManifest;
-  if (manifest?.formatVersion !== 3 || manifest?.kind !== "velar-framework-build") {
+  if (manifest?.formatVersion !== 4 || manifest?.kind !== "velar-framework-build") {
     throw new Error(`${manifestPath} has an unsupported production build format`);
+  }
+  if (manifest.mode !== "production" && manifest.mode !== "readable") {
+    throw new Error(`${manifestPath} has an invalid JavaScript build mode`);
   }
   if (manifest.compiler?.name !== "velar" || typeof manifest.compiler.version !== "string" || !manifest.compiler.version) {
     throw new Error(`${manifestPath} has invalid compiler identity`);

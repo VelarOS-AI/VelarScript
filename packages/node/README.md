@@ -41,10 +41,10 @@ export server app:
 {
   "formatVersion": 2,
   "entry": "src/main.vel",
+  "build": {"mode": "production", "sourceMaps": false},
   "extensions": ["@velarscript/node"],
   "node": {
-    "app": "start",
-    "build": {"sourceMaps": false}
+    "app": "start"
   }
 }
 ```
@@ -83,8 +83,8 @@ read those values once through `@velarscript/server` conventions.
 
 `p"..."` is scanned and checked only by this extension; Core does not acquire a
 general `p` string prefix. Captures use `{name:type}` with a half-width `:` and
-declare the route-scope name once. The five route verbs are compiler-owned
-`@name` roles rather than decorators. The compiler lowers each `server` to an
+declare the route-scope name once. The five route verbs are context annotations
+with compiler-owned route roles rather than decorators. The compiler lowers each `server` to an
 immutable `ServeApp`; `velar/serve` owns runtime matching, checked input
 decoding, automatic JSON, composition, static files, middleware, errors, and
 OpenAPI generation. Middleware stays attached to the route table passed to

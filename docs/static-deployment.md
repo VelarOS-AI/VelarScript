@@ -75,7 +75,7 @@ states them.
 ## Security and public configuration
 
 Production source maps are off by default because they contain source text.
-Opt in with `web.build.sourceMaps: true`; maps then participate in the exact
+Opt in with top-level `build.sourceMaps: true`; maps then participate in the exact
 inventory and `buildId`.
 
 `web.publicConfig` is validated and compiled into the content-hashed entry.

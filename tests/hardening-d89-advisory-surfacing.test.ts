@@ -79,7 +79,7 @@ test("[D89] velar build reports the advisory and emits anyway", async () => {
     const built = spawnSync(process.execPath, [cliPath, "build", directory, "--out-dir", output], { cwd: process.cwd(), encoding: "utf8" });
     assert.equal(built.status, 0, built.stderr);
     assert.match(built.stderr, /advisory A1:/u);
-    assert.match(built.stdout, /Built 1 module/u);
+    assert.match(built.stdout, /Built production 1 module/u);
   } finally {
     await rm(directory, { recursive: true, force: true });
     await rm(output, { recursive: true, force: true });

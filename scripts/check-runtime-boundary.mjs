@@ -14,8 +14,8 @@ import {
 import {
   VELAR_NON_REACTIVE_BRIDGE_MODULE_SOURCE,
   VELAR_REACTIVE_BRIDGE_MODULE,
-  VELAR_REACTIVE_BRIDGE_MODULE_SOURCE,
 } from "../packages/compiler/src/reactive-bridge-runtime.ts";
+import { VELAR_REACTIVE_BRIDGE_MODULE_SOURCE } from "../packages/web/src/reactive-bridge-runtime.ts";
 import {
   VELAR_PRIMITIVE_METHOD_MODULE,
   VELAR_PRIMITIVE_METHOD_MODULE_SOURCE,
@@ -76,6 +76,43 @@ const corePackage = workspacePackages.find((package_) => package_.manifest.name 
 if (!corePackage) failures.push("packages/core/package.json: Core package is missing");
 else if (Object.hasOwn(corePackage.manifest.dependencies ?? {}, "@velarscript/node")) {
   failures.push("packages/core/package.json: Core must not select or depend on the Node target");
+}
+// Package direction is an execution boundary, not just repository tidiness.
+// If Core/Compiler select a target, merely importing their public entry point
+// initializes target code before a program has chosen that capability. Keep
+// the exact dependency roster closed so Web, Node, Server, and Desktop can add
+// behavior only through explicit composition, while CLI remains the one tool
+// that is intentionally allowed to assemble every official target.
+const packageDependencyPolicy = new Map([
+  ["@velarscript/compiler", new Set(["acorn"])],
+  ["@velarscript/core", new Set(["@velarscript/compiler"])],
+  ["@velarscript/web", new Set(["@velarscript/compiler"])],
+  ["@velarscript/node", new Set(["@velarscript/compiler", "ws"])],
+  ["@velarscript/server", new Set(["@velarscript/compiler", "@velarscript/node", "yaml"])],
+  ["@velarscript/desktop", new Set(["@velarscript/compiler", "@velarscript/node", "@velarscript/web"])],
+  ["create-velar", new Set()],
+  ["@velarscript/cli", new Set([
+    "@velarscript/compiler", "@velarscript/core", "@velarscript/desktop", "@velarscript/node",
+    "@velarscript/server", "@velarscript/web", "create-velar", "esbuild", "playwright",
+  ])],
+]);
+for (const package_ of workspacePackages) {
+  const allowed = packageDependencyPolicy.get(package_.manifest.name);
+  if (!allowed) {
+    failures.push(`${display(join(package_.directory, "package.json"))}: package has no dependency-boundary policy`);
+    continue;
+  }
+  const actual = new Set(Object.keys({
+    ...package_.manifest.dependencies,
+    ...package_.manifest.optionalDependencies,
+    ...package_.manifest.peerDependencies,
+  }));
+  for (const dependency of actual) {
+    if (!allowed.has(dependency)) failures.push(`${display(join(package_.directory, "package.json"))}: dependency '${dependency}' crosses its package boundary`);
+  }
+  for (const dependency of allowed) {
+    if (!actual.has(dependency)) failures.push(`${display(join(package_.directory, "package.json"))}: dependency-boundary policy has stale entry '${dependency}'`);
+  }
 }
 const cliStandardModulesSource = await readFile(join(root, "packages", "cli", "src", "standard-modules.ts"), "utf8");
 for (const phrase of ['from "@velarscript/core"', "extensions.length === 0 ? [velarNodeCompilerExtension] : extensions"]) {
@@ -251,6 +288,7 @@ const compilerNumberRuntimeSource = await readFile(join(root, "packages", "compi
 const compilerPrimitiveRuntimeSource = await readFile(join(root, "packages", "compiler", "src", "primitive-runtime.ts"), "utf8");
 const compilerPromiseRuntimeSource = await readFile(join(root, "packages", "compiler", "src", "promise-runtime.ts"), "utf8");
 const compilerReactiveBridgeRuntimeSource = await readFile(join(root, "packages", "compiler", "src", "reactive-bridge-runtime.ts"), "utf8");
+const webReactiveBridgeRuntimeSource = await readFile(join(root, "packages", "web", "src", "reactive-bridge-runtime.ts"), "utf8");
 const compilerTextRuntimeSource = await readFile(join(root, "packages", "compiler", "src", "text-runtime.ts"), "utf8");
 const compilerTypeRegistryRuntimeSource = await readFile(join(root, "packages", "compiler", "src", "type-registry-runtime.ts"), "utf8");
 const compilerTypeValidationRuntimeSource = await readFile(join(root, "packages", "compiler", "src", "type-validation-runtime.ts"), "utf8");
@@ -396,10 +434,15 @@ for (const phrase of [
   "function __velarReactiveCollectionTrigger(value, key, iterate = true, structure = false, indexFrom = null, allKeys = false)",
   "bridge.collectionTrigger(value, key, iterate, structure, indexFrom, allKeys)",
 ]) {
-  if (!compilerReactiveBridgeRuntimeSource.includes(phrase)) failures.push(`packages/compiler: reactive bridge runtime is missing captured or late-binding operation '${phrase}'`);
+  if (!webReactiveBridgeRuntimeSource.includes(phrase)) failures.push(`packages/web/src/reactive-bridge-runtime.ts: reactive bridge runtime is missing captured or late-binding operation '${phrase}'`);
 }
-if (/\b(?:Object\.(?:getOwnPropertyDescriptor|getPrototypeOf|isExtensible|getOwnPropertySymbols)|Symbol\.for)\s*\(|\bnew TypeError\b|\.call\s*\(|\bruntime\.(?:toRaw|reactive|track|collectionRead|collectionTrigger|collectionUnlink)\s*\(/u.test(compilerReactiveBridgeRuntimeSource)) {
-  failures.push("packages/compiler/src/reactive-bridge-runtime.ts: JavaScript or collection bridging bypasses its captured registry, Object, Symbol, or Error ABI");
+if (/\b(?:Object\.(?:getOwnPropertyDescriptor|getPrototypeOf|isExtensible|getOwnPropertySymbols)|Symbol\.for)\s*\(|\bnew TypeError\b|\.call\s*\(|\bruntime\.(?:toRaw|reactive|track|collectionRead|collectionTrigger|collectionUnlink)\s*\(/u.test(webReactiveBridgeRuntimeSource)) {
+  failures.push("packages/web/src/reactive-bridge-runtime.ts: JavaScript or collection bridging bypasses its captured registry, Object, Symbol, or Error ABI");
+}
+for (const phrase of ["VELAR_RUNTIME_REGISTRY_KEY", "VELAR_RUNTIME_SCHEMA_VERSION", "__velarResolveReactiveBridge", "VELAR_REACTIVE_BRIDGE_MODULE_SOURCE"]) {
+  if (compilerReactiveBridgeRuntimeSource.includes(phrase)) {
+    failures.push(`packages/compiler/src/reactive-bridge-runtime.ts: Web reactive provider ownership crossed into Core/compiler through '${phrase}'`);
+  }
 }
 for (const phrase of [
   "return [VELAR_NON_REACTIVE_BRIDGE_RUNTIME",
@@ -421,7 +464,7 @@ const reactiveBridgeExports = [
 ];
 for (const name of reactiveBridgeExports) {
   if (!VELAR_REACTIVE_BRIDGE_MODULE_SOURCE.includes(` as ${name},`)) {
-    failures.push(`packages/compiler/src/reactive-bridge-runtime.ts: shared compiler runtime does not export '${name}'`);
+    failures.push(`packages/web/src/reactive-bridge-runtime.ts: shared Web runtime does not export '${name}'`);
   }
   if (!VELAR_NON_REACTIVE_BRIDGE_MODULE_SOURCE.includes(` as ${name},`)) {
     failures.push(`packages/compiler/src/reactive-bridge-runtime.ts: Core's static bridge does not export '${name}'`);
@@ -445,7 +488,6 @@ for (const phrase of [
 for (const phrase of [
   "runtimeModules?(): readonly string[]",
   "readonly sharedRuntimeModules?: boolean",
-  "VELAR_REACTIVE_BRIDGE_MODULE_SOURCE",
 ]) {
   if (!compilerExtensionSource.includes(phrase)) failures.push(`packages/compiler/src/extension.ts: extension protocol does not preserve shared runtime contract '${phrase}'`);
 }
@@ -534,7 +576,7 @@ for (const phrase of [
   "await recoverInterruptedBuilds(normalizedOutput)",
   "!processIsAlive(installed.ownerPid)",
   "await rm(staging, { recursive: true, force: true })",
-  "await writeNodeStandardModules(staging, project)",
+  "await writeNodeStandardModules(staging, project, false, buildMode)",
   "await replaceOutputDirectory(staging, outputDirectory)",
   "await rename(outputDirectory, previous)",
   "await rename(previous, outputDirectory)",
@@ -1640,7 +1682,8 @@ for (const name of VELAR_COLLECTION_HOST_EXPORTS) {
 for (const phrase of [
   "VELAR_COLLECTION_HOST_MODULE_SOURCE",
   "this.requireRuntimeModule(VELAR_COLLECTION_HOST_MODULE)",
-  "...VELAR_COLLECTION_HOST_EXPORTS.map",
+  "VELAR_COLLECTION_HOST_EXPORTS.filter((name) => directUses.has(name))",
+  "if (imports.length > 0)",
   "from ${JSON.stringify(VELAR_COLLECTION_HOST_MODULE)}",
 ]) {
   const source = phrase === "VELAR_COLLECTION_HOST_MODULE_SOURCE" ? compilerCollectionRuntimeSource : compilerEmitterSource;
@@ -1795,9 +1838,12 @@ if (/Reflect\.deleteProperty\s*\(|Object\.freeze\s*\(|for \(const field|\.values
   || !VELAR_COLLECTION_LOWERING_RUNTIME.includes("__velarCollectionRecordGetOwnPropertyDescriptor(value, index)")) {
   failures.push("packages/compiler: Record validation, indexing, traversal, snapshots, or receiver methods bypass the captured Record host ABI");
 }
-const emittedRecordLoweringSource = compilerEmitterSource.slice(compilerEmitterSource.indexOf('"function __velarSetRecordField'), compilerEmitterSource.indexOf("    if (this.needsObjectBindingHelpers)"));
-const emittedObjectBindingSource = compilerEmitterSource.slice(compilerEmitterSource.indexOf('"function __velarRequireBindingObject'), compilerEmitterSource.indexOf("    if (this.needsListBindingHelpers)"));
-const emittedListBindingSource = compilerEmitterSource.slice(compilerEmitterSource.indexOf('"function __velarRequireBindingList'), compilerEmitterSource.indexOf("    if (this.needsNumberHelper)"));
+const recordLoweringStart = compilerEmitterSource.indexOf('"function __velarSetRecordField');
+const objectBindingStart = compilerEmitterSource.indexOf('"function __velarRequireBindingObject');
+const listBindingStart = compilerEmitterSource.indexOf('"function __velarRequireBindingList');
+const emittedRecordLoweringSource = compilerEmitterSource.slice(recordLoweringStart, compilerEmitterSource.indexOf("    if (this.needsObjectBindingHelpers)", recordLoweringStart));
+const emittedObjectBindingSource = compilerEmitterSource.slice(objectBindingStart, compilerEmitterSource.indexOf("    if (this.needsListBindingHelpers)", objectBindingStart));
+const emittedListBindingSource = compilerEmitterSource.slice(listBindingStart, compilerEmitterSource.indexOf("    if (this.needsNumberHelper)", listBindingStart));
 if (/\b(?:Array\.isArray|Object\.(?:prototype|getOwnPropertyDescriptor|getOwnPropertyNames|getOwnPropertySymbols|defineProperty)|Reflect\.apply)\b|\.call\s*\(|for \(const|new (?:TypeError|RangeError)/u.test(emittedRecordLoweringSource)
   || !emittedRecordLoweringSource.includes("__velarCollectionRecordDefineProperty")
   || !emittedRecordLoweringSource.includes("__velarCollectionRecordOwnNames")) {

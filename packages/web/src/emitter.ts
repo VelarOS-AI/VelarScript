@@ -213,9 +213,13 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       : `const __velarLookKeywords = {\n  __proto__: null,\n${entries.join("\n")}\n};`;
   }
 
-  protected override reactiveBridgeHelpers(needsJavaScriptCallBoundary: boolean, needsCollections: boolean): readonly string[] {
-    if (this.usesSharedRuntimeModules()) return super.reactiveBridgeHelpers(needsJavaScriptCallBoundary, needsCollections);
-    if (!this.webOutput) return super.reactiveBridgeHelpers(needsJavaScriptCallBoundary, needsCollections);
+  protected override reactiveBridgeHelpers(
+    needsJavaScriptCallBoundary: boolean,
+    needsCollections: boolean,
+    usedIdentifiers: ReadonlySet<string> = new Set(),
+  ): readonly string[] {
+    if (this.usesSharedRuntimeModules()) return super.reactiveBridgeHelpers(needsJavaScriptCallBoundary, needsCollections, usedIdentifiers);
+    if (!this.webOutput) return super.reactiveBridgeHelpers(needsJavaScriptCallBoundary, needsCollections, usedIdentifiers);
     if (!needsJavaScriptCallBoundary && !needsCollections) return [];
     return [WEB_LOCAL_REACTIVE_BRIDGE_RUNTIME, ...(needsCollections ? [WEB_LOCAL_REACTIVE_COLLECTION_BRIDGE_RUNTIME] : [])];
   }

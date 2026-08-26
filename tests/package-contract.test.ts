@@ -10,6 +10,7 @@ import {
   velarToolchainBuildOrder,
   velarWorkspaceBuildOrder,
 } from "../scripts/velar-packages.mjs";
+import { parseNpmPackResult } from "../scripts/npm-pack-result.mjs";
 import { declaredEntryPaths, declaredImportSpecifiers, declaredJsonResourceImportSpecifiers, packageContentFailures, type PackedPackage } from "./package-contract.ts";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
 
@@ -64,10 +65,15 @@ async function packageOf(manifest: object, files: Record<string, string> = {}): 
   }
   const result = npm(["pack", "--dry-run", "--json", "--ignore-scripts", directory], directory);
   assert.equal(result.status, 0, result.stderr);
-  const packed = JSON.parse(result.stdout) as PackedPackage[];
-  assert.equal(packed.length, 1, result.stdout);
-  return { directory, packed: packed[0]! };
+  return { directory, packed: parseNpmPackResult(result.stdout, String((manifest as { name?: unknown }).name ?? "probe")) as PackedPackage };
 }
+
+test("npm pack receipts accept the npm 11 array and npm 12 keyed-object envelopes", () => {
+  const receipt = { name: "probe", version: "1.0.0", filename: "probe-1.0.0.tgz", files: [] };
+  assert.deepEqual(parseNpmPackResult(JSON.stringify([receipt]), "probe"), receipt);
+  assert.deepEqual(parseNpmPackResult(JSON.stringify({ probe: receipt }), "probe"), receipt);
+  assert.throws(() => parseNpmPackResult("{}", "probe"), /invalid result for probe/u);
+});
 
 test("[A-024] a crippled publishable package fails the content contract", async () => {
   const { packed } = await packageOf(brokenManifest);

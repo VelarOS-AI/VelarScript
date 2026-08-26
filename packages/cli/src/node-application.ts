@@ -59,7 +59,7 @@ export async function runNodeApplication(
   const prepared = await prepareNodeApplication(config, node, "serve", false);
   if (!prepared) return 1;
   try {
-    const running = startPreparedApplication(prepared, node.build.sourceMaps);
+    const running = startPreparedApplication(prepared, config.build.sourceMaps);
     return await forwardProcessSignals(running);
   } finally {
     await removeCompiledSandbox(prepared.sandbox);
@@ -195,7 +195,7 @@ async function prepareNodeApplication(
     await prepareStandardModules(sandbox, config);
     if (usesNodeWebSocket(project)) await writeWebSocketDependency(join(sandbox, "node_modules"));
     if (usesNodeServerConfiguration(project)) await writeServerConfigurationDependency(join(sandbox, "node_modules"));
-    await writeCompiledTestProject(project, sandbox);
+    await writeCompiledTestProject(project, sandbox, development || config.build.sourceMaps);
     const launcher = join(sandbox, ".velar-node-entry.mjs");
     const entryUrl = pathToFileURL(compiledTestModulePath(project, application.entry, sandbox)).href;
     await writeFile(launcher, nodeApplicationLauncherSource(entryUrl, node, development, application.kind), "utf8");

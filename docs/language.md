@@ -264,6 +264,8 @@ const first = tasks[0].title
 const missing = tasks.get(99)?.title ?? "none"
 
 const owners = Map([["t-1", "ada"], ["t-2", "lin"]])
+const eventsByDay: Map<string, List<Task>> = Map()
+eventsByDay.getOrSet("today", []).append(tasks[0])
 const words = Set(["done", "closed"])
 
 print(ordered.join(" | "))
@@ -338,16 +340,18 @@ Classes have typed body fields, **one** explicit constructor, and an explicit
 `self`. Instances are called directly — there is no `new`. A `const`/`let`
 prefix on a constructor parameter declares the field at the same time.
 
-`@` always qualifies the following name into the compiler-owned namespace of
-the current context. It is not a decorator or a runtime value, and source code
-cannot define an `@name`; the class context currently accepts `@dispose:` and
-`@iterate:`. That namespace can never collide with yours. `@dispose:` is the
+VelarScript calls `@name` a **context annotation**; `@` is the **annotation
+introducer**. A context annotation marks the following declaration or structural
+entry with a compiler-owned compile-time role chosen by the current syntax
+context. It is not a function call or runtime decorator, and source code cannot
+define one. The class context currently accepts `@dispose:` and `@iterate:`.
+That closed vocabulary can never collide with yours. `@dispose:` is the
 release contract: `using name = expression` runs it on **every** exit from the
 owning scope — block end, `return`, `break`, `continue`, a throw three frames
 down — in reverse declaration order. An owned value may not leave its scope,
 so return the data you read from it rather than the handle.
 
-The same rule covers every compiler-owned `@name`; the active context decides
+The same rule covers every context annotation; the active context decides
 the closed vocabulary and the editor hover explains the exact role and a legal
 example:
 
@@ -490,8 +494,8 @@ test "a single name keeps one initial":
 
 An application service activates `@velarscript/server` in `velar.json`; that
 application extension composes `@velarscript/node`. `server` declares
-an immutable route table; the five HTTP verbs are compiler-owned `@name` roles,
-not decorators. A Node-owned `p"..."` path pattern declares each path value
+an immutable route table; the five HTTP verbs are context annotations with
+compiler-owned route roles, not decorators. A Node-owned `p"..."` path pattern declares each path value
 once, with its type, and brings that name directly into the anonymous route
 body. Other scalar parameters come from the query string; one Data record on a
 writing route comes from JSON.
@@ -648,11 +652,11 @@ the gate still checks it in full.)
 
 ## 15. Lifecycle
 
-The component context has two compiler-owned names. `@mounted:` runs once after
+The component context has two context annotations. `@mounted:` runs once after
 the DOM is inserted and may `await`. `@cleanup:` runs once before the component
-is destroyed and is synchronous. `@` has the same namespace-qualification
-meaning it has in classes and Look; it does not mean "lifecycle". Because these
-names are compiler-owned, a component can still declare its own ordinary
+is destroyed and is synchronous. `@` is the same annotation introducer used in
+classes and Look; it does not mean "lifecycle". Because these annotations are
+compiler-owned, a component can still declare its own ordinary
 `def mounted()`.
 
 ```velar

@@ -187,7 +187,7 @@ test("[A-006] --out bundles npm runtime edges into a bare Node program", async (
     });
     const build = runCli(project, "build", "main.vel", "--out", output);
     assert.equal(build.status, 0, build.stdout + build.stderr);
-    assert.deepEqual((await readdir(dirname(output))).sort(), ["main.js", "main.js.map"]);
+    assert.deepEqual((await readdir(dirname(output))).sort(), ["main.js"]);
     const execution = spawnSync(process.execPath, [output], { cwd: dirname(output), encoding: "utf8" });
     assert.equal(execution.status, 0, String(execution.stderr));
     assert.equal(execution.stdout, "portable\n");

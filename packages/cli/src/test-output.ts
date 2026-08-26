@@ -78,7 +78,7 @@ export async function removeCompiledSandbox(sandbox: string): Promise<void> {
   }
 }
 
-export async function writeCompiledTestProject(project: ProjectResult, outputRoot: string): Promise<void> {
+export async function writeCompiledTestProject(project: ProjectResult, outputRoot: string, sourceMaps = true): Promise<void> {
   await writeProjectResources(project, outputRoot, "sandbox");
   // A frozen package stays a bare ESM import and resolves to its installed
   // package.json#exports. Shadow manifests are only for compiled source
@@ -94,12 +94,15 @@ export async function writeCompiledTestProject(project: ProjectResult, outputRoo
   for (const module of project.modules) {
     const output = compiledTestModulePath(project, module, outputRoot);
     await mkdir(dirname(output), { recursive: true });
-    await writeFile(output, `${module.result.code ?? ""}//# sourceMappingURL=${basename(output)}.map\n`, "utf8");
-    await writeFile(`${output}.map`, module.result.sourceMap ?? "", "utf8");
+    const code = sourceMaps
+      ? `${module.result.code ?? ""}//# sourceMappingURL=${basename(output)}.map\n`
+      : module.result.code ?? "";
+    await writeFile(output, code, "utf8");
+    if (sourceMaps) await writeFile(`${output}.map`, module.result.sourceMap ?? "", "utf8");
     for (const embedded of module.result.embeddedModules) {
       const embeddedPath = embeddedModuleOutputPath(output, embedded.specifier);
-      await writeFile(embeddedPath, embeddedModuleFileContents(embeddedPath, embedded), "utf8");
-      await writeFile(`${embeddedPath}.map`, embedded.sourceMap, "utf8");
+      await writeFile(embeddedPath, sourceMaps ? embeddedModuleFileContents(embeddedPath, embedded) : embedded.code, "utf8");
+      if (sourceMaps) await writeFile(`${embeddedPath}.map`, embedded.sourceMap, "utf8");
     }
   }
 }

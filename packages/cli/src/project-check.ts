@@ -36,13 +36,18 @@ export interface CheckedProject {
  * compiled the project its own way would eventually bundle a different failure
  * than the one the author saw.
  */
-export async function checkResolvedProject(config: VelarProjectConfig, input: string | null): Promise<CheckedProject> {
+export async function checkResolvedProject(
+  config: VelarProjectConfig,
+  input: string | null,
+  options: { readonly emitSourceMaps?: boolean } = {},
+): Promise<CheckedProject> {
   const project = await compileProjectEntries([config.entryPath, ...config.workerEntries.values()], config.entryPath, new Map(), {
     projectRoot: config.root,
     publicRoot: config.publicDir,
     extensions: config.compilerExtensions,
     extensionConfig: config.extensionConfig,
     framework: config.framework,
+    emitSourceMaps: options.emitSourceMaps !== false,
   });
   // A `*.test.vel` module is not reachable from the entry, so the module-graph
   // walk never saw one: `const n: number = "not a number"` inside a test passed
@@ -71,6 +76,7 @@ export async function checkResolvedProject(config: VelarProjectConfig, input: st
       extensionConfig: config.extensionConfig,
       framework: config.framework,
       exportTestFunctions: true,
+      emitSourceMaps: options.emitSourceMaps !== false,
     });
     const errors: string[] = testProject.failures.map((failure) => `${failure.path}: ${failure.message}`);
     const advisories: string[] = [];

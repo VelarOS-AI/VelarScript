@@ -1,7 +1,6 @@
 import {
   VELAR_ERROR_NORMALIZATION_RUNTIME,
   VELAR_REACTIVE_BRIDGE_MODULE,
-  VELAR_REACTIVE_BRIDGE_MODULE_SOURCE,
   VELAR_RUNTIME_REGISTRY_KEY,
   VELAR_RUNTIME_SCHEMA_VERSION,
   VELAR_STRICT_JSON_RUNTIME,
@@ -11,6 +10,7 @@ import {
 } from "@velarscript/compiler/extension";
 import { CSS_STRING_RUNTIME } from "./css-string.ts";
 import { LOOK_TRANSITION_PROPERTY_KEYWORDS } from "./look.ts";
+import { VELAR_REACTIVE_BRIDGE_MODULE_SOURCE } from "./reactive-bridge-runtime.ts";
 import { WEB_DOM_HOST_RUNTIME, WEB_ERROR_HOST_RUNTIME, WEB_RUNTIME_FOUNDATION } from "./runtime-foundation.ts";
 import { VELAR_WEB_WORKER_RUNTIME } from "./worker-runtime.ts";
 import { VELAR_WEB_WEBSOCKET_RUNTIME } from "./websocket-runtime.ts";

@@ -6,11 +6,11 @@ import { compile as compileCore } from "@velarscript/compiler";
 import {
   VELAR_RUNTIME_REGISTRY_KEY,
   VELAR_RUNTIME_SCHEMA_VERSION,
-  VELAR_REACTIVE_BRIDGE_RUNTIME,
   VELAR_TYPE_REGISTRY_KEY,
   VELAR_TYPE_REGISTRY_RUNTIME,
   VELAR_UTF8_RUNTIME,
 } from "@velarscript/compiler/extension";
+import { VELAR_REACTIVE_BRIDGE_RUNTIME } from "../packages/web/src/reactive-bridge-runtime.ts";
 // Core's rosters, not the CLI facade's: this test exists to recompute the
 // numbers the gate prints, and the gate reads Core (its neighbouring checks —
 // "Core must not own the target-specific velar/websocket surface" — depend on

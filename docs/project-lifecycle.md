@@ -55,13 +55,13 @@ Format 2 makes the language/framework boundary explicit:
   "entry": "src/main.vel",
   "outDir": "dist",
   "publicDir": "public",
+  "build": { "mode": "production", "sourceMaps": false },
   "extensions": ["@velarscript/web"],
   "web": {
     "title": "My VelarScript App",
     "base": "/",
     "icon": "velarscript-mark.svg",
     "publicConfig": {},
-    "build": { "sourceMaps": false },
     "security": { "contentSecurityPolicy": true },
     "deployment": { "spaFallback": true }
   }

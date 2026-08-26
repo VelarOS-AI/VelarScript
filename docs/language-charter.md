@@ -352,38 +352,41 @@ match type:                         // a header ending in ':' above a block
         pass
 ```
 
-### Compiler-owned contextual names: `@name`
+### Context annotations: `@name`
 
-`@` has exactly one responsibility everywhere in VelarScript: it qualifies the
-name immediately after it into the compiler-owned namespace of the current
-syntactic context. The name and that context determine the role; `@` never
-does. The module context therefore accepts `@main:`, a class accepts `@dispose:`
-and `@iterate:`, a component accepts `@mounted:` and `@cleanup:`, and Look
-accepts names such as `@hover` and `@before:` under one namespace rule, not
-separate entry, decorator, lifecycle, selector, or protocol meanings for `@`.
+VelarScript calls `@name` a **context annotation**. `@` is the **annotation
+introducer**: it attaches a compiler-owned compile-time role to the declaration
+or structural entry immediately after it, with the accepted name and role
+chosen by the current syntactic context. The annotation never chooses its own
+meaning. The module context therefore accepts `@main:`, a class accepts
+`@dispose:` and `@iterate:`, a component accepts `@mounted:` and `@cleanup:`,
+and Look accepts names such as `@hover` and `@before:` under one annotation
+rule, not separate entry, decorator, lifecycle, selector, or protocol meanings
+for `@`.
 
 The contract is closed and static:
 
-- `@name` never performs lexical or member lookup. It cannot be shadowed by an
+- A context annotation never performs lexical or member lookup. It cannot be shadowed by an
   author's binding, and `@` is not an identifier character, so `def mounted()`
   and `@mounted:` can coexist without collision.
-- Core or the active syntax-owning compiler extension owns every accepted name
+- Core or the active syntax-owning compiler extension owns every accepted annotation
   and the contexts in which it is valid. Source code and libraries cannot
   declare, import, export, alias, or register an `@name`. An unknown name, or a
   known name in the wrong context, is a compile-time error that names the
   vocabulary accepted there.
-- `@name` is not an ordinary runtime value. It cannot be stored, passed,
+- A context annotation is not an ordinary runtime value. It cannot be stored, passed,
   returned, called, reflected, or assembled dynamically. The compiler resolves
   its role statically and lowers that role directly; no `@` name or decorator
   lookup survives in emitted JavaScript.
 - Any punctuation or payload a particular role permits after `@name` belongs
   to that role's grammar. Parentheses, if a future compiler-owned role defines
-  them, carry static compiler input; they do not turn `@name` into a function
+  them, carry static compiler input; they do not turn a context annotation into a function
   call or a runtime wrapper around the following declaration.
 - One role has one accepted spelling. A compiler diagnostic may recover from a
   retired bare spelling to continue checking the file, but the recovered form
   remains an error, never an alias. New contextual roles in this family use
-  `@name`; they do not add a competing bare keyword for the same role.
+  a context annotation; they do not add a competing bare keyword for the same
+  role.
 
 This rule does not apply to `@` characters inside strings, module specifiers,
 comments, or extension-owned embedded foreign source: those are data for their
@@ -2079,12 +2082,22 @@ either operand.
 const users: Map<string, User> = Map()
 users.set(user.id, user)
 const selected = users.get("user-1")
+const terrainWrites = writesByStage.getOrSet("terrain", [])
+terrainWrites.append(write)
 const scores = Map([["Ada", 9], ["Lin", 7]])
 const flags = Map({preview: true, compact: false})
 ```
 
-Map members are `size`, `get`, `set`, `update`, `remove`, `has`, `clear`,
-`copy`, `keys`, `values`, and `entries`.
+Map members are `size`, `get`, `set`, `getOrSet`, `update`, `remove`, `has`,
+`clear`, `copy`, `keys`, `values`, and `entries`.
+
+`get(key)` is the read contract and returns `V?`. `getOrSet(key, fallback)` is
+the mutating grouping/cache contract: it returns the stored `V` when the key is
+present; otherwise it stores and returns `fallback`. Like every ordinary call,
+the fallback expression is evaluated before the method runs. The result is
+`V`, not `V?`, so repeated bucket appends do not create a collection-valued
+flow narrowing whose safety guard must walk the growing bucket on every read.
+`getOrSet` is unavailable through a `readonly Map`.
 
 `Set(values)` copies one checked dense List (or another Set). `Map(entries)`
 accepts a checked dense List whose every item is exactly `[key, value]`;
@@ -4717,14 +4730,15 @@ The following are not part of VelarScript:
   enters the language
 - JavaScript `splice`, `push`, `shift`, `unshift`, mutating `sort`, or mutating
   `reverse`
-- user-defined decorators or declaration annotations. `@name` does not reopen
-  them: it is the compiler-namespace qualifier defined in section 3, never a
-  library function, runtime wrapper, or user annotation. Declaration modifiers
+- user-defined decorators or user-defined annotations. Context annotations do
+  not reopen them: they are the closed compiler-owned vocabulary defined in
+  section 3, never library functions, runtime wrappers, or author-defined
+  metadata. Declaration modifiers
   remain the closed keywords `export`, `abstract`, `override`, `static`,
   `private`, `readonly`, and `async`. A library that could change what a
   declaration means would put the reader back to reading the library before
   reading the code; the same reason forbids user-defined type-parameter bounds.
-  A new compiler-owned contextual role uses `@name`; a new declaration
+  A new compiler-owned role uses a context annotation; a new declaration
   attribute uses a modifier keyword. Neither is a user extension point
 - magical JSX control-flow attributes
 - a second spelling of a derived value. `cached(() => value)` and

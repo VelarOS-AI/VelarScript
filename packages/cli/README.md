@@ -37,6 +37,15 @@ runtime behavior, and `velar build` writes a standalone Node directory with a
 launcher and copied public assets. Web/Desktop development continues through
 their framework hosts; `velar run` remains for framework-free CLI programs.
 
+`velar build` defaults to optimized `production` JavaScript for every target.
+Select `--mode readable` for one inspectable build, or set top-level
+`"build": {"mode": "readable"}` in `velar.json`; the command-line value
+overrides the project setting for that invocation.
+
+Source Map is configured independently. Formal builds default to no maps;
+set top-level `"build": {"sourceMaps": true}` or pass `--source-maps` to
+retain them. Development and test runs keep mappings enabled for diagnostics.
+
 Project creation delegates to the exact matching `create-velar` package, the
 same implementation used by `npm create velar@latest`. First-class application
 templates are `web`, `node`, and `desktop`; `docs`, `library`, and `component`

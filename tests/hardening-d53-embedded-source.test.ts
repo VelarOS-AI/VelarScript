@@ -77,8 +77,9 @@ async function webProject(prefix: string, main: string): Promise<{ readonly root
     formatVersion: 2,
     entry: "src/main.vel",
     outDir: "dist",
+    build: { sourceMaps: true },
     extensions: ["@velarscript/web"],
-    web: { title: "D53 embedded source", build: { sourceMaps: true } },
+    web: { title: "D53 embedded source" },
   }, null, 2)}\n`, "utf8");
   await writeFile(entry, main, "utf8");
   return { root, entry, output };
@@ -103,7 +104,7 @@ test("[D53-117] checked captures exist at module evaluation and emit an executab
   ]);
   const project = await coreProject("velar-d53-checked-", program);
   const output = join(project.root, "capture.js");
-  const built = runCli(project.root, "build", project.entry, "--out", output);
+  const built = runCli(project.root, "build", project.entry, "--out", output, "--source-maps");
   assert.equal(built.status, 0, built.stderr + built.stdout);
 
   const owner = await readFile(output, "utf8");

@@ -387,7 +387,7 @@ component App:
     def addEmpty():
         emptyList.append("L")
         emptySet.add("S")
-        emptyMap.set("M", "1")
+        emptyMap.getOrSet("M", "1")
 
     def addPair():
         pairs.set("b", "2")

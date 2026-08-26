@@ -58,8 +58,9 @@ async function writeWebProject(root: string, files: Readonly<Record<string, stri
       formatVersion: 2,
       entry: "src/main.vel",
       outDir: "dist",
+      build: { sourceMaps: true },
       extensions: ["@velarscript/web"],
-      web: { base: "/", build: { sourceMaps: true }, deployment: { spaFallback: true } },
+      web: { base: "/", deployment: { spaFallback: true } },
     }, null, 2)}\n`,
     ...files,
   });
@@ -89,7 +90,7 @@ test("[CLI-1] velar build refuses an output directory it does not own", async ()
 
     const forced = runCli(root, ["build", "--out-dir", "victim", "--force"]);
     assert.equal(forced.status, 0, forced.stdout + forced.stderr);
-    assert.deepEqual((await readdir(join(root, "victim"))).sort(), ["main.js", "main.js.map"]);
+    assert.deepEqual((await readdir(join(root, "victim"))).sort(), ["main.js"]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -118,7 +119,7 @@ test("[CLI-1] velar build accepts an empty, an absent, a declared, and a previou
     assert.equal(runCli(root, ["build"]).status, 0);
     const repeated = runCli(root, ["build"]);
     assert.equal(repeated.status, 0, repeated.stdout + repeated.stderr);
-    assert.deepEqual((await readdir(join(root, "dist"))).sort(), ["main.js", "main.js.map"]);
+    assert.deepEqual((await readdir(join(root, "dist"))).sort(), ["main.js"]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

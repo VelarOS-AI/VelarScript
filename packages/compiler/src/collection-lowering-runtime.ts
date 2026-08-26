@@ -79,6 +79,7 @@ export const VELAR_COLLECTION_LOWERING_EXPORTS = [
   "__velarSetIntersection",
   "__velarSetDifference",
   "__velarMapSet",
+  "__velarMapGetOrSet",
   "__velarMapUpdate",
   "__velarMapCopy",
   "__velarRecordFields",
@@ -819,6 +820,29 @@ function __velarMapSet(value, key, item) {
   __velarReactiveCollectionLink(value, item);
   __velarReactiveCollectionTrigger(value, key, true, !present);
   return null;
+}
+
+// Map.get followed by a null check is the right spelling for a read, but it is
+// a poor grouping primitive: narrowing a collection value deliberately walks
+// that value again to catch stale flow facts. getOrSet performs the one atomic
+// map operation the algorithm means and returns V directly, so repeated bucket
+// appends remain linear without weakening narrowing checks anywhere else.
+function __velarMapGetOrSet(value, key, fallback) {
+  value = __velarReactiveRaw(value);
+  key = __velarReactiveRaw(key);
+  fallback = __velarReactiveRaw(fallback);
+  const size = __velarCheckedMapSize(value, "Map.getOrSet");
+  if (size > __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A Map cannot exceed 1000000 entries");
+  __velarReactiveCollectionTrack(value, key);
+  if (__velarCollectionSetMapMapHas(value, key)) {
+    return __velarReactiveCollectionRead(value, key, __velarCollectionSetMapMapGet(value, key));
+  }
+  if (size >= __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A Map cannot exceed 1000000 entries");
+  __velarCollectionSetMapMapSet(value, key, fallback);
+  __velarReactiveCollectionLink(value, key);
+  __velarReactiveCollectionLink(value, fallback);
+  __velarReactiveCollectionTrigger(value, key, true, true);
+  return __velarReactiveCollectionRead(value, key, fallback);
 }
 
 function __velarMapUpdate(value, items) {

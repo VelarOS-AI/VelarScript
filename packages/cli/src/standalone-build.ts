@@ -3,6 +3,7 @@ import { dirname, resolve } from "node:path";
 import type { CompileResult } from "@velarscript/compiler";
 import { build, type Plugin } from "esbuild";
 import type { ProjectResource } from "./project.ts";
+import type { JavaScriptBuildMode } from "./javascript-output.ts";
 
 export interface StandaloneJavaScriptOutput {
   readonly code: string;
@@ -30,6 +31,8 @@ export async function bundleStandaloneJavaScript(
   outputPath: string,
   result: CompileResult,
   resources: readonly ProjectResource[] = [],
+  mode: JavaScriptBuildMode = "production",
+  sourceMaps = false,
 ): Promise<StandaloneJavaScriptOutput> {
   const embeddedByPath = new Map(result.embeddedModules.map((module) => [
     resolve(dirname(result.source.path), module.specifier),
@@ -45,7 +48,7 @@ export async function bundleStandaloneJavaScript(
       context.onLoad({ filter: /.*/, namespace: "velar-embedded" }, (arguments_) => {
         const embedded = embeddedByPath.get(resolve(arguments_.path));
         if (!embedded) return { errors: [{ text: `Embedded JavaScript module '${arguments_.path}' was not compiled` }] };
-        const sourceMap = embedded.sourceMap
+        const sourceMap = sourceMaps && embedded.sourceMap
           ? `\n//# sourceMappingURL=data:application/json;base64,${Buffer.from(embedded.sourceMap).toString("base64")}\n`
           : "";
         return {
@@ -70,7 +73,7 @@ export async function bundleStandaloneJavaScript(
       });
     },
   };
-  const sourceMap = result.sourceMap
+  const sourceMap = sourceMaps && result.sourceMap
     ? `\n//# sourceMappingURL=data:application/json;base64,${Buffer.from(result.sourceMap).toString("base64")}\n`
     : "";
   const bundled = await build({
@@ -82,9 +85,11 @@ export async function bundleStandaloneJavaScript(
     outfile: outputPath,
     packages: "bundle",
     platform: "node",
+    minify: mode === "production",
+    keepNames: mode === "readable",
     plugins: [embeddedPlugin, resourcePlugin],
-    sourcemap: "external",
-    sourcesContent: true,
+    sourcemap: sourceMaps ? "external" : false,
+    sourcesContent: sourceMaps,
     stdin: {
       contents: `${result.code ?? ""}${sourceMap}`,
       loader: "js",
@@ -96,6 +101,8 @@ export async function bundleStandaloneJavaScript(
   });
   const output = bundled.outputFiles?.find((file) => resolve(file.path) === resolve(outputPath));
   const map = bundled.outputFiles?.find((file) => resolve(file.path) === resolve(`${outputPath}.map`));
-  if (!output || !map) throw new Error("The standalone JavaScript bundler did not emit the program and its source map");
-  return { code: output.text, sourceMap: map.text };
+  if (!output || sourceMaps && !map) {
+    throw new Error(`The standalone JavaScript bundler did not emit the program${sourceMaps ? " and its source map" : ""}`);
+  }
+  return { code: output.text, sourceMap: map?.text ?? "" };
 }

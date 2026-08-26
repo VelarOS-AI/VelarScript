@@ -85,6 +85,8 @@ import {
 
 interface Binding {
   readonly mutable: boolean;
+  /** 由普通 `const` 变量声明拥有的一次性值副本；参数、导入和响应式绑定不具备。 */
+  stableOptionalCopy?: boolean;
   type: ValueType;
   declaredType: ValueType;
   storageType: ValueType;
@@ -373,7 +375,7 @@ export interface ClassInfo {
 
 export type CollectionRuntimeKind = "list" | "map" | "set" | "record";
 
-export type CollectionOperation = "listGet" | "mapGet" | "recordGet" | "slice" | "listAppend" | "listExtend" | "listInsert" | "listRemove" | "listPop" | "listClear" | "listCopy" | "listHas" | "listCount" | "listIndex" | "listFind" | "listSome" | "listEvery" | "listMap" | "listFilter" | "listFlatMap" | "listReduce" | "listJoin" | "listSorted" | "listReversed" | "listSum" | "listMin" | "listMax" | "setAdd" | "setUpdate" | "setHas" | "setRemove" | "setClear" | "setValues" | "setCopy" | "setUnion" | "setIntersection" | "setDifference" | "mapSet" | "mapUpdate" | "mapHas" | "mapRemove" | "mapClear" | "mapKeys" | "mapValues" | "mapEntries" | "mapCopy" | "recordSet" | "recordHas" | "recordRemove" | "recordClear" | "recordKeys" | "recordValues" | "recordEntries" | "recordCopy";
+export type CollectionOperation = "listGet" | "mapGet" | "recordGet" | "slice" | "listAppend" | "listExtend" | "listInsert" | "listRemove" | "listPop" | "listClear" | "listCopy" | "listHas" | "listCount" | "listIndex" | "listFind" | "listSome" | "listEvery" | "listMap" | "listFilter" | "listFlatMap" | "listReduce" | "listJoin" | "listSorted" | "listReversed" | "listSum" | "listMin" | "listMax" | "setAdd" | "setUpdate" | "setHas" | "setRemove" | "setClear" | "setValues" | "setCopy" | "setUnion" | "setIntersection" | "setDifference" | "mapSet" | "mapGetOrSet" | "mapUpdate" | "mapHas" | "mapRemove" | "mapClear" | "mapKeys" | "mapValues" | "mapEntries" | "mapCopy" | "recordSet" | "recordHas" | "recordRemove" | "recordClear" | "recordKeys" | "recordValues" | "recordEntries" | "recordCopy";
 
 export type PrimitiveOperation = "stringTrim" | "stringUpper" | "stringLower" | "stringSlice" | "stringChar" | "stringHas" | "stringIndex" | "stringCount" | "stringStartsWith" | "stringEndsWith" | "stringSplit" | "stringReplace" | "stringReplaceAll" | "stringPadStart" | "stringPadEnd" | "stringRepeat" | "stringIsBlank" | "numberAbs" | "numberRound" | "numberFloor" | "numberCeil" | "numberToFixed" | "numberIsInteger" | "numberIsNaN" | "numberIsFinite";
 
@@ -386,7 +388,7 @@ const listCollectionOperations = new Map<string, CollectionOperation>([
   ["sorted", "listSorted"], ["reversed", "listReversed"], ["sum", "listSum"], ["min", "listMin"], ["max", "listMax"],
 ]);
 const mapCollectionOperations = new Map<string, CollectionOperation>([
-  ["get", "mapGet"], ["set", "mapSet"], ["update", "mapUpdate"], ["has", "mapHas"],
+  ["get", "mapGet"], ["set", "mapSet"], ["getOrSet", "mapGetOrSet"], ["update", "mapUpdate"], ["has", "mapHas"],
   ["remove", "mapRemove"], ["clear", "mapClear"], ["copy", "mapCopy"],
   ["keys", "mapKeys"], ["values", "mapValues"], ["entries", "mapEntries"],
 ]);
@@ -3662,6 +3664,10 @@ export class Analyzer implements TypeEnvironment {
         }
         const unsettled = this.requireSettledCollectionElement(statement.initializer, declared, annotated !== null);
         this.declarePattern(statement.pattern, statement.binding === "let", unsettled ? invalidType : declared, unsettled ? invalidType : contract);
+        if (statement.binding === "const" && statement.pattern.kind === "NameBindingPattern") {
+          const declaredBinding = this.scopes.at(-1)?.get(statement.pattern.name);
+          if (declaredBinding) declaredBinding.stableOptionalCopy = true;
+        }
         if (annotated === null) this.recordBindingHoleSource(statement.pattern, statement.initializer, unsettled);
         this.claimArrowDeferredFrame(statement.pattern, statement.initializer);
         // D51 rule 101: an alias of an owned handle — or a closure over one —
@@ -6849,7 +6855,7 @@ export class Analyzer implements TypeEnvironment {
           }
         }
         if (binding.reactiveKind) this.reactiveReferences.set(spanIdentity(expression.span), binding.reactiveKind);
-        if (binding.narrowingFrame !== null) {
+        if (binding.narrowingFrame !== null && !this.isStableOptionalValueCopy(binding)) {
           this.runtimeNarrowings.set(spanIdentity(expression.span), {
             expected: binding.type,
             description: expression.name,
@@ -9399,7 +9405,7 @@ export class Analyzer implements TypeEnvironment {
     if (object.kind !== "list" && object.kind !== "map" && object.kind !== "set" && object.kind !== "record") return null;
     const mutating = object.kind === "list"
       ? new Set(["append", "extend", "insert", "remove", "pop", "clear"])
-      : object.kind === "map" ? new Set(["set", "update", "remove", "clear"])
+      : object.kind === "map" ? new Set(["set", "getOrSet", "update", "remove", "clear"])
         : object.kind === "set" ? new Set(["add", "update", "remove", "clear"])
           : new Set(["set", "remove", "clear"]);
     if (object.readonlyView && mutating.has(member.property)) {
@@ -9790,6 +9796,17 @@ export class Analyzer implements TypeEnvironment {
         if (valueArgument) this.requireAssignable(value, object.value, valueArgument.span);
         requireCount(2);
         return nullType;
+      }
+      if (member.property === "getOrSet") {
+        this.collectionCalls.set(member.span.end, "mapGetOrSet");
+        const keyArgument = argumentAt(0);
+        const valueArgument = argumentAt(1);
+        const key = inferArgument(0, object.key);
+        const value = inferArgument(1, object.value);
+        if (keyArgument) this.requireAssignable(key, object.key, keyArgument.span);
+        if (valueArgument) this.requireAssignable(value, object.value, valueArgument.span);
+        requireCount(2);
+        return object.value;
       }
       if (member.property === "update") {
         this.collectionCalls.set(member.span.end, "mapUpdate");
@@ -10836,6 +10853,9 @@ export class Analyzer implements TypeEnvironment {
       case "set":
         if (map.readonlyView) return null;
         return callable(["key", "value"], [map.key, map.value], nullType);
+      case "getOrSet":
+        if (map.readonlyView) return null;
+        return callable(["key", "fallback"], [map.key, map.value], map.value);
       case "update":
         if (map.readonlyView) return null;
         return callable(["values"], [map], nullType);
@@ -13749,7 +13769,7 @@ export class Analyzer implements TypeEnvironment {
     if (type.kind === "number") return new Map(["abs", "round", "floor", "ceil", "toFixed", "isInteger", "isNaN", "isFinite"]
       .map((name) => [name, this.numberMember(name)!]));
     if (type.kind === "list") return available(["size", "get", "slice", "append", "extend", "insert", "has", "remove", "pop", "clear", "copy", "count", "index", "sorted", "reversed", "map", "flatMap", "filter", "reduce", "some", "every", "find", "join", "sum", "min", "max"], (name) => this.listMember(type, name));
-    if (type.kind === "map") return available(["size", "get", "set", "update", "has", "remove", "clear", "copy", "keys", "values", "entries"], (name) => this.mapMember(type, name));
+    if (type.kind === "map") return available(["size", "get", "set", "getOrSet", "update", "has", "remove", "clear", "copy", "keys", "values", "entries"], (name) => this.mapMember(type, name));
     if (type.kind === "record") return available(["size", "get", "set", "has", "remove", "clear", "copy", "keys", "values", "entries"], (name) => this.recordMember(type, name));
     if (type.kind === "set") return available(["size", "add", "update", "has", "remove", "clear", "copy", "values", "union", "intersection", "difference"], (name) => this.setMember(type, name));
     if (type.kind === "action") return new Map([
@@ -14211,6 +14231,26 @@ export class Analyzer implements TypeEnvironment {
       }
     }
     return null;
+  }
+
+  /**
+   * `const value = map.get(key); if value == null: ...` 之后，`value` 是一次读取
+   * 得到的稳定副本。它不能被重新赋值，存在性检查得到的类型又恰好是原
+   * optional 的非空分支，因此后续读取无需再运行一次完整的 Type 检查。
+   *
+   * 这里刻意只认“普通 const + readonly 数据”这一个可证明的形状：参数、
+   * `let`、类实例、响应式值和导入的实时绑定仍会生成运行时收窄守卫；从
+   * unknown/union 通过 `is` 得到的更具体类型也仍会深度复验。这样能移除注册
+   * 表查询热路径上的重复结构校验，同时保留成员、getter、回调和跨模块可变
+   * 状态原有的失效检测。
+   */
+  private isStableOptionalValueCopy(binding: Binding): boolean {
+    const storage = binding.storageBinding ?? binding;
+    if (storage.stableOptionalCopy !== true || storage.mutable || storage.reactiveKind || this.importedBindingOrigins.has(storage)) return false;
+    const original = this.expandAliases(storage.storageType);
+    if (original.kind !== "optional") return false;
+    const inner = this.expandAliases(original.inner);
+    return isReadonlyView(inner) && sameType(inner, this.expandAliases(binding.type));
   }
 
   protected isBuiltinValueReference(expression: Expression, name: PermanentNamespaceName | "range"): boolean {

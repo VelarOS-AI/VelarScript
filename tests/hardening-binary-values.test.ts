@@ -80,3 +80,32 @@ catch error:
 `);
   assert.equal(result.output, "UInt16Buffer.values cannot produce more than 1000000 List items\n");
 });
+
+test("运行时创建的定长缓冲区共用可信索引快路径并保留边界错误", async () => {
+  const result = await run(`
+import {float32Buffer, uint16Buffer} from "velar/binary"
+
+const integers = uint16Buffer(3)
+integers[0] = 7
+integers[2] = 11
+const floats = float32Buffer(2)
+floats[1] = 1.5
+print(integers[0] + integers[2])
+print(floats[1])
+try:
+    print(integers[3])
+catch error:
+    print(error.name)
+try:
+    integers[-1] = 2
+catch error:
+    print(error.name)
+`);
+  assert.equal(result.output, "18\n1.5\nIndexError\nIndexError\n");
+  assert.match(result.code, /__velarBinaryRuntime\.__velarUInt16Index/u);
+
+  const runtime = standardModuleSource("velar/binary") ?? "";
+  assert.match(runtime, /const __velarBinaryTrustedLengths = new __velarBinaryNativeWeakMap/u);
+  assert.match(runtime, /function __velarBinaryTrustedIndex/u);
+  assert.match(runtime, /return __velarBinaryCheckedIndex\(value, index, expected, name\)/u);
+});

@@ -47,6 +47,7 @@ import { asHostError, hostErrorCode, hostErrorMessage, hostErrorStack } from "..
 import { validateApplicationPackageResult } from "../packages/cli/src/application-package-host.ts";
 import { WorkspaceIndexCancelledError, WorkspaceTextIndex } from "../packages/cli/src/workspace-index.ts";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
+import { parseNpmPackResult } from "../scripts/npm-pack-result.mjs";
 
 after(removeTemporaryDirectories);
 
@@ -5518,6 +5519,9 @@ test("CLI builds a real .vel file", async () => {
     sourcePath,
     "--out",
     outputPath,
+    "--mode",
+    "readable",
+    "--source-maps",
   ], {
     cwd: process.cwd(),
     encoding: "utf8",
@@ -8538,7 +8542,7 @@ test("the official Web package owns the framework contract and CLI only composes
     }
   }
 
-  assert.equal(VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION, 1);
+  assert.equal(VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION, 2);
   assert.equal(velarFrameworkHost.id, "@velarscript/web");
   assert.equal(velarFrameworkHost.capability, "web");
   assert.equal(velarFrameworkHost.target, "browser");
@@ -15077,12 +15081,12 @@ test("velar.json defines a self-contained Web project and standard modules", asy
     entry: "src/main.vel",
     outDir: "build",
     publicDir: "assets",
+    build: { sourceMaps: true },
     extensions: ["@velarscript/web"],
     web: {
       title: "Configured Velar",
       base: "/demo",
       publicConfig: { apiBase: "https://api.example.com", features: { releases: true } },
-      build: { sourceMaps: true },
     },
   }), "utf8");
   await writeFile(join(directory, "assets", "message.txt"), "VelarScript asset\n", "utf8");
@@ -15125,11 +15129,11 @@ mount(<App />, "#app")
   assert.match(config.manifestIdentity ?? "", /^[a-f0-9]{64}$/u);
   assert.equal(web.base, "/demo/");
   assert.deepEqual(web.publicConfig, { apiBase: "https://api.example.com", features: { releases: true } });
-  assert.equal(web.build.sourceMaps, true);
+  assert.equal(config.build.sourceMaps, true);
   assert.equal(web.security.contentSecurityPolicy, true);
   assert.equal(web.deployment.spaFallback, true);
   assert.equal(config.framework?.host.id, "@velarscript/web");
-  assert.equal(config.framework?.host.protocolVersion, 1);
+  assert.equal(config.framework?.host.protocolVersion, 2);
   const project = await compileProject(config.entryPath, new Map(), {
     projectRoot: config.root,
     publicRoot: config.publicDir,
@@ -15220,8 +15224,8 @@ test("project configuration rejects destructive output layouts and unsafe CSP or
   await writeFile(manifestPath, manifest({ entry: "main.vel", web: { deployment: { adapter: "netlify" } } }), "utf8");
   await assert.rejects(resolveVelarProject(directory), /unknown 'web\.deployment' field 'adapter'/u);
 
-  await writeFile(manifestPath, manifest({ entry: "main.vel", web: { build: { sourceMaps: "yes" } } }), "utf8");
-  await assert.rejects(resolveVelarProject(directory), /web\.build\.sourceMaps.*boolean/u);
+  await writeFile(manifestPath, manifest({ entry: "main.vel", build: { sourceMaps: "yes" } }), "utf8");
+  await assert.rejects(resolveVelarProject(directory), /build\.sourceMaps.*boolean/u);
 
   await writeFile(manifestPath, manifest({ entry: "main.vel", outdir: "misspelled" }), "utf8");
   await assert.rejects(resolveVelarProject(directory), /unknown 'project' field 'outdir'/u);
@@ -15265,7 +15269,6 @@ export const velarFrameworkHost = {
   apiVersion: "1.0",
   artifactKind: "fixture-build",
   base() { return "/" },
-  sourceMaps() { return false },
   createArtifacts() { return {entryModule: "/main.js", css: "", html: "<!doctype html>"} },
   createErrorDocument() { return "<!doctype html>" },
   staticDeployment() { return {base: "/", spaFallback: false, contentSecurityPolicy: null} },
@@ -15277,12 +15280,12 @@ export const velarFrameworkHost = {
   await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: ["fixture-version"] }), "utf8");
   await assert.rejects(resolveVelarProject(directory), /unsupported framework host protocol 99/u);
 
-  await writeExtension("fixture-capability", 1, "fixture", "other");
+  await writeExtension("fixture-capability", 2, "fixture", "other");
   await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: ["fixture-capability"] }), "utf8");
   await assert.rejects(resolveVelarProject(directory), /must bind one capability owned by its compiler extension/u);
 
-  await writeExtension("fixture-one", 1, "one");
-  await writeExtension("fixture-two", 1, "two");
+  await writeExtension("fixture-one", 2, "one");
+  await writeExtension("fixture-two", 2, "two");
   await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: ["fixture-one", "fixture-two"] }), "utf8");
   await assert.rejects(resolveVelarProject(directory), /only one application extension/u);
 });
@@ -15585,8 +15588,9 @@ test("static Web builds remain reproducible and provider-neutral", async () => {
     formatVersion: 2,
     entry: "src/main.vel",
     outDir: "dist",
+    build: { sourceMaps: true },
     extensions: ["@velarscript/web"],
-    web: { base: "/", build: { sourceMaps: true }, deployment: { spaFallback: true } },
+    web: { base: "/", deployment: { spaFallback: true } },
   }), "utf8");
   await assert.rejects(verifyProductionBuild(directory), /run 'velar build' first/u);
 
@@ -15783,8 +15787,8 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     devDependencies: Record<string, string>;
   };
-  assert.equal(createdPackage.dependencies["@velarscript/web"], "0.15.0");
-  assert.equal(createdPackage.devDependencies["@velarscript/cli"], "0.15.0");
+  assert.equal(createdPackage.dependencies["@velarscript/web"], "0.16.0");
+  assert.equal(createdPackage.devDependencies["@velarscript/cli"], "0.16.0");
   assert.equal(createdPackage.scripts.format, "velar format");
   assert.equal(createdPackage.scripts["format:check"], "velar format --check");
   assert.equal(createdPackage.scripts["test:browser"], "velar test --browser");
@@ -15807,7 +15811,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   const config = await resolveVelarProject(projectRoot);
   assert.equal(config.formatVersion, 2);
   assert.deepEqual(config.extensions, ["@velarscript/web"]);
-  assert.equal((config.extensionConfig.get("@velarscript/web") as VelarWebConfig).build.sourceMaps, false);
+  assert.equal(config.build.sourceMaps, false);
   assert.equal(config.framework?.host.id, "@velarscript/web");
   const checked = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "check"], { cwd: projectRoot, encoding: "utf8" });
   assert.equal(checked.status, 0, checked.stderr);
@@ -15895,13 +15899,13 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   const libraryTest = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "test", libraryRoot], { cwd: directory, encoding: "utf8" });
   assert.equal(libraryTest.status, 0, libraryTest.stderr);
   assert.match(libraryTest.stdout, /index\.test\.vel" :: "greeting"/u);
-  const libraryBuild = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "build", libraryRoot], { cwd: directory, encoding: "utf8" });
+  const libraryBuild = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "build", libraryRoot, "--mode", "readable"], { cwd: directory, encoding: "utf8" });
   assert.equal(libraryBuild.status, 0, libraryBuild.stderr);
   assert.match(await readFile(join(libraryRoot, "dist", "index.js"), "utf8"), /function greet/u);
   const libraryPack = runNpmSync(["pack", "--dry-run", "--json"], libraryRoot);
   assert.equal(libraryPack.status, 0, String(libraryPack.stderr));
-  const libraryReceipt = JSON.parse(String(libraryPack.stdout)) as Array<{ files: Array<{ path: string }> }>;
-  assert.ok(libraryReceipt[0]?.files.some((file) => file.path === "src/index.vel"), String(libraryPack.stdout));
+  const libraryReceipt = parseNpmPackResult(String(libraryPack.stdout), "text-library") as { files: Array<{ path: string }> };
+  assert.ok(libraryReceipt.files.some((file) => file.path === "src/index.vel"), String(libraryPack.stdout));
 
   const componentRoot = join(directory, "info-card");
   const componentCreate = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "create", componentRoot, "--template", "component"], { cwd: directory, encoding: "utf8" });
@@ -15920,8 +15924,8 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   assert.deepEqual(componentPackage.velar.requires.capabilities, []);
   assert.equal(componentPackage.scripts["pack:check"], "npm pack --dry-run --json");
   assert.match(componentPackage.scripts.validate ?? "", /npm run pack:check$/u);
-  assert.equal(componentPackage.peerDependencies["@velarscript/web"], "^0.15.0");
-  assert.equal(componentPackage.devDependencies["@velarscript/web"], "0.15.0");
+  assert.equal(componentPackage.peerDependencies["@velarscript/web"], "^0.16.0");
+  assert.equal(componentPackage.devDependencies["@velarscript/web"], "0.16.0");
   assert.match(await readFile(join(componentRoot, "src", "index.vel"), "utf8"), /export component InfoCard/u);
   assert.deepEqual(JSON.parse(await readFile(join(componentRoot, "velar.json"), "utf8")).extensions, ["@velarscript/web"]);
   await linkWorkspaceWebExtension(componentRoot);
@@ -15935,8 +15939,8 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   await verifyProductionBuild(join(componentRoot, "dist"));
   const componentPack = runNpmSync(["pack", "--dry-run", "--json"], componentRoot);
   assert.equal(componentPack.status, 0, String(componentPack.stderr));
-  const componentReceipt = JSON.parse(String(componentPack.stdout)) as Array<{ files: Array<{ path: string }> }>;
-  assert.ok(componentReceipt[0]?.files.some((file) => file.path === "src/index.vel"), String(componentPack.stdout));
+  const componentReceipt = parseNpmPackResult(String(componentPack.stdout), "info-card") as { files: Array<{ path: string }> };
+  assert.ok(componentReceipt.files.some((file) => file.path === "src/index.vel"), String(componentPack.stdout));
 
   const nodeRoot = join(directory, "hello-node");
   const nodeCreate = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "create", nodeRoot, "--template", "node"], { cwd: directory, encoding: "utf8" });
@@ -15946,7 +15950,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     scripts: Record<string, string>;
   };
-  assert.equal(nodePackage.dependencies["@velarscript/server"], "0.15.0");
+  assert.equal(nodePackage.dependencies["@velarscript/server"], "0.16.0");
   assert.equal(nodePackage.dependencies["@velarscript/node"], undefined);
   assert.equal(nodePackage.scripts.dev, "velar dev");
   assert.equal(nodePackage.scripts.start, "velar serve");
@@ -15974,7 +15978,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     scripts: Record<string, string>;
   };
-  assert.equal(desktopPackage.dependencies["@velarscript/desktop"], "0.15.0");
+  assert.equal(desktopPackage.dependencies["@velarscript/desktop"], "0.16.0");
   assert.equal(desktopPackage.scripts.package, "velar package");
   assert.equal(desktopPackage.scripts["test:browser"], "velar test --browser=all");
   const desktopAgents = await readFile(join(desktopRoot, "AGENTS.md"), "utf8");
@@ -16038,7 +16042,7 @@ test("CLI help is command-specific and malformed top-level invocations fail clea
   const creator = resolve("packages/create/src/cli.ts");
   const creatorVersion = spawnSync(process.execPath, [creator, "--version"], { encoding: "utf8" });
   assert.equal(creatorVersion.status, 0, creatorVersion.stderr);
-  assert.equal(creatorVersion.stdout, "create-velar 0.15.0\n");
+  assert.equal(creatorVersion.stdout, "create-velar 0.16.0\n");
   const creatorMissing = spawnSync(process.execPath, [creator], { encoding: "utf8" });
   assert.equal(creatorMissing.status, 2);
   assert.match(creatorMissing.stderr, /expected one project directory/u);
@@ -16533,7 +16537,7 @@ type Catalog:
 print(Catalog.parse(rawCatalog).name)
 `.trimStart(), "utf8");
 
-  const build = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "build"], { cwd: directory, encoding: "utf8" });
+  const build = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "build", "--mode", "readable"], { cwd: directory, encoding: "utf8" });
   assert.equal(build.status, 0, String(build.stderr));
   const output = await readFile(join(directory, "dist", "index.js"), "utf8");
   assert.match(output, /from "\.\/node_modules\/self-catalog\/generated\/catalog\.json\.js"/u);
@@ -16925,6 +16929,8 @@ test("CLI checks and builds a multi-module project", async () => {
     "tests/fixtures/modules/main.vel",
     "--out-dir",
     directory,
+    "--mode",
+    "readable",
   ], {
     cwd: process.cwd(),
     encoding: "utf8",
@@ -17451,6 +17457,44 @@ print(rows.size + handlers.size)
   assert.deepEqual(invalid.diagnostics.map((item) => item.message), ["Cannot assign string to number"]);
 });
 
+test("Map.getOrSet returns one required value and inserts only when the key is absent", () => {
+  const result = compile(`
+const buckets: Map<string, List<number>> = Map()
+const first = buckets.getOrSet("terrain", [])
+first.append(1)
+const second = buckets.getOrSet(fallback=[9], key="terrain")
+const created = buckets.getOrSet("caves", [2])
+print(first == second)
+print(second)
+print(created)
+print(buckets.size)
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(result.code ?? "", /__velarMapGetOrSet\(buckets,/u);
+  assert.doesNotMatch(result.code ?? "", /__velarNarrow\(/u,
+    "getOrSet returns V directly instead of creating an optional flow fact");
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "true\n[ 1 ]\n[ 2 ]\n2\n");
+
+  const invalid = compile(`
+const scores: Map<string, number> = Map()
+scores.getOrSet(1, "bad")
+`.trimStart());
+  assert.deepEqual(invalid.diagnostics.map((item) => item.message), [
+    "Cannot assign number to string",
+    "Cannot assign string to number",
+  ]);
+
+  const readonlyMap = compile(`
+def fill(scores: readonly Map<string, number>):
+    scores.getOrSet("a", 1)
+`.trimStart());
+  assert.deepEqual(readonlyMap.diagnostics.map((item) => item.message), [
+    "Cannot call mutating method 'getOrSet' through readonly Map<string, number>; it is a read-only view",
+  ]);
+});
+
 test("optional collection annotations contextually type empty values", () => {
   const result = compileCore(`
 type Names = List<string>
@@ -17877,6 +17921,86 @@ print(scores.values().size)
   assert.deepEqual(collection.runtimeModules, [VELAR_COLLECTION_LOWERING_MODULE]);
   assert.match(collection.code ?? "", /__velarMapValues/u);
   assert.doesNotMatch(collection.code ?? "", /\s__velarCollectionValue,/u);
+});
+
+test("project output omits dead range, runtime-Type, and collection-host imports", () => {
+  const counted = compileCore(`
+let total = 0
+for index in range(4): total += index
+print(total)
+`.trimStart(), { sharedRuntimeModules: true });
+  assert.deepEqual(counted.diagnostics, []);
+  assert.match(counted.code ?? "", /range as __velarCountedRangeOwner/u);
+  assert.doesNotMatch(counted.code ?? "", /range as __velarRange[, }]/u);
+
+  const rangedValue = compileCore("print(range(4).size)\n", { sharedRuntimeModules: true });
+  assert.deepEqual(rangedValue.diagnostics, []);
+  assert.match(rangedValue.code ?? "", /range as __velarRange/u);
+
+  const pointFields = new Map<string, ValueType>([["x", { kind: "number" }], ["z", { kind: "number" }]]);
+  const Point: ValueType = {
+    kind: "typeObject",
+    name: "Point",
+    value: {
+      kind: "object",
+      fields: pointFields,
+    },
+  };
+  const projection = compileCore(`
+import {Point} from "./point.vel"
+
+const source = {x: 1, z: 2, score: 9}
+const point = Point.from(source)
+print(point.x + point.z)
+`.trimStart(), {
+    sharedRuntimeModules: true,
+    analysis: { imports: new Map([["Point", Point]]) },
+  });
+  assert.deepEqual(projection.diagnostics, []);
+  assert.match(projection.code ?? "", /function __velarRecordFrom/u);
+  assert.doesNotMatch(projection.code ?? "", /function __velar(?:SpreadRecord|CreateRecord)/u);
+  assert.doesNotMatch(projection.code ?? "", /import \{\s*\} from/u);
+  assert.doesNotMatch(projection.code ?? "", /compiler-runtime-types-v1/u);
+  assert.doesNotMatch(projection.code ?? "", /__velarCollectionSetMap/u);
+  assert.doesNotMatch(projection.code ?? "", /__velarCollectionListHost/u);
+  assert.match(projection.code ?? "", /reactiveCollectionRead as __velarReactiveCollectionRead/u);
+  assert.doesNotMatch(projection.code ?? "", /reactiveRaw as __velarReactiveRaw/u);
+  assert.doesNotMatch(projection.code ?? "", /reactiveCollection(?:Link|Trigger|Unlink)/u);
+
+  const makePoint: ValueType = {
+    kind: "function",
+    parameters: [{ kind: "number" }],
+    parameterNames: ["x"],
+    requiredParameters: 1,
+    result: { kind: "number" },
+  };
+  const annotationOnly = compileCore(`
+import {Point, makePoint} from "./point.vel"
+
+export def project(value: Point) -> number: return makePoint(value.x)
+`.trimStart(), {
+    sharedRuntimeModules: true,
+    analysis: {
+      imports: new Map<string, ValueType>([["Point", Point], ["makePoint", makePoint]]),
+      namedTypes: new Map([["Point", pointFields]]),
+    },
+  });
+  assert.deepEqual(annotationOnly.diagnostics, []);
+  assert.match(annotationOnly.code ?? "", /import \{ makePoint \} from "\.\/point\.js"/u);
+  assert.doesNotMatch(annotationOnly.code ?? "", /import \{[^}]*\bPoint\b/u);
+
+  const pureAnnotation = compileCore(`
+import {Point} from "./point.vel"
+export def x(value: Point) -> number: return value.x
+`.trimStart(), {
+    sharedRuntimeModules: true,
+    analysis: {
+      imports: new Map<string, ValueType>([["Point", Point]]),
+      namedTypes: new Map([["Point", pointFields]]),
+    },
+  });
+  assert.deepEqual(pureAnnotation.diagnostics, []);
+  assert.match(pureAnnotation.code ?? "", /import "\.\/point\.js";/u);
 });
 
 test("project compilation shares checked class-field runtime without publishing it", async () => {
@@ -21288,12 +21412,25 @@ test("CLI source maps lead runtime stacks back to .vel source", async () => {
   const sourcePath = join(directory, "main.vel");
   const outputPath = join(directory, "main.js");
   await writeFile(sourcePath, "const values = [1]\nprint(values[4])\n", "utf8");
-  const build = spawnSync(process.execPath, ["packages/cli/src/cli.ts", "build", sourcePath, "--out", outputPath], { cwd: process.cwd(), encoding: "utf8" });
+  const build = spawnSync(process.execPath, ["packages/cli/src/cli.ts", "build", sourcePath, "--out", outputPath, "--source-maps"], { cwd: process.cwd(), encoding: "utf8" });
   assert.equal(build.status, 0, build.stderr);
 
   const execution = spawnSync(process.execPath, ["--enable-source-maps", outputPath], { encoding: "utf8" });
   assert.equal(execution.status, 1);
   assert.match(execution.stderr, new RegExp(`${sourcePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:2:`));
+});
+
+test("编译入口关闭 Source Map 时也跳过嵌入 JavaScript 的映射生成", () => {
+  const result = compileCore(`
+unsafe js\`
+export const ready = 1;
+\`
+`.trimStart(), { path: "unmapped.vel", emitSourceMap: false });
+  assert.deepEqual(result.diagnostics, []);
+  assert.ok(result.code);
+  assert.equal(result.sourceMap, null);
+  assert.equal(result.embeddedModules.length, 1);
+  assert.equal(result.embeddedModules[0]!.sourceMap, "");
 });
 
 test("Windows source paths become valid source-map file URLs and portable diagnostics", () => {
@@ -23933,6 +24070,33 @@ def label(box: Box) -> string:
 `.trimStart());
   assert.deepEqual(invokedClosure.diagnostics, []);
   assert.match(invokedClosure.code ?? "", /NarrowingError/u);
+});
+
+test("不可变 optional 副本的存在性收窄不重复执行完整运行时校验", () => {
+  const stable = compileCore(`
+type State:
+    label: string
+
+def requireState(states: readonly Map<number, readonly State>, key: number) -> readonly State:
+    const state = states.get(key)
+    if state == null: throw Error("missing")
+    return state
+`.trimStart());
+  assert.deepEqual(stable.diagnostics, []);
+  assert.doesNotMatch(stable.code ?? "", /__velarNarrow/u);
+
+  // 可变绑定仍可能在闭包或后续赋值中失效，继续保留原有守卫。
+  const mutable = compileCore(`
+type State:
+    label: string
+
+def requireState(states: readonly Map<number, readonly State>, key: number) -> readonly State:
+    let state = states.get(key)
+    if state == null: throw Error("missing")
+    return state
+`.trimStart());
+  assert.deepEqual(mutable.diagnostics, []);
+  assert.match(mutable.code ?? "", /__velarNarrow/u);
 });
 
 test("aliases callbacks methods and getters use runtime narrowing guards without effect summaries", () => {
@@ -27774,17 +27938,18 @@ test("CLI emits complete Web application assets", async () => {
     deployment: { manifest: string; fallback: string | null; contentSecurityPolicy: boolean };
     assets: Array<{ path: string; sizeBytes: number; sha256: string; role: string }>;
   };
-  assert.equal(manifest.formatVersion, 3);
+  assert.equal(manifest.formatVersion, 4);
+  assert.equal((manifest as typeof manifest & { mode: string }).mode, "production");
   assert.equal(manifest.kind, "velar-framework-build");
   assert.deepEqual(manifest.framework, {
     id: "@velarscript/web",
     capability: "web",
     target: "browser",
-    protocolVersion: 1,
+    protocolVersion: 2,
     apiVersion: "0.10",
     artifactKind: "velar-web-build",
   });
-  assert.deepEqual(manifest.compiler, { name: "velar", version: "0.15.0" });
+  assert.deepEqual(manifest.compiler, { name: "velar", version: "0.16.0" });
   assert.match(manifest.buildId, /^[a-f0-9]{64}$/u);
   assert.equal(manifest.sourceMaps, true);
   assert.equal(manifest.entry, `assets/${javascript}`);

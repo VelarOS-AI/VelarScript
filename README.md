@@ -120,7 +120,8 @@ spelling gets a diagnostic naming the one current spelling, so a model
 self-corrects in a single round and a person learns the language from the
 compiler. This is measured by blind tests, not claimed.
 
-**There is no lock-in.** Vel compiles to legible, source-mapped JavaScript. If
+**There is no lock-in.** Vel can emit legible JavaScript with an independently
+enabled Source Map. If
 Vel itself ever becomes the obstacle, take the emitted output and keep
 shipping — an exit enforced by a
 [permanent acceptance gate](tests/package.acceptance.ts), not promised in prose.

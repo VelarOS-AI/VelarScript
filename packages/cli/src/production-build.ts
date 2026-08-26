@@ -16,6 +16,7 @@ import { isNodeOnlyModule, nodeModuleDiagnostic } from "@velarscript/node/compil
 import { assertUniqueEmbeddedModuleOutputs, embeddedModuleOutputPath } from "./embedded-modules.ts";
 import { BUILD_STAGING_MARKER } from "./build-staging.ts";
 import { CORE_WORKER_CONFIG_KEY } from "./project-format.ts";
+import type { JavaScriptBuildMode } from "./javascript-output.ts";
 
 export interface ProductionBuildResult {
   readonly framework: ProductionFrameworkIdentity;
@@ -24,6 +25,7 @@ export interface ProductionBuildResult {
   readonly modules: ProductionModuleSummary;
   readonly dependencies: ProductionDependencySummary;
   readonly sourceMaps: boolean;
+  readonly mode: JavaScriptBuildMode;
 }
 
 export interface ProductionFrameworkIdentity {
@@ -60,7 +62,7 @@ export function isAbsoluteBrowserImportPath(specifier: string): boolean {
 }
 
 export interface ProductionBuildManifest {
-  readonly formatVersion: 3;
+  readonly formatVersion: 4;
   readonly kind: "velar-framework-build";
   readonly framework: ProductionFrameworkIdentity;
   readonly compiler: {
@@ -69,6 +71,7 @@ export interface ProductionBuildManifest {
   };
   readonly buildId: string;
   readonly sourceMaps: boolean;
+  readonly mode: JavaScriptBuildMode;
   readonly entry: string;
   readonly stylesheet: string | null;
   readonly modules: ProductionModuleSummary;
@@ -82,7 +85,12 @@ export interface ProductionBuildManifest {
   }[];
 }
 
-export async function buildProductionFramework(project: ProjectResult, outputDirectory: string): Promise<ProductionBuildResult> {
+export async function buildProductionFramework(
+  project: ProjectResult,
+  outputDirectory: string,
+  mode: JavaScriptBuildMode = "production",
+  sourceMaps = false,
+): Promise<ProductionBuildResult> {
   const framework = project.framework;
   if (!framework) throw new Error("A production application build requires a framework host");
   await mkdir(outputDirectory, { recursive: true });
@@ -95,16 +103,17 @@ export async function buildProductionFramework(project: ProjectResult, outputDir
     format: "esm",
     platform: "browser",
     target: "es2022",
-    minify: true,
+    minify: mode === "production",
+    keepNames: mode === "readable",
     treeShaking: true,
-    sourcemap: framework.host.sourceMaps(framework.config) ? "linked" : false,
-    sourcesContent: framework.host.sourceMaps(framework.config),
+    sourcemap: sourceMaps ? "linked" : false,
+    sourcesContent: sourceMaps,
     legalComments: "none",
     metafile: true,
     entryNames: "assets/[name]-[hash]",
     chunkNames: "assets/chunk-[name]-[hash]",
     assetNames: "assets/[name]-[hash]",
-    plugins: [velarModules(project)],
+    plugins: [velarModules(project, sourceMaps)],
     logLevel: "silent",
   });
   const entryOutput = Object.entries(result.metafile.outputs).find(([, output]) => Boolean(output.entryPoint));
@@ -129,12 +138,13 @@ export async function buildProductionFramework(project: ProjectResult, outputDir
         format: "esm",
         platform: "browser",
         target: "es2022",
-        minify: true,
+        minify: mode === "production",
+        keepNames: mode === "readable",
         treeShaking: true,
-        sourcemap: framework.host.sourceMaps(framework.config) ? "linked" : false,
-        sourcesContent: framework.host.sourceMaps(framework.config),
+        sourcemap: sourceMaps ? "linked" : false,
+        sourcesContent: sourceMaps,
         legalComments: "none",
-        plugins: [velarModules(project)],
+        plugins: [velarModules(project, sourceMaps)],
         logLevel: "silent",
       });
     }
@@ -161,7 +171,8 @@ export async function buildProductionFramework(project: ProjectResult, outputDir
     stylesheetPath,
     modules: moduleSummary(project),
     dependencies: dependencySummary(project),
-    sourceMaps: framework.host.sourceMaps(framework.config),
+    sourceMaps,
+    mode,
   };
 }
 
@@ -207,12 +218,13 @@ export async function writeProductionManifest(
     .update(assets.map((asset) => `${asset.path}\0${asset.sha256}`).join("\n"))
     .digest("hex");
   const manifest: ProductionBuildManifest = {
-    formatVersion: 3,
+    formatVersion: 4,
     kind: "velar-framework-build",
     framework: build.framework,
     compiler: { name: "velar", version: VELAR_VERSION },
     buildId,
     sourceMaps: build.sourceMaps,
+    mode: build.mode,
     entry: build.entryPath,
     stylesheet: build.stylesheetPath,
     modules: build.modules,
@@ -275,7 +287,7 @@ function assetRole(path: string, build: ProductionBuildResult): ProductionBuildM
   return "asset";
 }
 
-function velarModules(project: ProjectResult): Plugin {
+function velarModules(project: ProjectResult, sourceMaps: boolean): Plugin {
   const modulesByPath = new Map<string, ProjectResult["modules"][number]>();
   const resourcesByWrapperPath = new Map(project.resources
     .filter((resource) => resource.source.startsWith("."))
@@ -313,7 +325,7 @@ function velarModules(project: ProjectResult): Plugin {
       context.onLoad({ filter: /\.vel$/, namespace: "file" }, (arguments_) => {
         const module = moduleAt(arguments_.path);
         if (!module) return { errors: [{ text: `VelarScript module '${arguments_.path}' was not compiled` }] };
-        const sourceMap = module.result.sourceMap
+        const sourceMap = sourceMaps && module.result.sourceMap
           ? `\n//# sourceMappingURL=data:application/json;base64,${Buffer.from(module.result.sourceMap).toString("base64")}\n`
           : "";
         return {
@@ -325,7 +337,7 @@ function velarModules(project: ProjectResult): Plugin {
       context.onLoad({ filter: /.*/, namespace: "velar-embedded" }, (arguments_) => {
         const embedded = embeddedByPath.get(resolve(arguments_.path));
         if (!embedded) return { errors: [{ text: `Embedded JavaScript module '${arguments_.path}' was not compiled` }] };
-        const sourceMap = embedded.sourceMap
+        const sourceMap = sourceMaps && embedded.sourceMap
           ? `\n//# sourceMappingURL=data:application/json;base64,${Buffer.from(embedded.sourceMap).toString("base64")}\n`
           : "";
         return {

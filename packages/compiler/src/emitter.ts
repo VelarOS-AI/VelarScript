@@ -183,15 +183,40 @@ export class JavaScriptEmitter {
     this.prepareEmbeddedJavaScript(program);
     this.collectDeclarations(program);
     this.collectRuntimeUses(program);
-    const statements = program.body
-      .map((statement) => this.emitJavaScriptNode(statement.span, () => this.emitStatement(statement, 0)))
-      .filter((item) => item.code.length > 0);
+    const emittedStatements = program.body
+      .map((statement) => ({
+        statement,
+        node: this.emitJavaScriptNode(statement.span, () => this.emitStatement(statement, 0)),
+      }))
+      .filter((item) => item.node.code.length > 0);
+    // VelarScript types are real runtime values only when emitted code uses
+    // them (`Type.is`, `Type.parse`, `Type.from`, a runtime validator, and so
+    // on). An annotation by itself is erased. Keep evaluating the imported
+    // module, but do not ask the JavaScript linker for named exports which the
+    // generated module never reads.
+    const runtimeStatementIdentifiers = javaScriptIdentifiers(emittedStatements
+      .filter(({ statement }) => statement.kind !== "ImportDeclaration")
+      .map(({ node }) => node.code)
+      .concat(
+        this.copyPlanDeclarations,
+        [...this.hoistedGenericInstances.keys()],
+      ));
+    const statements = emittedStatements.map(({ statement, node }) => {
+      if (statement.kind !== "ImportDeclaration" || statement.javascript || statement.resource === "json") return node;
+      const specifiers = statement.specifiers.filter((specifier) => runtimeStatementIdentifiers.has(specifier.local));
+      if (specifiers.length === statement.specifiers.length) return node;
+      const code = specifiers.length === 0
+        ? `import ${JSON.stringify(statement.source.endsWith(".vel") ? `${statement.source.slice(0, -4)}.js` : statement.source)};`
+        : this.emitImport({ ...statement, specifiers }, "");
+      return { ...node, code };
+    });
 
     const needsDirectCollectionInfrastructure = this.needsDirectCollectionInfrastructure
       || this.needsRecordHelpers
       || this.needsObjectBindingHelpers
       || this.needsListBindingHelpers;
     const helpers: string[] = [...this.additionalHelpers(program)];
+    const statementIdentifiers = javaScriptIdentifiers(statements.map((statement) => statement.code));
     const builtinValues = new Set(this.hints.builtinValueReferences.values());
     if (builtinValues.has("Json")) {
       helpers.push('import * as __velarJsonNamespace from "velar/json";');
@@ -209,7 +234,11 @@ export class JavaScriptEmitter {
       helpers.push('import * as __velarMathNamespace from "velar/math";');
       this.requiredRuntimeModules.add("velar/math");
     }
-    if (builtinValues.has("range")) {
+    // A direct one-slot `for value in range(...)` lowers to the counted-range
+    // owner below and never calls the ordinary List-producing function. The
+    // analyzer still records the source-level `range` reference, so select the
+    // value import from emitted identifiers instead of that broader fact.
+    if (builtinValues.has("range") && statementIdentifiers.has("__velarRange")) {
       helpers.push('import { range as __velarRange } from "velar/collections";');
       this.requiredRuntimeModules.add("velar/collections");
     }
@@ -278,9 +307,26 @@ export class JavaScriptEmitter {
       "  return __velarDurationValue(operator === \"*\" ? milliseconds * right : milliseconds / right);",
       "}",
     ].join("\n"));
+    const reactiveBridgeIdentifiers = new Set(javaScriptIdentifiers([
+      ...statements.map((statement) => statement.code),
+      ...helpers,
+    ]));
+    // Record projection/construction and binding helpers are emitted after the
+    // bridge import is selected, so state their small reactive dependency
+    // closure explicitly. Direct structural-match operations are already
+    // present in `statements` and therefore need no extra entry here.
+    if (statementIdentifiers.has("__velarRecordFrom")) reactiveBridgeIdentifiers.add("__velarReactiveCollectionRead");
+    if (statementIdentifiers.has("__velarCreateRecord")
+      || statementIdentifiers.has("__velarCreateRecordAsync")
+      || this.needsObjectBindingHelpers
+      || this.needsListBindingHelpers) {
+      reactiveBridgeIdentifiers.add("__velarReactiveCollectionTrack");
+      reactiveBridgeIdentifiers.add("__velarReactiveCollectionRead");
+    }
     helpers.push(...this.reactiveBridgeHelpers(
       this.hints.javaScriptCallBoundaries.size > 0,
       this.sharedRuntimeModules ? needsDirectCollectionInfrastructure : this.needsCollectionHelpers,
+      reactiveBridgeIdentifiers,
     ));
     // Runtime imports are selected from JavaScript identifier tokens, not raw
     // substrings. Raw text produces two wrong answers: a user string such as
@@ -293,6 +339,10 @@ export class JavaScriptEmitter {
       ...helpers,
     ]);
     const usesGeneratedName = (name: string): boolean => generatedIdentifiers.has(name);
+    const needsRecordFromHelper = usesGeneratedName("__velarRecordFrom");
+    const needsCreateRecordHelper = usesGeneratedName("__velarCreateRecord");
+    const needsCreateRecordAsyncHelper = usesGeneratedName("__velarCreateRecordAsync");
+    const needsControlledRecordConstruction = needsCreateRecordHelper || needsCreateRecordAsyncHelper;
     if (this.needsExternExportHelper) {
       // W-22: an extern module declaration is trusted for shapes, but the
       // declared export must actually exist. The bridge verifies presence at
@@ -460,18 +510,67 @@ export class JavaScriptEmitter {
     const needsRuntimeTypeRuntime = this.needsRuntimeTypeHelpers || this.runtimeTypes.size > 0
       || program.body.some((statement) => statement.kind === "EnumDeclaration");
     if (needsDirectCollectionInfrastructure && this.sharedRuntimeModules) {
-      this.requireRuntimeModule(VELAR_COLLECTION_HOST_MODULE);
-      helpers.push([
-        "import {",
-        ...VELAR_COLLECTION_HOST_EXPORTS.map((name) => `  ${name},`),
-        `} from ${JSON.stringify(VELAR_COLLECTION_HOST_MODULE)};`,
-      ].join("\n"));
+      // Direct match/binding/record helpers are module-local algorithms over
+      // the captured collection host ABI. Import only the operations the
+      // emitted statements and selected local helpers actually reference;
+      // importing the entire ABI made a two-field `Type.from(...)` projection
+      // pull dozens of unrelated List, Set, and Map names into generated code.
+      const directUses = new Set(generatedIdentifiers);
+      const include = (...names: readonly string[]): void => { for (const name of names) directUses.add(name); };
+      if (needsRecordFromHelper || needsControlledRecordConstruction) {
+        include(
+          "__velarCollectionRecordGetOwnPropertyDescriptor",
+          "__velarCollectionRecordNativeRangeError",
+          "__velarCollectionRecordDefineProperty",
+          "__velarCollectionListIsArray",
+          "__velarCollectionNativeTypeError",
+        );
+      }
+      if (needsRecordFromHelper) include("__velarReactiveCollectionRead");
+      if (needsControlledRecordConstruction) {
+        include(
+          "__velarCollectionRecordOwnSymbols",
+          "__velarCollectionRecordOwnNames",
+          "__velarReactiveCollectionTrack",
+          "__velarReactiveCollectionRead",
+        );
+      }
+      if (this.needsObjectBindingHelpers) {
+        include(
+          "__velarCollectionListIsArray",
+          "__velarCollectionNativeTypeError",
+          "__velarCollectionRecordGetOwnPropertyDescriptor",
+          "__velarCollectionRecordOwnSymbols",
+          "__velarCollectionRecordOwnNames",
+          "__velarCollectionRecordNativeRangeError",
+          "__velarCollectionRecordDefineProperty",
+          "__velarReactiveCollectionTrack",
+          "__velarReactiveCollectionRead",
+        );
+      }
+      if (this.needsListBindingHelpers) {
+        include(
+          "__velarCollectionListNativeRangeError",
+          "__velarCollectionListGetOwnPropertyDescriptor",
+          "__velarCollectionNativeArray",
+          "__velarReactiveCollectionTrack",
+          "__velarReactiveCollectionRead",
+        );
+      }
+      const imports = VELAR_COLLECTION_HOST_EXPORTS.filter((name) => directUses.has(name));
+      if (imports.length > 0) {
+        this.requireRuntimeModule(VELAR_COLLECTION_HOST_MODULE);
+        helpers.push([
+          "import {",
+          ...imports.map((name) => `  ${name},`),
+          `} from ${JSON.stringify(VELAR_COLLECTION_HOST_MODULE)};`,
+        ].join("\n"));
+      }
     } else if (!this.sharedRuntimeModules && (this.needsCollectionHelpers || needsRuntimeTypeRuntime)) {
       helpers.push(VELAR_COLLECTION_IDENTITY_RUNTIME);
     }
     if (needsRuntimeTypeRuntime) {
       if (this.sharedRuntimeModules) {
-        this.requireRuntimeModule(VELAR_TYPE_VALIDATION_MODULE);
         const imports = [
           ["registerRuntimeType", "__velarRegisterRuntimeType"], ["ValidationError", "__VelarValidationError"],
           ["validationState", "__velarValidationState"], ["validationSet", "__velarValidationSet"],
@@ -483,7 +582,10 @@ export class JavaScriptEmitter {
           ["validationFreeze", "__velarValidationFreeze"],
           ["listTypeIs", "__velarListTypeIs"], ["setTypeIs", "__velarSetTypeIs"], ["mapTypeIs", "__velarMapTypeIs"], ["recordTypeIs", "__velarRecordTypeIs"],
         ].filter(([, local]) => usesGeneratedName(local!));
-        helpers.push(`import { ${imports.map(([exported, local]) => `${exported} as ${local}`).join(", ")} } from ${JSON.stringify(VELAR_TYPE_VALIDATION_MODULE)};`);
+        if (imports.length > 0) {
+          this.requireRuntimeModule(VELAR_TYPE_VALIDATION_MODULE);
+          helpers.push(`import { ${imports.map(([exported, local]) => `${exported} as ${local}`).join(", ")} } from ${JSON.stringify(VELAR_TYPE_VALIDATION_MODULE)};`);
+        }
       } else {
         helpers.push(VELAR_COLLECTION_TYPE_RUNTIME);
         helpers.push(VELAR_TYPE_REGISTRY_RUNTIME);
@@ -494,14 +596,16 @@ export class JavaScriptEmitter {
     }
     if (this.needsCollectionHelpers) {
       if (this.sharedRuntimeModules) {
-        this.requireRuntimeModule(VELAR_COLLECTION_LOWERING_MODULE);
         const imports = VELAR_COLLECTION_LOWERING_EXPORTS.filter((name) => usesGeneratedName(name)
           || (this.needsListBindingHelpers && name === "__velarValidateDenseList"));
-        helpers.push([
-          "import {",
-          ...imports.map((name) => `  ${name},`),
-          `} from ${JSON.stringify(VELAR_COLLECTION_LOWERING_MODULE)};`,
-        ].join("\n"));
+        if (imports.length > 0) {
+          this.requireRuntimeModule(VELAR_COLLECTION_LOWERING_MODULE);
+          helpers.push([
+            "import {",
+            ...imports.map((name) => `  ${name},`),
+            `} from ${JSON.stringify(VELAR_COLLECTION_LOWERING_MODULE)};`,
+          ].join("\n"));
+        }
       } else {
         helpers.push(VELAR_COLLECTION_LIST_RUNTIME);
         helpers.push(VELAR_COLLECTION_SET_MAP_RUNTIME);
@@ -510,7 +614,7 @@ export class JavaScriptEmitter {
       }
     }
     if (this.needsRecordHelpers) {
-      helpers.push([
+      const recordHelpers = [
         "const __velarMaxRecordFields = 1000000;",
         "",
         "function __velarSetRecordField(output, field, value, count) {",
@@ -519,75 +623,88 @@ export class JavaScriptEmitter {
         "  __velarCollectionRecordDefineProperty(output, field, { value: value ?? null, writable: true, enumerable: true, configurable: true });",
         "  return present ? count : count + 1;",
         "}",
-        "function __velarSpreadRecord(output, value, count) {",
-        "  if (value === null || typeof value !== \"object\" || __velarCollectionListIsArray(value)) throw new __velarCollectionNativeTypeError(\"Object spread requires a record object\");",
-        "  if (__velarCollectionRecordOwnSymbols(value).length > 0) throw new __velarCollectionNativeTypeError(\"Object spread cannot copy symbol fields\");",
-        "  __velarReactiveCollectionTrack(value);",
-        "  const fields = __velarCollectionRecordOwnNames(value);",
-        "  if (fields.length > __velarMaxRecordFields) throw new __velarCollectionRecordNativeRangeError(\"Object spread cannot inspect more than 1000000 fields\");",
-        "  for (let index = 0; index < fields.length; index += 1) {",
-        "    const field = fields[index];",
-        "    const descriptor = __velarCollectionRecordGetOwnPropertyDescriptor(value, field);",
-        "    if (!descriptor) throw new __velarCollectionNativeTypeError(\"Object spread source changed while it was being copied\");",
-        "    if (!descriptor.enumerable) continue;",
-        "    if (!(\"value\" in descriptor)) throw new __velarCollectionNativeTypeError(\"Object spread cannot copy accessor field '\" + field + \"'\");",
-        "    count = __velarSetRecordField(output, field, __velarReactiveCollectionRead(value, field, descriptor.value), count);",
-        "  }",
-        "  return count;",
-        "}",
-        "function __velarRecordFrom(source, overrides, fields, target) {",
-        "  if (source === null || typeof source !== \"object\" || __velarCollectionListIsArray(source)) throw new __velarCollectionNativeTypeError(target + \".from requires a record source\");",
-        "  if (overrides !== null && (typeof overrides !== \"object\" || __velarCollectionListIsArray(overrides))) throw new __velarCollectionNativeTypeError(target + \".from overrides must be a record\");",
-        "  const output = {};",
-        "  let count = 0;",
-        "  for (let index = 0; index < fields.length; index += 1) {",
-        "    const field = fields[index][0];",
-        "    const optional = fields[index][1];",
-        "    let owner = overrides;",
-        "    let descriptor = overrides === null ? undefined : __velarCollectionRecordGetOwnPropertyDescriptor(overrides, field);",
-        "    if (descriptor === undefined) {",
-        "      owner = source;",
-        "      descriptor = __velarCollectionRecordGetOwnPropertyDescriptor(source, field);",
-        "    }",
-        "    if (descriptor === undefined) {",
-        "      if (optional) continue;",
-        "      throw new __velarCollectionNativeTypeError(target + \".from source is missing required field '\" + field + \"'\");",
-        "    }",
-        "    if (!descriptor.enumerable || !(\"value\" in descriptor)) throw new __velarCollectionNativeTypeError(target + \".from cannot read non-data field '\" + field + \"'\");",
-        "    count = __velarSetRecordField(output, field, __velarReactiveCollectionRead(owner, field, descriptor.value), count);",
-        "  }",
-        "  return output;",
-        "}",
-        "function __velarCreateRecord(parts) {",
-        "  const output = {};",
-        "  let count = 0;",
-        "  for (let index = 0; index < parts.length; index += 1) {",
-        "    const spread = parts[index][0];",
-        "    const field = parts[index][1];",
-        "    const read = parts[index][2];",
-        "    if (spread) count = __velarSpreadRecord(output, read(), count);",
-        "    else {",
-        "      count = __velarSetRecordField(output, field, read(), count);",
-        "    }",
-        "  }",
-        "  return output;",
-        "}",
-        "async function __velarCreateRecordAsync(parts) {",
-        "  const output = {};",
-        "  let count = 0;",
-        "  for (let index = 0; index < parts.length; index += 1) {",
-        "    const spread = parts[index][0];",
-        "    const field = parts[index][1];",
-        "    const asynchronous = parts[index][2];",
-        "    const read = parts[index][3];",
-        "    if (spread) count = __velarSpreadRecord(output, asynchronous ? await read() : read(), count);",
-        "    else {",
-        "      count = __velarSetRecordField(output, field, asynchronous ? await read() : read(), count);",
-        "    }",
-        "  }",
-        "  return output;",
-        "}",
-      ].join("\n"));
+      ];
+      if (needsControlledRecordConstruction) {
+        recordHelpers.push(
+          "function __velarSpreadRecord(output, value, count) {",
+          "  if (value === null || typeof value !== \"object\" || __velarCollectionListIsArray(value)) throw new __velarCollectionNativeTypeError(\"Object spread requires a record object\");",
+          "  if (__velarCollectionRecordOwnSymbols(value).length > 0) throw new __velarCollectionNativeTypeError(\"Object spread cannot copy symbol fields\");",
+          "  __velarReactiveCollectionTrack(value);",
+          "  const fields = __velarCollectionRecordOwnNames(value);",
+          "  if (fields.length > __velarMaxRecordFields) throw new __velarCollectionRecordNativeRangeError(\"Object spread cannot inspect more than 1000000 fields\");",
+          "  for (let index = 0; index < fields.length; index += 1) {",
+          "    const field = fields[index];",
+          "    const descriptor = __velarCollectionRecordGetOwnPropertyDescriptor(value, field);",
+          "    if (!descriptor) throw new __velarCollectionNativeTypeError(\"Object spread source changed while it was being copied\");",
+          "    if (!descriptor.enumerable) continue;",
+          "    if (!(\"value\" in descriptor)) throw new __velarCollectionNativeTypeError(\"Object spread cannot copy accessor field '\" + field + \"'\");",
+          "    count = __velarSetRecordField(output, field, __velarReactiveCollectionRead(value, field, descriptor.value), count);",
+          "  }",
+          "  return count;",
+          "}",
+        );
+      }
+      if (needsRecordFromHelper) {
+        recordHelpers.push(
+          "function __velarRecordFrom(source, overrides, fields, target) {",
+          "  if (source === null || typeof source !== \"object\" || __velarCollectionListIsArray(source)) throw new __velarCollectionNativeTypeError(target + \".from requires a record source\");",
+          "  if (overrides !== null && (typeof overrides !== \"object\" || __velarCollectionListIsArray(overrides))) throw new __velarCollectionNativeTypeError(target + \".from overrides must be a record\");",
+          "  const output = {};",
+          "  let count = 0;",
+          "  for (let index = 0; index < fields.length; index += 1) {",
+          "    const field = fields[index][0];",
+          "    const optional = fields[index][1];",
+          "    let owner = overrides;",
+          "    let descriptor = overrides === null ? undefined : __velarCollectionRecordGetOwnPropertyDescriptor(overrides, field);",
+          "    if (descriptor === undefined) {",
+          "      owner = source;",
+          "      descriptor = __velarCollectionRecordGetOwnPropertyDescriptor(source, field);",
+          "    }",
+          "    if (descriptor === undefined) {",
+          "      if (optional) continue;",
+          "      throw new __velarCollectionNativeTypeError(target + \".from source is missing required field '\" + field + \"'\");",
+          "    }",
+          "    if (!descriptor.enumerable || !(\"value\" in descriptor)) throw new __velarCollectionNativeTypeError(target + \".from cannot read non-data field '\" + field + \"'\");",
+          "    count = __velarSetRecordField(output, field, __velarReactiveCollectionRead(owner, field, descriptor.value), count);",
+          "  }",
+          "  return output;",
+          "}",
+        );
+      }
+      if (needsCreateRecordHelper) {
+        recordHelpers.push(
+          "function __velarCreateRecord(parts) {",
+          "  const output = {};",
+          "  let count = 0;",
+          "  for (let index = 0; index < parts.length; index += 1) {",
+          "    const spread = parts[index][0];",
+          "    const field = parts[index][1];",
+          "    const read = parts[index][2];",
+          "    if (spread) count = __velarSpreadRecord(output, read(), count);",
+          "    else count = __velarSetRecordField(output, field, read(), count);",
+          "  }",
+          "  return output;",
+          "}",
+        );
+      }
+      if (needsCreateRecordAsyncHelper) {
+        recordHelpers.push(
+          "async function __velarCreateRecordAsync(parts) {",
+          "  const output = {};",
+          "  let count = 0;",
+          "  for (let index = 0; index < parts.length; index += 1) {",
+          "    const spread = parts[index][0];",
+          "    const field = parts[index][1];",
+          "    const asynchronous = parts[index][2];",
+          "    const read = parts[index][3];",
+          "    if (spread) count = __velarSpreadRecord(output, asynchronous ? await read() : read(), count);",
+          "    else count = __velarSetRecordField(output, field, asynchronous ? await read() : read(), count);",
+          "  }",
+          "  return output;",
+          "}",
+        );
+      }
+      helpers.push(recordHelpers.join("\n"));
     }
     if (this.needsObjectBindingHelpers) {
       helpers.push([
@@ -689,11 +806,11 @@ export class JavaScriptEmitter {
     return sourceMapFor(this.generatedCode, this.generatedMappings, source);
   }
 
-  embeddedModules(source: SourceText): readonly CompilerEmbeddedJavaScriptModule[] {
+  embeddedModules(source: SourceText, emitSourceMap = true): readonly CompilerEmbeddedJavaScriptModule[] {
     return [...this.embeddedJavaScript.values()].map((module) => ({
       specifier: module.specifier,
       code: module.code,
-      sourceMap: sourceMapFor(module.code, module.mappings, source),
+      sourceMap: emitSourceMap ? sourceMapFor(module.code, module.mappings, source) : "",
       sourceSpan: module.statement.sourceSpan,
     }));
   }
@@ -740,23 +857,27 @@ export class JavaScriptEmitter {
     return [];
   }
 
-  protected reactiveBridgeHelpers(needsJavaScriptCallBoundary: boolean, needsCollections: boolean): readonly string[] {
+  protected reactiveBridgeHelpers(
+    needsJavaScriptCallBoundary: boolean,
+    needsCollections: boolean,
+    usedIdentifiers: ReadonlySet<string> = new Set(),
+  ): readonly string[] {
     if (!needsJavaScriptCallBoundary && !needsCollections) return [];
     if (this.sharedRuntimeModules) {
-      this.requiredRuntimeModules.add(VELAR_REACTIVE_BRIDGE_MODULE);
       const imports = [
-        "reactiveRaw as __velarReactiveRaw",
-        "hostRaw as __velarHostRaw",
-        ...(needsCollections ? [
-          "reactiveIterateKey as __velarReactiveIterateKey",
-          "reactiveStructureKey as __velarReactiveStructureKey",
-          "reactiveCollectionRead as __velarReactiveCollectionRead",
-          "reactiveCollectionTrack as __velarReactiveCollectionTrack",
-          "reactiveCollectionLink as __velarReactiveCollectionLink",
-          "reactiveCollectionTrigger as __velarReactiveCollectionTrigger",
-          "reactiveCollectionUnlink as __velarReactiveCollectionUnlink",
-        ] : []),
-      ];
+        ["reactiveRaw", "__velarReactiveRaw"],
+        ["hostRaw", "__velarHostRaw"],
+        ["reactiveIterateKey", "__velarReactiveIterateKey"],
+        ["reactiveStructureKey", "__velarReactiveStructureKey"],
+        ["reactiveCollectionRead", "__velarReactiveCollectionRead"],
+        ["reactiveCollectionTrack", "__velarReactiveCollectionTrack"],
+        ["reactiveCollectionLink", "__velarReactiveCollectionLink"],
+        ["reactiveCollectionTrigger", "__velarReactiveCollectionTrigger"],
+        ["reactiveCollectionUnlink", "__velarReactiveCollectionUnlink"],
+      ].filter(([, local]) => usedIdentifiers.has(local!))
+        .map(([exported, local]) => `${exported} as ${local}`);
+      if (imports.length === 0) return [];
+      this.requiredRuntimeModules.add(VELAR_REACTIVE_BRIDGE_MODULE);
       return [`import { ${imports.join(", ")} } from ${JSON.stringify(VELAR_REACTIVE_BRIDGE_MODULE)};`];
     }
     return [VELAR_NON_REACTIVE_BRIDGE_RUNTIME, ...(needsCollections ? [VELAR_NON_REACTIVE_COLLECTION_BRIDGE_RUNTIME] : [])];
@@ -3497,6 +3618,7 @@ export class JavaScriptEmitter {
       case "setIntersection": return "__velarSetIntersection";
       case "setDifference": return "__velarSetDifference";
       case "mapSet": return "__velarMapSet";
+      case "mapGetOrSet": return "__velarMapGetOrSet";
       case "mapUpdate": return "__velarMapUpdate";
       case "mapHas": return "__velarMapHas";
       case "mapRemove": return "__velarMapRemove";
@@ -3841,8 +3963,12 @@ function javaScriptMemberAccess(name: string): string {
 
 function javaScriptIdentifiers(sources: readonly string[]): ReadonlySet<string> {
   const identifiers = new Set<string>();
-  const identifierStart = (character: string): boolean => /[A-Za-z_$]/u.test(character);
-  const identifierPart = (character: string): boolean => /[A-Za-z0-9_$]/u.test(character);
+  // 生成代码里的合法裸标识符只会使用 ASCII。这里位于每个模块的发射热路径，
+  // 逐字符创建字符串再跑两个正则会产生大量短命对象；直接判断 UTF-16 码元既
+  // 保留完全相同的词法范围，也让扫描成本稳定为一次 charCodeAt 和整数比较。
+  const identifierStart = (code: number): boolean =>
+    (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || code === 36 || code === 95;
+  const identifierPart = (code: number): boolean => identifierStart(code) || (code >= 48 && code <= 57);
 
   for (const source of sources) {
     let index = 0;
@@ -3893,10 +4019,10 @@ function javaScriptIdentifiers(sources: readonly string[]): ReadonlySet<string> 
           index += 1;
           continue;
         }
-        if (identifierStart(character)) {
+        if (identifierStart(source.charCodeAt(index))) {
           const start = index;
           index += 1;
-          while (index < source.length && identifierPart(source[index]!)) index += 1;
+          while (index < source.length && identifierPart(source.charCodeAt(index))) index += 1;
           identifiers.add(source.slice(start, index));
           continue;
         }

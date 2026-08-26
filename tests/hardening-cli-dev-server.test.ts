@@ -132,8 +132,9 @@ async function webProject(root: string, files: Readonly<Record<string, string>> 
       formatVersion: 2,
       entry: "src/main.vel",
       outDir: "dist",
+      build: { sourceMaps: true },
       extensions: ["@velarscript/web"],
-      web: { base: "/", build: { sourceMaps: true }, deployment: { spaFallback: true } },
+      web: { base: "/", deployment: { spaFallback: true } },
     }, null, 2)}\n`,
     ...files,
   });

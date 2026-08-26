@@ -34,13 +34,15 @@ each Web compiler layer and replaces only its target-owned module sources.
 Adding a Game application follows the same contract; it does not add a Game
 branch to Core AST, `ValueType`, Analyzer, formatter, semantic kinds, or emitter.
 
-### Compiler-owned contextual names
+### Context annotations
 
-The source spelling `@name` has one implementation contract across Core and
-every compiler extension: `@` selects the compiler-owned namespace for the
-current syntax context. It is not a generic decorator hook and must never be
-implemented through runtime functions, metadata, reflection, declaration
-wrapping, or user registration.
+The source spelling `@name` is a context annotation across Core and every
+compiler extension; `@` is its annotation introducer. It attaches a
+compiler-owned compile-time role to the following declaration or structural
+entry, with the accepted name and role selected by the current syntax context.
+It is not a generic decorator hook and must never be implemented through
+runtime functions, author-defined metadata, reflection, declaration wrapping,
+or user registration.
 
 An owner that adds an `@name` must keep one closed roster for the relevant
 context and use it for parsing, diagnostics, formatting, editor support, and
@@ -516,8 +518,10 @@ Collection runtime ownership is also split from collection values. Standalone
 compilation inlines both the captured Array/Map/Set/Object/Reflect host ABI and
 the stateless List/Set/Map/Record lowering algorithms. Project compilation uses
 two hidden compiler modules: the algorithm module imports the host ABI and the
-reactive bridge through its declared implementation dependency graph, while
-generated consumers import the algorithm module. A consumer does not repeat
+target-selected reactive ABI through its declared implementation dependency
+graph, while generated consumers import the algorithm module. Core supplies a
+static identity/no-op implementation; the Web extension owns and selects the
+registry-backed implementation. A consumer does not repeat
 those transitive host/reactive imports merely because it calls a collection
 algorithm; it declares them directly only when it also emits module-local
 Record construction, binding, or structural-match lowering that calls that ABI.

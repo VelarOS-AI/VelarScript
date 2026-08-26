@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import type { ProjectResource, ProjectResult } from "./project.ts";
+import { renderJavaScriptOutput, type JavaScriptBuildMode } from "./javascript-output.ts";
 
 export type ResourceOutputLayout = "sandbox" | "build";
 
@@ -9,6 +10,7 @@ export async function writeProjectResources(
   project: ProjectResult,
   outputRoot: string,
   layout: ResourceOutputLayout,
+  mode: JavaScriptBuildMode = "readable",
 ): Promise<void> {
   const outputs = new Map<string, ProjectResource>();
   for (const resource of project.resources) {
@@ -21,9 +23,19 @@ export async function writeProjectResources(
   }
   await Promise.all([...outputs].map(async ([target, resource]) => {
     await mkdir(dirname(target), { recursive: true });
+    const modulePath = `${target}.js`;
+    const moduleOutput = await renderJavaScriptOutput({
+      code: jsonResourceModule(resource.content),
+      sourceMap: null,
+      sourceFile: resource.inputPath,
+      outputFile: modulePath,
+      mode,
+      sourceMaps: false,
+      target: "node24",
+    });
     await Promise.all([
       writeFile(target, resource.content, "utf8"),
-      writeFile(`${target}.js`, jsonResourceModule(resource.content), "utf8"),
+      writeFile(modulePath, moduleOutput.code, "utf8"),
     ]);
   }));
 }

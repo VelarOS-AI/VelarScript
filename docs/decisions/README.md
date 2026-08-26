@@ -62,6 +62,9 @@ their titles are reproduced verbatim below.
 | [D93](D93-CANONICAL-COLLECTION-CONVERSION-ADVISORY.md) | 集合转换的唯一规范形建议 | A7 reports only proven identity-only collection conversions and names the existing snapshot or constructor, without turning ordinary style preferences into warnings. |
 | [D94](D94-CANONICAL-LIST-SOME-ADVISORY.md) | List 存在性查询的规范形建议 | A8 reports only the proven early-true/exhausted-false List loop and names `List.some`, while effectful or structurally wider loops stay silent. |
 | [D95](D95-EXACT-RECORD-PROJECTION.md) | 目标记录拥有精确投影 | Concrete record Types own `Target.from(source, overrides?)`; A9 reports only its proven closed-literal long form and makes target declaration order explicit. |
+| [D96](D96-MAP-GET-OR-SET.md) | Map 原子取值或写入 | `Map.getOrSet(key, fallback)` gives grouping and cache construction one linear, non-optional operation without weakening deep stale-flow validation. |
+| [D97](D97-EMITTED-RUNTIME-HYGIENE.md) | 编译产物运行时卫生与整数 range 校验 | Direct safe-integer ranges validate their count arithmetically, while project output imports and emits only the runtime helpers it actually calls. |
+| [D98](D98-DUAL-JAVASCRIPT-OUTPUT.md) | 双 JavaScript 产物模式 | `velar build` defaults to optimized production JavaScript; readable output and Source Map are independent, explicitly configurable build choices over the same checked program. |
 
 ## archive/
 

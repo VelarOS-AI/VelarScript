@@ -11,8 +11,8 @@ compiler entry owns the Web parser, analyzer, semantic index contribution,
 intrinsic API rules, dependency/public-interface inspection, and emitter as
 one versioned extension boundary. Its separate `./host` entry owns Web document
 generation, the development reload client, initial compile-error document, CSP
-and deployment projection, browser-test metadata, base-path behavior, and
-production source-map policy. The Web editor contribution owns JSX tag/native
+and deployment projection, browser-test metadata, and base-path behavior.
+Target-neutral build configuration owns the production Source Map switch. The Web editor contribution owns JSX tag/native
 HTML/native SVG completion, JSX attribute completion, and the special
 `children` rename guard; the generic CLI project semantic layer only supplies
 checked symbols and members.

@@ -22,7 +22,6 @@ export interface VelarWebConfig {
   /** A `publicDir`-relative icon path, or null to emit the blank default. */
   readonly icon: string | null;
   readonly publicConfig: Readonly<Record<string, unknown>>;
-  readonly build: { readonly sourceMaps: boolean };
   readonly security: {
     readonly contentSecurityPolicy: boolean;
     readonly connectSources: readonly string[];
@@ -50,11 +49,10 @@ function webConfig(value: unknown, manifestPath: string): VelarWebConfig {
     readonly base?: unknown;
     readonly icon?: unknown;
     readonly publicConfig?: unknown;
-    readonly build?: unknown;
     readonly security?: unknown;
     readonly deployment?: unknown;
   } | undefined;
-  if (web) knownFields(web as Record<string, unknown>, new Set(["title", "base", "icon", "publicConfig", "build", "security", "deployment"]), "web", manifestPath);
+  if (web) knownFields(web as Record<string, unknown>, new Set(["title", "base", "icon", "publicConfig", "security", "deployment"]), "web", manifestPath);
   const title = stringField(web?.title, "web.title", "VelarScript App");
   let base = stringField(web?.base, "web.base", "/");
   if (!base.startsWith("/")) throw new Error(`${manifestPath}: 'web.base' must start with '/'`);
@@ -66,7 +64,6 @@ function webConfig(value: unknown, manifestPath: string): VelarWebConfig {
     base,
     icon: iconField(web?.icon, manifestPath),
     publicConfig: publicConfigField(web?.publicConfig, manifestPath),
-    build: buildConfig(web?.build, manifestPath),
     security: securityConfig(web?.security, manifestPath),
     deployment,
   };
@@ -88,15 +85,6 @@ function iconField(value: unknown, manifestPath: string): string | null {
     throw new Error(`${manifestPath}: 'web.icon' must name a ${[...WEB_ICON_TYPES.keys()].join(", ")} file`);
   }
   return value;
-}
-
-function buildConfig(value: unknown, manifestPath: string): VelarWebConfig["build"] {
-  if (value !== undefined && (!value || typeof value !== "object" || Array.isArray(value))) {
-    throw new Error(`${manifestPath}: 'web.build' must be an object`);
-  }
-  const build = value as { readonly sourceMaps?: unknown } | undefined;
-  if (build) knownFields(build as Record<string, unknown>, new Set(["sourceMaps"]), "web.build", manifestPath);
-  return { sourceMaps: booleanField(build?.sourceMaps, "web.build.sourceMaps", false) };
 }
 
 function publicConfigField(value: unknown, manifestPath: string): Readonly<Record<string, unknown>> {

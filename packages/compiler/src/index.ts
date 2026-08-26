@@ -84,6 +84,12 @@ export interface CompileOptions {
   readonly sharedRuntimeModules?: boolean;
   /** 当前源文件是否作为程序入口生成 `@main`；直接编译单个源文件时默认为 true。 */
   readonly executeMain?: boolean;
+  /**
+   * 是否生成 Source Map。编译器 API 默认生成，便于开发工具和诊断调用方继续
+   * 获得完整位置信息；生产构建可显式关闭，避免在随后不会写出映射时仍遍历
+   * 整份生成代码和源位置表。
+   */
+  readonly emitSourceMap?: boolean;
 }
 
 export interface CompileResult {
@@ -261,8 +267,9 @@ function compileUnchecked(text: string, options: CompileOptions): CompileResult 
   )
     ?? new JavaScriptEmitter(analyzer.loweringHints(), options.exportFunctions, emitterOptions);
   const code = diagnostics.length === 0 ? emitter.emit(parsed.program) : null;
-  const sourceMap = code === null ? null : emitter.sourceMap(parsed.source);
-  const embeddedModules = code === null ? [] : emitter.embeddedModules?.(parsed.source) ?? [];
+  const emitSourceMap = options.emitSourceMap !== false;
+  const sourceMap = code === null || !emitSourceMap ? null : emitter.sourceMap(parsed.source);
+  const embeddedModules = code === null ? [] : emitter.embeddedModules?.(parsed.source, emitSourceMap) ?? [];
   const css = code === null ? null : emitter.css?.() ?? null;
   const styleSegments = code === null ? null : emitter.styleSegments?.() ?? null;
   const runtimeModules = code === null ? [] : emitter.runtimeModules?.() ?? [];
@@ -390,10 +397,25 @@ function parseModule(text: string, path: string, extensions: readonly CompilerEx
     const parser = parserExtensions[0]?.parser?.create(lexed.tokens, lexicalExtensions)
       ?? new Parser(lexed.tokens, lexicalExtensions);
     const parsed = parser.parse();
+    // A parser cannot recover a token the lexer never produced. Once VEL1001
+    // owns an unsupported spelling, later parser reports on that same physical
+    // line and after that spelling describe only the hole it left behind. Keep
+    // independent earlier and later-line diagnostics, but do not present the
+    // recovery cascade as additional mistakes the author has to fix.
+    const invalidFromByLine = new Map<number, number>();
+    for (const item of lexed.diagnostics) {
+      if (item.code !== "VEL1001" || item.message.startsWith("Unexpected UTF-8 BOM")) continue;
+      const line = source.location(item.span.start).line;
+      invalidFromByLine.set(line, Math.min(invalidFromByLine.get(line) ?? item.span.start, item.span.start));
+    }
+    const parserDiagnostics = parsed.diagnostics.filter((item) => {
+      const invalidFrom = invalidFromByLine.get(source.location(item.span.start).line);
+      return invalidFrom === undefined || item.span.start < invalidFrom;
+    });
     return {
       source,
       program: parsed.program,
-      diagnostics: [...lexed.diagnostics, ...parsed.diagnostics],
+      diagnostics: [...lexed.diagnostics, ...parserDiagnostics],
       advisories: [...lexed.advisories, ...parsed.advisories],
       suppressions: lexed.suppressions,
     };

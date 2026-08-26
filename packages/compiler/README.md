@@ -39,7 +39,7 @@ The `@velarscript/compiler/framework-host` subpath defines the small, versioned
 tooling ABI shared by framework packages and application hosts. It is a neutral
 contract only: framework implementations remain separate package entrypoints.
 The ABI covers generated application/error documents, deployment projection,
-base paths, source-map policy, and browser-test discovery, while filesystem,
+base paths, and browser-test discovery, while Source Map policy, filesystem,
 server, bundler, and browser-driver work stays outside the compiler.
 
 Construction uses the familiar class-body `constructor(...)` form. Derived

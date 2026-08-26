@@ -6,6 +6,40 @@ truth for acceptance status.
 
 ## Unreleased
 
+## 0.16.0 — 2026-08-26
+
+### Language and diagnostics
+
+- Added mutable `Map.getOrSet(key, fallback) -> V` for linear grouping and
+  cache construction without weakening stale-flow validation.
+- Consolidated each unsupported Unicode source run into one lexer diagnostic
+  while preserving recovery for independent errors later in the module.
+- Named compiler-owned `@name` roles consistently as context annotations and
+  kept their vocabulary closed to the active syntax owner.
+
+### Build output and tooling
+
+- Added target-neutral `production` and `readable` JavaScript build modes.
+  Production is the default for every target; readable output remains the
+  explicit, toolchain-independent handover form.
+- Made Source Map emission independent from JavaScript mode through top-level
+  project configuration and command-line overrides, while frozen ABI library
+  maps remain mandatory.
+- Made package manifests and build adapters reject target-owned configuration
+  outside its owning extension and added exact dependency-boundary checks for
+  every published workspace package.
+
+### Runtime and performance
+
+- Made safe-integer `range` loop validation constant-time and removed unused
+  runtime modules, empty imports, type-only imports, and uncalled helper bodies
+  from generated JavaScript.
+- Specialized trusted fixed numeric-buffer indexing and stable readonly
+  optional copies without weakening validation of host or mutable values.
+- Moved the registry-backed reactive bridge into the Web package. Compiler and
+  Core retain only the target-neutral private ABI and static non-reactive
+  implementation, with a permanent native-JavaScript hot-loop parity gate.
+
 ## 0.15.0 — 2026-08-25
 
 ### Language syntax

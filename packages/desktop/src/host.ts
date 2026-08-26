@@ -20,9 +20,6 @@ export const velarFrameworkHost: FrameworkHostExtension = Object.freeze({
   base() {
     return "/";
   },
-  sourceMaps() {
-    return false;
-  },
   prepareStyles(_config: unknown, styles: string) {
     return webHost.prepareStyles?.(webConfig(_config), styles) ?? styles;
   },
@@ -71,7 +68,6 @@ function webConfig(value: unknown) {
     // application icon, not a document `rel="icon"`.
     icon: null,
     publicConfig: Object.freeze({ desktop: Object.freeze({ identifier: config.identifier }) }),
-    build: Object.freeze({ sourceMaps: false }),
     security: Object.freeze({ contentSecurityPolicy: true, connectSources: Object.freeze([]), imageSources: Object.freeze([]) }),
     deployment: Object.freeze({ spaFallback: true }),
   };

@@ -64,8 +64,9 @@ test("Node application target creates, serves, and builds a standalone productio
     assert.equal(built.status, 0, built.stderr);
     const receipt = JSON.parse(await readFile(join(output, "velar-node.json"), "utf8")) as Record<string, unknown>;
     assert.deepEqual(receipt, {
-      formatVersion: 2,
+      formatVersion: 3,
       kind: "velar-node-build",
+      mode: "production",
       entry: ".velar-node-entry.mjs",
       app: "start",
       sourceMaps: false,
@@ -79,6 +80,15 @@ test("Node application target creates, serves, and builds a standalone productio
     await expectHello(running, buildPort);
     await stop(running);
     running = null;
+
+    const readableOutput = join(project, "readable");
+    const readableBuild = spawnSync(process.execPath, [
+      cli, "build", project, "--out-dir", readableOutput, "--mode", "readable",
+    ], {encoding: "utf8"});
+    assert.equal(readableBuild.status, 0, readableBuild.stderr);
+    const readableReceipt = JSON.parse(await readFile(join(readableOutput, "velar-node.json"), "utf8")) as { mode?: unknown };
+    assert.equal(readableReceipt.mode, "readable");
+    assert.match(await readFile(join(readableOutput, ".velar-node-entry.mjs"), "utf8"), /Server\.parse\(await start\(\)\)/u);
   } finally {
     if (running && running.exitCode === null && running.signalCode === null) {
       running.kill("SIGKILL");
@@ -146,7 +156,8 @@ export async def start():
     assert.ok((await readdir(join(output, "node_modules", "ws"))).includes("package.json"), "production WebSocket builds must carry their framework runtime dependency");
     assert.ok((await readdir(join(output, "node_modules", "yaml"))).includes("package.json"), "production configured servers must carry their framework runtime dependency");
     const launcher = await readFile(join(output, ".velar-node-entry.mjs"), "utf8");
-    assert.match(launcher, /WebSocketServer\.parse\(await start\(\)\)/u);
+    assert.match(launcher, /VelarScript production server listening on port/u);
+    assert.match(launcher, /\.parse\(await .+\(\)\)/u);
 
     running = spawn(process.execPath, [join(output, ".velar-node-entry.mjs")], {cwd: output, stdio: ["ignore", "pipe", "pipe"]});
     await expectHello(running, port);

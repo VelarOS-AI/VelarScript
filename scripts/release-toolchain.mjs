@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createIsolatedToolchainBuild } from "./isolated-toolchain-build.mjs";
+import { parseNpmPackResult } from "./npm-pack-result.mjs";
 import { velarPublishedToolchainPackages, velarToolchainPackageNames } from "./velar-packages.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -409,9 +410,7 @@ async function sourceTreeHash() {
 
 async function packWorkspace(workspace, destination, workspaceRoot) {
   const result = await runNpm(["pack", "--ignore-scripts", "--workspace", workspace, "--pack-destination", destination, "--json"], workspaceRoot);
-  const values = JSON.parse(result.stdout);
-  if (!Array.isArray(values) || values.length !== 1) throw new Error(`npm pack returned an invalid result for ${workspace}`);
-  return values[0];
+  return parseNpmPackResult(result.stdout, workspace);
 }
 
 async function replaceDirectory(staging, outputDirectory) {

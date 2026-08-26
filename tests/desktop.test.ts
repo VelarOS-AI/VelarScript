@@ -114,7 +114,7 @@ mount(<App />, "#app")
       id: "@velarscript/desktop",
       capability: "desktop",
       target: "browser",
-      protocolVersion: 1,
+      protocolVersion: 2,
       apiVersion: "0.10",
       artifactKind: "velar-desktop-renderer",
     });

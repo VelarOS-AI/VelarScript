@@ -3,6 +3,9 @@
   "entry": "src/main.vel",
   "outDir": "dist",
   "publicDir": "public",
+  "build": {
+    "sourceMaps": true
+  },
   "extensions": ["@velarscript/web"],
   "web": {
     "title": "Release Studio",
@@ -12,9 +15,6 @@
       "channel": "preview",
       "canonicalUrl": "https://releases.velar.example/",
       "socialImage": "/mark.svg"
-    },
-    "build": {
-      "sourceMaps": true
     },
     "security": {
       "contentSecurityPolicy": true,

@@ -287,18 +287,17 @@ How I resolved it:
 
 ## 5. The final exit: readable JavaScript
 
-For the Node target, `velar build` emits legible, source-mapped JavaScript —
+For the Node target, `velar build --mode readable --source-maps` emits legible, source-mapped JavaScript —
 ordinary modules with your names in them, plus a generated
 `node_modules/velar` directory containing the standard-module runtime as
 plain readable JavaScript. That generated runtime is part of the build
 output, not part of the toolchain.
 
-A production web build additionally bundles and minifies its assets for
-deployment, so the deployed bundle is not the form you read. A web
-application's readable form is its module emission —
-`velar build <single.vel> --out <file.js>` produces the same legible,
-name-preserving JavaScript for any module — plus the source maps when the
-build is configured to keep them.
+The default `production` mode bundles or minifies every target for deployment,
+so that artifact is not the form you read. Pass `--mode readable`, or set
+`"build": {"mode": "readable"}` in `velar.json`, to preserve generated names
+and structure. Source maps are an independent switch: set
+`"build": {"sourceMaps": true}` or pass `--source-maps` when they are needed.
 
 If Vel itself becomes the obstacle, take the emitted output and keep
 shipping without us: an emitted Node program runs in a bare directory with

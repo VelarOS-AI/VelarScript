@@ -1,4 +1,4 @@
-export const VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION = 1 as const;
+export const VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION = 2 as const;
 
 export interface FrameworkHostArtifactsInput {
   readonly config: unknown;
@@ -89,7 +89,6 @@ export interface FrameworkHostExtension {
   readonly apiVersion: string;
   readonly artifactKind: string;
   readonly base: (config: unknown) => string;
-  readonly sourceMaps: (config: unknown) => boolean;
   readonly prepareStyles?: (config: unknown, styles: string) => string;
   readonly createArtifacts: (input: FrameworkHostArtifactsInput) => FrameworkHostArtifacts;
   readonly createErrorDocument: (input: FrameworkHostErrorDocumentInput) => string;

@@ -1900,13 +1900,31 @@ export class Lexer {
   }
 
   private invalidCharacter(character: string, start: number): void {
-    this.advance();
-    if (this.diagnosedBidirectionalOffsets.has(start) || this.isBidirectionalControl(character.codePointAt(0)!)) return;
+    const firstCodePoint = this.text.codePointAt(start) ?? character.codePointAt(0)!;
+    this.index = start + (firstCodePoint > 0xffff ? 2 : 1);
+    if (this.diagnosedBidirectionalOffsets.has(start) || this.isBidirectionalControl(firstCodePoint)) return;
+
+    // One unsupported source run is one spelling error. Reading a non-ASCII
+    // typo one UTF-16 unit at a time used to report `哈大大` as three VEL1001
+    // diagnostics, then left the parser to add a fourth boundary diagnostic
+    // for the same absent expression. Keep ASCII punctuation as individual
+    // recovery points, but own a contiguous unsupported Unicode run here.
+    if (firstCodePoint > 0x7f && firstCodePoint !== 0xfeff && !this.isForbiddenLiteralControl(firstCodePoint)) {
+      while (!this.isAtEnd()) {
+        const next = this.text.codePointAt(this.index)!;
+        if (next <= 0x7f || next === 0xfeff || this.isBidirectionalControl(next) || this.isForbiddenLiteralControl(next)) break;
+        this.index += next > 0xffff ? 2 : 1;
+      }
+    }
+
+    const invalid = this.text.slice(start, this.index);
     this.diagnostics.push(diagnostic(
       "VEL1001",
-      character === "\uFEFF"
+      firstCodePoint === 0xfeff
         ? "Unexpected UTF-8 BOM (U+FEFF); remove the BOM or save the file as UTF-8 without BOM"
-        : `Unexpected character '${character}'`,
+        : [...invalid].length === 1
+          ? `Unexpected character '${invalid}'`
+          : `Unexpected characters '${invalid}'`,
       span(start, this.index),
     ));
   }

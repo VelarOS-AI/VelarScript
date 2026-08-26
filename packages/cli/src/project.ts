@@ -183,6 +183,11 @@ export interface CompileProjectOptions {
   readonly framework?: ResolvedFrameworkHost | null;
   readonly exportTestFunctions?: boolean;
   /**
+   * 是否为已编译模块构建 Source Map。默认开启；`check` 和关闭映射的生产构建
+   * 会传 false，使编译阶段本身也跳过映射计算，而不只是最后不写 `.map` 文件。
+   */
+  readonly emitSourceMaps?: boolean;
+  /**
    * BRG-U2: bare `import js` specifiers resolve at check time by default. A
    * caller whose sources are illustrations rather than a runnable project
    * (the documentation-example checker) opts out explicitly.
@@ -690,6 +695,7 @@ export async function compileProjectEntries(
           resourceContents: module.resourceContents,
           sharedRuntimeModules: true,
           executeMain: initialEntries.includes(module.inputPath),
+          emitSourceMap: options.emitSourceMaps !== false,
           ...(options.exportTestFunctions ? { exportFunctions: new Set(module.inspection.moduleInterface.tests.map((item) => item.name)) } : {}),
         }), analysis.reactiveImports ?? new Map());
         const result = module.package === null

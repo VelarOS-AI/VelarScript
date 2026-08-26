@@ -67,6 +67,7 @@ function nodeTemplate(name: string, displayName: string, version: string, format
       formatVersion,
       entry: "src/main.vel",
       outDir: "dist",
+      build: { mode: "production", sourceMaps: false },
       publicDir: "public",
       extensions: ["@velarscript/server"],
     })],
@@ -164,6 +165,7 @@ function desktopTemplate(name: string, displayName: string, version: string, for
       formatVersion,
       entry: "src/main.vel",
       outDir: "dist/renderer",
+      build: { mode: "production", sourceMaps: false },
       publicDir: "public",
       extensions: ["@velarscript/desktop"],
       desktop: {
@@ -326,6 +328,7 @@ function libraryTemplate(name: string, displayName: string, version: string, for
       formatVersion,
       entry: "src/index.vel",
       outDir: "dist",
+      build: { mode: "production", sourceMaps: false },
       publicDir: "public",
       extensions: [],
     })],
@@ -381,13 +384,13 @@ function componentTemplate(name: string, displayName: string, version: string, f
       formatVersion,
       entry: "src/demo.vel",
       outDir: "dist",
+      build: { mode: "production", sourceMaps: false },
       publicDir: "public",
       extensions: ["@velarscript/web"],
       web: {
         title: `${displayName} component preview`,
         base: "/",
         publicConfig: {},
-        build: { sourceMaps: false },
         security: { contentSecurityPolicy: true, connectSources: [], imageSources: [] },
         deployment: { spaFallback: true },
       },
@@ -436,13 +439,13 @@ function commonWebFiles(
       formatVersion,
       entry: "src/main.vel",
       outDir: "dist",
+      build: { mode: "production", sourceMaps: false },
       publicDir: "public",
       extensions: ["@velarscript/web"],
       web: {
         title: displayName,
         base: "/",
         publicConfig: {},
-        build: { sourceMaps: false },
         security: { contentSecurityPolicy: true, connectSources: [], imageSources: [] },
         deployment: { spaFallback: true },
       },
@@ -524,8 +527,9 @@ In order: \`extern module\` declares a checked boundary to any npm package
 (first choice); \`import js unsafe\` admits a raw value as \`any\` — validate
 it with \`Type.parse\` at the edge.${AGENT_TARGET_ESCAPE_HATCHES[target]} If the
 compiler itself seems wrong, reduce to a minimal repro and report it; the
-emitted \`velar build\` JavaScript is always a readable, source-mapped exit
-that runs without the toolchain. \`velar skill core\` includes the full
+\`velar build --mode readable --source-maps\` emits the readable, source-mapped exit that
+runs without the toolchain; ordinary builds default to optimized production
+JavaScript. \`velar skill core\` includes the full
 escape-hatch decision tree.
 `;
 }

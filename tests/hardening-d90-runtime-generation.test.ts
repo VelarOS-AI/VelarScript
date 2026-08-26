@@ -4,13 +4,13 @@ import test from "node:test";
 import { standardModuleSource } from "@velarscript/core";
 import {
   VELAR_PROMISE_NORMALIZATION_REGISTRY_KEY,
-  VELAR_REACTIVE_BRIDGE_RUNTIME,
   VELAR_RUNTIME_REGISTRY_KEY,
   VELAR_RUNTIME_SCHEMA_VERSION,
   VELAR_STRICT_JSON_RUNTIME,
   VELAR_TYPE_REGISTRY_KEY,
   VELAR_TYPE_REGISTRY_RUNTIME,
 } from "@velarscript/compiler/extension";
+import { VELAR_REACTIVE_BRIDGE_RUNTIME } from "../packages/web/src/reactive-bridge-runtime.ts";
 import { WEB_RUNTIME_FOUNDATION } from "../packages/web/src/runtime-foundation.ts";
 
 // D90 fr-5/fr-6/fr-7/fr-8 — the runtime generation boundary.

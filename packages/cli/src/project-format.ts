@@ -5,6 +5,7 @@ export const CORE_PROJECT_MANIFEST_FIELDS = Object.freeze([
   "entry",
   "outDir",
   "publicDir",
+  "build",
   "extensions",
   "workers",
 ] as const);

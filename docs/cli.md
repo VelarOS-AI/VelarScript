@@ -133,22 +133,43 @@ deployment; a malformed percent escape is answered with `400`.
 ## Building and shipping
 
 ```text
-velar build [entry.vel | project-directory] [--out-dir <directory>]
-velar build <single.vel> --out <file.js>
-velar build-library [project-directory]
+velar build [entry.vel | project-directory] [--out-dir <directory>] [--mode <production|readable>] [--source-maps|--no-source-maps]
+velar build <single.vel> --out <file.js> [--mode <production|readable>] [--source-maps|--no-source-maps]
+velar build-library [project-directory] [--mode <production|readable>]
 velar verify [project-directory | build-directory]
 velar preview [project-directory | build-directory] [--port <port>]
 velar verify-deployment [project-directory | build-directory] --url <https-origin> [--json]
 velar package [project-directory]
 ```
 
+`build` defaults to `production`: generated modules, target runtimes and bundled
+applications are minified and safely tree-shaken. Use `--mode readable` for one
+inspectable handover build, or make it the project default in `velar.json`:
+
+```json
+{
+  "formatVersion": 2,
+  "entry": "src/main.vel",
+  "build": { "mode": "readable", "sourceMaps": true }
+}
+```
+
+JavaScript mode and Source Map are independent. `build.sourceMaps` defaults to
+`false` for distributable builds and can be overridden for one invocation with
+`--source-maps` or `--no-source-maps`. Development and test execution retain
+their own enabled mappings regardless of the production build setting.
+
 `build-library` is the release build for a Core or Node library whose
 `package.json` declares `velar.entry`, one `velar.artifacts` receipt, and a root
 npm export. It replaces that declared artifact directory transactionally with
-frozen ABI-1 JavaScript, a source map, a portable type interface, and their hash
+frozen ABI-1 JavaScript, its ABI-owned source map, a portable type interface, and their hash
 receipt. The `.vel` source remains a separate published input; consumers use
 the artifact first and compile source only as a fallback. ABI 1 does not build
 Web/Desktop component packages.
+
+The Source Map switch belongs to application/module `build` output. A frozen
+library map remains mandatory because ABI 1 hashes and verifies it as part of
+the released artifact set.
 
 `verify` checks that a build is actually deployable rather than merely present.
 For a Node application, `build` instead writes a standalone ESM directory with
@@ -156,7 +177,7 @@ copied public assets, `.velar-node-entry.mjs`, and `velar-node.json`; run the
 launcher with Node from that output directory. A typed WebSocket startup entry
 uses the same host, port, body limit, and shared HTTP/WebSocket listener after
 build; its pinned transport dependency is copied into the output.
-`node.build.sourceMaps` controls whether source-map files are retained.
+Top-level `build.sourceMaps` controls whether source-map files are retained.
 All commands read the same checked JSON-resource graph: `dev` watches and
 serves it, `test` reconstructs used package resource exports in its sandbox,
 browser builds bundle it, and framework-free builds copy its exact bytes and

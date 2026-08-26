@@ -14,6 +14,7 @@ import type { ProjectModule, ProjectResult } from "./project.ts";
 import { jsonResourceModule } from "./resource-output.ts";
 import { standardModuleSource } from "./standard-modules.ts";
 import { VELAR_VERSION } from "./version.ts";
+import type { JavaScriptBuildMode } from "./javascript-output.ts";
 
 const MAX_PACKAGE_MANIFEST_BYTES = 1024 * 1024;
 const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*|[a-z0-9][a-z0-9._-]*)$/u;
@@ -91,13 +92,14 @@ export async function writeVelarLibraryArtifact(
   buildConfig: VelarLibraryBuildConfig,
   project: ProjectResult,
   stagingRoot: string,
+  mode: JavaScriptBuildMode = "production",
 ): Promise<WrittenVelarLibraryArtifact> {
   if (project.failures.length > 0) throw new Error("Cannot write a library artifact from a project with resolution failures");
   const diagnostics = project.modules.flatMap((module) => module.result.diagnostics);
   if (diagnostics.length > 0) throw new Error("Cannot write a library artifact from a project with compiler diagnostics");
   const entry = project.modules.find((module) => module.inputPath === buildConfig.project.entryPath);
   if (!entry?.result.code) throw new Error("The VelarScript library entry did not emit JavaScript");
-  const output = await bundleLibrary(project, entry, buildConfig.target, buildConfig.outputRoot);
+  const output = await bundleLibrary(project, entry, buildConfig.target, buildConfig.outputRoot, mode);
   const interface_ = project.moduleInterfaces.get(entry.inputPath) ?? entry.result.moduleInterface;
   const replacements = identityReplacements(buildConfig, project);
   const interfaceText = encodeVelarLibraryInterface(rebaseModuleInterfaceIdentities(interface_, replacements));
@@ -145,6 +147,7 @@ async function bundleLibrary(
   entry: ProjectModule,
   target: VelarLibraryArtifactTarget,
   finalOutputRoot: string,
+  mode: JavaScriptBuildMode,
 ): Promise<{ readonly code: string; readonly sourceMap: string }> {
   if (entry.result.code === null) throw new Error("The VelarScript library entry did not emit JavaScript");
   const modules = new Map(project.modules.map((module) => [resolve(module.inputPath), module]));
@@ -187,11 +190,19 @@ async function bundleLibrary(
       });
       context.onLoad({ filter: /.*/, namespace: "velar-module" }, (arguments_) => {
         const module = portableModules.get(arguments_.path);
-        return module?.result.code ? { contents: module.result.code, loader: "js", resolveDir: dirname(module.inputPath) } : { errors: [{ text: `VelarScript module '${arguments_.path}' was not compiled` }] };
+        return module?.result.code ? {
+          contents: mappedJavaScript(module.result.code, module.result.sourceMap),
+          loader: "js",
+          resolveDir: dirname(module.inputPath),
+        } : { errors: [{ text: `VelarScript module '${arguments_.path}' was not compiled` }] };
       });
       context.onLoad({ filter: /.*/, namespace: "velar-embedded" }, (arguments_) => {
         const item = portableEmbedded.get(arguments_.path);
-        return item ? { contents: item.code, loader: "js", resolveDir: dirname(item.owner.inputPath) } : null;
+        return item ? {
+          contents: mappedJavaScript(item.code, item.sourceMap),
+          loader: "js",
+          resolveDir: dirname(item.owner.inputPath),
+        } : null;
       });
       context.onLoad({ filter: /.*/, namespace: "velar-resource" }, (arguments_) => {
         const resource = portableResources.get(arguments_.path);
@@ -211,6 +222,8 @@ async function bundleLibrary(
     target: target === "node" ? "node24" : "es2022",
     conditions: ["import", "default"],
     packages: "external",
+    minify: mode === "production",
+    keepNames: mode === "readable",
     // Node's `Worker(..., {eval:true})` executes CommonJS source and exposes
     // `globalThis.require`. Naming that explicitly prevents esbuild from
     // closing over its ESM `__require` shim inside a function whose source is
@@ -226,7 +239,7 @@ async function bundleLibrary(
     write: false,
     plugins: [plugin],
     stdin: {
-      contents: entry.result.code,
+      contents: mappedJavaScript(entry.result.code, entry.result.sourceMap),
       loader: "js",
       resolveDir: dirname(entry.inputPath),
       sourcefile: portableBundlePath(project, entry.inputPath),
@@ -236,6 +249,11 @@ async function bundleLibrary(
   const sourceMap = result.outputFiles?.find((file) => resolve(file.path) === resolve(finalOutputRoot, "index.js.map"));
   if (!code || !sourceMap) throw new Error("The Velar library bundler did not emit JavaScript and its source map");
   return { code: code.text, sourceMap: sourceMap.text };
+}
+
+function mappedJavaScript(code: string, sourceMap: string | null): string {
+  if (!sourceMap) return code;
+  return `${code}\n//# sourceMappingURL=data:application/json;base64,${Buffer.from(sourceMap).toString("base64")}\n`;
 }
 
 function portableBundlePath(project: ProjectResult, path: string): string {

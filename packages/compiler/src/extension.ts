@@ -22,7 +22,7 @@ export { VELAR_NUMBER_METHOD_RUNTIME } from "./number-runtime.ts";
 export { VELAR_NARROWING_MODULE, VELAR_NARROWING_MODULE_SOURCE, VELAR_NARROWING_RUNTIME } from "./narrowing-runtime.ts";
 export { VELAR_PRIMITIVE_METHOD_MODULE, VELAR_PRIMITIVE_METHOD_MODULE_SOURCE } from "./primitive-runtime.ts";
 export { VELAR_PROMISE_NORMALIZATION_MODULE, VELAR_PROMISE_NORMALIZATION_MODULE_SOURCE, VELAR_PROMISE_NORMALIZATION_RUNTIME } from "./promise-runtime.ts";
-export { VELAR_NON_REACTIVE_BRIDGE_MODULE_SOURCE, VELAR_NON_REACTIVE_BRIDGE_RUNTIME, VELAR_NON_REACTIVE_COLLECTION_BRIDGE_RUNTIME, VELAR_REACTIVE_BRIDGE_MODULE, VELAR_REACTIVE_BRIDGE_MODULE_SOURCE, VELAR_REACTIVE_BRIDGE_RUNTIME, VELAR_REACTIVE_COLLECTION_BRIDGE_RUNTIME } from "./reactive-bridge-runtime.ts";
+export { VELAR_NON_REACTIVE_BRIDGE_MODULE_SOURCE, VELAR_NON_REACTIVE_BRIDGE_RUNTIME, VELAR_NON_REACTIVE_COLLECTION_BRIDGE_RUNTIME, VELAR_REACTIVE_BRIDGE_MODULE } from "./reactive-bridge-runtime.ts";
 export { VELAR_PROMISE_NORMALIZATION_REGISTRY_KEY, VELAR_RUNTIME_REGISTRY_KEY, VELAR_RUNTIME_SCHEMA_VERSION, VELAR_TYPE_REGISTRY_KEY } from "./runtime-abi.ts";
 export { VELAR_TYPE_REGISTRY_RUNTIME } from "./type-registry-runtime.ts";
 export {
@@ -103,7 +103,7 @@ export interface CompilerEmitter {
    * real ESM file, so hosts can serve or bundle it without eval/data URLs and
    * its own source map can point back into the authoring `.vel` file.
    */
-  embeddedModules?(source: SourceText): readonly CompilerEmbeddedJavaScriptModule[];
+  embeddedModules?(source: SourceText, emitSourceMap?: boolean): readonly CompilerEmbeddedJavaScriptModule[];
   runtimeModules?(): readonly string[];
   css?(): string;
   styleSegments?(): CompilerStyleSegments;

@@ -22,10 +22,10 @@ one exported zero-argument async startup function:
   "entry": "src/main.vel",
   "outDir": "dist",
   "publicDir": "public",
+  "build": {"mode": "production", "sourceMaps": false},
   "extensions": ["@velarscript/node"],
   "node": {
-    "app": "start",
-    "build": {"sourceMaps": false}
+    "app": "start"
   }
 }
 ```
@@ -66,10 +66,11 @@ application service, activate `@velarscript/server`; it provides the same
 `velar dev`, `velar serve`, and standalone `velar build` workflow without a
 second runtime configuration source.
 
-`@name` keeps its one language-wide role: it qualifies a compiler-owned name
-in the current context. In a `server` block, the available names are `@get`,
-`@post`, `@put`, `@patch`, `@delete`, and `@notFound`. They are not decorators,
-functions, imports, annotations, first-class values, or user extension points.
+`@` remains the language-wide annotation introducer, and `@name` is a context
+annotation with a compiler-owned compile-time role. In a `server` block, the
+available annotations are `@get`, `@post`, `@put`, `@patch`, `@delete`, and
+`@notFound`. They are not decorators, functions, imports, user-defined
+annotations, first-class values, or user extension points.
 
 ## Routes and checked inputs
 

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { velarWorkspacePackageNames } from "../scripts/velar-packages.mjs";
+import { parseNpmPackResult } from "../scripts/npm-pack-result.mjs";
 import { BROWSER_TEST_MODULE, webModuleInterfaces } from "../packages/web/dist/compiler.js";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -95,9 +96,7 @@ mount(<App />, "#app")
 
 async function pack(workspace: string): Promise<string> {
   const result = await runNpm(["pack", "--workspace", workspace, "--pack-destination", directory, "--json"], root);
-  const values = JSON.parse(result.stdout) as Array<{ filename: string }>;
-  assert.equal(values.length, 1);
-  return values[0]!.filename;
+  return parseNpmPackResult(result.stdout, workspace).filename;
 }
 
 async function runNpm(arguments_: readonly string[], cwd: string): Promise<{ stdout: string; stderr: string }> {

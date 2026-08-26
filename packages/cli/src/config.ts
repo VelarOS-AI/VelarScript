@@ -24,6 +24,7 @@ import {
   unsupportedProjectFormat,
 } from "./project-format.ts";
 import { bundledExtension } from "./bundled-extension-registry.ts";
+import type { JavaScriptBuildMode } from "./javascript-output.ts";
 
 export { CURRENT_PROJECT_FORMAT_VERSION } from "./project-format.ts";
 
@@ -53,6 +54,15 @@ export interface VelarProjectConfig {
   readonly entryPath: string;
   readonly outDir: string;
   readonly publicDir: string;
+  readonly build: {
+    /** 默认是可直接部署的生产产物；可读模式必须由项目或命令显式选择。 */
+    readonly mode: JavaScriptBuildMode;
+    /**
+     * 是否为正式构建保留 Source Map。它是独立开关，不由 JavaScript 的
+     * production/readable 表达形式推导；开发服务器仍始终使用自己的映射。
+     */
+    readonly sourceMaps: boolean;
+  };
   readonly extensions: readonly string[];
   readonly extensionGraph: readonly ResolvedExtensionPackage[];
   readonly compilerExtensions: readonly CompilerExtension[];
@@ -79,6 +89,7 @@ interface ManifestShape {
   readonly entry?: unknown;
   readonly outDir?: unknown;
   readonly publicDir?: unknown;
+  readonly build?: unknown;
   readonly extensions?: unknown;
   readonly workers?: unknown;
 }
@@ -135,6 +146,7 @@ async function loadManifest(manifestPath: string, entryOverride: string | null =
   if (extname(entry) !== ".vel") throw new Error(`${manifestPath}: 'entry' must point to a .vel file`);
   const outDir = resolveProjectPath(root, stringField(manifest.outDir, "outDir", "dist"), "outDir");
   const publicDir = resolveProjectPath(root, stringField(manifest.publicDir, "publicDir", "public"), "publicDir");
+  const build = buildConfig(manifest.build, manifestPath);
   const workerEntries = workerEntryMap(manifest.workers, root, manifestPath);
   const extensions = extensionList(manifest.extensions, manifestPath);
   const loadedExtensions = await loadExtensions(root, extensions, manifestPath);
@@ -169,6 +181,7 @@ async function loadManifest(manifestPath: string, entryOverride: string | null =
     entryPath: entry,
     outDir,
     publicDir,
+    build,
     extensions,
     extensionGraph: loadedExtensions.packages,
     compilerExtensions: loadedExtensions.compiler,
@@ -188,6 +201,7 @@ function standaloneProject(entryPath: string): VelarProjectConfig {
     entryPath,
     outDir: join(root, "dist"),
     publicDir: join(root, "public"),
+    build: { mode: "production", sourceMaps: false },
     extensions: [],
     extensionGraph: [],
     compilerExtensions: [],
@@ -195,6 +209,23 @@ function standaloneProject(entryPath: string): VelarProjectConfig {
     framework: null,
     workerEntries: new Map(),
   };
+}
+
+function buildConfig(value: unknown, manifestPath: string): VelarProjectConfig["build"] {
+  if (value !== undefined && (!value || typeof value !== "object" || Array.isArray(value))) {
+    throw new Error(`${manifestPath}: 'build' must be an object`);
+  }
+  const build = value as { readonly mode?: unknown; readonly sourceMaps?: unknown } | undefined;
+  if (build) knownFields(build as Record<string, unknown>, new Set(["mode", "sourceMaps"]), "build", manifestPath);
+  const mode = build?.mode ?? "production";
+  if (mode !== "production" && mode !== "readable") {
+    throw new Error(`${manifestPath}: 'build.mode' must be 'production' or 'readable'`);
+  }
+  const sourceMaps = build?.sourceMaps ?? false;
+  if (typeof sourceMaps !== "boolean") {
+    throw new Error(`${manifestPath}: 'build.sourceMaps' must be a boolean`);
+  }
+  return Object.freeze({ mode, sourceMaps });
 }
 
 function workerEntryMap(value: unknown, root: string, manifestPath: string): ReadonlyMap<string, string> {
@@ -357,7 +388,7 @@ function validateFrameworkHost(value: unknown, compiler: CompilerExtension, name
   if (host.target !== "browser" || typeof host.displayName !== "string" || !host.displayName
     || typeof host.apiVersion !== "string" || !host.apiVersion
     || typeof host.artifactKind !== "string" || !/^[a-z][a-z0-9-]*$/u.test(host.artifactKind)
-    || typeof host.base !== "function" || typeof host.sourceMaps !== "function"
+    || typeof host.base !== "function"
     || typeof host.createArtifacts !== "function" || typeof host.createErrorDocument !== "function"
     || typeof host.staticDeployment !== "function"
     || (host.requiredPublicAssets !== undefined && typeof host.requiredPublicAssets !== "function")

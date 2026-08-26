@@ -55,6 +55,10 @@ test("a frozen library runs and type-checks without reading its previous-generat
   const built = runCli(["build-library", library], root);
   assert.equal(built.status, 0, `${built.stdout}${built.stderr}`);
   assert.match(built.stdout, /Built Velar library ABI 1 frozen-fixture@1\.2\.3 \(core\)/u);
+  assert.doesNotMatch(await readFile(join(library, "dist", "index.js"), "utf8"), /function add/u);
+  const readable = runCli(["build-library", library, "--mode", "readable"], root);
+  assert.equal(readable.status, 0, `${readable.stdout}${readable.stderr}`);
+  assert.match(await readFile(join(library, "dist", "index.js"), "utf8"), /function add/u);
   const receipt = JSON.parse(await readFile(join(library, "dist", "velar-library.json"), "utf8")) as {
     abiVersion: number;
     sourceEntry: string;

@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import test, { after } from "node:test";
+import { compile as compileCore } from "../packages/compiler/src/index.ts";
+import { standardModuleSource as coreStandardModuleSource } from "../packages/core/src/index.ts";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
 import { repositoryRoot } from "./repository-root.ts";
 
@@ -61,11 +63,83 @@ function dimension(samples: ReadonlyMap<string, number[]>, label: string): numbe
   return median(values);
 }
 
+test("Core scalar hot loops keep JavaScript code shape and native throughput", async (t) => {
+  const compiled = compileCore(`
+export def arithmetic(rounds: number) -> number:
+    let total = 0
+    let index = 0
+    while index < rounds:
+        total += (index * 17) % 97
+        index += 1
+    return total
+`.trimStart());
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.deepEqual(compiled.runtimeModules, []);
+  const code = compiled.code ?? "";
+  assert.equal(code, `export function arithmetic(rounds) {
+  let total = 0;
+  let index = 0;
+  while ((index < rounds)) {
+    total += ((index * 17) % 97);
+    index += 1;
+  }
+  return total;
+}
+`, "Core scalar lowering must remain the corresponding direct JavaScript operations");
+  assert.doesNotMatch(code, /\b__velar|\bglobalThis\b|\bimport\s/u,
+    "target or safety runtime work crossed into a scalar Core hot loop");
+
+  const runtimeUrl = `data:text/javascript;base64,${Buffer.from(code).toString("base64")}`;
+  const runtime = await import(runtimeUrl) as { arithmetic(rounds: number): number };
+  function javaScriptArithmetic(rounds: number): number {
+    let total = 0;
+    let index = 0;
+    while (index < rounds) {
+      total += (index * 17) % 97;
+      index += 1;
+    }
+    return total;
+  }
+  const rounds = 10_000_000;
+  for (let warm = 0; warm < 5; warm += 1) {
+    runtime.arithmetic(rounds);
+    javaScriptArithmetic(rounds);
+  }
+  const coreSamples: number[] = [];
+  const javaScriptSamples: number[] = [];
+  let coreResult = 0;
+  let javaScriptResult = 0;
+  for (let round = 0; round < 7; round += 1) {
+    let started = performance.now();
+    if ((round & 1) === 0) coreResult = runtime.arithmetic(rounds);
+    else javaScriptResult = javaScriptArithmetic(rounds);
+    const first = performance.now() - started;
+    started = performance.now();
+    if ((round & 1) === 0) javaScriptResult = javaScriptArithmetic(rounds);
+    else coreResult = runtime.arithmetic(rounds);
+    const second = performance.now() - started;
+    coreSamples.push((round & 1) === 0 ? first : second);
+    javaScriptSamples.push((round & 1) === 0 ? second : first);
+  }
+  assert.equal(coreResult, javaScriptResult);
+  const coreElapsed = median(coreSamples);
+  const javaScriptElapsed = median(javaScriptSamples);
+  const ratio = coreElapsed / javaScriptElapsed;
+  const context = `${rounds.toLocaleString("en-US")} arithmetic iterations: Core ${coreElapsed.toFixed(1)}ms, JavaScript ${javaScriptElapsed.toFixed(1)}ms, ratio ${ratio.toFixed(2)}`;
+  t.diagnostic(context);
+  // The source-level types and extension mechanism are compile-time facts in
+  // this loop. Generated Core therefore has no adapter to amortize or probe;
+  // the small allowance covers scheduler and JIT sampling noise only. The
+  // emitted-operation equality above is the non-statistical part of the gate.
+  assert.ok(ratio < (process.env.CI ? 1.35 : 1.20), `Core scalar execution drifted from JavaScript throughput -- ${context}`);
+});
+
 /** Compiles a single-module VelarScript program and runs the emitted JavaScript under Node. */
 async function benchmarkProgram(prefix: string, source: string): Promise<{ samples: Map<string, number[]>; code: string }> {
   const directory = await makeTemporaryDirectory(prefix);
   const entry = join(directory, "main.vel");
   const output = join(directory, "dist");
+  const readableOutput = join(directory, "readable");
   await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: [] }), "utf8");
   await writeFile(entry, source, "utf8");
 
@@ -75,13 +149,23 @@ async function benchmarkProgram(prefix: string, source: string): Promise<{ sampl
     timeout: 60_000,
   });
   assert.equal(build.status, 0, String(build.stderr || build.error));
+  // 性能样本执行默认 production；静态 lowering 断言读取显式 readable，
+  // 避免把压缩器允许改写的局部名字误当成语言 ABI。
+  const readableBuild = spawnSync(process.execPath, [
+    "packages/cli/src/cli.ts", "build", entry, "--out-dir", readableOutput, "--mode", "readable",
+  ], {
+    cwd: root,
+    encoding: "utf8",
+    timeout: 60_000,
+  });
+  assert.equal(readableBuild.status, 0, String(readableBuild.stderr || readableBuild.error));
   const execution = spawnSync(process.execPath, [join(output, "main.js")], {
     cwd: root,
     encoding: "utf8",
     timeout: 120_000,
   });
   assert.equal(execution.status, 0, String(execution.stderr || execution.error));
-  return { samples: parseSamples(execution.stdout), code: await readFile(join(output, "main.js"), "utf8") };
+  return { samples: parseSamples(execution.stdout), code: await readFile(join(readableOutput, "main.js"), "utf8") };
 }
 
 /**
@@ -315,12 +399,37 @@ test("acyclic runtime Type checks stay on the straight-line validation path", { 
     `the runtime Type benchmark took ${(performance.now() - started).toFixed(0)}ms end to end`);
 });
 
+test("direct integer range validation does not replay the complete loop", async (t) => {
+  const source = coreStandardModuleSource("velar/collections");
+  assert.ok(source);
+  const runtimeUrl = `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
+  const runtime = await import(runtimeUrl) as {
+    range: ((start: number, stop?: number | null, step?: number) => number[]) & {
+      __velarCounted(start: number, stop?: number | null, step?: number): number[];
+    };
+  };
+  let sink = 0;
+  for (let warm = 0; warm < 3; warm += 1) {
+    for (let index = 0; index < 100; index += 1) sink += runtime.range.__velarCounted(100_000 + (index & 1))[1]!;
+  }
+  const started = performance.now();
+  for (let index = 0; index < 1_000; index += 1) sink += runtime.range.__velarCounted(100_000 + (index & 1))[1]!;
+  const elapsed = performance.now() - started;
+  const context = `1,000 validations of ~100,000 integer iterations: ${elapsed.toFixed(2)}ms`;
+  t.diagnostic(context);
+  assert.ok(sink > 0);
+  // Baseline 2026-08-26 after safe-integer ranges switched to exact arithmetic:
+  // about 0.1ms. Replaying every future loop during validation took ~75ms.
+  assert.ok(elapsed < timeBudget(20), `direct range validation exceeded its budget -- ${context}`);
+});
+
 const collectionProgram = `
 import {monotonic} from "velar/time"
 
 const size = 100000
 const rangeSize = 2000
 const rangeReads = 200000
+const bucketGroups = 256
 
 def buildList(count: number) -> List<number>:
     const output: List<number> = []
@@ -353,6 +462,14 @@ def readMap(values: Map<number, number>, reads: number) -> number:
         total += values.get(index % 100000) ?? 0
         index += 1
     return total
+
+def buildMapBuckets(count: number) -> Map<number, List<number>>:
+    const output: Map<number, List<number>> = Map()
+    let index = 0
+    while index < count:
+        output.getOrSet(index % bucketGroups, []).append(index)
+        index += 1
+    return output
 
 def buildSet(count: number) -> Set<number>:
     const output: Set<number> = Set()
@@ -387,6 +504,7 @@ let filterSamples = ""
 let sortedSamples = ""
 let mapInsertSamples = ""
 let mapLookupSamples = ""
+let mapBucketSamples = ""
 let setInsertSamples = ""
 let setLookupSamples = ""
 let rangeIndexSamples = ""
@@ -399,6 +517,7 @@ def warmUp():
     sink += values.sorted().size
     const pairs = buildMap(size)
     sink += readMap(pairs, size)
+    sink += buildMapBuckets(size).size
     const members = buildSet(size)
     sink += readSet(members, size)
     sink += readProvided(range(0, rangeSize), rangeReads)
@@ -429,6 +548,9 @@ while round < 5:
     sink += readMap(pairs, size)
     mapLookupSamples += f"{str(monotonic() - start)},"
     start = monotonic()
+    const buckets = buildMapBuckets(size)
+    mapBucketSamples += f"{str(monotonic() - start)},"
+    start = monotonic()
     const members = buildSet(size)
     setInsertSamples += f"{str(monotonic() - start)},"
     start = monotonic()
@@ -438,6 +560,7 @@ while round < 5:
     sink += readProvided(range(0, rangeSize), rangeReads)
     rangeIndexSamples += f"{str(monotonic() - start)},"
     sink += mapped.size + filtered.size + ordered.size + pairs.size + members.size
+    sink += buckets.size
     round += 1
 
 print(f"append={appendSamples}")
@@ -447,6 +570,7 @@ print(f"filter={filterSamples}")
 print(f"sorted={sortedSamples}")
 print(f"mapInsert={mapInsertSamples}")
 print(f"mapLookup={mapLookupSamples}")
+print(f"mapBuckets={mapBucketSamples}")
 print(f"setInsert={setInsertSamples}")
 print(f"setLookup={setLookupSamples}")
 print(f"rangeIndex={rangeIndexSamples}")
@@ -459,6 +583,7 @@ test("emitted collection operations hold their large-List and Map/Set budgets", 
 
   assert.match(code, /__velarListIndexGet\(values,/u);
   assert.match(code, /__velarMapGet\(values,/u);
+  assert.match(code, /__velarMapGetOrSet\(output,/u);
   assert.match(code, /__velarSetHas\(values,/u);
   assert.match(code, /__velarListSize\(values\)/u);
   assert.doesNotMatch(code, /\b__velarCollection(?:Get|Has|Size)\b/u,
@@ -472,12 +597,13 @@ test("emitted collection operations hold their large-List and Map/Set budgets", 
   const sorted = dimension(samples, "sorted");
   const mapInsert = dimension(samples, "mapInsert");
   const mapLookup = dimension(samples, "mapLookup");
+  const mapBuckets = dimension(samples, "mapBuckets");
   const setInsert = dimension(samples, "setInsert");
   const setLookup = dimension(samples, "setLookup");
   const rangeIndex = dimension(samples, "rangeIndex");
   const context = `over ${size.toLocaleString("en-US")} items: append ${append.toFixed(1)}ms, index ${index.toFixed(1)}ms, `
     + `map ${mapped.toFixed(1)}ms, filter ${filtered.toFixed(1)}ms, sorted ${sorted.toFixed(1)}ms, `
-    + `Map.set ${mapInsert.toFixed(1)}ms, Map.get ${mapLookup.toFixed(1)}ms, Set.add ${setInsert.toFixed(1)}ms, Set.has ${setLookup.toFixed(1)}ms, `
+    + `Map.set ${mapInsert.toFixed(1)}ms, Map.get ${mapLookup.toFixed(1)}ms, Map.getOrSet buckets ${mapBuckets.toFixed(1)}ms, Set.add ${setInsert.toFixed(1)}ms, Set.has ${setLookup.toFixed(1)}ms, `
     + `200,000 index reads of a 2,000-item range() ${rangeIndex.toFixed(1)}ms`;
   t.diagnostic(context);
 
@@ -507,6 +633,11 @@ test("emitted collection operations hold their large-List and Map/Set budgets", 
   // Map.get 2.5ms, Set.add 3.9ms, Set.has 2.0ms per 100,000 operations.
   assert.ok(mapInsert < timeBudget(18), `Map.set exceeded its budget -- ${context}`);
   assert.ok(mapLookup < timeBudget(10), `Map.get exceeded its budget -- ${context}`);
+  // Baseline 2026-08-26: 100,000 appends distributed across 256 List buckets
+  // take about 28ms. The equivalent Map.get/null-narrowing spelling walks the
+  // growing List on every hit and takes seconds; this gate keeps grouping
+  // linear while leaving the stale-flow deep-validation contract intact.
+  assert.ok(mapBuckets < timeBudget(75), `Map.getOrSet bucket grouping exceeded its budget -- ${context}`);
   assert.ok(setInsert < timeBudget(15), `Set.add exceeded its budget -- ${context}`);
   assert.ok(setLookup < timeBudget(9), `Set.has exceeded its budget -- ${context}`);
   // rangeIndex 12.1ms for 200,000 index reads of the 2,000-item List `range()`
@@ -520,6 +651,61 @@ test("emitted collection operations hold their large-List and Map/Set budgets", 
 
   assert.ok(performance.now() - started < BENCHMARK_WALL_CLOCK_BUDGET_MS,
     `the collection benchmark took ${(performance.now() - started).toFixed(0)}ms end to end`);
+});
+
+const binaryBufferProgram = `
+import {float32Buffer} from "velar/binary"
+import {monotonic} from "velar/time"
+
+const values = float32Buffer(8192)
+
+def writeRound(count: number) -> number:
+    const started = monotonic()
+    let index = 0
+    while index < count:
+        values[index % 8192] = (index % 1000) / 10
+        index += 1
+    return monotonic() - started
+
+def readRound(count: number) -> number:
+    const started = monotonic()
+    let total = 0
+    let index = 0
+    while index < count:
+        total += values[index % 8192]
+        index += 1
+    if total < 0: print("unreachable")
+    return monotonic() - started
+
+writeRound(1000000)
+readRound(1000000)
+let writeSamples = ""
+let readSamples = ""
+let round = 0
+while round < 5:
+    writeSamples += f"{str(writeRound(1000000))},"
+    readSamples += f"{str(readRound(1000000))},"
+    round += 1
+print(f"write={writeSamples}")
+print(f"read={readSamples}")
+`.trimStart();
+
+test("fixed numeric buffer indexing holds its million-operation budget", { timeout: 180_000 }, async (t) => {
+  const started = performance.now();
+  const { samples, code } = await benchmarkProgram("velar-runtime-binary-", binaryBufferProgram);
+  assert.match(code, /__velarBinaryRuntime\.__velarFloat32Index/u);
+  assert.match(code, /__velarBinaryRuntime\.__velarFloat32SetIndex/u);
+  const write = dimension(samples, "write");
+  const read = dimension(samples, "read");
+  const context = `per 1,000,000 Float32Buffer operations: write ${write.toFixed(1)}ms, read ${read.toFixed(1)}ms`;
+  t.diagnostic(context);
+  // 2026-08-26 基线：预绑定可信长度查询后每百万次写约 6.1ms、读约 5.7ms。
+  // 这里约束的是可信
+  // 运行时缓冲区的索引路径；宿主传入且尚未 parse 的值仍回退到完整品牌校验。
+  assert.ok(write < timeBudget(25), `Float32Buffer writes exceeded their budget -- ${context}`);
+  assert.ok(read < timeBudget(25), `Float32Buffer reads exceeded their budget -- ${context}`);
+  assert.ok(performance.now() - started < BENCHMARK_WALL_CLOCK_BUDGET_MS,
+    `the binary buffer benchmark took ${(performance.now() - started).toFixed(0)}ms end to end`);
 });
 
 const textProgram = `

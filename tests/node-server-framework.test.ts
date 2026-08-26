@@ -20,7 +20,6 @@ async function compileServer(source: string) {
 test("Node application configuration is bounded and rejects unknown fields", () => {
   assert.deepEqual(velarProjectExtension.parse(undefined, "/service/velar.json"), {
     app: "start",
-    build: {sourceMaps: false},
   });
   assert.throws(() => velarProjectExtension.parse({port: 3000}, "/service/velar.json"), /unknown 'node' field 'port'/u);
   assert.throws(() => velarProjectExtension.parse({host: "127.0.0.1"}, "/service/velar.json"), /unknown 'node' field 'host'/u);
@@ -31,7 +30,6 @@ test("Node application configuration is bounded and rejects unknown fields", () 
 test("server configuration, authentication, and database helpers preserve checked application types", async () => {
   assert.deepEqual(serverProjectExtension.parse(undefined, "/service/velar.json"), {
     app: "start",
-    build: {sourceMaps: false},
   });
   assert.throws(() => serverProjectExtension.parse({port: 3000}, "/service/velar.json"), /unknown 'server' field 'port'/u);
   const source = `

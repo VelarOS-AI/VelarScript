@@ -13,7 +13,7 @@ browser application activates `@velarscript/web`:
 ```json
 {
   "dependencies": {
-    "@velarscript/server": "0.15.0"
+    "@velarscript/server": "0.16.0"
   }
 }
 ```
@@ -33,8 +33,8 @@ extensions. Without `@velarscript/server`, `velar/server` is unavailable and
 root application configuration is not loaded.
 
 The conventional entry export is `start`. A different exported binding may be
-selected with the optional `server.app` manifest field; `server.build.sourceMaps`
-is the only build setting. Host, port, request limits, database locations, and
+selected with the optional `server.app` manifest field. Source maps belong to
+the target-neutral top-level `build.sourceMaps` switch. Host, port, request limits, database locations, and
 other runtime settings never belong in `velar.json`.
 
 ## Convention-based application configuration
