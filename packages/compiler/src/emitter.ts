@@ -3623,6 +3623,7 @@ export class JavaScriptEmitter {
       case "mapHas": return "__velarMapHas";
       case "mapRemove": return "__velarMapRemove";
       case "mapClear": return "__velarMapClear";
+      case "mapIterator": return "__velarMapIterator";
       case "mapKeys": return "__velarMapKeys";
       case "mapValues": return "__velarMapValues";
       case "mapEntries": return "__velarMapEntries";

@@ -171,8 +171,19 @@ export function compile(text: string, options: CompileOptions = {}): CompileResu
   try {
     return compileUnchecked(text, options);
   } catch (error) {
+    // 「源码嵌套过深」由显式预算判定：解析器的语法深度门（parser.ts 的
+    // MAX_PARSE_DEPTH）和下面 MAX_ANALYSIS_NESTING_DEPTH 的 AST 深度门。走到这里
+    // 说明还有一条没设门的递归路径把 JavaScript 栈用尽了 —— 那是编译器自己的
+    // 缺陷，不是作者写得太复杂，所以报内部错误并请求上报，而不是把责任推给用户。
+    // 栈深度取决于引擎、线程栈大小和当前已用深度，所以这条路径一旦可达，同一份
+    // 源码在 CLI、playground、worker 里的结论就会不一致；把它标成内部错误正是为了
+    // 让这种不确定性可见而不是被伪装成一条正常诊断。
     if (!isJavaScriptStackOverflow(error)) throw error;
-    return complexityFailureResult(text, options);
+    return emptyCompileResult(text, options, diagnostic(
+      "VEL9001",
+      "Internal compiler error: a compiler recursion ran out of JavaScript stack before any explicit budget stopped it; please report this module",
+      { start: 0, end: Math.min(1, text.length) },
+    ));
   }
 }
 
@@ -180,6 +191,18 @@ function compileUnchecked(text: string, options: CompileOptions): CompileResult 
   const extensions = normalizedExtensions(options.extensions ?? []);
   const parsed = parseModule(text, options.path ?? "<source>", extensions);
   const semanticProgram = programWithEmbeddedJavaScriptImports(parsed.program, parsed.source.path);
+  // 解析器的语法深度门管不到这里：`1 + 1 + …` 这样的左结合链是循环解析的，一层
+  // 语法深度都不花，却生成一棵和链等长的 AST，而分析器、发射器和语义索引都是递归
+  // 遍历。所以解析之后再过一道显式的 AST 深度门，是「嵌套过深」在任何宿主上都给出
+  // 同一个答案的唯一办法。这道门带节点自己的位置，用户知道该改哪里。
+  const overDeep = nodeSpanBeyondNestingDepth(semanticProgram, MAX_ANALYSIS_NESTING_DEPTH);
+  if (overDeep) {
+    return emptyCompileResult(text, options, diagnostic(
+      "VEL2008",
+      `VelarScript source nesting is too complex to process safely; expression and statement nesting cannot exceed ${MAX_ANALYSIS_NESTING_DEPTH} levels`,
+      overDeep,
+    ));
+  }
   const diagnostics = [...parsed.diagnostics];
   const advisories: Advisory[] = [...parsed.advisories];
   const analysisExtensions = extensions.flatMap((extension) => extension.analysis ? [extension.analysis] : []);
@@ -220,20 +243,41 @@ function compileUnchecked(text: string, options: CompileOptions): CompileResult 
       diagnostics.push(...initialDiagnostics);
       advisories.push(...analyzer.analyzedAdvisories());
     } else {
-      const maximumPasses = Math.min(Math.max(inferredResults.size + 2, 4), 256);
+      // 收敛依据：每一趟至少让一个省略了结果标注的函数定型，所以 `size + 2` 是这个
+      // 假设下的紧上界（+1 定完最后一个，+1 确认已经稳定）。外层的硬上限则是一条
+      // **工作量**预算而不是正确性判据 —— 每一趟都是全模块重分析，趟数再随函数数
+      // 线性增长，去掉上限最坏情况就是模块规模的平方。所以上限保留，但预算用尽而
+      // 仍未稳定这件事必须报出来：静默地把最后一趟（可能正在两个类型之间震荡的）
+      // 结果当成答案，等于交给用户一个看起来编译成功、推断结果却不确定的产物。
+      const maximumPasses = Math.min(Math.max(inferredResults.size + 2, 4), MAX_RESULT_INFERENCE_PASSES);
+      let converged = false;
       for (let pass = 0; pass < maximumPasses; pass += 1) {
         const probe = createAnalyzer(inferredResults);
         probe.analyze(semanticProgram);
         const next = probe.inferredFunctionResults();
-        const stable = Analyzer.inferredFunctionResultsMatch(inferredResults, next);
+        converged = Analyzer.inferredFunctionResultsMatch(inferredResults, next);
         inferredResults = next;
-        if (stable) break;
+        if (converged) break;
       }
       analyzer = createAnalyzer(inferredResults, true);
       diagnostics.push(...analyzer.analyze(semanticProgram));
       // The advisories are read off the same analyzer whose diagnostics were
       // kept; the probe passes above are discarded whole.
       advisories.push(...analyzer.analyzedAdvisories());
+      if (!converged) {
+        // 权威趟本身就是最后一次收敛检查：它以最后一趟的结果为种子重新推断，推出来
+        // 的还是同一组结果就说明种子已经是真不动点，预算刚好用尽也无妨。只有这里
+        // 仍然不一致，才是「没收敛」，而它必须留下痕迹。
+        const settled = analyzer.inferredFunctionResults();
+        const unsettled = unsettledResultKeys(inferredResults, settled);
+        if (unsettled.length > 0) {
+          diagnostics.push(diagnostic(
+            "VEL2038",
+            `Result type inference did not settle within the compiler's ${maximumPasses}-pass budget; ${unsettled.length} inferred result${unsettled.length === 1 ? "" : "s"} still changed on the last pass and must be annotated explicitly`,
+            spanOfResultKey(unsettled[0] ?? "0:0"),
+          ));
+        }
+      }
     }
   }
 
@@ -318,7 +362,87 @@ function compileUnchecked(text: string, options: CompileOptions): CompileResult 
   };
 }
 
-function complexityFailureResult(text: string, options: CompileOptions): CompileResult {
+/**
+ * 结果类型不动点迭代的趟数上限。紧上界是「省略结果标注的数量 + 2」，这个常量只在
+ * 那之上再夹一刀，作用是把最坏工作量从「模块规模的平方」压回「模块规模的常数倍」：
+ * 每一趟都是全模块重分析。代价是一条超过 254 个互相串联、且都省略结果标注的函数的
+ * 模块会被这条预算拦下 —— 那时报的是 VEL2038 而不是猜一个答案。真正的解法是按调用
+ * 图的强连通分量分组做局部不动点，只在真递归环里迭代，那需要一份可靠的函数调用图。
+ */
+const MAX_RESULT_INFERENCE_PASSES = 256;
+
+/** `spanIdentity` 生成的结果键（`start:end`）反解回位置，用来给未收敛的推断定位。 */
+function spanOfResultKey(key: string): Span {
+  const separator = key.lastIndexOf(":");
+  const start = Number.parseInt(key.slice(0, separator), 10);
+  const end = Number.parseInt(key.slice(separator + 1), 10);
+  return Number.isFinite(start) && Number.isFinite(end) ? { start, end } : { start: 0, end: 0 };
+}
+
+/** 两趟推断之间仍在变化的结果键，按位置排序，所以诊断的落点是确定的。 */
+function unsettledResultKeys(
+  left: ReadonlyMap<string, ValueType>,
+  right: ReadonlyMap<string, ValueType>,
+): readonly string[] {
+  const unsettled: string[] = [];
+  for (const key of new Set([...left.keys(), ...right.keys()])) {
+    const before = left.get(key);
+    const after = right.get(key);
+    if (before === undefined || after === undefined) {
+      unsettled.push(key);
+      continue;
+    }
+    // 单键对比借用分析器自己的结果等价判断，避免在这里重写一份类型比较。
+    if (!Analyzer.inferredFunctionResultsMatch(new Map([[key, before]]), new Map([[key, after]]))) unsettled.push(key);
+  }
+  return unsettled.sort((first, second) => {
+    const firstSpan = spanOfResultKey(first);
+    const secondSpan = spanOfResultKey(second);
+    return firstSpan.start - secondSpan.start || firstSpan.end - secondSpan.end || byCodeUnit(first, second);
+  });
+}
+
+/**
+ * AST 的最大节点嵌套深度。依据是实测：真实语料里最深的模块是 13 层，而分析器在
+ * 600 层左右耗尽 Node 主线程的栈；256 既远高于任何人写得出的嵌套，又留了一倍以上
+ * 的余量给栈更小的宿主（浏览器 worker）。它和解析器的语法深度预算取同一个数，
+ * 因为一层语法嵌套至多生成常数层 AST 节点，两道门给出同一条 VEL2008。
+ */
+const MAX_ANALYSIS_NESTING_DEPTH = 256;
+
+/**
+ * 第一个深度超过 `limit` 的 AST 节点的位置，没有则为 null。走的是显式栈而不是
+ * 递归，所以这道门自己不会成为下一个栈溢出源；深度只在带 `kind` 的节点上累加，
+ * 数组与 span 这类附属对象不计。
+ */
+function nodeSpanBeyondNestingDepth(root: unknown, limit: number): Span | null {
+  const pending: { readonly value: unknown; readonly depth: number }[] = [{ value: root, depth: 0 }];
+  const seen = new Set<object>();
+  while (pending.length > 0) {
+    const entry = pending.pop();
+    if (!entry) break;
+    const value = entry.value;
+    if (typeof value !== "object" || value === null) continue;
+    if (seen.has(value)) continue;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      for (let index = value.length - 1; index >= 0; index -= 1) pending.push({ value: value[index], depth: entry.depth });
+      continue;
+    }
+    const node = typeof (value as { kind?: unknown }).kind === "string";
+    const depth = node ? entry.depth + 1 : entry.depth;
+    if (node && depth > limit) {
+      const span = (value as { span?: Span }).span;
+      return span && typeof span.start === "number" && typeof span.end === "number" ? span : { start: 0, end: 0 };
+    }
+    const children = Object.values(value);
+    for (let index = children.length - 1; index >= 0; index -= 1) pending.push({ value: children[index], depth });
+  }
+  return null;
+}
+
+/** 结构完整但没有程序的编译结果：下游读到的是一条诊断，而不是一个崩溃。 */
+function emptyCompileResult(text: string, options: CompileOptions, reported: Diagnostic): CompileResult {
   const path = options.path ?? "<source>";
   const extensions = normalizedExtensions(options.extensions ?? []);
   const source = new SourceText(path, text);
@@ -331,7 +455,7 @@ function complexityFailureResult(text: string, options: CompileOptions): Compile
     styleSegments: null,
     runtimeModules: [],
     extensions: extensions.map((extension) => extension.id),
-    diagnostics: [diagnostic("VEL2008", "VelarScript source nesting is too complex to process safely", { start: 0, end: Math.min(1, text.length) })],
+    diagnostics: [reported],
     advisories: [],
     source,
     dependencies: [],
@@ -420,7 +544,9 @@ function parseModule(text: string, path: string, extensions: readonly CompilerEx
       suppressions: lexed.suppressions,
     };
   } catch (error) {
-    if (!isParserComplexityFailure(error) && !isJavaScriptStackOverflow(error)) throw error;
+    // 只有解析器自己的深度预算哨兵才是这条诊断的来源。栈溢出不再在这里被翻译成
+    // 「你的源码太复杂」：它交给 `compile` 的兜底报成内部编译器错误。
+    if (!isParserComplexityFailure(error)) throw error;
     return {
       source,
       program: { kind: "Program", body: [], span: { start: 0, end: 0 } },
@@ -431,6 +557,11 @@ function parseModule(text: string, path: string, extensions: readonly CompilerEx
   }
 }
 
+/**
+ * 消息文本是给人看的，不是接口的一部分，所以这个判据只用来给**内部错误**分类：
+ * 认出来就报 VEL9001 并请求上报，认不出来就原样抛出。用户可见的「嵌套过深」由
+ * 显式深度预算决定，不再依赖任何引擎的英文措辞。
+ */
 function isJavaScriptStackOverflow(error: unknown): boolean {
   return error instanceof RangeError && /Maximum call stack size exceeded|too much recursion/iu.test(error.message);
 }

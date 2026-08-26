@@ -264,11 +264,14 @@ const first = tasks[0].title
 const missing = tasks.get(99)?.title ?? "none"
 
 const owners = Map([["t-1", "ada"], ["t-2", "lin"]])
+const ownerCursor = owners.iterator()
+const firstOwner = ownerCursor.next()
 const eventsByDay: Map<string, List<Task>> = Map()
 eventsByDay.getOrSet("today", []).append(tasks[0])
 const words = Set(["done", "closed"])
 
 print(ordered.join(" | "))
+if firstOwner != null: print(firstOwner.value)
 print(f"{total} {first} {missing} {owners.get("t-1")} {"done" in words}")
 ```
 

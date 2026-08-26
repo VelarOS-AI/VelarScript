@@ -15787,8 +15787,8 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     devDependencies: Record<string, string>;
   };
-  assert.equal(createdPackage.dependencies["@velarscript/web"], "0.16.0");
-  assert.equal(createdPackage.devDependencies["@velarscript/cli"], "0.16.0");
+  assert.equal(createdPackage.dependencies["@velarscript/web"], "0.16.1");
+  assert.equal(createdPackage.devDependencies["@velarscript/cli"], "0.16.1");
   assert.equal(createdPackage.scripts.format, "velar format");
   assert.equal(createdPackage.scripts["format:check"], "velar format --check");
   assert.equal(createdPackage.scripts["test:browser"], "velar test --browser");
@@ -15924,8 +15924,8 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   assert.deepEqual(componentPackage.velar.requires.capabilities, []);
   assert.equal(componentPackage.scripts["pack:check"], "npm pack --dry-run --json");
   assert.match(componentPackage.scripts.validate ?? "", /npm run pack:check$/u);
-  assert.equal(componentPackage.peerDependencies["@velarscript/web"], "^0.16.0");
-  assert.equal(componentPackage.devDependencies["@velarscript/web"], "0.16.0");
+  assert.equal(componentPackage.peerDependencies["@velarscript/web"], "^0.16.1");
+  assert.equal(componentPackage.devDependencies["@velarscript/web"], "0.16.1");
   assert.match(await readFile(join(componentRoot, "src", "index.vel"), "utf8"), /export component InfoCard/u);
   assert.deepEqual(JSON.parse(await readFile(join(componentRoot, "velar.json"), "utf8")).extensions, ["@velarscript/web"]);
   await linkWorkspaceWebExtension(componentRoot);
@@ -15950,7 +15950,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     scripts: Record<string, string>;
   };
-  assert.equal(nodePackage.dependencies["@velarscript/server"], "0.16.0");
+  assert.equal(nodePackage.dependencies["@velarscript/server"], "0.16.1");
   assert.equal(nodePackage.dependencies["@velarscript/node"], undefined);
   assert.equal(nodePackage.scripts.dev, "velar dev");
   assert.equal(nodePackage.scripts.start, "velar serve");
@@ -15978,7 +15978,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     scripts: Record<string, string>;
   };
-  assert.equal(desktopPackage.dependencies["@velarscript/desktop"], "0.16.0");
+  assert.equal(desktopPackage.dependencies["@velarscript/desktop"], "0.16.1");
   assert.equal(desktopPackage.scripts.package, "velar package");
   assert.equal(desktopPackage.scripts["test:browser"], "velar test --browser=all");
   const desktopAgents = await readFile(join(desktopRoot, "AGENTS.md"), "utf8");
@@ -16042,7 +16042,7 @@ test("CLI help is command-specific and malformed top-level invocations fail clea
   const creator = resolve("packages/create/src/cli.ts");
   const creatorVersion = spawnSync(process.execPath, [creator, "--version"], { encoding: "utf8" });
   assert.equal(creatorVersion.status, 0, creatorVersion.stderr);
-  assert.equal(creatorVersion.stdout, "create-velar 0.16.0\n");
+  assert.equal(creatorVersion.stdout, "create-velar 0.16.1\n");
   const creatorMissing = spawnSync(process.execPath, [creator], { encoding: "utf8" });
   assert.equal(creatorMissing.status, 2);
   assert.match(creatorMissing.stderr, /expected one project directory/u);
@@ -18690,6 +18690,9 @@ export def exercise():
     const scores = Map({a: 1})
     scores.set("b", 2)
     print(scores.get("b"))
+    const scoreCursor = scores.iterator()
+    const firstScore = scoreCursor.next() ?? {value: "missing"}
+    print(firstScore.value)
 
     let row: Record<number> = {...{a: 1}}
     row["b"] = 2
@@ -18717,6 +18720,7 @@ export def optionalIndex(values: List<number>?) -> number?:
   assert.match(shared.code ?? "", /\b__velarListIndexSet\b/u);
   assert.match(shared.code ?? "", /\b__velarRecordIndexSet\b/u);
   assert.match(shared.code ?? "", /\b__velarMapGet\b/u);
+  assert.match(shared.code ?? "", /\b__velarMapIterator\b/u);
   assert.match(shared.code ?? "", /\b__velarSetSize\b/u);
   assert.doesNotMatch(shared.code ?? "", /\b__velarIndex\b/u);
   assert.doesNotMatch(shared.code ?? "", /\b__velarSetIndex\b/u);
@@ -18848,7 +18852,7 @@ OriginalObject.defineProperty;
 console.log(poisonCalls);
 `);
   assert.equal(hostile.status, 0, String(hostile.stderr));
-  assert.equal(hostile.stdout, "3\n6\n4\n2\n2\n8 2 null IndexError true\n0\n");
+  assert.equal(hostile.stdout, "3\n6\n4\n2\na\n2\n8 2 null IndexError true\n0\n");
 });
 
 test("extension runtime dependencies materialize transitively without becoming public modules", () => {
@@ -20337,7 +20341,7 @@ const Set = "shadow"
   assert.ok(malformedType.diagnostics.some((item) => item.code === "VEL2012" && /expects 1 type argument/u.test(item.message)));
 });
 
-test("Map and Set expose typed ordered snapshots without iterator leakage", () => {
+test("Map and Set expose typed ordered snapshots without exposing host iterators", () => {
   const result = compile(`
 const scores: Map<string, number> = Map()
 scores.set("Ada", 9)
@@ -21313,6 +21317,56 @@ for key in lookup:
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "first:6\n");
+});
+
+test("Map iterator pulls one live key at a time and keeps null keys distinct from exhaustion", () => {
+  const result = compile(`
+const lookup: Map<string?, number> = Map([[null, 1], ["removed", 2]])
+const cursor = lookup.iterator()
+const first = cursor.next()
+if first != null:
+    print(str(first.value == null))
+
+lookup.remove("removed")
+lookup.set("added", 3)
+const second = cursor.next()
+if second != null:
+    print(second.value)
+print(str(cursor.next() == null))
+`.trimStart());
+
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(result.code ?? "", /__velarMapIterator\(lookup\)/u);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "true\nadded\ntrue\n");
+});
+
+test("Map iterator captures its host operations before JavaScript prototypes can be replaced", () => {
+  const result = compile(`
+export def pullKeys() -> string:
+    const lookup = Map([["first", 1], ["second", 2]])
+    const cursor = lookup.iterator()
+    const first = cursor.next()!
+    const second = cursor.next()!
+    return first.value + ":" + second.value + ":" + str(cursor.next() == null)
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+
+  const execution = executeModule(`${result.code ?? ""}
+const originalDefineProperty = Object.defineProperty;
+const iteratorPrototype = Object.getPrototypeOf(Map.prototype.keys.call(new Map()));
+const poison = () => { throw new Error("poisoned Map iterator host"); };
+for (const [owner, name] of [
+  [Map.prototype, "keys"],
+  [iteratorPrototype, "next"],
+  [Object, "freeze"],
+  [Reflect, "apply"],
+]) originalDefineProperty(owner, name, {configurable: true, writable: true, value: poison});
+console.log(pullKeys());
+`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "first:second:true\n");
 });
 
 test("collection loops validate boundaries and ignore instance iterator overrides", () => {
@@ -27949,7 +28003,7 @@ test("CLI emits complete Web application assets", async () => {
     apiVersion: "0.10",
     artifactKind: "velar-web-build",
   });
-  assert.deepEqual(manifest.compiler, { name: "velar", version: "0.16.0" });
+  assert.deepEqual(manifest.compiler, { name: "velar", version: "0.16.1" });
   assert.match(manifest.buildId, /^[a-f0-9]{64}$/u);
   assert.equal(manifest.sourceMaps, true);
   assert.equal(manifest.entry, `assets/${javascript}`);

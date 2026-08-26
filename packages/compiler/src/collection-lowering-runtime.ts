@@ -105,6 +105,7 @@ export const VELAR_COLLECTION_LOWERING_EXPORTS = [
   "__velarSetClear",
   "__velarRecordClear",
   "__velarCollectionKeys",
+  "__velarMapIterator",
   "__velarMapKeys",
   "__velarRecordKeys",
   "__velarCollectionValues",
@@ -1187,6 +1188,25 @@ function __velarMapKeys(value) {
   if (size > __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A Map cannot exceed 1000000 entries");
   const output = new __velarCollectionNativeArray(size); const iterator = __velarCollectionSetMapMapKeys(value); let index = 0;
   while (true) { const step = __velarCollectionSetMapMapNext(iterator); if (step.done) return __velarAdoptList(output); output[index++] = __velarReactiveCollectionRead(value, __velarReactiveStructureKey, step.value); }
+}
+// 这里不复用 Map.keys()，因为它的 VelarScript 契约是构造完整 List 快照。
+// 游标直接持有宿主 Map 的原生 key iterator，所以创建和每次 next 都是 O(1)。
+// next 的外层 null 只表示耗尽；真实 key 放在冻结的 {value} 中，因此 null key
+// 仍然可以无歧义地返回。宿主 keys/next/freeze 操作都已在运行时初始化时捕获，
+// 应用代码之后改写 JavaScript 原型也不能劫持这条路径。
+function __velarMapIterator(value) {
+  value = __velarReactiveRaw(value); __velarReactiveCollectionTrack(value, __velarReactiveStructureKey);
+  const size = __velarCheckedMapSize(value, "Map.iterator");
+  if (size > __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A Map cannot exceed 1000000 entries");
+  const iterator = __velarCollectionSetMapMapKeys(value);
+  let exhausted = false;
+  const next = () => {
+    if (exhausted) return null;
+    const step = __velarCollectionSetMapMapNext(iterator);
+    if (step.done) { exhausted = true; return null; }
+    return __velarCollectionSetMapFreeze({value: __velarReactiveCollectionRead(value, __velarReactiveStructureKey, step.value)});
+  };
+  return __velarCollectionSetMapFreeze({next});
 }
 function __velarCollectionKeys(value) { value = __velarReactiveRaw(value); return __velarIsRecord(value) ? __velarRecordKeys(value) : __velarMapKeys(value); }
 

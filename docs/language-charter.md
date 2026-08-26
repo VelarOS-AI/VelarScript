@@ -2089,7 +2089,7 @@ const flags = Map({preview: true, compact: false})
 ```
 
 Map members are `size`, `get`, `set`, `getOrSet`, `update`, `remove`, `has`,
-`clear`, `copy`, `keys`, `values`, and `entries`.
+`clear`, `copy`, `iterator`, `keys`, `values`, and `entries`.
 
 `get(key)` is the read contract and returns `V?`. `getOrSet(key, fallback)` is
 the mutating grouping/cache contract: it returns the stored `V` when the key is
@@ -2098,6 +2098,21 @@ the fallback expression is evaluated before the method runs. The result is
 `V`, not `V?`, so repeated bucket appends do not create a collection-valued
 flow narrowing whose safety guard must walk the growing bucket on every read.
 `getOrSet` is unavailable through a `readonly Map`.
+
+`iterator()` creates a live insertion-order key cursor. Its `next()` method
+pulls at most one key and returns `{value: K}`; after exhaustion it returns
+`null` permanently. The item wrapper is deliberate: a Map may legally contain
+`null` in its key type, so `{value: null}` must remain distinct from cursor
+exhaustion. Creating and advancing the cursor does not copy the Map. `keys()`,
+`values()`, and `entries()` keep their separate snapshot contract and return
+fresh Lists.
+
+```velar fragment
+const cursor = users.iterator()
+const first = cursor.next()
+if first != null:
+    print(first.value)
+```
 
 `Set(values)` copies one checked dense List (or another Set). `Map(entries)`
 accepts a checked dense List whose every item is exactly `[key, value]`;
@@ -2258,7 +2273,8 @@ is defined rather than accidental.
   moved into the current position. `for value in values: values.append(value)`
   therefore runs until the 1,000,000-item ceiling fails the append, exactly as
   the same loop diverges in JavaScript and Python.
-- **Set and Map** — the loop holds a live native iterator. A member or key
+- **Set and Map** — the loop holds a live native iterator. `Map.iterator()`
+  exposes the same live key order one pull at a time. A member or key
   added during the loop is visited; one removed before the loop reaches it is
   skipped. A `Map`'s two-slot `for` reads each value at the moment its key is
   visited.
@@ -2758,8 +2774,11 @@ synchronous block may not `await`; await the work before construction and hold
 the finished collection. Answering `T?` is the asynchronous pull form `async for`
 drives — one element per pull, `null` for exhaustion — and that block may
 `await`. Any other answer is refused, and the message names both forms. That is
-the whole mechanism in either form: no iterator object, no generator, and no
-`next()` of the author's own. The block is not callable as `bag.iterate()`.
+the whole class hook in either form: it does not expose an iterator object or
+generator and does not turn an author's ordinary `next()` method into the
+hook. The block is not callable as `bag.iterate()`. The compiler-owned
+`Map.iterator()` cursor is a separate built-in collection operation and does
+not change this class contract.
 
 A derived class inherits the block. Overriding it *replaces* the answer rather
 than composing a chain, because there is only one answer to give; the

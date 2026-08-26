@@ -1018,9 +1018,17 @@ join that lockstep manifest. Neither rehearsal script contains a publish step.
 
 The compiler rejects a source module above 4 MiB before lexing. Lexing stops at
 250,000 tokens or 512 delimiter/indent levels, and Core parsing has an explicit
-512-level syntax budget reported as `VEL2008`. Only the compiler-owned budget
-sentinel becomes that diagnostic; a compiler extension's own `RangeError`
-remains an extension failure instead of being hidden as source complexity.
+256-level syntax budget reported as `VEL2008`. A left-associative chain costs no
+syntax depth but produces an equally deep tree, so the same 256-level budget is
+re-applied to the parsed tree before analysis; both report `VEL2008` at the
+offending node. Only the compiler-owned budget sentinels become that diagnostic:
+a compiler extension's own `RangeError` remains an extension failure, and a
+`RangeError` that escapes every budget is reported as the internal compiler
+error `VEL9001` rather than as source complexity, because a recursion nobody
+metered is a compiler defect and not the author's mistake.
+Result type inference iterates to a fixed point with its own explicit budget of
+256 whole-module passes; exhausting it without settling is `VEL2038`, never a
+silently accepted last pass.
 Terminal lexer ceilings stop before parser or extension-parser execution, so
 their more precise `VEL1005`/`VEL1006` diagnostics cannot be overwritten.
 Project discovery/resolution stops at 4,096 VelarScript

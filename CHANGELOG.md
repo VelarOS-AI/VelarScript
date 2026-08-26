@@ -6,6 +6,24 @@ truth for acceptance status.
 
 ## Unreleased
 
+## 0.16.1 — 2026-08-26
+
+### Language and compiler
+
+- Added `Map.iterator()` with an incremental `next() -> {value: K}?` key
+  cursor. It preserves live insertion order, distinguishes a legal `null` key
+  from exhaustion, and avoids materializing the full `keys()` snapshot.
+- Made parser and analyzed-AST nesting use the same explicit 256-level budget.
+  Result inference now reports `VEL2038` when its fixed-point pass budget does
+  not settle, while an unmetered compiler stack overflow reports the internal
+  error `VEL9001` instead of blaming source complexity.
+
+### Runtime
+
+- Lowered Map cursors through the captured native key iterator in standalone
+  and shared project runtimes. Cursor and item records are frozen, and later
+  JavaScript global or prototype replacement cannot redirect `next()`.
+
 ## 0.16.0 — 2026-08-26
 
 ### Language and diagnostics

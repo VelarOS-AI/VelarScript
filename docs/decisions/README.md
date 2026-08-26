@@ -65,6 +65,7 @@ their titles are reproduced verbatim below.
 | [D96](D96-MAP-GET-OR-SET.md) | Map 原子取值或写入 | `Map.getOrSet(key, fallback)` gives grouping and cache construction one linear, non-optional operation without weakening deep stale-flow validation. |
 | [D97](D97-EMITTED-RUNTIME-HYGIENE.md) | 编译产物运行时卫生与整数 range 校验 | Direct safe-integer ranges validate their count arithmetically, while project output imports and emits only the runtime helpers it actually calls. |
 | [D98](D98-DUAL-JAVASCRIPT-OUTPUT.md) | 双 JavaScript 产物模式 | `velar build` defaults to optimized production JavaScript; readable output and Source Map are independent, explicitly configurable build choices over the same checked program. |
+| [D99](D99-MAP-ITERATOR.md) | Map 增量迭代游标 | `Map.iterator()` exposes a live insertion-order key cursor whose `next()` distinguishes a null key from exhaustion without materializing `keys()`. |
 
 ## archive/
 

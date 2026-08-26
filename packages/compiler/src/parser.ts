@@ -96,13 +96,20 @@ const typeArgumentTokenKinds = new Set<TokenKind>([
   "identifier", "null", "comma", "dot", "question", "pipe", "arrow", "fatArrow",
   "leftParen", "rightParen", "leftBracket", "rightBracket", "colon", "ellipsis",
 ]);
-const MAX_PARSE_DEPTH = 512;
+// 一层语法嵌套要花掉八个左右的 JavaScript 栈帧（parseExpression → … →
+// parsePrimary → parseExpression），实测冷启动的 V8 在 400–500 层之间就已经把
+// Node 主线程的栈用完了 —— 也就是说 512 这个预算根本来不及生效，同一份源码是编译
+// 通过还是报「嵌套过深」，取决于 JIT 有没有热身、宿主的线程栈有多大。预算必须低到
+// 永远抢在栈前面才算数，所以取 256：它比真实语料里最深的模块（13 层）高一个数量级
+// 以上，又给栈更小的宿主（浏览器 worker）留了一倍余量。index.ts 的 AST 深度门取
+// 同一个数。
+const MAX_PARSE_DEPTH = 256;
 // An interpolation re-enters the compiler — a fresh lex and a fresh parse of
 // the fragment — so one nest holds far more JavaScript stack than one ordinary
 // expression level. Charging it a block of the budget keeps
 // PARSER_COMPLEXITY_FAILURE ahead of the stack, which is what turns a
 // pathological f-string into one diagnostic instead of seconds of work ended
-// by a stack overflow. 64 nested interpolations remain available, which is
+// by a stack overflow. 32 nested interpolations remain available, which is
 // orders of magnitude past any spelling a reader can follow.
 const NESTED_EXPRESSION_PARSE_COST = 8;
 const PARSER_COMPLEXITY_FAILURE = Object.freeze({ kind: "VelarParserComplexityFailure" });

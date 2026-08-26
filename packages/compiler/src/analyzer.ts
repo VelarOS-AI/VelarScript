@@ -375,7 +375,7 @@ export interface ClassInfo {
 
 export type CollectionRuntimeKind = "list" | "map" | "set" | "record";
 
-export type CollectionOperation = "listGet" | "mapGet" | "recordGet" | "slice" | "listAppend" | "listExtend" | "listInsert" | "listRemove" | "listPop" | "listClear" | "listCopy" | "listHas" | "listCount" | "listIndex" | "listFind" | "listSome" | "listEvery" | "listMap" | "listFilter" | "listFlatMap" | "listReduce" | "listJoin" | "listSorted" | "listReversed" | "listSum" | "listMin" | "listMax" | "setAdd" | "setUpdate" | "setHas" | "setRemove" | "setClear" | "setValues" | "setCopy" | "setUnion" | "setIntersection" | "setDifference" | "mapSet" | "mapGetOrSet" | "mapUpdate" | "mapHas" | "mapRemove" | "mapClear" | "mapKeys" | "mapValues" | "mapEntries" | "mapCopy" | "recordSet" | "recordHas" | "recordRemove" | "recordClear" | "recordKeys" | "recordValues" | "recordEntries" | "recordCopy";
+export type CollectionOperation = "listGet" | "mapGet" | "recordGet" | "slice" | "listAppend" | "listExtend" | "listInsert" | "listRemove" | "listPop" | "listClear" | "listCopy" | "listHas" | "listCount" | "listIndex" | "listFind" | "listSome" | "listEvery" | "listMap" | "listFilter" | "listFlatMap" | "listReduce" | "listJoin" | "listSorted" | "listReversed" | "listSum" | "listMin" | "listMax" | "setAdd" | "setUpdate" | "setHas" | "setRemove" | "setClear" | "setValues" | "setCopy" | "setUnion" | "setIntersection" | "setDifference" | "mapSet" | "mapGetOrSet" | "mapUpdate" | "mapHas" | "mapRemove" | "mapClear" | "mapIterator" | "mapKeys" | "mapValues" | "mapEntries" | "mapCopy" | "recordSet" | "recordHas" | "recordRemove" | "recordClear" | "recordKeys" | "recordValues" | "recordEntries" | "recordCopy";
 
 export type PrimitiveOperation = "stringTrim" | "stringUpper" | "stringLower" | "stringSlice" | "stringChar" | "stringHas" | "stringIndex" | "stringCount" | "stringStartsWith" | "stringEndsWith" | "stringSplit" | "stringReplace" | "stringReplaceAll" | "stringPadStart" | "stringPadEnd" | "stringRepeat" | "stringIsBlank" | "numberAbs" | "numberRound" | "numberFloor" | "numberCeil" | "numberToFixed" | "numberIsInteger" | "numberIsNaN" | "numberIsFinite";
 
@@ -389,7 +389,7 @@ const listCollectionOperations = new Map<string, CollectionOperation>([
 ]);
 const mapCollectionOperations = new Map<string, CollectionOperation>([
   ["get", "mapGet"], ["set", "mapSet"], ["getOrSet", "mapGetOrSet"], ["update", "mapUpdate"], ["has", "mapHas"],
-  ["remove", "mapRemove"], ["clear", "mapClear"], ["copy", "mapCopy"],
+  ["remove", "mapRemove"], ["clear", "mapClear"], ["copy", "mapCopy"], ["iterator", "mapIterator"],
   ["keys", "mapKeys"], ["values", "mapValues"], ["entries", "mapEntries"],
 ]);
 const setCollectionOperations = new Map<string, CollectionOperation>([
@@ -421,7 +421,7 @@ const discardedPureCollectionOperations = new Set<CollectionOperation>([
   "listGet", "mapGet", "recordGet", "slice", "listCopy", "listCount", "listIndex", "listFind", "listSome", "listEvery",
   "listMap", "listFilter", "listFlatMap", "listReduce", "listJoin", "listSorted", "listReversed",
   "listSum", "listMin", "listMax", "setCopy", "setUnion", "setIntersection", "setDifference", "mapCopy", "recordCopy",
-  "listHas", "mapHas", "setHas", "recordHas", "mapKeys", "recordKeys", "mapValues", "setValues", "recordValues", "mapEntries", "recordEntries",
+  "listHas", "mapHas", "setHas", "recordHas", "mapIterator", "mapKeys", "recordKeys", "mapValues", "setValues", "recordValues", "mapEntries", "recordEntries",
 ]);
 const discardedPurePrimitiveOperations = new Set<PrimitiveOperation>([
   "stringTrim", "stringUpper", "stringLower", "stringSlice", "stringChar",
@@ -930,8 +930,8 @@ const coreGlobalGuidance = new Map([
   ["repr", "Use 'print(value)' to inspect a value, 'str(value)' for its text form, or 'Json.stringify(value)' for data text"],
   ["format", "Use an f-string — 'f\"{value}\"' — and format the value first: 'value.toFixed(2)' for fixed decimals, 'str(value).padStart(size)' for width"],
   ["type", "Use 'value is Type' to test a value's type, and a 'type' declaration to name one; VelarScript has no runtime type-of function"],
-  ["iter", "Use a 'for' loop over the collection — 'for value in values:' — VelarScript has no 'iter'/'next' iterator pair"],
-  ["next", "Use a 'for' loop over the collection — 'for value in values:' — VelarScript has no 'iter'/'next' iterator pair"],
+  ["iter", "Use a 'for' loop for ordinary traversal; when a Map must be pulled incrementally, call 'map.iterator()'"],
+  ["next", "'next()' belongs to a Map cursor — create one with 'const cursor = map.iterator()', then call 'cursor.next()'"],
   ["tuple", "Use a List — '[a, b]' — for a positional sequence, or a record — '{first: a, second: b}' — for named parts; VelarScript has no tuple type"],
   ["bytes", "Import the Bytes type — 'import {Bytes} from \"velar/binary\"' — which is VelarScript's immutable byte snapshot"],
   // The two capability answers. A terminal and a filesystem are target
@@ -1004,6 +1004,23 @@ const namespaceFunction = (
   requiredParameters = parameters.length,
 ): ValueType => ({ kind: "intrinsic", name, parameterNames, parameters, requiredParameters, result });
 const promiseOf = (value: ValueType): ValueType => ({ kind: "promise", value });
+/**
+ * A synchronous cursor returns an optional wrapper rather than `T?` directly.
+ * The wrapper keeps exhaustion distinct from a legitimate `null` collection
+ * value: `null` means there is no next item, while `{value: null}` is an item.
+ */
+const iteratorOf = (value: ValueType): ValueType => {
+  const step: ValueType = {
+    kind: "object",
+    fields: new Map([["value", value]]),
+    readonlyFields: new Set(["value"]),
+  };
+  return {
+    kind: "object",
+    fields: new Map([["next", {kind: "function", parameters: [], requiredParameters: 0, result: optionalOf(step)}]]),
+    readonlyFields: new Set(["next"]),
+  };
+};
 const jsonNamespaceType: ValueType = {
   kind: "object",
   fields: new Map([
@@ -9530,7 +9547,7 @@ export class Analyzer implements TypeEnvironment {
     };
     const lowered = object.kind === "list"
       ? ["get", "slice", "append", "extend", "insert", "remove", "pop", "clear", "copy", "has", "count", "index", "find", "some", "every", "map", "flatMap", "filter", "reduce", "join", "sorted", "reversed", "sum", "min", "max"].includes(member.property)
-      : object.kind === "map" ? ["get", "set", "update", "has", "remove", "clear", "copy", "keys", "values", "entries"].includes(member.property)
+      : object.kind === "map" ? ["get", "set", "update", "has", "remove", "clear", "copy", "iterator", "keys", "values", "entries"].includes(member.property)
         : object.kind === "set" ? ["add", "update", "has", "remove", "clear", "copy", "values", "union", "intersection", "difference"].includes(member.property)
           : object.kind === "record" ? ["get", "set", "has", "remove", "clear", "copy", "keys", "values", "entries"].includes(member.property) : false;
     if (lowered && arguments_.some((argument) => argument.kind === "SpreadExpression")) {
@@ -9828,6 +9845,11 @@ export class Analyzer implements TypeEnvironment {
         }
         checkProbeArgument(comparisonKey!, "Map.get", "key");
         return optionalOf(readonlyValue!);
+      }
+      if (member.property === "iterator") {
+        this.collectionCalls.set(member.span.end, "mapIterator");
+        checkCollectionArguments([]);
+        return iteratorOf(readonlyKey!);
       }
       if (member.property === "keys") {
         this.collectionCalls.set(member.span.end, "mapKeys");
@@ -10869,6 +10891,8 @@ export class Analyzer implements TypeEnvironment {
         return callable([], [], nullType);
       case "copy":
         return callable([], [], copy);
+      case "iterator":
+        return callable([], [], iteratorOf(key));
       case "keys":
         return callable([], [], { kind: "list", element: key });
       case "values":
@@ -13769,7 +13793,7 @@ export class Analyzer implements TypeEnvironment {
     if (type.kind === "number") return new Map(["abs", "round", "floor", "ceil", "toFixed", "isInteger", "isNaN", "isFinite"]
       .map((name) => [name, this.numberMember(name)!]));
     if (type.kind === "list") return available(["size", "get", "slice", "append", "extend", "insert", "has", "remove", "pop", "clear", "copy", "count", "index", "sorted", "reversed", "map", "flatMap", "filter", "reduce", "some", "every", "find", "join", "sum", "min", "max"], (name) => this.listMember(type, name));
-    if (type.kind === "map") return available(["size", "get", "set", "getOrSet", "update", "has", "remove", "clear", "copy", "keys", "values", "entries"], (name) => this.mapMember(type, name));
+    if (type.kind === "map") return available(["size", "get", "set", "getOrSet", "update", "has", "remove", "clear", "copy", "iterator", "keys", "values", "entries"], (name) => this.mapMember(type, name));
     if (type.kind === "record") return available(["size", "get", "set", "has", "remove", "clear", "copy", "keys", "values", "entries"], (name) => this.recordMember(type, name));
     if (type.kind === "set") return available(["size", "add", "update", "has", "remove", "clear", "copy", "values", "union", "intersection", "difference"], (name) => this.setMember(type, name));
     if (type.kind === "action") return new Map([
