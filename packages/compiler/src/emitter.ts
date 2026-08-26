@@ -315,7 +315,9 @@ export class JavaScriptEmitter {
     // bridge import is selected, so state their small reactive dependency
     // closure explicitly. Direct structural-match operations are already
     // present in `statements` and therefore need no extra entry here.
-    if (statementIdentifiers.has("__velarRecordFrom")) reactiveBridgeIdentifiers.add("__velarReactiveCollectionRead");
+    if (statementIdentifiers.has("__velarRecordFrom") || statementIdentifiers.has("__velarRecordMapFrom")) {
+      reactiveBridgeIdentifiers.add("__velarReactiveCollectionRead");
+    }
     if (statementIdentifiers.has("__velarCreateRecord")
       || statementIdentifiers.has("__velarCreateRecordAsync")
       || this.needsObjectBindingHelpers
@@ -340,6 +342,7 @@ export class JavaScriptEmitter {
     ]);
     const usesGeneratedName = (name: string): boolean => generatedIdentifiers.has(name);
     const needsRecordFromHelper = usesGeneratedName("__velarRecordFrom");
+    const needsRecordMapFromHelper = usesGeneratedName("__velarRecordMapFrom");
     const needsCreateRecordHelper = usesGeneratedName("__velarCreateRecord");
     const needsCreateRecordAsyncHelper = usesGeneratedName("__velarCreateRecordAsync");
     const needsControlledRecordConstruction = needsCreateRecordHelper || needsCreateRecordAsyncHelper;
@@ -517,7 +520,7 @@ export class JavaScriptEmitter {
       // pull dozens of unrelated List, Set, and Map names into generated code.
       const directUses = new Set(generatedIdentifiers);
       const include = (...names: readonly string[]): void => { for (const name of names) directUses.add(name); };
-      if (needsRecordFromHelper || needsControlledRecordConstruction) {
+      if (needsRecordFromHelper || needsRecordMapFromHelper || needsControlledRecordConstruction) {
         include(
           "__velarCollectionRecordGetOwnPropertyDescriptor",
           "__velarCollectionRecordNativeRangeError",
@@ -526,7 +529,7 @@ export class JavaScriptEmitter {
           "__velarCollectionNativeTypeError",
         );
       }
-      if (needsRecordFromHelper) include("__velarReactiveCollectionRead");
+      if (needsRecordFromHelper || needsRecordMapFromHelper) include("__velarReactiveCollectionRead");
       if (needsControlledRecordConstruction) {
         include(
           "__velarCollectionRecordOwnSymbols",
@@ -666,6 +669,29 @@ export class JavaScriptEmitter {
           "    }",
           "    if (!descriptor.enumerable || !(\"value\" in descriptor)) throw new __velarCollectionNativeTypeError(target + \".from cannot read non-data field '\" + field + \"'\");",
           "    count = __velarSetRecordField(output, field, __velarReactiveCollectionRead(owner, field, descriptor.value), count);",
+          "  }",
+          "  return output;",
+          "}",
+        );
+      }
+      if (needsRecordMapFromHelper) {
+        recordHelpers.push(
+          "function __velarRecordMapFrom(source, transform, fields, target) {",
+          "  if (source === null || typeof source !== \"object\" || __velarCollectionListIsArray(source)) throw new __velarCollectionNativeTypeError(target + \".mapFrom requires a record source\");",
+          "  if (typeof transform !== \"function\") throw new __velarCollectionNativeTypeError(target + \".mapFrom transform must be a function\");",
+          "  const output = {};",
+          "  let count = 0;",
+          "  for (let index = 0; index < fields.length; index += 1) {",
+          "    const field = fields[index][0];",
+          "    const optional = fields[index][1];",
+          "    const descriptor = __velarCollectionRecordGetOwnPropertyDescriptor(source, field);",
+          "    if (descriptor === undefined) {",
+          "      if (optional) continue;",
+          "      throw new __velarCollectionNativeTypeError(target + \".mapFrom source is missing required field '\" + field + \"'\");",
+          "    }",
+          "    if (!descriptor.enumerable || !(\"value\" in descriptor)) throw new __velarCollectionNativeTypeError(target + \".mapFrom cannot read non-data field '\" + field + \"'\");",
+          "    const value = __velarReactiveCollectionRead(source, field, descriptor.value);",
+          "    count = __velarSetRecordField(output, field, transform(value), count);",
           "  }",
           "  return output;",
           "}",
@@ -2452,7 +2478,11 @@ export class JavaScriptEmitter {
         // An alias of an enum is lowered as the enum object itself, so its
         // check delegates the same way a direct enum name does (ENM-I4).
         if (this.enumAliasTarget(type.name) !== null) return `${type.name}.is(${value})`;
-        if (this.typeDeclarations.has(type.name)) {
+        // `type Alias = RecordType` also lives in typeDeclarations so the
+        // emitter can produce its runtime Type binding, but only an actual
+        // record declaration owns a `__velarTypeCheck_Name` helper. Aliases
+        // delegate through their emitted Type object (`Alias.is`) below.
+        if (this.typeDeclarations.get(type.name)?.kind === "TypeDeclaration") {
           const check = this.runtimeTypeCheckName(type.name);
           return this.runtimeTypeNeedsTraversalGuard(type.name) ? `${check}(${value}, ${state})` : `${check}(${value})`;
         }
@@ -3250,6 +3280,23 @@ export class JavaScriptEmitter {
             return `((__velarNamedArguments) => __velarRecordFrom(${source}, ${overrides}, ${JSON.stringify(recordFrom.fields.map((field) => [field.name, field.optional]))}, ${JSON.stringify(recordFrom.target)}))([${sourceArguments.join(", ")}])`;
           }
           return `__velarRecordFrom(${sourceArguments[0]}, ${sourceArguments[1] ?? "null"}, ${JSON.stringify(recordFrom.fields.map((field) => [field.name, field.optional]))}, ${JSON.stringify(recordFrom.target)})`;
+        }
+        const recordMapFrom = this.hints.recordMapFromCalls.get(spanIdentity(expression.span));
+        if (recordMapFrom) {
+          this.needsCollectionHelpers = true;
+          this.needsRecordHelpers = true;
+          const sourceArguments = expression.arguments.map((argument) => this.emitMappedExpression(argument));
+          const namedOrder = this.hints.namedArgumentOrders.get(spanIdentity(expression.span));
+          if (namedOrder) {
+            const source = namedOrder[0] === undefined || namedOrder[0] === -1
+              ? "undefined"
+              : `__velarNamedArguments[${namedOrder[0]}]`;
+            const transform = namedOrder[1] === undefined || namedOrder[1] === -1
+              ? "undefined"
+              : `__velarNamedArguments[${namedOrder[1]}]`;
+            return `((__velarNamedArguments) => __velarRecordMapFrom(${source}, ${transform}, ${JSON.stringify(recordMapFrom.fields.map((field) => [field.name, field.optional]))}, ${JSON.stringify(recordMapFrom.target)}))([${sourceArguments.join(", ")}])`;
+          }
+          return `__velarRecordMapFrom(${sourceArguments[0]}, ${sourceArguments[1]}, ${JSON.stringify(recordMapFrom.fields.map((field) => [field.name, field.optional]))}, ${JSON.stringify(recordMapFrom.target)})`;
         }
         if (expression.callee.kind === "MemberExpression") {
           const binaryHelper = this.binaryHelper(expression.callee);

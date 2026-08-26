@@ -6,6 +6,26 @@ truth for acceptance status.
 
 ## Unreleased
 
+## 0.16.2 — 2026-08-26
+
+### Language and diagnostics
+
+- Added concrete record `Target.mapFrom(source, transform)` projection. It
+  traverses the target record's declared fields once, reads the same-name
+  typed source fields, and builds the target record without an intermediate
+  dynamic record or validation round trip.
+- Added advisory A10 for large, complete record literals that repeat one
+  transform over every same-name source field. Its mechanical fix uses
+  `Target.mapFrom(...)` only when target coverage and evaluation order are
+  proven equivalent.
+
+### Compiler correctness
+
+- Preserved canonical generic record identities through re-exported aliases,
+  including readonly views used across package boundaries.
+- Made runtime validation of generic record aliases call the alias type object
+  instead of emitting a helper name that only concrete type declarations own.
+
 ## 0.16.1 — 2026-08-26
 
 ### Language and compiler

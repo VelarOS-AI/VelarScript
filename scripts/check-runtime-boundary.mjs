@@ -1196,7 +1196,8 @@ if ((projectCompilerSource.match(/case "runtimeType":/gu)?.length ?? 0) < 3
   failures.push("packages/cli/src/project.ts: Type<T> must survive rename, nominal resolution, and alias expansion");
 }
 if ((projectCompilerSource.match(/case "record":/gu)?.length ?? 0) < 3
-  || !projectCompilerSource.includes('value: resolveKnownNominals(type.value, classes, enums, namedTypeIdentities)')
+  || (!projectCompilerSource.includes('value: resolveKnownNominals(type.value, classes, enums, namedTypeIdentities)')
+    && !projectCompilerSource.includes('value: resolveNested(type.value)'))
   || !projectCompilerSource.includes('value: expandKnownAliases(type.value, aliases, seen)')) {
   failures.push("packages/cli/src/project.ts: Record<T> must preserve nested value types across package boundaries");
 }

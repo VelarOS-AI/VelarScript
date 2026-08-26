@@ -450,6 +450,9 @@ export interface RecordFromHint {
   }[];
 }
 
+/** Concrete `Target.mapFrom(source, transform)` calls lowered as mapped record projections. */
+export type RecordMapFromHint = RecordFromHint;
+
 export interface LoweringHints {
   readonly collectionCalls: ReadonlyMap<number, CollectionOperation>;
   readonly collectionSizes: ReadonlyMap<number, CollectionRuntimeKind>;
@@ -458,6 +461,8 @@ export interface LoweringHints {
   readonly collectionIterations: ReadonlyMap<number, CollectionRuntimeKind | "string">;
   /** Concrete `Target.from(source, overrides?)` calls lowered as exact record projections. */
   readonly recordFromCalls: ReadonlyMap<string, RecordFromHint>;
+  /** Concrete `Target.mapFrom(source, transform)` calls lowered as mapped record projections. */
+  readonly recordMapFromCalls: ReadonlyMap<string, RecordMapFromHint>;
   /** Binary members and indexes lower directly against their typed-array storage. */
   readonly binaryCalls: ReadonlyMap<number, "bufferCopy" | "bufferSlice" | "bufferToBytes" | "bufferValues">;
   readonly binarySizes: ReadonlyMap<number, BinaryStorageKind>;
@@ -1446,6 +1451,7 @@ export class Analyzer implements TypeEnvironment {
   private readonly collectionMemberships = new Map<string, CollectionRuntimeKind | "string">();
   private readonly collectionIterations = new Map<number, CollectionRuntimeKind | "string">();
   private readonly recordFromCalls = new Map<string, RecordFromHint>();
+  private readonly recordMapFromCalls = new Map<string, RecordMapFromHint>();
   private readonly binaryCalls = new Map<number, "bufferCopy" | "bufferSlice" | "bufferToBytes" | "bufferValues">();
   private readonly binarySizes = new Map<number, BinaryStorageKind>();
   private readonly binaryIndexes = new Map<string, BinaryStorageKind>();
@@ -2337,6 +2343,7 @@ export class Analyzer implements TypeEnvironment {
       collectionMemberships: this.collectionMemberships,
       collectionIterations: this.collectionIterations,
       recordFromCalls: this.recordFromCalls,
+      recordMapFromCalls: this.recordMapFromCalls,
       binaryCalls: this.binaryCalls,
       binarySizes: this.binarySizes,
       binaryIndexes: this.binaryIndexes,
@@ -4696,6 +4703,7 @@ export class Analyzer implements TypeEnvironment {
   private adviseManualRecordProjection(
     expression: Extract<Expression, { kind: "ObjectExpression" }>,
     target: ValueType | null,
+    writtenTarget: ValueType,
   ): void {
     if (target?.kind !== "named") return;
     const shape = this.recordProjectionShape(target);
@@ -4733,17 +4741,92 @@ export class Analyzer implements TypeEnvironment {
     const sourceBinding = this.lookup(sourceName);
     if (!sourceBinding || !this.recordProjectionShape(sourceBinding.type)) return;
 
-    const replacement = `${target.name}.from(${sourceName}${overrides.length > 0 ? `, {${overrides.join(", ")}}` : ""})`;
+    const targetName = this.recordProjectionTypeName(target, writtenTarget);
+    const replacement = `${targetName}.from(${sourceName}${overrides.length > 0 ? `, {${overrides.join(", ")}}` : ""})`;
     this.advise(
       "A9",
-      `This ${target.name} literal mirrors ${mirrors} same-name fields from '${sourceName}'; '${replacement}' is the canonical exact projection and keeps ${target.name}'s declared field set and declaration order. Write that instead of copying the fields one by one; suppress A9 only when this literal's authored Record order is intentional`,
+      `This ${targetName} literal mirrors ${mirrors} same-name fields from '${sourceName}'; '${replacement}' is the canonical exact projection and keeps ${targetName}'s declared field set and declaration order. Write that instead of copying the fields one by one; suppress A9 only when this literal's authored Record order is intentional`,
       expression.span,
       this.commentPreservingMechanicalFix(
         expression.span,
         replacement,
-        `Use '${target.name}.from(...)'`,
+        `Use '${targetName}.from(...)'`,
       ),
     );
+  }
+
+  /**
+   * A10: a large closed record literal that applies one transform to every
+   * same-name field is the long form of `Target.mapFrom(source, transform)`.
+   *
+   * Four fields is the deliberately conservative threshold: below it the
+   * literal is often clearer, while a larger block is maintenance-heavy and
+   * likely to drift. Because the transform may have effects, this proof also
+   * requires authored property order to equal target declaration order.
+   */
+  private adviseManualMappedRecordProjection(
+    expression: Extract<Expression, { kind: "ObjectExpression" }>,
+    target: ValueType | null,
+    writtenTarget: ValueType,
+  ): void {
+    if (target?.kind !== "named") return;
+    const shape = this.recordProjectionShape(target);
+    if (!shape || expression.properties.some((property) => property.kind !== "ObjectProperty")) return;
+    const properties = expression.properties as readonly Extract<(typeof expression.properties)[number], { kind: "ObjectProperty" }>[];
+    const targetFields = [...shape.fields.keys()];
+    if (targetFields.length < 4 || properties.length !== targetFields.length) return;
+    if (properties.some((property, index) => property.name !== targetFields[index])) return;
+
+    let sourceName: string | null = null;
+    let transformName: string | null = null;
+    for (const property of properties) {
+      const value = property.value;
+      if (value.kind !== "CallExpression"
+        || value.optional
+        || value.callee.kind !== "IdentifierExpression"
+        || value.arguments.length !== 1
+        || value.argumentNames?.some((name) => name !== null)) return;
+      const argument = value.arguments[0];
+      if (!argument || argument.kind !== "MemberExpression"
+        || argument.optional
+        || argument.object.kind !== "IdentifierExpression"
+        || argument.property !== property.name
+        || !this.stableDataMember(argument.object, argument.property)) return;
+      if (sourceName !== null && sourceName !== argument.object.name) return;
+      if (transformName !== null && transformName !== value.callee.name) return;
+      sourceName = argument.object.name;
+      transformName = value.callee.name;
+    }
+    if (sourceName === null || transformName === null) return;
+    const sourceBinding = this.lookup(sourceName);
+    const transformBinding = this.lookup(transformName);
+    if (!sourceBinding || !this.recordProjectionShape(sourceBinding.type)) return;
+    const transformType = transformBinding ? this.expandAliases(transformBinding.type) : null;
+    if (!transformType || (transformType.kind !== "function" && transformType.kind !== "action")) return;
+
+    const targetName = this.recordProjectionTypeName(target, writtenTarget);
+    const replacement = `${targetName}.mapFrom(${sourceName}, ${transformName})`;
+    this.advise(
+      "A10",
+      `This ${targetName} literal repeats '${transformName}(${sourceName}.field)' for all ${targetFields.length} fields; '${replacement}' maps the complete target field table in declaration order. Write that instead of maintaining one conversion per field`,
+      expression.span,
+      this.commentPreservingMechanicalFix(
+        expression.span,
+        replacement,
+        `Use '${targetName}.mapFrom(...)'`,
+      ),
+    );
+  }
+
+  /** Returns a name that is legal in the Type-object position of the fix. */
+  private recordProjectionTypeName(target: Extract<ValueType, { kind: "named" }>, writtenTarget: ValueType): string {
+    if (writtenTarget.kind === "named" && this.lookup(writtenTarget.name)?.type.kind === "typeObject") {
+      return writtenTarget.name;
+    }
+    for (const [name, alias] of this.typeAliases) {
+      if (sameType(this.expandAliases(alias), target)) return name;
+    }
+    return target.name;
   }
 
   /**
@@ -7037,7 +7120,10 @@ export class Analyzer implements TypeEnvironment {
           }
           this.contextualAssignments.set(spanIdentity(expression.span), contextualType);
         }
-        if (this.diagnostics.length === diagnosticsBefore) this.adviseManualRecordProjection(expression, objectContext);
+        if (this.diagnostics.length === diagnosticsBefore) {
+          this.adviseManualRecordProjection(expression, objectContext, contextualType);
+          this.adviseManualMappedRecordProjection(expression, objectContext, contextualType);
+        }
         return expectedRecordValue
           ? { kind: "record", value: expectedRecordValue }
           : { kind: "object", fields, ...(optionalFields.size > 0 ? { optionalFields } : {}) };
@@ -8432,6 +8518,8 @@ export class Analyzer implements TypeEnvironment {
       this.recordMemberAccessProperty(calleeExpression);
       const recordFromResult = this.inferRecordFromCall(calleeExpression, arguments_, argumentNames, callSpan);
       if (recordFromResult) return recordFromResult;
+      const recordMapFromResult = this.inferRecordMapFromCall(calleeExpression, arguments_, argumentNames, callSpan);
+      if (recordMapFromResult) return recordMapFromResult;
       const primitiveResult = this.inferPrimitiveCall(calleeExpression, arguments_, argumentNames, callSpan);
       if (primitiveResult) return primitiveResult;
       const collectionResult = this.inferCollectionCall(calleeExpression, arguments_, argumentNames, callSpan);
@@ -10152,6 +10240,164 @@ export class Analyzer implements TypeEnvironment {
 
     if (this.diagnostics.length === diagnosticsBefore) {
       this.recordFromCalls.set(spanIdentity(callSpan), {
+        target: receiver.name,
+        fields: [...targetShape.fields].map(([name, type]) => ({
+          name,
+          optional: targetShape.optionalFields.has(name) || type.kind === "optional",
+        })),
+      });
+    }
+    return target;
+  }
+
+  /**
+   * A mapped projection keeps the target record's field table as the sole
+   * authority while converting every same-name source value with one
+   * callback:
+   *
+   *     RuntimePalette.mapFrom(identityPalette, resolve)
+   *
+   * This is intentionally a concrete-record operation rather than
+   * `Record.map`: the analyzer can prove that every required target field is
+   * present, the emitter can preserve target declaration order, and callers
+   * retain named-field completion on the returned value.
+   */
+  private inferRecordMapFromCall(
+    member: Extract<Expression, { kind: "MemberExpression" }>,
+    sourceArguments: readonly Expression[],
+    argumentNames: readonly (string | null)[] | undefined,
+    callSpan: Span,
+  ): ValueType | null {
+    if (member.property !== "mapFrom" || member.optional || member.object.kind !== "IdentifierExpression") return null;
+    const binding = this.lookup(member.object.name);
+    if (binding?.type.kind !== "typeObject") return null;
+    const diagnosticsBefore = this.diagnostics.length;
+
+    this.callExpressionCallees.add(spanIdentity(member.span));
+    const receiver = this.inferExpression(member.object);
+    if (isInvalidType(receiver) || receiver.kind !== "typeObject") {
+      for (const argument of sourceArguments) this.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument);
+      return invalidType;
+    }
+
+    const target = this.runtimeTypeObjectValue(receiver);
+    const targetShape = this.recordProjectionShape(target);
+    const callable: ValueType = {
+      kind: "function",
+      parameterNames: ["source", "transform"],
+      parameters: [unknownType, { kind: "function", parameters: [unknownType], requiredParameters: 1, result: unknownType }],
+      requiredParameters: 2,
+      result: target,
+    };
+    this.semanticExpressionOwners.set(`${member.span.start}:${member.span.end}`, receiver);
+    this.recordSemanticExpression(member, callable);
+    if (!targetShape) {
+      for (const argument of sourceArguments) this.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument);
+      this.typeError(
+        `Type '${receiver.name}' is not a concrete record, so it cannot use '.mapFrom'; declare a record type whose fields define the mapped projection`,
+        member.span,
+      );
+      return invalidType;
+    }
+
+    const named = this.planNamedArguments(
+      sourceArguments,
+      argumentNames,
+      [unknownType, unknownType],
+      ["source", "transform"],
+      2,
+      callSpan,
+    );
+    if (named && !named.valid) {
+      for (const argument of sourceArguments) this.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument);
+      return target;
+    }
+    if (!named && sourceArguments.length !== 2) {
+      for (const argument of sourceArguments) this.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument);
+      this.typeError(`Expected 2 arguments but received ${sourceArguments.length}`, callSpan);
+      return target;
+    }
+
+    const ordered = named?.ordered ?? sourceArguments;
+    const omitted = (expression: Expression | undefined): boolean => expression?.kind === "IdentifierExpression"
+      && expression.name === "\u0000omitted-named-argument";
+    const sourceExpression = ordered[0];
+    const transformExpression = ordered[1];
+    if (!sourceExpression || !transformExpression || omitted(sourceExpression) || omitted(transformExpression)) return target;
+    if (sourceExpression.kind === "SpreadExpression" || transformExpression.kind === "SpreadExpression") {
+      this.inferExpression(sourceExpression.kind === "SpreadExpression" ? sourceExpression.value : sourceExpression);
+      this.inferExpression(transformExpression.kind === "SpreadExpression" ? transformExpression.value : transformExpression);
+      this.typeError("A mapped record projection does not accept call spreads", callSpan);
+      return target;
+    }
+
+    const source = this.inferExpression(sourceExpression);
+    const sourceShape = this.recordProjectionShape(source);
+    if (!isInvalidType(source) && (source.kind === "unknown" || source.kind === "any")) {
+      this.typeError(
+        `Cannot build ${describeType(target)} from ${describeType(source)}; validate untrusted data with 'Type.parse' before mapping a typed record`,
+        sourceExpression.span,
+      );
+    } else if (!isInvalidType(source) && !sourceShape) {
+      this.typeError(
+        `Cannot build ${describeType(target)} from ${describeType(source)}; '.mapFrom' requires a typed record source`,
+        sourceExpression.span,
+      );
+    }
+
+    const sourceFieldTypes: ValueType[] = [];
+    if (sourceShape) {
+      for (const [name] of targetShape.fields) {
+        let actual = sourceShape.fields.get(name);
+        if (!actual) {
+          if (targetShape.optionalFields.has(name)) continue;
+          this.typeError(
+            `${describeType(target)}.mapFrom cannot fill required field '${name}' from ${describeType(source)}`,
+            sourceExpression.span,
+          );
+          continue;
+        }
+        if (sourceShape.optionalFields.has(name) && !targetShape.optionalFields.has(name)) {
+          this.typeError(
+            `${describeType(target)}.mapFrom cannot fill required field '${name}' from optional field '${name}' on ${describeType(source)}`,
+            sourceExpression.span,
+          );
+        }
+        if (sourceShape.optionalFields.has(name) && actual.kind !== "optional") actual = optionalOf(actual);
+        if (sourceShape.readonlyFields.has(name) || sourceShape.readonlyView) actual = this.readonlyDataViewOf(actual);
+        sourceFieldTypes.push(actual);
+      }
+    }
+
+    const sourceFieldType = unionOf(sourceFieldTypes);
+    const transformExpected: ValueType = {
+      kind: "function",
+      parameters: [sourceFieldType],
+      parameterNames: ["value"],
+      requiredParameters: 1,
+      result: unknownType,
+    };
+    const transform = this.concreteCallableFor(
+      this.inferExpression(transformExpression, transformExpected),
+      transformExpected,
+      transformExpression.span,
+    );
+    this.requireAssignable(transform, transformExpected, transformExpression.span);
+    const result = transform.kind === "function" ? transform.result : unknownType;
+    const checkedTargetTypes: ValueType[] = [];
+    for (const expected of targetShape.fields.values()) {
+      if (checkedTargetTypes.some((existing) => sameType(existing, expected))) continue;
+      checkedTargetTypes.push(expected);
+      if (!isAssignable(result, expected, this)) {
+        this.typeError(
+          `${describeType(target)}.mapFrom transform returns ${describeType(result)}, but target fields require ${describeType(expected)}`,
+          transformExpression.span,
+        );
+      }
+    }
+
+    if (this.diagnostics.length === diagnosticsBefore) {
+      this.recordMapFromCalls.set(spanIdentity(callSpan), {
         target: receiver.name,
         fields: [...targetShape.fields].map(([name, type]) => ({
           name,

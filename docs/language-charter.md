@@ -218,7 +218,7 @@ for a keyed list rebuilt by `map` (section 14), and `A5` and `A6` for
 JavaScript `${...}` in a string, without and under the `f` prefix (section 3).
 `A7` reports a proven manual collection conversion and `A8` a proven manual
 existential List query (section 8). `A9` reports a proven manual exact record
-projection (section 6).
+projection and `A10` a proven large same-field mapped projection (section 6).
 
 An advisory that is right about the line is answered by writing the unambiguous
 spelling it names. An advisory that is wrong about *this* line is answered in
@@ -1395,6 +1395,37 @@ accessors and missing required fields, preserves reactive collection reads,
 and uses the normal bounded record writer. This fail-closed runtime check is
 defence in depth for typed values arriving from a host boundary.
 
+A concrete record Type also owns a mapped projection for the case where the
+field names already agree but every field value needs the same conversion:
+
+```velar fragment
+type Slots<T>:
+    air: T
+    water: T
+
+type IdentitySlots = Slots<string>
+type RuntimeSlots = Slots<number>
+
+const runtime = RuntimeSlots.mapFrom(identities, resolveRuntimeId)
+```
+
+`Target.mapFrom(source, transform)` visits the target's fields in target
+declaration order, reads each same-name source field once, calls `transform`
+once for that value, and writes the result under the same name. The source must
+have a statically known record shape and every required target field; the
+transform must accept the union of source field types and its result must be
+assignable to every target field type. This deliberately serves homogeneous
+record families such as configuration identities, runtime ids, indexes, and
+flags. A transform whose behavior depends on the field name remains an
+ordinary explicit construction rather than a hidden dependent-type facility.
+
+Like `from`, `mapFrom` is shallow typed construction rather than validation.
+It ignores surplus source fields, omits an absent optional target field, and
+rejects an optional source for a required target. Both arguments are evaluated
+once in authored call-argument order before mapping. Runtime reads accept only
+own enumerable data fields and reuse the bounded record writer and reactive
+read path.
+
 Advisory `A9` catches the closed literal long form when every target field is
 written, at least two fields are direct same-name data reads from one plain
 record binding, and every other value is an identifier or literal. Computed
@@ -1404,6 +1435,15 @@ is observable, `from` deliberately canonicalizes even a differently ordered
 literal to target declaration order. The report states that change; a wire
 format that intentionally depends on authored field order keeps the literal
 with `// velar-allow A9: <reason>` on its opening line.
+
+Advisory `A10` catches the large mapped long form when a complete target record
+of at least four fields writes every field as
+`field: transform(source.field)`. Every field must use the same plain source
+binding and transform binding, and authored property order must already equal
+target declaration order so an effectful transform keeps exactly the same call
+order. Smaller records, reordered fields, mixed sources, mixed transforms,
+spreads, partial targets, and complex callees stay silent. The canonical form
+is `Target.mapFrom(source, transform)`.
 
 Record types have a runtime validator:
 

@@ -66,6 +66,7 @@ their titles are reproduced verbatim below.
 | [D97](D97-EMITTED-RUNTIME-HYGIENE.md) | 编译产物运行时卫生与整数 range 校验 | Direct safe-integer ranges validate their count arithmetically, while project output imports and emits only the runtime helpers it actually calls. |
 | [D98](D98-DUAL-JAVASCRIPT-OUTPUT.md) | 双 JavaScript 产物模式 | `velar build` defaults to optimized production JavaScript; readable output and Source Map are independent, explicitly configurable build choices over the same checked program. |
 | [D99](D99-MAP-ITERATOR.md) | Map 增量迭代游标 | `Map.iterator()` exposes a live insertion-order key cursor whose `next()` distinguishes a null key from exhaustion without materializing `keys()`. |
+| [D100](D100-MAPPED-RECORD-PROJECTION.md) | 具体记录拥有同名字段映射构造 | `Target.mapFrom(source, transform)` 按目标声明顺序转换同名字段；A10 提示完整的大规模手写映射。 |
 
 ## archive/
 

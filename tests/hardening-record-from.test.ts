@@ -240,3 +240,148 @@ print(Target.from(source))
   const emitted = project.modules.find((module) => module.inputPath === entry)?.result.code ?? "";
   assert.match(emitted, /__velarRecordFrom\(source, null, \[\["id",false\]\], "Target"\)/u);
 });
+
+test("Type.mapFrom converts every same-name field once and preserves target declaration order", () => {
+  const output = run(`
+type IdentitySlots<T>:
+    water: T
+    air: T
+
+type IdentityKeys = IdentitySlots<string>
+type RuntimeIds = IdentitySlots<number>
+
+const keys: IdentityKeys = {water: "water", air: "air"}
+const visited: List<string> = []
+
+def resolve(key: string) -> number:
+    visited.append(key)
+    return key.size
+
+const runtimeIds: RuntimeIds = RuntimeIds.mapFrom(keys, resolve)
+print(visited.join(","))
+print(runtimeIds)
+`);
+  assert.equal(output, "water,air\n{ water: 5, air: 3 }\n");
+});
+
+test("Type.mapFrom accepts named arguments without changing authored evaluation order", () => {
+  const output = run(`
+type Source:
+    value: string
+
+type Target:
+    value: number
+
+const events: List<string> = []
+
+def source() -> Source:
+    events.append("source")
+    return {value: "four"}
+
+def transform() -> (value: string) -> number:
+    events.append("transform")
+    return value => value.size
+
+const target = Target.mapFrom(transform=transform(), source=source())
+print(events.join(","))
+print(target.value)
+`);
+  assert.equal(output, "transform,source\n4\n");
+});
+
+test("Type.mapFrom diagnoses incomplete sources and incompatible transforms", () => {
+  assert.deepEqual(diagnostics(`
+type Source:
+    first: string
+type Target:
+    first: number
+    second: number
+const source: Source = {first: "1"}
+const target = Target.mapFrom(source, value => value.size)
+`), ["Target.mapFrom cannot fill required field 'second' from Source"]);
+
+  assert.deepEqual(diagnostics(`
+type Source:
+    value: string
+type Target:
+    value: number
+const source: Source = {value: "1"}
+const target = Target.mapFrom(source, value => value)
+`), ["Target.mapFrom transform returns string, but target fields require number"]);
+
+  assert.deepEqual(diagnostics(`
+type Target:
+    value: number
+def convert(source: unknown) -> Target:
+    return Target.mapFrom(source, value => 1)
+`), ["Cannot build Target from unknown; validate untrusted data with 'Type.parse' before mapping a typed record"]);
+});
+
+test("Type.mapFrom remains ordinary call syntax for formatting and emits one mapped projection", () => {
+  const canonical = `
+type Source:
+    value: string
+
+type Target:
+    value: number
+
+const source: Source = {value: "1"}
+const target = Target.mapFrom(
+    source,
+    value => value.size,
+)
+`.trimStart();
+  assert.equal(formatSource(canonical), canonical);
+  const result = compiled(canonical);
+  assert.match(result.code ?? "", /__velarRecordMapFrom\(source, value => __velarStringSize\(value\), \[\["value",false\]\], "Target"\)/u);
+});
+
+test("an exported generic record alias keeps its field table through another module", async () => {
+  const directory = join(tmpdir(), "velar-record-map-from-forwarded-alias");
+  const slots = join(directory, "slots.vel");
+  const palette = join(directory, "palette.vel");
+  const entry = join(directory, "main.vel");
+  const project = await compileProject(entry, new Map([
+    [slots, `
+export type Slots<T>:
+    air: T
+    water: T
+`.trimStart()],
+    [palette, `
+import {Slots} from "./slots.vel"
+
+export type RuntimeSlots = Slots<number>
+`.trimStart()],
+    [entry, `
+import {RuntimeSlots} from "./palette.vel"
+
+def sum(slots: readonly RuntimeSlots) -> number:
+    return slots.air + slots.water
+
+const source = {air: "1", water: "22"}
+const runtime = RuntimeSlots.mapFrom(source, value => value.size)
+print(sum(runtime))
+`.trimStart()],
+  ]), { sourceRoot: directory, projectRoot: directory });
+  assert.deepEqual(project.failures, []);
+  assert.deepEqual(project.modules.flatMap((module) => module.result.diagnostics), []);
+  const emitted = project.modules.find((module) => module.inputPath === entry)?.result.code ?? "";
+  assert.match(emitted, /__velarRecordMapFrom/u);
+});
+
+test("a generic record alias nested in another record delegates runtime validation to its Type object", () => {
+  const output = run(`
+type Slots<T>:
+    air: T
+    water: T
+
+type IdentitySlots = Slots<string>
+
+type Palette:
+    blocks: IdentitySlots
+
+const palette = Palette.parse({blocks: {air: "air", water: "water"}})
+print(palette.blocks.water)
+`);
+  assert.equal(output, "water\n");
+});

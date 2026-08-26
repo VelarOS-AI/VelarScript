@@ -1780,7 +1780,13 @@ function resolvedModuleInterface(
   }
 
   const enumNames = enums;
-  const resolveType = (type: ValueType): ValueType => resolveKnownNominals(expandKnownAliases(type, typeAliases), classes, enumNames, namedTypeIdentities);
+  const resolveType = (type: ValueType): ValueType => resolveKnownNominals(
+    expandKnownAliases(type, typeAliases),
+    classes,
+    enumNames,
+    namedTypeIdentities,
+    genericTypes,
+  );
   for (const [name, type] of exports) exports.set(name, resolveType(type));
   for (const [name, fields] of namedTypes) {
     namedTypes.set(name, new Map([...fields].map(([field, type]) => [field, resolveType(type)])));
@@ -2666,13 +2672,23 @@ function resolveKnownNominals(
   classes: ReadonlyMap<string, ClassInfo>,
   enums: ReadonlyMap<string, EnumInfo>,
   namedTypeIdentities: ReadonlyMap<string, string>,
+  genericTypes: ReadonlyMap<string, GenericTypeInfo> = new Map(),
 ): ValueType {
+  const resolveNested = (nested: ValueType): ValueType => resolveKnownNominals(
+    nested,
+    classes,
+    enums,
+    namedTypeIdentities,
+    genericTypes,
+  );
   // D55 rule 121: the importing side of the same crossing `resolveNominals`
   // makes on the exporting side. Both call one constructor, so the identity
   // computed here and the identity published there are the same string.
   if (type.kind === "named" && type.application) {
-    const arguments_ = type.application.arguments.map((argument) => resolveKnownNominals(argument, classes, enums, namedTypeIdentities));
-    const declaration = namedTypeIdentities.get(type.application.name) ?? type.application.declaration;
+    const arguments_ = type.application.arguments.map(resolveNested);
+    const declaration = genericTypes.get(type.application.name)?.identity
+      ?? namedTypeIdentities.get(type.application.name)
+      ?? type.application.declaration;
     return genericApplicationType(declaration, type.application.name, arguments_, type.readonlyView === true);
   }
   if (type.kind === "named" && classes.has(type.name)) {
@@ -2691,42 +2707,42 @@ function resolveKnownNominals(
   }
   switch (type.kind) {
     case "optional":
-      return optionalOf(resolveKnownNominals(type.inner, classes, enums, namedTypeIdentities));
+      return optionalOf(resolveNested(type.inner));
     case "list":
-      return { ...type, element: resolveKnownNominals(type.element, classes, enums, namedTypeIdentities) };
+      return { ...type, element: resolveNested(type.element) };
     case "set":
-      return { ...type, element: resolveKnownNominals(type.element, classes, enums, namedTypeIdentities) };
+      return { ...type, element: resolveNested(type.element) };
     case "map":
-      return { ...type, key: resolveKnownNominals(type.key, classes, enums, namedTypeIdentities), value: resolveKnownNominals(type.value, classes, enums, namedTypeIdentities) };
+      return { ...type, key: resolveNested(type.key), value: resolveNested(type.value) };
     case "record":
-      return { ...type, value: resolveKnownNominals(type.value, classes, enums, namedTypeIdentities) };
+      return { ...type, value: resolveNested(type.value) };
     case "promise":
-      return { kind: "promise", value: resolveKnownNominals(type.value, classes, enums, namedTypeIdentities) };
+      return { kind: "promise", value: resolveNested(type.value) };
     case "runtimeType":
-      return { kind: "runtimeType", value: resolveKnownNominals(type.value, classes, enums, namedTypeIdentities) };
+      return { kind: "runtimeType", value: resolveNested(type.value) };
     case "typeObject":
       return type.value
-        ? { ...type, value: resolveKnownNominals(type.value, classes, enums, namedTypeIdentities) }
+        ? { ...type, value: resolveNested(type.value) }
         : type;
     case "object":
-      return { ...type, fields: new Map([...type.fields].map(([name, value]) => [name, resolveKnownNominals(value, classes, enums, namedTypeIdentities)])) };
+      return { ...type, fields: new Map([...type.fields].map(([name, value]) => [name, resolveNested(value)])) };
     case "function":
     case "action":
     case "intrinsic":
       return {
         ...type,
-        parameters: type.parameters.map((parameter) => resolveKnownNominals(parameter, classes, enums, namedTypeIdentities)),
-        ...(type.rest ? { rest: resolveKnownNominals(type.rest, classes, enums, namedTypeIdentities) } : {}),
-        result: resolveKnownNominals(type.result, classes, enums, namedTypeIdentities),
+        parameters: type.parameters.map(resolveNested),
+        ...(type.rest ? { rest: resolveNested(type.rest) } : {}),
+        result: resolveNested(type.result),
       };
     case "extension":
       return {
         ...type,
-        properties: new Map([...type.properties].map(([name, value]) => [name, resolveKnownNominals(value, classes, enums, namedTypeIdentities)])),
-        arguments: type.arguments.map((argument) => resolveKnownNominals(argument, classes, enums, namedTypeIdentities)),
+        properties: new Map([...type.properties].map(([name, value]) => [name, resolveNested(value)])),
+        arguments: type.arguments.map(resolveNested),
       };
     case "union":
-      return { kind: "union", members: type.members.map((member) => resolveKnownNominals(member, classes, enums, namedTypeIdentities)) };
+      return { kind: "union", members: type.members.map(resolveNested) };
     default:
       return type;
   }
