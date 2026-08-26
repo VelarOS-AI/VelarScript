@@ -9,6 +9,7 @@ import {
   type CompilerAnalysisExtension,
   type CompilerEmitterOptions,
   type CompilerLexicalExtension,
+  type ExtensionValueType,
   type LoweringHints,
   type Token,
 } from "@velarscript/compiler/extension";
@@ -33,11 +34,11 @@ import { velarNodeInspectionExtension } from "./server-inspection.ts";
 import { scanNodePathPatternForFormatting, scanNodeToken } from "./server-lexer.ts";
 import { VelarNodeParser } from "./server-parser.ts";
 import { velarNodeSemanticExtension } from "./server-semantic.ts";
-import { serveAppType, serveRequestType } from "./server-types.ts";
+import { httpOutcomeType, routePatternType, serveAppType, serveRequestType, VELAR_HTTP_OUTCOME_IDENTITY, VELAR_ROUTE_PATTERN_IDENTITY } from "./server-types.ts";
 
 export { VELAR_PROCESS_HOST_RUNTIME } from "./process-runtime.ts";
 
-export const VELAR_NODE_API_VERSION = "0.11";
+export const VELAR_NODE_API_VERSION = "0.12";
 export const VELAR_NODE_HOST_MODULE = "velar/node-host-v1";
 
 const unknownType: ValueType = { kind: "unknown" };
@@ -131,17 +132,34 @@ const requestBodyTooLargeErrorClass: ClassInfo = {
   staticGetters: new Set(),
   staticMethods: new Map(),
 };
-const serveHttpErrorIdentity = "velar/serve#class:HttpError";
-const serveHttpErrorClass: ClassInfo = {
-  identity: serveHttpErrorIdentity,
-  parameters: [numberType, unknownType, optional(responseHeadersType)],
-  parameterNames: ["status", "body", "headers"],
+const httpProblemIdentity = "velar/serve#class:HttpProblem";
+const httpProblemOptionsType = object({
+  status: numberType,
+  code: stringType,
+  title: optional(stringType),
+  detail: optional(stringType),
+  type: optional(stringType),
+  instance: optional(stringType),
+  source: optional(stringType),
+  parameter: optional(stringType),
+  headers: optional(responseHeadersType),
+}, ["title", "detail", "type", "instance", "source", "parameter", "headers"]);
+const httpProblemClass: ClassInfo = {
+  identity: httpProblemIdentity,
+  parameters: [httpProblemOptionsType],
+  parameterNames: ["options"],
   requiredParameters: 1,
   base: "Error",
   abstract: false,
   fields: new Map([
     ["status", { mutable: false, type: numberType }],
-    ["body", { mutable: false, type: unknownType }],
+    ["code", { mutable: false, type: stringType }],
+    ["title", { mutable: false, type: stringType }],
+    ["detail", { mutable: false, type: optional(stringType) }],
+    ["type", { mutable: false, type: stringType }],
+    ["instance", { mutable: false, type: optional(stringType) }],
+    ["source", { mutable: false, type: optional(stringType) }],
+    ["parameter", { mutable: false, type: optional(stringType) }],
     ["headers", { mutable: false, type: responseHeadersType }],
   ]),
   getters: new Set(), abstractGetters: new Set(), methods: new Map(), abstractMethods: new Set(),
@@ -164,6 +182,14 @@ const jsonResponseType = object({ status: numberType, json: unknownType, headers
 const textResponseType = object({ status: numberType, text: stringType, contentType: stringType, headers: responseHeadersType }, ["contentType", "headers"]);
 const streamResponseType = object({ status: numberType, stream: streamProducerType, headers: responseHeadersType }, ["headers"]);
 const serveResponseAlias: ValueType = { kind: "union", members: [jsonResponseType, textResponseType, streamResponseType] };
+const serveResultAlias: ValueType = {kind: "union", members: [serveResponseAlias, httpOutcomeType]};
+const httpOutcomeFields = new Map<string, ValueType>([
+  ["ok", boolType],
+  ["status", numberType],
+  ["value", unknownType],
+  ["problem", optional({kind: "class", name: "HttpProblem", identity: httpProblemIdentity})],
+  ["headers", responseHeadersType],
+]);
 const openApiDocumentType = object({
   openapi: stringType,
   info: object({ title: stringType, version: stringType }),
@@ -178,18 +204,21 @@ const routeDocumentationType = object({
   documented: optional(boolType),
 }, ["summary", "description", "tags", "status", "errors", "documented"]);
 const routeDocumentationMapType: ValueType = { kind: "map", key: stringType, value: routeDocumentationType };
-const handlerType = functionType(["request"], [serveRequestType], promise(serveResponseAlias));
+const routePatternFields = new Map<string, ValueType>([["definition", stringType]]);
+const handlerType = functionType(["request"], [serveRequestType], promise(serveResultAlias));
 const serveTargetType: ValueType = { kind: "union", members: [handlerType, serveAppType] };
 const middlewareNextType = functionType([], [], promise(serveResponseAlias));
+// 中间件接到的 next 已经经过应用的 @response 策略，因而它处理的是最终响应。
+// 需要提前终止时使用 json/text/redirect 等明确表示，避免在中间件外再开启一轮策略。
 const middlewareType = functionType(["request", "next"], [serveRequestType, middlewareNextType], promise(serveResponseAlias));
 const middlewareListType: ValueType = { kind: "list", element: middlewareType };
 const middlewareInputType: ValueType = { kind: "union", members: [middlewareType, middlewareListType] };
 const providerType: ValueType = { kind: "extension", extensionId: "@velarscript/node", family: "serve-provider", role: "provider", properties: new Map(), requiredProperties: new Set(), arguments: [unknownType, unknownType], display: { kind: "named", name: "Provider" } };
-const routeInputType: ValueType = { kind: "extension", extensionId: "@velarscript/node", family: "serve-input", role: "query", properties: new Map(), requiredProperties: new Set(), arguments: [unknownType], display: { kind: "named", name: "RouteInput" } };
+// 这里只是内建函数签名的占位类型；分析器会把每次调用替换为准确的输入来源。
+const routeInputType: ValueType = { kind: "extension", extensionId: "@velarscript/node", family: "serve-input", role: "request", properties: new Map(), requiredProperties: new Set(), arguments: [unknownType], display: { kind: "named", name: "RouteInput" } };
 const uploadType: ValueType = { kind: "named", name: "Upload", identity: "velar/serve#type:Upload" };
 const stringOrNullType: ValueType = { kind: "union", members: [stringType, nullType] };
 const inputType = object({
-  query: namedIntrinsic("serve.input.query", ["name", "default"], [stringType, stringOrNullType], routeInputType, 0),
   header: namedIntrinsic("serve.input.header", ["name", "default"], [stringType, stringOrNullType], routeInputType, 0),
   cookie: namedIntrinsic("serve.input.cookie", ["name", "default"], [stringType, stringOrNullType], routeInputType, 0),
   form: namedIntrinsic("serve.input.form", ["target"], [unknownType], routeInputType),
@@ -253,6 +282,7 @@ const processResultType = object({
 });
 const processOutputChannelIdentity = "velar/process#enum:ProcessOutputChannel";
 const processOutputChannelMembers = new Set(["stdout", "stderr"]);
+const processOutputChannelWireValues = new Map([...processOutputChannelMembers].map((member) => [member, member]));
 const processOutputChannelType: ValueType = { kind: "enum", name: "ProcessOutputChannel", identity: processOutputChannelIdentity };
 const processOutputType = object({
   channel: processOutputChannelType,
@@ -329,6 +359,7 @@ const nodeHttpType = object({
 });
 const httpTransportPhaseIdentity = "velar/http#enum:HttpTransportPhase";
 const httpTransportPhaseMembers = new Set(["request", "response"]);
+const httpTransportPhaseWireValues = new Map([...httpTransportPhaseMembers].map((member) => [member, member]));
 const httpTransportPhaseType: ValueType = { kind: "enum", name: "HttpTransportPhase", identity: httpTransportPhaseIdentity };
 const httpAbortErrorIdentity = "velar/http#class:HttpAbortError";
 const httpResponseErrorIdentity = "velar/http#class:HttpResponseError";
@@ -469,9 +500,11 @@ export const nodeModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Ma
       ["Request", { kind: "typeObject", name: "Request", value: serveRequestType }],
       ["ServeRequest", { kind: "typeObject", name: "ServeRequest" }],
       ["ServeResponse", { kind: "typeObject", name: "ServeResponse" }],
+      ["HttpOutcome", {kind: "typeObject", name: "HttpOutcome", value: httpOutcomeType}],
       ["ServeApp", { kind: "typeObject", name: "ServeApp", value: serveAppType }],
+      ["RoutePattern", { kind: "typeObject", name: "RoutePattern", value: routePatternType }],
       ["Server", { kind: "typeObject", name: "Server" }],
-      ["HttpError", { kind: "classConstructor", name: "HttpError", identity: serveHttpErrorIdentity }],
+      ["HttpProblem", {kind: "classConstructor", name: "HttpProblem", identity: httpProblemIdentity}],
       ["RequestBodyTooLargeError", { kind: "classConstructor", name: "RequestBodyTooLargeError", identity: requestBodyTooLargeErrorIdentity }],
       ["Upload", { kind: "typeObject", name: "Upload", value: uploadType }],
       ["Provider", { kind: "typeObject", name: "Provider", value: providerType }],
@@ -482,8 +515,9 @@ export const nodeModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Ma
       ["middleware", middlewareFactoriesType],
       ["serve", functionType(["app", "port", "host", "maxBodyBytes"], [serveTargetType, numberType, stringType, numberType], promise(serverType), 2)],
       ["json", namedIntrinsic("serve.response.json", ["value", "status", "headers"], [unknownType, numberType, optional(responseHeadersType)], jsonResponseType, 1)],
-      ["created", namedIntrinsic("serve.response.created", ["value", "headers"], [unknownType, optional(responseHeadersType)], jsonResponseType, 1)],
-      ["noContent", namedIntrinsic("serve.response.noContent", ["completion", "headers"], [nullType, optional(responseHeadersType)], textResponseType, 0)],
+      ["respond", namedIntrinsic("serve.response.respond", ["value", "status", "headers"], [unknownType, numberType, optional(responseHeadersType)], httpOutcomeType, 1)],
+      ["created", namedIntrinsic("serve.response.created", ["value", "headers"], [unknownType, optional(responseHeadersType)], httpOutcomeType, 1)],
+      ["noContent", namedIntrinsic("serve.response.noContent", ["completion", "headers"], [nullType, optional(responseHeadersType)], httpOutcomeType, 0)],
       ["redirect", namedIntrinsic("serve.response.redirect", ["location", "status", "headers"], [stringType, numberType, optional(responseHeadersType)], textResponseType, 1)],
       ["text", namedIntrinsic("serve.response.text", ["value", "status", "contentType", "headers"], [stringType, numberType, stringType, optional(responseHeadersType)], textResponseType, 1)],
       ["stream", functionType(["producer", "status", "headers"], [streamProducerType, numberType, optional(responseHeadersType)], streamResponseType, 1)],
@@ -496,9 +530,9 @@ export const nodeModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Ma
       ["openapi", functionType(["app", "title", "version"], [serveAppType, optional(stringType), stringType], openApiDocumentType, 1)],
       ["docs", functionType(["app", "title", "version", "path", "openapiPath", "routes"], [serveAppType, optional(stringType), stringType, stringType, stringType, routeDocumentationMapType], serveAppType, 1)],
       ["lifecycle", functionType(["app", "startup", "shutdown"], [serveAppType, lifecycleHookType, lifecycleHookType], serveAppType, 1)],
-      ["background", namedIntrinsic("serve.response.background", ["response", "task"], [serveResponseAlias, backgroundTaskType], serveResponseAlias)],
-      ["setCookie", namedIntrinsic("serve.response.setCookie", ["response", "name", "value", "path", "httpOnly", "secure", "sameSite", "maxAge"], [serveResponseAlias, stringType, stringType, stringType, boolType, boolType, stringType, optional(numberType)], serveResponseAlias, 3)],
-      ["clearCookie", namedIntrinsic("serve.response.clearCookie", ["response", "name", "path"], [serveResponseAlias, stringType, stringType], serveResponseAlias, 2)],
+      ["background", namedIntrinsic("serve.response.background", ["response", "task"], [serveResultAlias, backgroundTaskType], serveResultAlias)],
+      ["setCookie", namedIntrinsic("serve.response.setCookie", ["response", "name", "value", "path", "httpOnly", "secure", "sameSite", "maxAge"], [serveResultAlias, stringType, stringType, stringType, boolType, boolType, stringType, optional(numberType)], serveResultAlias, 3)],
+      ["clearCookie", namedIntrinsic("serve.response.clearCookie", ["response", "name", "path"], [serveResultAlias, stringType, stringType], serveResultAlias, 2)],
       ["fileResponse", functionType(["root", "path", "fallback"], [stringType, stringType, optional(stringType)], serveResponseAlias, 2)],
     ]),
     new Map([
@@ -531,6 +565,8 @@ export const nodeModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Ma
         ["stop", functionType(["grace"], [numberType], promise(nullType), 0)],
       ])],
       ["ServeApp", new Map()],
+      ["RoutePattern", routePatternFields],
+      ["HttpOutcome", httpOutcomeFields],
       ["Upload", new Map([
         ["name", stringType],
         ["filename", stringType],
@@ -545,11 +581,13 @@ export const nodeModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Ma
       ["Request", "velar/serve#type:ServeRequest"],
       ["ServeRequest", "velar/serve#type:ServeRequest"],
       ["ServeApp", "velar/serve#type:ServeApp"],
+      ["RoutePattern", VELAR_ROUTE_PATTERN_IDENTITY],
+      ["HttpOutcome", VELAR_HTTP_OUTCOME_IDENTITY],
       ["Server", "velar/serve#type:Server"],
       ["Upload", "velar/serve#type:Upload"],
     ]),
     new Map<string, ValueType>([["ServeResponse", serveResponseAlias], ["Provider", providerType], ["RouteDocumentation", routeDocumentationType]]),
-    new Map([["HttpError", serveHttpErrorClass], ["RequestBodyTooLargeError", requestBodyTooLargeErrorClass]]),
+    new Map([["HttpProblem", httpProblemClass], ["RequestBodyTooLargeError", requestBodyTooLargeErrorClass]]),
   )],
   ["velar/fs", moduleInterface(
     new Map([
@@ -627,7 +665,7 @@ export const nodeModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Ma
     new Map([["Process", "velar/process#type:Process"]]),
     new Map(),
     new Map(),
-    new Map([["ProcessOutputChannel", { identity: processOutputChannelIdentity, members: processOutputChannelMembers }]]),
+    new Map([["ProcessOutputChannel", { identity: processOutputChannelIdentity, members: processOutputChannelMembers, wireValues: processOutputChannelWireValues }]]),
   )],
   ["velar/http", moduleInterface(
     new Map([
@@ -646,7 +684,7 @@ export const nodeModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Ma
       ["HttpResponseError", httpResponseErrorClass],
       ["HttpTransportError", httpTransportErrorClass],
     ]),
-    new Map([["HttpTransportPhase", { identity: httpTransportPhaseIdentity, members: httpTransportPhaseMembers }]]),
+    new Map([["HttpTransportPhase", { identity: httpTransportPhaseIdentity, members: httpTransportPhaseMembers, wireValues: httpTransportPhaseWireValues }]]),
   )],
 ]);
 
@@ -1235,7 +1273,7 @@ const nodeRouteDocumentation = (method: string, usage: string, input: string): s
   usage,
   "```",
   "",
-  `The first item is a checked \`p\"/...\"\` path pattern. ${input} The handler may use \`await\` directly and must return Data or a response from \`velar/serve\`.`,
+  `The required \`path=\` argument is a checked \`p\"/...\"\` RoutePattern or a statically known catalog member. ${input} The handler may use \`await\` directly and must return Data or a response from \`velar/serve\`.`,
 ].join("\n");
 
 const nodeKeywordDocumentation = Object.freeze({
@@ -1244,44 +1282,44 @@ const nodeKeywordDocumentation = Object.freeze({
     "",
     "```velar",
     "export server routes:",
-    "    @get(p\"/health\") => {ok: true}",
+    "    @get(path=p\"/health\") => {ok: true}",
     "```",
     "",
-    "A server body contains route roles, one `@notFound` fallback, and `...otherApp` composition entries.",
+    "A server body contains route roles, one `@notFound` fallback, one `@response` policy, and `...otherApp` composition entries.",
   ].join("\n"),
   p: [
-    "Starts a Node path-pattern literal. It is parsed and checked by the compiler; it is not a function call or an ordinary string prefix.",
+    "Creates a first-class Node RoutePattern. It is parsed and checked by the compiler; it is not a function call or an ordinary string prefix.",
     "",
     "```velar",
-    "@get(p\"/articles/{id:number}\") => {id}",
+    "@get(path=p\"/articles/{id:number}\") => {id: path.params.id}",
     "```",
     "",
-    "Each `{name:type}` capture becomes a typed route-body binding. Static text is matched literally, and the pattern is valid only as the first item of an HTTP route role.",
+    "Each `{name:type}` path capture becomes a typed `path.params` field. Query fields after `?` become `path.query`; a type suffix `?` makes one optional. Static text is matched literally, and exported const catalogs may reuse the value across modules.",
   ].join("\n"),
   "@get": nodeRouteDocumentation(
     "GET",
-    "@get(p\"/articles/{id:number}\", details: bool = false) => {id, details}",
-    "Path captures come from the URL and additional scalar parameters come from the query string.",
+    "@get(path=p\"/articles/{id:number}?{details:bool?}\") => {id: path.params.id, details: path.query.details}",
+    "Path captures are read from `path.params`; query fields declared after `?` are read from `path.query`.",
   ),
   "@post": nodeRouteDocumentation(
     "POST",
-    "@post(p\"/articles\", input: CreateArticle) => created(input)",
-    "One Data parameter may receive the checked JSON request body; other scalar parameters come from the query string.",
+    "@post(path=p\"/articles\", input: CreateArticle) => created(input)",
+    "One Data parameter may receive the checked JSON request body; query fields belong to the RoutePattern.",
   ),
   "@put": nodeRouteDocumentation(
     "PUT",
-    "@put(p\"/articles/{id:string}\", input: UpdateArticle) => ok({id, input})",
-    "One Data parameter may receive the checked JSON request body; other scalar parameters come from the query string.",
+    "@put(path=p\"/articles/{id:string}\", input: UpdateArticle) => {id: path.params.id, input}",
+    "One Data parameter may receive the checked JSON request body; query fields belong to the RoutePattern.",
   ),
   "@patch": nodeRouteDocumentation(
     "PATCH",
-    "@patch(p\"/articles/{id:string}\", input: ArticlePatch) => ok({id, input})",
-    "One Data parameter may receive the checked JSON request body; other scalar parameters come from the query string.",
+    "@patch(path=p\"/articles/{id:string}\", input: ArticlePatch) => {id: path.params.id, input}",
+    "One Data parameter may receive the checked JSON request body; query fields belong to the RoutePattern.",
   ),
   "@delete": nodeRouteDocumentation(
     "DELETE",
-    "@delete(p\"/articles/{id:string}\") => noContent()",
-    "Path captures come from the URL and additional scalar parameters come from the query string.",
+    "@delete(path=p\"/articles/{id:string}\") => noContent()",
+    "Path captures are read from `path.params`; query fields declared after `?` are read from `path.query`.",
   ),
   "@notFound": [
     "Declares the final application's one unmatched-path fallback. It is a compiler-owned server role, not a decorator or ordinary function.",
@@ -1291,6 +1329,15 @@ const nodeKeywordDocumentation = Object.freeze({
     "```",
     "",
     "The optional parameter must be `Request`. Returning Data keeps status 404; an explicit response may choose another status. It does not catch a matched route's error or method-not-allowed response.",
+  ].join("\n"),
+  "@response": [
+    "Declares the final application's one semantic response policy. It is a compiler-owned server role, not a decorator or ordinary function.",
+    "",
+    "```velar",
+    "@response(outcome: HttpOutcome, request: Request) => json({ok: outcome.ok, data: outcome.value}, status=outcome.status, headers=outcome.headers)",
+    "```",
+    "",
+    "The policy receives route and framework outcomes once and returns Data or one final response. A final response owns its status and headers, so forward the outcome values when only selecting an encoder. The policy cannot return another HttpOutcome.",
   ].join("\n"),
 });
 
@@ -1324,6 +1371,16 @@ export const velarNodeCompilerExtension: CompilerExtension = Object.freeze({
   analysis: Object.freeze({
     directAwaitStatement: nodeServerStatementContainsDirectAwait,
     inferIntrinsic: inferNodeIntrinsic,
+    memberType(type: ExtensionValueType, property: string) {
+      if (type.extensionId === "@velarscript/node" && type.family === "serve-route-path") {
+        return type.properties.get(property) ?? null;
+      }
+      return undefined;
+    },
+    textForm(type: ValueType) {
+      if (type.kind === "named" && type.identity === VELAR_ROUTE_PATTERN_IDENTITY) return true;
+      return type.kind === "extension" && type.extensionId === "@velarscript/node" && type.family === "serve-route-path" ? true : undefined;
+    },
     // The Node guide already rules that the ambient Node globals are not the
     // door — "use velar/fs, velar/path, velar/process, velar/env,
     // velar/terminal, velar/http, velar/worker, and velar/websocket instead of

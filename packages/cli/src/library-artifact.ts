@@ -456,9 +456,16 @@ function validateGenericTypeInfo(value: unknown, label: string): void {
 
 function validateEnumInfo(value: unknown, label: string): void {
   const info = record(value, label);
-  exactKeys(info, ["identity", "members"], label);
+  exactKeys(info, ["identity", "members", "wireValues"], label);
   nonEmptyString(info.identity, `${label}.identity`);
   stringSet(info.members, `${label}.members`);
+  stringMap(info.wireValues, `${label}.wireValues`, (item, itemLabel) => {
+    if (typeof item !== "string") throw new Error(`${itemLabel} must be a string`);
+  });
+  if ((info.members as ReadonlySet<string>).size !== (info.wireValues as ReadonlyMap<string, string>).size
+    || [...info.members as ReadonlySet<string>].some((member) => !(info.wireValues as ReadonlyMap<string, string>).has(member))) {
+    throw new Error(`${label}.wireValues must define exactly one value for every enum member`);
+  }
 }
 
 function validateClassInfo(value: unknown, label: string): void {

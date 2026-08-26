@@ -103,6 +103,7 @@ const __velarServeRouteCapturePattern = /^\{[A-Za-z_][A-Za-z0-9_]*:[A-Za-z_][A-Z
 const __velarServeRouteNamePattern = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const __velarServeOperationIdCharacterPattern = /^[A-Za-z0-9]$/u;
 const __velarServeDecimalPattern = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$/u;
+const __velarServeProblemCodePattern = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/u;
 const __velarServeMaxBodyBytes = 16 * 1024 * 1024;
 const __velarServeMaxPathCodeUnits = 4096;
 const __velarServeMaxRoutes = 4096;
@@ -116,7 +117,10 @@ const __velarServeDefaultShutdownGrace = 30_000;
 const __velarServeFileMarker = Symbol("velar.serve.file-response");
 const __velarServeAppMarker = Symbol("velar.serve.app");
 const __velarServeRouteMarker = Symbol("velar.serve.route");
+const __velarServePatternMarker = Symbol("velar.serve.route-pattern");
 const __velarServeNotFoundMarker = Symbol("velar.serve.not-found");
+const __velarServeResponseHandlerMarker = Symbol("velar.serve.response-handler");
+const __velarServeOutcomeMarker = Symbol("velar.serve.http-outcome");
 const __velarServeInputMarker = Symbol("velar.serve.input");
 const __velarServeProviderMarker = Symbol("velar.serve.provider");
 const __velarServeUploadMarker = Symbol("velar.serve.upload");
@@ -136,6 +140,10 @@ const __velarServeStartFields = __velarServeFieldMap(["handle", "port"]);
 const __velarServeTestFileFields = __velarServeFieldMap(["data", "contentType"]);
 const __velarServeTestUploadFields = __velarServeFieldMap(["filename", "contentType", "data"]);
 const __velarServeRouteParameterFields = __velarServeFieldMap(["name", "source", "kind", "required", "check", "schema", "input"]);
+const __velarServePatternFields = __velarServeFieldMap(["definition", "pathname", "path", "query"]);
+const __velarServePatternCaptureFields = __velarServeFieldMap(["name", "wireName", "explicitWireName", "typeName", "optional", "kind", "check", "schema"]);
+const __velarServeProblemFields = __velarServeFieldMap(["status", "code", "title", "detail", "type", "instance", "source", "parameter", "headers"]);
+const __velarServeResponseHandlerFields = __velarServeFieldMap(["responseSchema", "responseContentTypes"]);
 const __velarServeRouteMetadataFields = __velarServeFieldMap(["responseSchema", "responseContentTypes", "maxBodyBytes", "middleware", "documented", "summary", "description", "tags", "status", "errors"]);
 const __velarServeRouteDocumentationFields = __velarServeFieldMap(["summary", "description", "tags", "status", "errors", "documented"]);
 const __velarServeErrorDocumentationFields = __velarServeFieldMap(["status", "description"]);
@@ -418,30 +426,90 @@ export class RequestBodyTooLargeError extends __velarServeRangeError {
   }
 }
 
-export class HttpError extends __velarServeError {
-  constructor(status, body = null, headers = null) {
-    if (!__velarServeIsSafeInteger(status) || status < 400 || status > 599) {
-      throw new __velarServeRangeError("HttpError status must be an HTTP error integer from 400 through 599");
+export class HttpProblem extends __velarServeError {
+  constructor(options) {
+    const fields = __velarServeRecord(options, __velarServeProblemFields, "HttpProblem options");
+    if (!__velarServeIsSafeInteger(fields.status) || fields.status < 400 || fields.status > 599) throw new __velarServeRangeError("HttpProblem status must be an HTTP error integer from 400 through 599");
+    if (typeof fields.code !== "string" || !__velarServeCall(__velarServeRegExpTest, __velarServeProblemCodePattern, [fields.code])) throw new __velarServeTypeError("HttpProblem code must be a stable lowercase identifier");
+    // title 在公开类型中是可选字段；缺省时使用稳定的 HTTP 状态标题。这里必须
+    // 与编译器契约一致，不能让一个静态合法的 HttpProblem 到请求阶段才变成 500。
+    const title = __velarServeProblemText(fields.title, "HttpProblem title", false) ?? "HTTP " + fields.status;
+    const detail = __velarServeProblemText(fields.detail, "HttpProblem detail", false);
+    const type = __velarServeProblemText(fields.type, "HttpProblem type", false) ?? "about:blank";
+    const instance = __velarServeProblemText(fields.instance, "HttpProblem instance", false);
+    const source = __velarServeProblemText(fields.source, "HttpProblem source", false);
+    const parameter = __velarServeProblemText(fields.parameter, "HttpProblem parameter", false);
+    super(detail ?? title);
+    __velarServeCall(__velarServeObjectDefineProperty, __velarServeObject, [this, "name", {value: "HttpProblem", enumerable: false, configurable: true, writable: true}]);
+    const properties = [["status", fields.status], ["code", fields.code], ["title", title], ["detail", detail], ["type", type], ["instance", instance], ["source", source], ["parameter", parameter], ["headers", __velarServeHeaders(fields.headers)]];
+    for (let index = 0; index < properties.length; index += 1) {
+      __velarServeCall(__velarServeObjectDefineProperty, __velarServeObject, [this, properties[index][0], {value: properties[index][1], enumerable: true, configurable: false, writable: false}]);
     }
-    super("HTTP " + status);
-    __velarServeCall(__velarServeObjectDefineProperty, __velarServeObject, [this, "name", {value: "HttpError", enumerable: false, configurable: true, writable: true}]);
-    __velarServeCall(__velarServeObjectDefineProperty, __velarServeObject, [this, "status", {value: status, enumerable: true, configurable: false, writable: false}]);
-    __velarServeCall(__velarServeObjectDefineProperty, __velarServeObject, [this, "body", {value: body ?? {error: "http_error"}, enumerable: true, configurable: false, writable: false}]);
-    __velarServeCall(__velarServeObjectDefineProperty, __velarServeObject, [this, "headers", {value: __velarServeHeaders(headers), enumerable: true, configurable: false, writable: false}]);
   }
+}
+
+function __velarServeProblemText(value, name, required) {
+  if (value == null && !required) return null;
+  if (typeof value !== "string" || value.length === 0 || value.length > 4096 || /[\0\r\n]/u.test(value)) throw new __velarServeTypeError(name + " must be bounded single-line text");
+  return value;
+}
+
+function __velarServeProblem(status, code, title, detail = null, source = null, parameter = null, headers = null) {
+  return new HttpProblem({status, code, title, detail, source, parameter, headers});
+}
+
+/** 将各输入解析器的紧凑失败信息收口为公开的 HttpProblem 契约。 */
+function __velarServeRequestProblem(status, body, headers = null) {
+  const raw = typeof body?.error === "string" ? body.error : "invalid_request";
+  const code = (status >= 500 ? "server." : status === 401 ? "security." : "request.")
+    + __velarServeCall(__velarServeArrayJoin, __velarServeCall(__velarServeStringSplit, raw, ["_"]), ["."]);
+  const title = status === 401 ? "Authentication required"
+    : status === 413 ? "Request input is too large"
+      : status === 415 ? "Unsupported request content type"
+        : status === 422 ? "Request validation failed"
+          : status >= 500 ? "Server could not complete the request"
+            : "Malformed request input";
+  const detail = typeof body?.expected === "string" ? "Expected " + body.expected : null;
+  const parameter = typeof body?.parameter === "string" ? body.parameter : null;
+  return __velarServeProblem(status, code, title, detail, parameter === null ? null : "parameter", parameter, headers);
 }
 
 // Exhausting the aggregate outbound budget is a temporary load condition, not a
 // server fault: 503 with retry-after is what a load balancer and a client both
 // know how to act on, and 500 is what neither can. Most reserves happen while a
-// response is already on its way out, past the HttpError catch in
+// response is already on its way out, past the HttpProblem catch in
 // __velarServeHandleRequest, so both send paths recognize this one error by
 // identity and answer it themselves. The shed answer reserves nothing: it is a
 // fixed, tiny payload, and reserving for it would fail by construction.
-class __velarServeOutboundBudgetError extends HttpError {
+class __velarServeOutboundBudgetError extends HttpProblem {
   constructor() {
-    super(503, {error: "outbound_budget_exhausted"}, new __velarServeMap([["retry-after", "1"]]));
+    super({status: 503, code: "server.outbound_budget", title: "Server is busy", headers: new __velarServeMap([["retry-after", "1"]])});
   }
+}
+
+function __velarServeIsOutcome(value) {
+  if (!value || typeof value !== "object") return false;
+  return __velarServeOwnDescriptor(value, __velarServeOutcomeMarker)?.value === true;
+}
+
+function __velarServeOutcome(value, status = 200, headers = null, problem = null, backgroundTasks = null) {
+  if (!__velarServeIsSafeInteger(status) || status < 200 || status > 599) throw new __velarServeRangeError("HttpOutcome status must be an HTTP status integer from 200 through 599");
+  if (problem !== null && !(problem instanceof HttpProblem)) throw new __velarServeTypeError("HttpOutcome problem must be HttpProblem or null");
+  const outcome = {
+    [__velarServeOutcomeMarker]: true,
+    ok: problem === null && status < 400,
+    status,
+    value,
+    problem,
+    headers: __velarServeHeaders(headers),
+  };
+  if (backgroundTasks !== null) __velarServeCall(__velarServeObjectDefineProperty, __velarServeObject, [outcome, "background", {value: backgroundTasks, enumerable: false, configurable: false, writable: false}]);
+  return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [outcome]);
+}
+
+function __velarServeIsHttpOutcome(value) {
+  return __velarServeIsOutcome(value) && typeof value.ok === "boolean" && __velarServeIsSafeInteger(value.status)
+    && value.headers instanceof __velarServeMap && (value.problem === null || value.problem instanceof HttpProblem);
 }
 
 function __velarServeIsFileResponse(value) {
@@ -592,11 +660,13 @@ function __velarServeIsRequest(value) {
 export const ServeRequest = __velarServeTypeObject(__velarServeIsRequest, "ServeRequest requires the request fields provided by velar/serve", __velarServeHandleNative);
 export const Request = ServeRequest;
 export const ServeResponse = __velarServeTypeObject(value => { __velarServeResponse(value); return true; }, "ServeResponse requires exactly one checked body");
+export const HttpOutcome = __velarServeTypeObject(__velarServeIsHttpOutcome, "HttpOutcome values are created by the framework or respond/created/noContent");
+export const RoutePattern = __velarServeTypeObject(value => __velarServeIsPattern(value), "RoutePattern values are declared with p\"/...\"");
 export const ServeApp = __velarServeTypeObject(
   value => __velarServeIsApp(value),
   "ServeApp values are declared with 'server name:' or built by velar/serve composition functions",
   null,
-  __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{createApp: __velarCreateServeApp, createRoute: __velarCreateServeRoute, createNotFound: __velarCreateServeNotFound, testClient: __velarServeTestClient, nativeApp: __velarServeNativeApp}]),
+  __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{createApp: __velarCreateServeApp, createPattern: __velarCreateServePattern, createRoute: __velarCreateServeRoute, createNotFound: __velarCreateServeNotFound, createResponse: __velarCreateServeResponse, testClient: __velarServeTestClient, nativeApp: __velarServeNativeApp}]),
 );
 export const Server = __velarServeTypeObject(value => {
   try {
@@ -753,7 +823,6 @@ function __velarServeInputValue(source, name, fallback = __velarServeMissing, ex
   }]);
 }
 
-function __velarServeQueryInput(name = "", fallback = __velarServeMissing) { return __velarServeInputValue("query", name, fallback); }
 function __velarServeHeaderInput(name = "", fallback = __velarServeMissing) { return __velarServeInputValue("header", name, fallback); }
 function __velarServeCookieInput(name = "", fallback = __velarServeMissing) { return __velarServeInputValue("cookie", name, fallback); }
 function __velarServeFormInput(Type) {
@@ -773,7 +842,6 @@ function __velarServeDependencyInput(provider) {
 function __velarServeRequestInput() { return __velarServeInputValue("request", ""); }
 
 export const input = __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{
-  query: __velarServeQueryInput,
   header: __velarServeHeaderInput,
   cookie: __velarServeCookieInput,
   form: __velarServeFormInput,
@@ -862,10 +930,11 @@ export function fileResponse(root, path, fallback = null) {
 export function json(value, status = 200, headers = null) {
   return __velarServeResponse({status, json: value, headers: __velarServeHeaders(headers)});
 }
-export function created(value, headers = null) { return json(value, 201, headers); }
+export function respond(value, status = 200, headers = null) { return __velarServeOutcome(value, status, headers); }
+export function created(value, headers = null) { return respond(value, 201, headers); }
 export function noContent(completion = null, headers = null) {
   if (completion !== null) throw new __velarServeTypeError("noContent completion must resolve to null");
-  return __velarServeResponse({status: 204, text: "", headers: __velarServeHeaders(headers)});
+  return respond(null, 204, headers);
 }
 export function redirect(location, status = 302, headers = null) {
   if (typeof location !== "string" || location.length === 0 || location.length > __velarServeMaxPathCodeUnits
@@ -943,6 +1012,16 @@ function __velarServeResponseCopy(value, headers = null, backgroundTasks = null)
 
 export function background(response, task) {
   if (typeof task !== "function") throw new __velarServeTypeError("background task must be a function");
+  if (__velarServeIsOutcome(response)) {
+    const tasks = [];
+    if (response.background != null) for (let index = 0; index < response.background.length; index += 1) tasks[tasks.length] = response.background[index];
+    if (tasks.length >= 64) throw new __velarServeRangeError("A response cannot have more than 64 background tasks");
+    tasks[tasks.length] = task;
+    const output = __velarServeOutcome(response.value, response.status, response.headers, response.problem, tasks);
+    const cookies = __velarServeCall(__velarServeWeakMapGet, __velarServeResponseCookies, [response]);
+    if (cookies !== undefined) __velarServeCall(__velarServeWeakMapSet, __velarServeResponseCookies, [output, cookies]);
+    return output;
+  }
   response = __velarServeAutomaticResponse(response);
   if (__velarServeIsFileResponse(response)) throw new __velarServeTypeError("background does not support file responses");
   const tasks = [];
@@ -964,9 +1043,15 @@ export function setCookie(response, name, value, path = "/", httpOnly = true, se
   if (secure) cookie += "; Secure";
   if (maxAge !== null) cookie += "; Max-Age=" + maxAge;
   if (__velarUtf8ByteLength(cookie) > 8192) throw new __velarServeRangeError("Cookie cannot exceed 8 KiB");
-  response = __velarServeAutomaticResponse(response);
+  const semantic = __velarServeIsOutcome(response);
+  const inherited = semantic ? __velarServeCall(__velarServeWeakMapGet, __velarServeResponseCookies, [response]) : undefined;
+  if (semantic) {
+    response = __velarServeOutcome(response.value, response.status, response.headers, response.problem, response.background ?? null);
+    if (inherited !== undefined) __velarServeCall(__velarServeWeakMapSet, __velarServeResponseCookies, [response, inherited]);
+  }
+  else response = __velarServeAutomaticResponse(response);
   if (__velarServeIsFileResponse(response)) throw new __velarServeTypeError("setCookie does not support file responses");
-  const output = __velarServeResponseCopy(response);
+  const output = semantic ? response : __velarServeResponseCopy(response);
   const previous = __velarServeCall(__velarServeWeakMapGet, __velarServeResponseCookies, [response]);
   const cookies = [];
   if (previous !== undefined) for (let index = 0; index < previous.length; index += 1) cookies[index] = previous[index];
@@ -984,10 +1069,22 @@ function __velarServeIsRoute(value) {
   return descriptor?.enumerable === true && "value" in descriptor && descriptor.value === true;
 }
 
+function __velarServeIsPattern(value) {
+  if (!value || typeof value !== "object") return false;
+  const descriptor = __velarServeOwnDescriptor(value, __velarServePatternMarker);
+  return descriptor?.value === true;
+}
+
 function __velarServeIsNotFound(value) {
   if (!value || typeof value !== "object") return false;
   const descriptor = __velarServeOwnDescriptor(value, __velarServeNotFoundMarker);
   return descriptor?.enumerable === true && "value" in descriptor && descriptor.value === true;
+}
+
+function __velarServeIsResponseHandler(value) {
+  if (!value || typeof value !== "object") return false;
+  const descriptor = __velarServeOwnDescriptor(value, __velarServeResponseHandlerMarker);
+  return descriptor?.value === true;
 }
 
 function __velarServeIsApp(value) {
@@ -1024,9 +1121,87 @@ function __velarServeRouteShape(path) {
   return __velarServeRouteShapeFromSegments(__velarServeCall(__velarServeStringSplit, path, ["/"]));
 }
 
-function __velarCreateServeRoute(method, path, parameters, handler, metadata = {}) {
+/**
+ * 编译器把 p"..." 降低成结构化数据，这里只做边界复核并冻结。路由字符串
+ * 不会在每次请求中重新解析；捕获的类型检查函数与 OpenAPI schema 也随模板
+ * 一次性保存。
+ */
+function __velarCreateServePattern(source) {
+  source = __velarServeRecord(source, __velarServePatternFields, "RoutePattern");
+  const pathname = __velarServeRoutePath(source.pathname, "RoutePattern pathname");
+  if (typeof source.definition !== "string" || source.definition.length === 0 || source.definition.length > __velarServeMaxPathCodeUnits) {
+    throw new __velarServeTypeError("RoutePattern definition must be bounded text");
+  }
+  const fieldNames = new __velarServeMap();
+  const readCaptures = (items, query) => {
+    if (!__velarServeIsArray(items) || items.length > 64) throw new __velarServeTypeError("RoutePattern captures must be a bounded list");
+    const output = [];
+    const localNames = new __velarServeMap();
+    const wireNames = new __velarServeMap();
+    for (let index = 0; index < items.length; index += 1) {
+      const item = __velarServeRecord(items[index], __velarServePatternCaptureFields, "RoutePattern capture");
+      if (typeof item.name !== "string" || !__velarServeCall(__velarServeRegExpTest, __velarServeRouteNamePattern, [item.name])
+        || typeof item.wireName !== "string" || item.wireName.length === 0 || item.wireName.length > 256
+        || typeof item.explicitWireName !== "boolean" || !query && item.explicitWireName
+        || query && !item.explicitWireName && item.wireName !== item.name
+        || typeof item.typeName !== "string" || !__velarServeCall(__velarServeRegExpTest, __velarServeRouteNamePattern, [item.typeName])
+        || typeof item.optional !== "boolean" || !query && item.optional
+        || !__velarServeCall(__velarServeArrayIncludes, ["string", "number", "bool", "enum"], [item.kind])
+        || typeof item.check !== "function") throw new __velarServeTypeError("RoutePattern capture is invalid");
+      if (__velarServeCall(__velarServeMapHas, localNames, [item.name])) throw new __velarServeTypeError("RoutePattern field names must be unique");
+      if (__velarServeCall(__velarServeMapHas, fieldNames, [item.name])) throw new __velarServeTypeError("RoutePattern path and query field names must be unique");
+      if (__velarServeCall(__velarServeMapHas, wireNames, [item.wireName])) throw new __velarServeTypeError("RoutePattern wire names must be unique");
+      __velarServeCall(__velarServeMapSet, localNames, [item.name, true]);
+      __velarServeCall(__velarServeMapSet, fieldNames, [item.name, true]);
+      __velarServeCall(__velarServeMapSet, wireNames, [item.wireName, true]);
+      output[output.length] = __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{
+        name: item.name, wireName: item.wireName, explicitWireName: item.explicitWireName, typeName: item.typeName, optional: item.optional,
+        kind: item.kind, check: item.check, schema: __velarServeSchema(item.schema ?? {}, "RoutePattern capture schema"),
+      }]);
+    }
+    return output;
+  };
+  const path = readCaptures(source.path, false);
+  const query = readCaptures(source.query, true);
+  const declared = new __velarServeMap();
+  const segments = __velarServeCall(__velarServeStringSplit, pathname, ["/"]);
+  for (let index = 1; index < segments.length; index += 1) {
+    const segment = segments[index];
+    if (!__velarServeCall(__velarServeStringStartsWith, segment, ["{"])) continue;
+    const text = __velarServeCall(__velarServeStringSlice, segment, [1, -1]);
+    const colon = __velarServeCall(__velarServeStringIndexOf, text, [":"]);
+    __velarServeCall(__velarServeMapSet, declared, [__velarServeCall(__velarServeStringSlice, text, [0, colon]), true]);
+  }
+  if (__velarServeCall(__velarServeMapSize, declared, []) !== path.length) throw new __velarServeTypeError("RoutePattern path captures do not match its pathname");
+  for (let index = 0; index < path.length; index += 1) {
+    if (path[index].wireName !== path[index].name || !__velarServeCall(__velarServeMapHas, declared, [path[index].name])) {
+      throw new __velarServeTypeError("RoutePattern path captures do not match its pathname");
+    }
+  }
+  let canonical = pathname;
+  if (query.length > 0) {
+    const clauses = [];
+    for (let index = 0; index < query.length; index += 1) {
+      const item = query[index];
+      clauses[index] = (item.explicitWireName ? item.wireName + "=" : "")
+        + "{" + item.name + ":" + item.typeName + (item.optional ? "?" : "") + "}";
+    }
+    canonical += "?" + __velarServeCall(__velarServeArrayJoin, clauses, ["&"]);
+  }
+  if (canonical !== source.definition) throw new __velarServeTypeError("RoutePattern definition does not agree with its compiled structure");
+  const value = {definition: source.definition};
+  __velarServeCall(__velarServeObjectDefineProperty, __velarServeObject, [value, __velarServePatternMarker, {value: true, enumerable: false, configurable: false, writable: false}]);
+  __velarServeCall(__velarServeObjectDefineProperty, __velarServeObject, [value, "pathname", {value: pathname, enumerable: false, configurable: false, writable: false}]);
+  __velarServeCall(__velarServeObjectDefineProperty, __velarServeObject, [value, "pathCaptures", {value: __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [path]), enumerable: false, configurable: false, writable: false}]);
+  __velarServeCall(__velarServeObjectDefineProperty, __velarServeObject, [value, "queryCaptures", {value: __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [query]), enumerable: false, configurable: false, writable: false}]);
+  __velarServeCall(__velarServeObjectDefineProperty, __velarServeObject, [value, "toString", {value: () => source.definition, enumerable: false, configurable: false, writable: false}]);
+  return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [value]);
+}
+
+function __velarCreateServeRoute(method, pattern, parameters, handler, metadata = {}) {
   if (typeof method !== "string" || !__velarServeCall(__velarServeArrayIncludes, ["GET", "POST", "PUT", "PATCH", "DELETE"], [method])) throw new __velarServeTypeError("Route method is invalid");
-  path = __velarServeRoutePath(path);
+  if (!__velarServeIsPattern(pattern)) throw new __velarServeTypeError("Route path must be a RoutePattern declared with p\"/...\"");
+  const path = pattern.pathname;
   if (!__velarServeIsArray(parameters) || parameters.length > 64) throw new __velarServeTypeError("Route parameters must be a bounded list");
   const checked = [];
   const names = new __velarServeMap();
@@ -1034,7 +1209,7 @@ function __velarCreateServeRoute(method, path, parameters, handler, metadata = {
     const parameter = __velarServeRecord(parameters[index], __velarServeRouteParameterFields, "Route parameter");
     if (typeof parameter.name !== "string" || !__velarServeCall(__velarServeRegExpTest, __velarServeRouteNamePattern, [parameter.name])
       || __velarServeCall(__velarServeMapHas, names, [parameter.name])) throw new __velarServeTypeError("Route parameter names must be unique identifiers");
-    if (!__velarServeCall(__velarServeArrayIncludes, ["path", "query", "body", "request", "header", "cookie", "form", "upload", "dependency", "security"], [parameter.source])
+    if (!__velarServeCall(__velarServeArrayIncludes, ["body", "request", "header", "cookie", "form", "upload", "dependency", "security"], [parameter.source])
       || !__velarServeCall(__velarServeArrayIncludes, ["string", "number", "bool", "enum", "list", "data", "request", "upload", "dependency", "security"], [parameter.kind])
       || typeof parameter.required !== "boolean" || parameter.source !== "request" && typeof parameter.check !== "function") {
       throw new __velarServeTypeError("Route parameter descriptor is invalid");
@@ -1044,9 +1219,7 @@ function __velarCreateServeRoute(method, path, parameters, handler, metadata = {
       throw new __velarServeTypeError("Route input descriptor does not agree with its compiled source");
     }
     const scalar = parameter.kind === "string" || parameter.kind === "number" || parameter.kind === "bool" || parameter.kind === "enum";
-    if (parameter.source === "path" && (!scalar || parameter.required !== true)
-      || parameter.source === "query" && !scalar && parameter.kind !== "list"
-      || parameter.source === "body" && parameter.kind !== "data"
+    if (parameter.source === "body" && parameter.kind !== "data"
       || parameter.source === "request" && (parameter.kind !== "request" || parameter.required !== true)
       || parameter.source === "header" && !scalar
       || parameter.source === "cookie" && !scalar
@@ -1058,34 +1231,12 @@ function __velarCreateServeRoute(method, path, parameters, handler, metadata = {
     }
     __velarServeCall(__velarServeMapSet, names, [parameter.name, true]);
     const schema = parameter.schema == null ? __velarServeDefaultSchema(parameter.kind) : __velarServeSchema(parameter.schema, "Route parameter schema");
-    const required = routeInput !== null && (routeInput.source === "query" || routeInput.source === "header" || routeInput.source === "cookie")
+    const required = routeInput !== null && (routeInput.source === "header" || routeInput.source === "cookie")
       ? !routeInput.hasDefault
       : parameter.required;
     checked[checked.length] = __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{name: parameter.name, source: parameter.source, kind: parameter.kind, required, check: parameter.check ?? null, schema, input: routeInput}]);
   }
-  const captures = new __velarServeMap();
   const segments = __velarServeCall(__velarServeStringSplit, path, ["/"]);
-  for (let index = 1; index < segments.length; index += 1) {
-    const segment = segments[index];
-    if (!__velarServeCall(__velarServeStringStartsWith, segment, ["{"])) continue;
-    const declaration = __velarServeCall(__velarServeStringSlice, segment, [1, -1]);
-    const separator = __velarServeCall(__velarServeStringIndexOf, declaration, [":"]);
-    const capture = __velarServeCall(__velarServeStringSlice, declaration, [0, separator]);
-    if (__velarServeCall(__velarServeMapHas, captures, [capture])) throw new __velarServeTypeError("Route path capture names must be unique");
-    __velarServeCall(__velarServeMapSet, captures, [capture, false]);
-  }
-  for (let index = 0; index < checked.length; index += 1) {
-    const parameter = checked[index];
-    if (parameter.source !== "path") continue;
-    if (!__velarServeCall(__velarServeMapHas, captures, [parameter.name])) throw new __velarServeTypeError("A path parameter must match a path capture");
-    __velarServeCall(__velarServeMapSet, captures, [parameter.name, true]);
-  }
-  const captureIterator = __velarServeCall(__velarServeMapEntries, captures, []);
-  while (true) {
-    const step = __velarServeCall(__velarServeMapIteratorNext, captureIterator, []);
-    if (step.done) break;
-    if (step.value[1] !== true) throw new __velarServeTypeError("Every path capture requires a checked path parameter");
-  }
   if (typeof handler !== "function") throw new __velarServeTypeError("Route handler is invalid");
   metadata = __velarServeRecord(metadata, __velarServeRouteMetadataFields, "Route metadata");
   const responseSchema = metadata.responseSchema == null ? {} : __velarServeSchema(metadata.responseSchema, "Route response schema");
@@ -1110,6 +1261,7 @@ function __velarCreateServeRoute(method, path, parameters, handler, metadata = {
     [__velarServeRouteMarker]: true,
     method,
     path,
+    pattern,
     segments: __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [segments]),
     parameters: __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [checked]),
     handler,
@@ -1138,6 +1290,21 @@ function __velarCreateServeNotFound(handler, middleware = []) {
     [__velarServeNotFoundMarker]: true,
     handler,
     middleware: __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [checkedMiddleware]),
+  }]);
+}
+
+function __velarCreateServeResponse(handler, metadata = {}) {
+  if (typeof handler !== "function") throw new __velarServeTypeError("@response handler is invalid");
+  metadata = __velarServeRecord(metadata, __velarServeResponseHandlerFields, "@response metadata");
+  const responseSchema = metadata.responseSchema == null ? {} : __velarServeSchema(metadata.responseSchema, "@response schema");
+  const responseContentTypes = metadata.responseContentTypes == null
+    ? ["application/json"]
+    : __velarServeStringList(metadata.responseContentTypes, "@response content types", 8);
+  return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{
+    [__velarServeResponseHandlerMarker]: true,
+    handler,
+    responseSchema,
+    responseContentTypes: __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [responseContentTypes]),
   }]);
 }
 
@@ -1227,7 +1394,7 @@ function __velarServeBodyLimit(value) {
   return value;
 }
 
-function __velarServeAppValue(name, routes, lifecycles = [], notFound = null) {
+function __velarServeAppValue(name, routes, lifecycles = [], notFound = null, responseHandler = null) {
   const router = __velarServeRouter(routes);
   return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{
     [__velarServeAppMarker]: true,
@@ -1236,15 +1403,17 @@ function __velarServeAppValue(name, routes, lifecycles = [], notFound = null) {
     router,
     lifecycles: __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [lifecycles]),
     notFound,
+    responseHandler,
   }]);
 }
 
 function __velarCreateServeApp(name, items) {
   if (typeof name !== "string" || name.length === 0 || name.length > 256) throw new __velarServeTypeError("ServeApp name must be bounded text");
-  if (!__velarServeIsArray(items) || items.length > __velarServeMaxRoutes + 1) throw new __velarServeTypeError("ServeApp items cannot exceed 4096 routes and one fallback");
+  if (!__velarServeIsArray(items) || items.length > __velarServeMaxRoutes + 2) throw new __velarServeTypeError("ServeApp items cannot exceed 4096 routes, one fallback, and one response policy");
   const routes = [];
   const lifecycles = [];
   let notFound = null;
+  let responseHandler = null;
   // D90 R19(b): assembly is the moment the final table exists, so the final
   // table is judged here — a conflict names both routes and both origins,
   // because the statically invisible half of a collision is exactly the one
@@ -1270,6 +1439,10 @@ function __velarCreateServeApp(name, items) {
       if (notFound !== null) throw new __velarServeTypeError("ServeApp contains more than one @notFound fallback");
       notFound = item;
     }
+    else if (__velarServeIsResponseHandler(item)) {
+      if (responseHandler !== null) throw new __velarServeTypeError("ServeApp contains more than one @response policy");
+      responseHandler = item;
+    }
     else if (__velarServeIsApp(item)) {
       for (let route = 0; route < item.routes.length; route += 1) append(item.routes[route], item.name);
       for (let hook = 0; hook < item.lifecycles.length; hook += 1) {
@@ -1280,9 +1453,13 @@ function __velarCreateServeApp(name, items) {
         if (notFound !== null) throw new __velarServeTypeError("ServeApp contains more than one @notFound fallback");
         notFound = item.notFound;
       }
+      if (item.responseHandler !== null) {
+        if (responseHandler !== null) throw new __velarServeTypeError("ServeApp contains more than one @response policy");
+        responseHandler = item.responseHandler;
+      }
     } else throw new __velarServeTypeError("A server composition entry must be a ServeApp");
   }
-  return __velarServeAppValue(name, routes, lifecycles, notFound);
+  return __velarServeAppValue(name, routes, lifecycles, notFound, responseHandler);
 }
 
 export function prefix(path, app) {
@@ -1293,26 +1470,36 @@ export function prefix(path, app) {
   }
   if (path === "/") return app;
   if (app.notFound !== null) throw new __velarServeTypeError("prefix cannot scope @notFound; compose the fallback on the final server instead");
+  if (app.responseHandler !== null) throw new __velarServeTypeError("prefix cannot scope @response; compose the policy on the final server instead");
   const routes = [];
   for (let index = 0; index < app.routes.length; index += 1) {
     const route = app.routes[index];
+    const pathname = path + (route.path === "/" ? "" : route.path);
+    const querySuffix = __velarServeCall(__velarServeStringSlice, route.pattern.definition, [route.path.length]);
+    const pattern = __velarCreateServePattern({
+      definition: pathname + querySuffix,
+      pathname,
+      path: route.pattern.pathCaptures,
+      query: route.pattern.queryCaptures,
+    });
     routes[routes.length] = __velarCreateServeRoute(
       route.method,
-      path + (route.path === "/" ? "" : route.path),
+      pattern,
       route.parameters,
       route.handler,
       __velarServeRouteMetadata(route),
     );
   }
   const output = __velarCreateServeApp(app.name, routes);
-  return __velarServeAppValue(output.name, output.routes, app.lifecycles, null);
+  return __velarServeAppValue(output.name, output.routes, app.lifecycles, null, app.responseHandler);
 }
 
 export function staticFiles(path, root, fallback = null) {
   path = __velarServeRoutePath(path, "staticFiles path");
   if (path !== "/" && __velarServeCall(__velarServeStringEndsWith, path, ["/"])) throw new __velarServeTypeError("staticFiles path must not end with '/'");
   const pattern = path === "/" ? "/*" : path + "/*";
-  const route = __velarCreateServeRoute("GET", pattern, [{name: "request", source: "request", kind: "request", required: true}], async request => {
+  const routePattern = __velarCreateServePattern({definition: pattern, pathname: pattern, path: [], query: []});
+  const route = __velarCreateServeRoute("GET", routePattern, [{name: "request", source: "request", kind: "request", required: true}], async (_path, request) => {
     const relative = path === "/" ? request.path : __velarServeCall(__velarServeStringSlice, request.path, [path.length]);
     return fileResponse(root, relative || "/", fallback);
   }, {documented: false});
@@ -1332,7 +1519,7 @@ export function use(app, middleware) {
     for (let item = 0; item < additions.length; item += 1) entries[entries.length] = additions[item];
     routes[routes.length] = __velarCreateServeRoute(
       route.method,
-      route.path,
+      route.pattern,
       route.parameters,
       route.handler,
       {...__velarServeRouteMetadata(route), middleware: entries},
@@ -1349,7 +1536,7 @@ export function use(app, middleware) {
   for (let index = 0; index < routes.length; index += 1) items[items.length] = routes[index];
   if (notFound !== null) items[items.length] = notFound;
   const output = __velarCreateServeApp(app.name, items);
-  return __velarServeAppValue(output.name, output.routes, app.lifecycles, output.notFound);
+  return __velarServeAppValue(output.name, output.routes, app.lifecycles, output.notFound, app.responseHandler);
 }
 
 export function bodyLimit(app, maxBytes) {
@@ -1360,14 +1547,14 @@ export function bodyLimit(app, maxBytes) {
     const route = app.routes[index];
     routes[routes.length] = __velarCreateServeRoute(
       route.method,
-      route.path,
+      route.pattern,
       route.parameters,
       route.handler,
       {...__velarServeRouteMetadata(route), maxBodyBytes: maxBytes},
     );
   }
   const output = __velarCreateServeApp(app.name, routes);
-  return __velarServeAppValue(output.name, output.routes, app.lifecycles, app.notFound);
+  return __velarServeAppValue(output.name, output.routes, app.lifecycles, app.notFound, app.responseHandler);
 }
 
 export function lifecycle(app, startup = null, shutdown = null) {
@@ -1377,7 +1564,7 @@ export function lifecycle(app, startup = null, shutdown = null) {
   const lifecycles = [];
   for (let index = 0; index < app.lifecycles.length; index += 1) lifecycles[index] = app.lifecycles[index];
   lifecycles[lifecycles.length] = __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{startup, shutdown}]);
-  return __velarServeAppValue(app.name, app.routes, lifecycles, app.notFound);
+  return __velarServeAppValue(app.name, app.routes, lifecycles, app.notFound, app.responseHandler);
 }
 
 function __velarServeResponseWithHeaders(value, additions) {
@@ -1438,7 +1625,7 @@ function __velarServeCors(origins = ["*"], methods = ["GET", "POST", "PUT", "PAT
     const origin = __velarServeCall(__velarServeMapHas, request.headers, ["origin"]) ? __velarServeCall(__velarServeMapGet, request.headers, ["origin"]) : null;
     const wildcard = __velarServeCall(__velarServeArrayIncludes, origins, ["*"]);
     const allowed = origin !== null && (wildcard || __velarServeCall(__velarServeArrayIncludes, origins, [origin]));
-    if (origin !== null && !allowed) return {status: 403, json: {error: "origin_not_allowed"}};
+    if (origin !== null && !allowed) return __velarServeOutcome(null, 403, null, __velarServeProblem(403, "security.origin_not_allowed", "Origin is not allowed", null, "header", "origin"));
     const response = await next();
     if (!allowed) return response;
     const output = new __velarServeMap([
@@ -1472,7 +1659,7 @@ function __velarServeTrustedHosts(hosts) {
       if (__velarServeCall(__velarServeStringStartsWith, allowed, ["["]) && __velarServeCall(__velarServeStringEndsWith, allowed, ["]"])) allowed = __velarServeCall(__velarServeStringSlice, allowed, [1, -1]);
       if (allowed === "*" || allowed === host || __velarServeCall(__velarServeStringStartsWith, allowed, ["*."]) && __velarServeCall(__velarServeStringEndsWith, host, [__velarServeCall(__velarServeStringSlice, allowed, [1])])) { accepted = true; break; }
     }
-    return accepted ? await next() : {status: 400, json: {error: "untrusted_host"}};
+    return accepted ? await next() : __velarServeOutcome(null, 400, null, __velarServeProblem(400, "security.untrusted_host", "Host is not trusted", null, "header", "host"));
   };
 }
 
@@ -1562,7 +1749,7 @@ function __velarServeTimeout(milliseconds) {
   if (!__velarServeIsSafeInteger(milliseconds) || milliseconds < 1 || milliseconds > 3_600_000) throw new __velarServeRangeError("middleware.timeout must be 1 through 3600000 milliseconds");
   return async (request, next) => {
     if (__velarServeActiveTimeouts >= __velarServeMaxActiveTimeouts) {
-      return {status: 503, json: {error: "server_busy"}, headers: new __velarServeMap([["retry-after", "1"]])};
+      return __velarServeOutcome(null, 503, null, __velarServeProblem(503, "server.busy", "Server is busy", null, null, null, new __velarServeMap([["retry-after", "1"]])));
     }
     let timer = null;
     const pending = next();
@@ -1581,7 +1768,7 @@ function __velarServeTimeout(milliseconds) {
       if (__velarServeActiveTimeouts >= __velarServeMaxActiveTimeouts) {
         try { await pending; }
         catch (error) { __velarServeReportFailure(error); }
-        return {status: 504, json: {error: "request_timeout"}};
+        return __velarServeOutcome(null, 504, null, __velarServeProblem(504, "request.timeout", "Request timed out"));
       }
       __velarServeActiveTimeouts += 1;
       __velarServeActiveBackgroundTasks += 1;
@@ -1599,11 +1786,7 @@ function __velarServeTimeout(milliseconds) {
         return await settlement;
       };
       __velarServeCall(__velarServeWeakMapSet, __velarServeReservedBackground, [continuation, true]);
-      return {
-        status: 504,
-        json: {error: "request_timeout"},
-        background: [continuation],
-      };
+      return __velarServeOutcome(null, 504, null, __velarServeProblem(504, "request.timeout", "Request timed out"), [continuation]);
     } finally {
       if (timer !== null) __velarServeCall(__velarServeClearTimeout, globalThis, [timer]);
     }
@@ -1614,7 +1797,7 @@ function __velarServeConcurrency(maximum) {
   if (!__velarServeIsSafeInteger(maximum) || maximum < 1 || maximum > 4096) throw new __velarServeRangeError("middleware.concurrency maximum must be from 1 through 4096");
   let active = 0;
   return async (_request, next) => {
-    if (active >= maximum) return {status: 503, json: {error: "server_busy"}, headers: new __velarServeMap([["retry-after", "1"]])};
+    if (active >= maximum) return __velarServeOutcome(null, 503, null, __velarServeProblem(503, "server.busy", "Server is busy", null, null, null, new __velarServeMap([["retry-after", "1"]])));
     active += 1;
     try { return await next(); }
     finally { active -= 1; }
@@ -1688,12 +1871,12 @@ function __velarServeDecodeScalarValue(raw, kind, name) {
     value = __velarServeNumber(raw);
     if (!__velarServeCall(__velarServeRegExpTest, __velarServeDecimalPattern, [raw])
       || !__velarServeCall(__velarServeNumberIsFinite, __velarServeNumber, [value])) {
-      throw new HttpError(422, {error: "invalid_request", parameter: name});
+      throw __velarServeRequestProblem(422, {error: "invalid_request", parameter: name});
     }
   } else if (kind === "bool") {
     if (raw === "true") value = true;
     else if (raw === "false") value = false;
-    else throw new HttpError(422, {error: "invalid_request", parameter: name});
+    else throw __velarServeRequestProblem(422, {error: "invalid_request", parameter: name});
   }
   return value;
 }
@@ -1702,7 +1885,7 @@ function __velarServeDecodeScalar(raw, parameter) {
   const value = __velarServeDecodeScalarValue(raw, parameter.kind, parameter.name);
   let valid = false;
   try { valid = parameter.check(value) === true; } catch {}
-  if (!valid) throw new HttpError(422, {error: "invalid_request", parameter: parameter.name});
+  if (!valid) throw __velarServeRequestProblem(422, {error: "invalid_request", parameter: parameter.name});
   return value;
 }
 
@@ -1716,12 +1899,12 @@ function __velarServeCookieValue(request, name) {
     const separator = __velarServeCall(__velarServeStringIndexOf, piece, ["="]);
     if (separator < 0 || __velarServeCall(__velarServeStringSlice, piece, [0, separator]) !== name) continue;
     matches += 1;
-    if (matches > 1) throw new HttpError(400, {error: "duplicate_cookie", parameter: name});
+    if (matches > 1) throw __velarServeRequestProblem(400, {error: "duplicate_cookie", parameter: name});
     encoded = __velarServeCall(__velarServeStringSlice, piece, [separator + 1]);
   }
   if (matches === 0) return __velarServeMissing;
   try { return __velarServeCall(__velarServeDecodeURIComponent, undefined, [encoded]); }
-  catch { throw new HttpError(400, {error: "invalid_cookie", parameter: name}); }
+  catch { throw __velarServeRequestProblem(400, {error: "invalid_cookie", parameter: name}); }
 }
 
 function __velarServeNamedInputRaw(descriptor, parameterName, request) {
@@ -1729,7 +1912,7 @@ function __velarServeNamedInputRaw(descriptor, parameterName, request) {
   if (descriptor.source === "query") {
     if (!__velarServeCall(__velarServeMapHas, request.queryAll, [name])) return __velarServeMissing;
     const values = __velarServeCall(__velarServeMapGet, request.queryAll, [name]);
-    if (values.length !== 1) throw new HttpError(422, {error: "duplicate_parameter", parameter: name});
+    if (values.length !== 1) throw __velarServeRequestProblem(422, {error: "duplicate_parameter", parameter: name});
     return values[0];
   }
   if (descriptor.source === "header") {
@@ -1749,7 +1932,7 @@ function __velarServeAuthenticationChallenge(details) {
 
 export function __velarServeAuthenticationError(credential) {
   credential = __velarServeAuthenticationCredential(credential);
-  return new HttpError(
+  return __velarServeRequestProblem(
     401,
     {error: "not_authenticated"},
     new __velarServeMap([["www-authenticate", __velarServeAuthenticationChallenge(credential.extra)]]),
@@ -1858,8 +2041,8 @@ async function __velarServeResolveProvider(provider, request, maxBodyBytes, cont
   const owner = appScoped ? context.appState : context;
   const providerLimit = appScoped ? __velarServeMaxAppProviders : __velarServeMaxRequestProviders;
   if (__velarServeCall(__velarServeMapHas, cache, [provider])) return await __velarServeCall(__velarServeMapGet, cache, [provider]);
-  if (__velarServeCall(__velarServeMapHas, resolving, [provider])) throw new HttpError(500, {error: "provider_cycle"});
-  if (owner.providerCount >= providerLimit) throw new HttpError(503, {error: "provider_budget_exhausted"});
+  if (__velarServeCall(__velarServeMapHas, resolving, [provider])) throw __velarServeRequestProblem(500, {error: "provider_cycle"});
+  if (owner.providerCount >= providerLimit) throw __velarServeRequestProblem(503, {error: "provider_budget_exhausted"});
   owner.providerCount += 1;
   __velarServeCall(__velarServeMapSet, resolving, [provider, true]);
   const pending = (async () => {
@@ -1906,7 +2089,7 @@ function __velarServeFindBytes(data, pattern, start) {
 
 function __velarServeDecodeBytes(data, start = 0, end = data.length) {
   try { return __velarServeCall(__velarServeTextDecode, __velarServeUtf8Decoder, [__velarServeCall(__velarServeUint8Slice, data, [start, end])]); }
-  catch { throw new HttpError(400, {error: "invalid_form_encoding"}); }
+  catch { throw __velarServeRequestProblem(400, {error: "invalid_form_encoding"}); }
 }
 
 function __velarServeDispositionValue(value, key) {
@@ -1925,7 +2108,7 @@ function __velarServeDispositionValue(value, key) {
 function __velarServeAddFormField(fields, name, value) {
   const existing = __velarServeOwnDescriptor(fields, name);
   if (existing === undefined) { fields[name] = value; return; }
-  if (!existing.enumerable || !("value" in existing)) throw new HttpError(400, {error: "invalid_form"});
+  if (!existing.enumerable || !("value" in existing)) throw __velarServeRequestProblem(400, {error: "invalid_form"});
   if (__velarServeIsArray(existing.value)) existing.value[existing.value.length] = value;
   else fields[name] = [existing.value, value];
 }
@@ -1933,10 +2116,10 @@ function __velarServeAddFormField(fields, name, value) {
 function __velarServeMultipartHeaders(text) {
   const output = __velarServeCall(__velarServeObjectCreate, __velarServeObject, [null]);
   const lines = __velarServeCall(__velarServeStringSplit, text, ["\r\n"]);
-  if (lines.length > 64) throw new HttpError(400, {error: "invalid_multipart"});
+  if (lines.length > 64) throw __velarServeRequestProblem(400, {error: "invalid_multipart"});
   for (let index = 0; index < lines.length; index += 1) {
     const separator = __velarServeCall(__velarServeStringIndexOf, lines[index], [":"]);
-    if (separator < 1) throw new HttpError(400, {error: "invalid_multipart"});
+    if (separator < 1) throw __velarServeRequestProblem(400, {error: "invalid_multipart"});
     const name = __velarServeCall(__velarServeStringToLowerCase, __velarServeCall(__velarServeStringTrim, __velarServeCall(__velarServeStringSlice, lines[index], [0, separator]), []), []);
     output[name] = __velarServeCall(__velarServeStringTrim, __velarServeCall(__velarServeStringSlice, lines[index], [separator + 1]), []);
   }
@@ -1950,7 +2133,7 @@ function __velarServeUploadBasename(filename) {
   const slashed = __velarServeCall(__velarServeStringSplit, filename, ["/"]);
   const separated = __velarServeCall(__velarServeStringSplit, slashed[slashed.length - 1], ["\\"]);
   const base = separated[separated.length - 1];
-  if (base === "" || base === "." || base === ".." || __velarServeCall(__velarServeStringIncludes, base, ["\0"])) throw new HttpError(400, {error: "invalid_multipart"});
+  if (base === "" || base === "." || base === ".." || __velarServeCall(__velarServeStringIncludes, base, ["\0"])) throw __velarServeRequestProblem(400, {error: "invalid_multipart"});
   return base;
 }
 
@@ -1958,7 +2141,7 @@ function __velarServeMultipart(data, boundary) {
   const opening = __velarServeBytePattern("--" + boundary);
   const separator = __velarServeBytePattern("\r\n\r\n");
   const delimiter = __velarServeBytePattern("\r\n--" + boundary);
-  if (__velarServeFindBytes(data, opening, 0) !== 0) throw new HttpError(400, {error: "invalid_multipart"});
+  if (__velarServeFindBytes(data, opening, 0) !== 0) throw __velarServeRequestProblem(400, {error: "invalid_multipart"});
   const fields = __velarServeCall(__velarServeObjectCreate, __velarServeObject, [null]);
   const files = new __velarServeMap();
   const uploadStates = [];
@@ -1966,31 +2149,31 @@ function __velarServeMultipart(data, boundary) {
   let parts = 0;
   while (position < data.length) {
     if (data[position] === 45 && data[position + 1] === 45) break;
-    if (data[position] !== 13 || data[position + 1] !== 10) throw new HttpError(400, {error: "invalid_multipart"});
+    if (data[position] !== 13 || data[position + 1] !== 10) throw __velarServeRequestProblem(400, {error: "invalid_multipart"});
     position += 2;
     const headerEnd = __velarServeFindBytes(data, separator, position);
-    if (headerEnd < 0 || headerEnd - position > 16 * 1024) throw new HttpError(400, {error: "invalid_multipart"});
+    if (headerEnd < 0 || headerEnd - position > 16 * 1024) throw __velarServeRequestProblem(400, {error: "invalid_multipart"});
     const headers = __velarServeMultipartHeaders(__velarServeDecodeBytes(data, position, headerEnd));
     const contentStart = headerEnd + separator.length;
     const contentEnd = __velarServeFindBytes(data, delimiter, contentStart);
-    if (contentEnd < 0) throw new HttpError(400, {error: "invalid_multipart"});
+    if (contentEnd < 0) throw __velarServeRequestProblem(400, {error: "invalid_multipart"});
     const disposition = headers["content-disposition"];
-    if (typeof disposition !== "string" || !__velarServeCall(__velarServeStringStartsWith, __velarServeCall(__velarServeStringToLowerCase, disposition, []), ["form-data"])) throw new HttpError(400, {error: "invalid_multipart"});
+    if (typeof disposition !== "string" || !__velarServeCall(__velarServeStringStartsWith, __velarServeCall(__velarServeStringToLowerCase, disposition, []), ["form-data"])) throw __velarServeRequestProblem(400, {error: "invalid_multipart"});
     const name = __velarServeDispositionValue(disposition, "name");
     const filename = __velarServeDispositionValue(disposition, "filename");
-    if (name === null || name.length === 0 || name.length > 256) throw new HttpError(400, {error: "invalid_multipart"});
+    if (name === null || name.length === 0 || name.length > 256) throw __velarServeRequestProblem(400, {error: "invalid_multipart"});
     const part = __velarServeCall(__velarServeUint8Subarray, data, [contentStart, contentEnd]);
     if (filename === null) {
-      if (part.length > 1024 * 1024) throw new HttpError(413, {error: "form_field_too_large", parameter: name});
+      if (part.length > 1024 * 1024) throw __velarServeRequestProblem(413, {error: "form_field_too_large", parameter: name});
       __velarServeAddFormField(fields, name, __velarServeDecodeBytes(part));
     } else {
-      if (filename.length > 1024 || __velarServeCall(__velarServeMapHas, files, [name])) throw new HttpError(400, {error: "invalid_multipart"});
+      if (filename.length > 1024 || __velarServeCall(__velarServeMapHas, files, [name])) throw __velarServeRequestProblem(400, {error: "invalid_multipart"});
       const base = __velarServeUploadBasename(filename);
       const contentType = typeof headers["content-type"] === "string" ? headers["content-type"] : "application/octet-stream";
       __velarServeCall(__velarServeMapSet, files, [name, __velarServeUploadValue(name, base, contentType, part, uploadStates)]);
     }
     parts += 1;
-    if (parts > 128) throw new HttpError(413, {error: "too_many_form_parts"});
+    if (parts > 128) throw __velarServeRequestProblem(413, {error: "too_many_form_parts"});
     position = contentEnd + delimiter.length;
   }
   return {fields, files, dispose() { for (let index = 0; index < uploadStates.length; index += 1) uploadStates[index].data = null; data = null; }};
@@ -1999,19 +2182,19 @@ function __velarServeMultipart(data, boundary) {
 function __velarServeFormComponent(value) {
   const spaced = __velarServeCall(__velarServeArrayJoin, __velarServeCall(__velarServeStringSplit, value, ["+"]), [" "]);
   try { return __velarServeCall(__velarServeDecodeURIComponent, undefined, [spaced]); }
-  catch { throw new HttpError(400, {error: "invalid_form_encoding"}); }
+  catch { throw __velarServeRequestProblem(400, {error: "invalid_form_encoding"}); }
 }
 
 function __velarServeUrlEncoded(text) {
   const fields = __velarServeCall(__velarServeObjectCreate, __velarServeObject, [null]);
   if (text === "") return {fields, files: new __velarServeMap(), dispose() {}};
   const pairs = __velarServeCall(__velarServeStringSplit, text, ["&"]);
-  if (pairs.length > 128) throw new HttpError(413, {error: "too_many_form_parts"});
+  if (pairs.length > 128) throw __velarServeRequestProblem(413, {error: "too_many_form_parts"});
   for (let index = 0; index < pairs.length; index += 1) {
     const separator = __velarServeCall(__velarServeStringIndexOf, pairs[index], ["="]);
     const name = __velarServeFormComponent(separator < 0 ? pairs[index] : __velarServeCall(__velarServeStringSlice, pairs[index], [0, separator]));
     const value = __velarServeFormComponent(separator < 0 ? "" : __velarServeCall(__velarServeStringSlice, pairs[index], [separator + 1]));
-    if (name.length === 0 || name.length > 256 || value.length > 1024 * 1024) throw new HttpError(400, {error: "invalid_form"});
+    if (name.length === 0 || name.length > 256 || value.length > 1024 * 1024) throw __velarServeRequestProblem(400, {error: "invalid_form"});
     __velarServeAddFormField(fields, name, value);
   }
   return {fields, files: new __velarServeMap(), dispose() {}};
@@ -2037,11 +2220,11 @@ async function __velarServeRequestForm(request, maxBodyBytes, context) {
           boundary = __velarServeCall(__velarServeStringSlice, item, [9]);
           if (__velarServeCall(__velarServeStringStartsWith, boundary, ["\""]) && __velarServeCall(__velarServeStringEndsWith, boundary, ["\""])) boundary = __velarServeCall(__velarServeStringSlice, boundary, [1, -1]);
         }
-        if (boundary === null || boundary.length === 0 || boundary.length > 128 || /[\0\r\n]/u.test(boundary)) throw new HttpError(400, {error: "invalid_multipart_boundary"});
+        if (boundary === null || boundary.length === 0 || boundary.length > 128 || /[\0\r\n]/u.test(boundary)) throw __velarServeRequestProblem(400, {error: "invalid_multipart_boundary"});
         return __velarServeMultipart(await request.bytes(maxBodyBytes), boundary);
       }
-    } catch (error) { if (error instanceof RequestBodyTooLargeError) throw new HttpError(413, {error: "request_too_large"}); throw error; }
-    throw new HttpError(415, {error: "unsupported_media_type", expected: "multipart/form-data or application/x-www-form-urlencoded"});
+    } catch (error) { if (error instanceof RequestBodyTooLargeError) throw __velarServeRequestProblem(413, {error: "request_too_large"}); throw error; }
+    throw __velarServeRequestProblem(415, {error: "unsupported_media_type", expected: "multipart/form-data or application/x-www-form-urlencoded"});
   })();
   return await context.form;
 }
@@ -2054,16 +2237,16 @@ function __velarServeCoerceForm(fields, schema) {
     const value = fields[name];
     const property = schema?.properties?.[name];
     const values = __velarServeIsArray(value) ? value : [value];
-    if (__velarServeIsArray(value) && property?.type !== "array") throw new HttpError(422, {error: "duplicate_parameter", parameter: name});
+    if (__velarServeIsArray(value) && property?.type !== "array") throw __velarServeRequestProblem(422, {error: "duplicate_parameter", parameter: name});
     const item = property?.type === "array" ? property.items : property;
     const converted = [];
     for (let itemIndex = 0; itemIndex < values.length; itemIndex += 1) {
       if (item?.type === "number") {
         const number = __velarServeCall(__velarServeNumber, undefined, [values[itemIndex]]);
-        if (!__velarServeCall(__velarServeRegExpTest, __velarServeDecimalPattern, [values[itemIndex]]) || !__velarServeCall(__velarServeNumberIsFinite, __velarServeNumber, [number])) throw new HttpError(422, {error: "invalid_request", parameter: name});
+        if (!__velarServeCall(__velarServeRegExpTest, __velarServeDecimalPattern, [values[itemIndex]]) || !__velarServeCall(__velarServeNumberIsFinite, __velarServeNumber, [number])) throw __velarServeRequestProblem(422, {error: "invalid_request", parameter: name});
         converted[converted.length] = number;
       } else if (item?.type === "boolean") {
-        if (values[itemIndex] !== "true" && values[itemIndex] !== "false") throw new HttpError(422, {error: "invalid_request", parameter: name});
+        if (values[itemIndex] !== "true" && values[itemIndex] !== "false") throw __velarServeRequestProblem(422, {error: "invalid_request", parameter: name});
         converted[converted.length] = values[itemIndex] === "true";
       } else converted[converted.length] = values[itemIndex];
     }
@@ -2080,26 +2263,49 @@ async function __velarServeResolveInput(descriptor, parameterName, parameter, re
     const form = await __velarServeRequestForm(request, maxBodyBytes, context);
     const value = __velarServeCoerceForm(form.fields, parameter?.schema ?? null);
     try { return descriptor.extra.parse(value); }
-    catch { throw new HttpError(422, {error: "invalid_request", parameter: parameterName}); }
+    catch { throw __velarServeRequestProblem(422, {error: "invalid_request", parameter: parameterName}); }
   }
   if (descriptor.source === "upload") {
     const form = await __velarServeRequestForm(request, maxBodyBytes, context);
     const name = descriptor.name === "" ? parameterName : descriptor.name;
-    if (!__velarServeCall(__velarServeMapHas, form.files, [name])) throw new HttpError(422, {error: "missing_parameter", parameter: name});
+    if (!__velarServeCall(__velarServeMapHas, form.files, [name])) throw __velarServeRequestProblem(422, {error: "missing_parameter", parameter: name});
     const upload = __velarServeCall(__velarServeMapGet, form.files, [name]);
-    if (upload.size > descriptor.extra) throw new HttpError(413, {error: "upload_too_large", parameter: name});
+    if (upload.size > descriptor.extra) throw __velarServeRequestProblem(413, {error: "upload_too_large", parameter: name});
     return upload;
   }
   const raw = __velarServeNamedInputRaw(descriptor, parameterName, request);
   if (raw === __velarServeMissing) {
     if (descriptor.hasDefault) return descriptor.fallback;
-    throw new HttpError(422, {error: "missing_parameter", parameter: descriptor.name === "" ? parameterName : descriptor.name});
+    throw __velarServeRequestProblem(422, {error: "missing_parameter", parameter: descriptor.name === "" ? parameterName : descriptor.name});
   }
   return parameter === null ? raw : __velarServeDecodeScalar(raw, parameter);
 }
 
 async function __velarServeRouteArguments(route, match, request, maxBodyBytes, context) {
-  const values = [];
+  const params = __velarServeCall(__velarServeObjectCreate, __velarServeObject, [null]);
+  for (let index = 0; index < route.pattern.pathCaptures.length; index += 1) {
+    const capture = route.pattern.pathCaptures[index];
+    const descriptor = __velarServeOwnDescriptor(match.values, capture.name);
+    if (descriptor === undefined || !("value" in descriptor)) throw __velarServeRequestProblem(422, {error: "missing_parameter", parameter: capture.name});
+    params[capture.name] = __velarServeDecodeScalar(descriptor.value, capture);
+  }
+  const query = __velarServeCall(__velarServeObjectCreate, __velarServeObject, [null]);
+  for (let index = 0; index < route.pattern.queryCaptures.length; index += 1) {
+    const capture = route.pattern.queryCaptures[index];
+    if (!__velarServeCall(__velarServeMapHas, request.queryAll, [capture.wireName])) {
+      if (!capture.optional) throw __velarServeRequestProblem(422, {error: "missing_parameter", parameter: capture.wireName});
+      continue;
+    }
+    const received = __velarServeCall(__velarServeMapGet, request.queryAll, [capture.wireName]);
+    if (received.length !== 1) throw __velarServeRequestProblem(422, {error: "duplicate_parameter", parameter: capture.wireName});
+    query[capture.name] = __velarServeDecodeScalar(received[0], capture);
+  }
+  __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [params]);
+  __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [query]);
+  const bound = {definition: route.pattern.definition, params, query};
+  __velarServeCall(__velarServeObjectDefineProperty, __velarServeObject, [bound, "toString", {value: () => route.pattern.definition, enumerable: false, configurable: false, writable: false}]);
+  __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [bound]);
+  const values = [bound];
   let body = undefined;
   for (let index = 0; index < route.parameters.length; index += 1) {
     const parameter = route.parameters[index];
@@ -2111,47 +2317,23 @@ async function __velarServeRouteArguments(route, match, request, maxBodyBytes, c
     if (parameter.source === "body") {
       if (body === undefined) {
         if (!__velarServeJsonContentType(request.headers)) {
-          throw new HttpError(415, {error: "unsupported_media_type", expected: "application/json"});
+          throw __velarServeRequestProblem(415, {error: "unsupported_media_type", expected: "application/json"});
         }
         try { body = await request.json(maxBodyBytes); }
         catch (error) {
-          if (error instanceof RequestBodyTooLargeError) throw new HttpError(413, {error: "request_too_large"});
-          throw new HttpError(400, {error: "invalid_json"});
+          if (error instanceof RequestBodyTooLargeError) throw __velarServeRequestProblem(413, {error: "request_too_large"});
+          throw __velarServeRequestProblem(400, {error: "invalid_json"});
         }
       }
       let valid = false;
       try { valid = parameter.check(body) === true; } catch {}
-      if (!valid) throw new HttpError(422, {error: "invalid_request", parameter: parameter.name});
+      if (!valid) throw __velarServeRequestProblem(422, {error: "invalid_request", parameter: parameter.name});
       values[values.length] = body;
       continue;
     }
-    const present = parameter.source === "path"
-      ? __velarServeOwnDescriptor(match.values, parameter.name) !== undefined
-      : __velarServeCall(__velarServeMapHas, request.queryAll, [parameter.name]);
-    if (!present) {
-      if (parameter.required) throw new HttpError(422, {error: "missing_parameter", parameter: parameter.name});
-      values[values.length] = undefined;
-      continue;
-    }
-    if (parameter.source === "query") {
-      const queryValues = __velarServeCall(__velarServeMapGet, request.queryAll, [parameter.name]);
-      if (parameter.kind === "list") {
-        const decoded = [];
-        const itemSchema = parameter.schema?.items ?? {};
-        const itemKind = itemSchema.type === "number" ? "number" : itemSchema.type === "boolean" ? "bool" : "string";
-        for (let item = 0; item < queryValues.length; item += 1) decoded[item] = __velarServeDecodeScalarValue(queryValues[item], itemKind, parameter.name);
-        __velarServeValidateDenseList(decoded, "Query List input");
-        let valid = false;
-        try { valid = parameter.check(decoded) === true; } catch {}
-        if (!valid) throw new HttpError(422, {error: "invalid_request", parameter: parameter.name});
-        values[values.length] = decoded;
-        continue;
-      }
-      if (queryValues.length !== 1) throw new HttpError(422, {error: "duplicate_parameter", parameter: parameter.name});
-      values[values.length] = __velarServeDecodeScalar(queryValues[0], parameter);
-      continue;
-    }
-    values[values.length] = __velarServeDecodeScalar(match.values[parameter.name], parameter);
+    // 路径和查询值只由 RoutePattern 绑定到第一个 path 参数。走到这里说明
+    // 编译器桥接数据损坏，不能再猜测来源并形成第二套路由协议。
+    throw new __velarServeTypeError("Route parameter has no runtime binding strategy");
   }
   return values;
 }
@@ -2179,11 +2361,94 @@ function __velarServeAutomaticResponse(value) {
   catch { return __velarServeResponse({status: 200, json: value}); }
 }
 
-function __velarServeNotFoundResponse(value) {
+function __velarServeProblemDocument(problem, request) {
+  const output = {type: problem.type, title: problem.title, status: problem.status, code: problem.code};
+  if (problem.detail !== null) output.detail = problem.detail;
+  const instance = problem.instance ?? request?.path ?? null;
+  if (instance !== null) output.instance = instance;
+  if (problem.source !== null) output.source = problem.source;
+  if (problem.parameter !== null) output.parameter = problem.parameter;
+  return output;
+}
+
+function __velarServeAccepts(request, mediaType) {
+  if (!request || !__velarServeCall(__velarServeMapHas, request.headers, ["accept"])) return true;
+  const source = __velarServeCall(__velarServeStringSplit, __velarServeCall(__velarServeStringToLowerCase, __velarServeCall(__velarServeMapGet, request.headers, ["accept"]), []), [","]);
+  const slash = __velarServeCall(__velarServeStringIndexOf, mediaType, ["/"]);
+  const family = __velarServeCall(__velarServeStringSlice, mediaType, [0, slash]);
+  for (let index = 0; index < source.length; index += 1) {
+    const parts = __velarServeCall(__velarServeStringSplit, __velarServeCall(__velarServeStringTrim, source[index], []), [";"]);
+    const accepted = __velarServeCall(__velarServeStringTrim, parts[0], []);
+    let quality = 1;
+    for (let part = 1; part < parts.length; part += 1) {
+      const option = __velarServeCall(__velarServeStringTrim, parts[part], []);
+      if (__velarServeCall(__velarServeStringStartsWith, option, ["q="])) quality = __velarServeNumber(__velarServeCall(__velarServeStringSlice, option, [2]));
+    }
+    if (!(quality > 0)) continue;
+    if (accepted === "*/*" || accepted === mediaType || accepted === family + "/*") return true;
+    if (__velarServeCall(__velarServeStringEndsWith, mediaType, ["+json"]) && accepted === "application/json") return true;
+  }
+  return false;
+}
+
+function __velarServeOutcomeHeaders(outcome) {
+  const headers = __velarServeHeaders(outcome.headers);
+  if (outcome.problem !== null) {
+    const problemHeaders = __velarServeResponseHeaders(outcome.problem.headers);
+    for (let index = 0; index < problemHeaders.length; index += 1) __velarServeCall(__velarServeMapSet, headers, [problemHeaders[index][0], problemHeaders[index][1]]);
+  }
+  return headers;
+}
+
+function __velarServeOutcomeResponse(response, outcome) {
+  if (__velarServeIsFileResponse(response)) return response;
+  if (outcome.background != null) response = __velarServeResponseCopy(response, null, outcome.background);
+  const cookies = __velarServeCall(__velarServeWeakMapGet, __velarServeResponseCookies, [outcome]);
+  if (cookies !== undefined) __velarServeCall(__velarServeWeakMapSet, __velarServeResponseCookies, [response, cookies]);
+  return response;
+}
+
+function __velarServeEncodeOutcome(value, outcome, request, problemDocument = false) {
+  const headers = __velarServeOutcomeHeaders(outcome);
+  if (outcome.status === 204 || outcome.status === 304) return __velarServeOutcomeResponse(__velarServeResponse({status: outcome.status, text: "", headers}), outcome);
+  if (problemDocument) {
+    return __velarServeOutcomeResponse(__velarServeResponse({status: outcome.status, json: value, contentType: "application/problem+json; charset=utf-8", headers}), outcome);
+  }
+  if (typeof value === "string") {
+    if (__velarServeAccepts(request, "text/plain")) return __velarServeOutcomeResponse(__velarServeResponse({status: outcome.status, text: value, contentType: "text/plain; charset=utf-8", headers}), outcome);
+  } else if (__velarServeAccepts(request, "application/json")) {
+    return __velarServeOutcomeResponse(__velarServeResponse({status: outcome.status, json: value, headers}), outcome);
+  }
+  const unacceptable = __velarServeProblem(406, "response.not_acceptable", "No acceptable response representation");
+  const rejected = __velarServeOutcome(null, 406, headers, unacceptable);
+  return __velarServeOutcomeResponse(__velarServeResponse({status: 406, json: __velarServeProblemDocument(unacceptable, request), contentType: "application/problem+json; charset=utf-8", headers: __velarServeOutcomeHeaders(rejected)}), rejected);
+}
+
+async function __velarServeFinalize(value, app, request, status = 200, problem = null, usePolicy = true) {
   if (__velarServeIsFileResponse(value)) return value;
   if (__velarServeIsResponseAttempt(value)) return __velarServeResponse(value);
-  try { return __velarServeResponse(value); }
-  catch { return __velarServeResponse({status: 404, json: value}); }
+  let outcome = __velarServeIsOutcome(value) ? value : __velarServeOutcome(value, problem?.status ?? status, null, problem);
+  if (usePolicy && app.responseHandler !== null) {
+    try {
+      const mapped = await __velarServeCall(app.responseHandler.handler, undefined, [outcome, request]);
+      if (__velarServeIsOutcome(mapped)) throw new __velarServeTypeError("@response returns Data or a final response, not another HttpOutcome");
+      if (__velarServeIsFileResponse(mapped)) return mapped;
+      if (__velarServeIsResponseAttempt(mapped)) return __velarServeOutcomeResponse(__velarServeResponse(mapped), outcome);
+      return __velarServeEncodeOutcome(mapped, outcome, request, false);
+    } catch (policyError) {
+      // 策略是一次性边界。它失败后若回到外层通用 catch，再次 finalize 会重复
+      // 调用策略并放大日志、写库等副作用，因此在这里直接降级且明确关闭策略。
+      const failure = policyError instanceof HttpProblem
+        ? policyError
+        : __velarServeProblem(500, "server.response_policy", "Response policy failed");
+      if (!(policyError instanceof HttpProblem)) __velarServeReportFailure(policyError);
+      const failed = __velarServeOutcome(null, failure.status, null, failure);
+      return __velarServeEncodeOutcome(__velarServeProblemDocument(failure, request), failed, request, true);
+    }
+  }
+  const defaultProblem = outcome.problem !== null && outcome.value === null;
+  const representation = defaultProblem ? __velarServeProblemDocument(outcome.problem, request) : outcome.value;
+  return __velarServeEncodeOutcome(representation, outcome, request, defaultProblem);
 }
 
 async function __velarServeHandleAppResponse(app, request, maxBodyBytes, context) {
@@ -2206,33 +2471,48 @@ async function __velarServeHandleAppResponse(app, request, maxBodyBytes, context
     }
     if (request.method === "OPTIONS" && __velarServeCall(__velarServeMapSize, allowed, []) > 0) {
       const methods = __velarServeAllowedMethods(allowed);
-      return await __velarServeApplyMiddleware(pathOwner.route, request, async () => ({status: 204, text: "", headers: new __velarServeMap([["allow", __velarServeCall(__velarServeArrayJoin, methods, [", "])]])}));
+      return await __velarServeApplyMiddleware(pathOwner.route, request, async () => __velarServeOutcome(null, 204, new __velarServeMap([["allow", __velarServeCall(__velarServeArrayJoin, methods, [", "])]])), value => __velarServeFinalize(value, app, request));
     }
     if (candidates.length === 0) {
       if (__velarServeCall(__velarServeMapSize, allowed, []) > 0) {
         const methods = __velarServeAllowedMethods(allowed);
-        return await __velarServeApplyMiddleware(pathOwner.route, request, async () => ({status: 405, json: {error: "method_not_allowed"}, headers: new __velarServeMap([["allow", __velarServeCall(__velarServeArrayJoin, methods, [", "])]])}));
+        const problem = __velarServeProblem(405, "route.method_not_allowed", "Method not allowed", null, "method", request.method, new __velarServeMap([["allow", __velarServeCall(__velarServeArrayJoin, methods, [", "])]]));
+        return await __velarServeApplyMiddleware(pathOwner.route, request, async () => __velarServeOutcome(null, 405, null, problem), value => __velarServeFinalize(value, app, request));
       }
       if (app.notFound !== null) {
+        const problem = __velarServeProblem(404, "route.not_found", "Route not found", null, "path", request.path);
         return await __velarServeApplyMiddleware(
           app.notFound,
           request,
-          async () => __velarServeNotFoundResponse(await __velarServeCall(app.notFound.handler, undefined, [request])),
+          async () => {
+            const value = await __velarServeCall(app.notFound.handler, undefined, [request]);
+            if (__velarServeIsFileResponse(value) || __velarServeIsResponseAttempt(value)) return value;
+            return __velarServeOutcome(value, 404, null, problem);
+          },
+          value => __velarServeFinalize(value, app, request),
         );
       }
-      return {status: 404, json: {error: "not_found"}};
+      const problem = __velarServeProblem(404, "route.not_found", "Route not found", null, "path", request.path);
+      return await __velarServeFinalize(__velarServeOutcome(null, 404, null, problem), app, request);
     }
     let selected = candidates[0];
     for (let index = 1; index < candidates.length; index += 1) if (candidates[index].match.score > selected.match.score) selected = candidates[index];
     const routeBodyBytes = selected.route.maxBodyBytes === null || selected.route.maxBodyBytes > maxBodyBytes
       ? maxBodyBytes
       : selected.route.maxBodyBytes;
-    const invokeRoute = async () => __velarServeAutomaticResponse(await __velarServeCall(selected.route.handler, undefined, await __velarServeRouteArguments(selected.route, selected.match, request, routeBodyBytes, context)));
-    return await __velarServeApplyMiddleware(selected.route, request, invokeRoute);
+    const invokeRoute = async () => await __velarServeCall(selected.route.handler, undefined, await __velarServeRouteArguments(selected.route, selected.match, request, routeBodyBytes, context));
+    return await __velarServeApplyMiddleware(selected.route, request, invokeRoute, value => __velarServeFinalize(value, app, request));
   } catch (error) {
-    if (error instanceof HttpError) return {status: error.status, json: error.body, headers: error.headers};
-    if (error instanceof RequestBodyTooLargeError) return {status: 413, json: {error: "request_too_large"}};
-    throw error;
+    const problem = error instanceof HttpProblem ? error
+      : error instanceof RequestBodyTooLargeError ? __velarServeProblem(413, "request.body_too_large", "Request body is too large")
+        : __velarServeProblem(500, "server.internal", "Internal server error");
+    if (!(error instanceof HttpProblem) && !(error instanceof RequestBodyTooLargeError)) __velarServeReportFailure(error);
+    try { return await __velarServeFinalize(__velarServeOutcome(null, problem.status, null, problem), app, request); }
+    catch (policyError) {
+      __velarServeReportFailure(policyError);
+      const internal = __velarServeProblem(500, "server.response_policy", "Response policy failed");
+      return await __velarServeFinalize(__velarServeOutcome(null, 500, null, internal), app, request, 500, internal, false);
+    }
   }
 }
 
@@ -2356,9 +2636,10 @@ async function __velarServeFinishAppAfterDrain(app, appState) {
 
 async function __velarServeHandleApp(app, request, maxBodyBytes, appState) {
   if (!__velarServeBeginAppRequest(appState, request.cancellation)) {
+    const problem = __velarServeProblem(503, "server.stopping", "Server is stopping", null, null, null, new __velarServeMap([["connection", "close"]]));
     return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{
       [__velarServeManagedResponseMarker]: true,
-      response: {status: 503, json: {error: "server_stopping"}, headers: new __velarServeMap([["connection", "close"]])},
+      response: await __velarServeFinalize(__velarServeOutcome(null, 503, null, problem), app, request),
       cleanup: async () => null,
     }]);
   }
@@ -2388,9 +2669,12 @@ async function __velarServeHandleApp(app, request, maxBodyBytes, appState) {
 }
 
 async function __velarServeHandleFunction(handler, request, appState) {
-  if (!__velarServeBeginAppRequest(appState, request.cancellation)) return {status: 503, json: {error: "server_stopping"}};
+  if (!__velarServeBeginAppRequest(appState, request.cancellation)) {
+    const problem = __velarServeProblem(503, "server.stopping", "Server is stopping");
+    return await __velarServeFinalize(__velarServeOutcome(null, 503, null, problem), {responseHandler: null}, request);
+  }
   try {
-    const response = await __velarServeCall(handler, undefined, [request]);
+    const response = await __velarServeFinalize(await __velarServeCall(handler, undefined, [request]), {responseHandler: null}, request);
     let cleaned = false;
     const cleanup = async () => { if (cleaned) return null; cleaned = true; __velarServeEndAppRequest(appState, request.cancellation); return null; };
     return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{[__velarServeManagedResponseMarker]: true, response, cleanup}]);
@@ -2437,8 +2721,8 @@ async function __velarServeNativeApp(app, maxBodyBytes = __velarServeMaxBodyByte
   }]);
 }
 
-async function __velarServeApplyMiddleware(route, request, handler) {
-  let next = handler;
+async function __velarServeApplyMiddleware(route, request, handler, finalize) {
+  let next = async () => finalize(await handler());
   for (let index = route.middleware.length - 1; index >= 0; index -= 1) {
     const downstream = next;
     const current = route.middleware[index];
@@ -2449,7 +2733,7 @@ async function __velarServeApplyMiddleware(route, request, handler) {
         called = true;
         return downstream();
       };
-      return __velarServeAutomaticResponse(await current(request, guarded));
+      return finalize(await current(request, guarded));
     };
   }
   return await next();
@@ -2481,13 +2765,21 @@ export function openapi(app, title = null, version = "1.0.0") {
     const route = app.routes[index];
     if (!route.documented) continue;
     const parameters = [];
+    for (let captureIndex = 0; captureIndex < route.pattern.pathCaptures.length; captureIndex += 1) {
+      const capture = route.pattern.pathCaptures[captureIndex];
+      parameters[parameters.length] = {name: capture.wireName, in: "path", required: true, schema: capture.schema};
+    }
+    for (let captureIndex = 0; captureIndex < route.pattern.queryCaptures.length; captureIndex += 1) {
+      const capture = route.pattern.queryCaptures[captureIndex];
+      parameters[parameters.length] = {name: capture.wireName, in: "query", required: !capture.optional, schema: capture.schema};
+    }
     let requestBody = null;
     const formProperties = __velarServeCall(__velarServeObjectCreate, __velarServeObject, [null]);
     const formRequired = [];
     let hasUpload = false;
     const operationSecurity = __velarServeCall(__velarServeObjectCreate, __velarServeObject, [null]);
     const securitySeen = new __velarServeMap();
-    let documentsValidationFailure = false;
+    let documentsValidationFailure = route.pattern.pathCaptures.length > 0 || route.pattern.queryCaptures.length > 0;
     let documentsMalformedInput = false;
     let documentsBoundedBody = false;
     let documentsMediaType = false;
@@ -2526,7 +2818,7 @@ export function openapi(app, title = null, version = "1.0.0") {
         if (parameter.input !== null) __velarServeOpenApiInputSecurity(parameter.input, securitySchemes, securityNames, operationSecurity, securitySeen);
       } else {
         const name = parameter.input?.name || parameter.name;
-        parameters[parameters.length] = {name, in: parameter.source, required: parameter.source === "path" || parameter.required, schema, ...(parameter.source === "query" && schema.type === "array" ? {style: "form", explode: true} : {})};
+        parameters[parameters.length] = {name, in: parameter.source, required: parameter.required, schema};
       }
     }
     if (__velarServeCall(__velarServeOwnKeys, __velarServeReflect, [formProperties]).length > 0) {
@@ -2543,22 +2835,28 @@ export function openapi(app, title = null, version = "1.0.0") {
       parameters,
       responses: __velarServeCall(__velarServeObjectCreate, __velarServeObject, [null]),
     };
-    const responseSchema = __velarServeSchema(route.responseSchema, "OpenAPI response schema");
+    // 全局策略的 schema 已在 createResponse 时校验，只复用同一份事实；若为每条
+    // 路由重新深拷贝，大型 API 会把同一个外壳按路由数成倍复制。
+    const responseSchema = app.responseHandler?.responseSchema
+      ?? __velarServeSchema(route.responseSchema, "OpenAPI response schema");
+    const responseContentTypes = app.responseHandler?.responseContentTypes ?? route.responseContentTypes;
     const responseContent = __velarServeCall(__velarServeObjectCreate, __velarServeObject, [null]);
-    for (let contentIndex = 0; contentIndex < route.responseContentTypes.length; contentIndex += 1) responseContent[route.responseContentTypes[contentIndex]] = {schema: responseSchema};
+    for (let contentIndex = 0; contentIndex < responseContentTypes.length; contentIndex += 1) responseContent[responseContentTypes[contentIndex]] = {schema: responseSchema};
     operation.responses[__velarServeString(route.status)] = route.status === 204 || route.status === 304
       ? {description: "Successful response"}
       : {description: "Successful response", content: responseContent};
     if (__velarServeCall(__velarServeOwnKeys, __velarServeReflect, [operationSecurity]).length > 0) {
-      operation.responses["401"] = __velarServeOpenApiFailure("Authentication required");
+      operation.responses["401"] = __velarServeOpenApiFailure("Authentication required", app.responseHandler);
     }
-    if (documentsMalformedInput) operation.responses["400"] = __velarServeOpenApiFailure("Malformed request input");
-    if (documentsBoundedBody) operation.responses["413"] = __velarServeOpenApiFailure("Request body or upload is too large");
-    if (documentsMediaType) operation.responses["415"] = __velarServeOpenApiFailure("Unsupported request content type");
-    if (documentsValidationFailure) operation.responses["422"] = __velarServeOpenApiFailure("Request validation failed");
+    if (documentsMalformedInput) operation.responses["400"] = __velarServeOpenApiFailure("Malformed request input", app.responseHandler);
+    if (documentsBoundedBody) operation.responses["413"] = __velarServeOpenApiFailure("Request body or upload is too large", app.responseHandler);
+    if (documentsMediaType) operation.responses["415"] = __velarServeOpenApiFailure("Unsupported request content type", app.responseHandler);
+    if (documentsValidationFailure) operation.responses["422"] = __velarServeOpenApiFailure("Request validation failed", app.responseHandler);
     for (let errorIndex = 0; errorIndex < route.errors.length; errorIndex += 1) {
       const error = route.errors[errorIndex];
-      operation.responses[__velarServeString(error.status)] = {description: error.description};
+      operation.responses[__velarServeString(error.status)] = app.responseHandler === null
+        ? {description: error.description}
+        : __velarServeOpenApiFailure(error.description, app.responseHandler);
     }
     if (route.summary !== null) operation.summary = route.summary;
     if (route.description !== null) operation.description = route.description;
@@ -2574,13 +2872,29 @@ export function openapi(app, title = null, version = "1.0.0") {
   return document;
 }
 
-function __velarServeOpenApiFailure(description) {
+function __velarServeOpenApiFailure(description, responseHandler = null) {
+  if (responseHandler !== null) {
+    const content = __velarServeCall(__velarServeObjectCreate, __velarServeObject, [null]);
+    for (let index = 0; index < responseHandler.responseContentTypes.length; index += 1) {
+      content[responseHandler.responseContentTypes[index]] = {schema: responseHandler.responseSchema};
+    }
+    return {description, content};
+  }
   return {
     description,
-    content: {"application/json": {schema: {
+    content: {"application/problem+json": {schema: {
       type: "object",
-      properties: {error: {type: "string"}},
-      required: ["error"],
+      properties: {
+        type: {type: "string"},
+        title: {type: "string"},
+        status: {type: "integer"},
+        code: {type: "string"},
+        detail: {type: "string"},
+        instance: {type: "string"},
+        source: {type: "string"},
+        parameter: {type: "string"},
+      },
+      required: ["type", "title", "status", "code"],
       additionalProperties: true,
     }}},
   };
@@ -2622,9 +2936,11 @@ export function docs(app, title = null, version = "1.0.0", path = "/docs", opena
   if (path === openapiPath || /[{}*<>]/u.test(path) || /[{}*<>]/u.test(openapiPath)) throw new __velarServeTypeError("docs paths must be distinct literal URL paths");
   app = __velarServeDocumentRoutes(app, routes);
   const document = openapi(app, title, version);
-  const schemaRoute = __velarCreateServeRoute("GET", openapiPath, [], async () => json(document), {documented: false});
+  const schemaPattern = __velarCreateServePattern({definition: openapiPath, pathname: openapiPath, path: [], query: []});
+  const docsPattern = __velarCreateServePattern({definition: path, pathname: path, path: [], query: []});
+  const schemaRoute = __velarCreateServeRoute("GET", schemaPattern, [], async () => json(document), {documented: false});
   const html = "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Velar API Docs</title><style>body{font:15px system-ui;margin:0;background:#0b1020;color:#e8ecf4}main{max-width:960px;margin:auto;padding:32px}article{background:#151c31;border:1px solid #2a3555;border-radius:12px;padding:16px;margin:12px 0}code{color:#8ed7ff}.method{font-weight:700;color:#9cf0b3}button{background:#5b7cff;color:white;border:0;border-radius:7px;padding:8px 12px}</style></head><body><main><h1 id=\"title\">API</h1><p>OpenAPI 3.1 · bundled offline documentation</p><section id=\"routes\"></section></main><script>fetch(" + __velarJsonStringify(openapiPath) + ").then(function(r){return r.json()}).then(function(d){document.getElementById('title').textContent=d.info.title+' '+d.info.version;var root=document.getElementById('routes');Object.keys(d.paths).forEach(function(p){Object.keys(d.paths[p]).forEach(function(m){var a=document.createElement('article');var h=document.createElement('div');h.innerHTML='<span class=\"method\">'+m.toUpperCase()+'</span> <code></code>';h.querySelector('code').textContent=p;a.appendChild(h);var b=document.createElement('button');b.textContent='Try request';b.onclick=function(){fetch(p,{method:m.toUpperCase()}).then(function(r){return r.text().then(function(t){alert(r.status+' '+t)})})};a.appendChild(b);root.appendChild(a)})})}).catch(function(e){document.getElementById('routes').textContent=String(e)});</script></body></html>";
-  const uiRoute = __velarCreateServeRoute("GET", path, [], async () => text(html, 200, "text/html; charset=utf-8"), {documented: false});
+  const uiRoute = __velarCreateServeRoute("GET", docsPattern, [], async () => text(html, 200, "text/html; charset=utf-8"), {documented: false});
   return __velarCreateServeApp(app.name, [app, schemaRoute, uiRoute]);
 }
 
@@ -2666,10 +2982,10 @@ function __velarServeDocumentRoutes(app, documentation) {
       : __velarServeCall(__velarServeMapHas, configured, [publicKey]) ? publicKey : null;
     if (key === null) { output[output.length] = route; continue; }
     __velarServeCall(__velarServeMapSet, seen, [key, true]);
-    output[output.length] = __velarCreateServeRoute(route.method, route.path, route.parameters, route.handler, __velarServeRouteMetadata(route, __velarServeCall(__velarServeMapGet, configured, [key])));
+    output[output.length] = __velarCreateServeRoute(route.method, route.pattern, route.parameters, route.handler, __velarServeRouteMetadata(route, __velarServeCall(__velarServeMapGet, configured, [key])));
   }
   if (__velarServeCall(__velarServeMapSize, seen, []) !== size) throw new __velarServeTypeError("docs routes contains a route that the application does not declare");
-  return __velarServeAppValue(app.name, output, app.lifecycles, app.notFound);
+  return __velarServeAppValue(app.name, output, app.lifecycles, app.notFound, app.responseHandler);
 }
 
 function __velarServeOpenApiPath(path) {
@@ -2796,7 +3112,7 @@ async function __velarServeWriteResponse(handle, value) {
     if (__velarServeOwnDescriptor(response, "json")) {
       const body = __velarServeCall(__velarServeWeakMapGet, __velarServeSerializedJson, [response]);
       if (__velarUtf8ByteLength(body) > __velarServeMaxBodyBytes) throw new __velarServeRangeError("ServeResponse.json cannot exceed 16 MiB");
-      await __velarServeWithOutbound(metadataBytes + __velarUtf8ByteLength(body), () => __velarNodeHostInvoke("serve.respond", [handle, response.status, headers, "json", body, null, response.compression ?? null, cookies]));
+      await __velarServeWithOutbound(metadataBytes + __velarUtf8ByteLength(body), () => __velarNodeHostInvoke("serve.respond", [handle, response.status, headers, "json", body, response.contentType ?? null, response.compression ?? null, cookies]));
       return null;
     }
     if (__velarServeOwnDescriptor(response, "text")) {
@@ -3040,7 +3356,7 @@ async function __velarServeHandleNative(handler, request, response, operations, 
     if (__velarServeIsFileResponse(value)) { __velarServeNativeSetHeaders(response, __velarServeResponseHeaders(value.headers)); await __velarServeNativeSendFile(request, response, value, operations); return null; }
     const checked = __velarServeResponse(value); backgroundTasks = checked.background ?? null; response.statusCode = checked.status; __velarServeNativeSetHeaders(response, __velarServeResponseHeaders(checked.headers), __velarServeCookies(checked));
     const suppressBody = request.method === "HEAD" || checked.status >= 100 && checked.status < 200 || checked.status === 204 || checked.status === 304;
-    if (__velarServeOwnDescriptor(checked, "json")) { if (request.method === "HEAD" || !suppressBody) response.setHeader("content-type", "application/json; charset=utf-8"); await __velarServeNativeBody(response, __velarServeCall(__velarServeWeakMapGet, __velarServeSerializedJson, [checked]), checked, suppressBody, operations); return null; }
+    if (__velarServeOwnDescriptor(checked, "json")) { if (request.method === "HEAD" || !suppressBody) response.setHeader("content-type", checked.contentType ?? "application/json; charset=utf-8"); await __velarServeNativeBody(response, __velarServeCall(__velarServeWeakMapGet, __velarServeSerializedJson, [checked]), checked, suppressBody, operations); return null; }
     if (__velarServeOwnDescriptor(checked, "text")) { if (request.method === "HEAD" || !suppressBody) response.setHeader("content-type", checked.contentType ?? "text/plain; charset=utf-8"); await __velarServeNativeBody(response, checked.text, checked, suppressBody, operations); return null; }
     let writing = false;
     const write = async chunk => { if (writing) throw new __velarServeError("ServeResponse allows only one active stream write"); writing = true; try { if (typeof chunk !== "string" || __velarUtf8ByteLength(chunk) > 1024 * 1024) throw new __velarServeTypeError("ServeResponse.stream chunks must be text of at most 1 MiB"); if (!suppressBody) await __velarServeWithOutbound(__velarUtf8ByteLength(chunk), () => __velarServeNativeWrite(response, chunk)); return null; } finally { writing = false; } };

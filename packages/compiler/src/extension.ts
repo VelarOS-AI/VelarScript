@@ -345,8 +345,11 @@ export interface CompilerInspectionExtension {
    * contributeInterface, this hook also reaches exports the core interface
    * builder owns (functions, consts), so an extension can attach metadata —
    * such as purity markers — without taking over their typing.
+   *
+   * context 与普通接口贡献使用同一套类型解析事实。扩展导出的跨模块数据若含
+   * 源码类型，必须在声明模块解析一次并携带结果，不能让消费模块按同名重猜。
    */
-  readonly exportAnnotations?: (program: Program) => ReadonlyMap<string, unknown>;
+  readonly exportAnnotations?: (program: Program, context: CompilerInterfaceContext) => ReadonlyMap<string, unknown>;
   readonly interfaceExportIdentity?: (name: string, value: unknown) => string;
   readonly inferPublicExpression?: (expression: Expression) => ValueType | undefined;
   readonly resources?: (program: Program) => readonly CompilerResourceDependency[];

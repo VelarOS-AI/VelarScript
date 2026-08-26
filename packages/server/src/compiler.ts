@@ -18,7 +18,7 @@ import {
 import { inferServerIntrinsic } from "./analyzer.ts";
 import { VELAR_SERVER_RUNTIME } from "./runtime.ts";
 
-export const VELAR_SERVER_API_VERSION = "0.11";
+export const VELAR_SERVER_API_VERSION = "0.12";
 
 const unknownType: ValueType = {kind: "unknown"};
 const stringType: ValueType = {kind: "string"};

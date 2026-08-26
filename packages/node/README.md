@@ -32,9 +32,12 @@ type CreateArticle:
     title: string
 
 export server app:
-    @get(p"/health") => {ok: true}
-    @get(p"/articles/{id:string}") => {id}
-    @post(p"/articles", input: CreateArticle) => created(input)
+    @get(path=p"/health") => {ok: true}
+    @get(path=p"/articles/{id:string}?{details:bool?}") => {
+        id: path.params.id,
+        details: path.query.details ?? false,
+    }
+    @post(path=p"/articles", input: CreateArticle) => created(input)
 ```
 
 ```json
@@ -82,8 +85,10 @@ The CLI supplies no host, port, or body-limit arguments. Server applications
 read those values once through `@velarscript/server` conventions.
 
 `p"..."` is scanned and checked only by this extension; Core does not acquire a
-general `p` string prefix. Captures use `{name:type}` with a half-width `:` and
-declare the route-scope name once. The five route verbs are context annotations
+general `p` string prefix. Captures use `{name:type}` with a half-width `:`;
+handlers read them through typed `path.params` and `path.query` objects.
+`wire={field:type}` maps distinct query names; a redundant same-name mapping is
+accepted with advisory `A11` and a mechanical shorthand fix. The five route verbs are context annotations
 with compiler-owned route roles rather than decorators. The compiler lowers each `server` to an
 immutable `ServeApp`; `velar/serve` owns runtime matching, checked input
 decoding, automatic JSON, composition, static files, middleware, errors, and
@@ -98,8 +103,8 @@ responses are documented automatically. Unexpected handler or middleware failure
 reported on stderr while the client receives only an opaque 500 response.
 
 The framework covers the ordinary service surface without adding controller or
-decorator vocabulary. Route defaults may be explicit `input.query`,
-`input.header`, `input.cookie`, `input.form`, `input.upload`, or
+decorator vocabulary. Query inputs belong to the `RoutePattern`; other route
+defaults may be explicit `input.header`, `input.cookie`, `input.form`, `input.upload`, or
 `input.dependency` values; `security` supplies API-key, Basic, Bearer, OAuth2,
 and OpenID descriptors. `provide` owns request- and application-scoped values,
 deduplicates them, detects cycles, and runs release callbacks at the end of the
@@ -111,8 +116,9 @@ challenge; they do not validate token signatures, sessions, passwords, or
 identities. The separate Server extension supplies the provider-neutral
 `authenticate` composition helper, while concrete verification remains an
 installed library or application dependency.
-Repeated scalar query or form fields fail with 422, while checked
-`List<scalar>` inputs preserve all repeated values. Request paths and queries
+Repeated scalar `RoutePattern` query fields fail with 422. Applications that
+intentionally model repeated query values read `Request.queryAll` explicitly;
+checked `List<scalar>` form fields preserve all repeated values. Request paths and queries
 are decoded exactly once with invalid UTF-8, encoded separators, NULs, and dot
 segments rejected before routing. Multiple cookies stay separate on the wire.
 `velar/websocket.listen({http: app, ...})` composes the ServeApp lifecycle on

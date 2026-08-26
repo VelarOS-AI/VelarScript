@@ -1,8 +1,10 @@
 import {
-    HttpError,
+    HttpProblem,
+    HttpOutcome,
     Request,
     Provider,
     RouteDocumentation,
+    RoutePattern,
     ServeApp,
     ServeResponse,
     Upload,
@@ -21,6 +23,7 @@ import {
     prefix,
     provide,
     redirect,
+    respond,
     security,
     setCookie,
     sse,
@@ -49,6 +52,7 @@ const currentUser = authenticate(security.bearer(), verifyTourToken)
 const requestContext = provide(inputs={}, resolve=async _values => {name: "tour"})
 const providerContract = Provider.is(currentUser)
 const healthDigest = sha256Text("openvoxel-catalog")
+const articlePath: RoutePattern = p"/articles/{id:number}?{details:bool?}"
 
 async def chunks(write: (chunk: string) -> Promise<null>):
     await write("first")
@@ -65,39 +69,51 @@ async def passThrough(request: Request, next: () -> Promise<ServeResponse>):
     return await next()
 
 server routes:
-    @get(p"/health") => json({ok: true, digest: healthDigest}, headers=Map([["cache-control", "no-store"]]))
+    @get(path=p"/health") => respond({ok: true, digest: healthDigest}, headers=Map([["cache-control", "no-store"]]))
 
-    @get(p"/articles/{id:number}", details: bool = false):
+    @get(path=articlePath):
+        const id = path.params.id
         if id < 1:
-            throw HttpError(404, {error: "article_not_found"})
-        return {id, details}
+            throw HttpProblem({status: 404, code: "article.not_found", title: "Article not found"})
+        return {id, details: path.query.details ?? false}
 
-    @get(p"/tags", tag: List<string>) => {tag}
-    @post(p"/articles", input: CreateArticle) => created(input)
-    @put(p"/articles/{id:number}", input: CreateArticle) => {id, title: input.title}
-    @patch(p"/articles/{id:number}", input: CreateArticle) => {id, title: input.title}
-    @delete(p"/articles/{id:number}") => noContent()
-    @get(p"/previous") => redirect("/articles/1")
-    @get(p"/plain") => text("plain response")
-    @get(p"/events") => stream(chunks)
-    @get(p"/sse") => sse(events)
-    @get(p"/me",
+    @get(path=p"/tags?{tag:string?}") => {tag: path.query.tag}
+    @post(path=p"/articles", input: CreateArticle) => created(input)
+    @put(path=p"/articles/{id:number}", input: CreateArticle) => {id: path.params.id, title: input.title}
+    @patch(path=p"/articles/{id:number}", input: CreateArticle) => {id: path.params.id, title: input.title}
+    @delete(path=p"/articles/{id:number}") => noContent()
+    @get(path=p"/previous") => redirect("/articles/1")
+    @get(path=p"/plain") => text("plain response")
+    @get(path=p"/events") => stream(chunks)
+    @get(path=p"/sse") => sse(events)
+    @get(path=p"/me",
         user = input.dependency(currentUser),
         session = input.cookie("session", default=null),
     ) => {id: user.id, session}
-    @get(p"/provider", context=input.dependency(requestContext)) => context
-    @post(p"/upload",
+    @get(path=p"/provider", context=input.dependency(requestContext)) => context
+    @post(path=p"/upload",
         metadata = input.form(UploadMetadata),
         image = input.upload("image", maxBytes=1_048_576),
     ) => {title: metadata.title, filename: uploadName(image)}
-    @get(p"/session") => setCookie(background(json({ok: true}), afterResponse), "session", "tour")
-    @delete(p"/session") => clearCookie(json({ok: true}), "session")
-    @get(p"/asset") => file("/index.html", root="public")
+    @get(path=p"/session") => setCookie(background(json({ok: true}), afterResponse), "session", "tour")
+    @delete(path=p"/session") => clearCookie(json({ok: true}), "session")
+    @get(path=p"/asset") => file("/index.html", root="public")
 
 server composed:
     ...prefix("/api", routes)
     ...staticFiles("/assets", root="public")
     @notFound(request: Request) => {error: "route_not_found", path: request.path}
+    @response(outcome: HttpOutcome):
+        // @response 中的 json 是最终响应，不会再被框架改写。这里显式沿用语义
+        // 结果的状态和响应头，认证失败的 401、WWW-Authenticate 等信息才不会
+        // 被统一外壳意外改成普通的 200 JSON。
+        if outcome.problem != null:
+            return json(
+                {ok: false, error: outcome.problem.code},
+                status = outcome.status,
+                headers = outcome.problem.headers,
+            )
+        return json({ok: true, data: outcome.value}, status=outcome.status, headers=outcome.headers)
 
 const guarded = use(bodyLimit(composed, 1_048_576), [
     passThrough,

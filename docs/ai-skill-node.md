@@ -68,8 +68,8 @@ second runtime configuration source.
 
 `@` remains the language-wide annotation introducer, and `@name` is a context
 annotation with a compiler-owned compile-time role. In a `server` block, the
-available annotations are `@get`, `@post`, `@put`, `@patch`, `@delete`, and
-`@notFound`. They are not decorators, functions, imports, user-defined
+available annotations are `@get`, `@post`, `@put`, `@patch`, `@delete`,
+`@notFound`, and `@response`. They are not decorators, functions, imports, user-defined
 annotations, first-class values, or user extension points.
 
 ## Routes and checked inputs
@@ -77,35 +77,42 @@ annotations, first-class values, or user extension points.
 A server is an immutable anonymous route table:
 
 ```velar
-import {HttpError, created} from "velar/serve"
+import {HttpProblem, created} from "velar/serve"
 
 type CreateArticle:
     title: string
 
 export server articles:
     /// Reports whether this service is ready.
-    @get(p"/health") => {ok: true}
+    @get(path=p"/health") => {ok: true}
 
-    @get(p"/articles/{id:number}", details: bool = false):
+    @get(path=p"/articles/{id:number}?{details:bool?}"):
+        const id = path.params.id
         if id < 1:
-            throw HttpError(404, {error: "article_not_found"})
-        return {id, details}
+            throw HttpProblem({status: 404, code: "article.not_found", title: "Article not found"})
+        return {id, details: path.query.details ?? false}
 
-    @post(p"/articles", input: CreateArticle):
+    @post(path=p"/articles", input: CreateArticle):
         return created({id: 1, title: input.title})
 
 ```
 
-The path is written once. A capture such as `{id:number}` declares `id`
-directly in the route body, so never repeat it in the argument list. Captures
-require an ASCII half-width `:` and accept `string`, `number`, `bool`, or
-a named enum. The Node-only `p"..."` prefix marks a compile-time reverse
-matcher; an ordinary string is not accepted, and Core does not recognize this
-prefix.
+`p"..."` is a first-class `RoutePattern`. A route receives one compiler-owned
+`path` value: `path.params` contains typed path captures, `path.query` contains
+typed query fields, `path.definition` and `str(path)` return the complete
+declaration. Query shorthand `?{details:bool?}` uses the field name on the
+wire; `?details={details:bool?}` spells it explicitly, and
+`?include-details={details:bool?}` maps a different wire name. The trailing
+`?` makes a query field optional; without it the framework rejects a missing
+value before the handler runs. Path fields are always required. Captures use
+an ASCII half-width `:` and accept `string`, `number`, `bool`, or a named enum.
+The explicit same-name form remains valid but reports advisory `A11`; its
+mechanical fix removes the redundant `details=` prefix. Different-name aliases
+do not report it.
+Route catalogs may keep patterns in exported `const` objects and routes may
+refer to those members directly.
 
-Unadorned scalar and `List<scalar>` parameters are query inputs. A default makes
-the input optional. Repeated query values populate a List; a repeated scalar is
-a 422 error. On `POST`, `PUT`, or `PATCH`, one concrete Data parameter is the
+On `POST`, `PUT`, or `PATCH`, one concrete Data parameter is the
 checked JSON body. A `Request` parameter explicitly requests the complete
 request, including `queryAll` and cooperative `cancellation`. Ambiguous bodies,
 duplicate declarations, conflicting path shapes, and unsupported path types are
@@ -115,13 +122,50 @@ compile errors.
 route. It may omit its parameter or accept one explicitly typed `Request`.
 Returning Data keeps status 404; return an explicit response such as
 `json(value, status=410)` to choose another final status. A matched route's
-`HttpError` and framework 405 responses do not enter this fallback. Declare at
+`HttpProblem` and framework 405 responses do not enter this fallback. Declare at
 most one on the final application; an app that owns `@notFound` cannot be moved
 under a non-root `prefix`, because a global fallback has no unambiguous prefix
 scope. Compose prefixed route tables first, then declare the fallback on the
 outer `server`. A catch-all route such as `staticFiles("/", ...)` is a matched
 route and therefore owns its own file fallback instead of entering
 `@notFound`.
+
+Routes return semantic values by default. Plain Data becomes a negotiated 200
+response; `created(value)`, `respond(value, status)`, and `noContent()` choose
+status without choosing a wire encoder. `HttpProblem({...})` is the checked
+failure contract. The framework renders unhandled problems as
+`application/problem+json` with `type`, `title`, `status`, and stable `code`
+fields, and performs `Accept` negotiation before writing a response.
+
+The final application may declare one response policy when it needs a shared
+envelope or representation:
+
+```velar
+import {HttpOutcome, Request, json} from "velar/serve"
+
+server api:
+    @response(outcome: HttpOutcome, request: Request):
+        if outcome.problem != null:
+            return json(
+                {ok: false, error: outcome.problem.code, requestPath: request.path},
+                status=outcome.status,
+                headers=outcome.problem.headers,
+            )
+        return json(
+            {ok: true, data: outcome.value},
+            status=outcome.status,
+            headers=outcome.headers,
+        )
+```
+
+The policy receives every semantic result, including framework validation,
+404, and 405 outcomes. It returns Data or one explicit final response and runs
+exactly once. `json`, `text`, `redirect`, `file`, `stream`, and `sse` remain
+escape hatches that already choose their final representation and status. When
+a policy uses one of them only to select an encoder, it must pass through
+`outcome.status` and the applicable semantic headers as shown above. A response
+policy is global and therefore cannot be placed under `prefix`; compose it on
+the final application.
 
 Use ordinary values for the cases that need more than inference:
 
@@ -140,20 +184,21 @@ const currentUser = provide(
 )
 
 server account:
-    @get(p"/me",
+    @get(path=p"/me",
         user=input.dependency(currentUser),
         tenant=input.header("x-tenant"),
         session=input.cookie("session", default=null),
     ) => {id: user.id, tenant, session}
 
-    @post(p"/images",
+    @post(path=p"/images",
         metadata=input.form(UploadMetadata),
         image=input.upload("image", maxBytes=8_388_608),
     ) => {title: metadata.title, filename: image.filename}
 ```
 
-`input.query`, `input.header`, and `input.cookie` select named scalar
-values. `input.form(Type)` checks URL-encoded or multipart fields, including
+`input.header` and `input.cookie` select named scalar values. Query values live
+in the `p"...?"` contract; `Request.query/queryAll` remain the raw escape hatch.
+`input.form(Type)` checks URL-encoded or multipart fields, including
 repeated fields for `List<scalar>` properties; duplicate scalar fields fail.
 `input.upload` returns an `Upload` whose bytes are valid only for the request
 lifetime; copy or persist them before retaining data. `security.apiKey`,
@@ -247,11 +292,13 @@ is data, not another `@` category.
 
 ## Responses and realtime
 
-Ordinary Data returns JSON. Use the explicit helpers only when transport
-semantics matter: `json`, `created`, `noContent`, `redirect`, `text`,
+Ordinary Data returns through content negotiation. Use `respond`, `created`,
+and `noContent` to select semantic status; use the explicit transport helpers
+when representation matters: `json`, `redirect`, `text`,
 `file`, `stream`, `sse`, `background`, `setCookie`, and
-`clearCookie`. `HttpError(status, body, headers=null)` is the expected HTTP
-failure. Unexpected failures are reported on stderr and become an opaque 500.
+`clearCookie`. `HttpProblem(options)` is the expected HTTP failure. The default
+problem representation follows `application/problem+json`. Unexpected failures
+are reported on stderr and become an opaque 500.
 
 `HEAD` reuses `GET` without a body. `OPTIONS` and 405 responses publish a
 complete `Allow` header. Final response statuses are 200 through 599; 204 and
@@ -356,7 +403,7 @@ response the code can hold already succeeded. Wrap the call in `try:` /
 there.
 
 Wire-shaped values arrive as `unknown`, not as a checked shape. An
-`HttpError`’s `body`, the payload of a response whose declared type is
+`HttpOutcome`’s `value`, the payload of a response whose declared type is
 `ServeResponse`, the path items of an `openapi(...)` document, the error handed
 to a `middleware.errors` handler, and a test response’s parsed body are all
 `unknown`: validate one with `Type.parse`, or narrow it, before touching a

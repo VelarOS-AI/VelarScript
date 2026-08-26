@@ -3,7 +3,7 @@ import type {
   SemanticExtensionContext,
   Statement,
 } from "@velarscript/compiler/extension";
-import { isNodeServerStatement } from "./server-ast.ts";
+import { isNodeServerStatement, type NodePathPatternExpression } from "./server-ast.ts";
 
 export const velarNodeSemanticExtension: CompilerSemanticExtension = Object.freeze({
   predeclare(statement: Statement, context: SemanticExtensionContext) {
@@ -29,25 +29,28 @@ export const velarNodeSemanticExtension: CompilerSemanticExtension = Object.free
         context.visitExpression(item.value);
         continue;
       }
-      const role = item.kind === "NodeNotFoundDeclaration" ? "notFound" : item.method.toLowerCase();
+      const role = item.kind === "NodeNotFoundDeclaration" ? "notFound"
+        : item.kind === "NodeResponseDeclaration" ? "response" : item.method.toLowerCase();
       const roleSpan = { start: item.signatureSpan.start, end: item.signatureSpan.start + role.length + 1 };
       context.syntaxToken(roleSpan, "decorator");
       context.documentSyntax(roleSpan, `@${role}`);
       if (item.kind === "NodeRouteDeclaration" && context.source[item.pathSpan.start] === "p") {
         context.documentSyntax({ start: item.pathSpan.start, end: item.pathSpan.start + 1 }, "p");
       }
+      if (item.kind === "NodeRouteDeclaration" && item.pathExpression.kind === "ExtensionExpression:node:path-pattern") {
+        // 捕获已经不再伪装成处理函数参数，但编辑器仍应把协议里的字段和类型
+        // 标成 parameter/type，阅读路由目录时才能直接看懂它的输入契约。
+        const pattern = (item.pathExpression as NodePathPatternExpression).pattern;
+        for (const capture of pattern.path.concat(pattern.query)) {
+          context.syntaxToken({start: capture.span.start + 1, end: capture.span.start + 1 + capture.name.length}, "parameter");
+          context.syntaxToken(capture.typeSpan, "type");
+        }
+      }
       context.enterScope(item.span);
       for (const parameter of item.parameters) {
         if (parameter.defaultValue) context.visitExpression(parameter.defaultValue);
         context.typeReferences(parameter.type);
         const nameSpan = { start: parameter.span.start, end: parameter.span.start + parameter.name.length };
-        const pathCapture = item.kind === "NodeRouteDeclaration"
-          && parameter.span.start >= item.pathSpan.start
-          && parameter.span.end <= item.pathSpan.end;
-        if (pathCapture) {
-          context.syntaxToken(nameSpan, "parameter");
-          if (parameter.type) context.syntaxToken(parameter.type.span, "type");
-        }
         context.declare(
           parameter,
           parameter.name,

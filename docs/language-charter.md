@@ -219,6 +219,8 @@ JavaScript `${...}` in a string, without and under the `f` prefix (section 3).
 `A7` reports a proven manual collection conversion and `A8` a proven manual
 existential List query (section 8). `A9` reports a proven manual exact record
 projection and `A10` a proven large same-field mapped projection (section 6).
+`A11` reports a redundant same-name query mapping in a Node `RoutePattern` and
+mechanically removes its repeated `name=` prefix.
 
 An advisory that is right about the line is answered by writing the unambiguous
 spelling it names. An advisory that is wrong about *this* line is answered in
@@ -434,22 +436,25 @@ item is the Node-owned path-pattern literal `p"..."`:
 
 ```velar
 export server articles:
-    @get(p"/articles/{id:string}", details: bool = false):
-        return {id, details}
+    @get(path=p"/articles/{id:string}?{details:bool?}"):
+        return {id: path.params.id, details: path.query.details ?? false}
 
     @notFound() => {error: "not_found"}
 ```
 
 `p"..."` is not a fifth Core string prefix. Core owns ordinary, raw, and
 interpolated strings; only an active `@velarscript/node` lexical extension
-recognizes a path pattern, and only a Node route accepts one. The extension
-checks the entire literal at compile time. It must be a normalized absolute
-path; a capture occupies one complete segment and has the exact
-`{name:type}` form with a half-width `:`. A capture type is `string`, `number`,
-`bool`, or a named enum type. The capture declares that typed name directly in
-the route body, so it is never repeated in the remaining parameter list.
-Scalar remaining parameters are query inputs; their defaults make them
-optional. A single concrete Data record on `POST`, `PUT`, or `PATCH` is the
+recognizes the first-class `RoutePattern` value. The extension checks the
+entire literal at compile time. It must be a normalized absolute path; a path
+capture occupies one complete segment and has the exact `{name:type}` form
+with a half-width `:`. Query fields follow the same contract after `?`; a type
+suffix `?` makes that field optional, and an explicit `wire-name={name:type}`
+may map a different URL name. An explicit same-name mapping remains valid but
+advisory `A11` rewrites it to `{name:type}`. A capture type is `string`, `number`, `bool`, or
+a named enum type. Each route receives a `path` value whose typed
+`path.params` and `path.query` objects own those inputs; `path.definition` and
+`str(path)` expose the complete declaration. A single concrete Data record on
+`POST`, `PUT`, or `PATCH` is the
 checked JSON body, and `Request` is the explicit low-level request input.
 Route bodies are async-capable without an `async` modifier and use either
 `=> expression` or the ordinary indented `:` block. A plain string in the path
@@ -2996,10 +3001,9 @@ reserved Core bindings, need no import, and cannot be extended. Every other
 capability failure stays an ordinary `Error`, because a caller writes the same
 recovery for all of them: none. `velar/http` keeps its own imported
 `HttpResponseError`, `HttpAbortError`, and `HttpTransportError`, whose fields
-(`status`, `reason`, `phase`) a caller branches on directly. The name is
-`HttpResponseError` rather than `HttpError` because `velar/serve` owns an
-`HttpError` of its own — the failure a route throws — and a proxy route holds
-both.
+(`status`, `reason`, `phase`) a caller branches on directly.
+`HttpResponseError` represents a non-successful outbound HTTP client response;
+server routes use the separate `HttpProblem` semantic failure contract.
 
 The `try` body and `catch` body are separate execution paths. A mutation in a
 catch that returns cannot erase a fact used only by the normal try continuation,

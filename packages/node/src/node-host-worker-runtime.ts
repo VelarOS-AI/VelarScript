@@ -1393,7 +1393,7 @@ async function dispatch(operation, args) {
       task.response.statusCode = status;
       setHeaders(task.response, headers, cookies);
       if (!task.response.hasHeader("Content-Type") && (task.request.method === "HEAD" || !suppressBody)) {
-        task.response.setHeader("Content-Type", kind === "json" ? "application/json; charset=utf-8" : contentType ?? "text/plain; charset=utf-8");
+        task.response.setHeader("Content-Type", contentType ?? (kind === "json" ? "application/json; charset=utf-8" : "text/plain; charset=utf-8"));
       }
       if (compression !== null) {
         task.response.setHeader("Content-Encoding", compression);

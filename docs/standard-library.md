@@ -892,20 +892,21 @@ The Node extension's native serving capability declares an immutable route table
 instead of a controller class or a group of decorated functions:
 
 ```velar
-import {HttpError, Request, created} from "velar/serve"
+import {HttpProblem, Request, created} from "velar/serve"
 
 type CreateArticle:
     title: string
 
 export server app:
-    @get(p"/health") => {ok: true}
+    @get(path=p"/health") => {ok: true}
 
-    @get(p"/articles/{id:number}", details: bool = false):
+    @get(path=p"/articles/{id:number}?{details:bool?}"):
+        const id = path.params.id
         if id < 1:
-            throw HttpError(404, {error: "article_not_found"})
-        return {id, details}
+            throw HttpProblem({status: 404, code: "article.not_found", title: "Article not found"})
+        return {id, details: path.query.details ?? false}
 
-    @post(p"/articles", input: CreateArticle) => created({id: 1, title: input.title})
+    @post(path=p"/articles", input: CreateArticle) => created({id: 1, title: input.title})
 
     @notFound(request: Request) => {error: "route_not_found", path: request.path}
 
@@ -914,33 +915,45 @@ export server app:
 `server name:` and the Node-only `p"..."` path pattern are enabled by
 `@velarscript/node`. `@get`, `@post`, `@put`, `@patch`, and `@delete` are the
 route roles; `@notFound` is the one unmatched-path fallback on the final
-application. They are anonymous compiler declarations, not decorators or
-runtime functions. A `{name:type}` path capture declares the checked name in
-the route body; the type is `string`, `number`, `bool`, or a named enum. A
-remaining scalar or `List<scalar>` parameter is read from the query string, and
-a default makes it optional. Repeated values fill a List; repeating a scalar is
-a 422 error instead of silently choosing one value. One concrete Data record on
+application; `@response` is its one semantic-result policy. They are anonymous
+compiler declarations, not decorators or runtime functions. A `{name:type}`
+path capture appears in `path.params`; query fields after `?` appear in
+`path.query`. A query type ending in `?` is optional, while every other field
+is required and rejected before the handler when absent. The type is `string`,
+`number`, `bool`, or a named enum. `path.definition` and `str(path)` return the
+complete route declaration. `?wire={field:type}` maps distinct names; writing
+`?field={field:type}` is accepted but advisory `A11` offers the mechanical
+`?{field:type}` shorthand. One concrete Data record on
 `POST`, `PUT`, or `PATCH` is the JSON body. `Request` asks for the complete
 low-level request explicitly. Route bodies may `await` directly and use either
 `=> expression` or an indented block.
 
 `@notFound` accepts zero parameters or one explicitly typed `Request`.
 Ordinary Data becomes a 404 JSON response; an explicit `ServeResponse` keeps
-its selected status. A matched route's `HttpError` and framework 405 response
+its selected status. A matched route's `HttpProblem` and framework 405 response
 remain outside this fallback. It participates in application middleware and
 lifecycle handling, but cannot be carried through a non-root `prefix`; declare
 it after composing prefixed route tables. A catch-all route such as
 `staticFiles("/", ...)` is already a matched route and retains ownership of its
 own file fallback.
 
-Returning ordinary Data produces a JSON response. `json(value, status=200,
-headers=null)`, `created(value, headers=null)`, `noContent(completion=null,
-headers=null)`, `redirect(location, status=302, headers=null)`, `text(value,
+Returning ordinary Data produces a negotiated semantic response.
+`respond(value, status=200, headers=null)`, `created(value, headers=null)`, and
+`noContent(completion=null, headers=null)` select semantic status.
+`json(value, status=200, headers=null)`, `redirect(location, status=302,
+headers=null)`, `text(value,
 status=200, contentType="text/plain; charset=utf-8", headers=null)`,
 `stream(producer, status=200, headers=null)`, and `file(path, root=".",
 fallback=null)` express the response cases whose status or transport should be
-visible. `HttpError(status, body, headers=null)` exits a route with a checked
-4xx/5xx JSON response. `prefix(path, app)` and server-body `...app` entries
+visible. `HttpProblem(options)` exits a route with a checked 4xx/5xx problem;
+the default encoder uses `application/problem+json`. One application-wide
+`@response(outcome: HttpOutcome, request: Request)` policy may map every
+semantic success and failure to shared Data or one final response. A final
+response owns its status and headers; a policy that uses `json` or `text` only
+to select an encoder therefore passes through `outcome.status` and either
+`outcome.headers` or, for a problem, `outcome.problem.headers`. The policy is
+global and cannot be scoped with `prefix`; compose it on the final application.
+`prefix(path, app)` and server-body `...app` entries
 compose route tables, and a composed table is refereed before it can answer
 anything. The compiler judges whatever the composition resolves to inside one
 module — a spread naming a server declared there, an alias of one, and `prefix`
@@ -980,7 +993,7 @@ directory with the same root configuration. Direct `serve(...)` is the
 lower-level operation for tests, embedded servers, and handler adapters.
 
 Explicit route defaults cover the inputs that cannot be inferred:
-`input.query`, `input.header`, `input.cookie`, `input.form`, `input.upload`, and
+`input.header`, `input.cookie`, `input.form`, `input.upload`, and
 `input.dependency`. Security descriptors include API key, Basic, Bearer,
 OAuth2, and OpenID. `provide` resolves request- or application-scoped
 dependencies once, detects cycles, optionally initializes app providers

@@ -11,8 +11,8 @@ test("the Node extension publishes its contextual server syntax as semantic toke
   const path = join(tmpdir(), `velar-server-semantic-tokens-${process.pid}.vel`);
   const source = `
 export server routes:
-    @get(p"/articles/{id:string}") => {id}
-    @post(p"/articles") => {ok: true}
+    @get(path=p"/articles/{id:string}") => {id: path.params.id}
+    @post(path=p"/articles") => {ok: true}
     @notFound() => {error: "missing"}
 `.trimStart();
   const project = await compileProject(path, new Map([[path, source]]), {

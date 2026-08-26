@@ -34,11 +34,11 @@ test("prefix with a literal path enters the static overlap check at the translat
 import {prefix, json} from "velar/serve"
 
 server routes:
-    @get(p"/health") => json({ok: true})
+    @get(path=p"/health") => json({ok: true})
 
 server app:
     ...prefix("/api", routes)
-    @get(p"/api/health") => json({ok: false})
+    @get(path=p"/api/health") => json({ok: false})
 `);
   assert.equal(diagnostics.length, 1);
   assert.match(diagnostics[0]!, /GET \/api\/health.*composed in from 'routes'/u);
@@ -59,11 +59,11 @@ async def mw(request: Request, next: () -> Promise<ServeResponse>) -> ServeRespo
     return await next()
 
 server routes:
-    @get(p"/health") => json({ok: true})
+    @get(path=p"/health") => json({ok: true})
 
 server app:
     ...${wrapper}
-    @get(p"/health") => json({ok: false})
+    @get(path=p"/health") => json({ok: false})
 `);
     assert.equal(diagnostics.length, 1, wrapper);
     assert.match(diagnostics[0]!, /GET \/health.*composed in from 'routes'/u, wrapper);
@@ -78,14 +78,14 @@ async def mw(request: Request, next: () -> Promise<ServeResponse>) -> ServeRespo
     return await next()
 
 server inner:
-    @get(p"/health") => json({ok: true})
+    @get(path=p"/health") => json({ok: true})
 
 server mid:
     ...prefix("/v1", inner)
 
 server app:
     ...use(prefix("/api", mid), [mw])
-    @get(p"/api/v1/health") => json({ok: false})
+    @get(path=p"/api/v1/health") => json({ok: false})
 `);
   assert.equal(diagnostics.length, 1);
   assert.match(diagnostics[0]!, /GET \/api\/v1\/health.*composed in from 'mid' → 'inner'/u);
@@ -99,13 +99,13 @@ test("an alias of a combinator call resolves exactly as the spelled-out spread",
 import {prefix, json} from "velar/serve"
 
 server routes:
-    @get(p"/health") => json({ok: true})
+    @get(path=p"/health") => json({ok: true})
 
 const scoped = prefix("/api", routes)
 
 server app:
     ...scoped
-    @get(p"/api/health") => json({ok: false})
+    @get(path=p"/api/health") => json({ok: false})
 `);
   assert.equal(diagnostics.length, 1);
   assert.match(diagnostics[0]!, /GET \/api\/health.*composed in from 'routes'/u);
@@ -120,11 +120,11 @@ import {prefix, json} from "velar/serve"
 const scope = "/api"
 
 server routes:
-    @get(p"/health") => json({ok: true})
+    @get(path=p"/health") => json({ok: true})
 
 server app:
     ...prefix(scope, routes)
-    @get(p"/api/health") => json({ok: false})
+    @get(path=p"/api/health") => json({ok: false})
 `);
   assert.deepEqual(diagnostics, []);
 });
@@ -140,11 +140,11 @@ def prefix(path: string, app: ServeApp) -> ServeApp:
     return app
 
 server routes:
-    @get(p"/health") => json({ok: true})
+    @get(path=p"/health") => json({ok: true})
 
 server app:
     ...prefix("/api", routes)
-    @get(p"/api/health") => json({ok: false})
+    @get(path=p"/api/health") => json({ok: false})
 `);
   assert.deepEqual(diagnostics, []);
 });
@@ -154,32 +154,33 @@ test("a root prefix composes untranslated", async () => {
 import {prefix, json} from "velar/serve"
 
 server routes:
-    @get(p"/health") => json({ok: true})
+    @get(path=p"/health") => json({ok: true})
 
 server app:
     ...prefix("/", routes)
-    @get(p"/health") => json({ok: false})
+    @get(path=p"/health") => json({ok: false})
 `);
   assert.equal(diagnostics.length, 1);
   assert.match(diagnostics[0]!, /GET \/health.*composed in from 'routes'/u);
 });
 
-test("a fallback seen through a prefix never composes, so it cannot double-report", async () => {
-  // The runtime refuses `prefix` around an app with @notFound outright; the
-  // static check claiming that fallback here would report a duplicate the
-  // program cannot have.
+test("a fallback seen through a prefix reports the global-policy boundary once", async () => {
+  // @notFound 是最终服务器的全局策略，不能被 prefix 伪装成局部策略。
+  // 编译期应直接说明这个边界，而不是把它误报成两个 fallback 冲突。
   const diagnostics = await diagnose(`
 import {prefix, json, Request} from "velar/serve"
 
 server routes:
-    @get(p"/health") => json({ok: true})
+    @get(path=p"/health") => json({ok: true})
     @notFound(request: Request) => {error: "routes"}
 
 server app:
     ...prefix("/api", routes)
     @notFound(request: Request) => {error: "app"}
 `);
-  assert.deepEqual(diagnostics, []);
+  assert.deepEqual(diagnostics, [
+    "prefix cannot scope @notFound; compose the fallback on the final server instead",
+  ]);
 });
 
 test("a let alias reassigned or shadowed anywhere stays out of the static check", async () => {
@@ -189,10 +190,10 @@ test("a let alias reassigned or shadowed anywhere stays out of the static check"
 import {json} from "velar/serve"
 
 server base:
-    @get(p"/health") => json({ok: true})
+    @get(path=p"/health") => json({ok: true})
 
 server extra:
-    @get(p"/other") => json({ok: true})
+    @get(path=p"/other") => json({ok: true})
 
 let other = base
 
@@ -202,7 +203,7 @@ def rebind():
 
 server app:
     ...other
-    @get(p"/health") => json({ok: false})
+    @get(path=p"/health") => json({ok: false})
 `);
   assert.deepEqual(throughFunction, []);
 
@@ -210,7 +211,7 @@ server app:
 import {json} from "velar/serve"
 
 server base:
-    @get(p"/health") => json({ok: true})
+    @get(path=p"/health") => json({ok: true})
 
 let other = base
 
@@ -219,7 +220,7 @@ def read(other: number) -> number:
 
 server app:
     ...other
-    @get(p"/health") => json({ok: false})
+    @get(path=p"/health") => json({ok: false})
 `);
   assert.deepEqual(shadowedByParameter, []);
 });
@@ -319,7 +320,8 @@ async function materializeNodeRuntimeDependencies(directory: string, source: str
 }
 
 interface ServeBridge {
-  createRoute(method: string, path: string, parameters: readonly Record<string, unknown>[], handler: (...arguments_: never[]) => Promise<unknown>): unknown;
+  createPattern(source: Record<string, unknown>): unknown;
+  createRoute(method: string, path: unknown, parameters: readonly Record<string, unknown>[], handler: (...arguments_: never[]) => Promise<unknown>): unknown;
   createApp(name: string, items: readonly unknown[]): unknown;
 }
 
@@ -327,12 +329,18 @@ test("assembly rejects a statically invisible overlap naming both routes and bot
   const serveRuntime = await runtime<{readonly ServeApp: object; prefix(path: string, app: unknown): unknown}>("velar/serve");
   const bridge = Object.getOwnPropertyDescriptor(serveRuntime.ServeApp, "__velarCompilerBridge")?.value as ServeBridge | undefined;
   assert.ok(bridge);
+  const pattern = (definition: string, captures: readonly Record<string, unknown>[] = []) => bridge.createPattern({
+    definition,
+    pathname: definition,
+    path: captures,
+    query: [],
+  });
 
   // A prefix whose path only takes shape at run time is exactly what the
   // static check let through; the final table still refuses to assemble.
-  const routes = bridge.createApp("routes", [bridge.createRoute("GET", "/health", [], async () => ({ok: true}))]);
+  const routes = bridge.createApp("routes", [bridge.createRoute("GET", pattern("/health"), [], async () => ({ok: true}))]);
   const scoped = serveRuntime.prefix("/" + "api", routes);
-  const direct = bridge.createRoute("GET", "/api/health", [], async () => ({ok: false}));
+  const direct = bridge.createRoute("GET", pattern("/api/health"), [], async () => ({ok: false}));
   assert.throws(() => bridge.createApp("app", [scoped, direct]), (error: unknown) => {
     const message = String((error as Error).message);
     assert.match(message, /^ServeApp 'app' contains conflicting routes: /u);
@@ -344,9 +352,10 @@ test("assembly rejects a statically invisible overlap naming both routes and bot
 
   // Two spellings of one shape: the message names both actual paths, because
   // the shape key alone cannot tell the author which routes collided.
-  const parameter = {name: "x", source: "path", kind: "string", required: true, check: (value: string) => value};
-  const left = bridge.createApp("left", [bridge.createRoute("GET", "/a/{x:string}", [parameter], async () => null)]);
-  const right = bridge.createApp("right", [bridge.createRoute("GET", "/a/{x:number}", [{...parameter, kind: "number", check: (value: number) => value}], async () => null)]);
+  const stringCapture = {name: "x", wireName: "x", explicitWireName: false, typeName: "string", optional: false, kind: "string", check: (value: unknown) => typeof value === "string", schema: {type: "string"}};
+  const numberCapture = {name: "x", wireName: "x", explicitWireName: false, typeName: "number", optional: false, kind: "number", check: (value: unknown) => typeof value === "number", schema: {type: "number"}};
+  const left = bridge.createApp("left", [bridge.createRoute("GET", pattern("/a/{x:string}", [stringCapture]), [], async () => null)]);
+  const right = bridge.createApp("right", [bridge.createRoute("GET", pattern("/a/{x:number}", [numberCapture]), [], async () => null)]);
   assert.throws(() => bridge.createApp("app", [left, right]), (error: unknown) => {
     const message = String((error as Error).message);
     assert.match(message, /'GET \/a\/\{x:number\}' composed in from 'right'/u);

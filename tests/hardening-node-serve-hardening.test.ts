@@ -55,13 +55,19 @@ async function materializeNodeRuntimeDependencies(
 }
 
 interface ServeBridge {
-  createRoute(method: string, path: string, parameters: readonly Record<string, unknown>[], handler: (...arguments_: never[]) => Promise<unknown>, metadata?: Record<string, unknown>): unknown;
+  createPattern(source: Record<string, unknown>): unknown;
+  createRoute(method: string, path: unknown, parameters: readonly Record<string, unknown>[], handler: (...arguments_: never[]) => Promise<unknown>, metadata?: Record<string, unknown>): unknown;
   createApp(name: string, items: readonly unknown[]): unknown;
   createNotFound(handler: (...arguments_: never[]) => Promise<unknown>, middleware?: readonly unknown[]): unknown;
 }
 
 function serveBridge(app: object): ServeBridge {
   return Object.getOwnPropertyDescriptor(app, "__velarCompilerBridge")?.value as ServeBridge;
+}
+
+/** Hardening tests enter through the compiler-only bridge, so they construct its exact route value. */
+function routePattern(bridge: ServeBridge, pathname: string): unknown {
+  return bridge.createPattern({definition: pathname, pathname, path: [], query: []});
 }
 
 // console.error is captured by value when velar/serve loads, so stderr is
@@ -119,7 +125,7 @@ test("middleware.cors refuses a credentialed origin wildcard at construction", a
   assert.doesNotThrow(() => serveRuntime.middleware.cors(), "the wildcard default remains available without credentials");
   assert.doesNotThrow(() => serveRuntime.middleware.cors(["*"], undefined, undefined, false));
 
-  const route = bridge.createRoute("GET", "/data", [], async () => ({ok: true}));
+  const route = bridge.createRoute("GET", routePattern(bridge, "/data"), [], async () => ({ok: true}));
   const app = serveRuntime.use(bridge.createApp("cors", [route]), [
     serveRuntime.middleware.cors(["https://client.test"], undefined, undefined, true),
   ]);
@@ -132,7 +138,10 @@ test("middleware.cors refuses a credentialed origin wildcard at construction", a
 
     const refused = await fetch(`http://127.0.0.1:${server.port}/data`, {headers: {origin: "https://evil.example"}});
     assert.equal(refused.status, 403);
-    assert.deepEqual(await refused.json(), {error: "origin_not_allowed"});
+    assert.deepEqual(await refused.json(), {
+      type: "about:blank", title: "Origin is not allowed", status: 403,
+      code: "security.origin_not_allowed", instance: "/data", source: "header", parameter: "origin",
+    });
     assert.equal(refused.headers.get("access-control-allow-origin"), null);
     assert.equal(refused.headers.get("access-control-allow-credentials"), null);
   } finally {
@@ -147,13 +156,13 @@ test("a malformed explicit response fails closed instead of becoming a success b
   }>("velar/serve");
   const bridge = serveBridge(serveRuntime.ServeApp);
   const routes = [
-    bridge.createRoute("GET", "/extra-field", [], async () => ({status: 403, json: {error: "forbidden"}, extra: 1})),
-    bridge.createRoute("GET", "/status-text", [], async () => ({status: "403", json: {error: "forbidden"}})),
-    bridge.createRoute("GET", "/two-bodies", [], async () => ({status: 401, json: {error: "forbidden"}, text: ""})),
-    bridge.createRoute("GET", "/status-range", [], async () => ({status: 999, json: {error: "forbidden"}})),
-    bridge.createRoute("GET", "/denied", [], async () => ({status: 403, json: {error: "forbidden"}})),
-    bridge.createRoute("GET", "/plain", [], async () => ({ok: true})),
-    bridge.createRoute("GET", "/record-with-status", [], async () => ({id: 1, status: "active"})),
+    bridge.createRoute("GET", routePattern(bridge, "/extra-field"), [], async () => ({status: 403, json: {error: "forbidden"}, extra: 1})),
+    bridge.createRoute("GET", routePattern(bridge, "/status-text"), [], async () => ({status: "403", json: {error: "forbidden"}})),
+    bridge.createRoute("GET", routePattern(bridge, "/two-bodies"), [], async () => ({status: 401, json: {error: "forbidden"}, text: ""})),
+    bridge.createRoute("GET", routePattern(bridge, "/status-range"), [], async () => ({status: 999, json: {error: "forbidden"}})),
+    bridge.createRoute("GET", routePattern(bridge, "/denied"), [], async () => ({status: 403, json: {error: "forbidden"}})),
+    bridge.createRoute("GET", routePattern(bridge, "/plain"), [], async () => ({ok: true})),
+    bridge.createRoute("GET", routePattern(bridge, "/record-with-status"), [], async () => ({id: 1, status: "active"})),
     bridge.createNotFound(async () => ({status: 410, json: {error: "gone"}, extra: 1})),
   ];
   const server = await serveRuntime.serve(bridge.createApp("responses", routes), 0);
@@ -164,7 +173,8 @@ test("a malformed explicit response fails closed instead of becoming a success b
       for (const path of paths) {
         const response = await fetch(`http://127.0.0.1:${server.port}${path}`);
         output[output.length] = response.status;
-        assert.equal(await response.text(), "Internal server error", `${path} must not deliver the malformed record as a body`);
+        const problem = await response.json() as {code: string};
+        assert.equal(problem.code, "server.internal", `${path} must not deliver the malformed record as a body`);
       }
       const fallback = await fetch(`http://127.0.0.1:${server.port}/no-such-route`);
       output[output.length] = fallback.status;
@@ -189,7 +199,7 @@ test("a malformed explicit response fails closed instead of becoming a success b
   }
 
   const wellFormedFallback = bridge.createApp("fallback", [
-    bridge.createRoute("GET", "/health", [], async () => ({ok: true})),
+    bridge.createRoute("GET", routePattern(bridge, "/health"), [], async () => ({ok: true})),
     bridge.createNotFound(async () => ({error: "route_not_found"})),
   ]);
   const fallbackServer = await serveRuntime.serve(wellFormedFallback, 0);
@@ -209,9 +219,9 @@ test("a duplicated cookie name is refused instead of resolving to the first valu
     serve(app: unknown, port: number): Promise<{readonly port: number; stop(): Promise<null>}>;
   }>("velar/serve");
   const bridge = serveBridge(serveRuntime.ServeApp);
-  const route = bridge.createRoute("GET", "/me", [
+  const route = bridge.createRoute("GET", routePattern(bridge, "/me"), [
     {name: "session", source: "cookie", kind: "string", required: true, check: (value: unknown) => typeof value === "string" || value === null, input: serveRuntime.input.cookie("session", null)},
-  ], async (session: string | null) => ({session}));
+  ], async (_path: unknown, session: string | null) => ({session}));
   const server = await serveRuntime.serve(bridge.createApp("cookies", [route]), 0);
   try {
     const single = await fetch(`http://127.0.0.1:${server.port}/me`, {headers: {cookie: "session=REAL"}});
@@ -225,7 +235,10 @@ test("a duplicated cookie name is refused instead of resolving to the first valu
     for (const cookie of ["session=ATTACKER; session=REAL", "session=REAL; session=ATTACKER"]) {
       const duplicated = await fetch(`http://127.0.0.1:${server.port}/me`, {headers: {cookie}});
       assert.equal(duplicated.status, 400, `${cookie} is ambiguous and must not silently pick a winner`);
-      assert.deepEqual(await duplicated.json(), {error: "duplicate_cookie", parameter: "session"});
+      assert.deepEqual(await duplicated.json(), {
+        type: "about:blank", title: "Malformed request input", status: 400,
+        code: "request.duplicate.cookie", instance: "/me", source: "parameter", parameter: "session",
+      });
     }
 
     const otherNames = await fetch(`http://127.0.0.1:${server.port}/me`, {headers: {cookie: "theme=dark; session=REAL; locale=en"}});
@@ -234,7 +247,10 @@ test("a duplicated cookie name is refused instead of resolving to the first valu
 
     const undecodable = await fetch(`http://127.0.0.1:${server.port}/me`, {headers: {cookie: "session=%E0%A4%A"}});
     assert.equal(undecodable.status, 400);
-    assert.deepEqual(await undecodable.json(), {error: "invalid_cookie", parameter: "session"});
+    assert.deepEqual(await undecodable.json(), {
+      type: "about:blank", title: "Malformed request input", status: 400,
+      code: "request.invalid.cookie", instance: "/me", source: "parameter", parameter: "session",
+    });
   } finally {
     await server.stop();
   }
@@ -262,8 +278,8 @@ test("middleware.timeout bounds detached continuations instead of live requests"
   assert.equal(settled.filter((item) => item.status === 503).length, 0, "an attached deadline must not cap process concurrency");
   assert.equal(settled.filter((item) => item.status === 200).length, 300);
 
-  const slow = bridge.createRoute("GET", "/slow", [], async () => { await new Promise<void>((settle) => setTimeout(settle, 100)); return {ok: true}; });
-  const fast = bridge.createRoute("GET", "/fast", [], async () => ({ok: true}));
+  const slow = bridge.createRoute("GET", routePattern(bridge, "/slow"), [], async () => { await new Promise<void>((settle) => setTimeout(settle, 100)); return {ok: true}; });
+  const fast = bridge.createRoute("GET", routePattern(bridge, "/fast"), [], async () => ({ok: true}));
   const concurrent = serveRuntime.use(bridge.createApp("timeouts", [slow, fast]), [serveRuntime.middleware.timeout(30_000)]);
   const server = await serveRuntime.serve(concurrent, 0);
   try {
@@ -279,7 +295,7 @@ test("middleware.timeout bounds detached continuations instead of live requests"
   // 300 real detachments, drained between waves, so the counter is shown to
   // release each continuation as it settles. The bound itself is held under a
   // single undrained burst by the next test.
-  const expiring = bridge.createRoute("GET", "/expiring", [], async () => { await new Promise<void>((settle) => setTimeout(settle, 120)); return {ok: true}; });
+  const expiring = bridge.createRoute("GET", routePattern(bridge, "/expiring"), [], async () => { await new Promise<void>((settle) => setTimeout(settle, 120)); return {ok: true}; });
   const deadlined = serveRuntime.use(bridge.createApp("detached", [expiring, fast]), [serveRuntime.middleware.timeout(20)]);
   const detachedServer = await serveRuntime.serve(deadlined, 0);
   try {
@@ -289,7 +305,7 @@ test("middleware.timeout bounds detached continuations instead of live requests"
         const responses = await Promise.all(Array.from({length: 50}, () => fetch(`http://127.0.0.1:${detachedServer.port}/expiring`)));
         for (const response of responses) {
           assert.equal(response.status, 504);
-          assert.deepEqual(await response.json(), {error: "request_timeout"});
+          assert.equal((await response.json() as {code: string}).code, "request.timeout");
           detachments += 1;
         }
         await new Promise<void>((settle) => setTimeout(settle, 250));
@@ -325,7 +341,7 @@ test("middleware.timeout holds its detached-continuation bound under one undrain
 
   let release = (): void => {};
   const gate = new Promise<void>((settle) => { release = settle; });
-  const held = bridge.createRoute("GET", "/held", [], async () => { await gate; return {ok: true}; });
+  const held = bridge.createRoute("GET", routePattern(bridge, "/held"), [], async () => { await gate; return {ok: true}; });
   const app = serveRuntime.use(bridge.createApp("burst", [held]), [serveRuntime.middleware.timeout(150)]);
   const server = await serveRuntime.serve(app, 0);
   try {
@@ -336,7 +352,7 @@ test("middleware.timeout holds its detached-continuation bound under one undrain
     const answered = new Set<number>();
     const burst = Array.from({length: 10}, (_item, index) => fetch(`http://127.0.0.1:${server.port}/held`).then(async (response) => {
       answered.add(index);
-      return {status: response.status, body: await response.json() as {error?: string}};
+      return {status: response.status, body: await response.json() as {code?: string}};
     }));
     await new Promise<void>((settle) => setTimeout(settle, 600));
     assert.equal(answered.size, 4, "a burst that expires together cannot detach past the bound");
@@ -344,7 +360,7 @@ test("middleware.timeout holds its detached-continuation bound under one undrain
     release();
     const settled = await Promise.all(burst);
     assert.equal(settled.filter((item) => item.status === 504).length, 10, "every expired request still reports its own deadline");
-    for (const item of settled) assert.deepEqual(item.body, {error: "request_timeout"});
+    for (const item of settled) assert.equal(item.body.code, "request.timeout");
 
     const drained = await fetch(`http://127.0.0.1:${server.port}/held`);
     assert.equal(drained.status, 200, "the counter drains once the held continuations settle");
@@ -381,7 +397,7 @@ test("both serve transports answer a static-file miss with the same 404", async 
       listen(options: Record<string, unknown>): Promise<{port: number; stop(): Promise<null>}>;
     };
     const bridge = serveBridge(serveRuntime.ServeApp);
-    const health = bridge.createRoute("GET", "/health", [], async () => ({ok: true}));
+    const health = bridge.createRoute("GET", routePattern(bridge, "/health"), [], async () => ({ok: true}));
     const app = bridge.createApp("assets", [
       health,
       serveRuntime.staticFiles("/assets", assets),
@@ -412,7 +428,7 @@ test("both serve transports answer a static-file miss with the same 404", async 
           // so it keeps the router's own not-found body rather than this one.
           const escape = await fetch(`http://127.0.0.1:${port}/assets/%2e%2e/secret.txt`);
           assert.equal(escape.status, 404, `${label} transport refuses an escape out of the root`);
-          assert.doesNotMatch(await escape.text(), /secret/u, "a refused escape never returns the outside file");
+          assert.equal((await escape.json() as {code: string}).code, "route.not_found", "a refused escape never returns the outside file");
           return output;
         });
         for (let index = 0; index < misses.length; index += 1) {
@@ -438,9 +454,9 @@ test("multipart upload filenames are reduced to one bounded file name", async ()
     serve(app: unknown, port: number): Promise<{readonly port: number; stop(): Promise<null>}>;
   }>("velar/serve");
   const bridge = serveBridge(serveRuntime.ServeApp);
-  const route = bridge.createRoute("POST", "/files", [
+  const route = bridge.createRoute("POST", routePattern(bridge, "/files"), [
     {name: "image", source: "upload", kind: "upload", required: true, check: () => true, input: serveRuntime.input.upload("image", 1024)},
-  ], async (image: {filename: string; size: number; text(): Promise<string>}) => ({filename: image.filename, size: image.size, text: await image.text()}));
+  ], async (_path: unknown, image: {filename: string; size: number; text(): Promise<string>}) => ({filename: image.filename, size: image.size, text: await image.text()}));
   const server = await serveRuntime.serve(bridge.createApp("uploads", [route]), 0);
   const boundary = "velar-hardening-boundary";
   const post = async (filename: string): Promise<Response> => fetch(`http://127.0.0.1:${server.port}/files`, {
@@ -472,7 +488,7 @@ test("multipart upload filenames are reduced to one bounded file name", async ()
     for (const filename of ["..", ".", "", "uploads/..", "trailing/"]) {
       const refused = await post(filename);
       assert.equal(refused.status, 400, `filename "${filename}" cannot name a file`);
-      assert.deepEqual(await refused.json(), {error: "invalid_multipart"});
+      assert.equal((await refused.json() as {code: string}).code, "request.invalid.multipart");
     }
   } finally {
     await server.stop();
@@ -500,9 +516,9 @@ test("Upload.save is confined to the root it is given", async () => {
     // so that every case exercises the same handler that a real application
     // writes: one save call whose arguments the application composed.
     let requested: {path: unknown; root: unknown} = {path: "", root: uploads};
-    const route = bridge.createRoute("POST", "/files", [
+    const route = bridge.createRoute("POST", routePattern(bridge, "/files"), [
       {name: "image", source: "upload", kind: "upload", required: true, check: () => true, input: serveRuntime.input.upload("image", 1024)},
-    ], async (image: {filename: string; save(path: unknown, root: unknown): Promise<null>}) => {
+    ], async (_path: unknown, image: {filename: string; save(path: unknown, root: unknown): Promise<null>}) => {
       // A null path stands for "the application composed the client's own
       // filename", which is the shape the basename reduction already bounds.
       try { await image.save(requested.path === null ? image.filename : requested.path, requested.root); return {saved: true, refused: null}; }
@@ -598,14 +614,14 @@ test("both serve transports shed an exhausted outbound budget as 503 with retry-
     await writeFile(join(directory, "large.txt"), "f".repeat(4096), "utf8");
     const bridge = serveBridge(serveRuntime.ServeApp);
     const app = bridge.createApp("budget", [
-      bridge.createRoute("GET", "/small", [], async () => ({ok: true})),
-      bridge.createRoute("GET", "/large", [], async () => ({text: "x".repeat(4096)})),
-      bridge.createRoute("GET", "/decorated", [], async () => ({
+      bridge.createRoute("GET", routePattern(bridge, "/small"), [], async () => ({ok: true})),
+      bridge.createRoute("GET", routePattern(bridge, "/large"), [], async () => ({text: "x".repeat(4096)})),
+      bridge.createRoute("GET", routePattern(bridge, "/decorated"), [], async () => ({
         status: 200,
         text: "x".repeat(4096),
         headers: new Map([["x-application-secret", "leaked"], ["set-cookie", "session=abc"]]),
       })),
-      bridge.createRoute("GET", "/file", [], async () => serveRuntime.fileResponse(directory, "/large.txt")),
+      bridge.createRoute("GET", routePattern(bridge, "/file"), [], async () => serveRuntime.fileResponse(directory, "/large.txt")),
     ]);
     const hostServer = await serveRuntime.serve(app, 0);
     const nativeServer = await websocket.listen({port: 0, host: "127.0.0.1", path: "/ws", http: app});
@@ -660,10 +676,10 @@ test("the emitted velar/serve runtime carries each hardening contract", () => {
   for (const contract of [
     /if \(credentials && __velarServeCall\(__velarServeArrayIncludes, origins, \["\*"\]\)\) throw new __velarServeTypeError\("middleware\.cors cannot combine credentials with the '\*' origin wildcard"\);/u,
     /function __velarServeIsResponseAttempt\(value\) \{/u,
-    /if \(matches > 1\) throw new HttpError\(400, \{error: "duplicate_cookie", parameter: name\}\);/u,
+    /if \(matches > 1\) throw __velarServeRequestProblem\(400, \{error: "duplicate_cookie", parameter: name\}\);/u,
     /class __velarServeNativeNotFound extends __velarServeError \{\}/u,
     /function __velarServeUploadBasename\(filename\) \{/u,
-    /class __velarServeOutboundBudgetError extends HttpError \{/u,
+    /class __velarServeOutboundBudgetError extends HttpProblem \{/u,
     /async function __velarServeUploadTarget\(path, root\) \{/u,
     /save: async \(path, root\) => \{/u,
   ]) assert.match(source, contract);
@@ -674,7 +690,7 @@ test("the emitted velar/serve runtime carries each hardening contract", () => {
   assert.doesNotMatch(source, /aggregate outbound byte budget is exhausted/u);
   assert.match(source, /if \(error instanceof __velarServeOutboundBudgetError && await __velarServeShedOutbound\(value\.handle\)\) return;/u, "the isolated-host transport answers the budget error itself");
   assert.match(source, /if \(error instanceof __velarServeOutboundBudgetError && !response\.headersSent\) \{\n\s*__velarServeNativeResetHeaders\(response\);\n\s*response\.statusCode = 503;\n\s*response\.setHeader\("retry-after", "1"\);/u, "the native transport answers the budget error itself, from an empty header set");
-  assert.match(source, /super\(503, \{error: "outbound_budget_exhausted"\}, new __velarServeMap\(\[\["retry-after", "1"\]\]\)\);/u);
+  assert.match(source, /super\(\{status: 503, code: "server\.outbound_budget", title: "Server is busy", headers: new __velarServeMap\(\[\["retry-after", "1"\]\]\)\}\);/u);
 
   const attempts = source.match(/if \(__velarServeIsResponseAttempt\(value\)\) return __velarServeResponse\(value\);/gu) ?? [];
   assert.equal(attempts.length, 2, "both the route and the @notFound wrapper discriminate a response attempt structurally");
@@ -684,7 +700,7 @@ test("the emitted velar/serve runtime carries each hardening contract", () => {
   // there, because admission alone cannot bound a burst that expires together.
   const increments = source.match(/__velarServeActiveTimeouts \+= 1;/gu) ?? [];
   assert.equal(increments.length, 1);
-  assert.match(source, /if \(__velarServeActiveTimeouts >= __velarServeMaxActiveTimeouts\) \{\n\s*try \{ await pending; \}\n\s*catch \(error\) \{ __velarServeReportFailure\(error\); \}\n\s*return \{status: 504, json: \{error: "request_timeout"\}\};\n\s*\}\n\s*__velarServeActiveTimeouts \+= 1;\n\s*__velarServeActiveBackgroundTasks \+= 1;/u);
+  assert.match(source, /if \(__velarServeActiveTimeouts >= __velarServeMaxActiveTimeouts\) \{\n\s*try \{ await pending; \}\n\s*catch \(error\) \{ __velarServeReportFailure\(error\); \}\n\s*return __velarServeOutcome\(null, 504, null, __velarServeProblem\(504, "request\.timeout", "Request timed out"\)\);\n\s*\}\n\s*__velarServeActiveTimeouts \+= 1;\n\s*__velarServeActiveBackgroundTasks \+= 1;/u);
   assert.doesNotMatch(source, /if \(!detached\) __velarServeActiveTimeouts -= 1;/u, "an attached request no longer occupies a detached-continuation slot");
 
   assert.match(source, /if \(!info\.isFile\(\)\) throw new __velarServeNativeNotFound/u, "a directory is reported as missing, not as an oversize file");

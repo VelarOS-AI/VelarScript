@@ -9,10 +9,8 @@ import { velarCompilerExtension as velarDesktopCompilerExtension } from "../pack
 import { velarNodeCompilerExtension } from "../packages/node/src/compiler.ts";
 import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
 
-// D90 R14: velar/http's client failure is HttpResponseError; velar/serve's
-// outbound failure keeps the name HttpError. A proxy route is the shape that
-// holds both, and before the rename it could hold only one of them under that
-// name — the other `is` test compiled clean and was always false.
+// HTTP 客户端失败和服务端问题分别使用 HttpResponseError 与 HttpProblem。
+// 代理路由会同时使用二者，因此这里锁定两个概念不会重新混成同名异常。
 async function compileNode(source: string): Promise<{
   readonly failures: readonly { readonly message: string }[];
   readonly diagnostics: readonly { readonly code: string; readonly message: string }[];
@@ -29,10 +27,10 @@ async function compileNode(source: string): Promise<{
   };
 }
 
-test("a proxy route holds velar/http's HttpResponseError and velar/serve's HttpError at once", async () => {
+test("a proxy route holds velar/http's HttpResponseError and velar/serve's HttpProblem at once", async () => {
   const proxy = await compileNode(`
 import {http, HttpResponseError} from "velar/http"
-import {HttpError} from "velar/serve"
+import {HttpProblem} from "velar/serve"
 
 async def proxy(target: string) -> string:
     const request = http.get(target)
@@ -40,17 +38,17 @@ async def proxy(target: string) -> string:
         return await request.text()
     catch error:
         if error is HttpResponseError:
-            throw HttpError(502, {error: "upstream", url: error.url, status: error.status})
-        throw HttpError(500, {error: "unknown"})
+            throw HttpProblem({status: 502, code: "upstream.failed", title: "Upstream request failed", detail: error.url})
+        throw HttpProblem({status: 500, code: "proxy.failed", title: "Proxy request failed"})
 `.trimStart());
   assert.deepEqual(proxy.failures, []);
   assert.deepEqual(proxy.diagnostics, [], "the two names no longer collide, so VEL3004 must not fire");
   assert.match(proxy.code, /import \{ http, HttpResponseError \} from "velar\/http";/u);
-  assert.match(proxy.code, /import \{ HttpError \} from "velar\/serve";/u);
+  assert.match(proxy.code, /import \{ HttpProblem \} from "velar\/serve";/u);
   assert.match(proxy.code, /if \(error instanceof HttpResponseError\) \{/u);
 });
 
-test("velar/http no longer exports HttpError and velar/serve still does", async () => {
+test("velar/http exports HttpResponseError while velar/serve exports HttpProblem", async () => {
   const nodeApi = standardModuleApi([velarNodeCompilerExtension]);
   assert.deepEqual(nodeApi.modules["velar/http"], [
     "HttpAbortError",
@@ -60,7 +58,8 @@ test("velar/http no longer exports HttpError and velar/serve still does", async 
     "http",
     "secretHeader",
   ]);
-  assert.ok(nodeApi.modules["velar/serve"]?.includes("HttpError"), "velar/serve keeps its outbound failure name");
+  assert.ok(nodeApi.modules["velar/serve"]?.includes("HttpProblem"), "velar/serve declares the structured problem contract");
+  assert.equal(nodeApi.modules["velar/serve"]?.includes("HttpError"), false);
   assert.equal(nodeApi.modules["velar/serve"]?.includes("HttpResponseError"), false);
 
   const webApi = standardModuleApi([velarCompilerExtension]);

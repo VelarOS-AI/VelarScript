@@ -498,26 +498,29 @@ test "a single name keeps one initial":
 An application service activates `@velarscript/server` in `velar.json`; that
 application extension composes `@velarscript/node`. `server` declares
 an immutable route table; the five HTTP verbs are context annotations with
-compiler-owned route roles, not decorators. A Node-owned `p"..."` path pattern declares each path value
-once, with its type, and brings that name directly into the anonymous route
-body. Other scalar parameters come from the query string; one Data record on a
-writing route comes from JSON.
+compiler-owned route roles, not decorators. A Node-owned `p"..."` value is a
+first-class `RoutePattern`: it declares path and query fields once, and the
+anonymous handler reads them through `path.params` and `path.query`. One Data
+record on a writing route comes from JSON. Distinct URL and field names use
+`wire={field:type}`; redundant same-name mappings receive advisory `A11` and a
+mechanical shorthand fix.
 
 ```velar
-import {HttpError, Request, created} from "velar/serve"
+import {HttpProblem, Request, created} from "velar/serve"
 
 type CreateArticle:
     title: string
 
 export server app:
-    @get(p"/health") => {ok: true}
+    @get(path=p"/health") => {ok: true}
 
-    @get(p"/articles/{id:number}", details: bool = false):
+    @get(path=p"/articles/{id:number}?{details:bool?}"):
+        const id = path.params.id
         if id < 1:
-            throw HttpError(404, {error: "article_not_found"})
-        return {id, details}
+            throw HttpProblem({status: 404, code: "article.not_found", title: "Article not found"})
+        return {id, details: path.query.details ?? false}
 
-    @post(p"/articles", input: CreateArticle) => created({id: 1, title: input.title})
+    @post(path=p"/articles", input: CreateArticle) => created({id: 1, title: input.title})
 
     @notFound(request: Request) => {error: "route_not_found", path: request.path}
 
@@ -541,7 +544,11 @@ policy.
 `@notFound` is the single application fallback for a path that matches no
 route. Its optional parameter must be `Request`; Data keeps the 404 status,
 while an explicit response may select another status. It does not intercept a
-matched route's `HttpError` or a method-not-allowed response.
+matched route's `HttpProblem` or a method-not-allowed response. Semantic route
+results are finalized once by the framework; an optional application-wide
+`@response(outcome: HttpOutcome, request: Request)` policy may define a shared
+envelope, while explicit `json`, `text`, `file`, `stream`, `sse`, and
+`redirect` results remain final representations.
 
 ↳ charter [§3 Bindings and literals](language-charter.md#3-bindings-and-literals)
 · [Standard library: `velar/serve`](standard-library.md#velarserve)

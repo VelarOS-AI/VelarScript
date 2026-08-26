@@ -23,6 +23,47 @@ import { VELAR_NODE_PROCESS_WORKER_SOURCE } from "../packages/node/src/process-w
 import { VELAR_NODE_TERMINAL_WORKER_SOURCE } from "../packages/node/src/terminal-worker-runtime.ts";
 import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
 
+type ServeCompilerBridge = {
+  createPattern(source: Record<string, unknown>): unknown;
+};
+
+type TestQueryCapture = {
+  readonly name: string;
+  readonly kind: "string" | "number" | "bool";
+  readonly optional?: boolean;
+  readonly wireName?: string;
+};
+
+/** Direct runtime tests build exactly the same immutable RoutePattern structure as the compiler. */
+function routePattern(bridge: ServeCompilerBridge, pathname: string, query: readonly TestQueryCapture[] = []): unknown {
+  const captures = [...pathname.matchAll(/\{([A-Za-z_][A-Za-z0-9_]*):(string|number|bool)\}/gu)].map((match) => {
+    const kind = match[2]!;
+    return {
+      name: match[1], wireName: match[1], explicitWireName: false, typeName: kind, optional: false, kind,
+      check: kind === "number" ? (value: unknown) => typeof value === "number"
+        : kind === "bool" ? (value: unknown) => typeof value === "boolean"
+          : (value: unknown) => typeof value === "string",
+      schema: {type: kind === "bool" ? "boolean" : kind},
+    };
+  });
+  const queryCaptures = query.map((capture) => ({
+    name: capture.name,
+    wireName: capture.wireName ?? capture.name,
+    explicitWireName: capture.wireName !== undefined,
+    typeName: capture.kind,
+    optional: capture.optional === true,
+    kind: capture.kind,
+    check: capture.kind === "number" ? (value: unknown) => typeof value === "number"
+      : capture.kind === "bool" ? (value: unknown) => typeof value === "boolean"
+        : (value: unknown) => typeof value === "string",
+    schema: {type: capture.kind === "bool" ? "boolean" : capture.kind},
+  }));
+  const definition = queryCaptures.length === 0
+    ? pathname
+    : `${pathname}?${queryCaptures.map((capture) => `${capture.explicitWireName ? `${capture.wireName}=` : ""}{${capture.name}:${capture.typeName}${capture.optional ? "?" : ""}}`).join("&")}`;
+  return bridge.createPattern({definition, pathname, path: captures, query: queryCaptures});
+}
+
 async function runtime<T>(
   name: string,
   transform: (source: string) => string = (source) => source,
@@ -848,7 +889,7 @@ test("Node serve types and JSON stay on the strict owned-data boundary", async (
 
 test("Node ServeApp routes bind checked inputs, compose, and normalize HTTP outcomes", async () => {
   const serveRuntime = await runtime<{
-    readonly HttpError: new (status: number, body?: unknown, headers?: Map<string, string>) => Error;
+    readonly HttpProblem: new (options: Record<string, unknown>) => Error;
     readonly ServeApp: object;
     created(value: unknown, headers?: Map<string, string>): unknown;
     noContent(): unknown;
@@ -865,40 +906,43 @@ test("Node ServeApp routes bind checked inputs, compose, and normalize HTTP outc
   assert.equal("__velarCreateServeApp" in serveRuntime, false);
   assert.deepEqual(Object.keys(serveRuntime.ServeApp).sort(), ["is", "parse"]);
   const bridge = Object.getOwnPropertyDescriptor(serveRuntime.ServeApp, "__velarCompilerBridge")?.value as {
-    createRoute(method: string, path: string, parameters: readonly Record<string, unknown>[], handler: (...arguments_: never[]) => Promise<unknown>, metadata?: Record<string, unknown>): unknown;
+    createPattern(source: Record<string, unknown>): unknown;
+    createRoute(method: string, path: unknown, parameters: readonly Record<string, unknown>[], handler: (...arguments_: never[]) => Promise<unknown>, metadata?: Record<string, unknown>): unknown;
     createApp(name: string, items: readonly unknown[]): unknown;
   } | undefined;
   assert.ok(bridge);
   assert.equal(Object.isFrozen(bridge), true);
-  const health = bridge.createRoute("GET", "/health", [], async () => ({ok: true}));
-  const cookies = bridge.createRoute("GET", "/cookies", [], async () => serveRuntime.setCookie(serveRuntime.setCookie(serveRuntime.json({ok: true}), "first", "1"), "second", "2"));
-  const tags = bridge.createRoute("GET", "/tags", [
-    {name: "tag", source: "query", kind: "list", required: true, check: (value: unknown) => Array.isArray(value) && value.every((item) => typeof item === "string"), schema: {type: "array", items: {type: "string"}}},
-  ], async (tag: readonly string[]) => ({tag}));
-  const user = bridge.createRoute("GET", "/users/{id:number}", [
-    {name: "id", source: "path", kind: "number", required: true, check: (value: unknown) => typeof value === "number", schema: {type: "number"}},
-    {name: "details", source: "query", kind: "bool", required: false, check: (value: unknown) => typeof value === "boolean", schema: {type: "boolean"}},
-  ], async (id: unknown, details = false) => ({id, details}), {responseSchema: {type: "object"}});
-  const create = bridge.createRoute("POST", "/users", [
+  const health = bridge.createRoute("GET", routePattern(bridge, "/health"), [], async () => ({ok: true}));
+  const cookies = bridge.createRoute("GET", routePattern(bridge, "/cookies"), [], async () => serveRuntime.setCookie(serveRuntime.setCookie(serveRuntime.json({ok: true}), "first", "1"), "second", "2"));
+  // p"" 的查询契约只描述单值参数；重复值属于低层 HTTP 语义，显式通过 Request.queryAll 读取。
+  const tags = bridge.createRoute("GET", routePattern(bridge, "/tags"), [
+    {name: "request", source: "request", kind: "request", required: true, check: null},
+  ], async (_path: unknown, request: {queryAll: Map<string, readonly string[]>}) => ({tag: request.queryAll.get("tag") ?? []}));
+  const user = bridge.createRoute(
+    "GET",
+    routePattern(bridge, "/users/{id:number}", [{name: "details", kind: "bool", optional: true}]),
+    [],
+    async (path: {params: {id: number}; query: {details?: boolean}}) => ({id: path.params.id, details: path.query.details ?? false}),
+    {responseSchema: {type: "object"}},
+  );
+  const create = bridge.createRoute("POST", routePattern(bridge, "/users"), [
     {name: "input", source: "body", kind: "data", required: true, check: (value: unknown) => !!value && typeof value === "object" && typeof (value as {name?: unknown}).name === "string", schema: {type: "object", properties: {name: {type: "string"}}, required: ["name"]}},
-  ], async (input: unknown) => serveRuntime.created(input));
-  const missing = bridge.createRoute("GET", "/missing", [], async () => {
-    throw new serveRuntime.HttpError(404, {error: "user_not_found"}, new Map([["x-error", "missing"]]));
+  ], async (_path: unknown, input: unknown) => serveRuntime.created(input));
+  const missing = bridge.createRoute("GET", routePattern(bridge, "/missing"), [], async () => {
+    throw new serveRuntime.HttpProblem({status: 404, code: "user.not_found", title: "User not found", headers: new Map([["x-error", "missing"]])});
   });
-  const empty = bridge.createRoute("DELETE", "/users/{id:number}", [
-    {name: "id", source: "path", kind: "number", required: true, check: (value: unknown) => typeof value === "number"},
-  ], async () => serveRuntime.noContent());
+  const empty = bridge.createRoute("DELETE", routePattern(bridge, "/users/{id:number}"), [], async () => serveRuntime.noContent());
   const users = bridge.createApp("users", [user, create, missing, empty]);
   let userMiddlewareCalls = 0;
   const protectedUsers = serveRuntime.use(users, async (_request, next) => {
     userMiddlewareCalls += 1;
     return next();
   });
-  const limitedCreate = bridge.createRoute("POST", "/", [
+  const limitedCreate = bridge.createRoute("POST", routePattern(bridge, "/"), [
     {name: "input", source: "body", kind: "data", required: true, check: () => true},
-  ], async (input: unknown) => input);
+  ], async (_path: unknown, input: unknown) => input);
   const limited = serveRuntime.bodyLimit(bridge.createApp("limited", [limitedCreate]), 8);
-  const doubleNextRoute = bridge.createRoute("GET", "/double-next", [], async () => ({ok: true}));
+  const doubleNextRoute = bridge.createRoute("GET", routePattern(bridge, "/double-next"), [], async () => ({ok: true}));
   const recoveredDoubleNext = serveRuntime.use(bridge.createApp("double-next", [doubleNextRoute]), async (_request, next) => {
     try { return await next(); }
     catch { return {status: 500, json: {error: "middleware_failed"}}; }
@@ -918,7 +962,11 @@ test("Node ServeApp routes bind checked inputs, compose, and normalize HTTP outc
   const document = serveRuntime.openapi(app, "Users API", "2.0.0");
   assert.deepEqual(document.info, {title: "Users API", version: "2.0.0"});
   assert.deepEqual(Object.keys(document.paths).sort(), ["/api/missing", "/api/users", "/api/users/{id}", "/cookies", "/double-next", "/health", "/limited", "/tags"]);
-  assert.deepEqual(JSON.parse(JSON.stringify((document.paths["/tags"] as {get: {parameters: unknown[]}}).get.parameters)), [{name: "tag", in: "query", required: true, schema: {type: "array", items: {type: "string"}}, style: "form", explode: true}]);
+  assert.deepEqual(JSON.parse(JSON.stringify((document.paths["/tags"] as {get: {parameters: unknown[]}}).get.parameters)), []);
+  assert.deepEqual(JSON.parse(JSON.stringify((document.paths["/api/users/{id}"] as {get: {parameters: unknown[]}}).get.parameters)), [
+    {name: "id", in: "path", required: true, schema: {type: "number"}},
+    {name: "details", in: "query", required: false, schema: {type: "boolean"}},
+  ]);
   assert.deepEqual(
     JSON.parse(JSON.stringify((document.paths["/api/users"] as {post: {requestBody: {content: {"application/json": {schema: unknown}}}}}).post.requestBody.content["application/json"].schema)),
     {type: "object", properties: {name: {type: "string"}}, required: ["name"]},
@@ -941,14 +989,18 @@ test("Node ServeApp routes bind checked inputs, compose, and normalize HTTP outc
     assert.deepEqual(await defaulted.json(), {id: 7, details: false});
     const invalidPath = await fetch(`http://127.0.0.1:${server.port}/api/users/not-a-number`);
     assert.equal(invalidPath.status, 422);
-    assert.deepEqual(await invalidPath.json(), {error: "invalid_request", parameter: "id"});
+    const invalidPathProblem = await invalidPath.json() as {code: string; parameter: string};
+    assert.equal(invalidPathProblem.code, "request.invalid.request");
+    assert.equal(invalidPathProblem.parameter, "id");
     for (const invalidNumber of ["%2042", "0x2a"]) {
       const response = await fetch(`http://127.0.0.1:${server.port}/api/users/${invalidNumber}`);
       assert.equal(response.status, 422);
     }
     const duplicateScalar = await fetch(`http://127.0.0.1:${server.port}/api/users/42?details=true&details=false`);
     assert.equal(duplicateScalar.status, 422);
-    assert.deepEqual(await duplicateScalar.json(), {error: "duplicate_parameter", parameter: "details"});
+    const duplicateProblem = await duplicateScalar.json() as {code: string; parameter: string};
+    assert.equal(duplicateProblem.code, "request.duplicate.parameter");
+    assert.equal(duplicateProblem.parameter, "details");
     const repeatedList = await fetch(`http://127.0.0.1:${server.port}/tags?tag=one&tag=two`);
     assert.deepEqual(await repeatedList.json(), {tag: ["one", "two"]});
     const encodedSeparator = await fetch(`http://127.0.0.1:${server.port}/api/users/4%2F2`);
@@ -970,7 +1022,7 @@ test("Node ServeApp routes bind checked inputs, compose, and normalize HTTP outc
 
     const notFound = await fetch(`http://127.0.0.1:${server.port}/api/missing`);
     assert.equal(notFound.status, 404);
-    assert.deepEqual(await notFound.json(), {error: "user_not_found"});
+    assert.equal(((await notFound.json()) as {code: string}).code, "user.not_found");
     assert.equal(notFound.headers.get("x-error"), "missing");
     const deleted = await fetch(`http://127.0.0.1:${server.port}/api/users/42`, {method: "DELETE"});
     assert.equal(deleted.status, 204);
@@ -997,7 +1049,7 @@ test("Node ServeApp routes bind checked inputs, compose, and normalize HTTP outc
 
 test("Node ServeApp exposes one bounded unmatched-path fallback without intercepting route errors or 405", async () => {
   const serveRuntime = await runtime<{
-    readonly HttpError: new (status: number, body?: unknown) => Error;
+    readonly HttpProblem: new (options: Record<string, unknown>) => Error;
     readonly ServeApp: object;
     bodyLimit(app: unknown, maxBytes: number): unknown;
     docs(app: unknown, title?: string, version?: string): unknown;
@@ -1008,7 +1060,8 @@ test("Node ServeApp exposes one bounded unmatched-path fallback without intercep
     serve(app: unknown, port: number): Promise<{readonly port: number; stop(): Promise<null>}>;
   }>("velar/serve");
   const bridge = Object.getOwnPropertyDescriptor(serveRuntime.ServeApp, "__velarCompilerBridge")?.value as {
-    createRoute(method: string, path: string, parameters: readonly Record<string, unknown>[], handler: (...arguments_: never[]) => Promise<unknown>): unknown;
+    createPattern(source: Record<string, unknown>): unknown;
+    createRoute(method: string, path: unknown, parameters: readonly Record<string, unknown>[], handler: (...arguments_: never[]) => Promise<unknown>): unknown;
     createNotFound(handler: (...arguments_: never[]) => Promise<unknown>): unknown;
     createApp(name: string, items: readonly unknown[]): unknown;
   } | undefined;
@@ -1016,9 +1069,9 @@ test("Node ServeApp exposes one bounded unmatched-path fallback without intercep
 
   let fallbackCalls = 0;
   let middlewareCalls = 0;
-  const health = bridge.createRoute("GET", "/health", [], async () => ({ok: true}));
-  const routeOwnedMissing = bridge.createRoute("GET", "/route-missing", [], async () => {
-    throw new serveRuntime.HttpError(404, {error: "route_owned"});
+  const health = bridge.createRoute("GET", routePattern(bridge, "/health"), [], async () => ({ok: true}));
+  const routeOwnedMissing = bridge.createRoute("GET", routePattern(bridge, "/route-missing"), [], async () => {
+    throw new serveRuntime.HttpProblem({status: 404, code: "route.owned", title: "Route-owned failure"});
   });
   const fallback = bridge.createNotFound(async (request: {readonly path: string}) => {
     fallbackCalls += 1;
@@ -1046,12 +1099,12 @@ test("Node ServeApp exposes one bounded unmatched-path fallback without intercep
 
     const routeError = await fetch(`http://127.0.0.1:${server.port}/route-missing`);
     assert.equal(routeError.status, 404);
-    assert.deepEqual(await routeError.json(), {error: "route_owned"});
-    assert.equal(fallbackCalls, 1, "an explicitly matched route owns its HttpError response");
+    assert.equal(((await routeError.json()) as {code: string}).code, "route.owned");
+    assert.equal(fallbackCalls, 1, "an explicitly matched route owns its HttpProblem response");
 
     const wrongMethod = await fetch(`http://127.0.0.1:${server.port}/health`, {method: "POST"});
     assert.equal(wrongMethod.status, 405);
-    assert.deepEqual(await wrongMethod.json(), {error: "method_not_allowed"});
+    assert.equal(((await wrongMethod.json()) as {code: string}).code, "route.method_not_allowed");
     assert.equal(fallbackCalls, 1, "method-not-allowed is not an unmatched path");
   } finally {
     await server.stop();
@@ -1061,7 +1114,7 @@ test("Node ServeApp exposes one bounded unmatched-path fallback without intercep
   try {
     const unknown = await fetch(`http://127.0.0.1:${defaultServer.port}/missing`);
     assert.equal(unknown.status, 404);
-    assert.deepEqual(await unknown.json(), {error: "not_found"});
+    assert.equal(((await unknown.json()) as {code: string}).code, "route.not_found");
   } finally {
     await defaultServer.stop();
   }
@@ -1095,7 +1148,8 @@ test("Node route input values resolve security, cookies, and scoped providers", 
     /requires a security credential descriptor/u,
   );
   const bridge = Object.getOwnPropertyDescriptor(serveRuntime.ServeApp, "__velarCompilerBridge")?.value as {
-    createRoute(method: string, path: string, parameters: readonly Record<string, unknown>[], handler: (...arguments_: never[]) => Promise<unknown>): unknown;
+    createPattern(source: Record<string, unknown>): unknown;
+    createRoute(method: string, path: unknown, parameters: readonly Record<string, unknown>[], handler: (...arguments_: never[]) => Promise<unknown>): unknown;
     createApp(name: string, items: readonly unknown[]): unknown;
   };
   let requestResolves = 0;
@@ -1116,12 +1170,12 @@ test("Node route input values resolve security, cookies, and scoped providers", 
     async () => { appReleases += 1; },
     true,
   );
-  const route = bridge.createRoute("GET", "/me", [
+  const route = bridge.createRoute("GET", routePattern(bridge, "/me"), [
     {name: "first", source: "dependency", kind: "dependency", required: true, check: () => true, input: serveRuntime.input.dependency(currentUser)},
     {name: "second", source: "dependency", kind: "dependency", required: true, check: () => true, input: serveRuntime.input.dependency(currentUser)},
     {name: "settings", source: "dependency", kind: "dependency", required: true, check: () => true, input: serveRuntime.input.dependency(settings)},
     {name: "session", source: "cookie", kind: "string", required: true, check: (value: unknown) => typeof value === "string" || value === null, input: serveRuntime.input.cookie("session", null)},
-  ], async (first: {id: string}, second: {id: string}, appSettings: {region: string}, session: string | null) => ({first: first.id, second: second.id, region: appSettings.region, session}));
+  ], async (_path: unknown, first: {id: string}, second: {id: string}, appSettings: {region: string}, session: string | null) => ({first: first.id, second: second.id, region: appSettings.region, session}));
   const server = await serveRuntime.serve(bridge.createApp("inputs", [route]), 0);
   assert.equal(appResolves, 1, "eager app providers initialize before serve resolves");
   try {
@@ -1156,7 +1210,8 @@ test("Node form and upload inputs parse bounded multipart and URL-encoded bodies
     serve(app: unknown, port: number): Promise<{readonly port: number; stop(): Promise<null>}>;
   }>("velar/serve");
   const bridge = Object.getOwnPropertyDescriptor(serveRuntime.ServeApp, "__velarCompilerBridge")?.value as {
-    createRoute(method: string, path: string, parameters: readonly Record<string, unknown>[], handler: (...arguments_: never[]) => Promise<unknown>): unknown;
+    createPattern(source: Record<string, unknown>): unknown;
+    createRoute(method: string, path: unknown, parameters: readonly Record<string, unknown>[], handler: (...arguments_: never[]) => Promise<unknown>): unknown;
     createApp(name: string, items: readonly unknown[]): unknown;
   };
   const Metadata = registerRuntimeType(Object.freeze({
@@ -1178,11 +1233,11 @@ test("Node form and upload inputs parse bounded multipart and URL-encoded bodies
     {name: "metadata", source: "form", kind: "data", required: true, check: () => true, schema: {type: "object", properties: {title: {type: "string"}, public: {type: "boolean"}}, required: ["title", "public"]}, input: serveRuntime.input.form(Metadata)},
     {name: "image", source: "upload", kind: "upload", required: true, check: () => true, input: serveRuntime.input.upload("image", 32)},
   ];
-  const upload = bridge.createRoute("POST", "/files", parameters, async (metadata: {title: string; public: boolean}, image: {filename: string; size: number; text(): Promise<string>}) => { escapedUpload = image; return {title: metadata.title, public: metadata.public, filename: image.filename, size: image.size, text: await image.text()}; });
-  const formOnly = bridge.createRoute("POST", "/form", [parameters[0]!], async (metadata: unknown) => metadata);
-  const repeatedForm = bridge.createRoute("POST", "/repeated-form", [
+  const upload = bridge.createRoute("POST", routePattern(bridge, "/files"), parameters, async (_path: unknown, metadata: {title: string; public: boolean}, image: {filename: string; size: number; text(): Promise<string>}) => { escapedUpload = image; return {title: metadata.title, public: metadata.public, filename: image.filename, size: image.size, text: await image.text()}; });
+  const formOnly = bridge.createRoute("POST", routePattern(bridge, "/form"), [parameters[0]!], async (_path: unknown, metadata: unknown) => metadata);
+  const repeatedForm = bridge.createRoute("POST", routePattern(bridge, "/repeated-form"), [
     {name: "input", source: "form", kind: "data", required: true, check: () => true, schema: {type: "object", properties: {tag: {type: "array", items: {type: "string"}}}, required: ["tag"]}, input: serveRuntime.input.form(RepeatedFields)},
-  ], async (input: unknown) => input);
+  ], async (_path: unknown, input: unknown) => input);
   const server = await serveRuntime.serve(bridge.createApp("forms", [upload, formOnly, repeatedForm]), 0);
   try {
     const body = new FormData();
@@ -1209,7 +1264,9 @@ test("Node form and upload inputs parse bounded multipart and URL-encoded bodies
     assert.deepEqual(await repeated.json(), {tag: ["one", "two"]});
     const duplicateScalar = await fetch(`http://127.0.0.1:${server.port}/form`, {method: "POST", headers: {"content-type": "application/x-www-form-urlencoded"}, body: "title=one&title=two&public=false"});
     assert.equal(duplicateScalar.status, 422);
-    assert.deepEqual(await duplicateScalar.json(), {error: "duplicate_parameter", parameter: "title"});
+    const duplicateProblem = await duplicateScalar.json() as {code: string; parameter: string};
+    assert.equal(duplicateProblem.code, "request.duplicate.parameter");
+    assert.equal(duplicateProblem.parameter, "title");
 
     const oversized = new FormData();
     oversized.set("title", "large");
@@ -1217,7 +1274,9 @@ test("Node form and upload inputs parse bounded multipart and URL-encoded bodies
     oversized.set("image", new Blob(["x".repeat(33)]), "large.txt");
     const refused = await fetch(`http://127.0.0.1:${server.port}/files`, {method: "POST", body: oversized});
     assert.equal(refused.status, 413);
-    assert.deepEqual(await refused.json(), {error: "upload_too_large", parameter: "image"});
+    const oversizedProblem = await refused.json() as {code: string; parameter: string};
+    assert.equal(oversizedProblem.code, "request.upload.too.large");
+    assert.equal(oversizedProblem.parameter, "image");
   } finally {
     await server.stop();
   }
@@ -1238,7 +1297,8 @@ test("Node server-test client runs in process with lifespan, cookies, and depend
     fileResponse(root: string, path: string): unknown;
   }>("velar/serve");
   const bridge = Object.getOwnPropertyDescriptor(serveRuntime.ServeApp, "__velarCompilerBridge")?.value as {
-    createRoute(method: string, path: string, parameters: readonly Record<string, unknown>[], handler: (...arguments_: never[]) => Promise<unknown>): unknown;
+    createPattern(source: Record<string, unknown>): unknown;
+    createRoute(method: string, path: unknown, parameters: readonly Record<string, unknown>[], handler: (...arguments_: never[]) => Promise<unknown>): unknown;
     createApp(name: string, items: readonly unknown[]): unknown;
     testClient(app: unknown, overrides?: Map<unknown, unknown>): Promise<{
       get(path: string): Promise<{status: number; text(): Promise<string>; json(): Promise<unknown>}>;
@@ -1250,18 +1310,18 @@ test("Node server-test client runs in process with lifespan, cookies, and depend
   let stops = 0;
   let realResolves = 0;
   const user = serveRuntime.provide({}, async () => { realResolves += 1; return {id: "real"}; }, "app");
-  const login = bridge.createRoute("GET", "/login", [], async () => serveRuntime.setCookie(serveRuntime.setCookie(serveRuntime.json({ok: true}), "session", "s1"), "theme", "dark"));
-  const me = bridge.createRoute("GET", "/me", [
+  const login = bridge.createRoute("GET", routePattern(bridge, "/login"), [], async () => serveRuntime.setCookie(serveRuntime.setCookie(serveRuntime.json({ok: true}), "session", "s1"), "theme", "dark"));
+  const me = bridge.createRoute("GET", routePattern(bridge, "/me"), [
     {name: "user", source: "dependency", kind: "dependency", required: true, check: () => true, input: serveRuntime.input.dependency(user)},
     {name: "session", source: "cookie", kind: "string", required: true, check: () => true, input: serveRuntime.input.cookie("session", null)},
     {name: "theme", source: "cookie", kind: "string", required: true, check: () => true, input: serveRuntime.input.cookie("theme", null)},
-  ], async (current: {id: string}, session: string | null, theme: string | null) => ({id: current.id, session, theme}));
+  ], async (_path: unknown, current: {id: string}, session: string | null, theme: string | null) => ({id: current.id, session, theme}));
   const Metadata = registerRuntimeType(Object.freeze({is(value: unknown) { return !!value && typeof value === "object"; }, parse(value: unknown) { return value as {title: string}; }}));
-  const upload = bridge.createRoute("POST", "/upload", [
+  const upload = bridge.createRoute("POST", routePattern(bridge, "/upload"), [
     {name: "metadata", source: "form", kind: "data", required: true, check: () => true, schema: {type: "object", properties: {title: {type: "string"}}, required: ["title"]}, input: serveRuntime.input.form(Metadata)},
     {name: "image", source: "upload", kind: "upload", required: true, check: () => true, input: serveRuntime.input.upload("image", 64)},
-  ], async (metadata: {title: string}, image: {filename: string; text(): Promise<string>}) => ({title: metadata.title, filename: image.filename, body: await image.text()}));
-  const asset = bridge.createRoute("GET", "/asset", [], async () => serveRuntime.fileResponse(directory, "/asset.txt"));
+  ], async (_path: unknown, metadata: {title: string}, image: {filename: string; text(): Promise<string>}) => ({title: metadata.title, filename: image.filename, body: await image.text()}));
+  const asset = bridge.createRoute("GET", routePattern(bridge, "/asset"), [], async () => serveRuntime.fileResponse(directory, "/asset.txt"));
   const app = serveRuntime.lifecycle(bridge.createApp("test", [login, me, upload, asset]), async () => { starts += 1; return null; }, async () => { stops += 1; return null; });
   const client = await bridge.testClient(app, new Map([[user, {id: "override"}]]));
   assert.equal(starts, 1);
@@ -1330,7 +1390,8 @@ test("Node application shutdown joins concurrent callers and drains requests bef
     lifecycle(app: unknown, startup: () => unknown, shutdown: () => unknown): unknown;
   }>("velar/serve");
   const bridge = Object.getOwnPropertyDescriptor(serveRuntime.ServeApp, "__velarCompilerBridge")?.value as {
-    createRoute(method: string, path: string, parameters: readonly Record<string, unknown>[], handler: (...arguments_: never[]) => Promise<unknown>): unknown;
+    createPattern(source: Record<string, unknown>): unknown;
+    createRoute(method: string, path: unknown, parameters: readonly Record<string, unknown>[], handler: (...arguments_: never[]) => Promise<unknown>): unknown;
     createApp(name: string, items: readonly unknown[]): unknown;
     testClient(app: unknown): Promise<{
       get(path: string): Promise<{status: number; json(): Promise<unknown>}>;
@@ -1353,9 +1414,9 @@ test("Node application shutdown joins concurrent callers and drains requests bef
     "app",
     async () => { providerReleases += 1; events.push("provider-release"); return null; },
   );
-  const route = bridge.createRoute("GET", "/work", [
+  const route = bridge.createRoute("GET", routePattern(bridge, "/work"), [
     {name: "shared", source: "dependency", kind: "dependency", required: true, check: () => true, input: serveRuntime.input.dependency(singleton)},
-  ], async () => {
+  ], async (_path: unknown) => {
     entered += 1;
     if (entered === requestCount) markEntered();
     await requestGate;
@@ -1398,7 +1459,8 @@ test("Node timeout ownership survives middleware that replaces the timeout respo
     serve(app: unknown, port: number): Promise<{readonly port: number; stop(grace?: number): Promise<null>}>;
   }>("velar/serve");
   const bridge = Object.getOwnPropertyDescriptor(serveRuntime.ServeApp, "__velarCompilerBridge")?.value as {
-    createRoute(method: string, path: string, parameters: readonly Record<string, unknown>[], handler: (...arguments_: never[]) => Promise<unknown>): unknown;
+    createPattern(source: Record<string, unknown>): unknown;
+    createRoute(method: string, path: unknown, parameters: readonly Record<string, unknown>[], handler: (...arguments_: never[]) => Promise<unknown>): unknown;
     createApp(name: string, items: readonly unknown[]): unknown;
   };
   let enter = (): void => {};
@@ -1407,9 +1469,9 @@ test("Node timeout ownership survives middleware that replaces the timeout respo
   const gate = new Promise<void>((resolveGate) => { finish = resolveGate; });
   let releases = 0;
   const dependency = serveRuntime.provide({}, async () => ({value: "owned"}), "request", async () => { releases += 1; return null; });
-  const route = bridge.createRoute("GET", "/slow", [
+  const route = bridge.createRoute("GET", routePattern(bridge, "/slow"), [
     {name: "owned", source: "dependency", kind: "dependency", required: true, check: () => true, input: serveRuntime.input.dependency(dependency)},
-  ], async () => { enter(); await gate; return {ok: true}; });
+  ], async (_path: unknown) => { enter(); await gate; return {ok: true}; });
   const app = serveRuntime.use(bridge.createApp("timeout-ownership", [route]), [
     async (_request: unknown, next: () => Promise<unknown>) => { await next(); return {status: 200, json: {replaced: true}}; },
     serveRuntime.middleware.timeout(5),
@@ -1489,7 +1551,8 @@ test("Node docs and built-in middleware provide offline OpenAPI, security, CORS,
     serve(app: unknown, port: number): Promise<{readonly port: number; stop(): Promise<null>}>;
   }>("velar/serve");
   const bridge = Object.getOwnPropertyDescriptor(serveRuntime.ServeApp, "__velarCompilerBridge")?.value as {
-    createRoute(method: string, path: string, parameters: readonly Record<string, unknown>[], handler: (...arguments_: never[]) => Promise<unknown>, metadata?: Record<string, unknown>): unknown;
+    createPattern(source: Record<string, unknown>): unknown;
+    createRoute(method: string, path: unknown, parameters: readonly Record<string, unknown>[], handler: (...arguments_: never[]) => Promise<unknown>, metadata?: Record<string, unknown>): unknown;
     createApp(name: string, items: readonly unknown[]): unknown;
   };
   const token = serveRuntime.security.bearer();
@@ -1497,12 +1560,11 @@ test("Node docs and built-in middleware provide offline OpenAPI, security, CORS,
   assert.equal(serveRuntime.RouteDocumentation.is({summary: "Read data", errors: new Map([[401, "Missing credentials"]])}), true);
   assert.equal(serveRuntime.RouteDocumentation.is({status: 199}), false, "OpenAPI metadata cannot advertise an informational response as a final route result");
   assert.equal(serveRuntime.RouteDocumentation.is({status: 200}), true);
-  const route = bridge.createRoute("GET", "/data", [
+  const route = bridge.createRoute("GET", routePattern(bridge, "/data", [{name: "limit", kind: "number", optional: true}]), [
     {name: "token", source: "security", kind: "security", required: true, check: () => true, input: token},
     {name: "apiKey", source: "security", kind: "security", required: true, check: () => true, input: apiKey},
-    {name: "limit", source: "query", kind: "number", required: false, check: (value: unknown) => typeof value === "number", schema: {type: "number"}},
-  ], async (credential: string) => ({credential, payload: "x".repeat(4096)}), {responseSchema: {type: "object"}});
-  const events = bridge.createRoute("GET", "/events", [], async () => serveRuntime.sse(async (send) => {
+  ], async (_path: unknown, credential: string) => ({credential, payload: "x".repeat(4096)}), {responseSchema: {type: "object"}});
+  const events = bridge.createRoute("GET", routePattern(bridge, "/events"), [], async () => serveRuntime.sse(async (send) => {
     await send({event: "ready", id: "1", retry: 1000, data: "first\nsecond"});
     return null;
   }));
@@ -1615,7 +1677,8 @@ test("Node WebSocket listen composes one ServeApp lifecycle and keeps queues glo
       connect(url: string): Promise<{origin: string | null; send(value: string): Promise<null>; next(): Promise<string | Uint8Array | null>; close(): Promise<null>}>;
     };
     const bridge = Object.getOwnPropertyDescriptor(serve.ServeApp, "__velarCompilerBridge")?.value as {
-      createRoute(method: string, path: string, parameters: readonly unknown[], handler: (...arguments_: never[]) => Promise<unknown>): unknown;
+      createPattern(source: Record<string, unknown>): unknown;
+      createRoute(method: string, path: unknown, parameters: readonly unknown[], handler: (...arguments_: never[]) => Promise<unknown>): unknown;
       createApp(name: string, items: readonly unknown[]): unknown;
     };
     let starts = 0;
@@ -1623,9 +1686,9 @@ test("Node WebSocket listen composes one ServeApp lifecycle and keeps queues glo
     let markWaitEntered = (): void => {};
     const waitEntered = new Promise<void>((resolveEntered) => { markWaitEntered = resolveEntered; });
     let cancellationReason: string | null = null;
-    const health = bridge.createRoute("GET", "/health", [], async () => ({ok: true}));
-    const echo = bridge.createRoute("POST", "/echo", [{name: "request", source: "request", kind: "request", required: true}], async (request: {text(): Promise<string>}) => ({body: await request.text()}));
-    const wait = bridge.createRoute("GET", "/wait", [{name: "request", source: "request", kind: "request", required: true}], async (request: {cancellation: {cancelled: boolean; reason: string | null}}) => {
+    const health = bridge.createRoute("GET", routePattern(bridge, "/health"), [], async () => ({ok: true}));
+    const echo = bridge.createRoute("POST", routePattern(bridge, "/echo"), [{name: "request", source: "request", kind: "request", required: true}], async (_path: unknown, request: {text(): Promise<string>}) => ({body: await request.text()}));
+    const wait = bridge.createRoute("GET", routePattern(bridge, "/wait"), [{name: "request", source: "request", kind: "request", required: true}], async (_path: unknown, request: {cancellation: {cancelled: boolean; reason: string | null}}) => {
       markWaitEntered();
       while (!request.cancellation.cancelled) await new Promise<void>((resolveWait) => setTimeout(resolveWait, 2));
       cancellationReason = request.cancellation.reason;

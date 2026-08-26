@@ -20,22 +20,36 @@ import {
   type ValueType,
 } from "@velarscript/compiler/extension";
 import { routeShape } from "./route-shape.ts";
-import { isNodeServerStatement, type NodeNotFoundDeclaration, type NodeRouteDeclaration, type NodeServerDeclaration, type NodeServerSpread } from "./server-ast.ts";
+import {
+  collectRoutePatternValues,
+  evaluateRoutePatternExpression,
+  isCompiledRoutePattern,
+  isRoutePatternStaticValue,
+  type CompiledRoutePattern,
+  type RoutePatternCapture,
+  type RoutePatternStaticValue,
+} from "./route-pattern.ts";
+import { isNodeServerStatement, type NodeNotFoundDeclaration, type NodeResponseDeclaration, type NodeRouteDeclaration, type NodeServerDeclaration, type NodeServerSpread } from "./server-ast.ts";
 import {
   isNodeProviderType,
   isNodeRouteInputType,
   isServeRequestType,
+  nodeBoundRoutePathType,
   nodeProviderResult,
   nodeProviderType,
   nodeRouteInputType,
   nodeRouteInputValue,
+  httpOutcomeType,
+  routePatternType,
   serveAppType,
   serveRequestType,
+  VELAR_HTTP_OUTCOME_IDENTITY,
   type NodeRouteInputType,
 } from "./server-types.ts";
 
 const routeHintPrefix = "node.route-param:";
 const routeResultHintPrefix = "node.route-result:";
+const routeCaptureHintPrefix = "node.route-capture:";
 const responseHeadersType: ValueType = {kind: "map", key: stringType, value: stringType};
 const sseEventType: ValueType = {kind: "object", fields: new Map([
   ["data", stringType], ["event", optionalOf(stringType)], ["id", optionalOf(stringType)], ["retry", optionalOf(numberType)],
@@ -59,10 +73,10 @@ const serveCombinators: ReadonlySet<string> = new Set<ServeCombinator>(["prefix"
 /** A spread target the analyzer resolved: the declaring server, seen through zero or more literal prefixes. */
 type ComposedServer = {readonly server: NodeServerDeclaration; readonly prefix: string};
 
-type NodeResponseMetadata = {readonly status: number | null; readonly contentType: string};
+type NodeResponseMetadata = {readonly status: number | null; readonly contentType: string; readonly payload?: ValueType};
 type NodeResponseValueType = ValueType & {readonly nodeResponse?: NodeResponseMetadata};
 
-export type RouteParameterSource = "path" | "query" | "body" | "request" | "header" | "cookie" | "form" | "upload" | "dependency" | "security";
+export type RouteParameterSource = "body" | "request" | "header" | "cookie" | "form" | "upload" | "dependency" | "security";
 export type RouteParameterKind = "string" | "number" | "bool" | "enum" | "list" | "data" | "request" | "upload" | "dependency" | "security";
 type OpenApiSchema = Readonly<Record<string, unknown>>;
 
@@ -108,6 +122,28 @@ export function parseRouteResultHint(value: string | undefined): {readonly schem
   }
 }
 
+/**
+ * p"..." 中的命名类型会在分析阶段解析到真正的枚举声明。生成器只看到原始
+ * TypeSyntax，无法自行恢复枚举的线值，因此把已经验证过的 schema 随 lowering
+ * hints 传下去；运行时校验与 OpenAPI 由此继续使用同一个类型事实。
+ */
+export function routeCaptureHint(kind: "string" | "number" | "bool" | "enum", schema: OpenApiSchema): string {
+  return `${routeCaptureHintPrefix}${JSON.stringify({kind, schema})}`;
+}
+
+export function parseRouteCaptureHint(value: string | undefined): {readonly kind: "string" | "number" | "bool" | "enum"; readonly schema: OpenApiSchema} | null {
+  if (!value?.startsWith(routeCaptureHintPrefix)) return null;
+  try {
+    const parsed = JSON.parse(value.slice(routeCaptureHintPrefix.length)) as {kind?: unknown; schema?: unknown};
+    return parsed && typeof parsed === "object" && (parsed.kind === "string" || parsed.kind === "number" || parsed.kind === "bool" || parsed.kind === "enum")
+      && parsed.schema && typeof parsed.schema === "object" && !Array.isArray(parsed.schema)
+      ? {kind: parsed.kind, schema: parsed.schema as OpenApiSchema}
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 export class VelarNodeAnalyzer extends Analyzer {
   private readonly contextualRouteParameters = new Map<string, ValueType>();
   private readonly routeInputs = new Map<string, NodeRouteInputType>();
@@ -121,11 +157,20 @@ export class VelarNodeAnalyzer extends Analyzer {
   private readonly stableAliases = new Map<string, boolean>();
   /** The program under analysis, held for the alias-stability walk. */
   private moduleProgram: Program | null = null;
+  /** 当前模块可静态解析的路由目录，包含通过接口注解导入的常量。 */
+  private routePatternValues: ReadonlyMap<string, RoutePatternStaticValue> = new Map();
+  private readonly importedRoutePatternValues: ReadonlyMap<string, RoutePatternStaticValue>;
+  /** 每条路由最终采用的编译期模板；碰撞检查和形参类型都读取这里。 */
+  private readonly routePatterns = new Map<string, CompiledRoutePattern>();
   private readonly nodeModulePath: string | null;
 
   constructor(context: AnalysisContext = {}, extensions: readonly CompilerAnalysisExtension[] = []) {
     super(context, extensions);
     this.nodeModulePath = context.path ?? null;
+    this.importedRoutePatternValues = new Map(
+      [...(context.extensionImports?.get("@velarscript/node") ?? [])]
+        .filter((entry): entry is [string, RoutePatternStaticValue] => isRoutePatternStaticValue(entry[1])),
+    );
   }
 
   override analyze(program: Program) {
@@ -134,6 +179,8 @@ export class VelarNodeAnalyzer extends Analyzer {
     this.moduleServeCombinators.clear();
     this.stableAliases.clear();
     this.moduleProgram = program;
+    this.routePatternValues = collectRoutePatternValues(program, this.importedRoutePatternValues);
+    this.routePatterns.clear();
     for (const statement of program.body) {
       if (isNodeServerStatement(statement)) {
         if (!this.moduleServers.has(statement.name)) this.moduleServers.set(statement.name, statement);
@@ -178,6 +225,17 @@ export class VelarNodeAnalyzer extends Analyzer {
     parameter: Parameter,
   ): ValueType | null {
     if (statement.kind !== "NodeRouteDeclaration" || !parameter.defaultValue) return null;
+    if (parameter.name === "path") {
+      const route = statement as NodeRouteDeclaration;
+      this.requireAssignable(this.inferExpression(parameter.defaultValue, routePatternType), routePatternType, parameter.defaultValue.span);
+      const value = evaluateRoutePatternExpression(parameter.defaultValue, this.routePatternValues);
+      if (!isCompiledRoutePattern(value)) {
+        this.typeError("Route 'path' must resolve to a compile-time p\"...\" value, a const alias, or a const catalog member", parameter.defaultValue.span);
+        return this.boundRoutePathType(null);
+      }
+      this.routePatterns.set(spanIdentity(route.span), value);
+      return this.boundRoutePathType(value);
+    }
     const inferred = this.expandAliases(this.inferParameterDefault(parameter.defaultValue));
     const key = `${parameter.span.start}:${parameter.span.end}`;
     if (isNodeRouteInputType(inferred)) {
@@ -190,6 +248,70 @@ export class VelarNodeAnalyzer extends Analyzer {
     return inferred;
   }
 
+  protected override inferExtensionExpression(expression: Expression, _contextualType: ValueType): ValueType | undefined {
+    if (expression.kind !== "ExtensionExpression:node:path-pattern") return undefined;
+    const pattern = (expression as typeof expression & {readonly pattern: CompiledRoutePattern}).pattern;
+    for (const capture of pattern.path.concat(pattern.query)) this.recordRouteCaptureHint(capture, this.routeCaptureType(capture));
+    return routePatternType;
+  }
+
+  private staticPattern(route: NodeRouteDeclaration): CompiledRoutePattern | null {
+    const cached = this.routePatterns.get(spanIdentity(route.span));
+    if (cached) return cached;
+    const value = evaluateRoutePatternExpression(route.pathExpression, this.routePatternValues);
+    if (!isCompiledRoutePattern(value)) return null;
+    this.routePatterns.set(spanIdentity(route.span), value);
+    return value;
+  }
+
+  private routePath(route: NodeRouteDeclaration): string {
+    return this.staticPattern(route)?.pathname ?? route.path;
+  }
+
+  /**
+   * 路由模板就是处理函数的签名来源。字段类型在这里解析一次，正文随后看到
+   * `path.params` 与 `path.query` 的精确只读结构；可选查询字段自然得到 `T?`。
+   */
+  private boundRoutePathType(pattern: CompiledRoutePattern | null): ValueType {
+    const fields = (captures: readonly RoutePatternCapture[], query: boolean): ValueType => {
+      const values = new Map<string, ValueType>();
+      const optionalFields = new Set<string>();
+      for (const capture of captures) {
+        const resolved = this.routeCaptureType(capture);
+        values.set(capture.name, capture.optional ? optionalOf(resolved) : resolved);
+        if (capture.optional) optionalFields.add(capture.name);
+        const scalar = scalarKind(resolved);
+        if (scalar && scalar !== "list") this.recordRouteCaptureHint(capture, resolved);
+        if (!scalar || scalar === "list") {
+          this.typeError(`Route field '${capture.name}' must be string, number, bool, or an enum; received ${describeType(resolved)}`, capture.typeSpan);
+        }
+        if (!query && capture.optional) this.typeError(`Path field '${capture.name}' cannot be optional`, capture.span);
+      }
+      return {kind: "object", fields: values, optionalFields, readonlyFields: new Set(values.keys())};
+    };
+    const params = fields(pattern?.path ?? [], false);
+    const query = fields(pattern?.query ?? [], true);
+    return nodeBoundRoutePathType(params, query);
+  }
+
+  private routeCaptureType(capture: RoutePatternCapture): ValueType {
+    if (capture.resolvedType) return this.expandAliases(capture.resolvedType);
+    const reference = {
+      syntax: {kind: "NamedTypeSyntax", name: capture.typeName, span: capture.typeSpan} as const,
+      span: capture.typeSpan,
+    };
+    return this.expandAliases(this.resolveValidatedAnnotation(reference));
+  }
+
+  private recordRouteCaptureHint(capture: RoutePatternCapture, resolved: ValueType): void {
+    const scalar = scalarKind(resolved);
+    if (!scalar || scalar === "list") return;
+    this.extensionCalls.set(
+      spanIdentity(capture.typeSpan),
+      routeCaptureHint(scalar, openApiSchema(resolved, (identity) => this.fieldsOf(identity), new Set(), (identity) => this.enumValuesOf(identity))),
+    );
+  }
+
   private analyzeServer(statement: NodeServerDeclaration): void {
     if (!this.isTopLevelScope()) {
       this.typeError("A server is a module declaration; move it to the top level", statement.span);
@@ -198,6 +320,7 @@ export class VelarNodeAnalyzer extends Analyzer {
 
     const routes = new Map<string, ComposedRoute>();
     let notFound: ComposedFallback | null = null;
+    let responsePolicy: NodeResponseDeclaration | null = null;
     for (const item of statement.items) {
       if (item.kind === "NodeServerSpread") {
         this.requireAssignable(this.inferExpression(item.value, serveAppType), serveAppType, item.value.span);
@@ -206,6 +329,10 @@ export class VelarNodeAnalyzer extends Analyzer {
         if (composed.notFound) {
           if (notFound) this.typeError(describeFallbackCollision(notFound, composed.notFound), item.span);
           else notFound = composed.notFound;
+        }
+        if (composed.responsePolicy) {
+          if (responsePolicy) this.typeError("A server can declare only one @response policy", item.span);
+          else responsePolicy = composed.responsePolicy;
         }
         for (const entry of composed.routes) this.recordRoute(entry, routes, item.span);
         continue;
@@ -217,7 +344,13 @@ export class VelarNodeAnalyzer extends Analyzer {
         this.analyzeNotFound(item);
         continue;
       }
-      this.recordRoute({route: item, path: item.path, spread: null, origin: []}, routes, item.pathSpan);
+      if (item.kind === "NodeResponseDeclaration") {
+        if (responsePolicy) this.typeError("A server can declare only one @response policy", item.span);
+        else responsePolicy = item;
+        this.analyzeResponse(item);
+        continue;
+      }
+      this.recordRoute({route: item, path: this.routePath(item), spread: null, origin: []}, routes, item.pathSpan);
       this.analyzeRoute(item);
     }
   }
@@ -274,13 +407,14 @@ export class VelarNodeAnalyzer extends Analyzer {
   private composedItems(
     statement: NodeServerDeclaration,
     spread: NodeServerSpread,
-  ): {readonly routes: readonly ComposedRoute[]; readonly notFound: ComposedFallback | null} | null {
+  ): {readonly routes: readonly ComposedRoute[]; readonly notFound: ComposedFallback | null; readonly responsePolicy: NodeResponseDeclaration | null} | null {
     const target = this.resolveComposedServer(spread.value);
     if (!target) return null;
     const routes: ComposedRoute[] = [];
     const shapes = new Set<string>();
     const visited = new Set<NodeServerDeclaration>([statement]);
     let notFound: ComposedFallback | null = null;
+    let responsePolicy: NodeResponseDeclaration | null = null;
     const collect = (server: NodeServerDeclaration, prefix: string, origin: readonly string[]): void => {
       if (visited.has(server)) return;
       visited.add(server);
@@ -291,15 +425,22 @@ export class VelarNodeAnalyzer extends Analyzer {
           continue;
         }
         if (item.kind === "NodeNotFoundDeclaration") {
-          // The runtime refuses `prefix` around an app with @notFound outright, so a fallback seen
-          // through a prefix never reaches any composed table and composing it here would report
-          // a duplicate the program cannot have.
-          if (prefix === "") notFound ??= {fallback: item, spread, origin};
+          if (prefix !== "") {
+            this.typeError("prefix cannot scope @notFound; compose the fallback on the final server instead", spread.span);
+          } else notFound ??= {fallback: item, spread, origin};
+          continue;
+        }
+        if (item.kind === "NodeResponseDeclaration") {
+          // @response 是最终应用的全局表示策略，前缀只能改变路径，无法缩小它
+          // 的作用域。静态可见时在这里拒绝，避免构建应用时才出现跨路由副作用。
+          if (prefix !== "") {
+            this.typeError("prefix cannot scope @response; compose the policy on the final server instead", spread.span);
+          } else responsePolicy ??= item;
           continue;
         }
         // A server that conflicts with itself already reported it; one entry per shape is what
         // reaches the composing server, exactly as one entry per shape reaches its own map.
-        const path = prefixedRoutePath(prefix, item.path);
+        const path = prefixedRoutePath(prefix, this.routePath(item));
         const shape = `${item.method} ${routeShape(path)}`;
         if (shapes.has(shape)) continue;
         shapes.add(shape);
@@ -307,7 +448,7 @@ export class VelarNodeAnalyzer extends Analyzer {
       }
     };
     collect(target.server, target.prefix, [target.server.name]);
-    return {routes, notFound};
+    return {routes, notFound, responsePolicy};
   }
 
   /**
@@ -396,8 +537,41 @@ export class VelarNodeAnalyzer extends Analyzer {
     }
   }
 
+  private analyzeResponse(handler: NodeResponseDeclaration): void {
+    this.analyzeFunctionDeclaration(handler, null, true, false, true, "Response policy");
+    if (handler.parameters.length < 1 || handler.parameters.length > 2) {
+      this.typeError("@response declares (outcome: HttpOutcome) or (outcome: HttpOutcome, request: Request)", handler.signatureSpan);
+    }
+    for (const [index, parameter] of handler.parameters.entries()) {
+      if (parameter.rest) this.typeError("@response parameters cannot be rest parameters", parameter.span);
+      if (parameter.defaultValue) this.typeError("@response parameters are supplied by the framework and cannot have defaults", parameter.span);
+      if (!parameter.type) {
+        this.typeError(`@response parameter ${index + 1} requires an explicit ${index === 0 ? "HttpOutcome" : "Request"} type`, parameter.span);
+        continue;
+      }
+      const resolved = this.expandAliases(this.resolveValidatedAnnotation(parameter.type));
+      const valid = index === 0
+        ? resolved.kind === "named" && (resolved.identity === VELAR_HTTP_OUTCOME_IDENTITY || resolved.name === "HttpOutcome")
+        : isServeRequestType(resolved);
+      if (!valid) this.typeError(`@response parameter ${index + 1} must be ${index === 0 ? "HttpOutcome" : "Request"}; received ${describeType(resolved)}`, parameter.span);
+    }
+    const result = this.expandAliases(this.inferredFunctionResult(handler));
+    this.extensionCalls.set(
+      spanIdentity(handler.signatureSpan),
+      routeResultHint(
+        openApiResponseSchema(result, (identity) => this.fieldsOf(identity), new Set(), (identity) => this.enumValuesOf(identity)),
+        openApiResponseContentTypes(result),
+        null,
+      ),
+    );
+    if (!isResponsePolicyResult(result, (identity) => this.fieldsOf(identity), new Set())) {
+      this.typeError(`@response must return Data or a final response from velar/serve; received ${describeType(result)}`, handler.returnType?.span ?? handler.span);
+    }
+  }
+
   private analyzeRoute(route: NodeRouteDeclaration): void {
-    const pathNames = validateRoutePath(route.path, route.pathSpan, (message) => this.typeError(message, route.pathSpan));
+    const pattern = this.staticPattern(route);
+    if (!pattern) this.typeError("A route path must be statically resolvable from p\"...\"", route.pathSpan);
     this.analyzeFunctionDeclaration(route, null, true, false, true, "Route");
 
     let bodies = 0;
@@ -405,6 +579,7 @@ export class VelarNodeAnalyzer extends Analyzer {
     let requests = 0;
     const declared = new Set<string>();
     for (const parameter of route.parameters) {
+      if (parameter.name === "path") continue;
       if (declared.has(parameter.name)) {
         this.typeError(`Route parameter '${parameter.name}' is declared more than once`, parameter.span);
       }
@@ -422,16 +597,7 @@ export class VelarNodeAnalyzer extends Analyzer {
       let source: RouteParameterSource;
       let kind: RouteParameterKind;
 
-      if (pathNames.has(parameter.name)) {
-        source = "path";
-        pathNames.delete(parameter.name);
-        if (!scalar || scalar === "list") {
-          this.typeError(`Path parameter '${parameter.name}' must be string, number, bool, or an enum; received ${describeType(resolved)}`, parameter.span);
-          continue;
-        }
-        kind = scalar;
-        if (parameter.defaultValue) this.typeError(`Path parameter '${parameter.name}' cannot have a default value`, parameter.span);
-      } else if (routeInput) {
+      if (routeInput) {
         source = routeInput.role;
         if (source === "form" || source === "upload") {
           forms += 1;
@@ -454,14 +620,14 @@ export class VelarNodeAnalyzer extends Analyzer {
         if (requests > 1) this.typeError("A route can declare only one Request parameter", parameter.span);
         if (parameter.defaultValue) this.typeError("A Request parameter is supplied by the server and cannot have a default value", parameter.span);
       } else if (scalar) {
-        source = "query";
-        kind = scalar;
+        this.typeError(`Scalar route input '${parameter.name}' must be declared in the p\"...?...\" query contract or use an explicit header/cookie/security descriptor`, parameter.span);
+        continue;
       } else {
         source = "body";
         kind = "data";
         bodies += 1;
         if (route.method !== "POST" && route.method !== "PUT" && route.method !== "PATCH") {
-          this.typeError(`${route.method} routes do not infer a JSON body; use scalar query parameters or an explicit Request`, parameter.span);
+          this.typeError(`${route.method} routes do not infer a JSON body; use the route pattern query contract or an explicit Request`, parameter.span);
         }
         if (bodies > 1) this.typeError("A route can declare only one structured JSON body parameter", parameter.span);
         if (parameter.defaultValue) this.typeError("A structured JSON body parameter cannot have a default value", parameter.span);
@@ -477,10 +643,6 @@ export class VelarNodeAnalyzer extends Analyzer {
     if (forms > 0 && bodies > 0) {
       this.typeError("A route cannot combine an inferred JSON body with form or upload inputs", route.span);
     }
-    for (const missing of pathNames) {
-      this.typeError(`Route path capture '${missing}' could not declare its route input; rewrite the capture as '{${missing}:string}'`, route.pathSpan);
-    }
-
     const result = this.expandAliases(this.inferredFunctionResult(route));
     this.extensionCalls.set(
       `${route.signatureSpan.start}:${route.signatureSpan.end}`,
@@ -515,13 +677,20 @@ export function inferNodeIntrinsic(context: CompilerIntrinsicAnalysisContext): V
       arity(1, 2);
       const value = inferAt(0, unknownType);
       if (argumentAt(1)) inferAt(1, optionalOf(responseHeadersType));
-      return nodeResponseValue("json", value, 201, "application/json");
+      return nodeOutcomeValue(value, 201);
     }
     case "serve.response.noContent": {
       arity(0, 2);
       if (argumentAt(0)) inferAt(0, nullType);
       if (argumentAt(1)) inferAt(1, optionalOf(responseHeadersType));
-      return nodeResponseValue("text", stringType, 204, "text/plain");
+      return nodeOutcomeValue(nullType, 204);
+    }
+    case "serve.response.respond": {
+      arity(1, 3);
+      const value = inferAt(0, unknownType);
+      if (argumentAt(1)) inferAt(1, numberType);
+      if (argumentAt(2)) inferAt(2, optionalOf(responseHeadersType));
+      return nodeOutcomeValue(value, literalStatus(argumentAt(1), 200));
     }
     case "serve.response.redirect": {
       arity(1, 3);
@@ -546,14 +715,16 @@ export function inferNodeIntrinsic(context: CompilerIntrinsicAnalysisContext): V
     }
     case "serve.response.background": {
       arity(2, 2);
-      const response = expandAliases(inferAt(0));
+      const inferred = inferAt(0);
+      const response = expandAliases(inferred);
       requireResponseValue(context, response, argumentAt(0)?.span ?? callSpan);
       callbackAt(1, [], unknownType);
-      return response;
+      return inferred;
     }
     case "serve.response.setCookie": {
       arity(3, 8);
-      const response = expandAliases(inferAt(0));
+      const inferred = inferAt(0);
+      const response = expandAliases(inferred);
       requireResponseValue(context, response, argumentAt(0)?.span ?? callSpan);
       inferAt(1, stringType);
       inferAt(2, stringType);
@@ -562,17 +733,17 @@ export function inferNodeIntrinsic(context: CompilerIntrinsicAnalysisContext): V
       if (argumentAt(5)) inferAt(5, boolType);
       if (argumentAt(6)) inferAt(6, stringType);
       if (argumentAt(7)) inferAt(7, optionalOf(numberType));
-      return response;
+      return inferred;
     }
     case "serve.response.clearCookie": {
       arity(2, 3);
-      const response = expandAliases(inferAt(0));
+      const inferred = inferAt(0);
+      const response = expandAliases(inferred);
       requireResponseValue(context, response, argumentAt(0)?.span ?? callSpan);
       inferAt(1, stringType);
       if (argumentAt(2)) inferAt(2, stringType);
-      return response;
+      return inferred;
     }
-    case "serve.input.query":
     case "serve.input.header":
     case "serve.input.cookie": {
       arity(0, 2);
@@ -583,7 +754,7 @@ export function inferNodeIntrinsic(context: CompilerIntrinsicAnalysisContext): V
         const inferred = expandAliases(inferAt(1, { kind: "union", members: [stringType, { kind: "null" }] }));
         if (inferred.kind === "null" || inferred.kind === "optional") result = optionalOf(stringType);
       }
-      const source = intrinsic.name.slice("serve.input.".length) as "query" | "header" | "cookie";
+      const source = intrinsic.name.slice("serve.input.".length) as "header" | "cookie";
       return nodeRouteInputType(source, result);
     }
     case "serve.input.form": {
@@ -693,7 +864,13 @@ function nodeResponseValue(body: "json" | "text" | "stream", value: ValueType, s
   return response;
 }
 
-function scalarKind(type: ValueType): Exclude<RouteParameterKind, "data" | "request"> | null {
+function nodeOutcomeValue(value: ValueType, status: number | null): ValueType {
+  // HttpOutcome 的公开字段描述框架信封，而 OpenAPI 应描述最终发给客户端的
+  // 业务值。把 payload 留在编译期元数据里，生成代码时不会携带额外对象。
+  return {...httpOutcomeType, nodeResponse: {status, contentType: "application/json", payload: value}} as NodeResponseValueType;
+}
+
+function scalarKind(type: ValueType): Extract<RouteParameterKind, "string" | "number" | "bool" | "enum" | "list"> | null {
   const value = type.kind === "optional" ? type.inner : type;
   if (value.kind === "string") return "string";
   if (value.kind === "number") return "number";
@@ -750,8 +927,12 @@ function isResponseShape(type: ValueType): boolean {
 }
 
 function requireResponseValue(context: CompilerIntrinsicAnalysisContext, type: ValueType, span: Parameters<CompilerIntrinsicAnalysisContext["typeError"]>[1]): void {
-  const response = type.kind === "union" ? type.members.every(isResponseShape) : isResponseShape(type);
+  const response = type.kind === "union" ? type.members.every((member) => isResponseShape(member) || isHttpOutcome(member)) : isResponseShape(type) || isHttpOutcome(type);
   if (!response) context.typeError(`Expected a ServeResponse, received ${describeType(type)}`, span);
+}
+
+function isHttpOutcome(type: ValueType): boolean {
+  return type.kind === "named" && (type.identity === VELAR_HTTP_OUTCOME_IDENTITY || type.name === "HttpOutcome");
 }
 
 function isRouteResult(
@@ -760,7 +941,20 @@ function isRouteResult(
   seen: ReadonlySet<string>,
 ): boolean {
   if (type.kind === "union") return type.members.every((member) => isRouteResult(member, fieldsOf, seen));
-  return isResponseShape(type) || isData(type, fieldsOf, seen);
+  return isResponseShape(type) || isHttpOutcome(type) || isData(type, fieldsOf, seen);
+}
+
+/**
+ * 响应策略是语义结果到最终表示的最后一步，因此不能再返回一个 HttpOutcome；
+ * 否则会形成第二轮策略选择，并让“只编码一次”的边界变得含糊。
+ */
+function isResponsePolicyResult(
+  type: ValueType,
+  fieldsOf: (identity: string) => ReadonlyMap<string, ValueType> | null,
+  seen: ReadonlySet<string>,
+): boolean {
+  if (type.kind === "union") return type.members.every((member) => isResponsePolicyResult(member, fieldsOf, seen));
+  return !isHttpOutcome(type) && (isResponseShape(type) || isData(type, fieldsOf, seen));
 }
 
 function openApiResponseSchema(
@@ -778,6 +972,8 @@ function openApiResponseSchema(
     if (json) return openApiSchema(json, fieldsOf, seen, enumValuesOf);
     if (type.fields.has("text") || type.fields.has("stream")) return { type: "string" };
   }
+  const metadata = (type as NodeResponseValueType).nodeResponse;
+  if (metadata?.payload) return openApiSchema(metadata.payload, fieldsOf, seen, enumValuesOf);
   return openApiSchema(type, fieldsOf, seen, enumValuesOf);
 }
 
@@ -1010,31 +1206,4 @@ function routeSpecificityDecides(left: readonly RouteSegment[], right: readonly 
   const [subset, superset] = leftLiterals.size < rightLiterals.size ? [leftLiterals, rightLiterals] : [rightLiterals, leftLiterals];
   for (const position of subset) if (!superset.has(position)) return false;
   return true;
-}
-
-function validateRoutePath(path: string, _sourceSpan: { readonly start: number; readonly end: number }, report: (message: string) => void): Set<string> {
-  const names = new Set<string>();
-  if (!path.startsWith("/")) report("A route path must start with '/'");
-  if (path.length > 1 && path.endsWith("/")) report("A route path must not end with '/' unless it is the root path");
-  if (path.includes("?") || path.includes("#")) report("A route path contains only its pathname; declare query parameters in the route signature");
-  if (path.includes("\\")) report("A route path uses '/', never a backslash");
-  if (path.includes("//")) report("A route path cannot contain an empty segment");
-  const segments = path.split("/").slice(1);
-  for (let index = 0; index < segments.length; index += 1) {
-    const segment = segments[index]!;
-    if (segment === "*") {
-      report("A source route does not use wildcards; compose staticFiles(...) for a checked file fallback");
-      continue;
-    }
-    if (!segment.startsWith("{") && !segment.endsWith("}")) continue;
-    const match = /^\{([A-Za-z_][A-Za-z0-9_]*):([A-Za-z_][A-Za-z0-9_]*)\}$/u.exec(segment);
-    if (!match) {
-      report(`Route path capture '${segment}' must use '{name:type}' with a half-width ':'`);
-      continue;
-    }
-    const name = match[1]!;
-    if (names.has(name)) report(`Route path capture '${name}' appears more than once`);
-    else names.add(name);
-  }
-  return names;
 }

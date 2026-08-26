@@ -1,4 +1,5 @@
 import type { Expression, Parameter, Span, Statement, TypeReference } from "@velarscript/compiler/extension";
+import type { CompiledRoutePattern } from "./route-pattern.ts";
 
 export const NODE_HTTP_METHODS = Object.freeze(["get", "post", "put", "patch", "delete"] as const);
 
@@ -13,7 +14,13 @@ export interface NodeServerDeclaration {
   readonly span: Span;
 }
 
-export type NodeServerItem = NodeRouteDeclaration | NodeNotFoundDeclaration | NodeServerSpread;
+export type NodeServerItem = NodeRouteDeclaration | NodeNotFoundDeclaration | NodeResponseDeclaration | NodeServerSpread;
+
+export interface NodePathPatternExpression {
+  readonly kind: "ExtensionExpression:node:path-pattern";
+  readonly pattern: CompiledRoutePattern;
+  readonly span: Span;
+}
 
 export interface NodeServerSpread {
   readonly kind: "NodeServerSpread";
@@ -26,6 +33,8 @@ export interface NodeRouteDeclaration {
   /** Internal diagnostic identity. Routes do not introduce a source binding. */
   readonly name: string;
   readonly method: NodeHttpMethod;
+  /** `path=...` 右侧的静态 RoutePattern 表达式。 */
+  readonly pathExpression: Expression;
   readonly path: string;
   readonly pathSpan: Span;
   readonly parameters: readonly Parameter[];
@@ -41,6 +50,18 @@ export interface NodeNotFoundDeclaration {
   readonly kind: "NodeNotFoundDeclaration";
   /** Internal diagnostic identity. A fallback does not introduce a source binding. */
   readonly name: "notFound";
+  readonly parameters: readonly Parameter[];
+  readonly returnType: TypeReference | null;
+  readonly resultAnnotationSpan?: Span;
+  readonly signatureSpan: Span;
+  readonly body: readonly Statement[];
+  readonly expressionBody: boolean;
+  readonly span: Span;
+}
+
+export interface NodeResponseDeclaration {
+  readonly kind: "NodeResponseDeclaration";
+  readonly name: "response";
   readonly parameters: readonly Parameter[];
   readonly returnType: TypeReference | null;
   readonly resultAnnotationSpan?: Span;

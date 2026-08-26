@@ -1403,7 +1403,14 @@ export function moduleInterfaceIdentity(
     ])));
   const enums = node("enums", [...interface_.enums]
     .sort(([left], [right]) => byCodeUnit(left, right))
-    .map(([name, info]) => node("enum", [name, info.identity, names(info.members)])));
+    .map(([name, info]) => node("enum", [
+      name,
+      info.identity,
+      names(info.members),
+      node("wire-values", [...info.wireValues]
+        .sort(([left], [right]) => byCodeUnit(left, right))
+        .map(([member, value]) => node("wire-value", [member, value]))),
+    ])));
   const classes = node("classes", [...interface_.classes]
     .sort(([left], [right]) => byCodeUnit(left, right))
     .map(([name, info]) => node("class", [

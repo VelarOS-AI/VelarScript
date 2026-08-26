@@ -2125,7 +2125,11 @@ export class Analyzer implements TypeEnvironment {
         this.declareBinding(statement.name, false, { kind: "typeObject", name: statement.name }, statement.span);
         this.predeclared.add(statement);
       } else if (statement.kind === "EnumDeclaration") {
-        const info = this.enums.get(statement.name) ?? { identity: statement.name, members: new Set(statement.members.map((member) => member.name)) };
+        const info = this.enums.get(statement.name) ?? {
+          identity: statement.name,
+          members: new Set(statement.members.map((member) => member.name)),
+          wireValues: new Map(statement.members.map((member) => [member.name, member.value])),
+        };
         this.declareBinding(statement.name, false, { kind: "enumObject", name: statement.name, identity: info.identity, members: info.members }, statement.span);
         this.predeclared.add(statement);
       } else if (statement.kind === "ClassDeclaration") {
@@ -2474,8 +2478,11 @@ export class Analyzer implements TypeEnvironment {
   }
 
   enumValuesOf(identity: string): readonly string[] | null {
-    const values = this.enums.get(identity)?.members;
-    return values ? [...values] : null;
+    const info = this.enums.get(identity);
+    if (!info) return null;
+    // OpenAPI、路由参数和其他线协议消费的是枚举真正序列化的值，不是源码成员名。
+    // 按成员声明顺序读取映射，既与 Enum.values() 一致，也避免 Map 构造顺序漂移。
+    return [...info.members].map((member) => info.wireValues.get(member)!);
   }
 
   /**
@@ -3284,7 +3291,11 @@ export class Analyzer implements TypeEnvironment {
   private registerEnumShapes(program: Program): void {
     for (const statement of program.body) {
       if (statement.kind !== "EnumDeclaration") continue;
-      this.enums.set(statement.name, { identity: statement.name, members: new Set(statement.members.map((member) => member.name)) });
+      this.enums.set(statement.name, {
+        identity: statement.name,
+        members: new Set(statement.members.map((member) => member.name)),
+        wireValues: new Map(statement.members.map((member) => [member.name, member.value])),
+      });
     }
   }
 

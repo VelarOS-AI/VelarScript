@@ -1,4 +1,4 @@
-import { mechanicalFix, type Diagnostic, type DiagnosticFix, type Span } from "@velarscript/compiler";
+import { type Advisory, type Diagnostic, type DiagnosticFix, type Span } from "@velarscript/compiler";
 import {
   Parser,
   type CompilerLexicalExtension,
@@ -12,14 +12,18 @@ import {
   type NodeHttpMethodName,
   type NodeNotFoundDeclaration,
   type NodeRouteDeclaration,
+  type NodeResponseDeclaration,
   type NodeServerDeclaration,
   type NodeServerItem,
 } from "./server-ast.ts";
-import { isNodePathPatternSyntax, NODE_PATH_PATTERN_TOKEN, type NodePathPatternSyntax } from "./server-lexer.ts";
+import { compileRoutePattern } from "./route-pattern.ts";
+import { isNodePathPatternSyntax, NODE_PATH_PATTERN_TOKEN } from "./server-lexer.ts";
 
 const span = (start: number, end: number): Span => ({ start, end });
 const diagnostic = (code: string, message: string, sourceSpan: Span, fix?: DiagnosticFix): Diagnostic =>
   fix ? { code, message, span: sourceSpan, fix } : { code, message, span: sourceSpan };
+const advisory = (code: string, message: string, sourceSpan: Span, fix: DiagnosticFix): Advisory =>
+  ({tier: "advisory", code, message, span: sourceSpan, fix});
 const methods = new Set<string>(NODE_HTTP_METHODS);
 
 export class VelarNodeParser extends Parser {
@@ -29,6 +33,27 @@ export class VelarNodeParser extends Parser {
 
   protected override createNestedParser(tokens: readonly Token[]): Parser {
     return new VelarNodeParser(tokens, this.lexicalExtensions);
+  }
+
+  protected override parseExtensionExpression(token: Token) {
+    if (token.kind !== "extensionToken" || token.value !== NODE_PATH_PATTERN_TOKEN || !isNodePathPatternSyntax(token.payload)) return undefined;
+    const syntax = token.payload;
+    const compiled = compileRoutePattern(syntax.value, syntax.contentSpan.start);
+    for (const issue of compiled.issues) this.diagnostics.push(diagnostic("VEL6005", issue.message, issue.span));
+    for (const capture of compiled.pattern.query) {
+      if (!capture.explicitWireName || capture.wireName !== capture.name) continue;
+      const shorthand = `{${capture.name}:${capture.typeName}${capture.optional ? "?" : ""}}`;
+      // 显式同名映射没有歧义，所以保持为合法语法；同时机械删除 `name=`
+      // 即可得到唯一的简写，不需要猜测作者意图。
+      const redundantPrefix = {start: capture.span.start - capture.wireName.length - 1, end: capture.span.start};
+      this.advisories.push(advisory(
+        "A11",
+        `Query wire name '${capture.wireName}' repeats its field name; use the shorter '${shorthand}' contract`,
+        {start: redundantPrefix.start, end: capture.span.end},
+        {title: `Use query shorthand '${shorthand}'`, edits: [{span: redundantPrefix, text: ""}]},
+      ));
+    }
+    return {kind: "ExtensionExpression:node:path-pattern", pattern: compiled.pattern, span: token.span} as const;
   }
 
   protected override parseExtensionStatement(
@@ -75,14 +100,14 @@ export class VelarNodeParser extends Parser {
       let item: NodeServerItem | null = null;
       if (this.check("at")) item = this.peekValue(1) === "notFound"
         ? this.parseNotFound(itemStart)
-        : this.parseRoute(itemStart);
+        : this.peekValue(1) === "response" ? this.parseResponse(itemStart) : this.parseRoute(itemStart);
       else if (this.match("ellipsis")) {
         const value = this.parseExpression();
         item = { kind: "NodeServerSpread", value, span: span(itemStart, value.span.end) };
       } else {
         this.diagnostics.push(diagnostic(
           "VEL6003",
-          "A server body contains only HTTP routes, one @notFound fallback, or '...app' composition entries; put ordinary declarations outside the server",
+          "A server body contains only HTTP routes, one @notFound fallback, one @response policy, or '...app' composition entries; put ordinary declarations outside the server",
           this.current().span,
         ));
         this.skipMistypedDeclaration();
@@ -108,8 +133,8 @@ export class VelarNodeParser extends Parser {
       this.diagnostics.push(diagnostic(
         "VEL6002",
         name
-          ? `Unknown compiler-owned name '@${name.value}' in a server; use an HTTP route name or @notFound`
-          : "Expected a compiler-owned server name after '@'; use an HTTP route name or @notFound",
+          ? `Unknown compiler-owned name '@${name.value}' in a server; use an HTTP route name, @notFound, or @response`
+          : "Expected a compiler-owned server name after '@'; use an HTTP route name, @notFound, or @response",
         span(marker.span.start, (name ?? marker).span.end),
       ));
       this.skipMistypedDeclaration();
@@ -118,20 +143,20 @@ export class VelarNodeParser extends Parser {
 
     const methodName = name.value as NodeHttpMethodName;
     this.expect("leftParen", `Expected '(' after '@${methodName}'`);
-    const path = this.check("extensionToken")
-      ? this.advance()
-      : this.advanceWithPathPatternDiagnostic(methodName);
-    const pathSyntax = path.value === NODE_PATH_PATTERN_TOKEN && isNodePathPatternSyntax(path.payload)
-      ? path.payload
+    const pathName = this.expectBindingName(`Expected 'path' as the first @${methodName} argument`, "route path binding");
+    if (pathName.value !== "path") this.diagnostics.push(diagnostic("VEL6005", `The first @${methodName} argument is named 'path'`, pathName.span));
+    this.expect("assign", `Expected '=' after the @${methodName} path binding`);
+    const pathExpression = this.parseExpression();
+    const directPattern = pathExpression.kind === "ExtensionExpression:node:path-pattern"
+      ? pathExpression as typeof pathExpression & {readonly pattern: {readonly definition: string}}
       : null;
-    if (path.kind === "extensionToken" && !pathSyntax) {
-      this.diagnostics.push(diagnostic(
-        "VEL6005",
-        `The first @${methodName} item must be a p\"/...\" path pattern`,
-        path.span,
-      ));
-    }
-    const parameters: Parameter[] = pathSyntax ? this.pathParameters(pathSyntax) : [];
+    const parameters: Parameter[] = [{
+      name: "path",
+      type: null,
+      defaultValue: pathExpression,
+      rest: false,
+      span: span(pathName.span.start, pathExpression.span.end),
+    }];
     let sawDefault = false;
     if (this.match("comma")) {
       while (!this.check("rightParen") && !this.check("eof")) {
@@ -158,10 +183,11 @@ export class VelarNodeParser extends Parser {
     const end = body.at(-1)?.span.end ?? returnType?.span.end ?? close.span.end;
     return {
       kind: "NodeRouteDeclaration",
-      name: `${method} ${pathSyntax?.value ?? ""}`,
+      name: `${method} ${directPattern?.pattern.definition ?? "<route>"}`,
       method,
-      path: pathSyntax?.value ?? "",
-      pathSpan: path.span,
+      pathExpression,
+      path: directPattern?.pattern.definition ?? "",
+      pathSpan: pathExpression.span,
       parameters,
       returnType,
       ...(resultAnnotationSpan ? { resultAnnotationSpan } : {}),
@@ -185,6 +211,26 @@ export class VelarNodeParser extends Parser {
       parameters,
       returnType,
       ...(resultAnnotationSpan ? { resultAnnotationSpan } : {}),
+      signatureSpan: span(start, returnType?.span.end ?? parameterListEnd),
+      body,
+      expressionBody,
+      span: span(start, end),
+    };
+  }
+
+  private parseResponse(start: number): NodeResponseDeclaration {
+    this.expect("at", "Expected '@'");
+    this.expect("identifier", "Expected 'response' after '@'");
+    const parameters = this.parseParameters();
+    const parameterListEnd = this.previous().span.end;
+    const {returnType, resultAnnotationSpan, expressionBody, body} = this.parseHandlerBody(parameterListEnd);
+    const end = body.at(-1)?.span.end ?? returnType?.span.end ?? parameterListEnd;
+    return {
+      kind: "NodeResponseDeclaration",
+      name: "response",
+      parameters,
+      returnType,
+      ...(resultAnnotationSpan ? {resultAnnotationSpan} : {}),
       signatureSpan: span(start, returnType?.span.end ?? parameterListEnd),
       body,
       expressionBody,
@@ -216,68 +262,4 @@ export class VelarNodeParser extends Parser {
     return { returnType, ...(resultAnnotationSpan ? { resultAnnotationSpan } : {}), expressionBody, body };
   }
 
-  private advanceWithPathPatternDiagnostic(methodName: NodeHttpMethodName): Token {
-    const token = this.current();
-    this.diagnostics.push(diagnostic(
-      "VEL6005",
-      `The first @${methodName} item must be a Node path pattern such as p\"/articles/{id:string}\"`,
-      token.span,
-    ));
-    return this.advance();
-  }
-
-  private pathParameters(path: NodePathPatternSyntax): Parameter[] {
-    const parameters: Parameter[] = [];
-    let segmentStart = 0;
-    for (const segment of path.value.split("/")) {
-      const sourceSpan = span(path.contentSpan.start + segmentStart, path.contentSpan.start + segmentStart + segment.length);
-      segmentStart += segment.length + 1;
-      if (!segment.includes("{") && !segment.includes("}")) continue;
-      if (!(segment.startsWith("{") && segment.endsWith("}")) || segment.slice(1, -1).includes("{") || segment.slice(1, -1).includes("}")) {
-        this.diagnostics.push(diagnostic("VEL6005", "A path capture must occupy one complete segment as '{name:type}'", sourceSpan));
-        continue;
-      }
-      const declaration = segment.slice(1, -1);
-      if (declaration.includes("：")) {
-        const separatorStart = sourceSpan.start + 1 + declaration.indexOf("：");
-        const separatorSpan = span(separatorStart, separatorStart + 1);
-        this.diagnostics.push(diagnostic(
-          "VEL6005",
-          "A path capture uses the half-width ':' in '{name:type}'",
-          separatorSpan,
-          mechanicalFix(separatorSpan, ":", "Use the half-width ':'"),
-        ));
-        continue;
-      }
-      const separator = declaration.indexOf(":");
-      if (separator <= 0 || separator !== declaration.lastIndexOf(":")) {
-        this.diagnostics.push(diagnostic("VEL6005", "A path capture declares its name and type as '{name:type}'", sourceSpan));
-        continue;
-      }
-      const parameterName = declaration.slice(0, separator);
-      const typeName = declaration.slice(separator + 1);
-      if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(parameterName)) {
-        this.diagnostics.push(diagnostic("VEL6005", `Path capture name '${parameterName}' must be an identifier`, sourceSpan));
-        continue;
-      }
-      if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(typeName)) {
-        this.diagnostics.push(diagnostic("VEL6005", `Path capture '${parameterName}' must use a named scalar type`, sourceSpan));
-        continue;
-      }
-      const nameStart = sourceSpan.start + 1;
-      const typeSpan = span(nameStart + separator + 1, sourceSpan.end - 1);
-      const type: TypeReference = {
-        syntax: { kind: "NamedTypeSyntax", name: typeName, span: typeSpan },
-        span: typeSpan,
-      };
-      parameters.push({
-        name: parameterName,
-        type,
-        defaultValue: null,
-        rest: false,
-        span: span(nameStart, sourceSpan.end - 1),
-      });
-    }
-    return parameters;
-  }
 }

@@ -13,7 +13,7 @@ browser application activates `@velarscript/web`:
 ```json
 {
   "dependencies": {
-    "@velarscript/server": "0.16.2"
+    "@velarscript/server": "0.17.0"
   }
 }
 ```
@@ -62,7 +62,7 @@ All three fields are optional. Their defaults are `127.0.0.1`, `3000`, and
 import {application} from "velar/server"
 
 export server routes:
-    @get(p"/health") => {status: "ready"}
+    @get(path=p"/health") => {status: "ready"}
 
 export const start = application(routes)
 ```
@@ -127,7 +127,7 @@ async def verifyAccessToken(token: string) -> Principal?:
 const currentPrincipal = authenticate(security.bearer(), verifyAccessToken)
 
 export server accountRoutes:
-    @get(p"/me", principal=input.dependency(currentPrincipal)) => {
+    @get(path=p"/me", principal=input.dependency(currentPrincipal)) => {
         subject: principal.subject,
     }
 ```
@@ -168,7 +168,7 @@ const connection = database(
 )
 
 export server databaseRoutes:
-    @get(p"/database", value=input.dependency(connection)) => {name: value.name}
+    @get(path=p"/database", value=input.dependency(connection)) => {name: value.name}
 ```
 
 The framework owns only this connect/inject/disconnect lifecycle. Concrete

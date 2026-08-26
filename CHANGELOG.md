@@ -6,6 +6,45 @@ truth for acceptance status.
 
 ## Unreleased
 
+## 0.17.0 — 2026-08-26
+
+### Node server language
+
+- Added first-class `p"..."` `RoutePattern` values. One declaration now owns
+  the literal path, typed path parameters, typed query fields, optionality,
+  wire-name aliases, runtime binding, and OpenAPI parameter metadata.
+- Route handlers receive one compiler-owned `path` value with `definition`,
+  `params`, and `query`. Exported `const` route catalogs remain statically
+  resolvable across modules, including object members, spreads, aliases, and
+  enum wire values that differ from their source member names.
+- Added advisory `A11` with a mechanical fix from redundant
+  `?field={field:type}` mappings to `?{field:type}`; distinct wire-name aliases
+  remain explicit.
+- Made route declarations use the function-like `@get(path=pattern, ...)`
+  contract. Required and optional query inputs are checked before the handler,
+  while repeated low-level query values remain explicitly available through
+  `Request.queryAll`.
+
+### Responses and failures
+
+- Added semantic `HttpOutcome` values and one application-wide `@response`
+  policy. Plain Data, `created`, `noContent`, route failures, validation
+  failures, 404, and 405 now pass through the same policy exactly once.
+- Added structured `HttpProblem` failures and RFC 9457-style
+  `application/problem+json` defaults with stable codes. Final `json`, `text`,
+  `file`, `stream`, `sse`, and `redirect` responses stay explicit and bypass a
+  second policy pass.
+- Unified content negotiation, framework-generated failures, OpenAPI failure
+  schemas, native transport responses, and isolated-host responses around the
+  same response contract.
+
+### Tooling and documentation
+
+- Added parser, analyzer, emitter, semantic-token, Hover, cross-module, runtime,
+  OpenAPI, failure-policy, and transport coverage for the server model.
+- Updated the language guide, standard library reference, Node and Server
+  skills, project template, and executable tour to teach the same contract.
+
 ## 0.16.2 — 2026-08-26
 
 ### Language and diagnostics

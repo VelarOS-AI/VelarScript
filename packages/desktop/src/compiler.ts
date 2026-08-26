@@ -78,6 +78,7 @@ function __velarDesktopHostCall(capability, operation, args, timeout = 30000) {
 
 const desktopPlatformIdentity = "velar/desktop#enum:DesktopPlatform";
 const desktopPlatforms = new Set(["macos", "test"]);
+const desktopPlatformWireValues = new Map([...desktopPlatforms].map((member) => [member, member]));
 const desktopPlatformType: ValueType = { kind: "enum", name: "DesktopPlatform", identity: desktopPlatformIdentity };
 const desktopModuleInterface = moduleInterface(new Map([
   ["DesktopPlatform", { kind: "enumObject", name: "DesktopPlatform", identity: desktopPlatformIdentity, members: desktopPlatforms }],
@@ -89,7 +90,7 @@ const desktopModuleInterface = moduleInterface(new Map([
   ["selectedProjectDirectory", functionType([], { kind: "promise", value: optionalStringType })],
   ["selectProjectDirectory", functionType([], { kind: "promise", value: optionalStringType })],
 ]), new Map(), new Map(), new Map([
-  ["DesktopPlatform", { identity: desktopPlatformIdentity, members: desktopPlatforms }],
+  ["DesktopPlatform", { identity: desktopPlatformIdentity, members: desktopPlatforms, wireValues: desktopPlatformWireValues }],
 ]));
 
 const desktopTestModuleInterface = moduleInterface(new Map([

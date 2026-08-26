@@ -1175,14 +1175,9 @@ const result = await http.post("/api/images", {body: body}).parse(UploadResult)
   is included in the same 100-field/64-KiB request-header budget. Non-2xx
   responses throw `HttpResponseError` with `status`, `url`, and an `unknown`
   body. Its URL is the final response URL after redirects; only a synthetic
-  response without a URL falls back to the initial request URL. The name is
-  `HttpResponseError` rather than `HttpError` because `velar/serve` owns an
-  `HttpError` of its own: this one is the non-2xx response a client caught,
-  that one is the failure a route throws outbound. A proxy route holds both, so
-  the two names have to differ: while both were spelled `HttpError`, importing
-  one and testing the other with `is` compiled clean and was always false.
-  Importing `HttpError` from `velar/http` now reports `HttpResponseError` by
-  name rather than an unknown export. This error is also why a response has no
+  response without a URL falls back to the initial request URL.
+  `HttpResponseError` is the outbound client failure; server routes use the
+  separate `HttpProblem` semantic contract. This error is also why a response has no
   `ok` field: the non-2xx case throws here instead of answering a response.
 - A `Bytes` request body is sent as binary without JSON/Base64 conversion. JSON
   request bodies use the same strict lossless data boundary as

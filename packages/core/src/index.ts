@@ -137,6 +137,7 @@ const loggerType = object({
 });
 const byteOrderIdentity = "velar/binary#enum:ByteOrder";
 const byteOrderMembers = new Set(["little", "big"]);
+const byteOrderWireValues = new Map([...byteOrderMembers].map((member) => [member, member]));
 const byteOrderType: ValueType = { kind: "enum", name: "ByteOrder", identity: byteOrderIdentity };
 const bytesType: ValueType = { kind: "named", name: "Bytes", identity: VELAR_BYTES_TYPE_IDENTITY };
 const uint8BufferType: ValueType = { kind: "named", name: "UInt8Buffer", identity: VELAR_UINT8_BUFFER_TYPE_IDENTITY };
@@ -372,7 +373,7 @@ const coreModuleInterfaces = new Map<string, ModuleInterface>([
       ["UInt32Builder", "velar/binary#type:UInt32Builder"],
       ["Float32Builder", "velar/binary#type:Float32Builder"],
     ]),
-    new Map([["ByteOrder", { identity: byteOrderIdentity, members: byteOrderMembers }]]),
+    new Map([["ByteOrder", { identity: byteOrderIdentity, members: byteOrderMembers, wireValues: byteOrderWireValues }]]),
   )],
   ["velar/random", moduleInterface(
     new Map([

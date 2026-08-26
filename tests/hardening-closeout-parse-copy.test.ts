@@ -34,7 +34,8 @@ import { velarCompilerExtension as velarWebCompilerExtension } from "../packages
 // not this wave's to edit.
 
 interface ServeBridge {
-  createRoute(method: string, path: string, parameters: readonly Record<string, unknown>[], handler: (...arguments_: never[]) => Promise<unknown>): unknown;
+  createPattern(source: Record<string, unknown>): unknown;
+  createRoute(method: string, path: unknown, parameters: readonly Record<string, unknown>[], handler: (...arguments_: never[]) => Promise<unknown>): unknown;
   createApp(name: string, items: readonly unknown[]): unknown;
 }
 
@@ -55,6 +56,10 @@ const REQUEST_PARAMETER = {name: "request", source: "request", kind: "request", 
 
 function serveBridge(app: object): ServeBridge {
   return Object.getOwnPropertyDescriptor(app, "__velarCompilerBridge")?.value as ServeBridge;
+}
+
+function routePattern(bridge: ServeBridge, pathname: string): unknown {
+  return bridge.createPattern({definition: pathname, pathname, path: [], query: []});
 }
 
 /**
@@ -109,7 +114,7 @@ test("both serve transports hand a handler the declared shape, not the client's 
   try {
     const {serve, websocket, types} = await runtimesWithType<{Profile: ParseType}>(directory, PROFILE);
     const bridge = serveBridge(serve.ServeApp);
-    const shape = bridge.createRoute("POST", "/shape", [REQUEST_PARAMETER], async (request: never) => {
+    const shape = bridge.createRoute("POST", routePattern(bridge, "/shape"), [REQUEST_PARAMETER], async (_path: unknown, request: never) => {
       const source = request as unknown as {json(maxBytes?: number): Promise<unknown>; parse<V>(target: ParseType, maxBytes?: number): Promise<V>};
       const before = await source.json(1 << 20) as Record<string, unknown>;
       const parsed = await source.parse<Record<string, unknown>>(types.Profile, 1 << 20);
@@ -167,7 +172,7 @@ test("both serve transports reject a mistyped body with the Type's own validatio
   try {
     const {serve, websocket, types} = await runtimesWithType<{Profile: ParseType}>(directory, PROFILE);
     const bridge = serveBridge(serve.ServeApp);
-    const reject = bridge.createRoute("POST", "/reject", [REQUEST_PARAMETER], async (request: never) => {
+    const reject = bridge.createRoute("POST", routePattern(bridge, "/reject"), [REQUEST_PARAMETER], async (_path: unknown, request: never) => {
       const source = request as unknown as {parse<V>(target: ParseType, maxBytes?: number): Promise<V>};
       try {
         await source.parse(types.Profile, 1 << 20);

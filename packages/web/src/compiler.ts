@@ -176,6 +176,7 @@ const formBodyType = object({
 const httpChunkConsumerType = namedFunction(["chunk"], [stringType], promise(nullType));
 const httpTransportPhaseIdentity = "velar/http#enum:HttpTransportPhase";
 const httpTransportPhaseMembers = new Set(["request", "response"]);
+const httpTransportPhaseWireValues = new Map([...httpTransportPhaseMembers].map((member) => [member, member]));
 const httpTransportPhaseType: ValueType = { kind: "enum", name: "HttpTransportPhase", identity: httpTransportPhaseIdentity };
 const httpTransportErrorIdentity = "velar/http#class:HttpTransportError";
 
@@ -549,7 +550,7 @@ export const webModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map
       staticGetters: new Set(),
       staticMethods: new Map(),
     }],
-  ]), new Map(), new Map(), new Map([["HttpTransportPhase", { identity: httpTransportPhaseIdentity, members: httpTransportPhaseMembers }]]))],
+  ]), new Map(), new Map(), new Map([["HttpTransportPhase", { identity: httpTransportPhaseIdentity, members: httpTransportPhaseMembers, wireValues: httpTransportPhaseWireValues }]]))],
   ["velar/storage", moduleInterface(new Map([
     ["storage", storageType],
     ["session", storageType],

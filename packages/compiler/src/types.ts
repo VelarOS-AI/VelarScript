@@ -3,7 +3,10 @@ import { byCodeUnit } from "./stable-order.ts";
 
 export interface EnumInfo {
   readonly identity: string;
+  /** Source member names used by type checking and member access. */
   readonly members: ReadonlySet<string>;
+  /** Runtime wire value for each source member name. */
+  readonly wireValues: ReadonlyMap<string, string>;
 }
 
 /**

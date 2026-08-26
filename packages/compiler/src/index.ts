@@ -5,7 +5,7 @@ import type { BindingPattern, DynamicImportExpression, Expression, FunctionDecla
 import { diagnostic, type Advisory, type Diagnostic } from "./diagnostic.ts";
 import { JavaScriptEmitter } from "./emitter.ts";
 import { programWithEmbeddedJavaScriptImports } from "./embedded-module.ts";
-import type { CompilerEmbeddedJavaScriptModule, CompilerEmitter, CompilerEmitterOptions, CompilerExtension, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface, ModuleTest } from "./extension.ts";
+import type { CompilerEmbeddedJavaScriptModule, CompilerEmitter, CompilerEmitterOptions, CompilerExtension, CompilerInterfaceContext, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface, ModuleTest } from "./extension.ts";
 import { Lexer } from "./lexer.ts";
 import { isParserComplexityFailure, Parser } from "./parser.ts";
 import { SourceText, type Span } from "./source.ts";
@@ -743,7 +743,11 @@ function interfaceOf(
   }
   const enumNames = new Map(program.body
     .filter((statement) => statement.kind === "EnumDeclaration")
-    .map((statement) => [statement.name, { identity: `${path}#enum:${statement.name}`, members: new Set(statement.members.map((member) => member.name)) }] satisfies [string, EnumInfo]));
+    .map((statement) => [statement.name, {
+      identity: `${path}#enum:${statement.name}`,
+      members: new Set(statement.members.map((member) => member.name)),
+      wireValues: new Map(statement.members.map((member) => [member.name, member.value])),
+    }] satisfies [string, EnumInfo]));
   const namedTypeIdentities = new Map(program.body
     .filter((statement) => statement.kind === "TypeDeclaration")
     .map((statement) => [statement.name, `velar:${path}#type:${statement.name}`] satisfies [string, string]));
@@ -844,7 +848,16 @@ function interfaceOf(
   for (const extension of extensions) {
     const data = extension.inspection?.moduleData?.(program, path);
     if (data !== undefined) extensionData.set(extension.id, data);
-    const annotations = extension.inspection?.exportAnnotations?.(program);
+    const context: CompilerInterfaceContext = {
+      exports,
+      reactiveExports,
+      extensionExports: extensionExports.get(extension.id)!,
+      resolve,
+      inferPublicExpression: (expression: Expression) => inferPublicExpression(expression, inspectionExtensions),
+      bindingType: (name: string, spanStart: number) => resolvedAnalyzedBindings.get(`${spanStart}:${name}`) ?? null,
+      unresolvedInferredResult: inferredResultPlaceholderType,
+    };
+    const annotations = extension.inspection?.exportAnnotations?.(program, context);
     if (annotations) {
       const values = extensionExports.get(extension.id)!;
       for (const [name, value] of annotations) values.set(name, value);
