@@ -486,6 +486,35 @@ test("a crashing service backs off to a terminal state, and 'never' does not res
   }
 });
 
+test("a start found to have failed twice is still one failure", async (context) => {
+  if (process.platform !== "darwin") return context.skip("the Desktop host is macOS-only in 0.10");
+  const project = await packagedFixture();
+  const logs = await mkdtemp(join(tmpdir(), "velar-service-log-"));
+  try {
+    const started = Date.now();
+    // `refuse` closes every hello with 1008, including the host's own token, so
+    // the readiness probe ends the start *and* terminates the process — and the
+    // termination it caused is reported to the supervisor as a failure too.
+    // Both reports are true and both are the same start, so the manifest's
+    // "five consecutive failures" must still take five starts to spend. It used
+    // to take three, because each start was counted on both routes.
+    const refused = smoke(project, "refuse", logs);
+    const elapsed = Date.now() - started;
+    assert.equal(refused.status, 1, refused.stdout);
+    assert.match(refused.stderr, /notes=failed: the service refused the token this host issued it \(close 1008\)/u, refused.stderr);
+    assert.equal((await serviceLog(logs, "notes")).filter((line) => line.startsWith("start ")).length, 5);
+    assert.equal((await serviceLog(logs, "notes")).filter((line) => line === "hello refused 1008").length, 5);
+    // Five starts means four backoffs, 1 + 2 + 4 + 8 seconds of them. Three
+    // starts would have reached the terminal state after 1 + 2.
+    assert.ok(elapsed >= 15_000, `the backoff took only ${elapsed}ms`);
+    // `never` is the contrast: one start, no restart, and the refusal is the
+    // stop rather than a countdown.
+    assert.equal((await serviceLog(logs, "once")).filter((line) => line.startsWith("start ")).length, 1);
+  } finally {
+    await rm(logs, { recursive: true, force: true });
+  }
+});
+
 /**
  * `velar dev` runs the same services on the system Node. The handshake it
  * performs is the same one the packaged host performs, so the round trip below

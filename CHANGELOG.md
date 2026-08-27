@@ -69,6 +69,11 @@ truth for acceptance status.
   the application's identity resolved against this machine. `desktop.services`
   still has no `env` — a value that is the same on every machine belongs in the
   payload, and a value the renderer knows is a message rather than a variable.
+- Counted a service start's failure once. The readiness deadline and a refused
+  token each end the process and report the failure, and the termination they
+  caused reported it again for the same start, so the five-failure budget was
+  spent at twice its rate and the terminal `failed` arrived after three real
+  timeouts rather than five. Restarts were never duplicated; only the count was.
 
 ### Language and diagnostics
 

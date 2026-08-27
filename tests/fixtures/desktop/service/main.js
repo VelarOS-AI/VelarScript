@@ -1,5 +1,5 @@
 // A product service process, as a fixture: a real dependency-free WebSocket
-// server that answers the two frames the host sends, plus four behaviours a
+// server that answers the two frames the host sends, plus five behaviours a
 // packaging test needs to be able to ask for.
 //
 // It writes one line per start into `${FIXTURE_SERVICE_LOG_DIR}/<service>.log`,
@@ -12,6 +12,9 @@
 //              restart policy has something to do and the host's capture has
 //              something to quote
 //   silent   — listen and never answer the hello, so readiness times out
+//   refuse   — serve, and close every hello with 1008 including the host's own
+//              token, so the failure is found on the probe and the process is
+//              then ended by the host: one start reported failed by two routes
 //   stubborn — serve and accept, but ignore SIGTERM, so the SIGKILL deadline
 //              has something to kill
 
@@ -83,7 +86,7 @@ server.on("upgrade", (request, socket) => {
       if (!authenticated) {
         let hello = null;
         try { hello = JSON.parse(text); } catch { hello = null; }
-        if (!hello || hello.velar !== "service-hello" || hello.token !== token) {
+        if (!hello || hello.velar !== "service-hello" || hello.token !== token || mode === "refuse") {
           // 1008, the pinned refusal in packages/desktop/README.md. A dropped
           // connection would be indistinguishable from a service that is not
           // up yet; this says no on purpose and says so in the close code.
