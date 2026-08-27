@@ -60,7 +60,7 @@ import {
 } from "./look.ts";
 import { collectLookStaticValues, evaluateLookStaticExpression, isLookStaticValue, lookStaticCss, type LookStaticValue } from "./look-static.ts";
 import { keyframeCssValue } from "./keyframes.ts";
-import { dynamicChildLeaves } from "./emitter.ts";
+import { dynamicChildLeaves, JSX_SCALAR_TEXT_HINT } from "./emitter.ts";
 import {
   isWebCustomElementName,
   WEB_ARIA_ATTRIBUTES,
@@ -3206,6 +3206,13 @@ export class VelarWebAnalyzer extends Analyzer {
         else if (!isInvalidType(childType) && !(child.expression.kind === "ListExpression" && child.expression.elements.length === 0)
           && !this.isJsxRenderable(childType)) {
           this.diagnostics.push(diagnostic("VEL5047", `JSX can render only text, finite numbers, bool, enums, WebNode values, and Lists of those values; received ${describeType(childType)}`, child.expression.span));
+        } else if (this.isScalarTextType(childType)) {
+          // F1: the checked type is the only place this is knowable. A span
+          // already claimed by another extension hint keeps it — the fast path
+          // is an optimisation and yields, where a look's arithmetic lowering
+          // would not.
+          const identity = spanIdentity(child.expression.span);
+          if (!this.extensionCalls.has(identity)) this.extensionCalls.set(identity, JSX_SCALAR_TEXT_HINT);
         }
       } else if (child.kind === "ExtensionExpression:web:jsx") {
         this.inferJsx(child);
@@ -3893,6 +3900,35 @@ export class VelarWebAnalyzer extends Analyzer {
     if (expanded.kind === "list") return this.isJsxRenderable(expanded.element);
     if (expanded.kind === "union") return expanded.members.every((member) => this.isJsxRenderable(member));
     return false;
+  }
+
+  /**
+   * F1's qualifying rule, and the whole of it: the types whose rendering is
+   * *exactly* one text node.
+   *
+   * `string` and `number` are the two. `__velarAppend` answers a string with one
+   * text node carrying it — the empty string included, which is why `""` is not
+   * a special case — and a number with one text node carrying `String(value)`,
+   * or refuses a non-finite number. An enum member is text at runtime and is
+   * assignable to `string`, so it rides the same branch it always did.
+   *
+   * Everything else stays on the full dynamic region, and the reason is always
+   * the same one: it does not render as *one* node.
+   * - `bool` renders **zero** nodes (`__velarAppend` returns on `true`/`false`),
+   *   so a text node would be an added child where an element previously had
+   *   none — observable to `:empty`, to `childNodes`, and to anything that
+   *   walks them.
+   * - An optional of either renders zero nodes when null and one when present,
+   *   so it needs an anchor to come back to.
+   * - `WebNode`, lists, unions, `any` and every named type can hold markup or
+   *   several nodes, which is what the comment pair exists to bracket.
+   *
+   * Widening this set is a semantic ruling, not an optimisation: it would
+   * change the node count of a rendered document.
+   */
+  private isScalarTextType(type: ValueType): boolean {
+    const expanded = this.expandAliases(type);
+    return expanded.kind === "string" || expanded.kind === "number";
   }
 
   private isJsxAttributeValue(type: ValueType): boolean {

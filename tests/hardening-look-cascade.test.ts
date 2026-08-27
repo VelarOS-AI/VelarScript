@@ -56,6 +56,12 @@ class FakeNode {
 globalThis.domWrites = () => writes;
 globalThis.resetWrites = () => { writes = 0; };
 globalThis.Node = FakeNode;
+globalThis.CharacterData = FakeNode;
+// A text node's character data is now written in place, so the stand-in models
+// the accessor the DOM writes it through instead of only its creation.
+Object.defineProperty(FakeNode.prototype, "data", { configurable: true,
+  get() { return this.textContent !== undefined ? this.textContent : this.value; },
+  set(next) { if (this.textContent !== undefined) this.textContent = next; else this.value = next; } });
 globalThis.document = {
   createElement() { return new FakeNode(); },
   createTextNode(value) { return new FakeNode(3, String(value)); },

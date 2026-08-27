@@ -94,6 +94,7 @@ const __velarDomNodeInsertBefore = __velarDomPrototypeMember(__velarDomNativeNod
 const __velarDomNodeReplaceChildren = __velarDomPrototypeMember(__velarDomNativeNode, "replaceChildren");
 const __velarDomNodeAppend = __velarDomPrototypeMember(__velarDomNativeNode, "append");
 const __velarDomNodeTextContentSet = __velarDomPrototypeMember(__velarDomNativeNode, "textContent", "set");
+const __velarDomCharacterDataDataSet = __velarDomPrototypeMember(__velarDomNativeCharacterData, "data", "set");
 const __velarDomElementAppend = __velarDomPrototypeMember(__velarDomNativeElement, "append");
 const __velarDomElementReplaceChildren = __velarDomPrototypeMember(__velarDomNativeElement, "replaceChildren");
 const __velarDomDocumentAppend = __velarDomPrototypeMember(__velarDomNativeDocument, "append");
@@ -259,6 +260,14 @@ function __velarDomRemoveListener(value, name, listener, options) {
   return __velarDomNodeOperation(value, "removeEventListener", [
     [__velarDomNativeNode, __velarDomNodeRemoveListener], [__velarDomNativeEventTarget, __velarDomEventTargetRemove],
   ], [name, listener, options]);
+}
+// The in-place text update. A scalar interpolation owns one text node for its
+// whole life and rewrites its character data rather than replacing the node, so
+// 'data' joins the captured accessor ABI beside 'innerHTML' and 'value': a
+// planted CharacterData.prototype setter must not be able to observe or divert
+// what the framework writes into its own node.
+function __velarDomSetData(value, next) {
+  return __velarDomNodeAccessor(value, "data", [[__velarDomNativeCharacterData, __velarDomCharacterDataDataSet]], [next], true);
 }
 function __velarDomSetHtml(value, next) {
   return __velarDomNodeAccessor(value, "innerHTML", [

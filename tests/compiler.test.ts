@@ -6714,6 +6714,12 @@ class FakeNode {
 }
 const targetNode = new FakeNode();
 globalThis.Node = FakeNode;
+globalThis.CharacterData = FakeNode;
+// A text node's character data is now written in place, so the stand-in models
+// the accessor the DOM writes it through instead of only its creation.
+Object.defineProperty(FakeNode.prototype, "data", { configurable: true,
+  get() { return this.textContent !== undefined ? this.textContent : this.value; },
+  set(next) { if (this.textContent !== undefined) this.textContent = next; else this.value = next; } });
 globalThis.document = {
   createElement() { return new FakeNode(); },
   createTextNode() { return new FakeNode(); },
@@ -9010,6 +9016,12 @@ class FakeNode {
   remove() { this.removed = true; }
 }
 globalThis.Node = FakeNode;
+globalThis.CharacterData = FakeNode;
+// A text node's character data is now written in place, so the stand-in models
+// the accessor the DOM writes it through instead of only its creation.
+Object.defineProperty(FakeNode.prototype, "data", { configurable: true,
+  get() { return this.textContent !== undefined ? this.textContent : this.value; },
+  set(next) { if (this.textContent !== undefined) this.textContent = next; else this.value = next; } });
 globalThis.document = {
   createElement(tag) { return new FakeNode(tag); },
   createElementNS(namespace, tag) { const node = new FakeNode(tag); node.namespace = namespace; return node; },
@@ -9070,6 +9082,12 @@ class FakeNode {
   remove() { this.removed = true; }
 }
 globalThis.Node = FakeNode;
+globalThis.CharacterData = FakeNode;
+// A text node's character data is now written in place, so the stand-in models
+// the accessor the DOM writes it through instead of only its creation.
+Object.defineProperty(FakeNode.prototype, "data", { configurable: true,
+  get() { return this.textContent !== undefined ? this.textContent : this.value; },
+  set(next) { if (this.textContent !== undefined) this.textContent = next; else this.value = next; } });
 globalThis.document = {
   createElement(tag) { return new FakeNode(tag); },
   createComment(text) { return new FakeNode(text); },
@@ -9174,6 +9192,12 @@ let historyCalls = 0;
 let frameCalls = 0;
 class FakeNode {}
 globalThis.Node = FakeNode;
+globalThis.CharacterData = FakeNode;
+// A text node's character data is now written in place, so the stand-in models
+// the accessor the DOM writes it through instead of only its creation.
+Object.defineProperty(FakeNode.prototype, "data", { configurable: true,
+  get() { return this.textContent !== undefined ? this.textContent : this.value; },
+  set(next) { if (this.textContent !== undefined) this.textContent = next; else this.value = next; } });
 globalThis.document = {
   createElement() { domCalls += 1; return new FakeNode(); },
   createComment() { domCalls += 1; return new FakeNode(); },
@@ -9634,6 +9658,12 @@ class FakeNode {
   removeEventListener(name, callback) { if (this.listeners.get(name) === callback) this.listeners.delete(name); }
 }
 globalThis.Node = FakeNode;
+globalThis.CharacterData = FakeNode;
+// A text node's character data is now written in place, so the stand-in models
+// the accessor the DOM writes it through instead of only its creation.
+Object.defineProperty(FakeNode.prototype, "data", { configurable: true,
+  get() { return this.textContent !== undefined ? this.textContent : this.value; },
+  set(next) { if (this.textContent !== undefined) this.textContent = next; else this.value = next; } });
 globalThis.document = { createElement() { return new FakeNode(); }, createTextNode() { return new FakeNode(); } };
 globalThis.location = { href: "https://example.test/", origin: "https://example.test", pathname: "/", search: "", hash: "" };
 globalThis.history = { pushState() { navigations += 1; }, replaceState() { navigations += 1; } };
@@ -9862,6 +9892,12 @@ class FakeDialog extends FakeNode {
 globalThis.Clipboard = FakeClipboard;
 globalThis.Navigator = FakeNavigator;
 globalThis.Node = FakeNode;
+globalThis.CharacterData = FakeNode;
+// A text node's character data is now written in place, so the stand-in models
+// the accessor the DOM writes it through instead of only its creation.
+Object.defineProperty(FakeNode.prototype, "data", { configurable: true,
+  get() { return this.textContent !== undefined ? this.textContent : this.value; },
+  set(next) { if (this.textContent !== undefined) this.textContent = next; else this.value = next; } });
 globalThis.HTMLDialogElement = FakeDialog;
 let secureReads = 0;
 Object.defineProperty(globalThis, "isSecureContext", { configurable: true, get() { secureReads += 1; return secureReads === 1; } });
@@ -9997,6 +10033,12 @@ let coercions = 0;
 const hostile = { toString() { coercions += 1; return ""; } };
 class FakeNode { replaceChildren() {} }
 globalThis.Node = FakeNode;
+globalThis.CharacterData = FakeNode;
+// A text node's character data is now written in place, so the stand-in models
+// the accessor the DOM writes it through instead of only its creation.
+Object.defineProperty(FakeNode.prototype, "data", { configurable: true,
+  get() { return this.textContent !== undefined ? this.textContent : this.value; },
+  set(next) { if (this.textContent !== undefined) this.textContent = next; else this.value = next; } });
 globalThis.document = { createElement() { return new FakeNode(); } };
 globalThis.location = { pathname: "/", search: hostile, hash: "" };
 ${webSource}
@@ -16648,6 +16690,12 @@ component Shell:
   assert.deepEqual(runtime.diagnostics, []);
   const execution = executeModule(`class FakeNode {}
 globalThis.Node = FakeNode;
+globalThis.CharacterData = FakeNode;
+// A text node's character data is now written in place, so the stand-in models
+// the accessor the DOM writes it through instead of only its creation.
+Object.defineProperty(FakeNode.prototype, "data", { configurable: true,
+  get() { return this.textContent !== undefined ? this.textContent : this.value; },
+  set(next) { if (this.textContent !== undefined) this.textContent = next; else this.value = next; } });
 globalThis.document = { createTextNode(value) { return { value }; } };
 const parent = { append() {}, setAttribute() {}, setAttributeNS() {} };
 ${runtime.code ?? ""}
@@ -16688,6 +16736,12 @@ class FakeNode {
   remove() {}
 }
 globalThis.Node = FakeNode;
+globalThis.CharacterData = FakeNode;
+// A text node's character data is now written in place, so the stand-in models
+// the accessor the DOM writes it through instead of only its creation.
+Object.defineProperty(FakeNode.prototype, "data", { configurable: true,
+  get() { return this.textContent !== undefined ? this.textContent : this.value; },
+  set(next) { if (this.textContent !== undefined) this.textContent = next; else this.value = next; } });
 globalThis.document = {
   createElement() { return new FakeNode(); },
   createTextNode(value) { return { value }; },
@@ -16758,6 +16812,12 @@ class FakeNode {
 }
 const target = new FakeNode(1, "target");
 globalThis.Node = FakeNode;
+globalThis.CharacterData = FakeNode;
+// A text node's character data is now written in place, so the stand-in models
+// the accessor the DOM writes it through instead of only its creation.
+Object.defineProperty(FakeNode.prototype, "data", { configurable: true,
+  get() { return this.textContent !== undefined ? this.textContent : this.value; },
+  set(next) { if (this.textContent !== undefined) this.textContent = next; else this.value = next; } });
 globalThis.document = {
   createElement(tag) { return new FakeNode(1, tag); },
   createElementNS(namespace, tag) { return new FakeNode(1, namespace + ":" + tag); },
@@ -16835,6 +16895,12 @@ class FakeNode {
 }
 const target = new FakeNode(1, "target");
 globalThis.Node = FakeNode;
+globalThis.CharacterData = FakeNode;
+// A text node's character data is now written in place, so the stand-in models
+// the accessor the DOM writes it through instead of only its creation.
+Object.defineProperty(FakeNode.prototype, "data", { configurable: true,
+  get() { return this.textContent !== undefined ? this.textContent : this.value; },
+  set(next) { if (this.textContent !== undefined) this.textContent = next; else this.value = next; } });
 globalThis.document = {
   createElement(tag) { return new FakeNode(1, tag); },
   createElementNS(namespace, tag) { return new FakeNode(1, namespace + ":" + tag); },
@@ -25342,12 +25408,17 @@ component Hygiene:
     const __childScope = "child"
     const __dynamicScope = "dynamic"
     const __el1 = "element"
-    return <div>{__el1 + __childScope + __scope + __namespace}</div>
+    const __maybe: string? = null
+    return <div>{__el1 + __childScope + __scope + __namespace}{__maybe}</div>
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /function Hygiene\(__velarProps = \{\}, __velarNamespace = "html"\)/u);
   assert.match(result.code ?? "", /const __velarRoot = \(\(\) => \{ const __velarElement1/u);
-  assert.match(result.code ?? "", /\(__velarChildScope\) => .*__el1.*__childScope.*__scope.*__namespace/u);
+  // The scalar child lowers to a text node and needs no child scope at all; the
+  // optional one still opens a dynamic region, and its generated parameter must
+  // still not capture the user's own `__childScope`.
+  assert.match(result.code ?? "", /__velarText\(__velarElement1, \(\) => \(__el1 \+ __childScope \+ __scope \+ __namespace\)/u);
+  assert.match(result.code ?? "", /\(__velarChildScope\) => \(__maybe \?\? null\)/u);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
 });
@@ -25803,6 +25874,12 @@ class FakeNode {
 }
 const target = new FakeNode(1, "root");
 globalThis.Node = FakeNode;
+globalThis.CharacterData = FakeNode;
+// A text node's character data is now written in place, so the stand-in models
+// the accessor the DOM writes it through instead of only its creation.
+Object.defineProperty(FakeNode.prototype, "data", { configurable: true,
+  get() { return this.textContent !== undefined ? this.textContent : this.value; },
+  set(next) { if (this.textContent !== undefined) this.textContent = next; else this.value = next; } });
 globalThis.document = {
   createElement(tag) { return new FakeNode(1, tag); },
   createTextNode(value) { return new FakeNode(3, "", String(value)); },
@@ -26090,6 +26167,12 @@ class FakeNode {
   removeAttribute(name) { this.attributes.delete(name); }
 }
 globalThis.Node = FakeNode;
+globalThis.CharacterData = FakeNode;
+// A text node's character data is now written in place, so the stand-in models
+// the accessor the DOM writes it through instead of only its creation.
+Object.defineProperty(FakeNode.prototype, "data", { configurable: true,
+  get() { return this.textContent !== undefined ? this.textContent : this.value; },
+  set(next) { if (this.textContent !== undefined) this.textContent = next; else this.value = next; } });
 globalThis.document = {
   createElement() { return new FakeNode(); },
   createTextNode(value) { return new FakeNode(3, String(value)); },
@@ -26151,6 +26234,12 @@ class FakeNode {
   removeAttribute(name) { this.attributes.delete(name); }
 }
 globalThis.Node = FakeNode;
+globalThis.CharacterData = FakeNode;
+// A text node's character data is now written in place, so the stand-in models
+// the accessor the DOM writes it through instead of only its creation.
+Object.defineProperty(FakeNode.prototype, "data", { configurable: true,
+  get() { return this.textContent !== undefined ? this.textContent : this.value; },
+  set(next) { if (this.textContent !== undefined) this.textContent = next; else this.value = next; } });
 globalThis.document = {
   createElement() { return new FakeNode(); },
   createTextNode(value) { return new FakeNode(3, String(value)); },
@@ -26974,6 +27063,12 @@ class FakeNode {
 }
 const target = new FakeNode();
 globalThis.Node = FakeNode;
+globalThis.CharacterData = FakeNode;
+// A text node's character data is now written in place, so the stand-in models
+// the accessor the DOM writes it through instead of only its creation.
+Object.defineProperty(FakeNode.prototype, "data", { configurable: true,
+  get() { return this.textContent !== undefined ? this.textContent : this.value; },
+  set(next) { if (this.textContent !== undefined) this.textContent = next; else this.value = next; } });
 globalThis.document = {
   createElement() { return new FakeNode(); },
   createTextNode() { return new FakeNode(); },
@@ -27053,6 +27148,12 @@ class FakeNode {
 }
 const target = new FakeNode(1, "root");
 globalThis.Node = FakeNode;
+globalThis.CharacterData = FakeNode;
+// A text node's character data is now written in place, so the stand-in models
+// the accessor the DOM writes it through instead of only its creation.
+Object.defineProperty(FakeNode.prototype, "data", { configurable: true,
+  get() { return this.textContent !== undefined ? this.textContent : this.value; },
+  set(next) { if (this.textContent !== undefined) this.textContent = next; else this.value = next; } });
 globalThis.document = {
   createElement(tag) { return new FakeNode(1, tag); },
   createTextNode(value) { return new FakeNode(3, "", String(value)); },
@@ -27134,6 +27235,12 @@ class FakeNode {
 }
 const target = new FakeNode();
 globalThis.Node = FakeNode;
+globalThis.CharacterData = FakeNode;
+// A text node's character data is now written in place, so the stand-in models
+// the accessor the DOM writes it through instead of only its creation.
+Object.defineProperty(FakeNode.prototype, "data", { configurable: true,
+  get() { return this.textContent !== undefined ? this.textContent : this.value; },
+  set(next) { if (this.textContent !== undefined) this.textContent = next; else this.value = next; } });
 globalThis.document = {
   createElement() { return new FakeNode(); },
   createTextNode() { return new FakeNode(); },
@@ -27541,6 +27648,12 @@ class FakeNode {
 }
 const flowTarget = new FakeNode(1, "root");
 globalThis.Node = FakeNode;
+globalThis.CharacterData = FakeNode;
+// A text node's character data is now written in place, so the stand-in models
+// the accessor the DOM writes it through instead of only its creation.
+Object.defineProperty(FakeNode.prototype, "data", { configurable: true,
+  get() { return this.textContent !== undefined ? this.textContent : this.value; },
+  set(next) { if (this.textContent !== undefined) this.textContent = next; else this.value = next; } });
 globalThis.document = {
   createElement(tag) { return new FakeNode(1, tag); },
   createTextNode(value) { return new FakeNode(3, "", String(value)); },
@@ -27722,6 +27835,12 @@ const targets = new Map([
   ["#list", new FakeNode(1, "root")],
 ]);
 globalThis.Node = FakeNode;
+globalThis.CharacterData = FakeNode;
+// A text node's character data is now written in place, so the stand-in models
+// the accessor the DOM writes it through instead of only its creation.
+Object.defineProperty(FakeNode.prototype, "data", { configurable: true,
+  get() { return this.textContent !== undefined ? this.textContent : this.value; },
+  set(next) { if (this.textContent !== undefined) this.textContent = next; else this.value = next; } });
 globalThis.document = {
   createElement(tag) { return new FakeNode(1, tag); },
   createTextNode(value) { return new FakeNode(3, "", String(value)); },
@@ -27913,6 +28032,12 @@ class FakeNode {
 }
 const target = new FakeNode(1, "root");
 globalThis.Node = FakeNode;
+globalThis.CharacterData = FakeNode;
+// A text node's character data is now written in place, so the stand-in models
+// the accessor the DOM writes it through instead of only its creation.
+Object.defineProperty(FakeNode.prototype, "data", { configurable: true,
+  get() { return this.textContent !== undefined ? this.textContent : this.value; },
+  set(next) { if (this.textContent !== undefined) this.textContent = next; else this.value = next; } });
 globalThis.document = {
   createElement(tag) { return new FakeNode(1, tag); },
   createTextNode(value) { return new FakeNode(3, "", String(value)); },
