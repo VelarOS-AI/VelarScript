@@ -714,7 +714,7 @@ private final class NodeCapabilityHost {
             }
             do {
                 try self.activate(generation: smokeGeneration)
-                guard let workerID = self.allocateWorkerRequestID(), self.probes[workerID] == nil else {
+                guard let workerID = self.allocateWorkerRequestID() else {
                     completion(false, nil, "Desktop capability request identity space is exhausted")
                     return
                 }
@@ -939,11 +939,15 @@ private final class NodeCapabilityHost {
         }
     }
 
+    /// Host-global request identities are shared by renderer requests and the
+    /// host's own probes, so both ledgers are consulted. One counter and one
+    /// check would let a renderer request be handed an identity a probe is still
+    /// waiting on, and the answer would go to whichever ledger was read first.
     private func allocateWorkerRequestID() -> Int? {
         for _ in 0...1024 {
             let candidate = nextWorkerRequestID
             nextWorkerRequestID = nextWorkerRequestID >= 9_007_199_254_740_991 ? 1 : nextWorkerRequestID + 1
-            if pending[candidate] == nil { return candidate }
+            if pending[candidate] == nil && probes[candidate] == nil { return candidate }
         }
         return nil
     }

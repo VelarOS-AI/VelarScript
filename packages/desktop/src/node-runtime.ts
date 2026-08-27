@@ -144,6 +144,14 @@ export async function provisionDesktopNodeRuntime(request: DesktopRuntimeRequest
     };
     await writeFile(join(staging, RUNTIME_RECEIPT_FILE), `${JSON.stringify(receipt, null, 2)}\n`, "utf8");
     await rm(archive, { force: true });
+    // Another build may have finished the same download while this one ran. Its
+    // entry passed the same digest check, so the polite answer is to use it
+    // rather than to delete a directory it is already reading out of.
+    const concurrent = await readCachedRuntime(directory, pinned.sha256);
+    if (concurrent) {
+      await rm(staging, { recursive: true, force: true });
+      return concurrent;
+    }
     await rm(directory, { recursive: true, force: true });
     await rename(staging, directory);
     return Object.freeze({
