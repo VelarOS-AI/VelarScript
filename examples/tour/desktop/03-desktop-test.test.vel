@@ -17,9 +17,11 @@
 // imported by name from `main.vel` the way chapters 01 and 02 are.
 
 import {DesktopPlatform} from "velar/desktop"
+import {WindowState} from "velar/window"
 import {appDataDirectory, makeDirectory, projectDirectory, readText, removeFile, setPlatform, writeText} from "velar/desktop-test"
 import {expect} from "velar/test"
 import {projectName} from "./01-desktop-host.vel"
+import {describeBounds, previewKey, previewRoute, stateLabel, stateNames} from "./05-windows.vel"
 
 // A fixture path is ordinary text, so the helper that builds one is pure and
 // can be asserted directly.
@@ -69,3 +71,22 @@ test "a fixture round is described before it is run":
 test "a pure function imported from a capability module runs without a host":
     expect(projectName("/Users/ada/work/release-tool")).toBe("release-tool")
     expect(projectName("/")).toBe("/")
+
+// Chapter 05's window identity, route and geometry are ordinary text built from
+// ordinary text, so a plain `velar test` asserts them with no window system
+// anywhere — the same rule the pure function above demonstrates for
+// `velar/desktop`, now for `velar/window`.
+test "a window instance key and route are built from the note they preview":
+    expect(previewKey("42")).toBe("note-42")
+    expect(previewRoute("42")).toBe("/note-preview?note=42")
+
+test "window bounds read back as one line of geometry":
+    expect(describeBounds({x: 40, y: 60, width: 512, height: 320})).toBe("512x320+40+60")
+
+// A module-provided enum carries the same runtime face a declared enum does, and
+// none of it needs a host: `values()` answers in declaration order.
+test "the five window states are the closed vocabulary the host publishes":
+    expect(stateNames()).toEqual(["moved", "resized", "focused", "blurred", "closed"])
+    expect(stateLabel(WindowState.blurred)).toBe("blurred")
+    expect(WindowState.is("moved")).toBe(true)
+    expect(WindowState.is("minimized")).toBe(false)

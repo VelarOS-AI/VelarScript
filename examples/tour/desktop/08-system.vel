@@ -1,0 +1,123 @@
+// Chapter 08 — links, displays, power, and the read-only probes.
+//
+// Authority: the `velar/desktop` module interface in
+// packages/desktop/src/compiler.ts, and `desktop.permissions.links` in this
+// project's velar.json.
+//
+// `openExternal` hands a URL to whatever the operating system uses to open it,
+// which is a different act from the renderer following a link: the manifest's
+// `links` list is a closed set of schemes, and a scheme outside it is refused at
+// the call and again by the host. `displays()` and `permissionStatus()` only
+// read. There is no function here that asks the user for a system permission —
+// requesting one belongs to the product flow that consumes the answer.
+
+import {Display, PermissionStatus, PowerState, PowerStream, SystemPermission, displays, openExternal, permissionStatus, watchPower} from "velar/desktop"
+import {border, rgb, spacing} from "velar/look"
+
+const ink = rgb(24, 24, 24)
+const paper = rgb(246, 252, 248)
+
+const systemLook = look:
+    display = "grid"
+    gap = 12px
+    padding = spacing(20px, 24px)
+    border = border(1px, ink)
+    borderRadius = 12px
+    color = ink
+    background = paper
+
+// This project grants `https` and `mailto`, so these two open and every other
+// scheme is refused before it reaches the host.
+export const guideUrl = "https://velarscript.dev/guide"
+
+export async def openGuide() -> string:
+    await openExternal(guideUrl)
+    return f"opened {guideUrl}"
+
+// A `Display` is the same record a window's own `display()` answers, in screen
+// coordinates with the origin at the top left.
+export async def describeDisplays() -> string:
+    const attached = await displays()
+    return attached.map(screen => describeDisplay(screen)).join(" ")
+
+export def describeDisplay(screen: Display) -> string:
+    return f"{screen.id}:{screen.workArea.width}x{screen.workArea.height}@{screen.scale}:{screen.primary}"
+
+// The three probes, and the three answers each may give. They only read: a
+// probe that returned `undetermined` is telling you the user has not answered,
+// not asking you to make them.
+export def probeNames() -> List<string>: return SystemPermission.values().map(kind => probeLabel(kind))
+
+export def probeLabel(kind: SystemPermission) -> string:
+    if kind == SystemPermission.screenRecording: return "screenRecording"
+    if kind == SystemPermission.accessibility: return "accessibility"
+    return "microphone"
+
+export def statusNames() -> List<string>: return PermissionStatus.values().map(status => statusLabel(status))
+
+export def statusLabel(status: PermissionStatus) -> string:
+    if status == PermissionStatus.granted: return "granted"
+    if status == PermissionStatus.denied: return "denied"
+    return "undetermined"
+
+export async def readyForCapture() -> string:
+    const screen = await permissionStatus(SystemPermission.screenRecording)
+    const microphone = await permissionStatus(SystemPermission.microphone)
+    return f"{statusLabel(screen)}/{statusLabel(microphone)}"
+
+// Sleep and wake are a transition stream: the machine is either asleep or
+// awake, so a state it is already in publishes nothing and the stream never
+// repeats itself.
+export def stateNames() -> List<string>: return PowerState.values().map(state => powerLabel(state))
+
+export def powerLabel(state: PowerState) -> string:
+    if state == PowerState.suspended: return "suspended"
+    return "resumed"
+
+export async def firstTransition(states: PowerStream) -> string:
+    async for state in states: return powerLabel(state)
+    return "no transition"
+
+export component SystemPanel:
+    state link = "nothing opened"
+    state screens = "not read"
+    state probe = "not read"
+    state power = "not watching"
+
+    action open() -> string:
+        link = await openGuide()
+        return link
+
+    action readDisplays() -> string:
+        screens = await describeDisplays()
+        return screens
+
+    action readProbes() -> string:
+        probe = await readyForCapture()
+        return probe
+
+    action watchSleep() -> string:
+        using states = await watchPower()
+        // Said only once the stream exists, so a reader — or a test — knows
+        // that no transition produced from here on can be missed.
+        power = "watching"
+        power = await firstTransition(states)
+        return power
+
+    return <section data-chapter="08" look={systemLook}>
+        <h2>08 — links, displays, power, probes</h2>
+        <p data-opened-link>{link}</p>
+        <p data-displays>{screens}</p>
+        <p data-probe>{probe}</p>
+        <p data-power>{power}</p>
+        <button type="button" data-open-link on:click={open} disabled={open.pending}>Open the guide</button>
+        <button type="button" data-read-displays on:click={readDisplays} disabled={readDisplays.pending}>
+            Read the attached displays
+        </button>
+        <button type="button" data-read-probes on:click={readProbes} disabled={readProbes.pending}>
+            Read the capture probes
+        </button>
+        <button type="button" data-watch-power on:click={watchSleep} disabled={watchSleep.pending}>
+            Watch for the first sleep or wake
+        </button>
+    </section>

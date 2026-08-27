@@ -65,6 +65,15 @@ write — a save that lands mid-pass survives verbatim instead of being reverted
 without a word. A run that could not write a file, or that leaves a diagnostic
 behind, exits non-zero.
 
+`fix` migrates `velar.json` too, and does it first, because a manifest written
+against a shape this compiler removed is what fails before anything else can
+run. A target that retires a manifest shape carries the rewrite with it, and the
+error the old shape raises names this command: `desktop.window` reports that
+`desktop.windows` replaced it, and `velar fix` rewrites `window: {…}` as
+`windows: {"main": {…}}`. The edit is surgical — the one member changes, and the
+rest of the manifest keeps its bytes, key order and indentation — and running it
+a second time changes nothing.
+
 `lsp` orders workspace symbols by match quality first, then by name ignoring
 case, then by path. Ignoring case is the Unicode default case mapping rather
 than a locale-tailored one, so `apple` comes before `Banana` on every machine
@@ -200,6 +209,194 @@ source packages. Their generated `validate` scripts run the appropriate build
 and `npm pack --dry-run --json` so the package contents are checked before
 publication. See [package distribution](package-distribution.md) and
 [static deployment](static-deployment.md).
+
+A Desktop project declares the windows it may open in `desktop.windows`, keyed
+by **window kind**. `main` is required and is the window the host opens at
+launch; every other kind waits for `openWindow`, and a kind that is not declared
+here is refused at the call. A kind name is lowercase words joined by single
+hyphens, and one application declares at most 32 of them. Every field has a
+default, and each one is a closed vocabulary — an unknown field is named with
+its exact path:
+
+```json
+{
+  "formatVersion": 2,
+  "entry": "src/main.vel",
+  "extensions": ["@velarscript/desktop"],
+  "desktop": {
+    "productName": "Example",
+    "identifier": "com.example.app",
+    "windows": {
+      "main": {
+        "title": "Example",
+        "width": 1280, "height": 820,
+        "minWidth": 720, "minHeight": 520,
+        "titleBar": "standard",
+        "material": "none"
+      },
+      "note-preview": {
+        "style": "panel",
+        "frame": false,
+        "level": "floating",
+        "visibleOnAllWorkspaces": true,
+        "aspectRatio": 1.6,
+        "resizable": false,
+        "width": 512, "height": 320
+      }
+    },
+    "services": {
+      "core": { "payload": "dist/service-core", "entry": "main.js", "restart": "always" }
+    },
+    "permissions": {
+      "files": ["project", "dropped"],
+      "processes": ["git"],
+      "network": ["https://api.example.com"],
+      "environment": [],
+      "secrets": [],
+      "links": ["https", "mailto"],
+      "notifications": true,
+      "secureStorage": ["CLOUD_SESSION"]
+    }
+  }
+}
+```
+
+`title` defaults to `productName`. `titleBar` is `standard` or `hidden-inset`;
+`material` is `none` or `sidebar` (macOS vibrancy, which implies the page paints
+no background of its own); `style` is `window` or `panel`, where a panel is
+non-activating, floats, and stays out of the window cycle; `frame`, `resizable`
+and `visibleOnAllWorkspaces` are booleans defaulting to `true`, `true` and
+`false`; `level` is `normal` or `floating`, and a panel defaults to `floating`
+because that is what a panel is; `aspectRatio` locks the width-to-height ratio
+when present. The older singular `desktop.window` was removed —
+[`velar fix`](#writing-code) migrates it.
+
+`desktop.services` declares the long-running processes the product owns — at
+most eight, keyed by a name that follows a window kind's rule. `payload` is a
+project directory `velar package` copies whole into
+`Contents/Resources/services/<name>/`, and `entry` is a JavaScript file inside
+it. The only runtime is the Node.js executable the bundle already carries: no
+other executable is declarable, and a short-lived process is `velar/process`
+with a `processes` grant instead. `restart` is `always` — an exponential backoff
+from one second to a thirty-second cap, with five consecutive failures reaching
+the terminal `failed` — or `never`.
+
+The host allocates a loopback endpoint and a 128-bit token per service, hands
+both to the process in `VELAR_SERVICE_ENDPOINT` and `VELAR_SERVICE_TOKEN`, and
+expects a WebSocket server there; the handshake frames are pinned in
+[`packages/desktop/README.md`](../packages/desktop/README.md). Services start
+before the renderer loads and are not awaited, and quitting sends SIGTERM and
+then SIGKILL thirty seconds later. A service payload is application code, so its
+bytes are inside `desktop.build.sizeBudgetBytes` and any `.node` or `.dylib` it
+carries is signed with the rest of the bundle. `velar dev` runs the same
+services on the system Node and converges them when the dev server closes; it
+does not watch or rebuild them.
+
+`desktop.permissions` is eight finite allowlists and one flag, and every one of
+them defaults to no authority at all. A capability the manifest never declared
+is refused where the program *calls* it, with the manifest line that would grant
+it named in the error, and the native host asks the same question again on its
+own side:
+
+| Field | Grants | Vocabulary |
+| --- | --- | --- |
+| `files` | `velar/fs`, `velar/path`, and the paths a drag gesture brings in | `app-data`, `project`, `dropped` |
+| `processes` | `velar/process` | exact executable names, never paths or shell text |
+| `network` | `velar/http` and renderer navigation to an outside origin | exact HTTPS origins, or exact loopback HTTP origins |
+| `environment` | `velar/env` | uppercase variable names |
+| `secrets` | `velar/http` secret headers | uppercase variable names |
+| `links` | `openExternal` | `http`, `https`, `mailto` |
+| `notifications` | `velar/notification` | `true` or `false` |
+| `secureStorage` | `velar/secure-storage` | uppercase variable names |
+
+`dropped` is not a directory: it authorizes reading the files a user's own drag
+gesture brings in and learning their real filesystem paths — the gesture is the
+grant, and it lasts the session. `links` governs `openExternal`, which hands a
+URL to the system default handler; `network` separately governs what the
+renderer itself may reach, so a link the application opens and an origin it
+fetches from are two grants rather than one. `secrets` and `secureStorage` share
+a spelling rule and may not share a name: the first is an opaque value the
+environment injects, the second is a credential slot the application writes and
+reads in the macOS keychain, and one name naming both would be two authorities
+wearing one label. `notifications` declares intent only — the operating system
+still asks the user, and `requestPermission()` is how the application learns that
+answer.
+
+### Packaging a Desktop application
+
+`velar package` produces a **self-contained** `.app`: the user needs nothing
+installed. The bundle carries one bare Node.js executable at
+`Contents/MacOS/node`, and the version is the toolchain generation's rather than
+the project's — `velar.json` has no field for it, and every application this
+toolchain builds carries the same interpreter. The first `velar package` on a
+machine downloads the official archive from `nodejs.org`, checks it against the
+`SHASUMS256` digest this toolchain pins, and caches the executable under
+`~/Library/Caches/velarscript/desktop-runtimes/<version>/<platform>-<arch>`
+(`VELAR_DESKTOP_RUNTIME_CACHE` moves that directory and nothing else). Later
+builds are offline. A cache entry whose bytes no longer match its receipt is
+treated as absent rather than trusted, and an offline build with nothing cached
+names the version and the directory to prime.
+
+`desktop.build.sizeBudgetBytes` (32 MiB by default) governs the **application's**
+components — native host, renderer, capability host, metadata. The runtime is not
+one of them: no project change removes or shrinks it, so it is reported
+separately and held to a fixed 200 MiB integrity ceiling the toolchain owns.
+
+The bundle is always signed, because an arm64 Mach-O with no signature cannot be
+executed. `desktop.build.signing` carries the three answers that belong to the
+product, and nothing about the mechanics:
+
+```json
+{
+  "desktop": {
+    "build": {
+      "signing": {
+        "identity": "Developer ID Application: Example Inc (TEAMID1234)",
+        "entitlements": "build/app.entitlements",
+        "notarization": { "keychainProfile": "example-notary" }
+      }
+    }
+  }
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `identity` | The `codesign` identity. Omit it for an ad-hoc signature, which is what a local build gets; writing `"-"` is refused, because absence already means ad-hoc. |
+| `entitlements` | A project-relative entitlements plist applied to the host and the bundle. The embedded runtime is signed separately with the language's own minimal file. |
+| `notarization.keychainProfile` | A profile `xcrun notarytool store-credentials` already stored. It is a reference the local keychain resolves, so no credential reaches the manifest, the build log, or the build receipt. Requires `identity`: Apple does not notarize an ad-hoc signature. |
+
+Signing runs inside-out — the runtime first, then the host, then the bundle —
+because macOS seals a bundle from its leaves inward and re-signing the bundle
+invalidates anything signed after it. The runtime's own entitlements are supplied
+by the language and contain exactly one key,
+`com.apple.security.cs.allow-jit`: without it the hardened runtime refuses V8 its
+code range, and the application dies on its first capability call rather than at
+build time. The file is written beside the build manifest as
+`velar-desktop-runtime.entitlements` so the signature is auditable.
+
+`velar-desktop-build.json` is `formatVersion` 4. Its `runtime` is
+`{"kind": "embedded-node", "version", "embedded": true, "bytes", "sha256"}`,
+where `sha256` is the official archive digest that was verified — provenance,
+not a hash of the shipped bytes, which this build's own signature has already
+changed. `services` lists each declared service with its entry, restart policy,
+byte count and the digest of the entry file the host will run. `sizes` reports
+`applicationBytes` and `runtimeBytes` beside the component breakdown — including
+`servicesBytes`, which is inside the application's budget — and `signing`
+records the mode and whether the build was notarized, never by whom. There is no
+reader for version 3.
+
+The packaged host accepts `--headless-smoke`: it starts, launches the capability
+worker on whichever runtime it resolved, completes one real capability
+round-trip, starts every declared service and waits for each to answer the
+authenticated handshake, converges them, prints what answered, and exits 0. That is the packaging gate's
+acceptance, and it is the only thing this host calls a smoke. `--verify-bundle`
+is the static check beside it: the bundle is complete and a runtime resolves.
+It cannot be an acceptance, because resolving a runtime means asking
+`node --version`, which returns before V8 has created an isolate — a bundle
+whose interpreter cannot execute JavaScript passes it. The check was once
+called `--smoke`, which is why it was believed; the flag now says what it does
+and there is no alias for the old spelling.
 
 Build output is fixed by the toolchain, not by the machine that runs it.
 Project modules are ordered by UTF-16 code unit over their POSIX-normalized

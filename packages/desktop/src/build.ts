@@ -1,13 +1,70 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { chmod, cp, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { VelarDesktopConfig } from "./config.ts";
+import {
+  DESKTOP_NODE_MINIMUM_MAJOR,
+  DESKTOP_NODE_RUNTIME_ARCHIVES,
+  DESKTOP_NODE_RUNTIME_VERSION,
+  DESKTOP_RUNTIME_CEILING_BYTES,
+  type VelarDesktopConfig,
+} from "./config.ts";
+import {
+  DESKTOP_EMBEDDED_RUNTIME_PATH,
+  hashFile,
+  provisionDesktopNodeRuntime,
+  type DesktopNodeRuntime,
+} from "./node-runtime.ts";
+import {
+  DESKTOP_RUNTIME_ENTITLEMENTS,
+  DESKTOP_RUNTIME_ENTITLEMENTS_FILE,
+  desktopNotarizationSteps,
+  desktopSigningMode,
+  desktopSigningPlan,
+  type DesktopSigningMode,
+} from "./signing.ts";
 import { byCodeUnit } from "./stable-order.ts";
 
+/**
+ * A packaged application either carries the interpreter it runs on or asks the
+ * machine for one. Both shapes name their `kind` first, so a reader of the
+ * manifest never has to infer which discipline produced the artifact.
+ *
+ * `sha256` on the embedded shape is the *provenance* digest: the official
+ * `SHASUMS256.txt` value of the nodejs.org archive this runtime was extracted
+ * from, verified before anything was cached. The bytes actually shipped are
+ * covered by the manifest's whole-tree `sha256`, and they deliberately differ
+ * from the upstream file — signing the bundle replaces Apple's own signature on
+ * the runtime with the product's.
+ */
+export type DesktopRuntimeManifest = {
+  readonly kind: "embedded-node";
+  readonly version: string;
+  readonly embedded: true;
+  readonly bytes: number;
+  readonly sha256: string;
+} | {
+  readonly kind: "external-node";
+  readonly embedded: false;
+};
+
+/**
+ * One declared service, as the build receipt records it. `entrySha256` is the
+ * digest of the JavaScript file the host will actually run: a payload directory
+ * is the product's own tree and this build does not audit it, but the one file
+ * it hands to an interpreter is named and hashed.
+ */
+export interface DesktopServiceManifest {
+  readonly name: string;
+  readonly entry: string;
+  readonly restart: "always" | "never";
+  readonly bytes: number;
+  readonly entrySha256: string;
+}
+
 export interface DesktopBuildManifest {
-  readonly formatVersion: 3;
+  readonly formatVersion: 4;
   readonly kind: "velar-desktop-build";
   readonly productName: string;
   readonly identifier: string;
@@ -15,11 +72,13 @@ export interface DesktopBuildManifest {
   readonly platform: "macos";
   readonly architecture: string;
   readonly hostProtocolVersion: 1;
-  readonly runtime: {
-    readonly kind: "external-node";
-    readonly minimumMajor: 24;
-    readonly discovery: "environment-and-system-paths";
-    readonly embedded: false;
+  readonly runtime: DesktopRuntimeManifest;
+  /** Declared services in manifest order; empty when the application declares none. */
+  readonly services: readonly DesktopServiceManifest[];
+  readonly signing: {
+    readonly mode: DesktopSigningMode;
+    readonly hardenedRuntime: true;
+    readonly notarized: boolean;
   };
   readonly applicationBundle: string;
   readonly sizeBudgetBytes: number;
@@ -27,7 +86,13 @@ export interface DesktopBuildManifest {
     readonly hostBytes: number;
     readonly rendererBytes: number;
     readonly capabilityHostBytes: number;
+    /** Every declared service payload together. It is application code, so it is inside the budget. */
+    readonly servicesBytes: number;
     readonly metadataBytes: number;
+    /** The five components above — what `desktop.build.sizeBudgetBytes` governs. */
+    readonly applicationBytes: number;
+    /** The embedded interpreter, outside the project's budget and under the toolchain's own ceiling. */
+    readonly runtimeBytes: number;
     readonly totalBytes: number;
   };
   readonly sha256: string;
@@ -56,6 +121,13 @@ interface DesktopNativeTemplate {
   readonly host: string;
   readonly worker: string;
   readonly icon: string;
+  /**
+   * The template application's own embedded runtime. A packaged Desktop
+   * application that packages another one already carries a verified
+   * interpreter of exactly the version this toolchain pins, so it reuses that
+   * rather than reaching for the network it may not have.
+   */
+  readonly runtime: string | null;
 }
 
 const desktopPackageTemplateEnvironment = "VELAR_DESKTOP_PACKAGE_TEMPLATE_ROOT";
@@ -75,27 +147,47 @@ async function desktopNativeTemplate(): Promise<DesktopNativeTemplate | null> {
   }
   const resources = await realpath(value);
   const contents = dirname(resources);
+  const runtime = join(contents, "MacOS", "node");
   const template: DesktopNativeTemplate = {
     host: join(contents, "MacOS", "VelarDesktopHost"),
     worker: join(resources, "host", "worker.js"),
     icon: join(resources, "VelarScript.icns"),
+    runtime: await isOrdinaryFile(runtime) ? runtime : null,
   };
   for (const candidate of Object.values(template)) {
+    if (candidate === null) continue;
     const information = await stat(candidate);
     if (!information.isFile()) throw new Error(`Desktop package template asset is not an ordinary file: ${candidate}`);
   }
   return template;
 }
 
+async function isOrdinaryFile(path: string): Promise<boolean> {
+  try { return (await stat(path)).isFile(); }
+  catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
 function bundledCapabilityWorker(): string {
   return fileURLToPath(new URL(import.meta.url.endsWith(".ts") ? "../dist/worker.js" : "./worker.js", import.meta.url));
 }
 
+/**
+ * The application's components, and only those. The embedded runtime is not
+ * listed: it is not under this budget, so listing it beside the components that
+ * are would invite exactly the arithmetic the budget no longer does.
+ */
 function desktopSizeComponents(sizes: DesktopBuildSizes): readonly DesktopSizeComponent[] {
   return [
     { label: "capability host (worker.js)", bytes: sizes.capabilityHostBytes, mandatory: true },
     { label: "native host (VelarDesktopHost)", bytes: sizes.hostBytes, mandatory: false },
     { label: "renderer (application code and assets)", bytes: sizes.rendererBytes, mandatory: false },
+    // Listed only when the application declares services. A composition that
+    // named a component every reader has zero of would spend a line teaching
+    // most authors about a manifest section they never wrote.
+    ...sizes.servicesBytes > 0 ? [{ label: "service payloads (desktop.services)", bytes: sizes.servicesBytes, mandatory: false }] : [],
     { label: "bundle metadata (Info.plist, icon, desktop.json)", bytes: sizes.metadataBytes, mandatory: false },
   ];
 }
@@ -106,27 +198,51 @@ function desktopSizeComponents(sizes: DesktopBuildSizes): readonly DesktopSizeCo
  * composition — every component, its share, and the mandatory capability
  * infrastructure floor no project can shrink — makes that judgment possible in one
  * pass, so this is the one message the failure prints.
+ *
+ * The budget governs the application's own components. The embedded interpreter
+ * is not one of them: no project change removes it, no project change shrinks
+ * it, and it is a hundred times the size of everything beside it — folding it in
+ * would make every failure here tell an author to shrink an icon to recover
+ * 100 MiB. It is named and excluded instead, and measured against the
+ * toolchain's own ceiling in `desktopRuntimeCeilingFailure`.
  */
 export function desktopSizeBudgetFailure(sizes: DesktopBuildSizes, sizeBudgetBytes: number): string | null {
-  if (sizes.totalBytes <= sizeBudgetBytes) return null;
+  if (sizes.applicationBytes <= sizeBudgetBytes) return null;
   const components = [...desktopSizeComponents(sizes)].sort((left, right) => right.bytes - left.bytes);
   const mandatoryBytes = components
     .filter((component) => component.mandatory)
     .reduce((total, component) => total + component.bytes, 0);
-  const share = (bytes: number): string => `${((bytes / Math.max(1, sizes.totalBytes)) * 100).toFixed(1)}%`;
+  const share = (bytes: number): string => `${((bytes / Math.max(1, sizes.applicationBytes)) * 100).toFixed(1)}%`;
   const largest = components[0];
   return [
-    `Desktop bundle is ${formatDesktopBytes(sizes.totalBytes)} (${sizes.totalBytes} bytes), exceeding the `
+    `Desktop application components are ${formatDesktopBytes(sizes.applicationBytes)} (${sizes.applicationBytes} bytes), exceeding the `
     + `${formatDesktopBytes(sizeBudgetBytes)} (${sizeBudgetBytes}-byte) size budget by `
-    + `${formatDesktopBytes(sizes.totalBytes - sizeBudgetBytes)} (${sizes.totalBytes - sizeBudgetBytes} bytes)`,
+    + `${formatDesktopBytes(sizes.applicationBytes - sizeBudgetBytes)} (${sizes.applicationBytes - sizeBudgetBytes} bytes)`,
+    ...sizes.runtimeBytes > 0
+      ? [`The embedded Node.js runtime (${formatDesktopBytes(sizes.runtimeBytes)}, ${sizes.runtimeBytes} bytes) is outside this budget: `
+        + "it is this toolchain generation's fixed cost, not application code, and it has its own integrity ceiling"]
+      : [],
     "Composition:",
     ...components.map((component) => `  ${component.bytes.toString().padStart(11)} bytes  ${share(component.bytes).padStart(6)}  `
       + `${component.label}${component.mandatory ? " [mandatory capability infrastructure]" : ""}`),
-    `Mandatory capability infrastructure: ${formatDesktopBytes(mandatoryBytes)} (${mandatoryBytes} bytes, ${share(mandatoryBytes)} of the bundle) `
+    `Mandatory capability infrastructure: ${formatDesktopBytes(mandatoryBytes)} (${mandatoryBytes} bytes, ${share(mandatoryBytes)} of the application) `
     + "ships in every Desktop application and no project change removes it, so any budget below that floor can never pass",
     `Largest contributor: ${largest ? `${largest.label} at ${formatDesktopBytes(largest.bytes)} (${share(largest.bytes)})` : "none"}`,
-    `Raise desktop.build.sizeBudgetBytes to at least ${sizes.totalBytes} to accept this bundle, or remove bytes from the non-mandatory components above`,
+    `Raise desktop.build.sizeBudgetBytes to at least ${sizes.applicationBytes} to accept this bundle, or remove bytes from the non-mandatory components above`,
   ].join("\n");
+}
+
+/**
+ * The runtime's own bound, and it is deliberately not a project field. A project
+ * cannot choose the runtime, so it has nothing to tune here; what this catches
+ * is an archive that unpacked to something an official Node.js macOS build never
+ * is, which is a supply-chain question rather than a budget one.
+ */
+export function desktopRuntimeCeilingFailure(runtimeBytes: number): string | null {
+  if (runtimeBytes <= DESKTOP_RUNTIME_CEILING_BYTES) return null;
+  return `Embedded Node.js runtime is ${formatDesktopBytes(runtimeBytes)} (${runtimeBytes} bytes), above the `
+    + `${formatDesktopBytes(DESKTOP_RUNTIME_CEILING_BYTES)} (${DESKTOP_RUNTIME_CEILING_BYTES}-byte) integrity ceiling this toolchain generation enforces. `
+    + "The ceiling is not a project setting: an official runtime is far below it, so a build that reaches it is reporting a corrupt or substituted archive";
 }
 
 export function formatDesktopBytes(value: number): string {
@@ -171,32 +287,69 @@ export async function buildDesktopApplication(
     } else {
       await compileMacHost(hostPath);
     }
+    // The payloads land before the bundle is signed and before anything is
+    // measured, because they are Mach-O carriers and application bytes at once:
+    // the signing plan reads what they contain and the budget reads what they
+    // weigh.
+    const services = await copyServicePayloads(projectRoot, config, resources);
     await writeFile(join(contents, "Info.plist"), infoPlist(config, version), "utf8");
     await writeFile(join(resources, "desktop.json"), `${JSON.stringify({
       protocolVersion: 1,
       productName: config.productName,
       identifier: config.identifier,
       version,
-      nodeMinimumMajor: 24,
-      window: config.window,
+      nodeMinimumMajor: DESKTOP_NODE_MINIMUM_MAJOR,
+      windows: config.windows,
+      // The host reads a service's entry and its restart policy. It never reads
+      // `payload`: a packaged service lives at `services/<name>/`, so the
+      // project path that produced it is a build fact rather than a runtime one.
+      services: Object.fromEntries(services.map((service) => [service.name, { entry: service.entry, restart: service.restart }])),
       permissions: config.permissions,
     }, null, 2)}\n`, "utf8");
 
+    // The runtime goes into `Contents/MacOS`, beside the executable, because a
+    // Mach-O under `Contents/Resources` is sealed as a plain resource: codesign
+    // records a hash for it and no signature, `--deep` will not sign it, and
+    // arm64 refuses to execute an unsigned Mach-O. The layout is what makes the
+    // signature possible, not a filing preference.
+    const runtimePath = join(applicationBundle, DESKTOP_EMBEDDED_RUNTIME_PATH);
+    const runtime = await embedDesktopRuntime(nativeTemplate, runtimePath);
+    // Checked on what was provisioned, before this build's signature replaces
+    // Apple's: the ceiling is a question about the archive that arrived.
+    const ceilingFailure = desktopRuntimeCeilingFailure((await stat(runtimePath)).size);
+    if (ceilingFailure) throw new Error(ceilingFailure);
+
+    const entitlementsPath = join(staging, DESKTOP_RUNTIME_ENTITLEMENTS_FILE);
+    await writeFile(entitlementsPath, DESKTOP_RUNTIME_ENTITLEMENTS, "utf8");
+    const notarized = await signDesktopBundle(projectRoot, config, applicationBundle, entitlementsPath, staging, services);
+
+    // Every size is read after signing, and none of them before. A signature is
+    // bytes in the bundle — an ad-hoc one is *smaller* than the Developer ID
+    // signature it replaced on the runtime — so measurements taken earlier
+    // describe an artifact that no longer exists, and their parts stop summing
+    // to their total.
+    const runtimeBytes = (await stat(runtimePath)).size;
     const hostBytes = (await stat(hostPath)).size;
     const rendererBytes = await treeSize(renderer);
     const capabilityHostBytes = (await stat(workerPath)).size;
+    const servicesBytes = services.length === 0 ? 0 : await treeSize(join(resources, DESKTOP_SERVICES_DIRECTORY));
     const totalBytes = await treeSize(applicationBundle);
-    const metadataBytes = totalBytes - hostBytes - rendererBytes - capabilityHostBytes;
-    const budgetFailure = desktopSizeBudgetFailure({
+    const applicationBytes = totalBytes - runtimeBytes;
+    const metadataBytes = applicationBytes - hostBytes - rendererBytes - capabilityHostBytes - servicesBytes;
+    const sizes: DesktopBuildSizes = Object.freeze({
       hostBytes,
       rendererBytes,
       capabilityHostBytes,
+      servicesBytes,
       metadataBytes,
+      applicationBytes,
+      runtimeBytes,
       totalBytes,
-    }, config.build.sizeBudgetBytes);
+    });
+    const budgetFailure = desktopSizeBudgetFailure(sizes, config.build.sizeBudgetBytes);
     if (budgetFailure) throw new Error(budgetFailure);
     const manifest: DesktopBuildManifest = Object.freeze({
-      formatVersion: 3,
+      formatVersion: 4,
       kind: "velar-desktop-build",
       productName: config.productName,
       identifier: config.identifier,
@@ -204,17 +357,29 @@ export async function buildDesktopApplication(
       platform: "macos",
       architecture: process.arch,
       hostProtocolVersion: 1,
-      runtime: Object.freeze({ kind: "external-node", minimumMajor: 24 as const, discovery: "environment-and-system-paths" as const, embedded: false }),
+      runtime: Object.freeze({
+        kind: "embedded-node" as const,
+        version: runtime.version,
+        embedded: true as const,
+        bytes: runtimeBytes,
+        sha256: runtime.archiveSha256,
+      }),
+      services: Object.freeze(services.map((service) => Object.freeze({
+        name: service.name,
+        entry: service.entry,
+        restart: service.restart,
+        bytes: service.bytes,
+        entrySha256: service.entrySha256,
+      }))),
+      signing: Object.freeze({
+        mode: desktopSigningMode(config.build.signing),
+        hardenedRuntime: true as const,
+        notarized,
+      }),
       applicationBundle: applicationName,
       sizeBudgetBytes: config.build.sizeBudgetBytes,
-      sizes: Object.freeze({
-        hostBytes,
-        rendererBytes,
-        capabilityHostBytes,
-        metadataBytes,
-        totalBytes,
-      }),
-      sha256: await hashTree(applicationBundle),
+      sizes,
+      sha256: await desktopTreeSha256(applicationBundle),
     });
     await writeFile(join(staging, "velar-desktop-build.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
     await rm(outputDirectory, { recursive: true, force: true });
@@ -231,11 +396,208 @@ export async function buildDesktopApplication(
   }
 }
 
+/**
+ * Where a declared service's payload lands inside the bundle. It is one
+ * directory per service under `Contents/Resources`, so a service's own files
+ * cannot collide with the renderer, the capability worker, or another service.
+ */
+export const DESKTOP_SERVICES_DIRECTORY = "services";
+
+interface DesktopPackagedService {
+  readonly name: string;
+  readonly entry: string;
+  readonly restart: "always" | "never";
+  readonly bytes: number;
+  readonly entrySha256: string;
+  /** Bundle-relative Mach-O paths found in this payload, deepest first. */
+  readonly nestedCode: readonly string[];
+}
+
+/**
+ * A payload is copied whole, and copied verbatim: the product owns what is in
+ * it and this build neither prunes nor rewrites it. What the build does insist
+ * on is that the directory is a directory of ordinary files — a symbolic link
+ * would leave the bundle's tree hash unable to describe what shipped, and the
+ * hash is the receipt — and that the declared entry is a file inside it, so a
+ * mistyped `entry` fails at `velar package` rather than at first launch.
+ */
+async function copyServicePayloads(
+  projectRoot: string,
+  config: VelarDesktopConfig,
+  resources: string,
+): Promise<readonly DesktopPackagedService[]> {
+  const names = Object.keys(config.services);
+  if (names.length === 0) return Object.freeze([]);
+  const root = join(resources, DESKTOP_SERVICES_DIRECTORY);
+  await mkdir(root, { recursive: true });
+  const packaged: DesktopPackagedService[] = [];
+  for (const name of names) {
+    const service = config.services[name]!;
+    const field = `desktop.services.${name}`;
+    const source = projectPath(projectRoot, service.payload, `${field}.payload`);
+    const information = await stat(source).catch(() => null);
+    if (!information?.isDirectory()) {
+      throw new Error(`'${field}.payload' names ${service.payload}, which is not a directory in this project`);
+    }
+    const entrySource = join(source, service.entry);
+    const entryInformation = await stat(entrySource).catch(() => null);
+    if (!entryInformation?.isFile()) {
+      throw new Error(`'${field}.entry' names ${service.entry}, which is not an ordinary file inside ${service.payload}`);
+    }
+    await refuseNonOrdinaryEntries(source, source, field);
+    const destination = join(root, name);
+    await cp(source, destination, { recursive: true });
+    packaged.push({
+      name,
+      entry: service.entry,
+      restart: service.restart,
+      bytes: await treeSize(destination),
+      entrySha256: await hashFile(entrySource),
+      nestedCode: await serviceNestedCode(destination, `Contents/Resources/${DESKTOP_SERVICES_DIRECTORY}/${name}`),
+    });
+  }
+  return Object.freeze(packaged);
+}
+
+async function refuseNonOrdinaryEntries(root: string, directory: string, field: string): Promise<void> {
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    const relativePath = relative(root, path).replaceAll("\\", "/");
+    if (entry.isSymbolicLink()) throw new Error(`'${field}.payload' contains symbolic link '${relativePath}'; a Desktop service payload is copied verbatim and a link cannot be sealed by the bundle's tree hash`);
+    if (entry.isDirectory()) await refuseNonOrdinaryEntries(root, path, field);
+    else if (!entry.isFile()) throw new Error(`'${field}.payload' contains unsupported entry '${relativePath}'`);
+  }
+}
+
+/**
+ * Native modules a payload brought with it, innermost first. A `.node` addon and
+ * a `.dylib` beside it are Mach-O files this build placed inside a bundle it
+ * signs, so the one rule the signing plan keeps — every Mach-O this build places
+ * is signed by this build, leaves first — reaches them too.
+ */
+async function serviceNestedCode(directory: string, bundleRelative: string): Promise<readonly string[]> {
+  const found: string[] = [];
+  const visit = async (current: string, prefix: string): Promise<void> => {
+    for (const entry of (await readdir(current, { withFileTypes: true })).sort((left, right) => byCodeUnit(left.name, right.name))) {
+      const path = `${prefix}/${entry.name}`;
+      if (entry.isDirectory()) await visit(join(current, entry.name), path);
+      else if (entry.isFile() && /\.(?:node|dylib)$/u.test(entry.name)) found.push(path);
+    }
+  };
+  await visit(directory, bundleRelative);
+  // Deepest first, and alphabetical within one depth, so that a nested framework
+  // is signed before whatever contains it and the order is the same on every
+  // machine.
+  return Object.freeze([...found].sort((left, right) => {
+    const depth = right.split("/").length - left.split("/").length;
+    return depth === 0 ? byCodeUnit(left, right) : depth;
+  }));
+}
+
+/**
+ * Only the bare executable is embedded. `npm`, `npx` and `corepack` are symbolic
+ * links into `lib/`, the runtime needs none of them, and the bundle's tree hash
+ * refuses to walk a symbolic link at all — three reasons that agree.
+ */
+async function embedDesktopRuntime(template: DesktopNativeTemplate | null, destination: string): Promise<DesktopNodeRuntime> {
+  const runtime = template?.runtime
+    ? await templateRuntime(template.runtime)
+    : await provisionDesktopNodeRuntime({ platform: process.platform, architecture: process.arch });
+  await cp(runtime.executablePath, destination);
+  // `cp` preserves neither the executable bit across every filesystem nor a
+  // read-only source's mode, and a runtime the host cannot execute is a bundle
+  // that fails at launch rather than at build.
+  await chmod(destination, 0o755);
+  return runtime;
+}
+
+/**
+ * A template application was built by this same toolchain generation, so the
+ * runtime inside it came through the same pinned archive and carries the same
+ * provenance — which is why the digest is read from the pin table rather than
+ * recomputed from a file whose signature the previous build already replaced.
+ */
+async function templateRuntime(path: string): Promise<DesktopNodeRuntime> {
+  const key = `${process.platform}-${process.arch}`;
+  const pinned = DESKTOP_NODE_RUNTIME_ARCHIVES[key];
+  if (!pinned) throw new Error(`This toolchain has no pinned Node.js runtime archive for '${key}'`);
+  return Object.freeze({
+    executablePath: path,
+    version: DESKTOP_NODE_RUNTIME_VERSION,
+    archiveSha256: pinned.sha256,
+    bytes: (await stat(path)).size,
+    source: "cache",
+  });
+}
+
+/**
+ * Inside-out, always: the embedded runtime with the entitlements only it needs,
+ * then the host, then the bundle. An identity makes the result distributable; its
+ * absence makes it ad-hoc, which is still a signature and is what lets an arm64
+ * machine run what it just built.
+ */
+async function signDesktopBundle(
+  projectRoot: string,
+  config: VelarDesktopConfig,
+  applicationBundle: string,
+  runtimeEntitlements: string,
+  staging: string,
+  services: readonly DesktopPackagedService[],
+): Promise<boolean> {
+  const signing = config.build.signing;
+  let entitlements: string | null = null;
+  if (signing.entitlements !== null) {
+    entitlements = projectPath(projectRoot, signing.entitlements, "desktop.build.signing.entitlements");
+    const information = await stat(entitlements).catch(() => null);
+    if (!information?.isFile()) {
+      throw new Error(`'desktop.build.signing.entitlements' names ${signing.entitlements}, which is not an ordinary file in this project`);
+    }
+  }
+  const plan = desktopSigningPlan({
+    applicationBundle,
+    nestedCode: [
+      // Service payloads first: they are the deepest code in the bundle, and a
+      // native module signed after the runtime beside it would be signed after
+      // a step that already sealed part of what contains it. They carry no
+      // entitlements — an addon runs inside the runtime's process and inherits
+      // the entitlements that process was signed with.
+      ...services.flatMap((service) => service.nestedCode.map((path) => ({ path, entitlements: null }))),
+      { path: DESKTOP_EMBEDDED_RUNTIME_PATH, entitlements: runtimeEntitlements },
+    ],
+    executable: "Contents/MacOS/VelarDesktopHost",
+    identity: signing.identity,
+    entitlements,
+  });
+  for (const step of plan) {
+    try {
+      await runProcess(step.command, step.arguments, dirname(applicationBundle));
+    } catch (error) {
+      throw new Error(`Desktop signing failed while signing the ${step.label}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  if (signing.notarization === null) return false;
+  const archive = join(staging, "velar-desktop-notarization.zip");
+  try {
+    for (const step of desktopNotarizationSteps(applicationBundle, archive, signing.notarization.keychainProfile)) {
+      await runProcess(step.command, step.arguments, dirname(applicationBundle));
+    }
+  } finally {
+    await rm(archive, { force: true });
+  }
+  return true;
+}
+
 async function compileMacHost(output: string): Promise<void> {
   const source = fileURLToPath(new URL("../native/macos/VelarDesktopHost.swift", import.meta.url));
   await runProcess("/usr/bin/swiftc", [
     "-Osize", "-whole-module-optimization", "-swift-version", "5", "-parse-as-library",
-    "-framework", "Cocoa", "-framework", "WebKit", source, "-o", output,
+    // Cocoa and WebKit are the shell; the other four are the host surface the
+    // manifest's permission categories reach — notifications, the keychain, the
+    // microphone probe, and the screen-recording and accessibility probes.
+    "-framework", "Cocoa", "-framework", "WebKit",
+    "-framework", "UserNotifications", "-framework", "Security",
+    "-framework", "AVFoundation", "-framework", "ApplicationServices",
+    source, "-o", output,
   ], dirname(output));
   await chmod(output, 0o755);
 }
@@ -304,6 +666,7 @@ function infoPlist(config: VelarDesktopConfig, version: string): string {
   <key>CFBundleShortVersionString</key><string>${xml(version)}</string>
   <key>CFBundleVersion</key><string>${xml(version)}</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
+  <key>LSMultipleInstancesProhibited</key><true/>
   <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 `;
@@ -328,8 +691,25 @@ async function treeSize(root: string): Promise<number> {
   return total;
 }
 
-async function hashTree(root: string): Promise<string> {
+/**
+ * One digest over the whole bundle, in one stable order, streamed. The digest is
+ * exactly what a whole-file implementation produced — name, NUL, byte count,
+ * NUL, then the bytes — so an embedded runtime does not change the meaning of
+ * the receipt, only the cost of computing it: a 110 MiB interpreter read into
+ * memory in one buffer is a hundred megabytes this build has no use for.
+ *
+ * A symbolic link is still refused rather than followed or hashed. A link is
+ * neither a directory nor a file here, so it lands in the same refusal an
+ * unsupported entry does, and that refusal is why only the bare `node`
+ * executable is ever embedded.
+ *
+ * The runtime is inside the tree on purpose: its version is pinned to this
+ * toolchain generation, so the digest moves when the generation moves and not
+ * otherwise.
+ */
+export async function desktopTreeSha256(root: string): Promise<string> {
   const hash = createHash("sha256");
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
   const visit = async (directory: string): Promise<void> => {
     const entries = (await readdir(directory, { withFileTypes: true })).sort((left, right) => byCodeUnit(left.name, right.name));
     for (const entry of entries) {
@@ -337,8 +717,17 @@ async function hashTree(root: string): Promise<string> {
       const name = relative(root, path).replaceAll("\\", "/");
       if (entry.isDirectory()) await visit(path);
       else if (entry.isFile()) {
-        const body = await readFile(path);
-        hash.update(name).update("\0").update(String(body.byteLength)).update("\0").update(body);
+        const handle = await open(path, "r");
+        try {
+          hash.update(name).update("\0").update(String((await handle.stat()).size)).update("\0");
+          while (true) {
+            const { bytesRead } = await handle.read(buffer, 0, buffer.byteLength, null);
+            if (bytesRead === 0) break;
+            hash.update(buffer.subarray(0, bytesRead));
+          }
+        } finally {
+          await handle.close();
+        }
       } else throw new Error(`Desktop output contains unsupported entry '${name}'`);
     }
   };

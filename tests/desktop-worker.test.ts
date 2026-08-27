@@ -509,7 +509,7 @@ desktopWorkerTest("Desktop Node capability host enforces filesystem, process, an
       { timeout: 0, maxOutputBytes: 65536 },
     ]) as { handle: number; pid: number };
     await client.call("http", "request", [18, "GET", `${origin}/slow`, { maxBytes: 1024, timeout: 0 }]);
-    client.useOwner(replacementOwner);
+    client.replaceOwner(replacementOwner);
     await client.call("http", "request", [18, "GET", `${origin}/stream`, { maxBytes: 1024, timeout: 1000 }]);
     let replacementText = "";
     while (true) {
@@ -527,7 +527,7 @@ desktopWorkerTest("Desktop Node capability host enforces filesystem, process, an
       try { process.kill(retiredProcess.pid, 0); await new Promise((resolveWait) => setTimeout(resolveWait, 20)); }
       catch { retiredProcessExists = false; break; }
     }
-    assert.equal(retiredProcessExists, false, "activating a new document generation must reap the old document process");
+    assert.equal(retiredProcessExists, false, "retiring a document generation must reap the processes it owned");
     assert.ok(client.lifecycle().some((event) => event.hostEvent === "process-owned" && event.owner === retiredOwner && event.handle === retiredProcess.handle));
 
     const cancelledHttp = client.beginCall("http", "request", [19, "GET", `${origin}/slow-headers`, { maxBytes: 1024, timeout: 0 }]);
@@ -906,9 +906,32 @@ class WorkerClient {
     return result;
   }
 
-  useOwner(owner: string): void {
+  /**
+   * What the native host does when a document is replaced: the outgoing
+   * generation is retired and the incoming one activated. Activation alone no
+   * longer retires anything, because a Desktop application may hold several
+   * windows — several live generations — open at once.
+   */
+  replaceOwner(owner: string): void {
+    this.writeHostCommand("owner-retire", this.owner);
     this.writeHostCommand("owner-activate", owner);
     this.owner = owner;
+  }
+
+  /** Adds a second live generation, the way opening a second window does. */
+  addOwner(owner: string): void {
+    this.writeHostCommand("owner-activate", owner);
+    this.owner = owner;
+  }
+
+  /** Speaks as an already-live generation, without activating anything. */
+  useOwner(owner: string): void {
+    this.owner = owner;
+  }
+
+  /** Retires one generation, the way closing one window does. */
+  retireOwnerNamed(owner: string): void {
+    this.writeHostCommand("owner-retire", owner);
   }
 
   retireOwner(): void {
@@ -1053,3 +1076,49 @@ function addressPort(server: Server): number {
   if (!address || typeof address === "string") throw new Error("Desktop worker test server has no TCP port");
   return address.port;
 }
+
+desktopWorkerTest("Desktop capability host keeps one live generation per window", { timeout: 120_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-desktop-generations-"));
+  const project = join(directory, "project");
+  const appData = join(directory, "app-data");
+  await mkdir(project);
+  await mkdir(appData);
+  const configPath = join(directory, "desktop.json");
+  await writeFile(configPath, JSON.stringify({
+    protocolVersion: 1,
+    permissions: { files: ["project"], processes: [], network: [] },
+  }), "utf8");
+  const worker = spawn(process.execPath, [workerPath, configPath, appData, project], { stdio: ["pipe", "pipe", "pipe"] });
+  const client = new WorkerClient(worker);
+  const firstWindow = "0000000000000000000000000000000a";
+  const secondWindow = "0000000000000000000000000000000b";
+  try {
+    // Two windows are two live generations. Opening the second must not retire
+    // the first: before multi-window, activation retired whatever came before,
+    // and a second window would have killed the first window's watchers,
+    // processes and in-flight requests.
+    client.addOwner(firstWindow);
+    await client.call("fs", "writeText", ["first.txt", "from the first window"]);
+    const firstWatcher = await client.call("fs", "watchStart", [project, false]) as number;
+    client.addOwner(secondWindow);
+    await client.call("fs", "writeText", ["second.txt", "from the second window"]);
+
+    client.useOwner(firstWindow);
+    assert.equal(await client.call("fs", "readText", ["second.txt", 4096]), "from the second window");
+    assert.equal(await client.call("fs", "watchClose", [firstWatcher]), true);
+
+    // A generation still leaves the set exactly where it always did, and takes
+    // only its own work with it.
+    client.useOwner(secondWindow);
+    const secondWatcher = await client.call("fs", "watchStart", [project, false]) as number;
+    client.retireOwnerNamed(firstWindow);
+    assert.equal(await client.call("fs", "readText", ["first.txt", 4096]), "from the first window");
+    assert.equal(await client.call("fs", "watchClose", [secondWatcher]), true);
+
+    client.useOwner(firstWindow);
+    await assert.rejects(client.call("fs", "exists", ["first.txt"]), /Invalid Desktop worker request/u);
+  } finally {
+    await client.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

@@ -1,0 +1,84 @@
+// Chapter 07 — secure storage.
+//
+// Authority: the `velar/secure-storage` module interface in
+// packages/desktop/src/compiler.ts, and `desktop.permissions.secureStorage` in
+// this project's velar.json.
+//
+// `secrets` and `secureStorage` are two different authorities that happen to
+// share a spelling rule, which is why one name may appear in only one of them.
+// A `secrets` entry is an opaque value the environment injects and the
+// application only ever hands onward; a `secureStorage` entry is a named
+// credential slot the application itself writes and reads, held in the macOS
+// keychain under the application's bundle identifier.
+//
+// A name outside the manifest's allowlist fails at the call and lists the names
+// that are declared. Nothing here ever renders, logs, or returns a stored
+// value: this chapter reports whether a credential is present, never what it is.
+
+import {get, remove, set} from "velar/secure-storage"
+import {border, rgb, spacing} from "velar/look"
+
+const ink = rgb(24, 24, 24)
+const paper = rgb(248, 246, 252)
+
+const storageLook = look:
+    display = "grid"
+    gap = 12px
+    padding = spacing(20px, 24px)
+    border = border(1px, ink)
+    borderRadius = 12px
+    color = ink
+    background = paper
+
+// The one name this project declares. Writing it once and reaching the slot
+// through this constant is what keeps the manifest and the source in step.
+export const sessionSlot = "TOUR_SESSION"
+
+// A value up to 8 KiB goes in; the same value comes back until it is removed.
+export async def rememberSession(token: string) -> string:
+    await set(sessionSlot, token)
+    return describePresence(await get(sessionSlot))
+
+export async def sessionPresence() -> string: return describePresence(await get(sessionSlot))
+
+// Removing what is not there is the state it is already in, so a second call is
+// not an error and a caller never has to ask first.
+export async def forgetSession() -> string:
+    await remove(sessionSlot)
+    await remove(sessionSlot)
+    return describePresence(await get(sessionSlot))
+
+// The whole surface a credential is allowed to have in a user interface, a log
+// line, or a test assertion: whether it is there.
+export def describePresence(value: string?) -> string:
+    if value == null: return "absent"
+    return "present"
+
+export component SecureStoragePanel:
+    state presence = "not read"
+
+    action saveSession() -> string:
+        presence = await rememberSession("opaque-session-token")
+        return presence
+
+    action readSession() -> string:
+        presence = await sessionPresence()
+        return presence
+
+    action forget() -> string:
+        presence = await forgetSession()
+        return presence
+
+    return <section data-chapter="07" look={storageLook}>
+        <h2>07 — secure storage</h2>
+        <p data-session-presence>{presence}</p>
+        <button type="button" data-save-session on:click={saveSession} disabled={saveSession.pending}>
+            Store a session credential
+        </button>
+        <button type="button" data-read-session on:click={readSession} disabled={readSession.pending}>
+            Report whether one is stored
+        </button>
+        <button type="button" data-forget-session on:click={forget} disabled={forget.pending}>
+            Remove it, twice
+        </button>
+    </section>

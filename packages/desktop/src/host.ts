@@ -1,12 +1,14 @@
 import {
   VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION,
+  type FrameworkDevelopmentProcessInput,
   type FrameworkHostArtifactsInput,
   type FrameworkHostErrorDocumentInput,
   type FrameworkHostProjectValidationInput,
   type FrameworkHostExtension,
 } from "@velarscript/compiler/framework-host";
+import { startDesktopDevelopmentServices } from "./development-services.ts";
 import { createWebArtifacts, createWebErrorDocument, velarFrameworkHost as webHost, webStaticDeployment } from "@velarscript/web/host";
-import { VELAR_DESKTOP_API_VERSION, type VelarDesktopConfig } from "./config.ts";
+import { DESKTOP_MAIN_WINDOW_KIND, VELAR_DESKTOP_API_VERSION, type VelarDesktopConfig } from "./config.ts";
 import { desktopBrowserTestController } from "./test-runtime.ts";
 
 export const velarFrameworkHost: FrameworkHostExtension = Object.freeze({
@@ -39,6 +41,18 @@ export const velarFrameworkHost: FrameworkHostExtension = Object.freeze({
       return desktopBrowserTestController(config as VelarDesktopConfig);
     },
   }),
+  /**
+   * `velar dev` runs the same services a packaged application runs, on the
+   * system Node rather than on an embedded runtime a development tree does not
+   * have, and converges them when the dev server closes. It does not watch or
+   * rebuild them: a service's build is the product's own toolchain.
+   */
+  async startDevelopmentProcesses(input: FrameworkDevelopmentProcessInput) {
+    const config = input.config as VelarDesktopConfig;
+    const lines: string[] = [];
+    const started = await startDesktopDevelopmentServices(input.projectRoot, config, (line) => lines.push(line));
+    return Object.freeze({ report: Object.freeze(lines), stop: started.stop });
+  },
   validateProject(input: FrameworkHostProjectValidationInput) {
     const config = input.config as VelarDesktopConfig;
     const imports = new Set(input.modules.flatMap((module) => module.imports));
@@ -55,6 +69,19 @@ export const velarFrameworkHost: FrameworkHostExtension = Object.freeze({
     if (imports.has("velar/env") && config.permissions.environment.length === 0) {
       failures.push("Desktop source imports 'velar/env' but desktop.permissions.environment grants no variable");
     }
+    // A module whose every export is refused is a manifest mistake rather than
+    // a program to run, so it is reported once here. D60 rule 153 still owns
+    // the call: an individual capability the manifest does declare and the
+    // author reaches wrongly fails where it is used, not where it is imported.
+    if (imports.has("velar/notification") && !config.permissions.notifications) {
+      failures.push("Desktop source imports 'velar/notification' but desktop.permissions.notifications is not true");
+    }
+    if (imports.has("velar/secure-storage") && config.permissions.secureStorage.length === 0) {
+      failures.push("Desktop source imports 'velar/secure-storage' but desktop.permissions.secureStorage grants no name");
+    }
+    if (imports.has("velar/service") && Object.keys(config.services).length === 0) {
+      failures.push("Desktop source imports 'velar/service' but desktop.services declares no service");
+    }
     return Object.freeze(failures);
   },
 });
@@ -62,7 +89,10 @@ export const velarFrameworkHost: FrameworkHostExtension = Object.freeze({
 function webConfig(value: unknown) {
   const config = value as VelarDesktopConfig;
   return {
-    title: config.window.title,
+    // Every window loads this one document, so the document title is the main
+    // window's; a window kind's own title is applied by the native host to the
+    // NSWindow it opens, not to the shared page.
+    title: config.windows[DESKTOP_MAIN_WINDOW_KIND]!.title,
     base: "/",
     // A desktop window has no browser tab; its icon is the packaged
     // application icon, not a document `rel="icon"`.

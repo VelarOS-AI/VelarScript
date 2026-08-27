@@ -1,0 +1,72 @@
+// Chapter 10 — replacing the installed application with a newer copy of itself.
+//
+// Authority: `applyUpdate` in the `velar/desktop` module interface in
+// packages/desktop/src/compiler.ts, and the identity check in
+// packages/desktop/native/macos/VelarDesktopHost.swift.
+//
+// The language owns the mechanism and nothing else. There is no feed, no
+// channel, no version check, no automatic download and no delta format: an
+// application that wants to update itself decides on its own when to look,
+// where to look, and what to tell the user, downloads the archive with the
+// capabilities it already has, and then hands the local path to `applyUpdate`.
+//
+// What the host does with that path is the one thing a product must not be able
+// to get wrong. It expands the archive somewhere else, checks that the
+// application inside it has this application's bundle identifier and was signed
+// by this application's Team ID, and only then swaps the two atomically and
+// relaunches. Every failure leaves the installed copy untouched — including the
+// failure a development build always produces, because an ad-hoc install has no
+// Team ID for an update to match and "no team matches no team" would accept
+// every archive on the machine.
+
+import {applyUpdate} from "velar/desktop"
+import {border, rgb, spacing} from "velar/look"
+
+const ink = rgb(24, 24, 24)
+const paper = rgb(252, 248, 246)
+
+const updateLook = look:
+    display = "grid"
+    gap = 12px
+    padding = spacing(20px, 24px)
+    border = border(1px, ink)
+    borderRadius = 12px
+    color = ink
+    background = paper
+
+// The identifier this application declares in its velar.json, which is the
+// first of the two things an update archive has to match.
+export const tourIdentifier = "dev.velarscript.tour"
+
+// The product's own naming, not the language's: this tour pretends it has
+// already downloaded an archive into its application data directory.
+export def downloadedArchive(appData: string) -> string: return f"{appData}/updates/tour.zip"
+
+// The call succeeds only when the archive really is this application. It is
+// written as an ordinary call because that is what it is — a refusal arrives as
+// a failure at this line, with the reason in its message, and the installed
+// application is exactly as it was.
+export async def installDownloaded(archivePath: string) -> string:
+    await applyUpdate(archivePath)
+    return "replaced; relaunching"
+
+// A refusal is not an error the application should hide: the user asked for an
+// update and did not get one, and the reason is the only useful thing to say.
+export async def installOrExplain(archivePath: string) -> string:
+    try: return await installDownloaded(archivePath)
+    catch error: return f"refused: {error.message}"
+
+export component UpdatePanel:
+    state report = "no update applied"
+
+    action install() -> string:
+        report = await installOrExplain(downloadedArchive("/velar-test/app-data"))
+        return report
+
+    return <section data-chapter="10" look={updateLook}>
+        <h2>10 — applying an update</h2>
+        <p data-update>{report}</p>
+        <button type="button" data-apply-update on:click={install} disabled={install.pending}>
+            Install the downloaded update
+        </button>
+    </section>

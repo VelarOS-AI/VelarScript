@@ -1,0 +1,164 @@
+// Chapter 05 — windows.
+//
+// Authority: the `velar/window` module interface in
+// packages/desktop/src/compiler.ts, and the `desktop.windows` map in this
+// project's velar.json — the manifest is what decides which windows exist, and
+// this module is what opens them.
+//
+// A Desktop application declares its window *kinds* up front. This tour
+// declares two: `main`, which every manifest declares and the host opens at
+// launch, and `note-preview`, a floating panel with no frame, a locked aspect
+// ratio, and sidebar vibrancy behind it. A kind that is not in the manifest is
+// refused at the `openWindow` call, by name, before anything reaches the host.
+
+import {Window, WindowBounds, WindowState, WindowStateStream, currentWindow, currentWindowKind, openWindow, windows} from "velar/window"
+import {border, rgb, spacing} from "velar/look"
+
+const ink = rgb(24, 24, 24)
+const paper = rgb(244, 246, 250)
+
+const windowLook = look:
+    display = "grid"
+    gap = 12px
+    padding = spacing(20px, 24px)
+    border = border(1px, ink)
+    borderRadius = 12px
+    color = ink
+    background = paper
+
+// The one synchronous window read: which declared kind this execution
+// environment is running in. Every window loads the same application, so this
+// is how one source graph renders a panel differently from the main window.
+export def kindLabel() -> string: return f"running as {currentWindowKind()}"
+
+// A window instance is identified by its kind and an optional key. Opening the
+// same kind and key twice focuses the window that already exists and hands back
+// a handle to it, so this key is the whole de-duplication rule.
+export def previewKey(note: string) -> string: return f"note-{note}"
+
+// The route a new window loads. A window is not a new application: it loads
+// this same entry at the path given here, and the Router sees that location.
+export def previewRoute(note: string) -> string: return f"/note-preview?note={note}"
+
+// A window the application means to keep is held in a `const`: the handle is
+// the way to reach that window again, and the window outlives this call.
+// Opening the same kind and key twice focuses the one that is already open.
+export async def previewNote(note: string) -> string:
+    const preview = await openWindow("note-preview", {route: previewRoute(note), key: previewKey(note)})
+    const bounds = await preview.bounds()
+    await preview.setBounds({x: bounds.x + 24, y: bounds.y + 24, width: bounds.width, height: bounds.height})
+    await preview.focus()
+    return await windowGeometry(preview)
+
+// A `Window` is ordinary data to pass on: a function that is handed one reads
+// what it needs without caring who owns the window or when it closes.
+export async def windowGeometry(window: Window) -> string:
+    const display = await window.display()
+    return f"{describeBounds(await window.bounds())} on {display.id}"
+
+// The owned spelling: `openWindow` answers a `Window` that `using` closes on
+// the way out of the scope, which is the right shape for a window that exists
+// only while this work does. The release is idempotent, so a caller may still
+// close it early without arranging for the release to be skipped.
+export async def measurePreview(note: string) -> string:
+    using preview = await openWindow("note-preview", {route: previewRoute(note), key: previewKey(note)})
+    return describeBounds(await preview.bounds())
+
+// `WindowBounds` is screen coordinates with the origin at the top left.
+export def describeBounds(bounds: WindowBounds) -> string:
+    return f"{bounds.width}x{bounds.height}+{bounds.x}+{bounds.y}"
+
+// A window's state stream is a bounded pull source, the same shape
+// `watchFiles` publishes: `using` releases it, `async for` drives it, and a
+// slow consumer coalesces repeated `moved`/`resized` rather than growing a
+// queue. `closed` is the last event, after which the stream drains normally.
+//
+// The stream is opened by the caller rather than here, so the caller can say
+// it is watching before the first event could be missed.
+export async def countUntilClosed(states: WindowStateStream) -> number:
+    let seen = 0
+    async for state in states:
+        seen += 1
+        if state == WindowState.closed: break
+    return seen
+
+// The five members of `WindowState`, in declaration order.
+export def stateNames() -> List<string>: return WindowState.values().map(state => stateLabel(state))
+
+export def stateLabel(state: WindowState) -> string:
+    if state == WindowState.moved: return "moved"
+    if state == WindowState.resized: return "resized"
+    if state == WindowState.focused: return "focused"
+    if state == WindowState.blurred: return "blurred"
+    return "closed"
+
+// The registry snapshot: every open window, its kind, its key, and whether it
+// currently holds the keyboard.
+export async def openWindowSummary() -> string:
+    const open = await windows()
+    return open.map(info => f"{info.kind}:{info.key ?? "-"}:{info.focused}").join(" ")
+
+// `currentWindow()` is the handle for the window this code is running in. It
+// is a borrowed handle rather than one this scope opened, so it is held in a
+// `const`: writing `using` here would close the window the reader is looking
+// at when the function returns.
+export async def currentBounds() -> string:
+    const own = currentWindow()
+    return describeBounds(await own.bounds())
+
+export component WindowPanel:
+    state kind = "not read"
+    state summary = "not read"
+    state geometry = "not read"
+    state watched = "not watching"
+
+    def readKind(): kind = kindLabel()
+
+    action readSummary() -> string:
+        summary = await openWindowSummary()
+        return summary
+
+    action readGeometry() -> string:
+        geometry = await currentBounds()
+        return geometry
+
+    action openPreview() -> string:
+        summary = await previewNote("tour")
+        return summary
+
+    action measureAndClose() -> string:
+        geometry = await measurePreview("measured")
+        return geometry
+
+    action watchPreview() -> string:
+        const preview = await openWindow("note-preview", {route: previewRoute("watched"), key: previewKey("watched")})
+        using states = await preview.watchState()
+        // Said only once the stream exists, so a reader — or a test — knows
+        // that no state produced from here on can be missed.
+        watched = "watching"
+        watched = f"{await countUntilClosed(states)} states"
+        return watched
+
+    return <section data-chapter="05" look={windowLook}>
+        <h2>05 — windows</h2>
+        <p data-window-kind>{kind}</p>
+        <p data-window-summary>{summary}</p>
+        <p data-window-geometry>{geometry}</p>
+        <button type="button" data-read-kind on:click={readKind}>Read the current window kind</button>
+        <button type="button" data-read-window-summary on:click={readSummary} disabled={readSummary.pending}>
+            Read the open windows
+        </button>
+        <button type="button" data-read-window-geometry on:click={readGeometry} disabled={readGeometry.pending}>
+            Read this window's bounds
+        </button>
+        <button type="button" data-open-preview on:click={openPreview} disabled={openPreview.pending}>
+            Open the note preview panel
+        </button>
+        <button type="button" data-measure-preview on:click={measureAndClose} disabled={measureAndClose.pending}>
+            Measure a preview panel and close it
+        </button>
+        <p data-window-watched>{watched}</p>
+        <button type="button" data-watch-preview on:click={watchPreview} disabled={watchPreview.pending}>
+            Watch a preview panel until it closes
+        </button>
+    </section>

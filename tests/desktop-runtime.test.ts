@@ -950,9 +950,13 @@ test("Desktop CLI test host provides deterministic manifest-scoped process handl
   const initScript = desktopBrowserTestInitScript({
     productName: "Test",
     identifier: "dev.velarscript.test",
-    window: { title: "Test", width: 800, height: 600, minWidth: 480, minHeight: 320 },
-    permissions: { files: ["project"], processes: ["git"], network: [], environment: ["PRODUCTION_MODE"], secrets: ["PROVIDER_KEY"] },
-    build: { outDir: "dist/desktop", sizeBudgetBytes: 10 * 1024 * 1024 },
+    windows: { main: { title: "Test", width: 800, height: 600, minWidth: 480, minHeight: 320,
+      titleBar: "standard", material: "none", style: "window", frame: true, level: "normal",
+      visibleOnAllWorkspaces: false, aspectRatio: null, resizable: true } },
+    services: {},
+    permissions: { files: ["project"], processes: ["git"], network: [], environment: ["PRODUCTION_MODE"], secrets: ["PROVIDER_KEY"],
+      links: [], notifications: false, secureStorage: [] },
+    build: { outDir: "dist/desktop", sizeBudgetBytes: 10 * 1024 * 1024, signing: { identity: null, entitlements: null, notarization: null } },
   })
     .replace("const maxListTextUnits = 2 * 1024 * 1024;", "const maxListTextUnits = 8;")
     .replace("const maxWatchPaths = 4096;", "const maxWatchPaths = 1;");
@@ -1021,9 +1025,13 @@ test("Desktop browser-test platform is selected before the first open and then s
   const config = {
     productName: "Test",
     identifier: "dev.velarscript.test",
-    window: { title: "Test", width: 800, height: 600, minWidth: 480, minHeight: 320 },
-    permissions: { files: ["project"], processes: [], network: [], environment: [], secrets: [] },
-    build: { outDir: "dist/desktop", sizeBudgetBytes: 10 * 1024 * 1024 },
+    windows: { main: { title: "Test", width: 800, height: 600, minWidth: 480, minHeight: 320,
+      titleBar: "standard", material: "none", style: "window", frame: true, level: "normal",
+      visibleOnAllWorkspaces: false, aspectRatio: null, resizable: true } },
+    services: {},
+    permissions: { files: ["project"], processes: [], network: [], environment: [], secrets: [],
+      links: [], notifications: false, secureStorage: [] },
+    build: { outDir: "dist/desktop", sizeBudgetBytes: 10 * 1024 * 1024, signing: { identity: null, entitlements: null, notarization: null } },
   } as const;
   const controller = desktopBrowserTestController(config);
   assert.deepEqual(await controller.invoke("unowned", "operation", [], 30_000), { handled: false });
@@ -1032,8 +1040,8 @@ test("Desktop browser-test platform is selected before the first open and then s
   const context = vm.createContext({ TextEncoder, btoa });
   vm.runInContext(`${controller.initScript()}\nglobalThis.__platform = globalThis[Symbol.for("velar.desktop.bridge.v1")].platform`, context);
   assert.equal((context as { __platform?: string }).__platform, "macos");
-  assert.throws(
-    () => controller.invoke("desktop-test", "setPlatform", ["test"], 30_000),
+  await assert.rejects(
+    async () => controller.invoke("desktop-test", "setPlatform", ["test"], 30_000),
     /before the first browser\.open/u,
   );
 });
@@ -1075,3 +1083,660 @@ async function runtime<T>(directory: string, file: string, moduleName: string, t
   await writeFile(path, transform(source), "utf8");
   return import(`${pathToFileURL(path).href}?test=${Date.now()}`) as Promise<T>;
 }
+
+test("Desktop windows are opened only for manifest-declared kinds and released idempotently", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-desktop-window-"));
+  const calls: Array<{ operation: string; args: readonly unknown[] }> = [];
+  const states: Array<string | null> = [];
+  try {
+    const bridge = {
+      platform: "macos",
+      packaged: true,
+      windowKind: "main",
+      windowHandle: 1,
+      async invoke(capability: string, operation: string, args: readonly unknown[]) {
+        assert.equal(capability, "window");
+        calls.push({ operation, args });
+        if (operation === "open") return 7;
+        if (operation === "close") return args[0] === 7;
+        if (operation === "bounds") return { x: 12, y: 34, width: 800, height: 600 };
+        if (operation === "setBounds") return null;
+        if (operation === "focus") return null;
+        if (operation === "display") {
+          return {
+            id: "display-1",
+            bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+            workArea: { x: 0, y: 25, width: 1920, height: 1055 },
+            scale: 2,
+            primary: true,
+          };
+        }
+        if (operation === "list") return [{ kind: "main", key: null, focused: true }, { kind: "note-preview", key: "note-1", focused: false }];
+        if (operation === "watchStart") return 3;
+        if (operation === "watchNext") return states.shift() ?? null;
+        if (operation === "watchClose") return true;
+        throw new Error(`unexpected window operation '${operation}'`);
+      },
+    };
+    Object.defineProperty(globalThis, bridgeKey, { value: bridge, configurable: true });
+    const source = velarCompilerExtension.modules?.source?.("velar/window", {
+      windows: { main: {}, "note-preview": {} },
+    });
+    assert.ok(source, "velar/window must be generated from the project's declared window kinds");
+    const path = join(directory, "window.mjs");
+    await writeFile(path, source, "utf8");
+    const module = await import(`${pathToFileURL(path).href}?test=${Date.now()}`) as {
+      Window: { is(value: unknown): boolean };
+      WindowBounds: { is(value: unknown): boolean; parse(value: unknown): unknown };
+      WindowState: { values(): string[]; is(value: unknown): boolean };
+      WindowStateStream: { is(value: unknown): boolean };
+      currentWindowKind(): string;
+      currentWindow(): { bounds(): Promise<unknown>; close(): Promise<null> };
+      openWindow(kind: string, options: Record<string, unknown>): Promise<{
+        focus(): Promise<null>;
+        close(): Promise<null>;
+        bounds(): Promise<unknown>;
+        setBounds(bounds: unknown): Promise<null>;
+        display(): Promise<Record<string, unknown>>;
+        watchState(): Promise<{ next(): Promise<string | null>; close(): Promise<null> }>;
+      }>;
+      windows(): Promise<readonly Record<string, unknown>[]>;
+    };
+
+    // An undeclared kind is refused at the call, with the manifest field that
+    // would declare it, before anything reaches the host.
+    await assert.rejects(
+      module.openWindow("terminal", { route: "/" }),
+      /undeclared window kind 'terminal'.*desktop\.windows.*declared kinds: main, note-preview/su,
+    );
+    assert.equal(calls.length, 0, "an undeclared kind or invalid option must never reach the host");
+    await assert.rejects(module.openWindow("note-preview", { route: "https://example.com/" }), /must start with '\/'/u);
+    await assert.rejects(module.openWindow("note-preview", { route: "//example.com" }), /stay inside this application/u);
+    await assert.rejects(module.openWindow("note-preview", { route: "/", key: "not a key" }), /key must be at most 128 characters/u);
+    await assert.rejects(module.openWindow("note-preview", { route: "/", side: "left" }), /unknown field 'side'/u);
+    assert.equal(calls.length, 0, "an undeclared kind or invalid option must never reach the host");
+
+    assert.equal(module.currentWindowKind(), "main");
+    assert.equal(module.Window.is(module.currentWindow()), true);
+    const preview = await module.openWindow("note-preview", { route: "/note-preview?note=1", key: "note-1" });
+    assert.deepEqual(calls.at(-1), { operation: "open", args: ["note-preview", { route: "/note-preview?note=1", key: "note-1", bounds: null }] });
+    assert.deepEqual(await preview.bounds(), { x: 12, y: 34, width: 800, height: 600 });
+    assert.equal(await preview.setBounds({ x: 1, y: 2, width: 300, height: 200 }), null);
+    await assert.rejects(preview.setBounds({ x: 1, y: 2, width: 0, height: 200 }), /at least 1 point/u);
+    await assert.rejects(preview.setBounds({ x: 1, y: 2, width: 300 }), /must contain x, y, width and height/u);
+    assert.equal(await preview.focus(), null);
+    assert.deepEqual(await preview.display(), {
+      id: "display-1",
+      bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+      workArea: { x: 0, y: 25, width: 1920, height: 1055 },
+      scale: 2,
+      primary: true,
+    });
+    assert.deepEqual(await module.windows(), [
+      { kind: "main", key: null, focused: true },
+      { kind: "note-preview", key: "note-1", focused: false },
+    ]);
+
+    // The stream is a bounded pull source: one active pull at a time, and it
+    // drains normally after the window closes.
+    states.push("moved", "resized", "closed", null);
+    const stream = await preview.watchState();
+    assert.equal(module.WindowStateStream.is(stream), true);
+    const pull = stream.next();
+    await assert.rejects(stream.next(), /already has an active pull/u);
+    assert.equal(await pull, "moved");
+    assert.equal(await stream.next(), "resized");
+    assert.equal(await stream.next(), "closed");
+    assert.equal(await stream.next(), null);
+    assert.equal(await stream.next(), null);
+    assert.equal(await stream.close(), null);
+
+    // Releasing a Window closes it, and the release is idempotent: the second
+    // close never reaches the host at all.
+    const closes = () => calls.filter((call) => call.operation === "close").length;
+    assert.equal(await preview.close(), null);
+    assert.equal(closes(), 1);
+    assert.equal(await preview.close(), null);
+    assert.equal(closes(), 1);
+
+    assert.deepEqual(module.WindowState.values(), ["moved", "resized", "focused", "blurred", "closed"]);
+    assert.equal(module.WindowState.is("minimized"), false);
+    assert.equal(module.WindowBounds.is({ x: 0, y: 0, width: 10, height: 10 }), true);
+    assert.equal(module.WindowBounds.is({ x: 0, y: 0, width: 10 }), false);
+  } finally {
+    delete (globalThis as { [key: symbol]: unknown })[bridgeKey];
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Desktop test window registry keys on kind and key and coalesces a slow consumer", async () => {
+  const context = vm.createContext({ TextEncoder, btoa });
+  // The registry answers from inside the vm realm, so its records carry that
+  // realm's prototypes; these assertions compare the data, not the realm.
+  const plain = (value: unknown): unknown => JSON.parse(JSON.stringify(value));
+  const config = velarProjectExtension.parse({
+    productName: "Test",
+    identifier: "dev.velarscript.test",
+    windows: { main: {}, "note-preview": { style: "panel", width: 480, height: 320 } },
+    permissions: { files: ["app-data"] },
+  }, "velar.json");
+  vm.runInContext(
+    `${desktopBrowserTestInitScript(config, "test", "main")}\nglobalThis.__bridgeUnderTest = globalThis[Symbol.for("velar.desktop.bridge.v1")]`,
+    context,
+  );
+  const bridge = (context as {
+    __bridgeUnderTest?: {
+      windowKind: string;
+      windowHandle: number;
+      invoke(capability: string, operation: string, args: unknown[]): Promise<unknown>;
+    };
+  }).__bridgeUnderTest;
+  assert.ok(bridge);
+  assert.equal(bridge.windowKind, "main");
+  assert.equal(bridge.windowHandle, 1);
+  assert.deepEqual(plain(await bridge.invoke("window", "list", [])), [{ kind: "main", key: null, focused: true }]);
+
+  await assert.rejects(
+    bridge.invoke("window", "open", ["terminal", { route: "/" }]),
+    /undeclared window kind 'terminal'.*declared kinds: main, note-preview/su,
+  );
+  const preview = await bridge.invoke("window", "open", ["note-preview", { route: "/preview", key: "note-1" }]) as number;
+  assert.equal(await bridge.invoke("window", "open", ["note-preview", { route: "/preview", key: "note-1" }]), preview);
+  assert.deepEqual(plain(await bridge.invoke("window", "list", [])), [
+    { kind: "main", key: null, focused: false },
+    { kind: "note-preview", key: "note-1", focused: true },
+  ]);
+  // A window with a different key is a different window.
+  const second = await bridge.invoke("window", "open", ["note-preview", { route: "/preview", key: "note-2" }]) as number;
+  assert.notEqual(second, preview);
+  assert.equal((await bridge.invoke("window", "list", []) as unknown[]).length, 3);
+  assert.equal(await bridge.invoke("window", "close", [second]), true);
+  assert.equal(await bridge.invoke("window", "close", [second]), false);
+
+  // The declared size is the window's opening geometry, and a bounds change
+  // publishes moved and resized separately.
+  assert.deepEqual(plain(await bridge.invoke("window", "bounds", [preview])), { x: 0, y: 0, width: 480, height: 320 });
+  // Closing a window leaves no window focused, so the preview takes the focus
+  // back before the stream opens: the blur below has to have a focus to lose.
+  await bridge.invoke("window-test", "focus", ["note-preview", "note-1"]);
+  const watcher = await bridge.invoke("window", "watchStart", [preview]) as number;
+  await bridge.invoke("window", "setBounds", [preview, { x: 10, y: 10, width: 480, height: 320 }]);
+  await bridge.invoke("window-test", "move", ["note-preview", "note-1", { x: 20, y: 20, width: 480, height: 320 }]);
+  await bridge.invoke("window-test", "move", ["note-preview", "note-1", { x: 30, y: 30, width: 500, height: 320 }]);
+  // Three moves reached a consumer that pulled none of them, so the queue holds
+  // the one moved the window is actually in, followed by the resize.
+  assert.equal(await bridge.invoke("window", "watchNext", [watcher]), "moved");
+  assert.equal(await bridge.invoke("window", "watchNext", [watcher]), "resized");
+  const pending = bridge.invoke("window", "watchNext", [watcher]);
+  await assert.rejects(bridge.invoke("window", "watchNext", [watcher]), /already has an active pull/u);
+  await bridge.invoke("window-test", "focus", ["main", null]);
+  assert.equal(await pending, "blurred");
+  await bridge.invoke("window-test", "close", ["note-preview", "note-1"]);
+  assert.equal(await bridge.invoke("window", "watchNext", [watcher]), "closed");
+  // A closed window ends its stream: the pull that finds the queue empty
+  // answers null rather than failing on a released handle.
+  assert.equal(await bridge.invoke("window", "watchNext", [watcher]), null);
+  assert.equal(await bridge.invoke("window", "watchClose", [watcher]), false);
+  await assert.rejects(bridge.invoke("window", "bounds", [preview]), /unknown or already closed/u);
+  assert.deepEqual(plain(await bridge.invoke("window", "list", [])), [{ kind: "main", key: null, focused: true }]);
+});
+
+/**
+ * A module the extension closes over a project's own manifest. `runtime` above
+ * reads the ungranted fallback; this reads what a real project would compile,
+ * so the two halves of every permission — refused and granted — are exercised
+ * against the same generated source a build produces.
+ */
+async function configuredRuntime<T>(
+  directory: string,
+  file: string,
+  moduleName: string,
+  permissions: Record<string, unknown>,
+): Promise<T> {
+  const config = velarProjectExtension.parse({
+    productName: "Test",
+    identifier: "dev.velarscript.test",
+    windows: { main: {} },
+    permissions,
+  }, "velar.json");
+  const source = velarCompilerExtension.modules?.source?.(moduleName, config);
+  assert.ok(source, `${moduleName} must be generated from the project's declared permissions`);
+  const path = join(directory, `${file}.mjs`);
+  await writeFile(path, source, "utf8");
+  return await import(`${pathToFileURL(path).href}?test=${Date.now()}-${Math.random()}`) as T;
+}
+
+test("[L1] every Desktop capability an ungranted manifest omits fails at the call and names the declaration", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-desktop-ungranted-"));
+  const calls: string[] = [];
+  try {
+    Object.defineProperty(globalThis, bridgeKey, {
+      value: {
+        platform: "test",
+        packaged: false,
+        windowKind: "main",
+        windowHandle: 1,
+        async invoke(capability: string, operation: string) {
+          calls.push(`${capability}.${operation}`);
+          return null;
+        },
+      },
+      configurable: true,
+    });
+
+    // The fallback the extension publishes outside a resolved project grants
+    // nothing at all, which is the shape every one of these calls is refused in.
+    const notification = await runtime<{
+      requestPermission(): Promise<string>;
+      show(value: unknown): Promise<null>;
+      activations(): Promise<unknown>;
+    }>(directory, "notification-denied", "velar/notification");
+    for (const [name, call] of [
+      ["requestPermission", () => notification.requestPermission()],
+      ["show", () => notification.show({ title: "t", body: "b" })],
+      ["activations", () => notification.activations()],
+    ] as const) {
+      await assert.rejects(call(), (error: Error) => {
+        assert.match(error.message, new RegExp(`^${name} requires 'notifications: true' under 'desktop\\.permissions' in this project's velar\\.json$`, "u"));
+        return true;
+      });
+    }
+
+    const storage = await runtime<{
+      set(name: string, value: string): Promise<null>;
+      get(name: string): Promise<string | null>;
+      remove(name: string): Promise<null>;
+    }>(directory, "storage-denied", "velar/secure-storage");
+    for (const [name, call] of [
+      ["set", () => storage.set("CLOUD_SESSION", "value")],
+      ["get", () => storage.get("CLOUD_SESSION")],
+      ["remove", () => storage.remove("CLOUD_SESSION")],
+    ] as const) {
+      await assert.rejects(call(), (error: Error) => {
+        assert.match(error.message, new RegExp(`^${name} cannot reach the undeclared secure storage name 'CLOUD_SESSION'`, "u"));
+        assert.match(error.message, /declare it under 'desktop\.permissions\.secureStorage' in this project's velar\.json \(declared names: none\)/u);
+        return true;
+      });
+    }
+
+    const desktop = await runtime<{
+      openExternal(url: string): Promise<null>;
+      watchDroppedFiles(): Promise<unknown>;
+    }>(directory, "desktop-denied", "velar/desktop");
+    await assert.rejects(desktop.openExternal("https://velarscript.dev/"), (error: Error) => {
+      assert.match(error.message, /^openExternal cannot open a 'https' URL; declare the scheme under 'desktop\.permissions\.links' in this project's velar\.json \(granted schemes: none\)$/u);
+      return true;
+    });
+    await assert.rejects(desktop.watchDroppedFiles(), (error: Error) => {
+      assert.match(error.message, /^watchDroppedFiles requires the 'dropped' root in 'desktop\.permissions\.files' in this project's velar\.json$/u);
+      return true;
+    });
+
+    // Nothing reached the host: a capability the manifest never declared is
+    // refused where it is written, not where it is served.
+    assert.deepEqual(calls, []);
+
+    // A grant that exists but does not cover this name is the same refusal, and
+    // the message lists what the manifest did declare.
+    const narrow = await configuredRuntime<{ get(name: string): Promise<string | null> }>(
+      directory, "storage-narrow", "velar/secure-storage", { secureStorage: ["CLOUD_SESSION"] },
+    );
+    await assert.rejects(narrow.get("OTHER_SESSION"), /undeclared secure storage name 'OTHER_SESSION'.*declared names: CLOUD_SESSION/su);
+    const mailOnly = await configuredRuntime<{ openExternal(url: string): Promise<null> }>(
+      directory, "desktop-mail", "velar/desktop", { links: ["mailto"] },
+    );
+    await assert.rejects(mailOnly.openExternal("https://velarscript.dev/"), /granted schemes: mailto/u);
+    // A nested scheme names one scheme and reads as another, so the outermost is
+    // the one asked about.
+    await assert.rejects(mailOnly.openExternal("blob:https://velarscript.dev/id"), /cannot open a 'blob' URL/u);
+    assert.deepEqual(calls, []);
+  } finally {
+    delete (globalThis as { [key: symbol]: unknown })[bridgeKey];
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("[L1] velar/notification bounds its fields and drains its activation stream", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-desktop-notification-"));
+  const calls: Array<{ operation: string; args: readonly unknown[] }> = [];
+  const activations: Array<Record<string, unknown> | null> = [];
+  try {
+    Object.defineProperty(globalThis, bridgeKey, {
+      value: {
+        platform: "macos",
+        packaged: true,
+        async invoke(capability: string, operation: string, args: readonly unknown[]) {
+          assert.equal(capability, "notification");
+          calls.push({ operation, args });
+          if (operation === "requestPermission") return "granted";
+          if (operation === "show") return null;
+          if (operation === "watchStart") return 4;
+          if (operation === "watchNext") return activations.shift() ?? null;
+          if (operation === "watchClose") return true;
+          throw new Error(`unexpected notification operation '${operation}'`);
+        },
+      },
+      configurable: true,
+    });
+    const module = await configuredRuntime<{
+      NotificationPermission: { values(): string[]; is(value: unknown): boolean };
+      NotificationActivation: { is(value: unknown): boolean };
+      NotificationActivationStream: { is(value: unknown): boolean };
+      requestPermission(): Promise<string>;
+      show(value: unknown): Promise<null>;
+      activations(): Promise<{ next(): Promise<unknown>; close(): Promise<null> }>;
+    }>(directory, "notification", "velar/notification", { notifications: true });
+
+    assert.deepEqual(module.NotificationPermission.values(), ["granted", "denied", "undetermined"]);
+    assert.equal(module.NotificationPermission.is("default"), false);
+    assert.equal(await module.requestPermission(), "granted");
+    assert.equal(await module.show({ title: "Build finished", body: "3 packages", tag: "build" }), null);
+    assert.deepEqual(calls.at(-1), { operation: "show", args: [{ title: "Build finished", body: "3 packages", tag: "build" }] });
+    // An absent tag is the absent tag, not an absent field.
+    assert.equal(await module.show({ title: "t", body: "b" }), null);
+    assert.deepEqual(calls.at(-1), { operation: "show", args: [{ title: "t", body: "b", tag: null }] });
+
+    const shown = calls.length;
+    await assert.rejects(module.show({ title: "", body: "b" }), /show title must be non-empty text/u);
+    await assert.rejects(module.show({ title: "t".repeat(257), body: "b" }), /show title cannot exceed 256 characters/u);
+    await assert.rejects(module.show({ title: "t", body: "b".repeat(1025) }), /show body cannot exceed 1024 characters/u);
+    await assert.rejects(module.show({ title: "t", body: "b", tag: "g".repeat(129) }), /show tag cannot exceed 128 characters/u);
+    await assert.rejects(module.show({ title: "t", body: "b", icon: "x" }), /unknown field 'icon'/u);
+    assert.equal(calls.length, shown, "a notification outside its bounds never reaches the host");
+
+    activations.push({ tag: "build" }, { tag: null }, null);
+    const stream = await module.activations();
+    assert.equal(module.NotificationActivationStream.is(stream), true);
+    const pull = stream.next();
+    await assert.rejects(stream.next(), /already has an active pull/u);
+    assert.deepEqual(await pull, { tag: "build" });
+    assert.deepEqual(await stream.next(), { tag: null });
+    assert.equal(await stream.next(), null);
+    assert.equal(await stream.next(), null);
+    assert.equal(await stream.close(), null);
+    assert.equal(module.NotificationActivation.is({ tag: "build" }), true);
+    assert.equal(module.NotificationActivation.is({ tag: "build", body: "x" }), false);
+  } finally {
+    delete (globalThis as { [key: symbol]: unknown })[bridgeKey];
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("[L1] velar/secure-storage reaches declared names only and keeps values out of its errors", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-desktop-storage-"));
+  const calls: Array<{ operation: string; args: readonly unknown[] }> = [];
+  const entries = new Map<string, string>();
+  try {
+    Object.defineProperty(globalThis, bridgeKey, {
+      value: {
+        platform: "macos",
+        packaged: true,
+        async invoke(capability: string, operation: string, args: readonly unknown[]) {
+          assert.equal(capability, "secure-storage");
+          calls.push({ operation, args });
+          if (operation === "set") { entries.set(args[0] as string, args[1] as string); return null; }
+          if (operation === "get") return entries.get(args[0] as string) ?? null;
+          if (operation === "remove") { entries.delete(args[0] as string); return null; }
+          throw new Error(`unexpected secure storage operation '${operation}'`);
+        },
+      },
+      configurable: true,
+    });
+    const module = await configuredRuntime<{
+      set(name: string, value: string): Promise<null>;
+      get(name: string): Promise<string | null>;
+      remove(name: string): Promise<null>;
+    }>(directory, "storage", "velar/secure-storage", { secureStorage: ["CLOUD_SESSION", "SYNC_TOKEN"] });
+
+    assert.equal(await module.get("CLOUD_SESSION"), null);
+    assert.equal(await module.set("CLOUD_SESSION", "opaque"), null);
+    assert.equal(await module.get("CLOUD_SESSION"), "opaque");
+    // Removing what is not there is the state it is already in.
+    assert.equal(await module.remove("SYNC_TOKEN"), null);
+    assert.equal(await module.remove("CLOUD_SESSION"), null);
+    assert.equal(await module.remove("CLOUD_SESSION"), null);
+    assert.equal(await module.get("CLOUD_SESSION"), null);
+
+    const reached = calls.length;
+    await assert.rejects(module.set("CLOUD_SESSION", "x".repeat(8 * 1024 + 1)), (error: Error) => {
+      assert.match(error.message, /^set cannot store more than 8 KiB$/u);
+      // The rejected value is described by its size, never by its content.
+      assert.doesNotMatch(error.message, /x{4}/u);
+      return true;
+    });
+    // A value that is 8 KiB of multi-byte text is over the bound in bytes even
+    // though it is under it in characters.
+    await assert.rejects(module.set("CLOUD_SESSION", "é".repeat(4 * 1024 + 1)), /cannot store more than 8 KiB/u);
+    assert.equal(await module.set("CLOUD_SESSION", "x".repeat(8 * 1024)), null);
+    await assert.rejects(module.set("CLOUD_SESSION", 7 as unknown as string), /set requires a text value/u);
+    assert.equal(calls.length, reached + 1, "only the value inside its bound reached the host");
+  } finally {
+    delete (globalThis as { [key: symbol]: unknown })[bridgeKey];
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("[L1] velar/desktop reads displays, opens granted links, and pulls power and dropped files", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-desktop-surface-"));
+  const calls: Array<{ operation: string; args: readonly unknown[] }> = [];
+  const power: Array<string | null> = [];
+  const drops: Array<Record<string, unknown> | null> = [];
+  const display = {
+    id: "display-1",
+    bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+    workArea: { x: 0, y: 25, width: 1920, height: 1055 },
+    scale: 2,
+    primary: true,
+  };
+  try {
+    Object.defineProperty(globalThis, bridgeKey, {
+      value: {
+        platform: "macos",
+        packaged: true,
+        async invoke(capability: string, operation: string, args: readonly unknown[]) {
+          assert.equal(capability, "desktop");
+          calls.push({ operation, args });
+          if (operation === "openExternal") return null;
+          if (operation === "displays") return [display];
+          if (operation === "permissionStatus") return args[0] === "microphone" ? "denied" : "undetermined";
+          if (operation === "powerWatchStart") return 1;
+          if (operation === "powerWatchNext") return power.shift() ?? null;
+          if (operation === "powerWatchClose") return true;
+          if (operation === "dropWatchStart") return 2;
+          if (operation === "dropWatchNext") return drops.shift() ?? null;
+          if (operation === "dropWatchClose") return true;
+          throw new Error(`unexpected desktop operation '${operation}'`);
+        },
+      },
+      configurable: true,
+    });
+    const module = await configuredRuntime<{
+      Display: { is(value: unknown): boolean };
+      DroppedFiles: { is(value: unknown): boolean };
+      PowerState: { values(): string[] };
+      PowerStream: { is(value: unknown): boolean };
+      DroppedFilesStream: { is(value: unknown): boolean };
+      SystemPermission: { values(): string[] };
+      PermissionStatus: { values(): string[] };
+      openExternal(url: string): Promise<null>;
+      displays(): Promise<readonly Record<string, unknown>[]>;
+      permissionStatus(kind: string): Promise<string>;
+      watchPower(): Promise<{ next(): Promise<string | null>; close(): Promise<null> }>;
+      watchDroppedFiles(): Promise<{ next(): Promise<unknown>; close(): Promise<null> }>;
+    }>(directory, "desktop", "velar/desktop", { files: ["app-data", "dropped"], links: ["https", "mailto"] });
+
+    assert.deepEqual(module.SystemPermission.values(), ["screenRecording", "accessibility", "microphone"]);
+    assert.deepEqual(module.PermissionStatus.values(), ["granted", "denied", "undetermined"]);
+    assert.deepEqual(module.PowerState.values(), ["suspended", "resumed"]);
+
+    assert.equal(await module.openExternal("https://velarscript.dev/guide"), null);
+    assert.equal(await module.openExternal("mailto:ada@example.com"), null);
+    const opened = calls.length;
+    await assert.rejects(module.openExternal("ftp://example.com/file"), /cannot open a 'ftp' URL/u);
+    await assert.rejects(module.openExternal("/guide"), /openExternal requires an absolute URL/u);
+    assert.equal(calls.length, opened, "an ungranted scheme never reaches the host");
+
+    assert.deepEqual(await module.displays(), [display]);
+    assert.equal(module.Display.is(display), true);
+    assert.equal(module.Display.is({ ...display, scale: 0 }), false);
+    assert.equal(await module.permissionStatus("microphone"), "denied");
+    assert.equal(await module.permissionStatus("screenRecording"), "undetermined");
+    await assert.rejects(module.permissionStatus("camera"), /Value does not match SystemPermission/u);
+
+    power.push("suspended", "resumed", null);
+    const states = await module.watchPower();
+    assert.equal(module.PowerStream.is(states), true);
+    assert.equal(module.DroppedFilesStream.is(states), false);
+    const pull = states.next();
+    await assert.rejects(states.next(), /PowerStream\.next already has an active pull/u);
+    assert.equal(await pull, "suspended");
+    assert.equal(await states.next(), "resumed");
+    assert.equal(await states.next(), null);
+    assert.equal(await states.close(), null);
+
+    drops.push({ paths: ["/Users/ada/one.txt", "/Users/ada/two.txt"] }, null);
+    const dropped = await module.watchDroppedFiles();
+    assert.equal(module.DroppedFilesStream.is(dropped), true);
+    // The order is the order of the gesture, so it is preserved rather than
+    // sorted: the first file the user dropped is the first path here.
+    assert.deepEqual(await dropped.next(), { paths: ["/Users/ada/one.txt", "/Users/ada/two.txt"] });
+    assert.equal(await dropped.next(), null);
+    assert.equal(await dropped.close(), null);
+    assert.equal(module.DroppedFiles.is({ paths: ["/a"] }), true);
+    assert.equal(module.DroppedFiles.is({ paths: ["relative"] }), false);
+    assert.equal(module.DroppedFiles.is({ paths: [] }), false);
+  } finally {
+    delete (globalThis as { [key: symbol]: unknown })[bridgeKey];
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("[L1] the Desktop test host answers notifications, the keychain, power, drops and probes", async () => {
+  const context = vm.createContext({ TextEncoder, btoa, URL });
+  const plain = (value: unknown): unknown => JSON.parse(JSON.stringify(value));
+  const config = velarProjectExtension.parse({
+    productName: "Test",
+    identifier: "dev.velarscript.test",
+    windows: { main: {} },
+    permissions: {
+      files: ["app-data", "dropped"],
+      links: ["https"],
+      notifications: true,
+      secureStorage: ["CLOUD_SESSION"],
+    },
+  }, "velar.json");
+  vm.runInContext(
+    `${desktopBrowserTestInitScript(config, "test", "main")}\nglobalThis.__bridgeUnderTest = globalThis[Symbol.for("velar.desktop.bridge.v1")]`,
+    context,
+  );
+  const bridge = (context as {
+    __bridgeUnderTest?: { invoke(capability: string, operation: string, args: unknown[]): Promise<unknown> };
+  }).__bridgeUnderTest;
+  assert.ok(bridge);
+
+  // A notification the operating system never authorized fails rather than
+  // being quietly dropped.
+  assert.equal(await bridge.invoke("notification", "requestPermission", []), "undetermined");
+  await assert.rejects(
+    bridge.invoke("notification", "show", [{ title: "t", body: "b" }]),
+    /cannot deliver a notification the operating system has not authorized \(permission: undetermined\)/u,
+  );
+  await bridge.invoke("notification-test", "setPermission", ["granted"]);
+  assert.equal(await bridge.invoke("notification", "show", [{ title: "Build finished", body: "3 packages", tag: "build" }]), null);
+  assert.deepEqual(plain(await bridge.invoke("notification-test", "shown", [])), [{ title: "Build finished", body: "3 packages", tag: "build" }]);
+
+  const inbox = await bridge.invoke("notification", "watchStart", []) as number;
+  await bridge.invoke("notification-test", "activate", ["build"]);
+  // Two activations of the same notification are one activation.
+  await bridge.invoke("notification-test", "activate", ["build"]);
+  await bridge.invoke("notification-test", "activate", [null]);
+  assert.deepEqual(plain(await bridge.invoke("notification", "watchNext", [inbox])), { tag: "build" });
+  assert.deepEqual(plain(await bridge.invoke("notification", "watchNext", [inbox])), { tag: null });
+  const pendingActivation = bridge.invoke("notification", "watchNext", [inbox]);
+  await assert.rejects(bridge.invoke("notification", "watchNext", [inbox]), /already has an active pull/u);
+  await bridge.invoke("notification-test", "activate", ["deploy"]);
+  assert.deepEqual(plain(await pendingActivation), { tag: "deploy" });
+  assert.equal(await bridge.invoke("notification", "watchClose", [inbox]), true);
+  assert.equal(await bridge.invoke("notification", "watchClose", [inbox]), false);
+
+  // The fake keychain holds values the way the real one does, and neither hands
+  // one back through the test seam.
+  assert.equal(await bridge.invoke("secure-storage", "get", ["CLOUD_SESSION"]), null);
+  assert.equal(await bridge.invoke("secure-storage", "set", ["CLOUD_SESSION", "opaque"]), null);
+  assert.equal(await bridge.invoke("secure-storage", "get", ["CLOUD_SESSION"]), "opaque");
+  assert.deepEqual(plain(await bridge.invoke("secure-storage-test", "names", [])), ["CLOUD_SESSION"]);
+  await assert.rejects(bridge.invoke("secure-storage", "get", ["OTHER"]), /undeclared secure storage name 'OTHER'.*declared names: CLOUD_SESSION/su);
+  assert.equal(await bridge.invoke("secure-storage", "remove", ["CLOUD_SESSION"]), null);
+  assert.deepEqual(plain(await bridge.invoke("secure-storage-test", "names", [])), []);
+
+  // Power is a transition stream: a state the machine is already in publishes
+  // nothing, so the resume below is the first event the stream carries.
+  const powerHandle = await bridge.invoke("desktop", "powerWatchStart", []) as number;
+  await bridge.invoke("desktop-test", "publishPower", ["resumed"]);
+  await bridge.invoke("desktop-test", "publishPower", ["suspended"]);
+  await bridge.invoke("desktop-test", "publishPower", ["resumed"]);
+  assert.equal(await bridge.invoke("desktop", "powerWatchNext", [powerHandle]), "suspended");
+  assert.equal(await bridge.invoke("desktop", "powerWatchNext", [powerHandle]), "resumed");
+  assert.equal(await bridge.invoke("desktop", "powerWatchClose", [powerHandle]), true);
+
+  // A slow consumer sees two gestures as one batch, in gesture order, rather
+  // than losing either.
+  const dropHandle = await bridge.invoke("desktop", "dropWatchStart", []) as number;
+  await bridge.invoke("desktop-test", "dropFiles", [["/Users/ada/one.txt"]]);
+  await bridge.invoke("desktop-test", "dropFiles", [["/Users/ada/two.txt", "/Users/ada/three.txt"]]);
+  assert.deepEqual(plain(await bridge.invoke("desktop", "dropWatchNext", [dropHandle])), {
+    paths: ["/Users/ada/one.txt", "/Users/ada/two.txt", "/Users/ada/three.txt"],
+  });
+  const pendingDrop = bridge.invoke("desktop", "dropWatchNext", [dropHandle]);
+  await bridge.invoke("desktop-test", "dropFiles", [["/Users/ada/four.txt"]]);
+  assert.deepEqual(plain(await pendingDrop), { paths: ["/Users/ada/four.txt"] });
+  assert.equal(await bridge.invoke("desktop", "dropWatchClose", [dropHandle]), true);
+
+  assert.equal(await bridge.invoke("desktop", "openExternal", ["https://velarscript.dev/"]), null);
+  await assert.rejects(bridge.invoke("desktop", "openExternal", ["mailto:ada@example.com"]),
+    /requires the 'mailto' scheme under 'desktop\.permissions\.links'/u);
+  assert.deepEqual(plain(await bridge.invoke("desktop-test", "openedLinks", [])), ["https://velarscript.dev/"]);
+
+  assert.equal(await bridge.invoke("desktop", "permissionStatus", ["microphone"]), "undetermined");
+  await bridge.invoke("desktop-test", "setSystemPermission", ["microphone", "granted"]);
+  assert.equal(await bridge.invoke("desktop", "permissionStatus", ["microphone"]), "granted");
+  assert.deepEqual(plain(await bridge.invoke("desktop", "displays", [])), [{
+    id: "velar-test-display",
+    bounds: { x: 0, y: 0, width: 1440, height: 900 },
+    workArea: { x: 0, y: 25, width: 1440, height: 875 },
+    scale: 2,
+    primary: true,
+  }]);
+});
+
+test("[L1] the Desktop test host refuses the capabilities its manifest never declared", async () => {
+  const context = vm.createContext({ TextEncoder, btoa, URL });
+  const config = velarProjectExtension.parse({
+    productName: "Test",
+    identifier: "dev.velarscript.test",
+    windows: { main: {} },
+    permissions: { files: ["app-data"] },
+  }, "velar.json");
+  vm.runInContext(
+    `${desktopBrowserTestInitScript(config, "test", "main")}\nglobalThis.__bridgeUnderTest = globalThis[Symbol.for("velar.desktop.bridge.v1")]`,
+    context,
+  );
+  const bridge = (context as {
+    __bridgeUnderTest?: { invoke(capability: string, operation: string, args: unknown[]): Promise<unknown> };
+  }).__bridgeUnderTest;
+  assert.ok(bridge);
+  // The generated module already refused each of these at the call; a page that
+  // reached the bridge another way is refused again here.
+  await assert.rejects(bridge.invoke("notification", "requestPermission", []),
+    /requires 'notifications: true' under 'desktop\.permissions'/u);
+  await assert.rejects(bridge.invoke("notification", "show", [{ title: "t", body: "b" }]),
+    /requires 'notifications: true' under 'desktop\.permissions'/u);
+  await assert.rejects(bridge.invoke("secure-storage", "get", ["CLOUD_SESSION"]),
+    /undeclared secure storage name 'CLOUD_SESSION'.*declared names: none/su);
+  await assert.rejects(bridge.invoke("desktop", "openExternal", ["https://velarscript.dev/"]),
+    /requires the 'https' scheme under 'desktop\.permissions\.links'/u);
+  await assert.rejects(bridge.invoke("desktop", "dropWatchStart", []),
+    /requires the 'dropped' root in 'desktop\.permissions\.files'/u);
+  await assert.rejects(bridge.invoke("desktop-test", "dropFiles", [["/Users/ada/one.txt"]]),
+    /requires the 'dropped' root in 'desktop\.permissions\.files'/u);
+});

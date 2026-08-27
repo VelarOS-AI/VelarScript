@@ -134,10 +134,16 @@ test("[D60-149] the extensions still register the module-provided enums this gat
   const covered = enums.map((item) => `${item.label} ${item.specifier} ${item.name}`).sort();
   assert.deepEqual(covered, [
     "@velarscript/desktop velar/desktop DesktopPlatform",
+    "@velarscript/desktop velar/desktop PermissionStatus",
+    "@velarscript/desktop velar/desktop PowerState",
+    "@velarscript/desktop velar/desktop SystemPermission",
     "@velarscript/desktop velar/http HttpTransportPhase",
+    "@velarscript/desktop velar/notification NotificationPermission",
     "@velarscript/desktop velar/process ProcessOutputChannel",
     "@velarscript/desktop velar/realtime RealtimeClientFailureAction",
     "@velarscript/desktop velar/realtime RealtimeClientState",
+    "@velarscript/desktop velar/service ServiceState",
+    "@velarscript/desktop velar/window WindowState",
     "@velarscript/node velar/http HttpTransportPhase",
     "@velarscript/node velar/process ProcessOutputChannel",
     "@velarscript/server velar/http HttpTransportPhase",

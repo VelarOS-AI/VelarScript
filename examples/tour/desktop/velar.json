@@ -10,21 +10,53 @@
   "desktop": {
     "productName": "VelarScript Desktop tour",
     "identifier": "dev.velarscript.tour",
-    "window": {
-      "width": 1040,
-      "height": 720,
-      "minWidth": 640,
-      "minHeight": 480
+    "windows": {
+      "main": {
+        "width": 1040,
+        "height": 720,
+        "minWidth": 640,
+        "minHeight": 480
+      },
+      "note-preview": {
+        "title": "Note preview",
+        "style": "panel",
+        "frame": false,
+        "level": "floating",
+        "material": "sidebar",
+        "titleBar": "hidden-inset",
+        "visibleOnAllWorkspaces": true,
+        "aspectRatio": 1.6,
+        "width": 512,
+        "height": 320,
+        "minWidth": 480,
+        "minHeight": 300
+      }
+    },
+    "services": {
+      "notes-index": {
+        "payload": "service-notes-index",
+        "entry": "main.js",
+        "restart": "always"
+      }
     },
     "permissions": {
       "files": [
         "app-data",
-        "project"
+        "project",
+        "dropped"
       ],
       "processes": [],
       "network": [],
       "environment": [],
-      "secrets": []
+      "secrets": [],
+      "links": [
+        "https",
+        "mailto"
+      ],
+      "notifications": true,
+      "secureStorage": [
+        "TOUR_SESSION"
+      ]
     }
   }
 }
