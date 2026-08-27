@@ -22,19 +22,40 @@
 // closed authenticated connection as an application-level event.
 
 import { createHash } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { join } from "node:path";
 
 const endpoint = process.env.VELAR_SERVICE_ENDPOINT;
 const token = process.env.VELAR_SERVICE_TOKEN;
-if (!endpoint || !token) {
-  process.stderr.write("This service is started by the VelarScript Desktop host, which supplies VELAR_SERVICE_ENDPOINT and VELAR_SERVICE_TOKEN\n");
+// The third standard variable: the application's own data directory, which the
+// host has already created and which is the same path
+// `velar/desktop.appDataDirectory()` answers in the renderer. It is given rather
+// than derived because it is this application's identity resolved against this
+// machine — a payload cannot carry it, and a service that recomputed it would be
+// keeping a second copy of a rule only the host can be right about.
+const appData = process.env.VELAR_SERVICE_APP_DATA;
+if (!endpoint || !token || !appData) {
+  process.stderr.write("This service is started by the VelarScript Desktop host, which supplies VELAR_SERVICE_ENDPOINT, VELAR_SERVICE_TOKEN and VELAR_SERVICE_APP_DATA\n");
   process.exit(1);
 }
 const [host, port] = endpoint.split(":");
 
-// The product's own state. A service exists to hold something a renderer should
-// not: here, an index that would be expensive to rebuild on every window.
-const notes = new Map();
+// The product's own state, and the product's own file format in the product's
+// own data directory. A service exists to hold something a renderer should not:
+// here, an index that would be expensive to rebuild on every window, and that
+// therefore has to outlive the process holding it.
+const store = join(appData, "notes-index.json");
+const notes = new Map(load());
+
+function load() {
+  try { return Object.entries(JSON.parse(readFileSync(store, "utf8"))); }
+  catch { return []; }
+}
+
+function save() {
+  writeFileSync(store, JSON.stringify(Object.fromEntries(notes)), "utf8");
+}
 
 const server = createServer((_request, response) => response.writeHead(426).end());
 server.on("upgrade", (request, socket) => {
@@ -77,6 +98,7 @@ function answer(request) {
   const [command, id, ...rest] = request.split(" ");
   if (command === "put" && id) {
     notes.set(id, rest.join(" "));
+    save();
     return `stored ${id}`;
   }
   if (command === "get" && id) return notes.get(id) ?? "";

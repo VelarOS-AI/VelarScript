@@ -113,11 +113,19 @@ executable is declarable: a short-lived process is `velar/process` with a
 `always` (exponential backoff from 1s to a 30s cap, and five consecutive
 failures reach the terminal `failed`) or `never`.
 
-The host gives each service a loopback endpoint and a 128-bit token in
-`VELAR_SERVICE_ENDPOINT` and `VELAR_SERVICE_TOKEN`, and the service must run a
-WebSocket server there. Readiness is the handshake: the host sends
-`{"velar":"service-hello","token":"…"}` and the service answers
-`{"velar":"service-ready"}`. A connection that opens with any other token must
+The host gives each service three variables and no more, the same three under
+`velar dev` as in a packaged application: a loopback endpoint and a 128-bit token
+in `VELAR_SERVICE_ENDPOINT` and `VELAR_SERVICE_TOKEN`, and the application's own
+data directory in `VELAR_SERVICE_APP_DATA` — the exact path
+`velar/desktop.appDataDirectory()` answers the renderer, already created. That
+third one is standard because it is the only thing a service needs that cannot
+be baked into its payload: it is the application's identity resolved against
+this machine. `desktop.services` has no `env`, and a value that is the same on
+every machine belongs in the payload rather than in the environment.
+
+The service must run a WebSocket server on that endpoint. Readiness is the
+handshake: the host sends `{"velar":"service-hello","token":"…"}` and the
+service answers `{"velar":"service-ready"}`. A connection that opens with any other token must
 be closed with WebSocket code 1008 and no answer — a loopback port is reachable
 by every process on the machine, so the token is the whole of the channel's
 authentication, and the pinned code is what separates a refusal from a service

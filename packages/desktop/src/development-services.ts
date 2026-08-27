@@ -1,7 +1,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:net";
-import { stat } from "node:fs/promises";
+import { mkdir, stat } from "node:fs/promises";
+import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type { VelarDesktopConfig } from "./config.ts";
 
@@ -27,6 +28,18 @@ export const DESKTOP_SERVICE_TERMINATION_GRACE_MS = 30_000;
  * host should keep retrying.
  */
 export const DESKTOP_SERVICE_REFUSED_CLOSE_CODE = 1008;
+
+/**
+ * The directory `velar/desktop.appDataDirectory()` answers, worked out the way
+ * the packaged host works it out — the application support root, this bundle
+ * identifier, `data` — so that the service a product debugs under `velar dev`
+ * and the service it ships read one path and share one store. It is created
+ * here for the same reason the native host creates it: a service that has to
+ * make its own data root before it can use it would be doing the host's work.
+ */
+export function desktopApplicationDataDirectory(identifier: string): string {
+  return join(homedir(), "Library", "Application Support", identifier, "data");
+}
 
 export interface DesktopDevelopmentService {
   readonly name: string;
@@ -66,6 +79,8 @@ export async function startDesktopDevelopmentServices(
   const names = Object.keys(config.services);
   const running: RunningService[] = [];
   const services: DesktopDevelopmentService[] = [];
+  const appData = desktopApplicationDataDirectory(config.identifier);
+  if (names.length > 0) await mkdir(appData, { recursive: true });
   const stop = async (): Promise<void> => {
     await Promise.all(running.map((service) => convergeService(service)));
   };
@@ -85,7 +100,16 @@ export async function startDesktopDevelopmentServices(
         // The product's own process, so the product's own environment. A
         // service is not capability-scoped: `desktop.permissions` governs what
         // the renderer may reach, not what the product's process inherits.
-        env: { ...process.env, VELAR_SERVICE_ENDPOINT: `127.0.0.1:${port}`, VELAR_SERVICE_TOKEN: token },
+        //
+        // The three variables the host adds are the same three the packaged
+        // host adds, with the same spellings and the same values, because a
+        // service written against one form is a service that runs in the other.
+        env: {
+          ...process.env,
+          VELAR_SERVICE_ENDPOINT: `127.0.0.1:${port}`,
+          VELAR_SERVICE_TOKEN: token,
+          VELAR_SERVICE_APP_DATA: appData,
+        },
         stdio: ["ignore", "inherit", "inherit"],
       });
       const service: RunningService = { name, child, port, token, exited: false };

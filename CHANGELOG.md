@@ -61,6 +61,14 @@ truth for acceptance status.
   connection is also what a service that has not finished binding its port looks
   like; the code separates the two, so a wrong token is reported at once instead
   of retried for thirty seconds and then reported as a slow start.
+- Added `VELAR_SERVICE_APP_DATA` to the environment every service is started in,
+  beside `VELAR_SERVICE_ENDPOINT` and `VELAR_SERVICE_TOKEN`, in both the packaged
+  host and `velar dev`. It carries the directory
+  `velar/desktop.appDataDirectory()` answers, already created, and it is standard
+  because it is the one thing a service needs that a payload cannot carry: it is
+  the application's identity resolved against this machine. `desktop.services`
+  still has no `env` — a value that is the same on every machine belongs in the
+  payload, and a value the renderer knows is a message rather than a variable.
 
 ### Language and diagnostics
 

@@ -313,6 +313,21 @@ function smoke(
   ], { encoding: "utf8" });
 }
 
+/**
+ * The one value both hosts owe every service: the directory
+ * `velar/desktop.appDataDirectory()` answers for this bundle identifier. The
+ * expectation is written out here rather than read back from either host,
+ * because a test that asked the host what it decided would agree with a host
+ * that decided wrongly — and because the whole point of the variable is that
+ * `velar dev` and a packaged application answer the same path.
+ */
+const fixtureAppData = join(homedir(), "Library", "Application Support", "dev.velarscript.services", "data");
+
+/** What the fixture service recorded about the app-data directory it was handed. */
+function recordedAppData(lines: readonly string[]): string | null {
+  return lines.find((line) => line.startsWith("app-data ")) ?? null;
+}
+
 async function serviceLog(directory: string, name: string): Promise<string[]> {
   try { return (await readFile(join(directory, `${name}.log`), "utf8")).trimEnd().split("\n").filter(Boolean); }
   catch { return []; }
@@ -391,6 +406,13 @@ test("the packaged smoke starts each service, authenticates, reaches ready, and 
         assert.equal(lines.filter((line) => line.startsWith("start ")).length, 1, `${name}: ${lines.join(" | ")}`);
         assert.equal(lines.includes("hello accepted"), true, `${name}: ${lines.join(" | ")}`);
         assert.equal(lines.includes("terminated"), true, `${name}: ${lines.join(" | ")}`);
+        // The third standard variable, in the packaged form and in the deprived
+        // one: the exact directory `appDataDirectory()` answers, and already a
+        // directory before the service's first line ran. A service that had to
+        // climb to `desktop.json` to work this out — which is what a product
+        // did before the host said it — would be keeping a second copy of a
+        // rule only the host can be right about.
+        assert.equal(recordedAppData(lines), `app-data ${fixtureAppData} true`, `${name}: ${lines.join(" | ")}`);
         const started = lines.find((line) => line.startsWith("start "))!;
         assert.equal(running(Number(started.split(" ")[2])), false, `${name} outlived the host that started it`);
       }
@@ -541,7 +563,13 @@ test("velar dev starts the declared services, authenticates them, and converges 
     assert.equal(refused, "refused", "a token the host never issued must be closed with 1008, not merely dropped");
     assert.equal((await serviceLog(logs, "notes")).includes("hello refused 1008"), true);
     for (const name of ["notes", "once"]) {
-      assert.equal((await serviceLog(logs, name)).includes("hello accepted"), true, name);
+      const lines = await serviceLog(logs, name);
+      assert.equal(lines.includes("hello accepted"), true, name);
+      // The same variable, the same value, the same already-created directory
+      // as the packaged form above. A service that reads it under `velar dev`
+      // and reads it again after `velar package` reads one data root, which is
+      // what makes the two forms exclusive rather than divergent.
+      assert.equal(recordedAppData(lines), `app-data ${fixtureAppData} true`, `${name}: ${lines.join(" | ")}`);
     }
     assert.equal(pids.length, 2, output);
     // Nothing the dev server started outlives it.

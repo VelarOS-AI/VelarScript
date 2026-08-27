@@ -284,13 +284,19 @@ the terminal `failed` — or `never`.
 The host allocates a loopback endpoint and a 128-bit token per service, hands
 both to the process in `VELAR_SERVICE_ENDPOINT` and `VELAR_SERVICE_TOKEN`, and
 expects a WebSocket server there; the handshake frames are pinned in
-[`packages/desktop/README.md`](../packages/desktop/README.md). Services start
-before the renderer loads and are not awaited, and quitting sends SIGTERM and
-then SIGKILL thirty seconds later. A service payload is application code, so its
+[`packages/desktop/README.md`](../packages/desktop/README.md). A third variable,
+`VELAR_SERVICE_APP_DATA`, carries the application's own data directory — the
+path `velar/desktop.appDataDirectory()` answers — because a service's data root
+is the application's identity resolved on this machine and cannot be written
+into a payload at build time. Those three are the whole of what the host adds:
+`desktop.services` has no `env`. Services start before the renderer loads and
+are not awaited, and quitting sends SIGTERM and then SIGKILL thirty seconds
+later. A service payload is application code, so its
 bytes are inside `desktop.build.sizeBudgetBytes` and any `.node` or `.dylib` it
 carries is signed with the rest of the bundle. `velar dev` runs the same
-services on the system Node and converges them when the dev server closes; it
-does not watch or rebuild them.
+services on the system Node, in the same three variables with the same values,
+and converges them when the dev server closes; it does not watch or rebuild
+them.
 
 `desktop.permissions` is eight finite allowlists and one flag, and every one of
 them defaults to no authority at all. A capability the manifest never declared

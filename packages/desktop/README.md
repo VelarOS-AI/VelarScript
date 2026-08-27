@@ -134,19 +134,36 @@ application that could rewrite it is an application whose crash report proves
 nothing. Under `velar dev` there is no such file — a service's streams are the
 terminal's, where a developer is already looking.
 
-### The handshake
+### The environment a service is started in
 
-The host allocates a loopback port and a 128-bit token per service and hands
-both to the process in its environment:
+A service inherits the host process's environment and finds three more variables
+in it, the same three under `velar dev` as in a packaged application:
 
 ```sh
 VELAR_SERVICE_ENDPOINT=127.0.0.1:<port>
 VELAR_SERVICE_TOKEN=<32 hexadecimal characters>
+VELAR_SERVICE_APP_DATA=<the directory appDataDirectory() answers>
 ```
 
-The service must run a WebSocket server on that endpoint. Every connection the
-host opens — the readiness probe and each `connect()` — begins with exactly two
-frames, and this is the whole protocol the language imposes:
+The first two are this start's channel. The third is the application's own
+data directory — the exact path `velar/desktop.appDataDirectory()` returns in
+the renderer — and it exists by the time the service reads it. It is standard
+rather than something a manifest declares because it is the one thing a service
+needs and cannot be told at build time: it is the application's identity
+resolved against this machine, so a payload that carried it would carry a guess,
+and a service that derived it would be keeping a second copy of the host's rule
+where nothing checks it against the first. A product's own configuration is not
+this: a value that is the same on every machine belongs in the payload, and
+`desktop.services` has no `env`.
+
+There is no fourth. The channel a service is given is the way a renderer talks
+to it, so a value the renderer knows is a message rather than a variable.
+
+### The handshake
+
+The service must run a WebSocket server on the endpoint it was given. Every
+connection the host opens — the readiness probe and each `connect()` — begins
+with exactly two frames, and this is the whole protocol the language imposes:
 
 ```json
 {"velar":"service-hello","token":"<the value of VELAR_SERVICE_TOKEN>"}

@@ -15,7 +15,7 @@
 //   stubborn — serve and accept, but ignore SIGTERM, so the SIGKILL deadline
 //              has something to kill
 
-import { appendFileSync } from "node:fs";
+import { appendFileSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { basename } from "node:path";
@@ -44,10 +44,17 @@ if (mode === "exit") {
 
 const endpoint = process.env.VELAR_SERVICE_ENDPOINT;
 const token = process.env.VELAR_SERVICE_TOKEN;
-if (!endpoint || !token || token.length !== 32) {
+// The third standard variable. It is recorded rather than merely checked,
+// because the test's question is not "was something set" but "is it the exact
+// directory `appDataDirectory()` answers, in both forms a service runs in".
+const appData = process.env.VELAR_SERVICE_APP_DATA;
+if (!endpoint || !token || token.length !== 32 || !appData) {
   record("environment missing");
   process.exit(1);
 }
+// The host creates it before the service starts, so a service may write there
+// on its first line without making its own data root.
+record(`app-data ${appData} ${statSync(appData).isDirectory()}`);
 const [host, port] = endpoint.split(":");
 
 const server = createServer((_request, response) => response.writeHead(426).end());
