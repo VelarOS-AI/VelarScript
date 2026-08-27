@@ -6,6 +6,50 @@ truth for acceptance status.
 
 ## Unreleased
 
+### Desktop applications
+
+- Replaced the singular `desktop.window` manifest member with `desktop.windows`,
+  a map keyed by window kind. `main` is required and is the window the host
+  opens at launch; every other kind waits for `openWindow`, and a kind the
+  manifest never declared is refused at the call. The error the retired shape
+  raises names `velar fix`, which rewrites it.
+- Added `velar/window`: `currentWindowKind`, `currentWindow`, `openWindow`,
+  `openWindows`, `closeWindow`, and a `WindowState` stream per window.
+- Added `velar/notification` and `velar/secure-storage` — the macOS
+  notification centre and the keychain — and extended `velar/desktop` with
+  `openExternal`, `displays`, `watchPower`, `watchDroppedFiles`,
+  `permissionStatus`, and `applyUpdate`.
+- Added four grants to `desktop.permissions`: `links`, the URL schemes
+  `openExternal` may hand to the system; `notifications`, which declares intent
+  only, since the operating system still asks the user; `secureStorage`, the
+  keychain slots an application may write and read; and the `dropped` root
+  under `files`, which is not a directory but authority to read the files a
+  drag gesture brings in and learn their real paths. Each defaults to no
+  authority, and the refusal names the manifest line that would grant it.
+- Made `velar package` produce a self-contained `.app`: the user needs nothing
+  installed. The bundle carries one Node.js runtime this toolchain generation
+  pins, downloaded once against the official `SHASUMS256` digest and cached
+  under `~/Library/Caches/velarscript/desktop-runtimes`. The runtime is not an
+  application component, so it is measured against an integrity ceiling the
+  toolchain owns rather than `desktop.build.sizeBudgetBytes`. Signing runs
+  inside-out — runtime, then host, then bundle — because macOS seals a
+  bundle from its leaves inward, and `desktop.build.signing` adds an optional
+  notarization step that resolves its credentials through a keychain profile
+  rather than the manifest. `velar-desktop-build.json` is `formatVersion` 4.
+- Renamed the packaged host's `--smoke` to `--verify-bundle`, which is what it
+  is: a static check that the bundle is complete and a runtime resolves. It
+  could never be an acceptance, because resolving a runtime asks
+  `node --version`, which answers before V8 has created an isolate. The
+  acceptance is the new `--headless-smoke`, which completes a real capability
+  round-trip on the runtime it resolved and waits for every declared service to
+  answer its handshake. There is no alias for the old spelling.
+- Added `desktop.services` and `velar/service`. A product declares at most eight
+  long-running processes, each a project directory `velar package` copies into
+  the bundle and runs on the Node.js executable the bundle already carries. The
+  host allocates a loopback endpoint and a token per service, supervises them
+  under an `always` or `never` restart policy, and converges them on quit;
+  `velar dev` runs the same services on the system Node.
+
 ### Runtime
 
 - The Node terminal now delivers every byte it read before its input host
