@@ -1,19 +1,21 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
-import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
-import { desktopTreeSha256 } from "../packages/desktop/src/build.ts";
+import { buildDesktopApplication, desktopTreeSha256 } from "../packages/desktop/src/build.ts";
 import {
   DESKTOP_NODE_RUNTIME_ARCHIVES,
   DESKTOP_NODE_RUNTIME_VERSION,
   velarProjectExtension,
+  type VelarDesktopConfig,
 } from "../packages/desktop/src/config.ts";
 import {
   DESKTOP_EMBEDDED_RUNTIME_PATH,
+  DESKTOP_RUNTIME_CACHE_ENVIRONMENT,
   desktopRuntimeCacheDirectory,
   provisionDesktopNodeRuntime,
 } from "../packages/desktop/src/node-runtime.ts";
@@ -309,6 +311,62 @@ test("the Desktop signing plan signs a real bundle, ad-hoc always and by identit
     run(identity);
     const distributable = spawnSync("/usr/bin/codesign", ["-dvv", bundle], { encoding: "utf8" });
     assert.match(`${distributable.stdout}${distributable.stderr}`, /Authority=Developer ID Application/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a packaged Desktop application packaging another reuses the runtime it already carries", async (t) => {
+  if (process.platform !== "darwin") {
+    t.skip("Desktop packaging builds only the macOS host");
+    return;
+  }
+  const root = await temporary("velar-desktop-template-");
+  try {
+    // A packaged application has no checkout and no Swift sources: it hands its
+    // own Resources directory to the build as a template. It also already
+    // carries a runtime this toolchain generation downloaded and verified, so
+    // the build must reuse that rather than reach for a network it may not have
+    // — which is what this test proves, by giving it a cache that is empty and
+    // an origin that does not answer.
+    const template = join(root, "template", "Contents");
+    await mkdir(join(template, "MacOS"), { recursive: true });
+    await mkdir(join(template, "Resources", "host"), { recursive: true });
+    await cp("/bin/echo", join(template, "MacOS", "VelarDesktopHost"));
+    await cp("/bin/echo", join(template, "MacOS", "node"));
+    await writeFile(join(template, "Resources", "host", "worker.js"), "// template worker\n", "utf8");
+    await cp(new URL("../packages/desktop/native/macos/VelarScript.icns", import.meta.url), join(template, "Resources", "VelarScript.icns"));
+
+    const project = join(root, "project");
+    await mkdir(project, { recursive: true });
+    await writeFile(join(project, "package.json"), JSON.stringify({ name: "template-fixture", version: "1.2.3", private: true, type: "module" }), "utf8");
+    const config = velarProjectExtension.parse({
+      productName: "Template Reuse",
+      identifier: "dev.velarscript.template-reuse",
+    }, "velar.json") as VelarDesktopConfig;
+
+    process.env[DESKTOP_RUNTIME_CACHE_ENVIRONMENT] = join(root, "empty-cache");
+    process.env.VELAR_DESKTOP_PACKAGE_TEMPLATE_ROOT = join(template, "Resources");
+    try {
+      const result = await buildDesktopApplication(project, config, async (rendererDirectory) => {
+        await mkdir(rendererDirectory, { recursive: true });
+        await writeFile(join(rendererDirectory, "index.html"), "<!doctype html><div id=app></div>", "utf8");
+      });
+      assert.equal(result.manifest.formatVersion, 4);
+      assert.equal(result.manifest.runtime.kind, "embedded-node");
+      // Provenance comes from the pin table rather than from a digest of the
+      // template's copy: the previous build's signature already replaced Apple's
+      // on those bytes, so hashing them would record a number that matches
+      // nothing anyone can check.
+      assert.equal(result.manifest.runtime.embedded && result.manifest.runtime.sha256, pinned.sha256);
+      assert.equal((await stat(join(result.applicationBundle, DESKTOP_EMBEDDED_RUNTIME_PATH))).isFile(), true);
+      // The template's worker travelled with it, so this really is the template
+      // path and not a checkout build wearing its name.
+      assert.equal(await readFile(join(result.applicationBundle, "Contents", "Resources", "host", "worker.js"), "utf8"), "// template worker\n");
+    } finally {
+      delete process.env[DESKTOP_RUNTIME_CACHE_ENVIRONMENT];
+      delete process.env.VELAR_DESKTOP_PACKAGE_TEMPLATE_ROOT;
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }
