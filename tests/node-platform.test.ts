@@ -3,7 +3,7 @@ import { Buffer as NodeBuffer } from "node:buffer";
 import { ChildProcess, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { createServer } from "node:http";
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
@@ -20,7 +20,7 @@ import { standardModuleApi, standardModuleDependencies, standardModuleSource } f
 import { nodeModuleDependencies, nodeModuleSources, velarNodeCompilerExtension, VELAR_NODE_HOST_MODULE } from "../packages/node/src/compiler.ts";
 import { VELAR_NODE_HOST_WORKER_SOURCE } from "../packages/node/src/node-host-worker-runtime.ts";
 import { VELAR_NODE_PROCESS_WORKER_SOURCE } from "../packages/node/src/process-worker-runtime.ts";
-import { VELAR_NODE_TERMINAL_WORKER_SOURCE } from "../packages/node/src/terminal-worker-runtime.ts";
+import { VELAR_NODE_TERMINAL_INPUT_SOURCE, VELAR_NODE_TERMINAL_WORKER_SOURCE } from "../packages/node/src/terminal-worker-runtime.ts";
 import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
 
 type ServeCompilerBridge = {
@@ -507,6 +507,64 @@ terminal.close()
     );
     assert.equal(overflow.code, 0, overflow.stderr);
     assert.equal(overflow.stdout, "first\nbounded\n");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+// The test above reached this ordering only by timing luck: on a loaded machine
+// it went red with "Node terminal input host exited unexpectedly with code 0",
+// because the host tore its IPC channel down in the same turn as its last send
+// and the records still queued on that channel — the forwarded input and the
+// end of it — went down with it. Forcing the ordering here makes the same
+// regression observable on an idle one.
+test("Node terminal input host delivers its queued input and its end of input before exiting", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-node-terminal-input-host-"));
+  try {
+    const payload = `${"x".repeat(1024 * 1024)}\n`;
+    const inputPath = join(directory, "input.txt");
+    await writeFile(inputPath, payload, "utf8");
+    const inputFile = await open(inputPath, "r");
+    let forwarded = 0;
+    let ended = false;
+    let unexpected: string | null = null;
+    let markReady = (): void => {};
+    const ready = new Promise<void>((resolveReady) => { markReady = resolveReady; });
+    try {
+      const host = spawn(process.execPath, ["--input-type=module", "--eval", VELAR_NODE_TERMINAL_INPUT_SOURCE], {
+        cwd: directory,
+        // A regular file rather than a pipe, so the host reads the whole
+        // payload without a turn of this thread's event loop feeding it.
+        stdio: [inputFile.fd, "ignore", "inherit", "ipc"],
+        serialization: "advanced",
+      });
+      const finished = new Promise<readonly [number | null, NodeJS.Signals | null]>((resolveClose) => {
+        host.once("close", (code, signal) => resolveClose([code, signal]));
+      });
+      host.on("message", (message: { kind?: unknown; data?: unknown }) => {
+        if (message.kind === "ready") { host.send({kind: "input-state", active: true}); markReady(); }
+        else if (message.kind === "input-data" && message.data instanceof Uint8Array) forwarded += message.data.byteLength;
+        else if (message.kind === "input-end") ended = true;
+        else unexpected = String(message.kind);
+      });
+      await ready;
+      // Stop reading the channel while the host forwards a megabyte and reaches
+      // end of file. Its terminating record is then provably queued rather than
+      // written when it closes the channel, which is the whole race.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+      const [code, signal] = await finished;
+      assert.equal(unexpected, null);
+      assert.equal(signal, null);
+      assert.equal(code, 0, "the terminal input host must end its own process cleanly");
+      assert.ok(ended, "the terminal input host exited without delivering the end of its input");
+      assert.equal(
+        forwarded,
+        NodeBuffer.byteLength(payload, "utf8"),
+        "the terminal input host dropped forwarded input when it closed its channel",
+      );
+    } finally {
+      await inputFile.close();
+    }
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

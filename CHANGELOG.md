@@ -6,6 +6,15 @@ truth for acceptance status.
 
 ## Unreleased
 
+### Runtime
+
+- The Node terminal now delivers every byte it read before its input host
+  exits. The host closed the IPC channel carrying that input in the same turn
+  as its last send, which discarded whatever the channel had not written yet —
+  the end of input among it — so a program reading a large input intermittently
+  failed with `Node terminal input host exited unexpectedly with code 0`
+  instead of receiving what it had already typed.
+
 ## 0.19.1 — 2026-08-27
 
 ### Performance and build verification

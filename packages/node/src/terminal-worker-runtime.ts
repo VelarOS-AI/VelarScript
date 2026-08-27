@@ -1,4 +1,7 @@
-const VELAR_NODE_TERMINAL_INPUT_SOURCE = String.raw`
+// Owns the inherited stdin handle and forwards it to the worker over IPC. The
+// last record it sends is the one the worker waits for, so it must survive the
+// channel teardown that follows it.
+export const VELAR_NODE_TERMINAL_INPUT_SOURCE = String.raw`
 process.stdin.pause();
 process.on("error", () => process.exit(0));
 const send = value => {
@@ -6,9 +9,20 @@ const send = value => {
     process.send(value, error => { if (error) process.exit(0); });
   }
 };
+// process.disconnect() discards every record the channel has accepted but not
+// yet written, so the terminating record and the input queued ahead of it are
+// flushed first. Disconnecting in the same turn as the send dropped both, and
+// the worker then saw a host that exited cleanly without ever ending its input.
+let finished = false;
+const finish = value => {
+  if (finished) return;
+  finished = true;
+  if (!process.connected || typeof process.send !== "function") { process.exit(0); return; }
+  process.send(value, error => { if (error) process.exit(0); else process.disconnect(); });
+};
 process.stdin.on("data", data => send({kind: "input-data", data}));
-process.stdin.on("end", () => { send({kind: "input-end"}); process.disconnect(); });
-process.stdin.on("error", () => { send({kind: "input-error"}); process.disconnect(); });
+process.stdin.on("end", () => finish({kind: "input-end"}));
+process.stdin.on("error", () => finish({kind: "input-error"}));
 process.on("message", value => {
   if (!value || typeof value !== "object") return;
   if (value.kind === "input-state" && typeof value.active === "boolean") {
@@ -98,8 +112,14 @@ function ensureInputHost() {
     } catch (error) { settleInput(error); }
   });
   inputHost.on("error", error => settleInput(error));
-  inputHost.on("exit", code => {
-    if (!closed && !inputHostEnded) settleInput(new Error("Node terminal input host exited unexpectedly with code " + code));
+  // A child's exit and its IPC channel are separate events, and the exit may be
+  // reported while the channel still holds records the host already sent. Judge
+  // the host on "close", which follows both, so an end of input is never read
+  // as a host that died owing data.
+  inputHost.on("close", (code, signal) => {
+    if (closed || inputHostEnded) return;
+    const ending = signal ? "on signal " + signal : "with code " + code;
+    settleInput(new Error("Node terminal input host exited " + ending + " before ending its input"));
   });
   referenceInputHost(false);
   return inputHost;
