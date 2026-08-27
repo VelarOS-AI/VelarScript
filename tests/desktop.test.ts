@@ -493,3 +493,97 @@ test("velar fix migrates desktop.window to desktop.windows.main in place", async
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("Desktop manifest v2 declares the link, notification and secure storage grants", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-desktop-permissions-v2-"));
+  try {
+    await mkdir(join(directory, "src"));
+    await linkDesktopExtension(directory);
+    await writeFile(join(directory, "src", "main.vel"), "const ready = true\n", "utf8");
+    const write = async (permissions: Record<string, unknown>): Promise<void> => {
+      await writeFile(join(directory, "velar.json"), JSON.stringify({
+        formatVersion: 2,
+        entry: "src/main.vel",
+        extensions: ["@velarscript/desktop"],
+        desktop: { productName: "Grants", identifier: "dev.velarscript.grants", permissions },
+      }), "utf8");
+    };
+
+    // `links` is a closed scheme set, not author-supplied text.
+    await write({ links: ["ftp"] });
+    await assert.rejects(resolveVelarProject(directory), /'desktop\.permissions\.links' must contain only 'http', 'https', 'mailto'/u);
+    await write({ links: ["https", "https"] });
+    await assert.rejects(resolveVelarProject(directory), /'desktop\.permissions\.links' cannot contain duplicates/u);
+
+    await write({ notifications: "yes" });
+    await assert.rejects(resolveVelarProject(directory), /'desktop\.permissions\.notifications' must be a boolean/u);
+
+    // A credential slot follows the same spelling rule an environment secret
+    // does, which is what makes the collision rule below able to fire at all.
+    await write({ secureStorage: ["cloud-session"] });
+    await assert.rejects(resolveVelarProject(directory), /desktop secure storage permissions must be uppercase variable names/u);
+    await write({ secrets: ["CLOUD_SESSION"], secureStorage: ["CLOUD_SESSION"] });
+    await assert.rejects(resolveVelarProject(directory), /secure storage name 'CLOUD_SESSION' cannot also be declared in desktop\.permissions\.secrets/u);
+
+    // `dropped` is a file root a drag gesture authorizes, and an unknown root is
+    // still refused by name.
+    await write({ files: ["app-data", "downloads"] });
+    await assert.rejects(resolveVelarProject(directory), /unknown desktop file scope 'downloads'/u);
+
+    await write({ files: ["app-data", "project", "dropped"], links: ["https", "mailto"], notifications: true, secureStorage: ["CLOUD_SESSION"] });
+    const project = await resolveVelarProject(directory);
+    const config = project.extensionConfig.get("@velarscript/desktop") as { permissions: Record<string, unknown> };
+    assert.deepEqual(config.permissions, {
+      files: ["app-data", "project", "dropped"],
+      processes: [], network: [], environment: [], secrets: [],
+      links: ["https", "mailto"], notifications: true, secureStorage: ["CLOUD_SESSION"],
+    });
+
+    // Every category has a default, and the default is no authority at all.
+    await write({});
+    const bare = await resolveVelarProject(directory);
+    const bareConfig = bare.extensionConfig.get("@velarscript/desktop") as { permissions: Record<string, unknown> };
+    assert.deepEqual(bareConfig.permissions.links, []);
+    assert.equal(bareConfig.permissions.notifications, false);
+    assert.deepEqual(bareConfig.permissions.secureStorage, []);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Desktop refuses a project whose imported capability module is granted nothing", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-desktop-ungranted-"));
+  try {
+    await mkdir(join(directory, "src"));
+    await linkDesktopExtension(directory);
+    await writeFile(join(directory, "package.json"), JSON.stringify({ name: "ungranted", version: "0.1.0", private: true, type: "module" }), "utf8");
+    const write = async (source: string, permissions: Record<string, unknown>): Promise<void> => {
+      await writeFile(join(directory, "src", "main.vel"), source, "utf8");
+      await writeFile(join(directory, "velar.json"), JSON.stringify({
+        formatVersion: 2,
+        entry: "src/main.vel",
+        extensions: ["@velarscript/desktop"],
+        desktop: { productName: "Ungranted", identifier: "dev.velarscript.ungranted", permissions },
+      }), "utf8");
+    };
+    const check = () => spawnSync(process.execPath, [cli, "check"], { cwd: directory, encoding: "utf8" });
+
+    await write("import {show} from \"velar/notification\"\n\nexport async def tell(): await show({title: \"t\", body: \"b\"})\n", {});
+    const withoutNotifications = check();
+    assert.equal(withoutNotifications.status, 1, withoutNotifications.stdout);
+    assert.match(withoutNotifications.stderr, /imports 'velar\/notification' but desktop\.permissions\.notifications is not true/u);
+
+    await write("import {show} from \"velar/notification\"\n\nexport async def tell(): await show({title: \"t\", body: \"b\"})\n", { notifications: true });
+    assert.equal(check().status, 0);
+
+    await write("import {get} from \"velar/secure-storage\"\n\nexport async def read() -> string?: return await get(\"CLOUD_SESSION\")\n", {});
+    const withoutStorage = check();
+    assert.equal(withoutStorage.status, 1, withoutStorage.stdout);
+    assert.match(withoutStorage.stderr, /imports 'velar\/secure-storage' but desktop\.permissions\.secureStorage grants no name/u);
+
+    await write("import {get} from \"velar/secure-storage\"\n\nexport async def read() -> string?: return await get(\"CLOUD_SESSION\")\n", { secureStorage: ["CLOUD_SESSION"] });
+    assert.equal(check().status, 0);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
