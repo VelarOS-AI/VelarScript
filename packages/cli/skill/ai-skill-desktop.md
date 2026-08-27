@@ -21,25 +21,32 @@ Activate Desktop explicitly and declare the smallest required authority:
       "note-preview": { "style": "panel", "frame": false, "aspectRatio": 1.6, "width": 512, "height": 320 }
     },
     "permissions": {
-      "files": ["project"],
+      "files": ["project", "dropped"],
       "processes": ["git"],
       "network": ["https://api.example.com"],
       "environment": [],
-      "secrets": []
+      "secrets": [],
+      "links": ["https", "mailto"],
+      "notifications": true,
+      "secureStorage": ["CLOUD_SESSION"]
     }
   }
 }
 ```
 
-Desktop owns `velar/desktop`, `velar/window`, `velar/desktop-test`, and
-permission-scoped implementations of `velar/fs`, `velar/path`, `velar/process`,
-`velar/http`, and `velar/env`. It composes Web components, JSX, Look, state,
-resources, actions, and browser tests. It does not expose a user main process,
-renderer project, local server, port, or general IPC surface.
+Desktop owns `velar/desktop`, `velar/window`, `velar/notification`,
+`velar/secure-storage`, `velar/desktop-test`, and permission-scoped
+implementations of `velar/fs`, `velar/path`, `velar/process`, `velar/http`, and
+`velar/env`. It composes Web components, JSX, Look, state, resources, actions,
+and browser tests. It does not expose a user main process, renderer project,
+local server, port, or general IPC surface.
 
 The manifest is the authority. Never broaden a grant merely to silence a
 failure. File roots, executable identities, network origins, readable
-environment names, and opaque secret names are finite allowlists.
+environment names, opaque secret names, link schemes, and credential slot names
+are finite allowlists, and `notifications` is a single declaration of intent. A
+capability the manifest never declared fails where it is *called*, naming the
+line that would grant it — never at the import, and never silently.
 
 ## Windows
 
@@ -83,6 +90,84 @@ and closing the last window quits. Do not build an application that depends on
 outliving them, and do not try to share state between windows through the
 language — windows do not share a JavaScript context.
 
+## Notifications
+
+`desktop.permissions.notifications: true` is the application's declaration that
+it may notify at all; without it `requestPermission`, `show`, and `activations`
+each fail at the call and name that line. The operating system's own answer is a
+second, different gate — ask for it with `requestPermission()`, and expect
+`granted`, `denied`, or `undetermined`. `show` on an unauthorized application
+fails; it never quietly delivers nothing.
+
+```velar fragment
+import {NotificationPermission, activations, requestPermission, show} from "velar/notification"
+
+async def announce(packages: number) -> string:
+    if await requestPermission() != NotificationPermission.granted: return "not notified"
+    // A tag is the notification's identity: a second notification carrying it
+    // replaces the first, and an activation reports it back.
+    await show({title: "Build finished", body: f"{packages} packages", tag: "build"})
+    using clicks = await activations()
+    async for click in clicks: return click.tag ?? "untagged"
+    return "no activation"
+```
+
+`title` is at most 256 characters, `body` 1024, `tag` 128. `activations()` is a
+bounded pull stream of `{tag: string?}`; two clicks on one notification are one
+activation, and the host brings the application forward with it, opening `main`
+when no window is left.
+
+## Secure storage
+
+`secureStorage` is a finite allowlist of credential slot names, spelled the way
+`secrets` names are, and one name may appear in only one of the two lists. They
+are different authorities: a `secrets` entry is an opaque value the environment
+injects, while a `secureStorage` entry is a slot the application itself writes
+and reads — a macOS keychain generic password under the application's bundle
+identifier.
+
+```velar fragment
+import {get, remove, set} from "velar/secure-storage"
+
+async def rotate(token: string) -> bool:
+    await set("CLOUD_SESSION", token)      // at most 8 KiB
+    const stored = await get("CLOUD_SESSION")
+    await remove("CLOUD_SESSION")          // removing what is absent is not an error
+    await remove("CLOUD_SESSION")
+    return stored != null
+```
+
+A name outside the allowlist fails at the call and lists the declared names.
+Never render, log, or serialize a stored value; report whether a credential is
+present, not what it is.
+
+## Links, displays, power, dropped files, and probes
+
+```velar fragment
+import {PowerState, SystemPermission, displays, openExternal, permissionStatus, watchDroppedFiles, watchPower} from "velar/desktop"
+
+async def sleepAware() -> string:
+    await openExternal("https://example.com/guide")   // scheme must be in `links`
+    const attached = await displays()
+    const ready = await permissionStatus(SystemPermission.screenRecording)
+    using states = await watchPower()
+    using drops = await watchDroppedFiles()            // needs files: ["dropped"]
+    async for state in states:
+        if state == PowerState.suspended: break
+    async for batch in drops: return f"{batch.paths.size}:{attached.size}:{ready}"
+    return "none"
+```
+
+`links` is a closed set of `http`, `https`, and `mailto`; any other scheme is
+refused at the call and again by the host. `displays()` answers the same
+`Display` record a window's own `display()` does. `watchPower()` carries
+transitions only — a machine already awake publishes nothing on waking.
+`watchDroppedFiles()` needs the `dropped` file root and reports the real paths of
+the files a user's drag gesture brought in, in gesture order; the page still gets
+its ordinary DOM `drop` event, and the two are the same gesture.
+`permissionStatus` only reads. There is no request function: asking the user for
+a system permission belongs to the product flow that consumes the answer.
+
 ## Capability model
 
 All privileged operations are asynchronous checked calls. Import the official
@@ -116,10 +201,15 @@ Put target-specific calls in narrow service modules so UI components consume
 checked application data instead of transport details. Use
 `velar/desktop-test` only from official browser-test modules; plain unit tests
 should cover pure policy and conversion logic without platform authority. Its
-fake window registry answers `velar/window` for the page and lets a browser test
-produce the host events a window system would: `setWindowKind` before the first
-`browser.open()`, then `openWindows`, `focusWindow`, `moveWindow`, and
-`closeWindow`.
+fake host answers every module above for the page and lets a browser test
+produce the host events a real system would. Two of its choices are made before
+the first `browser.open()` and sealed by it — `setPlatform` and `setWindowKind`
+— and the rest are events inside a running page: `openWindows`, `focusWindow`,
+`moveWindow`, `closeWindow`, `setNotificationPermission`, `shownNotifications`,
+`activateNotification`, `secureStorageNames`, `publishPower`, `dropFiles`,
+`setSystemPermission`, and `openedLinks`. `secureStorageNames` reports the names
+the fake keychain holds and never the values: a test seam that handed a
+credential back would be the exception that ends that rule.
 
 ## Build and finish
 

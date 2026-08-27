@@ -236,11 +236,14 @@ its exact path:
       }
     },
     "permissions": {
-      "files": ["project"],
+      "files": ["project", "dropped"],
       "processes": ["git"],
       "network": ["https://api.example.com"],
       "environment": [],
-      "secrets": []
+      "secrets": [],
+      "links": ["https", "mailto"],
+      "notifications": true,
+      "secureStorage": ["CLOUD_SESSION"]
     }
   }
 }
@@ -255,6 +258,36 @@ and `visibleOnAllWorkspaces` are booleans defaulting to `true`, `true` and
 because that is what a panel is; `aspectRatio` locks the width-to-height ratio
 when present. The older singular `desktop.window` was removed —
 [`velar fix`](#writing-code) migrates it.
+
+`desktop.permissions` is eight finite allowlists and one flag, and every one of
+them defaults to no authority at all. A capability the manifest never declared
+is refused where the program *calls* it, with the manifest line that would grant
+it named in the error, and the native host asks the same question again on its
+own side:
+
+| Field | Grants | Vocabulary |
+| --- | --- | --- |
+| `files` | `velar/fs`, `velar/path`, and the paths a drag gesture brings in | `app-data`, `project`, `dropped` |
+| `processes` | `velar/process` | exact executable names, never paths or shell text |
+| `network` | `velar/http` and renderer navigation to an outside origin | exact HTTPS origins, or exact loopback HTTP origins |
+| `environment` | `velar/env` | uppercase variable names |
+| `secrets` | `velar/http` secret headers | uppercase variable names |
+| `links` | `openExternal` | `http`, `https`, `mailto` |
+| `notifications` | `velar/notification` | `true` or `false` |
+| `secureStorage` | `velar/secure-storage` | uppercase variable names |
+
+`dropped` is not a directory: it authorizes reading the files a user's own drag
+gesture brings in and learning their real filesystem paths — the gesture is the
+grant, and it lasts the session. `links` governs `openExternal`, which hands a
+URL to the system default handler; `network` separately governs what the
+renderer itself may reach, so a link the application opens and an origin it
+fetches from are two grants rather than one. `secrets` and `secureStorage` share
+a spelling rule and may not share a name: the first is an opaque value the
+environment injects, the second is a credential slot the application writes and
+reads in the macOS keychain, and one name naming both would be two authorities
+wearing one label. `notifications` declares intent only — the operating system
+still asks the user, and `requestPermission()` is how the application learns that
+answer.
 
 Build output is fixed by the toolchain, not by the machine that runs it.
 Project modules are ordered by UTF-16 code unit over their POSIX-normalized
