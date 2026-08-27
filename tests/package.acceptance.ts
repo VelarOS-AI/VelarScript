@@ -396,6 +396,7 @@ mount(<App />, "#app")
       // The template declares the one window kind every manifest declares, and
       // the packaged host reports the kinds it will actually open.
       windowKinds: ["main"],
+      services: [],
     });
     // The packaging acceptance, from a packed consumer that never saw this
     // checkout. This project grants no filesystem scope at all, so the round
@@ -414,6 +415,7 @@ mount(<App />, "#app")
       capability: "fs.list",
       fileScope: false,
       windowKinds: ["main"],
+      services: [],
     }, accepted.stdout);
     assert.equal(runtime.endsWith("/Contents/MacOS/node"), true, runtime);
   }

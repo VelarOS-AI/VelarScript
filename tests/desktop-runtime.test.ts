@@ -1040,8 +1040,8 @@ test("Desktop browser-test platform is selected before the first open and then s
   const context = vm.createContext({ TextEncoder, btoa });
   vm.runInContext(`${controller.initScript()}\nglobalThis.__platform = globalThis[Symbol.for("velar.desktop.bridge.v1")].platform`, context);
   assert.equal((context as { __platform?: string }).__platform, "macos");
-  assert.throws(
-    () => controller.invoke("desktop-test", "setPlatform", ["test"], 30_000),
+  await assert.rejects(
+    async () => controller.invoke("desktop-test", "setPlatform", ["test"], 30_000),
     /before the first browser\.open/u,
   );
 });

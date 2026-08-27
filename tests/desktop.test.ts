@@ -256,6 +256,9 @@ mount(<App />, "#app")
       protocolVersion: 1,
       identifier: "dev.velarscript.fixture",
       windowKinds: ["main", "note-preview"],
+      // An application that declares no service says so rather than leaving the
+      // reader to infer it from an absent field.
+      services: [],
     });
     const invalidRootVerification = spawnSync(join(application, "Contents", "MacOS", "VelarDesktopHost"), ["--verify-bundle"], {
       encoding: "utf8",
@@ -297,6 +300,7 @@ mount(<App />, "#app")
         capability: "fs.list",
         fileScope: true,
         windowKinds: ["main", "note-preview"],
+        services: [],
       }, `${label}: ${accepted.stdout}${accepted.stderr}`);
       assert.equal(await realpath(runtime), await realpath(embeddedRuntime), `${label}: ${runtime}`);
     }

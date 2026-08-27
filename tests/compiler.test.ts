@@ -15296,12 +15296,12 @@ export const velarFrameworkHost = {
   await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: ["fixture-version"] }), "utf8");
   await assert.rejects(resolveVelarProject(directory), /unsupported framework host protocol 99/u);
 
-  await writeExtension("fixture-capability", 2, "fixture", "other");
+  await writeExtension("fixture-capability", 3, "fixture", "other");
   await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: ["fixture-capability"] }), "utf8");
   await assert.rejects(resolveVelarProject(directory), /must bind one capability owned by its compiler extension/u);
 
-  await writeExtension("fixture-one", 2, "one");
-  await writeExtension("fixture-two", 2, "two");
+  await writeExtension("fixture-one", 3, "one");
+  await writeExtension("fixture-two", 3, "two");
   await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: ["fixture-one", "fixture-two"] }), "utf8");
   await assert.rejects(resolveVelarProject(directory), /only one application extension/u);
 });
