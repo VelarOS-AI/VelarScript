@@ -162,8 +162,15 @@ test("Desktop native host hands a URL to the system from two branches, each behi
   // `network`, and `openExternal` handing a URL to the system default handler is
   // governed by `links`. A third branch, or either of these two losing its
   // guard, is what this counts.
-  const opens = hostSource.split("\n").filter((line) => line.includes("NSWorkspace.shared.open"));
+  const opens = hostSource.split("\n").filter((line) => line.includes("NSWorkspace.shared.open("));
   assert.equal(opens.length, 2, "the native host hands a URL to the system from exactly two branches");
+  // `openApplication` is a different act and is counted separately: it launches
+  // one known application bundle — this one, after `applyUpdate` replaced it —
+  // rather than handing a URL to whatever the system would choose for it. There
+  // is exactly one, and it relaunches the install it just wrote.
+  const launches = hostSource.split("\n").filter((line) => line.includes("NSWorkspace.shared.openApplication("));
+  assert.equal(launches.length, 1, "the native host launches an application from exactly one branch");
+  assert.match(hostSource, /NSWorkspace\.shared\.openApplication\(at: installed, configuration: configuration\)/u);
   assert.match(hostSource, /\} else if let origin = navigationOrigin\(url\), externalOrigins\.contains\(origin\) \{\n\s*NSWorkspace\.shared\.open\(url\)\n\s*decisionHandler\(\.cancel\)/u);
   assert.match(hostSource, /guard linkSchemes\.contains\(scheme\) else \{[\s\S]*?desktop\.permissions\.links[\s\S]*?\}\n\s*NSWorkspace\.shared\.open\(url\)/u);
   assert.match(hostSource, /self\.linkSchemes = Set\(permissions\.links\)/u);
