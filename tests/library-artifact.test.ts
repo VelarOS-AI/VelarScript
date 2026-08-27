@@ -4,6 +4,7 @@ import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test, { after } from "node:test";
 import { compileProject } from "../packages/cli/src/project.ts";
+import { decodeVelarLibraryInterface, encodeVelarLibraryInterface } from "../packages/cli/src/library-artifact.ts";
 import { VELAR_PROJECT_FORMAT_VERSION } from "../packages/create/src/types.ts";
 import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
@@ -121,4 +122,43 @@ test("a frozen library runs and type-checks without reading its previous-generat
     ...tampered.modules.flatMap((module) => module.result.diagnostics.map((item) => item.message)),
   ].join("\n");
   assert.match(tamperMessages, /JavaScript hash mismatch/u);
+});
+
+test("[D102-1] a frozen interface carries an enum's integer wire values across the ABI", async () => {
+  const path = join(await makeTemporaryDirectory("velar-library-wire-"), "wire.vel");
+  const project = await compileProject(path, new Map([[path, `
+export enum KernelProtocol:
+    v1 = 1
+    v2 = 2
+
+export enum Visibility:
+    public = "published"
+    private = "restricted"
+
+export enum Plain:
+    ready
+`.trimStart()]]));
+  assert.deepEqual(project.failures, []);
+  assert.deepEqual(project.modules.flatMap((module) => module.result.diagnostics), []);
+  const interface_ = project.modules[0]!.result.moduleInterface;
+  // ABI 1 is a tagged data format, so the two wire-value kinds survive the
+  // round trip as themselves: a consumer built against `v2 = 2` must not read
+  // back the string "2", which would parse where the number does not.
+  const restored = decodeVelarLibraryInterface(encodeVelarLibraryInterface(interface_));
+  assert.deepEqual([...restored.enums.get("KernelProtocol")!.wireValues], [["v1", 1], ["v2", 2]]);
+  assert.deepEqual([...restored.enums.get("Visibility")!.wireValues], [["public", "published"], ["private", "restricted"]]);
+  assert.deepEqual([...restored.enums.get("Plain")!.wireValues], [["ready", "ready"]]);
+
+  // The reader is an untrusted boundary, so it re-checks the integer bound the
+  // declaration site enforced rather than assuming the producer was a compiler.
+  const text = encodeVelarLibraryInterface(interface_);
+  const pinned = /("v2",\s*\n\s*)2\n/u;
+  assert.match(text, pinned);
+  for (const bad of ["2.5", "9007199254740993", "true"]) {
+    assert.throws(
+      () => decodeVelarLibraryInterface(text.replace(pinned, `$1${bad}\n`)),
+      /must be a string or a safe integer/u,
+      `a wire value of ${bad} must be refused`,
+    );
+  }
 });

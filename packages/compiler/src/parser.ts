@@ -1762,7 +1762,7 @@ export class Parser {
         continue;
       }
       const member = this.expectMemberName("Expected an enum member name");
-      let value = member.value;
+      let value: string | number = member.value;
       let valueSpan: Span | undefined;
       if (this.match("assign")) {
         if (this.check("string")) {
@@ -1781,8 +1781,14 @@ export class Parser {
             serialized.span,
           ));
           valueSpan = serialized.span;
+        } else if (this.check("number") || (this.check("minus") && this.peekKind(1) === "number")) {
+          const numeric = this.parseEnumNumericValue();
+          if (numeric) {
+            value = numeric.value;
+            valueSpan = numeric.span;
+          }
         } else {
-          this.diagnostics.push(diagnostic("VEL2001", "Expected an inline string value after '=' in an enum member", this.current().span));
+          this.diagnostics.push(diagnostic("VEL2001", "Expected an inline string or an integer value after '=' in an enum member", this.current().span));
           this.synchronize();
         }
       }
@@ -1796,6 +1802,58 @@ export class Parser {
     }
     const last = members.at(-1);
     return { kind: "EnumDeclaration", exported, name: name.value, members, span: span(start, last?.valueSpan?.end ?? last?.span.end ?? close.span.end) };
+  }
+
+  /**
+   * D102 ruling 1: an enum member's numeric wire value. The slot takes exactly
+   * the shape the charter (section 3) calls an integer literal — decimal or an
+   * explicit radix, digit separators allowed, no fraction part and no exponent
+   * — with an optional leading minus, which is how `parseMatchValue` already
+   * spells a signed literal in a slot that is not an expression position. A
+   * decimal spelling is refused here rather than rounded, because `2.0` and `2`
+   * are one JavaScript number and a wire value has to read at the declaration
+   * as the integer it is. Exact representability is D90 R6's existing test, so
+   * `9007199254740993 = ...` reports once, in R6's own words, and the safe
+   * integer fence below never fires behind it — it stands for the value, not
+   * for the spelling.
+   *
+   * Returns `null` when it reported, so the member keeps its name-derived value
+   * instead of a salvaged one; a bogus `0` here would collide with a real `0`
+   * and produce a second, contradicting duplicate-value report.
+   */
+  private parseEnumNumericValue(): { readonly value: number; readonly span: Span } | null {
+    const negative = this.match("minus");
+    const start = negative ? this.previous().span.start : this.current().span.start;
+    const token = this.advance();
+    const literalSpan = span(start, token.span.end);
+    const text = token.value;
+    if (!text) return null;
+    // `-0` and `0` are one wire value: they emit the same JSON and `===` cannot
+    // tell them apart, so the declaration carries the one spelling downstream.
+    const signed = Number(text) * (negative ? -1 : 1);
+    const numeric = Object.is(signed, -0) ? 0 : signed;
+    if (!/^(?:[0-9]+|0[xXbBoO][0-9a-fA-F]+)$/u.test(text)) {
+      this.diagnostics.push(diagnostic(
+        "VEL2017",
+        `An enum member's numeric wire value must be a whole number; '${negative ? "-" : ""}${writtenNumber(token)}' spells a decimal`,
+        literalSpan,
+      ));
+      return null;
+    }
+    if (!Number.isFinite(numeric)) {
+      this.diagnostics.push(diagnostic("VEL2017", "Numeric literals must be finite", literalSpan));
+      return null;
+    }
+    if (!this.checkExactIntegerLiteral(text, writtenNumber(token), literalSpan, negative)) return null;
+    if (!Number.isSafeInteger(numeric)) {
+      this.diagnostics.push(diagnostic(
+        "VEL2017",
+        `An enum member's numeric wire value must be a safe integer; '${negative ? "-" : ""}${writtenNumber(token)}' is outside that range`,
+        literalSpan,
+      ));
+      return null;
+    }
+    return { value: numeric, span: literalSpan };
   }
 
   private parseClassDeclaration(start: number, exported: boolean, abstract: boolean): ClassDeclaration {

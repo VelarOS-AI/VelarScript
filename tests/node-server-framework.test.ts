@@ -944,6 +944,41 @@ server api:
   assert.match(code, /status:204/u);
 });
 
+test("[D102-1] an enum reaches OpenAPI as its wire values, integers included", async () => {
+  const path = join(tmpdir(), "velar-node-response-enum-wire.vel");
+  const project = await compileProject(path, new Map([[path, `
+enum KernelProtocol:
+    v1 = 1
+    v2 = 2
+
+enum Visibility:
+    public = "published"
+    private = "restricted"
+
+type Frame:
+    protocol: KernelProtocol
+    pinned: KernelProtocol.v2
+    visibility: Visibility
+    tag: Visibility.public
+
+def frame() -> Frame:
+    return {protocol: KernelProtocol.v1, pinned: KernelProtocol.v2, visibility: Visibility.private, tag: Visibility.public}
+
+server api:
+    @get(p"/frame" as path) => frame()
+`.trimStart()]]), {extensions: [velarNodeCompilerExtension]});
+  assert.deepEqual(project.failures, []);
+  assert.deepEqual(project.modules.flatMap((module) => module.result.diagnostics), []);
+  const code = project.modules[0]?.result.code ?? "";
+  // An all-integer enum says `integer` and lists the integers; a singleton
+  // member lists the one wire value rather than the source member name, which
+  // is what actually crosses the wire.
+  assert.match(code, /"protocol":\{"type":"integer","enum":\[1,2\]\}/u);
+  assert.match(code, /"pinned":\{"type":"integer","enum":\[2\]\}/u);
+  assert.match(code, /"visibility":\{"type":"string","enum":\["published","restricted"\]\}/u);
+  assert.match(code, /"tag":\{"type":"string","enum":\["published"\]\}/u);
+});
+
 test("a data record named status remains a JSON OpenAPI response", async () => {
   const path = join(tmpdir(), "velar-node-response-status-field.vel");
   const project = await compileProject(path, new Map([[path, `

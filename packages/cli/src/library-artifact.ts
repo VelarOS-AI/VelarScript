@@ -459,11 +459,19 @@ function validateEnumInfo(value: unknown, label: string): void {
   exactKeys(info, ["identity", "members", "wireValues"], label);
   nonEmptyString(info.identity, `${label}.identity`);
   stringSet(info.members, `${label}.members`);
+  // D102 ruling 1: a wire value is a string or a safe integer. The artifact is
+  // an untrusted input, so the integer bound is re-checked here rather than
+  // assumed from the declaration site that produced it — a fraction or an
+  // unsafe integer arriving in a frozen artifact would be a wire value the
+  // language cannot have declared.
   stringMap(info.wireValues, `${label}.wireValues`, (item, itemLabel) => {
-    if (typeof item !== "string") throw new Error(`${itemLabel} must be a string`);
+    if (typeof item === "string") return;
+    if (typeof item !== "number" || !Number.isSafeInteger(item)) {
+      throw new Error(`${itemLabel} must be a string or a safe integer`);
+    }
   });
-  if ((info.members as ReadonlySet<string>).size !== (info.wireValues as ReadonlyMap<string, string>).size
-    || [...info.members as ReadonlySet<string>].some((member) => !(info.wireValues as ReadonlyMap<string, string>).has(member))) {
+  if ((info.members as ReadonlySet<string>).size !== (info.wireValues as ReadonlyMap<string, string | number>).size
+    || [...info.members as ReadonlySet<string>].some((member) => !(info.wireValues as ReadonlyMap<string, string | number>).has(member))) {
     throw new Error(`${label}.wireValues must define exactly one value for every enum member`);
   }
 }

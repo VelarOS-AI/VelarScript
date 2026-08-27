@@ -61,6 +61,17 @@ test("[ENM-D1] Map and Set key domains reject unions that collapse at runtime", 
   accepts(`${AB}const m: Map<A, string> = Map()\nprint(str(m.size))\n`);
   accepts(`${AB}const m: Map<A?, string> = Map()\nprint(str(m.size))\n`);
   accepts("const s: Set<number | string> = Set()\nprint(str(s.size))\n");
+
+  // D102 ruling 1: the scalar that collides follows the wire value. An enum
+  // pinned to integers collapses against `number` and not against `string`;
+  // a string-backed one keeps the opposite pair, so neither rule reaches past
+  // the domain its members actually occupy at run time.
+  const PROTO = "enum Proto:\n    v1 = 1\n    v2 = 2\n";
+  rejects(`${PROTO}const m: Map<Proto | number, string> = Map()\nprint("x")\n`, /mixes Proto with number, and an enum member is a bare number at runtime/u);
+  rejects(`${PROTO}const s: Set<Proto | number> = Set()\nprint("x")\n`, /mixes Proto with number, and an enum member is a bare number at runtime/u);
+  rejects(`${PROTO}const m: Map<Proto | number, string> = Map()\nprint("x")\n`, /bind each member to a number first and store that deliberately/u);
+  accepts(`${PROTO}const m: Map<Proto | string, number> = Map()\nprint(str(m.size))\n`);
+  accepts(`${AB}const m: Map<A | number, string> = Map()\nprint(str(m.size))\n`);
 });
 
 test("[ENM-I3] the membership vocabulary requires the probe to intersect the element or key", () => {

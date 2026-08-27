@@ -734,10 +734,11 @@ comparison of a *non-optional* value against `null` is rejected as the
 constant it is, with guidance to drop the check or declare the value
 optional.
 
-The one place assignability does not decide is enum against `string`. An enum
-member converts to `string` as a one-way wire exit (section 6), and equality
-is symmetric, so honoring that direction here would open a read path around
-`Enum.parse`. `raw == Kind.textDelta` is therefore rejected and teaches both
+The one place assignability does not decide is an enum against the scalar its
+wire values are. An enum member converts to that scalar — `string` for a
+string-backed member, `number` for one pinned to an integer — as a one-way wire
+exit (section 6), and equality is symmetric, so honoring that direction here
+would open a read path around `Enum.parse`. `raw == Kind.textDelta` is therefore rejected and teaches both
 honest spellings together with the rule for choosing between them, because they
 differ on the value the author has not thought about yet — an unknown one.
 `Kind.parse(raw) == Kind.textDelta` states that the text must name a member:
@@ -748,7 +749,9 @@ is what a forward-compatible wire handler needs. The boundary holds through
 union arms: a `Kind | string` operand still puts a raw string
 and an enum member into one comparison, so it is rejected with guidance to
 narrow first (`if value is Kind:`) — the enum domain and the string domain
-never meet in `==`. The same intersection requirement (including the
+never meet in `==`. An enum pinned to integers draws the same boundary against
+`number`, so `code == Proto.v2` against a bare number is refused for the same
+reason and by the same rule. The same intersection requirement (including the
 enum/string boundary) governs every membership probe — `in`, `has`, `index`,
 `count`, `remove`, and the key of `Map.get` — because a membership test asks
 the `==` question one element at a time.
@@ -771,8 +774,9 @@ are all one of those two categories. String order is Unicode code-point order
 (identical to UTF-8 byte order) on every ordered surface — the operators,
 `min`/`max`, default `sorted()`, and ordered keys — never UTF-16 code-unit
 order, so an astral character always orders after every basic-plane one. Enums are excluded: an enum's runtime
-value is a bare string, so ordering enum members sorts them by member name,
-which is never the order the author means. One rule answers "is this ordered"
+value is its wire value — the member's own name unless the declaration maps one
+— so ordering enum members sorts them by that, which is never the order the
+author means. One rule answers "is this ordered"
 for `<`, `<=`, `>`, `>=`, `min()`, `max()`, default `sorted()`,
 `sorted(by=selector)`, and the `sortBy`/`minBy`/`maxBy` keys, so no two of
 them can disagree. A business order is stated explicitly —
@@ -1252,7 +1256,7 @@ An f-string converts each embedded value at its source position under the
 language's one text-conversion contract: conversion accepts `string`,
 `number`, `bool`, enums, and `null` — plus optionals and unions of those —
 and is inert. A `bool` renders `true` or `false`, `null` renders `null`,
-enums render their runtime string value, and non-finite numbers print
+enums render their runtime wire value, and non-finite numbers print
 honestly. Records, collections, functions, class instances, `unknown`, and
 `any` never convert implicitly: JavaScript string coercion would execute
 conversion hooks such as a `toString` field, so those values are rejected at
@@ -1620,6 +1624,33 @@ inside an enum, interpolation and layout strings are not enum declarations,
 and the generated validator uses strict equality without calling mutable
 collection helpers. This keeps third-party JSON/SSE tags precise without
 adding structural literal types or a second protocol declaration family.
+
+A wire value may also be a safe integer, for the protocols that pin a version
+number rather than a tag:
+
+```velar
+enum KernelProtocol:
+    v1 = 1
+    v2 = 2
+
+print(str(KernelProtocol.v2)) // 2
+```
+
+The mapped value takes exactly the shape section 3 calls an integer literal —
+decimal or an explicit radix, digit separators allowed, an optional leading
+minus — so a spelling carrying a fraction part or an exponent is refused rather
+than rounded, and an integer that cannot be held exactly is refused by section
+3's own rule. Uniqueness is by value identity across both kinds: `"2"` and `2`
+are two wire values and may stand in one enum, because neither parses as the
+other. Everything else is unchanged — the member is the same nominal singleton
+in type position, `match` carries the same fact, and `parse` and `is` compare
+with the same strict equality, which is what makes `Kind.parse("2")` throw for
+a member pinned to `2`.
+
+Which scalar an enum exits to (section 4) follows its wire value: a
+string-backed member satisfies a `string` contract, an integer-pinned one
+satisfies a `number` contract, and an enum whose members disagree exits only
+after narrowing to one of them.
 
 An enum member may also appear in type position. Combined with records and a
 small union, this models protocols whose payload depends on one finite tag
@@ -2087,8 +2118,9 @@ requirement on the probe (section 4), so a probe that could never equal an
 element is a compile error. A `match` value pattern whose subject and
 candidate can both be `NaN` also compares by SameValueZero, so every
 exact-value operation in the language answers the way `==` answers. A Set
-element type or Map key type may not mix members of different enums, or an
-enum with `string`: enum members are bare strings at runtime, so such keys
+element type or Map key type may not mix members of different enums, or an enum
+with the scalar its wire values are: enum members are bare wire values at
+runtime — strings, or integers where the declaration pins one — so such keys
 would silently collapse into one slot. The ordered aggregations and `sorted` accept
 ordered elements and keys only — `number`, `string`, or a single-category
 union of them — so an enum element or key is rejected with guidance to

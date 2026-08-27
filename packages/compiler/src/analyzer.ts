@@ -1396,6 +1396,10 @@ function settlingValuePositions(expression: Expression): readonly Expression[] {
   }
 }
 
+/** D102 ruling 1: the two wire-value domains an enum can exit to. */
+const STRING_WIRE_KIND: ReadonlySet<"string" | "number"> = new Set(["string"]);
+const NUMBER_WIRE_KIND: ReadonlySet<"string" | "number"> = new Set(["number"]);
+
 export class Analyzer implements TypeEnvironment {
   protected readonly diagnostics: Diagnostic[] = [];
   protected readonly advisories: Advisory[] = [];
@@ -2477,7 +2481,16 @@ export class Analyzer implements TypeEnvironment {
     return this.extensionFieldsOf(identity);
   }
 
-  enumValuesOf(identity: string): readonly string[] | null {
+  /**
+   * D102 ruling 1: the declared wire value of each member, by identity first
+   * and local name second — `this.enums` is keyed by the name the module sees,
+   * and an imported enum's identity is its declaring module's.
+   */
+  enumWireValuesOf(identity: string, name: string): ReadonlyMap<string, string | number> | null {
+    return (this.enums.get(identity) ?? this.enums.get(name))?.wireValues ?? null;
+  }
+
+  enumValuesOf(identity: string): readonly (string | number)[] | null {
     const info = this.enums.get(identity);
     if (!info) return null;
     // OpenAPI、路由参数和其他线协议消费的是枚举真正序列化的值，不是源码成员名。
@@ -3627,7 +3640,13 @@ export class Analyzer implements TypeEnvironment {
           this.diagnostics.push(diagnostic("VEL3011", "Enums can only be declared at module scope", statement.span));
         }
         const seen = new Set<string>();
-        const serializedValues = new Map<string, string>();
+        // D102 ruling 1: wire values are unique by *value identity*, across the
+        // string and integer kinds alike. Keying on the value itself is exactly
+        // that rule — a Map separates the string `"2"` from the number `2`, so
+        // both may stand in one enum, which is right because neither parses as
+        // the other. `JSON.stringify` in the report keeps the two spellings
+        // apart on the page as well.
+        const serializedValues = new Map<string | number, string>();
         for (const member of statement.members) {
           if (member.name === "is" || member.name === "parse" || member.name === "values") {
             this.diagnostics.push(diagnostic("VEL4014", `Enum member '${member.name}' is reserved for the enum's runtime surface (is, parse, values)`, member.span));
@@ -7667,7 +7686,8 @@ export class Analyzer implements TypeEnvironment {
     // claiming a constant result (ENM-I2).
     if (this.typesIntersect(left, right, false)) {
       this.typeError(
-        `${describeType(left)} and ${describeType(right)} can meet only where an enum member matches a raw string, and the enum and string domains never meet in '${operator}'${this.equalityGuidance(left, right)}`,
+        `${describeType(left)} and ${describeType(right)} can meet only where an enum member matches a raw ${this.enumMeetDomain(left, right)},`
+          + ` and the enum and ${this.enumMeetDomain(left, right)} domains never meet in '${operator}'${this.equalityGuidance(left, right)}`,
         errorSpan,
       );
       return;
@@ -7893,22 +7913,27 @@ export class Analyzer implements TypeEnvironment {
     return null;
   }
 
-  // ENM-D1: an enum member is a bare string at runtime, so a Set element or
+  // ENM-D1: an enum member is a bare wire value at runtime, so a Set element or
   // Map key type whose union mixes members of different enums — or an enum
-  // with `string` — would collapse nominally distinct keys into one slot.
-  // The same no-intersection principle as D42 item 64, applied where the
-  // collection would silently unify what the type system keeps apart.
+  // with the scalar its own wire values are — would collapse nominally distinct
+  // keys into one slot. The same no-intersection principle as D42 item 64,
+  // applied where the collection would silently unify what the type system
+  // keeps apart. D102 ruling 1: the scalar to watch for follows the wire value,
+  // so `Map<Proto | number, T>` collides exactly as `Map<Kind | string, T>`
+  // does, and a string-backed enum beside `number` collides with neither.
   private rejectCollidingKeyDomain(keySource: ValueType, span: Span, position: string): void {
     const enumIdentities = new Set<string>();
     let enumName: string | null = null;
-    let sawString = false;
+    const enumScalars = new Set<"string" | "number">();
+    const scalars = new Set<"string" | "number">();
     const visit = (source: ValueType): void => {
       const type = this.expandAliases(source);
       if (type.kind === "enum" || type.kind === "enumMember") {
         enumIdentities.add(type.identity);
         enumName ??= type.name;
-      } else if (type.kind === "string") {
-        sawString = true;
+        for (const kind of this.enumWireScalarKinds(type)) enumScalars.add(kind);
+      } else if (type.kind === "string" || type.kind === "number") {
+        scalars.add(type.kind);
       } else if (type.kind === "optional") {
         visit(type.inner);
       } else if (type.kind === "union") {
@@ -7916,12 +7941,18 @@ export class Analyzer implements TypeEnvironment {
       }
     };
     visit(keySource);
-    if (enumIdentities.size === 0 || (enumIdentities.size === 1 && !sawString)) return;
-    const collision = sawString
-      ? `mixes ${enumName ?? "an enum"} with string, and an enum member is a bare string at runtime`
-      : "mixes members of different enums, which are bare strings at runtime";
+    const collidingScalar = [...scalars].find((kind) => enumScalars.has(kind)) ?? null;
+    if (enumIdentities.size === 0 || (enumIdentities.size === 1 && collidingScalar === null)) return;
+    const collision = collidingScalar !== null
+      ? `mixes ${enumName ?? "an enum"} with ${collidingScalar}, and an enum member is a bare ${collidingScalar} at runtime`
+      : "mixes members of different enums, which are bare wire values at runtime";
+    // The deliberate spelling is the enum's own exit, and only the string one
+    // has a function to name: an integer wire value leaves through assignment.
+    const deliberate = collidingScalar === "number"
+      ? "or bind each member to a number first and store that deliberately"
+      : "or store wire strings deliberately with str(member)";
     this.typeError(
-      `A ${position} of ${describeType(keySource)} ${collision}, so nominally distinct keys would collapse into one slot; keep the domains in separate collections, or store wire strings deliberately with str(member)`,
+      `A ${position} of ${describeType(keySource)} ${collision}, so nominally distinct keys would collapse into one slot; keep the domains in separate collections, ${deliberate}`,
       span,
     );
   }
@@ -7974,9 +8005,17 @@ export class Analyzer implements TypeEnvironment {
     // a `Status | string` operand still puts a raw string and an enum member
     // into the same comparison, so the two domains never meet — not even
     // through a union arm — and the author narrows first.
-    if (enumStringVeto
-      && ((this.valueLevelEnum(left) !== null && this.hasValueLevelString(right))
-        || (this.hasValueLevelString(left) && this.valueLevelEnum(right) !== null))) return false;
+    // D102 ruling 1: the exit now leads to whichever scalar the wire value is,
+    // so the veto follows it there. `code == Proto.v2` against a bare number is
+    // the same mistake as `text == Kind.textDelta` against a bare string, and
+    // an enum that pins integers would otherwise be the one enum an open value
+    // could walk into unchallenged.
+    if (enumStringVeto) {
+      const leftEnum = this.valueLevelEnum(left);
+      if (leftEnum !== null && this.hasValueLevelScalar(right, this.enumWireScalarKinds(leftEnum))) return false;
+      const rightEnum = this.valueLevelEnum(right);
+      if (rightEnum !== null && this.hasValueLevelScalar(left, this.enumWireScalarKinds(rightEnum))) return false;
+    }
     if (left.kind === "union") return left.members.some((member) => this.typesIntersect(member, right, enumStringVeto));
     if (right.kind === "union") return right.members.some((member) => this.typesIntersect(left, member, enumStringVeto));
     if (left.kind === "optional") {
@@ -7997,8 +8036,9 @@ export class Analyzer implements TypeEnvironment {
     // A union operand that mixes the enum domain with raw strings has no
     // deliberate comparison to teach until the author knows which domain the
     // value is in, so the way out is narrowing first (ENM-I2).
-    const mixedUnion = (leftEnum !== null && this.hasValueLevelString(left)) ? leftEnum
-      : (rightEnum !== null && this.hasValueLevelString(right)) ? rightEnum
+    const enumKinds = enumSide === null ? STRING_WIRE_KIND : this.enumWireScalarKinds(enumSide);
+    const mixedUnion = (leftEnum !== null && this.hasValueLevelScalar(left, this.enumWireScalarKinds(leftEnum))) ? leftEnum
+      : (rightEnum !== null && this.hasValueLevelScalar(right, this.enumWireScalarKinds(rightEnum))) ? rightEnum
         : null;
     if (mixedUnion !== null) {
       return `; narrow the union first — 'if value is ${mixedUnion.name}:' — and compare inside the branch`;
@@ -8011,8 +8051,17 @@ export class Analyzer implements TypeEnvironment {
     // choosing rule instead of ranking one first. Recommending parse alone
     // broke a forward-compatible protocol handler in the referee migration:
     // it compiled clean and then threw on the first unknown wire tag.
-    if (enumSide !== null && this.hasValueLevelString(leftEnum === null ? left : right)) {
+    if (enumSide !== null && this.hasValueLevelScalar(leftEnum === null ? left : right, enumKinds)) {
       const member = enumSide.kind === "enumMember" ? `${enumSide.name}.${enumSide.member}` : `${enumSide.name}.member`;
+      // D102 ruling 1: a member pinned to an integer exits to `number`, and the
+      // way back is `parse` there too. The escape half differs because the
+      // numeric exit is plain assignability — there is no `str` to name — so it
+      // says what to write instead of naming a conversion that does not exist.
+      if (!enumKinds.has("string")) {
+        return `; an enum member converts to number only as a one-way wire exit, so choose by what an unknown value means here:`
+          + ` write ${enumSide.name}.parse(value) == ${member} when the value must name a member — ${enumSide.name}.parse throws on anything else —`
+          + ` or bind ${member} to a number first and compare that, when unknown values are expected and must be ignored, as on an open wire protocol`;
+      }
       return `; an enum member converts to string only as a one-way wire exit, so choose by what an unknown value means here:`
         + ` write ${enumSide.name}.parse(text) == ${member} when the text must name a member — ${enumSide.name}.parse throws on anything else —`
         + ` or str(${member}) == text when unknown values are expected and must be ignored, as on an open wire protocol`;
@@ -8037,11 +8086,45 @@ export class Analyzer implements TypeEnvironment {
     return null;
   }
 
+  /**
+   * D102 ruling 1: the boundary the veto names is the one the wire value
+   * crosses — a string-backed member meets raw strings, an integer-pinned one
+   * meets raw numbers. The wording follows the value, so the report never
+   * sends an author looking for a string in a line that holds a number.
+   */
+  private enumMeetDomain(left: ValueType, right: ValueType): "string" | "number" {
+    const enumSide = this.valueLevelEnum(left) ?? this.valueLevelEnum(right);
+    if (enumSide === null) return "string";
+    return this.enumWireScalarKinds(enumSide).has("string") ? "string" : "number";
+  }
+
   private hasValueLevelString(source: ValueType): boolean {
+    return this.hasValueLevelScalar(source, STRING_WIRE_KIND);
+  }
+
+  /**
+   * D102 ruling 1: the scalar kinds an enum's wire values exit to. A member
+   * answers for itself; the whole enum answers with every kind its members
+   * declare, so a mixed enum vetoes both domains and the author narrows to a
+   * member before comparing. An enum this analyzer cannot see keeps the
+   * pre-D102 answer, which is the right one for every string-backed enum.
+   */
+  private enumWireScalarKinds(source: Extract<ValueType, { kind: "enum" | "enumMember" }>): ReadonlySet<"string" | "number"> {
+    const wireValues = this.enumWireValuesOf(source.identity, source.name);
+    if (!wireValues || wireValues.size === 0) return STRING_WIRE_KIND;
+    if (source.kind === "enumMember") {
+      return typeof wireValues.get(source.member) === "number" ? NUMBER_WIRE_KIND : STRING_WIRE_KIND;
+    }
+    const kinds = new Set<"string" | "number">();
+    for (const value of wireValues.values()) kinds.add(typeof value === "number" ? "number" : "string");
+    return kinds;
+  }
+
+  private hasValueLevelScalar(source: ValueType, kinds: ReadonlySet<"string" | "number">): boolean {
     const type = this.resolveNamedClasses(this.expandAliases(source));
-    if (type.kind === "string") return true;
-    if (type.kind === "optional") return this.hasValueLevelString(type.inner);
-    if (type.kind === "union") return type.members.some((member) => this.hasValueLevelString(member));
+    if (type.kind === "string" || type.kind === "number") return kinds.has(type.kind);
+    if (type.kind === "optional") return this.hasValueLevelScalar(type.inner, kinds);
+    if (type.kind === "union") return type.members.some((member) => this.hasValueLevelScalar(member, kinds));
     return false;
   }
 
@@ -9445,7 +9528,8 @@ export class Analyzer implements TypeEnvironment {
     if (!violated && operands[0] && operands[1] && !this.equalityTypesIntersect(operands[0].type, operands[1].type)) {
       this.typeError(
         this.typesIntersect(operands[0].type, operands[1].type, false)
-          ? `${describeType(operands[0].type)} and ${describeType(operands[1].type)} can meet only where an enum member matches a raw string, and the enum and string domains never meet in equals${this.equalityGuidance(operands[0].type, operands[1].type)}`
+          ? `${describeType(operands[0].type)} and ${describeType(operands[1].type)} can meet only where an enum member matches a raw ${this.enumMeetDomain(operands[0].type, operands[1].type)},`
+            + ` and the enum and ${this.enumMeetDomain(operands[0].type, operands[1].type)} domains never meet in equals${this.equalityGuidance(operands[0].type, operands[1].type)}`
           : `${describeType(operands[0].type)} and ${describeType(operands[1].type)} have no values in common, so equals(a, b) is always false${this.equalityGuidance(operands[0].type, operands[1].type)}`,
         callSpan,
       );

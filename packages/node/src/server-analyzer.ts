@@ -302,7 +302,7 @@ export class VelarNodeAnalyzer extends Analyzer {
     if (!scalar || scalar === "list") return;
     this.extensionCalls.set(
       spanIdentity(capture.typeSpan),
-      routeCaptureHint(scalar, openApiSchema(resolved, (identity) => this.fieldsOf(identity), new Set(), (identity) => this.enumValuesOf(identity))),
+      routeCaptureHint(scalar, openApiSchema(resolved, (identity) => this.fieldsOf(identity), new Set(), (identity, name) => this.enumWireValuesOf(identity, name))),
     );
   }
 
@@ -568,7 +568,7 @@ export class VelarNodeAnalyzer extends Analyzer {
     this.extensionCalls.set(
       spanIdentity(handler.signatureSpan),
       routeResultHint(
-        openApiResponseSchema(result, (identity) => this.fieldsOf(identity), new Set(), (identity) => this.enumValuesOf(identity)),
+        openApiResponseSchema(result, (identity) => this.fieldsOf(identity), new Set(), (identity, name) => this.enumWireValuesOf(identity, name)),
         openApiResponseContentTypes(result),
         null,
       ),
@@ -660,7 +660,7 @@ export class VelarNodeAnalyzer extends Analyzer {
       }
       this.extensionCalls.set(
         key,
-        routeParameterHint(source, kind, openApiSchema(resolved, (identity) => this.fieldsOf(identity), new Set(), (identity) => this.enumValuesOf(identity)), Boolean(routeInput)),
+        routeParameterHint(source, kind, openApiSchema(resolved, (identity) => this.fieldsOf(identity), new Set(), (identity, name) => this.enumWireValuesOf(identity, name)), Boolean(routeInput)),
       );
     }
     if (forms > 0 && bodies > 0) {
@@ -677,7 +677,7 @@ export class VelarNodeAnalyzer extends Analyzer {
     this.extensionCalls.set(
       `${route.signatureSpan.start}:${route.signatureSpan.end}`,
       routeResultHint(
-        openApiResponseSchema(result, (identity) => this.fieldsOf(identity), new Set(), (identity) => this.enumValuesOf(identity)),
+        openApiResponseSchema(result, (identity) => this.fieldsOf(identity), new Set(), (identity, name) => this.enumWireValuesOf(identity, name)),
         openApiResponseContentTypes(result),
         openApiResponseStatus(result),
       ),
@@ -1001,20 +1001,20 @@ function openApiResponseSchema(
   type: ValueType,
   fieldsOf: (identity: string) => ReadonlyMap<string, ValueType> | null,
   seen: ReadonlySet<string>,
-  enumValuesOf: (identity: string) => readonly string[] | null,
+  enumWireValuesOf: (identity: string, name: string) => ReadonlyMap<string, string | number> | null,
 ): OpenApiSchema {
   if (type.kind === "union") {
-    const schemas = type.members.map((member) => openApiResponseSchema(member, fieldsOf, seen, enumValuesOf));
+    const schemas = type.members.map((member) => openApiResponseSchema(member, fieldsOf, seen, enumWireValuesOf));
     return schemas.length === 1 ? schemas[0]! : { anyOf: schemas };
   }
   if (type.kind === "object" && type.fields.has("status")) {
     const json = type.fields.get("json");
-    if (json) return openApiSchema(json, fieldsOf, seen, enumValuesOf);
+    if (json) return openApiSchema(json, fieldsOf, seen, enumWireValuesOf);
     if (type.fields.has("text") || type.fields.has("stream")) return { type: "string" };
   }
   const metadata = (type as NodeResponseValueType).nodeResponse;
-  if (metadata?.payload) return openApiSchema(metadata.payload, fieldsOf, seen, enumValuesOf);
-  return openApiSchema(type, fieldsOf, seen, enumValuesOf);
+  if (metadata?.payload) return openApiSchema(metadata.payload, fieldsOf, seen, enumWireValuesOf);
+  return openApiSchema(type, fieldsOf, seen, enumWireValuesOf);
 }
 
 function openApiResponseContentTypes(type: ValueType): readonly string[] {
@@ -1055,46 +1055,66 @@ function openApiResponseStatus(type: ValueType): number | null {
   return !unknown && statuses.size === 1 ? [...statuses][0]! : null;
 }
 
+/**
+ * D102 ruling 1: an enum reaches OpenAPI as its wire values, which are strings
+ * or safe integers. `type` is written only where every value agrees — a mixed
+ * enum states its `enum` alone rather than claiming a type half its members do
+ * not have — and an all-integer enum says `integer`, which is what the values
+ * are and what the zod contracts this came from pin.
+ */
+function enumValueSchema(values: readonly (string | number)[]): OpenApiSchema {
+  const textual = values.every((value) => typeof value === "string");
+  const numeric = !textual && values.every((value) => typeof value === "number");
+  return { ...(textual ? { type: "string" } : numeric ? { type: "integer" } : {}), enum: values };
+}
+
 function openApiSchema(
   type: ValueType,
   fieldsOf: (identity: string) => ReadonlyMap<string, ValueType> | null,
   seen: ReadonlySet<string>,
-  enumValuesOf: (identity: string) => readonly string[] | null,
+  enumWireValuesOf: (identity: string, name: string) => ReadonlyMap<string, string | number> | null,
 ): OpenApiSchema {
   if (type.kind === "string" || type.kind === "number" || type.kind === "bool") {
     return { type: type.kind === "bool" ? "boolean" : type.kind };
   }
   if (type.kind === "null") return { type: "null" };
   if (type.kind === "enum") {
-    const values = enumValuesOf(type.identity) ?? enumValuesOf(type.name);
-    return values ? {type: "string", enum: values} : {type: "string"};
+    const wireValues = enumWireValuesOf(type.identity, type.name);
+    return wireValues ? enumValueSchema([...wireValues.values()]) : {type: "string"};
   }
-  if (type.kind === "enumMember") return {type: "string", enum: [type.member]};
+  if (type.kind === "enumMember") {
+    // D102 ruling 1's motivating shape is a record union discriminated by a
+    // pinned member (`kind: Proto.v2`), and what crosses the wire is the wire
+    // value — the member name was only ever right for a member that maps to
+    // itself, and it is never right for one pinned to an integer.
+    const wire = enumWireValuesOf(type.identity, type.name)?.get(type.member);
+    return enumValueSchema([wire ?? type.member]);
+  }
   if (type.kind === "unknown" || type.kind === "any") return {};
   if (type.kind === "optional") {
-    return { anyOf: [openApiSchema(type.inner, fieldsOf, seen, enumValuesOf), { type: "null" }] };
+    return { anyOf: [openApiSchema(type.inner, fieldsOf, seen, enumWireValuesOf), { type: "null" }] };
   }
   if (type.kind === "union") {
-    return { anyOf: type.members.map((member) => openApiSchema(member, fieldsOf, seen, enumValuesOf)) };
+    return { anyOf: type.members.map((member) => openApiSchema(member, fieldsOf, seen, enumWireValuesOf)) };
   }
   if (type.kind === "list" || type.kind === "set") {
     return {
       type: "array",
-      items: openApiSchema(type.element, fieldsOf, seen, enumValuesOf),
+      items: openApiSchema(type.element, fieldsOf, seen, enumWireValuesOf),
       ...(type.kind === "set" ? { uniqueItems: true } : {}),
     };
   }
   if (type.kind === "record") {
-    return { type: "object", additionalProperties: openApiSchema(type.value, fieldsOf, seen, enumValuesOf) };
+    return { type: "object", additionalProperties: openApiSchema(type.value, fieldsOf, seen, enumWireValuesOf) };
   }
-  if (type.kind === "object") return openApiObjectSchema(type.fields, fieldsOf, seen, enumValuesOf);
+  if (type.kind === "object") return openApiObjectSchema(type.fields, fieldsOf, seen, enumWireValuesOf);
   if (type.kind === "named") {
     if (type.name === "Duration") return { type: "number" };
     const identity = type.identity ?? type.name;
     if (seen.has(identity)) return { type: "object" };
     const fields = fieldsOf(identity);
     if (!fields) return {};
-    return openApiObjectSchema(fields, fieldsOf, new Set([...seen, identity]), enumValuesOf);
+    return openApiObjectSchema(fields, fieldsOf, new Set([...seen, identity]), enumWireValuesOf);
   }
   return {};
 }
@@ -1103,12 +1123,12 @@ function openApiObjectSchema(
   fields: ReadonlyMap<string, ValueType>,
   fieldsOf: (identity: string) => ReadonlyMap<string, ValueType> | null,
   seen: ReadonlySet<string>,
-  enumValuesOf: (identity: string) => readonly string[] | null,
+  enumWireValuesOf: (identity: string, name: string) => ReadonlyMap<string, string | number> | null,
 ): OpenApiSchema {
   const properties = Object.create(null) as Record<string, OpenApiSchema>;
   const required: string[] = [];
   for (const [name, field] of fields) {
-    properties[name] = openApiSchema(field, fieldsOf, seen, enumValuesOf);
+    properties[name] = openApiSchema(field, fieldsOf, seen, enumWireValuesOf);
     if (field.kind !== "optional") required.push(name);
   }
   return {
