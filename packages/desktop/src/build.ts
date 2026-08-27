@@ -235,7 +235,13 @@ async function compileMacHost(output: string): Promise<void> {
   const source = fileURLToPath(new URL("../native/macos/VelarDesktopHost.swift", import.meta.url));
   await runProcess("/usr/bin/swiftc", [
     "-Osize", "-whole-module-optimization", "-swift-version", "5", "-parse-as-library",
-    "-framework", "Cocoa", "-framework", "WebKit", source, "-o", output,
+    // Cocoa and WebKit are the shell; the other four are the host surface the
+    // manifest's permission categories reach — notifications, the keychain, the
+    // microphone probe, and the screen-recording and accessibility probes.
+    "-framework", "Cocoa", "-framework", "WebKit",
+    "-framework", "UserNotifications", "-framework", "Security",
+    "-framework", "AVFoundation", "-framework", "ApplicationServices",
+    source, "-o", output,
   ], dirname(output));
   await chmod(output, 0o755);
 }

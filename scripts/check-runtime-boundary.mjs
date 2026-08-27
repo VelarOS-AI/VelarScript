@@ -2069,9 +2069,38 @@ for (const phrase of [
   "process.terminationHandler =",
   'case "process-owned":',
   "for pid in owner.pids { _ = Darwin.kill(-pid, SIGKILL) }",
+  // The L1b host surface lives in the shell rather than in the capability
+  // worker, because notifications, the keychain, the displays, the sleep/wake
+  // pair and a drag gesture's pasteboard are all AppKit or Security work.
+  "kSecClass as String: kSecClassGenericPassword",
+  "UNUserNotificationCenter.current().delegate = self",
+  "services?.registerDroppedFiles(sender.draggingPasteboard)",
+  "NSWorkspace.willSleepNotification",
+  "CGPreflightScreenCaptureAccess()",
 ]) {
   if (!desktopNativeHostSource.includes(phrase)) {
     failures.push(`packages/desktop/native/macos/VelarDesktopHost.swift: missing captured bridge operation '${phrase}'`);
+  }
+}
+// Every L1b capability is refused by the manifest field that would grant it, in
+// the generated module and again in the host. A message that stopped naming the
+// declaration would still fail closed and would stop telling anyone why.
+for (const [source, label, phrases] of [
+  [desktopCompilerSource, "packages/desktop/src/compiler.ts", [
+    "requires 'notifications: true' under 'desktop.permissions' in this project's velar.json",
+    "declare it under 'desktop.permissions.secureStorage' in this project's velar.json",
+    "declare the scheme under 'desktop.permissions.links' in this project's velar.json",
+    "requires the 'dropped' root in 'desktop.permissions.files' in this project's velar.json",
+  ]],
+  [desktopNativeHostSource, "packages/desktop/native/macos/VelarDesktopHost.swift", [
+    "require 'notifications: true' under 'desktop.permissions'",
+    "declare it under 'desktop.permissions.secureStorage'",
+    "declare the scheme under 'desktop.permissions.links'",
+    "requires the 'dropped' root in 'desktop.permissions.files'",
+  ]],
+]) {
+  for (const phrase of phrases) {
+    if (!source.includes(phrase)) failures.push(`${label}: a Desktop capability refusal stopped naming its declaration ('${phrase}')`);
   }
 }
 for (const phrase of [
@@ -2099,6 +2128,9 @@ for (const phrase of [
   '!activeOwners.has(request.owner)',
   'activeOwners.delete(owner)',
   'registry?.retire(generation: generation)',
+  // A host event stream belongs to the document that started it, exactly as a
+  // window state stream does.
+  'services?.retire(generation: generation)',
   // Each window's responses go back to that window's own web view; a shared one
   // would deliver another window's answer.
   'deliverBridgeResponse(encoded, generation: request.identity.generation, to: target)',

@@ -1,6 +1,10 @@
+import ApplicationServices
+import AVFoundation
 import Cocoa
 import Darwin
 import Foundation
+import Security
+import UserNotifications
 import WebKit
 
 private let bridgeScript = #"""
@@ -243,7 +247,22 @@ private struct PermissionConfiguration: Decodable {
     let network: [String]
     let environment: [String]
     let secrets: [String]
+    let links: [String]
+    let notifications: Bool
+    let secureStorage: [String]
 }
+
+/// The bounds every host event stream keeps, stated once for the three streams
+/// that keep them. The renderer states the same numbers on its own side of the
+/// bridge (packages/desktop/src/compiler.ts) and the fake host in
+/// packages/desktop/src/test-runtime.ts states them a third time; the three must
+/// not drift.
+private let maxHostEventStreams = 128
+private let maxHostQueuedEvents = 64
+private let maxDroppedPaths = 4096
+private let maxDroppedTextUnits = 2 * 1024 * 1024
+private let maxSecureStorageValueBytes = 8 * 1024
+private let notificationTagKey = "velar.notification.tag"
 
 private struct BridgeIdentity: Hashable {
     let generation: String
@@ -950,6 +969,15 @@ private final class AssetSchemeHandler: NSObject, WKURLSchemeHandler {
     }
 }
 
+/// The `desktop` capability operations the host answers itself. Everything else
+/// under that capability is a project-directory question answered below, and
+/// everything under another capability goes to the worker.
+private let desktopHostSurface: Set<String> = [
+    "openExternal", "displays", "permissionStatus",
+    "powerWatchStart", "powerWatchNext", "powerWatchClose",
+    "dropWatchStart", "dropWatchNext", "dropWatchClose",
+]
+
 private final class DesktopBridge: NSObject, WKScriptMessageHandler {
     private struct IncomingChunks {
         let total: Int
@@ -959,6 +987,7 @@ private final class DesktopBridge: NSObject, WKScriptMessageHandler {
     private let identifier: String
     private let projectGrant: ProjectDirectoryGrant
     private let projectFilesGranted: Bool
+    private let droppedFilesGranted: Bool
     private let worker: NodeCapabilityHost
     private var incomingChunks: [BridgeIdentity: IncomingChunks] = [:]
     private var incomingBytes = 0
@@ -970,11 +999,20 @@ private final class DesktopBridge: NSObject, WKScriptMessageHandler {
     /// `currentWindow()` is a host field rather than a round trip.
     let windowHandle: Int
     weak var registry: WindowRegistry?
+    weak var services: HostServices?
 
-    init(identifier: String, projectGrant: ProjectDirectoryGrant, projectFilesGranted: Bool, worker: NodeCapabilityHost, windowHandle: Int) {
+    init(
+        identifier: String,
+        projectGrant: ProjectDirectoryGrant,
+        projectFilesGranted: Bool,
+        droppedFilesGranted: Bool,
+        worker: NodeCapabilityHost,
+        windowHandle: Int
+    ) {
         self.identifier = identifier
         self.projectGrant = projectGrant
         self.projectFilesGranted = projectFilesGranted
+        self.droppedFilesGranted = droppedFilesGranted
         self.worker = worker
         self.windowHandle = windowHandle
     }
@@ -1010,6 +1048,7 @@ private final class DesktopBridge: NSObject, WKScriptMessageHandler {
         let discarded = incomingChunks.filter { $0.key.generation == generation }
         for (identity, _) in discarded { discardIncoming(identity: identity) }
         registry?.retire(generation: generation)
+        services?.retire(generation: generation)
         worker.retire(generation: generation)
     }
 
@@ -1061,8 +1100,16 @@ private final class DesktopBridge: NSObject, WKScriptMessageHandler {
                 handleWindow(request)
                 return
             }
+            if request.capability == "notification" || request.capability == "secure-storage" {
+                handleHostService(request)
+                return
+            }
             if request.capability != "desktop" {
                 try worker.send(request, body: body, to: webView)
+                return
+            }
+            if desktopHostSurface.contains(request.operation) {
+                handleHostService(request)
                 return
             }
             let value: Any
@@ -1160,6 +1207,91 @@ private final class DesktopBridge: NSObject, WKScriptMessageHandler {
                 complete(identity: identity, value: registry.watchClose(handle, generation: request.generation), error: nil)
             default:
                 throw NSError(domain: "VelarDesktop", code: 404, userInfo: [NSLocalizedDescriptionKey: "Unknown Desktop window operation '\(request.operation)'"])
+            }
+        } catch {
+            complete(identity: identity, value: nil, error: error.localizedDescription)
+        }
+    }
+
+    /// The rest of the host surface: notifications, the keychain, displays,
+    /// links, the two host event streams, and the read-only probes. Every one of
+    /// them is AppKit or Security work the capability worker has no business
+    /// holding, so it is served here on the main thread beside the windows.
+    private func handleHostService(_ request: BridgeRequest) {
+        let identity = BridgeIdentity(generation: request.generation, id: request.id)
+        guard let services else {
+            complete(identity: identity, value: nil, error: "Desktop host services are unavailable")
+            return
+        }
+        func streamHandle() throws -> Int {
+            guard request.arguments.count == 1, let handle = request.arguments[0] as? Int, handle > 0 else {
+                throw NSError(domain: "VelarDesktop", code: 400, userInfo: [NSLocalizedDescriptionKey:
+                    "Desktop operation '\(request.operation)' received invalid arguments"])
+            }
+            return handle
+        }
+        do {
+            if request.capability == "secure-storage" {
+                complete(identity: identity, value: try services.secureStorage(request.operation, arguments: request.arguments), error: nil)
+                return
+            }
+            if request.capability == "notification" {
+                switch request.operation {
+                case "requestPermission":
+                    guard request.arguments.isEmpty else { throw windowRequestFailure("requestPermission") }
+                    services.requestNotificationPermission { [weak self] value, error in
+                        self?.complete(identity: identity, value: value, error: error)
+                    }
+                case "show":
+                    services.showNotification(request.arguments) { [weak self] value, error in
+                        self?.complete(identity: identity, value: value, error: error)
+                    }
+                case "watchStart":
+                    guard request.arguments.isEmpty else { throw windowRequestFailure("watchStart") }
+                    complete(identity: identity, value: try services.watchStart(.notification, generation: request.generation), error: nil)
+                case "watchNext":
+                    try services.watchNext(.notification, handle: try streamHandle(), generation: request.generation) { [weak self] value in
+                        self?.complete(identity: identity, value: value, error: nil)
+                    }
+                case "watchClose":
+                    complete(identity: identity, value: services.watchClose(.notification, handle: try streamHandle(), generation: request.generation), error: nil)
+                default:
+                    throw NSError(domain: "VelarDesktop", code: 404, userInfo: [NSLocalizedDescriptionKey: "Unknown Desktop notification operation '\(request.operation)'"])
+                }
+                return
+            }
+            switch request.operation {
+            case "openExternal":
+                complete(identity: identity, value: try services.openExternal(request.arguments), error: nil)
+            case "displays":
+                guard request.arguments.isEmpty else { throw windowRequestFailure("displays") }
+                complete(identity: identity, value: try services.displays(), error: nil)
+            case "permissionStatus":
+                complete(identity: identity, value: try services.permissionStatus(request.arguments), error: nil)
+            case "powerWatchStart":
+                guard request.arguments.isEmpty else { throw windowRequestFailure("powerWatchStart") }
+                complete(identity: identity, value: try services.watchStart(.power, generation: request.generation), error: nil)
+            case "powerWatchNext":
+                try services.watchNext(.power, handle: try streamHandle(), generation: request.generation) { [weak self] value in
+                    self?.complete(identity: identity, value: value, error: nil)
+                }
+            case "powerWatchClose":
+                complete(identity: identity, value: services.watchClose(.power, handle: try streamHandle(), generation: request.generation), error: nil)
+            case "dropWatchStart":
+                guard request.arguments.isEmpty else { throw windowRequestFailure("dropWatchStart") }
+                guard droppedFilesGranted else {
+                    throw NSError(domain: "VelarDesktop", code: 403, userInfo: [NSLocalizedDescriptionKey:
+                        "Desktop watchDroppedFiles requires the 'dropped' root in 'desktop.permissions.files'"])
+                }
+                complete(identity: identity, value: try services.watchStart(.dropped, generation: request.generation), error: nil)
+            case "dropWatchNext":
+                try services.watchNext(.dropped, handle: try streamHandle(), generation: request.generation) { [weak self] value in
+                    self?.complete(identity: identity, value: value, error: nil)
+                }
+            case "dropWatchClose":
+                complete(identity: identity, value: services.watchClose(.dropped, handle: try streamHandle(), generation: request.generation), error: nil)
+            default:
+                throw NSError(domain: "VelarDesktop", code: 404, userInfo: [NSLocalizedDescriptionKey: "Unknown Desktop operation '\(request.operation)'"])
             }
         } catch {
             complete(identity: identity, value: nil, error: error.localizedDescription)
@@ -1297,6 +1429,444 @@ private final class WindowStateWatcher {
     }
 }
 
+/// One bounded pull stream. Power states, dropped-file batches and notification
+/// activations all keep the same shape `WindowStateWatcher` keeps: a queue that
+/// never grows past its bound, one pending pull at a time, and an owner
+/// generation that releases it when its document goes away.
+private final class HostEventWatcher {
+    let handle: Int
+    let generation: String
+    var events: [Any] = []
+    var pending: ((Any) -> Void)?
+    var closed = false
+
+    init(handle: Int, generation: String) {
+        self.handle = handle
+        self.generation = generation
+    }
+}
+
+private enum HostEventStream {
+    case power
+    case dropped
+    case notification
+
+    var label: String {
+        switch self {
+        case .power: return "PowerStream"
+        case .dropped: return "DroppedFilesStream"
+        case .notification: return "NotificationActivationStream"
+        }
+    }
+}
+
+/// Everything the host owns that is not a window: the notification centre, the
+/// keychain, the attached displays, the sleep/wake pair, the paths a drag
+/// gesture brought in, and the read-only system probes. One instance per
+/// application, shared by every window's bridge, and everything on the main
+/// thread — which is where WebKit delivers script messages and where AppKit
+/// requires its work.
+private final class HostServices: NSObject, UNUserNotificationCenterDelegate {
+    private let identifier: String
+    private let permissions: PermissionConfiguration
+    private let linkSchemes: Set<String>
+    private let secureStorageNames: Set<String>
+    private var watchers: [Int: (stream: HostEventStream, watcher: HostEventWatcher)] = [:]
+    private var nextWatcherHandle = 1
+    private var powerState = "resumed"
+    private var observers: [NSObjectProtocol] = []
+    weak var registry: WindowRegistry?
+
+    init(identifier: String, permissions: PermissionConfiguration) {
+        self.identifier = identifier
+        self.permissions = permissions
+        self.linkSchemes = Set(permissions.links)
+        self.secureStorageNames = Set(permissions.secureStorage)
+        super.init()
+        let center = NSWorkspace.shared.notificationCenter
+        // The sleep/wake pair AppKit publishes. A machine that is already awake
+        // publishes nothing when it wakes, so the stream carries transitions.
+        observers.append(center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.publishPower("suspended")
+        })
+        observers.append(center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.publishPower("resumed")
+        })
+        if permissions.notifications, Bundle.main.bundleIdentifier != nil {
+            UNUserNotificationCenter.current().delegate = self
+        }
+    }
+
+    func stop() {
+        let center = NSWorkspace.shared.notificationCenter
+        for observer in observers { center.removeObserver(observer) }
+        observers.removeAll(keepingCapacity: false)
+    }
+
+    // MARK: - Streams
+
+    func watchStart(_ stream: HostEventStream, generation: String) throws -> Int {
+        guard watchers.count < maxHostEventStreams else {
+            throw NSError(domain: "VelarDesktop", code: 429, userInfo: [NSLocalizedDescriptionKey: "Desktop host cannot own more than \(maxHostEventStreams) host event streams"])
+        }
+        let handle = nextWatcherHandle
+        nextWatcherHandle += 1
+        watchers[handle] = (stream, HostEventWatcher(handle: handle, generation: generation))
+        return handle
+    }
+
+    func watchNext(_ stream: HostEventStream, handle: Int, generation: String, deliver: @escaping (Any) -> Void) throws {
+        guard let entry = watchers[handle], entry.stream == stream, entry.watcher.generation == generation else {
+            throw NSError(domain: "VelarDesktop", code: 404, userInfo: [NSLocalizedDescriptionKey: "Desktop \(stream.label) handle is unknown or already released"])
+        }
+        guard entry.watcher.pending == nil else {
+            throw NSError(domain: "VelarDesktop", code: 409, userInfo: [NSLocalizedDescriptionKey: "\(stream.label).next already has an active pull"])
+        }
+        if !entry.watcher.events.isEmpty {
+            deliver(entry.watcher.events.removeFirst())
+            return
+        }
+        entry.watcher.pending = deliver
+    }
+
+    @discardableResult
+    func watchClose(_ stream: HostEventStream, handle: Int, generation: String) -> Bool {
+        guard let entry = watchers[handle], entry.stream == stream, entry.watcher.generation == generation else { return false }
+        release(handle)
+        return true
+    }
+
+    /// A document that navigated away or a window that closed no longer owns the
+    /// streams it started, and a pending pull from it is dropped rather than
+    /// answered: the replacement document must never receive it.
+    func retire(generation: String) {
+        for (handle, entry) in watchers where entry.watcher.generation == generation { release(handle) }
+    }
+
+    private func release(_ handle: Int) {
+        guard let entry = watchers.removeValue(forKey: handle) else { return }
+        entry.watcher.closed = true
+        entry.watcher.pending = nil
+    }
+
+    private func deliver(_ stream: HostEventStream, _ value: Any, coalesce: (HostEventWatcher, Any) -> Bool) {
+        for (_, entry) in watchers where entry.stream == stream && !entry.watcher.closed {
+            let watcher = entry.watcher
+            if let pending = watcher.pending, watcher.events.isEmpty {
+                watcher.pending = nil
+                pending(value)
+                continue
+            }
+            if coalesce(watcher, value) { continue }
+            watcher.events.append(value)
+            if watcher.events.count > maxHostQueuedEvents { watcher.events.removeFirst() }
+        }
+    }
+
+    // MARK: - Power
+
+    /// Power is a transition stream: the machine is either asleep or awake, so a
+    /// state it is already in publishes nothing.
+    private func publishPower(_ state: String) {
+        guard state != powerState else { return }
+        powerState = state
+        deliver(.power, state) { _, _ in false }
+    }
+
+    // MARK: - Dropped files
+
+    /// The paths are registered inside the same drag operation that hands the
+    /// drop to WebKit, so the batch this publishes and the DOM's own drop event
+    /// are one gesture rather than two that happened to be close together.
+    func registerDroppedFiles(_ pasteboard: NSPasteboard) {
+        guard permissions.files.contains("dropped") else { return }
+        let options: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
+        guard let objects = pasteboard.readObjects(forClasses: [NSURL.self], options: options) as? [URL] else { return }
+        var paths: [String] = []
+        var units = 0
+        for url in objects {
+            let path = url.standardizedFileURL.path
+            guard path.hasPrefix("/"), !path.contains("\0"), path.utf8.count <= 4096 else { continue }
+            units += path.count
+            guard paths.count < maxDroppedPaths, units <= maxDroppedTextUnits else { break }
+            paths.append(path)
+        }
+        guard !paths.isEmpty else { return }
+        // One batch deep. A gesture that arrives while a batch is still waiting
+        // is appended to it in gesture order, so a slow consumer sees the two
+        // drops as one drop rather than losing either; a merge past the bound
+        // drops the oldest paths, because the newest gesture is the one the user
+        // just made.
+        deliver(.dropped, ["paths": paths]) { watcher, value in
+            guard let batch = watcher.events.first as? [String: Any], let queued = batch["paths"] as? [String],
+                  let arriving = (value as? [String: Any])?["paths"] as? [String] else { return false }
+            var merged = queued + arriving
+            while merged.count > maxDroppedPaths || merged.reduce(0, { $0 + $1.count }) > maxDroppedTextUnits {
+                merged.removeFirst()
+            }
+            watcher.events = [["paths": merged]]
+            return true
+        }
+    }
+
+    // MARK: - Notifications
+
+    private func notificationCentre() throws -> UNUserNotificationCenter {
+        guard permissions.notifications else {
+            throw NSError(domain: "VelarDesktop", code: 403, userInfo: [NSLocalizedDescriptionKey:
+                "Desktop notifications require 'notifications: true' under 'desktop.permissions'"])
+        }
+        guard Bundle.main.bundleIdentifier != nil else {
+            throw NSError(domain: "VelarDesktop", code: 500, userInfo: [NSLocalizedDescriptionKey:
+                "Desktop notifications require a bundled application identity"])
+        }
+        return UNUserNotificationCenter.current()
+    }
+
+    private static func permissionName(_ status: UNAuthorizationStatus) -> String {
+        switch status {
+        case .authorized, .provisional, .ephemeral: return "granted"
+        case .denied: return "denied"
+        default: return "undetermined"
+        }
+    }
+
+    func requestNotificationPermission(_ completion: @escaping (Any?, String?) -> Void) {
+        do {
+            let center = try notificationCentre()
+            center.requestAuthorization(options: [.alert, .sound]) { _, _ in
+                center.getNotificationSettings { settings in
+                    let name = Self.permissionName(settings.authorizationStatus)
+                    DispatchQueue.main.async { completion(name, nil) }
+                }
+            }
+        } catch {
+            completion(nil, error.localizedDescription)
+        }
+    }
+
+    func showNotification(_ arguments: [Any], completion: @escaping (Any?, String?) -> Void) {
+        do {
+            let center = try notificationCentre()
+            guard arguments.count == 1, let fields = arguments[0] as? [String: Any], fields.count <= 3,
+                  let title = fields["title"] as? String, !title.isEmpty, title.count <= 256,
+                  let body = fields["body"] as? String, !body.isEmpty, body.count <= 1024 else {
+                throw NSError(domain: "VelarDesktop", code: 400, userInfo: [NSLocalizedDescriptionKey: "Desktop show received an invalid notification"])
+            }
+            var tag: String?
+            if let value = fields["tag"], !(value is NSNull) {
+                guard let text = value as? String, !text.isEmpty, text.count <= 128 else {
+                    throw NSError(domain: "VelarDesktop", code: 400, userInfo: [NSLocalizedDescriptionKey: "Desktop show received an invalid notification tag"])
+                }
+                tag = text
+            }
+            center.getNotificationSettings { settings in
+                let name = Self.permissionName(settings.authorizationStatus)
+                guard name == "granted" else {
+                    DispatchQueue.main.async {
+                        // Not authorized is a capability failure, never a silent
+                        // no-op: an application that believes it notified the
+                        // user and did not is worse off than one that is told.
+                        completion(nil, "Desktop show cannot deliver a notification the operating system has not authorized (permission: \(name))")
+                    }
+                    return
+                }
+                let content = UNMutableNotificationContent()
+                content.title = title
+                content.body = body
+                if let tag { content.userInfo = [notificationTagKey: tag] }
+                // A tag is the notification's identity, so a second notification
+                // carrying it replaces the first rather than stacking beside it.
+                let request = UNNotificationRequest(identifier: tag ?? UUID().uuidString, content: content, trigger: nil)
+                center.add(request) { error in
+                    DispatchQueue.main.async {
+                        if let error { completion(nil, error.localizedDescription) }
+                        else { completion(NSNull(), nil) }
+                    }
+                }
+            }
+        } catch {
+            completion(nil, error.localizedDescription)
+        }
+    }
+
+    /// Two activations of the same notification are one activation, so a tag
+    /// already queued is not queued twice.
+    private func publishActivation(_ tag: String?) {
+        deliver(.notification, ["tag": tag.map { $0 as Any } ?? NSNull()]) { watcher, value in
+            let arriving = (value as? [String: Any])?["tag"] as? String
+            return watcher.events.contains { queued in ((queued as? [String: Any])?["tag"] as? String) == arriving }
+        }
+    }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .sound])
+    }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        let tag = response.notification.request.content.userInfo[notificationTagKey] as? String
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.publishActivation(tag)
+            // The host brings the application forward with the activation, and
+            // opens the one window every manifest declares when none is left.
+            self.registry?.activateForNotification()
+        }
+        completionHandler()
+    }
+
+    // MARK: - Secure storage
+
+    private func secureStorageQuery(_ name: String, operation: String) throws -> [String: Any] {
+        guard secureStorageNames.contains(name) else {
+            throw NSError(domain: "VelarDesktop", code: 403, userInfo: [NSLocalizedDescriptionKey:
+                "Desktop \(operation) cannot reach the undeclared secure storage name '\(name)'; declare it under 'desktop.permissions.secureStorage' (declared names: \(permissions.secureStorage.sorted().joined(separator: ", ")))"])
+        }
+        return [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: identifier,
+            kSecAttrAccount as String: name,
+        ]
+    }
+
+    /// A keychain failure is reported by what failed and by the status code, and
+    /// never by the value: a stored credential does not leave this file through
+    /// an error message, a log line, or a diagnostic.
+    private func secureStorageFailure(_ operation: String, _ status: OSStatus) -> NSError {
+        NSError(domain: "VelarDesktop", code: 500, userInfo: [NSLocalizedDescriptionKey:
+            "Desktop secure storage could not \(operation) the entry (keychain status \(status))"])
+    }
+
+    func secureStorage(_ operation: String, arguments: [Any]) throws -> Any {
+        guard let name = arguments.first as? String, !name.isEmpty, name.count <= 128 else {
+            throw NSError(domain: "VelarDesktop", code: 400, userInfo: [NSLocalizedDescriptionKey: "Desktop secure storage received an invalid name"])
+        }
+        let query = try secureStorageQuery(name, operation: operation)
+        switch operation {
+        case "set":
+            guard arguments.count == 2, let value = arguments[1] as? String, value.utf8.count <= maxSecureStorageValueBytes else {
+                throw NSError(domain: "VelarDesktop", code: 400, userInfo: [NSLocalizedDescriptionKey: "Desktop secure storage set requires a text value of at most 8 KiB"])
+            }
+            let data = Data(value.utf8)
+            var status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+            if status == errSecItemNotFound {
+                var insert = query
+                insert[kSecValueData as String] = data
+                insert[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+                status = SecItemAdd(insert as CFDictionary, nil)
+            }
+            guard status == errSecSuccess else { throw secureStorageFailure("store", status) }
+            return NSNull()
+        case "get":
+            guard arguments.count == 1 else {
+                throw NSError(domain: "VelarDesktop", code: 400, userInfo: [NSLocalizedDescriptionKey: "Desktop secure storage get takes one name"])
+            }
+            var read = query
+            read[kSecReturnData as String] = true
+            read[kSecMatchLimit as String] = kSecMatchLimitOne
+            var item: CFTypeRef?
+            let status = SecItemCopyMatching(read as CFDictionary, &item)
+            if status == errSecItemNotFound { return NSNull() }
+            guard status == errSecSuccess, let data = item as? Data, data.count <= maxSecureStorageValueBytes,
+                  let text = String(data: data, encoding: .utf8) else {
+                throw secureStorageFailure("read", status)
+            }
+            return text
+        case "remove":
+            guard arguments.count == 1 else {
+                throw NSError(domain: "VelarDesktop", code: 400, userInfo: [NSLocalizedDescriptionKey: "Desktop secure storage remove takes one name"])
+            }
+            let status = SecItemDelete(query as CFDictionary)
+            // Removing what is not there is the state it is already in.
+            guard status == errSecSuccess || status == errSecItemNotFound else { throw secureStorageFailure("remove", status) }
+            return NSNull()
+        default:
+            throw NSError(domain: "VelarDesktop", code: 404, userInfo: [NSLocalizedDescriptionKey: "Unknown Desktop secure storage operation '\(operation)'"])
+        }
+    }
+
+    // MARK: - Displays, links and probes
+
+    func displays() throws -> [[String: Any]] {
+        let screens = NSScreen.screens
+        guard !screens.isEmpty else {
+            throw NSError(domain: "VelarDesktop", code: 500, userInfo: [NSLocalizedDescriptionKey: "Desktop host found no attached display"])
+        }
+        return screens.map { screen in
+            let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
+            return [
+                "id": number.map { "display-\($0.uint32Value)" } ?? "display-unknown",
+                "bounds": topLeftBounds(screen.frame),
+                "workArea": topLeftBounds(screen.visibleFrame),
+                "scale": Double(screen.backingScaleFactor),
+                "primary": screen == screens.first,
+            ]
+        }
+    }
+
+    /// The renderer already refused an ungranted scheme at the call; the host
+    /// asks the same question again before anything is handed to the system,
+    /// because a boundary that trusts the last one is a boundary that is not
+    /// there. `linkSchemeOf` in packages/desktop/src/compiler.ts is the other
+    /// copy of this rule.
+    func openExternal(_ arguments: [Any]) throws -> Any {
+        guard arguments.count == 1, let text = arguments[0] as? String, !text.isEmpty, text.utf8.count <= 2048,
+              let url = URL(string: text), let scheme = url.scheme?.lowercased() else {
+            throw NSError(domain: "VelarDesktop", code: 400, userInfo: [NSLocalizedDescriptionKey: "Desktop openExternal received an invalid URL"])
+        }
+        guard linkSchemes.contains(scheme) else {
+            throw NSError(domain: "VelarDesktop", code: 403, userInfo: [NSLocalizedDescriptionKey:
+                "Desktop openExternal cannot open a '\(scheme)' URL; declare the scheme under 'desktop.permissions.links' (granted schemes: \(permissions.links.sorted().joined(separator: ", ")))"])
+        }
+        NSWorkspace.shared.open(url)
+        return NSNull()
+    }
+
+    /// Read-only probes. `microphone` is the only one of the three macOS answers
+    /// in three states; screen recording and accessibility answer "granted" or
+    /// "not yet", which is `undetermined` here — reporting `denied` for a
+    /// checkbox the user has simply never seen would be a guess.
+    func permissionStatus(_ arguments: [Any]) throws -> Any {
+        guard arguments.count == 1, let kind = arguments[0] as? String else {
+            throw NSError(domain: "VelarDesktop", code: 400, userInfo: [NSLocalizedDescriptionKey: "Desktop permissionStatus received an invalid kind"])
+        }
+        switch kind {
+        case "screenRecording":
+            return CGPreflightScreenCaptureAccess() ? "granted" : "undetermined"
+        case "accessibility":
+            return AXIsProcessTrusted() ? "granted" : "undetermined"
+        case "microphone":
+            switch AVCaptureDevice.authorizationStatus(for: .audio) {
+            case .authorized: return "granted"
+            case .denied, .restricted: return "denied"
+            default: return "undetermined"
+            }
+        default:
+            throw NSError(domain: "VelarDesktop", code: 400, userInfo: [NSLocalizedDescriptionKey: "Unknown Desktop system permission '\(kind)'"])
+        }
+    }
+}
+
+/// The web view a Desktop window renders into. It exists for one reason: a drag
+/// gesture's real filesystem paths are on the pasteboard of the very operation
+/// that hands the drop to WebKit, and nowhere afterwards.
+private final class VelarWebView: WKWebView {
+    weak var services: HostServices?
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        services?.registerDroppedFiles(sender.draggingPasteboard)
+        return super.performDragOperation(sender)
+    }
+}
+
 private final class WindowRecord {
     let handle: Int
     let kind: String
@@ -1330,6 +1900,7 @@ private final class WindowRegistry: NSObject, NSWindowDelegate {
     private let projectGrant: ProjectDirectoryGrant
     private let projectFilesGranted: Bool
     private let worker: NodeCapabilityHost
+    private let services: HostServices
     private let environmentJSON: String
     private let headless: Bool
     private var records: [Int: WindowRecord] = [:]
@@ -1346,6 +1917,7 @@ private final class WindowRegistry: NSObject, NSWindowDelegate {
         projectGrant: ProjectDirectoryGrant,
         projectFilesGranted: Bool,
         worker: NodeCapabilityHost,
+        services: HostServices,
         environmentJSON: String,
         headless: Bool
     ) {
@@ -1355,6 +1927,7 @@ private final class WindowRegistry: NSObject, NSWindowDelegate {
         self.projectGrant = projectGrant
         self.projectFilesGranted = projectFilesGranted
         self.worker = worker
+        self.services = services
         self.environmentJSON = environmentJSON
         self.headless = headless
     }
@@ -1566,10 +2139,12 @@ private final class WindowRegistry: NSObject, NSWindowDelegate {
             identifier: host.identifier,
             projectGrant: projectGrant,
             projectFilesGranted: projectFilesGranted,
+            droppedFilesGranted: host.permissions.files.contains("dropped"),
             worker: worker,
             windowHandle: handle
         )
         bridge.registry = self
+        bridge.services = services
         let configuration = WKWebViewConfiguration()
         configuration.setURLSchemeHandler(schemeHandler, forURLScheme: "velar-app")
         let projectDirectoryJSON = try jsonText(projectGrant.directory)
@@ -1580,7 +2155,8 @@ private final class WindowRegistry: NSObject, NSWindowDelegate {
             .replacingOccurrences(of: "__VELAR_ENVIRONMENT__", with: environmentJSON)
         configuration.userContentController.addUserScript(WKUserScript(source: injected, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         configuration.userContentController.add(bridge, name: "velarDesktop")
-        let webView = WKWebView(frame: .zero, configuration: configuration)
+        let webView = VelarWebView(frame: .zero, configuration: configuration)
+        webView.services = services
         let navigation = NavigationPolicy(bridge: bridge, network: host.permissions.network)
         webView.navigationDelegate = navigation
         bridge.webView = webView
@@ -1709,6 +2285,16 @@ private final class WindowRegistry: NSObject, NSWindowDelegate {
         }
         NSApp.activate(ignoringOtherApps: true)
     }
+
+    /// A notification the user clicked brings the application forward, and opens
+    /// the one window every manifest declares when no window is left to bring.
+    func activateForNotification() {
+        if records.values.contains(where: { !$0.closed }) {
+            activateExistingWindows()
+            return
+        }
+        _ = try? open(kind: mainWindowKind, route: "/index.html", key: nil, bounds: nil)
+    }
 }
 
 private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
@@ -1717,6 +2303,7 @@ private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
     private var nodeHost: NodeCapabilityHost?
     private var projectGrant: ProjectDirectoryGrant?
     private var registry: WindowRegistry?
+    private var services: HostServices?
 
     init(headless: Bool) {
         self.headless = headless
@@ -1764,6 +2351,7 @@ private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
             }
             let environmentData = try JSONSerialization.data(withJSONObject: environment)
             let environmentJSON = String(data: environmentData, encoding: .utf8)!
+            let services = HostServices(identifier: host.identifier, permissions: host.permissions)
             let registry = WindowRegistry(
                 host: host,
                 resources: resources,
@@ -1771,15 +2359,18 @@ private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
                 projectGrant: projectGrant,
                 projectFilesGranted: projectFilesGranted,
                 worker: nodeHost,
+                services: services,
                 environmentJSON: environmentJSON,
                 headless: headless
             )
+            services.registry = registry
             // The `main` kind is the one window the manifest always declares and
             // the host always opens; every other kind waits for `openWindow`.
             try registry.open(kind: mainWindowKind, route: "/index.html", key: nil, bounds: nil)
             self.schemeHandler = schemeHandler
             self.nodeHost = nodeHost
             self.projectGrant = projectGrant
+            self.services = services
             self.registry = registry
         } catch {
             let alert = NSAlert(error: error)
@@ -1800,6 +2391,7 @@ private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
     func applicationWillTerminate(_ notification: Notification) {
         registry?.closeAll()
+        services?.stop()
         projectGrant?.release()
         nodeHost?.stop()
     }
