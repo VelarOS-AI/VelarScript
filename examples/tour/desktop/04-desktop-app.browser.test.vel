@@ -11,7 +11,7 @@
 // this test produce the host events a real window system would.
 
 import {DesktopPlatform, PermissionStatus, PowerState, SystemPermission} from "velar/desktop"
-import {activateNotification, appDataDirectory, closeWindow, dropFiles, focusWindow, makeDirectory, moveWindow, openWindows, openedLinks, projectDirectory, publishPower, readText, removeFile, secureStorageNames, setNotificationPermission, setPlatform, setSystemPermission, setWindowKind, shownNotifications, writeText} from "velar/desktop-test"
+import {activateNotification, appDataDirectory, appliedUpdates, closeWindow, dropFiles, focusWindow, makeDirectory, moveWindow, openWindows, openedLinks, projectDirectory, publishPower, readText, removeFile, secureStorageNames, setNotificationPermission, setPlatform, setSigningTeam, setSystemPermission, setWindowKind, shownNotifications, stageUpdate, writeText} from "velar/desktop-test"
 import {NotificationPermission} from "velar/notification"
 import {browser} from "velar/web-test"
 import {expect} from "velar/test"
@@ -20,6 +20,7 @@ import {previewKey} from "./05-windows.vel"
 import {buildTag} from "./06-notifications.vel"
 import {sessionSlot} from "./07-secure-storage.vel"
 import {guideUrl} from "./08-system.vel"
+import {downloadedArchive, tourIdentifier} from "./10-updates.vel"
 
 test "the explicit platform fixture selects an application branch before open":
     await setPlatform(DesktopPlatform.macos)
@@ -178,3 +179,50 @@ test "a drag gesture reports its real paths in the order they were dropped":
     await browser.waitForText("[data-dropped]", "watching")
     await dropFiles(["/Users/ada/second.txt", "/Users/ada/first.txt"])
     await browser.waitForText("[data-dropped]", "second.txt first.txt")
+
+// The update identity matrix. Four archives, one installed application, and the
+// only one that is applied is the one that is this same application signed by
+// the same team. `stageUpdate` describes what an archive contains and
+// `setSigningTeam` says what this install itself was signed with — neither is
+// something a program can read about itself, which is exactly why they are test
+// seams rather than module exports.
+test "an update is refused unless it is this application signed by this team":
+    await browser.open()
+    const archive = downloadedArchive("/velar-test/app-data")
+
+    // A development install is ad-hoc: no Team ID exists, so no archive can be
+    // required to match one, and accepting any would accept all of them.
+    await stageUpdate(archive, tourIdentifier, "TOURTEAM01")
+    await browser.click("[data-apply-update]")
+    await browser.waitForText("[data-update]", "refused: Desktop applyUpdate refuses to update an application signed with no Team ID."
+        + " This install is ad-hoc or unsigned, so there is no signing identity an update could be required to match,"
+        + " and accepting one anyway would accept every archive. Install a Developer ID signed build to update in place.")
+    expect(await appliedUpdates()).toHaveLength(0)
+
+    await setSigningTeam("TOURTEAM01")
+
+    // Another product's application, correctly signed by somebody else.
+    await stageUpdate(archive, "dev.velarscript.other", "TOURTEAM01")
+    await browser.click("[data-apply-update]")
+    await browser.waitForText("[data-update]",
+        f"refused: Desktop applyUpdate refuses an archive whose bundle identifier is 'dev.velarscript.other' and not '{tourIdentifier}'")
+    expect(await appliedUpdates()).toHaveLength(0)
+
+    // This application's name, somebody else's signature.
+    await stageUpdate(archive, tourIdentifier, "OTHERTEAM2")
+    await browser.click("[data-apply-update]")
+    await browser.waitForText("[data-update]",
+        "refused: Desktop applyUpdate refuses an archive signed by Team ID 'OTHERTEAM2' and not 'TOURTEAM01'")
+    expect(await appliedUpdates()).toHaveLength(0)
+
+    // This application's name and no signature at all.
+    await stageUpdate(archive, tourIdentifier, null)
+    await browser.click("[data-apply-update]")
+    await browser.waitForText("[data-update]", "refused: Desktop applyUpdate refuses an archive signed with no Team ID")
+    expect(await appliedUpdates()).toHaveLength(0)
+
+    // The one that is applied.
+    await stageUpdate(archive, tourIdentifier, "TOURTEAM01")
+    await browser.click("[data-apply-update]")
+    await browser.waitForText("[data-update]", "replaced; relaunching")
+    expect(await appliedUpdates()).toEqual([archive])

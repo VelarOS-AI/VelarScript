@@ -14,6 +14,7 @@ import {NotificationPanel} from "./06-notifications.vel"
 import {SecureStoragePanel} from "./07-secure-storage.vel"
 import {SystemPanel} from "./08-system.vel"
 import {DropPanel} from "./09-dropped-files.vel"
+import {UpdatePanel} from "./10-updates.vel"
 
 component Tour:
     return <div id="tour">
@@ -24,6 +25,7 @@ component Tour:
         <SecureStoragePanel />
         <SystemPanel />
         <DropPanel />
+        <UpdatePanel />
     </div>
 
 mount(<Tour />, "#app")

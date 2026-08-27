@@ -559,6 +559,14 @@ export function desktopBrowserTestInitScript(
   const maxSecureStorageValueBytes = 8 * 1024;
   const notificationInbox = [];
   const openedLinks = [];
+  // The fake install applyUpdate compares an archive against. A test build
+  // starts ad-hoc — no Team ID — because that is what a development install
+  // actually is, and because the refusal it produces is the one an author is
+  // most likely to meet first.
+  const installedIdentifier = ${JSON.stringify(config.identifier)};
+  let installedTeam = null;
+  const stagedUpdates = new Map();
+  const appliedUpdates = [];
   const keychain = new Map();
   const systemPermissions = new Map();
   const powerWatchers = new Map();
@@ -709,6 +717,34 @@ export function desktopBrowserTestInitScript(
       openedLinks.push(url);
       return null;
     }
+    // The same four questions the native host asks, asked here so a browser test
+    // can drive the whole refusal matrix. The native copy is in
+    // packages/desktop/native/macos/VelarDesktopHost.swift; the two must not
+    // drift, and the wording below is deliberately the wording there.
+    if (operation === "applyUpdate") {
+      const archivePath = args[0];
+      if (typeof archivePath !== "string" || archivePath.length === 0 || archivePath[0] !== "/" || archivePath.length > 4096) {
+        throw new TypeError("Desktop test applyUpdate requires a bounded absolute archive path");
+      }
+      if (installedTeam === null) {
+        throw new Error("Desktop applyUpdate refuses to update an application signed with no Team ID. "
+          + "This install is ad-hoc or unsigned, so there is no signing identity an update could be required to match, "
+          + "and accepting one anyway would accept every archive. Install a Developer ID signed build to update in place.");
+      }
+      const update = stagedUpdates.get(archivePath);
+      if (!update) throw new Error("Desktop applyUpdate archive does not identify an ordinary file");
+      if (update.bundleIdentifier !== installedIdentifier) {
+        throw new Error("Desktop applyUpdate refuses an archive whose bundle identifier is '" + update.bundleIdentifier
+          + "' and not '" + installedIdentifier + "'");
+      }
+      if (update.teamIdentifier === null) throw new Error("Desktop applyUpdate refuses an archive signed with no Team ID");
+      if (update.teamIdentifier !== installedTeam) {
+        throw new Error("Desktop applyUpdate refuses an archive signed by Team ID '" + update.teamIdentifier + "' and not '" + installedTeam + "'");
+      }
+      if (appliedUpdates.length >= 64) throw new RangeError("Desktop test host cannot record more than 64 applied updates");
+      appliedUpdates.push(archivePath);
+      return null;
+    }
     if (operation === "displays") return [display];
     if (operation === "permissionStatus") {
       const kind = args[0];
@@ -770,6 +806,33 @@ export function desktopBrowserTestInitScript(
       return null;
     }
     if (operation === "openedLinks") return [...openedLinks];
+    // The two halves of the update identity check a test controls: what this
+    // install was signed by, and what an archive on disk claims to be. Neither
+    // is a value the application can read — a program cannot ask its own host
+    // for its Team ID — so they exist here and nowhere in velar/desktop.
+    if (operation === "setSigningTeam") {
+      if (args[0] !== null && (typeof args[0] !== "string" || !/^[A-Z0-9]{2,32}$/u.test(args[0]))) {
+        throw new TypeError("Desktop test setSigningTeam requires an Apple Team ID or none");
+      }
+      installedTeam = args[0];
+      return null;
+    }
+    if (operation === "stageUpdate") {
+      const archivePath = args[0];
+      if (typeof archivePath !== "string" || archivePath.length === 0 || archivePath[0] !== "/" || archivePath.length > 4096) {
+        throw new TypeError("Desktop test stageUpdate requires a bounded absolute archive path");
+      }
+      if (typeof args[1] !== "string" || args[1].length === 0 || args[1].length > 256) {
+        throw new TypeError("Desktop test stageUpdate requires the archived application's bundle identifier");
+      }
+      if (args[2] !== null && (typeof args[2] !== "string" || !/^[A-Z0-9]{2,32}$/u.test(args[2]))) {
+        throw new TypeError("Desktop test stageUpdate requires an Apple Team ID or none");
+      }
+      if (stagedUpdates.size >= 64) throw new RangeError("Desktop test host cannot stage more than 64 update archives");
+      stagedUpdates.set(archivePath, {bundleIdentifier: args[1], teamIdentifier: args[2]});
+      return null;
+    }
+    if (operation === "appliedUpdates") return [...appliedUpdates];
     throw new Error("Desktop test capability '" + capability + "' has no operation '" + operation + "'");
   }
 

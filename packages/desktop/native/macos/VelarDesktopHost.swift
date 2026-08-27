@@ -263,6 +263,11 @@ private let maxDroppedPaths = 4096
 private let maxDroppedTextUnits = 2 * 1024 * 1024
 private let maxSecureStorageValueBytes = 8 * 1024
 private let notificationTagKey = "velar.notification.tag"
+/// The document generation `--headless-smoke` issues its own capability request
+/// under. A renderer generation is 128 random bits, so this fixed one belongs to
+/// nobody else, and it lets the worker's ownership bookkeeping treat the smoke
+/// exactly as it treats a window.
+private let smokeGeneration = "00000000000000000000000000000001"
 
 private struct BridgeIdentity: Hashable {
     let generation: String
@@ -360,27 +365,99 @@ private func responseIdentifier(_ data: Data) -> Int? {
     return id
 }
 
-private func resolveNodeRuntime(_ configuration: HostConfiguration) throws -> URL {
-    var candidates: [String] = []
+/// Where the runtime a packaged application actually ran on came from. It is
+/// reported by `--headless-smoke` so a deprivation test can prove the bundled
+/// one was used rather than infer it from the absence of a failure.
+private enum NodeRuntimeSource: String {
+    case override = "override"
+    case bundled = "bundled"
+    case external = "external"
+}
+
+private struct ResolvedNodeRuntime {
+    let url: URL
+    let source: NodeRuntimeSource
+}
+
+/// Three sources, in one order, and the order is the whole contract.
+///
+/// `VELAR_DESKTOP_NODE` is first because it is an explicit act by a developer
+/// who is debugging this application and needs the runtime replaced; an override
+/// that a bundled runtime silently won a race against would not be an override.
+///
+/// The bundled runtime is second because a self-contained application is one
+/// whose behaviour does not depend on what the user happens to have installed.
+/// The external search below it is unchanged and still runs — for an unpackaged
+/// development run, and for any bundle whose runtime is missing — which is what
+/// keeps `velar dev` and the source-built host working exactly as they did.
+private func resolveNodeRuntime(_ configuration: HostConfiguration) throws -> ResolvedNodeRuntime {
+    var candidates: [(String, NodeRuntimeSource)] = []
     if let override = ProcessInfo.processInfo.environment["VELAR_DESKTOP_NODE"], !override.isEmpty {
-        candidates.append(override)
+        candidates.append((override, .override))
+    }
+    if let executable = Bundle.main.executableURL?.resolvingSymlinksInPath() {
+        candidates.append((executable.deletingLastPathComponent().appendingPathComponent("node", isDirectory: false).path, .bundled))
     }
     if let path = ProcessInfo.processInfo.environment["PATH"] {
-        candidates.append(contentsOf: path.split(separator: ":").map { String($0) + "/node" })
+        candidates.append(contentsOf: path.split(separator: ":").map { (String($0) + "/node", .external) })
     }
-    candidates.append(contentsOf: ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"])
+    candidates.append(contentsOf: [
+        ("/opt/homebrew/bin/node", .external),
+        ("/usr/local/bin/node", .external),
+        ("/usr/bin/node", .external),
+    ])
     var visited = Set<String>()
-    for candidate in candidates where candidate.hasPrefix("/") && visited.insert(candidate).inserted {
+    for (candidate, source) in candidates where candidate.hasPrefix("/") && visited.insert(candidate).inserted {
         let url = URL(fileURLWithPath: candidate).resolvingSymlinksInPath()
         guard FileManager.default.isExecutableFile(atPath: url.path),
               let major = nodeMajorVersion(url), major >= configuration.nodeMinimumMajor else { continue }
-        return url
+        return ResolvedNodeRuntime(url: url, source: source)
     }
     throw NSError(
         domain: "VelarDesktop",
         code: 5,
-        userInfo: [NSLocalizedDescriptionKey: "Desktop thin runtime requires Node.js \(configuration.nodeMinimumMajor) or newer; set VELAR_DESKTOP_NODE to an absolute executable path"]
+        userInfo: [NSLocalizedDescriptionKey: "Desktop application carries no usable embedded Node.js runtime and found no Node.js \(configuration.nodeMinimumMajor) or newer on this machine; set VELAR_DESKTOP_NODE to an absolute executable path"]
     )
+}
+
+/// What `applyUpdate` compares. The bundle identifier is read from the bundle
+/// itself and the Team ID out of its code signature, because they answer two
+/// different questions: what the application calls itself, and who signed it.
+private struct BundleSigningIdentity {
+    let bundleIdentifier: String
+    /// Absent for an ad-hoc or unsigned build. Absence is never a match.
+    let teamIdentifier: String?
+}
+
+private func bundleSigningIdentity(at url: URL, verify: Bool) throws -> BundleSigningIdentity {
+    guard let bundle = Bundle(url: url), let identifier = bundle.bundleIdentifier, !identifier.isEmpty else {
+        throw NSError(domain: "VelarDesktop", code: 400, userInfo: [NSLocalizedDescriptionKey:
+            "Application bundle at \(url.lastPathComponent) declares no CFBundleIdentifier"])
+    }
+    var staticCode: SecStaticCode?
+    guard SecStaticCodeCreateWithPath(url as CFURL, [], &staticCode) == errSecSuccess, let code = staticCode else {
+        throw NSError(domain: "VelarDesktop", code: 403, userInfo: [NSLocalizedDescriptionKey:
+            "Application bundle at \(url.lastPathComponent) carries no readable code signature"])
+    }
+    if verify {
+        // Nested code is checked too: the embedded Node.js runtime is a second
+        // Mach-O in `Contents/MacOS`, and an archive whose bundle checks out
+        // while its interpreter does not is exactly the substitution this guards.
+        let flags = SecCSFlags(rawValue: kSecCSCheckAllArchitectures | kSecCSCheckNestedCode | kSecCSStrictValidate)
+        let status = SecStaticCodeCheckValidity(code, flags, nil)
+        guard status == errSecSuccess else {
+            throw NSError(domain: "VelarDesktop", code: 403, userInfo: [NSLocalizedDescriptionKey:
+                "Application bundle at \(url.lastPathComponent) does not pass code signature validation (OSStatus \(status))"])
+        }
+    }
+    var information: CFDictionary?
+    guard SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &information) == errSecSuccess,
+          let signing = information as? [String: Any] else {
+        throw NSError(domain: "VelarDesktop", code: 403, userInfo: [NSLocalizedDescriptionKey:
+            "Application bundle at \(url.lastPathComponent) has unreadable signing information"])
+    }
+    let team = signing[kSecCodeInfoTeamIdentifier as String] as? String
+    return BundleSigningIdentity(bundleIdentifier: identifier, teamIdentifier: team?.isEmpty == false ? team : nil)
 }
 
 private func resolveProjectDirectory(_ fallback: URL) throws -> String {
@@ -542,6 +619,9 @@ private final class NodeCapabilityHost {
     private var nextProjectRootCommandID = 1
     private var processOwners: [Int: ProcessOwner] = [:]
     private var pendingProjectRoots: [Int: PendingProjectRoot] = [:]
+    /// Capability requests the host itself issued, answered back into Swift
+    /// rather than into a web view. `--headless-smoke` is the only caller.
+    private var probes: [Int: (Bool, Any?, String?) -> Void] = [:]
     private var failure: String?
     private var reaping = false
     private let queue = DispatchQueue(label: "velar.desktop.node-worker")
@@ -612,6 +692,49 @@ private final class NodeCapabilityHost {
                 try self.write(forwarded)
             } catch {
                 self.fail("Desktop Node capability host write failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// One capability request the host issues on its own behalf, answered into
+    /// Swift. It exists for `--headless-smoke`: a runtime that cannot execute
+    /// JavaScript still answers `node --version`, so proving the interpreter
+    /// works means making it run the capability worker's real dispatcher and
+    /// return through the real transport.
+    ///
+    /// The reply is delivered whether it succeeded or failed, because a refusal
+    /// the worker computed is as much proof of a working runtime as a result is
+    /// — the caller decides which refusals it expected.
+    func probe(capability: String, operation: String, arguments: [Any], completion: @escaping (Bool, Any?, String?) -> Void) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            guard self.failure == nil, self.process.isRunning else {
+                completion(false, nil, self.failure ?? "Desktop Node capability host is not running")
+                return
+            }
+            do {
+                try self.activate(generation: smokeGeneration)
+                guard let workerID = self.allocateWorkerRequestID(), self.probes[workerID] == nil else {
+                    completion(false, nil, "Desktop capability request identity space is exhausted")
+                    return
+                }
+                self.probes[workerID] = completion
+                do {
+                    try self.write([
+                        "protocolVersion": 1,
+                        "id": workerID,
+                        "owner": smokeGeneration,
+                        "capability": capability,
+                        "operation": operation,
+                        "args": arguments,
+                    ])
+                } catch {
+                    self.probes.removeValue(forKey: workerID)
+                    throw error
+                }
+            } catch {
+                self.fail("Desktop Node capability host write failed: \(error.localizedDescription)")
+                completion(false, nil, self.failure ?? error.localizedDescription)
             }
         }
     }
@@ -702,6 +825,13 @@ private final class NodeCapabilityHost {
                 if failure != nil { return }
                 continue
             }
+            if let id = object["id"] as? Int, id > 0, let probe = probes.removeValue(forKey: id) {
+                let ok = object["ok"] as? Bool == true
+                let value = object["value"]
+                let error = object["error"] as? String
+                DispatchQueue.main.async { probe(ok, value, error) }
+                continue
+            }
             guard let id = object["id"] as? Int, id > 0,
                   let request = pending.removeValue(forKey: id) else {
                 fail("Desktop Node capability host returned an unknown response")
@@ -789,13 +919,16 @@ private final class NodeCapabilityHost {
         if process.isRunning { process.terminate() }
         let requests = Array(pending.values)
         let projectRoots = Array(pendingProjectRoots.values)
+        let outstandingProbes = Array(probes.values)
         pending.removeAll(keepingCapacity: false)
         pendingProjectRoots.removeAll(keepingCapacity: false)
+        probes.removeAll(keepingCapacity: false)
         pendingRequestBytes = 0
         activeIdentities.removeAll(keepingCapacity: false)
         activeGenerations.removeAll(keepingCapacity: false)
         for request in requests where !request.retired { complete(identity: request.identity, error: message, to: request.webView) }
         for projectRoot in projectRoots { DispatchQueue.main.async { projectRoot.completion(message) } }
+        for probe in outstandingProbes { DispatchQueue.main.async { probe(false, nil, message) } }
         reapProcessOwners()
     }
 
@@ -973,7 +1106,7 @@ private final class AssetSchemeHandler: NSObject, WKURLSchemeHandler {
 /// under that capability is a project-directory question answered below, and
 /// everything under another capability goes to the worker.
 private let desktopHostSurface: Set<String> = [
-    "openExternal", "displays", "permissionStatus",
+    "openExternal", "displays", "permissionStatus", "applyUpdate",
     "powerWatchStart", "powerWatchNext", "powerWatchClose",
     "dropWatchStart", "dropWatchNext", "dropWatchClose",
 ]
@@ -1263,6 +1396,10 @@ private final class DesktopBridge: NSObject, WKScriptMessageHandler {
             switch request.operation {
             case "openExternal":
                 complete(identity: identity, value: try services.openExternal(request.arguments), error: nil)
+            case "applyUpdate":
+                services.applyUpdate(request.arguments) { [weak self] value, error in
+                    self?.complete(identity: identity, value: value, error: error)
+                }
             case "displays":
                 guard request.arguments.isEmpty else { throw windowRequestFailure("displays") }
                 complete(identity: identity, value: try services.displays(), error: nil)
@@ -1830,6 +1967,122 @@ private final class HostServices: NSObject, UNUserNotificationCenterDelegate {
         return NSNull()
     }
 
+    /// Replace this application with the one inside `archivePath`, then relaunch.
+    ///
+    /// The mechanism is the language's; the policy is the product's. There is no
+    /// feed, no channel, no automatic check and no delta: what arrives here is a
+    /// local archive the product downloaded under its own rules, and what this
+    /// does is decide whether that archive is *this application* and, if it is,
+    /// swap it in atomically.
+    ///
+    /// Identity is two questions asked of the staged copy before anything on
+    /// disk is touched: does its bundle identifier equal ours, and does the Team
+    /// ID in its signature equal ours. A build with no Team ID — an ad-hoc or
+    /// unsigned development install — cannot answer the second, so it is refused
+    /// by name rather than waved through: an update path that accepts "no team
+    /// matches no team" is an update path that accepts anything.
+    ///
+    /// Every refusal happens before the replacement, and the staged copy lives
+    /// in a directory of its own that is removed on every path, so a failure
+    /// leaves the installed application exactly as it was.
+    func applyUpdate(_ arguments: [Any], completion: @escaping (Any?, String?) -> Void) {
+        guard arguments.count == 1, let path = arguments[0] as? String, path.hasPrefix("/"),
+              !path.contains("\0"), path.utf8.count <= 4096 else {
+            completion(nil, "Desktop applyUpdate requires one bounded absolute archive path")
+            return
+        }
+        let installed = Bundle.main.bundleURL
+        guard installed.pathExtension == "app" else {
+            completion(nil, "Desktop applyUpdate replaces an installed application bundle; this host is not running from one")
+            return
+        }
+        let current: BundleSigningIdentity
+        do {
+            current = try bundleSigningIdentity(at: installed, verify: false)
+        } catch {
+            completion(nil, "Desktop applyUpdate cannot read this application's own signature: \(error.localizedDescription)")
+            return
+        }
+        guard let currentTeam = current.teamIdentifier else {
+            completion(nil, "Desktop applyUpdate refuses to update an application signed with no Team ID. "
+                + "This install is ad-hoc or unsigned, so there is no signing identity an update could be required to match, "
+                + "and accepting one anyway would accept every archive. Install a Developer ID signed build to update in place.")
+            return
+        }
+        let archive = URL(fileURLWithPath: path).resolvingSymlinksInPath()
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: archive.path, isDirectory: &isDirectory), !isDirectory.boolValue else {
+            completion(nil, "Desktop applyUpdate archive does not identify an ordinary file")
+            return
+        }
+        let staging = installed.deletingLastPathComponent().appendingPathComponent(".velar-update-\(UUID().uuidString)", isDirectory: true)
+        DispatchQueue.global(qos: .userInitiated).async {
+            let replacement: URL
+            do {
+                replacement = try Self.stageUpdate(archive: archive, staging: staging, identifier: current.bundleIdentifier, team: currentTeam)
+            } catch {
+                try? FileManager.default.removeItem(at: staging)
+                DispatchQueue.main.async { completion(nil, error.localizedDescription) }
+                return
+            }
+            do {
+                _ = try FileManager.default.replaceItemAt(installed, withItemAt: replacement, backupItemName: nil, options: [])
+            } catch {
+                try? FileManager.default.removeItem(at: staging)
+                DispatchQueue.main.async { completion(nil, "Desktop applyUpdate could not replace the installed application: \(error.localizedDescription)") }
+                return
+            }
+            try? FileManager.default.removeItem(at: staging)
+            DispatchQueue.main.async {
+                // The renderer is answered before the relaunch, so the call it
+                // made resolves rather than disappearing with the process.
+                completion(NSNull(), nil)
+                let configuration = NSWorkspace.OpenConfiguration()
+                configuration.createsNewApplicationInstance = true
+                NSWorkspace.shared.openApplication(at: installed, configuration: configuration) { _, _ in
+                    DispatchQueue.main.async { NSApp.terminate(nil) }
+                }
+            }
+        }
+    }
+
+    private static func stageUpdate(archive: URL, staging: URL, identifier: String, team: String) throws -> URL {
+        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: false)
+        let expand = Process()
+        expand.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        expand.arguments = ["-x", "-k", archive.path, staging.path]
+        expand.standardInput = FileHandle.nullDevice
+        expand.standardOutput = FileHandle.nullDevice
+        expand.standardError = FileHandle.nullDevice
+        try expand.run()
+        expand.waitUntilExit()
+        guard expand.terminationStatus == 0 else {
+            throw NSError(domain: "VelarDesktop", code: 400, userInfo: [NSLocalizedDescriptionKey: "Desktop applyUpdate could not expand the archive"])
+        }
+        let entries = try FileManager.default.contentsOfDirectory(at: staging, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
+        let bundles = entries.filter { $0.pathExtension == "app" }
+        guard bundles.count == 1, let candidate = bundles.first else {
+            throw NSError(domain: "VelarDesktop", code: 400, userInfo: [NSLocalizedDescriptionKey:
+                "Desktop applyUpdate archive must contain exactly one application bundle; it contains \(bundles.count)"])
+        }
+        // Validity first: an identifier read out of an archive whose signature
+        // does not check is a claim, not evidence.
+        let update = try bundleSigningIdentity(at: candidate, verify: true)
+        guard update.bundleIdentifier == identifier else {
+            throw NSError(domain: "VelarDesktop", code: 403, userInfo: [NSLocalizedDescriptionKey:
+                "Desktop applyUpdate refuses an archive whose bundle identifier is '\(update.bundleIdentifier)' and not '\(identifier)'"])
+        }
+        guard let updateTeam = update.teamIdentifier else {
+            throw NSError(domain: "VelarDesktop", code: 403, userInfo: [NSLocalizedDescriptionKey:
+                "Desktop applyUpdate refuses an archive signed with no Team ID"])
+        }
+        guard updateTeam == team else {
+            throw NSError(domain: "VelarDesktop", code: 403, userInfo: [NSLocalizedDescriptionKey:
+                "Desktop applyUpdate refuses an archive signed by Team ID '\(updateTeam)' and not '\(team)'"])
+        }
+        return candidate
+    }
+
     /// Read-only probes. `microphone` is the only one of the three macOS answers
     /// in three states; screen recording and accessibility answer "granted" or
     /// "not yet", which is `undetermined` here — reporting `denied` for a
@@ -2299,14 +2552,19 @@ private final class WindowRegistry: NSObject, NSWindowDelegate {
 
 private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
     private let headless: Bool
+    /// `--headless-smoke`: start everything, prove the runtime actually executes
+    /// a capability, report what it proved, and exit. `--headless` is the same
+    /// application with no visible windows and no ending.
+    private let smoke: Bool
     private var schemeHandler: AssetSchemeHandler?
     private var nodeHost: NodeCapabilityHost?
     private var projectGrant: ProjectDirectoryGrant?
     private var registry: WindowRegistry?
     private var services: HostServices?
 
-    init(headless: Bool) {
+    init(headless: Bool, smoke: Bool) {
         self.headless = headless
+        self.smoke = smoke
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -2331,7 +2589,7 @@ private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
             let launchDirectory = projectGrant.directory
             let nodeRuntime = try resolveNodeRuntime(host)
             let nodeHost = try NodeCapabilityHost(
-                executable: nodeRuntime.path,
+                executable: nodeRuntime.url.path,
                 worker: resources.appendingPathComponent("host/worker.js"),
                 config: resources.appendingPathComponent("desktop.json"),
                 appData: appData,
@@ -2372,11 +2630,60 @@ private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
             self.projectGrant = projectGrant
             self.services = services
             self.registry = registry
+            if smoke { runHeadlessSmoke(host: host, runtime: nodeRuntime, worker: nodeHost) }
         } catch {
+            if smoke {
+                FileHandle.standardError.write(Data("VelarScript Desktop headless smoke failed: \(error.localizedDescription)\n".utf8))
+                exit(1)
+            }
             let alert = NSAlert(error: error)
             alert.messageText = "VelarScript Desktop could not start"
             alert.runModal()
             NSApp.terminate(nil)
+        }
+    }
+
+    /// The packaging gate's acceptance, and the reason it is not `--smoke`.
+    ///
+    /// `--smoke` proves a runtime can be *resolved*: it runs `node --version`,
+    /// which returns before V8 has created an Isolate. A runtime that cannot
+    /// reserve its code range under the hardened runtime passes that and dies on
+    /// the first real call — so this one starts the host, starts the capability
+    /// worker on whichever runtime was resolved, and makes it answer a real
+    /// capability request through the real dispatcher and the real transport.
+    ///
+    /// An application that grants no filesystem scope at all still proves the
+    /// same thing: the refusal it gets back was *computed by the worker*, which
+    /// only a working interpreter could have done. What is never accepted is
+    /// silence, a transport failure, or a different error.
+    private func runHeadlessSmoke(host: HostConfiguration, runtime: ResolvedNodeRuntime, worker: NodeCapabilityHost) {
+        let deadline = DispatchWorkItem {
+            FileHandle.standardError.write(Data("VelarScript Desktop headless smoke failed: the capability round-trip did not answer within 60s\n".utf8))
+            exit(1)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 60, execute: deadline)
+        let granted = host.permissions.files.contains("app-data") || host.permissions.files.contains("project")
+        worker.probe(capability: "fs", operation: "list", arguments: ["."]) { ok, value, error in
+            deadline.cancel()
+            if granted {
+                guard ok, value is [Any] else {
+                    FileHandle.standardError.write(Data("VelarScript Desktop headless smoke failed: fs.list answered \(error ?? "an unusable value")\n".utf8))
+                    exit(1)
+                }
+            } else {
+                guard !ok, let error, error.contains("no granted filesystem scope") else {
+                    FileHandle.standardError.write(Data("VelarScript Desktop headless smoke failed: an application with no file grant answered \(error ?? "a result")\n".utf8))
+                    exit(1)
+                }
+            }
+            let kinds = host.windows.keys.sorted().map { "\"\($0)\"" }.joined(separator: ",")
+            print("{\"kind\":\"velar-desktop-headless-smoke\",\"protocolVersion\":1,\"identifier\":\"\(host.identifier)\","
+                + "\"runtimeSource\":\"\(runtime.source.rawValue)\",\"runtime\":\"\(runtime.url.path)\","
+                + "\"capability\":\"fs.list\",\"fileScope\":\(granted),\"windowKinds\":[\(kinds)]}")
+            // The renderer, the worker and the windows are all live here; the
+            // acceptance is that they started and answered, so the exit is the
+            // last statement rather than a shutdown sequence.
+            exit(0)
         }
     }
 
@@ -2405,6 +2712,11 @@ private enum VelarDesktopHost {
                 guard let resources = Bundle.main.resourceURL else { throw NSError(domain: "VelarDesktop", code: 1) }
                 let configData = try Data(contentsOf: resources.appendingPathComponent("desktop.json"))
                 let host = try JSONDecoder().decode(HostConfiguration.self, from: configData)
+                // `--smoke` answers "is this bundle complete and is there a
+                // runtime": a static check, still worth having, and deliberately
+                // no longer the packaging gate's acceptance. `--headless-smoke`
+                // is, because a runtime that answers `node --version` can still
+                // be a runtime that cannot execute JavaScript.
                 _ = try resolveNodeRuntime(host)
                 _ = try resolveProjectDirectory(resources)
                 guard host.protocolVersion == 1,
@@ -2431,10 +2743,12 @@ private enum VelarDesktopHost {
                 exit(1)
             }
         }
-        let headlessSmoke = CommandLine.arguments.dropFirst() == ["--headless-smoke"]
+        let arguments = CommandLine.arguments.dropFirst()
+        let smoke = arguments == ["--headless-smoke"]
+        let headless = smoke || arguments == ["--headless"]
         let application = NSApplication.shared
-        let delegate = ApplicationDelegate(headless: headlessSmoke)
-        application.setActivationPolicy(headlessSmoke ? .prohibited : .regular)
+        let delegate = ApplicationDelegate(headless: headless, smoke: smoke)
+        application.setActivationPolicy(headless ? .prohibited : .regular)
         application.delegate = delegate
         application.run()
         _ = delegate

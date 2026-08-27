@@ -163,6 +163,7 @@ const desktopModuleInterface = moduleInterface(
     ["selectedProjectDirectory", functionType([], promiseOf(optionalStringType))],
     ["selectProjectDirectory", functionType([], promiseOf(optionalStringType))],
     ["openExternal", functionType([stringType], promiseOf(nullType))],
+    ["applyUpdate", functionType([stringType], promiseOf(nullType))],
     ["displays", functionType([], promiseOf(listOf(displayType)))],
     ["permissionStatus", functionType([systemPermission.value], promiseOf(permissionStatus.value))],
     ["watchPower", functionType([], promiseOf(powerStreamType))],
@@ -319,6 +320,12 @@ const desktopTestModuleInterface = moduleInterface(new Map([
   ["dropFiles", functionType([listOf(stringType)], promiseOf(nullType))],
   ["setSystemPermission", functionType([systemPermission.value, permissionStatus.value], promiseOf(nullType))],
   ["openedLinks", functionType([], promiseOf(listOf(stringType)))],
+  // The update identity a running application cannot read about itself: what
+  // Team ID this install carries, what an archive on disk claims to be, and
+  // which archives the host actually applied.
+  ["setSigningTeam", functionType([optionalStringType], promiseOf(nullType), 0)],
+  ["stageUpdate", functionType([stringType, stringType, optionalStringType], promiseOf(nullType), 2)],
+  ["appliedUpdates", functionType([], promiseOf(listOf(stringType)))],
 ]));
 
 const nodeProcessInterface = nodeModuleInterfaces.get("velar/process")!;
@@ -510,6 +517,26 @@ function linkSchemeOf(url) {
 export async function openExternal(url) {
   const value = await invoke("openExternal", [linkSchemeOf(url)]);
   if (value !== null) throw new TypeError("Desktop host returned an invalid openExternal result");
+  return null;
+}
+// The update mechanism, and only the mechanism. Downloading the archive,
+// deciding when to look for one, which channel to look on, and what to do when
+// the user declines are the product's; what this does is hand the host a local
+// archive and let it decide whether that archive is this same application,
+// signed by the same team. It is not a permission the manifest grants: the
+// identity check is the grant, and an archive that fails it changes nothing.
+//
+// There is no timeout, because expanding and verifying a signed application
+// bundle is bounded by its size rather than by a number chosen here. On success
+// the application relaunches immediately, so a program should not expect to run
+// its own code afterwards.
+export async function applyUpdate(archivePath) {
+  if (typeof archivePath !== "string" || archivePath.length === 0 || archivePath[0] !== "/"
+    || archivePath.length > maxDesktopPathUnits || archivePath.includes("\0")) {
+    throw new TypeError("applyUpdate requires a bounded absolute path to a downloaded application archive");
+  }
+  const value = await invoke("applyUpdate", [archivePath], 0);
+  if (value !== null) throw new TypeError("Desktop host returned an invalid applyUpdate result");
   return null;
 }
 export async function displays() {
@@ -800,6 +827,32 @@ export async function setSystemPermission(kind, status) {
 }
 export async function openedLinks() {
   return testTextList("desktop-test", "openedLinks", "openedLinks", 256);
+}
+// The two halves of the identity applyUpdate checks. Neither is readable by a
+// program — an application cannot ask what Team ID signed it — so they exist
+// only here, where a test states what the install is and what an archive claims
+// to be, and then watches the same four refusals the native host produces.
+function testTeamIdentifier(value, operation) {
+  if (value === null) return null;
+  if (typeof value !== "string" || !/^[A-Z0-9]{2,32}$/u.test(value)) {
+    throw new TypeError("Desktop test " + operation + " requires an Apple Team ID of uppercase letters and digits, or none");
+  }
+  return value;
+}
+export async function setSigningTeam(team = null) {
+  return testSettle("desktop-test", "setSigningTeam", [testTeamIdentifier(team, "setSigningTeam")], "setSigningTeam");
+}
+export async function stageUpdate(archivePath, bundleIdentifier, team = null) {
+  const path = testBoundedText(archivePath, "stageUpdate", "archive path", 4096);
+  if (path[0] !== "/") throw new TypeError("Desktop test stageUpdate requires an absolute archive path");
+  return testSettle("desktop-test", "stageUpdate", [
+    path,
+    testBoundedText(bundleIdentifier, "stageUpdate", "bundle identifier", 256),
+    testTeamIdentifier(team, "stageUpdate"),
+  ], "stageUpdate");
+}
+export async function appliedUpdates() {
+  return testTextList("desktop-test", "appliedUpdates", "appliedUpdates", 64);
 }
 `.trimStart();
 
