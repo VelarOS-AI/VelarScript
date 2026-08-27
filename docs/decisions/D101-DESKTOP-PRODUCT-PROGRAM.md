@@ -40,8 +40,11 @@ VelarScript desktop 目标；完整评估与七项产品侧裁决记录在新仓
    面；产品级服务本身仍不属于语言能力，与 `ai-skill-desktop.md` 的排除清单
    一致——语言提供的是「宿主一个服务进程」的机制，不是服务本身。
 6. L6 稳定判据（「先把语言层做稳定」的可执行定义）：
-   - 0.20 冻结点 = CI 运行完整门（`check` + `test:full` + `test:browser` +
-     `test:packages`），不再只跑 `check`。此条**取代**此前「CI 只跑源质量
+   - 冻结点 = CI 运行完整门（`check` + `test:full` + `test:browser` +
+     `test:packages`）的首个发布，不再只跑 `check`。（本条最初写作
+     「0.20 冻结点」；0.20.0/0.20.1 已被并行工作线的常规发版占用于
+     2026-08-27 当日，判据不变，落点顺延为包含 c68c019 桌面计划合并的
+     下一个发布。）此条**取代**此前「CI 只跑源质量
      门、不重复发布套件」的姿态（旧姿态成文于
      `docs/contributing/continuous-integration.md` 并由
      `tests/ci.acceptance.ts` 强制；两处已随本条改写）；

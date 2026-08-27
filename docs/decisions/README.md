@@ -68,6 +68,7 @@ their titles are reproduced verbatim below.
 | [D99](D99-MAP-ITERATOR.md) | Map 增量迭代游标 | `Map.iterator()` exposes a live insertion-order key cursor whose `next()` distinguishes a null key from exhaustion without materializing `keys()`. |
 | [D100](D100-MAPPED-RECORD-PROJECTION.md) | 具体记录拥有同名字段映射构造 | `Target.mapFrom(source, transform)` 按目标声明顺序转换同名字段；A10 提示完整的大规模手写映射。 |
 | [D101](D101-DESKTOP-PRODUCT-PROGRAM.md) | 桌面产品级目标计划 | Six work packages (L1–L6) raise the desktop target to product grade for the VelarOS-Desktop shell rewrite, with the boundary, ownership, and stability criteria pinned before implementation starts. |
+| [D102](D102-NUMERIC-WIRE-VALUES-AND-SURPLUS-FIELDS.md) | 枚举数值 wire 值与多余字段语义 | Enum member wire values extend to safe integers (a completion of the existing mechanism, not literal types), and surplus-field stripping is the permanent record semantics — the type is the contract, undeclared data does not exist. |
 
 ## archive/
 
