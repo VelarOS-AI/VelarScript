@@ -1182,9 +1182,11 @@ function __velarCreateServePattern(source) {
       __velarServeCall(__velarServeMapSet, localNames, [item.name, true]);
       __velarServeCall(__velarServeMapSet, fieldNames, [item.name, true]);
       __velarServeCall(__velarServeMapSet, wireNames, [item.wireName, true]);
+      const captureSchema = __velarServeSchema(item.schema ?? {}, "RoutePattern capture schema");
       output[output.length] = __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{
         name: item.name, wireName: item.wireName, explicitWireName: item.explicitWireName, typeName: item.typeName, optional: item.optional,
-        kind: item.kind, check: item.check, schema: __velarServeSchema(item.schema ?? {}, "RoutePattern capture schema"),
+        kind: item.kind, check: item.check, schema: captureSchema,
+        integerEnum: __velarServeIntegerEnum(item.kind, captureSchema),
       }]);
     }
     return output;
@@ -1272,7 +1274,7 @@ function __velarCreateServeRoute(method, pattern, parameters, handler, metadata 
     const required = routeInput !== null && (routeInput.source === "header" || routeInput.source === "cookie")
       ? !routeInput.hasDefault
       : parameter.required;
-    checked[checked.length] = __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{name: parameter.name, source: parameter.source, kind: parameter.kind, required, check: parameter.check ?? null, schema, input: routeInput}]);
+    checked[checked.length] = __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{name: parameter.name, source: parameter.source, kind: parameter.kind, required, check: parameter.check ?? null, schema, input: routeInput, integerEnum: __velarServeIntegerEnum(parameter.kind, schema)}]);
   }
   const segments = __velarServeCall(__velarServeStringSplit, path, ["/"]);
   if (typeof handler !== "function") throw new __velarServeTypeError("Route handler is invalid");
@@ -1350,14 +1352,16 @@ function __velarCreateServeWebSocket(pattern, parameters, handler, metadata = {}
         || parameter.source === "security" && parameter.kind !== "security") throw new __velarServeTypeError("WebSocket parameter source and kind do not agree");
     }
     __velarServeCall(__velarServeMapSet, names, [parameter.name, true]);
+    const socketSchema = parameter.schema == null ? __velarServeDefaultSchema(parameter.kind) : __velarServeSchema(parameter.schema, "WebSocket parameter schema");
     checked[checked.length] = __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{
       name: parameter.name,
       source: parameter.source,
       kind: parameter.kind,
       required: true,
       check: parameter.check ?? null,
-      schema: parameter.schema == null ? __velarServeDefaultSchema(parameter.kind) : __velarServeSchema(parameter.schema, "WebSocket parameter schema"),
+      schema: socketSchema,
       input: routeInput,
+      integerEnum: __velarServeIntegerEnum(parameter.kind, socketSchema),
     }]);
   }
   if (connectionIndex === -1) throw new __velarServeTypeError("A WebSocket route requires exactly one connection parameter");
@@ -1511,6 +1515,19 @@ function __velarServeFreezeSchema(value) {
     if (descriptor && "value" in descriptor) __velarServeFreezeSchema(descriptor.value);
   }
   return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [value]);
+}
+
+/*
+ * D102 后续裁决：线值全为整数的枚举，其 schema 写的是 {"type":"integer",
+ * "enum":[1,2]}——URL 段却是文本，成员判定拿到文本对着数字比，于是每一个请求都
+ * 422。这里回答的只是「该捕获是不是那种枚举」；解码本身走*已有的* number 规则，
+ * 一字未改也一字未加：一个 number 捕获接受什么，它就接受什么。线值混用或全为
+ * 字符串的枚举没有 "integer" 这一行，仍旧按原样文本匹配。
+ */
+function __velarServeIntegerEnum(kind, schema) {
+  if (kind !== "enum" || !schema || typeof schema !== "object") return false;
+  const descriptor = __velarServeOwnDescriptor(schema, "type");
+  return descriptor !== undefined && "value" in descriptor && descriptor.value === "integer";
 }
 
 function __velarServeDefaultSchema(kind) {
@@ -2128,7 +2145,9 @@ function __velarServeDecodeScalarValue(raw, kind, name) {
 }
 
 function __velarServeDecodeScalar(raw, parameter) {
-  const value = __velarServeDecodeScalarValue(raw, parameter.kind, parameter.name);
+  // 一个整数线值的枚举捕获，先按 number 捕获解码，再做成员判定;
+  // 解码失败与今天的解码失败是同一个 422。
+  const value = __velarServeDecodeScalarValue(raw, parameter.integerEnum === true ? "number" : parameter.kind, parameter.name);
   let valid = false;
   try { valid = parameter.check(value) === true; } catch {}
   if (!valid) throw __velarServeRequestProblem(422, {error: "invalid_request", parameter: parameter.name});

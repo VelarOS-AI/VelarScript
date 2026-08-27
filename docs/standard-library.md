@@ -1068,7 +1068,15 @@ and 204 and 304 responses are always bodyless at the transport boundary. Public
 response and documentation statuses are final HTTP statuses from 200 through
 599; an application cannot emit an informational response as its final result.
 Path and query `number` inputs use finite decimal syntax rather than JavaScript
-coercion, so whitespace and hexadecimal text are rejected with 422.
+coercion, so whitespace and hexadecimal text are rejected with 422. An enum
+capture whose wire values are all integers — the form D102 introduced, and the
+one its OpenAPI schema states as `{"type":"integer","enum":[1,2]}` — decodes by
+that same rule before its membership is checked, because the URL segment is text
+and the members it must match are numbers. It is exactly the `number` rule and
+no more: what a `{n:number}` capture accepts is what such a capture accepts, a
+decoded value that is not a member is the same 422 an undecodable one is, and a
+capture whose enum is all strings, or whose wire values mix strings and
+integers, matches the raw text as it always has.
 An inferred JSON body accepts a missing media type, `application/json`, or an
 `application/*+json` type; another declared media type returns 415 before body
 decoding.
