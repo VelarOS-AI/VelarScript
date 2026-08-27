@@ -133,6 +133,86 @@ print(invertible[1])
   assert.equal(formatSource("active=not   active\n"), "active = not active\n");
 });
 
+test("[P1-5b] 'contains' on a string points at 'has', the way 'includes' already does", () => {
+  // The List, Set, and Map tables have carried `contains` since they were
+  // written; a string is the fourth thing membership is asked of, and the
+  // spelling an author arrives with from Java, C#, Kotlin, or Dart got the bare
+  // "string has no member 'contains'".
+  const membership = "Use '.has(text)'; strings and collections share one membership method";
+  for (const member of ["includes", "contains"]) {
+    const messages = compileCore(`def probe(text: string) -> bool:\n    return text.${member}("a")\n`)
+      .diagnostics.map((item) => item.message);
+    assert.ok(messages.includes(membership), `${member}: ${messages.join(" | ")}`);
+  }
+
+  // The spelling the guidance names is the one that exists, and the collection
+  // tables it mirrors are untouched.
+  assert.deepEqual(compileCore('def probe(text: string) -> bool:\n    return text.has("a")\n').diagnostics, []);
+  const listMessages = compileCore('def probe(values: List<string>) -> bool:\n    return values.contains("a")\n')
+    .diagnostics.map((item) => item.message);
+  assert.ok(listMessages.some((item) => item.includes("Use 'has(value)'")), listMessages.join(" | "));
+});
+
+test("[P1-5a] a member-singleton cell names the annotation that would hold the enum", () => {
+  // `state locale = Locale.zhCN` infers the member, not the enum, so the second
+  // member ever stored is refused against the first. The refusal is right; its
+  // fix is on the declaration line rather than the line it points at.
+  const inferred = compile(`
+enum Locale:
+    zhCN
+    enUS
+
+state locale = Locale.zhCN
+
+def go(): locale = Locale.enUS
+`.trimStart());
+  assert.deepEqual(inferred.diagnostics.map((item) => item.code), ["VEL4001"]);
+  assert.equal(
+    inferred.diagnostics[0]?.message,
+    "Cannot assign Locale.enUS to Locale.zhCN; 'locale' has no annotation, so it took the one member its initializer"
+      + " named; declare the enum to hold any of them — 'state locale: Locale = ...'",
+  );
+
+  // And the annotation it names compiles.
+  assert.deepEqual(compile(`
+enum Locale:
+    zhCN
+    enUS
+
+state locale: Locale = Locale.zhCN
+
+def go(): locale = Locale.enUS
+`.trimStart()).diagnostics, []);
+
+  // The guidance is for the cell whose declaration can hold the enum, so it
+  // does not attach to an assignment between two different enums, and it does
+  // not attach to a target that is not a mutable binding.
+  const foreign = compile(`
+enum Locale:
+    zhCN
+
+enum Theme:
+    dark
+
+state locale = Locale.zhCN
+
+def go(): locale = Theme.dark
+`.trimStart());
+  assert.deepEqual(foreign.diagnostics.map((item) => item.message), ["Cannot assign Theme.dark to Locale.zhCN"]);
+
+  const field = compile(`
+enum Locale:
+    zhCN
+    enUS
+
+type Holder:
+    locale: Locale.zhCN
+
+def go(holder: Holder): holder.locale = Locale.enUS
+`.trimStart());
+  assert.deepEqual(field.diagnostics.map((item) => item.message), ["Cannot assign Locale.enUS to Locale.zhCN"]);
+});
+
 test(
   "[D28 7] x = not x publishes state, deep-field, and List-index updates in Chromium",
   { timeout: 120_000 },
