@@ -1079,3 +1079,200 @@ async function runtime<T>(directory: string, file: string, moduleName: string, t
   await writeFile(path, transform(source), "utf8");
   return import(`${pathToFileURL(path).href}?test=${Date.now()}`) as Promise<T>;
 }
+
+test("Desktop windows are opened only for manifest-declared kinds and released idempotently", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-desktop-window-"));
+  const calls: Array<{ operation: string; args: readonly unknown[] }> = [];
+  const states: Array<string | null> = [];
+  try {
+    const bridge = {
+      platform: "macos",
+      packaged: true,
+      windowKind: "main",
+      windowHandle: 1,
+      async invoke(capability: string, operation: string, args: readonly unknown[]) {
+        assert.equal(capability, "window");
+        calls.push({ operation, args });
+        if (operation === "open") return 7;
+        if (operation === "close") return args[0] === 7;
+        if (operation === "bounds") return { x: 12, y: 34, width: 800, height: 600 };
+        if (operation === "setBounds") return null;
+        if (operation === "focus") return null;
+        if (operation === "display") {
+          return {
+            id: "display-1",
+            bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+            workArea: { x: 0, y: 25, width: 1920, height: 1055 },
+            scale: 2,
+            primary: true,
+          };
+        }
+        if (operation === "list") return [{ kind: "main", key: null, focused: true }, { kind: "note-preview", key: "note-1", focused: false }];
+        if (operation === "watchStart") return 3;
+        if (operation === "watchNext") return states.shift() ?? null;
+        if (operation === "watchClose") return true;
+        throw new Error(`unexpected window operation '${operation}'`);
+      },
+    };
+    Object.defineProperty(globalThis, bridgeKey, { value: bridge, configurable: true });
+    const source = velarCompilerExtension.modules?.source?.("velar/window", {
+      windows: { main: {}, "note-preview": {} },
+    });
+    assert.ok(source, "velar/window must be generated from the project's declared window kinds");
+    const path = join(directory, "window.mjs");
+    await writeFile(path, source, "utf8");
+    const module = await import(`${pathToFileURL(path).href}?test=${Date.now()}`) as {
+      Window: { is(value: unknown): boolean };
+      WindowBounds: { is(value: unknown): boolean; parse(value: unknown): unknown };
+      WindowState: { values(): string[]; is(value: unknown): boolean };
+      WindowStateStream: { is(value: unknown): boolean };
+      currentWindowKind(): string;
+      currentWindow(): { bounds(): Promise<unknown>; close(): Promise<null> };
+      openWindow(kind: string, options: Record<string, unknown>): Promise<{
+        focus(): Promise<null>;
+        close(): Promise<null>;
+        bounds(): Promise<unknown>;
+        setBounds(bounds: unknown): Promise<null>;
+        display(): Promise<Record<string, unknown>>;
+        watchState(): Promise<{ next(): Promise<string | null>; close(): Promise<null> }>;
+      }>;
+      windows(): Promise<readonly Record<string, unknown>[]>;
+    };
+
+    // An undeclared kind is refused at the call, with the manifest field that
+    // would declare it, before anything reaches the host.
+    await assert.rejects(
+      module.openWindow("terminal", { route: "/" }),
+      /undeclared window kind 'terminal'.*desktop\.windows.*declared kinds: main, note-preview/su,
+    );
+    assert.deepEqual(calls, []);
+    await assert.rejects(module.openWindow("note-preview", { route: "https://example.com/" }), /must start with '\/'/u);
+    await assert.rejects(module.openWindow("note-preview", { route: "//example.com" }), /stay inside this application/u);
+    await assert.rejects(module.openWindow("note-preview", { route: "/", key: "not a key" }), /key must be at most 128 characters/u);
+    await assert.rejects(module.openWindow("note-preview", { route: "/", side: "left" }), /unknown field 'side'/u);
+    assert.deepEqual(calls, []);
+
+    assert.equal(module.currentWindowKind(), "main");
+    assert.equal(module.Window.is(module.currentWindow()), true);
+    const preview = await module.openWindow("note-preview", { route: "/note-preview?note=1", key: "note-1" });
+    assert.deepEqual(calls.at(-1), { operation: "open", args: ["note-preview", { route: "/note-preview?note=1", key: "note-1", bounds: null }] });
+    assert.deepEqual(await preview.bounds(), { x: 12, y: 34, width: 800, height: 600 });
+    assert.equal(await preview.setBounds({ x: 1, y: 2, width: 300, height: 200 }), null);
+    await assert.rejects(preview.setBounds({ x: 1, y: 2, width: 0, height: 200 }), /at least 1 point/u);
+    await assert.rejects(preview.setBounds({ x: 1, y: 2, width: 300 }), /must contain x, y, width and height/u);
+    assert.equal(await preview.focus(), null);
+    assert.deepEqual(await preview.display(), {
+      id: "display-1",
+      bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+      workArea: { x: 0, y: 25, width: 1920, height: 1055 },
+      scale: 2,
+      primary: true,
+    });
+    assert.deepEqual(await module.windows(), [
+      { kind: "main", key: null, focused: true },
+      { kind: "note-preview", key: "note-1", focused: false },
+    ]);
+
+    // The stream is a bounded pull source: one active pull at a time, and it
+    // drains normally after the window closes.
+    states.push("moved", "resized", "closed", null);
+    const stream = await preview.watchState();
+    assert.equal(module.WindowStateStream.is(stream), true);
+    const pull = stream.next();
+    await assert.rejects(stream.next(), /already has an active pull/u);
+    assert.equal(await pull, "moved");
+    assert.equal(await stream.next(), "resized");
+    assert.equal(await stream.next(), "closed");
+    assert.equal(await stream.next(), null);
+    assert.equal(await stream.next(), null);
+    assert.equal(await stream.close(), null);
+
+    // Releasing a Window closes it, and the release is idempotent: the second
+    // close never reaches the host at all.
+    const closes = () => calls.filter((call) => call.operation === "close").length;
+    assert.equal(await preview.close(), null);
+    assert.equal(closes(), 1);
+    assert.equal(await preview.close(), null);
+    assert.equal(closes(), 1);
+
+    assert.deepEqual(module.WindowState.values(), ["moved", "resized", "focused", "blurred", "closed"]);
+    assert.equal(module.WindowState.is("minimized"), false);
+    assert.equal(module.WindowBounds.is({ x: 0, y: 0, width: 10, height: 10 }), true);
+    assert.equal(module.WindowBounds.is({ x: 0, y: 0, width: 10 }), false);
+  } finally {
+    delete (globalThis as { [key: symbol]: unknown })[bridgeKey];
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Desktop test window registry keys on kind and key and coalesces a slow consumer", async () => {
+  const context = vm.createContext({ TextEncoder, btoa });
+  // The registry answers from inside the vm realm, so its records carry that
+  // realm's prototypes; these assertions compare the data, not the realm.
+  const plain = (value: unknown): unknown => JSON.parse(JSON.stringify(value));
+  const config = velarProjectExtension.parse({
+    productName: "Test",
+    identifier: "dev.velarscript.test",
+    windows: { main: {}, "note-preview": { style: "panel", width: 480, height: 320 } },
+    permissions: { files: ["app-data"] },
+  }, "velar.json");
+  vm.runInContext(
+    `${desktopBrowserTestInitScript(config, "test", "main")}\nglobalThis.__bridgeUnderTest = globalThis[Symbol.for("velar.desktop.bridge.v1")]`,
+    context,
+  );
+  const bridge = (context as {
+    __bridgeUnderTest?: {
+      windowKind: string;
+      windowHandle: number;
+      invoke(capability: string, operation: string, args: unknown[]): Promise<unknown>;
+    };
+  }).__bridgeUnderTest;
+  assert.ok(bridge);
+  assert.equal(bridge.windowKind, "main");
+  assert.equal(bridge.windowHandle, 1);
+  assert.deepEqual(plain(await bridge.invoke("window", "list", [])), [{ kind: "main", key: null, focused: true }]);
+
+  await assert.rejects(
+    bridge.invoke("window", "open", ["terminal", { route: "/" }]),
+    /undeclared window kind 'terminal'.*declared kinds: main, note-preview/su,
+  );
+  const preview = await bridge.invoke("window", "open", ["note-preview", { route: "/preview", key: "note-1" }]) as number;
+  assert.equal(await bridge.invoke("window", "open", ["note-preview", { route: "/preview", key: "note-1" }]), preview);
+  assert.deepEqual(plain(await bridge.invoke("window", "list", [])), [
+    { kind: "main", key: null, focused: false },
+    { kind: "note-preview", key: "note-1", focused: true },
+  ]);
+  // A window with a different key is a different window.
+  const second = await bridge.invoke("window", "open", ["note-preview", { route: "/preview", key: "note-2" }]) as number;
+  assert.notEqual(second, preview);
+  assert.equal((await bridge.invoke("window", "list", []) as unknown[]).length, 3);
+  assert.equal(await bridge.invoke("window", "close", [second]), true);
+  assert.equal(await bridge.invoke("window", "close", [second]), false);
+
+  // The declared size is the window's opening geometry, and a bounds change
+  // publishes moved and resized separately.
+  assert.deepEqual(plain(await bridge.invoke("window", "bounds", [preview])), { x: 0, y: 0, width: 480, height: 320 });
+  // Closing a window leaves no window focused, so the preview takes the focus
+  // back before the stream opens: the blur below has to have a focus to lose.
+  await bridge.invoke("window-test", "focus", ["note-preview", "note-1"]);
+  const watcher = await bridge.invoke("window", "watchStart", [preview]) as number;
+  await bridge.invoke("window", "setBounds", [preview, { x: 10, y: 10, width: 480, height: 320 }]);
+  await bridge.invoke("window-test", "move", ["note-preview", "note-1", { x: 20, y: 20, width: 480, height: 320 }]);
+  await bridge.invoke("window-test", "move", ["note-preview", "note-1", { x: 30, y: 30, width: 500, height: 320 }]);
+  // Three moves reached a consumer that pulled none of them, so the queue holds
+  // the one moved the window is actually in, followed by the resize.
+  assert.equal(await bridge.invoke("window", "watchNext", [watcher]), "moved");
+  assert.equal(await bridge.invoke("window", "watchNext", [watcher]), "resized");
+  const pending = bridge.invoke("window", "watchNext", [watcher]);
+  await assert.rejects(bridge.invoke("window", "watchNext", [watcher]), /already has an active pull/u);
+  await bridge.invoke("window-test", "focus", ["main", null]);
+  assert.equal(await pending, "blurred");
+  await bridge.invoke("window-test", "close", ["note-preview", "note-1"]);
+  assert.equal(await bridge.invoke("window", "watchNext", [watcher]), "closed");
+  // A closed window ends its stream: the pull that finds the queue empty
+  // answers null rather than failing on a released handle.
+  assert.equal(await bridge.invoke("window", "watchNext", [watcher]), null);
+  assert.equal(await bridge.invoke("window", "watchClose", [watcher]), false);
+  await assert.rejects(bridge.invoke("window", "bounds", [preview]), /unknown or already closed/u);
+  assert.deepEqual(plain(await bridge.invoke("window", "list", [])), [{ kind: "main", key: null, focused: true }]);
+});

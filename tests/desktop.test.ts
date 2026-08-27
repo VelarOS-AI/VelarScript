@@ -29,6 +29,10 @@ test("Desktop is one VelarScript project with Web syntax and no renderer/main so
       desktop: {
         productName: "Velar Desktop Fixture",
         identifier: "dev.velarscript.fixture",
+        windows: {
+          main: { width: 900, height: 640 },
+          "note-preview": { style: "panel", frame: false, material: "sidebar", aspectRatio: 1.5, width: 480, height: 320, minWidth: 480, minHeight: 320 },
+        },
         permissions: {
           files: ["project"],
           processes: ["git", basename(process.execPath)],
@@ -168,6 +172,9 @@ mount(<App />, "#app")
     assert.ok(!(await collectNames(application)).some((name) => name === "node_modules" || name.endsWith(".map")));
     const information = await readFile(join(application, "Contents", "Info.plist"), "utf8");
     assert.match(information, /<key>CFBundleIconFile<\/key><string>VelarScript<\/string>/u);
+    // A second launch of a packaged application activates the running instance
+    // rather than starting another; this is the key that makes it so.
+    assert.match(information, /<key>LSMultipleInstancesProhibited<\/key><true\/>/u);
     const applicationIcon = await readFile(join(application, "Contents", "Resources", "VelarScript.icns"));
     assert.equal(applicationIcon.subarray(0, 4).toString("ascii"), "icns");
     const hostConfigText = await readFile(join(application, "Contents", "Resources", "desktop.json"), "utf8");
@@ -175,6 +182,21 @@ mount(<App />, "#app")
     assert.equal(hostConfig.languageServer, undefined);
     assert.equal(hostConfig.projectTask, undefined);
     assert.equal(hostConfig.terminalHost, undefined);
+    // The native host reads the window map the manifest declared, not a
+    // singular window; every field it may act on is resolved before packaging.
+    assert.equal(hostConfig.window, undefined);
+    assert.deepEqual(hostConfig.windows, {
+      main: {
+        title: "Velar Desktop Fixture", width: 900, height: 640, minWidth: 720, minHeight: 520,
+        titleBar: "standard", material: "none", style: "window", frame: true, level: "normal",
+        visibleOnAllWorkspaces: false, aspectRatio: null, resizable: true,
+      },
+      "note-preview": {
+        title: "Velar Desktop Fixture", width: 480, height: 320, minWidth: 480, minHeight: 320,
+        titleBar: "standard", material: "sidebar", style: "panel", frame: false, level: "floating",
+        visibleOnAllWorkspaces: false, aspectRatio: 1.5, resizable: true,
+      },
+    });
     assert.deepEqual((await readdir(join(application, "Contents", "Resources", "host"))).sort(), ["worker.js"]);
     assert.equal(hostConfig.nodeExecutableHint, undefined);
     assert.doesNotMatch(hostConfigText, new RegExp(process.execPath.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"));
@@ -185,6 +207,7 @@ mount(<App />, "#app")
       kind: "velar-desktop-smoke",
       protocolVersion: 1,
       identifier: "dev.velarscript.fixture",
+      windowKinds: ["main", "note-preview"],
     });
     const invalidRootSmoke = spawnSync(join(application, "Contents", "MacOS", "VelarDesktopHost"), ["--smoke"], {
       encoding: "utf8",
@@ -317,3 +340,156 @@ async function collectNames(root: string): Promise<string[]> {
   }
   return output;
 }
+
+test("Desktop manifest v2 declares window kinds with closed vocabularies", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-desktop-windows-"));
+  try {
+    await mkdir(join(directory, "src"));
+    await linkDesktopExtension(directory);
+    await writeFile(join(directory, "src", "main.vel"), "const ready = true\n", "utf8");
+    const write = async (desktop: Record<string, unknown>): Promise<void> => {
+      await writeFile(join(directory, "velar.json"), JSON.stringify({
+        formatVersion: 2,
+        entry: "src/main.vel",
+        extensions: ["@velarscript/desktop"],
+        desktop: { productName: "Windows", identifier: "dev.velarscript.windows", ...desktop },
+      }), "utf8");
+    };
+
+    // The retired singular shape is reported by what replaced it and by the
+    // command that migrates it, rather than as an unknown field.
+    await write({ window: { width: 900 } });
+    await assert.rejects(resolveVelarProject(directory), /'desktop\.window' was replaced by 'desktop\.windows'/u);
+    await assert.rejects(resolveVelarProject(directory), /run 'velar fix'/u);
+
+    await write({ windows: { preview: {} } });
+    await assert.rejects(resolveVelarProject(directory), /must declare the 'main' window kind the host opens at launch/u);
+
+    await write({ windows: { main: {}, "Note Preview": {} } });
+    await assert.rejects(resolveVelarProject(directory), /window kind 'Note Preview' must be lowercase words joined by single hyphens/u);
+
+    await write({ windows: Object.fromEntries([...Array(33).keys()].map((index) => [`kind-${"a".repeat(index + 1)}`, {}])) });
+    await assert.rejects(resolveVelarProject(directory), /cannot declare more than 32 window kinds/u);
+
+    // knownFields names the exact path, kind and all.
+    await write({ windows: { main: {}, "note-preview": { vibrancy: "sidebar" } } });
+    await assert.rejects(resolveVelarProject(directory), /unknown 'desktop\.windows\.note-preview' field 'vibrancy'/u);
+
+    for (const [field, value, message] of [
+      ["titleBar", "hidden", /'desktop\.windows\.main\.titleBar' must be one of 'standard', 'hidden-inset'/u],
+      ["material", "acrylic", /'desktop\.windows\.main\.material' must be one of 'none', 'sidebar'/u],
+      ["style", "sheet", /'desktop\.windows\.main\.style' must be one of 'window', 'panel'/u],
+      ["level", "screenSaver", /'desktop\.windows\.main\.level' must be one of 'normal', 'floating'/u],
+      ["frame", "yes", /'desktop\.windows\.main\.frame' must be a boolean/u],
+      ["visibleOnAllWorkspaces", 1, /'desktop\.windows\.main\.visibleOnAllWorkspaces' must be a boolean/u],
+      ["resizable", "no", /'desktop\.windows\.main\.resizable' must be a boolean/u],
+      ["aspectRatio", 0, /'desktop\.windows\.main\.aspectRatio' must be a finite number greater than 0/u],
+      ["aspectRatio", "1.6", /'desktop\.windows\.main\.aspectRatio' must be a finite number greater than 0/u],
+    ] as const) {
+      await write({ windows: { main: { [field]: value } } });
+      await assert.rejects(resolveVelarProject(directory), message, `${field} must be a closed vocabulary`);
+    }
+
+    await write({
+      windows: {
+        main: { title: "Main" },
+        "note-preview": {
+          style: "panel", frame: false, material: "sidebar", titleBar: "hidden-inset",
+          visibleOnAllWorkspaces: true, aspectRatio: 1.6, resizable: false,
+          width: 512, height: 320, minWidth: 480, minHeight: 300,
+        },
+      },
+    });
+    const project = await resolveVelarProject(directory);
+    const config = project.extensionConfig.get("@velarscript/desktop") as {
+      windows: Record<string, Record<string, unknown>>;
+    };
+    assert.deepEqual(Object.keys(config.windows), ["main", "note-preview"]);
+    assert.deepEqual(config.windows.main, {
+      title: "Main", width: 1180, height: 760, minWidth: 720, minHeight: 520,
+      titleBar: "standard", material: "none", style: "window", frame: true, level: "normal",
+      visibleOnAllWorkspaces: false, aspectRatio: null, resizable: true,
+    });
+    assert.deepEqual(config.windows["note-preview"], {
+      // An undeclared title is the product name, so a window kind never has to
+      // repeat it to get the default.
+      title: "Windows", width: 512, height: 320, minWidth: 480, minHeight: 300,
+      titleBar: "hidden-inset", material: "sidebar", style: "panel", frame: false,
+      // A panel floats by definition, so `level` restates rather than decides.
+      level: "floating", visibleOnAllWorkspaces: true, aspectRatio: 1.6, resizable: false,
+    });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("velar fix migrates desktop.window to desktop.windows.main in place", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-desktop-fix-"));
+  try {
+    await mkdir(join(directory, "src"));
+    await linkDesktopExtension(directory);
+    await writeFile(join(directory, "package.json"), JSON.stringify({ name: "fix-fixture", version: "0.1.0", private: true, type: "module" }), "utf8");
+    await writeFile(join(directory, "src", "main.vel"), "const ready = true\n", "utf8");
+    const before = [
+      "{",
+      "  \"formatVersion\": 2,",
+      "  \"entry\": \"src/main.vel\",",
+      "  \"extensions\": [\"@velarscript/desktop\"],",
+      "  \"desktop\": {",
+      "    \"productName\": \"Fix Fixture\",",
+      "    \"identifier\": \"dev.velarscript.fix\",",
+      "    \"window\": {",
+      "      \"title\": \"Fix Fixture\",",
+      "      \"width\": 1040,",
+      "      \"height\": 720",
+      "    },",
+      "    \"permissions\": {",
+      "      \"files\": [\"app-data\"]",
+      "    }",
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+    const after = before
+      .replace("\"window\": {", "\"windows\": {\n      \"main\": {")
+      .replace([
+        "      \"title\": \"Fix Fixture\",",
+        "      \"width\": 1040,",
+        "      \"height\": 720",
+        "    },",
+      ].join("\n"), [
+        "        \"title\": \"Fix Fixture\",",
+        "        \"width\": 1040,",
+        "        \"height\": 720",
+        "      }",
+        "    },",
+      ].join("\n"));
+    await writeFile(join(directory, "velar.json"), before, "utf8");
+
+    // Before: `velar check` refuses the manifest and names the migration.
+    const checkedBefore = spawnSync(process.execPath, [cli, "check"], { cwd: directory, encoding: "utf8" });
+    assert.equal(checkedBefore.status, 1, checkedBefore.stdout);
+    assert.match(checkedBefore.stderr, /'desktop\.window' was replaced by 'desktop\.windows'/u);
+    assert.match(checkedBefore.stderr, /run 'velar fix'/u);
+
+    const fixed = spawnSync(process.execPath, [cli, "fix"], { cwd: directory, encoding: "utf8" });
+    assert.equal(fixed.status, 0, fixed.stderr);
+    assert.match(fixed.stdout, /velar\.json migrated the 'desktop' manifest section/u);
+    assert.match(fixed.stdout, /applied 1 mechanical fix in 1 file/u);
+
+    // After: the rewrite is exactly the one member, indented as the author's
+    // own manifest already was, and everything else keeps its bytes.
+    assert.equal(await readFile(join(directory, "velar.json"), "utf8"), after);
+    const checkedAfter = spawnSync(process.execPath, [cli, "check"], { cwd: directory, encoding: "utf8" });
+    assert.equal(checkedAfter.status, 0, checkedAfter.stderr);
+
+    // A second run changes nothing, which is what makes the migration a fix
+    // rather than a rewrite.
+    const again = spawnSync(process.execPath, [cli, "fix"], { cwd: directory, encoding: "utf8" });
+    assert.equal(again.status, 0, again.stderr);
+    assert.doesNotMatch(again.stdout, /migrated the 'desktop' manifest section/u);
+    assert.equal(await readFile(join(directory, "velar.json"), "utf8"), after);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

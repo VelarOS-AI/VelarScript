@@ -40,6 +40,8 @@ test("Desktop WebView bridge chunks large requests and responses without changin
   });
   const source = bridgeSource
     .replace("__VELAR_PROJECT_DIRECTORY__", JSON.stringify("/tmp/velar-project"))
+    .replace("__VELAR_WINDOW_KIND__", JSON.stringify("main"))
+    .replace("__VELAR_WINDOW_HANDLE__", "1")
     .replace("__VELAR_ENVIRONMENT__", JSON.stringify({ LANG: "en_US.UTF-8" }));
   vm.runInContext(`${source}\nglobalThis.__bridgeUnderTest = globalThis[Symbol.for("velar.desktop.bridge.v1")]`, context);
   const bridge = (context as { __bridgeUnderTest?: { projectDirectoryValue(): string; invoke(capability: string, operation: string, args: unknown[], timeout?: number): Promise<unknown> } }).__bridgeUnderTest;
