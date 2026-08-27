@@ -301,16 +301,18 @@ export async function buildDesktopApplication(
     const rendererBytes = await treeSize(renderer);
     const capabilityHostBytes = (await stat(workerPath)).size;
     const totalBytes = await treeSize(applicationBundle);
-    const metadataBytes = totalBytes - hostBytes - rendererBytes - capabilityHostBytes - runtimeBytes;
-    const budgetFailure = desktopSizeBudgetFailure({
+    const applicationBytes = totalBytes - runtimeBytes;
+    const metadataBytes = applicationBytes - hostBytes - rendererBytes - capabilityHostBytes;
+    const sizes: DesktopBuildSizes = Object.freeze({
       hostBytes,
       rendererBytes,
       capabilityHostBytes,
       metadataBytes,
-      applicationBytes: totalBytes - runtimeBytes,
+      applicationBytes,
       runtimeBytes,
       totalBytes,
-    }, config.build.sizeBudgetBytes);
+    });
+    const budgetFailure = desktopSizeBudgetFailure(sizes, config.build.sizeBudgetBytes);
     if (budgetFailure) throw new Error(budgetFailure);
     const manifest: DesktopBuildManifest = Object.freeze({
       formatVersion: 4,
@@ -335,15 +337,7 @@ export async function buildDesktopApplication(
       }),
       applicationBundle: applicationName,
       sizeBudgetBytes: config.build.sizeBudgetBytes,
-      sizes: Object.freeze({
-        hostBytes,
-        rendererBytes,
-        capabilityHostBytes,
-        metadataBytes,
-        applicationBytes: totalBytes - runtimeBytes,
-        runtimeBytes,
-        totalBytes,
-      }),
+      sizes,
       sha256: await desktopTreeSha256(applicationBundle),
     });
     await writeFile(join(staging, "velar-desktop-build.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
