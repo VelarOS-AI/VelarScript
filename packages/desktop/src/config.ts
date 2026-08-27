@@ -2,10 +2,48 @@ import { migrateDesktopManifestText } from "./manifest-migration.ts";
 import { byCodeUnit } from "./stable-order.ts";
 
 export const VELAR_DESKTOP_API_VERSION = "0.10";
-// The budget covers only the native shell, renderer, capability host, and
-// metadata. Product tooling is installed by products rather than bundled into
-// every Desktop application.
+// The budget covers only the application's own components — the native shell,
+// renderer, capability host, and metadata. Product tooling is installed by
+// products rather than bundled into every Desktop application, and the embedded
+// Node.js runtime is not an application component either: it is this toolchain
+// generation's fixed cost, measured against its own ceiling below.
 export const DEFAULT_DESKTOP_SIZE_BUDGET_BYTES = 32 * 1024 * 1024;
+
+/**
+ * The Node.js runtime this generation of the toolchain embeds, and the official
+ * `SHASUMS256.txt` digest of the tarball it is extracted from. One generation
+ * supports exactly one version: a project does not choose a runtime, so
+ * `velar.json` grows no field for it and every application built by this
+ * toolchain carries the same interpreter.
+ *
+ * The digests are copied from https://nodejs.org/dist/v24.19.0/SHASUMS256.txt
+ * and are the only reason a downloaded archive is trusted. Bumping the version
+ * means replacing both halves of a row here; a version with no row cannot be
+ * provisioned at all, which is the point.
+ */
+export const DESKTOP_NODE_RUNTIME_VERSION = "24.19.0";
+/** The Node.js major the host requires of an external runtime, and the major the pinned version is. */
+export const DESKTOP_NODE_MINIMUM_MAJOR = 24;
+export const DESKTOP_NODE_RUNTIME_ORIGIN = "https://nodejs.org/dist";
+/**
+ * Keyed by `${platform}-${arch}` as Node reports them. Only the architecture a
+ * macOS Desktop application is built for today has a row: x64 and universal
+ * binaries are a later Desktop milestone, alongside the Windows and Linux hosts,
+ * and an absent row is a refusal rather than a silently different download.
+ */
+export const DESKTOP_NODE_RUNTIME_ARCHIVES: Readonly<Record<string, { readonly archive: string; readonly sha256: string }>> = Object.freeze({
+  "darwin-arm64": Object.freeze({
+    archive: `node-v${DESKTOP_NODE_RUNTIME_VERSION}-darwin-arm64.tar.gz`,
+    sha256: "8294b7aa9b03997481c06babf1e8b270c859358f27da57a11509afe537ac381d",
+  }),
+});
+/**
+ * The runtime is not a project knob, so it does not get a project budget. It
+ * gets an integrity ceiling this toolchain owns: an official Node.js macOS
+ * executable is around 110 MiB, and an archive that unpacked to something far
+ * larger is a supply-chain question rather than a size-tuning one.
+ */
+export const DESKTOP_RUNTIME_CEILING_BYTES = 200 * 1024 * 1024;
 
 /**
  * The window kind a Desktop application always declares and the host always
@@ -87,6 +125,36 @@ export interface DesktopPermissionConfig {
   readonly secureStorage: readonly string[];
 }
 
+/**
+ * Notarization credentials are never a manifest field. `keychainProfile` names
+ * a profile `xcrun notarytool store-credentials` already put in the developer's
+ * keychain, so the manifest carries a *reference* the machine resolves rather
+ * than an Apple ID, a team password, or an App Store Connect key.
+ */
+export interface DesktopNotarizationConfig {
+  readonly keychainProfile: string;
+}
+
+/**
+ * Who owns what, in one shape: the identity, the product entitlements, and the
+ * notarization credentials belong to the product; the order the bundle is signed
+ * in, the entitlements the embedded runtime needs, and the tools that do it
+ * belong to this toolchain. A project states the three product answers here and
+ * nothing about the mechanics.
+ */
+export interface DesktopSigningConfig {
+  /**
+   * The `codesign` identity, usually a `Developer ID Application: …` common
+   * name. Absent means ad-hoc: `velar package` still signs, with `codesign -s -`,
+   * because an arm64 Mach-O with no signature at all cannot be executed.
+   */
+  readonly identity: string | null;
+  /** Project-relative entitlements plist applied to the host and the application bundle. */
+  readonly entitlements: string | null;
+  /** Absent means `velar package` does not submit the build for notarization. */
+  readonly notarization: DesktopNotarizationConfig | null;
+}
+
 export interface VelarDesktopConfig {
   readonly productName: string;
   readonly identifier: string;
@@ -100,6 +168,7 @@ export interface VelarDesktopConfig {
   readonly build: {
     readonly outDir: string;
     readonly sizeBudgetBytes: number;
+    readonly signing: DesktopSigningConfig;
   };
 }
 
@@ -287,13 +356,54 @@ function permissionOrigin(value: string): string | null {
 
 function buildConfig(value: unknown, manifestPath: string): VelarDesktopConfig["build"] {
   const build = value === undefined ? {} : objectField(value, "desktop.build", manifestPath);
-  knownFields(build, new Set(["outDir", "sizeBudgetBytes"]), "desktop.build", manifestPath);
+  knownFields(build, new Set(["outDir", "sizeBudgetBytes", "signing"]), "desktop.build", manifestPath);
   const outDir = build.outDir === undefined ? "dist/desktop" : stringField(build.outDir, "desktop.build.outDir");
   if (outDir.startsWith("/") || outDir.split(/[\\/]/u).includes("..")) throw new Error(`${manifestPath}: 'desktop.build.outDir' must stay inside the project`);
   return Object.freeze({
     outDir,
     sizeBudgetBytes: integerField(build.sizeBudgetBytes, "desktop.build.sizeBudgetBytes", DEFAULT_DESKTOP_SIZE_BUDGET_BYTES, 64 * 1024, 1024 * 1024 * 1024),
+    signing: signingConfig(build.signing, manifestPath),
   });
+}
+
+function signingConfig(value: unknown, manifestPath: string): DesktopSigningConfig {
+  const signing = value === undefined ? {} : objectField(value, "desktop.build.signing", manifestPath);
+  knownFields(signing, new Set(["identity", "entitlements", "notarization"]), "desktop.build.signing", manifestPath);
+  let identity: string | null = null;
+  if (signing.identity !== undefined) {
+    identity = stringField(signing.identity, "desktop.build.signing.identity");
+    // Ad-hoc is the absence of an identity, not the string every `codesign`
+    // invocation spells it with. Two ways to say one thing is one way too many,
+    // and the one that reads like an identity is the one that misleads.
+    if (identity === "-") throw new Error(`${manifestPath}: 'desktop.build.signing.identity' is ad-hoc when it is absent; remove the field rather than naming '-'`);
+    if (identity.length > 256 || /[\r\n]/u.test(identity)) {
+      throw new Error(`${manifestPath}: 'desktop.build.signing.identity' must be a single-line codesign identity of at most 256 characters`);
+    }
+  }
+  let entitlements: string | null = null;
+  if (signing.entitlements !== undefined) {
+    entitlements = stringField(signing.entitlements, "desktop.build.signing.entitlements");
+    if (entitlements.startsWith("/") || entitlements.split(/[\\/]/u).includes("..")) {
+      throw new Error(`${manifestPath}: 'desktop.build.signing.entitlements' must stay inside the project`);
+    }
+  }
+  let notarization: DesktopNotarizationConfig | null = null;
+  if (signing.notarization !== undefined) {
+    const declared = objectField(signing.notarization, "desktop.build.signing.notarization", manifestPath);
+    knownFields(declared, new Set(["keychainProfile"]), "desktop.build.signing.notarization", manifestPath);
+    const keychainProfile = stringField(declared.keychainProfile, "desktop.build.signing.notarization.keychainProfile");
+    if (!/^[A-Za-z0-9._-]{1,128}$/u.test(keychainProfile)) {
+      throw new Error(`${manifestPath}: 'desktop.build.signing.notarization.keychainProfile' must be the name of a stored 'notarytool' credential profile`);
+    }
+    // Apple notarizes Developer ID signatures. An ad-hoc build submitted for
+    // notarization is rejected by the service, so it is refused here where the
+    // author can read why instead of after a build and an upload.
+    if (identity === null) {
+      throw new Error(`${manifestPath}: 'desktop.build.signing.notarization' requires 'desktop.build.signing.identity'; Apple does not notarize an ad-hoc signature`);
+    }
+    notarization = Object.freeze({ keychainProfile });
+  }
+  return Object.freeze({ identity, entitlements, notarization });
 }
 
 function stringList(value: unknown, field: string, maximum: number): readonly string[] {

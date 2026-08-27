@@ -955,7 +955,7 @@ test("Desktop CLI test host provides deterministic manifest-scoped process handl
       visibleOnAllWorkspaces: false, aspectRatio: null, resizable: true } },
     permissions: { files: ["project"], processes: ["git"], network: [], environment: ["PRODUCTION_MODE"], secrets: ["PROVIDER_KEY"],
       links: [], notifications: false, secureStorage: [] },
-    build: { outDir: "dist/desktop", sizeBudgetBytes: 10 * 1024 * 1024 },
+    build: { outDir: "dist/desktop", sizeBudgetBytes: 10 * 1024 * 1024, signing: { identity: null, entitlements: null, notarization: null } },
   })
     .replace("const maxListTextUnits = 2 * 1024 * 1024;", "const maxListTextUnits = 8;")
     .replace("const maxWatchPaths = 4096;", "const maxWatchPaths = 1;");
@@ -1029,7 +1029,7 @@ test("Desktop browser-test platform is selected before the first open and then s
       visibleOnAllWorkspaces: false, aspectRatio: null, resizable: true } },
     permissions: { files: ["project"], processes: [], network: [], environment: [], secrets: [],
       links: [], notifications: false, secureStorage: [] },
-    build: { outDir: "dist/desktop", sizeBudgetBytes: 10 * 1024 * 1024 },
+    build: { outDir: "dist/desktop", sizeBudgetBytes: 10 * 1024 * 1024, signing: { identity: null, entitlements: null, notarization: null } },
   } as const;
   const controller = desktopBrowserTestController(config);
   assert.deepEqual(await controller.invoke("unowned", "operation", [], 30_000), { handled: false });

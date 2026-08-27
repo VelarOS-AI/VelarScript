@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test, { after } from "node:test";
 import { fileURLToPath } from "node:url";
 import { formatSource } from "@velarscript/compiler";
-import { desktopSizeBudgetFailure } from "../packages/desktop/src/build.ts";
+import { desktopRuntimeCeilingFailure, desktopSizeBudgetFailure } from "../packages/desktop/src/build.ts";
 import { uncaughtProgramEntrySource } from "../packages/cli/src/uncaught-program-error.ts";
 import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
@@ -175,6 +175,11 @@ test("[MIG-3] a Desktop size budget failure reports the bundle's composition, no
     rendererBytes: 900_000,
     capabilityHostBytes: 300_000,
     metadataBytes: 200_000,
+    applicationBytes: 1_800_000,
+    // An application whose runtime is not counted here is not a special case: the
+    // embedded interpreter is measured against the toolchain's own ceiling, and
+    // the embedded composition is asserted below.
+    runtimeBytes: 0,
     totalBytes: 1_800_000,
   };
   assert.equal(desktopSizeBudgetFailure(sizes, 2 * 1024 * 1024), null);
@@ -188,11 +193,31 @@ test("[MIG-3] a Desktop size budget failure reports the bundle's composition, no
   assert.match(failure, /300000 bytes\s+16\.7%\s+capability host \(worker\.js\) \[mandatory capability infrastructure\]/u, failure);
   assert.match(failure, /200000 bytes\s+11\.1%\s+bundle metadata \(Info\.plist, icon, desktop\.json\)\n/u, failure);
   // The floor no project change can remove, and the budget that would pass.
-  assert.match(failure, /Mandatory capability infrastructure: 293\.0 KiB \(300000 bytes, 16\.7% of the bundle\)/u, failure);
+  assert.match(failure, /Mandatory capability infrastructure: 293\.0 KiB \(300000 bytes, 16\.7% of the application\)/u, failure);
   assert.match(failure, /Largest contributor: renderer \(application code and assets\) at 878\.9 KiB \(50\.0%\)/u, failure);
   assert.match(failure, /Raise desktop\.build\.sizeBudgetBytes to at least 1800000/u, failure);
   // A reader never has to leave the message to judge the budget.
   assert.equal(failure.split("\n").length, 9, failure);
+
+  // L2: a 110 MiB interpreter is this toolchain generation's fixed cost, not
+  // application code. It never enters the budget arithmetic, and the shares stay
+  // readable because of it — but the failure still says out loud that the bundle
+  // carries it, so nobody reads the composition as the whole artifact.
+  const embedded = desktopSizeBudgetFailure({ ...sizes, runtimeBytes: 120_000_000, totalBytes: 121_800_000 }, 1024 * 1024);
+  assert.ok(embedded, "an embedded-runtime application over its budget must still fail");
+  assert.match(embedded, /Desktop application components are 1\.72 MiB \(1800000 bytes\)/u, embedded);
+  assert.match(embedded, /The embedded Node\.js runtime \(114\.44 MiB, 120000000 bytes\) is outside this budget/u, embedded);
+  assert.match(embedded, /900000 bytes\s+50\.0%\s+renderer \(application code and assets\)\n/u, embedded);
+  assert.doesNotMatch(embedded, /120000000 bytes\s+\d/u, embedded);
+  assert.equal(embedded.split("\n").length, 10, embedded);
+
+  // The runtime's own bound is the toolchain's, and the message says so rather
+  // than pointing at a project field that could not move it.
+  assert.equal(desktopRuntimeCeilingFailure(120_000_000), null);
+  const ceiling = desktopRuntimeCeilingFailure(220 * 1024 * 1024);
+  assert.ok(ceiling, "a runtime past the integrity ceiling must fail");
+  assert.match(ceiling, /above the 200\.00 MiB \(209715200-byte\) integrity ceiling this toolchain generation enforces/u, ceiling);
+  assert.match(ceiling, /not a project setting/u, ceiling);
 });
 
 test("[MOD-U10] an uncaught program error presents as a VelarScript failure, with the Node.js trace one flag away", async () => {
