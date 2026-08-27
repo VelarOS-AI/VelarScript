@@ -141,14 +141,23 @@ for (const file of files) {
     let cascaded = 0;
     const cascadeMessages = [];
     for (const module of result.modules) {
-      const { kept, cascades } = suppress
+      const { kept, cascades, preambleRequired } = suppress
         ? significantFragmentDiagnostics(module.result)
-        : { kept: module.result.diagnostics, cascades: [] };
-      suppressed += module.result.diagnostics.length - kept.length;
+        : { kept: module.result.diagnostics, cascades: [], preambleRequired: [] };
+      suppressed += module.result.diagnostics.length - kept.length - preambleRequired.length;
       cascaded += cascades.length;
       for (const diagnostic of cascades) cascadeMessages.push(`${diagnostic.code} ${diagnostic.message}`);
       for (const diagnostic of kept) {
         failures.push(`${display(file)}:${line}: ${diagnostic.code} ${diagnostic.message}`);
+      }
+      // An `unknown`-type cascade in a fragment that borrows only names is a
+      // refusal about code this fence does spell out, and a preamble resolves
+      // the name that caused it. Naming the repair is the whole difference
+      // between a gate that closes this gap and one that only measures it.
+      for (const diagnostic of preambleRequired) {
+        failures.push(`${display(file)}:${line}: ${diagnostic.code} ${diagnostic.message}`
+          + "\n    This fragment borrows a name it never declares, and the `unknown` that name types flowed into the refusal above."
+          + " Declare the borrowed names in a `<!-- velar-preamble ... -->` comment before this fence and it is checked in full.");
       }
     }
     if (cascaded > 0) {
@@ -217,7 +226,8 @@ function cascadeReport() {
   if (cascadeFragments === 0) return [];
   return [
     `  Of those, ${cascadeFragments} fragment${cascadeFragments === 1 ? "" : "s"} rest on the \`unknown\`-type cascade clause`
-      + ` (${cascadeDiagnostics} diagnostic${cascadeDiagnostics === 1 ? "" : "s"}), the one clause that can hide a refusal about code the fence does declare.`,
+      + ` (${cascadeDiagnostics} diagnostic${cascadeDiagnostics === 1 ? "" : "s"}), the one clause that can hide a refusal about code the fence does declare.`
+      + " It now reaches only fragments borrowing a module a preamble cannot declare; every other cascade is a failure.",
     ...(detail ? cascadeFences : []),
   ];
 }
@@ -343,13 +353,21 @@ function webTargetProvides(interface_, name) {
 //     statically known callable signature` on a call to a name the fragment
 //     never declared, `Unknown component 'App'` on a component imported from a
 //     module the fence only mentions.
-//  3. Only in a fragment that carries at least one unresolved reference: a
+//  3. Only in a fragment that borrows a *module* it never declares: a
 //     diagnostic about the `unknown` *type*. The analyzer types an unresolved
 //     reference `unknown`, and that type flows outward through locals,
 //     destructuring patterns, and f-strings, where the resulting complaint no
-//     longer encloses the reference that caused it. A fragment with no
-//     unresolved reference keeps full strictness over `unknown`, which is a
-//     real type at the JSON and JavaScript boundaries.
+//     longer encloses the reference that caused it.
+//
+// (3) used to apply to any fragment with any unresolved reference, and it was
+// the only clause that could hide a refusal about code the fence *does* spell
+// out. Its scope is now the one case a preamble cannot repair: a preamble
+// declares bindings in the fragment's own module, so it can supply a borrowed
+// *name* but it cannot conjure the sibling `.vel` file that `import("./x.vel")`
+// resolves — the dynamic-import examples in the charter are its whole residual.
+// A fragment that borrows only names has no such excuse: every `unknown`-type
+// cascade in one is a hard failure that names the preamble as the repair, which
+// is what keeps the 12 fences closed here from silently reopening.
 //
 // (3) reads the rendered type, not the word: diagnostics quote *names* in
 // single quotes and render *types* bare, so `use 'unknown' in VelarScript` —
@@ -358,7 +376,7 @@ function webTargetProvides(interface_, name) {
 function significantFragmentDiagnostics(result) {
   const diagnostics = result.diagnostics;
   const unresolved = diagnostics.filter(isUnresolvedReference);
-  if (unresolved.length === 0) return { kept: diagnostics, cascades: [] };
+  if (unresolved.length === 0) return { kept: diagnostics, cascades: [], preambleRequired: [] };
   const index = result.semanticIndex;
   // (2) The spans an unresolved reference occupies: the reference itself, plus
   // every use of a binding whose module never resolved.
@@ -377,18 +395,22 @@ function significantFragmentDiagnostics(result) {
   // The three clauses are applied in order and (3) is reported separately: it is
   // the only one that can drop a diagnostic about code the fence *does* declare,
   // so it is the clause whose reach has to stay measurable (D56 rule 129).
+  // Its reach is now also bounded: only a fragment borrowing a module it cannot
+  // declare may rest on it, because only that fragment is beyond a preamble.
+  const borrowsModule = unresolved.some((diagnostic) => diagnostic.code.startsWith(MODULE_RESOLUTION_PREFIX));
   const kept = [];
   const cascades = [];
+  const preambleRequired = [];
   for (const diagnostic of diagnostics) {
     if (isUnresolvedReference(diagnostic)) continue;
     if (spans.some((span) => span.start >= diagnostic.span.start && span.end <= diagnostic.span.end)) continue;
     if (mentionsUnknownType(diagnostic.message)) {
-      cascades.push(diagnostic);
+      (borrowsModule ? cascades : preambleRequired).push(diagnostic);
       continue;
     }
     kept.push(diagnostic);
   }
-  return { kept, cascades };
+  return { kept, cascades, preambleRequired };
 }
 
 function isUnresolvedReference(diagnostic) {

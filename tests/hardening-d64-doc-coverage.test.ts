@@ -153,8 +153,13 @@ test("a declared preamble turns a masked documentation defect red", async () => 
 });
 
 test("a declared preamble restores the checks an unresolved reference switched off", async () => {
-  // The harder half of rule 167: this defect produces no diagnostic at all
-  // without the declaration, so no suppression clause is even consulted.
+  // The harder half of rule 167. Without the declaration `loadAccount` is
+  // unresolved, so `account` is `unknown` and the field read is refused for the
+  // wrong reason — a complaint about the `unknown` type rather than about the
+  // field. That refusal is about code this fence DOES spell out, so the gate
+  // now fails on it and names the repair instead of dropping it under clause
+  // (3); the message it gives is the vague one, which is the whole argument for
+  // declaring the preamble.
   const silent = await checkMarkdown("silent", [
     "```velar fragment",
     "const account = loadAccount(\"42\")",
@@ -162,7 +167,9 @@ test("a declared preamble restores the checks an unresolved reference switched o
     "```",
     "",
   ].join("\n"));
-  assert.equal(silent.status, 0, silent.output);
+  assert.equal(silent.status, 1, silent.output);
+  assert.match(silent.stderr, /Cannot access 'noSuchFieldAtAll' on unknown/u);
+  assert.match(silent.stderr, /Declare the borrowed names in a `<!-- velar-preamble \.\.\. -->` comment/u);
 
   const declared = await checkMarkdown("declared-field", [
     "<!-- velar-preamble",
@@ -180,6 +187,35 @@ test("a declared preamble restores the checks an unresolved reference switched o
   ].join("\n"));
   assert.equal(declared.status, 1, declared.output);
   assert.match(declared.stderr, /Type 'Account' has no field 'noSuchFieldAtAll'/u);
+});
+
+test("the `unknown`-type cascade clause reaches only a fragment borrowing a module", async () => {
+  // The clause's residual, and the reason it is a residual rather than a
+  // retirement: a preamble declares bindings in the fragment's own module, so
+  // it can supply a borrowed name but cannot conjure the sibling `.vel` file
+  // that `import("./x.vel")` resolves. The charter's two dynamic-import
+  // examples are the whole of it, and they stay reported-but-green.
+  const borrowsModule = await checkMarkdown("borrows-module", [
+    "```velar fragment",
+    "const reports = await import(\"./reports.vel\")",
+    "print(reports.title)",
+    "```",
+    "",
+  ].join("\n"));
+  assert.equal(borrowsModule.status, 0, borrowsModule.output);
+  assert.match(borrowsModule.stdout, /rest on the `unknown`-type cascade clause/u);
+
+  // The same shape borrowing only a NAME has a preamble available to it, so the
+  // identical cascade is a failure there.
+  const borrowsName = await checkMarkdown("borrows-name", [
+    "```velar fragment",
+    "const reports = loadReports()",
+    "print(reports.title)",
+    "```",
+    "",
+  ].join("\n"));
+  assert.equal(borrowsName.status, 1, borrowsName.output);
+  assert.match(borrowsName.stderr, /Cannot access 'title' on unknown/u);
 });
 
 test("a preamble is compiled, so a defect inside it fails the gate too", async () => {

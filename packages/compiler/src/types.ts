@@ -1292,8 +1292,9 @@ export function unifyTypeParameters(
   bindings: (ValueType | null)[],
   fieldsOf: (identity: string) => ReadonlyMap<string, ValueType> | null = () => null,
   unknownParameters?: Set<number>,
+  expandAliases: (type: ValueType) => ValueType = (type) => type,
 ): void {
-  unifyInto(pattern, actual, bindings, fieldsOf, unknownParameters);
+  unifyInto(pattern, actual, bindings, fieldsOf, unknownParameters, expandAliases);
 }
 
 /**
@@ -1312,10 +1313,11 @@ function unifyInto(
   bindings: (ValueType | null)[],
   fieldsOf: (identity: string) => ReadonlyMap<string, ValueType> | null,
   unknownParameters: Set<number> | undefined,
+  expandAliases: (type: ValueType) => ValueType,
   readonlyProjection = false,
 ): void {
   const unifyTypeParameters = (nextPattern: ValueType, nextActual: ValueType, nextReadonly = readonlyProjection): void =>
-    unifyInto(nextPattern, nextActual, bindings, fieldsOf, unknownParameters, nextReadonly);
+    unifyInto(nextPattern, nextActual, bindings, fieldsOf, unknownParameters, expandAliases, nextReadonly);
   const through = (container: ValueType): boolean => readonlyProjection || isReadonlyView(container);
   if (isInvalidType(actual)) return;
   if (pattern.kind === "parameter") {
@@ -1323,7 +1325,19 @@ function unifyInto(
       unknownParameters?.add(pattern.index);
       return;
     }
-    const solved = readonlyProjection ? readonlyViewOf(actual) : actual;
+    // D55 rule 121: a solved type argument is the same type argument an
+    // annotation writes, and `expandAliases` already canonicalizes those — so
+    // `Box<Id>` and `Box<string>` "reach the identity step already agreeing".
+    // A binding solved through a `Type<T>` argument is the one that does not
+    // arrive pre-expanded: `channel(Answer, capacity=1)` solves T from the
+    // runtime-type value `Answer`, which is a `named` alias, not the `string`
+    // an annotation would have resolved to. Left unexpanded it made the
+    // resulting `Channel<Answer>` nominally distinct from the `Channel<string>`
+    // every annotation spelling resolves to — so BOTH spellings were refused
+    // and only inference could name the type. Expanding here also keeps the
+    // merge honest: `Answer` merged with `string` produced the phantom union
+    // `Answer | string` rather than plain `string`.
+    const solved = expandAliases(readonlyProjection ? readonlyViewOf(actual) : actual);
     const existing = bindings[pattern.index];
     bindings[pattern.index] = existing ? mergeTypes(existing, solved) : solved;
     return;
@@ -1504,21 +1518,22 @@ export function instantiateGenericCallable(
   const bindings: (ValueType | null)[] = Array.from({ length: actual.typeParameterNames?.length ?? 0 }, () => null);
   const unknownParameters = new Set<number>();
   const fieldsOf = (identity: string): ReadonlyMap<string, ValueType> | null => environment.fieldsOf(identity);
+  const expandAliases = (type: ValueType): ValueType => environment.expandTypeAliases?.(type) ?? type;
   for (let index = 0; index < actual.parameters.length; index += 1) {
     const provided = expected.parameters[index] ?? expected.rest;
-    if (provided) unifyTypeParameters(actual.parameters[index]!, provided, bindings, fieldsOf, unknownParameters);
+    if (provided) unifyTypeParameters(actual.parameters[index]!, provided, bindings, fieldsOf, unknownParameters, expandAliases);
   }
   if (actual.rest) {
     for (let index = actual.parameters.length; index < expected.parameters.length; index += 1) {
-      unifyTypeParameters(actual.rest, expected.parameters[index]!, bindings, fieldsOf, unknownParameters);
+      unifyTypeParameters(actual.rest, expected.parameters[index]!, bindings, fieldsOf, unknownParameters, expandAliases);
     }
-    if (expected.rest) unifyTypeParameters(actual.rest, expected.rest, bindings, fieldsOf, unknownParameters);
+    if (expected.rest) unifyTypeParameters(actual.rest, expected.rest, bindings, fieldsOf, unknownParameters, expandAliases);
   }
   // The result position is deliberately outside the `unknown` sink: an expected
   // result of `unknown` says "the consumer accepts anything", not "the callee
   // is handed an unvalidated value". Only the input positions can force a
   // bounded parameter to be `unknown` inside the body.
-  unifyTypeParameters(actual.result, expected.result, bindings, fieldsOf);
+  unifyTypeParameters(actual.result, expected.result, bindings, fieldsOf, undefined, expandAliases);
   if (violations && environment.satisfiesBound) {
     const decide = environment.satisfiesBound.bind(environment);
     violations.push(...collectGenericBoundViolations(actual, bindings, decide, unknownParameters));

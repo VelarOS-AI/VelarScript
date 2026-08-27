@@ -5,6 +5,14 @@
 `Map.get(key)` 返回 `V?`，这是普通读取的正确契约。但当 `V` 本身是集合时，常见
 的分桶写法会先检查 `null`，再使用收窄后的集合：
 
+<!-- velar-preamble
+type Write:
+    stage: string
+
+const buckets: Map<string, List<Write>> = Map()
+const key = "terrain"
+const value: Write = {stage: "terrain"}
+-->
 ```velar fragment
 const bucket = buckets.get(key)
 if bucket == null: buckets.set(key, [value])

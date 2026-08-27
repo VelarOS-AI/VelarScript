@@ -1410,6 +1410,81 @@ function settlingValuePositions(expression: Expression): readonly Expression[] {
 const STRING_WIRE_KIND: ReadonlySet<"string" | "number"> = new Set(["string"]);
 const NUMBER_WIRE_KIND: ReadonlySet<"string" | "number"> = new Set(["number"]);
 
+/**
+ * Every lowering hint names its owner before it names itself, so that owners
+ * who never met cannot pick the same word. Both spellings in use are accepted —
+ * a bare owner (`core.duration-arithmetic`, `node.route-param:{...}`) and a
+ * scoped package (`@velarscript/web:jsx-scalar-text`) — and only the prefix is
+ * constrained, because node's route hints carry a JSON payload after theirs.
+ */
+const EXTENSION_CALL_OWNER = /^(?:@[a-z0-9][a-z0-9-]*\/)?[a-z][a-z0-9-]*[.:][a-z][a-z0-9-]*/u;
+
+/**
+ * The lowering-hint channel: keyed by span identity, an open string vocabulary,
+ * written by three independent owners (core's duration arithmetic, web's look
+ * arithmetic and scalar-text fast path, node's route hints) and by any
+ * third-party extension that subclasses `Analyzer`. Nothing but convention kept
+ * two owners from claiming one span, and the loser's hint vanished in silence —
+ * the emitter then lowered that expression the other way with no diagnostic
+ * anywhere saying a decision had been dropped.
+ *
+ * The protocol shape is deliberately unchanged: `Analyzer` is exported from
+ * `@velarscript/compiler/extension` and `LoweringHints` publishes the map back
+ * as a `ReadonlyMap<string, string>`, so both sides stay `Map<string, string>`
+ * and every existing `.set(identity, value)` writer keeps working verbatim.
+ * What changes is that `set` now enforces the invariant those writers assumed:
+ *
+ *   - the same value written twice is idempotent and legal — a span can be
+ *     re-analyzed, and deciding it the same way twice says nothing new;
+ *   - a DIFFERENT value onto a claimed span is an invariant violation. Two
+ *     owners disagree about how one expression lowers, and arrival order is not
+ *     an answer to that, so it is reported as the compiler defect it is and the
+ *     first claim stands;
+ *   - a value with no owner prefix is refused on the same ground, since the
+ *     namespace is the only reason independent owners cannot collide by accident.
+ *
+ * An owner that must YIELD to an existing claim still says so exactly the way
+ * web's scalar-text fast path always has — `if (!has(identity)) set(...)`. That
+ * stays legal because it never overwrites, and it is now the ONLY way to lose a
+ * span: every other second write is heard.
+ */
+class ExtensionCallMap extends Map<string, string> {
+  private readonly report: (message: string, span: Span) => void;
+
+  constructor(report: (message: string, span: Span) => void) {
+    super();
+    this.report = report;
+  }
+
+  override set(identity: string, value: string): this {
+    const existing = this.get(identity);
+    if (existing === value) return this;
+    if (existing !== undefined) {
+      this.report(
+        `Internal compiler error: lowering hints '${existing}' and '${value}' both claim one expression, and only one of them can be emitted; please report this module`,
+        spanFromIdentity(identity),
+      );
+      return this;
+    }
+    if (!EXTENSION_CALL_OWNER.test(value)) {
+      this.report(
+        `Internal compiler error: lowering hint '${value}' does not name an owner — write '<owner>.<name>' or '@scope/<owner>:<name>'; please report this module`,
+        spanFromIdentity(identity),
+      );
+      return this;
+    }
+    return super.set(identity, value);
+  }
+}
+
+/** The inverse of `spanIdentity`, so a hint collision can point at the source. */
+function spanFromIdentity(identity: string): Span {
+  const [start, end] = identity.split(":", 2).map((part) => Number.parseInt(part, 10));
+  return start !== undefined && end !== undefined && Number.isSafeInteger(start) && Number.isSafeInteger(end)
+    ? { start, end }
+    : { start: 0, end: 0 };
+}
+
 export class Analyzer implements TypeEnvironment {
   protected readonly diagnostics: Diagnostic[] = [];
   protected readonly advisories: Advisory[] = [];
@@ -1541,7 +1616,9 @@ export class Analyzer implements TypeEnvironment {
   private readonly formReads = new Map<string, readonly FormReadField[]>();
   private readonly namedArgumentOrders = new Map<string, readonly number[]>();
   protected readonly extensionLiterals = new Map<string, string>();
-  protected readonly extensionCalls = new Map<string, string>();
+  protected readonly extensionCalls: Map<string, string> = new ExtensionCallMap(
+    (message, span) => this.diagnostics.push(diagnostic("VEL9004", message, span)),
+  );
   private readonly builtinValueReferences = new Map<string, PermanentNamespaceName | "range">();
   private readonly semanticBindingTypes = new Map<string, ValueType>();
   private readonly semanticBindingMembers = new Map<string, ReadonlyMap<string, ValueType>>();
@@ -8823,6 +8900,10 @@ export class Analyzer implements TypeEnvironment {
     // `unknown` still never poisons a merge with a concrete argument.
     const unknownParameters = new Set<number>();
     const fieldsOf = (identity: string): ReadonlyMap<string, ValueType> | null => this.fieldsOf(identity);
+    // A solved type argument is canonicalized the same way an annotation's is;
+    // see the `parameter` branch of `unifyInto` for why the `Type<T>` path is
+    // the one that would otherwise carry an unexpanded alias into `Channel<T>`.
+    const expandAliases = (type: ValueType): ValueType => this.expandAliases(type);
     // D55 rule 121: substituting into `Box<T>` produces an instantiation this
     // module may never have written down, and it still has to have a field
     // table — otherwise `def unwrap<T>(box: Box<T>)` would solve T correctly
@@ -8899,16 +8980,16 @@ export class Analyzer implements TypeEnvironment {
       if (!item.declared) continue;
       if (item.spreadList) {
         const expanded = this.expandAliases(actual);
-        if (expanded.kind === "list") unifyTypeParameters(item.declared, expanded.element, bindings, fieldsOf, unknownParameters);
+        if (expanded.kind === "list") unifyTypeParameters(item.declared, expanded.element, bindings, fieldsOf, unknownParameters, expandAliases);
       } else {
-        unifyTypeParameters(item.declared, actual, bindings, fieldsOf, unknownParameters);
+        unifyTypeParameters(item.declared, actual, bindings, fieldsOf, unknownParameters, expandAliases);
       }
     }
     for (const item of deferredArrows) {
       const context = item.declared ? substitute(item.declared) : unknownType;
       const actual = this.inferExpression(item.value, context);
       actuals.set(item, actual);
-      if (item.declared) unifyTypeParameters(item.declared, actual, bindings, fieldsOf, unknownParameters);
+      if (item.declared) unifyTypeParameters(item.declared, actual, bindings, fieldsOf, unknownParameters, expandAliases);
     }
     this.reportGenericBoundViolations(callee, bindings, planned, callSpan, unknownParameters);
     for (const item of planned) {

@@ -640,6 +640,16 @@ fields that were not explicitly awaited.
 
 Declarations and `for` loops share one controlled binding-pattern contract:
 
+<!-- velar-preamble
+type Profile:
+    name: string
+    nickname: string
+    tier: number
+
+const profile: Profile = {name: "Ada", nickname: "ada", tier: 1}
+const values = [1, 2, 3]
+const pairs: List<List<string>> = [["region", "north"]]
+-->
 ```velar fragment
 const {name, nickname, ...details} = profile
 const [first, ...rest] = values
@@ -963,6 +973,20 @@ resolved value. A function *type* carries no `async` and describes the value
 the call hands back, which is a Promise. They are written side by side here
 because seeing only one of them makes the other look like a mistake:
 
+<!-- velar-preamble
+type User:
+    id: string
+    name: string
+
+async def fetchUser(id: string) -> User:
+    return {id: id, name: "Ada"}
+
+type Api:
+    user: (id: string) -> Promise<User>
+
+const api: Api = {user: fetchUser}
+const users: List<User> = []
+-->
 ```velar fragment
 async def loadUser(id: string) -> User:                  // declaration: '-> User'
     return await api.user(id)
@@ -2160,6 +2184,18 @@ either operand.
 
 ### Map
 
+<!-- velar-preamble
+type User:
+    id: string
+    name: string
+
+type Write:
+    id: string
+
+const user: User = {id: "user-1", name: "Ada"}
+const writesByStage: Map<string, List<Write>> = Map()
+const write: Write = {id: "write-1"}
+-->
 ```velar fragment
 const users: Map<string, User> = Map()
 users.set(user.id, user)
@@ -2189,6 +2225,9 @@ exhaustion. Creating and advancing the cursor does not copy the Map. `keys()`,
 `values()`, and `entries()` keep their separate snapshot contract and return
 fresh Lists.
 
+<!-- velar-preamble
+const users: Map<string, string> = Map([["user-1", "Ada"]])
+-->
 ```velar fragment
 const cursor = users.iterator()
 const first = cursor.next()
@@ -2252,6 +2291,11 @@ record with arbitrary string keys whose values all satisfy `T`. It is intended
 for JSON objects, schema property tables, headers encoded as data, and other
 wire formats where object keys are not known in advance.
 
+<!-- velar-preamble
+type Property:
+    type: string
+    description: string
+-->
 ```velar fragment
 const properties: Record<Property> = {
     path: {type: "string", description: "Relative path"},
@@ -2478,6 +2522,18 @@ Record patterns use the same field spelling as records and object
 destructuring. A shorthand field captures that field, a nested pattern follows
 `:`, and `...rest` captures the remaining fields:
 
+<!-- velar-preamble
+type ListedUser:
+    name: string
+
+type Response:
+    kind: string
+    users: List<ListedUser>
+    requestId: string
+    message: string
+
+const response: Response = {kind: "success", users: [{name: "Ada"}], requestId: "r-1", message: ""}
+-->
 ```velar fragment
 match response:
     case {kind: "success", users: [first, ...rest], requestId} as result:
@@ -2567,6 +2623,21 @@ match status:
 
 ### Loops
 
+<!-- velar-preamble
+type User:
+    name: string
+
+type Reply:
+    next: () -> Promise<string?>
+
+async def nextChunk() -> string?:
+    return null
+
+const users: List<User> = [{name: "Ada"}]
+const usersById: Map<string, User> = Map([["user-1", {name: "Ada"}]])
+const reply: Reply = {next: nextChunk}
+let attempts = 0
+-->
 ```velar fragment
 for user in users:
     print(user.name)
@@ -2705,6 +2776,18 @@ enclosing scope — falling off the end, `return`, `break`, `continue`, or a
 throw — releases it. Several owned resources release in reverse declaration
 order.
 
+<!-- velar-preamble
+class LogFile:
+    @dispose:
+        pass
+
+    @iterate:
+        const line: string? = null
+        return line
+
+async def openLog(path: string) -> LogFile:
+    return LogFile()
+-->
 ```velar fragment
 async def collect(path: string) -> number:
     using source = await openLog(path)
@@ -2766,6 +2849,18 @@ exits are always available — move the `using` up to the scope that really owns
 the resource, or return the data you read from it. Passing the handle to a
 function stays legal: a callee borrows, and a borrow is not ownership.
 
+<!-- velar-preamble
+class LogFile:
+    @dispose:
+        pass
+
+    @iterate:
+        const line: string? = null
+        return line
+
+async def openLog(path: string) -> LogFile:
+    return LogFile()
+-->
 ```velar fragment
 async def lineCount(path: string) -> number:
     using source = await openLog(path)
@@ -3996,6 +4091,16 @@ State does not copy, freeze, or claim linear ownership of a mutable value.
 Hydrated data, rebuilt indexes, and other ordinary values may initialize or be
 assigned into state directly:
 
+<!-- velar-preamble
+type Model:
+    id: string
+
+type Snapshot:
+    model: Model
+
+def loadSnapshot() -> Snapshot:
+    return {model: {id: "model-1"}}
+-->
 ```velar fragment
 const restored = loadSnapshot()
 state model = restored.model

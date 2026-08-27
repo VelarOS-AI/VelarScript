@@ -876,6 +876,15 @@ Analyzer-to-emitter lowering hints use the complete source span as node identity
 Parent expressions and their first child often share a start offset, so
 start-only keys are forbidden for expression hints such as optional reads,
 private members, named calls, conditions, and Web-controlled calls.
+Each hint value names its owner before it names itself — `core.duration-arithmetic`,
+`@velarscript/web:jsx-scalar-text`, `node.route-param:` — so owners who never met
+cannot pick the same word, and an unnamespaced value is refused. Writing the same
+value onto one span twice is idempotent; writing a *different* one is an invariant
+violation, because two owners then disagree about how one expression lowers and
+arrival order is not an answer. That is reported as internal error `VEL9004` and
+the first claim stands. An owner that must yield to an existing claim says so by
+never overwriting (`if (!has(identity)) set(...)`), which is how the Web
+scalar-text fast path defers to a look's arithmetic lowering.
 
 Null normalization is type-directed. Every
 checked expression whose expanded type is optional, `null`, or `unknown`

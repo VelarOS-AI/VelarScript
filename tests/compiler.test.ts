@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { applyMechanicalFixes, compile as compileCore, describeType, formatDiagnostic, formatSource, inspectModule as inspectCoreModule, MAX_VELAR_SOURCE_CODE_UNITS, semanticVisibleSymbolsAt, SourceText, type CompilerExtension } from "@velarscript/compiler";
 import { VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION } from "@velarscript/compiler/framework-host";
-import { VELAR_CLASS_FIELD_MODULE, VELAR_COLLECTION_HOST_EXPORTS, VELAR_COLLECTION_HOST_MODULE, VELAR_COLLECTION_LOWERING_DEPENDENCIES, VELAR_COLLECTION_LOWERING_EXPORTS, VELAR_COLLECTION_LOWERING_MODULE, VELAR_ERROR_NORMALIZATION_MODULE, VELAR_NARROWING_MODULE, VELAR_PRIMITIVE_METHOD_MODULE, VELAR_PROMISE_NORMALIZATION_MODULE, VELAR_PROMISE_NORMALIZATION_REGISTRY_KEY, VELAR_REACTIVE_BRIDGE_MODULE, VELAR_RUNTIME_SCHEMA_VERSION, VELAR_TYPE_VALIDATION_MODULE, type ExtensionValueType, type TypeSyntax } from "@velarscript/compiler/extension";
+import { Analyzer, VELAR_CLASS_FIELD_MODULE, VELAR_COLLECTION_HOST_EXPORTS, VELAR_COLLECTION_HOST_MODULE, VELAR_COLLECTION_LOWERING_DEPENDENCIES, VELAR_COLLECTION_LOWERING_EXPORTS, VELAR_COLLECTION_LOWERING_MODULE, VELAR_ERROR_NORMALIZATION_MODULE, VELAR_NARROWING_MODULE, VELAR_PRIMITIVE_METHOD_MODULE, VELAR_PROMISE_NORMALIZATION_MODULE, VELAR_PROMISE_NORMALIZATION_REGISTRY_KEY, VELAR_REACTIVE_BRIDGE_MODULE, VELAR_RUNTIME_SCHEMA_VERSION, VELAR_TYPE_VALIDATION_MODULE, type ExtensionValueType, type TypeSyntax } from "@velarscript/compiler/extension";
 import { isAssignable, sameType, type ValueType } from "../packages/compiler/src/types.ts";
 import { keywordKinds } from "../packages/compiler/src/token.ts";
 import { compileProject as compileProjectCore, moduleInterfaceIdentity, type CompileProjectOptions, type ProjectResult } from "../packages/cli/src/project.ts";
@@ -29721,4 +29721,39 @@ mount(<App />, "#app")
   for (const module of project.modules) {
     assert.deepEqual(module.result.diagnostics, []);
   }
+});
+
+// The lowering-hint channel (`extensionCalls`) is keyed by span identity with
+// an open string vocabulary, and `Analyzer` is exported to extension authors,
+// so three in-repo owners plus any third party write it. Its safety used to be
+// convention: a second owner claiming a span silently lost, and the emitter
+// lowered that expression the other way with nothing anywhere saying so.
+test("a second, different lowering hint on one span is a reported compiler defect", () => {
+  const claims: [string, string][] = [
+    ["4:9", "test.first-claim"],
+    ["4:9", "test.first-claim"],    // idempotent: a re-analyzed span decided the same way
+    ["4:9", "test.second-claim"],   // collision: two owners disagree about one expression
+    ["11:14", "unnamespaced"],      // opts out of the namespace that prevents collisions
+    ["11:14", "test.well-named"],   // the refused value never claimed the span
+  ];
+  class DoubleWritingAnalyzer extends Analyzer {
+    override analyze(program: Parameters<Analyzer["analyze"]>[0]): ReturnType<Analyzer["analyze"]> {
+      const diagnostics = super.analyze(program);
+      for (const [identity, value] of claims) this.extensionCalls.set(identity, value);
+      return diagnostics;
+    }
+  }
+  const extension: CompilerExtension = {
+    id: "test:lowering-hint-collision",
+    analyzer: { create: (context, extensions) => new DoubleWritingAnalyzer(context, extensions) },
+  };
+
+  const result = compileCore(`print("hint")\n`, { extensions: [extension] });
+  assert.deepEqual(result.diagnostics.map((item) => `${item.code} ${item.message}`), [
+    "VEL9004 Internal compiler error: lowering hints 'test.first-claim' and 'test.second-claim' both claim one expression, and only one of them can be emitted; please report this module",
+    "VEL9004 Internal compiler error: lowering hint 'unnamespaced' does not name an owner — write '<owner>.<name>' or '@scope/<owner>:<name>'; please report this module",
+  ]);
+  // The collision points at the source it is about, and the refusal leaves the
+  // span free for the owner that spells its hint correctly.
+  assert.deepEqual(result.diagnostics.map((item) => item.span), [{ start: 4, end: 9 }, { start: 11, end: 14 }]);
 });
