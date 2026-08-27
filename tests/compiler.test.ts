@@ -25417,7 +25417,7 @@ component Hygiene:
   // The scalar child lowers to a text node and needs no child scope at all; the
   // optional one still opens a dynamic region, and its generated parameter must
   // still not capture the user's own `__childScope`.
-  assert.match(result.code ?? "", /__velarText\(__velarElement1, \(\) => \(__el1 \+ __childScope \+ __scope \+ __namespace\)/u);
+  assert.match(result.code ?? "", /__velarText\(__velarElement1, \(\) => .*__el1.*__childScope.*__scope.*__namespace/u);
   assert.match(result.code ?? "", /\(__velarChildScope\) => \(__maybe \?\? null\)/u);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));

@@ -24,7 +24,7 @@ import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
 
 function emitted(source: string): string {
   const result = compile(source, { extensions: [velarCompilerExtension] });
-  assert.deepEqual(result.diagnostics.filter((entry) => entry.severity !== "advisory"), []);
+  assert.deepEqual(result.diagnostics, []);
   return result.code ?? "";
 }
 
@@ -108,7 +108,7 @@ async function mountInChromium(
   visit: (page: Page, failures: readonly string[]) => Promise<void>,
 ): Promise<void> {
   const result = compile(source, { extensions: [velarCompilerExtension] });
-  assert.deepEqual(result.diagnostics.filter((entry) => entry.severity !== "advisory"), []);
+  assert.deepEqual(result.diagnostics, []);
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage();
