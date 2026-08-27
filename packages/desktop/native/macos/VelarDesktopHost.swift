@@ -3456,8 +3456,13 @@ private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
             finish()
             return
         }
-        if let terminal = states.first(where: { $0 == .failed || $0 == .stopped }) {
-            endSmoke(supervisor, 1, "a declared service reached the terminal state '\(terminal.rawValue)' instead of ready")
+        // Only when every service has settled somewhere terminal, never on the
+        // first one: a service that stops immediately would otherwise end the
+        // smoke before a service that is still backing off has finished proving
+        // what its restart policy does.
+        if states.allSatisfy({ $0 == .failed || $0 == .stopped }) {
+            let report = supervisor.report().map { "\($0["name"] ?? "?")=\($0["state"] ?? "?")" }.joined(separator: ", ")
+            endSmoke(supervisor, 1, "every declared service settled without becoming ready (\(report))")
         }
         guard Date() < deadline else {
             let report = supervisor.report().map { "\($0["name"] ?? "?")=\($0["state"] ?? "?")" }.joined(separator: ", ")
