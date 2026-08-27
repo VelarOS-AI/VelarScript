@@ -138,6 +138,7 @@ test("[D60-149] the extensions still register the module-provided enums this gat
     "@velarscript/desktop velar/process ProcessOutputChannel",
     "@velarscript/desktop velar/realtime RealtimeClientFailureAction",
     "@velarscript/desktop velar/realtime RealtimeClientState",
+    "@velarscript/desktop velar/window WindowState",
     "@velarscript/node velar/http HttpTransportPhase",
     "@velarscript/node velar/process ProcessOutputChannel",
     "@velarscript/server velar/http HttpTransportPhase",
