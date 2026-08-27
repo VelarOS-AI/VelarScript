@@ -10,10 +10,33 @@ permission-scoped implementations of existing language capabilities:
 
 - `velar/desktop`: platform, packaging state, application directories, and the
   native project-directory picker.
+- `velar/window`: the window kinds `desktop.windows` declares, opened by kind
+  and optional instance key. A `Window` is an owned resource whose release
+  closes it; `watchState()` is a bounded pull stream of `moved`, `resized`,
+  `focused`, `blurred` and `closed`.
+- `velar/desktop` also carries the rest of the host surface: `openExternal`
+  through a closed scheme allowlist, `displays()`, the `watchPower()`
+  sleep/wake stream, the `watchDroppedFiles()` stream of real paths a drag
+  gesture brought in, the read-only `permissionStatus()` probes, and
+  `applyUpdate()`, which replaces this installed application with a downloaded
+  archive of itself.
+- `velar/service`: `connect(name)` opens an authenticated loopback channel to a
+  process `desktop.services` declares, and `watchServices()` is a bounded pull
+  stream of `starting`, `ready`, `restarting`, `failed` and `stopped`. A
+  `ServiceConnection` is an owned resource with a backpressured send and a
+  bounded pull receive; it carries text.
+- `velar/notification`: `requestPermission`, `show`, and a bounded pull stream of
+  activations. The manifest declares whether the application may notify; the
+  operating system separately answers whether it may right now.
+- `velar/secure-storage`: named credential slots held as macOS keychain generic
+  passwords under the application's bundle identifier. A stored value never
+  enters a log line, a diagnostic, or a test seam.
 - `velar/fs`, `velar/path`, `velar/process`, `velar/http`, and `velar/env`: the
   same checked contracts as Node, restricted by the Desktop manifest.
-- `velar/desktop-test`: deterministic platform selection and bounded fixture
-  filesystem helpers for official browser tests.
+- `velar/desktop-test`: deterministic platform and window-kind selection, a fake
+  window registry, notification centre, keychain, power source, drop source and
+  permission probes, and bounded fixture filesystem helpers for official browser
+  tests.
 
 Language servers, project transactions, product task runners, terminals,
 editors, and other Workbench features are not Desktop language capabilities.
@@ -30,22 +53,116 @@ compose the public filesystem/process/network contracts where appropriate.
   "desktop": {
     "productName": "Example",
     "identifier": "com.example.app",
+    "windows": {
+      "main": { "width": 1280, "height": 820 },
+      "note-preview": { "style": "panel", "frame": false, "aspectRatio": 1.6, "width": 512, "height": 320 }
+    },
+    "services": {
+      "core": { "payload": "dist/service-core", "entry": "main.js", "restart": "always" }
+    },
     "permissions": {
-      "files": ["project"],
+      "files": ["project", "dropped"],
       "processes": ["git"],
       "network": ["https://api.example.com"],
       "environment": [],
-      "secrets": []
+      "secrets": [],
+      "links": ["https", "mailto"],
+      "notifications": true,
+      "secureStorage": ["CLOUD_SESSION"]
     }
   }
 }
 ```
 
+`desktop.windows` declares every window kind the application may open. `main` is
+required and opens at launch; an undeclared kind is refused at the `openWindow`
+call and again by the host. Closing `main` closes every other window and quits,
+closing the last window quits, and a packaged application is a single instance —
+none of the three is configurable. Each window is its own document generation
+with its own capability ownership; windows share no JavaScript context.
+
+## Service processes
+
+`desktop.services` declares the long-running processes the product owns. The
+language starts them, supervises them, converges them when the application
+quits, and hands the renderer one authenticated channel to each; it does not
+sandbox them. A service does not go through the capability worker, and declaring
+one in the manifest makes it auditable rather than confined — its policy, its
+permissions and its code are the product's.
+
+A service name follows a window kind's rule — lowercase words joined by single
+hyphens — and at most eight may be declared. `payload` is a project directory
+copied whole into `Contents/Resources/services/<name>/` by `velar package`;
+`entry` is a JavaScript file inside it. The only runtime is the Node.js
+executable the bundle already carries: no other executable is declarable, because
+a second supply surface for long-running processes is exactly what this model
+exists to avoid. A short-lived process is `velar/process` with a `processes`
+grant instead. `restart` is `always` — an exponential backoff from one second to
+a thirty-second cap, with five consecutive failures reaching the terminal
+`failed` — or `never`.
+
+Services start before the renderer loads and are not awaited. On quit the host
+sends SIGTERM and, thirty seconds later, SIGKILL; a service's exit status never
+becomes the application's.
+
+### The handshake
+
+The host allocates a loopback port and a 128-bit token per service and hands
+both to the process in its environment:
+
+```sh
+VELAR_SERVICE_ENDPOINT=127.0.0.1:<port>
+VELAR_SERVICE_TOKEN=<32 hexadecimal characters>
+```
+
+The service must run a WebSocket server on that endpoint. Every connection the
+host opens — the readiness probe and each `connect()` — begins with exactly two
+frames, and this is the whole protocol the language imposes:
+
+```json
+{"velar":"service-hello","token":"<the value of VELAR_SERVICE_TOKEN>"}
+```
+
+```json
+{"velar":"service-ready"}
+```
+
+The host sends the first as a text frame immediately after the socket opens and
+waits up to 30 seconds for the second; a service should apply the same 30-second
+bound to a connection that has not sent a hello. A connection whose token is not
+the one the host issued must be closed without an answer: the endpoint is
+loopback and every process on the machine can reach loopback, so the token is
+the whole of this channel's authentication. After the two frames the channel
+carries whatever the product decided it carries; the language reads none of it.
+
+The readiness probe closes its connection as soon as it has the answer. A
+service that never answers within the deadline is a start that failed, and the
+declared `restart` policy decides what happens next.
+
+`velar dev` runs the same services from `<project>/<payload>/<entry>` on the
+system Node and converges them when the dev server closes. It performs the same
+handshake and reports the result, and it does not watch or rebuild a service:
+that is the product's own toolchain.
+
+`examples/tour/desktop/service-notes-index/main.js` is a complete implementation
+of the service side in dependency-free JavaScript, and is the shortest answer to
+"what do I actually have to write".
+
 The permission manifest is the authority. File access is limited to the
-`app-data` and `project` scopes. Process grants are exact executable names and
-do not imply shell parsing or an operating-system sandbox. Network grants are
-exact HTTPS origins (or loopback HTTP origins). Readable environment values
-and opaque HTTP secrets are separate allowlists.
+`app-data` and `project` scopes, plus the special `dropped` root that authorizes
+reading the files a user's drag gesture brings in and learning their real paths.
+Process grants are exact executable names and do not imply shell parsing or an
+operating-system sandbox. Network grants are exact HTTPS origins (or loopback
+HTTP origins) and govern what the renderer may reach; `links` is a separate
+closed set of `http`, `https` and `mailto` and governs only what `openExternal`
+may hand to the system. Readable environment values, opaque HTTP secrets, and
+named credential slots are three separate allowlists, and `secrets` and
+`secureStorage` may not share a name. `notifications` is a single declaration of
+intent; the operating system still asks the user.
+
+Every capability fails where it is *called*, with the manifest line that would
+grant it named in the error — never at the import, and never silently. The
+native host repeats each check on its own side.
 
 `selectProjectDirectory()` opens the native directory chooser. A successful
 selection atomically replaces the project grant used by subsequent relative
@@ -69,11 +186,49 @@ streamed HTTP bodies with distinct status, abort, and transport failures.
 Large request and response values use the bounded chunk transport rather than
 depending on WebView message limits.
 
-The macOS package uses WKWebView and keeps Node external (Node.js 24 or newer).
+The macOS package uses WKWebView and is self-contained: it carries one bare
+Node.js executable at `Contents/MacOS/node`, and the end user installs nothing.
 `velar package` contains only the native host, the capability worker, renderer,
-icon, and metadata. The manifest reports each component and the complete tree
-hash under one size budget; it does not bundle the CLI, compiler, browser
-automation, language server, build engine, project kernel, or PTY helper.
+icon, metadata, any declared service payloads, and that runtime. The manifest reports each component and the
+complete tree hash; it does not bundle the CLI, compiler, browser automation,
+language server, build engine, project kernel, or PTY helper.
+
+The runtime version belongs to the toolchain generation, not the project. One
+version and one official `SHASUMS256` digest are pinned per generation; the first
+`velar package` downloads the archive from `nodejs.org`, verifies it, and caches
+the executable per version, platform and architecture, so later builds need no
+network. An entry whose bytes no longer match its receipt is treated as absent.
+`desktop.build.sizeBudgetBytes` governs the application's own components; the
+runtime is measured separately against a fixed toolchain-owned ceiling, because
+no project change removes or shrinks it.
+
+The runtime lives beside the executable rather than in `Contents/Resources`,
+where a Mach-O is sealed as a plain resource and never signed — and an unsigned
+Mach-O cannot execute on arm64. The bundle is signed inside-out: the runtime
+first, with the language's own minimal entitlements file whose single key is
+`com.apple.security.cs.allow-jit` (without it the hardened runtime denies V8 its
+code range and the worker dies on the first capability call), then the host, then
+the bundle. `desktop.build.signing` supplies the product's identity, its own
+entitlements, and a `notarytool` keychain-profile name; no credential enters the
+build manifest or a log line, and an absent identity means ad-hoc, which is what
+lets a local build run.
+
+The packaged host's `--headless-smoke` is the packaging acceptance: it starts,
+launches the capability worker on the runtime it resolved, completes one real
+capability round-trip, reports whether that runtime was the bundled one, and
+exits 0. `--verify-bundle` is the static bundle check beside it; it cannot see a
+runtime that resolves but cannot execute JavaScript, which is why it no longer
+carries the word smoke. `--headless` runs the application with no visible
+windows and no ending. Every report these flags print is serialized JSON, one
+object on one line.
+
+`applyUpdate(archivePath)` replaces this installed application with an archive
+and relaunches. The host verifies that the `.app` inside carries this bundle
+identifier and this signing Team ID — nested code included — before touching
+anything on disk, and every failure leaves the current install exactly as it was.
+An ad-hoc-signed development install has no Team ID and is refused by name:
+accepting "no team matches no team" would accept any archive. Downloading,
+scheduling, channels, feeds and rollback policy are the product's.
 
 ```sh
 velar check .

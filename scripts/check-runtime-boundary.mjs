@@ -2053,8 +2053,13 @@ if (!webFoundationSource.includes("webRuntimeFoundation(WEB_ERROR_HOST_RUNTIME)"
 if (/\bPromise\.prototype\.then|\bError\.isError\s*\(|\berrorHandlers\.(?:has|add|delete)\s*\(/u.test(webOwnedCallbackRuntimeSource + "\n" + webAppModuleSource)) {
   failures.push("packages/web/src/runtime.ts: Web error callbacks or velar/app bypass the captured error/handler ABI");
 }
+// velar/desktop, velar/window, velar/service, velar/notification,
+// velar/secure-storage, velar/path, velar/fs, velar/process, velar/env and
+// velar/http: every Desktop target module reaches its host through the one
+// captured bridge ABI, and a new module raises this count rather than opening a
+// second door.
 const desktopHostRuntimeUses = desktopCompilerSource.match(/\$\{DESKTOP_HOST_ABI_RUNTIME\}/gu)?.length ?? 0;
-if (desktopHostRuntimeUses !== 6
+if (desktopHostRuntimeUses !== 10
   || /Object\.getOwnPropertyDescriptor\(globalThis, bridgeKey\)|\bbridge\.invoke\s*\(|globalThis\[runtimeKey\]/u.test(desktopCompilerSource)) {
   failures.push("packages/desktop/src/compiler.ts: a Desktop target module bypasses the captured host bridge ABI");
 }
@@ -2066,10 +2071,100 @@ for (const phrase of [
   "process.terminationHandler =",
   'case "process-owned":',
   "for pid in owner.pids { _ = Darwin.kill(-pid, SIGKILL) }",
+  // The L1b host surface lives in the shell rather than in the capability
+  // worker, because notifications, the keychain, the displays, the sleep/wake
+  // pair and a drag gesture's pasteboard are all AppKit or Security work.
+  "kSecClass as String: kSecClassGenericPassword",
+  "UNUserNotificationCenter.current().delegate = self",
+  "services?.registerDroppedFiles(sender.draggingPasteboard)",
+  "NSWorkspace.willSleepNotification",
+  "CGPreflightScreenCaptureAccess()",
 ]) {
   if (!desktopNativeHostSource.includes(phrase)) {
     failures.push(`packages/desktop/native/macos/VelarDesktopHost.swift: missing captured bridge operation '${phrase}'`);
   }
+}
+// Every L1b capability is refused by the manifest field that would grant it, in
+// the generated module and again in the host. A message that stopped naming the
+// declaration would still fail closed and would stop telling anyone why.
+for (const [source, label, phrases] of [
+  [desktopCompilerSource, "packages/desktop/src/compiler.ts", [
+    "requires 'notifications: true' under 'desktop.permissions' in this project's velar.json",
+    "declare it under 'desktop.permissions.secureStorage' in this project's velar.json",
+    "declare the scheme under 'desktop.permissions.links' in this project's velar.json",
+    "requires the 'dropped' root in 'desktop.permissions.files' in this project's velar.json",
+  ]],
+  [desktopNativeHostSource, "packages/desktop/native/macos/VelarDesktopHost.swift", [
+    "require 'notifications: true' under 'desktop.permissions'",
+    "declare it under 'desktop.permissions.secureStorage'",
+    "declare the scheme under 'desktop.permissions.links'",
+    "requires the 'dropped' root in 'desktop.permissions.files'",
+  ]],
+]) {
+  for (const phrase of phrases) {
+    if (!source.includes(phrase)) failures.push(`${label}: a Desktop capability refusal stopped naming its declaration ('${phrase}')`);
+  }
+}
+// L2: `applyUpdate` replaces the running application with an archive, so its
+// identity check is the only thing standing between a product's update flow and
+// an arbitrary bundle. The rule is written twice — once in the native host that
+// enforces it, once in the browser-test host a Desktop test drives — and the
+// four refusals must read the same in both, including the one a development
+// install always gets. A copy that drifted would be a matrix passing against a
+// check nobody ships.
+const desktopTestRuntimeSource = await readFile(join(root, "packages", "desktop", "src", "test-runtime.ts"), "utf8");
+for (const phrase of [
+  "Desktop applyUpdate refuses to update an application signed with no Team ID.",
+  "Desktop applyUpdate refuses an archive whose bundle identifier is",
+  "Desktop applyUpdate refuses an archive signed with no Team ID",
+  "Desktop applyUpdate refuses an archive signed by Team ID",
+]) {
+  for (const [source, label] of [
+    [desktopNativeHostSource, "packages/desktop/native/macos/VelarDesktopHost.swift"],
+    [desktopTestRuntimeSource, "packages/desktop/src/test-runtime.ts"],
+  ]) {
+    if (!source.includes(phrase)) failures.push(`${label}: the applyUpdate identity check stopped refusing '${phrase}'`);
+  }
+}
+for (const phrase of [
+  // Identity is read from the signature and the bundle, never from the archive's
+  // own claim about itself, and the candidate's nested code is checked too — the
+  // embedded interpreter is a second Mach-O an attacker would rather replace.
+  "kSecCodeInfoTeamIdentifier as String",
+  "SecStaticCodeCheckValidity(code, flags, nil)",
+  "kSecCSCheckNestedCode",
+  "FileManager.default.replaceItemAt(installed, withItemAt: replacement",
+]) {
+  if (!desktopNativeHostSource.includes(phrase)) {
+    failures.push(`packages/desktop/native/macos/VelarDesktopHost.swift: the applyUpdate identity check is missing '${phrase}'`);
+  }
+}
+// The runtime is embedded beside the executable and signed with the one
+// entitlement V8 needs. Both are load-bearing and neither is visible in a test
+// that only reads a manifest: a Mach-O under Contents/Resources is sealed as a
+// plain resource and never signed, and a hardened runtime without allow-jit
+// passes every static check and dies on the first real JavaScript.
+const desktopBuildSource = await readFile(join(root, "packages", "desktop", "src", "build.ts"), "utf8");
+const desktopSigningSource = await readFile(join(root, "packages", "desktop", "src", "signing.ts"), "utf8");
+const desktopRuntimeSource = await readFile(join(root, "packages", "desktop", "src", "node-runtime.ts"), "utf8");
+if (!desktopRuntimeSource.includes('DESKTOP_EMBEDDED_RUNTIME_PATH = "Contents/MacOS/node"')) {
+  failures.push("packages/desktop/src/node-runtime.ts: the embedded runtime must live in Contents/MacOS, where codesign signs it as nested code");
+}
+if (!desktopSigningSource.includes("<key>com.apple.security.cs.allow-jit</key><true/>")) {
+  failures.push("packages/desktop/src/signing.ts: the embedded runtime's entitlements must carry com.apple.security.cs.allow-jit");
+}
+// The runtime is the last nested entry and a service payload's native modules
+// come before it, so the order remains leaves first: a `.node` under
+// `Resources/services` is deeper in the bundle than the interpreter that loads
+// it, and signing it after would seal it under a signature already applied.
+if (!desktopBuildSource.includes("...services.flatMap((service) => service.nestedCode.map((path) => ({ path, entitlements: null })))")
+  || !desktopBuildSource.includes("{ path: DESKTOP_EMBEDDED_RUNTIME_PATH, entitlements: runtimeEntitlements },")) {
+  failures.push("packages/desktop/src/build.ts: service payload code and the embedded runtime must be signed as nested code, before the host and the bundle");
+}
+// The pinned runtime is the toolchain generation's, so its digest is a constant
+// here rather than anything a project or a machine supplies.
+if (!/sha256: "[0-9a-f]{64}"/u.test(await readFile(join(root, "packages", "desktop", "src", "config.ts"), "utf8"))) {
+  failures.push("packages/desktop/src/config.ts: the embedded Node.js runtime archive must be pinned to an official SHASUMS256 digest");
 }
 for (const phrase of [
   'export async function selectProjectDirectory() { return optionalPath("selectProjectDirectory", 0); }',
@@ -2089,7 +2184,19 @@ for (const phrase of [
   'forwarded["owner"] = request.generation',
   'func webView(_ webView: WKWebView, didCommit navigation:',
   'worker.retire(generation: generation)',
-  'request.owner !== activeOwner',
+  // A window is a document generation, and an application holds several open at
+  // once, so the live set is a set. The invariant is unchanged: a request is
+  // served only for a generation that is still live, and a generation is
+  // retired when its document navigates away or its window closes.
+  '!activeOwners.has(request.owner)',
+  'activeOwners.delete(owner)',
+  'registry?.retire(generation: generation)',
+  // A host event stream belongs to the document that started it, exactly as a
+  // window state stream does.
+  'services?.retire(generation: generation)',
+  // Each window's responses go back to that window's own web view; a shared one
+  // would deliver another window's answer.
+  'deliverBridgeResponse(encoded, generation: request.identity.generation, to: target)',
   'if (task.owner !== owner)',
   'if (request.owner !== owner)',
   'finishHttp(handle, request)',

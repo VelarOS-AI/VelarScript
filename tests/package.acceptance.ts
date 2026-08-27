@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { velarPublishedWorkspacePackages } from "../scripts/velar-packages.mjs";
 import { parseNpmPackResult } from "../scripts/npm-pack-result.mjs";
 import { declaredEntryPaths, declaredImportSpecifiers, declaredJsonResourceImportSpecifiers, packageContentFailures, type PackedPackage } from "./package-contract.ts";
+import { DESKTOP_NODE_RUNTIME_ARCHIVES, DESKTOP_NODE_RUNTIME_VERSION } from "../packages/desktop/src/config.ts";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const directory = await mkdtemp(join(tmpdir(), "velar-packages-"));
@@ -307,7 +308,7 @@ print(Text.chunks("A😀游戏", 2).join("|"))
   const host = await run(process.execPath, [
     "--input-type=module",
     "--eval",
-    "import {VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION} from '@velarscript/compiler/framework-host'; import {velarFrameworkHost} from '@velarscript/web/host'; if (VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION !== 2 || velarFrameworkHost.protocolVersion !== 2 || velarFrameworkHost.capability !== 'web' || velarFrameworkHost.target !== 'browser') process.exit(1); console.log(velarFrameworkHost.id)",
+    "import {VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION} from '@velarscript/compiler/framework-host'; import {velarFrameworkHost} from '@velarscript/web/host'; if (VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION !== 3 || velarFrameworkHost.protocolVersion !== 3 || velarFrameworkHost.capability !== 'web' || velarFrameworkHost.target !== 'browser') process.exit(1); console.log(velarFrameworkHost.id)",
   ], directory);
   assert.equal(host.stdout, "@velarscript/web\n");
   const desktopApi = await run(process.execPath, [
@@ -344,29 +345,34 @@ component App:
       formatVersion: number;
       kind: string;
       applicationBundle: string;
-      sizes: { hostBytes: number; rendererBytes: number; capabilityHostBytes: number; metadataBytes: number; totalBytes: number };
-      sizeBudgetBytes: number;
-      runtime: {
-        kind: string;
-        minimumMajor: number;
-        discovery: string;
-        embedded: boolean;
-        version?: unknown;
-        executableHint?: unknown;
+      sizes: {
+        hostBytes: number;
+        rendererBytes: number;
+        capabilityHostBytes: number;
+        metadataBytes: number;
+        applicationBytes: number;
+        runtimeBytes: number;
+        totalBytes: number;
       };
+      sizeBudgetBytes: number;
+      signing: { mode: string; hardenedRuntime: boolean; notarized: boolean };
+      runtime: { kind: string; version: string; embedded: boolean; bytes: number; sha256: string };
     };
-    assert.equal(builtDesktop.formatVersion, 3);
+    assert.equal(builtDesktop.formatVersion, 4);
     assert.equal(builtDesktop.kind, "velar-desktop-build");
-    assert.ok(builtDesktop.sizes.totalBytes < builtDesktop.sizeBudgetBytes);
+    // The budget is the application's; the interpreter it carries is measured
+    // separately and dwarfs it.
+    assert.ok(builtDesktop.sizes.applicationBytes < builtDesktop.sizeBudgetBytes);
+    assert.ok(builtDesktop.sizes.runtimeBytes > builtDesktop.sizes.applicationBytes * 10);
     assert.ok(builtDesktop.sizes.metadataBytes > 0);
     assert.deepEqual(builtDesktop.runtime, {
-      kind: "external-node",
-      minimumMajor: 24,
-      discovery: "environment-and-system-paths",
-      embedded: false,
+      kind: "embedded-node",
+      version: DESKTOP_NODE_RUNTIME_VERSION,
+      embedded: true,
+      bytes: builtDesktop.sizes.runtimeBytes,
+      sha256: DESKTOP_NODE_RUNTIME_ARCHIVES[`${process.platform}-${process.arch}`]!.sha256,
     });
-    assert.equal(builtDesktop.runtime.version, undefined);
-    assert.equal(builtDesktop.runtime.executableHint, undefined);
+    assert.deepEqual(builtDesktop.signing, { mode: "ad-hoc", hardenedRuntime: true, notarized: false });
     const application = join(desktopProject, "dist", "desktop", builtDesktop.applicationBundle);
     const information = await readFile(join(application, "Contents", "Info.plist"), "utf8");
     assert.match(information, /<key>CFBundleIconFile<\/key><string>VelarScript<\/string>/u);
@@ -380,16 +386,40 @@ component App:
     assert.deepEqual((await readdir(join(application, "Contents", "Resources", "host"))).sort(), ["worker.js"]);
     assert.equal(hostConfiguration.nodeExecutableHint, undefined);
     assert.ok(!hostConfigurationText.includes(process.execPath));
-    const smoke = await run(join(application, "Contents", "MacOS", "VelarDesktopHost"), ["--smoke"], desktopProject, {
+    const verification = await run(join(application, "Contents", "MacOS", "VelarDesktopHost"), ["--verify-bundle"], desktopProject, {
       ...process.env,
       VELAR_DESKTOP_NODE: process.execPath,
       VELAR_DESKTOP_PROJECT_ROOT: desktopProject,
     });
-    assert.deepEqual(JSON.parse(smoke.stdout), {
-      kind: "velar-desktop-smoke",
+    assert.deepEqual(JSON.parse(verification.stdout), {
+      kind: "velar-desktop-bundle-verification",
       protocolVersion: 1,
       identifier: "dev.velarscript.packed",
+      // The template declares the one window kind every manifest declares, and
+      // the packaged host reports the kinds it will actually open.
+      windowKinds: ["main"],
+      services: [],
     });
+    // The packaging acceptance, from a packed consumer that never saw this
+    // checkout. This project grants no filesystem scope at all, so the round
+    // trip that proves the interpreter works comes back as the refusal the
+    // worker computed — which only a running interpreter could have computed.
+    const accepted = await run(join(application, "Contents", "MacOS", "VelarDesktopHost"), ["--headless-smoke"], desktopProject, {
+      ...process.env,
+      VELAR_DESKTOP_PROJECT_ROOT: desktopProject,
+    });
+    const { runtime, ...report } = JSON.parse(accepted.stdout) as { runtime: string };
+    assert.deepEqual(report, {
+      kind: "velar-desktop-headless-smoke",
+      protocolVersion: 1,
+      identifier: "dev.velarscript.packed",
+      runtimeSource: "bundled",
+      capability: "fs.list",
+      fileScope: false,
+      windowKinds: ["main"],
+      services: [],
+    }, accepted.stdout);
+    assert.equal(runtime.endsWith("/Contents/MacOS/node"), true, runtime);
   }
 
   const docsProject = join(directory, "created-docs");

@@ -1,0 +1,97 @@
+// Chapter 06 — notifications.
+//
+// Authority: the `velar/notification` module interface in
+// packages/desktop/src/compiler.ts, and `desktop.permissions.notifications` in
+// this project's velar.json.
+//
+// Two gates stand in front of a system notification, and they are different
+// questions. The manifest's `notifications: true` is the application's
+// declaration that it may notify at all; without it every export here fails at
+// the call and says which line is missing. The operating system's own answer is
+// the second gate, and `requestPermission()` is how the application learns it.
+// A notification the user never authorized fails loudly rather than vanishing.
+
+import {NotificationActivation, NotificationActivationStream, NotificationPermission, activations, requestPermission, show} from "velar/notification"
+import {border, rgb, spacing} from "velar/look"
+
+const ink = rgb(24, 24, 24)
+const paper = rgb(246, 248, 252)
+
+const notificationLook = look:
+    display = "grid"
+    gap = 12px
+    padding = spacing(20px, 24px)
+    border = border(1px, ink)
+    borderRadius = 12px
+    color = ink
+    background = paper
+
+// The three answers the operating system gives, in declaration order.
+export def permissionNames() -> List<string>:
+    return NotificationPermission.values().map(value => permissionLabel(value))
+
+export def permissionLabel(permission: NotificationPermission) -> string:
+    if permission == NotificationPermission.granted: return "granted"
+    if permission == NotificationPermission.denied: return "denied"
+    return "undetermined"
+
+// A tag is the notification's identity: a second notification carrying it
+// replaces the first rather than stacking beside it, and an activation reports
+// it so the application knows which notification the user clicked.
+export def buildTag(build: string) -> string: return f"build-{build}"
+
+// Asking first is not optional politeness — `show` fails when the answer is not
+// `granted`, so the application asks and then decides what to do with each of
+// the three answers.
+export async def announce(build: string, packages: number) -> string:
+    const permission = await requestPermission()
+    if permission != NotificationPermission.granted: return f"not notified: {permissionLabel(permission)}"
+    await show({title: "Build finished", body: f"{packages} packages", tag: buildTag(build)})
+    return f"notified: {buildTag(build)}"
+
+// The activation stream is the same bounded pull source every other host event
+// uses: `using` releases it, `async for` drives it, and two clicks on one
+// notification are one activation rather than two.
+export async def firstActivation(clicks: NotificationActivationStream) -> string:
+    async for activation in clicks: return describeActivation(activation)
+    return "no activation"
+
+export def describeActivation(activation: NotificationActivation) -> string:
+    return f"activated {activation.tag ?? "untagged"}"
+
+export component NotificationPanel:
+    state permission = "not asked"
+    state delivered = "nothing delivered"
+    state activated = "not watching"
+
+    action ask() -> string:
+        permission = permissionLabel(await requestPermission())
+        return permission
+
+    action deliver() -> string:
+        delivered = await announce("42", 3)
+        return delivered
+
+    action watchActivations() -> string:
+        using clicks = await activations()
+        // Said only once the stream exists, so a reader — or a test — knows
+        // that no activation produced from here on can be missed.
+        activated = "watching"
+        activated = await firstActivation(clicks)
+        return activated
+
+    return <section data-chapter="06" look={notificationLook}>
+        <h2>06 — notifications</h2>
+        <p data-notification-permission>{permission}</p>
+        <p data-notification-delivered>{delivered}</p>
+        <p data-notification-activated>{activated}</p>
+        <button type="button" data-ask-notification on:click={ask} disabled={ask.pending}>
+            Ask the operating system
+        </button>
+        <button type="button" data-deliver-notification on:click={deliver} disabled={deliver.pending}>
+            Deliver a build notification
+        </button>
+        <button type="button" data-watch-activations on:click={watchActivations} disabled={watchActivations.pending}>
+            Watch for the first activation
+        </button>
+    </section>

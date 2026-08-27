@@ -1,4 +1,4 @@
-export const VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION = 2 as const;
+export const VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION = 3 as const;
 
 export interface FrameworkHostArtifactsInput {
   readonly config: unknown;
@@ -67,6 +67,23 @@ export interface FrameworkRequiredPublicAsset {
   readonly path: string;
 }
 
+/**
+ * Long-running processes a target's manifest declares and its development
+ * server starts beside the page. The host owns the processes; this ABI carries
+ * only the handle that converges them, because a dev server that outlived the
+ * processes it started would leave a product's services running after Ctrl-C.
+ */
+export interface FrameworkDevelopmentProcesses {
+  /** One line per process, already formatted for the dev server's output. */
+  readonly report: readonly string[];
+  readonly stop: () => Promise<void>;
+}
+
+export interface FrameworkDevelopmentProcessInput {
+  readonly config: unknown;
+  readonly projectRoot: string;
+}
+
 export interface FrameworkHostProjectValidationInput {
   readonly config: unknown;
   readonly modules: readonly {
@@ -95,5 +112,7 @@ export interface FrameworkHostExtension {
   readonly staticDeployment: (config: unknown) => FrameworkStaticDeployment;
   readonly requiredPublicAssets?: (config: unknown) => readonly FrameworkRequiredPublicAsset[];
   readonly browserTests?: FrameworkBrowserTestContract;
+  /** Started before the dev server listens and converged when it closes. */
+  readonly startDevelopmentProcesses?: (input: FrameworkDevelopmentProcessInput) => Promise<FrameworkDevelopmentProcesses>;
   readonly validateProject?: (input: FrameworkHostProjectValidationInput) => readonly string[];
 }

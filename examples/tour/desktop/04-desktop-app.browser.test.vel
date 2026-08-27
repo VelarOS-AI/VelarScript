@@ -1,16 +1,28 @@
-// Chapter 04 — the Desktop browser test, where the seven `velar/desktop-test`
+// Chapter 04 — the Desktop browser test, where the `velar/desktop-test`
 // exports actually run.
 //
 // Authority: the same module interface chapter 03 lists, plus D57 rule 138 for
 // why `velar/web-test` is imported here rather than anywhere else. Under
 // `velar test --browser` the framework host answers the Desktop bridge, so this
 // is the one place a fixture round is a call and not a description.
+//
+// The window half of the module is the same idea one level up: the fake window
+// registry answers `velar/window` for the page, and the four event helpers let
+// this test produce the host events a real window system would.
 
-import {DesktopPlatform} from "velar/desktop"
-import {appDataDirectory, makeDirectory, projectDirectory, readText, removeFile, setPlatform, writeText} from "velar/desktop-test"
+import {DesktopPlatform, PermissionStatus, PowerState, SystemPermission} from "velar/desktop"
+import {activateNotification, appDataDirectory, appliedUpdates, closeWindow, dropFiles, focusWindow, makeDirectory, moveWindow, openWindows, openedLinks, projectDirectory, publishPower, readText, removeFile, secureStorageNames, serveService, serviceRejectsWrongToken, setNotificationPermission, setPlatform, setServiceState, setSigningTeam, setSystemPermission, setWindowKind, shownNotifications, stageUpdate, stopService, writeText} from "velar/desktop-test"
+import {NotificationPermission} from "velar/notification"
 import {browser} from "velar/web-test"
 import {expect} from "velar/test"
 import {fixturePath} from "./03-desktop-test.test.vel"
+import {previewKey} from "./05-windows.vel"
+import {buildTag} from "./06-notifications.vel"
+import {sessionSlot} from "./07-secure-storage.vel"
+import {guideUrl} from "./08-system.vel"
+import {downloadedArchive, tourIdentifier} from "./10-updates.vel"
+import {askService, channelState, countRequest, endChannel, firstState, notesIndex, stateNames, storeRequest} from "./11-services.vel"
+import {ServiceState} from "velar/service"
 
 test "the explicit platform fixture selects an application branch before open":
     await setPlatform(DesktopPlatform.macos)
@@ -44,3 +56,227 @@ test "the renderer is an ordinary Web page":
     expect(await browser.text("[data-boundary]")).toBe("Product tooling stays outside the Desktop language framework.")
     await browser.click("[data-read-summary]")
     await browser.waitForText("[data-summary]", "|")
+
+test "the window kind is chosen before the document exists, like the platform":
+    await setWindowKind("note-preview")
+    await browser.open()
+    await browser.click("[data-read-kind]")
+    await browser.waitForText("[data-window-kind]", "running as note-preview")
+
+test "the launch window is the one the manifest always declares":
+    await browser.open()
+    const open = await openWindows()
+    expect(open).toHaveLength(1)
+    expect(open.get(0)?.kind).toBe("main")
+    expect(open.get(0)?.key).toBe(null)
+    expect(open.get(0)?.focused).toBe(true)
+
+test "opening a second declared kind joins the registry and takes the focus":
+    await browser.open()
+    await browser.click("[data-open-preview]")
+    await browser.waitForText("[data-window-summary]", "on velar-test-display")
+    const open = await openWindows()
+    expect(open).toHaveLength(2)
+    expect(open.map(info => f"{info.kind}:{info.key ?? "-"}:{info.focused}").join(" "))
+        .toBe(f"main:-:false note-preview:{previewKey("tour")}:true")
+    await browser.click("[data-read-window-summary]")
+    await browser.waitForText("[data-window-summary]", "note-preview")
+    // Opening the same kind and key again focuses what is already open rather
+    // than adding a second window.
+    await focusWindow("main")
+    await browser.click("[data-open-preview]")
+    await browser.waitForText("[data-window-summary]", "on velar-test-display")
+    expect(await openWindows()).toHaveLength(2)
+
+test "releasing an owned window closes it":
+    await browser.open()
+    await browser.click("[data-measure-preview]")
+    await browser.waitForText("[data-window-geometry]", "512x320")
+    const open = await openWindows()
+    expect(open).toHaveLength(1)
+    expect(open.get(0)?.kind).toBe("main")
+
+test "a window state stream is a bounded pull source that ends after closed":
+    await browser.open()
+    await browser.click("[data-watch-preview]")
+    await browser.waitForText("[data-window-watched]", "watching")
+    // A move that also changes the size is two states, not one, because the
+    // two questions a consumer asks about them are different.
+    await moveWindow("note-preview", previewKey("watched"), {x: 40, y: 60, width: 480, height: 300})
+    await closeWindow("note-preview", previewKey("watched"))
+    await browser.waitForText("[data-window-watched]", "3 states")
+    expect(await openWindows()).toHaveLength(1)
+
+test "this window's own bounds read back through the borrowed handle":
+    await browser.open()
+    await browser.click("[data-read-window-geometry]")
+    await browser.waitForText("[data-window-geometry]", "1040x720")
+
+// The operating system's answer is the second gate, and the fake notification
+// centre answers it exactly as the real one does: undetermined until something
+// says otherwise, and a notification it never authorized fails rather than
+// vanishing.
+test "a notification is delivered only once the operating system authorizes it":
+    await browser.open()
+    await browser.click("[data-deliver-notification]")
+    await browser.waitForText("[data-notification-delivered]", "not notified: undetermined")
+    expect(await shownNotifications()).toHaveLength(0)
+    await setNotificationPermission(NotificationPermission.granted)
+    await browser.click("[data-deliver-notification]")
+    await browser.waitForText("[data-notification-delivered]", f"notified: {buildTag("42")}")
+    const inbox = await shownNotifications()
+    expect(inbox).toHaveLength(1)
+    expect(inbox.get(0)?.title).toBe("Build finished")
+    expect(inbox.get(0)?.body).toBe("3 packages")
+    expect(inbox.get(0)?.tag).toBe(buildTag("42"))
+
+test "an activation reports the notification the user clicked":
+    await browser.open()
+    await setNotificationPermission(NotificationPermission.granted)
+    await browser.click("[data-ask-notification]")
+    await browser.waitForText("[data-notification-permission]", "granted")
+    await browser.click("[data-watch-activations]")
+    await browser.waitForText("[data-notification-activated]", "watching")
+    await activateNotification(buildTag("42"))
+    await browser.waitForText("[data-notification-activated]", f"activated {buildTag("42")}")
+
+// The keychain seam reports the names it holds and never the values it holds,
+// which is the whole point of the module.
+test "a stored credential is present until it is removed":
+    await browser.open()
+    await browser.click("[data-read-session]")
+    await browser.waitForText("[data-session-presence]", "absent")
+    expect(await secureStorageNames()).toHaveLength(0)
+    await browser.click("[data-save-session]")
+    await browser.waitForText("[data-session-presence]", "present")
+    expect(await secureStorageNames()).toEqual([sessionSlot])
+    await browser.click("[data-forget-session]")
+    await browser.waitForText("[data-session-presence]", "absent")
+    expect(await secureStorageNames()).toHaveLength(0)
+
+test "power is a transition stream, so the state the machine is in publishes nothing":
+    await browser.open()
+    await browser.click("[data-watch-power]")
+    await browser.waitForText("[data-power]", "watching")
+    // The host starts awake, so waking is not a transition and the stream stays
+    // where it was.
+    await publishPower(PowerState.resumed)
+    await publishPower(PowerState.suspended)
+    await browser.waitForText("[data-power]", "suspended")
+
+test "a link opens through a granted scheme, and the probes only read":
+    await browser.open()
+    await browser.click("[data-open-link]")
+    await browser.waitForText("[data-opened-link]", f"opened {guideUrl}")
+    expect(await openedLinks()).toEqual([guideUrl])
+    await browser.click("[data-read-displays]")
+    await browser.waitForText("[data-displays]", "velar-test-display:1440x875@2:true")
+    await setSystemPermission(SystemPermission.microphone, PermissionStatus.granted)
+    await browser.click("[data-read-probes]")
+    await browser.waitForText("[data-probe]", "undetermined/granted")
+
+test "a drag gesture reports its real paths in the order they were dropped":
+    await browser.open()
+    await browser.click("[data-watch-drops]")
+    await browser.waitForText("[data-dropped]", "watching")
+    await dropFiles(["/Users/ada/second.txt", "/Users/ada/first.txt"])
+    await browser.waitForText("[data-dropped]", "second.txt first.txt")
+
+// The update identity matrix. Four archives, one installed application, and the
+// only one that is applied is the one that is this same application signed by
+// the same team. `stageUpdate` describes what an archive contains and
+// `setSigningTeam` says what this install itself was signed with — neither is
+// something a program can read about itself, which is exactly why they are test
+// seams rather than module exports.
+test "an update is refused unless it is this application signed by this team":
+    await browser.open()
+    const archive = downloadedArchive("/velar-test/app-data")
+
+    // A development install is ad-hoc: no Team ID exists, so no archive can be
+    // required to match one, and accepting any would accept all of them.
+    await stageUpdate(archive, tourIdentifier, "TOURTEAM01")
+    await browser.click("[data-apply-update]")
+    await browser.waitForText("[data-update]", "refused: Desktop applyUpdate refuses to update an application signed with no Team ID."
+        + " This install is ad-hoc or unsigned, so there is no signing identity an update could be required to match,"
+        + " and accepting one anyway would accept every archive. Install a Developer ID signed build to update in place.")
+    expect(await appliedUpdates()).toHaveLength(0)
+
+    await setSigningTeam("TOURTEAM01")
+
+    // Another product's application, correctly signed by somebody else.
+    await stageUpdate(archive, "dev.velarscript.other", "TOURTEAM01")
+    await browser.click("[data-apply-update]")
+    await browser.waitForText("[data-update]",
+        f"refused: Desktop applyUpdate refuses an archive whose bundle identifier is 'dev.velarscript.other' and not '{tourIdentifier}'")
+    expect(await appliedUpdates()).toHaveLength(0)
+
+    // This application's name, somebody else's signature.
+    await stageUpdate(archive, tourIdentifier, "OTHERTEAM2")
+    await browser.click("[data-apply-update]")
+    await browser.waitForText("[data-update]",
+        "refused: Desktop applyUpdate refuses an archive signed by Team ID 'OTHERTEAM2' and not 'TOURTEAM01'")
+    expect(await appliedUpdates()).toHaveLength(0)
+
+    // This application's name and no signature at all.
+    await stageUpdate(archive, tourIdentifier, null)
+    await browser.click("[data-apply-update]")
+    await browser.waitForText("[data-update]", "refused: Desktop applyUpdate refuses an archive signed with no Team ID")
+    expect(await appliedUpdates()).toHaveLength(0)
+
+    // The one that is applied.
+    await stageUpdate(archive, tourIdentifier, "TOURTEAM01")
+    await browser.click("[data-apply-update]")
+    await browser.waitForText("[data-update]", "replaced; relaunching")
+    expect(await appliedUpdates()).toEqual([archive])
+
+// Chapter 11's services, driven by the two seams that make them testable. The
+// fake is not a stub: `serveService` starts a real loopback WebSocket server,
+// performs the real RFC 6455 upgrade, checks the real token, and pumps the
+// application's channel through it, so what follows is a message leaving the
+// page, crossing a socket, reaching this handler, and coming back.
+//
+// A served service is ready, so `serveService` comes before the first
+// `browser.open()` the way `setPlatform` does — and `stopService` comes at the
+// end, because a test owns the work it starts.
+test "a service channel round-trips through a real loopback socket":
+    const index = async (request: string) => request == countRequest() ? "1" : f"stored {request}"
+    await serveService(notesIndex, index)
+    await browser.open()
+
+    // The application drives the channel from its own code: the click sends
+    // `put`, then `count`, and the answer came back over the socket.
+    await browser.click("[data-ask-service]")
+    await browser.waitForText("[data-service-summary]", "1")
+    await stopService(notesIndex)
+
+// The token is the whole authentication of a loopback endpoint every process on
+// the machine can reach, so the service side has to refuse one the host never
+// issued. This asks it to, on the same real socket.
+test "the service side refuses a token the host never issued":
+    await serveService(notesIndex, async (request: string) => request)
+    expect(await serviceRejectsWrongToken(notesIndex)).toBe(true)
+    await stopService(notesIndex)
+
+// The state a service is in decides whether a channel to it can be opened at
+// all, and `setServiceState` is how a test produces the transitions a real
+// supervisor publishes.
+test "a service reports its state, and a channel opens only once it is ready":
+    await serveService(notesIndex, async (request: string) => request)
+    await browser.open()
+    await browser.click("[data-watch-services]")
+    await browser.waitForText("[data-service-summary]", f"{notesIndex}: ready")
+
+    await setServiceState(notesIndex, ServiceState.restarting)
+    await browser.click("[data-watch-services]")
+    await browser.waitForText("[data-service-summary]", f"{notesIndex}: restarting")
+
+    // A channel to a service that is not ready is refused where it is asked
+    // for, by name and by state.
+    await browser.click("[data-ask-service]")
+    await browser.waitForText("[data-service-summary]",
+        f"Desktop service '{notesIndex}' is restarting rather than ready; watchServices() reports when it becomes ready")
+
+    expect(stateNames()).toEqual([
+        ServiceState.starting, ServiceState.ready, ServiceState.restarting, ServiceState.failed, ServiceState.stopped,
+    ])
+    await stopService(notesIndex)

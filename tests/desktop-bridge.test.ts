@@ -40,6 +40,8 @@ test("Desktop WebView bridge chunks large requests and responses without changin
   });
   const source = bridgeSource
     .replace("__VELAR_PROJECT_DIRECTORY__", JSON.stringify("/tmp/velar-project"))
+    .replace("__VELAR_WINDOW_KIND__", JSON.stringify("main"))
+    .replace("__VELAR_WINDOW_HANDLE__", "1")
     .replace("__VELAR_ENVIRONMENT__", JSON.stringify({ LANG: "en_US.UTF-8" }));
   vm.runInContext(`${source}\nglobalThis.__bridgeUnderTest = globalThis[Symbol.for("velar.desktop.bridge.v1")]`, context);
   const bridge = (context as { __bridgeUnderTest?: { projectDirectoryValue(): string; invoke(capability: string, operation: string, args: unknown[], timeout?: number): Promise<unknown> } }).__bridgeUnderTest;
@@ -151,12 +153,25 @@ test("Desktop WebView bridge chunks large requests and responses without changin
   });
 });
 
-test("Desktop native host opens an external URL only through the granted network origins", async () => {
+test("Desktop native host hands a URL to the system from two branches, each behind its own grant", async () => {
   const hostSource = await readFile(resolve("packages/desktop/native/macos/VelarDesktopHost.swift"), "utf8");
   assert.match(hostSource, /private struct PermissionConfiguration: Decodable \{\n\s*let files: \[String\]\n\s*let network: \[String\]/u);
   assert.match(hostSource, /NavigationPolicy\(bridge: bridge, network: host\.permissions\.network\)/u);
   assert.match(hostSource, /private let externalOrigins: Set<String>/u);
-  const opens = hostSource.split("\n").filter((line) => line.includes("NSWorkspace.shared.open"));
-  assert.equal(opens.length, 1, "the native host hands a URL to the system from exactly one branch");
+  // Two acts, two grants: the renderer following a link is governed by
+  // `network`, and `openExternal` handing a URL to the system default handler is
+  // governed by `links`. A third branch, or either of these two losing its
+  // guard, is what this counts.
+  const opens = hostSource.split("\n").filter((line) => line.includes("NSWorkspace.shared.open("));
+  assert.equal(opens.length, 2, "the native host hands a URL to the system from exactly two branches");
+  // `openApplication` is a different act and is counted separately: it launches
+  // one known application bundle — this one, after `applyUpdate` replaced it —
+  // rather than handing a URL to whatever the system would choose for it. There
+  // is exactly one, and it relaunches the install it just wrote.
+  const launches = hostSource.split("\n").filter((line) => line.includes("NSWorkspace.shared.openApplication("));
+  assert.equal(launches.length, 1, "the native host launches an application from exactly one branch");
+  assert.match(hostSource, /NSWorkspace\.shared\.openApplication\(at: installed, configuration: configuration\)/u);
   assert.match(hostSource, /\} else if let origin = navigationOrigin\(url\), externalOrigins\.contains\(origin\) \{\n\s*NSWorkspace\.shared\.open\(url\)\n\s*decisionHandler\(\.cancel\)/u);
+  assert.match(hostSource, /guard linkSchemes\.contains\(scheme\) else \{[\s\S]*?desktop\.permissions\.links[\s\S]*?\}\n\s*NSWorkspace\.shared\.open\(url\)/u);
+  assert.match(hostSource, /self\.linkSchemes = Set\(permissions\.links\)/u);
 });

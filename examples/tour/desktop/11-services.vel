@@ -1,0 +1,128 @@
+// Chapter 11 — service processes.
+//
+// Authority: the `velar/service` module interface in
+// packages/desktop/src/compiler.ts, and the `desktop.services` map in this
+// project's velar.json. The manifest decides which services exist; this module
+// is what talks to them.
+//
+// A service is a long-running process the *product* owns: its policy, its
+// permissions, its code. The language does four things and no more — it starts
+// it, supervises it, converges it when the application quits, and hands the
+// renderer one authenticated loopback channel to it. It does not sandbox it:
+// declaring a service in the manifest makes it auditable, not confined.
+//
+// The service this chapter talks to is `service-notes-index/main.js`, a real
+// WebSocket server in plain JavaScript with no dependencies. Read it: it is the
+// whole of what a product has to implement, and its handshake is the two frames
+// packages/desktop/README.md pins.
+//
+// The token never appears here. The host generates it, hands it to the service
+// in its environment, and spends it itself on the first frame of every
+// connection, so application code holds a channel and never a credential.
+
+import {ServiceClose, ServiceConnection, ServiceState, ServiceStateEvent, ServiceStateStream, connect, watchServices} from "velar/service"
+import {border, rgb, spacing} from "velar/look"
+
+const ink = rgb(24, 24, 24)
+const paper = rgb(244, 246, 250)
+
+const servicePanelLook = look:
+    display = "grid"
+    gap = 12px
+    padding = spacing(20px, 24px)
+    border = border(1px, ink)
+    borderRadius = 12px
+    color = ink
+    background = paper
+
+// The one service this project declares. A name that is not in the manifest is
+// refused at the `connect` call, before anything reaches the host, and the host
+// refuses it again on its own side.
+export const notesIndex: string = "notes-index"
+
+// The product's own protocol over the channel the language provides. The
+// language carries text and takes no interest in what the text means.
+export def storeRequest(id: string, title: string) -> string: return f"put {id} {title}"
+
+export def countRequest() -> string: return "count"
+
+// The five states a service passes through. `failed` is terminal: five
+// consecutive failures stop the restarts, and the application decides what to
+// tell a person about it rather than watching a loop nobody can see.
+export def stateLabel(state: ServiceState) -> string:
+    match state:
+        case ServiceState.starting: return "starting"
+        case ServiceState.ready: return "ready"
+        case ServiceState.restarting: return "restarting"
+        case ServiceState.failed: return "failed — restart the application"
+        case ServiceState.stopped: return "stopped"
+
+export def stateNames() -> List<ServiceState>: return ServiceState.values()
+
+export def eventLabel(event: ServiceStateEvent) -> string: return f"{event.name}: {stateLabel(event.state)}"
+
+export def closeLabel(info: ServiceClose) -> string: return f"{info.code} {info.reason}"
+
+// A channel is an owned resource, so `using` releases it: charter section 16's
+// rule, and the same one `velar/window` and `velar/fs` keep. The send is
+// backpressured and the receive is a bounded pull, exactly as a
+// `velar/websocket` client's are.
+export async def askService(request: string) -> string:
+    using channel = await connect(notesIndex)
+    return await exchange(channel, request)
+
+// One exchange on a channel somebody else owns. `ServiceConnection` is a named
+// type, so a function can take one and stay out of the question of who releases
+// it — the caller that opened it does.
+export async def exchange(channel: ServiceConnection, request: string) -> string:
+    await channel.send(request)
+    const reply = await channel.next()
+    return reply ?? ""
+
+// The state stream is a bounded pull stream, and a slow reader gets the latest
+// state per service rather than a history of transitions it missed.
+export async def firstState() -> string:
+    using states = await watchServices()
+    return await nextLabel(states)
+
+export async def nextLabel(states: ServiceStateStream) -> string:
+    const event = await states.next()
+    if event == null: return "none"
+    return eventLabel(event)
+
+// Why a channel ended, for a reader that wants more than "it ended".
+export async def endChannel() -> string:
+    const channel = await connect(notesIndex)
+    await channel.close(1000, "done")
+    const info: ServiceClose = await channel.closeInfo()
+    return closeLabel(info)
+
+// A service that is not ready has no channel, and the refusal says which state
+// it is in instead. It is not an error to hide: the application asked for a
+// channel and did not get one, and why is the only useful thing to say.
+export async def askOrExplain() -> string:
+    try:
+        await askService(storeRequest("tour", "Service processes"))
+        return await askService(countRequest())
+    catch error: return error.message
+
+export async def channelState() -> string:
+    using channel = await connect(notesIndex)
+    return await channel.state()
+
+export component ServicePanel:
+    state summary: string = "—"
+
+    action ask():
+        summary = await askOrExplain()
+
+    action watch():
+        summary = await firstState()
+
+    return <section look={servicePanelLook} data-service-panel>
+        <h2>Service processes</h2>
+        <p>{f"declared: {notesIndex}"}</p>
+        <button on:click={ask} data-ask-service>Ask the service</button>
+        <button on:click={watch} data-watch-services>Watch the services</button>
+        <p data-service-summary>{summary}</p>
+    </section>
