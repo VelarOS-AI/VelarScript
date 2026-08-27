@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -62,19 +62,57 @@ test("Node application target creates, serves, and builds a standalone productio
     await writeFile(join(project, "application.yml"), serverYaml(buildPort), "utf8");
     const built = spawnSync(process.execPath, [cli, "build", project, "--out-dir", output], {encoding: "utf8"});
     assert.equal(built.status, 0, built.stderr);
-    const receipt = JSON.parse(await readFile(join(output, "velar-node.json"), "utf8")) as Record<string, unknown>;
-    assert.deepEqual(receipt, {
-      formatVersion: 3,
-      kind: "velar-node-build",
-      mode: "production",
-      entry: ".velar-node-entry.mjs",
-      app: "start",
-      sourceMaps: false,
-    });
+    const receipt = JSON.parse(await readFile(join(output, "velar-node.json"), "utf8")) as {
+      formatVersion: number;
+      kind: string;
+      compiler: { name: string; version: string };
+      buildId: string;
+      mode: string;
+      entry: string;
+      app: string;
+      sourceMaps: boolean;
+      assets: Array<{ path: string; role: string }>;
+    };
+    assert.equal(receipt.formatVersion, 4);
+    assert.equal(receipt.kind, "velar-node-build");
+    assert.deepEqual(receipt.compiler, { name: "velar", version: "0.19.1" });
+    assert.match(receipt.buildId, /^[a-f0-9]{64}$/u);
+    assert.equal(receipt.mode, "production");
+    assert.equal(receipt.entry, ".velar-node-entry.mjs");
+    assert.equal(receipt.app, "start");
+    assert.equal(receipt.sourceMaps, false);
+    assert.equal(receipt.assets.find((asset) => asset.path === ".velar-node-entry.mjs")?.role, "entry");
+    assert.equal(receipt.assets.find((asset) => asset.path === "application.yml")?.role, "configuration");
+    assert.deepEqual(receipt.assets.map((asset) => asset.path), [...receipt.assets.map((asset) => asset.path)].sort());
     assert.ok((await readdir(join(output, "public"))).includes("index.html"));
     assert.ok((await readdir(output)).includes("application.yml"));
     assert.ok((await readdir(join(output, "node_modules", "yaml"))).includes("package.json"));
     assert.equal((await readdir(output, {recursive: true})).some((name) => name.endsWith(".map")), false);
+
+    // verify 同时接受具体 Node 构建目录和清单文件，不再尝试从里面寻找
+    // velar.json。它对已记录的每个字节重算哈希，并拒绝清单之外的文件。
+    const verified = spawnSync(process.execPath, [cli, "verify", output], {encoding: "utf8"});
+    assert.equal(verified.status, 0, verified.stderr);
+    assert.match(verified.stdout, new RegExp(`Verified node build ${receipt.buildId}`, "u"));
+    const verifiedManifest = spawnSync(process.execPath, [cli, "verify", join(output, "velar-node.json")], {encoding: "utf8"});
+    assert.equal(verifiedManifest.status, 0, verifiedManifest.stderr);
+
+    const entryBytes = await readFile(join(output, ".velar-node-entry.mjs"));
+    await writeFile(join(output, ".velar-node-entry.mjs"), `${entryBytes.toString("utf8")}\n`, "utf8");
+    const tampered = spawnSync(process.execPath, [cli, "verify", output], {encoding: "utf8"});
+    assert.notEqual(tampered.status, 0);
+    assert.match(tampered.stderr, /size does not match|SHA-256 does not match/u);
+    await writeFile(join(output, ".velar-node-entry.mjs"), entryBytes);
+    await writeFile(join(output, "unexpected.txt"), "not declared\n", "utf8");
+    const unexpected = spawnSync(process.execPath, [cli, "verify", output], {encoding: "utf8"});
+    assert.notEqual(unexpected.status, 0);
+    assert.match(unexpected.stderr, /undeclared file 'unexpected\.txt'/u);
+    await rm(join(output, "unexpected.txt"));
+    await symlink(join(output, ".velar-node-entry.mjs"), join(output, "linked-entry.mjs"));
+    const linked = spawnSync(process.execPath, [cli, "verify", output], {encoding: "utf8"});
+    assert.notEqual(linked.status, 0);
+    assert.match(linked.stderr, /symbolic link 'linked-entry\.mjs'/u);
+    await rm(join(output, "linked-entry.mjs"));
 
     running = spawn(process.execPath, [join(output, ".velar-node-entry.mjs")], {cwd: output, stdio: ["ignore", "pipe", "pipe"]});
     await expectHello(running, buildPort);

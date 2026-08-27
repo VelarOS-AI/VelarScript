@@ -14519,11 +14519,14 @@ export class Analyzer implements TypeEnvironment {
    * 得到的稳定副本。它不能被重新赋值，存在性检查得到的类型又恰好是原
    * optional 的非空分支，因此后续读取无需再运行一次完整的 Type 检查。
    *
-   * 这里刻意只认“普通 const + readonly 数据”这一个可证明的形状：参数、
-   * `let`、类实例、响应式值和导入的实时绑定仍会生成运行时收窄守卫；从
-   * unknown/union 通过 `is` 得到的更具体类型也仍会深度复验。这样能移除注册
-   * 表查询热路径上的重复结构校验，同时保留成员、getter、回调和跨模块可变
-   * 状态原有的失效检测。
+   * 这个证明只回答“这个局部副本还会不会变回 null”，与它指向的
+   * List、Map 或记录内容是否可变无关。别名可以修改对象内容，却无法把这个
+   * `const` 绑定本身改成 null；因此用整个记录的 Type 遍历去重复证明非空，
+   * 会把普通 Map 更新意外变成二次复杂度。
+   *
+   * 参数、`let`、类实例、响应式值和导入的实时绑定仍会生成运行时收窄
+   * 守卫；从 unknown/union 通过 `is` 得到的更具体类型也仍会深度复验。
+   * 这些形状证明的不只是存在性，不能借用这条快路。
    */
   private isStableOptionalValueCopy(binding: Binding): boolean {
     const storage = binding.storageBinding ?? binding;
@@ -14531,7 +14534,7 @@ export class Analyzer implements TypeEnvironment {
     const original = this.expandAliases(storage.storageType);
     if (original.kind !== "optional") return false;
     const inner = this.expandAliases(original.inner);
-    return isReadonlyView(inner) && sameType(inner, this.expandAliases(binding.type));
+    return sameType(inner, this.expandAliases(binding.type));
   }
 
   protected isBuiltinValueReference(expression: Expression, name: PermanentNamespaceName | "range"): boolean {

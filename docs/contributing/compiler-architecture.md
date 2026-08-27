@@ -269,6 +269,13 @@ runtime that provides the captured `instanceof` evidence; standalone output
 must inline that helper and shared project output must declare its hidden runtime
 module dependency. This mechanism is independent of readonly conversion.
 
+One existence-only case needs no hint: a plain local `const` copied from `T?`
+and narrowed exactly to `T` cannot be reassigned through an alias. This remains
+true when `T` is mutable; mutating its contents cannot turn the local binding
+back into `null`. Analyzer therefore keeps that presence fact without emitting
+a deep `T` validator on every later read. Other union narrowing and every
+location whose binding may change continue through the guarded path above.
+
 Ordinary `is` expressions use an overridable direct-check dispatch. Core named
 data types and imported runtime Types retain their established `.is` owner;
 an extension must explicitly route its named host primitives to the same
@@ -842,7 +849,7 @@ previous output. Compiler-owned entry/fallback/manifest names and symbolic
 links fail closed. The deployment manifest is the provider-neutral authority
 for CSP, security headers, cache rules, base paths, and SPA fallback.
 
-The production verifier is the read-side authority for format-3 framework
+The production verifier is the read-side authority for format-4 framework
 build output and format-2 static-deployment output. Each build records the
 framework package, capability, target, host-protocol version, framework API
 version, and framework artifact kind. It

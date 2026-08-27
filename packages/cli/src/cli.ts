@@ -49,6 +49,8 @@ import {
 import { resourceOutputRelativePath, writeBuildResourcePackageManifests, writeProjectResources } from "./resource-output.ts";
 import { resolveVelarLibraryBuild, writeVelarLibraryArtifact } from "./library-artifact-build.ts";
 import { renderJavaScriptOutput, type JavaScriptBuildMode } from "./javascript-output.ts";
+import { NODE_BUILD_MANIFEST_NAME, writeNodeProductionManifest } from "./node-production-build.ts";
+import { verifyApplicationBuild } from "./application-verifier.ts";
 
 
 interface CommandArguments {
@@ -243,8 +245,14 @@ async function main(arguments_: readonly string[]): Promise<number> {
       return 2;
     }
     try {
-      const verified = await verifyProductionBuild(input);
-      process.stdout.write(`Verified production ${verified.manifest.framework.capability} build ${verified.manifest.buildId} -> ${verified.directory}\n`);
+      const verified = await verifyApplicationBuild(input);
+      if (verified.kind === "framework") {
+        // 保留既有 Web CLI 的成功输出契约；统一分派只扩展可校验的产物类型，
+        // 不应让依赖这段稳定文本的脚本因为内部重构而失效。
+        process.stdout.write(`Verified production ${verified.build.manifest.framework.capability} build ${verified.build.manifest.buildId} -> ${verified.build.directory}\n`);
+      } else {
+        process.stdout.write(`Verified node build ${verified.build.manifest.buildId} -> ${verified.build.directory}\n`);
+      }
       return 0;
     } catch (error) {
       process.stderr.write(`velar verify: ${hostErrorMessage(error)}\n`);
@@ -783,9 +791,6 @@ async function writeFrameworkProductionApplication(
   }
 }
 
-/** The receipt a node build leaves in its output; it also proves velar owns the directory. */
-const NODE_BUILD_MANIFEST_NAME = "velar-node.json";
-
 async function writeNodeProductionApplication(
   project: ProjectResult,
   outputDirectory: string,
@@ -828,14 +833,7 @@ async function writeNodeProductionApplication(
     });
     await writeFile(launcherPath, launcherOutput.code, "utf8");
     await writeFile(join(staging, "package.json"), `${JSON.stringify({ name: "velar-node-build", private: true, type: "module" }, null, 2)}\n`, "utf8");
-    await writeFile(join(staging, NODE_BUILD_MANIFEST_NAME), `${JSON.stringify({
-      formatVersion: 3,
-      kind: "velar-node-build",
-      mode,
-      entry: launcher,
-      app: config.app,
-      sourceMaps,
-    }, null, 2)}\n`, "utf8");
+    await writeNodeProductionManifest(staging, { mode, entry: launcher, app: config.app, sourceMaps });
     await replaceOutputDirectory(staging, outputDirectory);
   } catch (error) {
     await rm(staging, { recursive: true, force: true });
@@ -1619,7 +1617,7 @@ function printCommandHelp(command: string, output: NodeJS.WritableStream = proce
     "build-library": ["Usage: velar build-library [project-directory] [--mode <production|readable>]", "Checks a Core or Node source library, then writes its frozen ABI-1 JavaScript, source map, portable type interface, and integrity receipt; production JavaScript is the default."],
     package: ["Usage: velar package [project-directory]", "Packages an application through its target-owned native packaging host."],
     run: ["Usage: velar run [entry.vel | project-directory] [--stack] [-- <program-arguments>...]", "Compiles the resolved Core project and executes its entry module once on Node.js; arguments after '--' reach the program.", "--stack prints the full Node.js trace behind an uncaught program error instead of the VelarScript frames."],
-    verify: ["Usage: velar verify [project-directory | build-directory]", "Verifies the exact production manifest, inventory, sizes, hashes, and relationships."],
+    verify: ["Usage: velar verify [project-directory | build-directory]", "Verifies the exact Web or Node production manifest, inventory, sizes, hashes, and relationships."],
     preview: ["Usage: velar preview [project-directory | build-directory] [--port <1-65535>]", "Serves only a verified production build; the default port is 4173."],
     "verify-deployment": ["Usage: velar verify-deployment [project-directory | build-directory] --url <https-origin> [--json]", "Compares verified local bytes, routes, MIME types, and headers with an HTTPS deployment."],
     test: ["Usage: velar test [project-directory | file.test.vel]", "       velar test [project-directory | file.browser.test.vel] --browser[=chromium|firefox|webkit|all]", "Runs Core tests or explicit browser tests; bare --browser defaults to Chromium."],

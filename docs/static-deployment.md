@@ -12,7 +12,7 @@ velar preview --port 4173
 velar verify-deployment --url https://preview.example.com
 ```
 
-`verify` requires exact equality between the directory and the format-3
+`verify` requires exact equality between the directory and the format-4
 `velar-build.json` inventory. It rejects symbolic links and unsafe or duplicate
 paths, verifies every byte count and SHA-256, recomputes `buildId`, and
 cross-checks entry, stylesheet, source-map, CSP, cache, and fallback facts.
@@ -31,7 +31,7 @@ publisher authenticity still requires an external signature or attestation.
 - `404.html`: optional provider-neutral SPA fallback document.
 - `velar-deploy.json`: format-2 base, framework identity, fallback, headers,
   and caching contract.
-- `velar-build.json`: format-3 build identity and exact file inventory.
+- `velar-build.json`: format-4 build identity and exact file inventory.
 - `assets/*`: content-hashed JavaScript, CSS, and optional maps.
 
 The CLI never emits provider control files and the Web manifest has no

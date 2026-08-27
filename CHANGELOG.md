@@ -6,6 +6,20 @@ truth for acceptance status.
 
 ## Unreleased
 
+## 0.19.1 — 2026-08-27
+
+### Performance and build verification
+
+- Removed repeated deep runtime validation from stable local optional values
+  after a presence check, while retaining guards for locations that can change.
+- Indexed Server routes by method and path segments, skipped unused route-match
+  projections, reused JSON serialization snapshots, and removed avoidable
+  request-provider, middleware, and realtime byte-copy allocations.
+- Extended `velar verify` to Node production builds. Format-4
+  `velar-node.json` now binds the compiler identity, deterministic full-file
+  inventory, byte sizes, SHA-256 values, entry/source-map relationships, and
+  aggregate `buildId`.
+
 ## 0.19.0 — 2026-08-27
 
 ### Realtime applications

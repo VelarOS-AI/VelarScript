@@ -1,6 +1,6 @@
 # VelarScript Toolchain Release Process
 
-Release line: VelarScript 0.19.0 on 2026-08-27
+Release line: VelarScript 0.19.1 on 2026-08-27
 
 VelarScript ships the compiler, target-neutral Core Standard API, official Node
 runtime, official Server, Web and Desktop frameworks, project creator, and CLI
@@ -96,10 +96,12 @@ after every package exists, each package is bound to this workflow through npm
 trusted publishing and the bootstrap secret is removed.
 
 Application artifacts have a separate integrity boundary. `velar verify`
-recomputes the format-3 framework-build inventory and `buildId`, while `velar preview`
-serves only a verified directory. This proves local self-consistency, not
-publisher authenticity; the external release pipeline must sign or attest the
-application manifest when authenticated application releases are introduced.
+recognizes both format-4 Web and Node builds, recomputes their complete file
+inventory and `buildId`, and checks the target-specific entry and source-map
+relationships. `velar preview` remains Web-only and serves only a verified
+static directory. This proves local self-consistency, not publisher
+authenticity; the external release pipeline must sign or attest the application
+manifest when authenticated application releases are introduced.
 
 ## External preview evidence
 

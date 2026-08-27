@@ -1224,13 +1224,15 @@ Runtime narrowing guards are separate from `readonly`: the former validates a
 fact at a use site; the latter removes mutation capability from a data type at
 compile time.
 
-The recheck runs at **every read that relies on the fact**, not once per check,
-and for a record or collection it is a validating walk over the data. One check
-followed by ten reads is ten rechecks. That is the right default — it is what
-makes a fact survive a call at all — but in a hot loop it is worth avoiding:
-bind the narrowed value to a `const` once, outside the loop or immediately
-after the check, and read the `const`. A `const` holds the checked type
-outright, so it carries no fact and needs no recheck.
+The recheck runs at **every read that relies on a fact which may become stale**,
+not once per check, and for a record or collection it is a validating walk over
+the data. One check followed by ten reads is ten rechecks. A local `const` copy
+of an optional has one narrower rule: when the check removes only `null`, the
+fact cannot become stale because no alias can reassign that local binding. Its
+record or collection contents may remain mutable, but later reads do not walk
+those contents to re-prove the unrelated presence fact. Parameters, `let`,
+members, imports, reactive bindings, and checks that select a more specific
+union arm retain the ordinary runtime recheck.
 
 Three boundaries remain because they are visible in source:
 

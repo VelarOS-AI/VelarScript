@@ -1123,8 +1123,10 @@ A response is one checked plain record body:
 The exported `ServeRequest`, `ServeResponse`, and `Server` runtime types inspect
 only enumerable own data fields. Type checks and response dispatch never invoke
 getters, symbol hooks, `toJSON`, overridden collection methods, or sparse List
-entries. Server JSON responses reuse the compiler-owned strict JSON snapshot
-instead of maintaining a weaker serializer beside it.
+entries. A Server JSON response takes one compiler-owned strict JSON snapshot
+when the response is created; finalization, middleware copies, test transport,
+and native transport carry that same encoded snapshot instead of walking and
+serializing the application value again.
 
 The application-facing module never owns a Node HTTP server or request stream.
 It exchanges bounded request/response commands with the same private isolated

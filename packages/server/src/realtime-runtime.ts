@@ -9,7 +9,7 @@
  * values.
  */
 export const VELAR_SERVER_REALTIME_RUNTIME = String.raw`
-import { WebSocketClosedError as __velarRealtimeTransportClosed, WebSocketConnection as __velarRealtimeConnection } from "velar/websocket";
+import { WebSocketClosedError as __velarRealtimeTransportClosed, WebSocketConnection as __velarRealtimeConnection, __velarWebSocketSendOwned as __velarRealtimeSendOwned } from "velar/websocket";
 
 const __velarRealtimePeers = new WeakMap();
 const __velarRealtimeApply = Reflect.apply;
@@ -271,7 +271,9 @@ async function __velarRealtimeWrite(peer) {
       state.queueSize -= 1;
       state.queuedBytes -= entry.size;
       try {
-        await __velarRealtimeTimed(state.connection.send(entry.wire), state.options.drainTimeout);
+        // entry.wire 是入队时已复制的框架自有快照。走底层内部 ABI
+        // 可避免 WebSocket 公开 send 为防应用篡改而再复制一次 Bytes。
+        await __velarRealtimeTimed(__velarRealtimeSendOwned(state.connection, entry.wire), state.options.drainTimeout);
         entry.resolve(null);
       } catch (failure) {
         entry.reject(failure);

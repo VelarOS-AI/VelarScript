@@ -133,6 +133,8 @@ const __velarServeSerializedJson = new __velarServeWeakMap();
 const __velarServeResponseCookies = new __velarServeWeakMap();
 const __velarServeReservedBackground = new __velarServeWeakMap();
 const __velarServeTimeoutSettlements = new __velarServeWeakMap();
+// 没有捕获值的内部匹配结果不暴露给应用，可以安全共享一个空对象。
+const __velarServeEmptyRouteValues = __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [__velarServeCall(__velarServeObjectCreate, __velarServeObject, [null])]);
 const __velarServeResponseFields = __velarServeFieldMap(["status", "json", "text", "contentType", "stream", "headers", "background", "compression"]);
 const __velarServeBodyFields = __velarServeFieldMap(["text", "bytes", "tooLarge"]);
 const __velarServeBodyBytesFields = __velarServeFieldMap(["data", "bytes", "tooLarge"]);
@@ -522,6 +524,13 @@ function __velarServeIsFileResponse(value) {
 function __velarServeResponse(value) {
   if (__velarServeIsFileResponse(value)) return value;
   const inheritedCookies = value && typeof value === "object" ? __velarServeCall(__velarServeWeakMapGet, __velarServeResponseCookies, [value]) : undefined;
+  // ServeResponse 在创建时已把 JSON 快照编码并校验过一次。后续的
+  // finalize、中间件和传输边界会为了各自的信任边界再次复制响应
+  // 外壳，但不应重复遍历同一份 JSON 数据。缓存跟随框架内部副本
+  // 传递，因此一个响应始终表示创建它时的稳定快照。
+  const inheritedSerialized = value && typeof value === "object"
+    ? __velarServeCall(__velarServeWeakMapGet, __velarServeSerializedJson, [value])
+    : undefined;
   const fields = __velarServeRecord(value, __velarServeResponseFields, "ServeResponse");
   if (!__velarServeIsSafeInteger(fields.status) || fields.status < 200 || fields.status > 599) {
     throw new __velarServeRangeError("ServeResponse.status must be a final HTTP status integer from 200 through 599");
@@ -531,8 +540,8 @@ function __velarServeResponse(value) {
   for (let index = 0; index < bodyNames.length; index += 1) if (__velarServeOwnDescriptor(fields, bodyNames[index])) bodies += 1;
   if (bodies !== 1) throw new __velarServeTypeError("ServeResponse requires exactly one of json, text, or stream");
   if (__velarServeOwnDescriptor(fields, "json")) {
-    const serialized = __velarJsonStringify(fields.json);
-    if (__velarUtf8ByteLength(serialized) > __velarServeMaxBodyBytes) throw new __velarServeRangeError("ServeResponse.json cannot exceed 16 MiB");
+    const serialized = inheritedSerialized === undefined ? __velarJsonStringify(fields.json) : inheritedSerialized;
+    if (inheritedSerialized === undefined && __velarUtf8ByteLength(serialized) > __velarServeMaxBodyBytes) throw new __velarServeRangeError("ServeResponse.json cannot exceed 16 MiB");
     __velarServeCall(__velarServeWeakMapSet, __velarServeSerializedJson, [fields, serialized]);
   }
   if (__velarServeOwnDescriptor(fields, "text") && typeof fields.text !== "string") throw new __velarServeTypeError("ServeResponse.text must be a string");
@@ -1005,6 +1014,10 @@ function __velarServeResponseCopy(value, headers = null, backgroundTasks = null)
   const tasks = backgroundTasks === null ? value.background : backgroundTasks;
   if (tasks != null) output.background = tasks;
   if (value.compression != null) output.compression = value.compression;
+  // 只改头、cookie 或后台任务时，JSON 本体仍是同一个已编码快照。
+  // 先把快照挂到新外壳，__velarServeResponse 就能继承而不重编码。
+  const serialized = __velarServeCall(__velarServeWeakMapGet, __velarServeSerializedJson, [value]);
+  if (serialized !== undefined) __velarServeCall(__velarServeWeakMapSet, __velarServeSerializedJson, [output, serialized]);
   const copied = __velarServeResponse(output);
   const cookies = __velarServeCall(__velarServeWeakMapGet, __velarServeResponseCookies, [value]);
   if (cookies !== undefined) __velarServeCall(__velarServeWeakMapSet, __velarServeResponseCookies, [copied, cookies]);
@@ -1128,6 +1141,12 @@ function __velarServeRouteShape(path) {
   return __velarServeRouteShapeFromSegments(__velarServeCall(__velarServeStringSplit, path, ["/"]));
 }
 
+function __velarServeRouteBinding(pattern, pathname, params, query) {
+  const bound = {pattern, pathname, params, query};
+  __velarServeCall(__velarServeObjectDefineProperty, __velarServeObject, [bound, "toString", {value: () => pattern.definition, enumerable: false, configurable: false, writable: false}]);
+  return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [bound]);
+}
+
 /**
  * 编译器把 p"..." 降低成结构化数据，这里只做边界复核并冻结。路由字符串
  * 不会在每次请求中重新解析；捕获的类型检查函数与 OpenAPI schema 也随模板
@@ -1172,12 +1191,21 @@ function __velarCreateServePattern(source) {
   const query = readCaptures(source.query, true);
   const declared = new __velarServeMap();
   const segments = __velarServeCall(__velarServeStringSplit, pathname, ["/"]);
+  // 捕获名在路由注册时按路径段预编译。请求匹配阶段只做数组读取，
+  // 不再反复对 {name:type} 执行 startsWith/slice/indexOf。
+  const segmentCaptures = [];
+  segmentCaptures[0] = null;
   for (let index = 1; index < segments.length; index += 1) {
     const segment = segments[index];
-    if (!__velarServeCall(__velarServeStringStartsWith, segment, ["{"])) continue;
+    if (!__velarServeCall(__velarServeStringStartsWith, segment, ["{"])) {
+      segmentCaptures[index] = null;
+      continue;
+    }
     const text = __velarServeCall(__velarServeStringSlice, segment, [1, -1]);
     const colon = __velarServeCall(__velarServeStringIndexOf, text, [":"]);
-    __velarServeCall(__velarServeMapSet, declared, [__velarServeCall(__velarServeStringSlice, text, [0, colon]), true]);
+    const captureName = __velarServeCall(__velarServeStringSlice, text, [0, colon]);
+    segmentCaptures[index] = captureName;
+    __velarServeCall(__velarServeMapSet, declared, [captureName, true]);
   }
   if (__velarServeCall(__velarServeMapSize, declared, []) !== path.length) throw new __velarServeTypeError("RoutePattern path captures do not match its pathname");
   for (let index = 0; index < path.length; index += 1) {
@@ -1201,11 +1229,12 @@ function __velarCreateServePattern(source) {
   __velarServeCall(__velarServeObjectDefineProperty, __velarServeObject, [value, "pathname", {value: pathname, enumerable: false, configurable: false, writable: false}]);
   __velarServeCall(__velarServeObjectDefineProperty, __velarServeObject, [value, "pathCaptures", {value: __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [path]), enumerable: false, configurable: false, writable: false}]);
   __velarServeCall(__velarServeObjectDefineProperty, __velarServeObject, [value, "queryCaptures", {value: __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [query]), enumerable: false, configurable: false, writable: false}]);
+  __velarServeCall(__velarServeObjectDefineProperty, __velarServeObject, [value, "segmentCaptures", {value: __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [segmentCaptures]), enumerable: false, configurable: false, writable: false}]);
   __velarServeCall(__velarServeObjectDefineProperty, __velarServeObject, [value, "toString", {value: () => source.definition, enumerable: false, configurable: false, writable: false}]);
   return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [value]);
 }
 
-function __velarCreateServeRoute(method, pattern, parameters, handler, metadata = {}) {
+function __velarCreateServeRoute(method, pattern, parameters, handler, metadata = {}, bindRoute = true) {
   if (typeof method !== "string" || !__velarServeCall(__velarServeArrayIncludes, ["GET", "POST", "PUT", "PATCH", "DELETE"], [method])) throw new __velarServeTypeError("Route method is invalid");
   if (!__velarServeIsPattern(pattern)) throw new __velarServeTypeError("Route path must be a RoutePattern declared with p\"/...\"");
   const path = pattern.pathname;
@@ -1245,6 +1274,9 @@ function __velarCreateServeRoute(method, pattern, parameters, handler, metadata 
   }
   const segments = __velarServeCall(__velarServeStringSplit, path, ["/"]);
   if (typeof handler !== "function") throw new __velarServeTypeError("Route handler is invalid");
+  if (typeof bindRoute !== "boolean" || !bindRoute && (pattern.pathCaptures.length > 0 || pattern.queryCaptures.length > 0)) {
+    throw new __velarServeTypeError("A route with path or query captures must bind its RouteMatch");
+  }
   metadata = __velarServeRecord(metadata, __velarServeRouteMetadataFields, "Route metadata");
   const responseSchema = metadata.responseSchema == null ? {} : __velarServeSchema(metadata.responseSchema, "Route response schema");
   const responseContentTypes = metadata.responseContentTypes == null ? ["application/json"] : __velarServeStringList(metadata.responseContentTypes, "Route response content types", 8);
@@ -1270,6 +1302,8 @@ function __velarCreateServeRoute(method, pattern, parameters, handler, metadata 
     path,
     pattern,
     segments: __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [segments]),
+    segmentCaptures: pattern.segmentCaptures,
+    bindRoute,
     parameters: __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [checked]),
     handler,
     responseSchema,
@@ -1285,7 +1319,7 @@ function __velarCreateServeRoute(method, pattern, parameters, handler, metadata 
   }]);
 }
 
-function __velarCreateServeWebSocket(pattern, parameters, handler) {
+function __velarCreateServeWebSocket(pattern, parameters, handler, bindRoute = true) {
   if (!__velarServeIsPattern(pattern)) throw new __velarServeTypeError("WebSocket path must be a RoutePattern declared with p\"/...\"");
   if (!__velarServeIsArray(parameters) || parameters.length > 64) throw new __velarServeTypeError("WebSocket parameters must be a bounded list");
   const checked = [];
@@ -1324,13 +1358,19 @@ function __velarCreateServeWebSocket(pattern, parameters, handler) {
   }
   if (connectionIndex === -1) throw new __velarServeTypeError("A WebSocket route requires exactly one connection parameter");
   if (typeof handler !== "function") throw new __velarServeTypeError("WebSocket handler is invalid");
+  if (typeof bindRoute !== "boolean" || !bindRoute && (pattern.pathCaptures.length > 0 || pattern.queryCaptures.length > 0)) {
+    throw new __velarServeTypeError("A WebSocket route with path or query captures must bind its RouteMatch");
+  }
   const path = pattern.pathname;
+  const segments = __velarServeCall(__velarServeStringSplit, path, ["/"]);
   return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{
     [__velarServeWebSocketMarker]: true,
     method: "WEBSOCKET",
     path,
     pattern,
-    segments: __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [__velarServeCall(__velarServeStringSplit, path, ["/"])]),
+    segments: __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [segments]),
+    segmentCaptures: pattern.segmentCaptures,
+    bindRoute,
     parameters: __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [checked]),
     connectionIndex,
     handler,
@@ -1554,6 +1594,7 @@ export function prefix(path, app) {
       route.parameters,
       route.handler,
       __velarServeRouteMetadata(route),
+      route.bindRoute,
     );
   }
   for (let index = 0; index < app.webSockets.length; index += 1) {
@@ -1561,7 +1602,7 @@ export function prefix(path, app) {
     const pathname = path + (route.path === "/" ? "" : route.path);
     const querySuffix = __velarServeCall(__velarServeStringSlice, route.pattern.definition, [route.path.length]);
     const pattern = __velarCreateServePattern({definition: pathname + querySuffix, pathname, path: route.pattern.pathCaptures, query: route.pattern.queryCaptures});
-    webSockets[webSockets.length] = __velarCreateServeWebSocket(pattern, route.parameters, route.handler);
+    webSockets[webSockets.length] = __velarCreateServeWebSocket(pattern, route.parameters, route.handler, route.bindRoute);
   }
   const items = [];
   for (let index = 0; index < routes.length; index += 1) items[items.length] = routes[index];
@@ -1575,10 +1616,10 @@ export function staticFiles(path, root, fallback = null) {
   if (path !== "/" && __velarServeCall(__velarServeStringEndsWith, path, ["/"])) throw new __velarServeTypeError("staticFiles path must not end with '/'");
   const pattern = path === "/" ? "/*" : path + "/*";
   const routePattern = __velarCreateServePattern({definition: pattern, pathname: pattern, path: [], query: []});
-  const route = __velarCreateServeRoute("GET", routePattern, [{name: "request", source: "request", kind: "request", required: true}], async (_path, request) => {
+  const route = __velarCreateServeRoute("GET", routePattern, [{name: "request", source: "request", kind: "request", required: true}], async request => {
     const relative = path === "/" ? request.path : __velarServeCall(__velarServeStringSlice, request.path, [path.length]);
     return fileResponse(root, relative || "/", fallback);
-  }, {documented: false});
+  }, {documented: false}, false);
   return __velarCreateServeApp("static", [route]);
 }
 
@@ -1599,6 +1640,7 @@ export function use(app, middleware) {
       route.parameters,
       route.handler,
       {...__velarServeRouteMetadata(route), middleware: entries},
+      route.bindRoute,
     );
   }
   let notFound = app.notFound;
@@ -1628,6 +1670,7 @@ export function bodyLimit(app, maxBytes) {
       route.parameters,
       route.handler,
       {...__velarServeRouteMetadata(route), maxBodyBytes: maxBytes},
+      route.bindRoute,
     );
   }
   const items = [];
@@ -1898,51 +1941,92 @@ export const middleware = __velarServeCall(__velarServeObjectFreeze, __velarServ
 
 function __velarServeMatch(route, actual) {
   const pattern = route.segments;
-  const values = __velarServeCall(__velarServeObjectCreate, __velarServeObject, [null]);
+  let values = null;
   let score = 0;
   for (let index = 1; index < pattern.length; index += 1) {
     const expected = pattern[index];
-    if (expected === "*") return {values, score};
+    if (expected === "*") return {values: values === null ? __velarServeEmptyRouteValues : values, score};
     if (index >= actual.length) return null;
     const received = actual[index];
-    if (__velarServeCall(__velarServeStringStartsWith, expected, ["{"]) && __velarServeCall(__velarServeStringEndsWith, expected, ["}"])) {
-      const declaration = __velarServeCall(__velarServeStringSlice, expected, [1, -1]);
-      const separator = __velarServeCall(__velarServeStringIndexOf, declaration, [":"]);
-      values[__velarServeCall(__velarServeStringSlice, declaration, [0, separator])] = received;
+    const captureName = route.segmentCaptures[index];
+    if (captureName !== null) {
+      if (values === null) values = __velarServeCall(__velarServeObjectCreate, __velarServeObject, [null]);
+      values[captureName] = received;
       score += 1;
     } else {
       if (expected !== received) return null;
       score += 4;
     }
   }
-  return actual.length === pattern.length ? {values, score} : null;
+  return actual.length === pattern.length ? {values: values === null ? __velarServeEmptyRouteValues : values, score} : null;
+}
+
+function __velarServeRouterNode() {
+  return {literals: new __velarServeMap(), dynamic: null, exact: [], wildcard: []};
 }
 
 function __velarServeRouter(routes) {
   const methods = new __velarServeMap();
   for (let index = 0; index < routes.length; index += 1) {
     const route = routes[index];
-    let buckets = __velarServeCall(__velarServeMapGet, methods, [route.method]);
-    if (buckets === undefined) { buckets = new __velarServeMap(); __velarServeCall(__velarServeMapSet, methods, [route.method, buckets]); }
-    const first = route.segments.length < 2 || route.segments[1] === "" ? "" : route.segments[1];
-    const key = first === "*" || __velarServeCall(__velarServeStringStartsWith, first, ["{"]) ? "*" : first;
-    let entries = __velarServeCall(__velarServeMapGet, buckets, [key]);
-    if (entries === undefined) { entries = []; __velarServeCall(__velarServeMapSet, buckets, [key, entries]); }
-    entries[entries.length] = route;
+    let node = __velarServeCall(__velarServeMapGet, methods, [route.method]);
+    if (node === undefined) { node = __velarServeRouterNode(); __velarServeCall(__velarServeMapSet, methods, [route.method, node]); }
+    let terminal = true;
+    for (let segmentIndex = 1; segmentIndex < route.segments.length; segmentIndex += 1) {
+      const segment = route.segments[segmentIndex];
+      if (segment === "*") {
+        node.wildcard[node.wildcard.length] = route;
+        terminal = false;
+        break;
+      }
+      if (__velarServeCall(__velarServeStringStartsWith, segment, ["{"])) {
+        if (node.dynamic === null) node.dynamic = __velarServeRouterNode();
+        node = node.dynamic;
+        continue;
+      }
+      let child = __velarServeCall(__velarServeMapGet, node.literals, [segment]);
+      if (child === undefined) { child = __velarServeRouterNode(); __velarServeCall(__velarServeMapSet, node.literals, [segment, child]); }
+      node = child;
+    }
+    if (terminal) node.exact[node.exact.length] = route;
   }
   return methods;
 }
 
 function __velarServeRouterRoutes(app, method, actual) {
-  const buckets = __velarServeCall(__velarServeMapGet, app.router, [method]);
-  if (buckets === undefined) return [];
+  const root = __velarServeCall(__velarServeMapGet, app.router, [method]);
+  if (root === undefined) return [];
   const output = [];
-  const first = actual.length < 2 ? "" : actual[1];
-  const literal = __velarServeCall(__velarServeMapGet, buckets, [first]);
-  if (literal !== undefined) for (let index = 0; index < literal.length; index += 1) output[output.length] = literal[index];
-  const dynamic = __velarServeCall(__velarServeMapGet, buckets, ["*"]);
-  if (dynamic !== undefined) for (let index = 0; index < dynamic.length; index += 1) output[output.length] = dynamic[index];
+  let current = [root];
+  for (let segmentIndex = 1; segmentIndex < actual.length; segmentIndex += 1) {
+    const next = [];
+    for (let nodeIndex = 0; nodeIndex < current.length; nodeIndex += 1) {
+      const node = current[nodeIndex];
+      for (let wildcardIndex = 0; wildcardIndex < node.wildcard.length; wildcardIndex += 1) output[output.length] = node.wildcard[wildcardIndex];
+      const literal = __velarServeCall(__velarServeMapGet, node.literals, [actual[segmentIndex]]);
+      if (literal !== undefined) next[next.length] = literal;
+      if (node.dynamic !== null) next[next.length] = node.dynamic;
+    }
+    if (next.length === 0) return output;
+    current = next;
+  }
+  for (let nodeIndex = 0; nodeIndex < current.length; nodeIndex += 1) {
+    const node = current[nodeIndex];
+    for (let exactIndex = 0; exactIndex < node.exact.length; exactIndex += 1) output[output.length] = node.exact[exactIndex];
+    // 通配段与原匹配器一致，可以匹配零个剩余路径段。
+    for (let wildcardIndex = 0; wildcardIndex < node.wildcard.length; wildcardIndex += 1) output[output.length] = node.wildcard[wildcardIndex];
+  }
   return output;
+}
+
+function __velarServeBestRoute(app, method, actual) {
+  const routes = __velarServeRouterRoutes(app, method, actual);
+  let selected = null;
+  for (let index = 0; index < routes.length; index += 1) {
+    const match = __velarServeMatch(routes[index], actual);
+    if (match !== null && (selected === null || match.score > selected.match.score)) selected = {route: routes[index], match};
+  }
+  return selected;
 }
 
 function __velarServeDecodeScalarValue(raw, kind, name) {
@@ -1970,8 +2054,9 @@ function __velarServeDecodeScalar(raw, parameter) {
 }
 
 function __velarServeCookieValue(request, name) {
-  if (!__velarServeCall(__velarServeMapHas, request.headers, ["cookie"])) return __velarServeMissing;
-  const pieces = __velarServeCall(__velarServeStringSplit, __velarServeCall(__velarServeMapGet, request.headers, ["cookie"]), [";"]);
+  const header = __velarServeCall(__velarServeMapGet, request.headers, ["cookie"]);
+  if (header === undefined) return __velarServeMissing;
+  const pieces = __velarServeCall(__velarServeStringSplit, header, [";"]);
   let encoded = null;
   let matches = 0;
   for (let index = 0; index < pieces.length; index += 1) {
@@ -1990,16 +2075,15 @@ function __velarServeCookieValue(request, name) {
 function __velarServeNamedInputRaw(descriptor, parameterName, request) {
   const name = descriptor.name === "" ? parameterName : descriptor.name;
   if (descriptor.source === "query") {
-    if (!__velarServeCall(__velarServeMapHas, request.queryAll, [name])) return __velarServeMissing;
     const values = __velarServeCall(__velarServeMapGet, request.queryAll, [name]);
+    if (values === undefined) return __velarServeMissing;
     if (values.length !== 1) throw __velarServeRequestProblem(422, {error: "duplicate_parameter", parameter: name});
     return values[0];
   }
   if (descriptor.source === "header") {
     const normalized = __velarServeCall(__velarServeStringToLowerCase, name, []);
-    return __velarServeCall(__velarServeMapHas, request.headers, [normalized])
-      ? __velarServeCall(__velarServeMapGet, request.headers, [normalized])
-      : __velarServeMissing;
+    const value = __velarServeCall(__velarServeMapGet, request.headers, [normalized]);
+    return value === undefined ? __velarServeMissing : value;
   }
   if (descriptor.source === "cookie") return __velarServeCookieValue(request, name);
   return __velarServeMissing;
@@ -2064,7 +2148,10 @@ function __velarServeSecurityInput(descriptor, request) {
 }
 
 function __velarServeRequestContext(appState) {
-  return {appState, cache: new __velarServeMap(), resolving: new __velarServeMap(), releases: [], providerCount: 0, form: null};
+  // 大部分路由要么没有依赖，要么只读应用级依赖。请求级 Map 和
+  // release 列表在这两种情况下都不会被使用，因此延迟到第一个请求级
+  // Provider 真正解析时再分配，避免每个普通请求创建并清空两个 Map。
+  return {appState, cache: null, resolving: null, releases: null, providerCount: 0, form: null};
 }
 
 async function __velarServeCleanupReleases(releases) {
@@ -2081,15 +2168,17 @@ async function __velarServeCleanupReleases(releases) {
 
 async function __velarServeCleanupRequestContext(context) {
   let failure = null;
-  try { await __velarServeCleanupReleases(context.releases); }
-  catch (error) { failure = error; }
+  if (context.releases !== null) {
+    try { await __velarServeCleanupReleases(context.releases); }
+    catch (error) { failure = error; }
+  }
   if (context.form !== null) {
     try { const form = await context.form; if (typeof form?.dispose === "function") form.dispose(); }
     catch {}
     context.form = null;
   }
-  __velarServeCall(__velarServeMapClear, context.cache, []);
-  __velarServeCall(__velarServeMapClear, context.resolving, []);
+  if (context.cache !== null) __velarServeCall(__velarServeMapClear, context.cache, []);
+  if (context.resolving !== null) __velarServeCall(__velarServeMapClear, context.resolving, []);
   context.providerCount = 0;
   if (failure !== null) throw failure;
   return null;
@@ -2112,16 +2201,20 @@ async function __velarServeCleanupAppState(appState) {
 }
 
 async function __velarServeResolveProvider(provider, request, maxBodyBytes, context) {
-  if (context.appState.overrides !== null && __velarServeCall(__velarServeMapHas, context.appState.overrides, [provider])) {
-    return __velarServeCall(__velarServeMapGet, context.appState.overrides, [provider]);
+  if (context.appState.overrides !== null) {
+    const override = __velarServeCall(__velarServeMapGet, context.appState.overrides, [provider]);
+    if (override !== undefined) return override;
   }
   const appScoped = provider.scope === "app";
+  if (!appScoped && context.cache === null) context.cache = new __velarServeMap();
+  if (!appScoped && context.resolving === null) context.resolving = new __velarServeMap();
   const cache = appScoped ? context.appState.cache : context.cache;
   const resolving = appScoped ? context.appState.resolving : context.resolving;
   const owner = appScoped ? context.appState : context;
   const providerLimit = appScoped ? __velarServeMaxAppProviders : __velarServeMaxRequestProviders;
-  if (__velarServeCall(__velarServeMapHas, cache, [provider])) return await __velarServeCall(__velarServeMapGet, cache, [provider]);
-  if (__velarServeCall(__velarServeMapHas, resolving, [provider])) throw __velarServeRequestProblem(500, {error: "provider_cycle"});
+  const cached = __velarServeCall(__velarServeMapGet, cache, [provider]);
+  if (cached !== undefined) return await cached;
+  if (__velarServeCall(__velarServeMapGet, resolving, [provider]) !== undefined) throw __velarServeRequestProblem(500, {error: "provider_cycle"});
   if (owner.providerCount >= providerLimit) throw __velarServeRequestProblem(503, {error: "provider_budget_exhausted"});
   owner.providerCount += 1;
   __velarServeCall(__velarServeMapSet, resolving, [provider, true]);
@@ -2134,6 +2227,7 @@ async function __velarServeResolveProvider(provider, request, maxBodyBytes, cont
     }
     const result = await __velarServeCall(provider.resolve, undefined, [__velarServeCall(__velarServeObjectFreeze, __velarServeObject, [values])]);
     if (provider.release !== null) {
+      if (!appScoped && context.releases === null) context.releases = [];
       const releases = appScoped ? context.appState.releases : context.releases;
       releases[releases.length] = {release: provider.release, value: result};
     }
@@ -2348,8 +2442,8 @@ async function __velarServeResolveInput(descriptor, parameterName, parameter, re
   if (descriptor.source === "upload") {
     const form = await __velarServeRequestForm(request, maxBodyBytes, context);
     const name = descriptor.name === "" ? parameterName : descriptor.name;
-    if (!__velarServeCall(__velarServeMapHas, form.files, [name])) throw __velarServeRequestProblem(422, {error: "missing_parameter", parameter: name});
     const upload = __velarServeCall(__velarServeMapGet, form.files, [name]);
+    if (upload === undefined) throw __velarServeRequestProblem(422, {error: "missing_parameter", parameter: name});
     if (upload.size > descriptor.extra) throw __velarServeRequestProblem(413, {error: "upload_too_large", parameter: name});
     return upload;
   }
@@ -2362,30 +2456,30 @@ async function __velarServeResolveInput(descriptor, parameterName, parameter, re
 }
 
 async function __velarServeRouteArguments(route, match, request, maxBodyBytes, context, connection = __velarServeMissing) {
-  const params = __velarServeCall(__velarServeObjectCreate, __velarServeObject, [null]);
-  for (let index = 0; index < route.pattern.pathCaptures.length; index += 1) {
-    const capture = route.pattern.pathCaptures[index];
-    const descriptor = __velarServeOwnDescriptor(match.values, capture.name);
-    if (descriptor === undefined || !("value" in descriptor)) throw __velarServeRequestProblem(422, {error: "missing_parameter", parameter: capture.name});
-    params[capture.name] = __velarServeDecodeScalar(descriptor.value, capture);
-  }
-  const query = __velarServeCall(__velarServeObjectCreate, __velarServeObject, [null]);
-  for (let index = 0; index < route.pattern.queryCaptures.length; index += 1) {
-    const capture = route.pattern.queryCaptures[index];
-    if (!__velarServeCall(__velarServeMapHas, request.queryAll, [capture.wireName])) {
-      if (!capture.optional) throw __velarServeRequestProblem(422, {error: "missing_parameter", parameter: capture.wireName});
-      continue;
+  const values = [];
+  if (route.bindRoute) {
+    const params = __velarServeCall(__velarServeObjectCreate, __velarServeObject, [null]);
+    for (let index = 0; index < route.pattern.pathCaptures.length; index += 1) {
+      const capture = route.pattern.pathCaptures[index];
+      const descriptor = __velarServeOwnDescriptor(match.values, capture.name);
+      if (descriptor === undefined || !("value" in descriptor)) throw __velarServeRequestProblem(422, {error: "missing_parameter", parameter: capture.name});
+      params[capture.name] = __velarServeDecodeScalar(descriptor.value, capture);
     }
-    const received = __velarServeCall(__velarServeMapGet, request.queryAll, [capture.wireName]);
-    if (received.length !== 1) throw __velarServeRequestProblem(422, {error: "duplicate_parameter", parameter: capture.wireName});
-    query[capture.name] = __velarServeDecodeScalar(received[0], capture);
+    const query = __velarServeCall(__velarServeObjectCreate, __velarServeObject, [null]);
+    for (let index = 0; index < route.pattern.queryCaptures.length; index += 1) {
+      const capture = route.pattern.queryCaptures[index];
+      const received = __velarServeCall(__velarServeMapGet, request.queryAll, [capture.wireName]);
+      if (received === undefined) {
+        if (!capture.optional) throw __velarServeRequestProblem(422, {error: "missing_parameter", parameter: capture.wireName});
+        continue;
+      }
+      if (received.length !== 1) throw __velarServeRequestProblem(422, {error: "duplicate_parameter", parameter: capture.wireName});
+      query[capture.name] = __velarServeDecodeScalar(received[0], capture);
+    }
+    __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [params]);
+    __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [query]);
+    values[values.length] = __velarServeRouteBinding(route.pattern, request.path, params, query);
   }
-  __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [params]);
-  __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [query]);
-  const bound = {pattern: route.pattern, pathname: request.path, params, query};
-  __velarServeCall(__velarServeObjectDefineProperty, __velarServeObject, [bound, "toString", {value: () => route.pattern.definition, enumerable: false, configurable: false, writable: false}]);
-  __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [bound]);
-  const values = [bound];
   let body = undefined;
   for (let index = 0; index < route.parameters.length; index += 1) {
     const parameter = route.parameters[index];
@@ -2424,8 +2518,8 @@ async function __velarServeRouteArguments(route, match, request, maxBodyBytes, c
 }
 
 function __velarServeJsonContentType(headers) {
-  if (!__velarServeCall(__velarServeMapHas, headers, ["content-type"])) return true;
   const header = __velarServeCall(__velarServeMapGet, headers, ["content-type"]);
+  if (header === undefined) return true;
   const mediaType = __velarServeCall(__velarServeStringToLowerCase, __velarServeCall(__velarServeStringTrim, header, []), []);
   const separator = __velarServeCall(__velarServeStringIndexOf, mediaType, [";"]);
   const value = separator < 0 ? mediaType : __velarServeCall(__velarServeStringTrim, __velarServeCall(__velarServeStringSlice, mediaType, [0, separator]), []);
@@ -2539,54 +2633,57 @@ async function __velarServeFinalize(value, app, request, status = 200, problem =
 async function __velarServeHandleAppResponse(app, request, maxBodyBytes, context) {
   try {
     const actual = __velarServeCall(__velarServeStringSplit, request.path, ["/"]);
-    const candidates = [];
+    // 成功请求是压倒性的热路径。先只查当前方法（HEAD 复用 GET），
+    // 命中后立即执行；只有 OPTIONS 或当前方法没有路由时，才扫描其他
+    // 方法以构造准确的 404/405 和 Allow。
+    const requestedMethod = request.method === "HEAD" ? "GET" : request.method;
+    const canSelect = requestedMethod === "GET" || requestedMethod === "POST" || requestedMethod === "PUT"
+      || requestedMethod === "PATCH" || requestedMethod === "DELETE";
+    const attemptedMethod = request.method === "OPTIONS" || !canSelect ? null : requestedMethod;
+    const selected = attemptedMethod === null ? null : __velarServeBestRoute(app, attemptedMethod, actual);
+    if (selected !== null) {
+      const routeBodyBytes = selected.route.maxBodyBytes === null || selected.route.maxBodyBytes > maxBodyBytes
+        ? maxBodyBytes
+        : selected.route.maxBodyBytes;
+      const invokeRoute = async () => await __velarServeCall(selected.route.handler, undefined, await __velarServeRouteArguments(selected.route, selected.match, request, routeBodyBytes, context));
+      return await __velarServeApplyMiddleware(selected.route, request, invokeRoute, value => __velarServeFinalize(value, app, request));
+    }
+
     const allowed = new __velarServeMap();
     let pathOwner = null;
     const declared = ["GET", "POST", "PUT", "PATCH", "DELETE"];
     for (let methodIndex = 0; methodIndex < declared.length; methodIndex += 1) {
-      const routes = __velarServeRouterRoutes(app, declared[methodIndex], actual);
-      for (let index = 0; index < routes.length; index += 1) {
-        const route = routes[index];
-        const match = __velarServeMatch(route, actual);
-        if (!match) continue;
-        if (pathOwner === null || match.score > pathOwner.match.score) pathOwner = {route, match};
-        __velarServeCall(__velarServeMapSet, allowed, [route.method, true]);
-        if (route.method === request.method || request.method === "HEAD" && route.method === "GET") candidates[candidates.length] = {route, match};
-      }
+      const method = declared[methodIndex];
+      if (method === attemptedMethod) continue;
+      const candidate = __velarServeBestRoute(app, method, actual);
+      if (candidate === null) continue;
+      if (pathOwner === null || candidate.match.score > pathOwner.match.score) pathOwner = candidate;
+      __velarServeCall(__velarServeMapSet, allowed, [method, true]);
     }
     if (request.method === "OPTIONS" && __velarServeCall(__velarServeMapSize, allowed, []) > 0) {
       const methods = __velarServeAllowedMethods(allowed);
       return await __velarServeApplyMiddleware(pathOwner.route, request, async () => __velarServeOutcome(null, 204, new __velarServeMap([["allow", __velarServeCall(__velarServeArrayJoin, methods, [", "])]])), value => __velarServeFinalize(value, app, request));
     }
-    if (candidates.length === 0) {
-      if (__velarServeCall(__velarServeMapSize, allowed, []) > 0) {
-        const methods = __velarServeAllowedMethods(allowed);
-        const problem = __velarServeProblem(405, "route.method_not_allowed", "Method not allowed", null, "method", request.method, new __velarServeMap([["allow", __velarServeCall(__velarServeArrayJoin, methods, [", "])]]));
-        return await __velarServeApplyMiddleware(pathOwner.route, request, async () => __velarServeOutcome(null, 405, null, problem), value => __velarServeFinalize(value, app, request));
-      }
-      if (app.notFound !== null) {
-        const problem = __velarServeProblem(404, "route.not_found", "Route not found", null, "path", request.path);
-        return await __velarServeApplyMiddleware(
-          app.notFound,
-          request,
-          async () => {
-            const value = await __velarServeCall(app.notFound.handler, undefined, [request]);
-            if (__velarServeIsFileResponse(value) || __velarServeIsResponseAttempt(value)) return value;
-            return __velarServeOutcome(value, 404, null, problem);
-          },
-          value => __velarServeFinalize(value, app, request),
-        );
-      }
-      const problem = __velarServeProblem(404, "route.not_found", "Route not found", null, "path", request.path);
-      return await __velarServeFinalize(__velarServeOutcome(null, 404, null, problem), app, request);
+    if (__velarServeCall(__velarServeMapSize, allowed, []) > 0) {
+      const methods = __velarServeAllowedMethods(allowed);
+      const problem = __velarServeProblem(405, "route.method_not_allowed", "Method not allowed", null, "method", request.method, new __velarServeMap([["allow", __velarServeCall(__velarServeArrayJoin, methods, [", "])]]));
+      return await __velarServeApplyMiddleware(pathOwner.route, request, async () => __velarServeOutcome(null, 405, null, problem), value => __velarServeFinalize(value, app, request));
     }
-    let selected = candidates[0];
-    for (let index = 1; index < candidates.length; index += 1) if (candidates[index].match.score > selected.match.score) selected = candidates[index];
-    const routeBodyBytes = selected.route.maxBodyBytes === null || selected.route.maxBodyBytes > maxBodyBytes
-      ? maxBodyBytes
-      : selected.route.maxBodyBytes;
-    const invokeRoute = async () => await __velarServeCall(selected.route.handler, undefined, await __velarServeRouteArguments(selected.route, selected.match, request, routeBodyBytes, context));
-    return await __velarServeApplyMiddleware(selected.route, request, invokeRoute, value => __velarServeFinalize(value, app, request));
+    if (app.notFound !== null) {
+      const problem = __velarServeProblem(404, "route.not_found", "Route not found", null, "path", request.path);
+      return await __velarServeApplyMiddleware(
+        app.notFound,
+        request,
+        async () => {
+          const value = await __velarServeCall(app.notFound.handler, undefined, [request]);
+          if (__velarServeIsFileResponse(value) || __velarServeIsResponseAttempt(value)) return value;
+          return __velarServeOutcome(value, 404, null, problem);
+        },
+        value => __velarServeFinalize(value, app, request),
+      );
+    }
+    const problem = __velarServeProblem(404, "route.not_found", "Route not found", null, "path", request.path);
+    return await __velarServeFinalize(__velarServeOutcome(null, 404, null, problem), app, request);
   } catch (error) {
     const problem = error instanceof HttpProblem ? error
       : error instanceof RequestBodyTooLargeError ? __velarServeProblem(413, "request.body_too_large", "Request body is too large")
@@ -2782,12 +2879,7 @@ async function __velarServePrepareWebSocket(app, nativeRequest, maxBodyBytes, ap
     return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{accepted: false, status}]);
   };
   const actual = __velarServeCall(__velarServeStringSplit, request.path, ["/"]);
-  const routes = __velarServeRouterRoutes({router: app.webSocketRouter}, "WEBSOCKET", actual);
-  let selected = null;
-  for (let index = 0; index < routes.length; index += 1) {
-    const match = __velarServeMatch(routes[index], actual);
-    if (match !== null && (selected === null || match.score > selected.match.score)) selected = {route: routes[index], match};
-  }
+  const selected = __velarServeBestRoute({router: app.webSocketRouter}, "WEBSOCKET", actual);
   if (selected === null) return reject(404);
   if (!__velarServeBeginAppRequest(appState, request.cancellation)) return reject(503);
   const context = __velarServeRequestContext(appState);
@@ -2815,7 +2907,7 @@ async function __velarServePrepareWebSocket(app, nativeRequest, maxBodyBytes, ap
         started = true;
         const values = [];
         for (let index = 0; index < prepared.length; index += 1) values[index] = prepared[index];
-        values[selected.route.connectionIndex + 1] = connection;
+        values[selected.route.connectionIndex + (selected.route.bindRoute ? 1 : 0)] = connection;
         try {
           const result = await __velarServeCall(selected.route.handler, undefined, values);
           if (result !== null) throw new __velarServeTypeError("@websocket handler must resolve to null");
@@ -2887,21 +2979,20 @@ async function __velarServeNativeApp(app, maxBodyBytes = __velarServeMaxBodyByte
 }
 
 async function __velarServeApplyMiddleware(route, request, handler, finalize) {
-  let next = async () => finalize(await handler());
-  for (let index = route.middleware.length - 1; index >= 0; index -= 1) {
-    const downstream = next;
-    const current = route.middleware[index];
-    next = async () => {
-      let called = false;
-      const guarded = async () => {
-        if (called) throw new __velarServeError("A middleware next function can be called only once per request");
-        called = true;
-        return downstream();
-      };
-      return finalize(await current(request, guarded));
+  if (route.middleware.length === 0) return await finalize(await handler());
+  // 逐层派发只为实际执行的中间件创建一个受保护的 next。旧实现先为整条
+  // 链创建一轮包装闭包，执行时又创建一轮 guarded 闭包，请求越多浪费越大。
+  const dispatch = async index => {
+    if (index === route.middleware.length) return await finalize(await handler());
+    let called = false;
+    const next = async () => {
+      if (called) throw new __velarServeError("A middleware next function can be called only once per request");
+      called = true;
+      return await dispatch(index + 1);
     };
-  }
-  return await next();
+    return await finalize(await route.middleware[index](request, next));
+  };
+  return await dispatch(0);
 }
 
 function __velarServeAllowedMethods(allowed) {
@@ -3103,9 +3194,9 @@ export function docs(app, title = null, version = "1.0.0", path = "/docs", opena
   const document = openapi(app, title, version);
   const schemaPattern = __velarCreateServePattern({definition: openapiPath, pathname: openapiPath, path: [], query: []});
   const docsPattern = __velarCreateServePattern({definition: path, pathname: path, path: [], query: []});
-  const schemaRoute = __velarCreateServeRoute("GET", schemaPattern, [], async () => json(document), {documented: false});
+  const schemaRoute = __velarCreateServeRoute("GET", schemaPattern, [], async () => json(document), {documented: false}, false);
   const html = "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Velar API Docs</title><style>body{font:15px system-ui;margin:0;background:#0b1020;color:#e8ecf4}main{max-width:960px;margin:auto;padding:32px}article{background:#151c31;border:1px solid #2a3555;border-radius:12px;padding:16px;margin:12px 0}code{color:#8ed7ff}.method{font-weight:700;color:#9cf0b3}button{background:#5b7cff;color:white;border:0;border-radius:7px;padding:8px 12px}</style></head><body><main><h1 id=\"title\">API</h1><p>OpenAPI 3.1 · bundled offline documentation</p><section id=\"routes\"></section></main><script>fetch(" + __velarJsonStringify(openapiPath) + ").then(function(r){return r.json()}).then(function(d){document.getElementById('title').textContent=d.info.title+' '+d.info.version;var root=document.getElementById('routes');Object.keys(d.paths).forEach(function(p){Object.keys(d.paths[p]).forEach(function(m){var a=document.createElement('article');var h=document.createElement('div');h.innerHTML='<span class=\"method\">'+m.toUpperCase()+'</span> <code></code>';h.querySelector('code').textContent=p;a.appendChild(h);var b=document.createElement('button');b.textContent='Try request';b.onclick=function(){fetch(p,{method:m.toUpperCase()}).then(function(r){return r.text().then(function(t){alert(r.status+' '+t)})})};a.appendChild(b);root.appendChild(a)})})}).catch(function(e){document.getElementById('routes').textContent=String(e)});</script></body></html>";
-  const uiRoute = __velarCreateServeRoute("GET", docsPattern, [], async () => text(html, 200, "text/html; charset=utf-8"), {documented: false});
+  const uiRoute = __velarCreateServeRoute("GET", docsPattern, [], async () => text(html, 200, "text/html; charset=utf-8"), {documented: false}, false);
   return __velarCreateServeApp(app.name, [app, schemaRoute, uiRoute]);
 }
 
@@ -3147,7 +3238,7 @@ function __velarServeDocumentRoutes(app, documentation) {
       : __velarServeCall(__velarServeMapHas, configured, [publicKey]) ? publicKey : null;
     if (key === null) { output[output.length] = route; continue; }
     __velarServeCall(__velarServeMapSet, seen, [key, true]);
-    output[output.length] = __velarCreateServeRoute(route.method, route.pattern, route.parameters, route.handler, __velarServeRouteMetadata(route, __velarServeCall(__velarServeMapGet, configured, [key])));
+    output[output.length] = __velarCreateServeRoute(route.method, route.pattern, route.parameters, route.handler, __velarServeRouteMetadata(route, __velarServeCall(__velarServeMapGet, configured, [key])), route.bindRoute);
   }
   if (__velarServeCall(__velarServeMapSize, seen, []) !== size) throw new __velarServeTypeError("docs routes contains a route that the application does not declare");
   return __velarServeAppValue(app.name, output, app.webSockets, app.lifecycles, app.notFound, app.responseHandler);
@@ -3754,7 +3845,10 @@ async function __velarServeTestResponse(value, cookies) {
     }
     let jsonValue = __velarServeMissing;
     let textValue = "";
-    if (__velarServeOwnDescriptor(response, "json")) { jsonValue = response.json; textValue = __velarJsonStringify(response.json); }
+    if (__velarServeOwnDescriptor(response, "json")) {
+      jsonValue = response.json;
+      textValue = __velarServeCall(__velarServeWeakMapGet, __velarServeSerializedJson, [response]);
+    }
     else if (__velarServeOwnDescriptor(response, "text")) textValue = response.text;
     else {
       const chunks = [];

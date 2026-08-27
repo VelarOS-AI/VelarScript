@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {spawnSync} from "node:child_process";
 import test from "node:test";
+import {VELAR_NODE_WEBSOCKET_RUNTIME} from "../packages/node/src/websocket-runtime.ts";
 import {VELAR_SERVER_REALTIME_RUNTIME} from "../packages/server/src/realtime-runtime.ts";
 import {VELAR_WEB_REALTIME_CLIENT_RUNTIME} from "../packages/web/src/realtime-client-runtime.ts";
 
@@ -13,7 +14,8 @@ test("server realtimeSession owns one bounded writer and deterministic cleanup",
     /^import \{[^\n]+\} from "velar\/websocket";$/mu,
     `class __velarRealtimeTransportBackpressure extends Error {}
 class __velarRealtimeTransportClosed extends Error {}
-const __velarRealtimeConnection = {parse(value) { return value; }};`,
+const __velarRealtimeConnection = {parse(value) { return value; }};
+const __velarRealtimeSendOwned = (connection, message) => connection.send(message);`,
   );
   const execution = executeModule(`
 ${runtime}
@@ -74,6 +76,11 @@ console.log(JSON.stringify({sent, maximumActiveSends, openedCapacity, cleanupCou
     closedValue: {code: 1000, reason: "Realtime session finished"},
   });
   assert.match(VELAR_SERVER_REALTIME_RUNTIME, /queueHead/u);
+  assert.match(VELAR_SERVER_REALTIME_RUNTIME, /__velarRealtimeSendOwned\(state\.connection, entry\.wire\)/u);
+  assert.match(VELAR_NODE_WEBSOCKET_RUNTIME, /send\(message\) \{ return __velarWsSend\(this, message, true\); \}/u,
+    "the public WebSocket API keeps its defensive Bytes copy");
+  assert.match(VELAR_NODE_WEBSOCKET_RUNTIME, /__velarWebSocketSendOwned\(connection, message\) \{ return __velarWsSend\(connection, message, false\); \}/u,
+    "the internal realtime path sends the already-owned queue snapshot without a second copy");
   assert.doesNotMatch(VELAR_SERVER_REALTIME_RUNTIME, /queue\.shift\(/u);
   assert.doesNotMatch(VELAR_SERVER_REALTIME_RUNTIME, /new TextEncoder/u);
 });
@@ -82,7 +89,8 @@ test("server realtimeSession reports a failed setup once and closes as an applic
   const runtime = VELAR_SERVER_REALTIME_RUNTIME.replace(
     /^import \{[^\n]+\} from "velar\/websocket";$/mu,
     `class __velarRealtimeTransportClosed extends Error {}
-const __velarRealtimeConnection = {parse(value) { return value; }};`,
+const __velarRealtimeConnection = {parse(value) { return value; }};
+const __velarRealtimeSendOwned = (connection, message) => connection.send(message);`,
   );
   const execution = executeModule(`
 ${runtime}

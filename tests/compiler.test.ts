@@ -15803,8 +15803,8 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     devDependencies: Record<string, string>;
   };
-  assert.equal(createdPackage.dependencies["@velarscript/web"], "0.19.0");
-  assert.equal(createdPackage.devDependencies["@velarscript/cli"], "0.19.0");
+  assert.equal(createdPackage.dependencies["@velarscript/web"], "0.19.1");
+  assert.equal(createdPackage.devDependencies["@velarscript/cli"], "0.19.1");
   assert.equal(createdPackage.scripts.format, "velar format");
   assert.equal(createdPackage.scripts["format:check"], "velar format --check");
   assert.equal(createdPackage.scripts["test:browser"], "velar test --browser");
@@ -15940,8 +15940,8 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   assert.deepEqual(componentPackage.velar.requires.capabilities, []);
   assert.equal(componentPackage.scripts["pack:check"], "npm pack --dry-run --json");
   assert.match(componentPackage.scripts.validate ?? "", /npm run pack:check$/u);
-  assert.equal(componentPackage.peerDependencies["@velarscript/web"], "^0.19.0");
-  assert.equal(componentPackage.devDependencies["@velarscript/web"], "0.19.0");
+  assert.equal(componentPackage.peerDependencies["@velarscript/web"], "^0.19.1");
+  assert.equal(componentPackage.devDependencies["@velarscript/web"], "0.19.1");
   assert.match(await readFile(join(componentRoot, "src", "index.vel"), "utf8"), /export component InfoCard/u);
   assert.deepEqual(JSON.parse(await readFile(join(componentRoot, "velar.json"), "utf8")).extensions, ["@velarscript/web"]);
   await linkWorkspaceWebExtension(componentRoot);
@@ -15966,7 +15966,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     scripts: Record<string, string>;
   };
-  assert.equal(nodePackage.dependencies["@velarscript/server"], "0.19.0");
+  assert.equal(nodePackage.dependencies["@velarscript/server"], "0.19.1");
   assert.equal(nodePackage.dependencies["@velarscript/node"], undefined);
   assert.equal(nodePackage.scripts.dev, "velar dev");
   assert.equal(nodePackage.scripts.start, "velar serve");
@@ -15994,7 +15994,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     scripts: Record<string, string>;
   };
-  assert.equal(desktopPackage.dependencies["@velarscript/desktop"], "0.19.0");
+  assert.equal(desktopPackage.dependencies["@velarscript/desktop"], "0.19.1");
   assert.equal(desktopPackage.scripts.package, "velar package");
   assert.equal(desktopPackage.scripts["test:browser"], "velar test --browser=all");
   const desktopAgents = await readFile(join(desktopRoot, "AGENTS.md"), "utf8");
@@ -16058,7 +16058,7 @@ test("CLI help is command-specific and malformed top-level invocations fail clea
   const creator = resolve("packages/create/src/cli.ts");
   const creatorVersion = spawnSync(process.execPath, [creator, "--version"], { encoding: "utf8" });
   assert.equal(creatorVersion.status, 0, creatorVersion.stderr);
-  assert.equal(creatorVersion.stdout, "create-velar 0.19.0\n");
+  assert.equal(creatorVersion.stdout, "create-velar 0.19.1\n");
   const creatorMissing = spawnSync(process.execPath, [creator], { encoding: "utf8" });
   assert.equal(creatorMissing.status, 2);
   assert.match(creatorMissing.stderr, /expected one project directory/u);
@@ -24142,7 +24142,7 @@ def label(box: Box) -> string:
   assert.match(invokedClosure.code ?? "", /NarrowingError/u);
 });
 
-test("不可变 optional 副本的存在性收窄不重复执行完整运行时校验", () => {
+test("const optional 副本的存在性收窄不重复执行完整运行时校验", () => {
   const stable = compileCore(`
 type State:
     label: string
@@ -24154,6 +24154,22 @@ def requireState(states: readonly Map<number, readonly State>, key: number) -> r
 `.trimStart());
   assert.deepEqual(stable.diagnostics, []);
   assert.doesNotMatch(stable.code ?? "", /__velarNarrow/u);
+
+  // 可变的是 State 里的内容，不是 const 局部绑定本身。别名可以
+  // 修改 label 或 values，但不可能把这次 Map.get 得到的副本改回 null。
+  const mutableValue = compileCore(`
+type State:
+    label: string
+    values: Map<string, number>
+
+def update(states: Map<number, State>, key: number):
+    const state = states.get(key)
+    if state == null: throw Error("missing")
+    state.values.set("seen", 1)
+    state.label = "updated"
+`.trimStart());
+  assert.deepEqual(mutableValue.diagnostics, []);
+  assert.doesNotMatch(mutableValue.code ?? "", /__velarNarrow/u);
 
   // 可变绑定仍可能在闭包或后续赋值中失效，继续保留原有守卫。
   const mutable = compileCore(`
@@ -28019,7 +28035,7 @@ test("CLI emits complete Web application assets", async () => {
     apiVersion: "0.11",
     artifactKind: "velar-web-build",
   });
-  assert.deepEqual(manifest.compiler, { name: "velar", version: "0.19.0" });
+  assert.deepEqual(manifest.compiler, { name: "velar", version: "0.19.1" });
   assert.match(manifest.buildId, /^[a-f0-9]{64}$/u);
   assert.equal(manifest.sourceMaps, true);
   assert.equal(manifest.entry, `assets/${javascript}`);

@@ -1644,7 +1644,10 @@ async def start():
     const accepted = await compileProject(entry, new Map(), {extensions: [velarNodeCompilerExtension]});
     assert.deepEqual(accepted.failures, []);
     assert.deepEqual(accepted.modules.flatMap((module) => module.result.diagnostics), []);
-    assert.match(accepted.modules[0]?.result.code ?? "", /\)\(connection\)\.origin \?\? null\)/u);
+    const acceptedCode = accepted.modules[0]?.result.code ?? "";
+    assert.match(acceptedCode, /const origin = \(connection\.origin \?\? null\)/u);
+    assert.doesNotMatch(acceptedCode, /__velarNarrow/u,
+      "a const copy returned by next keeps its non-null existence fact without revalidating the mutable connection object");
 
     await writeFile(entry, source.replace("REQUIRED", "string"), "utf8");
     const refused = await compileProject(entry, new Map(), {extensions: [velarNodeCompilerExtension]});

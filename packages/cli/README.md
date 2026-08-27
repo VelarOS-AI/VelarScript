@@ -34,7 +34,9 @@ npm exec velar -- dev
 For a generated Node service, `velar dev` watches and restarts the last-good
 checked `ServeApp`, `velar serve` runs the checked source with production
 runtime behavior, and `velar build` writes a standalone Node directory with a
-launcher and copied public assets. Web/Desktop development continues through
+launcher and copied public assets. `velar verify` checks that directory's full
+file inventory, hashes, build identity, entry, and source-map state before it is
+deployed. Web/Desktop development continues through
 their framework hosts; `velar run` remains for framework-free CLI programs.
 
 `velar build` defaults to optimized `production` JavaScript for every target.

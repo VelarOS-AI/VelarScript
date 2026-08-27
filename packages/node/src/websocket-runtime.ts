@@ -88,6 +88,39 @@ function __velarWsRequestOrigin(request) {
 }
 function __velarWsBytes(value) { if (value instanceof Uint8Array) { const output = new Uint8Array(value.byteLength); output.set(value); return output; } return null; }
 function __velarWsMessageBytes(value) { if (typeof value === "string") return Buffer.byteLength(value, "utf8"); if (value instanceof Uint8Array) return value.byteLength; throw new TypeError("WebSocket.send requires text or Bytes"); }
+function __velarWsSend(connection, message, copyBytes) {
+  const state = __velarWebSocketConnections.get(connection);
+  if (!state) throw new TypeError("WebSocket.send requires a connection");
+  if (state.socket.readyState !== __VelarWebSocket.OPEN) return Promise.reject(new WebSocketClosedError());
+  const size = __velarWsMessageBytes(message);
+  if (size > state.options.maxMessageBytes) return Promise.reject(new RangeError("WebSocket message exceeds maxMessageBytes"));
+  if (state.pendingSendBytes + size > state.options.maxPendingSendBytes || !__velarWsReserveSend(size)) return Promise.reject(new WebSocketBackpressureError());
+  let bytes;
+  try { bytes = typeof message === "string" ? null : copyBytes ? __velarWsBytes(message) : message; }
+  catch (error) { __velarWsReleaseSend(size); throw error; }
+  state.pendingSendBytes += size;
+  return new Promise((resolve, reject) => {
+    let completed = false;
+    const complete = error => {
+      if (completed) return;
+      completed = true;
+      state.pendingSends.delete(complete);
+      state.pendingSendBytes -= size;
+      __velarWsReleaseSend(size);
+      if (error) reject(new WebSocketClosedError(error.message));
+      else resolve(null);
+    };
+    state.pendingSends.add(complete);
+    try { state.socket.send(bytes ?? message, {binary: bytes !== null}, complete); }
+    catch (error) { complete(error instanceof Error ? error : new Error("WebSocket send failed")); }
+  });
+}
+
+// 只供官方 realtime 单写者使用的内部 ABI。realtime 在入队时已经
+// 复制 Bytes 并取得唯一所有权，因此传输层可以直接发送这份副本。
+// 该名称不在编译器模块接口中，VelarScript 应用无法导入；公开 send
+// 仍在调用当下复制 Bytes，保持原有的防篡改语义。
+export function __velarWebSocketSendOwned(connection, message) { return __velarWsSend(connection, message, false); }
 function __velarWsReserve(size) { if (!Number.isSafeInteger(size) || size < 0 || __velarWsAggregateBytes + size > __velarWsAggregateByteLimit) return false; __velarWsAggregateBytes += size; return true; }
 function __velarWsRelease(size) { __velarWsAggregateBytes -= size; if (__velarWsAggregateBytes < 0) __velarWsAggregateBytes = 0; }
 function __velarWsReserveQueue(size) { if (__velarWsAggregateQueuedMessages >= __velarWsAggregateQueuedMessageLimit || !__velarWsReserve(size)) return false; __velarWsAggregateQueuedMessages += 1; return true; }
@@ -193,7 +226,7 @@ function __velarWsStopState(state) {
 }
 const __velarWsConnectionPrototype = Object.freeze({
   state() { const state = __velarWebSocketConnections.get(this); if (!state) throw new TypeError("WebSocket state requires a connection"); return state.socket.readyState === __VelarWebSocket.CONNECTING ? "connecting" : state.socket.readyState === __VelarWebSocket.OPEN ? "open" : state.socket.readyState === __VelarWebSocket.CLOSING ? "closing" : "closed"; },
-  send(message) { const state = __velarWebSocketConnections.get(this); if (!state) throw new TypeError("WebSocket.send requires a connection"); if (state.socket.readyState !== __VelarWebSocket.OPEN) return Promise.reject(new WebSocketClosedError()); const size = __velarWsMessageBytes(message); if (size > state.options.maxMessageBytes) return Promise.reject(new RangeError("WebSocket message exceeds maxMessageBytes")); if (state.pendingSendBytes + size > state.options.maxPendingSendBytes || !__velarWsReserveSend(size)) return Promise.reject(new WebSocketBackpressureError()); let bytes; try { bytes = typeof message === "string" ? null : __velarWsBytes(message); } catch (error) { __velarWsReleaseSend(size); throw error; } state.pendingSendBytes += size; return new Promise((resolve, reject) => { let completed = false; const complete = error => { if (completed) return; completed = true; state.pendingSends.delete(complete); state.pendingSendBytes -= size; __velarWsReleaseSend(size); if (error) reject(new WebSocketClosedError(error.message)); else resolve(null); }; state.pendingSends.add(complete); try { state.socket.send(bytes ?? message, { binary: bytes !== null }, complete); } catch (error) { complete(error instanceof Error ? error : new Error("WebSocket send failed")); } }); },
+  send(message) { return __velarWsSend(this, message, true); },
   next() { const state = __velarWebSocketConnections.get(this); if (!state) throw new TypeError("WebSocket.next requires a connection"); if (state.queue.length) { const message = state.queue.shift(); const size = __velarWsMessageBytes(message); state.queuedBytes -= size; __velarWsReleaseQueue(size); if (state.finished && state.queue.length === 0) __velarWsDiscardQueue(state); return Promise.resolve(message); } if (state.finished) return Promise.resolve(null); if (state.waiter) return Promise.reject(new WebSocketBackpressureError("Only one WebSocket.next call may wait at a time")); return new Promise((resolve, reject) => { state.waiter = { resolve, reject }; }); },
   closeInfo() { const state = __velarWebSocketConnections.get(this); if (!state) throw new TypeError("WebSocket.closeInfo requires a connection"); return state.closeInfoPromise; },
   close(code = 1000, reason = "") { const state = __velarWebSocketConnections.get(this); if (!state) throw new TypeError("WebSocket.close requires a connection"); if (!Number.isSafeInteger(code) || code < 1000 || code > 4999) return Promise.reject(new RangeError("WebSocket close code must be from 1000 through 4999")); if (typeof reason !== "string" || Buffer.byteLength(reason, "utf8") > 123) return Promise.reject(new RangeError("WebSocket close reason cannot exceed 123 UTF-8 bytes")); if (state.finished) return Promise.resolve(null); if (!state.closePromise) { state.closePromise = new Promise(resolve => { let settled = false; let timer = null; const finish = () => { if (settled) return; settled = true; if (timer !== null) __velarWsClearTimeout(timer); state.socket.off("close", finish); resolve(null); }; state.socket.once("close", finish); try { state.socket.close(code, reason); } catch { try { state.socket.terminate(); } catch {} finish(); return; } timer = __velarWsSetTimeout(() => { try { state.socket.terminate(); } catch {} finish(); }, 5000); }); } return state.closePromise; },

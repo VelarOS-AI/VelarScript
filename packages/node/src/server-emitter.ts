@@ -132,22 +132,23 @@ export class NodeJavaScriptEmitter extends JavaScriptEmitter {
       const hint = parseRouteParameterHint(this.hints.extensionCalls.get(spanIdentity(parameter.span)));
       return this.emitParameter(parameter.name, hint?.descriptor ? null : parameter.defaultValue, false);
     });
+    const bindRoute = route.routeBinding !== null || route.projectedCaptures.length > 0;
     const routeParameter = route.routeBinding?.name ?? this.emitProjectedRouteParameter(route);
-    const parameters = [routeParameter, ...inputParameters].join(", ");
+    const parameters = [...(bindRoute ? [routeParameter] : []), ...inputParameters].join(", ");
     const descriptors = route.inputParameters
       .map((parameter) => this.emitRouteParameter(parameter.type, parameter.name, parameter.defaultValue, parameter.span)).join(", ");
     if (route.transport === "websocket") {
       const bodyLines = [...this.emitStatementLines(route.body, depth + 1)];
       if (!this.blockAlwaysReturns(route.body)) bodyLines.push(`${"  ".repeat(depth + 1)}return null;`);
       const body = bodyLines.join("\n");
-      return `__velarCreateServeWebSocket(${this.emitMappedExpression(route.pathExpression)}, [${descriptors}], async (${parameters}) => {${body ? `\n${body}\n${indentation}` : ""}})`;
+      return `__velarCreateServeWebSocket(${this.emitMappedExpression(route.pathExpression)}, [${descriptors}], async (${parameters}) => {${body ? `\n${body}\n${indentation}` : ""}}, ${bindRoute})`;
     }
     const response = parseRouteResultHint(this.hints.extensionCalls.get(spanIdentity(route.signatureSpan))) ?? {schema: {}, contentTypes: ["application/json"], status: null};
     const description = this.routeDocumentation(route.span.start);
     const bodyLines = [...this.emitStatementLines(route.body, depth + 1)];
     if (!this.blockAlwaysReturns(route.body)) bodyLines.push(`${"  ".repeat(depth + 1)}return null;`);
     const body = bodyLines.join("\n");
-    return `__velarCreateServeRoute(${JSON.stringify(route.method)}, ${this.emitMappedExpression(route.pathExpression)}, [${descriptors}], async (${parameters}) => {${body ? `\n${body}\n${indentation}` : ""}}, {responseSchema:${JSON.stringify(response.schema)},responseContentTypes:${JSON.stringify(response.contentTypes)},status:${JSON.stringify(response.status)},description:${JSON.stringify(description)}})`;
+    return `__velarCreateServeRoute(${JSON.stringify(route.method)}, ${this.emitMappedExpression(route.pathExpression)}, [${descriptors}], async (${parameters}) => {${body ? `\n${body}\n${indentation}` : ""}}, {responseSchema:${JSON.stringify(response.schema)},responseContentTypes:${JSON.stringify(response.contentTypes)},status:${JSON.stringify(response.status)},description:${JSON.stringify(description)}}, ${bindRoute})`;
   }
 
   private emitProjectedRouteParameter(route: NodeRouteDeclaration): string {

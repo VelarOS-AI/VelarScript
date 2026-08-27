@@ -153,7 +153,7 @@ well, but it is a guarantee rather than a trap.
 | Calling an async function and moving on | A dropped Promise is a compile error. `await task()` to wait; `async task()` to run it detached. |
 | `flag or name ?? fallback` | Parenthesize — `??` never shares an unparenthesized chain with `and`/`or`. |
 | `map[key]` reads | `map.get(key)` returns `T?`. On Lists, `[index]` throws on a bug; `.get(index)` returns `null` when absence is an expected answer. |
-| Repeated `Map.get` + null check to build buckets | `map.getOrSet(key, fallback)` inserts only when absent and returns `V` directly. Use it for grouping and caches; collection-valued flow narrowing deliberately deep-checks each relied-on read. |
+| Repeated `Map.get` + null check to build buckets | `map.getOrSet(key, fallback)` is the shortest spelling when absence means insertion. An explicit `const value = map.get(key)` plus null branch is also linear: once the local `const` is proven present, later reads do not deep-check the mutable value again. Use the explicit branch when creation needs more than one statement. |
 | Copying `map.keys()` just to read the first key | `const cursor = map.iterator()` followed by `cursor.next()`. A pull returns `{value: K}?`, so exhaustion stays distinct from a legal `null` key. Ordinary full traversal remains a `for` loop. |
 | `[...text]` or `list(text)` for characters | `text.split("")` — the empty separator splits per Unicode code point. |
 | `x !== x` or `Number.isNaN(x)` | Number predicates are members: `x.isNaN()`, `x.isFinite()`, `x.isInteger()`. `NaN == NaN` is `true` — equality is SameValueZero. |

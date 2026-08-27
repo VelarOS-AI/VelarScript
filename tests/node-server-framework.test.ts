@@ -238,6 +238,9 @@ const identity = authenticate(security.bearer(), async token => {id: token})
 test("velar/server exists only when the Server application extension is active", () => {
   assert.equal(nodeModuleInterfaces.has("velar/server"), false);
   assert.equal(serverModuleInterfaces.has("velar/server"), true);
+  // realtime 与 websocket 的免复制发送是框架内部所有权交接，不属于应用 API。
+  // 运行时模块可以复用它，VelarScript 源码不能导入这条内部 ABI。
+  assert.equal(serverModuleInterfaces.get("velar/websocket")?.exports.has("__velarWebSocketSendOwned"), false);
 });
 
 test("Node server syntax lowers anonymous async routes without decorator functions", () => {
@@ -266,6 +269,7 @@ export server api:
   const code = result.code ?? "";
   assert.match(code, /export const api = __velarCreateServeApp\("api"/u);
   assert.match(code, /__velarCreateServeRoute\("GET", __velarCreateServePattern\(\{definition:"\/health"/u);
+  assert.match(code, /description:"Reports whether the service is ready\."\}, true\)/u);
   assert.match(code, /definition:"\/users\/\{id:number\}\?\{details:bool\?\}"/u);
   assert.match(code, /path:\[\{name:"id"[^\n]*kind:"number"/u);
   assert.match(code, /query:\[\{name:"details"[^\n]*optional:true[^\n]*kind:"bool"/u);
@@ -276,6 +280,11 @@ export server api:
   assert.match(code, /responseSchema:/u);
   assert.match(code, /description:"Reports whether the service is ready\."/u);
   assert.doesNotMatch(code, /function health|function getUser|function createUser/u);
+
+  const unusedRouteMatch = compileNode(`server api:\n    @get(p"/health") => {ok: true}\n`);
+  assert.deepEqual(unusedRouteMatch.diagnostics, []);
+  assert.match(unusedRouteMatch.code ?? "", /definition:"\/health"[^\n]*\[\], async \(\) =>/u);
+  assert.match(unusedRouteMatch.code ?? "", /description:null\}, false\)/u);
 
   const formatted = formatSource(source.trimStart(), { extensions: [velarNodeCompilerExtension] });
   assert.match(formatted, /@get\(p"\/health" as path\) => \{ok: true\}/u);

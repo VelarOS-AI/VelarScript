@@ -471,6 +471,19 @@ def buildMapBuckets(count: number) -> Map<number, List<number>>:
         index += 1
     return output
 
+def buildMapBucketsByLookup(count: number) -> Map<number, List<number>>:
+    const output: Map<number, List<number>> = Map()
+    let index = 0
+    while index < count:
+        const key = index % bucketGroups
+        const bucket = output.get(key)
+        if bucket == null:
+            output.set(key, [index])
+        else:
+            bucket.append(index)
+        index += 1
+    return output
+
 def buildSet(count: number) -> Set<number>:
     const output: Set<number> = Set()
     let index = 0
@@ -505,6 +518,7 @@ let sortedSamples = ""
 let mapInsertSamples = ""
 let mapLookupSamples = ""
 let mapBucketSamples = ""
+let mapLookupBucketSamples = ""
 let setInsertSamples = ""
 let setLookupSamples = ""
 let rangeIndexSamples = ""
@@ -518,6 +532,7 @@ def warmUp():
     const pairs = buildMap(size)
     sink += readMap(pairs, size)
     sink += buildMapBuckets(size).size
+    sink += buildMapBucketsByLookup(size).size
     const members = buildSet(size)
     sink += readSet(members, size)
     sink += readProvided(range(0, rangeSize), rangeReads)
@@ -551,6 +566,9 @@ while round < 5:
     const buckets = buildMapBuckets(size)
     mapBucketSamples += f"{str(monotonic() - start)},"
     start = monotonic()
+    const lookupBuckets = buildMapBucketsByLookup(size)
+    mapLookupBucketSamples += f"{str(monotonic() - start)},"
+    start = monotonic()
     const members = buildSet(size)
     setInsertSamples += f"{str(monotonic() - start)},"
     start = monotonic()
@@ -561,6 +579,7 @@ while round < 5:
     rangeIndexSamples += f"{str(monotonic() - start)},"
     sink += mapped.size + filtered.size + ordered.size + pairs.size + members.size
     sink += buckets.size
+    sink += lookupBuckets.size
     round += 1
 
 print(f"append={appendSamples}")
@@ -571,6 +590,7 @@ print(f"sorted={sortedSamples}")
 print(f"mapInsert={mapInsertSamples}")
 print(f"mapLookup={mapLookupSamples}")
 print(f"mapBuckets={mapBucketSamples}")
+print(f"mapLookupBuckets={mapLookupBucketSamples}")
 print(f"setInsert={setInsertSamples}")
 print(f"setLookup={setLookupSamples}")
 print(f"rangeIndex={rangeIndexSamples}")
@@ -598,12 +618,14 @@ test("emitted collection operations hold their large-List and Map/Set budgets", 
   const mapInsert = dimension(samples, "mapInsert");
   const mapLookup = dimension(samples, "mapLookup");
   const mapBuckets = dimension(samples, "mapBuckets");
+  const mapLookupBuckets = dimension(samples, "mapLookupBuckets");
   const setInsert = dimension(samples, "setInsert");
   const setLookup = dimension(samples, "setLookup");
   const rangeIndex = dimension(samples, "rangeIndex");
   const context = `over ${size.toLocaleString("en-US")} items: append ${append.toFixed(1)}ms, index ${index.toFixed(1)}ms, `
     + `map ${mapped.toFixed(1)}ms, filter ${filtered.toFixed(1)}ms, sorted ${sorted.toFixed(1)}ms, `
-    + `Map.set ${mapInsert.toFixed(1)}ms, Map.get ${mapLookup.toFixed(1)}ms, Map.getOrSet buckets ${mapBuckets.toFixed(1)}ms, Set.add ${setInsert.toFixed(1)}ms, Set.has ${setLookup.toFixed(1)}ms, `
+    + `Map.set ${mapInsert.toFixed(1)}ms, Map.get ${mapLookup.toFixed(1)}ms, Map.getOrSet buckets ${mapBuckets.toFixed(1)}ms, `
+    + `Map.get/null buckets ${mapLookupBuckets.toFixed(1)}ms, Set.add ${setInsert.toFixed(1)}ms, Set.has ${setLookup.toFixed(1)}ms, `
     + `200,000 index reads of a 2,000-item range() ${rangeIndex.toFixed(1)}ms`;
   t.diagnostic(context);
 
@@ -634,10 +656,11 @@ test("emitted collection operations hold their large-List and Map/Set budgets", 
   assert.ok(mapInsert < timeBudget(18), `Map.set exceeded its budget -- ${context}`);
   assert.ok(mapLookup < timeBudget(10), `Map.get exceeded its budget -- ${context}`);
   // Baseline 2026-08-26: 100,000 appends distributed across 256 List buckets
-  // take about 28ms. The equivalent Map.get/null-narrowing spelling walks the
-  // growing List on every hit and takes seconds; this gate keeps grouping
-  // linear while leaving the stale-flow deep-validation contract intact.
+  // take about 28ms. Both canonical getOrSet and an explicit Map.get/null branch
+  // must stay linear: the latter's const optional copy proves only non-nullness,
+  // so it must not deep-validate the growing List again on every append.
   assert.ok(mapBuckets < timeBudget(75), `Map.getOrSet bucket grouping exceeded its budget -- ${context}`);
+  assert.ok(mapLookupBuckets < timeBudget(75), `Map.get/null bucket grouping exceeded its budget -- ${context}`);
   assert.ok(setInsert < timeBudget(15), `Set.add exceeded its budget -- ${context}`);
   assert.ok(setLookup < timeBudget(9), `Set.has exceeded its budget -- ${context}`);
   // rangeIndex 12.1ms for 200,000 index reads of the 2,000-item List `range()`

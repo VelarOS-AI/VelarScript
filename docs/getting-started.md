@@ -146,7 +146,9 @@ npm run package   # Desktop: creates the native application package
 ```
 
 A Node build is a standalone ESM directory containing copied public assets,
-`velar-node.json`, and `.velar-node-entry.mjs`. Run the launcher with Node from
+`velar-node.json`, and `.velar-node-entry.mjs`. `velar verify` validates the
+complete Node file inventory, sizes, hashes, entry relationship, and build ID.
+Run the launcher with Node from
 that directory; the toolchain is not required at runtime.
 
 Or run the whole gate in one command, which is what CI does:
