@@ -820,6 +820,19 @@ server api:
   assert.match(code, /status:204/u);
 });
 
+test("a data record named status remains a JSON OpenAPI response", async () => {
+  const path = join(tmpdir(), "velar-node-response-status-field.vel");
+  const project = await compileProject(path, new Map([[path, `
+server api:
+    @get(p"/health" as path) => {status: "ready", service: "openvoxel"}
+`.trimStart()]]), {extensions: [velarNodeCompilerExtension]});
+  assert.deepEqual(project.failures, []);
+  assert.deepEqual(project.modules.flatMap((module) => module.result.diagnostics), []);
+  const code = project.modules[0]?.result.code ?? "";
+  assert.match(code, /responseSchema:\{"type":"object","properties":\{"status":\{"type":"string"\},"service":\{"type":"string"\}\},"required":\["status","service"\],"additionalProperties":false\},responseContentTypes:\["application\/json"\]/u);
+  assert.doesNotMatch(code, /responseContentTypes:\["application\/octet-stream"\]/u);
+});
+
 test("velar/server-test is available only to test modules", async () => {
   const root = join(tmpdir(), "velar-node-server-test-boundary");
   const application = join(root, "app.vel");

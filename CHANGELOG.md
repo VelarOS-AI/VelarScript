@@ -6,6 +6,15 @@ truth for acceptance status.
 
 ## Unreleased
 
+## 0.18.1 — 2026-08-27
+
+### Server OpenAPI
+
+- Kept ordinary JSON records with a business `status` field classified as JSON
+  in generated OpenAPI metadata. Only actual framework response shapes with a
+  `json`, `text`, or `stream` payload now select an explicit response media
+  type.
+
 ## 0.18.0 — 2026-08-27
 
 ### Route semantics

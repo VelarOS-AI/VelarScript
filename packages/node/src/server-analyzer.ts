@@ -998,7 +998,10 @@ function openApiResponseContentTypes(type: ValueType): readonly string[] {
     if (value.kind === "union") { value.members.forEach(visit); return; }
     const metadata = (value as NodeResponseValueType).nodeResponse;
     if (metadata) { output.add(metadata.contentType); return; }
-    if (value.kind === "object" && value.fields.has("status")) {
+    // `status` 也是普通业务数据中很常见的字段，不能只凭字段名就把记录当成
+    // ServeResponse。只有同时具备响应载荷字段的框架响应对象，才按载荷种类
+    // 推导媒体类型；普通记录仍由 JSON 编码。
+    if (value.kind === "object" && isResponseShape(value)) {
       if (value.fields.has("json")) output.add("application/json");
       else if (value.fields.has("text") || value.fields.has("stream")) output.add("text/plain");
       else output.add("application/octet-stream");
