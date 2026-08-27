@@ -120,6 +120,17 @@ truth for acceptance status.
   failed with `Node terminal input host exited unexpectedly with code 0`
   instead of receiving what it had already typed.
 
+### Tooling
+
+- `velar test --browser=firefox` no longer fails a Desktop test over a bridge
+  call the test itself handled. The runner raised such a failure inside the
+  document, and Firefox alone reports an asynchronous in-page evaluation's
+  rejection as an error the *page* suffered, so a call made before the first
+  `browser.open()` — which is ordinary, and which `serveService` makes by
+  design — arrived on the page-error channel and failed a test that had already
+  recovered from it. Chromium and WebKit were unaffected. The failure now
+  belongs to the caller that asked, on every engine, with its message unchanged.
+
 ## 0.19.1 — 2026-08-27
 
 ### Performance and build verification
