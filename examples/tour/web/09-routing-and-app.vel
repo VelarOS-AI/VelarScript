@@ -124,7 +124,13 @@ component ErrorChain:
 // and `NavLink` adds `exact` plus the `aria-current` the `@current` Look hook
 // reads.
 export component RoutingPanel:
-    const here = currentRoute()
+    // `currentRoute()` answers a frozen snapshot of where the application is.
+    // Read in a rendered position it is also *live*: the read is a dependency
+    // on the history exactly as reading a state cell is a dependency on that
+    // cell, so this line follows navigation even though it sits outside the
+    // `Router` below. That is what chrome — a title bar, a breadcrumb, a
+    // sidebar marking the open page — is built from.
+    def herePath() -> string: return currentRoute().path
 
     def goToSection(): navigate("/section/units")
 
@@ -143,7 +149,7 @@ export component RoutingPanel:
         <h2>09 — routing, app, and config</h2>
         <p data-config>{f"{config.apiBase}:{config.channel}:{config.features.realtime}"}</p>
         <p data-config-keys>{f"{hasApiBase}:{configKeys.size}"}</p>
-        <p data-current-route>{here.path}</p>
+        <p data-current-route>{herePath()}</p>
         <nav data-tour-nav aria-label="Tour pages">
             <Link to="/" replace={false}>Home</Link>
             <NavLink to="/lazy" exact={true}>Lazy</NavLink>

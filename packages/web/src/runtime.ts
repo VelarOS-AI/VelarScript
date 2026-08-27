@@ -1002,7 +1002,53 @@ export function reload() {
   return null;
 }
 
+// The document's history is one source, so the runtime listens to it once and
+// hands every route reader that one subscription. Router re-renders from it and
+// NavLink re-marks its aria-current from it; each used to install a window
+// listener of its own, and 'currentRoute()' — which installed none — was
+// therefore the one route reader that could not follow a navigation.
+const routeSubscribers = new Set();
+let removeRouteSubscription = null;
+
+function subscribeRoute(callback) {
+  routeSubscribers.add(callback);
+  if (removeRouteSubscription === null) {
+    removeRouteSubscription = __velarBrowserListenGlobal("popstate", () => {
+      // A subscriber may unsubscribe (a Router destroying its page destroys the
+      // NavLinks on it) while the notification is running, so the set is copied.
+      for (const subscriber of [...routeSubscribers]) if (routeSubscribers.has(subscriber)) subscriber();
+    });
+  }
+  return () => {
+    if (!routeSubscribers.delete(callback) || routeSubscribers.size > 0 || removeRouteSubscription === null) return;
+    removeRouteSubscription();
+    removeRouteSubscription = null;
+  };
+}
+
+// Reading the route inside a reactive position is a dependency on the history,
+// the same way reading a state cell is a dependency on that cell — no second
+// spelling, and no publishing the route back out of a mounted page by hand. The
+// reactive subscription is one entry in the one listener above, taken on the
+// first tracked read and kept: the graph it feeds outlives every component, and
+// a read outside a reactive position takes nothing.
+const routeReadSource = {};
+let routeReadSubscribed = false;
+
+function trackRoute() {
+  const runtime = globalThis[Symbol.for(${JSON.stringify(VELAR_RUNTIME_REGISTRY_KEY)})];
+  if (!runtime || typeof runtime.track !== "function" || typeof runtime.trigger !== "function") return;
+  const observer = runtime.activeObserver;
+  if (!observer || observer.stopped) return;
+  if (!routeReadSubscribed) {
+    routeReadSubscribed = true;
+    subscribeRoute(() => runtime.trigger(routeReadSource, "path"));
+  }
+  runtime.track(routeReadSource, "path");
+}
+
 export function currentRoute() {
+  trackRoute();
   const path = applicationPath(webLocationField("pathname", __velarBrowserLocationPathname)) ?? "/";
   return Object.freeze({ path, params: new Map(), query: queryValues(), hash: routeHash() });
 }
@@ -1251,7 +1297,7 @@ export function Router(props) {
   }, "router", "Router");
   return component(node, () => {
     mounted = true;
-    removeRouteListener = __velarBrowserListenGlobal("popstate", changed);
+    removeRouteListener = subscribeRoute(changed);
     if (active) active.__mount();
   }, () => {
     observer.stop();
@@ -1379,7 +1425,7 @@ export function NavLink(props) {
   }
   return component(linked.node, () => {
     linked.__mount();
-    removeRouteListener = __velarBrowserListenGlobal("popstate", update);
+    removeRouteListener = subscribeRoute(update);
   }, () => {
     observer.stop();
     if (removeRouteListener) removeRouteListener();
