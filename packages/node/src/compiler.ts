@@ -38,7 +38,7 @@ import { httpOutcomeType, routePatternType, serveAppType, serveRequestType, VELA
 
 export { VELAR_PROCESS_HOST_RUNTIME } from "./process-runtime.ts";
 
-export const VELAR_NODE_API_VERSION = "0.13";
+export const VELAR_NODE_API_VERSION = "0.14";
 export const VELAR_NODE_HOST_MODULE = "velar/node-host-v1";
 
 const unknownType: ValueType = { kind: "unknown" };
@@ -394,15 +394,22 @@ const httpTransportErrorClass: ClassInfo = {
 };
 
 const webSocketConnectionIdentity = "velar/websocket#type:WebSocketConnection";
+const webSocketCloseIdentity = "velar/websocket#type:WebSocketClose";
 const webSocketServerIdentity = "velar/websocket#type:WebSocketServer";
 const webSocketConnectionType: ValueType = { kind: "named", name: "WebSocketConnection", identity: webSocketConnectionIdentity };
+const webSocketCloseType: ValueType = { kind: "named", name: "WebSocketClose", identity: webSocketCloseIdentity };
 const webSocketServerType: ValueType = { kind: "named", name: "WebSocketServer", identity: webSocketServerIdentity };
 const webSocketMessageType: ValueType = { kind: "union", members: [stringType, bytesType] };
+const webSocketCloseFields = new Map<string, ValueType>([
+  ["code", numberType],
+  ["reason", stringType],
+]);
 const webSocketConnectionFields = new Map<string, ValueType>([
   ["origin", optional(stringType)],
   ["state", functionType([], [], stringType)],
   ["send", functionType(["message"], [webSocketMessageType], promise(nullType))],
   ["next", functionType([], [], promise(optional(webSocketMessageType)))],
+  ["closeInfo", functionType([], [], promise(webSocketCloseType))],
   ["close", functionType(["code", "reason"], [numberType, stringType], promise(nullType), 0)],
 ]);
 const webSocketServerFields = new Map<string, ValueType>([
@@ -458,6 +465,7 @@ export const nodeModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Ma
   ["velar/websocket", moduleInterface(
     new Map([
       ["WebSocketConnection", { kind: "typeObject", name: "WebSocketConnection", value: webSocketConnectionType }],
+      ["WebSocketClose", { kind: "typeObject", name: "WebSocketClose", value: webSocketCloseType }],
       ["WebSocketServer", { kind: "typeObject", name: "WebSocketServer", value: webSocketServerType }],
       ...[...webSocketErrorIdentities].map(([name, identity]) => [name, { kind: "classConstructor", name, identity } as ValueType] as const),
       ["connect", functionType(["url", "options"], [stringType, webSocketConnectOptions], promise(webSocketConnectionType), 1)],
@@ -465,10 +473,12 @@ export const nodeModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Ma
     ]),
     new Map([
       ["WebSocketConnection", webSocketConnectionFields],
+      ["WebSocketClose", webSocketCloseFields],
       ["WebSocketServer", webSocketServerFields],
     ]),
     new Map([
       ["WebSocketConnection", webSocketConnectionIdentity],
+      ["WebSocketClose", webSocketCloseIdentity],
       ["WebSocketServer", webSocketServerIdentity],
     ]),
     new Map(),
@@ -476,6 +486,7 @@ export const nodeModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Ma
     new Map(),
     new Map([
       ["WebSocketConnection", new Set(webSocketConnectionFields.keys())],
+      ["WebSocketClose", new Set(webSocketCloseFields.keys())],
       ["WebSocketServer", new Set(webSocketServerFields.keys())],
     ]),
   )],

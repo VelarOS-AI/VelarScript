@@ -60,8 +60,8 @@ embedded servers, and low-level protocol adapters.
 
 An ordinary service activates the separate `@velarscript/server` application
 extension instead. It composes this Node capability and owns root
-root `application.yml`, startup assembly,
-and abstract connection lifecycle. Without that explicit extension,
+`application.yml`, startup assembly, abstract connection lifecycle, and the
+typed `realtimeSession` application wrapper. Without that explicit extension,
 `velar/server` is unavailable and application configuration is not loaded.
 Host, port, and request ceilings do not belong in `node` manifest settings.
 
@@ -248,7 +248,9 @@ data-graph scan without detaching the caller's values. It provides single-worker
 and bounded pool owners with per-call cancellation and timeout.
 `velar/websocket` provides pull connections bounded by unread message count,
 pending operations, and aggregate bytes, preserves queued messages through
-normal EOF, and discards them on receive failure, plus a Node server;
+normal EOF, and discards them on receive failure. `closeInfo()` waits for the
+terminal handshake and returns `WebSocketClose {code, reason}`. The module also
+provides a Node server;
 `listen({http: app, ...})` accepts either a `ServeApp` or low-level handler and
 serves the same typed HTTP contract as `velar/serve` on the upgrade port. Its
 only external transport dependency is the pinned `ws` package; native socket

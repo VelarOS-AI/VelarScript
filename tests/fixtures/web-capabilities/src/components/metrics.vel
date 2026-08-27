@@ -36,5 +36,5 @@ export component Metrics(projects: number):
     return <section class="metrics" look={metricsLook} aria-label="Project metrics">
         <MetricCard label="Projects" value={str(projects)} />
         <MetricCard label="Browser engines" value="3" />
-        <MetricCard label="Web API" value="0.10" />
+        <MetricCard label="Web API" value="0.11" />
     </section>

@@ -1512,7 +1512,7 @@ created. `readText(file, maxBytes=16777216)` and
 the explicit ceiling is 64 MiB. One picker result is limited to 10,000 files,
 and text downloads are likewise limited to 64 MiB. Directory access,
 persistent file handles, and the File System Access API are deliberately not
-part of Web API 0.10.
+part of Web API 0.11.
 
 Returned file names/MIME types, sizes, and modification times are validated
 before an opaque `File` is registered. Invalid native picker results reject
@@ -1573,13 +1573,72 @@ socket makes no progress and stops once nothing is waiting. Closing or failing t
 connection settles every send still waiting: one whose bytes had already left
 resolves, and the rest reject with `WebSocketClosedError`.
 
-`velar/websocket` is the only WebSocket client. D90 R20 retired
+`velar/websocket` is the only raw WebSocket client. D90 R20 retired
 `velar/realtime.socket`, a second, text-only client that admitted only close
 code `1000` and application codes `3000`–`4999`, reported failure as a bare
-`Error`, and could not carry binary messages. `velar/realtime` no longer
-exports `socket`.
+`Error`, and could not carry binary messages. `velar/realtime` does not expose
+a second raw socket; its application client composes `velar/websocket`.
 
 ## `velar/realtime`
+
+For bidirectional application protocols, use one shared command/event package
+on both sides and give its codec to `realtimeClient`:
+
+```velar fragment
+import {Bytes} from "velar/binary"
+import {RealtimeClient, RealtimeClientFailureAction, RealtimeOpen, realtimeClient} from "velar/realtime"
+
+type ServerEvent:
+    event: string
+
+type Command:
+    operation: string
+
+def decode(message: string | Bytes) -> ServerEvent:
+    if message is string: return Json.parse(message, ServerEvent)
+    throw Error("Binary events are not supported")
+
+def encode(command: Command) -> string | Bytes:
+    return Json.stringify(command)
+
+async def opened(client: RealtimeClient<Command>, open: RealtimeOpen):
+    // generation 每次成功连接都会递增；重连后在这里重新订阅或请求快照。
+    if open.reconnected: await client.send({operation: "resync"})
+
+const live = realtimeClient(
+    () => "wss://example.test/live",
+    {decode, encode},
+    async (event, _client) => print(event.event),
+    opened=opened,
+    failed=async (_failure, _client) => RealtimeClientFailureAction.reconnect,
+    options={reconnectDelays: [0ms, 1s, 2s, 5s], reconnectJitter: 0.2},
+)
+
+await live.start()
+await live.send({operation: "subscribe"})
+await live.close()
+```
+
+`start()` performs the first connection, `whenOpen()` waits for the current or
+next connection generation, and `whenClosed()` waits for terminal shutdown.
+The URL may be text or a zero-argument function, allowing a fresh signed URL on
+each attempt. Reconnect delays are finite; once exhausted, the client closes.
+`retryInitial` is `false` by default so configuration and authentication
+failures do not create an invisible infinite loop.
+
+`send` requires an open connection and rejects with
+`RealtimeUnavailableError` otherwise. Commands are never buffered across a
+disconnect and never replayed after reconnect. Applications that need stronger
+delivery add message IDs, acknowledgements, resume cursors, and idempotent
+handling to their shared protocol. `opened(..., RealtimeOpen)` is the one place
+to renew subscriptions or fetch a fresh snapshot after a reconnect.
+
+The failure callback chooses `continue`, `reconnect`, or `stop`. `continue` is
+meaningful for a rejected inbound message or handler; terminal transport
+failure still follows close-code/reconnect policy. State changes are typed as
+`idle`, `connecting`, `open`, `reconnecting`, and `closed`.
+
+For one-way server events, `eventStream` remains smaller:
 
 ```velar
 import {eventStream} from "velar/realtime"
@@ -1743,7 +1802,7 @@ unavailable outside `velar test --browser`.
 
 ## Deliberate boundaries
 
-Web API 0.10 does not define SSR/server execution, workers, service workers/PWA,
+Web API 0.11 does not define SSR/server execution, workers, service workers/PWA,
 WebRTC, WebGPU, directory handles, persistent file handles, or a game runtime.
 `CanvasElement.getContext(kind=...)` therefore returns `unknown` rather than an
 untyped browser escape hatch; the future game package will own a checked Canvas
@@ -1761,7 +1820,7 @@ CLI dynamically loads the project-declared `/compiler` and optional `/host`
 entries. Web owns HTML/CSP/reload/deployment projection and browser-test
 metadata; CLI owns generic routing, filesystem, bundling, transport,
 verification, and browser-driver mechanics.
-`standardModuleApi()` reports Web API `0.10` under the extension ID, and compiler tests protect
+`standardModuleApi()` reports Web API `0.11` under the extension ID, and compiler tests protect
 exact names and types, and the Chromium, Firefox, and WebKit
 development/production matrix protects runtime behavior. Workbench does not
 copy these rules; completion and diagnostics arrive through the project's

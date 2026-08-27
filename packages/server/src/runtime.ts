@@ -1,6 +1,7 @@
 // Convention-based server application assembly. The Node extension owns the
 // transport and route primitives; this application extension owns only root
 // configuration discovery, startup assembly, and connection lifetime.
+
 export const VELAR_SERVER_RUNTIME = String.raw`
 import { exists as __velarServerExists, readText as __velarServerReadText } from "velar/fs";
 import { ServeApp as __velarServerServeApp, __velarServeAuthenticationCredential as __velarServerAuthenticationCredential, __velarServeAuthenticationError as __velarServerAuthenticationError, provide as __velarServerProvide, serve as __velarServerServe } from "velar/serve";
@@ -177,4 +178,5 @@ export function database(connect, disconnect) {
     true,
   );
 }
+
 `.trimStart();

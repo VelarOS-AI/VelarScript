@@ -76,8 +76,17 @@ contract crosses WebSocket and Worker boundaries. Worker source entries come
 from the project manifest, so application source does not construct bundle URLs.
 Requests and responses are checked with runtime `Type` values; pools, call
 queues, message queues, transfers, cancellation, timeout, and crash convergence
-are bounded by the shared Core contracts. `velar/realtime` keeps
-`eventStream`; the WebSocket client is `velar/websocket.connect`.
+are bounded by the shared Core contracts.
+
+Realtime has two layers. `velar/websocket.connect` is the sole raw socket
+transport. `velar/realtime.realtimeClient` composes that transport with a typed
+codec, explicit start/close lifecycle, bounded connect options, finite
+reconnect policy, connection generations, and reconnect callbacks for
+resynchronization. It never buffers or replays application commands. Projects
+share their command/event contract in their own protocol package; they do not
+need a framework-generated client tied to one server implementation.
+
+`eventStream` remains the simpler server-sent-event client.
 
 The package also owns Look, the checked visual language integrated with VelarScript
 values and JSX. `look:` values, ordinary functions, imports/exports, named

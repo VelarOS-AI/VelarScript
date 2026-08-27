@@ -3,26 +3,25 @@
 //
 // Authority: the module export tables in packages/web/src/compiler.ts —
 // `velar/storage` (3 exports, where `storage` and `session` each publish seven
-// members plus `scope`, and `database` publishes six), `velar/realtime` (1
-// handle), and `velar/http`.
+// members plus `scope`, and `database` publishes six), `velar/realtime` (the
+// SSE handle plus the typed application-client contract), and `velar/http`.
 //
 // `velar/http` is a shared module whose two targets publish different sets: the
 // Node target adds `secretHeader` and the Web target adds `formBody`. Everything
 // else about `velar/http` is the same in both, so the Core tour walks the shared
 // members and this chapter walks the one the Web target adds.
 //
-// A WebSocket is not a `velar/realtime` handle: `velar/websocket` owns that
-// connection on every target, and chapter 17 of the Core tour walks it in full.
-// This chapter opens one anyway, because a browser page is where a socket
-// usually lives, and because the two connections it opens here are the two a
-// page holds side by side.
+// `velar/websocket` owns the raw connection on every target, and chapter 17 of
+// the Core tour walks it in full. `velar/realtime` composes that transport into
+// a typed application client without defining another socket implementation.
 //
 // Both connection handles open real connections, so both live in a `def` that
 // nothing calls; `using` is what releases them, because each publishes `close()`
 // and is therefore a standard capability handle.
 
 import {HttpAbortError, HttpResponseError, HttpTransportError, HttpTransportPhase, formBody, http} from "velar/http"
-import {eventStream} from "velar/realtime"
+import {Bytes} from "velar/binary"
+import {RealtimeClient, RealtimeClientFailureAction, RealtimeClientState, RealtimeCodec, RealtimeFailure, RealtimeOpen, RealtimeUnavailableError, eventStream, realtimeClient} from "velar/realtime"
 import {StorageQuotaError, StorageTransactionError, StorageUpgradeError, database, session, storage} from "velar/storage"
 import {connect} from "velar/websocket"
 
@@ -31,6 +30,35 @@ export type Draft:
     body: string
 
 const emptyDraft: Draft = {title: "", body: ""}
+
+type LiveEvent:
+    event: string
+
+type LiveCommand:
+    operation: string
+
+def decodeLive(message: string | Bytes) -> LiveEvent:
+    if message is string: return Json.parse(message, LiveEvent)
+    throw Error("This tour protocol accepts text events")
+
+def encodeLive(command: LiveCommand) -> string | Bytes: return Json.stringify(command)
+
+const liveCodec: RealtimeCodec<LiveEvent, LiveCommand> = {decode: decodeLive, encode: encodeLive}
+
+async def receiveLive(event: LiveEvent, _client: RealtimeClient<LiveCommand>): print(event.event)
+
+async def openLive(client: RealtimeClient<LiveCommand>, open: RealtimeOpen):
+    if open.reconnected: await client.send({operation: "resync"})
+
+async def failLive(_failure: RealtimeFailure, _client: RealtimeClient<LiveCommand>):
+    return RealtimeClientFailureAction.reconnect
+
+async def changeLive(_client: RealtimeClient<LiveCommand>, state: RealtimeClientState):
+    if state == RealtimeClientState.open: print("realtime open")
+
+export def realtimeFailure(error: Error) -> string:
+    if error is RealtimeUnavailableError: return "unavailable"
+    return "other"
 
 export def storageFailure(error: Error) -> string:
     if error is StorageQuotaError: return "quota"
@@ -230,6 +258,23 @@ export async def realtimeSpellings():
     print(f"{live.state()}")
     await live.close()
     await live.close(1000, "done")
+    print(Json.stringify(await live.closeInfo()))
+
+    // 高层客户端复用同一个底层 WebSocket，只接管应用层模板：类型化编解码、
+    // 有界重连、状态变化和重连后的重新同步。它不会缓存或重放业务命令。
+    const applicationLive = realtimeClient(
+        "wss://example.test/live",
+        liveCodec,
+        receiveLive,
+        opened = openLive,
+        failed = failLive,
+        stateChanged = changeLive,
+        options = {reconnectDelays: [0ms, 1s, 2s], reconnectJitter: 0.2},
+    )
+    await applicationLive.start()
+    await applicationLive.send({operation: "subscribe"})
+    await applicationLive.close()
+    await applicationLive.whenClosed()
 
     using feed = eventStream("/api/events", {
         open: () => print("stream open"),

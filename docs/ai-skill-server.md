@@ -13,7 +13,7 @@ browser application activates `@velarscript/web`:
 ```json
 {
   "dependencies": {
-    "@velarscript/server": "0.18.1"
+    "@velarscript/server": "0.19.0"
   }
 }
 ```
@@ -176,6 +176,64 @@ drivers, pools, database models, schemas, queries, migrations, transactions,
 dialect behavior, retry rules, and credentials remain independently installed
 application dependencies. Do not add SQLite, PostgreSQL, an ORM, or model
 syntax to `@velarscript/server` or `@velarscript/node`.
+
+## Typed realtime sessions
+
+Keep the physical socket and the application session separate. A declarative
+`@websocket` route receives `WebSocketConnection`; pass it to
+`realtimeSession` with the codec from the application's shared protocol
+package:
+
+```velar fragment
+import {Bytes} from "velar/binary"
+import {RealtimeFailure, RealtimeFailureAction, RealtimePeer, realtimeSession} from "velar/realtime"
+import {WebSocketConnection} from "velar/websocket"
+
+type Command:
+    operation: string
+
+type ServerEvent:
+    event: string
+
+def decode(message: string | Bytes) -> Command:
+    if message is string: return Json.parse(message, Command)
+    throw Error("Binary commands are not supported")
+
+def encode(event: ServerEvent) -> string | Bytes:
+    return Json.stringify(event)
+
+async def receive(command: Command, peer: RealtimePeer<ServerEvent>):
+    await peer.send({event: command.operation})
+
+async def failed(failure: RealtimeFailure, _peer: RealtimePeer<ServerEvent>):
+    print(failure.error)
+    return RealtimeFailureAction.close
+
+async def serveSession(connection: WebSocketConnection):
+    await realtimeSession(
+        connection,
+        {decode, encode},
+        receive,
+        failed=failed,
+        options={maxQueuedMessages: 64, maxQueuedBytes: 1_048_576, drainTimeout: 5s},
+    )
+```
+
+The session runs one sequential inbound handler and one writer over a bounded
+outbound mailbox. `peer.send(event)` waits for its own transport send;
+`peer.trySend(event)` returns `false` instead of waiting when the mailbox is
+full. `opened` may install a subscription and return an async cleanup function;
+cleanup runs exactly once before the writer finishes draining. `closed`
+receives the actual `WebSocketClose` code and reason.
+
+`RealtimeFailureAction.continue` skips one failed decode or command and keeps
+the session alive. Unrecoverable setup, transport, encode, and send failures
+close the session. Route authentication, authorization, room membership,
+subscription ownership, and application delivery semantics remain application
+policy. Do not report a command as durable merely because `send` completed:
+WebSocket is ordered but application delivery is still at-most-once unless the
+shared protocol adds message IDs, acknowledgements, resume cursors, and
+idempotent handling.
 
 ## Custom shared HTTP/WebSocket startup
 

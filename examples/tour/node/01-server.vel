@@ -33,7 +33,10 @@ import {
     use,
 } from "velar/serve"
 import {sha256Text} from "velar/hash"
+import {Bytes} from "velar/binary"
+import {RealtimeBackpressureError, RealtimeCodec, RealtimeFailure, RealtimeFailureAction, RealtimePeer, RealtimePeerState, realtimeSession} from "velar/realtime"
 import {authenticate} from "velar/server"
+import {WebSocketConnection} from "velar/websocket"
 
 type CreateArticle:
     title: string
@@ -43,6 +46,12 @@ type CurrentUser:
 
 type UploadMetadata:
     title: string
+
+type LiveCommand:
+    operation: string
+
+type LiveEvent:
+    event: string
 
 async def verifyTourToken(token: string) -> CurrentUser?:
     if token != "tour-token": return null
@@ -67,6 +76,35 @@ def uploadName(value: Upload) -> string: return value.filename
 async def passThrough(request: Request, next: () -> Promise<ServeResponse>):
     print(request.path)
     return await next()
+
+def decodeLive(message: string | Bytes) -> LiveCommand:
+    if message is string: return Json.parse(message, LiveCommand)
+    throw Error("This tour protocol accepts text commands")
+
+def encodeLive(event: LiveEvent) -> string | Bytes: return Json.stringify(event)
+
+const liveCodec: RealtimeCodec<LiveCommand, LiveEvent> = {decode: decodeLive, encode: encodeLive}
+
+def describeRealtimeFailure(error: Error) -> string:
+    if error is RealtimeBackpressureError: return "backpressure"
+    return "other"
+
+async def receiveLive(command: LiveCommand, peer: RealtimePeer<LiveEvent>):
+    assert peer.state() == RealtimePeerState.open
+    await peer.send({event: command.operation})
+
+async def liveFailure(failure: RealtimeFailure, _peer: RealtimePeer<LiveEvent>):
+    print(failure.error)
+    return RealtimeFailureAction.close
+
+async def serveLive(connection: WebSocketConnection):
+    await realtimeSession(
+        connection,
+        liveCodec,
+        receiveLive,
+        failed = liveFailure,
+        options = {maxQueuedMessages: 64, maxQueuedBytes: 1_048_576, drainTimeout: 5s},
+    )
 
 server routes:
     @get(p"/health") => respond({ok: true, digest: healthDigest}, headers=Map([["cache-control", "no-store"]]))
@@ -98,6 +136,8 @@ server routes:
     @get(p"/session") => setCookie(background(json({ok: true}), afterResponse), "session", "tour")
     @delete(p"/session") => clearCookie(json({ok: true}), "session")
     @get(p"/asset") => file("/index.html", root="public")
+    @websocket(p"/realtime", connection: WebSocketConnection):
+        await serveLive(connection)
 
 server composed:
     ...prefix("/api", routes)

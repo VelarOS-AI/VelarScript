@@ -165,7 +165,7 @@ An extension package instead declares:
 {
   "velar": { "extension": {
     "kind": "application",
-    "apiVersion": "0.10",
+    "apiVersion": "0.11",
     "manifestKey": "web",
     "extends": {}
   } }

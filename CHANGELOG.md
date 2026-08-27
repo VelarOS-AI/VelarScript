@@ -6,6 +6,38 @@ truth for acceptance status.
 
 ## Unreleased
 
+## 0.19.0 — 2026-08-27
+
+### Realtime applications
+
+- Added the server target of `velar/realtime`. `realtimeSession` owns typed
+  decode and encode, sequential command handling, one bounded outbound
+  mailbox and writer, backpressure, setup cleanup, failure policy, and close
+  notification without introducing a Hub abstraction.
+- Added the browser target of `velar/realtime`. `realtimeClient` provides an
+  explicit connection lifecycle, finite reconnect policy, connection
+  generations, fresh URL providers, resynchronization callbacks, and typed
+  failure/state reporting. Application commands are never buffered or replayed
+  across reconnects.
+- Kept application command/event types, authentication, authorization,
+  subscriptions, acknowledgements, resume cursors, and idempotency in an
+  ordinary shared application protocol package.
+
+### WebSocket transport
+
+- Added `WebSocketClose` and `WebSocketConnection.closeInfo()` to the Node and
+  browser transports so application lifecycles receive the actual terminal
+  close code and reason.
+- Split `velar/server` from the server realtime runtime dependency. Conventional
+  HTTP applications no longer load the Node WebSocket transport unless they
+  import server-target `velar/realtime`.
+
+### Tooling and documentation
+
+- Updated compiler contracts, executable tours, API references, target skills,
+  package acceptance, runtime hardening, enum-surface coverage, and lifecycle
+  regression tests for the symmetric server/browser realtime model.
+
 ## 0.18.1 — 2026-08-27
 
 ### Server OpenAPI

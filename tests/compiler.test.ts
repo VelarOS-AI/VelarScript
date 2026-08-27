@@ -54,6 +54,17 @@ after(removeTemporaryDirectories);
 const webCompilerExtensions = Object.freeze([velarCompilerExtension]);
 const webFormatOptions = Object.freeze({ extensions: webCompilerExtensions });
 
+// `velar/realtime` normally enters a built application together with its
+// declared `velar/websocket` dependency. EventSource-only unit tests execute
+// one module body directly, so replace that import with an inert boundary; the
+// dedicated realtime-client tests exercise the real dependency separately.
+function standaloneRealtimeSource(): string {
+  return (standardModuleSource("velar/realtime") ?? "").replace(
+    /^import \{[^\n]+\} from "velar\/websocket";$/mu,
+    'const __velarRealtimeConnection = {parse(value) { return value; }};\nconst __velarRealtimeConnect = async () => { throw new Error("WebSocket test boundary is unavailable"); };',
+  );
+}
+
 function runNpmSync(arguments_: readonly string[], cwd: string): ReturnType<typeof spawnSync> {
   const npmEntry = process.env.npm_execpath;
   return npmEntry
@@ -5880,7 +5891,7 @@ mount(<App />, "#app")
       apiVersion: string;
       compilation: { moduleCount: number; compiledModules: number; reusedModules: number };
     };
-    assert.equal(initial.apiVersion, "0.10");
+    assert.equal(initial.apiVersion, "0.11");
     assert.deepEqual(initial.compilation, { ...initial.compilation, moduleCount: 3, compiledModules: 3, reusedModules: 0 });
 
     await reportedChange(
@@ -8299,11 +8310,11 @@ test("project sessions keep nested manifest sources under their nearest owner", 
   assert.equal(nested.project.modules[0]?.result.source.text, "export const nested = 2\n");
 });
 
-test("0.10 Web APIs have one versioned typed compiler/runtime contract", async () => {
+test("0.11 Web APIs have one versioned typed compiler/runtime contract", async () => {
   const api = standardModuleApi();
   assert.equal(api.standardVersion, "0.5");
   assert.equal(api.extensions["@velarscript/node"], undefined);
-  assert.equal(api.extensions["@velarscript/web"], "0.10");
+  assert.equal(api.extensions["@velarscript/web"], "0.11");
   assert.deepEqual(api.modules["velar/app"], ["onError", "reportError"]);
   assert.deepEqual(api.modules["velar/config"], ["has", "keys", "publicConfig"]);
   assert.deepEqual(api.modules["velar/web"], ["Head", "Link", "NavLink", "RouteContext", "Router", "announce", "back", "currentRoute", "domId", "forward", "lazy", "navigate", "redirect", "reload", "route"]);
@@ -8312,7 +8323,7 @@ test("0.10 Web APIs have one versioned typed compiler/runtime contract", async (
   assert.deepEqual(api.modules["velar/storage"], ["StorageQuotaError", "StorageTransactionError", "StorageUpgradeError", "database", "session", "storage"]);
   assert.deepEqual(api.modules["velar/browser"], ["after", "blur", "capturePointer", "clipboardText", "closeDialog", "copyText", "dialogResult", "environment", "every", "focus", "frame", "location", "measure", "media", "open", "readClipboardText", "releasePointer", "scrollElementTo", "scrollIntoView", "scrollMetrics", "scrollTo", "setClipboardText", "setTextSelection", "showDialog", "textSelection", "watchMedia", "watchOnline", "watchVisibility"]);
   assert.deepEqual(api.modules["velar/files"], ["download", "pick", "readDataUrl", "readText"]);
-  assert.deepEqual(api.modules["velar/realtime"], ["eventStream"]);
+  assert.deepEqual(api.modules["velar/realtime"], ["RealtimeClient", "RealtimeClientFailureAction", "RealtimeClientState", "RealtimeCodec", "RealtimeFailure", "RealtimeOpen", "RealtimeUnavailableError", "eventStream", "realtimeClient"]);
   assert.deepEqual(api.modules["velar/test"], ["expect"]);
   assert.deepEqual(api.modules["velar/web-test"], ["browser", "localStorage", "network", "sessionStorage"]);
   const browserTestController = webModuleInterfaces.get("velar/web-test")?.exports.get("browser");
@@ -8497,7 +8508,7 @@ reload()
 });
 
 test("the official Web package owns the framework contract and CLI only composes it", async () => {
-  assert.equal(VELAR_WEB_API_VERSION, "0.10");
+  assert.equal(VELAR_WEB_API_VERSION, "0.11");
   assert.equal(velarWebFramework.name, "@velarscript/web");
   assert.deepEqual([...velarWebFramework.modules], [...VELAR_WEB_MODULES]);
   assert.deepEqual([...webModuleInterfaces.keys()].sort(), [...VELAR_WEB_MODULES].sort());
@@ -8964,7 +8975,7 @@ console.log(listeners.size);
   assert.equal(storageExecution.status, 0, String(storageExecution.stderr));
   assert.equal(storageExecution.stdout, "RangeError\ntrue\n1 true true\n0\nstorage:watch:storage failed\n0\n");
 
-  const realtimeSource = standardModuleSource("velar/realtime") ?? "";
+  const realtimeSource = standaloneRealtimeSource();
   const realtimeExecution = executeModule(`
 const reports = [];
 globalThis[Symbol.for("velar.runtime.v1")] = { report(error, options) { reports.push(options.phase + ":" + options.detail + ":" + error.message); } };
@@ -10323,7 +10334,7 @@ console.log(removals, fileListLengthReads, fileListIndexReads);
 });
 
 test("realtime validates event-stream handlers and credentials before native effects", () => {
-  const source = standardModuleSource("velar/realtime") ?? "";
+  const source = standaloneRealtimeSource();
   const execution = executeModule(`
 let getterReads = 0;
 let constructed = 0;
@@ -10356,7 +10367,7 @@ console.log([getterReads, constructed, closed].join(":"));
 });
 
 test("realtime validates resolved event-stream URLs and states", () => {
-  const source = standardModuleSource("velar/realtime") ?? "";
+  const source = standaloneRealtimeSource();
   const execution = executeModule(`
 let coercions = 0;
 let resolvedUrl = { toString() { coercions += 1; return "https://coerced.test"; } };
@@ -10383,7 +10394,7 @@ console.log(coercions + ":" + invalidCloses);
 });
 
 test("realtime closes oversized inbound event-stream messages", () => {
-  const source = standardModuleSource("velar/realtime") ?? "";
+  const source = standaloneRealtimeSource();
   const execution = executeModule(`
 let streamValue;
 let streamClosed = 0;
@@ -10416,7 +10427,7 @@ console.log([streamDataReads, streamIdReads].join(":"));
 });
 
 test("realtime ignores event accessors and bypasses event-stream instance overrides", () => {
-  const source = standardModuleSource("velar/realtime") ?? "";
+  const source = standaloneRealtimeSource();
   const execution = executeModule(`
 const reports = [];
 const calls = [];
@@ -10524,7 +10535,7 @@ const reads = () => coercions;
   assert.equal(execution.stdout, "IndexError\nIndexError\n0\n");
 });
 
-test("0.10 Web APIs reject invalid typed boundaries before browser execution", async () => {
+test("0.11 Web APIs reject invalid typed boundaries before browser execution", async () => {
   const directory = await makeTemporaryDirectory("velar-web-api-invalid-");
   const entry = join(directory, "main.vel");
   await writeFile(entry, `
@@ -10832,12 +10843,12 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
   // codecs, noise, and database engines now live in independently versioned
   // source packages rather than occupying the Standard namespace. This Web
   // view intentionally excludes every Node-only module. D90 R20 then retired
-  // `velar/realtime.socket`: `velar/websocket` was already the WebSocket
-  // client, and a second one that refused half the close-code range is the
-  // duplication rule 3 forbids — so the total falls by one, deliberately.
-  // The typed bounded Channel then adds its type, constructor, and two distinct
-  // recovery classes to velar/task.
-  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 286);
+  // `velar/realtime` now layers one typed reconnecting application client over
+  // the sole raw WebSocket transport instead of publishing another transport.
+  // `WebSocketClose` exposes the peer's real close code and reason on both
+  // targets, and the typed bounded Channel contributes its type, constructor,
+  // and two recovery classes to `velar/task`.
+  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 295);
   assert.equal(Object.values(api.modules).slice(0, 14).reduce((total, exports_) => total + exports_.length, 0), 160);
   assert.equal(api.modules["velar/collections"]?.length, 28);
   assert.equal(api.modules["velar/text"]?.length, 23);
@@ -11158,6 +11169,7 @@ test("Core, Web, and Node own distinct WebSocket surfaces", async () => {
   assert.equal(languageCoreModuleApi().modules["velar/websocket"], undefined);
   assert.deepEqual(standardModuleApiCore(webCompilerExtensions).modules["velar/websocket"], [
     "WebSocketBackpressureError",
+    "WebSocketClose",
     "WebSocketClosedError",
     "WebSocketConnection",
     "WebSocketProtocolError",
@@ -11166,6 +11178,7 @@ test("Core, Web, and Node own distinct WebSocket surfaces", async () => {
   ]);
   assert.deepEqual(standardModuleApiCore([velarNodeCompilerExtension]).modules["velar/websocket"], [
     "WebSocketBackpressureError",
+    "WebSocketClose",
     "WebSocketClosedError",
     "WebSocketConnection",
     "WebSocketProtocolError",
@@ -15790,8 +15803,8 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     devDependencies: Record<string, string>;
   };
-  assert.equal(createdPackage.dependencies["@velarscript/web"], "0.18.1");
-  assert.equal(createdPackage.devDependencies["@velarscript/cli"], "0.18.1");
+  assert.equal(createdPackage.dependencies["@velarscript/web"], "0.19.0");
+  assert.equal(createdPackage.devDependencies["@velarscript/cli"], "0.19.0");
   assert.equal(createdPackage.scripts.format, "velar format");
   assert.equal(createdPackage.scripts["format:check"], "velar format --check");
   assert.equal(createdPackage.scripts["test:browser"], "velar test --browser");
@@ -15927,8 +15940,8 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   assert.deepEqual(componentPackage.velar.requires.capabilities, []);
   assert.equal(componentPackage.scripts["pack:check"], "npm pack --dry-run --json");
   assert.match(componentPackage.scripts.validate ?? "", /npm run pack:check$/u);
-  assert.equal(componentPackage.peerDependencies["@velarscript/web"], "^0.18.1");
-  assert.equal(componentPackage.devDependencies["@velarscript/web"], "0.18.1");
+  assert.equal(componentPackage.peerDependencies["@velarscript/web"], "^0.19.0");
+  assert.equal(componentPackage.devDependencies["@velarscript/web"], "0.19.0");
   assert.match(await readFile(join(componentRoot, "src", "index.vel"), "utf8"), /export component InfoCard/u);
   assert.deepEqual(JSON.parse(await readFile(join(componentRoot, "velar.json"), "utf8")).extensions, ["@velarscript/web"]);
   await linkWorkspaceWebExtension(componentRoot);
@@ -15953,7 +15966,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     scripts: Record<string, string>;
   };
-  assert.equal(nodePackage.dependencies["@velarscript/server"], "0.18.1");
+  assert.equal(nodePackage.dependencies["@velarscript/server"], "0.19.0");
   assert.equal(nodePackage.dependencies["@velarscript/node"], undefined);
   assert.equal(nodePackage.scripts.dev, "velar dev");
   assert.equal(nodePackage.scripts.start, "velar serve");
@@ -15981,7 +15994,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     scripts: Record<string, string>;
   };
-  assert.equal(desktopPackage.dependencies["@velarscript/desktop"], "0.18.1");
+  assert.equal(desktopPackage.dependencies["@velarscript/desktop"], "0.19.0");
   assert.equal(desktopPackage.scripts.package, "velar package");
   assert.equal(desktopPackage.scripts["test:browser"], "velar test --browser=all");
   const desktopAgents = await readFile(join(desktopRoot, "AGENTS.md"), "utf8");
@@ -16045,7 +16058,7 @@ test("CLI help is command-specific and malformed top-level invocations fail clea
   const creator = resolve("packages/create/src/cli.ts");
   const creatorVersion = spawnSync(process.execPath, [creator, "--version"], { encoding: "utf8" });
   assert.equal(creatorVersion.status, 0, creatorVersion.stderr);
-  assert.equal(creatorVersion.stdout, "create-velar 0.18.1\n");
+  assert.equal(creatorVersion.stdout, "create-velar 0.19.0\n");
   const creatorMissing = spawnSync(process.execPath, [creator], { encoding: "utf8" });
   assert.equal(creatorMissing.status, 2);
   assert.match(creatorMissing.stderr, /expected one project directory/u);
@@ -28003,10 +28016,10 @@ test("CLI emits complete Web application assets", async () => {
     capability: "web",
     target: "browser",
     protocolVersion: 2,
-    apiVersion: "0.10",
+    apiVersion: "0.11",
     artifactKind: "velar-web-build",
   });
-  assert.deepEqual(manifest.compiler, { name: "velar", version: "0.18.1" });
+  assert.deepEqual(manifest.compiler, { name: "velar", version: "0.19.0" });
   assert.match(manifest.buildId, /^[a-f0-9]{64}$/u);
   assert.equal(manifest.sourceMaps, true);
   assert.equal(manifest.entry, `assets/${javascript}`);

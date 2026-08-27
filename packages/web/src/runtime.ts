@@ -14,6 +14,7 @@ import { VELAR_REACTIVE_BRIDGE_MODULE_SOURCE } from "./reactive-bridge-runtime.t
 import { WEB_DOM_HOST_RUNTIME, WEB_ERROR_HOST_RUNTIME, WEB_RUNTIME_FOUNDATION } from "./runtime-foundation.ts";
 import { VELAR_WEB_WORKER_RUNTIME } from "./worker-runtime.ts";
 import { VELAR_WEB_WEBSOCKET_RUNTIME } from "./websocket-runtime.ts";
+import { VELAR_WEB_REALTIME_CLIENT_RUNTIME } from "./realtime-client-runtime.ts";
 
 const ownedCallbackRuntime = String.raw`
 ${WEB_ERROR_HOST_RUNTIME}
@@ -3536,6 +3537,7 @@ export function eventStream(url, handlers = {}, credentials = false) {
     close() { realtimeCall(realtimeEventSourceClose, value, [], "EventSource close"); return null; },
   });
 }
+${VELAR_WEB_REALTIME_CLIENT_RUNTIME}
 `.trimStart()],
   ["velar/web-test", String.raw`
 const browserRuntimeKey = Symbol.for("velar.browser.test.v1");

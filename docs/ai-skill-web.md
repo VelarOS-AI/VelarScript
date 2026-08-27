@@ -153,6 +153,51 @@ property unconditionally to override the component's outright, and declare it
 under a condition to refine that condition alone and leave the component's
 other values standing.
 
+## Realtime client
+
+`velar/websocket.connect` is the sole raw socket transport.
+`velar/realtime.realtimeClient` is the application layer: a typed codec,
+explicit lifecycle, finite reconnect policy, connection generations, and one
+callback where subscriptions can be rebuilt after reconnect.
+
+```velar fragment
+import {Bytes} from "velar/binary"
+import {RealtimeClient, RealtimeClientFailureAction, RealtimeOpen, realtimeClient} from "velar/realtime"
+
+type ServerEvent:
+    event: string
+
+type Command:
+    operation: string
+
+def decode(message: string | Bytes) -> ServerEvent:
+    if message is string: return Json.parse(message, ServerEvent)
+    throw Error("Binary events are not supported")
+
+def encode(command: Command) -> string | Bytes: return Json.stringify(command)
+
+async def opened(client: RealtimeClient<Command>, open: RealtimeOpen):
+    if open.reconnected: await client.send({operation: "resync"})
+
+export def liveClient(url: string) -> RealtimeClient<Command>:
+    return realtimeClient(
+        url,
+        {decode, encode},
+        async (event, _client) => print(event.event),
+        opened=opened,
+        failed=async (_failure, _client) => RealtimeClientFailureAction.reconnect,
+        options={reconnectDelays: [0ms, 1s, 2s, 5s], reconnectJitter: 0.2},
+    )
+```
+
+Call `await client.start()` from owned startup and `await client.close()` from
+cleanup. `whenOpen()` waits for the current or next generation;
+`whenClosed()` waits for terminal shutdown. The client does not queue or replay
+commands across a disconnect. Put message IDs, acknowledgements, resume
+cursors, and idempotency in the shared application protocol when stronger
+delivery is required. A URL function may refresh a signed URL on every attempt.
+Initial retry is off unless `retryInitial: true` is explicit.
+
 ## Storage and tests
 
 `velar/storage` stores JSON and validates on read. A generic type spelling is

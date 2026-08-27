@@ -262,9 +262,10 @@ console.log(Object.hasOwn(okResponse, "ok"), okResponse.status, await okResponse
 // velar/realtime.socket
 // ---------------------------------------------------------------------------
 
-test("[D90 R20] velar/realtime publishes only eventStream", () => {
-  assert.deepEqual([...(webModuleInterfaces.get("velar/realtime")?.exports.keys() ?? [])], ["eventStream"]);
-  assert.deepEqual(standardModuleApi(extensions).modules["velar/realtime"], ["eventStream"]);
+test("velar/realtime publishes the resilient typed client beside eventStream", () => {
+  const exports = ["RealtimeClient", "RealtimeClientFailureAction", "RealtimeClientState", "RealtimeCodec", "RealtimeFailure", "RealtimeOpen", "RealtimeUnavailableError", "eventStream", "realtimeClient"];
+  assert.deepEqual([...(webModuleInterfaces.get("velar/realtime")?.exports.keys() ?? [])], exports);
+  assert.deepEqual(standardModuleApi(extensions).modules["velar/realtime"], exports);
 });
 
 test("[D90 R22] importing socket from velar/realtime is an ordinary missing export", async () => {
@@ -280,16 +281,54 @@ export def open():
   ]);
 });
 
-test("[D90 R20] the velar/realtime runtime carries no WebSocket client", () => {
+test("velar/realtime composes the low-level WebSocket without owning a wire codec", () => {
   const source = standardModuleSource("velar/realtime", { base: "/" }, extensions) ?? "";
   assert.ok(source.length > 0);
-  assert.doesNotMatch(source, /WebSocket/u);
+  assert.match(source, /from "velar\/websocket"/u);
+  assert.match(source, /export function realtimeClient\(/u);
   assert.doesNotMatch(source, /sendJson/u);
-  // The strict-JSON runtime travelled with `sendJson` and nothing else in this
-  // module used it, so retiring the socket takes the whole serializer out of
-  // every page that opens an event stream.
   assert.doesNotMatch(source, /__velarJsonStringify/u);
   assert.match(source, /export function eventStream\(/u);
+});
+
+test("velar/realtime infers the shared codec and typed client callbacks", async () => {
+  const reported = await checkProject(`
+import {Bytes} from "velar/binary"
+import {RealtimeClient, RealtimeClientFailureAction, RealtimeFailure, RealtimeOpen, realtimeClient} from "velar/realtime"
+
+type ServerEvent:
+    event: string
+
+type Command:
+    operation: string
+
+def decode(message: string | Bytes) -> ServerEvent:
+    if message is string: return {event: message}
+    return {event: "binary"}
+
+def encode(command: Command) -> string | Bytes: return command.operation
+
+async def receive(event: ServerEvent, client: RealtimeClient<Command>):
+    if event.event == "ready": await client.send({operation: "sync"})
+
+async def opened(client: RealtimeClient<Command>, open: RealtimeOpen):
+    assert open.generation == client.generation()
+
+async def failed(failure: RealtimeFailure, client: RealtimeClient<Command>):
+    return RealtimeClientFailureAction.reconnect
+
+export def create(url: string) -> RealtimeClient<Command>:
+    return realtimeClient(
+        url,
+        {decode, encode},
+        receive,
+        opened=opened,
+        failed=failed,
+        options={reconnectDelays: [0ms, 1s], reconnectJitter: 0.1},
+    )
+`);
+  assert.deepEqual(reported.failures, []);
+  assert.deepEqual(reported.diagnostics, []);
 });
 
 test("[D90 R20] velar/websocket answers everything realtime.socket did, and more", async () => {
@@ -306,6 +345,7 @@ export async def live(url: string, draft: Draft) -> string:
     const message = await connection.next()
     const state = connection.state()
     await connection.close(1000, "done")
+    const close = await connection.closeInfo()
     // The close-code range realtime.socket refused; velar/websocket accepts it.
     await connection.close(1001, "going away")
     if message is string:
@@ -356,7 +396,7 @@ console.log("sent", JSON.stringify(host.sent[0]), host.sent[1] instanceof Uint8A
 host.dispatch("message", { data: "pushed" });
 console.log("next", await live.next());
 await live.close(4000, "done");
-console.log("closed", JSON.stringify(host.closedWith), live.state());
+console.log("closed", JSON.stringify(host.closedWith), live.state(), JSON.stringify(await live.closeInfo()));
 try { await live.send("late"); } catch (error) { console.log("late", error.name, error instanceof WebSocketClosedError); }
 
 const second = await connect("wss://example.test/second");
@@ -370,7 +410,7 @@ console.log("code1001", JSON.stringify(secondHost.closedWith));
     "state open binaryType arraybuffer",
     'sent "hello" true 1-2-3',
     "next pushed",
-    'closed [4000,"done"] closed',
+    'closed [4000,"done"] closed {"code":4000,"reason":"done"}',
     "late WebSocketClosedError true",
     "range RangeError WebSocket close code must be from 1000 through 4999",
     'code1001 [1001,"going away"]',

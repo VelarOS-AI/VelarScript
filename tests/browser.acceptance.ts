@@ -100,7 +100,7 @@ async function runBrowserAcceptance(): Promise<void> {
         notices: readonly string[];
         compilation: { moduleCount: number; compiledModules: number };
       };
-      assert.equal(status.apiVersion, "0.10");
+      assert.equal(status.apiVersion, "0.11");
       assert.equal(status.ready, true);
       assert.deepEqual(status.notices, []);
       assert.ok(status.compilation.moduleCount >= 5);
@@ -210,7 +210,7 @@ async function acceptBrowser(
     assert.equal(await page.locator("h1").textContent(), "VelarScript Web capabilities");
     assert.equal(new URL(page.url()).pathname, "/app/");
     assert.equal(await page.title(), "VelarScript Web capabilities");
-    assert.equal(await page.locator('meta[name="description"]').getAttribute("content"), "VelarScript 0.10 Web platform application");
+    assert.equal(await page.locator('meta[name="description"]').getAttribute("content"), "VelarScript 0.19 · Web API 0.11 platform application");
     assert.equal(await page.locator('link[rel="canonical"]').getAttribute("href"), "https://velar.example/app/");
     assert.equal(await page.locator('meta[name="robots"]').getAttribute("content"), "index,follow");
     assert.equal(await page.locator('meta[property="og:image"]').getAttribute("content"), "/app/share.svg");

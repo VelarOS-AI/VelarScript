@@ -9,7 +9,7 @@
   </defs>
   <rect width="1200" height="630" rx="48" fill="url(#background)"/>
   <circle cx="1010" cy="110" r="230" fill="#6578dc" opacity="0.22"/>
-  <text x="92" y="250" fill="#9dacff" font-family="Inter, system-ui, sans-serif" font-size="34" font-weight="700">VELARSCRIPT 0.10</text>
+  <text x="92" y="250" fill="#9dacff" font-family="Inter, system-ui, sans-serif" font-size="34" font-weight="700">VELARSCRIPT 0.19</text>
   <text x="92" y="345" fill="#f4f6ff" font-family="Inter, system-ui, sans-serif" font-size="72" font-weight="750">Web capabilities</text>
   <text x="92" y="420" fill="#cbd3ff" font-family="Inter, system-ui, sans-serif" font-size="34">Verified Web applications, compiled to JavaScript.</text>
 </svg>

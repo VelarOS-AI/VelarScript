@@ -1673,8 +1673,8 @@ test("Node WebSocket listen composes one ServeApp lifecycle and keeps queues glo
       lifecycle(app: unknown, startup: () => Promise<null>, shutdown: () => Promise<null>): unknown;
     };
     const websocket = await import(`${pathToFileURL(websocketPath).href}?compose=${Date.now()}`) as {
-      listen(options: Record<string, unknown>): Promise<{port: number; next(): Promise<{origin: string | null; send(value: string): Promise<null>; next(): Promise<string | Uint8Array | null>; close(): Promise<null>} | null>; stop(): Promise<null>}>;
-      connect(url: string): Promise<{origin: string | null; send(value: string): Promise<null>; next(): Promise<string | Uint8Array | null>; close(): Promise<null>}>;
+      listen(options: Record<string, unknown>): Promise<{port: number; next(): Promise<{origin: string | null; send(value: string): Promise<null>; next(): Promise<string | Uint8Array | null>; closeInfo(): Promise<{code: number; reason: string}>; close(code?: number, reason?: string): Promise<null>} | null>; stop(): Promise<null>}>;
+      connect(url: string): Promise<{origin: string | null; send(value: string): Promise<null>; next(): Promise<string | Uint8Array | null>; closeInfo(): Promise<{code: number; reason: string}>; close(code?: number, reason?: string): Promise<null>}>;
     };
     const bridge = Object.getOwnPropertyDescriptor(serve.ServeApp, "__velarCompilerBridge")?.value as {
       createPattern(source: Record<string, unknown>): unknown;
@@ -1764,7 +1764,9 @@ test("Node WebSocket listen composes one ServeApp lifecycle and keeps queues glo
       assert.equal(await accepted.next(), "hello");
       await accepted.send("world");
       assert.equal(await client.next(), "world");
-      await client.close();
+      await client.close(1000, "finished");
+      assert.deepEqual(await client.closeInfo(), {code: 1000, reason: "finished"});
+      assert.deepEqual(await accepted.closeInfo(), {code: 1000, reason: "finished"});
       const abandoned = await websocket.connect(`ws://127.0.0.1:${server.port}/ws`);
       await abandoned.close();
       await new Promise<void>((resolveWait) => setTimeout(resolveWait, 10));
@@ -1809,7 +1811,7 @@ test("declarative @websocket routes own matching, decoded captures, and handler 
     const serve = await import(pathToFileURL(join(directory, "node_modules", "velar", "serve.js")).href) as {ServeApp: object};
     const websocket = await import(`${pathToFileURL(websocketPath).href}?routes=${Date.now()}`) as {
       listen(options: Record<string, unknown>): Promise<{port: number; next(): Promise<unknown>; stop(): Promise<null>}>;
-      connect(url: string): Promise<{send(value: string): Promise<null>; next(): Promise<string | Uint8Array | null>; close(): Promise<null>}>;
+      connect(url: string): Promise<{send(value: string): Promise<null>; next(): Promise<string | Uint8Array | null>; closeInfo(): Promise<{code: number; reason: string}>; close(code?: number, reason?: string): Promise<null>}>;
     };
     const bridge = Object.getOwnPropertyDescriptor(serve.ServeApp, "__velarCompilerBridge")?.value as {
       createPattern(source: Record<string, unknown>): unknown;

@@ -371,6 +371,8 @@ handles native URLs or ports.
 `velar/websocket` exposes `connect(url, options?)` on Node and Web, plus Node
 `listen(options)`. A `WebSocketConnection` sends `string | Bytes`, and its
 `next() -> Promise<(string | Bytes)?>` is consumed directly or with `async for`.
+`closeInfo() -> Promise<WebSocketClose>` returns the terminal numeric code and
+reason after the handshake completes.
 `send` resolves only after the bounded pending-byte budget drains. Connection,
 message, send, accept, unread-message count, and aggregate unread-byte limits
 fail explicitly. Node additionally enforces process-wide connection, queued

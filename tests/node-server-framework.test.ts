@@ -165,6 +165,50 @@ export const start = application(app)
   assert.match(result.code ?? "", /application\(app\)/u);
 });
 
+test("server realtime sessions infer one typed codec, peer, and lifecycle", async () => {
+  const result = await compileServer(`
+import {Bytes} from "velar/binary"
+import {RealtimeFailure, RealtimeFailureAction, RealtimePeer, RealtimePeerState, realtimeSession} from "velar/realtime"
+import {WebSocketConnection} from "velar/websocket"
+
+type Command:
+    operation: string
+
+type Event:
+    event: string
+
+def decode(message: string | Bytes) -> Command:
+    if message is string: return {operation: message}
+    return {operation: "binary"}
+
+def encode(event: Event) -> string | Bytes: return event.event
+
+async def receive(command: Command, peer: RealtimePeer<Event>):
+    await peer.send({event: command.operation})
+
+async def opened(peer: RealtimePeer<Event>) -> (() -> Promise<null>)?:
+    assert peer.state() == RealtimePeerState.open
+    return async () => null
+
+async def failed(failure: RealtimeFailure, peer: RealtimePeer<Event>):
+    await peer.send({event: failure.phase})
+    return RealtimeFailureAction.continue
+
+async def serve(connection: WebSocketConnection):
+    await realtimeSession(
+        connection,
+        {decode, encode},
+        receive,
+        opened=opened,
+        failed=failed,
+        options={maxQueuedMessages: 8, maxQueuedBytes: 4096, drainTimeout: 2s},
+    )
+`);
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(result.code ?? "", /realtimeSession\(/u);
+  assert.match(result.code ?? "", /maxQueuedMessages: 8/u);
+});
+
 test("server authentication accepts only security credentials and nullable async verifiers", async () => {
   const ordinaryInput = await compileServer(`
 import {authenticate} from "velar/server"

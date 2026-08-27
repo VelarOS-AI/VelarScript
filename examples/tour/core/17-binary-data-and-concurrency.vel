@@ -8,7 +8,7 @@ import {ByteOrder, Bytes, Float32Buffer, Float32Builder, UInt8Buffer, UInt16Buff
 import {Random, random} from "velar/random"
 import {Cancellation, CancellationError, Channel, ChannelBackpressureError, ChannelClosedError, Task, TaskTimeoutError, channel, task, withTimeout} from "velar/task"
 import {Worker, WorkerBackpressureError, WorkerCallError, WorkerClosedError, WorkerCrashedError, WorkerPool, serveWorker, worker, workerPool} from "velar/worker"
-import {WebSocketBackpressureError, WebSocketClosedError, WebSocketConnection, WebSocketProtocolError, WebSocketServer, WebSocketTimeoutError, connect, listen} from "velar/websocket"
+import {WebSocketBackpressureError, WebSocketClose, WebSocketClosedError, WebSocketConnection, WebSocketProtocolError, WebSocketServer, WebSocketTimeoutError, connect, listen} from "velar/websocket"
 import {createBytes, readBytes, writeBytes} from "velar/fs"
 
 type DataRequest:
@@ -92,11 +92,14 @@ def connectionValue(value: WebSocketConnection) -> WebSocketConnection: return v
 
 def serverValue(value: WebSocketServer) -> WebSocketServer: return value
 
+def closeCode(value: WebSocketClose) -> number: return value.code
+
 export async def websocketSpellings() -> number:
     using connection = await connect("ws://127.0.0.1:8080/socket", {timeout: 2s})
     using server = await listen({port: 0, path: "/socket"})
     await connectionValue(connection).send("tour")
-    return serverValue(server).port
+    await connection.close(1000, "tour complete")
+    return serverValue(server).port + closeCode(await connection.closeInfo())
 
 export async def persistenceSpellings(path: string, snapshot: Bytes) -> number:
     await createBytes(f"{path}.new", snapshot)

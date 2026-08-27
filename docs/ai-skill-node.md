@@ -337,6 +337,11 @@ canonical HTTP/HTTPS origins. The default rejects any upgrade carrying
 intentional unrestricted policy. A rejected browser origin receives 403 before
 it consumes connection-queue capacity. Connections are pull-based. Always
 consume each connection's `next()`, handle backpressure, and stop the server.
+`closeInfo()` waits for the terminal handshake and returns the actual typed
+`WebSocketClose {code, reason}`; `next()` returning `null` alone does not expose
+why the connection ended. Application sessions should normally use
+server-target `velar/realtime.realtimeSession` instead of rebuilding their own writer and
+cleanup loops over this transport.
 
 ## Tests
 

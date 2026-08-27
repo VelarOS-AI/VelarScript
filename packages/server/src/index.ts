@@ -5,6 +5,7 @@ export {velarProjectExtension, type VelarServerConfig} from "./project-config.ts
 
 export const VELAR_SERVER_MODULES = Object.freeze([
   "velar/server",
+  "velar/realtime",
 ] as const);
 
 export const VELAR_SERVER_CONFIGURATION_FILES = Object.freeze([

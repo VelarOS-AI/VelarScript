@@ -8,6 +8,7 @@ import type { CompilerExtension, ModuleInterface } from "@velarscript/compiler/e
 import { standardModuleClosure, standardModuleSource } from "../packages/cli/src/standard-modules.ts";
 import { velarCompilerExtension as desktopExtension } from "../packages/desktop/src/compiler.ts";
 import { velarNodeCompilerExtension as nodeExtension } from "../packages/node/src/compiler.ts";
+import { velarCompilerExtension as serverExtension } from "../packages/server/src/compiler.ts";
 import { velarCompilerExtension as webExtension } from "../packages/web/src/compiler.ts";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
 import { repositoryRoot } from "./repository-root.ts";
@@ -87,6 +88,12 @@ async function loadModuleRuntime(extension: CompilerExtension, specifier: string
     JSON.stringify({ name: "velar", private: true, type: "module", exports: exports_ }),
     "utf8",
   );
+  // Server-target realtime depends on the real Node WebSocket transport. Keep
+  // this derived runtime gate honest by loading that transport with its actual
+  // external dependency instead of replacing it with a test double.
+  if (closure.has("velar/websocket")) {
+    await symlink(join(repositoryRoot, "node_modules", "ws"), join(root, "node_modules", "ws"), "dir");
+  }
   const entry = join(packageRoot, `${specifier.slice("velar/".length)}.js`);
   return await import(`${pathToFileURL(entry).href}?enum-surface=${Date.now()}-${Math.random()}`) as Record<string, unknown>;
 }
@@ -114,6 +121,7 @@ after(async () => {
 const catalogue: readonly (readonly [string, CompilerExtension])[] = [
   ["@velarscript/web", webExtension],
   ["@velarscript/node", nodeExtension],
+  ["@velarscript/server", serverExtension],
   ["@velarscript/desktop", desktopExtension],
 ];
 
@@ -128,9 +136,17 @@ test("[D60-149] the extensions still register the module-provided enums this gat
     "@velarscript/desktop velar/desktop DesktopPlatform",
     "@velarscript/desktop velar/http HttpTransportPhase",
     "@velarscript/desktop velar/process ProcessOutputChannel",
+    "@velarscript/desktop velar/realtime RealtimeClientFailureAction",
+    "@velarscript/desktop velar/realtime RealtimeClientState",
     "@velarscript/node velar/http HttpTransportPhase",
     "@velarscript/node velar/process ProcessOutputChannel",
+    "@velarscript/server velar/http HttpTransportPhase",
+    "@velarscript/server velar/process ProcessOutputChannel",
+    "@velarscript/server velar/realtime RealtimeFailureAction",
+    "@velarscript/server velar/realtime RealtimePeerState",
     "@velarscript/web velar/http HttpTransportPhase",
+    "@velarscript/web velar/realtime RealtimeClientFailureAction",
+    "@velarscript/web velar/realtime RealtimeClientState",
   ]);
 });
 

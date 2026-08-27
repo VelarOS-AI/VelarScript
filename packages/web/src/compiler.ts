@@ -1,4 +1,4 @@
-import { optionalOf as optional, type ClassInfo, type CompilerExtension, type EnumInfo, type ModuleInterface, type ValueType } from "@velarscript/compiler";
+import { optionalOf as optional, type ClassInfo, type CompilerExtension, type EnumInfo, type GenericTypeInfo, type ModuleInterface, type ValueType } from "@velarscript/compiler";
 import type { AnalysisContext, CompilerAnalysisExtension, CompilerEmitterOptions, CompilerLexicalExtension, LoweringHints, Token } from "@velarscript/compiler/extension";
 import { inferWebIntrinsic, routeContextIdentity, VelarWebAnalyzer } from "./analyzer.ts";
 import {
@@ -19,7 +19,7 @@ import { velarWebSemanticExtension } from "./semantic.ts";
 import { LOOK_BUILDER_SIGNATURES, LOOK_BUILDERS, LOOK_HOOKS, LOOK_MEDIA_SUBJECTS, LOOK_PUBLIC_TYPE_NAMES, LOOK_TARGETS, LOOK_UNIT_TYPES } from "./look.ts";
 import { isWebTypeAssignable, resolveWebTypeSyntax, WEB_OWNED_TYPE_NAMES, webComponentConstructor, webNodeType } from "./types.ts";
 
-export const VELAR_WEB_API_VERSION = "0.10";
+export const VELAR_WEB_API_VERSION = "0.11";
 const bytesType: ValueType = { kind: "named", name: "Bytes", identity: "velar/binary#type:Bytes" };
 
 // D57 rule 138 gave the browser-test boundary teeth, so the two names it is
@@ -332,11 +332,10 @@ const fileOptionsType = object({ accept: optional(stringType), multiple: optiona
 // section 16). It is declared structurally rather than as a named type, and
 // the marker is what lets Core see it without ever detecting a shape.
 //
-// D90 R20 retired the second handle this comment used to cover: the WebSocket
-// client is `velar/websocket.connect`, which owns the whole close-code range,
-// types its failures, and carries binary messages. Two complete WebSocket
-// clients that disagreed about which close codes are legal is the duplication
-// rule 3 refuses.
+// `velar/websocket.connect` remains the sole raw WebSocket transport. The
+// higher-level `realtimeClient` below composes it with typed codecs, lifecycle,
+// and reconnect policy; it does not duplicate framing or invent a second
+// socket contract.
 const eventStreamHandlersType = object({
   open: optional(functionType([], unknownType)),
   message: optional(functionType([stringType, stringType], unknownType)),
@@ -402,8 +401,14 @@ const browserTestNetworkControllerType = object({
 });
 
 const webSocketConnectionIdentity = "velar/websocket#type:WebSocketConnection";
+const webSocketCloseIdentity = "velar/websocket#type:WebSocketClose";
 const webSocketConnectionType: ValueType = { kind: "named", name: "WebSocketConnection", identity: webSocketConnectionIdentity };
+const webSocketCloseType: ValueType = { kind: "named", name: "WebSocketClose", identity: webSocketCloseIdentity };
 const webSocketMessageType: ValueType = { kind: "union", members: [stringType, bytesType] };
+const webSocketCloseFields = new Map<string, ValueType>([
+  ["code", numberType],
+  ["reason", stringType],
+]);
 const webSocketConnectionFields = new Map<string, ValueType>([
   // D90 fr-4: one identity, one field roster. A Web connection is always an
   // outbound `connect()` result, which was never upgraded from an Origin and
@@ -414,6 +419,7 @@ const webSocketConnectionFields = new Map<string, ValueType>([
   ["state", namedFunction([], [], stringType)],
   ["send", namedFunction(["message"], [webSocketMessageType], promise(nullType))],
   ["next", namedFunction([], [], promise(optional(webSocketMessageType)))],
+  ["closeInfo", namedFunction([], [], promise(webSocketCloseType))],
   ["close", namedFunction(["code", "reason"], [numberType, stringType], promise(nullType), 0)],
 ]);
 const webSocketConnectOptions = object({
@@ -446,19 +452,147 @@ const webSocketErrorClass = (identity: string): ClassInfo => ({
   staticMethods: new Map(),
 });
 
+const realtimeWireType = webSocketMessageType;
+const realtimeCodecIdentity = "velar/realtime#type:RealtimeCodec";
+const realtimeClientIdentity = "velar/realtime#type:RealtimeClient";
+const realtimeFailureIdentity = "velar/realtime#type:RealtimeFailure";
+const realtimeOpenIdentity = "velar/realtime#type:RealtimeOpen";
+const realtimeClientStateIdentity = "velar/realtime#enum:RealtimeClientState";
+const realtimeFailureActionIdentity = "velar/realtime#enum:RealtimeClientFailureAction";
+const realtimeUnavailableIdentity = "velar/realtime#class:RealtimeUnavailableError";
+const realtimeClientStates = new Set(["idle", "connecting", "open", "reconnecting", "closed"]);
+const realtimeFailureActions = new Set(["continue", "reconnect", "stop"]);
+const realtimeClientStateType: ValueType = {kind: "enum", name: "RealtimeClientState", identity: realtimeClientStateIdentity};
+const realtimeFailureActionType: ValueType = {kind: "enum", name: "RealtimeClientFailureAction", identity: realtimeFailureActionIdentity};
+const realtimeFailureType: ValueType = {kind: "named", name: "RealtimeFailure", identity: realtimeFailureIdentity};
+const realtimeOpenType: ValueType = {kind: "named", name: "RealtimeOpen", identity: realtimeOpenIdentity};
+const realtimeCodecIncoming: ValueType = {kind: "parameter", name: "Incoming", index: 0};
+const realtimeCodecOutgoing: ValueType = {kind: "parameter", name: "Outgoing", index: 1};
+const realtimeClientOutgoing: ValueType = {kind: "parameter", name: "T", index: 0};
+const realtimeInput: ValueType = {kind: "parameter", name: "Incoming", index: 0};
+const realtimeOutput: ValueType = {kind: "parameter", name: "Outgoing", index: 1};
+
+function realtimeGenericApplication(name: string, identity: string, arguments_: readonly ValueType[]): ValueType {
+  const labels = arguments_.map((argument, index) => argument.kind === "parameter" ? argument.name : `T${index + 1}`);
+  return {kind: "named", name: `${name}<${labels.join(", ")}>`, identity, application: {declaration: identity, name, arguments: arguments_}};
+}
+
+const realtimeCodecOf = (incoming: ValueType, outgoing: ValueType): ValueType => realtimeGenericApplication("RealtimeCodec", realtimeCodecIdentity, [incoming, outgoing]);
+const realtimeClientOf = (outgoing: ValueType): ValueType => realtimeGenericApplication("RealtimeClient", realtimeClientIdentity, [outgoing]);
+const realtimeCodecTemplate: GenericTypeInfo = {
+  identity: realtimeCodecIdentity,
+  name: "RealtimeCodec",
+  parameterNames: ["Incoming", "Outgoing"],
+  parameterBounds: [null, null],
+  fields: new Map([
+    ["decode", namedFunction(["message"], [realtimeWireType], realtimeCodecIncoming)],
+    ["encode", namedFunction(["message"], [realtimeCodecOutgoing], realtimeWireType)],
+  ]),
+  readonlyFields: new Set(["decode", "encode"]),
+};
+const realtimeClientTemplate: GenericTypeInfo = {
+  identity: realtimeClientIdentity,
+  name: "RealtimeClient",
+  parameterNames: ["T"],
+  parameterBounds: [null],
+  fields: new Map([
+    ["state", namedFunction([], [], realtimeClientStateType)],
+    ["generation", namedFunction([], [], numberType)],
+    ["start", namedFunction([], [], promise(nullType))],
+    ["whenOpen", namedFunction([], [], promise(numberType))],
+    ["whenClosed", namedFunction([], [], promise(nullType))],
+    ["send", namedFunction(["message"], [realtimeClientOutgoing], promise(nullType))],
+    ["close", namedFunction(["code", "reason"], [numberType, stringType], promise(nullType), 0)],
+  ]),
+  readonlyFields: new Set(["state", "generation", "start", "whenOpen", "whenClosed", "send", "close"]),
+};
+const realtimeGenericTypes = new Map<string, GenericTypeInfo>([
+  ["RealtimeCodec", realtimeCodecTemplate],
+  ["RealtimeClient", realtimeClientTemplate],
+]);
+const realtimeFailureFields = new Map<string, ValueType>([
+  ["phase", stringType],
+  ["error", errorType],
+  ["recoverable", boolType],
+]);
+const realtimeOpenFields = new Map<string, ValueType>([
+  ["generation", numberType],
+  ["reconnected", boolType],
+]);
+const realtimeClientOptions = object({
+  connectTimeout: optional(durationType),
+  maxMessageBytes: optional(numberType),
+  maxQueuedMessages: optional(numberType),
+  maxQueuedBytes: optional(numberType),
+  maxPendingSendBytes: optional(numberType),
+  reconnectDelays: optional({kind: "list", element: durationType}),
+  reconnectJitter: optional(numberType),
+  retryInitial: optional(boolType),
+});
+const realtimeClientOutput = realtimeClientOf(realtimeOutput);
+const realtimeUrlType: ValueType = {kind: "union", members: [stringType, namedFunction([], [], stringType)]};
+const realtimeReceive = namedFunction(["message", "client"], [realtimeInput, realtimeClientOutput], promise(nullType));
+const realtimeOpened = namedFunction(["client", "open"], [realtimeClientOutput, realtimeOpenType], promise(nullType));
+const realtimeFailed = namedFunction(["failure", "client"], [realtimeFailureType, realtimeClientOutput], promise(realtimeFailureActionType));
+const realtimeClosed = namedFunction(["client", "close"], [realtimeClientOutput, webSocketCloseType], promise(nullType));
+const realtimeStateChanged = namedFunction(["client", "state"], [realtimeClientOutput, realtimeClientStateType], promise(nullType));
+const realtimeClientFunction: ValueType = {
+  kind: "function",
+  typeParameterNames: ["Incoming", "Outgoing"],
+  parameterNames: ["url", "codec", "receive", "opened", "failed", "closed", "stateChanged", "options"],
+  parameters: [
+    realtimeUrlType,
+    realtimeCodecOf(realtimeInput, realtimeOutput),
+    realtimeReceive,
+    optional(realtimeOpened),
+    optional(realtimeFailed),
+    optional(realtimeClosed),
+    optional(realtimeStateChanged),
+    realtimeClientOptions,
+  ],
+  requiredParameters: 3,
+  result: realtimeClientOutput,
+};
+const realtimeUnavailableClass: ClassInfo = {
+  identity: realtimeUnavailableIdentity,
+  parameters: [stringType],
+  parameterNames: ["message"],
+  requiredParameters: 0,
+  base: "Error",
+  abstract: false,
+  fields: new Map(),
+  getters: new Set(),
+  abstractGetters: new Set(),
+  methods: new Map(),
+  abstractMethods: new Set(),
+  staticFields: new Map(),
+  staticGetters: new Set(),
+  staticMethods: new Map(),
+};
+
 
 export const webModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map([
   ["velar/websocket", moduleInterface(
     new Map([
       ["WebSocketConnection", { kind: "typeObject", name: "WebSocketConnection", value: webSocketConnectionType }],
+      ["WebSocketClose", { kind: "typeObject", name: "WebSocketClose", value: webSocketCloseType }],
       ...[...webSocketErrorIdentities].map(([name, identity]) => [name, { kind: "classConstructor", name, identity } as ValueType] as const),
       ["connect", namedFunction(["url", "options"], [stringType, webSocketConnectOptions], promise(webSocketConnectionType), 1)],
     ]),
     new Map([...webSocketErrorIdentities].map(([name, identity]) => [name, webSocketErrorClass(identity)])),
-    new Map([["WebSocketConnection", webSocketConnectionFields]]),
-    new Map([["WebSocketConnection", webSocketConnectionIdentity]]),
+    new Map([
+      ["WebSocketConnection", webSocketConnectionFields],
+      ["WebSocketClose", webSocketCloseFields],
+    ]),
+    new Map([
+      ["WebSocketConnection", webSocketConnectionIdentity],
+      ["WebSocketClose", webSocketCloseIdentity],
+    ]),
     new Map(),
-    new Map([["WebSocketConnection", new Set(webSocketConnectionFields.keys())]]),
+    new Map([
+      ["WebSocketConnection", new Set(webSocketConnectionFields.keys())],
+      ["WebSocketClose", new Set(webSocketCloseFields.keys())],
+    ]),
   )],
   ["velar/look", moduleInterface(lookModuleExports)],
   ["velar/app", moduleInterface(new Map([
@@ -615,9 +749,37 @@ export const webModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map
     ["readDataUrl", namedFunction(["file", "maxBytes"], [fileType, numberType], promise(stringType), 1)],
     ["download", namedFunction(["name", "data", "mime"], [stringType, stringType, stringType], nullType, 2)],
   ]))],
-  ["velar/realtime", moduleInterface(new Map([
-    ["eventStream", namedFunction(["url", "handlers", "credentials"], [stringType, eventStreamHandlersType, boolType], eventStreamType, 1)],
-  ]))],
+  ["velar/realtime", moduleInterface(
+    new Map([
+      ["RealtimeClient", {kind: "typeObject", name: "RealtimeClient", value: realtimeClientOf(realtimeClientOutgoing)}],
+      ["RealtimeClientFailureAction", {kind: "enumObject", name: "RealtimeClientFailureAction", identity: realtimeFailureActionIdentity, members: realtimeFailureActions}],
+      ["RealtimeClientState", {kind: "enumObject", name: "RealtimeClientState", identity: realtimeClientStateIdentity, members: realtimeClientStates}],
+      ["RealtimeCodec", {kind: "typeObject", name: "RealtimeCodec", value: realtimeCodecOf(realtimeCodecIncoming, realtimeCodecOutgoing)}],
+      ["RealtimeFailure", {kind: "typeObject", name: "RealtimeFailure", value: realtimeFailureType}],
+      ["RealtimeOpen", {kind: "typeObject", name: "RealtimeOpen", value: realtimeOpenType}],
+      ["RealtimeUnavailableError", {kind: "classConstructor", name: "RealtimeUnavailableError", identity: realtimeUnavailableIdentity}],
+      ["eventStream", namedFunction(["url", "handlers", "credentials"], [stringType, eventStreamHandlersType, boolType], eventStreamType, 1)],
+      ["realtimeClient", realtimeClientFunction],
+    ]),
+    new Map([["RealtimeUnavailableError", realtimeUnavailableClass]]),
+    new Map([
+      ["RealtimeFailure", realtimeFailureFields],
+      ["RealtimeOpen", realtimeOpenFields],
+    ]),
+    new Map([
+      ["RealtimeFailure", realtimeFailureIdentity],
+      ["RealtimeOpen", realtimeOpenIdentity],
+    ]),
+    new Map([
+      ["RealtimeClientFailureAction", {identity: realtimeFailureActionIdentity, members: realtimeFailureActions, wireValues: new Map([...realtimeFailureActions].map((member) => [member, member]))}],
+      ["RealtimeClientState", {identity: realtimeClientStateIdentity, members: realtimeClientStates, wireValues: new Map([...realtimeClientStates].map((member) => [member, member]))}],
+    ]),
+    new Map([
+      ["RealtimeFailure", new Set(realtimeFailureFields.keys())],
+      ["RealtimeOpen", new Set(realtimeOpenFields.keys())],
+    ]),
+    realtimeGenericTypes,
+  )],
   [BROWSER_TEST_MODULE, moduleInterface(new Map([
     ["browser", browserTestControllerType],
     ["localStorage", browserTestStorageControllerType],
@@ -633,8 +795,9 @@ function moduleInterface(
   namedTypeIdentities: ReadonlyMap<string, string> = new Map(),
   enums: ReadonlyMap<string, EnumInfo> = new Map(),
   namedTypeReadonlyFields: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
+  genericTypes: NonNullable<ModuleInterface["genericTypes"]> = new Map(),
 ): ModuleInterface {
-  return { exports, mutableExports: new Set(), reactiveExports: new Map(), reExports: new Map(), namedTypes, namedTypeReadonlyFields, namedTypeIdentities, typeAliases: new Map(), enums, classes, tests: [], extensionExports: new Map(), extensionData: new Map() };
+  return { exports, mutableExports: new Set(), reactiveExports: new Map(), reExports: new Map(), namedTypes, namedTypeReadonlyFields, namedTypeIdentities, genericTypes, typeAliases: new Map(), enums, classes, tests: [], extensionExports: new Map(), extensionData: new Map() };
 }
 
 const webLookHookDocumentation = Object.fromEntries([...LOOK_HOOKS].map((name) => [
@@ -862,6 +1025,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       ["velar/worker", ["velar/worker-manifest", "velar/task"]],
       ["velar/http", ["velar/binary"]],
       ["velar/storage", ["velar/binary"]],
+      ["velar/realtime", ["velar/websocket"]],
     ]),
     source(specifier: string, projectConfig: unknown) {
       return webModuleSource(specifier, (projectConfig ?? { base: "/" }) as VelarWebRuntimeConfig);

@@ -427,6 +427,15 @@ test("every emitted Web module declares the runtime helpers its own source calls
   const freeNames = (source: string): readonly string[] => {
     const declared = new Set<string>();
     for (const match of source.matchAll(/\b(?:function|const|let|var|class)\s+(__velar\w*)/gu)) declared.add(match[1]!);
+    // 运行时模块现在也可以通过依赖图导入另一个标准模块的私有绑定。具名
+    // import 的本地别名和函数、常量一样属于当前模块声明，不能被误判为
+    // 泄漏的自由变量。
+    for (const statement of source.matchAll(/\bimport\s*\{([^}]*)\}\s*from\s*["'][^"']+["']/gu)) {
+      for (const binding of statement[1]!.split(",")) {
+        const local = /(?:^|\s+as\s+)(__velar\w*)\s*$/u.exec(binding.trim());
+        if (local) declared.add(local[1]!);
+      }
+    }
     // A name behind a dot, inside a string, or in front of a colon is a
     // property rather than a binding this module has to declare.
     const used = [...source.matchAll(/(?<![.\w"'`$])(__velar\w*)\b(?!\s*:)/gu)].map((match) => match[1]!);
