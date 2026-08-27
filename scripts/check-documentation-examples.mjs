@@ -17,6 +17,12 @@ const detail = process.argv.includes("--partial");
 // with `failures` still in its temporal dead zone crashed the gate with a
 // ReferenceError instead of printing the failure it had just found.
 const failures = [];
+// docs/decisions/archive holds process artifacts: audit ledgers, wave briefs,
+// and executable specs for surface that is *not built yet* (D101's L-series).
+// Those fences describe a future or past language, so compiling them against
+// the current compiler asserts something the archive never claims. The
+// numbered decision records outside archive/ stay compiled.
+const uncompiledDirectories = new Set([join("docs", "decisions", "archive")]);
 const requested = process.argv.slice(2).filter((argument) => argument !== "--partial");
 const files = requested.length > 0
   ? requested.map((file) => resolve(file))
@@ -338,13 +344,16 @@ function inherentProjectFailure(message) {
     || /^Cannot load json resource '[^']*': package '[^']*' is not installed\b/u.test(message);
 }
 
-async function markdownFiles(directory) {
+async function markdownFiles(directory, parentPath = "docs") {
   const entries = await readdir(directory, { withFileTypes: true });
   const files = [];
   for (const entry of entries) {
     const path = join(directory, entry.name);
-    if (entry.isDirectory()) files.push(...await markdownFiles(path));
-    else if (entry.isFile() && entry.name.endsWith(".md")) files.push(path);
+    const entryPath = join(parentPath, entry.name);
+    if (entry.isDirectory()) {
+      if (uncompiledDirectories.has(entryPath)) continue;
+      files.push(...await markdownFiles(path, entryPath));
+    } else if (entry.isFile() && entry.name.endsWith(".md")) files.push(path);
   }
   return files.sort();
 }
