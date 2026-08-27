@@ -1007,20 +1007,48 @@ export function reload() {
 // NavLink re-marks its aria-current from it; each used to install a window
 // listener of its own, and 'currentRoute()' — which installed none — was
 // therefore the one route reader that could not follow a navigation.
-const routeSubscribers = new Set();
+//
+// The list is replaced rather than mutated, and it is read and written with
+// index operations alone: this runs after initialization, where a live
+// Set.prototype.add is exactly the reach the DOM host ABI exists to avoid.
+let routeSubscribers = [];
 let removeRouteSubscription = null;
 
 function subscribeRoute(callback) {
-  routeSubscribers.add(callback);
+  const added = [];
+  for (let index = 0; index < routeSubscribers.length; index += 1) added[index] = routeSubscribers[index];
+  added[added.length] = callback;
+  routeSubscribers = added;
   if (removeRouteSubscription === null) {
     removeRouteSubscription = __velarBrowserListenGlobal("popstate", () => {
-      // A subscriber may unsubscribe (a Router destroying its page destroys the
-      // NavLinks on it) while the notification is running, so the set is copied.
-      for (const subscriber of [...routeSubscribers]) if (routeSubscribers.has(subscriber)) subscriber();
+      // A Router re-rendering destroys the NavLinks on the page it replaces, so
+      // a subscriber can leave while the notification is still running. The
+      // snapshot is what is walked; whether each entry is still subscribed is
+      // asked again, so a departed one is not called after it left -- which is
+      // what a window listener removed mid-dispatch already did.
+      const notified = routeSubscribers;
+      for (let index = 0; index < notified.length; index += 1) {
+        const subscriber = notified[index];
+        const active = routeSubscribers;
+        for (let scan = 0; scan < active.length; scan += 1) {
+          if (active[scan] !== subscriber) continue;
+          subscriber();
+          break;
+        }
+      }
     });
   }
   return () => {
-    if (!routeSubscribers.delete(callback) || routeSubscribers.size > 0 || removeRouteSubscription === null) return;
+    const remaining = [];
+    let removed = false;
+    for (let index = 0; index < routeSubscribers.length; index += 1) {
+      const subscriber = routeSubscribers[index];
+      if (!removed && subscriber === callback) { removed = true; continue; }
+      remaining[remaining.length] = subscriber;
+    }
+    if (!removed) return;
+    routeSubscribers = remaining;
+    if (routeSubscribers.length > 0 || removeRouteSubscription === null) return;
     removeRouteSubscription();
     removeRouteSubscription = null;
   };

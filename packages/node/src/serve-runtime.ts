@@ -1182,11 +1182,9 @@ function __velarCreateServePattern(source) {
       __velarServeCall(__velarServeMapSet, localNames, [item.name, true]);
       __velarServeCall(__velarServeMapSet, fieldNames, [item.name, true]);
       __velarServeCall(__velarServeMapSet, wireNames, [item.wireName, true]);
-      const captureSchema = __velarServeSchema(item.schema ?? {}, "RoutePattern capture schema");
       output[output.length] = __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{
         name: item.name, wireName: item.wireName, explicitWireName: item.explicitWireName, typeName: item.typeName, optional: item.optional,
-        kind: item.kind, check: item.check, schema: captureSchema,
-        integerEnum: __velarServeIntegerEnum(item.kind, captureSchema),
+        kind: item.kind, check: item.check, schema: __velarServeSchema(item.schema ?? {}, "RoutePattern capture schema"),
       }]);
     }
     return output;
@@ -1274,7 +1272,7 @@ function __velarCreateServeRoute(method, pattern, parameters, handler, metadata 
     const required = routeInput !== null && (routeInput.source === "header" || routeInput.source === "cookie")
       ? !routeInput.hasDefault
       : parameter.required;
-    checked[checked.length] = __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{name: parameter.name, source: parameter.source, kind: parameter.kind, required, check: parameter.check ?? null, schema, input: routeInput, integerEnum: __velarServeIntegerEnum(parameter.kind, schema)}]);
+    checked[checked.length] = __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{name: parameter.name, source: parameter.source, kind: parameter.kind, required, check: parameter.check ?? null, schema, input: routeInput}]);
   }
   const segments = __velarServeCall(__velarServeStringSplit, path, ["/"]);
   if (typeof handler !== "function") throw new __velarServeTypeError("Route handler is invalid");
@@ -1352,16 +1350,14 @@ function __velarCreateServeWebSocket(pattern, parameters, handler, metadata = {}
         || parameter.source === "security" && parameter.kind !== "security") throw new __velarServeTypeError("WebSocket parameter source and kind do not agree");
     }
     __velarServeCall(__velarServeMapSet, names, [parameter.name, true]);
-    const socketSchema = parameter.schema == null ? __velarServeDefaultSchema(parameter.kind) : __velarServeSchema(parameter.schema, "WebSocket parameter schema");
     checked[checked.length] = __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{
       name: parameter.name,
       source: parameter.source,
       kind: parameter.kind,
       required: true,
       check: parameter.check ?? null,
-      schema: socketSchema,
+      schema: parameter.schema == null ? __velarServeDefaultSchema(parameter.kind) : __velarServeSchema(parameter.schema, "WebSocket parameter schema"),
       input: routeInput,
-      integerEnum: __velarServeIntegerEnum(parameter.kind, socketSchema),
     }]);
   }
   if (connectionIndex === -1) throw new __velarServeTypeError("A WebSocket route requires exactly one connection parameter");
@@ -2146,8 +2142,11 @@ function __velarServeDecodeScalarValue(raw, kind, name) {
 
 function __velarServeDecodeScalar(raw, parameter) {
   // 一个整数线值的枚举捕获，先按 number 捕获解码，再做成员判定;
-  // 解码失败与今天的解码失败是同一个 422。
-  const value = __velarServeDecodeScalarValue(raw, parameter.integerEnum === true ? "number" : parameter.kind, parameter.name);
+  // 解码失败与今天的解码失败是同一个 422。判定读的是已经规范化并冻结的 schema，
+  // 而不是描述符上多出来的一个字段：规范化后的描述符会被中间件重新登记一次，
+  // 多一个字段就是「Route parameter has an unknown field」。
+  const kind = __velarServeIntegerEnum(parameter.kind, parameter.schema) ? "number" : parameter.kind;
+  const value = __velarServeDecodeScalarValue(raw, kind, parameter.name);
   let valid = false;
   try { valid = parameter.check(value) === true; } catch {}
   if (!valid) throw __velarServeRequestProblem(422, {error: "invalid_request", parameter: parameter.name});
