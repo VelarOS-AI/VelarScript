@@ -8823,6 +8823,10 @@ export class Analyzer implements TypeEnvironment {
     // `unknown` still never poisons a merge with a concrete argument.
     const unknownParameters = new Set<number>();
     const fieldsOf = (identity: string): ReadonlyMap<string, ValueType> | null => this.fieldsOf(identity);
+    // A solved type argument is canonicalized the same way an annotation's is;
+    // see the `parameter` branch of `unifyInto` for why the `Type<T>` path is
+    // the one that would otherwise carry an unexpanded alias into `Channel<T>`.
+    const expandAliases = (type: ValueType): ValueType => this.expandAliases(type);
     // D55 rule 121: substituting into `Box<T>` produces an instantiation this
     // module may never have written down, and it still has to have a field
     // table — otherwise `def unwrap<T>(box: Box<T>)` would solve T correctly
@@ -8899,16 +8903,16 @@ export class Analyzer implements TypeEnvironment {
       if (!item.declared) continue;
       if (item.spreadList) {
         const expanded = this.expandAliases(actual);
-        if (expanded.kind === "list") unifyTypeParameters(item.declared, expanded.element, bindings, fieldsOf, unknownParameters);
+        if (expanded.kind === "list") unifyTypeParameters(item.declared, expanded.element, bindings, fieldsOf, unknownParameters, expandAliases);
       } else {
-        unifyTypeParameters(item.declared, actual, bindings, fieldsOf, unknownParameters);
+        unifyTypeParameters(item.declared, actual, bindings, fieldsOf, unknownParameters, expandAliases);
       }
     }
     for (const item of deferredArrows) {
       const context = item.declared ? substitute(item.declared) : unknownType;
       const actual = this.inferExpression(item.value, context);
       actuals.set(item, actual);
-      if (item.declared) unifyTypeParameters(item.declared, actual, bindings, fieldsOf, unknownParameters);
+      if (item.declared) unifyTypeParameters(item.declared, actual, bindings, fieldsOf, unknownParameters, expandAliases);
     }
     this.reportGenericBoundViolations(callee, bindings, planned, callSpan, unknownParameters);
     for (const item of planned) {

@@ -120,3 +120,41 @@ for capacity in [0, 65537, 1.5]:
 `);
   assert.equal(output, "RangeError\nRangeError\nRangeError");
 });
+
+// D55 rule 121: an alias inside a type argument is transparent, so
+// `Channel<Answer>` and `Channel<string>` are one type. The runtime-type
+// argument used to solve `T` to the unexpanded alias, which made the
+// constructed channel nominally distinct from EVERY annotation spelling —
+// both `Channel<Answer>` and `Channel<string>` were refused with the same
+// message, so an annotated binding or Map could not hold one at all.
+test("a channel built through a type alias is the channel its expansion names", async () => {
+  const output = await run(`
+import {channel, Channel} from "velar/task"
+
+type Answer = string
+type Reply:
+    text: string
+
+const viaAlias: Channel<Answer> = channel(Answer, capacity=1)
+const viaString: Channel<string> = channel(Answer, capacity=1)
+// Both spellings name the same type, so each channel is reachable through
+// either one and the two bindings below are views of the channels above.
+const backToString: Channel<string> = viaAlias
+const backToAlias: Channel<Answer> = viaString
+const answers: Map<string, Channel<Answer>> = Map()
+answers.set("alias", viaAlias)
+answers.set("expansion", viaString)
+answers.set("fresh", channel(Answer, capacity=1))
+
+const replies: Channel<Reply> = channel(Reply, capacity=1)
+replies.trySend({text: "record payloads are unaffected"})
+
+await viaAlias.send("sent through the alias")
+print((await backToString.next()) ?? "none")
+await viaString.send("sent through the expansion")
+print((await backToAlias.next()) ?? "none")
+print(str(answers.size))
+print((await replies.next())!.text)
+`);
+  assert.equal(output, "sent through the alias\nsent through the expansion\n3\nrecord payloads are unaffected");
+});

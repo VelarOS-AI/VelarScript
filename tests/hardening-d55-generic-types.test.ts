@@ -135,6 +135,37 @@ print(direct.value)
   assert.equal(output, "one\n");
 });
 
+test("[D55 121] a type argument SOLVED from a runtime type is transparent too", () => {
+  // The test above only exercises annotations, and annotations expand aliases
+  // as they resolve. Inference is the other producer of type arguments, and a
+  // `Type<T>` parameter is the one path that hands it an alias unexpanded: the
+  // runtime-type value `Id` is a `named` type, not the `string` an annotation
+  // would have resolved to. Left that way, `Box<Id>` came out nominally
+  // distinct from the `Box<string>` that every annotation spelling resolves to,
+  // so BOTH spellings were refused and only an un-annotated `const` could hold
+  // the result. Merging made it worse: solving T from the runtime type AND from
+  // a value argument produced the phantom union `Box<Id | string>`.
+  const output = run(`
+type Id = string
+
+type Box<T>:
+    value: T
+
+def hold<T>(Type: Type<T>, value: T) -> Box<T>:
+    return { value: value }
+
+const viaAlias: Box<Id> = hold(Id, "one")
+const viaExpansion: Box<string> = hold(Id, "two")
+const swapped: Box<Id> = viaExpansion
+const back: Box<string> = viaAlias
+const kept: Map<string, Box<Id>> = Map()
+kept.set("alias", viaAlias)
+kept.set("expansion", viaExpansion)
+print(back.value + swapped.value + str(kept.size))
+`);
+  assert.equal(output, "onetwo2\n");
+});
+
 test("[D55 122] variance is by field: readonly is covariant, mutable is invariant", () => {
   // The strongest positive finding of D55's investigation, kept honest here:
   // `objectFieldsAssignable` already decided variance field by field, and an
