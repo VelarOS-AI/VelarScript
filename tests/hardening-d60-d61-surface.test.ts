@@ -94,7 +94,7 @@ test("[D61-155] a bool on aria-* renders the literal token in a real browser", {
         <button type="button" data-press aria-pressed={busy} disabled={busy} on:click={toggle}>press</button>
     </section>
 
-mount(<AriaProbe />, "#app")
+@main: mount(<AriaProbe />, "#app")
 `],
     // Before rule 155 every assertion below read "" or null: a true bool became
     // the empty string, which is not an ARIA token, and a false bool removed
@@ -125,7 +125,7 @@ test "an aria bool is a literal token and never leaves the element":
 
 test("[D61-155] a static aria bool attribute renders the token, and other attributes are unchanged", { timeout: 300_000 }, async () => {
   const directory = await webProject("velar-d61-155-static-", new Map([
-    ["main.vel", `mount(<p data-probe aria-hidden aria-label="static" hidden>bare</p>, "#app")
+    ["main.vel", `@main: mount(<p data-probe aria-hidden aria-label="static" hidden>bare</p>, "#app")
 `],
     ["static.browser.test.vel", `import {expect} from "velar/test"
 import {browser} from "velar/web-test"
@@ -165,7 +165,7 @@ export const alsoReachable = look:
     transitionProperty = "opacity"
     transitionTimingFunction = "step-start"
 
-mount(<div look={reachable} />, "#app")
+@main: mount(<div look={reachable} />, "#app")
 `],
   ]));
   const checked = await run(["check", directory]);
@@ -192,7 +192,7 @@ export const wrong4 = look:
 export const wrong5 = look:
     backgroundSize = "coverr"
 
-mount(<div />, "#app")
+@main: mount(<div />, "#app")
 `],
   ]));
   const checked = await run(["check", directory]);
@@ -231,7 +231,7 @@ export const tokens = keyframes:
         rotate = spinTo
         opacity = 1
 
-mount(<div />, "#app")
+@main: mount(<div />, "#app")
 `],
   ]));
   // Before rule 151 every one of these lines was VEL5060: the stop grammar was
@@ -263,7 +263,7 @@ export const frames = keyframes:
     to:
         opacity = 1
 
-mount(<div />, "#app")
+@main: mount(<div />, "#app")
 `],
   ]));
   const checked = await run(["check", directory]);
@@ -299,7 +299,7 @@ export async def present(name: string) -> bool:
 component Shell:
     return <p>{slug("Release One")}</p>
 
-mount(<Shell />, "#app")
+@main: mount(<Shell />, "#app")
 `],
     // Before rule 153 this module could not even be loaded: the Desktop host
     // ABI threw "VelarScript Desktop bridge is unavailable" while the module

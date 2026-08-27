@@ -63,6 +63,10 @@ component App:
 
 `@main` may also own an indented body. It runs only when this source is selected
 as an entry; importing the same module does not start it.
+Generated application manifests state `"kind": "application"`. A reusable
+package that needs Web or Node extension capabilities instead states
+`"kind": "library"`; its entry may export declarations but cannot declare
+`@main`, and no application host is created for it.
 
 ## 3. Run it
 
@@ -71,9 +75,9 @@ npm run dev
 ```
 
 For Web/Desktop, the dev server rebuilds and serves the renderer. For Server,
-it checks the exported zero-argument startup function, loads the root
-`application.yml`, and restarts the last-good build after a source or
-configuration change. Edit `src/app.vel`; the
+it executes the selected entry's `@main`, reads the path declared by
+`server.configuration` in `velar.json`, and restarts the last-good build after
+a source or configuration change. Edit `src/app.vel`; the
 generated Node service answers `/api/hello` and uses `npm start` (`velar serve`)
 when a watcher is not wanted.
 
@@ -145,11 +149,11 @@ npm run preview   # Web: serves the verified build locally
 npm run package   # Desktop: creates the native application package
 ```
 
-A Node build is a standalone ESM directory containing copied public assets,
-`velar-node.json`, and `.velar-node-entry.mjs`. `velar verify` validates the
-complete Node file inventory, sizes, hashes, entry relationship, and build ID.
-Run the launcher with Node from
-that directory; the toolchain is not required at runtime.
+A Node build is a standalone ESM directory containing the compiled entry,
+copied public assets, the declared configuration, and `velar-node.json`.
+`velar verify` validates the complete Node file inventory, sizes, hashes, entry
+relationship, and build ID. Run the manifest's entry with Node from that
+directory; the toolchain is not required at runtime.
 
 Or run the whole gate in one command, which is what CI does:
 

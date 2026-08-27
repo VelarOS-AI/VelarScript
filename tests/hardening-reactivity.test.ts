@@ -172,7 +172,7 @@ component App:
     state revision = 0
     return <main>{rows.filter(row => row.id != "" or revision >= 0).map(row => <span key={row.id}>{row.title}</span>)}</main>
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `.trimStart(),
   );
   assert.deepEqual(keyed.diagnostics, []);
@@ -314,8 +314,6 @@ state renderError = ""
 def captureRenderError(phase: string, message: string):
     renderError = phase + ":" + message
 
-onError(report => captureRenderError(report.phase, report.error.message))
-
 def listText(source: List<string>) -> string:
     let output = ""
     for item in source:
@@ -455,7 +453,9 @@ component App:
         <button data-edit-row on:click={editRow}>edit row</button>
     </main>
 
-mount(<App />, "#app")
+@main:
+    onError(report => captureRenderError(report.phase, report.error.message))
+    mount(<App />, "#app")
 `.trimStart();
 
 const browserTests = `

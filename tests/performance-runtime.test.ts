@@ -915,31 +915,32 @@ def readRound(updates: number) -> number:
         print("unreachable")
     return monotonic() - start
 
-let pushSamples = ""
-let pullSamples = ""
-let writeSamples = ""
-let readSamples = ""
+@main:
+    let pushSamples = ""
+    let pullSamples = ""
+    let writeSamples = ""
+    let readSamples = ""
 
-await pushRound(10000)
-pullRound(10000)
-writeRound(10000)
-readRound(10000)
-const observedAfterWarmUp = notifications
+    await pushRound(10000)
+    pullRound(10000)
+    writeRound(10000)
+    readRound(10000)
+    const observedAfterWarmUp = notifications
 
-let round = 0
-while round < 5:
-    pushSamples += f"{str(await pushRound(10000))},"
-    pullSamples += f"{str(pullRound(10000))},"
-    writeSamples += f"{str(writeRound(10000))},"
-    readSamples += f"{str(readRound(10000))},"
-    round += 1
+    let round = 0
+    while round < 5:
+        pushSamples += f"{str(await pushRound(10000))},"
+        pullSamples += f"{str(pullRound(10000))},"
+        writeSamples += f"{str(writeRound(10000))},"
+        readSamples += f"{str(readRound(10000))},"
+        round += 1
 
-await tick()
-print(f"push={pushSamples}")
-print(f"pull={pullSamples}")
-print(f"write={writeSamples}")
-print(f"read={readSamples}")
-print(f"notifications={str(notifications - observedAfterWarmUp)},")
+    await tick()
+    print(f"push={pushSamples}")
+    print(f"pull={pullSamples}")
+    print(f"write={writeSamples}")
+    print(f"read={readSamples}")
+    print(f"notifications={str(notifications - observedAfterWarmUp)},")
 `.trimStart();
 
 test("emitted reactive updates hold the 10k-update throughput budget", { timeout: 180_000 }, async (t) => {

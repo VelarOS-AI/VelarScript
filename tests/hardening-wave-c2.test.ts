@@ -880,6 +880,8 @@ export component App():
         print(stream.state())
 
     return <button on:click={listen}>listen</button>
+
+@main: pass
 `.trimStart(),
   }, true);
   try {

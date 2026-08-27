@@ -104,7 +104,7 @@ const panelLook = look:
 component App:
     return <div look={panelLook}>panel</div>
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `.trimStart());
   assert.deepEqual(look.diagnostics, []);
 });
@@ -207,7 +207,7 @@ component App:
         <output data-local>{localFlip()}</output>
     </main>
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `.trimStart();
 
 const browserTests = `

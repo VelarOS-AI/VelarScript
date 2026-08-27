@@ -15,6 +15,7 @@ const applicationName = "Velar"
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
+  assert.equal(result.hasMain, true);
   assert.match(result.code ?? "", /const applicationName = "Velar";/u);
   assert.match(result.code ?? "", /\{\n  console\.log\(applicationName\);\n\}/u);
 });
@@ -30,7 +31,14 @@ async def start():
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
+  assert.equal(result.hasMain, true);
   assert.match(result.code ?? "", /const started = __velarNormalizePromiseValue\(start\(\)\);\n  await __velarNormalizePromiseValue\(started\);/u);
+});
+
+test("a regular module reports that it has no application entry", () => {
+  const result = compile("export const value = 1\n");
+  assert.deepEqual(result.diagnostics, []);
+  assert.equal(result.hasMain, false);
 });
 
 test("an imported module is checked without emitting its @main body", async () => {

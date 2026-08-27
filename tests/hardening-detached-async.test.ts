@@ -288,8 +288,6 @@ state clicks = 0
 def capture(phase: string, message: string):
     detachedReport = phase + ":" + message
 
-onError(report => capture(report.phase, report.error.message))
-
 async def boom():
     throw Error("detached boom")
 
@@ -307,7 +305,9 @@ component App:
         <p data-clicks>{clicks}</p>
     </main>
 
-mount(<App />, "#app")
+@main:
+    onError(report => capture(report.phase, report.error.message))
+    mount(<App />, "#app")
 `.trimStart();
 
 const browserTests = `

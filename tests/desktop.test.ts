@@ -22,6 +22,7 @@ test("Desktop is one VelarScript project with Web syntax and no renderer/main so
     await writeFile(join(directory, "package.json"), JSON.stringify({ name: "desktop-fixture", version: "0.1.0", private: true, type: "module" }), "utf8");
     await writeFile(join(projectRoot, "velar.json"), JSON.stringify({
       formatVersion: 2,
+      kind: "application",
       entry: "src/main.vel",
       outDir: "dist/renderer",
       publicDir: "public",
@@ -95,8 +96,15 @@ component App:
         <p>{detail}</p>
     </main>
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `.trimStart(), "utf8");
+
+    const completeEntry = await readFile(join(projectRoot, "src", "main.vel"), "utf8");
+    await writeFile(join(projectRoot, "src", "main.vel"), completeEntry.replace(/\n@main: mount[\s\S]*$/u, "\n"), "utf8");
+    const missingEntry = spawnSync(process.execPath, [cli, "check"], { cwd: projectRoot, encoding: "utf8" });
+    assert.equal(missingEntry.status, 1, missingEntry.stdout + missingEntry.stderr);
+    assert.match(missingEntry.stderr, /Application entry must declare '@main'/u);
+    await writeFile(join(projectRoot, "src", "main.vel"), completeEntry, "utf8");
 
     const project = await resolveVelarProject(projectRoot);
     assert.equal(project.framework?.host.id, "@velarscript/desktop");

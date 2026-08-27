@@ -47,7 +47,7 @@ const geometryLook = look:
 component App:
     return <main data-geometry look={geometryLook}><span>a</span><span>b</span></main>
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `.trimStart(), "utf8");
     await writeFile(join(directory, "src", "geometry.browser.test.vel"), `
 import {expect} from "velar/test"

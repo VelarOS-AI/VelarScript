@@ -76,7 +76,7 @@ const probeApplication = `
 component App:
     return <p>unused</p>
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `;
 
 // ---------------------------------------------------------------------------
@@ -279,15 +279,15 @@ test("[WEB-D3] a dynamic-region failure during the initial render shows the fata
     application: `
 import {onError} from "velar/app"
 
-onError(report => null)
-
 def explode() -> string:
     throw Error("construction boom")
 
 component App:
     return <p>{explode()}</p>
 
-mount(<App />, "#app")
+@main:
+    onError(report => null)
+    mount(<App />, "#app")
 `,
     browserTests: `
 import {expect} from "velar/test"
@@ -313,12 +313,12 @@ test("[WEB-D3] a missing mount target shows the fatal state instead of a blank p
     application: `
 import {onError} from "velar/app"
 
-onError(report => null)
-
 component App:
     return <p>hello</p>
 
-mount(<App />, "#missing")
+@main:
+    onError(report => null)
+    mount(<App />, "#missing")
 `,
     browserTests: `
 import {expect} from "velar/test"

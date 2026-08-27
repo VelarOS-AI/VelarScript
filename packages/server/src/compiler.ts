@@ -19,9 +19,9 @@ import {
 } from "@velarscript/node/compiler";
 import { inferServerIntrinsic } from "./analyzer.ts";
 import { VELAR_SERVER_REALTIME_RUNTIME } from "./realtime-runtime.ts";
-import { VELAR_SERVER_RUNTIME } from "./runtime.ts";
+import { velarServerRuntime } from "./runtime.ts";
 
-export const VELAR_SERVER_API_VERSION = "0.14";
+export const VELAR_SERVER_API_VERSION = "0.15";
 
 const unknownType: ValueType = {kind: "unknown"};
 const stringType: ValueType = {kind: "string"};
@@ -214,9 +214,10 @@ function moduleInterface(
 }
 
 const serverModuleInterface = moduleInterface(new Map([
-    ["application", functionType(["app", "path"], [serveAppType, {kind: "union", members: [stringType, {kind: "null"}]}], functionType([], [], promise(serverType)), 1)],
+    ["application", functionType(["app"], [serveAppType], promise(serverType))],
+    ["applicationConfigurationPath", stringType],
     ["authenticate", intrinsic("server.authenticate", ["credential", "verify"], [unknownType, unknownType], providerType)],
-    ["configuration", intrinsic("server.configuration", ["target", "path", "maxBytes"], [unknownType, {kind: "union", members: [stringType, {kind: "null"}]}, numberType], promise(unknownType), 1)],
+    ["configuration", intrinsic("server.configuration", ["target", "maxBytes"], [unknownType, numberType], promise(unknownType), 1)],
     ["database", intrinsic("server.database", ["connect", "disconnect"], [unknownType, unknownType], providerType)],
   ]));
 
@@ -245,12 +246,19 @@ composedModuleInterfaces.set("velar/server", serverModuleInterface);
 composedModuleInterfaces.set("velar/realtime", serverRealtimeModuleInterface);
 export const serverModuleInterfaces: ReadonlyMap<string, ModuleInterface> = composedModuleInterfaces;
 
-const composedModuleSources = new Map(nodeModuleSources);
-composedModuleSources.set("velar/server", String.raw`
+function serverRuntimeSource(configurationPath: string): string {
+  return String.raw`
 ${VELAR_STRICT_JSON_RUNTIME}
 ${VELAR_TYPE_REGISTRY_RUNTIME}
-${VELAR_SERVER_RUNTIME}
-`.trimStart());
+${velarServerRuntime(configurationPath)}
+`.trimStart();
+}
+
+const composedModuleSources = new Map(nodeModuleSources);
+// 这份无项目上下文的公开源码只用于编译器能力枚举，不替任何应用猜配置
+// 文件。实际项目会由 modules.source 注入 velar.json 中已校验的路径；若宿主
+// 绕过项目装配直接执行此源码，运行时会给出缺少 server.configuration 的错误。
+composedModuleSources.set("velar/server", serverRuntimeSource(""));
 composedModuleSources.set("velar/realtime", VELAR_SERVER_REALTIME_RUNTIME);
 export const serverModuleSources: ReadonlyMap<string, string> = composedModuleSources;
 
@@ -288,6 +296,13 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
     interfaces: serverModuleInterfaces,
     sources: serverModuleSources,
     dependencies: serverModuleDependencies,
+    source(specifier: string, projectConfig: unknown) {
+      if (specifier !== "velar/server") return serverModuleSources.get(specifier) ?? null;
+      const configured = projectConfig && typeof projectConfig === "object" && !Array.isArray(projectConfig)
+        ? (projectConfig as {readonly configuration?: unknown}).configuration
+        : undefined;
+      return serverRuntimeSource(typeof configured === "string" ? configured : "");
+    },
   }),
 });
 

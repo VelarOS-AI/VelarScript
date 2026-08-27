@@ -73,12 +73,14 @@ async function webProject(prefix: string, modules: Readonly<Record<string, strin
   return directory;
 }
 
-const WEB_APPLICATION = `
+const WEB_COMPONENT = `
 export component App():
     state count = 0
     return <button id="go">Count: {count}</button>
+`.trimStart();
 
-mount(<App />, "#app")
+const WEB_APPLICATION = `${WEB_COMPONENT}
+@main: mount(<App />, "#app")
 `.trimStart();
 
 // ─── Rule 137: velar/fs publishes no Blob and no readBlob ───────────────────
@@ -173,8 +175,10 @@ test("[D57-138] the JavaScript bridge and a re-export are the same import", asyn
     "main.vel": `
 import js {browser} from "velar/web-test"
 
-${WEB_APPLICATION}
-print(str(browser != null))
+${WEB_COMPONENT}
+@main:
+    print(str(browser != null))
+    mount(<App />, "#app")
 `.trimStart(),
   });
   const bridgeResult = await runCommand(process.execPath, [cli, "check", bridge]);
@@ -185,8 +189,10 @@ print(str(browser != null))
     "main.vel": `
 import {browser} from "./barrel.vel"
 
-${WEB_APPLICATION}
-print(await browser.text("#go"))
+${WEB_COMPONENT}
+@main:
+    print(await browser.text("#go"))
+    mount(<App />, "#app")
 `.trimStart(),
     "barrel.vel": `export {browser} from "velar/web-test"\n`,
   });

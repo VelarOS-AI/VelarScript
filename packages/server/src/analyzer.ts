@@ -3,8 +3,6 @@ import {
   nullType,
   nonOptional,
   numberType,
-  optionalOf,
-  stringType,
   unknownType,
   type CompilerIntrinsicAnalysisContext,
   type ValueType,
@@ -44,10 +42,9 @@ export function inferServerIntrinsic(context: CompilerIntrinsicAnalysisContext):
       return nodeProviderType(inputs, identity);
     }
     case "server.configuration": {
-      arity(1, 3);
+      arity(1, 2);
       const result = runtimeTypeAt(0);
-      if (argumentAt(1)) inferAt(1, optionalOf(stringType));
-      if (argumentAt(2)) inferAt(2, numberType);
+      if (argumentAt(1)) inferAt(1, numberType);
       return {kind: "promise", value: result};
     }
     case "server.database": {

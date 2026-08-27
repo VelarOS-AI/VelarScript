@@ -29,6 +29,7 @@ import {
     sse,
     staticFiles,
     stream,
+    supply,
     text,
     use,
 } from "velar/serve"
@@ -59,6 +60,7 @@ async def verifyTourToken(token: string) -> CurrentUser?:
 
 const currentUser = authenticate(security.bearer(), verifyTourToken)
 const requestContext = provide(inputs={}, resolve=async _values => {name: "tour"})
+const applicationContext = provide(inputs={}, resolve=async _values => {name: "fallback"}, scope="app")
 const providerContract = Provider.is(currentUser)
 const healthDigest = sha256Text("openvoxel-catalog")
 const articlePath: RoutePattern = p"/articles/{id:number}?{details:bool?}"
@@ -129,6 +131,7 @@ server routes:
         session = input.cookie("session", default=null),
     ) => {id: user.id, session}
     @get(p"/provider", context=input.dependency(requestContext)) => context
+    @get(p"/application", context=input.dependency(applicationContext)) => context
     @post(p"/upload",
         metadata = input.form(UploadMetadata),
         image = input.upload("image", maxBytes=1_048_576),
@@ -163,13 +166,14 @@ const guarded = use(bodyLimit(composed, 1_048_576), [
 ])
 
 const owned = lifecycle(guarded, startup=async () => null, shutdown=async () => null)
+const configured = supply(owned, applicationContext, {name: "tour-application"})
 const articleDocs: RouteDocumentation = {summary: "Read article", tags: ["articles"], errors: Map([[404, "Article not found"]])}
 const routeDocs: Map<string, RouteDocumentation> = Map([
     ["GET /api/articles/{id:number}", articleDocs],
 ])
 
 export const app: ServeApp = docs(
-    owned,
+    configured,
     title = "Article API",
     version = "1.0.0",
     routes = routeDocs,

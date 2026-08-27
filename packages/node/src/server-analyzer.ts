@@ -869,6 +869,16 @@ export function inferNodeIntrinsic(context: CompilerIntrinsicAnalysisContext): V
       if (argumentAt(4)) inferAt(4, boolType);
       return nodeProviderType(values, result);
     }
+    case "serve.supply": {
+      arity(3, 3);
+      inferAt(0, serveAppType);
+      const provider = expandAliases(inferAt(1));
+      if (!isNodeProviderType(provider)) {
+        context.typeError(`supply provider must be a Provider, received ${describeType(provider)}`, argumentAt(1)?.span ?? callSpan);
+        inferAt(2, unknownType);
+      } else inferAt(2, nodeProviderResult(provider));
+      return serveAppType;
+    }
     default:
       return undefined;
   }

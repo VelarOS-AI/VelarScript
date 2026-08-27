@@ -118,7 +118,7 @@ component App:
         <button type="button" data-store on:click={mutateFromStore}>store</button>
     </main>
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `.trimStart(), "utf8");
     await writeFile(join(directory, "src", "mutable-props.browser.test.vel"), `
 import {expect} from "velar/test"

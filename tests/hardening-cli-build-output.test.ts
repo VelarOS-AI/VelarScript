@@ -53,9 +53,10 @@ async function linkWebExtension(root: string): Promise<void> {
 async function writeWebProject(root: string, files: Readonly<Record<string, string>> = {}): Promise<void> {
   await linkWebExtension(root);
   await writeTree(root, {
-    "src/main.vel": 'component App:\n    return <main><h1>Static Velar</h1></main>\n\nmount(<App />, "#app")\n',
+    "src/main.vel": 'component App:\n    return <main><h1>Static Velar</h1></main>\n\n@main: mount(<App />, "#app")\n',
     "velar.json": `${JSON.stringify({
       formatVersion: 2,
+      kind: "application",
       entry: "src/main.vel",
       outDir: "dist",
       build: { sourceMaps: true },
@@ -65,6 +66,52 @@ async function writeWebProject(root: string, files: Readonly<Record<string, stri
     ...files,
   });
 }
+
+test("Web applications require startup in the selected entry's @main region", async () => {
+  const root = await temporaryRoot("velar-web-application-entry");
+  try {
+    await writeWebProject(root, {
+      "src/main.vel": "component App:\n    return <main>Missing entry</main>\n",
+    });
+    const checked = runCli(root, ["check"]);
+    assert.equal(checked.status, 1, checked.stdout + checked.stderr);
+    assert.match(checked.stderr, /Application entry must declare '@main'/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("library projects can use Web capabilities without becoming applications", async () => {
+  const root = await temporaryRoot("velar-web-library-kind");
+  try {
+    await linkWebExtension(root);
+    await writeTree(root, {
+      "src/index.vel": "export component LibraryCard:\n    return <article>Library</article>\n",
+      "velar.json": `${JSON.stringify({
+        formatVersion: 2,
+        kind: "library",
+        entry: "src/index.vel",
+        outDir: "dist",
+        extensions: ["@velarscript/web"],
+      }, null, 2)}\n`,
+    });
+
+    const checked = runCli(root, ["check"]);
+    assert.equal(checked.status, 0, checked.stdout + checked.stderr);
+    const built = runCli(root, ["build"]);
+    assert.equal(built.status, 0, built.stdout + built.stderr);
+    const outputs = await readdir(join(root, "dist"));
+    assert.equal(outputs.includes("index.html"), false);
+    assert.equal(outputs.includes("index.js"), true);
+
+    await writeFile(join(root, "src", "index.vel"), "@main: pass\n", "utf8");
+    const refused = runCli(root, ["check"]);
+    assert.equal(refused.status, 1, refused.stdout + refused.stderr);
+    assert.match(refused.stderr, /A library entry cannot declare '@main'/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("[CLI-1] velar build refuses an output directory it does not own", async () => {
   const root = await temporaryRoot("velar-build-output-guard");
@@ -246,7 +293,7 @@ test("[CLI-6] the manifest package order does not follow the machine's collation
   const root = await temporaryRoot("velar-manifest-package-order");
   try {
     await writeWebProject(root, {
-      "src/main.vel": 'import {first} from "aa"\nimport {second} from "z"\n\ncomponent App:\n    return <main>{first()}{second()}</main>\n\nmount(<App />, "#app")\n',
+    "src/main.vel": 'import {first} from "aa"\nimport {second} from "z"\n\ncomponent App:\n    return <main>{first()}{second()}</main>\n\n@main: mount(<App />, "#app")\n',
     });
     for (const name of ["aa", "z"]) {
       await writeTree(root, {
@@ -363,7 +410,7 @@ test("[CLI-x16] the project stylesheet carries each generated rule once", async 
         "component App:",
         "    return <main><Left /><Right /></main>",
         "",
-        'mount(<App />, "#app")',
+        '@main: mount(<App />, "#app")',
         "",
       ].join("\n"),
       "src/left.vel": 'export component Left:\n    return <p look:color="red">left</p>\n',

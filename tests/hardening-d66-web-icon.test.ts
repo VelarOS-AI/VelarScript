@@ -62,7 +62,7 @@ async function webProject(prefix: string, options: WebProjectOptions = {}): Prom
     extensions: ["@velarscript/web"],
     web: { title: "D66 icon", ...options.web },
   }), "utf8");
-  await writeFile(join(directory, "src", "main.vel"), "component App:\n    return <main>D66</main>\n\nmount(<App />, \"#app\")\n", "utf8");
+  await writeFile(join(directory, "src", "main.vel"), "component App:\n    return <main>D66</main>\n\n@main: mount(<App />, \"#app\")\n", "utf8");
   for (const asset of options.assets ?? []) {
     const path = join(directory, "public", asset);
     await mkdir(join(path, ".."), { recursive: true });

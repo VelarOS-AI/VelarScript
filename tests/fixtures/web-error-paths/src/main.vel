@@ -51,4 +51,4 @@ component App:
         <Router routes={routes} fallback={RouteNotFound} />
     </div>
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")

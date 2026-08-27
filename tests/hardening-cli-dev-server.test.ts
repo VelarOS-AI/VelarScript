@@ -127,7 +127,7 @@ async function changeUntilReported(path: string, contents: (attempt: number) => 
 async function webProject(root: string, files: Readonly<Record<string, string>> = {}): Promise<void> {
   await linkWebExtension(root);
   await writeTree(root, {
-    "src/main.vel": 'component App:\n    return <main><h1>Dev</h1></main>\n\nmount(<App />, "#app")\n',
+    "src/main.vel": 'component App:\n    return <main><h1>Dev</h1></main>\n\n@main: mount(<App />, "#app")\n',
     "velar.json": `${JSON.stringify({
       formatVersion: 2,
       entry: "src/main.vel",
@@ -235,7 +235,7 @@ test("[cli-13] the dev watcher exclusions apply on every platform", async (conte
   // negative assertion below would hold for the wrong reason.
   await changeUntilReported(
     main,
-    (attempt) => `component App:\n    return <main><h1>Armed ${attempt}</h1></main>\n\nmount(<App />, "#app")\n`,
+    (attempt) => `component App:\n    return <main><h1>Armed ${attempt}</h1></main>\n\n@main: mount(<App />, "#app")\n`,
     () => server.rebuilds() >= 1,
   );
   const armed = server.rebuilds();
@@ -255,7 +255,7 @@ test("[cli-13] the dev watcher exclusions apply on every platform", async (conte
 
   await changeUntilReported(
     main,
-    (attempt) => `component App:\n    return <main><h1>Live ${attempt}</h1></main>\n\nmount(<App />, "#app")\n`,
+    (attempt) => `component App:\n    return <main><h1>Live ${attempt}</h1></main>\n\n@main: mount(<App />, "#app")\n`,
     () => server.rebuilds() > armed,
   );
   assert.ok(server.rebuilds() > armed, "a write to a project module must still rebuild the app");

@@ -709,7 +709,7 @@ component Row(label: string):
 component App:
     return <ul><Row key="a" label="a" /></ul>
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `), /^VEL5050 This JSX key has no effect: '<Row>' is rendered in a fixed position/u);
 
   // A keyed .map() root keeps its key, and the interpolation diagnostic is unchanged.
@@ -920,7 +920,7 @@ component App:
         <p data-reading>{reading}</p>
     </main>
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `;
 
 const surfaceTests = String.raw`

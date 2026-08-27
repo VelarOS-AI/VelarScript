@@ -133,9 +133,11 @@ print(str(counter) + str(mask) + str(power))
     "walrus.vel": "def start() -> number:\n    total := 1\n    return total\n",
   });
   const fixed = runCli(root, "fix");
-  assert.equal(fixed.status, 0, fixed.stderr);
+  // fix 没有可安全应用的改写时会保留诊断；只要诊断仍存在，命令就必须以
+  // 失败状态结束，不能向脚本或 CI 谎报成功。
+  assert.equal(fixed.status, 1, fixed.stdout);
   assert.equal(fixed.stdout.includes("fixed"), false, fixed.stdout);
-  assert.equal(fixed.stderr, "");
+  assert.match(fixed.stderr, /VelarScript has no ':=' binding operator/u, fixed.stderr);
   assert.equal(await readFile(join(root, "src", "main.vel"), "utf8"), `let counter = 0
 const mask = 5 & 3
 const power = 2 ^ 3

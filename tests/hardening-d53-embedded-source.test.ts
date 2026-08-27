@@ -196,7 +196,7 @@ test("[D53-117] production Web output preserves CSP and chains embedded maps bac
     "component App:",
     "    return <main>{label()}</main>",
     "",
-    'mount(<App />, "#app")',
+    '@main: mount(<App />, "#app")',
   ]));
 
   const built = runCli(project.root, "build", project.root, "--out-dir", project.output);

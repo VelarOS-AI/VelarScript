@@ -47,43 +47,41 @@ export server app:
   "formatVersion": 2,
   "entry": "src/main.vel",
   "build": {"mode": "production", "sourceMaps": false},
-  "extensions": ["@velarscript/node"],
-  "node": {
-    "app": "start"
-  }
+  "extensions": ["@velarscript/node"]
 }
 ```
 
-The entry is an exact zero-argument async function returning `Server` or
-`WebSocketServer`. Calling `serve(...)` directly remains available for tests,
-embedded servers, and low-level protocol adapters.
+The selected entry owns startup and lifetime inside `@main`, like every other
+VelarScript application target. Calling `serve(...)` directly remains
+available for tests, embedded servers, and low-level protocol adapters.
 
 An ordinary service activates the separate `@velarscript/server` application
-extension instead. It composes this Node capability and owns root
-`application.yml`, startup assembly, abstract connection lifecycle, and the
+extension instead. It composes this Node capability and owns the explicit
+`server.configuration` path, startup assembly, abstract connection lifecycle, and the
 typed `realtimeSession` application wrapper. Without that explicit extension,
 `velar/server` is unavailable and application configuration is not loaded.
 Host, port, and request ceilings do not belong in `node` manifest settings.
 
-When declarative HTTP and WebSocket routes share one port, the entry may return
-`Promise<WebSocketServer>`:
+When declarative HTTP and WebSocket routes share one port, the entry uses the
+WebSocket transport's matching lifecycle operation:
 
 ```velar fragment
 import {app as routes} from "./app.vel"
-import {listen} from "velar/websocket"
+import {listen, run} from "velar/websocket"
 
-export async def start():
-    return await listen({
+@main:
+    const server = await listen({
         host: "127.0.0.1",
         port: 3000,
         http: routes,
         origins: ["https://app.example.com"],
         maxBodyBytes: 16777216,
     })
+    await run(server)
 ```
 
-The CLI supplies no host, port, or body-limit arguments. Server applications
-read those values once through `@velarscript/server` conventions.
+The CLI executes the compiled entry module directly. Server applications read
+host, port, and body limits once from their declared configuration file.
 
 `p"..."` is scanned and checked only by this extension; Core does not acquire a
 general `p` string prefix. Captures use `{name:type}` with a half-width `:`. An
@@ -120,7 +118,9 @@ defaults may be explicit `input.header`, `input.cookie`, `input.form`, `input.up
 `input.dependency` values; `security` supplies API-key, Basic, Bearer, OAuth2,
 and OpenID descriptors. `provide` owns request- and application-scoped values,
 deduplicates them, detects cycles, and runs release callbacks at the end of the
-owning scope. `lifecycle`, `background`, cookie helpers, SSE, bounded streaming,
+owning scope. `supply(app, provider, value)` binds a prebuilt application value
+without global state while preserving the provider's shutdown release.
+`lifecycle`, `background`, cookie helpers, SSE, bounded streaming,
 multipart uploads, route-scoped middleware, offline `docs`, OpenAPI 3.1, and
 the test-only `velar/server-test` client are part of the same checked runtime.
 Security descriptors extract credentials and own their transport-level 401

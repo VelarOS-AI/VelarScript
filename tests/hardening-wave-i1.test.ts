@@ -338,6 +338,8 @@ const shell = look:
 
 component App:
     return <main look={shell}>{str(clamp(1.0, 0.0, 2.0))}</main>
+
+@main: pass
 `.trimStart()],
   ]));
   try {

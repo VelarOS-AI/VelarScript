@@ -1,5 +1,6 @@
 {
   "formatVersion": 2,
+  "kind": "application",
   "entry": "main.vel",
   "outDir": "dist",
   "publicDir": "public",

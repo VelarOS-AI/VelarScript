@@ -38,7 +38,7 @@ import { httpOutcomeType, routePatternType, serveAppType, serveRequestType, VELA
 
 export { VELAR_PROCESS_HOST_RUNTIME } from "./process-runtime.ts";
 
-export const VELAR_NODE_API_VERSION = "0.14";
+export const VELAR_NODE_API_VERSION = "0.15";
 export const VELAR_NODE_HOST_MODULE = "velar/node-host-v1";
 
 const unknownType: ValueType = { kind: "unknown" };
@@ -470,6 +470,7 @@ export const nodeModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Ma
       ...[...webSocketErrorIdentities].map(([name, identity]) => [name, { kind: "classConstructor", name, identity } as ValueType] as const),
       ["connect", functionType(["url", "options"], [stringType, webSocketConnectOptions], promise(webSocketConnectionType), 1)],
       ["listen", functionType(["options"], [webSocketListenOptions], promise(webSocketServerType))],
+      ["run", functionType(["server"], [webSocketServerType], promise(nullType))],
     ]),
     new Map([
       ["WebSocketConnection", webSocketConnectionFields],
@@ -523,8 +524,10 @@ export const nodeModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Ma
       ["input", inputType],
       ["security", securityType],
       ["provide", namedIntrinsic("serve.provide", ["inputs", "resolve", "scope", "release", "eager"], [unknownType, unknownType, stringType, releaseProviderType, boolType], providerType, 2)],
+      ["supply", namedIntrinsic("serve.supply", ["app", "provider", "value"], [serveAppType, providerType, unknownType], serveAppType)],
       ["middleware", middlewareFactoriesType],
       ["serve", functionType(["app", "port", "host", "maxBodyBytes"], [serveTargetType, numberType, stringType, numberType], promise(serverType), 2)],
+      ["run", functionType(["server"], [serverType], promise(nullType))],
       ["json", namedIntrinsic("serve.response.json", ["value", "status", "headers"], [unknownType, numberType, optional(responseHeadersType)], jsonResponseType, 1)],
       ["respond", namedIntrinsic("serve.response.respond", ["value", "status", "headers"], [unknownType, numberType, optional(responseHeadersType)], httpOutcomeType, 1)],
       ["created", namedIntrinsic("serve.response.created", ["value", "headers"], [unknownType, optional(responseHeadersType)], httpOutcomeType, 1)],
@@ -1252,10 +1255,10 @@ ${VELAR_NODE_SERVE_RUNTIME}
 export const nodeModuleDependencies: ReadonlyMap<string, readonly string[]> = new Map([
   ["velar/server-test", ["velar/serve"]],
   ["velar/worker", ["velar/worker-manifest", "velar/task"]],
-  ["velar/websocket", ["velar/serve"]],
+  ["velar/websocket", ["velar/serve", "velar/host"]],
   ["velar/http", [VELAR_NODE_HOST_MODULE, "velar/binary"]],
   ["velar/fs", [VELAR_NODE_HOST_MODULE, "velar/binary"]],
-  ["velar/serve", [VELAR_NODE_HOST_MODULE, VELAR_ERROR_NORMALIZATION_MODULE, VELAR_COLLECTION_LOWERING_MODULE, "velar/binary", "velar/fs", "velar/task"]],
+  ["velar/serve", [VELAR_NODE_HOST_MODULE, VELAR_ERROR_NORMALIZATION_MODULE, VELAR_COLLECTION_LOWERING_MODULE, "velar/binary", "velar/fs", "velar/host", "velar/task"]],
   // D50 rule 89: the host proxy rebuilds the compiler-owned capability error
   // classes, so its module carries that dependency edge.
   [VELAR_NODE_HOST_MODULE, [VELAR_ERROR_NORMALIZATION_MODULE]],

@@ -65,13 +65,15 @@ function nodeTemplate(name: string, displayName: string, version: string, format
     })],
     ["velar.json", json({
       formatVersion,
+      kind: "application",
       entry: "src/main.vel",
       outDir: "dist",
       build: { mode: "production", sourceMaps: false },
       publicDir: "public",
       extensions: ["@velarscript/server"],
+      server: { configuration: "application.yml" },
     })],
-    ["README.md", `# ${displayName}\n\nA VelarScript Server application on the Node runtime.\n\n\`\`\`sh\nnpm install\nnpm run dev\n\`\`\`\n\nOpen \`http://127.0.0.1:3000\`. Edit \`src/app.vel\` to add routes and root \`application.yml\` to change server settings. It is the only conventional application configuration name; explicit configuration paths may still use YAML or JSON. Use \`npm run build\` for production output and \`npm start\` to run the checked source with production runtime behavior.\n`],
+    ["README.md", `# ${displayName}\n\nA VelarScript Server application on the Node runtime.\n\n\`\`\`sh\nnpm install\nnpm run dev\n\`\`\`\n\nOpen \`http://127.0.0.1:3000\`. Edit \`src/app.vel\` to add routes and \`application.yml\` to change server settings. The configuration path is declared by \`server.configuration\` in \`velar.json\`, so it can be renamed or moved without changing source code. Use \`npm run build\` for production output and \`npm start\` to run the checked source with production runtime behavior.\n`],
     ["application.yml", `server:\n  host: 127.0.0.1\n  port: 3000\n  maxBodyBytes: 16777216\n`],
     ["public/index.html", `<!doctype html>
 <html lang="en">
@@ -112,10 +114,15 @@ export server app:
     ...staticFiles("/", root="public", fallback="index.html")
 `],
     ["src/main.vel", `import {application} from "velar/server"
+import {run} from "velar/serve"
 import {app as routes, appName as name} from "./app.vel"
 
-export const start = application(routes)
 export const appName = name
+
+@main:
+    const server = await application(routes)
+    print(f"{appName} is running at http://127.0.0.1:{server.port}")
+    await run(server)
 `],
     ["src/app.test.vel", `import {http} from "velar/http"
 import {serve} from "velar/serve"
@@ -163,6 +170,7 @@ function desktopTemplate(name: string, displayName: string, version: string, for
     })],
     ["velar.json", json({
       formatVersion,
+      kind: "application",
       entry: "src/main.vel",
       outDir: "dist/renderer",
       build: { mode: "production", sourceMaps: false },
@@ -326,6 +334,7 @@ function libraryTemplate(name: string, displayName: string, version: string, for
     ["package.json", json(packageManifest)],
     ["velar.json", json({
       formatVersion,
+      kind: "library",
       entry: "src/index.vel",
       outDir: "dist",
       build: { mode: "production", sourceMaps: false },
@@ -382,6 +391,7 @@ function componentTemplate(name: string, displayName: string, version: string, f
     ["package.json", json(packageManifest)],
     ["velar.json", json({
       formatVersion,
+      kind: "application",
       entry: "src/demo.vel",
       outDir: "dist",
       build: { mode: "production", sourceMaps: false },
@@ -397,7 +407,7 @@ function componentTemplate(name: string, displayName: string, version: string, f
     })],
     ["README.md", `# ${displayName}\n\nA reusable VelarScript Web component source package.\n\n\`\`\`sh\nnpm install\nnpm run validate\nnpm run test:browser\n\`\`\`\n\nThe published package entry is \`src/index.vel\`; \`src/demo.vel\` is the local preview application. The package is private by default. Remove \`private\` only after choosing a public package name, license, and release policy.\n`],
     ["src/index.vel", `import {domId} from "velar/web"\nimport {border, rgb, rgba} from "velar/look"\n\nexport type CardContent:\n    title: string\n    body: string\n\nexport const exampleContent: CardContent = {title: "Built with VelarScript", body: "A reusable component ships as checked VelarScript source."}\n\nconst cardLook = look:\n    display = "grid"\n    gap = 10px\n    padding = 20px\n    border = border(1px, rgba(17, 18, 22, 0.14))\n    borderRadius = 14px\n    background = rgb(251, 250, 247)\n\nconst titleLook = look:\n    margin = 0\n\nconst bodyLook = look:\n    margin = 0\n    color = rgb(94, 96, 102)\n    lineHeight = 1.6\n\nexport component InfoCard(content: CardContent):\n    const titleId = domId("info-card-title")\n    return <article class="card" look={cardLook} aria-labelledby={titleId}>\n        <h2 look={titleLook} id={titleId}>{content.title}</h2>\n        <p look={bodyLook}>{content.body}</p>\n    </article>\n`],
-    ["src/demo.vel", `import {InfoCard, exampleContent} from "./index.vel"\n\nmount(<main><InfoCard content={exampleContent} /></main>, "#app")\n`],
+    ["src/demo.vel", `import {InfoCard, exampleContent} from "./index.vel"\n\n@main: mount(<main><InfoCard content={exampleContent} /></main>, "#app")\n`],
     ["src/index.test.vel", `import {expect} from "velar/test"\nimport {exampleContent} from "./index.vel"\n\ntest "component content contract":\n    expect(exampleContent.title).toBe("Built with VelarScript")\n    expect(exampleContent.body).toContain("checked VelarScript source")\n`],
     ["src/demo.browser.test.vel", `import {expect} from "velar/test"\nimport {browser} from "velar/web-test"\n\ntest "component preview":\n    await browser.open("/")\n    expect(await browser.text("article h2")).toBe("Built with VelarScript")\n    expect(await browser.text("article p")).toContain("reusable component")\n    const titleId = await browser.attribute("article", "aria-labelledby")\n    expect(titleId != null).toBe(true)\n    if titleId != null:\n        expect(titleId).toContain("info-card-title-")\n        expect(await browser.attribute("article h2", "id")).toBe(titleId)\n`],
   ]);
@@ -437,6 +447,7 @@ function commonWebFiles(
     })],
     ["velar.json", json({
       formatVersion,
+      kind: "application",
       entry: "src/main.vel",
       outDir: "dist",
       build: { mode: "production", sourceMaps: false },

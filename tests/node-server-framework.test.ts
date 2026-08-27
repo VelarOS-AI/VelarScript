@@ -122,9 +122,7 @@ async function compileServer(source: string) {
 }
 
 test("Node application configuration is bounded and rejects unknown fields", () => {
-  assert.deepEqual(velarProjectExtension.parse(undefined, "/service/velar.json"), {
-    app: "start",
-  });
+  assert.deepEqual(velarProjectExtension.parse(undefined, "/service/velar.json"), {});
   assert.throws(() => velarProjectExtension.parse({port: 3000}, "/service/velar.json"), /unknown 'node' field 'port'/u);
   assert.throws(() => velarProjectExtension.parse({host: "127.0.0.1"}, "/service/velar.json"), /unknown 'node' field 'host'/u);
   assert.throws(() => velarProjectExtension.parse({maxBodyBytes: 16_777_216}, "/service/velar.json"), /unknown 'node' field 'maxBodyBytes'/u);
@@ -132,13 +130,21 @@ test("Node application configuration is bounded and rejects unknown fields", () 
 });
 
 test("server configuration, authentication, and database helpers preserve checked application types", async () => {
-  assert.deepEqual(serverProjectExtension.parse(undefined, "/service/velar.json"), {
-    app: "start",
+  assert.deepEqual(serverProjectExtension.parse({configuration: "application.yml"}, "/service/velar.json"), {
+    configuration: "application.yml",
   });
+  assert.deepEqual(serverProjectExtension.parse({configuration: "config/server.json"}, "/service/velar.json"), {
+    configuration: "config/server.json",
+  });
+  assert.throws(() => serverProjectExtension.parse(undefined, "/service/velar.json"), /'server' must be an object/u);
   assert.throws(() => serverProjectExtension.parse({port: 3000}, "/service/velar.json"), /unknown 'server' field 'port'/u);
+  assert.throws(() => serverProjectExtension.parse({configuration: "../application.yml"}, "/service/velar.json"), /must stay inside the project root/u);
+  assert.throws(() => serverProjectExtension.parse({configuration: "/etc/application.yml"}, "/service/velar.json"), /project-relative path/u);
+  assert.throws(() => serverProjectExtension.parse({configuration: "config\\application.yml"}, "/service/velar.json"), /using '\/' separators/u);
+  assert.throws(() => serverProjectExtension.parse({configuration: "application.toml"}, "/service/velar.json"), /must end in/u);
   const source = `
 import {application, authenticate, configuration, database} from "velar/server"
-import {input, security} from "velar/serve"
+import {input, run, security} from "velar/serve"
 
 type ServerSettings:
     host: string
@@ -176,7 +182,9 @@ server app:
     @get(p"/database" as path, value=input.dependency(connection)) => {path: value.path}
     @get(p"/me" as path, user=input.dependency(currentUser)) => {id: user.id}
 
-export const start = application(app)
+@main:
+    const server = await application(app)
+    await run(server)
 `.trimStart();
   const path = join(tmpdir(), "velar-server-framework-helpers.vel");
   const project = await compileProject(path, new Map([[path, source]]), {extensions: [velarServerCompilerExtension]});
@@ -873,6 +881,46 @@ server api:
   assert.doesNotMatch(code, /async \(user = input\.dependency/u);
   assert.match(code, /source:"form",kind:"data"/u);
   assert.match(code, /source:"upload",kind:"upload"/u);
+});
+
+test("supply checks the concrete result type of an app-scoped Provider", async () => {
+  const path = join(tmpdir(), "velar-node-supplied-provider.vel");
+  const source = `
+import {provide, supply} from "velar/serve"
+
+type Application:
+    name: string
+
+async def resolveApplication(_values: Record<unknown>) -> Application:
+    return {name: "fallback"}
+
+const applicationProvider = provide(
+    inputs={},
+    resolve=resolveApplication,
+    scope="app",
+)
+
+server api:
+    @get(p"/health") => {ok: true}
+
+const app = supply(api, applicationProvider, {name: "OpenVoxel"})
+`.trimStart();
+  const project = await compileProject(path, new Map([[path, source]]), {extensions: [velarNodeCompilerExtension]});
+  assert.deepEqual(project.failures, []);
+  assert.deepEqual(project.modules.flatMap((module) => module.result.diagnostics), []);
+  assert.match(project.modules[0]?.result.code ?? "", /supply\(api, applicationProvider, \{ name: "OpenVoxel" \}\)/u);
+
+  const invalidPath = join(tmpdir(), "velar-node-invalid-supplied-provider.vel");
+  const invalid = await compileProject(
+    invalidPath,
+    new Map([[invalidPath, source.replace('{name: "OpenVoxel"}', "{name: 42}")]]),
+    {extensions: [velarNodeCompilerExtension]},
+  );
+  const invalidDiagnostics = invalid.modules.flatMap((module) => module.result.diagnostics);
+  assert.ok(
+    invalidDiagnostics.some((item) => /number.*string|string.*number/u.test(item.message)),
+    invalidDiagnostics.map((item) => item.message).join("\n"),
+  );
 });
 
 test("response helpers preserve compiler-derived OpenAPI schemas and final statuses", async () => {

@@ -1,6 +1,10 @@
 {
   "formatVersion": 2,
+  "kind": "application",
   "entry": "main.vel",
   "outDir": "dist",
-  "extensions": ["@velarscript/server"]
+  "extensions": ["@velarscript/server"],
+  "server": {
+    "configuration": "application.yml"
+  }
 }

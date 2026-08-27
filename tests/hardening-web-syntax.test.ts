@@ -154,7 +154,7 @@ component App:
         <section data-look look={cardLook}>grid</section>
     </main>
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `.trimStart();
 
 const browserTests = String.raw`

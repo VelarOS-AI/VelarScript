@@ -1,9 +1,11 @@
-// Convention-based server application assembly. The Node extension owns the
-// transport and route primitives; this application extension owns only root
-// configuration discovery, startup assembly, and connection lifetime.
+// Server application assembly. The Node extension owns transport and route
+// primitives; this application extension owns the manifest-selected
+// configuration, startup assembly, and connection lifetime.
 
-export const VELAR_SERVER_RUNTIME = String.raw`
-import { exists as __velarServerExists, readText as __velarServerReadText } from "velar/fs";
+export function velarServerRuntime(configurationPath: string): string {
+  const encodedConfigurationPath = JSON.stringify(configurationPath);
+  return String.raw`
+import { readText as __velarServerReadText } from "velar/fs";
 import { ServeApp as __velarServerServeApp, __velarServeAuthenticationCredential as __velarServerAuthenticationCredential, __velarServeAuthenticationError as __velarServerAuthenticationError, provide as __velarServerProvide, serve as __velarServerServe } from "velar/serve";
 import { parseDocument as __velarServerParseYamlDocument } from "yaml";
 
@@ -27,8 +29,7 @@ const __velarServerRegExpTest = __velarServerRegExp.prototype.test;
 const __velarServerStringEndsWith = __velarServerString.prototype.endsWith;
 const __velarServerStringIncludes = __velarServerString.prototype.includes;
 const __velarServerStringToLowerCase = __velarServerString.prototype.toLowerCase;
-const __velarServerConfigurationPathName = "application.yml";
-const __velarServerUnsupportedConfigurationPaths = __velarServerObjectFreeze(["application.yaml", "application.json"]);
+export const applicationConfigurationPath = ${encodedConfigurationPath};
 const __velarServerOptionFields = __velarServerObjectFreeze(["host", "port", "maxBodyBytes"]);
 const __velarServerMaximumConfigurationBytes = 1024 * 1024;
 const __velarServerDefaultConfigurationBytes = 64 * 1024;
@@ -73,24 +74,6 @@ function __velarServerConfigurationExtension(path) {
   throw new __velarServerTypeError("Server configuration path must end in .yml, .yaml, or .json");
 }
 
-async function __velarServerConfigurationPath(path, required) {
-  if (path !== null) {
-    __velarServerConfigurationExtension(path);
-    return path;
-  }
-  for (let index = 0; index < __velarServerUnsupportedConfigurationPaths.length; index += 1) {
-    const unsupported = __velarServerUnsupportedConfigurationPaths[index];
-    if (await __velarServerExists(unsupported)) {
-      throw new __velarServerTypeError("Unsupported conventional Server configuration '" + unsupported + "'; rename it to application.yml or pass it as an explicit configuration path");
-    }
-  }
-  if (!await __velarServerExists(__velarServerConfigurationPathName)) {
-    if (!required) return null;
-    throw new __velarServerTypeError("Server configuration is missing; create application.yml in the project root");
-  }
-  return __velarServerConfigurationPathName;
-}
-
 function __velarServerYaml(source, path) {
   let document;
   try {
@@ -102,9 +85,12 @@ function __velarServerYaml(source, path) {
   return document.toJS({maxAliasCount: 100});
 }
 
-async function __velarServerReadConfiguration(path, maxBytes, required) {
-  const resolved = await __velarServerConfigurationPath(path, required);
-  if (resolved === null) return null;
+async function __velarServerReadConfiguration(path, maxBytes) {
+  const resolved = path;
+  if (resolved === "") {
+    throw new __velarServerTypeError("Server configuration path is missing; declare 'server.configuration' in velar.json");
+  }
+  __velarServerConfigurationExtension(resolved);
   let source;
   try { source = await __velarServerReadText(resolved, maxBytes); }
   catch (error) { throw new __velarServerTypeError("Cannot read server configuration '" + resolved + "': " + (error instanceof __velarServerError ? error.message : "read failed")); }
@@ -135,21 +121,18 @@ function __velarServerOptions(configuration) {
   return {host, port, maxBodyBytes};
 }
 
-export async function configuration(Type, path = null, maxBytes = __velarServerDefaultConfigurationBytes) {
+export async function configuration(Type, maxBytes = __velarServerDefaultConfigurationBytes) {
   Type = __velarRequireRuntimeType(Type, "server.configuration");
   if (!__velarServerCall(__velarServerNumberIsSafeInteger, __velarServerNumber, [maxBytes]) || maxBytes < 1 || maxBytes > __velarServerMaximumConfigurationBytes) {
     throw new __velarServerRangeError("server.configuration maxBytes must be an integer from 1 through 1048576");
   }
-  return Type.parse(await __velarServerReadConfiguration(path, maxBytes, true));
+  return Type.parse(await __velarServerReadConfiguration(applicationConfigurationPath, maxBytes));
 }
 
-export function application(app, path = null) {
+export async function application(app) {
   app = __velarServerServeApp.parse(app);
-  if (path !== null) __velarServerConfigurationExtension(path);
-  return async () => {
-    const options = __velarServerOptions(await __velarServerReadConfiguration(path, __velarServerDefaultConfigurationBytes, false));
-    return await __velarServerServe(app, options.port, options.host, options.maxBodyBytes);
-  };
+  const options = __velarServerOptions(await __velarServerReadConfiguration(applicationConfigurationPath, __velarServerDefaultConfigurationBytes));
+  return await __velarServerServe(app, options.port, options.host, options.maxBodyBytes);
 }
 
 export function authenticate(credential, verify) {
@@ -180,3 +163,4 @@ export function database(connect, disconnect) {
 }
 
 `.trimStart();
+}

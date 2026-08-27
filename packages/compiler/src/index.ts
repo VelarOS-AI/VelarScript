@@ -93,6 +93,8 @@ export interface CompileOptions {
 }
 
 export interface CompileResult {
+  /** 模块是否声明了编译器拥有的 `@main` 程序入口。 */
+  readonly hasMain: boolean;
   readonly code: string | null;
   readonly sourceMap: string | null;
   readonly embeddedModules: readonly CompilerEmbeddedJavaScriptModule[];
@@ -334,6 +336,7 @@ function compileUnchecked(text: string, options: CompileOptions): CompileResult 
     extensions.flatMap((extension) => extension.semantic ? [extension.semantic] : []),
   );
   return {
+    hasMain: parsed.program.body.some((statement) => statement.kind === "MainBlock"),
     code,
     sourceMap,
     embeddedModules,
@@ -448,6 +451,7 @@ function emptyCompileResult(text: string, options: CompileOptions, reported: Dia
   const source = new SourceText(path, text);
   const program: Program = { kind: "Program", body: [], span: { start: 0, end: 0 } };
   return {
+    hasMain: false,
     code: null,
     sourceMap: null,
     embeddedModules: [],

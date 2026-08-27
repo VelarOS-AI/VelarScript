@@ -2,6 +2,7 @@ export const CURRENT_PROJECT_FORMAT_VERSION = 2;
 
 export const CORE_PROJECT_MANIFEST_FIELDS = Object.freeze([
   "formatVersion",
+  "kind",
   "entry",
   "outDir",
   "publicDir",

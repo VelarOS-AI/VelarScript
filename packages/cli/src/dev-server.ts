@@ -14,6 +14,7 @@ import { standardModuleAsset } from "./standard-modules.ts";
 import { asHostError, hostErrorMessage } from "./host-error.ts";
 import { assertUniqueEmbeddedModuleOutputs } from "./embedded-modules.ts";
 import { localRequestRefusal } from "./local-request-guard.ts";
+import { applicationEntry } from "./application-entry.ts";
 
 interface Snapshot {
   readonly project: ProjectResult;
@@ -493,6 +494,12 @@ async function compileSnapshot(
     ...npm.failures,
     ...artifactErrors,
   ];
+  // 开发服务器也走与 check/build/package 相同的入口校验。这样缺少 @main
+  // 时显示编译错误页，而不会出现“命令启动成功但浏览器只有空白页”的假成功。
+  if (errors.length === 0) {
+    try { applicationEntry(project); }
+    catch (error) { errors.push(hostErrorMessage(error)); }
+  }
   const notices = project.notices.map((notice) => `${notice.path}: ${notice.message}`);
   return {
     project,

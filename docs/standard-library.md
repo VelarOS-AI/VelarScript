@@ -1022,19 +1022,19 @@ with response 101 and `x-velar-transport: websocket`; an HTTP GET and WebSocket
 upgrade cannot share one documented path.
 
 The separate `@velarscript/server` application extension composes this Node
-capability. It adds `velar/server`, root `application.yml`
-discovery, `application(app)`, typed `configuration(Type)`, request-scoped
+capability. It adds `velar/server`, explicit `server.configuration` loading,
+`application(app)`, typed `configuration(Type)`, request-scoped
 `authenticate(credential, verify)`, and an abstract `database(connect,
 disconnect)` provider lifecycle. Authentication accepts only Node-owned
 `security` descriptors; its nullable async verifier produces a typed identity
 Provider, and `null` produces the descriptor's opaque 401 challenge. Token,
 session, password, identity-store, and authorization policy implementations are
-installed library or application responsibilities. Its conventional entry is
-an exact zero-argument async `start` function returning `Server` or
-`WebSocketServer`; the launcher supplies no host, port, or body-limit arguments.
+installed library or application responsibilities. Its selected entry starts
+and awaits the transport inside `@main`; no exported startup binding or hidden
+launcher is part of the application contract.
 `velar dev` watches and restarts the last-good build, `velar serve` runs checked
 source with production behavior, and `velar build` emits a standalone Node
-directory with the same root configuration. Direct `serve(...)` is the
+directory with the same declared configuration. Direct `serve(...)` is the
 lower-level operation for tests, embedded servers, and handler adapters.
 
 Explicit route defaults cover the inputs that cannot be inferred:
@@ -1043,6 +1043,10 @@ Explicit route defaults cover the inputs that cannot be inferred:
 OAuth2, and OpenID. `provide` resolves request- or application-scoped
 dependencies once, detects cycles, optionally initializes app providers
 eagerly, and invokes release callbacks before clearing the ended scope’s cache.
+`supply(app, provider, value)` attaches an already constructed value to an
+app-scoped provider without process-global state; the compiler checks the
+provider's concrete result type and the provider's release callback retains
+ownership at shutdown.
 `lifecycle`, `background`, cookie helpers, `sse`, and
 `velar/websocket.listen({http: app, ...})` cover owned service lifetime and
 realtime transport without adding compiler-owned names.

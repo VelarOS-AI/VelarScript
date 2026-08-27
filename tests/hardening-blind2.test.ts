@@ -98,7 +98,7 @@ async function runTestsWithLimits(
 // runner had never been brought under it, because the reports arrive on the
 // worker's host error channel rather than through the page.
 
-test("[BLIND2-1] a browser test whose imported module fails on the host fails the run", { timeout: 300_000 }, async () => {
+test("[BLIND2-1] importing an application module does not execute its @main region", { timeout: 300_000 }, async () => {
   const directory = await webProject("velar-blind2-browser-load-", {
     "app.vel": `
 export component App():
@@ -110,24 +110,22 @@ import {App} from "./app.vel"
 
 export const heading = "Blind round two"
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `.trimStart(),
-    // The mounted entry is imported by the test, so its top-level mount runs in
-    // the test process, where there is no DOM.
+    // @main 只属于配置选中的应用入口。测试模块导入其中的数据声明时，不得
+    // 顺带启动整个应用，否则普通复用也会产生挂载、监听端口等隐式副作用。
     "load.browser.test.vel": `
 import {expect} from "velar/test"
 import {heading} from "./main.vel"
 
-test "importing the mounted entry":
+test "importing declarations from an application entry":
     expect(heading).toBe("Blind round two")
 `.trimStart(),
   });
   const result = await runCommand(process.execPath, [cli, "test", directory, "--browser", "chromium"]);
-  assert.notEqual(result.code, 0, result.output);
-  assert.match(result.output, /reported an unowned error while loading/u);
-  assert.match(result.output, /document\.createElement API is unavailable/u);
-  assert.match(result.output, /velar\/web-test/u);
-  assert.match(result.stdout, /\n0 passed, 1 failed\n/u);
+  assert.equal(result.code, 0, result.output);
+  assert.doesNotMatch(result.output, /document\.createElement API is unavailable/u);
+  assert.match(result.stdout, /\n1 passed, 0 failed\n/u);
 });
 
 test("[BLIND2-1] a browser test that mounts in its own body fails the run", { timeout: 300_000 }, async () => {
@@ -140,7 +138,7 @@ export component App():
     "main.vel": `
 import {App} from "./app.vel"
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `.trimStart(),
     "body.browser.test.vel": `
 import {expect} from "velar/test"
@@ -170,7 +168,7 @@ export component App():
 
     return <button id="go">Count: {count}</button>
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `.trimStart(),
     "page.browser.test.vel": `
 import {expect} from "velar/test"
@@ -195,7 +193,7 @@ export component App():
     state count = 0
     return <button id="go">Count: {count}</button>
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `.trimStart(),
     "straggler.browser.test.vel": `
 import {expect} from "velar/test"
@@ -334,7 +332,7 @@ export component App():
     state count = 0
     return <button id="go">Count: {count}</button>
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `.trimStart(),
     "probe.browser.test.vel": `
 import {expect} from "velar/test"
@@ -360,7 +358,7 @@ export component App():
     print(document)
     return <button id="go">Count: {count}</button>
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `.trimStart(),
   });
   const result = await runCommand(process.execPath, [cli, "check", directory]);
@@ -428,9 +426,10 @@ type Item:
 
 type SavedItems = List<Item>
 
-const items = storage.get("reading", SavedItems, [])
-storage.set("reading", items)
-print(str(items.size))
+@main:
+    const items = storage.get("reading", SavedItems, [])
+    storage.set("reading", items)
+    print(str(items.size))
 `.trimStart(),
   });
   const result = await runCommand(process.execPath, [cli, "check", directory]);
@@ -454,7 +453,7 @@ export component ProjectList(items: readonly List<Item>):
 
 const empty: List<Item> = []
 
-mount(<ProjectList items={empty} />, "#app")
+@main: mount(<ProjectList items={empty} />, "#app")
 `.trimStart(),
   });
   const result = await runCommand(process.execPath, [cli, "check", directory]);
@@ -479,7 +478,7 @@ export component ProjectList(items: readonly List<Item>):
 
 const empty: List<Item> = []
 
-mount(<ProjectList items={empty} />, "#app")
+@main: mount(<ProjectList items={empty} />, "#app")
 `.trimStart(),
   });
   const result = await runCommand(process.execPath, [cli, "check", directory]);

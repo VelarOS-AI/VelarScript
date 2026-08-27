@@ -1,4 +1,6 @@
-import {application, configuration, database} from "velar/server"
+import {application, applicationConfigurationPath, configuration, database} from "velar/server"
+import {run as runHttp} from "velar/serve"
+import {WebSocketServer, run as runWebSocket} from "velar/websocket"
 import {app as routes, describeApi} from "./01-server.vel"
 import {findArticle} from "./03-project-dependencies.vel"
 
@@ -10,12 +12,18 @@ type RuntimeServerSettings:
 type ApplicationSettings:
     server: RuntimeServerSettings
 
-export const start = application(routes)
-export const settings = await configuration(ApplicationSettings)
 export const exampleConnection = database(
     connect = async () => {name: "tour"},
     disconnect = async connection => null,
 )
 export const projectDependencyExample = {findArticle}
 
-describeApi(routes)
+/// 自定义共享 HTTP/WebSocket 监听器使用同一个宿主生命周期入口。
+export async def superviseWebSocket(server: WebSocketServer): await runWebSocket(server)
+
+@main:
+    const settings = await configuration(ApplicationSettings)
+    describeApi(routes)
+    const server = await application(routes)
+    print(f"VelarScript tour is running at http://{settings.server.host}:{server.port} using {applicationConfigurationPath}")
+    await runHttp(server)

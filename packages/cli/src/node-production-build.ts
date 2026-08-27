@@ -9,7 +9,7 @@ import { VELAR_VERSION } from "./version.ts";
 export const NODE_BUILD_MANIFEST_NAME = "velar-node.json";
 
 export interface NodeProductionBuildManifest {
-  readonly formatVersion: 4;
+  readonly formatVersion: 5;
   readonly kind: "velar-node-build";
   readonly compiler: {
     readonly name: "velar";
@@ -18,7 +18,7 @@ export interface NodeProductionBuildManifest {
   readonly buildId: string;
   readonly mode: JavaScriptBuildMode;
   readonly entry: string;
-  readonly app: string;
+  readonly configuration: string | null;
   readonly sourceMaps: boolean;
   readonly assets: readonly NodeProductionAsset[];
 }
@@ -33,7 +33,7 @@ export interface NodeProductionAsset {
 interface NodeProductionBuildInput {
   readonly mode: JavaScriptBuildMode;
   readonly entry: string;
-  readonly app: string;
+  readonly configuration: string | null;
   readonly sourceMaps: boolean;
 }
 
@@ -77,18 +77,18 @@ export async function writeNodeProductionManifest(
       path: file.path,
       sizeBytes: identity.sizeBytes,
       sha256: identity.sha256,
-      role: nodeProductionAssetRole(file.path, build.entry),
+      role: nodeProductionAssetRole(file.path, build.entry, build.configuration),
     });
   }
   const buildId = nodeProductionBuildId(assets);
   const manifest: NodeProductionBuildManifest = {
-    formatVersion: 4,
+    formatVersion: 5,
     kind: "velar-node-build",
     compiler: { name: "velar", version: VELAR_VERSION },
     buildId,
     mode: build.mode,
     entry: build.entry,
-    app: build.app,
+    configuration: build.configuration,
     sourceMaps: build.sourceMaps,
     assets,
   };
@@ -102,10 +102,10 @@ export function nodeProductionBuildId(assets: readonly Pick<NodeProductionAsset,
     .digest("hex");
 }
 
-export function nodeProductionAssetRole(path: string, entry: string): NodeProductionAsset["role"] {
+export function nodeProductionAssetRole(path: string, entry: string, configuration: string | null): NodeProductionAsset["role"] {
   if (path === entry) return "entry";
   if (path.endsWith(".map")) return "source-map";
-  if (path === "application.yml") return "configuration";
+  if (configuration !== null && path === configuration) return "configuration";
   return "asset";
 }
 

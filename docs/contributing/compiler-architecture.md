@@ -783,9 +783,9 @@ initialization therefore cannot change which case is selected.
   but it creates its input stream only for the first `readLine`, so a module
   import or output-only CLI never acquires an active stdin reader.
 - `packages/server` owns the separate application extension that composes the
-  Node compiler/runtime contract. It alone publishes `velar/server`, discovers
-  root `application.yml`, assembles the conventional zero-argument startup
-  function, maps a Node-owned security descriptor plus nullable async verifier
+  Node compiler/runtime contract. It alone publishes `velar/server`, injects
+  the checked `server.configuration` path, assembles the application server,
+  maps a Node-owned security descriptor plus nullable async verifier
   onto a request-scoped typed identity Provider, and maps an
   abstract connect/disconnect pair onto Node's application-scoped Provider
   lifecycle. Node does not read application configuration; Server contains no

@@ -548,20 +548,21 @@ watch hasX as current, previous:
     membershipRuns += 1
     observed = current
 
-await tick()
-const baseline = membershipRuns
+@main:
+    await tick()
+    const baseline = membershipRuns
 
-tags.update(["w", "x", "y"])
-await tick()
-print(f"afterUpdate={str(membershipRuns - baseline)},{str(observed)},{str("x" in tags)}")
+    tags.update(["w", "x", "y"])
+    await tick()
+    print(f"afterUpdate={str(membershipRuns - baseline)},{str(observed)},{str("x" in tags)}")
 
-tags.remove("x")
-await tick()
-print(f"afterRemove={str(membershipRuns - baseline)},{str(observed)},{str("x" in tags)}")
+    tags.remove("x")
+    await tick()
+    print(f"afterRemove={str(membershipRuns - baseline)},{str(observed)},{str("x" in tags)}")
 
-tags.add("x")
-await tick()
-print(f"afterAdd={str(membershipRuns - baseline)},{str(observed)},{str("x" in tags)}")
+    tags.add("x")
+    await tick()
+    print(f"afterAdd={str(membershipRuns - baseline)},{str(observed)},{str("x" in tags)}")
 `.trimStart());
 
   assert.match(output, /afterUpdate=1,true,true/u, output);

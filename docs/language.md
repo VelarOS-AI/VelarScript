@@ -529,9 +529,10 @@ export server app:
 `p"..."` belongs to the Node extension rather than Core's string system.
 `f"..."` therefore keeps its one job—forward runtime interpolation—while a
 path pattern is a reverse matcher checked entirely at compile time.
-The entry convention is `export const start = application(app)` from
-`velar/server`. Root `application.yml` owns host, port, request limits, and
-application settings. Other YAML/JSON files require an explicit path.
+The selected entry starts the server inside `@main`; importing that module does
+not run the entry body. `server.configuration` in `velar.json` explicitly names
+the project-relative YAML or JSON file that owns host, port, request limits,
+and application settings.
 `velar dev` watches and restarts it, `velar serve` runs it with production
 behavior, and `velar build` emits the standalone Node application. Direct
 `serve(...)` remains an ordinary Node operation for integration tests and

@@ -1,6 +1,6 @@
 export interface VelarServerConfig {
-  /** Exported zero-argument startup function in the project entry module. */
-  readonly app: string;
+  /** Project-root-relative runtime configuration copied to the same build path. */
+  readonly configuration: string;
 }
 
 export const velarProjectExtension = Object.freeze({
@@ -12,22 +12,27 @@ export const velarProjectExtension = Object.freeze({
 });
 
 function serverConfig(value: unknown, manifestPath: string): VelarServerConfig {
-  if (value !== undefined && (!value || typeof value !== "object" || Array.isArray(value))) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${manifestPath}: 'server' must be an object`);
   }
-  const server = value as {readonly app?: unknown} | undefined;
-  if (server) knownFields(server as Record<string, unknown>, new Set(["app"]), "server", manifestPath);
-  const app = stringField(server?.app, "server.app", "start", 128);
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(app)) {
-    throw new Error(`${manifestPath}: 'server.app' must name an exported VelarScript binding`);
-  }
-  return Object.freeze({app});
+  const server = value as {readonly configuration?: unknown};
+  knownFields(server as Record<string, unknown>, new Set(["configuration"]), "server", manifestPath);
+  return Object.freeze({configuration: configurationPath(server.configuration, manifestPath)});
 }
 
-function stringField(value: unknown, field: string, fallback: string, maximum: number): string {
-  if (value === undefined) return fallback;
-  if (typeof value !== "string" || value.length === 0 || value.length > maximum || value.includes("\0")) {
-    throw new Error(`'${field}' must be a bounded non-empty string`);
+function configurationPath(value: unknown, manifestPath: string): string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 1024 || value.includes("\0")) {
+    throw new Error(`${manifestPath}: 'server.configuration' must be bounded non-empty text`);
+  }
+  if (value.startsWith("/") || /^[A-Za-z]:[\\/]/u.test(value) || value.includes("\\")) {
+    throw new Error(`${manifestPath}: 'server.configuration' must be a project-relative path using '/' separators`);
+  }
+  const segments = value.split("/");
+  if (segments.some((segment) => segment.length === 0 || segment === "." || segment === "..")) {
+    throw new Error(`${manifestPath}: 'server.configuration' must stay inside the project root`);
+  }
+  if (!/\.(?:json|ya?ml)$/iu.test(value)) {
+    throw new Error(`${manifestPath}: 'server.configuration' must end in .yml, .yaml, or .json`);
   }
   return value;
 }

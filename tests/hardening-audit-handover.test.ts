@@ -202,7 +202,7 @@ test("[A-007] Web embedded-JavaScript resolution errors point at the authoring .
   try {
     await writeTree(root, {
       "velar.json": JSON.stringify({ formatVersion: 2, entry: "src/main.vel", outDir: "dist", publicDir: "public", extensions: ["@velarscript/web"], web: { title: "Probe" } }),
-      "src/main.vel": 'extern js()`\n    import {basename} from "node:path"\n    export function label() { return basename("/tmp/file.txt") }\n`:\n    export def label() -> string\ncomponent App:\n    return <main>{label()}</main>\nmount(<App />, "#app")\n',
+      "src/main.vel": 'extern js()`\n    import {basename} from "node:path"\n    export function label() { return basename("/tmp/file.txt") }\n`:\n    export def label() -> string\ncomponent App:\n    return <main>{label()}</main>\n@main: mount(<App />, "#app")\n',
     });
     const build = runCli(root, "build", ".");
     assert.equal(build.status, 1, build.stdout + build.stderr);

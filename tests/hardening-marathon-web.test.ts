@@ -465,7 +465,7 @@ component App:
         <button data-bump on:click={bump}>inc</button>
     </div>
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `,
     tests: `
 import {expect} from "velar/test"
@@ -500,8 +500,6 @@ state independent = 0
 def capture(phase: string, message: string):
     failure = phase + ":" + message
 
-onError(report => capture(report.phase, report.error.message))
-
 watch left:
     right += 1
 
@@ -522,7 +520,9 @@ component App:
         <span data-independent>{str(independent)}</span>
     </main>
 
-mount(<App />, "#app")
+@main:
+    onError(report => capture(report.phase, report.error.message))
+    mount(<App />, "#app")
 `,
     tests: `
 import {expect} from "velar/test"
@@ -572,7 +572,7 @@ component App:
         )}</ul>
     </main>
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `,
     tests: `
 import {expect} from "velar/test"
@@ -740,7 +740,7 @@ component App:
         <span data-unread>{str(unread)}</span>
     </main>
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `,
     tests: `
 import {expect} from "velar/test"
@@ -815,7 +815,7 @@ component App:
         <button data-swap on:click={swap}>swap</button>
     </main>
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `,
     tests: `
 import {expect} from "velar/test"

@@ -336,7 +336,7 @@ async function writeCssProject(directory: string, css: string, publicAssets: rea
     "component App:",
     '    return <main class="icon">Icon</main>',
     "",
-    'mount(<App />, "#app")',
+    '@main: mount(<App />, "#app")',
     "",
   ].join("\n"), "utf8");
 }

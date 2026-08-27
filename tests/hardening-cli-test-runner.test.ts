@@ -142,7 +142,7 @@ export component App():
   await writeFile(join(directory, "src", "main.vel"), `
 import {App} from "./app.vel"
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `.trimStart(), "utf8");
   for (const [name, source] of Object.entries(modules)) {
     await writeFile(join(directory, "src", name), source.trimStart(), "utf8");

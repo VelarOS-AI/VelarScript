@@ -5,7 +5,6 @@ import { basename, dirname, extname, isAbsolute, join, parse as parsePath, relat
 import { homedir, tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { CompileResult, CompilerExtension } from "@velarscript/compiler";
-import type { VelarNodeConfig } from "@velarscript/node/compiler";
 import { createVelarProject, parseCreateArguments } from "create-velar";
 import { projectImportKey, type ProjectModule, type ProjectResult } from "./project.ts";
 import { additionalProjectRoots, checkResolvedProject, discoverVelarSources, formatCheckOutput } from "./project-check.ts";
@@ -14,7 +13,7 @@ import { runDevServer } from "./dev-server.ts";
 import {
   nodeApplicationConfig,
   nodeApplicationEntry,
-  nodeApplicationLauncherSource,
+  type NodeApplicationConfig,
   runNodeApplication,
   runNodeDevelopment,
 } from "./node-application.ts";
@@ -794,12 +793,12 @@ async function writeFrameworkProductionApplication(
 async function writeNodeProductionApplication(
   project: ProjectResult,
   outputDirectory: string,
-  config: VelarNodeConfig,
+  config: NodeApplicationConfig,
   replacement: BuildOutputReplacement,
   mode: JavaScriptBuildMode,
   sourceMaps: boolean,
 ): Promise<void> {
-  const application = nodeApplicationEntry(project, config);
+  const application = nodeApplicationEntry(project);
   const entry = application.entry;
   const staging = await prepareBuildStaging(outputDirectory, replacement);
   try {
@@ -816,24 +815,10 @@ async function writeNodeProductionApplication(
     await writeBuildResourcePackageManifests(project, staging);
     await writeNodeStandardModules(staging, project, false, mode);
     await copyPublicAssets(project.publicRoot, join(staging, "public"), true);
-    if (requiredNodeStandardModules(project).has("velar/server")) {
-      await copyConventionalServerConfiguration(project.projectRoot, staging);
-    }
+    if (config.configuration !== null) await copyConfiguredServerConfiguration(project.projectRoot, staging, config.configuration);
     const entryPath = `./${relative(project.sourceRoot, entry.inputPath).replace(/\.vel$/u, ".js").replaceAll("\\", "/")}`;
-    const launcher = ".velar-node-entry.mjs";
-    const launcherPath = join(staging, launcher);
-    const launcherOutput = await renderJavaScriptOutput({
-      code: nodeApplicationLauncherSource(entryPath, config, false, application.kind),
-      sourceMap: null,
-      sourceFile: launcherPath,
-      outputFile: launcherPath,
-      mode,
-      sourceMaps: false,
-      target: "node24",
-    });
-    await writeFile(launcherPath, launcherOutput.code, "utf8");
     await writeFile(join(staging, "package.json"), `${JSON.stringify({ name: "velar-node-build", private: true, type: "module" }, null, 2)}\n`, "utf8");
-    await writeNodeProductionManifest(staging, { mode, entry: launcher, app: config.app, sourceMaps });
+    await writeNodeProductionManifest(staging, { mode, entry: entryPath.slice(2), configuration: config.configuration, sourceMaps });
     await replaceOutputDirectory(staging, outputDirectory);
   } catch (error) {
     await rm(staging, { recursive: true, force: true });
@@ -841,30 +826,19 @@ async function writeNodeProductionApplication(
   }
 }
 
-const CONVENTIONAL_SERVER_CONFIGURATION_FILE = "application.yml";
-const UNSUPPORTED_CONVENTIONAL_SERVER_CONFIGURATION_FILES = ["application.yaml", "application.json"] as const;
-
-async function copyConventionalServerConfiguration(projectRoot: string, outputRoot: string): Promise<void> {
-  for (const name of UNSUPPORTED_CONVENTIONAL_SERVER_CONFIGURATION_FILES) {
-    const path = join(projectRoot, name);
-    try {
-      const metadata = await lstat(path);
-      if (metadata.isSymbolicLink() || !metadata.isFile()) throw new Error(`Conventional Server configuration '${path}' must be a regular file`);
-      throw new Error(`Unsupported conventional Server configuration '${path}'; rename it to application.yml or use a non-conventional explicit configuration path`);
-    } catch (error) {
-      if (!isHostErrorCode(error, "ENOENT")) throw error;
-    }
-  }
-  const path = join(projectRoot, CONVENTIONAL_SERVER_CONFIGURATION_FILE);
+async function copyConfiguredServerConfiguration(projectRoot: string, outputRoot: string, configuration: string): Promise<void> {
+  const path = join(projectRoot, configuration);
   try {
     const metadata = await lstat(path);
-    if (metadata.isSymbolicLink() || !metadata.isFile()) throw new Error(`Conventional Server configuration '${path}' must be a regular file`);
-    if (metadata.size > 1024 * 1024) throw new Error(`Conventional Server configuration '${path}' cannot exceed 1 MiB`);
+    if (metadata.isSymbolicLink() || !metadata.isFile()) throw new Error(`Configured Server configuration '${path}' must be a regular file`);
+    if (metadata.size > 1024 * 1024) throw new Error(`Configured Server configuration '${path}' cannot exceed 1 MiB`);
   } catch (error) {
-    if (isHostErrorCode(error, "ENOENT")) return;
+    if (isHostErrorCode(error, "ENOENT")) throw new Error(`Configured Server configuration '${path}' does not exist`);
     throw error;
   }
-  await copyFile(path, join(outputRoot, CONVENTIONAL_SERVER_CONFIGURATION_FILE));
+  const output = join(outputRoot, configuration);
+  await mkdir(dirname(output), {recursive: true});
+  await copyFile(path, output);
 }
 
 function packageFrameworkOutput(root: string, input: string): string {

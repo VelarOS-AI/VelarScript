@@ -67,7 +67,7 @@ const view: RowView = Row
 component App:
     return <ul><view label="hello" /></ul>
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `],
   ]));
   const checked = velar(["check", directory]);
@@ -95,7 +95,7 @@ const Render = slot.render
 component App:
     return <ul><Render label="hello" /></ul>
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `],
   ]));
   const checked = velar(["check", directory]);

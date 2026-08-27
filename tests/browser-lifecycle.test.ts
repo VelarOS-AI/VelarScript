@@ -204,7 +204,7 @@ async function browserFixture(): Promise<string> {
 component App:
     return <main>Browser lifecycle probe</main>
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `.trimStart(), "utf8");
   await writeFile(join(directory, "src", "app.browser.test.vel"), `
 test "never settles":

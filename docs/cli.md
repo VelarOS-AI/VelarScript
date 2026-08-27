@@ -95,12 +95,12 @@ velar test [project-directory] --browser [chromium|firefox|webkit|all]
 ```
 
 `dev` rebuilds on save and serves a Web/Desktop application or restarts the
-last-good exported Server/Node zero-argument startup function. Web defaults to
-port 5173. Server host, port, and request limits come only from root
-`application.yml`; Node `--port` and `serve --host` are not parallel
-configuration channels. `serve` checks and
-runs the server startup function with production runtime behavior and no file
-watcher.
+last-good Server/Node entry module. Every application target executes the
+selected source's `@main`. Web defaults to port 5173. Server host, port, and
+request limits come only from the file named by `server.configuration` in
+`velar.json`; Node `--port` and `serve --host` are not parallel configuration
+channels. `serve` checks and runs the same entry with production runtime
+behavior and no file watcher.
 `run` executes a framework-free CLI program; `--stack` keeps the full trace
 instead of hiding internal frames. `test` runs
 `*.test.vel` modules in Node; `--browser` runs `*.browser.test.vel` modules in
@@ -156,6 +156,7 @@ inspectable handover build, or make it the project default in `velar.json`:
 ```json
 {
   "formatVersion": 2,
+  "kind": "application",
   "entry": "src/main.vel",
   "build": { "mode": "readable", "sourceMaps": true }
 }
@@ -166,7 +167,7 @@ JavaScript mode and Source Map are independent. `build.sourceMaps` defaults to
 `--source-maps` or `--no-source-maps`. Development and test execution retain
 their own enabled mappings regardless of the production build setting.
 
-`build-library` is the release build for a Core or Node library whose
+`build-library` is the release build for a `kind: "library"` Core or Node library whose
 `package.json` declares `velar.entry`, one `velar.artifacts` receipt, and a root
 npm export. It replaces that declared artifact directory transactionally with
 frozen ABI-1 JavaScript, its ABI-owned source map, a portable type interface, and their hash
@@ -180,10 +181,11 @@ the released artifact set.
 
 `verify` checks that a build is actually deployable rather than merely present.
 For a Node application, `build` instead writes a standalone ESM directory with
-copied public assets, `.velar-node-entry.mjs`, and `velar-node.json`; run the
-launcher with Node from that output directory. A typed WebSocket startup entry
-uses the same host, port, body limit, and shared HTTP/WebSocket listener after
-build; its pinned transport dependency is copied into the output.
+the compiled `@main` entry, copied public assets, the manifest-declared Server
+configuration, and `velar-node.json`; run the recorded entry with Node from
+that output directory. A WebSocket entry uses the same host, port, body limit,
+and shared HTTP/WebSocket listener after build; its pinned transport dependency
+is copied into the output.
 Top-level `build.sourceMaps` controls whether source-map files are retained.
 All commands read the same checked JSON-resource graph: `dev` watches and
 serves it, `test` reconstructs used package resource exports in its sandbox,

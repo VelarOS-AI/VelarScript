@@ -35,6 +35,7 @@ const MINIMAL_MANIFEST_EXAMPLE = [
   "a minimal web-project velar.json is:",
   "{",
   `  "formatVersion": ${CURRENT_PROJECT_FORMAT_VERSION},`,
+  "  \"kind\": \"application\",",
   "  \"entry\": \"src/main.vel\",",
   `  "extensions": [${JSON.stringify(OFFICIAL_WEB_EXTENSION_PACKAGE)}]`,
   "}",
@@ -46,8 +47,12 @@ export interface ResolvedFrameworkHost {
   readonly config: unknown;
 }
 
+export type VelarProjectKind = "application" | "library";
+
 export interface VelarProjectConfig {
   readonly formatVersion: number;
+  /** 应用入口由宿主执行 @main；库入口只发布声明和导出。 */
+  readonly kind: VelarProjectKind;
   readonly root: string;
   readonly manifestPath: string | null;
   readonly manifestIdentity: string | null;
@@ -86,6 +91,7 @@ interface LoadedExtensions {
 
 interface ManifestShape {
   readonly formatVersion?: unknown;
+  readonly kind?: unknown;
   readonly entry?: unknown;
   readonly outDir?: unknown;
   readonly publicDir?: unknown;
@@ -141,6 +147,7 @@ async function loadManifest(manifestPath: string, entryOverride: string | null =
   if (formatVersion !== CURRENT_PROJECT_FORMAT_VERSION) {
     throw new Error(`${manifestPath}: ${unsupportedProjectFormat(formatVersion)} — ${MINIMAL_MANIFEST_EXAMPLE}`);
   }
+  const projectKind = projectKindField(manifest.kind, manifestPath);
   const root = dirname(manifestPath);
   const entry = entryOverride ?? resolveProjectPath(root, stringField(manifest.entry, "entry", "src/main.vel"), "entry");
   if (extname(entry) !== ".vel") throw new Error(`${manifestPath}: 'entry' must point to a .vel file`);
@@ -170,11 +177,12 @@ async function loadManifest(manifestPath: string, entryOverride: string | null =
     name,
     relative(dirname(entry), path).replaceAll("\\", "/").replace(/\.vel$/u, ".js"),
   ]))));
-  const framework = resolveFrameworkHost(loadedExtensions, extensionConfig, manifestPath);
+  const framework = resolveFrameworkHost(loadedExtensions, extensionConfig, projectKind, manifestPath);
   assertProjectPaths(root, entry, outDir, publicDir, manifestPath);
   for (const workerEntry of workerEntries.values()) assertProjectPaths(root, workerEntry, outDir, publicDir, manifestPath);
   return {
     formatVersion,
+    kind: projectKind,
     root,
     manifestPath,
     manifestIdentity,
@@ -195,6 +203,7 @@ function standaloneProject(entryPath: string): VelarProjectConfig {
   const root = dirname(entryPath);
   return {
     formatVersion: CURRENT_PROJECT_FORMAT_VERSION,
+    kind: "application",
     root,
     manifestPath: null,
     manifestIdentity: null,
@@ -411,6 +420,7 @@ function validateFrameworkHost(value: unknown, compiler: CompilerExtension, name
 function resolveFrameworkHost(
   extensions: LoadedExtensions,
   configs: ReadonlyMap<string, unknown>,
+  projectKind: VelarProjectKind,
   manifestPath: string,
 ): ResolvedFrameworkHost | null {
   if (extensions.hosts.length > 1) {
@@ -418,10 +428,21 @@ function resolveFrameworkHost(
   }
   const host = extensions.hosts[0];
   if (!host) return null;
+  // 应用扩展同时提供语法、类型和运行时能力。库可以使用这些能力，但明确
+  // 声明 kind=library 后不会因此被悄悄变成一个需要页面或监听端口的应用。
+  if (projectKind === "library") return null;
   if (!configs.has(host.id)) {
     throw new Error(`${manifestPath}: framework host '${host.id}' must define a project configuration extension`);
   }
   return Object.freeze({ host, config: configs.get(host.id) });
+}
+
+function projectKindField(value: unknown, manifestPath: string): VelarProjectKind {
+  if (value === undefined) return "application";
+  if (value !== "application" && value !== "library") {
+    throw new Error(`${manifestPath}: 'kind' must be 'application' or 'library'`);
+  }
+  return value;
 }
 
 function integerField(value: unknown, field: string): number {

@@ -13,7 +13,7 @@ browser application activates `@velarscript/web`:
 ```json
 {
   "dependencies": {
-    "@velarscript/server": "0.20.0"
+    "@velarscript/server": "0.20.1"
   }
 }
 ```
@@ -24,27 +24,33 @@ browser application activates `@velarscript/web`:
   "entry": "src/main.vel",
   "outDir": "dist",
   "publicDir": "public",
-  "extensions": ["@velarscript/server"]
+  "extensions": ["@velarscript/server"],
+  "server": {
+    "configuration": "application.yml"
+  }
 }
 ```
 
 The Server application extension composes the Node capability. Do not list both
 extensions. Without `@velarscript/server`, `velar/server` is unavailable and
-root application configuration is not loaded.
+application configuration is not loaded.
 
-The conventional entry export is `start`. A different exported binding may be
-selected with the optional `server.app` manifest field. Source maps belong to
-the target-neutral top-level `build.sourceMaps` switch. Host, port, request limits, database locations, and
-other runtime settings never belong in `velar.json`.
+The selected entry source must start the application inside `@main`; there is
+no special exported startup binding. Source maps belong to the target-neutral
+top-level `build.sourceMaps` switch. `velar.json` stores only the project-relative
+configuration path. Host, port, request limits, database locations, and other
+runtime values remain in that YAML or JSON file.
 
 ## Convention-based application configuration
 
-The only conventional configuration file is root `application.yml`.
+`server.configuration` is required and is the single configuration source.
+The CLI's minimal template chooses root `application.yml`, but users may rename
+or move it by editing `velar.json`; the framework never scans conventional
+filenames.
 
 YAML and JSON enter the same checked runtime-Type boundary. Files are bounded;
-YAML is strict, rejects duplicate keys, and limits aliases. An explicit
-`.yml`, `.yaml`, or `.json` path is the escape hatch for deployment-specific
-configuration; other root filenames are never discovered by convention.
+YAML is strict, rejects duplicate keys, and limits aliases. The declared path
+must stay within the project and end in `.yml`, `.yaml`, or `.json`.
 
 The framework-owned server section is:
 
@@ -56,22 +62,24 @@ server:
 ```
 
 All three fields are optional. Their defaults are `127.0.0.1`, `3000`, and
-16 MiB. `application(app)` reads this section when the server starts:
+16 MiB. `application(app)` reads this section and creates the server; the
+entry owns its lifetime explicitly:
 
 ```velar
 import {application} from "velar/server"
+import {run} from "velar/serve"
 
 export server routes:
     @get(p"/health") => {status: "ready"}
 
-export const start = application(routes)
+@main:
+    const server = await application(routes)
+    await run(server)
 ```
 
 `velar dev`, `velar serve`, and the standalone `velar build` output use the
-same root configuration. CLI `--host` and Node `--port` overrides are not a
-second configuration channel. A missing conventional file uses the server
-defaults; when application-specific settings are required, load the full file
-with `configuration(Type)`, which requires the file to exist.
+same declared configuration. CLI `--host` and Node `--port` overrides are not
+a second configuration channel. A missing declared file fails closed.
 
 ## Typed application settings
 
@@ -93,11 +101,12 @@ type ApplicationSettings:
     server: ServerSettings
     database: DatabaseSettings
 
-export const settings = await configuration(ApplicationSettings)
+export async def loadSettings() -> ApplicationSettings:
+    return await configuration(ApplicationSettings)
 ```
 
-`configuration(Type, path=null, maxBytes=65536)` returns
-`Promise<Type>`. A non-null path must end in `.yml`, `.yaml`, or `.json`.
+`configuration(Type, maxBytes=65536)` returns `Promise<Type>` and always reads
+the manifest-declared path.
 The framework parses syntax; the application Runtime Type owns field names and
 types, and application validation still owns domain ranges and invariants.
 Environment variables may form an explicit deployment override layer, but
@@ -238,12 +247,12 @@ idempotent handling.
 ## Custom shared HTTP/WebSocket startup
 
 A service whose route table contains `@websocket` declarations may load the
-same typed configuration and export an exact zero-argument async startup
-function for the shared HTTP/WebSocket listener:
+same typed configuration and create the shared HTTP/WebSocket listener inside
+`@main`:
 
 ```velar fragment
 import {configuration} from "velar/server"
-import {listen} from "velar/websocket"
+import {listen, run} from "velar/websocket"
 
 type ServerSettings:
     host: string
@@ -253,21 +262,21 @@ type ServerSettings:
 type Settings:
     server: ServerSettings
 
-const settings = await configuration(Settings)
-
-export async def start():
-    return await listen({
+@main:
+    const settings = await configuration(Settings)
+    const server = await listen({
         host: settings.server.host,
         port: settings.server.port,
         http: routes,
         origins: ["https://app.example.com"],
         maxBodyBytes: settings.server.maxBodyBytes,
     })
+    await run(server)
 ```
 
-The result must be exactly `Promise<WebSocketServer>`. The launcher supplies no
-host, port, or body-limit arguments; the root application configuration remains
-the single runtime authority. Each `@websocket` RoutePattern owns its own path,
+The entry module itself is the executable artifact; the declared application
+configuration remains the single runtime authority. Each `@websocket`
+RoutePattern owns its own path,
 typed captures, admission inputs, and session handler, so this declarative mode
 does not accept the listener's legacy single `path` option.
 

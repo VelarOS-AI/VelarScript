@@ -10,11 +10,12 @@ capabilities, or application configuration.
 path-pattern strings, Node modules, HTTP/WebSocket transport, and low-level
 server lifecycle; it does not own convention-based application configuration.
 An ordinary service activates `@velarscript/server` and then loads
-`velar skill server` for root `application.*`, application assembly, and
+`velar skill server` for manifest-declared application configuration, assembly, and
 connection lifecycle.
 
-A deliberately low-level Node application may activate Node directly and name
-one exported zero-argument async startup function:
+A deliberately low-level Node application may activate Node directly. Its
+selected entry source owns startup inside `@main`, exactly like Core, Web, and
+Desktop entries:
 
 ```json
 {
@@ -23,42 +24,41 @@ one exported zero-argument async startup function:
   "outDir": "dist",
   "publicDir": "public",
   "build": {"mode": "production", "sourceMaps": false},
-  "extensions": ["@velarscript/node"],
-  "node": {
-    "app": "start"
-  }
+  "extensions": ["@velarscript/node"]
 }
 ```
 
 The low-level entry owns its own startup arguments in code:
 
 ```velar fragment
-import {serve} from "velar/serve"
+import {run, serve} from "velar/serve"
 import {app} from "./app.vel"
 
-export async def start():
-    return await serve(app, port=3000, host="127.0.0.1")
+@main:
+    const server = await serve(app, port=3000, host="127.0.0.1")
+    await run(server)
 ```
 
-For one shared HTTP/WebSocket application port, the same exact zero-argument
-shape returns `Promise<WebSocketServer>`:
+For one shared HTTP/WebSocket application port, use the WebSocket transport's
+matching lifecycle operation:
 
 ```velar fragment
 import {app as routes} from "./app.vel"
-import {listen} from "velar/websocket"
+import {listen, run} from "velar/websocket"
 
-export async def start():
-    return await listen({
+@main:
+    const server = await listen({
         host: "127.0.0.1",
         port: 3000,
         http: routes,
         origins: ["https://app.example.com"],
         maxBodyBytes: 16777216,
     })
+    await run(server)
 ```
 
-The exact result is `Promise<WebSocketServer>`. The launcher supplies no
-host, port, or body-limit parameters.
+`run(server)` owns SIGINT/SIGTERM shutdown for either transport. The external
+CLI executes the compiled entry module directly.
 
 Use direct Node activation for tools, embedded adapters, and tests. For an
 application service, activate `@velarscript/server`; it provides the same
@@ -223,6 +223,12 @@ when injected repeatedly and releases after response/background completion.
 An app-scoped provider may depend only on other app-scoped providers, may be
 eager, and releases during shutdown. Cycles and provider-budget exhaustion fail
 closed. Do not build a controller or container layer around it.
+
+When the process has already constructed an application resource, bind it with
+`supply(app, provider, value)`. The provider must be app-scoped, the value is
+checked against that provider's inferred result type, and its `release` callback
+still owns shutdown. The binding follows `prefix`, middleware, docs, lifecycle,
+and server composition; supplying the same provider twice is rejected.
 
 ## Composition, lifecycle, and middleware
 

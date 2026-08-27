@@ -204,7 +204,7 @@ test("[D60-149] velar/http's enum answers all three names inside a built page", 
   await writeFile(join(directory, "src", "main.vel"), `component App:
     return <p data-ready>ready</p>
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `, "utf8");
   await writeFile(join(directory, "src", "phase.browser.test.vel"), `import {HttpTransportPhase} from "velar/http"
 import {expect} from "velar/test"

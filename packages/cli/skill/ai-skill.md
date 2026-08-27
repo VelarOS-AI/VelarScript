@@ -75,7 +75,8 @@ considering source fallback. Other templates select their own framework brief. E
 `velar.json`, a `package.json` whose scripts are the gates, a `src/` tree, a
 passing test, and an `AGENTS.md`.
 
-Writing the manifest yourself: `formatVersion` is required, `extensions` may be
+Writing the manifest yourself: `formatVersion` is required, `kind` may be
+`application` or `library` (and defaults to `application`), `extensions` may be
 omitted by a project that loads none, `entry` defaults to `src/main.vel`,
 `outDir` to `dist`, and `publicDir` to `public`.
 
@@ -84,6 +85,7 @@ A Core project (CLI or library) loads no extensions:
 ```json
 {
   "formatVersion": 2,
+  "kind": "library",
   "entry": "src/main.vel",
   "extensions": []
 }

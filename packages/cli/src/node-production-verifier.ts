@@ -26,7 +26,7 @@ export async function verifyNodeProductionBuild(input: string, cwd = process.cwd
   const actualFiles = await nodeProductionFiles(directory);
   const manifest = await readJson(manifestPath) as NodeProductionBuildManifest;
 
-  if (manifest?.formatVersion !== 4 || manifest.kind !== "velar-node-build") {
+  if (manifest?.formatVersion !== 5 || manifest.kind !== "velar-node-build") {
     throw new Error(`${manifestPath} has an unsupported Node production build format`);
   }
   if (manifest.compiler?.name !== "velar" || typeof manifest.compiler.version !== "string" || !manifest.compiler.version) {
@@ -39,10 +39,10 @@ export async function verifyNodeProductionBuild(input: string, cwd = process.cwd
     throw new Error(`${manifestPath} has an invalid buildId`);
   }
   if (typeof manifest.sourceMaps !== "boolean") throw new Error(`${manifestPath} has invalid source-map state`);
-  if (typeof manifest.app !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(manifest.app)) {
-    throw new Error(`${manifestPath} has an invalid startup binding`);
-  }
   const entry = safeRelativePath(manifest.entry, "entry");
+  const configuration = manifest.configuration === null
+    ? null
+    : safeRelativePath(manifest.configuration, "configuration");
   if (!Array.isArray(manifest.assets) || manifest.assets.length === 0) throw new Error(`${manifestPath} has no asset inventory`);
   if (manifest.assets.length > MAX_PRODUCTION_ASSETS) {
     throw new Error(`${manifestPath} exceeds the ${MAX_PRODUCTION_ASSETS}-asset production limit`);
@@ -59,7 +59,7 @@ export async function verifyNodeProductionBuild(input: string, cwd = process.cwd
     if (asset.role !== "entry" && asset.role !== "source-map" && asset.role !== "configuration" && asset.role !== "asset") {
       throw new Error(`${manifestPath} has invalid role for '${path}'`);
     }
-    const expectedRole = nodeProductionAssetRole(path, entry);
+    const expectedRole = nodeProductionAssetRole(path, entry, configuration);
     if (asset.role !== expectedRole) {
       throw new Error(`${manifestPath} must classify '${path}' as ${expectedRole}`);
     }
@@ -93,6 +93,9 @@ export async function verifyNodeProductionBuild(input: string, cwd = process.cwd
   if (declared.get(entry)?.role !== "entry") throw new Error(`${manifestPath} entry '${entry}' is not the entry asset`);
   if (sortedPaths.filter((path) => declared.get(path)?.role === "entry").length !== 1) {
     throw new Error(`${manifestPath} must declare exactly one entry asset`);
+  }
+  if (configuration !== null && declared.get(configuration)?.role !== "configuration") {
+    throw new Error(`${manifestPath} configuration '${configuration}' is not the configuration asset`);
   }
   const sourceMapAssets = sortedPaths.filter((path) => declared.get(path)?.role === "source-map");
   if (manifest.sourceMaps && sourceMapAssets.length === 0) throw new Error(`${manifestPath} enables source maps but declares none`);

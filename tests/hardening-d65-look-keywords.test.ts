@@ -186,7 +186,7 @@ test("[D65-169] a recorded partial exclusion names a property that publishes a s
 
 test("[D65-168] every newly closed property accepts a value its CSS grammar has", { timeout: 300_000 }, async () => {
   const directory = await webProject("velar-d65-168-accept-", `${lookOf("reachable", closedProperties.map(([property, right]) => [property, right]))}
-mount(<div look={reachable} />, "#app")
+@main: mount(<div look={reachable} />, "#app")
 `);
   const checked = await run(["check", directory]);
   assert.equal(checked.code, 0, checked.output);
@@ -201,7 +201,7 @@ test("[D65-168] every newly closed property rejects the value only the fallback 
   // twenty-six entries in one block would report one of them.
   const blocks = closedProperties.map(([property, , wrong], index) => lookOf(`wrong${index}`, [[property, wrong]]));
   const directory = await webProject("velar-d65-168-reject-", `${blocks.join("\n")}
-mount(<div />, "#app")
+@main: mount(<div />, "#app")
 `);
   const checked = await run(["check", directory]);
   assert.notEqual(checked.code, 0);
@@ -230,7 +230,7 @@ test("[D65-169] a multi-token CSS value is written the way CSS writes it", { tim
     ["textUnderlinePosition", "right under"],
     ["overscrollBehavior", "none contain"],
   ])}
-mount(<div look={whole} />, "#app")
+@main: mount(<div look={whole} />, "#app")
 `);
   const checked = await run(["check", directory]);
   assert.equal(checked.code, 0, checked.output);

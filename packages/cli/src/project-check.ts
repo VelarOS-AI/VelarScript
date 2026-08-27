@@ -4,6 +4,8 @@ import { formatAdvisory, formatDiagnostic } from "@velarscript/compiler";
 import type { VelarProjectConfig } from "./config.ts";
 import { compileProject, compileProjectEntries, type ProjectResult } from "./project.ts";
 import { MAX_VELAR_PROJECT_MODULES } from "./source-limits.ts";
+import { nodeApplicationConfig } from "./node-application.ts";
+import { applicationEntry } from "./application-entry.ts";
 
 /**
  * One compiled root of a `velar check` run: the project entry first, then every
@@ -64,14 +66,29 @@ export async function checkResolvedProject(
   // MOD-I1: resolution failures and module diagnostics print together —
   // exactly as `velar run` reports them — so one unresolved import can never
   // bury the compiler's own diagnostics for everything else.
+  const entryErrors = [
+    ...project.failures.map((failure) => `${failure.path}: ${failure.message}`),
+    ...project.modules.flatMap((module) => module.result.diagnostics.map((item) => formatDiagnostic(module.result.source, item))),
+  ];
   const roots: CheckedProjectRoot[] = [{
     result: project,
-    errors: [
-      ...project.failures.map((failure) => `${failure.path}: ${failure.message}`),
-      ...project.modules.flatMap((module) => module.result.diagnostics.map((item) => formatDiagnostic(module.result.source, item))),
-    ],
+    errors: entryErrors,
     advisories: project.modules.flatMap((module) => module.result.advisories.map((item) => formatAdvisory(module.result.source, item))),
   }];
+  // Web、Desktop、Node 和 Server 共用同一入口契约：外部宿主只执行清单选中的
+  // 模块，真正的启动动作必须写在该模块的 @main 区域中。单文件检查仍允许
+  // 检查普通库模块；完整应用项目则在这里统一拦截缺少入口区域的情况。
+  if (!input?.endsWith(".vel") && entryErrors.length === 0) {
+    if (config.kind === "application" && (config.framework || nodeApplicationConfig(config))) {
+      try { applicationEntry(project); }
+      catch (error) { entryErrors.push(error instanceof Error ? error.message : "Application entry validation failed"); }
+    } else if (config.kind === "library") {
+      const entry = project.modules.find((module) => module.inputPath === project.entryPath);
+      if (entry?.result.hasMain) {
+        entryErrors.push(`${project.entryPath}: A library entry cannot declare '@main'; move startup into an application project`);
+      }
+    }
+  }
   // One extra root, compiled on its own. It is deliberately *not* folded into
   // the `compileProjectEntries` call above: every entry handed to that call has
   // its `@main` body emitted, so adding roots there would change what a build

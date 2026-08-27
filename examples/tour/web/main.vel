@@ -36,4 +36,4 @@ component Tour:
         <ConnectionsPanel />
     </div>
 
-mount(<Tour />, "#app")
+@main: mount(<Tour />, "#app")

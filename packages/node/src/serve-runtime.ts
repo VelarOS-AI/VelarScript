@@ -9,6 +9,7 @@ import { normalizeError as __velarServeNormalizeError } from "velar/compiler-run
 import { __velarValidateDenseList as __velarServeValidateDenseList } from "velar/compiler-runtime-collection-lowering-v1";
 import { Bytes as __velarServeBytesType } from "velar/binary";
 import { canonical as __velarServeFsCanonical, info as __velarServeFsInfo, writeBytes as __velarServeWriteBytes } from "velar/fs";
+import { onShutdown as __velarServeOnShutdown } from "velar/host";
 import { Cancellation as __velarServeCancellation } from "velar/task";
 
 const __velarServeArray = globalThis.Array;
@@ -1527,7 +1528,7 @@ function __velarServeBodyLimit(value) {
   return value;
 }
 
-function __velarServeAppValue(name, routes, webSockets = [], lifecycles = [], notFound = null, responseHandler = null) {
+function __velarServeAppValue(name, routes, webSockets = [], lifecycles = [], notFound = null, responseHandler = null, supplies = []) {
   const router = __velarServeRouter(routes);
   const webSocketRouter = __velarServeRouter(webSockets);
   return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{
@@ -1540,6 +1541,7 @@ function __velarServeAppValue(name, routes, webSockets = [], lifecycles = [], no
     lifecycles: __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [lifecycles]),
     notFound,
     responseHandler,
+    supplies: __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [supplies]),
   }]);
 }
 
@@ -1549,6 +1551,8 @@ function __velarCreateServeApp(name, items) {
   const routes = [];
   const webSockets = [];
   const lifecycles = [];
+  const supplies = [];
+  const suppliedProviders = new __velarServeMap();
   let notFound = null;
   let responseHandler = null;
   // D90 R19(b): assembly is the moment the final table exists, so the final
@@ -1597,6 +1601,15 @@ function __velarCreateServeApp(name, items) {
         if (lifecycles.length >= __velarServeMaxLifecycles) throw new __velarServeRangeError("ServeApp cannot contain more than 4096 lifecycle pairs after composition");
         lifecycles[lifecycles.length] = item.lifecycles[hook];
       }
+      for (let binding = 0; binding < item.supplies.length; binding += 1) {
+        const supplied = item.supplies[binding];
+        if (__velarServeCall(__velarServeMapHas, suppliedProviders, [supplied.provider])) {
+          throw new __velarServeTypeError("ServeApp '" + name + "' supplies the same Provider more than once");
+        }
+        if (supplies.length >= 128) throw new __velarServeRangeError("ServeApp cannot contain more than 128 supplied Providers");
+        __velarServeCall(__velarServeMapSet, suppliedProviders, [supplied.provider, true]);
+        supplies[supplies.length] = supplied;
+      }
       if (item.notFound !== null) {
         if (notFound !== null) throw new __velarServeTypeError("ServeApp contains more than one @notFound fallback");
         notFound = item.notFound;
@@ -1607,7 +1620,27 @@ function __velarCreateServeApp(name, items) {
       }
     } else throw new __velarServeTypeError("A server composition entry must be a ServeApp");
   }
-  return __velarServeAppValue(name, routes, webSockets, lifecycles, notFound, responseHandler);
+  return __velarServeAppValue(name, routes, webSockets, lifecycles, notFound, responseHandler, supplies);
+}
+
+/**
+ * 把一个进程在启动时已经构造好的应用级资源交给 ServeApp。绑定属于应用组合
+ * 本身，因此 prefix、middleware、docs 等后续包装不会丢失它；服务器关闭时，
+ * 仍由 Provider 声明的 release 负责按统一顺序释放资源。
+ */
+export function supply(app, provider, value) {
+  if (!__velarServeIsApp(app)) throw new __velarServeTypeError("supply requires a ServeApp");
+  if (!__velarServeIsProvider(provider)) throw new __velarServeTypeError("supply requires a Provider");
+  if (provider.scope !== "app") throw new __velarServeTypeError("supply accepts only app-scoped Providers");
+  if (app.supplies.length >= 128) throw new __velarServeRangeError("ServeApp cannot contain more than 128 supplied Providers");
+  const supplies = [];
+  for (let index = 0; index < app.supplies.length; index += 1) {
+    const binding = app.supplies[index];
+    if (binding.provider === provider) throw new __velarServeTypeError("A ServeApp cannot supply the same Provider more than once");
+    supplies[index] = binding;
+  }
+  supplies[supplies.length] = __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{provider, value}]);
+  return __velarServeAppValue(app.name, app.routes, app.webSockets, app.lifecycles, app.notFound, app.responseHandler, supplies);
 }
 
 export function prefix(path, app) {
@@ -1657,7 +1690,7 @@ export function prefix(path, app) {
   for (let index = 0; index < routes.length; index += 1) items[items.length] = routes[index];
   for (let index = 0; index < webSockets.length; index += 1) items[items.length] = webSockets[index];
   const output = __velarCreateServeApp(app.name, items);
-  return __velarServeAppValue(output.name, output.routes, output.webSockets, app.lifecycles, null, app.responseHandler);
+  return __velarServeAppValue(output.name, output.routes, output.webSockets, app.lifecycles, null, app.responseHandler, app.supplies);
 }
 
 export function staticFiles(path, root, fallback = null) {
@@ -1704,7 +1737,7 @@ export function use(app, middleware) {
   for (let index = 0; index < app.webSockets.length; index += 1) items[items.length] = app.webSockets[index];
   if (notFound !== null) items[items.length] = notFound;
   const output = __velarCreateServeApp(app.name, items);
-  return __velarServeAppValue(output.name, output.routes, output.webSockets, app.lifecycles, output.notFound, app.responseHandler);
+  return __velarServeAppValue(output.name, output.routes, output.webSockets, app.lifecycles, output.notFound, app.responseHandler, app.supplies);
 }
 
 export function bodyLimit(app, maxBytes) {
@@ -1726,7 +1759,7 @@ export function bodyLimit(app, maxBytes) {
   for (let index = 0; index < routes.length; index += 1) items[items.length] = routes[index];
   for (let index = 0; index < app.webSockets.length; index += 1) items[items.length] = app.webSockets[index];
   const output = __velarCreateServeApp(app.name, items);
-  return __velarServeAppValue(output.name, output.routes, output.webSockets, app.lifecycles, app.notFound, app.responseHandler);
+  return __velarServeAppValue(output.name, output.routes, output.webSockets, app.lifecycles, app.notFound, app.responseHandler, app.supplies);
 }
 
 export function lifecycle(app, startup = null, shutdown = null) {
@@ -1736,7 +1769,7 @@ export function lifecycle(app, startup = null, shutdown = null) {
   const lifecycles = [];
   for (let index = 0; index < app.lifecycles.length; index += 1) lifecycles[index] = app.lifecycles[index];
   lifecycles[lifecycles.length] = __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{startup, shutdown}]);
-  return __velarServeAppValue(app.name, app.routes, app.webSockets, lifecycles, app.notFound, app.responseHandler);
+  return __velarServeAppValue(app.name, app.routes, app.webSockets, lifecycles, app.notFound, app.responseHandler, app.supplies);
 }
 
 function __velarServeResponseWithHeaders(value, additions) {
@@ -2747,12 +2780,20 @@ async function __velarServeHandleAppResponse(app, request, maxBodyBytes, context
   }
 }
 
-function __velarServeAppState(overrides = null) {
-  return {
+function __velarServeAppState(app = null, overrides = null) {
+  const state = {
     cache: new __velarServeMap(), resolving: new __velarServeMap(), releases: [], providerCount: 0, overrides,
     phase: "open", activeRequests: 0, cancellations: new __velarServeMap(), drain: null, resolveDrain: null,
     startedLifecycles: 0,
   };
+  if (app !== null) for (let index = 0; index < app.supplies.length; index += 1) {
+    const binding = app.supplies[index];
+    if (overrides !== null && __velarServeCall(__velarServeMapHas, overrides, [binding.provider])) continue;
+    __velarServeCall(__velarServeMapSet, state.cache, [binding.provider, binding.value]);
+    state.providerCount += 1;
+    if (binding.provider.release !== null) state.releases[state.releases.length] = {release: binding.provider.release, value: binding.value};
+  }
+  return state;
 }
 
 function __velarServeBeginAppRequest(appState, cancellation) {
@@ -2991,7 +3032,7 @@ async function __velarServePrepareWebSocket(app, nativeRequest, maxBodyBytes, ap
 async function __velarServeNativeApp(app, maxBodyBytes = __velarServeMaxBodyBytes) {
   if (!__velarServeIsApp(app)) throw new __velarServeTypeError("Native HTTP composition requires a ServeApp");
   maxBodyBytes = __velarServeBodyLimit(maxBodyBytes);
-  const appState = __velarServeAppState();
+  const appState = __velarServeAppState(app);
   try {
     await __velarServeRunStartup(app, appState);
     await __velarServeInitializeEagerProviders(app, maxBodyBytes, appState);
@@ -3354,7 +3395,7 @@ function __velarServeDocumentRoutes(app, documentation) {
     output[output.length] = __velarCreateServeRoute(route.method, route.pattern, route.parameters, route.handler, __velarServeRouteMetadata(route, __velarServeCall(__velarServeMapGet, configured, [key])), route.bindRoute);
   }
   if (__velarServeCall(__velarServeMapSize, seen, []) !== size) throw new __velarServeTypeError("docs routes contains a route that the application does not declare");
-  return __velarServeAppValue(app.name, output, app.webSockets, app.lifecycles, app.notFound, app.responseHandler);
+  return __velarServeAppValue(app.name, output, app.webSockets, app.lifecycles, app.notFound, app.responseHandler, app.supplies);
 }
 
 function __velarServeOpenApiPath(path) {
@@ -3987,7 +4028,7 @@ async function __velarServeTestResponse(value, cookies) {
 
 async function __velarServeTestClient(app, overrides = null) {
   if (!__velarServeIsApp(app)) throw new __velarServeTypeError("server-test client requires a ServeApp");
-  const appState = __velarServeAppState(__velarServeTestOverrides(overrides));
+  const appState = __velarServeAppState(app, __velarServeTestOverrides(overrides));
   const cookies = new __velarServeMap();
   let closing = null;
   let closed = null;
@@ -4074,8 +4115,8 @@ export async function serve(app, port, host = "127.0.0.1", maxBodyBytes = __vela
   if (!__velarServeIsSafeInteger(maxBodyBytes) || maxBodyBytes < 1 || maxBodyBytes > __velarServeMaxBodyBytes) {
     throw new __velarServeRangeError("serve maxBodyBytes must be an integer from 1 through 16777216");
   }
-  const appState = __velarServeAppState();
   if (!__velarServeIsApp(app) && typeof app !== "function") throw new __velarServeTypeError("serve requires a ServeApp or async request handler");
+  const appState = __velarServeAppState(__velarServeIsApp(app) ? app : null);
   const handler = __velarServeIsApp(app)
     ? request => __velarServeHandleApp(app, request, maxBodyBytes, appState)
     : request => __velarServeHandleFunction(app, request, appState);
@@ -4156,5 +4197,14 @@ export async function serve(app, port, host = "127.0.0.1", maxBodyBytes = __vela
     catch (error) { if (!transportStopped && stopped === pending) stopped = null; throw error; }
   };
   return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{port: started.port, stop}]);
+}
+
+// Node 程序在 @main 中把已创建的 Server 交给统一宿主生命周期。velar/host 是
+// 唯一的进程信号所有者；传输层只登记自身的异步释放动作，避免每种服务各自
+// 捕获 process 并形成互相竞争的 SIGINT/SIGTERM 处理器。
+export async function run(server) {
+  server = Server.parse(server);
+  __velarServeOnShutdown(async () => await server.stop());
+  return null;
 }
 `.trimStart();

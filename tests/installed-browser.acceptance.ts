@@ -96,8 +96,9 @@ ${applicationWebModules.map(({ probe }) => `    ${probe},`).join("\n")}
 import {App} from "./app.vel"
 import {installedWebModules} from "./web-contract.vel"
 
-assert installedWebModules == ${applicationWebModules.length} else "The installed Web package must expose all application modules"
-mount(<App />, "#app")
+@main:
+    assert installedWebModules == ${applicationWebModules.length} else "The installed Web package must expose all application modules"
+    mount(<App />, "#app")
 `.trimStart(), "utf8");
   // Asked of the installed tree rather than of the install command: the pin is
   // only worth anything if the CLI the application runs resolves to it, and a

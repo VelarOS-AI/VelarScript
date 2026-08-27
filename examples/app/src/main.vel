@@ -8,5 +8,6 @@
 import {App} from "./app.vel"
 import {restorePreferences} from "./state/preferences.vel"
 
-restorePreferences()
-mount(<App />, "#app")
+@main:
+    restorePreferences()
+    mount(<App />, "#app")

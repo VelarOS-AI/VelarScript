@@ -16,4 +16,4 @@ component Tour:
         <CapabilityPanel />
     </div>
 
-mount(<Tour />, "#app")
+@main: mount(<Tour />, "#app")

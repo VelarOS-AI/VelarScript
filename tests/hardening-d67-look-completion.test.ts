@@ -80,7 +80,7 @@ function rejectionProject(prefix: string, probes: readonly (readonly [string, st
   return webProject(prefix, `${probes
     .map(([property, value], index) => lookOf(`probe${index}`, [[property, value]]))
     .join("\n")}
-mount(<div />, "#app")
+@main: mount(<div />, "#app")
 `);
 }
 
@@ -165,7 +165,7 @@ export const measured = look:
     backgroundPosition = 12px
     transformOrigin = 50%
 
-mount(<div look={positioned} />, "#app")
+@main: mount(<div look={positioned} />, "#app")
 `);
   const checked = await run(["check", directory]);
   assert.equal(checked.code, 0, checked.output);
@@ -197,7 +197,7 @@ test("[D67-172] a <position> property still refuses the shared sizing words", { 
   }
   // A metric property with no table of its own keeps the shared words.
   const shared = await webProject("velar-d67-172-shared-", `${lookOf("sized", [["width", "min-content"], ["maxHeight", "fit-content"]])}
-mount(<div look={sized} />, "#app")
+@main: mount(<div look={sized} />, "#app")
 `);
   assert.equal((await run(["check", shared])).code, 0);
 });
@@ -238,7 +238,7 @@ test("[D67-173] every value this ruling added compiles", { timeout: 300_000 }, a
   const directory = await webProject("velar-d67-173-accept-", `${completedValues
     .map(([property, value], index) => lookOf(`added${index}`, [[property, value]]))
     .join("\n")}
-mount(<div />, "#app")
+@main: mount(<div />, "#app")
 `);
   const checked = await run(["check", directory]);
   assert.equal(checked.code, 0, checked.output);

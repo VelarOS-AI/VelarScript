@@ -67,7 +67,7 @@ component App:
     const featureLabel: string = featureValue()
     return <main>{rootLabel}:{directLabel}:{featureLabel}</main>
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `.trimStart(), "utf8");
 
     const checked = spawnSync(process.execPath, [cli, "check"], { cwd: projectRoot, encoding: "utf8" });

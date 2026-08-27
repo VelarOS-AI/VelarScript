@@ -7,6 +7,7 @@ import { extname as __velarServeExtname, isAbsolute as __velarServeIsAbsolute, r
 import { brotliCompress as __velarServeBrotliNode, gzip as __velarServeGzipNode } from "node:zlib";
 import { promisify as __velarServePromisify } from "node:util";
 import { ServeRequest as __velarServeRuntime, ServeApp as __velarServeApp } from "velar/serve";
+import { onShutdown as __velarWsOnShutdown } from "velar/host";
 
 const __velarWebSocketConnections = new WeakMap();
 const __velarWebSocketServers = new WeakMap();
@@ -345,5 +346,10 @@ export async function listen(options) {
       });
     });
   } catch (error) { if (application) await application.close(); throw error; }
+}
+export async function run(server) {
+  server = __velarWsServerType.parse(server);
+  __velarWsOnShutdown(async () => await server.stop());
+  return null;
 }
 `.trimStart();

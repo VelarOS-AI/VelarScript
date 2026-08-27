@@ -5717,7 +5717,7 @@ test("dev server keeps the last good app behind compile-error overlays", async (
   const mainPath = join(directory, "main.vel");
   await linkWorkspaceWebExtension(directory);
   await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: ["@velarscript/web"] }), "utf8");
-  await writeFile(mainPath, "component App:\n    return <main>Ready</main>\n\nmount(<App />, \"#app\")\n", "utf8");
+  await writeFile(mainPath, "component App:\n    return <main>Ready</main>\n\n@main: mount(<App />, \"#app\")\n", "utf8");
   const child = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", directory, "--port", "42880"], {
     cwd: process.cwd(),
     stdio: ["ignore", "pipe", "pipe"],
@@ -5752,7 +5752,7 @@ test("dev server contains unexpected rebuild failures and recovers on the next e
   const mainPath = join(directory, "main.vel");
   await linkWorkspaceWebExtension(directory);
   await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: ["@velarscript/web"] }), "utf8");
-  const validSource = (label: string): string => `component App:\n    return <main>${label}</main>\n\nmount(<App />, \"#app\")\n`;
+  const validSource = (label: string): string => `component App:\n    return <main>${label}</main>\n\n@main: mount(<App />, \"#app\")\n`;
   await writeFile(mainPath, validSource("Ready"), "utf8");
   const child = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", directory, "--port", "42881"], {
     cwd: process.cwd(),
@@ -5827,7 +5827,7 @@ test("dev server polling watcher reports project changes without native file eve
   const preloadPath = join(directory, "force-windows-platform.mjs");
   await linkWorkspaceWebExtension(directory);
   await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: ["@velarscript/web"] }), "utf8");
-  await writeFile(mainPath, "component App:\n    return <main>Before</main>\n\nmount(<App />, \"#app\")\n", "utf8");
+  await writeFile(mainPath, "component App:\n    return <main>Before</main>\n\n@main: mount(<App />, \"#app\")\n", "utf8");
   await writeFile(preloadPath, "Object.defineProperty(process, 'platform', {value: 'win32'});\n", "utf8");
   const child = spawn(process.execPath, [
     "--import",
@@ -5848,7 +5848,7 @@ test("dev server polling watcher reports project changes without native file eve
   };
 
   await waitForOutput(/VelarScript dev server:/u);
-  await writeFile(mainPath, "component App:\n    return <main>After</main>\n\nmount(<App />, \"#app\")\n", "utf8");
+  await writeFile(mainPath, "component App:\n    return <main>After</main>\n\n@main: mount(<App />, \"#app\")\n", "utf8");
   await waitForOutput(/VelarScript app rebuilt in/u);
   const javascript = await (await fetch("http://127.0.0.1:42882/main.js")).text();
   assert.match(javascript, /After/u);
@@ -5872,7 +5872,7 @@ import {Banner} from "./banner.vel"
 component App:
     return <main><Banner />{label}</main>
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `.trimStart(), "utf8");
   const child = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", directory, "--port", "42883"], {
     cwd: process.cwd(),
@@ -5960,7 +5960,7 @@ type Catalog:
 const directLabel = Catalog.parse(rawCatalog).label
 component App:
     return <main>{label}:{directLabel}</main>
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `.trimStart(), "utf8");
 
   const child = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", projectRoot, "--port", "42884"], {
@@ -6033,7 +6033,7 @@ test("dev server watches JavaScript package subpath declarations and reanalyzes 
 import js {format} from "typed-library/format"
 component App:
     return <main>{format(42)}</main>
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `.trimStart(), "utf8");
 
   const child = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", projectRoot, "--port", "42885"], {
@@ -6102,7 +6102,7 @@ import js {decorate} from "dual-lib"
 component App:
     return <main>{decorate("velar")}</main>
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `.trimStart(), "utf8");
 
   const child = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", projectRoot, "--port", "42886"], {
@@ -6164,7 +6164,7 @@ import js {decorate} from "legacy-lib"
 component App:
     return <main>{decorate("velar")}</main>
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `.trimStart(), "utf8");
 
   const child = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", projectRoot, "--port", "42887"], {
@@ -6249,7 +6249,7 @@ import js util from "wrapper-lib/lib/util"
 component App:
     return <main>{wrapper.frame(util.wrap("velar"))}</main>
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `.trimStart(), "utf8");
 
   const child = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", projectRoot, "--port", "42888"], {
@@ -6316,7 +6316,7 @@ import js {decorate} from "broken-lib"
 component App:
     return <main>{decorate("velar")}</main>
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `.trimStart(), "utf8");
 
   const child = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", projectRoot, "--port", "42889"], {
@@ -6587,7 +6587,7 @@ import {lazy} from "velar/web"
 const Page = lazy(() => import("./page.vel"), "Page")
 component App:
     return <Page />
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `.trimStart(), "utf8");
   const execution = spawnSync(process.execPath, [
     "packages/cli/src/cli.ts", "build", directory, "--out-dir", output,
@@ -11228,6 +11228,7 @@ test("Core, Web, and Node own distinct WebSocket surfaces", async () => {
     "WebSocketTimeoutError",
     "connect",
     "listen",
+    "run",
   ]);
 
   const directory = await makeTemporaryDirectory("velar-websocket-target-");
@@ -15178,7 +15179,7 @@ const routes = [route("/", Home)]
 component App:
     return <Router routes={routes} />
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `.trimStart(), "utf8");
 
   const config = await resolveVelarProject(null, directory);
@@ -15502,7 +15503,7 @@ test("official toolchain targets resolve for zero-npm projects without weakening
         permissions: {},
       },
     }), "utf8");
-    await writeFile(join(directory, "src", "main.vel"), "component App:\n    return <main>ready</main>\n\nmount(<App />, \"#app\")\n", "utf8");
+    await writeFile(join(directory, "src", "main.vel"), "component App:\n    return <main>ready</main>\n\n@main: mount(<App />, \"#app\")\n", "utf8");
 
     const project = await resolveVelarProject(directory);
     assert.deepEqual(project.extensionGraph.map((item) => [item.name, item.resolution]), [
@@ -15640,7 +15641,7 @@ throw {
 test("static Web builds remain reproducible and provider-neutral", async () => {
   const directory = await makeTemporaryDirectory("velar-static-deployment-");
   await mkdir(join(directory, "src"), { recursive: true });
-  await writeFile(join(directory, "src", "main.vel"), `component App:\n    return <main><h1>Static Velar</h1></main>\n\nmount(<App />, "#app")\n`, "utf8");
+  await writeFile(join(directory, "src", "main.vel"), `component App:\n    return <main><h1>Static Velar</h1></main>\n\n@main: mount(<App />, "#app")\n`, "utf8");
   await linkWorkspaceWebExtension(directory);
   await writeFile(join(directory, "velar.json"), JSON.stringify({
     formatVersion: 2,
@@ -15845,8 +15846,8 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     devDependencies: Record<string, string>;
   };
-  assert.equal(createdPackage.dependencies["@velarscript/web"], "0.20.0");
-  assert.equal(createdPackage.devDependencies["@velarscript/cli"], "0.20.0");
+  assert.equal(createdPackage.dependencies["@velarscript/web"], "0.20.1");
+  assert.equal(createdPackage.devDependencies["@velarscript/cli"], "0.20.1");
   assert.equal(createdPackage.scripts.format, "velar format");
   assert.equal(createdPackage.scripts["format:check"], "velar format --check");
   assert.equal(createdPackage.scripts["test:browser"], "velar test --browser");
@@ -15982,8 +15983,8 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   assert.deepEqual(componentPackage.velar.requires.capabilities, []);
   assert.equal(componentPackage.scripts["pack:check"], "npm pack --dry-run --json");
   assert.match(componentPackage.scripts.validate ?? "", /npm run pack:check$/u);
-  assert.equal(componentPackage.peerDependencies["@velarscript/web"], "^0.20.0");
-  assert.equal(componentPackage.devDependencies["@velarscript/web"], "0.20.0");
+  assert.equal(componentPackage.peerDependencies["@velarscript/web"], "^0.20.1");
+  assert.equal(componentPackage.devDependencies["@velarscript/web"], "0.20.1");
   assert.match(await readFile(join(componentRoot, "src", "index.vel"), "utf8"), /export component InfoCard/u);
   assert.deepEqual(JSON.parse(await readFile(join(componentRoot, "velar.json"), "utf8")).extensions, ["@velarscript/web"]);
   await linkWorkspaceWebExtension(componentRoot);
@@ -16008,7 +16009,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     scripts: Record<string, string>;
   };
-  assert.equal(nodePackage.dependencies["@velarscript/server"], "0.20.0");
+  assert.equal(nodePackage.dependencies["@velarscript/server"], "0.20.1");
   assert.equal(nodePackage.dependencies["@velarscript/node"], undefined);
   assert.equal(nodePackage.scripts.dev, "velar dev");
   assert.equal(nodePackage.scripts.start, "velar serve");
@@ -16036,7 +16037,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     scripts: Record<string, string>;
   };
-  assert.equal(desktopPackage.dependencies["@velarscript/desktop"], "0.20.0");
+  assert.equal(desktopPackage.dependencies["@velarscript/desktop"], "0.20.1");
   assert.equal(desktopPackage.scripts.package, "velar package");
   assert.equal(desktopPackage.scripts["test:browser"], "velar test --browser=all");
   const desktopAgents = await readFile(join(desktopRoot, "AGENTS.md"), "utf8");
@@ -16100,7 +16101,7 @@ test("CLI help is command-specific and malformed top-level invocations fail clea
   const creator = resolve("packages/create/src/cli.ts");
   const creatorVersion = spawnSync(process.execPath, [creator, "--version"], { encoding: "utf8" });
   assert.equal(creatorVersion.status, 0, creatorVersion.stderr);
-  assert.equal(creatorVersion.stdout, "create-velar 0.20.0\n");
+  assert.equal(creatorVersion.stdout, "create-velar 0.20.1\n");
   const creatorMissing = spawnSync(process.execPath, [creator], { encoding: "utf8" });
   assert.equal(creatorMissing.status, 2);
   assert.match(creatorMissing.stderr, /expected one project directory/u);
@@ -28160,7 +28161,7 @@ test("CLI emits complete Web application assets", async () => {
     apiVersion: "0.11",
     artifactKind: "velar-web-build",
   });
-  assert.deepEqual(manifest.compiler, { name: "velar", version: "0.20.0" });
+  assert.deepEqual(manifest.compiler, { name: "velar", version: "0.20.1" });
   assert.match(manifest.buildId, /^[a-f0-9]{64}$/u);
   assert.equal(manifest.sourceMaps, true);
   assert.equal(manifest.entry, `assets/${javascript}`);

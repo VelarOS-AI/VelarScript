@@ -244,7 +244,7 @@ import {openTasks, tasks} from "./store.vel"
 export component App:
     return <p>{openTasks} {tasks.size}</p>
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `.trimStart(),
   });
   const checked = await run(["check", directory]);
@@ -260,7 +260,7 @@ export component App:
         openTasks = 5
     return <div><input bind:value={openTasks} /><p>{openTasks}</p></div>
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `.trimStart(), "utf8");
   const refused = await run(["check", directory]);
   assert.equal(refused.code, 1, refused.output);
@@ -286,7 +286,7 @@ export component App:
 
     return <p>{openTasks}</p>
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `.trimStart(),
   });
   const checked = await run(["check", directory]);
@@ -633,7 +633,7 @@ export const gutter: Length = 12px
 export component App:
     return <p look:color={brand} look:padding={gutter}>x</p>
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `.trimStart(),
   });
   const checked = await run(["check", directory]);
@@ -646,7 +646,7 @@ import {rgb as Color} from "velar/look"
 export component App:
     return <p>{str(Color(1, 2, 3))}</p>
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `.trimStart(), "utf8");
   const refused = await run(["check", directory]);
   assert.equal(refused.code, 1, refused.output);

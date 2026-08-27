@@ -1274,6 +1274,59 @@ test("Node route input values resolve security, cookies, and scoped providers", 
   assert.equal(appReleases, 1, "app providers release during server shutdown");
 });
 
+test("Node ServeApp supply binds an owned application resource without global state", async () => {
+  const serveRuntime = await runtime<{
+    readonly ServeApp: object;
+    readonly input: {dependency(provider: unknown): unknown};
+    provide(inputs: Record<string, unknown>, resolve: () => unknown, scope?: string, release?: ((value: unknown) => unknown) | null): unknown;
+    supply(app: unknown, provider: unknown, value: unknown): unknown;
+    prefix(path: string, app: unknown): unknown;
+    use(app: unknown, middleware: (request: unknown, next: () => Promise<unknown>) => Promise<unknown>): unknown;
+    serve(app: unknown, port: number): Promise<{readonly port: number; stop(): Promise<null>}>;
+  }>("velar/serve");
+  const bridge = Object.getOwnPropertyDescriptor(serveRuntime.ServeApp, "__velarCompilerBridge")?.value as {
+    createPattern(source: Record<string, unknown>): unknown;
+    createRoute(method: string, path: unknown, parameters: readonly Record<string, unknown>[], handler: (...arguments_: never[]) => Promise<unknown>): unknown;
+    createApp(name: string, items: readonly unknown[]): unknown;
+    testClient(app: unknown, overrides?: Map<unknown, unknown>): Promise<{get(path: string): Promise<{status: number; json(): Promise<unknown>}>; close(): Promise<null>}>;
+  };
+  let fallbackResolves = 0;
+  const released: unknown[] = [];
+  const applicationProvider = serveRuntime.provide(
+    {},
+    async () => { fallbackResolves += 1; return {name: "fallback"}; },
+    "app",
+    async (value) => { released.push(value); return null; },
+  );
+  const route = bridge.createRoute("GET", routePattern(bridge, "/health"), [
+    {name: "application", source: "dependency", kind: "dependency", required: true, check: () => true, input: serveRuntime.input.dependency(applicationProvider)},
+  ], async (_path: unknown, application: {name: string}) => ({name: application.name}));
+  const suppliedValue = {name: "OpenVoxel"};
+  const composed = serveRuntime.use(
+    serveRuntime.prefix("/api", serveRuntime.supply(bridge.createApp("supplied", [route]), applicationProvider, suppliedValue)),
+    async (_request, next) => await next(),
+  );
+  const server = await serveRuntime.serve(composed, 0);
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.port}/api/health`);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {name: "OpenVoxel"});
+    assert.equal(fallbackResolves, 0);
+  } finally { await server.stop(); }
+  assert.deepEqual(released, [suppliedValue], "the provider release owns the supplied production value");
+
+  const overrideValue = {name: "test"};
+  const client = await bridge.testClient(composed, new Map([[applicationProvider, overrideValue]]));
+  try {
+    assert.deepEqual(await (await client.get("/api/health")).json(), overrideValue);
+  } finally { await client.close(); }
+  assert.deepEqual(released, [suppliedValue], "test overrides do not adopt or release the production binding");
+
+  const requestProvider = serveRuntime.provide({}, async () => null, "request");
+  assert.throws(() => serveRuntime.supply(composed, requestProvider, null), /only app-scoped Providers/u);
+  assert.throws(() => serveRuntime.supply(composed, applicationProvider, suppliedValue), /same Provider more than once/u);
+});
+
 test("Node form and upload inputs parse bounded multipart and URL-encoded bodies", async () => {
   const serveRuntime = await runtime<{
     readonly ServeApp: object;
