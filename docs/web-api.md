@@ -12,6 +12,15 @@ browser globals. The compiler reports `VEL3008` for direct source-level use of
 JavaScript boundary. This document defines the current API; removed experiments
 do not remain as compatibility aliases.
 
+`mount`, `tick`, `viewport`, `scheme`, and `motion` are reserved Web bindings.
+`mount` and `tick` are real runtime entry points; `viewport`, `scheme`, and
+`motion` name the Look media subjects, so a local binding can never shadow a
+media condition. A Web module refuses all five as binding names with `VEL3007`,
+which is why a scroll container is named `scroller` rather than `viewport`.
+These five words are the whole difference between the names a Core module
+accepts and the names a Web module accepts; every other word the extension adds
+is a contextual keyword that remains available as an ordinary name.
+
 ## One call convention
 
 Every fixed Web API uses the same call rule as an ordinary VelarScript function:
@@ -713,13 +722,28 @@ descendant. Deep-change bubbling therefore costs the same after ten thousand
 root replacements as after the first. Keyed JSX rows receive reactive record items even though
 dense-List validation intentionally reads raw descriptors.
 
+<!-- velar-preamble
+type Message:
+    text: string
+
+type Session:
+    id: string
+
+state sessions: List<Session> = []
+
+def messagePreview(message: Message?) -> string:
+    return message?.text ?? ""
+
+component SessionRow(preview: string):
+    return <li>{preview}</li>
+-->
 ```velar fragment
 state messagesById: Map<string, Message> = Map()
 state latestBySession: Map<string, Message> = Map()
 
 def appendChunk(replyId: string, chunk: string):
     const reply = messagesById.get(replyId)
-    if reply:
+    if reply != null:
         reply.text += chunk
 
 component SessionList:
@@ -1079,6 +1103,9 @@ const profile = await request.parse(Profile)
 
 Incremental text bodies do not require buffering the whole response:
 
+<!-- velar-preamble
+import {http} from "velar/http"
+-->
 ```velar fragment
 const request = http.get("/api/events", {timeout: 120000})
 async def consumeEventChunk(chunk: string):
