@@ -235,6 +235,9 @@ its exact path:
         "width": 512, "height": 320
       }
     },
+    "services": {
+      "core": { "payload": "dist/service-core", "entry": "main.js", "restart": "always" }
+    },
     "permissions": {
       "files": ["project", "dropped"],
       "processes": ["git"],
@@ -258,6 +261,27 @@ and `visibleOnAllWorkspaces` are booleans defaulting to `true`, `true` and
 because that is what a panel is; `aspectRatio` locks the width-to-height ratio
 when present. The older singular `desktop.window` was removed —
 [`velar fix`](#writing-code) migrates it.
+
+`desktop.services` declares the long-running processes the product owns — at
+most eight, keyed by a name that follows a window kind's rule. `payload` is a
+project directory `velar package` copies whole into
+`Contents/Resources/services/<name>/`, and `entry` is a JavaScript file inside
+it. The only runtime is the Node.js executable the bundle already carries: no
+other executable is declarable, and a short-lived process is `velar/process`
+with a `processes` grant instead. `restart` is `always` — an exponential backoff
+from one second to a thirty-second cap, with five consecutive failures reaching
+the terminal `failed` — or `never`.
+
+The host allocates a loopback endpoint and a 128-bit token per service, hands
+both to the process in `VELAR_SERVICE_ENDPOINT` and `VELAR_SERVICE_TOKEN`, and
+expects a WebSocket server there; the handshake frames are pinned in
+[`packages/desktop/README.md`](../packages/desktop/README.md). Services start
+before the renderer loads and are not awaited, and quitting sends SIGTERM and
+then SIGKILL thirty seconds later. A service payload is application code, so its
+bytes are inside `desktop.build.sizeBudgetBytes` and any `.node` or `.dylib` it
+carries is signed with the rest of the bundle. `velar dev` runs the same
+services on the system Node and converges them when the dev server closes; it
+does not watch or rebuild them.
 
 `desktop.permissions` is eight finite allowlists and one flag, and every one of
 them defaults to no authority at all. A capability the manifest never declared
@@ -346,13 +370,17 @@ build time. The file is written beside the build manifest as
 `{"kind": "embedded-node", "version", "embedded": true, "bytes", "sha256"}`,
 where `sha256` is the official archive digest that was verified — provenance,
 not a hash of the shipped bytes, which this build's own signature has already
-changed. `sizes` reports `applicationBytes` and `runtimeBytes` beside the
-component breakdown, and `signing` records the mode and whether the build was
-notarized, never by whom. There is no reader for version 3.
+changed. `services` lists each declared service with its entry, restart policy,
+byte count and the digest of the entry file the host will run. `sizes` reports
+`applicationBytes` and `runtimeBytes` beside the component breakdown — including
+`servicesBytes`, which is inside the application's budget — and `signing`
+records the mode and whether the build was notarized, never by whom. There is no
+reader for version 3.
 
 The packaged host accepts `--headless-smoke`: it starts, launches the capability
 worker on whichever runtime it resolved, completes one real capability
-round-trip, prints what answered, and exits 0. That is the packaging gate's
+round-trip, starts every declared service and waits for each to answer the
+authenticated handshake, converges them, prints what answered, and exits 0. That is the packaging gate's
 acceptance, and it is the only thing this host calls a smoke. `--verify-bundle`
 is the static check beside it: the bundle is complete and a runtime resolves.
 It cannot be an acceptance, because resolving a runtime means asking

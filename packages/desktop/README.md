@@ -20,6 +20,11 @@ permission-scoped implementations of existing language capabilities:
   gesture brought in, the read-only `permissionStatus()` probes, and
   `applyUpdate()`, which replaces this installed application with a downloaded
   archive of itself.
+- `velar/service`: `connect(name)` opens an authenticated loopback channel to a
+  process `desktop.services` declares, and `watchServices()` is a bounded pull
+  stream of `starting`, `ready`, `restarting`, `failed` and `stopped`. A
+  `ServiceConnection` is an owned resource with a backpressured send and a
+  bounded pull receive; it carries text.
 - `velar/notification`: `requestPermission`, `show`, and a bounded pull stream of
   activations. The manifest declares whether the application may notify; the
   operating system separately answers whether it may right now.
@@ -52,6 +57,9 @@ compose the public filesystem/process/network contracts where appropriate.
       "main": { "width": 1280, "height": 820 },
       "note-preview": { "style": "panel", "frame": false, "aspectRatio": 1.6, "width": 512, "height": 320 }
     },
+    "services": {
+      "core": { "payload": "dist/service-core", "entry": "main.js", "restart": "always" }
+    },
     "permissions": {
       "files": ["project", "dropped"],
       "processes": ["git"],
@@ -72,6 +80,73 @@ call and again by the host. Closing `main` closes every other window and quits,
 closing the last window quits, and a packaged application is a single instance —
 none of the three is configurable. Each window is its own document generation
 with its own capability ownership; windows share no JavaScript context.
+
+## Service processes
+
+`desktop.services` declares the long-running processes the product owns. The
+language starts them, supervises them, converges them when the application
+quits, and hands the renderer one authenticated channel to each; it does not
+sandbox them. A service does not go through the capability worker, and declaring
+one in the manifest makes it auditable rather than confined — its policy, its
+permissions and its code are the product's.
+
+A service name follows a window kind's rule — lowercase words joined by single
+hyphens — and at most eight may be declared. `payload` is a project directory
+copied whole into `Contents/Resources/services/<name>/` by `velar package`;
+`entry` is a JavaScript file inside it. The only runtime is the Node.js
+executable the bundle already carries: no other executable is declarable, because
+a second supply surface for long-running processes is exactly what this model
+exists to avoid. A short-lived process is `velar/process` with a `processes`
+grant instead. `restart` is `always` — an exponential backoff from one second to
+a thirty-second cap, with five consecutive failures reaching the terminal
+`failed` — or `never`.
+
+Services start before the renderer loads and are not awaited. On quit the host
+sends SIGTERM and, thirty seconds later, SIGKILL; a service's exit status never
+becomes the application's.
+
+### The handshake
+
+The host allocates a loopback port and a 128-bit token per service and hands
+both to the process in its environment:
+
+```sh
+VELAR_SERVICE_ENDPOINT=127.0.0.1:<port>
+VELAR_SERVICE_TOKEN=<32 hexadecimal characters>
+```
+
+The service must run a WebSocket server on that endpoint. Every connection the
+host opens — the readiness probe and each `connect()` — begins with exactly two
+frames, and this is the whole protocol the language imposes:
+
+```json
+{"velar":"service-hello","token":"<the value of VELAR_SERVICE_TOKEN>"}
+```
+
+```json
+{"velar":"service-ready"}
+```
+
+The host sends the first as a text frame immediately after the socket opens and
+waits up to 30 seconds for the second; a service should apply the same 30-second
+bound to a connection that has not sent a hello. A connection whose token is not
+the one the host issued must be closed without an answer: the endpoint is
+loopback and every process on the machine can reach loopback, so the token is
+the whole of this channel's authentication. After the two frames the channel
+carries whatever the product decided it carries; the language reads none of it.
+
+The readiness probe closes its connection as soon as it has the answer. A
+service that never answers within the deadline is a start that failed, and the
+declared `restart` policy decides what happens next.
+
+`velar dev` runs the same services from `<project>/<payload>/<entry>` on the
+system Node and converges them when the dev server closes. It performs the same
+handshake and reports the result, and it does not watch or rebuild a service:
+that is the product's own toolchain.
+
+`examples/tour/desktop/service-notes-index/main.js` is a complete implementation
+of the service side in dependency-free JavaScript, and is the shortest answer to
+"what do I actually have to write".
 
 The permission manifest is the authority. File access is limited to the
 `app-data` and `project` scopes, plus the special `dropped` root that authorizes
@@ -114,7 +189,7 @@ depending on WebView message limits.
 The macOS package uses WKWebView and is self-contained: it carries one bare
 Node.js executable at `Contents/MacOS/node`, and the end user installs nothing.
 `velar package` contains only the native host, the capability worker, renderer,
-icon, metadata, and that runtime. The manifest reports each component and the
+icon, metadata, any declared service payloads, and that runtime. The manifest reports each component and the
 complete tree hash; it does not bundle the CLI, compiler, browser automation,
 language server, build engine, project kernel, or PTY helper.
 

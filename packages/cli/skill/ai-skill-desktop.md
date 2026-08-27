@@ -20,6 +20,9 @@ Activate Desktop explicitly and declare the smallest required authority:
       "main": { "width": 1280, "height": 820 },
       "note-preview": { "style": "panel", "frame": false, "aspectRatio": 1.6, "width": 512, "height": 320 }
     },
+    "services": {
+      "core": { "payload": "dist/service-core", "entry": "main.js", "restart": "always" }
+    },
     "permissions": {
       "files": ["project", "dropped"],
       "processes": ["git"],
@@ -34,8 +37,8 @@ Activate Desktop explicitly and declare the smallest required authority:
 }
 ```
 
-Desktop owns `velar/desktop`, `velar/window`, `velar/notification`,
-`velar/secure-storage`, `velar/desktop-test`, and permission-scoped
+Desktop owns `velar/desktop`, `velar/window`, `velar/service`,
+`velar/notification`, `velar/secure-storage`, `velar/desktop-test`, and permission-scoped
 implementations of `velar/fs`, `velar/path`, `velar/process`, `velar/http`, and
 `velar/env`. It composes Web components, JSX, Look, state, resources, actions,
 and browser tests. It does not expose a user main process, renderer project,
@@ -89,6 +92,60 @@ Two host rules have no knob: closing `main` closes every other window and quits,
 and closing the last window quits. Do not build an application that depends on
 outliving them, and do not try to share state between windows through the
 language — windows do not share a JavaScript context.
+
+## Service processes
+
+`desktop.services` declares the long-running processes the *product* owns. The
+language does four things and no more: it starts them, supervises them,
+converges them when the application quits, and hands the renderer one
+authenticated loopback channel to each. It does not sandbox them — a service
+does not go through the capability worker, and declaring one makes it auditable
+rather than confined. The service itself is not a language capability: writing
+one is the product's job, exactly as the exclusion list at the end of this brief
+says.
+
+A service name follows the window kind's rule and at most eight may be declared.
+`payload` is a project directory copied whole into
+`Contents/Resources/services/<name>/` at package time; `entry` is a JavaScript
+file inside it, run by the Node.js runtime the bundle carries. No other
+executable is declarable: a short-lived process is `velar/process` with a
+`processes` grant, and that is a different model on purpose. `restart` is
+`always` (exponential backoff from 1s to a 30s cap, and five consecutive
+failures reach the terminal `failed`) or `never`.
+
+The host gives each service a loopback endpoint and a 128-bit token in
+`VELAR_SERVICE_ENDPOINT` and `VELAR_SERVICE_TOKEN`, and the service must run a
+WebSocket server there. Readiness is the handshake: the host sends
+`{"velar":"service-hello","token":"…"}` and the service answers
+`{"velar":"service-ready"}`. A connection that opens with any other token must
+be refused — a loopback port is reachable by every process on the machine, so the
+token is the whole of the channel's authentication. Both sides wait 30 seconds.
+
+```velar fragment
+import {ServiceState, connect, watchServices} from "velar/service"
+
+async def indexNote(id: string) -> string:
+    using channel = await connect("core")
+    await channel.send(f"put {id}")
+    return (await channel.next()) ?? ""
+
+async def coreState() -> ServiceState:
+    using states = await watchServices()
+    const event = await states.next()
+    return event?.state ?? ServiceState.stopped
+```
+
+Application code never holds the token: the host spends it itself on the first
+frame of every connection. An undeclared name fails at the `connect` call, and a
+service that is not `ready` is refused by state — services start before the
+renderer loads and are not awaited, so read `watchServices()` rather than
+assuming one is up. `ServiceConnection` keeps the `velar/websocket` client's
+discipline: a backpressured `send`, a bounded pull `next`, and a release `using`
+performs. It carries text.
+
+`velar dev` runs the same services from `<project>/<payload>/<entry>` on the
+system Node and converges them when the dev server closes. It does not watch or
+rebuild them — a service's build is the product's own toolchain.
 
 ## Notifications
 
@@ -271,6 +328,8 @@ reference the local keychain resolves.
 Run `velar format`, `velar check`, `velar test`, the Desktop browser tests,
 `velar build`, and the platform packaging gate, whose acceptance is the packaged
 host's `--headless-smoke` (host up, capability worker up on the bundled runtime,
-one real capability round-trip, exit 0). Runnable target examples live
+one real capability round-trip, every declared service started and through its
+authenticated handshake to `ready`, converged, exit 0). `--verify-bundle` is the
+static bundle check beside it and is not an acceptance. Runnable target examples live
 in `examples/tour/desktop/`; diagnostics and checked manifest vocabulary
 outrank this brief if they disagree.
