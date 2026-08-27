@@ -10,10 +10,15 @@ permission-scoped implementations of existing language capabilities:
 
 - `velar/desktop`: platform, packaging state, application directories, and the
   native project-directory picker.
+- `velar/window`: the window kinds `desktop.windows` declares, opened by kind
+  and optional instance key. A `Window` is an owned resource whose release
+  closes it; `watchState()` is a bounded pull stream of `moved`, `resized`,
+  `focused`, `blurred` and `closed`.
 - `velar/fs`, `velar/path`, `velar/process`, `velar/http`, and `velar/env`: the
   same checked contracts as Node, restricted by the Desktop manifest.
-- `velar/desktop-test`: deterministic platform selection and bounded fixture
-  filesystem helpers for official browser tests.
+- `velar/desktop-test`: deterministic platform and window-kind selection, a fake
+  window registry, and bounded fixture filesystem helpers for official browser
+  tests.
 
 Language servers, project transactions, product task runners, terminals,
 editors, and other Workbench features are not Desktop language capabilities.
@@ -30,6 +35,10 @@ compose the public filesystem/process/network contracts where appropriate.
   "desktop": {
     "productName": "Example",
     "identifier": "com.example.app",
+    "windows": {
+      "main": { "width": 1280, "height": 820 },
+      "note-preview": { "style": "panel", "frame": false, "aspectRatio": 1.6, "width": 512, "height": 320 }
+    },
     "permissions": {
       "files": ["project"],
       "processes": ["git"],
@@ -40,6 +49,13 @@ compose the public filesystem/process/network contracts where appropriate.
   }
 }
 ```
+
+`desktop.windows` declares every window kind the application may open. `main` is
+required and opens at launch; an undeclared kind is refused at the `openWindow`
+call and again by the host. Closing `main` closes every other window and quits,
+closing the last window quits, and a packaged application is a single instance —
+none of the three is configurable. Each window is its own document generation
+with its own capability ownership; windows share no JavaScript context.
 
 The permission manifest is the authority. File access is limited to the
 `app-data` and `project` scopes. Process grants are exact executable names and
