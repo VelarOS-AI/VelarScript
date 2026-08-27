@@ -544,7 +544,7 @@ test("velar fix migrates desktop.window to desktop.windows.main in place", async
     await mkdir(join(directory, "src"));
     await linkDesktopExtension(directory);
     await writeFile(join(directory, "package.json"), JSON.stringify({ name: "fix-fixture", version: "0.1.0", private: true, type: "module" }), "utf8");
-    await writeFile(join(directory, "src", "main.vel"), "const ready = true\n", "utf8");
+    await writeFile(join(directory, "src", "main.vel"), "const ready = true\n@main: pass\n", "utf8");
     const before = [
       "{",
       "  \"formatVersion\": 2,",
@@ -673,7 +673,9 @@ test("Desktop refuses a project whose imported capability module is granted noth
     await linkDesktopExtension(directory);
     await writeFile(join(directory, "package.json"), JSON.stringify({ name: "ungranted", version: "0.1.0", private: true, type: "module" }), "utf8");
     const write = async (source: string, permissions: Record<string, unknown>): Promise<void> => {
-      await writeFile(join(directory, "src", "main.vel"), source, "utf8");
+      // An application entry owns its startup region. These fixtures are about
+      // the capability grant the import needs, so the region is empty.
+      await writeFile(join(directory, "src", "main.vel"), `${source}\n@main: pass\n`, "utf8");
       await writeFile(join(directory, "velar.json"), JSON.stringify({
         formatVersion: 2,
         entry: "src/main.vel",

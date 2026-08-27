@@ -79,7 +79,7 @@ component App:
         <p>{detail}</p>
     </main>
 
-mount(<App />, "#app")
+@main: mount(<App />, "#app")
 `.trimStart(), "utf8");
   for (const payload of ["service-notes", "service-once"]) {
     await mkdir(join(root, payload), { recursive: true });
