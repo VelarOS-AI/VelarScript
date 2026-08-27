@@ -216,6 +216,12 @@ VelarScript `null` before becoming observable.
 | `join` | Joins one checked `List<string>` snapshot with an optional separator; the result cannot exceed 16 MiB. |
 | `repeat` | Returns a list containing a value a non-negative number of times. |
 
+<!-- velar-preamble
+type User:
+    role: string
+
+const users: List<User> = [{role: "admin"}]
+-->
 ```velar fragment
 import {enumerate, groupBy} from "velar/collections"
 
