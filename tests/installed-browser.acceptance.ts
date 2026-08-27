@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -47,6 +48,20 @@ const applicationWebModules = [...webModuleInterfaces]
   .sort((left, right) => left.specifier < right.specifier ? -1 : left.specifier > right.specifier ? 1 : 0);
 
 try {
+  /**
+   * The revision of Playwright this checkout is tested against, read from the
+   * one place that decides it. The packed CLI declares a caret range, so a
+   * consumer install resolves whatever the registry's newest matching release
+   * is on the day it runs, while the only browser binary on the machine is the
+   * one provisioned from this lockfile — CI keys its Playwright cache on this
+   * file's hash. The install below also passes `--ignore-scripts`, so the
+   * consumer never downloads a browser of its own to fall back on. The day the
+   * registry's newest match moves past the lockfile those two stop being the
+   * same revision and this gate goes red on a push that changed nothing, so the
+   * consumer is pinned to the toolchain's revision. Derived, never written down
+   * a second time.
+   */
+  const toolchainPlaywright = await lockedVersion("playwright");
   // A-024: derive the packed set from workspace topology. The 1x1 gate installs
   // it once to obtain the published CLI, then once into the representative
   // generated application whose browser path it proves.
@@ -54,7 +69,15 @@ try {
   for (const name of await velarWorkspacePackageNames(root)) tarballs.push(join(directory, await pack(name)));
   /** Every packed tarball, as one `npm install` takes them. */
   const install = (extra: readonly string[], cwd: string) =>
-    runNpm(["install", ...extra, "--ignore-scripts", "--no-audit", "--no-fund", ...tarballs], cwd);
+    runNpm([
+      "install",
+      ...extra,
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+      `playwright@${toolchainPlaywright}`,
+      ...tarballs,
+    ], cwd);
   await writeFile(join(directory, "package.json"), "{}\n", "utf8");
   await install([], directory);
   const installedCli = join(directory, "node_modules", "@velarscript", "cli", "dist", "cli.js");
@@ -76,6 +99,17 @@ import {installedWebModules} from "./web-contract.vel"
 assert installedWebModules == ${applicationWebModules.length} else "The installed Web package must expose all application modules"
 mount(<App />, "#app")
 `.trimStart(), "utf8");
+  // Asked of the installed tree rather than of the install command: the pin is
+  // only worth anything if the CLI the application runs resolves to it, and a
+  // range the pin no longer satisfies would quietly nest a second copy the CLI
+  // would load instead.
+  const applicationCli = createRequire(join(application, "node_modules", "@velarscript", "cli", "dist", "cli.js"));
+  const resolvedPlaywright = JSON.parse(await readFile(applicationCli.resolve("playwright/package.json"), "utf8")) as { version?: unknown };
+  assert.equal(
+    resolvedPlaywright.version,
+    toolchainPlaywright,
+    "the installed CLI must drive the Playwright revision this checkout has a browser for",
+  );
   const manifest = JSON.parse(await readFile(join(application, "package.json"), "utf8")) as { scripts: Record<string, string> };
   for (const script of ["format:check", "check", "test", "build", "verify", "test:browser"]) assert.ok(manifest.scripts[script], `missing generated script ${script}`);
   await runNpm(["run", "format:check"], application);
@@ -92,6 +126,16 @@ mount(<App />, "#app")
   process.stdout.write("Installed VelarScript 1x1 Chromium acceptance passed\n");
 } finally {
   await rm(directory, { recursive: true, force: true });
+}
+
+/** The version `npm ci` installs for a root dependency of this checkout. */
+async function lockedVersion(name: string): Promise<string> {
+  const lock = JSON.parse(await readFile(join(root, "package-lock.json"), "utf8")) as {
+    packages?: Record<string, { version?: unknown } | undefined>;
+  };
+  const version = lock.packages?.[`node_modules/${name}`]?.version;
+  assert.ok(typeof version === "string" && version.length > 0, `package-lock.json resolves no version for ${name}`);
+  return version;
 }
 
 async function pack(workspace: string): Promise<string> {
