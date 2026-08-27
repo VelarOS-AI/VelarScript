@@ -1407,9 +1407,14 @@ export function moduleInterfaceIdentity(
       name,
       info.identity,
       names(info.members),
+      // D102 ruling 1: a wire value is a string or a safe integer, and the two
+      // kinds are different values. The hash carries the JSON spelling so a
+      // member moving from `"2"` to `2` invalidates every dependent built
+      // against the old one — the digest is what decides that, and a bare
+      // `String(value)` would make the change invisible to it.
       node("wire-values", [...info.wireValues]
         .sort(([left], [right]) => byCodeUnit(left, right))
-        .map(([member, value]) => node("wire-value", [member, value]))),
+        .map(([member, value]) => node("wire-value", [member, JSON.stringify(value)]))),
     ])));
   const classes = node("classes", [...interface_.classes]
     .sort(([left], [right]) => byCodeUnit(left, right))

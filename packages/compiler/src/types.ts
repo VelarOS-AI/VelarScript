@@ -5,8 +5,12 @@ export interface EnumInfo {
   readonly identity: string;
   /** Source member names used by type checking and member access. */
   readonly members: ReadonlySet<string>;
-  /** Runtime wire value for each source member name. */
-  readonly wireValues: ReadonlyMap<string, string>;
+  /**
+   * Runtime wire value for each source member name. D102 ruling 1: a string,
+   * or a safe integer where the protocol pins a numeric version. The kinds are
+   * distinct values — `"2"` and `2` are two wire values, not one.
+   */
+  readonly wireValues: ReadonlyMap<string, string | number>;
 }
 
 /**
@@ -233,6 +237,14 @@ export interface TypeEnvironment {
   extensionTextForm?(type: ValueType): boolean | undefined;
   /** Expands declared type aliases; the text-conversion domain checks the expanded shape. */
   expandTypeAliases?(type: ValueType): ValueType;
+  /**
+   * D102 ruling 1: the declared wire value of each member of an enum, looked up
+   * by identity first and local name second, the way every other enum question
+   * reaches `this.enums`. Assignability needs it because the enum -> `string`
+   * exit (D42 item 65) is a claim about the runtime representation, and a
+   * member pinned to an integer does not have one.
+   */
+  enumWireValuesOf?(identity: string, name: string): ReadonlyMap<string, string | number> | null;
   /**
    * D41 item 61 risk 2: the declared bound of a type parameter in scope. The
    * bound deliberately lives outside the `parameter` type kind (whose identity
@@ -672,15 +684,17 @@ function decideAssignable(actual: ValueType, expected: ValueType, environment: T
   if (actual.kind === "parameter" && expected.kind === "parameter") {
     return actual.index === expected.index;
   }
-  if (actual.kind === "enum" && expected.kind === "string") {
-    return true;
+  if (actual.kind === "enum" && (expected.kind === "string" || expected.kind === "number")) {
+    return enumDomainWireKind(actual.identity, actual.name, environment) === expected.kind;
   }
   if (actual.kind === "enumMember") {
     if (expected.kind === "enumMember") {
       return actual.identity === expected.identity && actual.member === expected.member;
     }
     if (expected.kind === "enum") return actual.identity === expected.identity;
-    if (expected.kind === "string") return true;
+    if (expected.kind === "string" || expected.kind === "number") {
+      return enumMemberWireKind(actual.identity, actual.name, actual.member, environment) === expected.kind;
+    }
   }
   if (expected.kind === "runtimeType") {
     const value = runtimeTypeValue(actual);
@@ -990,6 +1004,36 @@ export function describeType(type: ValueType): string {
     case "union":
       return type.members.map(describeType).join(" | ");
   }
+}
+
+/**
+ * D42 item 65 gave the enum domain one one-way exit — to `string` — for the
+ * single reason that an enum member *is* a string at run time, so a wire value
+ * can be sent out. D102 ruling 1 keeps the exit and makes it tell the truth:
+ * it now leads to whichever scalar the member's declared wire value actually
+ * is. A member pinned to an integer exits to `number`; a member with no
+ * explicit value still exits to `string`, because its wire value is its name.
+ *
+ * The whole enum exits only where every member agrees — an enum that mixes the
+ * two kinds has no single scalar to be, so the author narrows to a member
+ * first. An environment that cannot answer keeps the pre-D102 reading, which is
+ * the correct answer for every enum that predates the ruling.
+ */
+function enumDomainWireKind(identity: string, name: string, environment: TypeEnvironment): "string" | "number" | "mixed" {
+  const wireValues = environment.enumWireValuesOf?.(identity, name);
+  if (!wireValues || wireValues.size === 0) return "string";
+  let sawString = false;
+  let sawNumber = false;
+  for (const value of wireValues.values()) {
+    if (typeof value === "number") sawNumber = true;
+    else sawString = true;
+  }
+  return sawNumber && sawString ? "mixed" : sawNumber ? "number" : "string";
+}
+
+function enumMemberWireKind(identity: string, name: string, member: string, environment: TypeEnvironment): "string" | "number" {
+  const value = environment.enumWireValuesOf?.(identity, name)?.get(member);
+  return typeof value === "number" ? "number" : "string";
 }
 
 function invariant(actual: ValueType, expected: ValueType, environment: TypeEnvironment, seen: Set<string>): boolean {

@@ -345,8 +345,14 @@ export interface EnumDeclaration {
 
 export interface EnumMember {
   readonly name: string;
-  /** Runtime string value. Defaults to `name` when no explicit value is written. */
-  readonly value: string;
+  /**
+   * D102 ruling 1: the runtime wire value — a string, or a safe integer when
+   * the protocol pins a numeric version (`v2 = 2`). Defaults to the member's
+   * own name when no explicit value is written. The two kinds are distinct
+   * values: `"2"` and `2` may stand in one enum and neither parses as the
+   * other.
+   */
+  readonly value: string | number;
   readonly valueSpan?: Span;
   readonly span: Span;
 }
