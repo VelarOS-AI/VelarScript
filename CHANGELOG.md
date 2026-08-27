@@ -61,6 +61,19 @@ truth for acceptance status.
   connection is also what a service that has not finished binding its port looks
   like; the code separates the two, so a wrong token is reported at once instead
   of retried for thirty seconds and then reported as a slow start.
+- Added `VELAR_SERVICE_APP_DATA` to the environment every service is started in,
+  beside `VELAR_SERVICE_ENDPOINT` and `VELAR_SERVICE_TOKEN`, in both the packaged
+  host and `velar dev`. It carries the directory
+  `velar/desktop.appDataDirectory()` answers, already created, and it is standard
+  because it is the one thing a service needs that a payload cannot carry: it is
+  the application's identity resolved against this machine. `desktop.services`
+  still has no `env` — a value that is the same on every machine belongs in the
+  payload, and a value the renderer knows is a message rather than a variable.
+- Counted a service start's failure once. The readiness deadline and a refused
+  token each end the process and report the failure, and the termination they
+  caused reported it again for the same start, so the five-failure budget was
+  spent at twice its rate and the terminal `failed` arrived after three real
+  timeouts rather than five. Restarts were never duplicated; only the count was.
 
 ### Language and diagnostics
 
@@ -111,6 +124,17 @@ truth for acceptance status.
   the end of input among it — so a program reading a large input intermittently
   failed with `Node terminal input host exited unexpectedly with code 0`
   instead of receiving what it had already typed.
+
+### Tooling
+
+- `velar test --browser=firefox` no longer fails a Desktop test over a bridge
+  call the test itself handled. The runner raised such a failure inside the
+  document, and Firefox alone reports an asynchronous in-page evaluation's
+  rejection as an error the *page* suffered, so a call made before the first
+  `browser.open()` — which is ordinary, and which `serveService` makes by
+  design — arrived on the page-error channel and failed a test that had already
+  recovered from it. Chromium and WebKit were unaffected. The failure now
+  belongs to the caller that asked, on every engine, with its message unchanged.
 
 ## 0.19.1 — 2026-08-27
 

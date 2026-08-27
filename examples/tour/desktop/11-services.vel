@@ -22,6 +22,12 @@
 // host's own readiness probe opens a connection the same way, so a service sees
 // connections it did not have to be asked for — a fact for the service side to
 // know about, and one this side never has to think about.
+//
+// The environment carries one more thing the service cannot work out for
+// itself: `VELAR_SERVICE_APP_DATA`, the same directory `appDataDirectory()`
+// answers in chapter 01. That is why the notes index can persist itself without
+// this side telling it where to write, and why `desktop.services` needs no `env`
+// map for it.
 
 import {ServiceClose, ServiceConnection, ServiceState, ServiceStateEvent, ServiceStateStream, connect, watchServices} from "velar/service"
 import {border, rgb, spacing} from "velar/look"

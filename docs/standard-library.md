@@ -328,6 +328,14 @@ Only one `next` call may wait at a time. `close()` is idempotent: buffered value
 remain readable, waiting senders receive `ChannelClosedError`, and no new value
 is accepted.
 
+A channel is also how a caller parks until its own answer arrives, which is what
+request/response multiplexing over a single connection needs: one reader owns
+the connection's `next()` and forwards each answer into a capacity-1 channel the
+waiting call is already reading, so nothing polls.
+[`packages/desktop/README.md`](../packages/desktop/README.md) writes the pattern
+out over a `ServiceConnection`; it is the same over a `WebSocketConnection` or
+any other bounded pull source.
+
 ```velar
 import {channel} from "velar/task"
 

@@ -134,19 +134,36 @@ application that could rewrite it is an application whose crash report proves
 nothing. Under `velar dev` there is no such file — a service's streams are the
 terminal's, where a developer is already looking.
 
-### The handshake
+### The environment a service is started in
 
-The host allocates a loopback port and a 128-bit token per service and hands
-both to the process in its environment:
+A service inherits the host process's environment and finds three more variables
+in it, the same three under `velar dev` as in a packaged application:
 
 ```sh
 VELAR_SERVICE_ENDPOINT=127.0.0.1:<port>
 VELAR_SERVICE_TOKEN=<32 hexadecimal characters>
+VELAR_SERVICE_APP_DATA=<the directory appDataDirectory() answers>
 ```
 
-The service must run a WebSocket server on that endpoint. Every connection the
-host opens — the readiness probe and each `connect()` — begins with exactly two
-frames, and this is the whole protocol the language imposes:
+The first two are this start's channel. The third is the application's own
+data directory — the exact path `velar/desktop.appDataDirectory()` returns in
+the renderer — and it exists by the time the service reads it. It is standard
+rather than something a manifest declares because it is the one thing a service
+needs and cannot be told at build time: it is the application's identity
+resolved against this machine, so a payload that carried it would carry a guess,
+and a service that derived it would be keeping a second copy of the host's rule
+where nothing checks it against the first. A product's own configuration is not
+this: a value that is the same on every machine belongs in the payload, and
+`desktop.services` has no `env`.
+
+There is no fourth. The channel a service is given is the way a renderer talks
+to it, so a value the renderer knows is a message rather than a variable.
+
+### The handshake
+
+The service must run a WebSocket server on the endpoint it was given. Every
+connection the host opens — the readiness probe and each `connect()` — begins
+with exactly two frames, and this is the whole protocol the language imposes:
 
 ```json
 {"velar":"service-hello","token":"<the value of VELAR_SERVICE_TOKEN>"}
@@ -183,6 +200,67 @@ that is the product's own toolchain.
 `examples/tour/desktop/service-notes-index/main.js` is a complete implementation
 of the service side in dependency-free JavaScript, and is the shortest answer to
 "what do I actually have to write".
+
+### Multiplexing over one connection
+
+A `ServiceConnection` is one bounded pull: `next()` admits a single outstanding
+read, so two calls in flight at once cannot both hold it. The shape that answers
+this is a reader and a waiter, and `velar/task`'s `channel(Type, capacity)` is
+the waiter — it is a many-producer, single-consumer queue whose `next()` is the
+wait, so a caller that is owed an answer parks on a channel of its own instead
+of asking again. One reader owns the connection's `next()` and forwards each
+answer to the request that is waiting for it; nothing polls, and nothing sleeps
+between attempts.
+
+```velar fragment
+import {ServiceConnection, connect} from "velar/service"
+import {Cancellation, Channel, channel, task} from "velar/task"
+
+// The product's protocol, not the language's: the channel carries whatever the
+// product decided it carries, and the correlation key is the product's too.
+type Reply:
+    id: string
+    body: string
+
+// One waiter per request in flight. Each channel has exactly one producer — the
+// reader below — and exactly one consumer, the call waiting for its own answer,
+// which is the shape a channel is for.
+const waiting: Map<string, Channel<Reply>> = Map()
+
+// The reader is the only thing that pulls the connection, which is how the
+// single-outstanding-read rule is kept without anyone having to think about it.
+// It decides nothing: it matches an answer to the request waiting for it.
+async def readReplies(link: ServiceConnection, cancellation: Cancellation):
+    while true:
+        const text = await link.next()
+        if text == null:
+            // The connection ended, so every waiter's answer is that there is
+            // none: a closed channel drains and then answers null.
+            for waiter in waiting.values():
+                waiter.close()
+            waiting.clear()
+            return null
+        const reply = Reply.parse(Json.parse(text))
+        waiting.get(reply.id)?.trySend(reply)
+    return null
+
+async def ask(link: ServiceConnection, id: string, request: string) -> Reply?:
+    const answers = channel(Reply, capacity=1)
+    waiting.set(id, answers)
+    await link.send(request)
+    const answer = await answers.next()
+    waiting.remove(id)
+    return answer
+
+export async def count() -> string:
+    using link = await connect("core")
+    using reader = task((cancellation) => readReplies(link, cancellation))
+    return (await ask(link, "1", "count"))?.body ?? ""
+```
+
+The reader is an ordinary `Task`, so `using` cancels and joins it when the scope
+that opened the connection ends; a shell that keeps one connection for the
+application's lifetime keeps the task the same way it keeps the connection.
 
 The permission manifest is the authority. File access is limited to the
 `app-data` and `project` scopes, plus the special `dropped` root that authorizes

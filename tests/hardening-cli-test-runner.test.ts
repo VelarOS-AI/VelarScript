@@ -150,6 +150,59 @@ import {App} from "./app.vel"
   return directory;
 }
 
+/**
+ * A Desktop project, which is the only shape that reaches the runner's own
+ * in-page bridge callback: a framework capability the browser-test controller
+ * does not answer is asked of the document instead.
+ */
+async function desktopBrowserProject(prefix: string, modules: Readonly<Record<string, string>>): Promise<string> {
+  const directory = await makeTemporaryDirectory(prefix);
+  await mkdir(join(directory, "src"), { recursive: true });
+  await mkdir(join(directory, "public"), { recursive: true });
+  await mkdir(join(directory, "service-core"), { recursive: true });
+  await mkdir(join(directory, "node_modules", "@velarscript"), { recursive: true });
+  for (const name of ["compiler", "core", "web", "desktop"]) {
+    await symlink(join(repositoryRoot, "packages", name), join(directory, "node_modules", "@velarscript", name), "dir");
+  }
+  await writeFile(join(directory, "service-core", "main.js"), "// started by the packaged host, never by a browser test\n", "utf8");
+  await writeFile(join(directory, "velar.json"), JSON.stringify({
+    formatVersion: 2,
+    entry: "src/main.vel",
+    outDir: "dist/renderer",
+    publicDir: "public",
+    extensions: ["@velarscript/desktop"],
+    desktop: {
+      productName: "Engine Bridge",
+      identifier: "dev.velarscript.engine-bridge",
+      windows: { main: { width: 900, height: 640 } },
+      services: { core: { payload: "service-core", entry: "main.js", restart: "always" } },
+      permissions: { files: ["app-data"] },
+    },
+  }), "utf8");
+  await writeFile(join(directory, "src", "main.vel"), `
+import {connect} from "velar/service"
+
+component App:
+    state answer: string = "idle"
+
+    action ask():
+        using channel = await connect("core")
+        await channel.send("ping")
+        answer = (await channel.next()) ?? ""
+
+    return <main>
+        <button id="ask" on:click={ask}>Ask</button>
+        <p id="answer">{answer}</p>
+    </main>
+
+@main: mount(<App />, "#app")
+`.trimStart(), "utf8");
+  for (const [name, source] of Object.entries(modules)) {
+    await writeFile(join(directory, "src", name), source.trimStart(), "utf8");
+  }
+  return directory;
+}
+
 const sharedCounter = `
 const cell: Map<string, number> = Map()
 
@@ -360,6 +413,40 @@ test "each engine starts from a pristine shared module":
   for (const engine of ["chromium", "firefox", "webkit"]) {
     assert.match(result.output, new RegExp(`✓ ${engine} :: "src/engine\\.browser\\.test\\.vel"`, "u"));
   }
+  assert.match(result.stdout, /\n3 passed, 0 failed\n/u);
+});
+
+test("[CLI-31] a bridge call that fails before the page exists is not a failure of the page", { timeout: 600_000 }, async () => {
+  const directory = await desktopBrowserProject("velar-runner-bridge-engines-", {
+    "service.browser.test.vel": `
+import {serveService, stopService} from "velar/desktop-test"
+import {browser} from "velar/web-test"
+import {expect} from "velar/test"
+
+test "a service served before the first open round-trips once the page is there":
+    await serveService("core", async (request: string) => f"echo {request}")
+    await browser.open()
+    await browser.click("#ask")
+    await browser.waitForText("#answer", "echo ping")
+    await stopService("core")
+`,
+  });
+
+  // `serveService` starts pumping the application's side of the channel
+  // immediately, and there is no document to pump until `browser.open()`
+  // returns — so the first calls fail with the bridge that is not there yet,
+  // which the pump is written to expect and retry. The runner used to raise
+  // that expected failure *inside* the page, and Firefox alone reports an
+  // asynchronous evaluate callback's rejection as an error the page suffered,
+  // so the one engine turned a handled retry into four failed tests while
+  // Chromium and WebKit stayed green. The verdict now belongs to the caller
+  // that asked, on every engine.
+  const result = await runCommand(process.execPath, [cli, "test", directory, "--browser=all"]);
+  assert.equal(result.code, 0, result.output);
+  for (const engine of ["chromium", "firefox", "webkit"]) {
+    assert.match(result.output, new RegExp(`✓ ${engine} :: "src/service\\.browser\\.test\\.vel"`, "u"));
+  }
+  assert.doesNotMatch(result.output, /Desktop application test bridge is unavailable/u);
   assert.match(result.stdout, /\n3 passed, 0 failed\n/u);
 });
 

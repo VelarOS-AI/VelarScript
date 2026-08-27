@@ -1036,13 +1036,32 @@ function installBrowserRuntime(
         }
         if (result.handled) return result.value;
       }
-      return page.evaluate(async (request) => {
+      // The callback answers with a verdict and never rejects, and the failure
+      // is raised here instead. An asynchronous `page.evaluate` callback that
+      // rejects is reported by Firefox as an error the *page* suffered — the
+      // engine sees the intermediate rejection inside Playwright's own
+      // evaluation wrapper before Playwright settles it — while Chromium and
+      // WebKit report nothing. So a bridge call that fails the way a test
+      // expects it to, such as one made before the first `browser.open()`,
+      // arrived on the page-error channel on one engine only and failed the
+      // test that had already handled it. The message is preserved exactly; the
+      // only thing that changes is which process constructs the error.
+      const verdict = await page.evaluate(async (request) => {
         const bridge = Object.getOwnPropertyDescriptor(globalThis, Symbol.for("velar.desktop.bridge.v1"))?.value as {
           invoke?: (capability: string, operation: string, args: unknown[], timeout: number) => Promise<unknown>;
         } | undefined;
-        if (!bridge || typeof bridge.invoke !== "function") throw new Error("Desktop application test bridge is unavailable");
-        return bridge.invoke(request.capability, request.operation, request.args as unknown[], request.timeout);
+        if (!bridge || typeof bridge.invoke !== "function") {
+          return { failed: true as const, message: "Desktop application test bridge is unavailable" };
+        }
+        try {
+          return { failed: false as const, value: await bridge.invoke(request.capability, request.operation, request.args as unknown[], request.timeout) };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return { failed: true as const, message: message.slice(0, 4096) };
+        }
       }, input);
+      if (verdict.failed) throw new Error(verdict.message);
+      return verdict.value;
     },
   });
   (globalThis as unknown as { [key: symbol]: unknown })[runtimeKey] = runtime;
@@ -1074,14 +1093,21 @@ async function measureBrowserInteraction(
   if (!Number.isSafeInteger(measurement) || (measurement as number) < 1) throw new TypeError("Browser performance runtime returned an invalid measurement identity");
   try {
     await action();
-    const value = await page.evaluate(async (input) => {
+    // A verdict rather than a rejection, for the reason `frameworkInvoke`
+    // gives: on Firefox an asynchronous callback that rejects is also reported
+    // as an error the page suffered.
+    const verdict = await page.evaluate(async (input) => {
       const runtime = Object.getOwnPropertyDescriptor(globalThis, Symbol.for(input.key))?.value as {
         finish?: (identity: number) => Promise<unknown>;
       } | undefined;
-      if (!runtime || typeof runtime.finish !== "function") throw new Error("Browser performance test runtime is unavailable");
-      return runtime.finish(input.identity);
+      if (!runtime || typeof runtime.finish !== "function") {
+        return { failed: true as const, message: "Browser performance test runtime is unavailable" };
+      }
+      try { return { failed: false as const, value: await runtime.finish(input.identity) }; }
+      catch (error) { return { failed: true as const, message: (error instanceof Error ? error.message : String(error)).slice(0, 4096) }; }
     }, { key: browserPerformanceRuntimeKey, identity: measurement as number });
-    return interactionTiming(value);
+    if (verdict.failed) throw new Error(verdict.message);
+    return interactionTiming(verdict.value);
   } catch (error) {
     await page.evaluate((input) => {
       const runtime = Object.getOwnPropertyDescriptor(globalThis, Symbol.for(input.key))?.value as {

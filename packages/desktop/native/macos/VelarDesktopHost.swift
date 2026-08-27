@@ -2544,6 +2544,13 @@ private final class ServiceRecord {
     /// handler, so a reply belonging to a process this supervisor has already
     /// replaced is discarded instead of moving the current one's state.
     var generation = 0
+    /// The generation whose failure has already been counted. A start can be
+    /// found to have failed twice — the readiness deadline and the token
+    /// refusal both end the process, and the process ending is itself a
+    /// failure report — and one start is one failure, so the second report is
+    /// the same news arriving by the other route. `0` is before the first
+    /// start, which is never a counted generation.
+    var countedFailure = 0
     /// This service's log file and the stderr tail of its current start.
     var capture: ServiceOutputCapture?
     /// The host's own account of the last failure, for the case where the
@@ -2579,6 +2586,12 @@ private final class ServiceRecord {
 private final class ServiceSupervisor: NSObject, URLSessionDelegate {
     private let runtime: URL
     private let logDirectory: URL
+    /// The directory `velar/desktop.appDataDirectory()` answers, which every
+    /// service is told in its environment. It is the one thing a service cannot
+    /// work out for itself and cannot be given at build time: it is derived from
+    /// the bundle identity at run time, and a service that guessed at it would
+    /// be reimplementing the host's own rule beside the host.
+    private let appDataDirectory: URL
     private let records: [String: ServiceRecord]
     private let order: [String]
     private var watchers: [Int: ServiceStateWatcher] = [:]
@@ -2590,9 +2603,10 @@ private final class ServiceSupervisor: NSObject, URLSessionDelegate {
 
     var declaredNames: [String] { order }
 
-    init(runtime: URL, servicesRoot: URL, logDirectory: URL, services: [String: ServiceConfiguration]) {
+    init(runtime: URL, servicesRoot: URL, logDirectory: URL, appDataDirectory: URL, services: [String: ServiceConfiguration]) {
         self.runtime = runtime
         self.logDirectory = logDirectory
+        self.appDataDirectory = appDataDirectory
         self.order = services.keys.sorted()
         var records: [String: ServiceRecord] = [:]
         for name in order {
@@ -2673,9 +2687,15 @@ private final class ServiceSupervisor: NSObject, URLSessionDelegate {
         // The product's own process, so the product's own environment: a service
         // is not capability-scoped and `desktop.permissions.environment` governs
         // what the *renderer* may read, not what the product's process inherits.
+        //
+        // Three variables, and only three. The endpoint and the token are this
+        // start's channel; the app-data directory is the application's identity
+        // resolved to a path, which a payload cannot carry because it is not
+        // known until this bundle runs on this machine.
         var environment = ProcessInfo.processInfo.environment
         environment["VELAR_SERVICE_ENDPOINT"] = "127.0.0.1:\(port)"
         environment["VELAR_SERVICE_TOKEN"] = token
+        environment["VELAR_SERVICE_APP_DATA"] = appDataDirectory.path
         process.environment = environment
         process.terminationHandler = { [weak self] finished in
             DispatchQueue.main.async {
@@ -2760,8 +2780,18 @@ private final class ServiceSupervisor: NSObject, URLSessionDelegate {
     /// thirty-second cap, and five consecutive failures end in `failed`, which is
     /// terminal — a restart loop nobody is watching is worse than a state the
     /// application can show a person.
+    ///
+    /// A start is counted once. The generation guard is the same one `launch`
+    /// already stands behind, extended from "this reply belongs to the current
+    /// start" to "this start has not been declared failed yet": the readiness
+    /// deadline terminates the process and reports the failure, and the
+    /// termination it caused arrives immediately afterwards carrying the same
+    /// generation. Both are true and both are this one start, so counting both
+    /// spent the five-failure budget at twice the rate the manifest promises
+    /// and reached the terminal `failed` after three real timeouts.
     private func recordFailure(_ record: ServiceRecord, generation: Int) {
-        guard record.generation == generation else { return }
+        guard record.generation == generation, record.countedFailure != generation else { return }
+        record.countedFailure = generation
         guard record.restartAlways else {
             publish(record, .stopped)
             return
@@ -3715,6 +3745,9 @@ private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
                 // the evidence is an application whose crash report proves
                 // nothing.
                 logDirectory: appData.appendingPathComponent(serviceLogDirectoryName, isDirectory: true),
+                // The same directory `appDataDirectory()` answers the renderer,
+                // handed to every service in its environment.
+                appDataDirectory: dataDirectory,
                 services: host.services
             )
             supervisor?.start()
