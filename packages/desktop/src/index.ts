@@ -2,6 +2,7 @@ import { VELAR_DESKTOP_API_VERSION } from "./config.ts";
 
 export {
   DESKTOP_MAIN_WINDOW_KIND,
+  DESKTOP_SERVICE_LIMIT,
   DESKTOP_WINDOW_KIND_LIMIT,
   DESKTOP_WINDOWS_MIGRATION_MESSAGE,
   VELAR_DESKTOP_API_VERSION,
@@ -11,6 +12,8 @@ export type {
   DesktopFileScope,
   DesktopLinkScheme,
   DesktopPermissionConfig,
+  DesktopServiceConfig,
+  DesktopServiceRestart,
   DesktopWindowConfig,
   DesktopWindowLevel,
   DesktopWindowMaterial,
@@ -24,6 +27,7 @@ export const VELAR_DESKTOP_MODULES = Object.freeze([
   "velar/desktop",
   "velar/desktop-test",
   "velar/window",
+  "velar/service",
   "velar/notification",
   "velar/secure-storage",
   "velar/fs",

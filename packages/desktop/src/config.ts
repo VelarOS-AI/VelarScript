@@ -57,6 +57,14 @@ export const DESKTOP_MAIN_WINDOW_KIND = "main";
  */
 export const DESKTOP_WINDOW_KIND_LIMIT = 32;
 const desktopWindowKindPattern = /^[a-z]+(?:-[a-z]+)*$/u;
+/**
+ * A service name is a window kind's rule read a second time — the same pattern
+ * and the same character bound — because both are identities the manifest
+ * declares and the host keys a registry on, and two spellings for one kind of
+ * name is one spelling too many. Only the count differs: an application may
+ * open thirty-two kinds of window and may own eight long-running processes.
+ */
+export const DESKTOP_SERVICE_LIMIT = 8;
 
 export type DesktopWindowTitleBar = "standard" | "hidden-inset";
 export type DesktopWindowMaterial = "none" | "sidebar";
@@ -126,6 +134,30 @@ export interface DesktopPermissionConfig {
 }
 
 /**
+ * What happens when a service process ends. `always` supervises it — an
+ * exponential backoff from one second to a thirty-second cap, and five
+ * consecutive failures end in the terminal `failed` state rather than a restart
+ * loop nobody is watching. `never` records the exit and leaves it stopped.
+ */
+export type DesktopServiceRestart = "always" | "never";
+const desktopServiceRestarts: readonly DesktopServiceRestart[] = Object.freeze(["always", "never"]);
+
+/**
+ * A long-running process the product owns. The language declares it, starts it,
+ * supervises it, converges it on quit, and hands it one authenticated loopback
+ * channel; the process itself is the product's code under the product's policy,
+ * and it does not pass through the capability worker. Declaring it here is what
+ * makes it auditable, not what sandboxes it.
+ */
+export interface DesktopServiceConfig {
+  /** Project-relative directory copied whole into `Contents/Resources/services/<name>/`. */
+  readonly payload: string;
+  /** JavaScript entry inside the payload, run by the runtime this toolchain embeds. */
+  readonly entry: string;
+  readonly restart: DesktopServiceRestart;
+}
+
+/**
  * Notarization credentials are never a manifest field. `keychainProfile` names
  * a profile `xcrun notarytool store-credentials` already put in the developer's
  * keychain, so the manifest carries a *reference* the machine resolves rather
@@ -164,6 +196,11 @@ export interface VelarDesktopConfig {
    * `desktop.json` and the generated `velar/window` module are byte-stable.
    */
   readonly windows: Readonly<Record<string, DesktopWindowConfig>>;
+  /**
+   * The long-running processes this application owns, keyed by name and built
+   * in sorted key order for the same byte-stability reason `windows` is.
+   */
+  readonly services: Readonly<Record<string, DesktopServiceConfig>>;
   readonly permissions: DesktopPermissionConfig;
   readonly build: {
     readonly outDir: string;
@@ -201,7 +238,7 @@ export const DESKTOP_WINDOWS_MIGRATION_MESSAGE =
 function desktopConfig(value: unknown, manifestPath: string): VelarDesktopConfig {
   const desktop = objectField(value, "desktop", manifestPath);
   if (desktop.window !== undefined) throw new Error(`${manifestPath}: ${DESKTOP_WINDOWS_MIGRATION_MESSAGE}`);
-  knownFields(desktop, new Set(["productName", "identifier", "windows", "permissions", "build"]), "desktop", manifestPath);
+  knownFields(desktop, new Set(["productName", "identifier", "windows", "services", "permissions", "build"]), "desktop", manifestPath);
   const productName = stringField(desktop.productName, "desktop.productName");
   if (!/^[^/:\0]{1,80}$/u.test(productName) || productName === "." || productName === "..") {
     throw new Error(`${manifestPath}: 'desktop.productName' must be a safe application name of at most 80 characters`);
@@ -214,6 +251,7 @@ function desktopConfig(value: unknown, manifestPath: string): VelarDesktopConfig
     productName,
     identifier,
     windows: windowsConfig(desktop.windows, productName, manifestPath),
+    services: servicesConfig(desktop.services, manifestPath),
     permissions: permissionConfig(desktop.permissions, manifestPath),
     build: buildConfig(desktop.build, manifestPath),
   });
@@ -267,6 +305,47 @@ function windowConfig(value: unknown, kind: string, productName: string, manifes
     visibleOnAllWorkspaces: booleanField(window.visibleOnAllWorkspaces, `${field}.visibleOnAllWorkspaces`, false),
     aspectRatio: ratioField(window.aspectRatio, `${field}.aspectRatio`),
     resizable: booleanField(window.resizable, `${field}.resizable`, true),
+  });
+}
+
+function servicesConfig(value: unknown, manifestPath: string): Readonly<Record<string, DesktopServiceConfig>> {
+  if (value === undefined) return Object.freeze({});
+  const services = objectField(value, "desktop.services", manifestPath);
+  const names = Object.keys(services).sort(byCodeUnit);
+  if (names.length > DESKTOP_SERVICE_LIMIT) {
+    throw new Error(`${manifestPath}: 'desktop.services' cannot declare more than ${DESKTOP_SERVICE_LIMIT} services`);
+  }
+  const output: Record<string, DesktopServiceConfig> = {};
+  for (const name of names) {
+    if (!desktopWindowKindPattern.test(name) || name.length > DESKTOP_WINDOW_KIND_LIMIT) {
+      throw new Error(`${manifestPath}: desktop service name '${name}' must be lowercase words joined by single hyphens, at most ${DESKTOP_WINDOW_KIND_LIMIT} characters`);
+    }
+    output[name] = serviceConfig(services[name], name, manifestPath);
+  }
+  return Object.freeze(output);
+}
+
+function serviceConfig(value: unknown, name: string, manifestPath: string): DesktopServiceConfig {
+  const field = `desktop.services.${name}`;
+  const service = objectField(value, field, manifestPath);
+  knownFields(service, new Set(["payload", "entry", "restart"]), field, manifestPath);
+  const payload = stringField(service.payload, `${field}.payload`);
+  if (payload.startsWith("/") || payload.split(/[\\/]/u).includes("..")) {
+    throw new Error(`${manifestPath}: '${field}.payload' must be a project directory, not an absolute or escaping path`);
+  }
+  const entry = stringField(service.entry, `${field}.entry`);
+  // The entry is read relative to the payload directory both in a packaged
+  // bundle and under `velar dev`, so it has to stay inside it in both.
+  if (entry.startsWith("/") || entry.split(/[\\/]/u).includes("..")) {
+    throw new Error(`${manifestPath}: '${field}.entry' must be a path inside the payload directory`);
+  }
+  if (!/\.[cm]?js$/u.test(entry)) {
+    throw new Error(`${manifestPath}: '${field}.entry' must be a JavaScript file; a service runs on the Node.js runtime this toolchain embeds and no other executable is declarable`);
+  }
+  return Object.freeze({
+    payload,
+    entry,
+    restart: enumField(service.restart, `${field}.restart`, desktopServiceRestarts, "always"),
   });
 }
 

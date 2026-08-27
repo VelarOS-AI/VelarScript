@@ -174,6 +174,7 @@ test("[MIG-3] a Desktop size budget failure reports the bundle's composition, no
     hostBytes: 400_000,
     rendererBytes: 900_000,
     capabilityHostBytes: 300_000,
+    servicesBytes: 0,
     metadataBytes: 200_000,
     applicationBytes: 1_800_000,
     // An application whose runtime is not counted here is not a special case: the
@@ -210,6 +211,20 @@ test("[MIG-3] a Desktop size budget failure reports the bundle's composition, no
   assert.match(embedded, /900000 bytes\s+50\.0%\s+renderer \(application code and assets\)\n/u, embedded);
   assert.doesNotMatch(embedded, /120000000 bytes\s+\d/u, embedded);
   assert.equal(embedded.split("\n").length, 10, embedded);
+
+  // L3: a service payload is application code, so it is inside the budget and it
+  // is named in the composition. An application with no services is not told
+  // about a component it has none of, which is why the two messages differ by a
+  // line rather than by a zero.
+  assert.doesNotMatch(failure, /service payloads/u, failure);
+  const withServices = desktopSizeBudgetFailure(
+    { ...sizes, servicesBytes: 700_000, applicationBytes: 2_500_000, totalBytes: 2_500_000 },
+    1024 * 1024,
+  );
+  assert.ok(withServices, "a bundle whose services push it over its budget must fail");
+  assert.match(withServices, /700000 bytes\s+28\.0%\s+service payloads \(desktop\.services\)\n/u, withServices);
+  assert.match(withServices, /Raise desktop\.build\.sizeBudgetBytes to at least 2500000/u, withServices);
+  assert.equal(withServices.split("\n").length, 10, withServices);
 
   // The runtime's own bound is the toolchain's, and the message says so rather
   // than pointing at a project field that could not move it.
