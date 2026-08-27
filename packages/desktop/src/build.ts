@@ -282,16 +282,21 @@ export async function buildDesktopApplication(
     // signature possible, not a filing preference.
     const runtimePath = join(applicationBundle, DESKTOP_EMBEDDED_RUNTIME_PATH);
     const runtime = await embedDesktopRuntime(nativeTemplate, runtimePath);
-    const runtimeBytes = (await stat(runtimePath)).size;
-    const ceilingFailure = desktopRuntimeCeilingFailure(runtimeBytes);
+    // Checked on what was provisioned, before this build's signature replaces
+    // Apple's: the ceiling is a question about the archive that arrived.
+    const ceilingFailure = desktopRuntimeCeilingFailure((await stat(runtimePath)).size);
     if (ceilingFailure) throw new Error(ceilingFailure);
 
     const entitlementsPath = join(staging, DESKTOP_RUNTIME_ENTITLEMENTS_FILE);
     await writeFile(entitlementsPath, DESKTOP_RUNTIME_ENTITLEMENTS, "utf8");
     const notarized = await signDesktopBundle(projectRoot, config, applicationBundle, entitlementsPath, staging);
 
-    // Sizes are read after signing: a signature is bytes in the bundle, and a
-    // budget measured before it is a budget that does not describe the artifact.
+    // Every size is read after signing, and none of them before. A signature is
+    // bytes in the bundle — an ad-hoc one is *smaller* than the Developer ID
+    // signature it replaced on the runtime — so measurements taken earlier
+    // describe an artifact that no longer exists, and their parts stop summing
+    // to their total.
+    const runtimeBytes = (await stat(runtimePath)).size;
     const hostBytes = (await stat(hostPath)).size;
     const rendererBytes = await treeSize(renderer);
     const capabilityHostBytes = (await stat(workerPath)).size;
@@ -339,7 +344,7 @@ export async function buildDesktopApplication(
         runtimeBytes,
         totalBytes,
       }),
-      sha256: await hashTree(applicationBundle),
+      sha256: await desktopTreeSha256(applicationBundle),
     });
     await writeFile(join(staging, "velar-desktop-build.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
     await rm(outputDirectory, { recursive: true, force: true });
@@ -560,7 +565,7 @@ async function treeSize(root: string): Promise<number> {
  * toolchain generation, so the digest moves when the generation moves and not
  * otherwise.
  */
-async function hashTree(root: string): Promise<string> {
+export async function desktopTreeSha256(root: string): Promise<string> {
   const hash = createHash("sha256");
   const buffer = Buffer.allocUnsafe(1024 * 1024);
   const visit = async (directory: string): Promise<void> => {

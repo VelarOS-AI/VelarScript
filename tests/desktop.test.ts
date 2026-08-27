@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import test from "node:test";
 import { resolveVelarProject } from "../packages/cli/src/config.ts";
 import { velarDesktopFramework } from "../packages/desktop/src/index.ts";
+import { DESKTOP_NODE_RUNTIME_ARCHIVES, DESKTOP_NODE_RUNTIME_VERSION } from "../packages/desktop/src/config.ts";
 
 const cli = resolve("packages/cli/src/cli.ts");
 
@@ -142,32 +143,53 @@ mount(<App />, "#app")
         rendererBytes: number;
         capabilityHostBytes: number;
         metadataBytes: number;
+        applicationBytes: number;
+        runtimeBytes: number;
         totalBytes: number;
       };
       sizeBudgetBytes: number;
       applicationBundle: string;
-      runtime: { kind: string; minimumMajor: number; discovery: string; embedded: boolean; version?: unknown; executableHint?: unknown };
+      signing: { mode: string; hardenedRuntime: boolean; notarized: boolean };
+      runtime: { kind: string; version: string; embedded: boolean; bytes: number; sha256: string; minimumMajor?: unknown; discovery?: unknown };
     };
-    assert.equal(desktopBuild.formatVersion, 3);
+    assert.equal(desktopBuild.formatVersion, 4);
     assert.equal(desktopBuild.kind, "velar-desktop-build");
     assert.equal(desktopBuild.version, "0.1.0");
+    // A packaged application carries its interpreter. The version is the
+    // toolchain generation's, and `sha256` is the provenance the download
+    // verified — the official archive digest, not a digest of the signed bytes,
+    // which this build's own signature has already replaced.
     assert.deepEqual({
       kind: desktopBuild.runtime.kind,
-      minimumMajor: desktopBuild.runtime.minimumMajor,
-      discovery: desktopBuild.runtime.discovery,
+      version: desktopBuild.runtime.version,
       embedded: desktopBuild.runtime.embedded,
+      sha256: desktopBuild.runtime.sha256,
     }, {
-      kind: "external-node",
-      minimumMajor: 24,
-      discovery: "environment-and-system-paths",
-      embedded: false,
+      kind: "embedded-node",
+      version: DESKTOP_NODE_RUNTIME_VERSION,
+      embedded: true,
+      sha256: DESKTOP_NODE_RUNTIME_ARCHIVES[`${process.platform}-${process.arch}`]!.sha256,
     });
-    assert.equal(desktopBuild.runtime.version, undefined);
-    assert.equal(desktopBuild.runtime.executableHint, undefined);
-    assert.ok(desktopBuild.sizes.hostBytes < 512 * 1024, JSON.stringify(desktopBuild.sizes));
+    // v4 has no reader for v3's shape, and does not write it either.
+    assert.equal(desktopBuild.runtime.minimumMajor, undefined);
+    assert.equal(desktopBuild.runtime.discovery, undefined);
+    // Signing records what was done and never who it was done by: an identity,
+    // a keychain profile, or anything behind one is not a build receipt field.
+    assert.deepEqual(desktopBuild.signing, { mode: "ad-hoc", hardenedRuntime: true, notarized: false });
+    assert.ok(desktopBuild.sizes.hostBytes < 1024 * 1024, JSON.stringify(desktopBuild.sizes));
     assert.ok(desktopBuild.sizes.capabilityHostBytes > 0 && desktopBuild.sizes.capabilityHostBytes < 256 * 1024, JSON.stringify(desktopBuild.sizes));
     assert.ok(desktopBuild.sizes.metadataBytes > 0, JSON.stringify(desktopBuild.sizes));
-    assert.ok(desktopBuild.sizes.totalBytes < desktopBuild.sizeBudgetBytes, JSON.stringify(desktopBuild.sizes));
+    // The parts sum to the total. They only do so because every one of them is
+    // measured after signing: an ad-hoc signature is smaller than the Developer
+    // ID signature it replaced on the runtime.
+    const sizes = desktopBuild.sizes;
+    assert.equal(sizes.hostBytes + sizes.rendererBytes + sizes.capabilityHostBytes + sizes.metadataBytes, sizes.applicationBytes);
+    assert.equal(sizes.applicationBytes + sizes.runtimeBytes, sizes.totalBytes);
+    assert.equal(sizes.runtimeBytes, desktopBuild.runtime.bytes);
+    // The budget governs the application, not the bundle: the runtime is a
+    // hundred times the application here and the default budget still passes.
+    assert.ok(sizes.applicationBytes < desktopBuild.sizeBudgetBytes, JSON.stringify(sizes));
+    assert.ok(sizes.totalBytes > desktopBuild.sizeBudgetBytes, JSON.stringify(sizes));
     const application = join(projectRoot, "dist", "desktop", desktopBuild.applicationBundle);
     assert.ok(!(await collectNames(application)).some((name) => name === "node_modules" || name.endsWith(".map")));
     const information = await readFile(join(application, "Contents", "Info.plist"), "utf8");
@@ -200,6 +222,32 @@ mount(<App />, "#app")
     assert.deepEqual((await readdir(join(application, "Contents", "Resources", "host"))).sort(), ["worker.js"]);
     assert.equal(hostConfig.nodeExecutableHint, undefined);
     assert.doesNotMatch(hostConfigText, new RegExp(process.execPath.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"));
+
+    // The runtime sits beside the executable rather than in Resources. A Mach-O
+    // under Contents/Resources is sealed as a plain resource — no signature of
+    // its own — and arm64 refuses to execute one. Only the bare executable is
+    // there: no npm, no npx, no symbolic links into a lib directory.
+    const embeddedRuntime = join(application, "Contents", "MacOS", "node");
+    assert.equal((await stat(embeddedRuntime)).isFile(), true);
+    assert.ok((await stat(embeddedRuntime)).mode & 0o111, "the embedded runtime must be executable");
+    assert.deepEqual((await readdir(join(application, "Contents", "MacOS"))).sort(), ["VelarDesktopHost", "node"]);
+    const runtimeVersion = spawnSync(embeddedRuntime, ["--version"], { encoding: "utf8" });
+    assert.equal(runtimeVersion.stdout.trim(), `v${DESKTOP_NODE_RUNTIME_VERSION}`, runtimeVersion.stderr);
+    // The entitlement V8 cannot start without, in the signature rather than only
+    // in the build's argv. Without it the hardened runtime refuses the code
+    // range and the worker dies on its first real call.
+    const runtimeEntitlements = spawnSync("/usr/bin/codesign", ["-d", "--entitlements", "-", "--xml", embeddedRuntime], { encoding: "utf8" });
+    assert.match(`${runtimeEntitlements.stdout}${runtimeEntitlements.stderr}`, /com\.apple\.security\.cs\.allow-jit/u);
+    // The whole bundle verifies, nested code included.
+    const verified = spawnSync("/usr/bin/codesign", ["--verify", "--deep", "--strict", application], { encoding: "utf8" });
+    assert.equal(verified.status, 0, verified.stderr);
+    // The entitlements the runtime was signed with are recorded beside the
+    // manifest and are not shipped inside the application.
+    assert.match(
+      await readFile(join(projectRoot, "dist", "desktop", "velar-desktop-runtime.entitlements"), "utf8"),
+      /com\.apple\.security\.cs\.allow-jit/u,
+    );
+
     const smokeEnvironment = { ...process.env, VELAR_DESKTOP_NODE: process.execPath, VELAR_DESKTOP_PROJECT_ROOT: projectRoot };
     const smoke = spawnSync(join(application, "Contents", "MacOS", "VelarDesktopHost"), ["--smoke"], { encoding: "utf8", env: smokeEnvironment });
     assert.equal(smoke.status, 0, smoke.stderr);
@@ -216,7 +264,62 @@ mount(<App />, "#app")
     assert.equal(invalidRootSmoke.status, 1);
     assert.match(invalidRootSmoke.stderr, /must be an absolute path/u);
 
-    const generationHost = spawn(join(application, "Contents", "MacOS", "VelarDesktopHost"), ["--headless-smoke"], {
+    // The packaging gate's acceptance, run twice: once ordinarily, and once on a
+    // machine that has been stripped of every Node the application could borrow.
+    //
+    // The deprivation is two things at once because neither is enough on a
+    // developer's machine: `env -i` with a PATH that holds no `node`, and a
+    // sandbox profile that denies reading *and* executing under the three
+    // package-manager roots the native host falls back to. Without both, a
+    // Homebrew Node would answer and this test would pass for the wrong reason.
+    const deprivation = resolve("tests/fixtures/desktop/no-external-node.sb");
+    for (const [label, command, argv] of [
+      ["ordinary", join(application, "Contents", "MacOS", "VelarDesktopHost"), ["--headless-smoke"]],
+      ["deprived", "/usr/bin/sandbox-exec", [
+        "-f", deprivation,
+        "/usr/bin/env", "-i", `HOME=${process.env.HOME ?? ""}`, "PATH=/usr/bin",
+        join(application, "Contents", "MacOS", "VelarDesktopHost"), "--headless-smoke",
+      ]],
+    ] as const) {
+      const accepted = spawnSync(command, [...argv], { encoding: "utf8", env: { ...process.env, VELAR_DESKTOP_PROJECT_ROOT: projectRoot } });
+      assert.equal(accepted.status, 0, `${label}: ${accepted.stderr}`);
+      const { runtime, ...report } = JSON.parse(accepted.stdout) as { runtime: string };
+      assert.deepEqual(report, {
+        kind: "velar-desktop-headless-smoke",
+        protocolVersion: 1,
+        identifier: "dev.velarscript.fixture",
+        // Not "external", and this is the assertion the whole deprivation
+        // exists to make believable.
+        runtimeSource: "bundled",
+        // A real capability, answered by the worker the bundled interpreter is
+        // running. `--smoke` reaches `node --version`, which returns before V8
+        // has created an Isolate; this one cannot be answered without one.
+        capability: "fs.list",
+        fileScope: true,
+        windowKinds: ["main", "note-preview"],
+      }, `${label}: ${accepted.stdout}${accepted.stderr}`);
+      assert.equal(await realpath(runtime), await realpath(embeddedRuntime), `${label}: ${runtime}`);
+    }
+
+    // And the deprivation is real: take the bundled runtime away and the same
+    // command fails, because there is nothing else on this machine to find.
+    const parked = join(projectRoot, "parked-node");
+    await rename(embeddedRuntime, parked);
+    try {
+      const withoutRuntime = spawnSync("/usr/bin/sandbox-exec", [
+        "-f", deprivation,
+        "/usr/bin/env", "-i", `HOME=${process.env.HOME ?? ""}`, "PATH=/usr/bin",
+        join(application, "Contents", "MacOS", "VelarDesktopHost"), "--headless-smoke",
+      ], { encoding: "utf8" });
+      assert.equal(withoutRuntime.status, 1, withoutRuntime.stdout);
+      assert.match(withoutRuntime.stderr, /carries no usable embedded Node\.js runtime and found no Node\.js 24 or newer/u);
+    } finally {
+      await rename(parked, embeddedRuntime);
+    }
+
+    // `--headless` is the same application with no visible windows and no
+    // ending, which is what a renderer-driven regression needs.
+    const generationHost = spawn(join(application, "Contents", "MacOS", "VelarDesktopHost"), ["--headless"], {
       env: {
         ...smokeEnvironment,
         VELAR_DESKTOP_GENERATION_SMOKE: "1",

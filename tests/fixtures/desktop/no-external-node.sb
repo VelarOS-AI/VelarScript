@@ -1,0 +1,23 @@
+;; Deprivation profile: a machine with no Node.js the application could borrow.
+;;
+;; A packaged Desktop application is supposed to be self-contained, and the only
+;; honest way to test that claim is to take every other runtime away and see
+;; whether it still serves a capability. A sanitized PATH alone does not do it —
+;; the native host also falls back to three fixed package-manager locations, and
+;; on a developer's machine at least one of them has a Node.
+;;
+;; So the deprivation is two things at once, and the test applies both:
+;;   * `env -i ... PATH=/usr/bin`, which holds no `node`
+;;   * this profile, which denies reading *and* executing under the three
+;;     fallback roots the host hardcodes, plus /sw for the same reason.
+;;
+;; Reading is denied as well as executing because a resolver that can stat a
+;; runtime it cannot run would report a different failure than the one this test
+;; is about.
+(version 1)
+(allow default)
+(deny file-read* file-write* file-map-executable process-exec*
+  (subpath "/usr/local")
+  (subpath "/opt/homebrew")
+  (subpath "/opt/local")
+  (subpath "/sw"))
