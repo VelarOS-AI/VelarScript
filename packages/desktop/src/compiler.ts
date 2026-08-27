@@ -286,6 +286,60 @@ const windowModuleInterface = moduleInterface(
   new Map([["WindowBounds", windowBoundsType]]),
 );
 
+// `velar/service` — the channel to the long-running processes
+// `desktop.services` declares. The language owns four things here: the
+// declaration, the supervision, the convergence, and one authenticated loopback
+// channel. It owns nothing inside the service, which is the product's own code
+// under the product's own policy.
+//
+// `ServiceConnection` keeps the `velar/websocket` client's discipline — a send
+// that is backpressured, a receive that is a bounded pull, and a release that
+// `using` performs — under its own identity, because the peer is a process this
+// host dialed and authenticated rather than a URL an author named. It carries
+// text: the Desktop bridge has never carried bytes, and a service channel is not
+// where that would be decided.
+const serviceStateIdentity = "velar/service#enum:ServiceState";
+const serviceStateMembers = new Set(["starting", "ready", "restarting", "failed", "stopped"]);
+const serviceStateWireValues = new Map([...serviceStateMembers].map((member) => [member, member]));
+const serviceStateType: ValueType = { kind: "enum", name: "ServiceState", identity: serviceStateIdentity };
+const serviceConnectionType: ValueType = { kind: "named", name: "ServiceConnection", identity: "velar/service#type:ServiceConnection" };
+const serviceStateStreamType: ValueType = { kind: "named", name: "ServiceStateStream", identity: "velar/service#type:ServiceStateStream" };
+const serviceCloseType = objectType({ code: numberType, reason: stringType });
+const serviceStateEventType = objectType({ name: stringType, state: serviceStateType });
+
+const serviceModuleInterface = moduleInterface(
+  new Map<string, ValueType>([
+    ["ServiceClose", { kind: "typeObject", name: "ServiceClose" }],
+    ["ServiceConnection", { kind: "typeObject", name: "ServiceConnection" }],
+    ["ServiceState", { kind: "enumObject", name: "ServiceState", identity: serviceStateIdentity, members: serviceStateMembers }],
+    ["ServiceStateEvent", { kind: "typeObject", name: "ServiceStateEvent" }],
+    ["ServiceStateStream", { kind: "typeObject", name: "ServiceStateStream" }],
+    ["connect", functionType([stringType], promiseOf(serviceConnectionType))],
+    ["watchServices", functionType([], promiseOf(serviceStateStreamType))],
+  ]),
+  new Map([
+    ["ServiceConnection", new Map<string, ValueType>([
+      ["state", functionType([], promiseOf(stringType))],
+      ["send", functionType([stringType], promiseOf(nullType))],
+      ["next", functionType([], promiseOf(optionalStringType))],
+      ["closeInfo", functionType([], promiseOf(serviceCloseType))],
+      ["close", functionType([numberType, stringType], promiseOf(nullType), 0)],
+    ])],
+    ["ServiceStateStream", new Map<string, ValueType>([
+      ["next", functionType([], promiseOf(optionalOf(serviceStateEventType)))],
+      ["close", functionType([], promiseOf(nullType))],
+    ])],
+  ]),
+  new Map([
+    ["ServiceConnection", "velar/service#type:ServiceConnection"],
+    ["ServiceStateStream", "velar/service#type:ServiceStateStream"],
+  ]),
+  new Map([
+    ["ServiceState", { identity: serviceStateIdentity, members: serviceStateMembers, wireValues: serviceStateWireValues }],
+  ]),
+  new Map([["ServiceClose", serviceCloseType], ["ServiceStateEvent", serviceStateEventType]]),
+);
+
 const desktopTestModuleInterface = moduleInterface(new Map([
   ["setPlatform", functionType([desktopPlatformType], { kind: "promise", value: nullType })],
   ["appDataDirectory", functionType([], { kind: "promise", value: stringType })],
@@ -309,6 +363,14 @@ const desktopTestModuleInterface = moduleInterface(new Map([
   ["setNotificationPermission", functionType([notificationPermission.value], promiseOf(nullType))],
   ["shownNotifications", functionType([], promiseOf(listOf(notificationInputType)))],
   ["activateNotification", functionType([optionalStringType], promiseOf(nullType), 0)],
+  // The fake service registry. `setServiceState` injects the transitions a real
+  // supervisor would publish; `serveService` runs a real loopback WebSocket
+  // server in the test process so a `connect()` round trip crosses a socket
+  // rather than a stub, and the handler stays here in VelarScript.
+  ["setServiceState", functionType([stringType, serviceStateType], promiseOf(nullType))],
+  ["serveService", functionType([stringType, functionType([stringType], promiseOf(stringType))], promiseOf(nullType))],
+  ["serviceRejectsWrongToken", functionType([stringType], promiseOf(boolType))],
+  ["stopService", functionType([stringType], promiseOf(nullType))],
   // The fake keychain reports the names it holds and never the values it holds:
   // a stored credential does not leave `velar/secure-storage`, and a test seam
   // that handed one back would be the exception that ends that rule.
@@ -795,6 +857,76 @@ export async function shownNotifications() {
 export async function activateNotification(tag = null) {
   return testSettle("notification-test", "activate", [testOptionalTag(tag, "activateNotification")], "activateNotification");
 }
+function testServiceName(value, operation) {
+  if (typeof value !== "string" || value.length === 0 || value.length > 32) {
+    throw new TypeError("Desktop test " + operation + " requires a declared service name");
+  }
+  return value;
+}
+export async function setServiceState(name, state) {
+  if (state !== "starting" && state !== "ready" && state !== "restarting" && state !== "failed" && state !== "stopped") {
+    throw new TypeError("Desktop test setServiceState requires a ServiceState value");
+  }
+  return testSettle("service-fake", "setState", [testServiceName(name, "setServiceState"), state], "setServiceState");
+}
+/**
+ * Starts a real loopback WebSocket server for this service and pumps the
+ * application's channel through it: what the page sends leaves over a socket,
+ * reaches the handler here, and comes back the same way. The service is reported
+ * ready, because a served service is one that answered the authenticated
+ * handshake — which is exactly what readiness means in the packaged host.
+ */
+export async function serveService(name, handler) {
+  const service = testServiceName(name, "serveService");
+  if (typeof handler !== "function") throw new TypeError("Desktop test serveService requires a handler");
+  await testSettle("service-test", "serve", [service], "serveService");
+  void (async () => {
+    while (true) {
+      let message;
+      try { message = await invoke("service-test", "accept", [service], 0); }
+      catch { return; }
+      if (message === null) return;
+      let reply;
+      try { reply = await handler(message); }
+      catch { reply = ""; }
+      if (typeof reply !== "string") reply = "";
+      try { await invoke("service-test", "reply", [service, reply], 30000); }
+      catch { return; }
+    }
+  })();
+  // The page half of the pump. It tolerates a document that does not exist yet,
+  // because a test names its services before the first browser.open().
+  void (async () => {
+    while (true) {
+      let outbound;
+      try { outbound = await invoke("service-fake", "poll", [service], 0); }
+      catch { return; }
+      if (outbound == null) continue;
+      let reply;
+      try { reply = await invoke("service-test", "roundTrip", [service, outbound.message], 0); }
+      catch { return; }
+      if (typeof reply !== "string") return;
+      try { await invoke("service-fake", "deliver", [outbound.connection, reply], 30000); }
+      catch { return; }
+    }
+  })();
+  return setServiceState(service, "ready");
+}
+/**
+ * The token is the whole authentication of a loopback channel every process on
+ * the machine can reach, so a test can watch the service side refuse one that
+ * is not the host's.
+ */
+export async function serviceRejectsWrongToken(name) {
+  const value = await invoke("service-test", "wrongToken", [testServiceName(name, "serviceRejectsWrongToken")], 30000);
+  if (typeof value !== "boolean") throw new TypeError("Desktop test host returned an invalid handshake refusal result");
+  return value;
+}
+export async function stopService(name) {
+  const service = testServiceName(name, "stopService");
+  await testSettle("service-test", "close", [service], "stopService");
+  return setServiceState(service, "stopped");
+}
 // Names only. The fake keychain holds values the way the real one does, and
 // neither hands one back through a test seam.
 export async function secureStorageNames() {
@@ -1089,6 +1221,205 @@ export async function windows() {
     output[output.length] = infoOf(descriptor.value);
   }
   return output;
+}
+`.trimStart();
+}
+
+/**
+ * `velar/service`'s runtime, closed over the service names this project's
+ * manifest declares. The names are baked in rather than fetched, so an
+ * undeclared name is refused at the `connect` call with the manifest field that
+ * would declare it, before any request reaches the host — and the host refuses
+ * the same name again on its own side.
+ *
+ * The token that authenticates a channel is nowhere in this file, and that is
+ * the design rather than an omission: the host generates it, hands it to the
+ * service process in its environment, and spends it itself on the first frame
+ * of every connection. Application code receives a channel, never a credential.
+ */
+function desktopServiceSource(names: readonly string[]): string {
+  return String.raw`
+${DESKTOP_HOST_ABI_RUNTIME}
+${VELAR_TYPE_REGISTRY_RUNTIME}
+${VELAR_UTF8_RUNTIME}
+const serviceToken = Symbol("velar.desktop.service");
+const serviceStreamToken = Symbol("velar.desktop.service.state");
+const declaredServices = new Set(${JSON.stringify(names)});
+const declaredServiceList = ${JSON.stringify(names.length === 0 ? "none" : names.join(", "))};
+// The host states these three again on its own side
+// (packages/desktop/native/macos/VelarDesktopHost.swift) and the fake host a
+// third time (packages/desktop/src/test-runtime.ts); the three must not drift.
+const maxServiceMessageBytes = 8 * 1024 * 1024;
+const maxServiceCloseReasonBytes = 123;
+const serviceCloseFields = new Set(["code", "reason"]);
+const serviceEventFields = new Set(["name", "state"]);
+function recordOf(value, name, allowed) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError(name + " must be a record");
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) throw new TypeError(name + " must be a plain record");
+  const output = Object.create(null);
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string") throw new TypeError(name + " fields must use string names");
+    if (!allowed.has(key)) throw new TypeError(name + " has unknown field '" + key + "'");
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor?.enumerable || !("value" in descriptor)) throw new TypeError(name + " fields must be enumerable data values");
+    output[key] = descriptor.value;
+  }
+  return output;
+}
+function serviceNameOf(value) {
+  if (typeof value !== "string" || value.length === 0 || value.length > 32) {
+    throw new TypeError("connect requires a service name declared in desktop.services");
+  }
+  if (!declaredServices.has(value)) {
+    throw new Error("connect cannot reach the undeclared service '" + value
+      + "'; declare it under 'desktop.services' in this project's velar.json (declared services: " + declaredServiceList + ")");
+  }
+  return value;
+}
+function serviceHandleOf(value) {
+  if (!Number.isSafeInteger(value) || value < 1) throw new TypeError("Desktop host returned an invalid service handle");
+  return value;
+}
+function closeInfoOf(value) {
+  const fields = recordOf(value, "ServiceClose", serviceCloseFields);
+  if (Reflect.ownKeys(fields).length !== 2 || !Number.isSafeInteger(fields.code) || typeof fields.reason !== "string") {
+    throw new TypeError("Desktop host returned an invalid service close record");
+  }
+  return Object.freeze({code: fields.code, reason: fields.reason});
+}
+function eventOf(value) {
+  const fields = recordOf(value, "ServiceStateEvent", serviceEventFields);
+  if (Reflect.ownKeys(fields).length !== 2 || !declaredServices.has(fields.name)) {
+    throw new TypeError("Desktop host reported a state for an undeclared service");
+  }
+  return Object.freeze({name: fields.name, state: ServiceState.parse(fields.state)});
+}
+function invoke(operation, args, timeout = 30000) {
+  return __velarDesktopHostCall("service", operation, args, timeout);
+}
+export const ServiceState = __velarRegisterRuntimeType(Object.freeze({
+  starting: "starting", ready: "ready", restarting: "restarting", failed: "failed", stopped: "stopped",
+  is(value) {
+    return value === "starting" || value === "ready" || value === "restarting" || value === "failed" || value === "stopped";
+  },
+  parse(value) {
+    if (!ServiceState.is(value)) throw new TypeError("Value does not match ServiceState");
+    return value;
+  },
+  values() { return ["starting", "ready", "restarting", "failed", "stopped"]; },
+}));
+export const ServiceClose = Object.freeze({
+  is(value) { try { closeInfoOf(value); return true; } catch { return false; } },
+  parse(value) { return closeInfoOf(value); },
+});
+export const ServiceStateEvent = Object.freeze({
+  is(value) { try { eventOf(value); return true; } catch { return false; } },
+  parse(value) { return eventOf(value); },
+});
+class ServiceConnectionHandle {
+  constructor(token, handle, name) {
+    if (token !== serviceToken) throw new TypeError("ServiceConnection values are created only by velar/service.connect");
+    this.handle = serviceHandleOf(handle);
+    this.name = name;
+    this.released = false;
+    this.pending = false;
+    Object.seal(this);
+  }
+  async state() {
+    const value = await invoke("state", [this.handle]);
+    if (value !== "open" && value !== "closed") throw new TypeError("Desktop host returned an invalid service connection state");
+    return value;
+  }
+  // Backpressure is the host's answer rather than this module's: the call
+  // settles when the frame has left, and a caller that never awaits it is told
+  // so by name once its unsent messages reach the channel's bound.
+  async send(message) {
+    if (typeof message !== "string") throw new TypeError("ServiceConnection.send requires text");
+    if (__velarUtf8ByteLength(message) > maxServiceMessageBytes) {
+      throw new RangeError("ServiceConnection message cannot exceed 8 MiB");
+    }
+    const value = await invoke("send", [this.handle, message], 0);
+    if (value !== null) throw new TypeError("Desktop host returned an invalid service send result");
+    return null;
+  }
+  async next() {
+    if (this.pending) throw new Error("ServiceConnection.next already has an active pull");
+    this.pending = true;
+    try {
+      const value = await invoke("receive", [this.handle], 0);
+      if (value === null) return null;
+      if (typeof value !== "string") throw new TypeError("Desktop host returned an invalid service message");
+      return value;
+    } finally {
+      this.pending = false;
+    }
+  }
+  async closeInfo() { return closeInfoOf(await invoke("closeInfo", [this.handle])); }
+  // Releasing a ServiceConnection closes it, and closing a closed channel is the
+  // state it is already in, so the second call is not an error: the host answers
+  // false for a handle it no longer holds.
+  async close(code = 1000, reason = "") {
+    if (!Number.isSafeInteger(code) || code < 1000 || code > 4999) throw new RangeError("Service close code must be from 1000 through 4999");
+    if (typeof reason !== "string" || __velarUtf8ByteLength(reason) > maxServiceCloseReasonBytes) {
+      throw new RangeError("Service close reason cannot exceed 123 UTF-8 bytes");
+    }
+    if (this.released) return null;
+    this.released = true;
+    const value = await invoke("close", [this.handle, code, reason]);
+    if (typeof value !== "boolean") throw new TypeError("Desktop host returned an invalid service release result");
+    return null;
+  }
+}
+class ServiceStateStreamHandle {
+  constructor(token, handle) {
+    if (token !== serviceStreamToken) throw new TypeError("ServiceStateStream values are created only by velar/service.watchServices");
+    this.handle = serviceHandleOf(handle);
+    this.closed = false;
+    this.pending = false;
+    this.next = async () => {
+      if (this.closed) return null;
+      if (this.pending) throw new Error("ServiceStateStream.next already has an active pull");
+      this.pending = true;
+      try {
+        const value = await invoke("watchNext", [this.handle], 0);
+        if (value === null) { this.closed = true; return null; }
+        return eventOf(value);
+      } catch (error) {
+        this.closed = true;
+        try { await invoke("watchClose", [this.handle]); } catch {}
+        throw error;
+      } finally {
+        this.pending = false;
+      }
+    };
+    Object.seal(this);
+  }
+  async close() {
+    if (this.closed) return null;
+    this.closed = true;
+    const value = await invoke("watchClose", [this.handle]);
+    if (typeof value !== "boolean") throw new TypeError("Desktop host returned an invalid service state stream release result");
+    return null;
+  }
+}
+export const ServiceConnection = Object.freeze({
+  is(value) { return value instanceof ServiceConnectionHandle; },
+  parse(value) { if (!(value instanceof ServiceConnectionHandle)) throw new TypeError("Value does not match ServiceConnection"); return value; },
+});
+export const ServiceStateStream = Object.freeze({
+  is(value) { return value instanceof ServiceStateStreamHandle; },
+  parse(value) { if (!(value instanceof ServiceStateStreamHandle)) throw new TypeError("Value does not match ServiceStateStream"); return value; },
+});
+export async function connect(name) {
+  name = serviceNameOf(name);
+  return new ServiceConnectionHandle(serviceToken, await invoke("connect", [name]), name);
+}
+export async function watchServices() {
+  if (declaredServices.size === 0) {
+    throw new Error("watchServices requires at least one service under 'desktop.services' in this project's velar.json");
+  }
+  return new ServiceStateStreamHandle(serviceStreamToken, await invoke("watchStart", []));
 }
 `.trimStart();
 }
@@ -2319,6 +2650,7 @@ const desktopModuleInterfaces = new Map(webCompilerExtension.modules!.interfaces
 desktopModuleInterfaces.set("velar/desktop", desktopModuleInterface);
 desktopModuleInterfaces.set("velar/desktop-test", desktopTestModuleInterface);
 desktopModuleInterfaces.set("velar/window", windowModuleInterface);
+desktopModuleInterfaces.set("velar/service", serviceModuleInterface);
 desktopModuleInterfaces.set("velar/notification", notificationModuleInterface);
 desktopModuleInterfaces.set("velar/secure-storage", secureStorageModuleInterface);
 desktopModuleInterfaces.set("velar/fs", nodeModuleInterfaces.get("velar/fs")!);
@@ -2336,6 +2668,7 @@ const desktopModuleDependencies = new Map(webCompilerExtension.modules!.dependen
 desktopModuleSources.set("velar/desktop", desktopModuleSource([], false));
 desktopModuleSources.set("velar/desktop-test", DESKTOP_TEST_SOURCE);
 desktopModuleSources.set("velar/window", desktopWindowSource([DESKTOP_MAIN_WINDOW_KIND]));
+desktopModuleSources.set("velar/service", desktopServiceSource([]));
 desktopModuleSources.set("velar/notification", desktopNotificationSource(false));
 desktopModuleSources.set("velar/secure-storage", desktopSecureStorageSource([]));
 desktopModuleSources.set("velar/fs", DESKTOP_FS_SOURCE);
@@ -2382,6 +2715,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
         const windows = desktop?.windows;
         return desktopWindowSource(windows ? Object.keys(windows) : [DESKTOP_MAIN_WINDOW_KIND]);
       }
+      if (specifier === "velar/service") return desktopServiceSource(Object.keys(desktop?.services ?? {}));
       // A caller outside a resolved Desktop project — the standard-module
       // closure, a documentation fence, a runtime gate — passes a config that
       // has no `desktop` section at all, and gets the ungranted module: every

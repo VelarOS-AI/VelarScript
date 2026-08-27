@@ -1,7 +1,23 @@
 import { DESKTOP_MAIN_WINDOW_KIND, type VelarDesktopConfig } from "./config.ts";
+import { startLoopbackServiceServer, type LoopbackServiceRequest, type LoopbackServiceServer } from "./service-test-server.ts";
 import type { FrameworkBrowserTestController } from "@velarscript/compiler/framework-host";
 
 export type DesktopTestPlatform = "macos" | "test";
+
+/**
+ * One served fake service: a real loopback WebSocket server, and the real
+ * authenticated client connection the host would have opened to it. Both halves
+ * are real because the point of the seam is to let a test watch a message leave
+ * the application, cross a socket, reach a handler, and come back.
+ */
+interface ServedFakeService {
+  readonly server: LoopbackServiceServer;
+  readonly socket: WebSocket;
+  readonly inbound: string[];
+  readonly waiting: ((message: string | null) => void)[];
+  pending: LoopbackServiceRequest | null;
+  closed: boolean;
+}
 
 /**
  * Owns the one pre-navigation choice a Desktop browser test may make. Each
@@ -12,12 +28,14 @@ export function desktopBrowserTestController(config: VelarDesktopConfig): Framew
   let platform: DesktopTestPlatform = "test";
   let windowKind: string = DESKTOP_MAIN_WINDOW_KIND;
   let opened = false;
+  const served = new Map<string, ServedFakeService>();
   return Object.freeze({
     initScript() {
       opened = true;
       return desktopBrowserTestInitScript(config, platform, windowKind);
     },
-    invoke(capability: string, operation: string, args: readonly unknown[]) {
+    async invoke(capability: string, operation: string, args: readonly unknown[]) {
+      if (capability === "service-test") return { handled: true, value: await fakeService(config, served, operation, args) };
       if (capability !== "desktop-test") return { handled: false };
       if (operation === "setPlatform") {
         if (opened) throw new Error("Desktop test platform must be set before the first browser.open()");
@@ -44,6 +62,113 @@ export function desktopBrowserTestController(config: VelarDesktopConfig): Framew
 }
 
 /**
+ * The half of `serveService` that needs real authority: a real listener, a real
+ * upgrade, and the real authenticated client connection the native host would
+ * have opened. The handler stays in the test's own VelarScript, driven from
+ * `velar/desktop-test` through `accept` and `reply`, so what a test writes is a
+ * service and what runs is a socket.
+ */
+async function fakeService(
+  config: VelarDesktopConfig,
+  served: Map<string, ServedFakeService>,
+  operation: string,
+  args: readonly unknown[],
+): Promise<unknown> {
+  const name = args[0];
+  if (typeof name !== "string" || !Object.hasOwn(config.services, name)) {
+    throw new Error(`Desktop test serveService cannot serve the undeclared service '${String(name)}'; `
+      + `declare it under 'desktop.services' (declared services: ${Object.keys(config.services).join(", ") || "none"})`);
+  }
+  if (operation === "serve") {
+    if (served.has(name)) throw new Error(`Desktop test service '${name}' is already served`);
+    const server = await startLoopbackServiceServer();
+    const entry: ServedFakeService = {
+      server,
+      socket: await openAuthenticatedSocket(server.port, server.token),
+      inbound: [],
+      waiting: [],
+      pending: null,
+      closed: false,
+    };
+    entry.socket.addEventListener("message", (event) => {
+      const message = typeof event.data === "string" ? event.data : "";
+      const next = entry.waiting.shift();
+      if (next) next(message);
+      else entry.inbound.push(message);
+    });
+    served.set(name, entry);
+    return null;
+  }
+  const entry = served.get(name);
+  if (!entry) throw new Error(`Desktop test service '${name}' is not served; call serveService first`);
+  if (operation === "accept") {
+    const request = await entry.server.accept();
+    if (request === null) return null;
+    entry.pending = request;
+    return request.message;
+  }
+  if (operation === "reply") {
+    if (typeof args[1] !== "string") throw new TypeError("Desktop test service reply requires text");
+    entry.pending?.reply(args[1]);
+    entry.pending = null;
+    return null;
+  }
+  if (operation === "roundTrip") {
+    if (typeof args[1] !== "string") throw new TypeError("Desktop test service round trip requires text");
+    entry.socket.send(args[1]);
+    const queued = entry.inbound.shift();
+    if (queued !== undefined) return queued;
+    return new Promise<string | null>((resolve) => entry.waiting.push(resolve));
+  }
+  // The proof that the token gates the channel: the same endpoint, a token the
+  // host never issued, and a service that ends the connection instead of
+  // answering it.
+  if (operation === "wrongToken") {
+    const refused = entry.server.rejectedHandshakes();
+    try {
+      await openAuthenticatedSocket(entry.server.port, `${entry.server.token}00`);
+    } catch {
+      return entry.server.rejectedHandshakes() > refused;
+    }
+    return false;
+  }
+  if (operation === "close") {
+    entry.closed = true;
+    for (const resolve of entry.waiting.splice(0)) resolve(null);
+    entry.socket.close();
+    await entry.server.close();
+    served.delete(name);
+    return null;
+  }
+  throw new Error(`Unsupported Desktop test service operation '${operation}'`);
+}
+
+/**
+ * The host's side of the handshake, written out once here so that a test proves
+ * the same two frames `packages/desktop/README.md` pins and the native host
+ * sends.
+ */
+async function openAuthenticatedSocket(port: number, token: string): Promise<WebSocket> {
+  const socket = new WebSocket(`ws://127.0.0.1:${port}/`);
+  await new Promise<void>((resolve, reject) => {
+    const failed = (): void => reject(new Error("The fake service refused the handshake"));
+    socket.addEventListener("error", failed, { once: true });
+    socket.addEventListener("close", failed, { once: true });
+    socket.addEventListener("open", () => {
+      socket.send(JSON.stringify({ velar: "service-hello", token }));
+      socket.addEventListener("message", (event) => {
+        if (typeof event.data === "string" && (JSON.parse(event.data) as { velar?: string }).velar === "service-ready") {
+          socket.removeEventListener("error", failed);
+          socket.removeEventListener("close", failed);
+          resolve();
+        } else failed();
+      }, { once: true });
+    }, { once: true });
+  });
+  return socket;
+}
+
+/**
  * Creates the deterministic capability host used by `velar test --browser`.
  * It is intentionally an in-memory filesystem, not a browser polyfill for the
  * operating system. The native worker has a separate integration suite.
@@ -59,6 +184,7 @@ export function desktopBrowserTestInitScript(
   const secureStorage = JSON.stringify(config.permissions.secureStorage);
   const notifications = JSON.stringify(config.permissions.notifications);
   const windows = JSON.stringify(config.windows);
+  const services = JSON.stringify(Object.keys(config.services));
   return String.raw`
 (() => {
   "use strict";
@@ -836,6 +962,148 @@ export function desktopBrowserTestInitScript(
     throw new Error("Desktop test capability '" + capability + "' has no operation '" + operation + "'");
   }
 
+  // The page's side of the service channel. It is deliberately the same shape
+  // the native host presents — the renderer holds a handle and never a socket —
+  // and the frames it carries are pumped over a real loopback WebSocket by
+  // 'velar/desktop-test.serveService' in the test process. The renderer never
+  // opens a socket in production either: the host dials, so a fake that opened
+  // one from the page would be modelling the wrong architecture.
+  const declaredServices = new Set(${services});
+  const serviceStates = new Map([...declaredServices].map(name => [name, "starting"]));
+  const serviceConnections = new Map();
+  const serviceWatchers = new Map();
+  const serviceOutbound = [];
+  const serviceOutboundWaiting = [];
+  let nextServiceHandle = 1;
+  const maxServiceQueuedMessages = 1024;
+  function serviceConnection(handle, operation) {
+    const connection = serviceConnections.get(handle);
+    if (!connection) throw new Error("Desktop test service connection is closed or unknown");
+    return connection;
+  }
+  function settleServiceOutbound() {
+    while (serviceOutboundWaiting.length > 0 && serviceOutbound.length > 0) {
+      serviceOutboundWaiting.shift()(serviceOutbound.shift());
+    }
+  }
+  function publishServiceState(name, state) {
+    serviceStates.set(name, state);
+    for (const watcher of serviceWatchers.values()) {
+      if (watcher.closed) continue;
+      if (watcher.pending && watcher.events.length === 0) {
+        const deliver = watcher.pending;
+        watcher.pending = null;
+        deliver({name, state});
+        continue;
+      }
+      const index = watcher.events.findIndex(event => event.name === name);
+      if (index >= 0) watcher.events[index] = {name, state};
+      else watcher.events.push({name, state});
+    }
+    return null;
+  }
+  async function serviceCapability(operation, args) {
+    if (operation === "connect") {
+      const name = args[0];
+      if (!declaredServices.has(name)) throw new Error("Desktop service '" + String(name) + "' is not declared in 'desktop.services'");
+      const state = serviceStates.get(name);
+      if (state !== "ready") {
+        throw new Error("Desktop service '" + name + "' is " + state + " rather than ready; watchServices() reports when it becomes ready");
+      }
+      const handle = nextServiceHandle++;
+      serviceConnections.set(handle, {
+        name, queue: [], pending: null, closed: false,
+        closeCode: 1006, closeReason: "the service channel ended without a close frame",
+      });
+      return handle;
+    }
+    if (operation === "send") {
+      const connection = serviceConnection(args[0], "send");
+      if (typeof args[1] !== "string") throw new TypeError("Desktop test service send requires text");
+      if (connection.closed) throw new Error("Desktop test service connection is closed");
+      serviceOutbound.push({connection: args[0], message: args[1]});
+      settleServiceOutbound();
+      return null;
+    }
+    if (operation === "receive") {
+      const connection = serviceConnections.get(args[0]);
+      if (!connection) return null;
+      if (connection.pending) throw new Error("ServiceConnection.next already has an active pull");
+      if (connection.queue.length > 0) return connection.queue.shift();
+      if (connection.closed) { serviceConnections.delete(args[0]); return null; }
+      return new Promise(resolve => { connection.pending = resolve; });
+    }
+    if (operation === "state") return serviceConnections.get(args[0])?.closed === false ? "open" : "closed";
+    if (operation === "closeInfo") {
+      const connection = serviceConnection(args[0], "closeInfo");
+      return {code: connection.closeCode, reason: connection.closeReason};
+    }
+    if (operation === "close") {
+      const connection = serviceConnections.get(args[0]);
+      if (!connection) return false;
+      connection.closed = true;
+      connection.closeCode = args[1];
+      connection.closeReason = args[2];
+      if (connection.pending) { const deliver = connection.pending; connection.pending = null; deliver(null); }
+      serviceConnections.delete(args[0]);
+      return true;
+    }
+    if (operation === "watchStart") {
+      const handle = nextServiceHandle++;
+      serviceWatchers.set(handle, {
+        events: [...serviceStates].map(([name, state]) => ({name, state})),
+        pending: null,
+        closed: false,
+      });
+      return handle;
+    }
+    if (operation === "watchNext") {
+      const watcher = serviceWatchers.get(args[0]);
+      if (!watcher || watcher.closed) throw new Error("Desktop ServiceStateStream handle is unknown or already released");
+      if (watcher.pending) throw new Error("ServiceStateStream.next already has an active pull");
+      if (watcher.events.length > 0) return watcher.events.shift();
+      return new Promise(resolve => { watcher.pending = resolve; });
+    }
+    if (operation === "watchClose") {
+      const watcher = serviceWatchers.get(args[0]);
+      if (!watcher) return false;
+      watcher.closed = true;
+      watcher.pending = null;
+      serviceWatchers.delete(args[0]);
+      return true;
+    }
+    throw new Error("Unsupported Desktop test service operation '" + operation + "'");
+  }
+  async function serviceTestCapability(operation, args) {
+    if (operation === "setState") {
+      if (!declaredServices.has(args[0])) throw new Error("Desktop test setServiceState cannot name the undeclared service '" + String(args[0]) + "'");
+      return publishServiceState(args[0], args[1]);
+    }
+    // The test process pulls what the application sent and pushes back what the
+    // real loopback service answered. A bounded wait rather than an open-ended
+    // one, so a pump outlives neither the page nor the test that started it.
+    if (operation === "poll") {
+      if (serviceOutbound.length > 0) return serviceOutbound.shift();
+      return new Promise(resolve => {
+        const waiter = value => resolve(value ?? null);
+        serviceOutboundWaiting.push(waiter);
+        setTimeout(() => {
+          const index = serviceOutboundWaiting.indexOf(waiter);
+          if (index >= 0) { serviceOutboundWaiting.splice(index, 1); resolve(null); }
+        }, 100);
+      });
+    }
+    if (operation === "deliver") {
+      const connection = serviceConnections.get(args[0]);
+      if (!connection || connection.closed) return null;
+      if (connection.pending) { const deliver = connection.pending; connection.pending = null; deliver(args[1]); return null; }
+      if (connection.queue.length >= maxServiceQueuedMessages) throw new RangeError("Desktop test service receive queue reached its bound");
+      connection.queue.push(args[1]);
+      return null;
+    }
+    throw new Error("Unsupported Desktop test service seam operation '" + operation + "'");
+  }
+
   const bridge = Object.freeze({
     platform: ${JSON.stringify(platform)},
     packaged: false,
@@ -846,6 +1114,8 @@ export function desktopBrowserTestInitScript(
     environment,
     async invoke(capability, operation, args) {
       if (!Array.isArray(args)) throw new TypeError("Desktop test bridge args must be a list");
+      if (capability === "service") return serviceCapability(operation, args);
+      if (capability === "service-fake") return serviceTestCapability(operation, args);
       if (capability === "window") return windowCapability(operation, args);
       if (capability === "window-test") return windowTestCapability(operation, args);
       if (capability === "notification") return notificationCapability(operation, args);

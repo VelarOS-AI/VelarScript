@@ -65,6 +65,9 @@ export const velarFrameworkHost: FrameworkHostExtension = Object.freeze({
     if (imports.has("velar/secure-storage") && config.permissions.secureStorage.length === 0) {
       failures.push("Desktop source imports 'velar/secure-storage' but desktop.permissions.secureStorage grants no name");
     }
+    if (imports.has("velar/service") && Object.keys(config.services).length === 0) {
+      failures.push("Desktop source imports 'velar/service' but desktop.services declares no service");
+    }
     return Object.freeze(failures);
   },
 });
