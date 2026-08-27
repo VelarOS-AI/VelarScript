@@ -771,13 +771,34 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     // list is somewhere among them; each region gates itself on the shared
     // branch conditions, so at most one region renders content at a time and
     // the keyed list keeps identity-preserving children across the branch flip.
-    // Without a keyed leaf the interpolation stays one dynamic region.
-    const statements = leaves.some((leaf) => leaf.list?.key)
+    // Without a keyed leaf the interpolation stays one dynamic region -- unless
+    // its checked type can only ever be one text node, which is the whole tree
+    // of a conversation surface and is answered by one text node instead (F1).
+    const keyed = leaves.some((leaf) => leaf.list?.key);
+    const scalarText = !keyed && this.isScalarTextChild(expression);
+    // A scalar region owns no child scope, so nothing inside it may address
+    // one; the guard above proves nothing does.
+    if (scalarText) this.currentScope = scope;
+    const statements = keyed
       ? leaves.map((leaf) => this.emitDynamicChildLeaf(parent, leaf, scope, namespace))
-      : [`__velarDynamic(${parent}, (__velarChildScope) => ${this.emitMappedExpression(expression)}, ${scope});`];
+      : scalarText
+        ? [`__velarText(${parent}, () => ${this.emitMappedExpression(expression)}, ${scope});`]
+        : [`__velarDynamic(${parent}, (__velarChildScope) => ${this.emitMappedExpression(expression)}, ${scope});`];
     this.currentScope = previousScope;
     this.currentJsxNamespace = previousJsxNamespace;
     return statements.join(" ");
+  }
+
+  /**
+   * The two conditions for the scalar-text fast path, both of which must hold:
+   * the analyzer proved the checked type renders as exactly one text node, and
+   * the expression builds no JSX of its own. Everything else keeps the full
+   * dynamic region, so a widening of the type rule can only ever be a
+   * deliberate edit to `VelarWebAnalyzer.isScalarTextType`.
+   */
+  private isScalarTextChild(expression: Expression): boolean {
+    return this.hints.extensionCalls.get(spanIdentity(expression.span)) === JSX_SCALAR_TEXT_HINT
+      && !containsJsxExpression(expression);
   }
 
   private emitDynamicChildLeaf(parent: string, leaf: DynamicChildLeaf, scope: string, namespace: string): string {
@@ -1030,6 +1051,29 @@ export function jsxKeyedList(expression: Expression): JsxKeyedList | null {
   const arrow = callback as typeof callback & { readonly body: JSXElementExpression };
   const key = arrow.body.attributes.find((attribute) => attribute.name === "key") ?? null;
   return { source: expression.callee.object, arrow, key };
+}
+
+/**
+ * F1: the analyzer's verdict that an interpolation's checked type renders as
+ * exactly one text node. The emitter cannot re-derive it — the checked type is
+ * gone by lowering time — so the analyzer stamps the child expression's span
+ * and the emitter reads it back through the extension-hint channel that
+ * `LOOK_ARITHMETIC_HINT` already uses.
+ */
+export const JSX_SCALAR_TEXT_HINT = "@velarscript/web:jsx-scalar-text";
+
+/**
+ * The one thing a scalar interpolation must not contain. `__velarText` owns no
+ * child scope, so a nested element inside the expression — legal where a
+ * function takes a `WebNode` and answers text — would have nothing to register
+ * its observers and cleanups against. The type says one text node; this says
+ * nothing was built to make it.
+ */
+function containsJsxExpression(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  if (record.kind === "ExtensionExpression:web:jsx") return true;
+  return Object.values(record).some((child) => Array.isArray(child) ? child.some(containsJsxExpression) : containsJsxExpression(child));
 }
 
 // Flattens an interpolation into render leaves. A conditional contributes its
@@ -2026,6 +2070,44 @@ let __velarBuildScope = null;
 function __velarChildrenNode(build, scope) {
   const owner = __velarBuildScope === null ? scope : __velarBuildScope;
   return __velarInternalRead(() => build(owner));
+}
+
+// The scalar half of __velarAppend, lifted out so a region that can only ever
+// hold one text node can be that text node. The two branches are __velarAppend's
+// own, error text included: the checked type admits an unsound value only where
+// the program lied about it, and such a value must land exactly where it landed
+// before -- rendered if it is text or a finite number, refused with the same
+// message otherwise.
+function __velarTextValue(value) {
+  if (typeof value === "string") {
+    if (value.length > 16 * 1024 * 1024) throw new RangeError("JSX text cannot exceed 16 MiB");
+    return value;
+  }
+  if (typeof value === "number") {
+    if (!__velarDomIsFinite(value)) throw new TypeError("JSX numbers must be finite");
+    return __velarDomString(value);
+  }
+  throw new TypeError("JSX can render only text, finite numbers, bool, enums, WebNode values, and Lists of those values");
+}
+
+// F1: an interpolation whose checked type is 'string' or 'number' renders
+// exactly one text node -- never zero, never markup, never a list. So it needs
+// no comment pair to bracket content that can never grow or vanish, and no
+// child scope to own observers that can never exist: the text node is its own
+// anchor and its own content, created once and updated by assigning its data.
+// That is the same node identity a comment anchor gave, so a keyed row that
+// starts or ends on one still finds its bounds, and a focused sibling is never
+// detached by an update.
+function __velarText(parent, read, scope) {
+  let node = null;
+  __velarObserver(() => {
+    // Read and validate before touching the document: a failed update must
+    // leave the last valid text standing, exactly as a failed rebuild leaves
+    // the last valid region standing.
+    const value = __velarTextValue(read());
+    if (node === null) __velarDomAppend(parent, node = __velarDomCreateTextNode(value));
+    else __velarDomSetData(node, value);
+  }, "dom", scope);
 }
 
 function __velarDynamic(parent, read, scope, rootState = null) {
