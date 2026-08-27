@@ -50,6 +50,47 @@ truth for acceptance status.
   under an `always` or `never` restart policy, and converges them on quit;
   `velar dev` runs the same services on the system Node.
 
+### Language and diagnostics
+
+- A cross-module type check no longer writes a type name the emitting module
+  does not bind. A module reaching an enum, a class, or a pinned member only
+  through an imported signature — `def maybeKind() -> Kind?` imported without
+  `Kind` — had that name emitted as a receiver, so `velar check` and
+  `velar build` both passed and the application threw
+  `ReferenceError: Kind is not defined` the first time the check ran. A name
+  the module does have is still reached precisely; one it does not have
+  degrades exactly as an unreachable record type already did.
+- `Map(record)` now accepts a record a `type` declaration names. The refusal
+  listed "a record" among the forms it takes and then refused the most ordinary
+  record the language has.
+- A mutable cell that inferred an enum-member singleton now says which
+  declaration to annotate: `Cannot assign Locale.enUS to Locale.zhCN` carries
+  `'state locale: Locale = ...'`, because the line to change is not the line
+  the error points at.
+- `contains` on a string points at `has`, the way `includes` and `indexOf`
+  already do and the List, Set, and Map tables already did.
+
+### Web applications
+
+- Reading `currentRoute()` inside a rendered position now follows navigation.
+  `Router` and `NavLink` each listened to history; `currentRoute()` returned a
+  dead snapshot, so chrome outside the `Router` — a title bar, a breadcrumb, a
+  sidebar marking the open page — could only learn the route from a mounted
+  page publishing it back out. One history subscription now serves all three;
+  the return value is the same frozen snapshot, and a read outside a reactive
+  position subscribes to nothing.
+
+### Server routes
+
+- A route capture typed by an enum whose wire values are all integers now
+  decodes before it checks membership. Such a capture compiled, documented
+  `{"type":"integer","enum":[1,2]}`, and then refused every request that
+  matched it, because the URL segment is text and the members are numbers. The
+  decode is the `number` capture's own rule and nothing wider: `/f/1` answers,
+  `/f/3` is the same 422 an undecodable segment is, and an enum whose values
+  are all strings — or which mixes the two domains — matches the raw text as
+  before.
+
 ### Runtime
 
 - The Node terminal now delivers every byte it read before its input host
