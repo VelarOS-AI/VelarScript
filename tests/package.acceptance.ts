@@ -384,13 +384,13 @@ mount(<App />, "#app")
     assert.deepEqual((await readdir(join(application, "Contents", "Resources", "host"))).sort(), ["worker.js"]);
     assert.equal(hostConfiguration.nodeExecutableHint, undefined);
     assert.ok(!hostConfigurationText.includes(process.execPath));
-    const smoke = await run(join(application, "Contents", "MacOS", "VelarDesktopHost"), ["--smoke"], desktopProject, {
+    const verification = await run(join(application, "Contents", "MacOS", "VelarDesktopHost"), ["--verify-bundle"], desktopProject, {
       ...process.env,
       VELAR_DESKTOP_NODE: process.execPath,
       VELAR_DESKTOP_PROJECT_ROOT: desktopProject,
     });
-    assert.deepEqual(JSON.parse(smoke.stdout), {
-      kind: "velar-desktop-smoke",
+    assert.deepEqual(JSON.parse(verification.stdout), {
+      kind: "velar-desktop-bundle-verification",
       protocolVersion: 1,
       identifier: "dev.velarscript.packed",
       // The template declares the one window kind every manifest declares, and

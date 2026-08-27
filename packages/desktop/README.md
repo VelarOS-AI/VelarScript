@@ -141,9 +141,11 @@ lets a local build run.
 The packaged host's `--headless-smoke` is the packaging acceptance: it starts,
 launches the capability worker on the runtime it resolved, completes one real
 capability round-trip, reports whether that runtime was the bundled one, and
-exits 0. `--smoke` remains a static bundle check; it cannot see a runtime that
-resolves but cannot execute JavaScript. `--headless` runs the application with no
-visible windows and no ending.
+exits 0. `--verify-bundle` is the static bundle check beside it; it cannot see a
+runtime that resolves but cannot execute JavaScript, which is why it no longer
+carries the word smoke. `--headless` runs the application with no visible
+windows and no ending. Every report these flags print is serialized JSON, one
+object on one line.
 
 `applyUpdate(archivePath)` replaces this installed application with an archive
 and relaunches. The host verifies that the `.app` inside carries this bundle

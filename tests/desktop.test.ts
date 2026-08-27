@@ -249,20 +249,20 @@ mount(<App />, "#app")
     );
 
     const smokeEnvironment = { ...process.env, VELAR_DESKTOP_NODE: process.execPath, VELAR_DESKTOP_PROJECT_ROOT: projectRoot };
-    const smoke = spawnSync(join(application, "Contents", "MacOS", "VelarDesktopHost"), ["--smoke"], { encoding: "utf8", env: smokeEnvironment });
-    assert.equal(smoke.status, 0, smoke.stderr);
-    assert.deepEqual(JSON.parse(smoke.stdout), {
-      kind: "velar-desktop-smoke",
+    const verification = spawnSync(join(application, "Contents", "MacOS", "VelarDesktopHost"), ["--verify-bundle"], { encoding: "utf8", env: smokeEnvironment });
+    assert.equal(verification.status, 0, verification.stderr);
+    assert.deepEqual(JSON.parse(verification.stdout), {
+      kind: "velar-desktop-bundle-verification",
       protocolVersion: 1,
       identifier: "dev.velarscript.fixture",
       windowKinds: ["main", "note-preview"],
     });
-    const invalidRootSmoke = spawnSync(join(application, "Contents", "MacOS", "VelarDesktopHost"), ["--smoke"], {
+    const invalidRootVerification = spawnSync(join(application, "Contents", "MacOS", "VelarDesktopHost"), ["--verify-bundle"], {
       encoding: "utf8",
       env: { ...smokeEnvironment, VELAR_DESKTOP_PROJECT_ROOT: "relative-project" },
     });
-    assert.equal(invalidRootSmoke.status, 1);
-    assert.match(invalidRootSmoke.stderr, /must be an absolute path/u);
+    assert.equal(invalidRootVerification.status, 1);
+    assert.match(invalidRootVerification.stderr, /must be an absolute path/u);
 
     // The packaging gate's acceptance, run twice: once ordinarily, and once on a
     // machine that has been stripped of every Node the application could borrow.
@@ -292,7 +292,7 @@ mount(<App />, "#app")
         // exists to make believable.
         runtimeSource: "bundled",
         // A real capability, answered by the worker the bundled interpreter is
-        // running. `--smoke` reaches `node --version`, which returns before V8
+        // running. `--verify-bundle` reaches `node --version`, which returns before V8
         // has created an Isolate; this one cannot be answered without one.
         capability: "fs.list",
         fileScope: true,

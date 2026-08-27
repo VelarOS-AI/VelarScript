@@ -365,6 +365,19 @@ private func responseIdentifier(_ data: Data) -> Int? {
     return id
 }
 
+/// The one place a machine-readable report leaves this host, and the reason it
+/// is a function rather than a string literal with holes in it: the reports used
+/// to be assembled by concatenation, so every value they carried was trusted to
+/// contain no quote, no backslash and no newline. A bundle identifier and a
+/// filesystem path are not that, and neither is an error message. Serializing
+/// the object is the whole fix; the sorted keys keep the output stable enough to
+/// read in a diff.
+private func writeReport(_ report: [String: Any]) throws {
+    let data = try JSONSerialization.data(withJSONObject: report, options: [.sortedKeys])
+    FileHandle.standardOutput.write(data)
+    FileHandle.standardOutput.write(Data("\n".utf8))
+}
+
 /// Where the runtime a packaged application actually ran on came from. It is
 /// reported by `--headless-smoke` so a deprivation test can prove the bundled
 /// one was used rather than infer it from the absence of a failure.
@@ -2647,10 +2660,11 @@ private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// The packaging gate's acceptance, and the reason it is not `--smoke`.
+    /// The packaging gate's acceptance, and the reason it is not
+    /// `--verify-bundle`.
     ///
-    /// `--smoke` proves a runtime can be *resolved*: it runs `node --version`,
-    /// which returns before V8 has created an Isolate. A runtime that cannot
+    /// `--verify-bundle` proves a runtime can be *resolved*: it runs
+    /// `node --version`, which returns before V8 has created an Isolate. A runtime that cannot
     /// reserve its code range under the hardened runtime passes that and dies on
     /// the first real call — so this one starts the host, starts the capability
     /// worker on whichever runtime was resolved, and makes it answer a real
@@ -2680,10 +2694,21 @@ private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
                     exit(1)
                 }
             }
-            let kinds = host.windows.keys.sorted().map { "\"\($0)\"" }.joined(separator: ",")
-            print("{\"kind\":\"velar-desktop-headless-smoke\",\"protocolVersion\":1,\"identifier\":\"\(host.identifier)\","
-                + "\"runtimeSource\":\"\(runtime.source.rawValue)\",\"runtime\":\"\(runtime.url.path)\","
-                + "\"capability\":\"fs.list\",\"fileScope\":\(granted),\"windowKinds\":[\(kinds)]}")
+            do {
+                try writeReport([
+                    "kind": "velar-desktop-headless-smoke",
+                    "protocolVersion": 1,
+                    "identifier": host.identifier,
+                    "runtimeSource": runtime.source.rawValue,
+                    "runtime": runtime.url.path,
+                    "capability": "fs.list",
+                    "fileScope": granted,
+                    "windowKinds": host.windows.keys.sorted(),
+                ])
+            } catch {
+                FileHandle.standardError.write(Data("VelarScript Desktop headless smoke failed: the report could not be serialized\n".utf8))
+                exit(1)
+            }
             // The renderer, the worker and the windows are all live here; the
             // acceptance is that they started and answered, so the exit is the
             // last statement rather than a shutdown sequence.
@@ -2711,16 +2736,17 @@ private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
 @main
 private enum VelarDesktopHost {
     static func main() {
-        if CommandLine.arguments.dropFirst() == ["--smoke"] {
+        if CommandLine.arguments.dropFirst() == ["--verify-bundle"] {
             do {
                 guard let resources = Bundle.main.resourceURL else { throw NSError(domain: "VelarDesktop", code: 1) }
                 let configData = try Data(contentsOf: resources.appendingPathComponent("desktop.json"))
                 let host = try JSONDecoder().decode(HostConfiguration.self, from: configData)
-                // `--smoke` answers "is this bundle complete and is there a
-                // runtime": a static check, still worth having, and deliberately
-                // no longer the packaging gate's acceptance. `--headless-smoke`
-                // is, because a runtime that answers `node --version` can still
-                // be a runtime that cannot execute JavaScript.
+                // `--verify-bundle` answers "is this bundle complete and is
+                // there a runtime": a static check, still worth having, and
+                // deliberately not the packaging gate's acceptance. It used to
+                // be spelled `--smoke`, and that name was a lie that cost a
+                // release — it exits 0 on a bundle whose interpreter cannot
+                // execute JavaScript. `--headless-smoke` is the smoke.
                 _ = try resolveNodeRuntime(host)
                 _ = try resolveProjectDirectory(resources)
                 guard host.protocolVersion == 1,
@@ -2739,11 +2765,16 @@ private enum VelarDesktopHost {
                 ]), request.arguments.count == 1 else {
                     throw NSError(domain: "VelarDesktop", code: 3, userInfo: [NSLocalizedDescriptionKey: "Desktop bridge rejected a bounded request with arguments"])
                 }
-                let kinds = host.windows.keys.sorted().map { "\"\($0)\"" }.joined(separator: ",")
-                print("{\"kind\":\"velar-desktop-smoke\",\"protocolVersion\":1,\"identifier\":\"\(host.identifier)\",\"windowKinds\":[\(kinds)]}")
+                let report: [String: Any] = [
+                    "kind": "velar-desktop-bundle-verification",
+                    "protocolVersion": 1,
+                    "identifier": host.identifier,
+                    "windowKinds": host.windows.keys.sorted(),
+                ]
+                try writeReport(report)
                 return
             } catch {
-                FileHandle.standardError.write(Data("VelarScript Desktop smoke failed: \(error.localizedDescription)\n".utf8))
+                FileHandle.standardError.write(Data("VelarScript Desktop bundle verification failed: \(error.localizedDescription)\n".utf8))
                 exit(1)
             }
         }

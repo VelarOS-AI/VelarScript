@@ -353,9 +353,13 @@ notarized, never by whom. There is no reader for version 3.
 The packaged host accepts `--headless-smoke`: it starts, launches the capability
 worker on whichever runtime it resolved, completes one real capability
 round-trip, prints what answered, and exits 0. That is the packaging gate's
-acceptance. The older `--smoke` only resolves a runtime by asking
-`node --version`, which returns before V8 has created an isolate — a bundle whose
-interpreter cannot execute JavaScript passes it.
+acceptance, and it is the only thing this host calls a smoke. `--verify-bundle`
+is the static check beside it: the bundle is complete and a runtime resolves.
+It cannot be an acceptance, because resolving a runtime means asking
+`node --version`, which returns before V8 has created an isolate — a bundle
+whose interpreter cannot execute JavaScript passes it. The check was once
+called `--smoke`, which is why it was believed; the flag now says what it does
+and there is no alias for the old spelling.
 
 Build output is fixed by the toolchain, not by the machine that runs it.
 Project modules are ordered by UTF-16 code unit over their POSIX-normalized
