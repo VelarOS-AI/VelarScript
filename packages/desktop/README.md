@@ -17,7 +17,9 @@ permission-scoped implementations of existing language capabilities:
 - `velar/desktop` also carries the rest of the host surface: `openExternal`
   through a closed scheme allowlist, `displays()`, the `watchPower()`
   sleep/wake stream, the `watchDroppedFiles()` stream of real paths a drag
-  gesture brought in, and the read-only `permissionStatus()` probes.
+  gesture brought in, the read-only `permissionStatus()` probes, and
+  `applyUpdate()`, which replaces this installed application with a downloaded
+  archive of itself.
 - `velar/notification`: `requestPermission`, `show`, and a bounded pull stream of
   activations. The manifest declares whether the application may notify; the
   operating system separately answers whether it may right now.
@@ -109,11 +111,47 @@ streamed HTTP bodies with distinct status, abort, and transport failures.
 Large request and response values use the bounded chunk transport rather than
 depending on WebView message limits.
 
-The macOS package uses WKWebView and keeps Node external (Node.js 24 or newer).
+The macOS package uses WKWebView and is self-contained: it carries one bare
+Node.js executable at `Contents/MacOS/node`, and the end user installs nothing.
 `velar package` contains only the native host, the capability worker, renderer,
-icon, and metadata. The manifest reports each component and the complete tree
-hash under one size budget; it does not bundle the CLI, compiler, browser
-automation, language server, build engine, project kernel, or PTY helper.
+icon, metadata, and that runtime. The manifest reports each component and the
+complete tree hash; it does not bundle the CLI, compiler, browser automation,
+language server, build engine, project kernel, or PTY helper.
+
+The runtime version belongs to the toolchain generation, not the project. One
+version and one official `SHASUMS256` digest are pinned per generation; the first
+`velar package` downloads the archive from `nodejs.org`, verifies it, and caches
+the executable per version, platform and architecture, so later builds need no
+network. An entry whose bytes no longer match its receipt is treated as absent.
+`desktop.build.sizeBudgetBytes` governs the application's own components; the
+runtime is measured separately against a fixed toolchain-owned ceiling, because
+no project change removes or shrinks it.
+
+The runtime lives beside the executable rather than in `Contents/Resources`,
+where a Mach-O is sealed as a plain resource and never signed — and an unsigned
+Mach-O cannot execute on arm64. The bundle is signed inside-out: the runtime
+first, with the language's own minimal entitlements file whose single key is
+`com.apple.security.cs.allow-jit` (without it the hardened runtime denies V8 its
+code range and the worker dies on the first capability call), then the host, then
+the bundle. `desktop.build.signing` supplies the product's identity, its own
+entitlements, and a `notarytool` keychain-profile name; no credential enters the
+build manifest or a log line, and an absent identity means ad-hoc, which is what
+lets a local build run.
+
+The packaged host's `--headless-smoke` is the packaging acceptance: it starts,
+launches the capability worker on the runtime it resolved, completes one real
+capability round-trip, reports whether that runtime was the bundled one, and
+exits 0. `--smoke` remains a static bundle check; it cannot see a runtime that
+resolves but cannot execute JavaScript. `--headless` runs the application with no
+visible windows and no ending.
+
+`applyUpdate(archivePath)` replaces this installed application with an archive
+and relaunches. The host verifies that the `.app` inside carries this bundle
+identifier and this signing Team ID — nested code included — before touching
+anything on disk, and every failure leaves the current install exactly as it was.
+An ad-hoc-signed development install has no Team ID and is refused by name:
+accepting "no team matches no team" would accept any archive. Downloading,
+scheduling, channels, feeds and rollback policy are the product's.
 
 ```sh
 velar check .

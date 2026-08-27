@@ -289,6 +289,74 @@ wearing one label. `notifications` declares intent only — the operating system
 still asks the user, and `requestPermission()` is how the application learns that
 answer.
 
+### Packaging a Desktop application
+
+`velar package` produces a **self-contained** `.app`: the user needs nothing
+installed. The bundle carries one bare Node.js executable at
+`Contents/MacOS/node`, and the version is the toolchain generation's rather than
+the project's — `velar.json` has no field for it, and every application this
+toolchain builds carries the same interpreter. The first `velar package` on a
+machine downloads the official archive from `nodejs.org`, checks it against the
+`SHASUMS256` digest this toolchain pins, and caches the executable under
+`~/Library/Caches/velarscript/desktop-runtimes/<version>/<platform>-<arch>`
+(`VELAR_DESKTOP_RUNTIME_CACHE` moves that directory and nothing else). Later
+builds are offline. A cache entry whose bytes no longer match its receipt is
+treated as absent rather than trusted, and an offline build with nothing cached
+names the version and the directory to prime.
+
+`desktop.build.sizeBudgetBytes` (32 MiB by default) governs the **application's**
+components — native host, renderer, capability host, metadata. The runtime is not
+one of them: no project change removes or shrinks it, so it is reported
+separately and held to a fixed 200 MiB integrity ceiling the toolchain owns.
+
+The bundle is always signed, because an arm64 Mach-O with no signature cannot be
+executed. `desktop.build.signing` carries the three answers that belong to the
+product, and nothing about the mechanics:
+
+```json
+{
+  "desktop": {
+    "build": {
+      "signing": {
+        "identity": "Developer ID Application: Example Inc (TEAMID1234)",
+        "entitlements": "build/app.entitlements",
+        "notarization": { "keychainProfile": "example-notary" }
+      }
+    }
+  }
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `identity` | The `codesign` identity. Omit it for an ad-hoc signature, which is what a local build gets; writing `"-"` is refused, because absence already means ad-hoc. |
+| `entitlements` | A project-relative entitlements plist applied to the host and the bundle. The embedded runtime is signed separately with the language's own minimal file. |
+| `notarization.keychainProfile` | A profile `xcrun notarytool store-credentials` already stored. It is a reference the local keychain resolves, so no credential reaches the manifest, the build log, or the build receipt. Requires `identity`: Apple does not notarize an ad-hoc signature. |
+
+Signing runs inside-out — the runtime first, then the host, then the bundle —
+because macOS seals a bundle from its leaves inward and re-signing the bundle
+invalidates anything signed after it. The runtime's own entitlements are supplied
+by the language and contain exactly one key,
+`com.apple.security.cs.allow-jit`: without it the hardened runtime refuses V8 its
+code range, and the application dies on its first capability call rather than at
+build time. The file is written beside the build manifest as
+`velar-desktop-runtime.entitlements` so the signature is auditable.
+
+`velar-desktop-build.json` is `formatVersion` 4. Its `runtime` is
+`{"kind": "embedded-node", "version", "embedded": true, "bytes", "sha256"}`,
+where `sha256` is the official archive digest that was verified — provenance,
+not a hash of the shipped bytes, which this build's own signature has already
+changed. `sizes` reports `applicationBytes` and `runtimeBytes` beside the
+component breakdown, and `signing` records the mode and whether the build was
+notarized, never by whom. There is no reader for version 3.
+
+The packaged host accepts `--headless-smoke`: it starts, launches the capability
+worker on whichever runtime it resolved, completes one real capability
+round-trip, prints what answered, and exits 0. That is the packaging gate's
+acceptance. The older `--smoke` only resolves a runtime by asking
+`node --version`, which returns before V8 has created an isolate — a bundle whose
+interpreter cannot execute JavaScript passes it.
+
 Build output is fixed by the toolchain, not by the machine that runs it.
 Project modules are ordered by UTF-16 code unit over their POSIX-normalized
 project-relative path, and that order decides the concatenated stylesheet's

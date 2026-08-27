@@ -211,6 +211,38 @@ the first `browser.open()` and sealed by it — `setPlatform` and `setWindowKind
 the fake keychain holds and never the values: a test seam that handed a
 credential back would be the exception that ends that rule.
 
+## Updating the installed application
+
+```velar fragment
+import {applyUpdate} from "velar/desktop"
+
+async def install(archivePath: string) -> string:
+    try:
+        await applyUpdate(archivePath)
+        return "replaced; relaunching"
+    catch error:
+        return f"refused: {error.message}"
+```
+
+`applyUpdate` is the mechanism and nothing else. There is no feed, no channel,
+no version check, no automatic download, and no delta format — deciding when to
+look, where to look, and what to tell the user is the product's, and so is
+downloading the archive with the capabilities the application already has.
+
+The host expands the archive elsewhere, requires the application inside it to
+carry this application's bundle identifier and this application's signing Team
+ID, and only then replaces the installed bundle atomically and relaunches. Every
+failure leaves the current install untouched. Do not write a fallback that
+retries with a different archive or works around a refusal: a refusal means the
+archive is not this application.
+
+A development build is ad-hoc-signed and therefore has **no** Team ID, so
+`applyUpdate` refuses it by name. That is not a bug to route around — an update
+path where no team matches no team is an update path that accepts every archive
+on the machine. Test the flow with `velar/desktop-test`'s `setSigningTeam`,
+`stageUpdate` and `appliedUpdates`, and expect the real call to work only in a
+Developer ID signed install.
+
 ## Build and finish
 
 `velar dev` previews the renderer, `velar build` creates verified renderer
@@ -218,7 +250,27 @@ output, and `velar package` creates the native application containing the
 system-WebView host and capability worker. It does not embed compiler or
 Workbench tooling.
 
+`velar package` output is self-contained: it carries one bare Node.js executable
+at `Contents/MacOS/node`, whose version belongs to the toolchain generation
+rather than the project. Do not add a manifest field for it, do not check for
+Node at install time, and do not tell a user to install one. The first package on
+a machine downloads and verifies the official archive; later ones use the
+verified cache and need no network.
+
+`desktop.build.sizeBudgetBytes` measures the application's own components; the
+runtime is reported separately and has its own toolchain-owned ceiling. Do not
+raise the budget to make room for it.
+
+Signing always happens — ad-hoc when `desktop.build.signing.identity` is absent,
+so a local build runs on arm64. Set `identity`, `entitlements` and
+`notarization.keychainProfile` when the product distributes. Never put an Apple
+ID, a password, or an App Store Connect key in `velar.json`: the keychain profile
+name is the only credential-shaped thing that belongs there, and it is a
+reference the local keychain resolves.
+
 Run `velar format`, `velar check`, `velar test`, the Desktop browser tests,
-`velar build`, and the platform packaging gate. Runnable target examples live
+`velar build`, and the platform packaging gate, whose acceptance is the packaged
+host's `--headless-smoke` (host up, capability worker up on the bundled runtime,
+one real capability round-trip, exit 0). Runnable target examples live
 in `examples/tour/desktop/`; diagnostics and checked manifest vocabulary
 outrank this brief if they disagree.
