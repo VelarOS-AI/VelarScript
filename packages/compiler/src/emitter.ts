@@ -2489,12 +2489,21 @@ export class JavaScriptEmitter {
         // D60 rule 148: only a name that actually binds a runtime Type object
         // may be written into the output. See `runtimeTypeBinding`.
         return this.runtimeTypeBinding(type.name) ? `${type.name}.is(${value}, ${state})` : "false";
-      case "class":
-        return `__velarValidationIsInstance(${value}, ${this.builtinErrorRuntimeName(type.name) ?? type.name})`;
-      case "enum":
-        return `${type.name}.is(${value})`;
-      case "enumMember":
-        return `${value} === ${type.name}.${type.member}`;
+      // D60 rule 148 reaches the nominal kinds too: `class`, `enum`, and
+      // `enumMember` carry a display name exactly as `named` does, so a module
+      // that never bound the name may not write it. See `nominalRuntimeReceiver`.
+      case "class": {
+        const receiver = this.nominalRuntimeReceiver(type);
+        return receiver === null ? "false" : `__velarValidationIsInstance(${value}, ${receiver})`;
+      }
+      case "enum": {
+        const receiver = this.nominalRuntimeReceiver(type);
+        return receiver === null ? "false" : `${receiver}.is(${value})`;
+      }
+      case "enumMember": {
+        const receiver = this.nominalRuntimeReceiver(type);
+        return receiver === null ? "false" : `${value} === ${receiver}.${type.member}`;
+      }
       case "union":
         return `(${type.members.map((member) => this.emitTypeCheck(member, value, state)).join(" || ")})`;
       case "object":
@@ -2554,6 +2563,16 @@ export class JavaScriptEmitter {
         if (type.application && this.genericTypeBinding(type.application.name)) return this.emitTypeCheck(type, value, state);
         if (!this.runtimeTypeBinding(type.name)) return `${value} != null`;
         return this.emitTypeCheck(type, value, state);
+      // The same degradation for the nominal kinds. A recheck the module cannot
+      // spell is presence-only rather than a refusal, because a narrowing
+      // recheck is the caller's own recursion (`emitTypeCheck` would answer
+      // "false" and turn a correct program into a NarrowingError). The reported
+      // type text is unaffected: `__velarNarrow` is handed a string literal,
+      // not a binding.
+      case "class":
+      case "enum":
+      case "enumMember":
+        return this.nominalRuntimeReceiver(type) === null ? `${value} != null` : this.emitTypeCheck(type, value, state);
       case "object":
         return this.emitObjectTypeCheck(type, value, (field, read) => this.emitNarrowingCheck(field, read, state));
       case "parameter":
@@ -2812,6 +2831,29 @@ export class JavaScriptEmitter {
       || this.hints.classNames.has(name)
       || this.typeDeclarations.has(name)
       || this.hints.runtimeTypeObjectNames.has(name);
+  }
+
+  /**
+   * D60 rule 148 for the nominal kinds. `class`, `enum`, and `enumMember` carry
+   * a *display* name the same way `named` does, and that name belongs to the
+   * module that **declared** the type, not to the module now emitting. A module
+   * reaches a type through an imported signature alone — `def maybeKind() ->
+   * Kind?` imported without `Kind` — as often as it imports the name, and
+   * writing the display name there produced a check that passed `velar check`,
+   * bundled without complaint, and threw `ReferenceError: Kind is not defined`
+   * the first time it evaluated. Every writer of a nominal receiver asks here,
+   * so there is one gate rather than one per call site.
+   *
+   * A builtin error class answers under the runtime name the emitter imports
+   * for it, so it is reachable from every module regardless of what the source
+   * named.
+   */
+  protected nominalRuntimeReceiver(type: Extract<ValueType, { readonly kind: "class" | "enum" | "enumMember" }>): string | null {
+    if (type.kind === "class") {
+      const builtin = this.builtinErrorRuntimeName(type.name);
+      if (builtin !== null) return builtin;
+    }
+    return this.runtimeTypeBinding(type.name) ? type.name : null;
   }
 
   /** The runtime class behind a nameable builtin error type, marking the runtime it needs. */
