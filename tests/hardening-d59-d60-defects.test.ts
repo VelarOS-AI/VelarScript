@@ -177,6 +177,261 @@ export def probe(value: unknown) -> bool:
 });
 
 // ---------------------------------------------------------------------------
+// D60 rule 148, the nominal half (P1-1).
+//
+// `named` was gated; `class`, `enum`, and `enumMember` were not, and they carry
+// the very same display name. A module that reached an enum only through an
+// imported signature -- `def maybeKind() -> Kind?` imported without `Kind` --
+// had `Kind.is(value)` written into it: `velar check` green, `velar build`
+// green, and `ReferenceError: Kind is not defined` the first time the narrowing
+// recheck ran. The bundler renaming the declaring module's `Kind` to `Kind2`
+// (because the consumer's free `Kind` looked like a global) is what turned the
+// single-bundle accident into a certainty at scale.
+// ---------------------------------------------------------------------------
+
+/** JavaScript names the emitted output may reference without the module binding them. */
+const ambientNames = new Set([
+  "Array", "ArrayBuffer", "BigInt", "Boolean", "DataView", "Date", "Error", "EvalError", "Float32Array", "Float64Array",
+  "Function", "Infinity", "Int8Array", "Int16Array", "Int32Array", "Intl", "JSON", "Map", "Math", "NaN", "Number",
+  "Object", "Promise", "Proxy", "RangeError", "ReferenceError", "Reflect", "RegExp", "Set", "String", "Symbol",
+  "SyntaxError", "TypeError", "URIError", "Uint8Array", "Uint8ClampedArray", "Uint16Array", "Uint32Array", "URL",
+  "URLSearchParams", "WeakMap", "WeakRef", "WeakSet", "AbortController", "AbortSignal", "Blob", "Buffer", "Event",
+  "EventTarget", "FormData", "Headers", "Request", "Response", "TextDecoder", "TextEncoder", "AggregateError",
+  "BigInt64Array", "BigUint64Array", "FinalizationRegistry", "SharedArrayBuffer", "Atomics", "Iterator",
+]);
+
+/** Strings, templates, regular expressions, and comments, blanked so a scan reads code and not text. */
+function codeOnly(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//gu, " ")
+    .replace(/(^|[^:])\/\/[^\n]*/gu, "$1 ")
+    .replace(/"(?:[^"\\\n]|\\[\s\S])*"/gu, '""')
+    .replace(/'(?:[^'\\\n]|\\[\s\S])*'/gu, "''")
+    .replace(/`(?:[^`\\]|\\[\s\S])*`/gu, "``")
+    .replace(/\/(?:[^/\\\n[]|\\[\s\S]|\[(?:[^\]\\\n]|\\[\s\S])*\])+\/[dgimsuvy]*/gu, "/RE/");
+}
+
+/** Every module-scope name an emitted module binds: its imports and its top-level declarations. */
+function boundNames(code: string): Set<string> {
+  const bound = new Set<string>();
+  for (const match of code.matchAll(/import\s+([\s\S]*?)\s+from\s*["']/gu)) {
+    for (const piece of (match[1] ?? "").split(/[{},]/u)) {
+      const name = piece.trim().split(/\s+as\s+/u).at(-1)?.trim();
+      if (name && /^[A-Za-z_$][\w$]*$/u.test(name)) bound.add(name);
+    }
+  }
+  for (const match of code.matchAll(/\b(?:const|let|var|function|class)\s+\*?\s*([A-Za-z_$][\w$]*)/gu)) bound.add(match[1]!);
+  // Destructured module-scope bindings and every parameter name: a scan for a
+  // *type* name must not report a local the emitter introduced.
+  for (const match of code.matchAll(/(?:\{|\(|,|\[)\s*([A-Za-z_$][\w$]*)\s*(?:[,}\])=:]|$)/gu)) bound.add(match[1]!);
+  return bound;
+}
+
+/**
+ * The type names an emitted module writes into a value position without binding
+ * them. A complete free-variable analysis needs a JavaScript parser; this is
+ * exact for the class of defect that produced it -- a *type* name written as a
+ * receiver or an argument -- because a type name is capitalized, and because
+ * every position the emitter writes one into is a value position.
+ */
+function unboundTypeNames(code: string): string[] {
+  const stripped = codeOnly(code);
+  const bound = boundNames(stripped);
+  // Import and re-export clauses name their *source* export as well as the
+  // local binding, and only the local one is a name in this module. They have
+  // already been read for `bound`, so the scan reads the body alone.
+  const body = stripped
+    .replace(/\bimport\b[^;]*?\bfrom\b\s*(?:""|'')\s*;?/gu, " ")
+    .replace(/\bexport\b\s*\{[^}]*\}\s*(?:\bfrom\b\s*(?:""|''))?\s*;?/gu, " ");
+  const free = new Set<string>();
+  for (const match of body.matchAll(/(?<![.\w$])([A-Z][A-Za-z0-9_$]*)(?!\s*:)/gu)) {
+    const name = match[1]!;
+    if (bound.has(name) || ambientNames.has(name) || name.startsWith("__Velar") || name.startsWith("Velar")) continue;
+    free.add(name);
+  }
+  return [...free].sort();
+}
+
+/** The ledger's shapes: a declaring module, and a consumer that imports the *function* and never the type. */
+const crossModuleNominalShapes: readonly (readonly [string, string, string])[] = [
+  ["an optional enum narrowed by != null", `export enum Kind:
+    alpha
+    beta
+
+export def maybeKind() -> Kind?:
+    return Kind.alpha
+`, `import {maybeKind} from "./declared.vel"
+
+export def label() -> string:
+    let value = maybeKind()
+    if value != null: return str(value)
+    return "none"
+`],
+  ["an optional enum member singleton", `export enum Kind:
+    alpha
+    beta
+
+export def pinned() -> Kind.alpha?:
+    return Kind.alpha
+`, `import {pinned} from "./declared.vel"
+
+export def label() -> string:
+    let value = pinned()
+    if value != null: return str(value)
+    return "none"
+`],
+  ["an optional class instance", `export class Widget:
+    def title() -> string: return "widget"
+
+export def maybeWidget() -> Widget?:
+    return Widget()
+`, `import {maybeWidget} from "./declared.vel"
+
+export def label() -> string:
+    let value = maybeWidget()
+    if value != null: return value.title()
+    return "none"
+`],
+  ["an optional declared record", `export type Row:
+    name: string
+
+export def maybeRow() -> Row?:
+    return {name: "row"}
+`, `import {maybeRow} from "./declared.vel"
+
+export def label() -> string:
+    let value = maybeRow()
+    if value != null: return value.name
+    return "none"
+`],
+  ["a Record of an enum", `export enum Kind:
+    alpha
+    beta
+
+export def maybeBox() -> Record<Kind>?:
+    return {kind: Kind.alpha}
+`, `import {maybeBox} from "./declared.vel"
+
+export def label() -> number:
+    let value = maybeBox()
+    if value != null: return value.size
+    return 0
+`],
+  ["a List of an enum", `export enum Kind:
+    alpha
+    beta
+
+export def maybeKinds() -> List<Kind>?:
+    return [Kind.alpha]
+`, `import {maybeKinds} from "./declared.vel"
+
+export def label() -> number:
+    let value = maybeKinds()
+    if value != null: return value.size
+    return 0
+`],
+  ["an alias of an enum", `export enum Kind:
+    alpha
+    beta
+
+export type Sort = Kind
+
+export def maybeSort() -> Sort?:
+    return Kind.alpha
+`, `import {maybeSort} from "./declared.vel"
+
+export def label() -> string:
+    let value = maybeSort()
+    if value != null: return str(value)
+    return "none"
+`],
+];
+
+test("[D60-148] no emitted module names a type its own module does not bind", async () => {
+  const { compileProject } = await import("../packages/cli/src/project.ts");
+  for (const [label, declared, consumer] of crossModuleNominalShapes) {
+    const directory = await makeTemporaryDirectory("velar-p1-1-scan-");
+    await writeFile(join(directory, "declared.vel"), declared, "utf8");
+    await writeFile(join(directory, "consumer.vel"), consumer, "utf8");
+    await writeFile(join(directory, "main.vel"), `import {label} from "./consumer.vel"
+
+export const rendered = str(label())
+`, "utf8");
+    const project = await compileProject(join(directory, "main.vel"));
+    assert.deepEqual(project.failures.map((failure) => failure.message), [], label);
+    assert.deepEqual(project.modules.flatMap((module) => module.result.diagnostics), [], label);
+    for (const module of project.modules) {
+      assert.ok(module.result.code, `${label}: ${module.inputPath} emitted nothing`);
+      assert.deepEqual(
+        unboundTypeNames(module.result.code),
+        [],
+        `${label}: ${module.inputPath} names a type it does not bind`,
+      );
+    }
+  }
+});
+
+test("[D60-148] the check a module can still spell is still precise", async () => {
+  // The gate degrades a check the module cannot write; it must not degrade one
+  // it can. Importing the enum alongside the function keeps `Kind.is(...)`.
+  const { compileProject } = await import("../packages/cli/src/project.ts");
+  const directory = await makeTemporaryDirectory("velar-p1-1-bound-");
+  await writeFile(join(directory, "declared.vel"), `export enum Kind:
+    alpha
+    beta
+
+export def maybeKind() -> Kind?:
+    return Kind.alpha
+`, "utf8");
+  await writeFile(join(directory, "main.vel"), `import {Kind, maybeKind} from "./declared.vel"
+
+export def label() -> string:
+    let value = maybeKind()
+    if value != null: return str(value)
+    return str(Kind.beta)
+`, "utf8");
+  const project = await compileProject(join(directory, "main.vel"));
+  assert.deepEqual(project.failures.map((failure) => failure.message), []);
+  const main = project.modules.find((module) => module.inputPath.endsWith("main.vel"));
+  assert.ok(main?.result.code);
+  assert.match(main.result.code, /Kind\.is\(/u);
+  assert.deepEqual(unboundTypeNames(main.result.code), []);
+});
+
+test("[D60-148] check green means the built application runs", { timeout: 300_000 }, async () => {
+  // The ledger's own repro, executed. Before the fix this printed
+  // "ReferenceError: Kind is not defined" the first time the narrowing ran.
+  const directory = await makeTemporaryDirectory("velar-p1-1-run-");
+  await mkdir(join(directory, "src"), { recursive: true });
+  await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "src/main.vel" }), "utf8");
+  await writeFile(join(directory, "src", "kind.vel"), `export enum Kind:
+    alpha
+    beta
+
+export def maybeKind() -> Kind?:
+    return Kind.alpha
+`, "utf8");
+  await writeFile(join(directory, "src", "label.vel"), `import {maybeKind} from "./kind.vel"
+
+export def label() -> string:
+    let value = maybeKind()
+    if value != null: return str(value)
+    return "none"
+`, "utf8");
+  await writeFile(join(directory, "src", "main.vel"), `import {label} from "./label.vel"
+
+@main:
+    print(label())
+`, "utf8");
+  const checked = velar(["check", directory]);
+  assert.equal(checked.status, 0, checked.output);
+  const executed = velar(["run", join(directory, "src", "main.vel")]);
+  assert.equal(executed.status, 0, executed.output);
+  assert.match(executed.output, /alpha/u);
+  assert.doesNotMatch(executed.output, /ReferenceError/u);
+});
+
+// ---------------------------------------------------------------------------
 // D59 rule 141 — `toBe` is the language's own `==`.
 // ---------------------------------------------------------------------------
 
