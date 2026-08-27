@@ -32,7 +32,12 @@ export function desktopBrowserTestController(config: VelarDesktopConfig): Framew
   return Object.freeze({
     initScript() {
       opened = true;
-      return desktopBrowserTestInitScript(config, platform, windowKind);
+      // A service that is already served is a service that already answered the
+      // authenticated handshake, so the document opens with it ready. Serving
+      // one is therefore a pre-navigation choice like the platform and the
+      // window kind, and for the same reason: the page cannot be told about a
+      // service by a process it cannot call back into.
+      return desktopBrowserTestInitScript(config, platform, windowKind, [...served.keys()]);
     },
     async invoke(capability: string, operation: string, args: readonly unknown[]) {
       if (capability === "service-test") return { handled: true, value: await fakeService(config, served, operation, args) };
@@ -177,6 +182,7 @@ export function desktopBrowserTestInitScript(
   config: VelarDesktopConfig,
   platform: DesktopTestPlatform = "test",
   windowKind: string = DESKTOP_MAIN_WINDOW_KIND,
+  readyServices: readonly string[] = [],
 ): string {
   const files = JSON.stringify(config.permissions.files);
   const processes = JSON.stringify(config.permissions.processes);
@@ -185,6 +191,7 @@ export function desktopBrowserTestInitScript(
   const notifications = JSON.stringify(config.permissions.notifications);
   const windows = JSON.stringify(config.windows);
   const services = JSON.stringify(Object.keys(config.services));
+  const readyNames = JSON.stringify([...readyServices].sort());
   return String.raw`
 (() => {
   "use strict";
@@ -969,7 +976,8 @@ export function desktopBrowserTestInitScript(
   // opens a socket in production either: the host dials, so a fake that opened
   // one from the page would be modelling the wrong architecture.
   const declaredServices = new Set(${services});
-  const serviceStates = new Map([...declaredServices].map(name => [name, "starting"]));
+  const readyServices = new Set(${readyNames});
+  const serviceStates = new Map([...declaredServices].map(name => [name, readyServices.has(name) ? "ready" : "starting"]));
   const serviceConnections = new Map();
   const serviceWatchers = new Map();
   const serviceOutbound = [];

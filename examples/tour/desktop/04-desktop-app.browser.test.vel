@@ -11,7 +11,7 @@
 // this test produce the host events a real window system would.
 
 import {DesktopPlatform, PermissionStatus, PowerState, SystemPermission} from "velar/desktop"
-import {activateNotification, appDataDirectory, appliedUpdates, closeWindow, dropFiles, focusWindow, makeDirectory, moveWindow, openWindows, openedLinks, projectDirectory, publishPower, readText, removeFile, secureStorageNames, setNotificationPermission, setPlatform, setSigningTeam, setSystemPermission, setWindowKind, shownNotifications, stageUpdate, writeText} from "velar/desktop-test"
+import {activateNotification, appDataDirectory, appliedUpdates, closeWindow, dropFiles, focusWindow, makeDirectory, moveWindow, openWindows, openedLinks, projectDirectory, publishPower, readText, removeFile, secureStorageNames, serveService, serviceRejectsWrongToken, setNotificationPermission, setPlatform, setServiceState, setSigningTeam, setSystemPermission, setWindowKind, shownNotifications, stageUpdate, stopService, writeText} from "velar/desktop-test"
 import {NotificationPermission} from "velar/notification"
 import {browser} from "velar/web-test"
 import {expect} from "velar/test"
@@ -21,6 +21,8 @@ import {buildTag} from "./06-notifications.vel"
 import {sessionSlot} from "./07-secure-storage.vel"
 import {guideUrl} from "./08-system.vel"
 import {downloadedArchive, tourIdentifier} from "./10-updates.vel"
+import {askService, channelState, countRequest, endChannel, firstState, notesIndex, stateNames, storeRequest} from "./11-services.vel"
+import {ServiceState} from "velar/service"
 
 test "the explicit platform fixture selects an application branch before open":
     await setPlatform(DesktopPlatform.macos)
@@ -226,3 +228,55 @@ test "an update is refused unless it is this application signed by this team":
     await browser.click("[data-apply-update]")
     await browser.waitForText("[data-update]", "replaced; relaunching")
     expect(await appliedUpdates()).toEqual([archive])
+
+// Chapter 11's services, driven by the two seams that make them testable. The
+// fake is not a stub: `serveService` starts a real loopback WebSocket server,
+// performs the real RFC 6455 upgrade, checks the real token, and pumps the
+// application's channel through it, so what follows is a message leaving the
+// page, crossing a socket, reaching this handler, and coming back.
+//
+// A served service is ready, so `serveService` comes before the first
+// `browser.open()` the way `setPlatform` does — and `stopService` comes at the
+// end, because a test owns the work it starts.
+test "a service channel round-trips through a real loopback socket":
+    const index = async (request: string) => request == countRequest() ? "1" : f"stored {request}"
+    await serveService(notesIndex, index)
+    await browser.open()
+
+    // The application drives the channel from its own code: the click sends
+    // `put`, then `count`, and the answer came back over the socket.
+    await browser.click("[data-ask-service]")
+    await browser.waitForText("[data-service-summary]", "1")
+    await stopService(notesIndex)
+
+// The token is the whole authentication of a loopback endpoint every process on
+// the machine can reach, so the service side has to refuse one the host never
+// issued. This asks it to, on the same real socket.
+test "the service side refuses a token the host never issued":
+    await serveService(notesIndex, async (request: string) => request)
+    expect(await serviceRejectsWrongToken(notesIndex)).toBe(true)
+    await stopService(notesIndex)
+
+// The state a service is in decides whether a channel to it can be opened at
+// all, and `setServiceState` is how a test produces the transitions a real
+// supervisor publishes.
+test "a service reports its state, and a channel opens only once it is ready":
+    await serveService(notesIndex, async (request: string) => request)
+    await browser.open()
+    await browser.click("[data-watch-services]")
+    await browser.waitForText("[data-service-summary]", f"{notesIndex}: ready")
+
+    await setServiceState(notesIndex, ServiceState.restarting)
+    await browser.click("[data-watch-services]")
+    await browser.waitForText("[data-service-summary]", f"{notesIndex}: restarting")
+
+    // A channel to a service that is not ready is refused where it is asked
+    // for, by name and by state.
+    await browser.click("[data-ask-service]")
+    await browser.waitForText("[data-service-summary]",
+        f"Desktop service '{notesIndex}' is restarting rather than ready; watchServices() reports when it becomes ready")
+
+    expect(stateNames()).toEqual([
+        ServiceState.starting, ServiceState.ready, ServiceState.restarting, ServiceState.failed, ServiceState.stopped,
+    ])
+    await stopService(notesIndex)

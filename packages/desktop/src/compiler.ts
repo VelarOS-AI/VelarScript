@@ -857,6 +857,7 @@ export async function shownNotifications() {
 export async function activateNotification(tag = null) {
   return testSettle("notification-test", "activate", [testOptionalTag(tag, "activateNotification")], "activateNotification");
 }
+const servedServices = new Map();
 function testServiceName(value, operation) {
   if (typeof value !== "string" || value.length === 0 || value.length > 32) {
     throw new TypeError("Desktop test " + operation + " requires a declared service name");
@@ -879,28 +880,36 @@ export async function setServiceState(name, state) {
 export async function serveService(name, handler) {
   const service = testServiceName(name, "serveService");
   if (typeof handler !== "function") throw new TypeError("Desktop test serveService requires a handler");
+  if (servedServices.has(service)) throw new Error("Desktop test service '" + service + "' is already served; stopService releases it");
   await testSettle("service-test", "serve", [service], "serveService");
-  void (async () => {
-    while (true) {
-      let message;
-      try { message = await invoke("service-test", "accept", [service], 0); }
+  let running = true;
+  // The service half: what arrives on the real socket is handed to the test's
+  // own handler, and its answer goes back out the same socket.
+  const handlerPump = (async () => {
+    while (running) {
+      let request;
+      try { request = await invoke("service-test", "accept", [service], 0); }
       catch { return; }
-      if (message === null) return;
+      if (request === null) return;
       let reply;
-      try { reply = await handler(message); }
+      try { reply = await handler(request); }
       catch { reply = ""; }
-      if (typeof reply !== "string") reply = "";
-      try { await invoke("service-test", "reply", [service, reply], 30000); }
+      try { await invoke("service-test", "reply", [service, typeof reply === "string" ? reply : ""], 30000); }
       catch { return; }
     }
   })();
-  // The page half of the pump. It tolerates a document that does not exist yet,
-  // because a test names its services before the first browser.open().
-  void (async () => {
-    while (true) {
+  // The application half: what the page sent goes out over the real socket, and
+  // the real answer is delivered back into the page. It tolerates a document
+  // that does not exist yet, because a service is served before the first
+  // browser.open() and a page appears only afterwards.
+  const channelPump = (async () => {
+    while (running) {
       let outbound;
       try { outbound = await invoke("service-fake", "poll", [service], 0); }
-      catch { return; }
+      catch {
+        await new Promise(resolve => setTimeout(resolve, 50));
+        continue;
+      }
       if (outbound == null) continue;
       let reply;
       try { reply = await invoke("service-test", "roundTrip", [service, outbound.message], 0); }
@@ -910,7 +919,11 @@ export async function serveService(name, handler) {
       catch { return; }
     }
   })();
-  return setServiceState(service, "ready");
+  servedServices.set(service, {
+    stop() { running = false; },
+    settled: Promise.all([handlerPump, channelPump]),
+  });
+  return null;
 }
 /**
  * The token is the whole authentication of a loopback channel every process on
@@ -922,10 +935,23 @@ export async function serviceRejectsWrongToken(name) {
   if (typeof value !== "boolean") throw new TypeError("Desktop test host returned an invalid handshake refusal result");
   return value;
 }
+/**
+ * Releases a served service: the real server closes, both pumps settle, and the
+ * application sees the service stopped. A test owns the work it starts, and the
+ * pumps are work, so this is how a test hands it back.
+ */
 export async function stopService(name) {
   const service = testServiceName(name, "stopService");
+  const served = servedServices.get(service);
+  if (served) served.stop();
   await testSettle("service-test", "close", [service], "stopService");
-  return setServiceState(service, "stopped");
+  if (served) {
+    servedServices.delete(service);
+    await served.settled;
+  }
+  try { await setServiceState(service, "stopped"); }
+  catch { /* the document a state event would reach may already be gone */ }
+  return null;
 }
 // Names only. The fake keychain holds values the way the real one does, and
 // neither hands one back through a test seam.
