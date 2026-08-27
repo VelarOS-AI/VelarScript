@@ -36,8 +36,10 @@ export async function applyProjectMechanicalFixes(
   maximumPasses = 8,
   /**
    * D51 (audit 12): extra roots the module graph does not reach — `*.test.vel`
-   * modules nobody imports. A test module is source the author owns, so `fix`
-   * rewrites it on the same terms as every other module.
+   * modules nobody imports, and every other source nothing imports either. Both
+   * are source the author owns, so `fix` rewrites them on the same terms as
+   * every other module, and on the same terms `velar check` reads them: a
+   * diagnostic `check` refuses over must be one `fix` can reach.
    */
   additionalEntries: readonly string[] = [],
 ): Promise<MechanicalFixReport> {
@@ -46,8 +48,15 @@ export async function applyProjectMechanicalFixes(
   const entries = [config.entryPath, ...additionalEntries];
   const compile = async (): Promise<readonly ProjectResult[]> => {
     const results: ProjectResult[] = [];
+    // A root an earlier root already walked needs no compile of its own: the
+    // pass below reads every module of every result and dedupes by path, so
+    // compiling it again would only cost time. This is what keeps handing the
+    // whole source roster in as `additionalEntries` proportional to the number
+    // of *unreached* files rather than to the size of the project.
+    const covered = new Set<string>();
     for (const entry of entries) {
-      results.push(await compileProject(entry, new Map(), {
+      if (covered.has(entry)) continue;
+      const result = await compileProject(entry, new Map(), {
         sourceRoot: config.root,
         projectRoot: config.root,
         publicRoot: config.publicDir,
@@ -55,7 +64,9 @@ export async function applyProjectMechanicalFixes(
         extensionConfig: config.extensionConfig,
         framework: config.framework,
         ...(entry === config.entryPath ? {} : { exportTestFunctions: true }),
-      }));
+      });
+      for (const module of result.modules) covered.add(module.inputPath);
+      results.push(result);
     }
     return results;
   };

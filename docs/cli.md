@@ -16,7 +16,14 @@ velar repro [entry.vel | project-directory] [--out-dir <directory>]
 velar lsp
 ```
 
-`check` compiles and reports diagnostics without producing output. It reports
+`check` compiles and reports diagnostics without producing output. Over a
+project it reads **every `.vel` file under the project directory**, not only the
+ones the entry imports: a module nothing imports yet — a chapter mid-refactor, a
+file whose last importer was just deleted — is compiled as a root of its own and
+its diagnostics are ordinary diagnostics. `build` refuses on them too, and still
+emits only the graph the entry reaches, because checking is not emitting. Naming
+a single file instead (`velar check src/main.vel`) scopes the run to that file's
+own graph. It reports
 **advisories** too — the second channel, for a spelling VelarScript accepts
 with a meaning other than the one a Python or JavaScript reflex intended. An
 advisory never fails anything: `check` prints it, names the count in its summary

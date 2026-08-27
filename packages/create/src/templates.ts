@@ -491,8 +491,9 @@ ${AGENT_TARGET_BOUNDARIES[target]}
 
 Run these before considering any change done:
 
-- \`velar check\` — type-checks the whole project; do exactly what each
-  diagnostic says (it names the one current spelling).
+- \`velar check\` — type-checks every \`.vel\` file in the project, including
+  ones nothing imports yet; do exactly what each diagnostic says (it names the
+  one current spelling).
 - \`velar test\` — runs the project's tests.
 - \`velar format\` — settles layout (\`velar format --check\` verifies).
 

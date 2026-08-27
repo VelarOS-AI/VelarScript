@@ -67,6 +67,15 @@ let partialFragments = 0;
 let suppressedDiagnostics = 0;
 const partialFiles = new Map();
 const partialFences = [];
+// The narrow half of the gap, counted on its own. Clauses (1) and (2) of the
+// fragment rule drop a diagnostic *about the missing declaration itself*, which
+// is the omission a fragment is entitled to. Clause (3) is different: it drops a
+// complaint about code the fence does spell out, on the grounds that an
+// `unknown` type reached it from elsewhere — so it is the only clause that can
+// hide a real refusal, and F3 is the case where it did.
+let cascadeFragments = 0;
+let cascadeDiagnostics = 0;
+const cascadeFences = [];
 
 for (const file of files) {
   const markdown = await readFile(file, "utf8");
@@ -128,18 +137,34 @@ for (const file of files) {
       }
       failures.push(`${display(file)}:${line}: ${failure.message}`);
     }
+    let cascaded = 0;
+    const cascadeMessages = [];
     for (const module of result.modules) {
-      const diagnostics = suppress ? significantFragmentDiagnostics(module.result) : module.result.diagnostics;
-      suppressed += module.result.diagnostics.length - diagnostics.length;
-      for (const diagnostic of diagnostics) {
+      const { kept, cascades } = suppress
+        ? significantFragmentDiagnostics(module.result)
+        : { kept: module.result.diagnostics, cascades: [] };
+      suppressed += module.result.diagnostics.length - kept.length;
+      cascaded += cascades.length;
+      for (const diagnostic of cascades) cascadeMessages.push(`${diagnostic.code} ${diagnostic.message}`);
+      for (const diagnostic of kept) {
         failures.push(`${display(file)}:${line}: ${diagnostic.code} ${diagnostic.message}`);
       }
+    }
+    if (cascaded > 0) {
+      cascadeFragments += 1;
+      cascadeDiagnostics += cascaded;
+      // Each one is printed in full, not counted. A cascade is only ever
+      // *presumed* to be a consequence of the missing declaration; reading the
+      // text is the only way to tell that presumption from a real refusal, and
+      // F3 is what a mis-presumed one costs.
+      cascadeFences.push(`  ${display(file)}:${line} — ${cascaded} \`unknown\`-type cascade${cascaded === 1 ? "" : "s"}`,
+        ...cascadeMessages.map((message) => `      ${message}`));
     }
     if (suppressed === 0) continue;
     partialFragments += 1;
     suppressedDiagnostics += suppressed;
     partialFiles.set(display(file), (partialFiles.get(display(file)) ?? 0) + 1);
-    partialFences.push(`  ${display(file)}:${line} — ${suppressed} suppressed`);
+    partialFences.push(`  ${display(file)}:${line} — ${suppressed} suppressed${cascaded > 0 ? `, ${cascaded} of them \`unknown\`-type cascades` : ""}`);
   }
 }
 
@@ -170,12 +195,29 @@ function coverageReport() {
     `Coverage: ${partialFragments} of ${fragments} fragments were NOT checked in full — ${suppressedDiagnostics} diagnostic${suppressedDiagnostics === 1 ? " was" : "s were"} suppressed as inherent to a fragment,`,
     "  and every unresolved reference also types itself `unknown` and stops the analyzer downstream, so defects after one are never reported at all.",
     "  Declare the names a fragment borrows in a `<!-- velar-preamble ... -->` comment before its fence and that fragment is checked in full.",
+    ...cascadeReport(),
     ...(detail
       ? partialFences
       : [
         `  Concentrated in: ${worst.map(([file, count]) => `${file} (${count})`).join(", ")}`,
         "  Run `npm run check:docs -- --partial` to list every one of them by line.",
       ]),
+  ];
+}
+
+/**
+ * The `unknown`-type cascade clause's reach, printed separately from the rest of
+ * the gap. F3 in the conversation-stream benchmark was a real refusal — a bare
+ * optional used as a condition — that this clause swallowed, so the number of
+ * fences still standing on it is the number of places the same thing can happen
+ * again.
+ */
+function cascadeReport() {
+  if (cascadeFragments === 0) return [];
+  return [
+    `  Of those, ${cascadeFragments} fragment${cascadeFragments === 1 ? "" : "s"} rest on the \`unknown\`-type cascade clause`
+      + ` (${cascadeDiagnostics} diagnostic${cascadeDiagnostics === 1 ? "" : "s"}), the one clause that can hide a refusal about code the fence does declare.`,
+    ...(detail ? cascadeFences : []),
   ];
 }
 
@@ -308,7 +350,7 @@ function webTargetProvides(interface_, name) {
 function significantFragmentDiagnostics(result) {
   const diagnostics = result.diagnostics;
   const unresolved = diagnostics.filter(isUnresolvedReference);
-  if (unresolved.length === 0) return diagnostics;
+  if (unresolved.length === 0) return { kept: diagnostics, cascades: [] };
   const index = result.semanticIndex;
   // (2) The spans an unresolved reference occupies: the reference itself, plus
   // every use of a binding whose module never resolved.
@@ -324,9 +366,21 @@ function significantFragmentDiagnostics(result) {
   for (const reference of index.references) {
     if (reference.symbolId !== null && unresolvedSymbols.has(reference.symbolId)) spans.push(reference.span);
   }
-  return diagnostics.filter((diagnostic) => !isUnresolvedReference(diagnostic)
-    && !spans.some((span) => span.start >= diagnostic.span.start && span.end <= diagnostic.span.end)
-    && !mentionsUnknownType(diagnostic.message));
+  // The three clauses are applied in order and (3) is reported separately: it is
+  // the only one that can drop a diagnostic about code the fence *does* declare,
+  // so it is the clause whose reach has to stay measurable (D56 rule 129).
+  const kept = [];
+  const cascades = [];
+  for (const diagnostic of diagnostics) {
+    if (isUnresolvedReference(diagnostic)) continue;
+    if (spans.some((span) => span.start >= diagnostic.span.start && span.end <= diagnostic.span.end)) continue;
+    if (mentionsUnknownType(diagnostic.message)) {
+      cascades.push(diagnostic);
+      continue;
+    }
+    kept.push(diagnostic);
+  }
+  return { kept, cascades };
 }
 
 function isUnresolvedReference(diagnostic) {

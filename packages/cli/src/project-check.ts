@@ -7,7 +7,8 @@ import { MAX_VELAR_PROJECT_MODULES } from "./source-limits.ts";
 
 /**
  * One compiled root of a `velar check` run: the project entry first, then every
- * `*.test.vel` module, which no import reaches and which therefore has to be
+ * `*.test.vel` module, then every remaining `.vel` source in the project that
+ * nothing reached — each of them a module no import walks to, and each therefore
  * compiled as a root of its own.
  */
 export interface CheckedProjectRoot {
@@ -49,12 +50,16 @@ export async function checkResolvedProject(
     framework: config.framework,
     emitSourceMaps: options.emitSourceMaps !== false,
   });
-  // A `*.test.vel` module is not reachable from the entry, so the module-graph
-  // walk never saw one: `const n: number = "not a number"` inside a test passed
-  // `check` and `build` (audit 12). Test source is source the author owns and
-  // answers to the same compiler; it stays out of the build *output*, because
-  // checking is not emitting.
-  const testModules = input?.endsWith(".vel") ? [] : await projectTestModules(config);
+  // Every `.vel` file in the project, walked once and split between the two
+  // extra-root passes below. Neither kind is reachable from the entry, and the
+  // rule they share is the one audit 12 wrote down for tests: source the author
+  // owns answers to the same compiler, and it stays out of the build *output*,
+  // because checking is not emitting.
+  //
+  // A single-file `velar check src/thing.vel` names its own scope, so it keeps
+  // it — the walk is skipped and that file's graph is the whole run.
+  const sources = input?.endsWith(".vel") ? [] : await discoverVelarSources(config);
+  const testModules = sources.filter((path) => path.endsWith(".test.vel"));
   const compiled = new Set(project.modules.map((module) => module.inputPath));
   // MOD-I1: resolution failures and module diagnostics print together —
   // exactly as `velar run` reports them — so one unresolved import can never
@@ -67,26 +72,51 @@ export async function checkResolvedProject(
     ],
     advisories: project.modules.flatMap((module) => module.result.advisories.map((item) => formatAdvisory(module.result.source, item))),
   }];
-  for (const file of testModules) {
-    const testProject = await compileProject(file, new Map(), {
+  // One extra root, compiled on its own. It is deliberately *not* folded into
+  // the `compileProjectEntries` call above: every entry handed to that call has
+  // its `@main` body emitted, so adding roots there would change what a build
+  // writes. Compiling each root separately keeps this a check-only widening.
+  // A module reached from two roots is compiled twice and reported once —
+  // `compiled` is the registry that decides which root reports it.
+  const checkAdditionalRoot = async (file: string, isTestModule: boolean): Promise<void> => {
+    const rootProject = await compileProject(file, new Map(), {
       sourceRoot: config.root,
       projectRoot: config.root,
       publicRoot: config.publicDir,
       extensions: config.compilerExtensions,
       extensionConfig: config.extensionConfig,
       framework: config.framework,
-      exportTestFunctions: true,
+      ...(isTestModule ? { exportTestFunctions: true } : {}),
       emitSourceMaps: options.emitSourceMaps !== false,
     });
-    const errors: string[] = testProject.failures.map((failure) => `${failure.path}: ${failure.message}`);
+    const errors: string[] = rootProject.failures.map((failure) => `${failure.path}: ${failure.message}`);
     const advisories: string[] = [];
-    for (const module of testProject.modules) {
+    for (const module of rootProject.modules) {
       if (compiled.has(module.inputPath)) continue;
       compiled.add(module.inputPath);
       errors.push(...module.result.diagnostics.map((item) => formatDiagnostic(module.result.source, item)));
       advisories.push(...module.result.advisories.map((item) => formatAdvisory(module.result.source, item)));
     }
-    roots.push({ result: testProject, errors, advisories });
+    roots.push({ result: rootProject, errors, advisories });
+  };
+  for (const file of testModules) await checkAdditionalRoot(file, true);
+  // D56 rule 130, the gate that never reads: a `.vel` file nothing imports was
+  // walked by no root above, so `check` printed the same module count it would
+  // have printed without the file and exited 0 over two plain type errors. The
+  // generated AGENTS.md tells an author `velar check` type-checks the whole
+  // project, and during a refactor — where a module is orphaned for an
+  // afternoon — "the gate is green" and "the tree compiles" have to keep
+  // meaning the same thing. Every remaining source is therefore a root too.
+  //
+  // The `compiled` guard stands *before* the compile, not only before the
+  // report: one orphan may import another, and the importer's own walk already
+  // checked it. Files are visited in `discoverVelarSources` order, which is
+  // sorted, so which of two mutually-unreached modules becomes the root — and
+  // therefore which root's diagnostics list carries a shared module — does not
+  // depend on the filesystem's iteration order.
+  for (const file of sources) {
+    if (file.endsWith(".test.vel") || compiled.has(file)) continue;
+    await checkAdditionalRoot(file, false);
   }
   return {
     project,
@@ -113,9 +143,22 @@ export function formatCheckOutput(checked: CheckedProject): string {
     : `${notices}${advisories}`;
 }
 
-/** Every `*.test.vel` root in the project — the modules no import reaches. */
-export async function projectTestModules(config: VelarProjectConfig): Promise<string[]> {
-  return (await discoverVelarSources(config)).filter((path) => path.endsWith(".test.vel"));
+/**
+ * Every source a whole-project run treats as a root beyond the entry's own
+ * graph — `*.test.vel` modules and the files nothing imports alike.
+ *
+ * `velar check` and `velar fix` read this one roster so that a diagnostic
+ * `check` refuses over is always a diagnostic `fix` can reach. When they
+ * disagreed, `fix` answered "0 diagnostics remain" over a tree `check` was
+ * refusing, which is the same false claim in the opposite direction.
+ *
+ * A root an earlier root already walked is dropped by the caller rather than
+ * here: which files those are is known only once something has been compiled.
+ */
+export async function additionalProjectRoots(config: VelarProjectConfig, input: string | null): Promise<string[]> {
+  // A single-file input names its own scope, exactly as it does for `check`.
+  if (input?.endsWith(".vel")) return [];
+  return (await discoverVelarSources(config)).filter((path) => path !== config.entryPath);
 }
 
 export async function discoverVelarSources(config: VelarProjectConfig): Promise<string[]> {

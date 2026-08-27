@@ -23,6 +23,15 @@ modules, and the `web` manifest key. Without that extension these are not Core
 syntax. Web visual builders are named imports from `velar/look`; there is no
 `Look.` namespace.
 
+Every word in that list is a contextual keyword that stays available as an
+ordinary name — except five. `mount`, `tick`, `viewport`, `scheme`, and `motion`
+are **reserved bindings**: `mount` and `tick` are real runtime entry points, and
+`viewport`, `scheme`, and `motion` name the Look media subjects, so a local
+binding can never shadow a media condition. A Web module refuses all five as
+binding names with `VEL3007`. Three of them are ordinary words for a Web author,
+so name a scroll container `scroller`, a colour setting `theme`, and an
+animation preference `reducedMotion`.
+
 `@` remains the language-wide annotation introducer, and `@name` is a context
 annotation with a compiler-owned compile-time role. Components own `@mounted:`
 and `@cleanup:`; Look owns conditions such as `@hover` and `@before`. They are
