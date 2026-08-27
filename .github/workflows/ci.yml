@@ -81,6 +81,25 @@ jobs:
       - name: Install Chromium system dependencies
         if: runner.os == 'Linux'
         run: npx playwright install-deps chromium
+      - name: Read the pinned Desktop runtime version
+        if: runner.os == 'macOS'
+        id: desktop-runtime
+        run: |
+          version="$(node --input-type=module -e 'import { DESKTOP_NODE_RUNTIME_VERSION } from "./packages/desktop/src/config.ts"; process.stdout.write(DESKTOP_NODE_RUNTIME_VERSION)')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      # `velar package` embeds one pinned Node.js runtime, and the first build on
+      # a machine downloads its ~50 MiB archive from nodejs.org. The version is
+      # read from the one place that pins it rather than written here a second
+      # time, so bumping the pin invalidates this key on its own and a runner
+      # never restores an executable the toolchain no longer embeds. There are no
+      # restore-keys for the same reason: an older cache would be restored and
+      # then downloaded past.
+      - name: Cache the embedded Desktop Node runtime
+        if: runner.os == 'macOS'
+        uses: actions/cache@v6
+        with:
+          path: ~/Library/Caches/velarscript/desktop-runtimes
+          key: desktop-runtime-${{ runner.os }}-${{ steps.desktop-runtime.outputs.version }}
       - run: npm run test:full
 
   packed-consumers:
@@ -102,6 +121,22 @@ jobs:
       - run: npm ci
         env:
           NODE_AUTH_TOKEN: ${{ github.token }}
+      - name: Read the pinned Desktop runtime version
+        if: runner.os == 'macOS'
+        id: desktop-runtime
+        run: |
+          version="$(node --input-type=module -e 'import { DESKTOP_NODE_RUNTIME_VERSION } from "./packages/desktop/src/config.ts"; process.stdout.write(DESKTOP_NODE_RUNTIME_VERSION)')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      # The same runtime the Node suite caches: this gate reaches `velar package`
+      # through the installed toolchain, which downloads the identical archive
+      # into the identical cache, so the two jobs share one key rather than one
+      # of them paying for it every run.
+      - name: Cache the embedded Desktop Node runtime
+        if: runner.os == 'macOS'
+        uses: actions/cache@v6
+        with:
+          path: ~/Library/Caches/velarscript/desktop-runtimes
+          key: desktop-runtime-${{ runner.os }}-${{ steps.desktop-runtime.outputs.version }}
       - run: npm run test:packages
 
   browser-suite:
