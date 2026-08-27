@@ -6,7 +6,7 @@
 
 import {ByteOrder, Bytes, Float32Buffer, Float32Builder, UInt8Buffer, UInt16Buffer, UInt32Buffer, UInt32Builder, float32Buffer, float32Builder, float32FromBytes, uint8Buffer, uint8FromBytes, uint16Buffer, uint16FromBytes, uint32Buffer, uint32Builder, uint32FromBytes} from "velar/binary"
 import {Random, random} from "velar/random"
-import {Cancellation, CancellationError, Task, TaskTimeoutError, task, withTimeout} from "velar/task"
+import {Cancellation, CancellationError, Channel, ChannelBackpressureError, ChannelClosedError, Task, TaskTimeoutError, channel, task, withTimeout} from "velar/task"
 import {Worker, WorkerBackpressureError, WorkerCallError, WorkerClosedError, WorkerCrashedError, WorkerPool, serveWorker, worker, workerPool} from "velar/worker"
 import {WebSocketBackpressureError, WebSocketClosedError, WebSocketConnection, WebSocketProtocolError, WebSocketServer, WebSocketTimeoutError, connect, listen} from "velar/websocket"
 import {createBytes, readBytes, writeBytes} from "velar/fs"
@@ -61,6 +61,16 @@ export async def taskSpellings(parent: Cancellation?) -> number:
     using owner = task(cancellableWork, parent)
     return await withTimeout(taskValue(owner), 2s)
 
+def channelValue(value: Channel<DataRequest>) -> Channel<DataRequest>: return value
+
+export async def channelSpellings(cancellation: Cancellation?) -> number:
+    const requests = channel(DataRequest, capacity=8)
+    if not requests.trySend({x: 1, y: 2}): return 0
+    await requests.send({x: 3, y: 4}, cancellation)
+    const first = await channelValue(requests).next(cancellation)
+    requests.close()
+    return first?.x ?? 0
+
 async def generate(request: DataRequest, cancellation: Cancellation) -> DataReply:
     await cancellation.checkpoint()
     return {checksum: request.x ^ request.y}
@@ -97,6 +107,8 @@ export async def persistenceSpellings(path: string, snapshot: Bytes) -> number:
 export def concurrencyFailure(error: Error) -> string:
     if error is CancellationError: return "cancelled"
     if error is TaskTimeoutError: return "task timeout"
+    if error is ChannelBackpressureError: return "channel backpressure"
+    if error is ChannelClosedError: return "channel closed"
     if error is WorkerBackpressureError: return "worker backpressure"
     if error is WorkerCallError: return "worker call"
     if error is WorkerClosedError: return "worker closed"

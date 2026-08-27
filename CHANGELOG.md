@@ -6,6 +6,36 @@ truth for acceptance status.
 
 ## Unreleased
 
+## 0.18.0 — 2026-08-27
+
+### Route semantics
+
+- Made the checked RoutePattern the first positional route argument. An inline
+  `p"..."` projects path and query fields as immutable handler locals; a
+  RoutePattern stored in a catalog or another expression requires `pattern as
+  route` and exposes `route.pattern`, `route.pathname`, `route.params`, and
+  `route.query` as one explicit match value.
+- Rejected the old `path=` spelling with a mechanical fix. Semantic tokens and
+  Hover now distinguish direct parameter declarations from RouteMatch
+  properties, so a referenced expression never injects hidden identifiers.
+
+### WebSocket sessions and channels
+
+- Added declarative `@websocket` session routes to `server`. Matching, decoding,
+  dependencies, and credentials resolve before upgrade; connection close and
+  server shutdown cancel and join the handler before request-owned resources
+  are released. Shared listeners no longer require application Hub or accept
+  loop code.
+- Added the runtime-validated bounded `Channel<T>` to `velar/task`, with
+  multi-producer/single-consumer FIFO backpressure, cooperative cancellation,
+  draining close, and distinct closed/backpressure failures.
+
+### Tooling and documentation
+
+- Updated compiler output, semantic tokens, Hover, Standard API documentation,
+  Node/Server skills, project templates, and the executable tour. Added route
+  migration, declarative WebSocket lifecycle, and Channel boundary coverage.
+
 ## 0.17.0 — 2026-08-26
 
 ### Node server language

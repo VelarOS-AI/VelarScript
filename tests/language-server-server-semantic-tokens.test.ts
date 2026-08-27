@@ -11,8 +11,8 @@ test("the Node extension publishes its contextual server syntax as semantic toke
   const path = join(tmpdir(), `velar-server-semantic-tokens-${process.pid}.vel`);
   const source = `
 export server routes:
-    @get(path=p"/articles/{id:string}") => {id: path.params.id}
-    @post(path=p"/articles") => {ok: true}
+    @get(p"/articles/{id:string}") => {id}
+    @post(p"/articles") => {ok: true}
     @notFound() => {error: "missing"}
 `.trimStart();
   const project = await compileProject(path, new Map([[path, source]]), {
@@ -38,8 +38,11 @@ export server routes:
     tokens
       .filter((token) => token.span.start >= firstPathPatternStart && token.span.end <= firstPathPatternEnd)
       .map((token) => [token.type, token.modifiers, source.slice(token.span.start, token.span.end)]),
-    [["parameter", [], "id"], ["type", [], "string"]],
+    [["parameter", ["declaration"], "id"], ["type", [], "string"]],
   );
+
+  const declaration = tokens.find((token) => source.slice(token.span.start, token.span.end) === "id" && token.modifiers.includes("declaration"));
+  assert.equal(declaration?.type, "parameter");
 
   const documented = project.modules[0]!.result.semanticIndex.syntaxDocumentation
     .map((item) => [item.key, source.slice(item.span.start, item.span.end)]);
@@ -57,6 +60,28 @@ export server routes:
   for (let index = 1; index < tokens.length; index += 1) {
     assert.ok(tokens[index - 1]!.span.end <= tokens[index]!.span.start, "semantic tokens must not overlap");
   }
+});
+
+test("RouteMatch mode colors pattern fields as properties instead of injected parameters", async () => {
+  const path = join(tmpdir(), `velar-route-match-semantic-tokens-${process.pid}.vel`);
+  const source = `server routes:\n    @get(p"/articles/{id:string}" as route) => {id: route.params.id}\n`;
+  const project = await compileProject(path, new Map([[path, source]]), {
+    extensions: [velarNodeCompilerExtension],
+  });
+  assert.deepEqual(project.failures, []);
+  assert.deepEqual(project.modules[0]!.result.diagnostics, []);
+
+  const tokens = projectSemanticTokens(project, path);
+  const patternStart = source.indexOf('p"/articles/{id:string}"');
+  const patternEnd = patternStart + 'p"/articles/{id:string}"'.length;
+  assert.deepEqual(
+    tokens
+      .filter((token) => token.span.start >= patternStart && token.span.end <= patternEnd)
+      .map((token) => [token.type, token.modifiers, source.slice(token.span.start, token.span.end)]),
+    [["property", [], "id"], ["type", [], "string"]],
+  );
+  const route = tokens.find((token) => source.slice(token.span.start, token.span.end) === "route" && token.modifiers.includes("declaration"));
+  assert.equal(route?.type, "parameter");
 });
 
 test("Core class roles publish exact compiler-owned hover documentation spans", async () => {

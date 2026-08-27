@@ -117,6 +117,7 @@ const __velarServeDefaultShutdownGrace = 30_000;
 const __velarServeFileMarker = Symbol("velar.serve.file-response");
 const __velarServeAppMarker = Symbol("velar.serve.app");
 const __velarServeRouteMarker = Symbol("velar.serve.route");
+const __velarServeWebSocketMarker = Symbol("velar.serve.websocket-route");
 const __velarServePatternMarker = Symbol("velar.serve.route-pattern");
 const __velarServeNotFoundMarker = Symbol("velar.serve.not-found");
 const __velarServeResponseHandlerMarker = Symbol("velar.serve.response-handler");
@@ -666,7 +667,7 @@ export const ServeApp = __velarServeTypeObject(
   value => __velarServeIsApp(value),
   "ServeApp values are declared with 'server name:' or built by velar/serve composition functions",
   null,
-  __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{createApp: __velarCreateServeApp, createPattern: __velarCreateServePattern, createRoute: __velarCreateServeRoute, createNotFound: __velarCreateServeNotFound, createResponse: __velarCreateServeResponse, testClient: __velarServeTestClient, nativeApp: __velarServeNativeApp}]),
+  __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{createApp: __velarCreateServeApp, createPattern: __velarCreateServePattern, createRoute: __velarCreateServeRoute, createWebSocket: __velarCreateServeWebSocket, createNotFound: __velarCreateServeNotFound, createResponse: __velarCreateServeResponse, testClient: __velarServeTestClient, nativeApp: __velarServeNativeApp}]),
 );
 export const Server = __velarServeTypeObject(value => {
   try {
@@ -1069,6 +1070,12 @@ function __velarServeIsRoute(value) {
   return descriptor?.enumerable === true && "value" in descriptor && descriptor.value === true;
 }
 
+function __velarServeIsWebSocket(value) {
+  if (!value || typeof value !== "object") return false;
+  const descriptor = __velarServeOwnDescriptor(value, __velarServeWebSocketMarker);
+  return descriptor?.enumerable === true && "value" in descriptor && descriptor.value === true;
+}
+
 function __velarServeIsPattern(value) {
   if (!value || typeof value !== "object") return false;
   const descriptor = __velarServeOwnDescriptor(value, __velarServePatternMarker);
@@ -1278,6 +1285,58 @@ function __velarCreateServeRoute(method, pattern, parameters, handler, metadata 
   }]);
 }
 
+function __velarCreateServeWebSocket(pattern, parameters, handler) {
+  if (!__velarServeIsPattern(pattern)) throw new __velarServeTypeError("WebSocket path must be a RoutePattern declared with p\"/...\"");
+  if (!__velarServeIsArray(parameters) || parameters.length > 64) throw new __velarServeTypeError("WebSocket parameters must be a bounded list");
+  const checked = [];
+  const names = new __velarServeMap();
+  let connectionIndex = -1;
+  for (let index = 0; index < parameters.length; index += 1) {
+    const parameter = __velarServeRecord(parameters[index], __velarServeRouteParameterFields, "WebSocket parameter");
+    if (typeof parameter.name !== "string" || !__velarServeCall(__velarServeRegExpTest, __velarServeRouteNamePattern, [parameter.name])
+      || __velarServeCall(__velarServeMapHas, names, [parameter.name])) throw new __velarServeTypeError("WebSocket parameter names must be unique identifiers");
+    if (!__velarServeCall(__velarServeArrayIncludes, ["connection", "request", "header", "cookie", "dependency", "security"], [parameter.source])
+      || !__velarServeCall(__velarServeArrayIncludes, ["connection", "request", "string", "number", "bool", "enum", "dependency", "security"], [parameter.kind])
+      || parameter.required !== true) throw new __velarServeTypeError("WebSocket parameter descriptor is invalid");
+    const routeInput = parameter.input == null ? null : parameter.input;
+    if (parameter.source === "connection") {
+      if (parameter.kind !== "connection" || routeInput !== null || connectionIndex !== -1) throw new __velarServeTypeError("A WebSocket route requires exactly one connection parameter");
+      connectionIndex = index;
+    } else if (parameter.source === "request") {
+      if (parameter.kind !== "request" || routeInput !== null) throw new __velarServeTypeError("WebSocket Request descriptor is invalid");
+    } else {
+      if (routeInput === null || !__velarServeIsInput(routeInput) || routeInput.source !== parameter.source) throw new __velarServeTypeError("WebSocket input descriptor does not agree with its compiled source");
+      const scalar = parameter.kind === "string" || parameter.kind === "number" || parameter.kind === "bool" || parameter.kind === "enum";
+      if (parameter.source === "header" && !scalar || parameter.source === "cookie" && !scalar
+        || parameter.source === "dependency" && parameter.kind !== "dependency"
+        || parameter.source === "security" && parameter.kind !== "security") throw new __velarServeTypeError("WebSocket parameter source and kind do not agree");
+    }
+    __velarServeCall(__velarServeMapSet, names, [parameter.name, true]);
+    checked[checked.length] = __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{
+      name: parameter.name,
+      source: parameter.source,
+      kind: parameter.kind,
+      required: true,
+      check: parameter.check ?? null,
+      schema: parameter.schema == null ? __velarServeDefaultSchema(parameter.kind) : __velarServeSchema(parameter.schema, "WebSocket parameter schema"),
+      input: routeInput,
+    }]);
+  }
+  if (connectionIndex === -1) throw new __velarServeTypeError("A WebSocket route requires exactly one connection parameter");
+  if (typeof handler !== "function") throw new __velarServeTypeError("WebSocket handler is invalid");
+  const path = pattern.pathname;
+  return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{
+    [__velarServeWebSocketMarker]: true,
+    method: "WEBSOCKET",
+    path,
+    pattern,
+    segments: __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [__velarServeCall(__velarServeStringSplit, path, ["/"])]),
+    parameters: __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [checked]),
+    connectionIndex,
+    handler,
+  }]);
+}
+
 function __velarCreateServeNotFound(handler, middleware = []) {
   if (typeof handler !== "function") throw new __velarServeTypeError("@notFound handler is invalid");
   if (!__velarServeIsArray(middleware) || middleware.length > 64) throw new __velarServeRangeError("@notFound cannot have more than 64 middleware functions");
@@ -1394,13 +1453,16 @@ function __velarServeBodyLimit(value) {
   return value;
 }
 
-function __velarServeAppValue(name, routes, lifecycles = [], notFound = null, responseHandler = null) {
+function __velarServeAppValue(name, routes, webSockets = [], lifecycles = [], notFound = null, responseHandler = null) {
   const router = __velarServeRouter(routes);
+  const webSocketRouter = __velarServeRouter(webSockets);
   return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{
     [__velarServeAppMarker]: true,
     name,
     routes: __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [routes]),
     router,
+    webSockets: __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [webSockets]),
+    webSocketRouter,
     lifecycles: __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [lifecycles]),
     notFound,
     responseHandler,
@@ -1411,6 +1473,7 @@ function __velarCreateServeApp(name, items) {
   if (typeof name !== "string" || name.length === 0 || name.length > 256) throw new __velarServeTypeError("ServeApp name must be bounded text");
   if (!__velarServeIsArray(items) || items.length > __velarServeMaxRoutes + 2) throw new __velarServeTypeError("ServeApp items cannot exceed 4096 routes, one fallback, and one response policy");
   const routes = [];
+  const webSockets = [];
   const lifecycles = [];
   let notFound = null;
   let responseHandler = null;
@@ -1421,8 +1484,8 @@ function __velarCreateServeApp(name, items) {
   const shapes = new __velarServeMap();
   const describeRoute = entry => "'" + entry.route.method + " " + entry.route.path + "'"
     + (entry.source === null ? " declared by this server" : " composed in from '" + entry.source + "'");
-  const append = (route, source) => {
-    if (routes.length >= __velarServeMaxRoutes) throw new __velarServeRangeError("ServeApp cannot contain more than 4096 routes after composition");
+  const append = (route, source, target) => {
+    if (routes.length + webSockets.length >= __velarServeMaxRoutes) throw new __velarServeRangeError("ServeApp cannot contain more than 4096 routes after composition");
     const key = route.method + " " + __velarServeRouteShape(route.path);
     const previous = __velarServeCall(__velarServeMapGet, shapes, [key]);
     if (previous !== undefined) {
@@ -1430,11 +1493,12 @@ function __velarCreateServeApp(name, items) {
         + " and " + describeRoute(previous) + " both answer '" + key + "' — narrow or remove one");
     }
     __velarServeCall(__velarServeMapSet, shapes, [key, {route, source}]);
-    routes[routes.length] = route;
+    target[target.length] = route;
   };
   for (let index = 0; index < items.length; index += 1) {
     const item = items[index];
-    if (__velarServeIsRoute(item)) append(item, null);
+    if (__velarServeIsRoute(item)) append(item, null, routes);
+    else if (__velarServeIsWebSocket(item)) append(item, null, webSockets);
     else if (__velarServeIsNotFound(item)) {
       if (notFound !== null) throw new __velarServeTypeError("ServeApp contains more than one @notFound fallback");
       notFound = item;
@@ -1444,7 +1508,8 @@ function __velarCreateServeApp(name, items) {
       responseHandler = item;
     }
     else if (__velarServeIsApp(item)) {
-      for (let route = 0; route < item.routes.length; route += 1) append(item.routes[route], item.name);
+      for (let route = 0; route < item.routes.length; route += 1) append(item.routes[route], item.name, routes);
+      for (let route = 0; route < item.webSockets.length; route += 1) append(item.webSockets[route], item.name, webSockets);
       for (let hook = 0; hook < item.lifecycles.length; hook += 1) {
         if (lifecycles.length >= __velarServeMaxLifecycles) throw new __velarServeRangeError("ServeApp cannot contain more than 4096 lifecycle pairs after composition");
         lifecycles[lifecycles.length] = item.lifecycles[hook];
@@ -1459,7 +1524,7 @@ function __velarCreateServeApp(name, items) {
       }
     } else throw new __velarServeTypeError("A server composition entry must be a ServeApp");
   }
-  return __velarServeAppValue(name, routes, lifecycles, notFound, responseHandler);
+  return __velarServeAppValue(name, routes, webSockets, lifecycles, notFound, responseHandler);
 }
 
 export function prefix(path, app) {
@@ -1472,6 +1537,7 @@ export function prefix(path, app) {
   if (app.notFound !== null) throw new __velarServeTypeError("prefix cannot scope @notFound; compose the fallback on the final server instead");
   if (app.responseHandler !== null) throw new __velarServeTypeError("prefix cannot scope @response; compose the policy on the final server instead");
   const routes = [];
+  const webSockets = [];
   for (let index = 0; index < app.routes.length; index += 1) {
     const route = app.routes[index];
     const pathname = path + (route.path === "/" ? "" : route.path);
@@ -1490,8 +1556,18 @@ export function prefix(path, app) {
       __velarServeRouteMetadata(route),
     );
   }
-  const output = __velarCreateServeApp(app.name, routes);
-  return __velarServeAppValue(output.name, output.routes, app.lifecycles, null, app.responseHandler);
+  for (let index = 0; index < app.webSockets.length; index += 1) {
+    const route = app.webSockets[index];
+    const pathname = path + (route.path === "/" ? "" : route.path);
+    const querySuffix = __velarServeCall(__velarServeStringSlice, route.pattern.definition, [route.path.length]);
+    const pattern = __velarCreateServePattern({definition: pathname + querySuffix, pathname, path: route.pattern.pathCaptures, query: route.pattern.queryCaptures});
+    webSockets[webSockets.length] = __velarCreateServeWebSocket(pattern, route.parameters, route.handler);
+  }
+  const items = [];
+  for (let index = 0; index < routes.length; index += 1) items[items.length] = routes[index];
+  for (let index = 0; index < webSockets.length; index += 1) items[items.length] = webSockets[index];
+  const output = __velarCreateServeApp(app.name, items);
+  return __velarServeAppValue(output.name, output.routes, output.webSockets, app.lifecycles, null, app.responseHandler);
 }
 
 export function staticFiles(path, root, fallback = null) {
@@ -1534,9 +1610,10 @@ export function use(app, middleware) {
   }
   const items = [];
   for (let index = 0; index < routes.length; index += 1) items[items.length] = routes[index];
+  for (let index = 0; index < app.webSockets.length; index += 1) items[items.length] = app.webSockets[index];
   if (notFound !== null) items[items.length] = notFound;
   const output = __velarCreateServeApp(app.name, items);
-  return __velarServeAppValue(output.name, output.routes, app.lifecycles, output.notFound, app.responseHandler);
+  return __velarServeAppValue(output.name, output.routes, output.webSockets, app.lifecycles, output.notFound, app.responseHandler);
 }
 
 export function bodyLimit(app, maxBytes) {
@@ -1553,8 +1630,11 @@ export function bodyLimit(app, maxBytes) {
       {...__velarServeRouteMetadata(route), maxBodyBytes: maxBytes},
     );
   }
-  const output = __velarCreateServeApp(app.name, routes);
-  return __velarServeAppValue(output.name, output.routes, app.lifecycles, app.notFound, app.responseHandler);
+  const items = [];
+  for (let index = 0; index < routes.length; index += 1) items[items.length] = routes[index];
+  for (let index = 0; index < app.webSockets.length; index += 1) items[items.length] = app.webSockets[index];
+  const output = __velarCreateServeApp(app.name, items);
+  return __velarServeAppValue(output.name, output.routes, output.webSockets, app.lifecycles, app.notFound, app.responseHandler);
 }
 
 export function lifecycle(app, startup = null, shutdown = null) {
@@ -1564,7 +1644,7 @@ export function lifecycle(app, startup = null, shutdown = null) {
   const lifecycles = [];
   for (let index = 0; index < app.lifecycles.length; index += 1) lifecycles[index] = app.lifecycles[index];
   lifecycles[lifecycles.length] = __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{startup, shutdown}]);
-  return __velarServeAppValue(app.name, app.routes, lifecycles, app.notFound, app.responseHandler);
+  return __velarServeAppValue(app.name, app.routes, app.webSockets, lifecycles, app.notFound, app.responseHandler);
 }
 
 function __velarServeResponseWithHeaders(value, additions) {
@@ -2281,7 +2361,7 @@ async function __velarServeResolveInput(descriptor, parameterName, parameter, re
   return parameter === null ? raw : __velarServeDecodeScalar(raw, parameter);
 }
 
-async function __velarServeRouteArguments(route, match, request, maxBodyBytes, context) {
+async function __velarServeRouteArguments(route, match, request, maxBodyBytes, context, connection = __velarServeMissing) {
   const params = __velarServeCall(__velarServeObjectCreate, __velarServeObject, [null]);
   for (let index = 0; index < route.pattern.pathCaptures.length; index += 1) {
     const capture = route.pattern.pathCaptures[index];
@@ -2302,13 +2382,18 @@ async function __velarServeRouteArguments(route, match, request, maxBodyBytes, c
   }
   __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [params]);
   __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [query]);
-  const bound = {definition: route.pattern.definition, params, query};
+  const bound = {pattern: route.pattern, pathname: request.path, params, query};
   __velarServeCall(__velarServeObjectDefineProperty, __velarServeObject, [bound, "toString", {value: () => route.pattern.definition, enumerable: false, configurable: false, writable: false}]);
   __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [bound]);
   const values = [bound];
   let body = undefined;
   for (let index = 0; index < route.parameters.length; index += 1) {
     const parameter = route.parameters[index];
+    if (parameter.source === "connection") {
+      if (connection === __velarServeMissing) throw new __velarServeTypeError("WebSocket connection is unavailable outside a @websocket handler");
+      values[values.length] = connection;
+      continue;
+    }
     if (parameter.source === "request") { values[values.length] = request; continue; }
     if (parameter.input !== null) {
       values[values.length] = await __velarServeResolveInput(parameter.input, parameter.name, parameter, request, maxBodyBytes, context);
@@ -2331,7 +2416,7 @@ async function __velarServeRouteArguments(route, match, request, maxBodyBytes, c
       values[values.length] = body;
       continue;
     }
-    // 路径和查询值只由 RoutePattern 绑定到第一个 path 参数。走到这里说明
+    // 路径和查询值只由 RoutePattern 绑定到第一个 RouteMatch 参数。走到这里说明
     // 编译器桥接数据损坏，不能再猜测来源并形成第二套路由协议。
     throw new __velarServeTypeError("Route parameter has no runtime binding strategy");
   }
@@ -2577,11 +2662,15 @@ function __velarServeCollectEagerProvider(provider, providers, seen) {
 async function __velarServeInitializeEagerProviders(app, maxBodyBytes, appState) {
   const providers = [];
   const seen = new __velarServeMap();
-  for (let routeIndex = 0; routeIndex < app.routes.length; routeIndex += 1) {
-    const parameters = app.routes[routeIndex].parameters;
-    for (let parameterIndex = 0; parameterIndex < parameters.length; parameterIndex += 1) {
-      const descriptor = parameters[parameterIndex].input;
-      if (descriptor !== null && descriptor.source === "dependency") __velarServeCollectEagerProvider(descriptor.extra, providers, seen);
+  const groups = [app.routes, app.webSockets];
+  for (let groupIndex = 0; groupIndex < groups.length; groupIndex += 1) {
+    const group = groups[groupIndex];
+    for (let routeIndex = 0; routeIndex < group.length; routeIndex += 1) {
+      const parameters = group[routeIndex].parameters;
+      for (let parameterIndex = 0; parameterIndex < parameters.length; parameterIndex += 1) {
+        const descriptor = parameters[parameterIndex].input;
+        if (descriptor !== null && descriptor.source === "dependency") __velarServeCollectEagerProvider(descriptor.extra, providers, seen);
+      }
     }
   }
   const context = __velarServeRequestContext(appState);
@@ -2684,6 +2773,80 @@ async function __velarServeHandleFunction(handler, request, appState) {
   }
 }
 
+async function __velarServePrepareWebSocket(app, nativeRequest, maxBodyBytes, appState) {
+  const native = __velarServeNativeRequest(nativeRequest, maxBodyBytes);
+  const request = native.request;
+  const reject = status => {
+    __velarServeCancellation.__velarCancel(request.cancellation, "WebSocket upgrade rejected");
+    native.cleanup();
+    return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{accepted: false, status}]);
+  };
+  const actual = __velarServeCall(__velarServeStringSplit, request.path, ["/"]);
+  const routes = __velarServeRouterRoutes({router: app.webSocketRouter}, "WEBSOCKET", actual);
+  let selected = null;
+  for (let index = 0; index < routes.length; index += 1) {
+    const match = __velarServeMatch(routes[index], actual);
+    if (match !== null && (selected === null || match.score > selected.match.score)) selected = {route: routes[index], match};
+  }
+  if (selected === null) return reject(404);
+  if (!__velarServeBeginAppRequest(appState, request.cancellation)) return reject(503);
+  const context = __velarServeRequestContext(appState);
+  let active = true;
+  const finish = async reason => {
+    if (!active) return null;
+    active = false;
+    __velarServeCancellation.__velarCancel(request.cancellation, reason);
+    let failure = null;
+    try { await __velarServeCleanupRequestContext(context); }
+    catch (error) { failure = error; }
+    native.cleanup();
+    __velarServeEndAppRequest(appState, request.cancellation);
+    if (failure !== null) throw failure;
+    return null;
+  };
+  try {
+    const prepared = await __velarServeRouteArguments(selected.route, selected.match, request, maxBodyBytes, context, null);
+    let started = false;
+    return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{
+      accepted: true,
+      status: 101,
+      run: async connection => {
+        if (started || !active) throw new __velarServeError("A prepared WebSocket route can run only once");
+        started = true;
+        const values = [];
+        for (let index = 0; index < prepared.length; index += 1) values[index] = prepared[index];
+        values[selected.route.connectionIndex + 1] = connection;
+        try {
+          const result = await __velarServeCall(selected.route.handler, undefined, values);
+          if (result !== null) throw new __velarServeTypeError("@websocket handler must resolve to null");
+          return null;
+        } catch (error) {
+          __velarServeReportFailure(error);
+          throw error;
+        } finally { await finish("WebSocket session ended"); }
+      },
+      abort: async () => {
+        if (started) return null;
+        started = true;
+        return await finish("WebSocket upgrade was abandoned");
+      },
+      // 连接关闭和服务器停机只请求取消，不在这里提前释放请求级依赖。
+      // 真正的清理仍由 run 的 finally 完成，避免处理器仍在执行时销毁资源。
+      cancel: reason => {
+        if (active) __velarServeCancellation.__velarCancel(request.cancellation, reason);
+        return null;
+      },
+    }]);
+  } catch (error) {
+    try { await finish("WebSocket upgrade failed"); }
+    catch (cleanupError) { __velarServeReportFailure(cleanupError); }
+    if (error instanceof HttpProblem) return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{accepted: false, status: error.status}]);
+    if (error instanceof RequestBodyTooLargeError) return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{accepted: false, status: 413}]);
+    __velarServeReportFailure(error);
+    return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{accepted: false, status: 500}]);
+  }
+}
+
 async function __velarServeNativeApp(app, maxBodyBytes = __velarServeMaxBodyBytes) {
   if (!__velarServeIsApp(app)) throw new __velarServeTypeError("Native HTTP composition requires a ServeApp");
   maxBodyBytes = __velarServeBodyLimit(maxBodyBytes);
@@ -2717,6 +2880,8 @@ async function __velarServeNativeApp(app, maxBodyBytes = __velarServeMaxBodyByte
   };
   return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{
     handle: request => __velarServeHandleApp(app, request, maxBodyBytes, appState),
+    webSocketRoutes: app.webSockets.length,
+    prepareWebSocket: request => __velarServePrepareWebSocket(app, request, maxBodyBytes, appState),
     close,
   }]);
 }
@@ -2985,7 +3150,7 @@ function __velarServeDocumentRoutes(app, documentation) {
     output[output.length] = __velarCreateServeRoute(route.method, route.pattern, route.parameters, route.handler, __velarServeRouteMetadata(route, __velarServeCall(__velarServeMapGet, configured, [key])));
   }
   if (__velarServeCall(__velarServeMapSize, seen, []) !== size) throw new __velarServeTypeError("docs routes contains a route that the application does not declare");
-  return __velarServeAppValue(app.name, output, app.lifecycles, app.notFound, app.responseHandler);
+  return __velarServeAppValue(app.name, output, app.webSockets, app.lifecycles, app.notFound, app.responseHandler);
 }
 
 function __velarServeOpenApiPath(path) {

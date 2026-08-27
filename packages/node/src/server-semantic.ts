@@ -38,16 +38,43 @@ export const velarNodeSemanticExtension: CompilerSemanticExtension = Object.free
         context.documentSyntax({ start: item.pathSpan.start, end: item.pathSpan.start + 1 }, "p");
       }
       if (item.kind === "NodeRouteDeclaration" && item.pathExpression.kind === "ExtensionExpression:node:path-pattern") {
-        // 捕获已经不再伪装成处理函数参数，但编辑器仍应把协议里的字段和类型
-        // 标成 parameter/type，阅读路由目录时才能直接看懂它的输入契约。
         const pattern = (item.pathExpression as NodePathPatternExpression).pattern;
         for (const capture of pattern.path.concat(pattern.query)) {
-          context.syntaxToken({start: capture.span.start + 1, end: capture.span.start + 1 + capture.name.length}, "parameter");
+          // 未使用 `as` 时，字段在这里就是处理器参数的声明位置；对象模式
+          // 只声明 RouteMatch 的属性，编辑器据此给出不同的颜色和补全入口。
+          if (item.routeBinding !== null) {
+            context.syntaxToken({start: capture.span.start + 1, end: capture.span.start + 1 + capture.name.length}, "property");
+          }
           context.syntaxToken(capture.typeSpan, "type");
         }
       }
       context.enterScope(item.span);
-      for (const parameter of item.parameters) {
+      if (item.kind === "NodeRouteDeclaration" && item.routeBinding === null) {
+        for (const [index, parameter] of item.parameters.slice(0, item.projectedCaptures.length).entries()) {
+          const capture = item.projectedCaptures[index]!;
+          context.typeReferences(parameter.type);
+          context.declare(
+            parameter,
+            parameter.name,
+            "parameter",
+            parameter.span,
+            {start: capture.span.start + 1, end: capture.span.start + 1 + capture.name.length},
+            {container: item.name},
+          );
+        }
+      } else if (item.kind === "NodeRouteDeclaration" && item.routeBinding !== null) {
+        const parameter = item.parameters[0]!;
+        context.declare(
+          parameter,
+          parameter.name,
+          "parameter",
+          parameter.span,
+          item.routeBinding.span,
+          {container: item.name},
+        );
+      }
+      const parameters = item.kind === "NodeRouteDeclaration" ? item.inputParameters : item.parameters;
+      for (const parameter of parameters) {
         if (parameter.defaultValue) context.visitExpression(parameter.defaultValue);
         context.typeReferences(parameter.type);
         const nameSpan = { start: parameter.span.start, end: parameter.span.start + parameter.name.length };

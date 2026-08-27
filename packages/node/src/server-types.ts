@@ -4,6 +4,7 @@ export const VELAR_SERVE_APP_IDENTITY = "velar/serve#type:ServeApp";
 export const VELAR_SERVE_REQUEST_IDENTITY = "velar/serve#type:ServeRequest";
 export const VELAR_ROUTE_PATTERN_IDENTITY = "velar/serve#type:RoutePattern";
 export const VELAR_HTTP_OUTCOME_IDENTITY = "velar/serve#type:HttpOutcome";
+export const VELAR_WEBSOCKET_CONNECTION_IDENTITY = "velar/websocket#type:WebSocketConnection";
 export const VELAR_NODE_TYPE_EXTENSION_ID = "@velarscript/node";
 
 export type NodeRouteInputSource = "header" | "cookie" | "form" | "upload" | "dependency" | "security" | "request";
@@ -52,6 +53,11 @@ export function isServeRequestType(type: ValueType): boolean {
     && (type.identity === VELAR_SERVE_REQUEST_IDENTITY || type.name === "ServeRequest" || type.name === "Request");
 }
 
+export function isWebSocketConnectionType(type: ValueType): boolean {
+  return type.kind === "named"
+    && (type.identity === VELAR_WEBSOCKET_CONNECTION_IDENTITY || type.name === "WebSocketConnection");
+}
+
 export function nodeRouteInputType(
   source: NodeRouteInputSource,
   value: ValueType,
@@ -89,12 +95,12 @@ export function nodeBoundRoutePathType(params: ValueType, query: ValueType): Nod
     extensionId: VELAR_NODE_TYPE_EXTENSION_ID,
     family: "serve-route-path",
     role: "bound",
-    // 处理函数拿到的是一次请求的绑定结果。definition 直接给出完整协议文本，
-    // 不要求调用方先取 RoutePattern 再取一层 definition。
-    properties: new Map([["definition", {kind: "string"}], ["params", params], ["query", query]]),
-    requiredProperties: new Set(["definition", "params", "query"]),
+    // RoutePattern 是静态协议，RouteMatch 是一次请求的匹配结果。分开两者后，
+    // 模板文本、实际 pathname 与已解码字段不会继续挤在一个含混的 path 对象里。
+    properties: new Map([["pattern", routePatternType], ["pathname", {kind: "string"}], ["params", params], ["query", query]]),
+    requiredProperties: new Set(["pattern", "pathname", "params", "query"]),
     arguments: [params, query],
-    display: {kind: "named", name: "BoundRoutePath"},
+    display: {kind: "named", name: "RouteMatch"},
   };
 }
 

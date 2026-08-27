@@ -91,13 +91,14 @@ test("RoutePattern binds aliases and requiredness before invoking a handler", as
     [capture("details", "bool", true), capture("limit", "number", false, "page-size"), capture("page", "number", true, "page", true)],
   );
   const route = bridge.createRoute("GET", articlePattern, [], async (path: {
-    readonly definition: string;
+    readonly pattern: {toString(): string};
+    readonly pathname: string;
     readonly params: {readonly articleId: number};
     readonly query: {readonly details?: boolean; readonly limit: number; readonly page?: number};
     toString(): string;
   }) => {
     calls += 1;
-    return {definition: path.definition, rendered: String(path), id: path.params.articleId, details: path.query.details ?? false, limit: path.query.limit, page: path.query.page ?? 1};
+    return {definition: String(path.pattern), rendered: String(path), id: path.params.articleId, details: path.query.details ?? false, limit: path.query.limit, page: path.query.page ?? 1};
   });
   const app = bridge.createApp("routes", [route]);
   const document = runtime.openapi(app);
@@ -267,8 +268,8 @@ export const apiPaths = {
 import {apiPaths} from "./catalog.vel"
 
 export server routes:
-    @get(path=apiPaths.article) => {
-        definition: path.definition,
+    @get(apiPaths.article as path) => {
+        definition: str(path.pattern),
         articleId: path.params.articleId,
         details: path.query.details,
         visibility: path.query.visibility,
@@ -283,6 +284,7 @@ export server routes:
   assert.match(catalogCode, /name:"articleId"[^\n]*kind:"number"[^\n]*schema:\{"type":"number"\}/u);
   assert.match(catalogCode, /name:"visibility"[^\n]*kind:"enum"[^\n]*schema:\{"type":"string","enum":\["published","restricted"\]\}/u);
   assert.match(appCode, /__velarCreateServeRoute\("GET", apiPaths\.article/u);
+  assert.match(appCode, /path\.pattern/u);
   assert.match(appCode, /path\.params\.articleId/u);
   assert.match(appCode, /path\.query\.details/u);
   assert.match(appCode, /path\.query\.visibility/u);

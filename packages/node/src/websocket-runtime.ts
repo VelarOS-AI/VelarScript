@@ -10,6 +10,7 @@ import { ServeRequest as __velarServeRuntime, ServeApp as __velarServeApp } from
 
 const __velarWebSocketConnections = new WeakMap();
 const __velarWebSocketServers = new WeakMap();
+const __velarWebSocketPreparedRequests = new WeakMap();
 const __velarWsPromise = globalThis.Promise;
 const __velarWsPromiseAll = __velarWsPromise.all.bind(__velarWsPromise);
 const __velarWsReflectApply = globalThis.Reflect.apply;
@@ -161,16 +162,28 @@ function __velarWsStopState(state) {
   __velarWsPendingConnections -= state.pendingConnections.size;
   if (__velarWsPendingConnections < 0) __velarWsPendingConnections = 0;
   state.pendingConnections.clear(); state.queue.length = 0;
-  const applicationClose = state.application ? state.application.close(30000) : new __velarWsPromise(resolve => resolve(null));
   const httpClose = __velarWsCloseHttpServer(state);
   const pending = (async () => {
+    let failure = null;
     try {
+      const aborting = [];
+      for (const prepared of state.preparedSessions) aborting.push(prepared.abort());
+      state.preparedSessions.clear();
+      try { await __velarWsPromiseAll(aborting); } catch (error) { failure = error; }
+      // 先通知已经进入处理器的会话取消，再关闭连接。应用 close 会沿同一
+      // Cancellation 再次广播并提供 30 秒有界等待；处理器成功结束之前，
+      // ServeApp 不会释放请求级依赖。
+      for (const session of state.activeSessions) session.cancel("Server is stopping");
+      const applicationClose = state.application ? state.application.close(30000) : new __velarWsPromise(resolve => resolve(null));
       const closing = [];
       for (const connection of state.connections) closing.push(__velarWsCloseForStop(connection));
-      await __velarWsPromiseAll(closing);
-      await new __velarWsPromise((resolve, reject) => state.server.close(error => error ? reject(error) : resolve(null)));
-      await __velarWsPromiseAll([httpClose, applicationClose]);
-    } finally { state.connections.clear(); }
+      try { await __velarWsPromiseAll(closing); } catch (error) { if (failure === null) failure = error; }
+      try { await new __velarWsPromise((resolve, reject) => state.server.close(error => error ? reject(error) : resolve(null))); }
+      catch (error) { if (failure === null) failure = error; }
+      try { await httpClose; } catch (error) { if (failure === null) failure = error; }
+      try { await applicationClose; } catch (error) { if (failure === null) failure = error; }
+      if (failure !== null) throw failure;
+    } finally { state.connections.clear(); state.preparedSessions.clear(); }
     return null;
   })();
   state.stopPromise = pending;
@@ -183,7 +196,7 @@ const __velarWsConnectionPrototype = Object.freeze({
   close(code = 1000, reason = "") { const state = __velarWebSocketConnections.get(this); if (!state) throw new TypeError("WebSocket.close requires a connection"); if (!Number.isSafeInteger(code) || code < 1000 || code > 4999) return Promise.reject(new RangeError("WebSocket close code must be from 1000 through 4999")); if (typeof reason !== "string" || Buffer.byteLength(reason, "utf8") > 123) return Promise.reject(new RangeError("WebSocket close reason cannot exceed 123 UTF-8 bytes")); if (state.finished) return Promise.resolve(null); if (!state.closePromise) { state.closePromise = new Promise(resolve => { let settled = false; let timer = null; const finish = () => { if (settled) return; settled = true; if (timer !== null) __velarWsClearTimeout(timer); state.socket.off("close", finish); resolve(null); }; state.socket.once("close", finish); try { state.socket.close(code, reason); } catch { try { state.socket.terminate(); } catch {} finish(); return; } timer = __velarWsSetTimeout(() => { try { state.socket.terminate(); } catch {} finish(); }, 5000); }); } return state.closePromise; },
 });
 const __velarWsServerPrototype = Object.freeze({
-  next() { const state = __velarWebSocketServers.get(this); if (!state) throw new TypeError("WebSocketServer.next requires a server"); while (state.queue.length) { const connection = state.queue.shift(); if (!state.pendingConnections.delete(connection)) continue; __velarWsPendingConnections -= 1; if (__velarWsPendingConnections < 0) __velarWsPendingConnections = 0; return Promise.resolve(connection); } if (state.stopped) return Promise.resolve(null); if (state.waiter) return Promise.reject(new WebSocketBackpressureError("Only one WebSocketServer.next call may wait at a time")); return new Promise((resolve, reject) => { state.waiter = { resolve, reject }; }); },
+  next() { const state = __velarWebSocketServers.get(this); if (!state) throw new TypeError("WebSocketServer.next requires a server"); if (state.declarative) return Promise.reject(new TypeError("Connections are owned by @websocket routes and cannot be pulled with server.next()")); while (state.queue.length) { const connection = state.queue.shift(); if (!state.pendingConnections.delete(connection)) continue; __velarWsPendingConnections -= 1; if (__velarWsPendingConnections < 0) __velarWsPendingConnections = 0; return Promise.resolve(connection); } if (state.stopped) return Promise.resolve(null); if (state.waiter) return Promise.reject(new WebSocketBackpressureError("Only one WebSocketServer.next call may wait at a time")); return new Promise((resolve, reject) => { state.waiter = { resolve, reject }; }); },
   stop() { const state = __velarWebSocketServers.get(this); if (!state) throw new TypeError("WebSocketServer.stop requires a server"); return __velarWsStopState(state); },
 });
 const __velarWsConnectionType = Object.freeze({ is(value) { return __velarWebSocketConnections.has(value); }, parse(value) { if (!this.is(value)) throw new TypeError("Value does not match WebSocketConnection"); return value; } });
@@ -204,6 +217,8 @@ export async function listen(options) {
   if (host !== undefined && typeof host !== "string") throw new TypeError("WebSocket host must be text");
   if (path !== undefined && (typeof path !== "string" || !path.startsWith("/"))) throw new TypeError("WebSocket path must start with '/'");
   const application = __velarServeApp.is(http) ? await __velarServeApp.__velarCompilerBridge.nativeApp(http, maxBodyBytes) : null;
+  const declarative = application !== null && application.webSocketRoutes > 0;
+  if (declarative && path !== undefined) { await application.close(); throw new TypeError("listen path is unavailable when the ServeApp declares @websocket routes"); }
   const handler = application ? application.handle : http;
   if (handler !== undefined && typeof handler !== "function") { if (application) await application.close(); throw new TypeError("WebSocket http must be a ServeApp or velar/serve handler"); }
   try {
@@ -214,9 +229,32 @@ export async function listen(options) {
       });
       httpServer.maxConnections = 2048;
       httpServer.maxRequestsPerSocket = 1000;
-      const server = new __VelarWebSocketServer({server: httpServer, path, maxPayload: limits.maxMessageBytes, perMessageDeflate: false, clientTracking: true, verifyClient(info, complete) { const origin = info.origin; const allowed = origin === undefined || origins.wildcard || __velarWsReflectApply(__velarWsSetHas, origins.exact, [origin]); if (allowed) complete(true); else complete(false, 403, "Origin not allowed"); }});
+      let state = null;
+      const server = new __VelarWebSocketServer({server: httpServer, path: declarative ? undefined : path, maxPayload: limits.maxMessageBytes, perMessageDeflate: false, clientTracking: true, verifyClient(info, complete) {
+        const origin = info.origin;
+        const allowed = origin === undefined || origins.wildcard || __velarWsReflectApply(__velarWsSetHas, origins.exact, [origin]);
+        if (!allowed) { complete(false, 403, "Origin not allowed"); return; }
+        if (!declarative) { complete(true); return; }
+        if (state === null || state.stopped || state.preparing >= maxPendingConnections
+          || state.connections.size + state.preparedSessions.size + state.preparing >= maxConnections) {
+          complete(false, 503, "Server busy");
+          return;
+        }
+        state.preparing += 1;
+        void application.prepareWebSocket(info.req).then(prepared => {
+          state.preparing -= 1;
+          if (!prepared.accepted) { complete(false, prepared.status, "WebSocket route rejected"); return; }
+          if (state.stopped) { void prepared.abort(); complete(false, 503, "Server stopping"); return; }
+          __velarWebSocketPreparedRequests.set(info.req, prepared);
+          state.preparedSessions.add(prepared);
+          complete(true);
+        }, () => {
+          state.preparing -= 1;
+          complete(false, 500, "WebSocket route failed");
+        });
+      }});
       const value = Object.create(__velarWsServerPrototype);
-      const state = {server, httpServer, application, queue: [], pendingConnections: new Set(), waiter: null, stopped: false, stopPromise: null, connections: new Set(), sockets: new Set()};
+      state = {server, httpServer, application, declarative, preparing: 0, preparedSessions: new Set(), activeSessions: new Set(), handlers: new Set(), queue: [], pendingConnections: new Set(), waiter: null, stopped: false, stopPromise: null, connections: new Set(), sockets: new Set()};
       __velarWebSocketServers.set(value, state);
       httpServer.on("connection", socket => {
         if (state.stopped || state.sockets.size >= 2048 || __velarWsActiveHttpSockets >= 4096) { socket.destroy(); return; }
@@ -224,11 +262,27 @@ export async function listen(options) {
         socket.once("close", () => { if (!state.sockets.delete(socket)) return; __velarWsActiveHttpSockets -= 1; if (__velarWsActiveHttpSockets < 0) __velarWsActiveHttpSockets = 0; });
       });
       server.on("connection", (socket, request) => {
-        const willQueue = !state.waiter;
-        if (state.stopped || state.connections.size >= maxConnections || __velarWsActiveConnections >= __velarWsActiveConnectionLimit || (willQueue && (state.pendingConnections.size >= maxPendingConnections || __velarWsPendingConnections >= __velarWsPendingConnectionLimit))) { socket.close(1013, "Server busy"); return; }
+        const prepared = declarative ? __velarWebSocketPreparedRequests.get(request) : null;
+        if (prepared !== null && prepared !== undefined) { __velarWebSocketPreparedRequests.delete(request); state.preparedSessions.delete(prepared); }
+        const willQueue = !declarative && !state.waiter;
+        if (state.stopped || state.connections.size >= maxConnections || __velarWsActiveConnections >= __velarWsActiveConnectionLimit || (willQueue && (state.pendingConnections.size >= maxPendingConnections || __velarWsPendingConnections >= __velarWsPendingConnectionLimit))) {
+          if (prepared) void prepared.abort();
+          socket.close(1013, "Server busy");
+          return;
+        }
+        if (declarative && !prepared) { socket.close(1008, "WebSocket route unavailable"); return; }
         const connection = __velarWsWrap(socket, limits, __velarWsRequestOrigin(request)); state.connections.add(connection);
-        socket.once("close", () => { state.connections.delete(connection); if (state.pendingConnections.delete(connection)) { __velarWsPendingConnections -= 1; if (__velarWsPendingConnections < 0) __velarWsPendingConnections = 0; __velarWsCompactPendingConnections(state); } });
-        if (state.waiter) { const waiter = state.waiter; state.waiter = null; waiter.resolve(connection); }
+        socket.once("close", () => {
+          state.connections.delete(connection);
+          if (prepared) prepared.cancel("WebSocket connection closed");
+          if (state.pendingConnections.delete(connection)) { __velarWsPendingConnections -= 1; if (__velarWsPendingConnections < 0) __velarWsPendingConnections = 0; __velarWsCompactPendingConnections(state); }
+        });
+        if (declarative) {
+          state.activeSessions.add(prepared);
+          let running = null;
+          running = prepared.run(connection).catch(async () => { try { await connection.close(1011, "WebSocket handler failed"); } catch {} }).finally(() => { state.handlers.delete(running); state.activeSessions.delete(prepared); });
+          state.handlers.add(running);
+        } else if (state.waiter) { const waiter = state.waiter; state.waiter = null; waiter.resolve(connection); }
         else { state.queue.push(connection); state.pendingConnections.add(connection); __velarWsPendingConnections += 1; }
       });
       let settled = false;

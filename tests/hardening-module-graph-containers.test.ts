@@ -222,7 +222,14 @@ test("every dynamic import the parser produces reaches the module graph, in ever
     .filter((slot) => (refusals.get(slot)?.size ?? 0) === 0);
   assert.deepEqual(unexplained, [], "container slots with neither a dynamic import nor a refusal");
   const uncovered = [...containerSlots].filter((slot) => !covered.has(slot)).sort();
-  assert.deepEqual(uncovered, ["MatchValuePattern.values"], "the only container a dynamic import cannot be written into");
+  // 匹配分支的 values 是模式而不是普通运行时值；路由声明的 pathExpression
+  // 虽然复用 Expression 节点来支持命名 RoutePattern，但它的静态类型必须是
+  // RoutePattern，不能拿 Promise<Module> 充当路径。两者都会明确拒绝动态导入，
+  // 但上面的依赖图断言仍会确认解析器产出的 import 已被发现，不能静默漏图。
+  assert.deepEqual(uncovered, [
+    "MatchValuePattern.values",
+    "NodeRouteDeclaration.pathExpression",
+  ], "the only containers that deliberately reject a dynamic import");
 
   // The six containers A-010 named, held by their own names so the matrix
   // cannot lose its subject to a corpus edit.

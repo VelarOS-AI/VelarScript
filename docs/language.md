@@ -499,8 +499,9 @@ An application service activates `@velarscript/server` in `velar.json`; that
 application extension composes `@velarscript/node`. `server` declares
 an immutable route table; the five HTTP verbs are context annotations with
 compiler-owned route roles, not decorators. A Node-owned `p"..."` value is a
-first-class `RoutePattern`: it declares path and query fields once, and the
-anonymous handler reads them through `path.params` and `path.query`. One Data
+first-class `RoutePattern`: it declares path and query fields once. An inline
+pattern projects those fields directly into the anonymous handler; a referenced
+pattern uses an explicit `as route` binding. One Data
 record on a writing route comes from JSON. Distinct URL and field names use
 `wire={field:type}`; redundant same-name mappings receive advisory `A11` and a
 mechanical shorthand fix.
@@ -512,15 +513,14 @@ type CreateArticle:
     title: string
 
 export server app:
-    @get(path=p"/health") => {ok: true}
+    @get(p"/health") => {ok: true}
 
-    @get(path=p"/articles/{id:number}?{details:bool?}"):
-        const id = path.params.id
+    @get(p"/articles/{id:number}?{details:bool?}"):
         if id < 1:
             throw HttpProblem({status: 404, code: "article.not_found", title: "Article not found"})
-        return {id, details: path.query.details ?? false}
+        return {id, details: details ?? false}
 
-    @post(path=p"/articles", input: CreateArticle) => created({id: 1, title: input.title})
+    @post(p"/articles", input: CreateArticle) => created({id: 1, title: input.title})
 
     @notFound(request: Request) => {error: "route_not_found", path: request.path}
 

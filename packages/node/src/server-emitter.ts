@@ -37,7 +37,7 @@ export class NodeJavaScriptEmitter extends JavaScriptEmitter {
     if (!this.nodeServeOutput) return helpers;
     this.requireRuntimeModule("velar/serve");
     helpers.push('import { ServeApp as __velarServeAppType } from "velar/serve";');
-    helpers.push("const { createApp: __velarCreateServeApp, createPattern: __velarCreateServePattern, createRoute: __velarCreateServeRoute, createNotFound: __velarCreateServeNotFound, createResponse: __velarCreateServeResponse } = __velarServeAppType.__velarCompilerBridge;");
+    helpers.push("const { createApp: __velarCreateServeApp, createPattern: __velarCreateServePattern, createRoute: __velarCreateServeRoute, createWebSocket: __velarCreateServeWebSocket, createNotFound: __velarCreateServeNotFound, createResponse: __velarCreateServeResponse } = __velarServeAppType.__velarCompilerBridge;");
     return helpers;
   }
 
@@ -52,7 +52,8 @@ export class NodeJavaScriptEmitter extends JavaScriptEmitter {
         visitExpression(item.value);
         continue;
       }
-      for (const parameter of item.parameters) {
+      if (item.kind === "NodeRouteDeclaration") visitExpression(item.pathExpression);
+      for (const parameter of item.kind === "NodeRouteDeclaration" ? item.inputParameters : item.parameters) {
         if (parameter.defaultValue) visitExpression(parameter.defaultValue);
         if (parameter.type) visitExpression(runtimeTypeUse(parameter.type));
       }
@@ -127,18 +128,34 @@ export class NodeJavaScriptEmitter extends JavaScriptEmitter {
 
   private emitRoute(route: NodeRouteDeclaration, depth: number): string {
     const indentation = "  ".repeat(depth);
-    const parameters = route.parameters.map((parameter) => {
+    const inputParameters = route.inputParameters.map((parameter) => {
       const hint = parseRouteParameterHint(this.hints.extensionCalls.get(spanIdentity(parameter.span)));
-      return this.emitParameter(parameter.name, parameter.name === "path" || hint?.descriptor ? null : parameter.defaultValue, false);
-    }).join(", ");
-    const descriptors = route.parameters.filter((parameter) => parameter.name !== "path")
+      return this.emitParameter(parameter.name, hint?.descriptor ? null : parameter.defaultValue, false);
+    });
+    const routeParameter = route.routeBinding?.name ?? this.emitProjectedRouteParameter(route);
+    const parameters = [routeParameter, ...inputParameters].join(", ");
+    const descriptors = route.inputParameters
       .map((parameter) => this.emitRouteParameter(parameter.type, parameter.name, parameter.defaultValue, parameter.span)).join(", ");
+    if (route.transport === "websocket") {
+      const bodyLines = [...this.emitStatementLines(route.body, depth + 1)];
+      if (!this.blockAlwaysReturns(route.body)) bodyLines.push(`${"  ".repeat(depth + 1)}return null;`);
+      const body = bodyLines.join("\n");
+      return `__velarCreateServeWebSocket(${this.emitMappedExpression(route.pathExpression)}, [${descriptors}], async (${parameters}) => {${body ? `\n${body}\n${indentation}` : ""}})`;
+    }
     const response = parseRouteResultHint(this.hints.extensionCalls.get(spanIdentity(route.signatureSpan))) ?? {schema: {}, contentTypes: ["application/json"], status: null};
     const description = this.routeDocumentation(route.span.start);
     const bodyLines = [...this.emitStatementLines(route.body, depth + 1)];
     if (!this.blockAlwaysReturns(route.body)) bodyLines.push(`${"  ".repeat(depth + 1)}return null;`);
     const body = bodyLines.join("\n");
     return `__velarCreateServeRoute(${JSON.stringify(route.method)}, ${this.emitMappedExpression(route.pathExpression)}, [${descriptors}], async (${parameters}) => {${body ? `\n${body}\n${indentation}` : ""}}, {responseSchema:${JSON.stringify(response.schema)},responseContentTypes:${JSON.stringify(response.contentTypes)},status:${JSON.stringify(response.status)},description:${JSON.stringify(description)}})`;
+  }
+
+  private emitProjectedRouteParameter(route: NodeRouteDeclaration): string {
+    if (route.pathExpression.kind !== "ExtensionExpression:node:path-pattern") return `__velarRoute${route.span.start}`;
+    const pattern = (route.pathExpression as typeof route.pathExpression & {readonly pattern: CompiledRoutePattern}).pattern;
+    const fields = (captures: readonly RoutePatternCapture[]): string => captures.map((capture) => capture.name).join(",");
+    if (pattern.path.length === 0 && pattern.query.length === 0) return `__velarRoute${route.span.start}`;
+    return `{params:{${fields(pattern.path)}},query:{${fields(pattern.query)}}}`;
   }
 
   private emitPattern(pattern: CompiledRoutePattern): string {
@@ -177,6 +194,9 @@ export class NodeJavaScriptEmitter extends JavaScriptEmitter {
       ?? { source: "body" as const, kind: "data" as const, schema: {}, descriptor: false };
     if (hint.source === "request") {
       return `{name:${JSON.stringify(name)},source:"request",kind:"request",required:true,schema:{}}`;
+    }
+    if (hint.source === "connection") {
+      return `{name:${JSON.stringify(name)},source:"connection",kind:"connection",required:true,schema:{}}`;
     }
     const check = type ? this.emitTypeCheck(routeValueType(type.syntax), "value") : "true";
     const input = hint.descriptor && defaultValue ? `,input:${this.emitMappedExpression(defaultValue)}` : "";

@@ -11,8 +11,71 @@ function compileNode(source: string) {
   return compile(source.trimStart(), { path: "app.vel", extensions: [velarNodeCompilerExtension] });
 }
 
+test("inline RoutePattern captures project directly while 'as' binds the complete match", () => {
+  const projected = compileNode(`
+server api:
+    @get(p"/worlds/{worldId:string}?{details:bool?}") => {worldId, details}
+`);
+  assert.deepEqual(projected.diagnostics, []);
+  assert.match(projected.code ?? "", /async \(\{params:\{worldId\},query:\{details\}\}\) =>/u);
+
+  const bound = compileNode(`
+server api:
+    @get(p"/worlds/{worldId:string}?{details:bool?}" as route) => {
+        pattern: str(route.pattern),
+        pathname: route.pathname,
+        worldId: route.params.worldId,
+        details: route.query.details,
+    }
+`);
+  assert.deepEqual(bound.diagnostics, []);
+  assert.match(bound.code ?? "", /async \(route\) =>/u);
+
+  const hidden = compileNode(`
+const world = p"/worlds/{worldId:string}"
+server api:
+    @get(world) => {worldId}
+`);
+  assert.ok(hidden.diagnostics.some((item) => /cannot introduce hidden names/u.test(item.message)));
+
+  const legacySource = `server api:\n    @get(path=p"/worlds/{worldId:string}") => {worldId: path.params.worldId}\n`;
+  const legacy = compileNode(legacySource);
+  const positional = legacy.diagnostics.find((item) => /route pattern is positional/u.test(item.message));
+  assert.ok(positional?.fix);
+  const fixed = applyMechanicalFixes(legacySource, [positional]).text;
+  assert.equal(fixed, `server api:\n    @get(p"/worlds/{worldId:string}" as path) => {worldId: path.params.worldId}\n`);
+  assert.deepEqual(compileNode(fixed).diagnostics, []);
+});
+
+test("@websocket declares one framework-owned connection and shares RoutePattern projection", async () => {
+  const result = await compileServer(`
+import {WebSocketConnection} from "velar/websocket"
+
+server realtime:
+    @websocket(p"/worlds/{worldId:string}/realtime", connection: WebSocketConnection):
+        print(worldId)
+        await connection.close()
+`);
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(result.code ?? "", /__velarCreateServeWebSocket\(/u);
+  assert.match(result.code ?? "", /source:"connection",kind:"connection"/u);
+  assert.match(result.code ?? "", /async \(\{params:\{worldId\},query:\{\}\}, connection\)/u);
+
+  const missing = await compileServer(`server realtime:\n    @websocket(p"/realtime"):\n        pass\n`);
+  assert.ok(missing.diagnostics.some((item) => /requires exactly one WebSocketConnection/u.test(item.message)));
+
+  const body = await compileServer(`
+type Payload:
+    value: string
+server realtime:
+    @websocket(p"/realtime", payload: Payload):
+        pass
+`);
+  assert.ok(body.diagnostics.some((item) => /must be WebSocketConnection, Request, or an explicit input descriptor/u.test(item.message)));
+});
+
 test("A11 shortens a redundant same-name query mapping without rejecting it", () => {
-  const source = `server api:\n    @get(path=p"/articles?details={details:bool?}") => {details: path.query.details}\n`;
+  const source = `server api:\n    @get(p"/articles?details={details:bool?}" as path) => {details: path.query.details}\n`;
   const result = compileNode(source);
   assert.deepEqual(result.diagnostics, []);
   assert.notEqual(result.code, null, "a canonical-form advisory must not block emission");
@@ -20,11 +83,11 @@ test("A11 shortens a redundant same-name query mapping without rejecting it", ()
   assert.equal(result.advisories[0]?.fix?.title, "Use query shorthand '{details:bool?}'");
   assert.equal(
     applyMechanicalFixes(source, result.advisories).text,
-    `server api:\n    @get(path=p"/articles?{details:bool?}") => {details: path.query.details}\n`,
+    `server api:\n    @get(p"/articles?{details:bool?}" as path) => {details: path.query.details}\n`,
   );
 
-  const intentionalAlias = compileNode(`server api:\n    @get(path=p"/articles?include-details={details:bool?}") => {details: path.query.details}\n`);
-  const shorthand = compileNode(`server api:\n    @get(path=p"/articles?{details:bool?}") => {details: path.query.details}\n`);
+  const intentionalAlias = compileNode(`server api:\n    @get(p"/articles?include-details={details:bool?}" as path) => {details: path.query.details}\n`);
+  const shorthand = compileNode(`server api:\n    @get(p"/articles?{details:bool?}" as path) => {details: path.query.details}\n`);
   assert.deepEqual(intentionalAlias.advisories, []);
   assert.deepEqual(shorthand.advisories, []);
 });
@@ -76,7 +139,7 @@ async def verifyToken(token: string) -> User?:
     return null
 
 server routes:
-    @get(path=p"/health") => {ok: true}
+    @get(p"/health" as path) => {ok: true}
 
 const settings = await configuration(Settings)
 const connection = database(
@@ -87,8 +150,8 @@ const currentUser = authenticate(security.bearer(), verifyToken)
 
 server app:
     ...routes
-    @get(path=p"/database", value=input.dependency(connection)) => {path: value.path}
-    @get(path=p"/me", user=input.dependency(currentUser)) => {id: user.id}
+    @get(p"/database" as path, value=input.dependency(connection)) => {path: value.path}
+    @get(p"/me" as path, user=input.dependency(currentUser)) => {id: user.id}
 
 export const start = application(app)
 `.trimStart();
@@ -144,12 +207,12 @@ type User:
 
 export server api:
     /// Reports whether the service is ready.
-    @get(path=p"/health") => {ok: true}
+    @get(p"/health" as path) => {ok: true}
 
-    @get(path=p"/users/{id:number}?{details:bool?}") -> User:
+    @get(p"/users/{id:number}?{details:bool?}" as path) -> User:
         return {id: str(path.params.id), name: (path.query.details ?? false) ? "full" : "short"}
 
-    @post(path=p"/users", input: CreateUser):
+    @post(p"/users" as path, input: CreateUser):
         return {id: "u1", name: input.name}
 
     @notFound() => {error: "route_not_found"}
@@ -171,7 +234,7 @@ export server api:
   assert.doesNotMatch(code, /function health|function getUser|function createUser/u);
 
   const formatted = formatSource(source.trimStart(), { extensions: [velarNodeCompilerExtension] });
-  assert.match(formatted, /@get\(path=p"\/health"\) => \{ok: true\}/u);
+  assert.match(formatted, /@get\(p"\/health" as path\) => \{ok: true\}/u);
   assert.match(formatted, /@notFound\(\) => \{error: "route_not_found"\}/u);
   assert.equal(formatSource(formatted, { extensions: [velarNodeCompilerExtension] }), formatted);
 });
@@ -183,7 +246,7 @@ enum Visibility:
     private = "restricted"
 
 server api:
-    @get(path=p"/articles/{visibility:Visibility}?{filter:Visibility?}") => {
+    @get(p"/articles/{visibility:Visibility}?{filter:Visibility?}" as path) => {
         visibility: path.params.visibility,
         filter: path.query.filter,
     }
@@ -200,7 +263,7 @@ type Identifier = number
 type Enabled = bool
 
 server api:
-    @get(path=p"/articles/{id:Identifier}?{enabled:Enabled}") => {
+    @get(p"/articles/{id:Identifier}?{enabled:Enabled}" as path) => {
         id: path.params.id,
         enabled: path.query.enabled,
     }
@@ -219,7 +282,7 @@ type Envelope:
     ok: bool
 
 server api:
-    @get(path=p"/health") => {ready: true}
+    @get(p"/health" as path) => {ready: true}
     @response(outcome: HttpOutcome) -> Envelope: return {ok: outcome.ok}
 `);
   assert.deepEqual(result.diagnostics, []);
@@ -235,16 +298,16 @@ type Body:
     value: string
 
 server invalid:
-    @get(path=p"/users/{id:Body}", query: Body):
+    @get(p"/users/{id:Body}" as path, query: Body):
         return {ok: true}
 
-    @get(path=p"/users/{name:string}"):
+    @get(p"/users/{name:string}" as path):
         return {ok: true}
 
-    @post(path=p"/items", first: Body, second: Body):
+    @post(p"/items" as path, first: Body, second: Body):
         return {ok: true}
 
-    @post(path=p"/untyped", input):
+    @post(p"/untyped" as path, input):
         return {ok: true}
 `;
   const messages = compileNode(source).diagnostics.map((item) => item.message);
@@ -256,14 +319,14 @@ server invalid:
   assert.ok(messages.every((message) => !/matching '.*: Type' declaration/u.test(message)));
   const unknown = compileNode(`server api:\n    @head(p"/unsupported") => {ok: true}\n`);
   assert.ok(unknown.diagnostics.some((item) => /Unknown compiler-owned name '@head'/u.test(item.message)));
-  const wildcard = compileNode(`server api:\n    @get(path=p"/files/*") => {ok: true}\n`);
+  const wildcard = compileNode(`server api:\n    @get(p"/files/*" as path) => {ok: true}\n`);
   assert.ok(wildcard.diagnostics.some((item) => /use staticFiles/u.test(item.message)));
   const requestPath = join(tmpdir(), "velar-node-server-request-diagnostic.vel");
   const requestProject = await compileProject(requestPath, new Map([[requestPath, `
 import {Request} from "velar/serve"
 
 server api:
-    @get(path=p"/request", first: Request, second: Request) => {ok: true}
+    @get(p"/request" as path, first: Request, second: Request) => {ok: true}
     @notFound(request: Request) => {error: "missing", path: request.path}
 `.trimStart()]]), { extensions: [velarNodeCompilerExtension] });
   const requestDiagnostics = requestProject.modules.flatMap((module) => module.result.diagnostics);
@@ -305,7 +368,7 @@ server api:
 import {HttpOutcome, prefix} from "velar/serve"
 
 server child:
-    @get(path=p"/health") => {ok: true}
+    @get(p"/health" as path) => {ok: true}
     @notFound() => {error: "missing"}
     @response(outcome: HttpOutcome) => {ok: outcome.ok}
 
@@ -317,22 +380,22 @@ server api:
   assert.ok(scopedMessages.some((message) => /prefix cannot scope @response/u.test(message)));
 
   const tooManyQueryFields = Array.from({length: 65}, (_value, index) => `{field${index}:string}`).join("&");
-  const bounded = compileNode(`server api:\n    @get(path=p"/items?${tooManyQueryFields}") => {ok: true}\n`);
+  const bounded = compileNode(`server api:\n    @get(p"/items?${tooManyQueryFields}" as path) => {ok: true}\n`);
   assert.ok(bounded.diagnostics.some((item) => /more than 64 query fields/u.test(item.message)));
 
   const longWireName = "q".repeat(257);
-  const longWire = compileNode(`server api:\n    @get(path=p"/items?${longWireName}={value:string}") => {ok: true}\n`);
+  const longWire = compileNode(`server api:\n    @get(p"/items?${longWireName}={value:string}" as path) => {ok: true}\n`);
   assert.ok(longWire.diagnostics.some((item) => /wire name cannot exceed 256/u.test(item.message)));
 
-  const longPath = compileNode(`server api:\n    @get(path=p"/${"x".repeat(4096)}") => {ok: true}\n`);
+  const longPath = compileNode(`server api:\n    @get(p"/${" as pathx".repeat(4096)}") => {ok: true}\n`);
   assert.ok(longPath.diagnostics.some((item) => /1 through 4096 code units/u.test(item.message)));
 });
 
 test("Routes that share a path without a more specific winner are rejected", () => {
   const ambiguous = compileNode(`
 server api:
-    @get(path=p"/a/{x:string}/b") => {ok: true}
-    @get(path=p"/a/b/{y:string}") => {ok: true}
+    @get(p"/a/{x:string}/b" as path) => {ok: true}
+    @get(p"/a/b/{y:string}" as path) => {ok: true}
 `);
   assert.deepEqual(ambiguous.diagnostics.map((item) => item.message), [
     "Route 'GET /a/{x:string}/b' overlaps 'GET /a/b/{y:string}'; both match '/a/b/b' and neither is more specific — narrow or remove one",
@@ -340,8 +403,8 @@ server api:
 
   const captures = compileNode(`
 server api:
-    @get(path=p"/a/{x:string}/b/{p:string}") => {ok: true}
-    @get(path=p"/a/b/{y:string}/{q:string}") => {ok: true}
+    @get(p"/a/{x:string}/b/{p:string}" as path) => {ok: true}
+    @get(p"/a/b/{y:string}/{q:string}" as path) => {ok: true}
 `);
   assert.deepEqual(captures.diagnostics.map((item) => item.message), [
     "Route 'GET /a/{x:string}/b/{p:string}' overlaps 'GET /a/b/{y:string}/{q:string}'; both match '/a/b/b/p' and neither is more specific — narrow or remove one",
@@ -349,28 +412,28 @@ server api:
 
   const specific = compileNode(`
 server api:
-    @get(path=p"/users/me") => {ok: true}
-    @get(path=p"/users/{id:string}") => {ok: true}
-    @get(path=p"/users/{id:string}/settings") => {ok: true}
-    @get(path=p"/users/{id:string}/{section:string}") => {ok: true}
+    @get(p"/users/me" as path) => {ok: true}
+    @get(p"/users/{id:string}" as path) => {ok: true}
+    @get(p"/users/{id:string}/settings" as path) => {ok: true}
+    @get(p"/users/{id:string}/{section:string}" as path) => {ok: true}
 `);
   assert.deepEqual(specific.diagnostics, []);
 
   const unrealizable = compileNode(`
 server api:
-    @get(path=p"/a/{n:number}/b") => {ok: true}
-    @get(path=p"/a/b/{m:string}") => {ok: true}
-    @get(path=p"/a/{f:bool}/c") => {ok: true}
-    @get(path=p"/a/c/{m:string}") => {ok: true}
+    @get(p"/a/{n:number}/b" as path) => {ok: true}
+    @get(p"/a/b/{m:string}" as path) => {ok: true}
+    @get(p"/a/{f:bool}/c" as path) => {ok: true}
+    @get(p"/a/c/{m:string}" as path) => {ok: true}
 `);
   assert.deepEqual(unrealizable.diagnostics, []);
 
   const separate = compileNode(`
 server api:
-    @get(path=p"/a/{x:string}") => {ok: true}
-    @get(path=p"/a/b/{y:string}") => {ok: true}
-    @post(path=p"/a/{x:string}/b") => {ok: true}
-    @get(path=p"/a/true/{y:string}") => {ok: true}
+    @get(p"/a/{x:string}" as path) => {ok: true}
+    @get(p"/a/b/{y:string}" as path) => {ok: true}
+    @post(p"/a/{x:string}/b" as path) => {ok: true}
+    @get(p"/a/true/{y:string}" as path) => {ok: true}
 `);
   assert.deepEqual(separate.diagnostics.map((item) => item.message), []);
 });
@@ -378,7 +441,7 @@ server api:
 test("A statically resolvable spread enters the composing server's route checks", async () => {
   const composed = (order: string) => compileNode(`
 server base:
-    @get(path=p"/a/{x:string}/b") => {ok: "left"}
+    @get(p"/a/{x:string}/b" as path) => {ok: "left"}
 
 server app:
 ${order}
@@ -386,21 +449,21 @@ ${order}
 
   // The spread wins or loses by written position at runtime, so both orders must report.
   assert.deepEqual(composed(`    ...base
-    @get(path=p"/a/b/{y:string}") => {ok: "right"}`), [
+    @get(p"/a/b/{y:string}" as path) => {ok: "right"}`), [
     "Route 'GET /a/{x:string}/b' (composed in from 'base') overlaps 'GET /a/b/{y:string}'; both match '/a/b/b' and neither is more specific — narrow or remove one",
   ]);
-  assert.deepEqual(composed(`    @get(path=p"/a/b/{y:string}") => {ok: "right"}
+  assert.deepEqual(composed(`    @get(p"/a/b/{y:string}" as path) => {ok: "right"}
     ...base`), [
     "Route 'GET /a/b/{y:string}' overlaps 'GET /a/{x:string}/b' (composed in from 'base'); both match '/a/b/b' and neither is more specific — narrow or remove one",
   ]);
 
   const duplicate = compileNode(`
 server base:
-    @get(path=p"/a/{x:string}/b") => {ok: "left"}
+    @get(p"/a/{x:string}/b" as path) => {ok: "left"}
 
 server app:
     ...base
-    @get(path=p"/a/{z:string}/b") => {ok: "right"}
+    @get(p"/a/{z:string}/b" as path) => {ok: "right"}
 `);
   assert.deepEqual(duplicate.diagnostics.map((item) => item.message), [
     "Route 'GET /a/{z:string}/b' conflicts with 'GET /a/{x:string}/b' (composed in from 'base'); parameter names do not make two route shapes distinct",
@@ -420,14 +483,14 @@ server app:
 
   const transitive = compileNode(`
 server base:
-    @get(path=p"/a/{x:string}/b") => {ok: "left"}
+    @get(p"/a/{x:string}/b" as path) => {ok: "left"}
 
 server mid:
     ...base
 
 server app:
     ...mid
-    @get(path=p"/a/b/{y:string}") => {ok: "right"}
+    @get(p"/a/b/{y:string}" as path) => {ok: "right"}
 `);
   assert.deepEqual(transitive.diagnostics.map((item) => item.message), [
     "Route 'GET /a/{x:string}/b' (composed in from 'mid' → 'base') overlaps 'GET /a/b/{y:string}'; both match '/a/b/b' and neither is more specific — narrow or remove one",
@@ -436,8 +499,8 @@ server app:
   // The composed server already reported the pair; the server that spreads it must not repeat it.
   const reported = compileNode(`
 server base:
-    @get(path=p"/a/{x:string}/b") => {ok: "left"}
-    @get(path=p"/a/b/{y:string}") => {ok: "right"}
+    @get(p"/a/{x:string}/b" as path) => {ok: "left"}
+    @get(p"/a/b/{y:string}" as path) => {ok: "right"}
 
 server app:
     ...base
@@ -446,14 +509,14 @@ server app:
 
   const aliased = compileNode(`
 server base:
-    @get(path=p"/a/{x:string}/b") => {ok: "left"}
+    @get(p"/a/{x:string}/b" as path) => {ok: "left"}
 
 const one = base
 const two = one
 
 server app:
     ...two
-    @get(path=p"/a/b/{y:string}") => {ok: "right"}
+    @get(p"/a/b/{y:string}" as path) => {ok: "right"}
 `);
   assert.deepEqual(aliased.diagnostics.map((item) => item.message), [
     "Route 'GET /a/{x:string}/b' (composed in from 'base') overlaps 'GET /a/b/{y:string}'; both match '/a/b/b' and neither is more specific — narrow or remove one",
@@ -466,7 +529,7 @@ test("A composition collision names its own cause, not the nearest one", () => {
   // be narrowed, so the message names the server that arrives twice and the spreads that carry it.
   const twice = compileNode(`
 server base:
-    @get(path=p"/a/{x:string}") => {ok: "left"}
+    @get(p"/a/{x:string}" as path) => {ok: "left"}
 
 server app:
     ...base
@@ -478,7 +541,7 @@ server app:
 
   const diamond = compileNode(`
 server base:
-    @get(path=p"/a/{x:string}") => {ok: "left"}
+    @get(p"/a/{x:string}" as path) => {ok: "left"}
 
 server mid1:
     ...base
@@ -498,10 +561,10 @@ server app:
   // and naming them sends the author looking for a difference that is not there.
   const composedPath = compileNode(`
 server one:
-    @get(path=p"/a") => {ok: 1}
+    @get(p"/a" as path) => {ok: 1}
 
 server two:
-    @get(path=p"/a") => {ok: 2}
+    @get(p"/a" as path) => {ok: 2}
 
 server app:
     ...one
@@ -513,8 +576,8 @@ server app:
 
   const writtenPath = compileNode(`
 server api:
-    @get(path=p"/a") => {ok: 1}
-    @get(path=p"/a") => {ok: 2}
+    @get(p"/a" as path) => {ok: 1}
+    @get(p"/a" as path) => {ok: 2}
 `);
   assert.deepEqual(writtenPath.diagnostics.map((item) => item.message), [
     "Route 'GET /a' duplicates 'GET /a'; one method and path answer from a single route",
@@ -564,11 +627,11 @@ test("Spread route checking stays inside what one module can resolve", async () 
   const cycle = compileNode(`
 server a:
     ...b
-    @get(path=p"/x") => {ok: true}
+    @get(p"/x" as path) => {ok: true}
 
 server b:
     ...a
-    @get(path=p"/y") => {ok: true}
+    @get(p"/y" as path) => {ok: true}
 `);
   assert.deepEqual(cycle.diagnostics.map((item) => item.message), []);
 
@@ -576,13 +639,13 @@ server b:
   // the stability predicate lets it resolve and the genuine overlap is reported (D90 R19).
   const stableAlias = compileNode(`
 server base:
-    @get(path=p"/a/{x:string}/b") => {ok: "left"}
+    @get(p"/a/{x:string}/b" as path) => {ok: "left"}
 
 let other = base
 
 server app:
     ...other
-    @get(path=p"/a/b/{y:string}") => {ok: "right"}
+    @get(p"/a/b/{y:string}" as path) => {ok: "right"}
 `);
   assert.deepEqual(stableAlias.diagnostics.map((item) => item.message), [
     "Route 'GET /a/{x:string}/b' (composed in from 'base') overlaps 'GET /a/b/{y:string}'; both match '/a/b/b' and neither is more specific — narrow or remove one",
@@ -592,28 +655,28 @@ server app:
   // execution order, and the assembly-time referee owns that question.
   const rebound = compileNode(`
 server base:
-    @get(path=p"/a/{x:string}/b") => {ok: "left"}
+    @get(p"/a/{x:string}/b" as path) => {ok: "left"}
 
 server extra:
-    @get(path=p"/c") => {ok: true}
+    @get(p"/c" as path) => {ok: true}
 
 let other = base
 other = extra
 
 server app:
     ...other
-    @get(path=p"/a/b/{y:string}") => {ok: "right"}
+    @get(p"/a/b/{y:string}" as path) => {ok: "right"}
 `);
   assert.deepEqual(rebound.diagnostics.map((item) => item.message), []);
 
   const distinct = compileNode(`
 server base:
-    @get(path=p"/users/me") => {ok: true}
+    @get(p"/users/me" as path) => {ok: true}
 
 server app:
     ...base
-    @get(path=p"/users/{id:string}") => {ok: true}
-    @post(path=p"/users/me") => {ok: true}
+    @get(p"/users/{id:string}" as path) => {ok: true}
+    @post(p"/users/me" as path) => {ok: true}
 `);
   assert.deepEqual(distinct.diagnostics.map((item) => item.message), []);
 
@@ -627,7 +690,7 @@ server app:
   const project = await compileProject(app, new Map([
     [users, `
 export server users:
-    @get(path=p"/a/{x:string}/b") => {ok: "left"}
+    @get(p"/a/{x:string}/b" as path) => {ok: "left"}
 `.trimStart()],
     [app, `
 import {prefix} from "velar/serve"
@@ -635,11 +698,11 @@ import {users} from "./users.vel"
 
 export server direct:
     ...users
-    @get(path=p"/a/b/{y:string}") => {ok: "right"}
+    @get(p"/a/b/{y:string}" as path) => {ok: "right"}
 
 export server scoped:
     ...prefix("/api", users)
-    @get(path=p"/a/b/{y:string}") => {ok: "right"}
+    @get(p"/a/b/{y:string}" as path) => {ok: "right"}
 `.trimStart()],
   ]), { extensions: [velarNodeCompilerExtension] });
   assert.deepEqual(project.failures, []);
@@ -647,11 +710,11 @@ export server scoped:
 });
 
 test("Node owns and validates path-pattern strings without changing Core strings", () => {
-  const fullWidth = compileNode(`server api:\n    @get(path=p"/articles/{id：string}") => {ok: true}\n`);
+  const fullWidth = compileNode(`server api:\n    @get(p"/articles/{id：string}" as path) => {ok: true}\n`);
   assert.ok(fullWidth.diagnostics.some((item) => /declares its field and type/u.test(item.message)));
 
   const plain = compileNode(`server api:\n    @get(path="/articles/{id:string}") => {ok: true}\n`);
-  assert.ok(plain.diagnostics.some((item) => /statically resolvable from p/u.test(item.message)));
+  assert.ok(plain.diagnostics.some((item) => /route pattern is positional/u.test(item.message)));
 
   const core = compile(`const path = p"/articles/{id:string}"\n`, { path: "core.vel" });
   assert.ok(core.diagnostics.length > 0);
@@ -665,7 +728,7 @@ test("Node servers preserve their nominal contract across modules and compositio
   const project = await compileProject(main, new Map([
     [users, `
 export server users:
-    @get(path=p"/{id:string}") => {id: path.params.id}
+    @get(p"/{id:string}" as path) => {id: path.params.id}
 `.trimStart()],
     [app, `
 import {prefix} from "velar/serve"
@@ -688,7 +751,7 @@ await serve(app, port=3000)
 
 test("compiler-owned route names are not decorators or top-level values", () => {
   const result = compileNode(`
-@get(path=p"/health")
+@get(p"/health" as path)
 def health():
     return {ok: true}
 `);
@@ -715,12 +778,12 @@ const currentUser = provide(
 )
 
 server api:
-    @get(path=p"/users/me",
+    @get(p"/users/me" as path,
         user=input.dependency(currentUser),
         session=input.cookie("session", default=null),
     ) => {id: user.id, session}
 
-    @post(path=p"/files",
+    @post(p"/files" as path,
         metadata=input.form(UploadMetadata),
         image=input.upload("image", maxBytes=8_388_608),
     ) => {title: metadata.title, filename: image.filename}
@@ -745,9 +808,9 @@ type Article:
     title: string
 
 server api:
-    @post(path=p"/articles", input: Article) => setCookie(background(created(input), async () => null), "created", "yes")
-    @put(path=p"/articles/{id:string}", input: Article) => json(input, status=202)
-    @delete(path=p"/articles/{id:string}") => noContent()
+    @post(p"/articles" as path, input: Article) => setCookie(background(created(input), async () => null), "created", "yes")
+    @put(p"/articles/{id:string}" as path, input: Article) => json(input, status=202)
+    @delete(p"/articles/{id:string}" as path) => noContent()
 `.trimStart()]]), {extensions: [velarNodeCompilerExtension]});
   assert.deepEqual(project.failures, []);
   assert.deepEqual(project.modules.flatMap((module) => module.result.diagnostics), []);

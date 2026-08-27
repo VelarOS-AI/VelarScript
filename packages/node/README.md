@@ -27,17 +27,19 @@ activate `@velarscript/node` directly, then declare anonymous checked routes:
 
 ```velar
 import {created} from "velar/serve"
+import {WebSocketConnection} from "velar/websocket"
 
 type CreateArticle:
     title: string
 
 export server app:
-    @get(path=p"/health") => {ok: true}
-    @get(path=p"/articles/{id:string}?{details:bool?}") => {
-        id: path.params.id,
-        details: path.query.details ?? false,
-    }
-    @post(path=p"/articles", input: CreateArticle) => created(input)
+    @get(p"/health") => {ok: true}
+    @get(p"/articles/{id:string}?{details:bool?}") => {id, details: details ?? false}
+    @post(p"/articles", input: CreateArticle) => created(input)
+
+    @websocket(p"/worlds/{worldId:string}/realtime", connection: WebSocketConnection):
+        async for message in connection:
+            await connection.send(message)
 ```
 
 ```json
@@ -63,7 +65,7 @@ and abstract connection lifecycle. Without that explicit extension,
 `velar/server` is unavailable and application configuration is not loaded.
 Host, port, and request ceilings do not belong in `node` manifest settings.
 
-When low-level HTTP and WebSocket traffic share one port, the entry may return
+When declarative HTTP and WebSocket routes share one port, the entry may return
 `Promise<WebSocketServer>`:
 
 ```velar fragment
@@ -75,7 +77,6 @@ export async def start():
         host: "127.0.0.1",
         port: 3000,
         http: routes,
-        path: "/api/events",
         origins: ["https://app.example.com"],
         maxBodyBytes: 16777216,
     })
@@ -85,8 +86,10 @@ The CLI supplies no host, port, or body-limit arguments. Server applications
 read those values once through `@velarscript/server` conventions.
 
 `p"..."` is scanned and checked only by this extension; Core does not acquire a
-general `p` string prefix. Captures use `{name:type}` with a half-width `:`;
-handlers read them through typed `path.params` and `path.query` objects.
+general `p` string prefix. Captures use `{name:type}` with a half-width `:`. An
+inline pattern projects captures and query fields directly as immutable handler
+locals. A referenced pattern must use `as route`; its `RouteMatch` exposes
+`pattern`, `pathname`, `params`, and `query` without injecting hidden names.
 `wire={field:type}` maps distinct query names; a redundant same-name mapping is
 accepted with advisory `A11` and a mechanical shorthand fix. The five route verbs are context annotations
 with compiler-owned route roles rather than decorators. The compiler lowers each `server` to an
@@ -121,8 +124,12 @@ intentionally model repeated query values read `Request.queryAll` explicitly;
 checked `List<scalar>` form fields preserve all repeated values. Request paths and queries
 are decoded exactly once with invalid UTF-8, encoded separators, NULs, and dot
 segments rejected before routing. Multiple cookies stay separate on the wire.
-`velar/websocket.listen({http: app, ...})` composes the ServeApp lifecycle on
-one HTTP/WebSocket port. `origins` accepts only exact canonical HTTP/HTTPS
+`@websocket` routes own matching, dependency and credential resolution,
+handshake rejection, and handler lifetime. Exactly one `WebSocketConnection`
+parameter is required. `velar/websocket.listen({http: app, ...})` composes the
+ServeApp lifecycle on one HTTP/WebSocket port; when the app contains declarative
+WebSocket routes, the listener's legacy single `path` option is rejected.
+`origins` accepts only exact canonical HTTP/HTTPS
 origins. Its default rejects every browser-style upgrade carrying `Origin`;
 requests without `Origin` remain available to non-browser clients, and
 `origins: ["*"]` is the explicit unrestricted policy. Rejection returns 403

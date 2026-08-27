@@ -428,16 +428,16 @@ declarations remain outside it. Test modules use named `test "…":` declaration
 and do not also declare a program entry.
 
 The Node extension applies this same rule to HTTP servers. Directly inside a
-`server` declaration, `@get`, `@post`, `@put`, `@patch`, and `@delete` select
-one compiler-owned route role, while `@notFound` selects the application's one
+`server` declaration, `@get`, `@post`, `@put`, `@patch`, `@delete`, and
+`@websocket` select one compiler-owned route role, while `@notFound` selects the application's one
 unmatched-path fallback. They are anonymous structural declarations, not
 decorators and not references to functions of those names. A route's first
 item is the Node-owned path-pattern literal `p"..."`:
 
 ```velar
 export server articles:
-    @get(path=p"/articles/{id:string}?{details:bool?}"):
-        return {id: path.params.id, details: path.query.details ?? false}
+    @get(p"/articles/{id:string}?{details:bool?}"):
+        return {id, details: details ?? false}
 
     @notFound() => {error: "not_found"}
 ```
@@ -451,9 +451,12 @@ with a half-width `:`. Query fields follow the same contract after `?`; a type
 suffix `?` makes that field optional, and an explicit `wire-name={name:type}`
 may map a different URL name. An explicit same-name mapping remains valid but
 advisory `A11` rewrites it to `{name:type}`. A capture type is `string`, `number`, `bool`, or
-a named enum type. Each route receives a `path` value whose typed
-`path.params` and `path.query` objects own those inputs; `path.definition` and
-`str(path)` expose the complete declaration. A single concrete Data record on
+a named enum type. An inline pattern projects its captures and query fields as
+immutable handler locals. A referenced pattern must be explicit about its
+namespace with `@get(articlePath as route)`; that `RouteMatch` exposes
+`route.pattern`, `route.pathname`, `route.params`, and `route.query`, while
+`str(route)` and `str(route.pattern)` return the complete declaration. The obsolete `path=`
+spelling is rejected with a mechanical positional-and-`as` fix. A single concrete Data record on
 `POST`, `PUT`, or `PATCH` is the
 checked JSON body, and `Request` is the explicit low-level request input.
 Route bodies are async-capable without an `async` modifier and use either

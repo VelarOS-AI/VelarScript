@@ -6,6 +6,7 @@ import {
   type Statement,
   type Token,
   type TypeReference,
+  type TypeSyntax,
 } from "@velarscript/compiler/extension";
 import {
   NODE_HTTP_METHODS,
@@ -16,7 +17,7 @@ import {
   type NodeServerDeclaration,
   type NodeServerItem,
 } from "./server-ast.ts";
-import { compileRoutePattern } from "./route-pattern.ts";
+import { compileRoutePattern, type CompiledRoutePattern, type RoutePatternCapture } from "./route-pattern.ts";
 import { isNodePathPatternSyntax, NODE_PATH_PATTERN_TOKEN } from "./server-lexer.ts";
 
 const span = (start: number, end: number): Span => ({ start, end });
@@ -25,6 +26,7 @@ const diagnostic = (code: string, message: string, sourceSpan: Span, fix?: Diagn
 const advisory = (code: string, message: string, sourceSpan: Span, fix: DiagnosticFix): Advisory =>
   ({tier: "advisory", code, message, span: sourceSpan, fix});
 const methods = new Set<string>(NODE_HTTP_METHODS);
+const routeRoles = new Set<string>([...methods, "websocket"]);
 
 export class VelarNodeParser extends Parser {
   constructor(tokens: readonly Token[], lexicalExtensions: readonly CompilerLexicalExtension[]) {
@@ -107,7 +109,7 @@ export class VelarNodeParser extends Parser {
       } else {
         this.diagnostics.push(diagnostic(
           "VEL6003",
-          "A server body contains only HTTP routes, one @notFound fallback, one @response policy, or '...app' composition entries; put ordinary declarations outside the server",
+          "A server body contains only HTTP/WebSocket routes, one @notFound fallback, one @response policy, or '...app' composition entries; put ordinary declarations outside the server",
           this.current().span,
         ));
         this.skipMistypedDeclaration();
@@ -129,34 +131,57 @@ export class VelarNodeParser extends Parser {
   private parseRoute(start: number): NodeRouteDeclaration | null {
     const marker = this.expect("at", "Expected '@'");
     const name = this.check("identifier") ? this.advance() : null;
-    if (!name || !methods.has(name.value)) {
+    if (!name || !routeRoles.has(name.value)) {
       this.diagnostics.push(diagnostic(
         "VEL6002",
         name
-          ? `Unknown compiler-owned name '@${name.value}' in a server; use an HTTP route name, @notFound, or @response`
-          : "Expected a compiler-owned server name after '@'; use an HTTP route name, @notFound, or @response",
+          ? `Unknown compiler-owned name '@${name.value}' in a server; use an HTTP route name, @websocket, @notFound, or @response`
+          : "Expected a compiler-owned server name after '@'; use an HTTP route name, @websocket, @notFound, or @response",
         span(marker.span.start, (name ?? marker).span.end),
       ));
       this.skipMistypedDeclaration();
       return null;
     }
 
-    const methodName = name.value as NodeHttpMethodName;
+    const methodName = name.value as NodeHttpMethodName | "websocket";
     this.expect("leftParen", `Expected '(' after '@${methodName}'`);
-    const pathName = this.expectBindingName(`Expected 'path' as the first @${methodName} argument`, "route path binding");
-    if (pathName.value !== "path") this.diagnostics.push(diagnostic("VEL6005", `The first @${methodName} argument is named 'path'`, pathName.span));
-    this.expect("assign", `Expected '=' after the @${methodName} path binding`);
+    const legacyPath = this.check("identifier") && this.current().value === "path" && this.peekKind(1) === "assign";
+    const legacyStart = legacyPath ? this.advance().span.start : null;
+    if (legacyPath) this.advance();
     const pathExpression = this.parseExpression();
     const directPattern = pathExpression.kind === "ExtensionExpression:node:path-pattern"
-      ? pathExpression as typeof pathExpression & {readonly pattern: {readonly definition: string}}
+      ? pathExpression as typeof pathExpression & {readonly pattern: CompiledRoutePattern}
       : null;
-    const parameters: Parameter[] = [{
-      name: "path",
-      type: null,
-      defaultValue: pathExpression,
-      rest: false,
-      span: span(pathName.span.start, pathExpression.span.end),
-    }];
+    let routeBinding: {readonly name: string; readonly span: Span} | null = null;
+    if (this.matchWord("as")) {
+      const binding = this.expectBindingName("Expected a route match name after 'as'", "route match binding");
+      routeBinding = {name: binding.value, span: binding.span};
+    } else if (legacyPath) {
+      routeBinding = {name: "path", span: span(legacyStart!, legacyStart! + 4)};
+      this.diagnostics.push(diagnostic(
+        "VEL6005",
+        "A route pattern is positional; use p\"...\" for direct captures or p\"...\" as route for the complete match",
+        span(legacyStart!, pathExpression.span.end),
+        {
+          title: "Bind the complete route match explicitly",
+          edits: [
+            {span: span(legacyStart!, pathExpression.span.start), text: ""},
+            {span: {start: pathExpression.span.end, end: pathExpression.span.end}, text: " as path"},
+          ],
+        },
+      ));
+    } else if (!directPattern) {
+      this.diagnostics.push(diagnostic(
+        "VEL6005",
+        "A referenced RoutePattern cannot introduce hidden names; bind its complete match with 'as route'",
+        pathExpression.span,
+      ));
+    }
+
+    const projectedCaptures = routeBinding === null && directPattern
+      ? directPattern.pattern.path.concat(directPattern.pattern.query)
+      : [];
+    const inputParameters: Parameter[] = [];
     let sawDefault = false;
     if (this.match("comma")) {
       while (!this.check("rightParen") && !this.check("eof")) {
@@ -170,7 +195,7 @@ export class VelarNodeParser extends Parser {
         if (!defaultValue && sawDefault) {
           this.diagnostics.push(diagnostic("VEL2016", "A required route parameter cannot follow a parameter with a default value", parameterSpan));
         }
-        parameters.push({ name: parameterName.value, type, defaultValue, rest, span: parameterSpan });
+        inputParameters.push({ name: parameterName.value, type, defaultValue, rest, span: parameterSpan });
         sawDefault ||= defaultValue !== null;
         if (!this.match("comma")) break;
       }
@@ -179,16 +204,24 @@ export class VelarNodeParser extends Parser {
     const parameterListEnd = close.span.end;
 
     const { returnType, resultAnnotationSpan, expressionBody, body } = this.parseHandlerBody(parameterListEnd);
-    const method = methodName.toUpperCase() as Uppercase<NodeHttpMethodName>;
+    const transport = methodName === "websocket" ? "websocket" : "http";
+    const method = methodName.toUpperCase() as Uppercase<NodeHttpMethodName> | "WEBSOCKET";
     const end = body.at(-1)?.span.end ?? returnType?.span.end ?? close.span.end;
+    const contextParameters: Parameter[] = routeBinding
+      ? [{name: routeBinding.name, type: null, defaultValue: pathExpression, rest: false, span: routeBinding.span}]
+      : projectedCaptures.map(routeCaptureParameter);
     return {
       kind: "NodeRouteDeclaration",
       name: `${method} ${directPattern?.pattern.definition ?? "<route>"}`,
       method,
+      transport,
       pathExpression,
       path: directPattern?.pattern.definition ?? "",
       pathSpan: pathExpression.span,
-      parameters,
+      routeBinding,
+      projectedCaptures,
+      inputParameters,
+      parameters: contextParameters.concat(inputParameters),
       returnType,
       ...(resultAnnotationSpan ? { resultAnnotationSpan } : {}),
       signatureSpan: span(start, returnType?.span.end ?? close.span.end),
@@ -262,4 +295,18 @@ export class VelarNodeParser extends Parser {
     return { returnType, ...(resultAnnotationSpan ? { resultAnnotationSpan } : {}), expressionBody, body };
   }
 
+}
+
+function routeCaptureParameter(capture: RoutePatternCapture): Parameter {
+  const scalar: TypeSyntax = {kind: "NamedTypeSyntax", name: capture.typeName, span: capture.typeSpan};
+  const syntax: TypeSyntax = capture.optional
+    ? {kind: "OptionalTypeSyntax", inner: scalar, span: capture.typeSpan}
+    : scalar;
+  return {
+    name: capture.name,
+    type: {syntax, span: capture.typeSpan},
+    defaultValue: null,
+    rest: false,
+    span: capture.span,
+  };
 }

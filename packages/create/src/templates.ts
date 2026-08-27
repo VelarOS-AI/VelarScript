@@ -107,7 +107,7 @@ export const appName = "${escapeVelarString(displayName)}"
 export const greeting = "Hello from VelarScript Node"
 
 export server app:
-    @get(path=p"/api/hello") => {message: greeting, target: "node"}
+    @get(p"/api/hello") => {message: greeting, target: "node"}
 
     ...staticFiles("/", root="public", fallback="index.html")
 `],

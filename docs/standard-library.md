@@ -315,6 +315,34 @@ to finish; CPU-heavy work cooperates with `await cancellation.checkpoint()`.
 `withTimeout(task, duration)` cancels the underlying task before it rejects with
 `TaskTimeoutError`. A `using` Task cancels and joins automatically on every exit.
 
+`channel(MessageType, capacity=64)` creates a typed, bounded FIFO
+`Channel<MessageType>` for many producers and one consumer. The Runtime Type is
+passed explicitly because capacity alone cannot determine `MessageType`, and
+every value is validated before entering the queue. `send(value,
+cancellation?)` waits while the buffer is full, but waiting senders are also
+bounded by `capacity`; exceeding that second bound rejects with
+`ChannelBackpressureError`. `trySend(value)` never waits and returns `false`
+when the buffer is full. `next(cancellation?)` returns the next value or `null`
+after a closed channel has drained, and therefore also supports `async for`.
+Only one `next` call may wait at a time. `close()` is idempotent: buffered values
+remain readable, waiting senders receive `ChannelClosedError`, and no new value
+is accepted.
+
+```velar
+import {channel} from "velar/task"
+
+type Message:
+    kind: string
+    value: string
+
+const messages = channel(Message, capacity=64)
+await messages.send({kind: "changed", value: "0,0,0"})
+messages.close()
+
+async for message in messages:
+    print(message.value)
+```
+
 ## Workers and pull-based WebSockets
 
 `velar/worker` uses entries declared in `velar.json`:
@@ -350,7 +378,11 @@ message, pending connection, pending send, and 128 MiB byte budgets, so empty
 messages cannot bypass accounting. `maxQueuedBytes` defaults to 16 MiB on Node
 and Web. `listen` may receive a `ServeApp` or the same typed low-level handler
 as `velar/serve`, so HTTP and upgrade traffic share one port and a composed app
-keeps one startup/shutdown lifecycle. Its `maxBodyBytes` option bounds HTTP
+keeps one startup/shutdown lifecycle. A ServeApp may declare multiple
+`@websocket` routes; each route owns its checked pattern, pre-upgrade inputs,
+one `WebSocketConnection`, and complete handler lifetime. In that declarative
+mode `WebSocketServer.next()` and the listener's legacy single `path` option are
+unavailable. Its `maxBodyBytes` option bounds HTTP
 bodies on that shared listener. `origins` accepts exact canonical HTTP/HTTPS
 origins; by default upgrades carrying `Origin` receive 403 before admission,
 while non-browser requests without `Origin` remain allowed. `["*"]` is the
@@ -898,15 +930,14 @@ type CreateArticle:
     title: string
 
 export server app:
-    @get(path=p"/health") => {ok: true}
+    @get(p"/health") => {ok: true}
 
-    @get(path=p"/articles/{id:number}?{details:bool?}"):
-        const id = path.params.id
+    @get(p"/articles/{id:number}?{details:bool?}"):
         if id < 1:
             throw HttpProblem({status: 404, code: "article.not_found", title: "Article not found"})
-        return {id, details: path.query.details ?? false}
+        return {id, details: details ?? false}
 
-    @post(path=p"/articles", input: CreateArticle) => created({id: 1, title: input.title})
+    @post(p"/articles", input: CreateArticle) => created({id: 1, title: input.title})
 
     @notFound(request: Request) => {error: "route_not_found", path: request.path}
 
@@ -917,11 +948,13 @@ export server app:
 route roles; `@notFound` is the one unmatched-path fallback on the final
 application; `@response` is its one semantic-result policy. They are anonymous
 compiler declarations, not decorators or runtime functions. A `{name:type}`
-path capture appears in `path.params`; query fields after `?` appear in
-`path.query`. A query type ending in `?` is optional, while every other field
+An inline pattern projects path captures and query fields as immutable handler
+locals. A referenced pattern uses `@get(pattern as route)` and receives a
+`RouteMatch` with `route.pattern`, `route.pathname`, `route.params`, and
+`route.query`. A query type ending in `?` is optional, while every other field
 is required and rejected before the handler when absent. The type is `string`,
-`number`, `bool`, or a named enum. `path.definition` and `str(path)` return the
-complete route declaration. `?wire={field:type}` maps distinct names; writing
+`number`, `bool`, or a named enum. `str(route)` and `str(route.pattern)` return the complete
+route declaration. `?wire={field:type}` maps distinct names; writing
 `?field={field:type}` is accepted but advisory `A11` offers the mechanical
 `?{field:type}` shorthand. One concrete Data record on
 `POST`, `PUT`, or `PATCH` is the JSON body. `Request` asks for the complete

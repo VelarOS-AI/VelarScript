@@ -69,35 +69,35 @@ async def passThrough(request: Request, next: () -> Promise<ServeResponse>):
     return await next()
 
 server routes:
-    @get(path=p"/health") => respond({ok: true, digest: healthDigest}, headers=Map([["cache-control", "no-store"]]))
+    @get(p"/health") => respond({ok: true, digest: healthDigest}, headers=Map([["cache-control", "no-store"]]))
 
-    @get(path=articlePath):
-        const id = path.params.id
+    @get(articlePath as route):
+        const id = route.params.id
         if id < 1:
             throw HttpProblem({status: 404, code: "article.not_found", title: "Article not found"})
-        return {id, details: path.query.details ?? false}
+        return {id, details: route.query.details ?? false}
 
-    @get(path=p"/tags?{tag:string?}") => {tag: path.query.tag}
-    @post(path=p"/articles", input: CreateArticle) => created(input)
-    @put(path=p"/articles/{id:number}", input: CreateArticle) => {id: path.params.id, title: input.title}
-    @patch(path=p"/articles/{id:number}", input: CreateArticle) => {id: path.params.id, title: input.title}
-    @delete(path=p"/articles/{id:number}") => noContent()
-    @get(path=p"/previous") => redirect("/articles/1")
-    @get(path=p"/plain") => text("plain response")
-    @get(path=p"/events") => stream(chunks)
-    @get(path=p"/sse") => sse(events)
-    @get(path=p"/me",
+    @get(p"/tags?{tag:string?}") => {tag}
+    @post(p"/articles", input: CreateArticle) => created(input)
+    @put(p"/articles/{id:number}", input: CreateArticle) => {id, title: input.title}
+    @patch(p"/articles/{id:number}", input: CreateArticle) => {id, title: input.title}
+    @delete(p"/articles/{id:number}") => noContent()
+    @get(p"/previous") => redirect("/articles/1")
+    @get(p"/plain") => text("plain response")
+    @get(p"/events") => stream(chunks)
+    @get(p"/sse") => sse(events)
+    @get(p"/me",
         user = input.dependency(currentUser),
         session = input.cookie("session", default=null),
     ) => {id: user.id, session}
-    @get(path=p"/provider", context=input.dependency(requestContext)) => context
-    @post(path=p"/upload",
+    @get(p"/provider", context=input.dependency(requestContext)) => context
+    @post(p"/upload",
         metadata = input.form(UploadMetadata),
         image = input.upload("image", maxBytes=1_048_576),
     ) => {title: metadata.title, filename: uploadName(image)}
-    @get(path=p"/session") => setCookie(background(json({ok: true}), afterResponse), "session", "tour")
-    @delete(path=p"/session") => clearCookie(json({ok: true}), "session")
-    @get(path=p"/asset") => file("/index.html", root="public")
+    @get(p"/session") => setCookie(background(json({ok: true}), afterResponse), "session", "tour")
+    @delete(p"/session") => clearCookie(json({ok: true}), "session")
+    @get(p"/asset") => file("/index.html", root="public")
 
 server composed:
     ...prefix("/api", routes)

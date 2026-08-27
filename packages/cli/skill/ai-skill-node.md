@@ -52,7 +52,6 @@ export async def start():
         host: "127.0.0.1",
         port: 3000,
         http: routes,
-        path: "/api/events",
         origins: ["https://app.example.com"],
         maxBodyBytes: 16777216,
     })
@@ -69,7 +68,7 @@ second runtime configuration source.
 `@` remains the language-wide annotation introducer, and `@name` is a context
 annotation with a compiler-owned compile-time role. In a `server` block, the
 available annotations are `@get`, `@post`, `@put`, `@patch`, `@delete`,
-`@notFound`, and `@response`. They are not decorators, functions, imports, user-defined
+`@websocket`, `@notFound`, and `@response`. They are not decorators, functions, imports, user-defined
 annotations, first-class values, or user extension points.
 
 ## Routes and checked inputs
@@ -84,23 +83,24 @@ type CreateArticle:
 
 export server articles:
     /// Reports whether this service is ready.
-    @get(path=p"/health") => {ok: true}
+    @get(p"/health") => {ok: true}
 
-    @get(path=p"/articles/{id:number}?{details:bool?}"):
-        const id = path.params.id
+    @get(p"/articles/{id:number}?{details:bool?}"):
         if id < 1:
             throw HttpProblem({status: 404, code: "article.not_found", title: "Article not found"})
-        return {id, details: path.query.details ?? false}
+        return {id, details: details ?? false}
 
-    @post(path=p"/articles", input: CreateArticle):
+    @post(p"/articles", input: CreateArticle):
         return created({id: 1, title: input.title})
 
 ```
 
-`p"..."` is a first-class `RoutePattern`. A route receives one compiler-owned
-`path` value: `path.params` contains typed path captures, `path.query` contains
-typed query fields, `path.definition` and `str(path)` return the complete
-declaration. Query shorthand `?{details:bool?}` uses the field name on the
+`p"..."` is a first-class `RoutePattern`. An inline pattern projects its typed
+path captures and query fields directly as immutable handler locals. A pattern
+stored elsewhere must use an explicit binding such as `@get(articlePath as
+route)`; its `RouteMatch` contains `pattern`, `pathname`, `params`, and `query`,
+and `str(route)` or `str(route.pattern)` returns the complete declaration. Query shorthand
+`?{details:bool?}` uses the field name on the
 wire; `?details={details:bool?}` spells it explicitly, and
 `?include-details={details:bool?}` maps a different wire name. The trailing
 `?` makes a query field optional; without it the framework rejects a missing
@@ -109,8 +109,10 @@ an ASCII half-width `:` and accept `string`, `number`, `bool`, or a named enum.
 The explicit same-name form remains valid but reports advisory `A11`; its
 mechanical fix removes the redundant `details=` prefix. Different-name aliases
 do not report it.
-Route catalogs may keep patterns in exported `const` objects and routes may
-refer to those members directly.
+Route catalogs may keep patterns in exported `const` objects. Referenced
+patterns require `as name` so the compiler never injects identifiers that are
+hidden inside another declaration. The old `path=` spelling is an error with a
+mechanical fix to the positional form and `as path`.
 
 On `POST`, `PUT`, or `PATCH`, one concrete Data parameter is the
 checked JSON body. A `Request` parameter explicitly requests the complete
@@ -184,13 +186,13 @@ const currentUser = provide(
 )
 
 server account:
-    @get(path=p"/me",
+    @get(p"/me",
         user=input.dependency(currentUser),
         tenant=input.header("x-tenant"),
         session=input.cookie("session", default=null),
     ) => {id: user.id, tenant, session}
 
-    @post(path=p"/images",
+    @post(p"/images",
         metadata=input.form(UploadMetadata),
         image=input.upload("image", maxBytes=8_388_608),
     ) => {title: metadata.title, filename: image.filename}
@@ -308,13 +310,33 @@ total stream are bounded. SSE accepts text or checked
 root-contained, streamed reads with validators and one byte range.
 
 `velar/websocket.listen({http: app, ...})` serves a `ServeApp` and WebSocket
-upgrades on one native server and owns the application lifecycle. Set
+upgrades on one native server and owns the application lifecycle. A declarative
+session belongs in the route table:
+
+```velar
+import {WebSocketConnection} from "velar/websocket"
+
+server realtime:
+    @websocket(p"/worlds/{worldId:string}/realtime", connection: WebSocketConnection):
+        async for message in connection:
+            await connection.send(message)
+```
+
+Matching, path/query decoding, dependencies, security, headers, cookies, and
+the optional `Request` are resolved before upgrade. Exactly one
+`WebSocketConnection` is supplied by the framework, the handler must finish
+with `null`, and its lifetime is joined with shutdown. Inline patterns project
+captures directly; referenced patterns require `as route`. A listener whose app
+contains these routes rejects its legacy single `path` option and does not offer
+accepted sessions through `WebSocketServer.next()`.
+
+Set
 `maxBodyBytes` to the supplied application value. `origins` contains exact
 canonical HTTP/HTTPS origins. The default rejects any upgrade carrying
 `Origin`; no-Origin non-browser clients remain allowed. Use `["*"]` only for an
 intentional unrestricted policy. A rejected browser origin receives 403 before
 it consumes connection-queue capacity. Connections are pull-based. Always
-consume `next()`, handle backpressure, and stop the server.
+consume each connection's `next()`, handle backpressure, and stop the server.
 
 ## Tests
 

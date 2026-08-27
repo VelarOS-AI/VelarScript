@@ -196,6 +196,7 @@ const randomNamedTypes = new Map([
 const randomReadonlyFields = new Map([["Random", new Set(["number", "int", "bool", "pick", "shuffle", "fork"])]]);
 const cancellationIdentity = "velar/task#type:Cancellation";
 const taskIdentity = "velar/task#type:Task";
+const channelIdentity = "velar/task#type:Channel";
 const cancellationType: ValueType = { kind: "named", name: "Cancellation", identity: cancellationIdentity };
 const taskElementType: ValueType = { kind: "parameter", name: "T", index: 0 };
 const taskOf = (value: ValueType): ValueType => ({
@@ -216,6 +217,28 @@ const taskTemplate: GenericTypeInfo = {
   ]),
   readonlyFields: new Set(["result", "cancel", "close"]),
 };
+const channelOf = (value: ValueType): ValueType => ({
+  kind: "named",
+  name: `Channel<${value.kind === "parameter" ? value.name : "T"}>`,
+  identity: channelIdentity,
+  application: { declaration: channelIdentity, name: "Channel", arguments: [value] },
+});
+const channelTemplate: GenericTypeInfo = {
+  identity: channelIdentity,
+  name: "Channel",
+  parameterNames: ["T"],
+  parameterBounds: [null],
+  fields: new Map([
+    ["capacity", numberType],
+    ["size", numberType],
+    ["closed", boolType],
+    ["send", {kind: "function", parameterNames: ["value", "cancellation"], parameters: [taskElementType, optional(cancellationType)], requiredParameters: 1, result: promise(nullType)}],
+    ["trySend", apiFunction(["value"], [taskElementType], boolType)],
+    ["next", {kind: "function", parameterNames: ["cancellation"], parameters: [optional(cancellationType)], requiredParameters: 0, result: promise(optional(taskElementType))}],
+    ["close", apiFunction([], [], nullType)],
+  ]),
+  readonlyFields: new Set(["capacity", "size", "closed", "send", "trySend", "next", "close"]),
+};
 const cancellationFields = new Map([
   ["cancelled", boolType],
   ["reason", optional(stringType)],
@@ -230,6 +253,8 @@ const taskErrorClass = (identity: string): ClassInfo => ({
 });
 const cancellationErrorIdentity = "velar/task#class:CancellationError";
 const taskTimeoutErrorIdentity = "velar/task#class:TaskTimeoutError";
+const channelClosedErrorIdentity = "velar/task#class:ChannelClosedError";
+const channelBackpressureErrorIdentity = "velar/task#class:ChannelBackpressureError";
 const workerIdentity = "velar/worker#type:Worker";
 const workerPoolIdentity = "velar/worker#type:WorkerPool";
 const workerRequestType: ValueType = { kind: "parameter", name: "Request", index: 0 };
@@ -390,24 +415,30 @@ const coreModuleInterfaces = new Map<string, ModuleInterface>([
     new Map([
       ["Cancellation", { kind: "typeObject", name: "Cancellation", value: cancellationType }],
       ["Task", { kind: "typeObject", name: "Task" }],
+      ["Channel", { kind: "typeObject", name: "Channel" }],
       ["CancellationError", { kind: "classConstructor", name: "CancellationError", identity: cancellationErrorIdentity }],
       ["TaskTimeoutError", { kind: "classConstructor", name: "TaskTimeoutError", identity: taskTimeoutErrorIdentity }],
+      ["ChannelClosedError", { kind: "classConstructor", name: "ChannelClosedError", identity: channelClosedErrorIdentity }],
+      ["ChannelBackpressureError", { kind: "classConstructor", name: "ChannelBackpressureError", identity: channelBackpressureErrorIdentity }],
       ["task", { kind: "function", typeParameterNames: ["T"], parameterNames: ["work", "parent"], parameters: [
         { kind: "function", parameterNames: ["cancellation"], parameters: [cancellationType], requiredParameters: 1, result: promise(taskElementType) },
         optional(cancellationType),
       ], requiredParameters: 1, result: taskOf(taskElementType) }],
       ["withTimeout", { kind: "function", typeParameterNames: ["T"], parameterNames: ["source", "duration"], parameters: [taskOf(taskElementType), durationType], requiredParameters: 2, result: promise(taskElementType) }],
+      ["channel", { kind: "function", typeParameterNames: ["T"], parameterNames: ["Type", "capacity"], parameters: [{ kind: "runtimeType", value: taskElementType }, numberType], requiredParameters: 1, result: channelOf(taskElementType) }],
     ]),
     new Map([
       ["CancellationError", taskErrorClass(cancellationErrorIdentity)],
       ["TaskTimeoutError", taskErrorClass(taskTimeoutErrorIdentity)],
+      ["ChannelClosedError", taskErrorClass(channelClosedErrorIdentity)],
+      ["ChannelBackpressureError", taskErrorClass(channelBackpressureErrorIdentity)],
     ]),
     new Map([["Cancellation", cancellationFields]]),
     new Map(),
     new Map([["Cancellation", new Set(["cancelled", "reason", "checkpoint"])]]),
     new Map([["Cancellation", cancellationIdentity]]),
     new Map(),
-    new Map([["Task", taskTemplate], [taskIdentity, taskTemplate]]),
+    new Map([["Task", taskTemplate], [taskIdentity, taskTemplate], ["Channel", channelTemplate], [channelIdentity, channelTemplate]]),
   )],
   ["velar/worker", moduleInterface(
     new Map([
@@ -1848,6 +1879,7 @@ export function random(seed) { return __velarRandomMake(__velarRandomSeed(seed))
   ["velar/task", String.raw`
 ${VELAR_TYPE_REGISTRY_RUNTIME}
 const __velarTaskNativeObject = globalThis.Object;
+const __velarTaskNativeArray = globalThis.Array;
 const __velarTaskNativeNumber = globalThis.Number;
 const __velarTaskNativePromise = globalThis.Promise;
 const __velarTaskNativeWeakMap = globalThis.WeakMap;
@@ -1864,6 +1896,12 @@ const __velarTaskCreate = __velarTaskGetOwnPropertyDescriptor(__velarTaskNativeO
 const __velarTaskDefineProperties = __velarTaskGetOwnPropertyDescriptor(__velarTaskNativeObject, "defineProperties")?.value;
 const __velarTaskApply = __velarTaskGetOwnPropertyDescriptor(globalThis.Reflect, "apply")?.value;
 const __velarTaskNumberIsFinite = __velarTaskGetOwnPropertyDescriptor(__velarTaskNativeNumber, "isFinite")?.value;
+const __velarTaskNumberIsSafeInteger = __velarTaskGetOwnPropertyDescriptor(__velarTaskNativeNumber, "isSafeInteger")?.value;
+const __velarTaskArrayPrototype = __velarTaskGetOwnPropertyDescriptor(__velarTaskNativeArray, "prototype")?.value;
+const __velarTaskArrayPush = __velarTaskGetOwnPropertyDescriptor(__velarTaskArrayPrototype, "push")?.value;
+const __velarTaskArrayShift = __velarTaskGetOwnPropertyDescriptor(__velarTaskArrayPrototype, "shift")?.value;
+const __velarTaskArraySplice = __velarTaskGetOwnPropertyDescriptor(__velarTaskArrayPrototype, "splice")?.value;
+const __velarTaskArrayIndexOf = __velarTaskGetOwnPropertyDescriptor(__velarTaskArrayPrototype, "indexOf")?.value;
 const __velarTaskPromiseThen = __velarTaskGetOwnPropertyDescriptor(__velarTaskNativePromise.prototype, "then")?.value;
 const __velarTaskWeakMapPrototype = __velarTaskGetOwnPropertyDescriptor(__velarTaskNativeWeakMap, "prototype")?.value;
 const __velarTaskWeakMapGet = __velarTaskGetOwnPropertyDescriptor(__velarTaskWeakMapPrototype, "get")?.value;
@@ -1881,7 +1919,9 @@ if (typeof __velarTaskFreeze !== "function" || typeof __velarTaskCreate !== "fun
   || typeof __velarTaskApply !== "function" || typeof __velarTaskPromiseThen !== "function" || typeof __velarTaskSetTimeout !== "function"
   || typeof __velarTaskClearTimeout !== "function" || typeof __velarTaskWeakMapGet !== "function" || typeof __velarTaskWeakMapHas !== "function"
   || typeof __velarTaskWeakMapSet !== "function" || typeof __velarTaskSetAdd !== "function" || typeof __velarTaskSetDelete !== "function"
-  || typeof __velarTaskSetValues !== "function" || typeof __velarTaskSetIteratorNext !== "function" || typeof __velarTaskRegExpExec !== "function") {
+  || typeof __velarTaskSetValues !== "function" || typeof __velarTaskSetIteratorNext !== "function" || typeof __velarTaskRegExpExec !== "function"
+  || typeof __velarTaskNumberIsSafeInteger !== "function" || typeof __velarTaskArrayPush !== "function" || typeof __velarTaskArrayShift !== "function"
+  || typeof __velarTaskArraySplice !== "function" || typeof __velarTaskArrayIndexOf !== "function") {
   throw new __velarTaskNativeTypeError("The structured task runtime is unavailable");
 }
 function __velarTaskCall(operation, receiver, arguments_) { return __velarTaskApply(operation, receiver, arguments_); }
@@ -1891,8 +1931,15 @@ export class CancellationError extends __velarTaskNativeError {
 export class TaskTimeoutError extends __velarTaskNativeError {
   constructor(message = "Task timed out") { super(message); this.name = "TaskTimeoutError"; }
 }
+export class ChannelClosedError extends __velarTaskNativeError {
+  constructor(message = "Channel is closed") { super(message); this.name = "ChannelClosedError"; }
+}
+export class ChannelBackpressureError extends __velarTaskNativeError {
+  constructor(message = "Channel backpressure limit reached") { super(message); this.name = "ChannelBackpressureError"; }
+}
 const __velarCancellationStates = new __velarTaskNativeWeakMap();
 const __velarTaskStates = new __velarTaskNativeWeakMap();
+const __velarChannelStates = new __velarTaskNativeWeakMap();
 function __velarCancellationState(value) {
   const state = __velarTaskCall(__velarTaskWeakMapGet, __velarCancellationStates, [value]);
   if (state === undefined) throw new __velarTaskNativeTypeError("Cancellation method requires a Cancellation receiver");
@@ -1994,6 +2041,137 @@ function __velarMakeTask(work, parent) {
   startResolve(null);
   return __velarTaskFreeze(value);
 }
+function __velarChannelState(value) {
+  const state = __velarTaskCall(__velarTaskWeakMapGet, __velarChannelStates, [value]);
+  if (state === undefined) throw new __velarTaskNativeTypeError("Channel method requires a Channel receiver");
+  return state;
+}
+function __velarChannelResolved(value) { return new __velarTaskNativePromise(resolve => resolve(value)); }
+function __velarChannelRejected(error) { return new __velarTaskNativePromise((_, reject) => reject(error)); }
+function __velarChannelRemove(values, value) {
+  const index = __velarTaskCall(__velarTaskArrayIndexOf, values, [value]);
+  if (index >= 0) __velarTaskCall(__velarTaskArraySplice, values, [index, 1]);
+}
+function __velarChannelCancellation(value, operation) {
+  if (value === null) return null;
+  if (!Cancellation.is(value)) throw new __velarTaskNativeTypeError(operation + " cancellation must be a Cancellation value or null");
+  return value;
+}
+function __velarChannelFinishWaiter(waiter) {
+  if (!waiter.active) return false;
+  waiter.active = false;
+  if (waiter.unsubscribe !== null) waiter.unsubscribe();
+  return true;
+}
+function __velarChannelDeliver(receiver, value) {
+  if (!__velarChannelFinishWaiter(receiver)) return false;
+  receiver.resolve(value);
+  return true;
+}
+function __velarChannelPromoteSender(state) {
+  while (state.senders.length > 0) {
+    const sender = __velarTaskCall(__velarTaskArrayShift, state.senders, []);
+    if (!__velarChannelFinishWaiter(sender)) continue;
+    __velarTaskCall(__velarTaskArrayPush, state.values, [sender.value]);
+    sender.resolve(null);
+    return;
+  }
+}
+const __velarChannelPrototype = {};
+__velarTaskDefineProperties(__velarChannelPrototype, {
+  capacity: { enumerable: true, get() { return __velarChannelState(this).capacity; } },
+  size: { enumerable: true, get() { return __velarChannelState(this).values.length; } },
+  closed: { enumerable: true, get() { return __velarChannelState(this).closed; } },
+  send: { enumerable: true, value(value, cancellation = null) {
+    const state = __velarChannelState(this);
+    cancellation = __velarChannelCancellation(cancellation, "Channel.send");
+    if (state.closed) return __velarChannelRejected(new ChannelClosedError());
+    try { value = state.Type.parse(value); }
+    catch (error) { return __velarChannelRejected(error); }
+    if (state.receiver !== null) {
+      const receiver = state.receiver;
+      state.receiver = null;
+      __velarChannelDeliver(receiver, value);
+      return __velarChannelResolved(null);
+    }
+    if (state.values.length < state.capacity) {
+      __velarTaskCall(__velarTaskArrayPush, state.values, [value]);
+      return __velarChannelResolved(null);
+    }
+    if (state.senders.length >= state.capacity) {
+      return __velarChannelRejected(new ChannelBackpressureError("Channel has too many waiting senders"));
+    }
+    return new __velarTaskNativePromise((resolve, reject) => {
+      const waiter = {value, resolve, reject, active: true, unsubscribe: null};
+      __velarTaskCall(__velarTaskArrayPush, state.senders, [waiter]);
+      if (cancellation !== null) waiter.unsubscribe = __velarOnCancellation(cancellation, reason => {
+        if (!__velarChannelFinishWaiter(waiter)) return;
+        __velarChannelRemove(state.senders, waiter);
+        reject(new CancellationError(reason ?? "Channel send cancelled"));
+      });
+    });
+  } },
+  trySend: { enumerable: true, value(value) {
+    const state = __velarChannelState(this);
+    if (state.closed) throw new ChannelClosedError();
+    value = state.Type.parse(value);
+    if (state.receiver !== null) {
+      const receiver = state.receiver;
+      state.receiver = null;
+      __velarChannelDeliver(receiver, value);
+      return true;
+    }
+    if (state.values.length >= state.capacity) return false;
+    __velarTaskCall(__velarTaskArrayPush, state.values, [value]);
+    return true;
+  } },
+  next: { enumerable: true, value(cancellation = null) {
+    const state = __velarChannelState(this);
+    cancellation = __velarChannelCancellation(cancellation, "Channel.next");
+    if (state.values.length > 0) {
+      const value = __velarTaskCall(__velarTaskArrayShift, state.values, []);
+      __velarChannelPromoteSender(state);
+      return __velarChannelResolved(value);
+    }
+    if (state.closed) return __velarChannelResolved(null);
+    if (state.receiver !== null) return __velarChannelRejected(new ChannelBackpressureError("Only one Channel.next call may wait at a time"));
+    return new __velarTaskNativePromise((resolve, reject) => {
+      const waiter = {resolve, reject, active: true, unsubscribe: null};
+      state.receiver = waiter;
+      if (cancellation !== null) waiter.unsubscribe = __velarOnCancellation(cancellation, reason => {
+        if (!__velarChannelFinishWaiter(waiter)) return;
+        if (state.receiver === waiter) state.receiver = null;
+        reject(new CancellationError(reason ?? "Channel receive cancelled"));
+      });
+    });
+  } },
+  close: { enumerable: true, value() {
+    const state = __velarChannelState(this);
+    if (state.closed) return null;
+    state.closed = true;
+    while (state.senders.length > 0) {
+      const sender = __velarTaskCall(__velarTaskArrayShift, state.senders, []);
+      if (!__velarChannelFinishWaiter(sender)) continue;
+      sender.reject(new ChannelClosedError());
+    }
+    if (state.values.length === 0 && state.receiver !== null) {
+      const receiver = state.receiver;
+      state.receiver = null;
+      __velarChannelDeliver(receiver, null);
+    }
+    return null;
+  } },
+});
+__velarTaskFreeze(__velarChannelPrototype);
+function __velarMakeChannel(Type, capacity) {
+  Type = __velarRequireRuntimeType(Type, "channel");
+  if (!__velarTaskCall(__velarTaskNumberIsSafeInteger, __velarTaskNativeNumber, [capacity]) || capacity < 1 || capacity > 65536) {
+    throw new __velarTaskNativeRangeError("channel capacity must be an integer from 1 through 65536");
+  }
+  const value = __velarTaskCreate(__velarChannelPrototype);
+  __velarTaskCall(__velarTaskWeakMapSet, __velarChannelStates, [value, {Type, capacity, values: [], senders: [], receiver: null, closed: false}]);
+  return __velarTaskFreeze(value);
+}
 function __velarTaskDuration(value) {
   if (typeof value !== "string") throw new __velarTaskNativeTypeError("withTimeout requires Duration; write a value such as 200ms or 2s");
   const match = __velarTaskCall(__velarTaskRegExpExec, __velarTaskDurationPattern, [value]);
@@ -2014,7 +2192,13 @@ const __velarTaskType = __velarTaskFreeze({
   parse(value) { if (!__velarTaskType.is(value)) throw new __velarTaskNativeTypeError("Value does not match Task"); return value; },
 });
 export const Task = __velarRegisterRuntimeType(__velarTaskFreeze({ ...__velarTaskType, of() { return __velarTaskType; } }));
+const __velarChannelType = __velarTaskFreeze({
+  is(value) { return value !== null && (typeof value === "object" || typeof value === "function") && __velarTaskCall(__velarTaskWeakMapHas, __velarChannelStates, [value]); },
+  parse(value) { if (!__velarChannelType.is(value)) throw new __velarTaskNativeTypeError("Value does not match Channel"); return value; },
+});
+export const Channel = __velarRegisterRuntimeType(__velarTaskFreeze({ ...__velarChannelType, of() { return __velarChannelType; } }));
 export function task(work, parent = null) { return __velarMakeTask(work, parent); }
+export function channel(Type, capacity = 64) { return __velarMakeChannel(Type, capacity); }
 export function withTimeout(source, duration) {
   const state = __velarOwnedTaskState(source);
   const milliseconds = __velarTaskDuration(duration);

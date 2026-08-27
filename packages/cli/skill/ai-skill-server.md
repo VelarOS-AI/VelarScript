@@ -13,7 +13,7 @@ browser application activates `@velarscript/web`:
 ```json
 {
   "dependencies": {
-    "@velarscript/server": "0.17.0"
+    "@velarscript/server": "0.18.0"
   }
 }
 ```
@@ -62,7 +62,7 @@ All three fields are optional. Their defaults are `127.0.0.1`, `3000`, and
 import {application} from "velar/server"
 
 export server routes:
-    @get(path=p"/health") => {status: "ready"}
+    @get(p"/health") => {status: "ready"}
 
 export const start = application(routes)
 ```
@@ -127,7 +127,7 @@ async def verifyAccessToken(token: string) -> Principal?:
 const currentPrincipal = authenticate(security.bearer(), verifyAccessToken)
 
 export server accountRoutes:
-    @get(path=p"/me", principal=input.dependency(currentPrincipal)) => {
+    @get(p"/me", principal=input.dependency(currentPrincipal)) => {
         subject: principal.subject,
     }
 ```
@@ -168,7 +168,7 @@ const connection = database(
 )
 
 export server databaseRoutes:
-    @get(path=p"/database", value=input.dependency(connection)) => {name: value.name}
+    @get(p"/database", value=input.dependency(connection)) => {name: value.name}
 ```
 
 The framework owns only this connect/inject/disconnect lifecycle. Concrete
@@ -179,8 +179,9 @@ syntax to `@velarscript/server` or `@velarscript/node`.
 
 ## Custom shared HTTP/WebSocket startup
 
-A service that needs one custom shared HTTP/WebSocket listener may load the same
-typed configuration and export an exact zero-argument async startup function:
+A service whose route table contains `@websocket` declarations may load the
+same typed configuration and export an exact zero-argument async startup
+function for the shared HTTP/WebSocket listener:
 
 ```velar fragment
 import {configuration} from "velar/server"
@@ -201,7 +202,6 @@ export async def start():
         host: settings.server.host,
         port: settings.server.port,
         http: routes,
-        path: "/events",
         origins: ["https://app.example.com"],
         maxBodyBytes: settings.server.maxBodyBytes,
     })
@@ -209,7 +209,9 @@ export async def start():
 
 The result must be exactly `Promise<WebSocketServer>`. The launcher supplies no
 host, port, or body-limit arguments; the root application configuration remains
-the single runtime authority.
+the single runtime authority. Each `@websocket` RoutePattern owns its own path,
+typed captures, admission inputs, and session handler, so this declarative mode
+does not accept the listener's legacy single `path` option.
 
 Use direct `serve(app, port=0)` in tests or embedded low-level adapters. Use
 `velar/server-test` only from `*.test.vel`. Route, provider, transport,

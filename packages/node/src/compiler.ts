@@ -38,7 +38,7 @@ import { httpOutcomeType, routePatternType, serveAppType, serveRequestType, VELA
 
 export { VELAR_PROCESS_HOST_RUNTIME } from "./process-runtime.ts";
 
-export const VELAR_NODE_API_VERSION = "0.12";
+export const VELAR_NODE_API_VERSION = "0.13";
 export const VELAR_NODE_HOST_MODULE = "velar/node-host-v1";
 
 const unknownType: ValueType = { kind: "unknown" };
@@ -1273,7 +1273,7 @@ const nodeRouteDocumentation = (method: string, usage: string, input: string): s
   usage,
   "```",
   "",
-  `The required \`path=\` argument is a checked \`p\"/...\"\` RoutePattern or a statically known catalog member. ${input} The handler may use \`await\` directly and must return Data or a response from \`velar/serve\`.`,
+  `The first argument is a checked \`p\"/...\"\` RoutePattern. An inline pattern projects its captures as immutable handler locals; append \`as route\` to bind the complete RouteMatch, and use that form for a catalog expression. ${input} The handler may use \`await\` directly and must return Data or a response from \`velar/serve\`.`,
 ].join("\n");
 
 const nodeKeywordDocumentation = Object.freeze({
@@ -1282,45 +1282,56 @@ const nodeKeywordDocumentation = Object.freeze({
     "",
     "```velar",
     "export server routes:",
-    "    @get(path=p\"/health\") => {ok: true}",
+    "    @get(p\"/health\") => {ok: true}",
     "```",
     "",
-    "A server body contains route roles, one `@notFound` fallback, one `@response` policy, and `...otherApp` composition entries.",
+    "A server body contains HTTP and `@websocket` route roles, one `@notFound` fallback, one `@response` policy, and `...otherApp` composition entries.",
   ].join("\n"),
   p: [
     "Creates a first-class Node RoutePattern. It is parsed and checked by the compiler; it is not a function call or an ordinary string prefix.",
     "",
     "```velar",
-    "@get(path=p\"/articles/{id:number}\") => {id: path.params.id}",
+    "@get(p\"/articles/{id:number}\") => {id}",
     "```",
     "",
-    "Each `{name:type}` path capture becomes a typed `path.params` field. Query fields after `?` become `path.query`; a type suffix `?` makes one optional. Static text is matched literally, and exported const catalogs may reuse the value across modules.",
+    "Each `{name:type}` capture becomes an immutable local in direct mode. `p\"/...\" as route` instead exposes `route.pattern`, `route.pathname`, `route.params`, and `route.query`; `str(route)` returns the complete pattern declaration, and referenced catalog patterns require this explicit binding. A type suffix `?` makes a query field optional.",
   ].join("\n"),
   "@get": nodeRouteDocumentation(
     "GET",
-    "@get(path=p\"/articles/{id:number}?{details:bool?}\") => {id: path.params.id, details: path.query.details}",
-    "Path captures are read from `path.params`; query fields declared after `?` are read from `path.query`.",
+    "@get(p\"/articles/{id:number}?{details:bool?}\") => {id, details}",
+    "Inline path and query captures are projected directly as immutable locals.",
   ),
   "@post": nodeRouteDocumentation(
     "POST",
-    "@post(path=p\"/articles\", input: CreateArticle) => created(input)",
+    "@post(p\"/articles\", input: CreateArticle) => created(input)",
     "One Data parameter may receive the checked JSON request body; query fields belong to the RoutePattern.",
   ),
   "@put": nodeRouteDocumentation(
     "PUT",
-    "@put(path=p\"/articles/{id:string}\", input: UpdateArticle) => {id: path.params.id, input}",
+    "@put(p\"/articles/{id:string}\", input: UpdateArticle) => {id, input}",
     "One Data parameter may receive the checked JSON request body; query fields belong to the RoutePattern.",
   ),
   "@patch": nodeRouteDocumentation(
     "PATCH",
-    "@patch(path=p\"/articles/{id:string}\", input: ArticlePatch) => {id: path.params.id, input}",
+    "@patch(p\"/articles/{id:string}\", input: ArticlePatch) => {id, input}",
     "One Data parameter may receive the checked JSON request body; query fields belong to the RoutePattern.",
   ),
   "@delete": nodeRouteDocumentation(
     "DELETE",
-    "@delete(path=p\"/articles/{id:string}\") => noContent()",
-    "Path captures are read from `path.params`; query fields declared after `?` are read from `path.query`.",
+    "@delete(p\"/articles/{id:string}\") => noContent()",
+    "Inline path and query captures are projected directly as immutable locals.",
   ),
+  "@websocket": [
+    "Declares a framework-owned WebSocket session route in the current `server`. The shared HTTP listener validates the RoutePattern and inputs before upgrading, then owns the handler until the connection ends.",
+    "",
+    "```velar",
+    "@websocket(p\"/worlds/{worldId:string}/realtime\", connection: WebSocketConnection):",
+    "    async for message in connection:",
+    "        await connection.send(message)",
+    "```",
+    "",
+    "Exactly one `WebSocketConnection` parameter is required. Route captures use the same direct projection or `as route` rules as HTTP; Request, dependency, security, header, and cookie inputs are resolved before the upgrade. The handler resolves to null and is joined with the application lifecycle.",
+  ].join("\n"),
   "@notFound": [
     "Declares the final application's one unmatched-path fallback. It is a compiler-owned server role, not a decorator or ordinary function.",
     "",

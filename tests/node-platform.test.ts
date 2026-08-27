@@ -1796,6 +1796,78 @@ test("Node WebSocket listen composes one ServeApp lifecycle and keeps queues glo
   }
 });
 
+test("declarative @websocket routes own matching, decoded captures, and handler lifetime", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-websocket-routes-"));
+  try {
+    await materializeNodeRuntimeDependencies(directory, "velar/websocket");
+    const require = createRequire(import.meta.url);
+    await cp(resolve(require.resolve("ws/package.json"), ".."), join(directory, "node_modules", "ws"), {recursive: true});
+    const websocketSource = nodeModuleSources.get("velar/websocket");
+    assert.ok(websocketSource);
+    const websocketPath = join(directory, "websocket.mjs");
+    await writeFile(websocketPath, websocketSource, "utf8");
+    const serve = await import(pathToFileURL(join(directory, "node_modules", "velar", "serve.js")).href) as {ServeApp: object};
+    const websocket = await import(`${pathToFileURL(websocketPath).href}?routes=${Date.now()}`) as {
+      listen(options: Record<string, unknown>): Promise<{port: number; next(): Promise<unknown>; stop(): Promise<null>}>;
+      connect(url: string): Promise<{send(value: string): Promise<null>; next(): Promise<string | Uint8Array | null>; close(): Promise<null>}>;
+    };
+    const bridge = Object.getOwnPropertyDescriptor(serve.ServeApp, "__velarCompilerBridge")?.value as {
+      createPattern(source: Record<string, unknown>): unknown;
+      createWebSocket(path: unknown, parameters: readonly Record<string, unknown>[], handler: (...arguments_: never[]) => Promise<unknown>): unknown;
+      createApp(name: string, items: readonly unknown[]): unknown;
+    };
+    const pattern = routePattern(bridge, "/worlds/{worldId:string}/realtime", [{name: "details", kind: "bool", optional: true}]);
+    const route = bridge.createWebSocket(pattern, [
+      {name: "connection", source: "connection", kind: "connection", required: true},
+    ], async (match: {params: {worldId: string}; query: {details?: boolean}}, connection: {next(): Promise<string | Uint8Array | null>; send(value: string): Promise<null>; close(): Promise<null>}) => {
+      const message = await connection.next();
+      await connection.send(`${match.params.worldId}:${String(match.query.details ?? false)}:${String(message)}`);
+      await connection.close();
+      return null;
+    });
+    const requiredPattern = routePattern(bridge, "/required", [{name: "details", kind: "bool", optional: false}]);
+    const requiredRoute = bridge.createWebSocket(requiredPattern, [
+      {name: "connection", source: "connection", kind: "connection", required: true},
+    ], async (_match: unknown, connection: {close(): Promise<null>}) => {
+      await connection.close();
+      return null;
+    });
+    let resolveCancellation: ((reason: string | null) => void) | null = null;
+    const cancellationObserved = new Promise<string | null>(resolveValue => { resolveCancellation = resolveValue; });
+    const cancellationPattern = routePattern(bridge, "/cancel", []);
+    const cancellationRoute = bridge.createWebSocket(cancellationPattern, [
+      {name: "request", source: "request", kind: "request", required: true},
+      {name: "connection", source: "connection", kind: "connection", required: true},
+    ], async (_match: unknown, request: {cancellation: {cancelled: boolean; reason: string | null}}, _connection: unknown) => {
+      while (!request.cancellation.cancelled) await new Promise(resolveValue => setTimeout(resolveValue, 1));
+      resolveCancellation?.(request.cancellation.reason);
+      return null;
+    });
+    const app = bridge.createApp("realtime", [route, requiredRoute, cancellationRoute]);
+    await assert.rejects(
+      websocket.listen({port: 0, host: "127.0.0.1", http: app, path: "/legacy", origins: ["*"]}),
+      /path is unavailable when the ServeApp declares @websocket routes/u,
+    );
+    const server = await websocket.listen({port: 0, host: "127.0.0.1", http: app, origins: ["*"]});
+    try {
+      await assert.rejects(server.next(), /owned by @websocket routes/u);
+      assert.equal(await rejectedWebSocketStatus(`ws://127.0.0.1:${server.port}/missing`, "https://client.test"), 404);
+      assert.equal(await rejectedWebSocketStatus(`ws://127.0.0.1:${server.port}/required`, "https://client.test"), 422);
+      const client = await websocket.connect(`ws://127.0.0.1:${server.port}/worlds/demo/realtime?details=true`);
+      await client.send("hello");
+      assert.equal(await client.next(), "demo:true:hello");
+      assert.equal(await client.next(), null);
+      const cancellationClient = await websocket.connect(`ws://127.0.0.1:${server.port}/cancel`);
+      await cancellationClient.close();
+      assert.equal(await cancellationObserved, "WebSocket connection closed");
+    } finally {
+      await server.stop();
+    }
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
 function rejectedWebSocketStatus(url: string, origin: string): Promise<number> {
   return new Promise((resolveStatus, rejectStatus) => {
     const socket = new WebSocket(url, {origin});

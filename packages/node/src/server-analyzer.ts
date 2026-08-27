@@ -34,6 +34,7 @@ import {
   isNodeProviderType,
   isNodeRouteInputType,
   isServeRequestType,
+  isWebSocketConnectionType,
   nodeBoundRoutePathType,
   nodeProviderResult,
   nodeProviderType,
@@ -76,8 +77,8 @@ type ComposedServer = {readonly server: NodeServerDeclaration; readonly prefix: 
 type NodeResponseMetadata = {readonly status: number | null; readonly contentType: string; readonly payload?: ValueType};
 type NodeResponseValueType = ValueType & {readonly nodeResponse?: NodeResponseMetadata};
 
-export type RouteParameterSource = "body" | "request" | "header" | "cookie" | "form" | "upload" | "dependency" | "security";
-export type RouteParameterKind = "string" | "number" | "bool" | "enum" | "list" | "data" | "request" | "upload" | "dependency" | "security";
+export type RouteParameterSource = "body" | "request" | "header" | "cookie" | "form" | "upload" | "dependency" | "security" | "connection";
+export type RouteParameterKind = "string" | "number" | "bool" | "enum" | "list" | "data" | "request" | "upload" | "dependency" | "security" | "connection";
 type OpenApiSchema = Readonly<Record<string, unknown>>;
 
 export function routeParameterHint(source: RouteParameterSource, kind: RouteParameterKind, schema: OpenApiSchema, descriptor = false): string {
@@ -225,16 +226,9 @@ export class VelarNodeAnalyzer extends Analyzer {
     parameter: Parameter,
   ): ValueType | null {
     if (statement.kind !== "NodeRouteDeclaration" || !parameter.defaultValue) return null;
-    if (parameter.name === "path") {
-      const route = statement as NodeRouteDeclaration;
-      this.requireAssignable(this.inferExpression(parameter.defaultValue, routePatternType), routePatternType, parameter.defaultValue.span);
-      const value = evaluateRoutePatternExpression(parameter.defaultValue, this.routePatternValues);
-      if (!isCompiledRoutePattern(value)) {
-        this.typeError("Route 'path' must resolve to a compile-time p\"...\" value, a const alias, or a const catalog member", parameter.defaultValue.span);
-        return this.boundRoutePathType(null);
-      }
-      this.routePatterns.set(spanIdentity(route.span), value);
-      return this.boundRoutePathType(value);
+    const route = statement as NodeRouteDeclaration;
+    if (route.routeBinding?.name === parameter.name) {
+      return this.boundRoutePathType(this.staticPattern(route));
     }
     const inferred = this.expandAliases(this.inferParameterDefault(parameter.defaultValue));
     const key = `${parameter.span.start}:${parameter.span.end}`;
@@ -570,16 +564,20 @@ export class VelarNodeAnalyzer extends Analyzer {
   }
 
   private analyzeRoute(route: NodeRouteDeclaration): void {
+    this.requireAssignable(this.inferExpression(route.pathExpression, routePatternType), routePatternType, route.pathExpression.span);
     const pattern = this.staticPattern(route);
     if (!pattern) this.typeError("A route path must be statically resolvable from p\"...\"", route.pathSpan);
+    // 两种作用域模式共享同一份捕获验证与 OpenAPI 类型提示。对象模式随后把
+    // 这个形状交给 route 绑定；投影模式的合成参数则分别声明每个字段。
+    if (route.routeBinding === null) this.boundRoutePathType(pattern);
     this.analyzeFunctionDeclaration(route, null, true, false, true, "Route");
 
     let bodies = 0;
     let forms = 0;
     let requests = 0;
+    let connections = 0;
     const declared = new Set<string>();
-    for (const parameter of route.parameters) {
-      if (parameter.name === "path") continue;
+    for (const parameter of route.inputParameters) {
       if (declared.has(parameter.name)) {
         this.typeError(`Route parameter '${parameter.name}' is declared more than once`, parameter.span);
       }
@@ -597,11 +595,17 @@ export class VelarNodeAnalyzer extends Analyzer {
       let source: RouteParameterSource;
       let kind: RouteParameterKind;
 
-      if (routeInput) {
+      if (route.transport === "websocket" && isWebSocketConnectionType(resolved)) {
+        source = "connection";
+        kind = "connection";
+        connections += 1;
+        if (connections > 1) this.typeError("A @websocket route declares exactly one WebSocketConnection parameter", parameter.span);
+        if (parameter.defaultValue) this.typeError("WebSocketConnection is supplied by the framework and cannot have a default value", parameter.span);
+      } else if (routeInput) {
         source = routeInput.role;
         if (source === "form" || source === "upload") {
           forms += 1;
-          if (route.method !== "POST" && route.method !== "PUT" && route.method !== "PATCH") {
+          if (route.transport === "websocket" || route.method !== "POST" && route.method !== "PUT" && route.method !== "PATCH") {
             this.typeError(`${route.method} routes cannot declare form or upload inputs`, parameter.span);
           }
         }
@@ -623,6 +627,10 @@ export class VelarNodeAnalyzer extends Analyzer {
         this.typeError(`Scalar route input '${parameter.name}' must be declared in the p\"...?...\" query contract or use an explicit header/cookie/security descriptor`, parameter.span);
         continue;
       } else {
+        if (route.transport === "websocket") {
+          this.typeError(`@websocket parameter '${parameter.name}' must be WebSocketConnection, Request, or an explicit input descriptor`, parameter.span);
+          continue;
+        }
         source = "body";
         kind = "data";
         bodies += 1;
@@ -644,6 +652,13 @@ export class VelarNodeAnalyzer extends Analyzer {
       this.typeError("A route cannot combine an inferred JSON body with form or upload inputs", route.span);
     }
     const result = this.expandAliases(this.inferredFunctionResult(route));
+    if (route.transport === "websocket") {
+      if (connections !== 1) this.typeError("A @websocket route requires exactly one WebSocketConnection parameter", route.signatureSpan);
+      if (result.kind !== "null") {
+        this.typeError(`@websocket must finish with null; received ${describeType(result)}`, route.returnType?.span ?? route.span);
+      }
+      return;
+    }
     this.extensionCalls.set(
       `${route.signatureSpan.start}:${route.signatureSpan.end}`,
       routeResultHint(

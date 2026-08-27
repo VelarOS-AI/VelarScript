@@ -34,11 +34,11 @@ test("prefix with a literal path enters the static overlap check at the translat
 import {prefix, json} from "velar/serve"
 
 server routes:
-    @get(path=p"/health") => json({ok: true})
+    @get(p"/health" as path) => json({ok: true})
 
 server app:
     ...prefix("/api", routes)
-    @get(path=p"/api/health") => json({ok: false})
+    @get(p"/api/health" as path) => json({ok: false})
 `);
   assert.equal(diagnostics.length, 1);
   assert.match(diagnostics[0]!, /GET \/api\/health.*composed in from 'routes'/u);
@@ -59,11 +59,11 @@ async def mw(request: Request, next: () -> Promise<ServeResponse>) -> ServeRespo
     return await next()
 
 server routes:
-    @get(path=p"/health") => json({ok: true})
+    @get(p"/health" as path) => json({ok: true})
 
 server app:
     ...${wrapper}
-    @get(path=p"/health") => json({ok: false})
+    @get(p"/health" as path) => json({ok: false})
 `);
     assert.equal(diagnostics.length, 1, wrapper);
     assert.match(diagnostics[0]!, /GET \/health.*composed in from 'routes'/u, wrapper);
@@ -78,14 +78,14 @@ async def mw(request: Request, next: () -> Promise<ServeResponse>) -> ServeRespo
     return await next()
 
 server inner:
-    @get(path=p"/health") => json({ok: true})
+    @get(p"/health" as path) => json({ok: true})
 
 server mid:
     ...prefix("/v1", inner)
 
 server app:
     ...use(prefix("/api", mid), [mw])
-    @get(path=p"/api/v1/health") => json({ok: false})
+    @get(p"/api/v1/health" as path) => json({ok: false})
 `);
   assert.equal(diagnostics.length, 1);
   assert.match(diagnostics[0]!, /GET \/api\/v1\/health.*composed in from 'mid' → 'inner'/u);
@@ -99,13 +99,13 @@ test("an alias of a combinator call resolves exactly as the spelled-out spread",
 import {prefix, json} from "velar/serve"
 
 server routes:
-    @get(path=p"/health") => json({ok: true})
+    @get(p"/health" as path) => json({ok: true})
 
 const scoped = prefix("/api", routes)
 
 server app:
     ...scoped
-    @get(path=p"/api/health") => json({ok: false})
+    @get(p"/api/health" as path) => json({ok: false})
 `);
   assert.equal(diagnostics.length, 1);
   assert.match(diagnostics[0]!, /GET \/api\/health.*composed in from 'routes'/u);
@@ -120,11 +120,11 @@ import {prefix, json} from "velar/serve"
 const scope = "/api"
 
 server routes:
-    @get(path=p"/health") => json({ok: true})
+    @get(p"/health" as path) => json({ok: true})
 
 server app:
     ...prefix(scope, routes)
-    @get(path=p"/api/health") => json({ok: false})
+    @get(p"/api/health" as path) => json({ok: false})
 `);
   assert.deepEqual(diagnostics, []);
 });
@@ -140,11 +140,11 @@ def prefix(path: string, app: ServeApp) -> ServeApp:
     return app
 
 server routes:
-    @get(path=p"/health") => json({ok: true})
+    @get(p"/health" as path) => json({ok: true})
 
 server app:
     ...prefix("/api", routes)
-    @get(path=p"/api/health") => json({ok: false})
+    @get(p"/api/health" as path) => json({ok: false})
 `);
   assert.deepEqual(diagnostics, []);
 });
@@ -154,11 +154,11 @@ test("a root prefix composes untranslated", async () => {
 import {prefix, json} from "velar/serve"
 
 server routes:
-    @get(path=p"/health") => json({ok: true})
+    @get(p"/health" as path) => json({ok: true})
 
 server app:
     ...prefix("/", routes)
-    @get(path=p"/health") => json({ok: false})
+    @get(p"/health" as path) => json({ok: false})
 `);
   assert.equal(diagnostics.length, 1);
   assert.match(diagnostics[0]!, /GET \/health.*composed in from 'routes'/u);
@@ -171,7 +171,7 @@ test("a fallback seen through a prefix reports the global-policy boundary once",
 import {prefix, json, Request} from "velar/serve"
 
 server routes:
-    @get(path=p"/health") => json({ok: true})
+    @get(p"/health" as path) => json({ok: true})
     @notFound(request: Request) => {error: "routes"}
 
 server app:
@@ -190,10 +190,10 @@ test("a let alias reassigned or shadowed anywhere stays out of the static check"
 import {json} from "velar/serve"
 
 server base:
-    @get(path=p"/health") => json({ok: true})
+    @get(p"/health" as path) => json({ok: true})
 
 server extra:
-    @get(path=p"/other") => json({ok: true})
+    @get(p"/other" as path) => json({ok: true})
 
 let other = base
 
@@ -203,7 +203,7 @@ def rebind():
 
 server app:
     ...other
-    @get(path=p"/health") => json({ok: false})
+    @get(p"/health" as path) => json({ok: false})
 `);
   assert.deepEqual(throughFunction, []);
 
@@ -211,7 +211,7 @@ server app:
 import {json} from "velar/serve"
 
 server base:
-    @get(path=p"/health") => json({ok: true})
+    @get(p"/health" as path) => json({ok: true})
 
 let other = base
 
@@ -220,7 +220,7 @@ def read(other: number) -> number:
 
 server app:
     ...other
-    @get(path=p"/health") => json({ok: false})
+    @get(p"/health" as path) => json({ok: false})
 `);
   assert.deepEqual(shadowedByParameter, []);
 });
