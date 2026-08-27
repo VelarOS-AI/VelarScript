@@ -46,7 +46,12 @@ const fileWatchers = new Map();
 let nextFileWatcherHandle = 1;
 let nextTextReplacementIdentity = 1;
 let fatalDrainStarted = false;
-let activeOwner = null;
+// One entry per live document generation. A Desktop application may hold
+// several windows open at once, and each window is its own generation with its
+// own watchers, processes and requests; opening a second window must not retire
+// the first. A generation leaves this set exactly where it always did — when
+// its document navigates away or its window closes.
+const activeOwners = new Set();
 const roots = [];
 const lexicalRoots = [];
 let appDataCanonicalRoot = null;
@@ -77,7 +82,7 @@ rebuildFileRoots();
 
 const reader = createInterface({ input: process.stdin, crlfDelay: Infinity, terminal: false });
 reader.once("close", () => {
-  if (activeOwner !== null) retireOwner(activeOwner);
+  for (const owner of [...activeOwners]) retireOwner(owner);
   for (const task of fileWatchers.values()) releaseFileWatcher(task, new Error("Desktop capability host closed"));
   for (const activity of activeRequests.values()) cancelActivity(activity);
 });
@@ -94,7 +99,7 @@ reader.on("line", async (line) => {
     id = request.id;
     if (request.protocolVersion !== 1 || !Number.isSafeInteger(id) || id < 1
       || typeof request.capability !== "string" || typeof request.operation !== "string" || !Array.isArray(request.args)
-      || !validOwner(request.owner) || request.owner !== activeOwner) {
+      || !validOwner(request.owner) || !activeOwners.has(request.owner)) {
       throw new TypeError("Invalid Desktop worker request");
     }
     if (activeRequests.has(id)) throw new Error("Desktop worker request identity is already active");
@@ -102,7 +107,7 @@ reader.on("line", async (line) => {
     activeRequests.set(id, activity);
     const value = await dispatch(request.capability, request.operation, request.args, request.owner, activity);
     if (activity.cancelled) throw new Error("Desktop host request was cancelled");
-    if (request.owner !== activeOwner) throw new Error("Desktop document generation is no longer active");
+    if (!activeOwners.has(request.owner)) throw new Error("Desktop document generation is no longer active");
     respond({ id, ok: true, value });
   } catch (error) {
     respond({ id, ok: false, error: safeError(error) });
@@ -117,8 +122,8 @@ async function handleHostCommand(request) {
   }
   if (request.hostCommand === "owner-activate") {
     if (Object.keys(request).some((key) => !["protocolVersion", "hostCommand", "owner"].includes(key))) throw new TypeError("Invalid Desktop host command");
-    if (activeOwner !== null && activeOwner !== request.owner) retireOwner(activeOwner);
-    activeOwner = request.owner;
+    if (activeOwners.size >= 256) throw new RangeError("Desktop capability host cannot own more than 256 document generations");
+    activeOwners.add(request.owner);
     return;
   }
   if (request.hostCommand === "owner-retire") {
@@ -135,7 +140,7 @@ async function handleHostCommand(request) {
   }
   if (request.hostCommand === "project-root-set") {
     if (Object.keys(request).some((key) => !["protocolVersion", "hostCommand", "owner", "commandID", "path"].includes(key))
-      || request.owner !== activeOwner || !Number.isSafeInteger(request.commandID) || request.commandID < 1
+      || !activeOwners.has(request.owner) || !Number.isSafeInteger(request.commandID) || request.commandID < 1
       || typeof request.path !== "string" || !isAbsolute(request.path) || request.path.length === 0
       || request.path.length > MAX_PATH_UNITS || request.path.includes("\0") || !fileScopes.has("project")) {
       throw new TypeError("Invalid Desktop project-root command");
@@ -649,7 +654,7 @@ async function processStart(args, owner, activity) {
   // A caller may start before it waits. Keep rejection observed while the
   // explicit wait/stop operation still owns delivery and handle release.
   task.result.catch(() => {});
-  if (activity.cancelled || owner !== activeOwner) {
+  if (activity.cancelled || !activeOwners.has(owner)) {
     retainRetiredProcess(handle, task);
     throw new Error("Desktop document generation is no longer active");
   }
@@ -710,7 +715,7 @@ function retainRetiredProcess(handle, task) {
 }
 
 function retireOwner(owner) {
-  if (activeOwner === owner) activeOwner = null;
+  activeOwners.delete(owner);
   for (const task of fileWatchers.values()) {
     if (task.owner === owner) releaseFileWatcher(task, new Error("Desktop document generation retired"));
   }
@@ -1101,7 +1106,7 @@ async function httpRequest(args, owner, activity) {
   let response = null;
   try {
     response = await fetchAuthorized(url, method, headers, secretHeaderNames, body, controller.signal);
-    if (owner !== activeOwner) throw new Error("Desktop document generation is no longer active");
+    if (!activeOwners.has(owner)) throw new Error("Desktop document generation is no longer active");
     const ok = response.ok;
     const status = response.status;
     const statusText = response.statusText;
@@ -1243,7 +1248,7 @@ async function httpRead(args, owner) {
       if (request.controller.signal.aborted) throw error;
       throw new HttpTransportFailure("response");
     }
-    if (owner !== activeOwner) throw new Error("Desktop document generation is no longer active");
+    if (!activeOwners.has(owner)) throw new Error("Desktop document generation is no longer active");
     if (result.done) {
       const tail = request.decoder.decode();
       finishHttp(handle, request);

@@ -9,11 +9,13 @@
 
 import {HostPanel} from "./01-desktop-host.vel"
 import {CapabilityPanel} from "./02-capabilities.vel"
+import {WindowPanel} from "./05-windows.vel"
 
 component Tour:
     return <div id="tour">
         <HostPanel />
         <CapabilityPanel />
+        <WindowPanel />
     </div>
 
 mount(<Tour />, "#app")

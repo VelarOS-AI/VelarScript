@@ -153,6 +153,8 @@ const bridge = Object.freeze({
     packaged: true,
     projectDirectory: hostProjectDirectory,
     projectDirectoryValue: () => hostProjectDirectory,
+    windowKind: __VELAR_WINDOW_KIND__,
+    windowHandle: __VELAR_WINDOW_HANDLE__,
     environment: Object.freeze(__VELAR_ENVIRONMENT__),
     invoke(capability, operation, args, timeoutMs = 30000) {
       if (typeof capability !== "string" || typeof operation !== "string" || !hostArrayIsArray(args)) {
@@ -215,6 +217,14 @@ private struct WindowConfiguration: Decodable {
     let height: Int
     let minWidth: Int
     let minHeight: Int
+    let titleBar: String
+    let material: String
+    let style: String
+    let frame: Bool
+    let level: String
+    let visibleOnAllWorkspaces: Bool
+    let aspectRatio: Double?
+    let resizable: Bool
 }
 
 private struct HostConfiguration: Decodable {
@@ -222,9 +232,11 @@ private struct HostConfiguration: Decodable {
     let productName: String
     let identifier: String
     let nodeMinimumMajor: Int
-    let window: WindowConfiguration
+    let windows: [String: WindowConfiguration]
     let permissions: PermissionConfiguration
 }
+
+private let mainWindowKind = "main"
 
 private struct PermissionConfiguration: Decodable {
     let files: [String]
@@ -478,6 +490,11 @@ private final class NodeCapabilityHost {
         let identity: BridgeIdentity
         let requestBytes: Int
         var retired: Bool
+        // Every window owns its own document generation, so a response is
+        // delivered to the web view that issued the request rather than to one
+        // shared view. A window closed while its request was in flight drops
+        // the response with the view.
+        weak var webView: WKWebView?
     }
 
     private struct ProcessOwner {
@@ -498,7 +515,10 @@ private final class NodeCapabilityHost {
     private var pending: [Int: PendingRequest] = [:]
     private var pendingRequestBytes = 0
     private var activeIdentities = Set<BridgeIdentity>()
-    private var activeGeneration: String?
+    // One entry per live document. A Desktop application may hold several
+    // windows open at once, and each one is its own generation with its own
+    // owned watchers and processes; a second window must not retire the first.
+    private var activeGenerations = Set<String>()
     private var nextWorkerRequestID = 1
     private var nextProjectRootCommandID = 1
     private var processOwners: [Int: ProcessOwner] = [:]
@@ -506,7 +526,6 @@ private final class NodeCapabilityHost {
     private var failure: String?
     private var reaping = false
     private let queue = DispatchQueue(label: "velar.desktop.node-worker")
-    weak var webView: WKWebView?
 
     init(executable: String, worker: URL, config: URL, appData: URL, launchDirectory: String) throws {
         process.executableURL = URL(fileURLWithPath: executable)
@@ -531,44 +550,44 @@ private final class NodeCapabilityHost {
         try process.run()
     }
 
-    func send(_ request: BridgeRequest, body: [String: Any]) throws {
+    func send(_ request: BridgeRequest, body: [String: Any], to webView: WKWebView?) throws {
         let data = try JSONSerialization.data(withJSONObject: body)
         guard data.count <= 128 * 1024 * 1024 else { throw NSError(domain: "VelarDesktop", code: 413, userInfo: [NSLocalizedDescriptionKey: "Desktop request exceeds its transport bound"]) }
-        queue.async { [weak self] in
+        queue.async { [weak self, weak webView] in
             guard let self else { return }
             let identity = BridgeIdentity(generation: request.generation, id: request.id)
             if self.activeIdentities.contains(identity) {
-                self.complete(identity: identity, error: "Desktop request identity is already pending")
+                self.complete(identity: identity, error: "Desktop request identity is already pending", to: webView)
                 return
             }
             if let failure = self.failure {
-                self.complete(identity: identity, error: failure)
+                self.complete(identity: identity, error: failure, to: webView)
                 return
             }
             guard self.process.isRunning else {
                 self.fail("Desktop Node capability host is not running")
-                self.complete(identity: identity, error: self.failure ?? "Desktop Node capability host is not running")
+                self.complete(identity: identity, error: self.failure ?? "Desktop Node capability host is not running", to: webView)
                 return
             }
             if self.pending.count >= 1024 {
-                self.complete(identity: identity, error: "Too many pending Desktop capability requests")
+                self.complete(identity: identity, error: "Too many pending Desktop capability requests", to: webView)
                 return
             }
             if self.pendingRequestBytes + data.count > 128 * 1024 * 1024 {
-                self.complete(identity: identity, error: "Pending Desktop capability requests exceed their aggregate transport bound")
+                self.complete(identity: identity, error: "Pending Desktop capability requests exceed their aggregate transport bound", to: webView)
                 return
             }
             do {
                 try self.activate(generation: request.generation)
                 guard let workerID = self.allocateWorkerRequestID() else {
-                    self.complete(identity: identity, error: "Desktop capability request identity space is exhausted")
+                    self.complete(identity: identity, error: "Desktop capability request identity space is exhausted", to: webView)
                     return
                 }
                 var forwarded = body
                 forwarded.removeValue(forKey: "generation")
                 forwarded["id"] = workerID
                 forwarded["owner"] = request.generation
-                self.pending[workerID] = PendingRequest(identity: identity, requestBytes: data.count, retired: false)
+                self.pending[workerID] = PendingRequest(identity: identity, requestBytes: data.count, retired: false, webView: webView)
                 self.pendingRequestBytes += data.count
                 self.activeIdentities.insert(identity)
                 try self.write(forwarded)
@@ -679,8 +698,9 @@ private final class NodeCapabilityHost {
                 fail("Desktop Node capability host returned an invalid response")
                 return
             }
-            DispatchQueue.main.async { [weak self] in
-                deliverBridgeResponse(encoded, generation: request.identity.generation, to: self?.webView)
+            let target = request.webView
+            DispatchQueue.main.async {
+                deliverBridgeResponse(encoded, generation: request.identity.generation, to: target)
             }
         }
         if buffer.count > 65 * 1024 * 1024 { fail("Desktop Node capability host response exceeded its transport bound") }
@@ -697,7 +717,7 @@ private final class NodeCapabilityHost {
         case "process-owned":
             guard let pid = object["pid"] as? Int, pid > 0, pid <= Int(Int32.max),
                   processOwners[handle] == nil,
-                  generation == activeGeneration || pending.values.contains(where: { $0.identity.generation == generation }) else {
+                  activeGenerations.contains(generation) || pending.values.contains(where: { $0.identity.generation == generation }) else {
                 fail("Desktop Node capability host returned an invalid process owner")
                 return
             }
@@ -754,16 +774,16 @@ private final class NodeCapabilityHost {
         pendingProjectRoots.removeAll(keepingCapacity: false)
         pendingRequestBytes = 0
         activeIdentities.removeAll(keepingCapacity: false)
-        activeGeneration = nil
-        for request in requests where !request.retired { complete(identity: request.identity, error: message) }
+        activeGenerations.removeAll(keepingCapacity: false)
+        for request in requests where !request.retired { complete(identity: request.identity, error: message, to: request.webView) }
         for projectRoot in projectRoots { DispatchQueue.main.async { projectRoot.completion(message) } }
         reapProcessOwners()
     }
 
-    private func complete(identity: BridgeIdentity, error: String) {
+    private func complete(identity: BridgeIdentity, error: String, to webView: WKWebView?) {
         guard let data = try? JSONSerialization.data(withJSONObject: ["id": identity.id, "ok": false, "error": error]) else { return }
-        DispatchQueue.main.async { [weak self] in
-            deliverBridgeResponse(data, generation: identity.generation, to: self?.webView)
+        DispatchQueue.main.async { [weak webView] in
+            deliverBridgeResponse(data, generation: identity.generation, to: webView)
         }
     }
 
@@ -785,12 +805,18 @@ private final class NodeCapabilityHost {
         try input.fileHandleForWriting.write(contentsOf: data)
     }
 
+    // A window is a document generation, and an application may hold several
+    // windows open at once, so activating one never retires another. A
+    // generation leaves the live set exactly where it was always retired: when
+    // its document navigates away or its window closes.
     private func activate(generation: String) throws {
-        if activeGeneration == generation { return }
-        if let previous = activeGeneration { retireGeneration(previous) }
+        if activeGenerations.contains(generation) { return }
         guard failure == nil else { throw NSError(domain: "VelarDesktop", code: 500, userInfo: [NSLocalizedDescriptionKey: failure!]) }
+        guard activeGenerations.count < 256 else {
+            throw NSError(domain: "VelarDesktop", code: 500, userInfo: [NSLocalizedDescriptionKey: "Desktop capability host cannot own more than 256 document generations"])
+        }
         try write(["protocolVersion": 1, "hostCommand": "owner-activate", "owner": generation])
-        activeGeneration = generation
+        activeGenerations.insert(generation)
     }
 
     private func retireGeneration(_ generation: String) {
@@ -798,7 +824,7 @@ private final class NodeCapabilityHost {
             pending[id]?.retired = true
             activeIdentities.remove(request.identity)
         }
-        if activeGeneration == generation { activeGeneration = nil }
+        activeGenerations.remove(generation)
         for owner in processOwners.values where owner.generation == generation {
             for pid in owner.pids { _ = Darwin.kill(-pid, SIGKILL) }
         }
@@ -869,6 +895,15 @@ private final class AssetSchemeHandler: NSObject, WKURLSchemeHandler {
             fail(task, 403, "Velar application path escaped its bundle")
             return
         }
+        // The Web host declares this application a single-page deployment, so a
+        // route the Router owns has no file of its own and the document is the
+        // fallback — the same rule `webStaticDeployment` publishes for every
+        // other Desktop deployment surface. Only an extensionless path falls
+        // back: a missing script or image stays a missing resource rather than
+        // becoming an HTML document with a JavaScript content type.
+        if target.pathExtension.isEmpty, !FileManager.default.fileExists(atPath: target.path) {
+            target = root.appendingPathComponent("index.html").standardizedFileURL
+        }
         do {
             let data = try Data(contentsOf: target, options: [.mappedIfSafe])
             guard let response = HTTPURLResponse(
@@ -931,12 +966,17 @@ private final class DesktopBridge: NSObject, WKScriptMessageHandler {
     private var retiredGenerations = Set<String>()
     private var retiredGenerationOrder: [String] = []
     weak var webView: WKWebView?
+    /// The window this bridge's document lives in. One bridge per window, so
+    /// `currentWindow()` is a host field rather than a round trip.
+    let windowHandle: Int
+    weak var registry: WindowRegistry?
 
-    init(identifier: String, projectGrant: ProjectDirectoryGrant, projectFilesGranted: Bool, worker: NodeCapabilityHost) {
+    init(identifier: String, projectGrant: ProjectDirectoryGrant, projectFilesGranted: Bool, worker: NodeCapabilityHost, windowHandle: Int) {
         self.identifier = identifier
         self.projectGrant = projectGrant
         self.projectFilesGranted = projectFilesGranted
         self.worker = worker
+        self.windowHandle = windowHandle
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -969,6 +1009,7 @@ private final class DesktopBridge: NSObject, WKScriptMessageHandler {
         }
         let discarded = incomingChunks.filter { $0.key.generation == generation }
         for (identity, _) in discarded { discardIncoming(identity: identity) }
+        registry?.retire(generation: generation)
         worker.retire(generation: generation)
     }
 
@@ -1016,8 +1057,12 @@ private final class DesktopBridge: NSObject, WKScriptMessageHandler {
 
     private func handle(_ request: BridgeRequest, body: [String: Any]) {
         do {
+            if request.capability == "window" {
+                handleWindow(request)
+                return
+            }
             if request.capability != "desktop" {
-                try worker.send(request, body: body)
+                try worker.send(request, body: body, to: webView)
                 return
             }
             let value: Any
@@ -1055,6 +1100,82 @@ private final class DesktopBridge: NSObject, WKScriptMessageHandler {
         } catch {
             complete(identity: BridgeIdentity(generation: request.generation, id: request.id), value: nil, error: error.localizedDescription)
         }
+    }
+
+    /// Every window operation is served here, on the main thread, because a
+    /// window is AppKit state the capability worker has no business holding.
+    /// The registry validates the kind against the manifest a second time: the
+    /// generated module already refused an undeclared kind at the call, and a
+    /// renderer that reached the bridge another way is refused again here.
+    private func handleWindow(_ request: BridgeRequest) {
+        let identity = BridgeIdentity(generation: request.generation, id: request.id)
+        guard let registry else {
+            complete(identity: identity, value: nil, error: "Desktop window registry is unavailable")
+            return
+        }
+        do {
+            switch request.operation {
+            case "open":
+                guard request.arguments.count == 2, let kind = request.arguments[0] as? String,
+                      let options = request.arguments[1] as? [String: Any], options.count <= 3,
+                      let route = options["route"] as? String else { throw windowRequestFailure("open") }
+                let opened = try registry.open(
+                    kind: kind,
+                    route: route,
+                    key: options["key"] as? String,
+                    bounds: windowBounds(options["bounds"])
+                )
+                complete(identity: identity, value: opened, error: nil)
+            case "list":
+                guard request.arguments.isEmpty else { throw windowRequestFailure("list") }
+                complete(identity: identity, value: registry.list(), error: nil)
+            case "close":
+                guard request.arguments.count == 1, let handle = request.arguments[0] as? Int else { throw windowRequestFailure("close") }
+                complete(identity: identity, value: registry.close(handle), error: nil)
+            case "focus":
+                guard request.arguments.count == 1, let handle = request.arguments[0] as? Int else { throw windowRequestFailure("focus") }
+                try registry.focus(handle)
+                complete(identity: identity, value: NSNull(), error: nil)
+            case "bounds":
+                guard request.arguments.count == 1, let handle = request.arguments[0] as? Int else { throw windowRequestFailure("bounds") }
+                complete(identity: identity, value: try registry.bounds(handle), error: nil)
+            case "setBounds":
+                guard request.arguments.count == 2, let handle = request.arguments[0] as? Int,
+                      let bounds = windowBounds(request.arguments[1]) else { throw windowRequestFailure("setBounds") }
+                try registry.setBounds(handle, bounds: bounds)
+                complete(identity: identity, value: NSNull(), error: nil)
+            case "display":
+                guard request.arguments.count == 1, let handle = request.arguments[0] as? Int else { throw windowRequestFailure("display") }
+                complete(identity: identity, value: try registry.display(handle), error: nil)
+            case "watchStart":
+                guard request.arguments.count == 1, let handle = request.arguments[0] as? Int else { throw windowRequestFailure("watchStart") }
+                complete(identity: identity, value: try registry.watchStart(handle, generation: request.generation), error: nil)
+            case "watchNext":
+                guard request.arguments.count == 1, let handle = request.arguments[0] as? Int else { throw windowRequestFailure("watchNext") }
+                try registry.watchNext(handle, generation: request.generation) { [weak self] value in
+                    self?.complete(identity: identity, value: value, error: nil)
+                }
+            case "watchClose":
+                guard request.arguments.count == 1, let handle = request.arguments[0] as? Int else { throw windowRequestFailure("watchClose") }
+                complete(identity: identity, value: registry.watchClose(handle, generation: request.generation), error: nil)
+            default:
+                throw NSError(domain: "VelarDesktop", code: 404, userInfo: [NSLocalizedDescriptionKey: "Unknown Desktop window operation '\(request.operation)'"])
+            }
+        } catch {
+            complete(identity: identity, value: nil, error: error.localizedDescription)
+        }
+    }
+
+    private func windowRequestFailure(_ operation: String) -> NSError {
+        NSError(domain: "VelarDesktop", code: 400, userInfo: [NSLocalizedDescriptionKey: "Desktop window operation '\(operation)' received invalid arguments"])
+    }
+
+    private func windowBounds(_ value: Any?) -> WindowBounds? {
+        guard let fields = value as? [String: Any], fields.count == 4,
+              let x = (fields["x"] as? NSNumber)?.doubleValue, let y = (fields["y"] as? NSNumber)?.doubleValue,
+              let width = (fields["width"] as? NSNumber)?.doubleValue, let height = (fields["height"] as? NSNumber)?.doubleValue,
+              x.isFinite, y.isFinite, width.isFinite, height.isFinite, width >= 1, height >= 1 else { return nil }
+        return WindowBounds(x: x, y: y, width: width, height: height)
     }
 
     private func accept(generation: String) -> Bool {
@@ -1111,14 +1232,488 @@ private final class NavigationPolicy: NSObject, WKNavigationDelegate {
     }
 }
 
+/// Screen coordinates with the origin at the top left, the way every window API
+/// a VelarScript author meets states them. AppKit puts the origin at the bottom
+/// left of the primary screen, so the conversion happens once, here, rather than
+/// at each call site.
+private struct WindowBounds {
+    let x: Double
+    let y: Double
+    let width: Double
+    let height: Double
+}
+
+private func primaryScreenTop() -> Double {
+    NSScreen.screens.first.map { Double($0.frame.maxY) } ?? 0
+}
+
+private func topLeftBounds(_ frame: NSRect) -> [String: Any] {
+    [
+        "x": Double(frame.origin.x),
+        "y": primaryScreenTop() - Double(frame.maxY),
+        "width": Double(frame.width),
+        "height": Double(frame.height),
+    ]
+}
+
+private func windowFrame(_ bounds: WindowBounds) -> NSRect {
+    NSRect(
+        x: bounds.x,
+        y: primaryScreenTop() - bounds.y - bounds.height,
+        width: bounds.width,
+        height: bounds.height
+    )
+}
+
+/// A window a `frame: false` manifest asked for still has to be able to take
+/// the keyboard: AppKit refuses key status to a borderless window unless the
+/// window itself says otherwise.
+private final class VelarWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+}
+
+/// A panel floats above the application's windows, takes the keyboard when the
+/// user types into it, and never becomes the main window — which is exactly
+/// what keeps it out of the window cycle and stops it activating the app.
+private final class VelarPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+}
+
+private final class WindowStateWatcher {
+    let handle: Int
+    let window: Int
+    let generation: String
+    var events: [String] = []
+    var pending: ((Any) -> Void)?
+    var draining = false
+    var closed = false
+
+    init(handle: Int, window: Int, generation: String) {
+        self.handle = handle
+        self.window = window
+        self.generation = generation
+    }
+}
+
+private final class WindowRecord {
+    let handle: Int
+    let kind: String
+    let key: String?
+    let window: NSWindow
+    let webView: WKWebView
+    let bridge: DesktopBridge
+    let navigation: NavigationPolicy
+    var watchers = Set<Int>()
+    var closed = false
+
+    init(handle: Int, kind: String, key: String?, window: NSWindow, webView: WKWebView, bridge: DesktopBridge, navigation: NavigationPolicy) {
+        self.handle = handle
+        self.kind = kind
+        self.key = key
+        self.window = window
+        self.webView = webView
+        self.bridge = bridge
+        self.navigation = navigation
+    }
+}
+
+/// The window system: kind plus optional key is a window's identity, and one
+/// registry owns every window, its document bridge, and the bounded state
+/// streams watching it. Everything here runs on the main thread, which is where
+/// WebKit delivers script messages and where AppKit requires window work.
+private final class WindowRegistry: NSObject, NSWindowDelegate {
+    private let host: HostConfiguration
+    private let resources: URL
+    private let schemeHandler: AssetSchemeHandler
+    private let projectGrant: ProjectDirectoryGrant
+    private let projectFilesGranted: Bool
+    private let worker: NodeCapabilityHost
+    private let environmentJSON: String
+    private let headless: Bool
+    private var records: [Int: WindowRecord] = [:]
+    private var watchers: [Int: WindowStateWatcher] = [:]
+    private var handlesByWindow: [ObjectIdentifier: Int] = [:]
+    private var nextHandle = 1
+    private var nextWatcherHandle = 1
+    private var closingAll = false
+
+    init(
+        host: HostConfiguration,
+        resources: URL,
+        schemeHandler: AssetSchemeHandler,
+        projectGrant: ProjectDirectoryGrant,
+        projectFilesGranted: Bool,
+        worker: NodeCapabilityHost,
+        environmentJSON: String,
+        headless: Bool
+    ) {
+        self.host = host
+        self.resources = resources
+        self.schemeHandler = schemeHandler
+        self.projectGrant = projectGrant
+        self.projectFilesGranted = projectFilesGranted
+        self.worker = worker
+        self.environmentJSON = environmentJSON
+        self.headless = headless
+    }
+
+    // MARK: - Operations
+
+    @discardableResult
+    func open(kind: String, route: String, key: String?, bounds: WindowBounds?) throws -> Int {
+        guard let declared = host.windows[kind] else {
+            throw NSError(domain: "VelarDesktop", code: 403, userInfo: [NSLocalizedDescriptionKey:
+                "Desktop window kind '\(kind)' is not declared under 'desktop.windows' (declared kinds: \(host.windows.keys.sorted().joined(separator: ", ")))"])
+        }
+        try validate(route: route)
+        if let key { try validate(key: key) }
+        if let existing = identity(kind: kind, key: key) {
+            try focus(existing.handle)
+            return existing.handle
+        }
+        guard records.count < 64 else {
+            throw NSError(domain: "VelarDesktop", code: 429, userInfo: [NSLocalizedDescriptionKey: "Desktop application cannot hold more than 64 windows open"])
+        }
+        let handle = nextHandle
+        nextHandle += 1
+        let record = try build(handle: handle, kind: kind, key: key, declared: declared, route: route, bounds: bounds)
+        records[handle] = record
+        handlesByWindow[ObjectIdentifier(record.window)] = handle
+        if !headless {
+            if declared.style == "panel" {
+                // A panel is shown without activating the application, which is
+                // the behaviour that makes it a panel rather than a window.
+                record.window.orderFrontRegardless()
+            } else {
+                record.window.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+            }
+        }
+        return handle
+    }
+
+    func focus(_ handle: Int) throws {
+        let record = try owned(handle)
+        guard !headless else { return }
+        record.window.makeKeyAndOrderFront(nil)
+        if record.window is NSPanel { return }
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// Releasing a window handle closes the window, and a handle whose window is
+    /// already gone answers false rather than failing: the release is idempotent
+    /// because closing what is already closed is the state it is already in.
+    @discardableResult
+    func close(_ handle: Int) -> Bool {
+        guard let record = records[handle], !record.closed else { return false }
+        record.window.performClose(nil)
+        // `performClose` consults the delegate; a window that refuses is closed
+        // outright, because the application asked rather than the user.
+        if records[handle] != nil, !record.closed { record.window.close() }
+        return true
+    }
+
+    func bounds(_ handle: Int) throws -> [String: Any] {
+        topLeftBounds(try owned(handle).window.frame)
+    }
+
+    func setBounds(_ handle: Int, bounds: WindowBounds) throws {
+        let record = try owned(handle)
+        record.window.setFrame(clamp(windowFrame(bounds), to: record.window), display: true)
+    }
+
+    func display(_ handle: Int) throws -> [String: Any] {
+        let record = try owned(handle)
+        let screen = record.window.screen ?? NSScreen.main ?? NSScreen.screens.first
+        guard let screen else {
+            throw NSError(domain: "VelarDesktop", code: 500, userInfo: [NSLocalizedDescriptionKey: "Desktop host found no attached display"])
+        }
+        let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
+        return [
+            "id": number.map { "display-\($0.uint32Value)" } ?? "display-unknown",
+            "bounds": topLeftBounds(screen.frame),
+            "workArea": topLeftBounds(screen.visibleFrame),
+            "scale": Double(screen.backingScaleFactor),
+            "primary": screen == NSScreen.screens.first,
+        ]
+    }
+
+    func list() -> [[String: Any]] {
+        records.values
+            .filter { !$0.closed }
+            .sorted { $0.handle < $1.handle }
+            .map { ["kind": $0.kind, "key": $0.key.map { $0 as Any } ?? NSNull(), "focused": $0.window.isKeyWindow] }
+    }
+
+    // MARK: - Bounded state streams
+
+    func watchStart(_ handle: Int, generation: String) throws -> Int {
+        let record = try owned(handle)
+        guard watchers.count < 128 else {
+            throw NSError(domain: "VelarDesktop", code: 429, userInfo: [NSLocalizedDescriptionKey: "Desktop host cannot own more than 128 window state streams"])
+        }
+        let watcherHandle = nextWatcherHandle
+        nextWatcherHandle += 1
+        watchers[watcherHandle] = WindowStateWatcher(handle: watcherHandle, window: handle, generation: generation)
+        record.watchers.insert(watcherHandle)
+        return watcherHandle
+    }
+
+    func watchNext(_ handle: Int, generation: String, deliver: @escaping (Any) -> Void) throws {
+        guard let watcher = watchers[handle], watcher.generation == generation else {
+            throw NSError(domain: "VelarDesktop", code: 404, userInfo: [NSLocalizedDescriptionKey: "Desktop window state stream handle is unknown or already released"])
+        }
+        guard watcher.pending == nil else {
+            throw NSError(domain: "VelarDesktop", code: 409, userInfo: [NSLocalizedDescriptionKey: "WindowStateStream.next already has an active pull"])
+        }
+        if !watcher.events.isEmpty {
+            deliver(watcher.events.removeFirst())
+            return
+        }
+        if watcher.draining {
+            release(watcher)
+            deliver(NSNull())
+            return
+        }
+        watcher.pending = deliver
+    }
+
+    @discardableResult
+    func watchClose(_ handle: Int, generation: String) -> Bool {
+        guard let watcher = watchers[handle], watcher.generation == generation else { return false }
+        release(watcher)
+        return true
+    }
+
+    /// A document that navigated away or a window that closed no longer owns
+    /// the streams it started, and a pending pull from it is dropped rather than
+    /// answered: the replacement document must never receive it.
+    func retire(generation: String) {
+        for watcher in watchers.values where watcher.generation == generation { release(watcher) }
+    }
+
+    private func release(_ watcher: WindowStateWatcher) {
+        guard !watcher.closed else { return }
+        watcher.closed = true
+        watcher.pending = nil
+        watchers.removeValue(forKey: watcher.handle)
+        records[watcher.window]?.watchers.remove(watcher.handle)
+    }
+
+    /// A slow consumer never grows the queue. `moved` and `resized` carry no
+    /// payload, so a repeat of one already queued is the latest of its kind and
+    /// is dropped; a queue at its bound drops its oldest entry, because the
+    /// newest is the state the window is actually in.
+    private func publish(_ state: String, for record: WindowRecord) {
+        for handle in record.watchers {
+            guard let watcher = watchers[handle], !watcher.closed else { continue }
+            if let pending = watcher.pending, watcher.events.isEmpty {
+                watcher.pending = nil
+                pending(state)
+                continue
+            }
+            if (state == "moved" || state == "resized") && watcher.events.contains(state) { continue }
+            watcher.events.append(state)
+            if watcher.events.count > 64 { watcher.events.removeFirst() }
+        }
+    }
+
+    // MARK: - Window construction
+
+    private func identity(kind: String, key: String?) -> WindowRecord? {
+        records.values.first { !$0.closed && $0.kind == kind && $0.key == key }
+    }
+
+    private func owned(_ handle: Int) throws -> WindowRecord {
+        guard let record = records[handle], !record.closed else {
+            throw NSError(domain: "VelarDesktop", code: 404, userInfo: [NSLocalizedDescriptionKey: "Desktop window handle is unknown or already closed"])
+        }
+        return record
+    }
+
+    private func validate(route: String) throws {
+        guard route.count <= 2048, route.hasPrefix("/"), !route.hasPrefix("//"), !route.hasPrefix("/\\"),
+              !route.contains("\0"), URL(string: "velar-app://app" + route) != nil else {
+            throw NSError(domain: "VelarDesktop", code: 400, userInfo: [NSLocalizedDescriptionKey: "Desktop window route must be a bounded path inside this application"])
+        }
+    }
+
+    private func validate(key: String) throws {
+        guard !key.isEmpty, key.count <= 128,
+              key.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "." || $0 == "_" || $0 == ":" || $0 == "-") }) else {
+            throw NSError(domain: "VelarDesktop", code: 400, userInfo: [NSLocalizedDescriptionKey: "Desktop window key must be at most 128 characters of letters, digits, '.', '_', ':' or '-'"])
+        }
+    }
+
+    private func clamp(_ frame: NSRect, to window: NSWindow) -> NSRect {
+        let area = (window.screen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame
+        guard let area else { return frame }
+        var result = frame
+        result.size.width = min(result.width, area.width)
+        result.size.height = min(result.height, area.height)
+        result.origin.x = min(max(result.origin.x, area.minX), area.maxX - result.width)
+        result.origin.y = min(max(result.origin.y, area.minY), area.maxY - result.height)
+        return result
+    }
+
+    private func build(handle: Int, kind: String, key: String?, declared: WindowConfiguration, route: String, bounds: WindowBounds?) throws -> WindowRecord {
+        let bridge = DesktopBridge(
+            identifier: host.identifier,
+            projectGrant: projectGrant,
+            projectFilesGranted: projectFilesGranted,
+            worker: worker,
+            windowHandle: handle
+        )
+        bridge.registry = self
+        let configuration = WKWebViewConfiguration()
+        configuration.setURLSchemeHandler(schemeHandler, forURLScheme: "velar-app")
+        let projectDirectoryJSON = try jsonText(projectGrant.directory)
+        let injected = bridgeScript
+            .replacingOccurrences(of: "__VELAR_PROJECT_DIRECTORY__", with: projectDirectoryJSON)
+            .replacingOccurrences(of: "__VELAR_WINDOW_KIND__", with: try jsonText(kind))
+            .replacingOccurrences(of: "__VELAR_WINDOW_HANDLE__", with: String(handle))
+            .replacingOccurrences(of: "__VELAR_ENVIRONMENT__", with: environmentJSON)
+        configuration.userContentController.addUserScript(WKUserScript(source: injected, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        configuration.userContentController.add(bridge, name: "velarDesktop")
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        let navigation = NavigationPolicy(bridge: bridge, network: host.permissions.network)
+        webView.navigationDelegate = navigation
+        bridge.webView = webView
+
+        var styleMask: NSWindow.StyleMask = declared.frame
+            ? [.titled, .closable, .miniaturizable]
+            : [.borderless, .closable]
+        if declared.resizable { styleMask.insert(.resizable) }
+        if declared.titleBar == "hidden-inset" { styleMask.insert(.fullSizeContentView) }
+        if declared.style == "panel" { styleMask.insert(.nonactivatingPanel) }
+        let frame = NSRect(x: 0, y: 0, width: Double(declared.width), height: Double(declared.height))
+        let window: NSWindow = declared.style == "panel"
+            ? VelarPanel(contentRect: frame, styleMask: styleMask, backing: .buffered, defer: false)
+            : VelarWindow(contentRect: frame, styleMask: styleMask, backing: .buffered, defer: false)
+        window.title = declared.title
+        window.minSize = NSSize(width: declared.minWidth, height: declared.minHeight)
+        if !declared.resizable { window.maxSize = NSSize(width: declared.width, height: declared.height) }
+        if let ratio = declared.aspectRatio, ratio > 0 { window.contentAspectRatio = NSSize(width: ratio, height: 1) }
+        if declared.titleBar == "hidden-inset" {
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+        }
+        window.level = declared.level == "floating" ? .floating : .normal
+        if declared.visibleOnAllWorkspaces { window.collectionBehavior.insert([.canJoinAllSpaces, .fullScreenAuxiliary]) }
+        if let panel = window as? NSPanel {
+            panel.isFloatingPanel = true
+            panel.hidesOnDeactivate = false
+            panel.becomesKeyOnlyIfNeeded = false
+        }
+        window.isExcludedFromWindowsMenu = declared.style == "panel"
+        window.isReleasedWhenClosed = false
+        if declared.material == "sidebar" {
+            // Vibrancy is a surface behind the page, so the page must not paint
+            // its own. `underPageBackgroundColor` is the public control for that
+            // backdrop; the document still owns whether its own body is
+            // transparent, which is what the manifest field implies.
+            let effect = NSVisualEffectView(frame: frame)
+            effect.material = .sidebar
+            effect.blendingMode = .behindWindow
+            effect.state = .active
+            effect.autoresizingMask = [.width, .height]
+            webView.frame = effect.bounds
+            webView.autoresizingMask = [.width, .height]
+            webView.underPageBackgroundColor = .clear
+            effect.addSubview(webView)
+            window.contentView = effect
+        } else {
+            window.contentView = webView
+        }
+        window.delegate = self
+        if let bounds { window.setFrame(clamp(windowFrame(bounds), to: window), display: false) }
+        else { window.center() }
+        guard let url = URL(string: "velar-app://app" + route) else {
+            throw NSError(domain: "VelarDesktop", code: 400, userInfo: [NSLocalizedDescriptionKey: "Desktop window route must be a bounded path inside this application"])
+        }
+        webView.load(URLRequest(url: url))
+        return WindowRecord(handle: handle, kind: kind, key: key, window: window, webView: webView, bridge: bridge, navigation: navigation)
+    }
+
+    private func jsonText(_ value: String) throws -> String {
+        let data = try JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed])
+        guard let text = String(data: data, encoding: .utf8) else {
+            throw NSError(domain: "VelarDesktop", code: 500, userInfo: [NSLocalizedDescriptionKey: "Desktop host could not encode a window value"])
+        }
+        return text
+    }
+
+    // MARK: - NSWindowDelegate
+
+    private func record(for notification: Notification) -> WindowRecord? {
+        guard let window = notification.object as? NSWindow, let handle = handlesByWindow[ObjectIdentifier(window)] else { return nil }
+        return records[handle]
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        if let record = record(for: notification) { publish("moved", for: record) }
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        if let record = record(for: notification) { publish("resized", for: record) }
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        if let record = record(for: notification) { publish("focused", for: record) }
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        if let record = record(for: notification) { publish("blurred", for: record) }
+    }
+
+    /// The two lifecycle rules the host fixes and no manifest field softens:
+    /// closing the main window closes every other window first and then quits,
+    /// and closing the last window quits. There is no knob for either.
+    func windowWillClose(_ notification: Notification) {
+        guard let record = record(for: notification), !record.closed else { return }
+        record.closed = true
+        publish("closed", for: record)
+        for handle in record.watchers {
+            guard let watcher = watchers[handle] else { continue }
+            watcher.draining = true
+            if watcher.events.isEmpty, let pending = watcher.pending {
+                watcher.pending = nil
+                release(watcher)
+                pending(NSNull())
+            }
+        }
+        record.bridge.retireDocument()
+        record.webView.configuration.userContentController.removeScriptMessageHandler(forName: "velarDesktop")
+        handlesByWindow.removeValue(forKey: ObjectIdentifier(record.window))
+        records.removeValue(forKey: record.handle)
+        guard record.kind == mainWindowKind, !closingAll else { return }
+        closingAll = true
+        for other in records.values.sorted(by: { $0.handle > $1.handle }) { other.window.close() }
+        DispatchQueue.main.async { NSApp.terminate(nil) }
+    }
+
+    func closeAll() {
+        closingAll = true
+        for record in records.values.sorted(by: { $0.handle > $1.handle }) { record.window.close() }
+    }
+
+    func activateExistingWindows() {
+        guard !headless else { return }
+        for record in records.values.sorted(by: { $0.handle < $1.handle }) where !record.closed && !(record.window is NSPanel) {
+            record.window.makeKeyAndOrderFront(nil)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+    }
+}
+
 private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
     private let headless: Bool
-    private var window: NSWindow?
     private var schemeHandler: AssetSchemeHandler?
-    private var bridge: DesktopBridge?
-    private var navigationPolicy: NavigationPolicy?
     private var nodeHost: NodeCapabilityHost?
     private var projectGrant: ProjectDirectoryGrant?
+    private var registry: WindowRegistry?
 
     init(headless: Bool) {
         self.headless = headless
@@ -1130,6 +1725,9 @@ private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
             let configData = try Data(contentsOf: resources.appendingPathComponent("desktop.json"))
             let host = try JSONDecoder().decode(HostConfiguration.self, from: configData)
             guard host.protocolVersion == 1 else { throw NSError(domain: "VelarDesktop", code: 2, userInfo: [NSLocalizedDescriptionKey: "Unsupported Desktop host protocol"])}
+            guard host.windows[mainWindowKind] != nil else {
+                throw NSError(domain: "VelarDesktop", code: 2, userInfo: [NSLocalizedDescriptionKey: "Desktop bundle declares no 'main' window kind"])
+            }
             let schemeHandler = AssetSchemeHandler(root: resources.appendingPathComponent("renderer", isDirectory: true))
             let appDataBase = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
             let appData = appDataBase.appendingPathComponent(host.identifier, isDirectory: true)
@@ -1149,17 +1747,6 @@ private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
                 appData: appData,
                 launchDirectory: launchDirectory
             )
-            let bridge = DesktopBridge(
-                identifier: host.identifier,
-                projectGrant: projectGrant,
-                projectFilesGranted: projectFilesGranted,
-                worker: nodeHost
-            )
-            let navigationPolicy = NavigationPolicy(bridge: bridge, network: host.permissions.network)
-            let webConfiguration = WKWebViewConfiguration()
-            webConfiguration.setURLSchemeHandler(schemeHandler, forURLScheme: "velar-app")
-            let projectDirectoryData = try JSONSerialization.data(withJSONObject: launchDirectory, options: [.fragmentsAllowed])
-            let projectDirectoryJSON = String(data: projectDirectoryData, encoding: .utf8)!
             var environment: [String: String] = [:]
             var environmentBytes = 0
             for name in host.permissions.environment {
@@ -1174,37 +1761,23 @@ private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
             }
             let environmentData = try JSONSerialization.data(withJSONObject: environment)
             let environmentJSON = String(data: environmentData, encoding: .utf8)!
-            let injectedBridge = bridgeScript
-                .replacingOccurrences(of: "__VELAR_PROJECT_DIRECTORY__", with: projectDirectoryJSON)
-                .replacingOccurrences(of: "__VELAR_ENVIRONMENT__", with: environmentJSON)
-            webConfiguration.userContentController.addUserScript(WKUserScript(source: injectedBridge, injectionTime: .atDocumentStart, forMainFrameOnly: true))
-            webConfiguration.userContentController.add(bridge, name: "velarDesktop")
-            let webView = WKWebView(frame: .zero, configuration: webConfiguration)
-            webView.navigationDelegate = navigationPolicy
-            bridge.webView = webView
-            nodeHost.webView = webView
-
-            let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: host.window.width, height: host.window.height),
-                styleMask: [.titled, .closable, .miniaturizable, .resizable],
-                backing: .buffered,
-                defer: false
+            let registry = WindowRegistry(
+                host: host,
+                resources: resources,
+                schemeHandler: schemeHandler,
+                projectGrant: projectGrant,
+                projectFilesGranted: projectFilesGranted,
+                worker: nodeHost,
+                environmentJSON: environmentJSON,
+                headless: headless
             )
-            window.title = host.window.title
-            window.minSize = NSSize(width: host.window.minWidth, height: host.window.minHeight)
-            window.contentView = webView
-            window.center()
-            if !headless {
-                window.makeKeyAndOrderFront(nil)
-                NSApp.activate(ignoringOtherApps: true)
-            }
-            webView.load(URLRequest(url: URL(string: "velar-app://app/index.html")!))
-            self.window = window
+            // The `main` kind is the one window the manifest always declares and
+            // the host always opens; every other kind waits for `openWindow`.
+            try registry.open(kind: mainWindowKind, route: "/index.html", key: nil, bounds: nil)
             self.schemeHandler = schemeHandler
-            self.bridge = bridge
-            self.navigationPolicy = navigationPolicy
             self.nodeHost = nodeHost
             self.projectGrant = projectGrant
+            self.registry = registry
         } catch {
             let alert = NSAlert(error: error)
             alert.messageText = "VelarScript Desktop could not start"
@@ -1213,8 +1786,17 @@ private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// A packaged application is a single instance: LaunchServices activates the
+    /// running one rather than starting a second, and the reopen it sends is
+    /// answered by bringing the windows this instance already owns forward.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        registry?.activateExistingWindows()
+        return true
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
     func applicationWillTerminate(_ notification: Notification) {
+        registry?.closeAll()
         projectGrant?.release()
         nodeHost?.stop()
     }
@@ -1231,6 +1813,7 @@ private enum VelarDesktopHost {
                 _ = try resolveNodeRuntime(host)
                 _ = try resolveProjectDirectory(resources)
                 guard host.protocolVersion == 1,
+                      host.windows[mainWindowKind] != nil,
                       FileManager.default.fileExists(atPath: resources.appendingPathComponent("renderer/index.html").path),
                       FileManager.default.fileExists(atPath: resources.appendingPathComponent("host/worker.js").path) else {
                     throw NSError(domain: "VelarDesktop", code: 2, userInfo: [NSLocalizedDescriptionKey: "Desktop bundle is incomplete"])
@@ -1245,7 +1828,8 @@ private enum VelarDesktopHost {
                 ]), request.arguments.count == 1 else {
                     throw NSError(domain: "VelarDesktop", code: 3, userInfo: [NSLocalizedDescriptionKey: "Desktop bridge rejected a bounded request with arguments"])
                 }
-                print("{\"kind\":\"velar-desktop-smoke\",\"protocolVersion\":1,\"identifier\":\"\(host.identifier)\"}")
+                let kinds = host.windows.keys.sorted().map { "\"\($0)\"" }.joined(separator: ",")
+                print("{\"kind\":\"velar-desktop-smoke\",\"protocolVersion\":1,\"identifier\":\"\(host.identifier)\",\"windowKinds\":[\(kinds)]}")
                 return
             } catch {
                 FileHandle.standardError.write(Data("VelarScript Desktop smoke failed: \(error.localizedDescription)\n".utf8))

@@ -304,6 +304,7 @@ function infoPlist(config: VelarDesktopConfig, version: string): string {
   <key>CFBundleShortVersionString</key><string>${xml(version)}</string>
   <key>CFBundleVersion</key><string>${xml(version)}</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
+  <key>LSMultipleInstancesProhibited</key><true/>
   <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 `;
