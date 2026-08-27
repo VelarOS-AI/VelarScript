@@ -1,0 +1,58 @@
+// Chapter 09 — the files a user drags in.
+//
+// Authority: the `velar/desktop` module interface in
+// packages/desktop/src/compiler.ts, and the `"dropped"` root in
+// `desktop.permissions.files` in this project's velar.json.
+//
+// `dropped` is not a directory. It is the authority to read the files a user's
+// own drag gesture brings in, and to learn their real filesystem paths — the
+// gesture is the grant, and it lasts for the session. The page still receives
+// its ordinary DOM `drop` event with the file contents; this stream is the half
+// the DOM cannot give you, and the host registers it inside the very drag
+// operation that hands the drop to the web view, so the two are one gesture.
+
+import {DroppedFiles, DroppedFilesStream, watchDroppedFiles} from "velar/desktop"
+import {basename} from "velar/path"
+import {border, rgb, spacing} from "velar/look"
+
+const ink = rgb(24, 24, 24)
+const paper = rgb(252, 250, 244)
+
+const dropLook = look:
+    display = "grid"
+    gap = 12px
+    padding = spacing(20px, 24px)
+    border = border(1px, ink)
+    borderRadius = 12px
+    color = ink
+    background = paper
+
+// The paths arrive in the order the user dropped them, so they are read in that
+// order rather than sorted.
+export def describeDrop(batch: DroppedFiles) -> string: return batch.paths.map(path => basename(path)).join(" ")
+
+// A slow consumer never loses a gesture: two drops that arrive before either is
+// pulled become one batch, in gesture order, rather than one of them being
+// dropped on the floor.
+export async def firstDrop(drops: DroppedFilesStream) -> string:
+    async for batch in drops: return describeDrop(batch)
+    return "no drop"
+
+export component DropPanel:
+    state dropped = "not watching"
+
+    action watchDrops() -> string:
+        using drops = await watchDroppedFiles()
+        // Said only once the stream exists, so a reader — or a test — knows
+        // that no gesture produced from here on can be missed.
+        dropped = "watching"
+        dropped = await firstDrop(drops)
+        return dropped
+
+    return <section data-chapter="09" look={dropLook}>
+        <h2>09 — dropped files</h2>
+        <p data-dropped>{dropped}</p>
+        <button type="button" data-watch-drops on:click={watchDrops} disabled={watchDrops.pending}>
+            Watch for the next drag gesture
+        </button>
+    </section>

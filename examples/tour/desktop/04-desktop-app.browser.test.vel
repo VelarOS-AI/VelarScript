@@ -10,12 +10,16 @@
 // registry answers `velar/window` for the page, and the four event helpers let
 // this test produce the host events a real window system would.
 
-import {DesktopPlatform} from "velar/desktop"
-import {appDataDirectory, closeWindow, focusWindow, makeDirectory, moveWindow, openWindows, projectDirectory, readText, removeFile, setPlatform, setWindowKind, writeText} from "velar/desktop-test"
+import {DesktopPlatform, PermissionStatus, PowerState, SystemPermission} from "velar/desktop"
+import {activateNotification, appDataDirectory, closeWindow, dropFiles, focusWindow, makeDirectory, moveWindow, openWindows, openedLinks, projectDirectory, publishPower, readText, removeFile, secureStorageNames, setNotificationPermission, setPlatform, setSystemPermission, setWindowKind, shownNotifications, writeText} from "velar/desktop-test"
+import {NotificationPermission} from "velar/notification"
 import {browser} from "velar/web-test"
 import {expect} from "velar/test"
 import {fixturePath} from "./03-desktop-test.test.vel"
 import {previewKey} from "./05-windows.vel"
+import {buildTag} from "./06-notifications.vel"
+import {sessionSlot} from "./07-secure-storage.vel"
+import {guideUrl} from "./08-system.vel"
 
 test "the explicit platform fixture selects an application branch before open":
     await setPlatform(DesktopPlatform.macos)
@@ -104,3 +108,73 @@ test "this window's own bounds read back through the borrowed handle":
     await browser.open()
     await browser.click("[data-read-window-geometry]")
     await browser.waitForText("[data-window-geometry]", "1040x720")
+
+// The operating system's answer is the second gate, and the fake notification
+// centre answers it exactly as the real one does: undetermined until something
+// says otherwise, and a notification it never authorized fails rather than
+// vanishing.
+test "a notification is delivered only once the operating system authorizes it":
+    await browser.open()
+    await browser.click("[data-deliver-notification]")
+    await browser.waitForText("[data-notification-delivered]", "not notified: undetermined")
+    expect(await shownNotifications()).toHaveLength(0)
+    await setNotificationPermission(NotificationPermission.granted)
+    await browser.click("[data-deliver-notification]")
+    await browser.waitForText("[data-notification-delivered]", f"notified: {buildTag("42")}")
+    const inbox = await shownNotifications()
+    expect(inbox).toHaveLength(1)
+    expect(inbox.get(0)?.title).toBe("Build finished")
+    expect(inbox.get(0)?.body).toBe("3 packages")
+    expect(inbox.get(0)?.tag).toBe(buildTag("42"))
+
+test "an activation reports the notification the user clicked":
+    await browser.open()
+    await setNotificationPermission(NotificationPermission.granted)
+    await browser.click("[data-ask-notification]")
+    await browser.waitForText("[data-notification-permission]", "granted")
+    await browser.click("[data-watch-activations]")
+    await browser.waitForText("[data-notification-activated]", "watching")
+    await activateNotification(buildTag("42"))
+    await browser.waitForText("[data-notification-activated]", f"activated {buildTag("42")}")
+
+// The keychain seam reports the names it holds and never the values it holds,
+// which is the whole point of the module.
+test "a stored credential is present until it is removed":
+    await browser.open()
+    await browser.click("[data-read-session]")
+    await browser.waitForText("[data-session-presence]", "absent")
+    expect(await secureStorageNames()).toHaveLength(0)
+    await browser.click("[data-save-session]")
+    await browser.waitForText("[data-session-presence]", "present")
+    expect(await secureStorageNames()).toEqual([sessionSlot])
+    await browser.click("[data-forget-session]")
+    await browser.waitForText("[data-session-presence]", "absent")
+    expect(await secureStorageNames()).toHaveLength(0)
+
+test "power is a transition stream, so the state the machine is in publishes nothing":
+    await browser.open()
+    await browser.click("[data-watch-power]")
+    await browser.waitForText("[data-power]", "watching")
+    // The host starts awake, so waking is not a transition and the stream stays
+    // where it was.
+    await publishPower(PowerState.resumed)
+    await publishPower(PowerState.suspended)
+    await browser.waitForText("[data-power]", "suspended")
+
+test "a link opens through a granted scheme, and the probes only read":
+    await browser.open()
+    await browser.click("[data-open-link]")
+    await browser.waitForText("[data-opened-link]", f"opened {guideUrl}")
+    expect(await openedLinks()).toEqual([guideUrl])
+    await browser.click("[data-read-displays]")
+    await browser.waitForText("[data-displays]", "velar-test-display:1440x875@2:true")
+    await setSystemPermission(SystemPermission.microphone, PermissionStatus.granted)
+    await browser.click("[data-read-probes]")
+    await browser.waitForText("[data-probe]", "undetermined/granted")
+
+test "a drag gesture reports its real paths in the order they were dropped":
+    await browser.open()
+    await browser.click("[data-watch-drops]")
+    await browser.waitForText("[data-dropped]", "watching")
+    await dropFiles(["/Users/ada/second.txt", "/Users/ada/first.txt"])
+    await browser.waitForText("[data-dropped]", "second.txt first.txt")

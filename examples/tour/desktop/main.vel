@@ -10,12 +10,20 @@
 import {HostPanel} from "./01-desktop-host.vel"
 import {CapabilityPanel} from "./02-capabilities.vel"
 import {WindowPanel} from "./05-windows.vel"
+import {NotificationPanel} from "./06-notifications.vel"
+import {SecureStoragePanel} from "./07-secure-storage.vel"
+import {SystemPanel} from "./08-system.vel"
+import {DropPanel} from "./09-dropped-files.vel"
 
 component Tour:
     return <div id="tour">
         <HostPanel />
         <CapabilityPanel />
         <WindowPanel />
+        <NotificationPanel />
+        <SecureStoragePanel />
+        <SystemPanel />
+        <DropPanel />
     </div>
 
 mount(<Tour />, "#app")

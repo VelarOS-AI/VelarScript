@@ -34,12 +34,21 @@
     "permissions": {
       "files": [
         "app-data",
-        "project"
+        "project",
+        "dropped"
       ],
       "processes": [],
       "network": [],
       "environment": [],
-      "secrets": []
+      "secrets": [],
+      "links": [
+        "https",
+        "mailto"
+      ],
+      "notifications": true,
+      "secureStorage": [
+        "TOUR_SESSION"
+      ]
     }
   }
 }
