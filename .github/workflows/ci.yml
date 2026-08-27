@@ -1,3 +1,19 @@
+# D101 ruling 6 — the 0.20 freeze point is CI running the complete gate, not
+# `check` alone. Every push and pull request now runs the four public gates:
+# source quality, the Node suite, packed-consumer acceptance, and the browser
+# suite. `test:full` is run rather than `test`, because the full Node suite is
+# the quick suite plus every historical `hardening-*` wave, so the gate the
+# local `release:check` runs is contained in what CI runs here.
+#
+# Two gates carry macOS-only coverage and therefore run on both runners:
+# `tests/desktop.test.ts` and `tests/package.acceptance.ts` both stop before
+# `velar package` on any other platform, because @velarscript/desktop 0.10
+# builds only the macOS system-WebView host. Linux proves the single-project
+# compiler contract; macOS is the only place the packaged .app, its size
+# budget, and the installed toolchain's desktop path are actually produced.
+# There is no Windows runner: D101 ruling 7 keeps the Windows and Linux
+# desktop hosts as later milestones, and a runner for a target the language
+# does not claim yet would gate on nothing.
 name: Velar CI
 
 on:
@@ -10,10 +26,17 @@ permissions:
   contents: read
   packages: read
 
+# A pull request that receives a second push has no use for the first push's
+# six jobs. A commit on main does: every commit there keeps its own verdict.
+concurrency:
+  group: velar-ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   quality:
     name: Source quality
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -24,3 +47,87 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ github.token }}
       - run: npm run check
+
+  node-suite:
+    # Formatting, documentation, boundaries and types are one platform's job;
+    # the Node suite is not. It compiles and runs real programs, and its
+    # desktop packaging coverage exists only on macOS.
+    name: Node suite
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24.x"
+          cache: npm
+      - run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+      # The Node suite is not browser-free: web-error-paths, browser-lifecycle
+      # and module-enum-surface drive a real Chromium, and the historical
+      # hardening waves drive several more.
+      - name: Cache the locked Playwright browsers
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.os == 'macOS' && '~/Library/Caches/ms-playwright' || '~/.cache/ms-playwright' }}
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - name: Install the locked Chromium build
+        run: npx playwright install chromium
+      - name: Install Chromium system dependencies
+        if: runner.os == 'Linux'
+        run: npx playwright install-deps chromium
+      - run: npm run test:full
+
+  packed-consumers:
+    # `velar package` for a desktop project is reached here only through the
+    # installed toolchain, and only on macOS.
+    name: Packed consumers
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24.x"
+          cache: npm
+      - run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+      - run: npm run test:packages
+
+  browser-suite:
+    # 1x1 by design: the current host and Chromium. The browser gate holds no
+    # platform-specific branch, so it is not repeated on macOS.
+    name: Browser suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24.x"
+          cache: npm
+      - run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+      # Keyed on the lockfile, because the lockfile is what pins the Playwright
+      # version whose Chromium revision these gates expect.
+      - name: Cache the locked Playwright browsers
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - name: Install the locked Chromium build
+        run: npx playwright install chromium
+      - name: Install Chromium system dependencies
+        run: npx playwright install-deps chromium
+      - run: npm run test:browser

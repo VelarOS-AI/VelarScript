@@ -133,7 +133,7 @@ function workflowRunCommands(workflow: string): string[] {
   return commands;
 }
 
-test("default CI stays lightweight while rehearsal and npm publication remain explicit", async () => {
+test("default CI runs the complete gate while rehearsal and npm publication remain explicit", async () => {
   const workspace = JSON.parse(await readFile("package.json", "utf8")) as { scripts: Record<string, string> };
   const coreTest = resolveScript(workspace.scripts, "test");
   assert.match(coreTest, /scripts\/run-node-tests\.mjs quick/u);
@@ -171,17 +171,41 @@ test("default CI stays lightweight while rehearsal and npm publication remain ex
   assert.match(ci, /runs-on: ubuntu-latest/u);
   assert.match(ci, /node-version: "24\.x"/u);
 
-  // Full tests, packed consumers, and the browser matrix run locally before a
-  // release. A default push only repeats the cheap clean-install source check;
-  // publication below independently rebuilds and verifies the strict tagged
-  // candidate. Pin both sides so routine pushes cannot silently grow back into
-  // the former three-OS plus six-browser release suite.
+  // D101 ruling 6 — the 0.20 stability criterion is that CI runs the complete
+  // gate rather than `check` alone, so every public gate has to be reachable
+  // from this workflow. `test:full` stands in for `test`: the full Node suite
+  // is the quick suite plus every historical `hardening-*` wave, so requiring
+  // it is what keeps a green push from being weaker than a local
+  // `release:check`. Derived from the `gate:` scripts rather than listed, so a
+  // gate added tomorrow fails here until CI runs it.
   const reached = reachedScripts(workspace.scripts, workflowRunCommands(ci));
-  assert.ok(reached.has("check"), ".github/workflows/ci.yml must reach the source-quality gate");
-  for (const heavy of ["test", "test:full", "test:packages", "test:browser", "release:check", "release:rehearse", "release:publish"]) {
-    assert.equal(reached.has(heavy), false, `.github/workflows/ci.yml must not run ${heavy} on every push`);
+  // Three subtractions, each for what the gate is rather than what it is
+  // called: an entry point that forwards developer arguments has none to
+  // forward here, `build:packages` is the step every other gate opens with
+  // rather than a gate of its own, and the release chain is manual by design.
+  const publicGates = gates.filter((gate) =>
+    !forwarding.includes(gate) && gate !== "build:packages" && !gate.startsWith("release:"));
+  for (const gate of publicGates) {
+    const covered = reached.has(gate) || (gate === "test" && reached.has("test:full"));
+    assert.ok(covered, `.github/workflows/ci.yml must run the ${gate} gate on every push`);
   }
-  assert.doesNotMatch(ci, /macos-latest|windows-latest|playwright install|npm test|test:packages|test:browser/u);
+  // Publication and rehearsal stay deliberate: they rebuild and verify a
+  // strict tagged candidate of their own and are never a push's side effect.
+  for (const manual of ["release:check", "release:rehearse", "release:publish"]) {
+    assert.equal(reached.has(manual), false, `.github/workflows/ci.yml must not run ${manual} on every push`);
+  }
+  // The browser gate is not the only gate that drives a real Chromium: the
+  // Node suite does too, through web-error-paths, browser-lifecycle and
+  // module-enum-surface. Neither downloads one, so CI has to.
+  assert.match(ci, /playwright install chromium/u);
+  // @velarscript/desktop 0.10 builds only the macOS system-WebView host, so
+  // `tests/desktop.test.ts` and `tests/package.acceptance.ts` both stop before
+  // `velar package` anywhere else. Without a macOS runner the packaged .app is
+  // gated by nothing at all.
+  assert.match(ci, /macos-latest/u);
+  // D101 ruling 7 — Windows and Linux desktop hosts are later milestones, and
+  // a runner for a target the language does not claim yet gates on nothing.
+  assert.doesNotMatch(ci, /windows-latest/u);
 
   const release = await readFile(".github/workflows/release-rehearsal.yml", "utf8");
   assert.match(release, /id-token: write/u);

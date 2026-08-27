@@ -2,23 +2,47 @@
 
 Status: current public release and publication gates
 
-The repository defines four GitHub Actions workflows. The default push workflow
-stays intentionally small; the complete local release gate is one command:
+The repository defines four GitHub Actions workflows. The complete local
+release gate is one command:
 
 ```sh
 npm run release:check
 ```
 
-- `Velar CI` runs the clean-install Node 24 source-quality gate on Linux. It
-  does not repeat the complete release suite on every push.
+- `Velar CI` runs the complete gate on every push and pull request, on
+  clean-install Node 24, split into six jobs. D101 ruling 6 makes this the
+  0.20 stability criterion: a green push is no weaker than a local
+  `release:check`.
+  - `Source quality` runs `npm run check` on Linux.
+  - `Node suite` runs `npm run test:full` on Linux and on macOS.
+  - `Packed consumers` runs `npm run test:packages` on Linux and on macOS.
+  - `Browser suite` runs `npm run test:browser` on Linux.
+- CI runs `test:full` where `release:check` runs `test`, because the full Node
+  suite is the quick suite plus every historical `hardening-*` wave. The two
+  gates that repeat on macOS are the two that carry macOS-only coverage:
+  `tests/desktop.test.ts` and `tests/package.acceptance.ts` both stop before
+  `velar package` on any other platform, because @velarscript/desktop 0.10
+  builds only the macOS system-WebView host. Linux proves the single-project
+  compiler contract there; macOS is the only place the packaged `.app`, its
+  size budget, and the installed toolchain's desktop path are produced at all.
+  There is no Windows runner: D101 ruling 7 keeps the Windows and Linux
+  desktop hosts as later milestones.
+- The Node suite is not browser-free — `web-error-paths`, `browser-lifecycle`
+  and `module-enum-surface` drive a real Chromium, and the historical hardening
+  waves drive several more — so the Node suite and browser jobs install the
+  locked Chromium build before running. That download is cached against
+  `package-lock.json`, which is what pins the Playwright version whose browser
+  revision these gates expect.
 - `release:check` runs source quality, Node tests, packed-package consumer
   validation, and the browser gate locally. Browser acceptance is 1x1: the
   current host and Chromium. It covers the development server and CSP-enabled
   production output, discovered project-owned `.browser.test.vel` modules, and
   one generated application installed from packed toolchain tarballs.
 - `npm test` discovers the current baseline and closeout Node regression files.
-  `npm run test:full` additionally runs every historical `hardening-*` wave;
-  use it for broad compiler/runtime changes, not as a duplicate release step.
+  `npm run test:full` additionally runs every historical `hardening-*` wave.
+  Locally it is the suite for broad compiler/runtime changes rather than a
+  duplicate release step; CI runs it on every push, which is what makes a
+  green push stronger than a local `release:check` rather than weaker.
 - The packed-package gate derives the toolchain set from `packages/*`:
   every publishable workspace package is packed and checked against what
   its own manifest promises a consumer — LICENSE, README, and every path named
