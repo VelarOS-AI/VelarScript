@@ -316,10 +316,15 @@ for (const projectRoot of projectRoots) {
 
   // The project driver is the authority on which imports resolved to what, so
   // coverage of a standard-module export is read off its semantic index rather
-  // than off the import statement's text. Test roots are compiled separately
-  // for the same reason `velar check` does: no import reaches them.
+  // than off the import statement's text. Extra roots are compiled separately
+  // for the same reason `velar check` does it: no import reaches them. The
+  // roster is the same one `check` uses — test modules, then whatever the
+  // walk above found that nothing imported — so this gate reads exactly the
+  // modules the compiler reads, and cannot report a chapter as uncovered on
+  // the strength of a reachability rule the toolchain no longer has.
   const indexes = new Map();
   const compiles = [config.entryPath, ...sources.filter((path) => path.endsWith(".test.vel"))];
+  const queued = new Set(compiles);
   for (const entry of compiles) {
     const compiled = await compileProject(entry, new Map(), {
       sourceRoot: config.root,
@@ -334,6 +339,16 @@ for (const projectRoot of projectRoots) {
     for (const module of compiled.modules) {
       for (const item of module.result.diagnostics) failures.push(`${display(module.inputPath)}: ${item.code} ${item.message}`);
       if (!indexes.has(module.inputPath)) indexes.set(module.inputPath, module.result.semanticIndex);
+    }
+    // Once the declared roots are spent, whatever the walk found that none of
+    // them reached becomes a root too — one at a time, because each compile may
+    // itself cover several of the remainder. `for...of` over an array reads by
+    // index, so an entry appended here is still visited.
+    if (compiles.at(-1) !== entry) continue;
+    const next = sources.find((path) => !indexes.has(path) && !queued.has(path));
+    if (next !== undefined) {
+      queued.add(next);
+      compiles.push(next);
     }
   }
 
@@ -359,10 +374,12 @@ for (const projectRoot of projectRoots) {
     }
     const index = indexes.get(path);
     if (index === undefined) {
-      // D56 rule 128: `velar check` never looks at a module the entry cannot
-      // reach, so a chapter nobody imports silently loses its coverage. Say so
-      // rather than reading it anyway.
-      failures.push(`${display(path)}: no import reaches this module and it is not a '*.test.vel' root, so the compiler never checks it — import it from the tour entry`);
+      // Unreachable now means unreadable, not unchecked: `velar check` compiles
+      // an unimported source as a root of its own, and the roster above does
+      // the same, so every chapter should have arrived with an index. Reaching
+      // here means this gate could not compile the module at all, which is a
+      // gate defect rather than the D56 rule 128 reachability gap it used to be.
+      failures.push(`${display(path)}: the coverage gate compiled no module for this source, so its spellings were never observed — this is a gate defect, not a missing import`);
       continue;
     }
     observeModule({

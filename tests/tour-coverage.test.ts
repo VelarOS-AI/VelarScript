@@ -407,15 +407,36 @@ test("[A-023] a namespace member is credited to the namespace, not to its spelli
   await rm(directory, { recursive: true, force: true });
 });
 
-test("the gate refuses a chapter no import reaches", async () => {
-  // D56 rule 128: `velar check` never looks at a module the entry cannot reach,
-  // so a chapter added without an import in `main.vel` would silently lose the
-  // compile half of its gate coverage.
+test("the gate reads a chapter no import reaches", async () => {
+  // This test used to assert the opposite, and the reason it flipped is worth
+  // keeping. D56 rule 128 recorded that `velar check` never looked at a module
+  // the entry could not reach, so a chapter added without an import in
+  // `main.vel` silently lost the compile half of its coverage; the tour's
+  // "every chapter exports a name and `main.vel` imports it one by one" rule
+  // was *derived* from that limitation, and this gate enforced it.
+  //
+  // `velar check` now compiles an unimported source as a root of its own
+  // (stream-bench F4), so the limitation is gone and the derived rule with it.
+  // A chapter nothing imports is read like any other, which is what the tour
+  // wanted all along: the corpus is judged on what it spells, not on how it is
+  // wired to an entry.
   const directory = await copyOfTour();
   await writeFile(join(directory, "core", "99-orphan.vel"), 'export const orphanName = "nobody imports this"\n');
   const { status, output } = runGate(directory);
+  assert.equal(status, 0, output);
+  assert.doesNotMatch(output, /99-orphan\.vel/u, "an unimported chapter is compiled, so the gate has nothing to report about it");
+});
+
+test("the gate still refuses a chapter it cannot compile at all", async () => {
+  // The branch that used to report an unreachable chapter now reports a gate
+  // defect: every source should arrive with an index, and one that does not is
+  // a module this gate failed to read. A chapter that does not parse is the
+  // reachable way to prove the reporting path still fires.
+  const directory = await copyOfTour();
+  await writeFile(join(directory, "core", "99-broken.vel"), "export def broken( -> :\n");
+  const { status, output } = runGate(directory);
   assert.equal(status, 1, output);
-  assert.match(output, /99-orphan\.vel: no import reaches this module/u);
+  assert.match(output, /99-broken\.vel/u);
 });
 
 test("coverage is judged on resolved references, not on the text of the tour", async () => {

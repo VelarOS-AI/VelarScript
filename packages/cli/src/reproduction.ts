@@ -142,18 +142,18 @@ interface CarriedFile {
 }
 
 /**
- * The entry's own module graph, plus the graph of every `*.test.vel` root that
- * actually produced one of the reported errors. A test module nothing
- * complained about is left out; so is every unreachable file in the tree. The
+ * The entry's own module graph, plus the graph of every additional root — a
+ * `*.test.vel` module, or a source nothing imports — that actually produced one
+ * of the reported errors. A root nothing complained about is left out. The
  * entry graph itself stays whole because dropping a module the graph imports
  * replaces the reported diagnostic with an unresolved-import failure, which is
  * a different bug report than the one being filed.
  */
 function reproductionModules(checked: CheckedProject): readonly ProjectModule[] {
   const modules = new Map<string, ProjectModule>();
-  const [entry, ...tests] = checked.roots;
+  const [entry, ...additional] = checked.roots;
   for (const module of entry?.result.modules ?? []) modules.set(module.inputPath, module);
-  for (const root of tests) {
+  for (const root of additional) {
     if (root.errors.length === 0) continue;
     for (const module of root.result.modules) if (!modules.has(module.inputPath)) modules.set(module.inputPath, module);
   }
