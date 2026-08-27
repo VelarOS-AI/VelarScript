@@ -18,7 +18,10 @@
 //
 // The token never appears here. The host generates it, hands it to the service
 // in its environment, and spends it itself on the first frame of every
-// connection, so application code holds a channel and never a credential.
+// connection, so application code holds a channel and never a credential. The
+// host's own readiness probe opens a connection the same way, so a service sees
+// connections it did not have to be asked for — a fact for the service side to
+// know about, and one this side never has to think about.
 
 import {ServiceClose, ServiceConnection, ServiceState, ServiceStateEvent, ServiceStateStream, connect, watchServices} from "velar/service"
 import {border, rgb, spacing} from "velar/look"
@@ -59,7 +62,16 @@ export def stateLabel(state: ServiceState) -> string:
 
 export def stateNames() -> List<ServiceState>: return ServiceState.values()
 
-export def eventLabel(event: ServiceStateEvent) -> string: return f"{event.name}: {stateLabel(event.state)}"
+// A `failed` or `restarting` event carries a `detail`: up to the last 4 KiB the
+// service wrote to its own standard error, so an application has something to
+// show a person besides the word "failed". Every other state carries none. It is
+// text to read and never text to match on — the state is the decision, and the
+// detail is only the explanation. The whole log is a file the README names.
+export def detailLabel(event: ServiceStateEvent) -> string: return event.detail ?? "no detail"
+
+export def eventLabel(event: ServiceStateEvent) -> string:
+    if event.detail == null: return f"{event.name}: {stateLabel(event.state)}"
+    return f"{event.name}: {stateLabel(event.state)} — {detailLabel(event)}"
 
 export def closeLabel(info: ServiceClose) -> string: return f"{info.code} {info.reason}"
 

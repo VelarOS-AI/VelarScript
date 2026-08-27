@@ -49,6 +49,18 @@ truth for acceptance status.
   host allocates a loopback endpoint and a token per service, supervises them
   under an `always` or `never` restart policy, and converges them on quit;
   `velar dev` runs the same services on the system Node.
+- Gave a `watchServices()` event a `detail`: for `failed` and `restarting`, up to
+  the last 4 KiB of what the service wrote to its own standard error, truncated
+  on a character boundary and stripped of every control character but the
+  newline, so an application can tell a person why a service died instead of only
+  that it did. It is null for every other state, and the whole of a service's
+  output goes to a rotating log file at
+  `<app-data>/service-logs/<name>.log`. `velar/desktop-test.setServiceState`
+  takes the detail as an optional third argument.
+- Pinned WebSocket close code 1008 for a hello a service refuses. A dropped
+  connection is also what a service that has not finished binding its port looks
+  like; the code separates the two, so a wrong token is reported at once instead
+  of retried for thirty seconds and then reported as a slow start.
 
 ### Language and diagnostics
 

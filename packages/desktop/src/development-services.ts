@@ -18,6 +18,15 @@ export const DESKTOP_SERVICE_HELLO = "service-hello";
 export const DESKTOP_SERVICE_READY = "service-ready";
 export const DESKTOP_SERVICE_HANDSHAKE_TIMEOUT_MS = 30_000;
 export const DESKTOP_SERVICE_TERMINATION_GRACE_MS = 30_000;
+/**
+ * The close code a service owes a hello it will not accept: RFC 6455's 1008,
+ * "policy violation". It is pinned because "the connection ended" is what a
+ * service that has crashed, a service that is still binding its port, and a
+ * service that refused the token all look like otherwise — and only the third
+ * is a misconfiguration a person has to be told about rather than a start the
+ * host should keep retrying.
+ */
+export const DESKTOP_SERVICE_REFUSED_CLOSE_CODE = 1008;
 
 export interface DesktopDevelopmentService {
   readonly name: string;
@@ -82,11 +91,14 @@ export async function startDesktopDevelopmentServices(
       const service: RunningService = { name, child, port, token, exited: false };
       child.once("exit", () => { service.exited = true; });
       running.push(service);
-      const ready = await probeReadiness(service);
-      services.push({ name, endpoint: `127.0.0.1:${port}`, ready });
-      report(ready
-        ? `VelarScript dev service '${name}': ready on 127.0.0.1:${port}\n`
-        : `VelarScript dev service '${name}': did not answer the authenticated handshake on 127.0.0.1:${port} within ${DESKTOP_SERVICE_HANDSHAKE_TIMEOUT_MS / 1000}s\n`);
+      const outcome = await probeReadiness(service);
+      services.push({ name, endpoint: `127.0.0.1:${port}`, ready: outcome === "ready" });
+      if (outcome === "ready") report(`VelarScript dev service '${name}': ready on 127.0.0.1:${port}\n`);
+      else if (outcome === "refused") {
+        report(`VelarScript dev service '${name}': refused the token this host issued it on 127.0.0.1:${port} (close ${DESKTOP_SERVICE_REFUSED_CLOSE_CODE}); it is reading something other than VELAR_SERVICE_TOKEN\n`);
+      } else {
+        report(`VelarScript dev service '${name}': did not answer the authenticated handshake on 127.0.0.1:${port} within ${DESKTOP_SERVICE_HANDSHAKE_TIMEOUT_MS / 1000}s\n`);
+      }
     }
   } catch (error) {
     await stop();
@@ -96,48 +108,62 @@ export async function startDesktopDevelopmentServices(
 }
 
 /**
+ * What one probe found. `unavailable` is the ordinary case a millisecond after
+ * `spawn` — nothing is listening yet — and is worth retrying; `refused` is the
+ * service closing the hello with 1008, which is a service that will refuse the
+ * same token for the whole of the deadline, so it is worth reporting instead.
+ */
+export type DesktopServiceHandshake = "ready" | "refused" | "unavailable";
+
+/**
  * Readiness is the handshake, retried until its deadline: a process that has
  * started is not a service until something answers on the endpoint it was
- * given, and a refused connection right after `spawn` is the normal case.
+ * given, and an unreachable endpoint right after `spawn` is the normal case.
+ * A service that answers 1008 is not slow, though — it read the token and said
+ * no — so that ends the probe where it happens rather than thirty seconds later.
  */
-async function probeReadiness(service: RunningService): Promise<boolean> {
+async function probeReadiness(service: RunningService): Promise<DesktopServiceHandshake> {
   const deadline = Date.now() + DESKTOP_SERVICE_HANDSHAKE_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    if (service.exited) return false;
-    if (await handshake(service.port, service.token)) return true;
+    if (service.exited) return "unavailable";
+    const outcome = await handshake(service.port, service.token);
+    if (outcome !== "unavailable") return outcome;
     await new Promise<void>((resolve) => { setTimeout(resolve, 100); });
   }
-  return false;
+  return "unavailable";
 }
 
 /**
  * One connection, one hello, one answer, and the connection closed the moment
  * it has one. The probe proves the service authenticates; it is not a channel.
  */
-export async function handshake(port: number, token: string): Promise<boolean> {
-  return new Promise<boolean>((settle) => {
+export async function handshake(port: number, token: string): Promise<DesktopServiceHandshake> {
+  return new Promise<DesktopServiceHandshake>((settle) => {
     let socket: WebSocket;
     try { socket = new WebSocket(`ws://127.0.0.1:${port}/`); }
-    catch { settle(false); return; }
+    catch { settle("unavailable"); return; }
     let finished = false;
-    const finish = (accepted: boolean): void => {
+    const finish = (outcome: DesktopServiceHandshake): void => {
       if (finished) return;
       finished = true;
       clearTimeout(timer);
       try { socket.close(); } catch { /* a socket that never opened needs no close */ }
-      settle(accepted);
+      settle(outcome);
     };
-    const timer = setTimeout(() => finish(false), DESKTOP_SERVICE_HANDSHAKE_TIMEOUT_MS);
-    socket.addEventListener("error", () => finish(false));
-    socket.addEventListener("close", () => finish(false));
+    const timer = setTimeout(() => finish("unavailable"), DESKTOP_SERVICE_HANDSHAKE_TIMEOUT_MS);
+    socket.addEventListener("error", () => finish("unavailable"));
+    socket.addEventListener("close", (event) => {
+      finish(event.code === DESKTOP_SERVICE_REFUSED_CLOSE_CODE ? "refused" : "unavailable");
+    });
     socket.addEventListener("open", () => {
       socket.send(JSON.stringify({ velar: DESKTOP_SERVICE_HELLO, token }));
     });
     socket.addEventListener("message", (event) => {
       let answer: unknown;
       try { answer = JSON.parse(typeof event.data === "string" ? event.data : ""); }
-      catch { finish(false); return; }
-      finish(!!answer && typeof answer === "object" && (answer as Record<string, unknown>).velar === DESKTOP_SERVICE_READY);
+      catch { finish("unavailable"); return; }
+      const ready = !!answer && typeof answer === "object" && (answer as Record<string, unknown>).velar === DESKTOP_SERVICE_READY;
+      finish(ready ? "ready" : "unavailable");
     });
   });
 }
