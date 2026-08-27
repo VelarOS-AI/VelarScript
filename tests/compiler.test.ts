@@ -8553,7 +8553,7 @@ test("the official Web package owns the framework contract and CLI only composes
     }
   }
 
-  assert.equal(VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION, 2);
+  assert.equal(VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION, 3);
   assert.equal(velarFrameworkHost.id, "@velarscript/web");
   assert.equal(velarFrameworkHost.capability, "web");
   assert.equal(velarFrameworkHost.target, "browser");
@@ -15149,7 +15149,7 @@ mount(<App />, "#app")
   assert.equal(web.security.contentSecurityPolicy, true);
   assert.equal(web.deployment.spaFallback, true);
   assert.equal(config.framework?.host.id, "@velarscript/web");
-  assert.equal(config.framework?.host.protocolVersion, 2);
+  assert.equal(config.framework?.host.protocolVersion, 3);
   const project = await compileProject(config.entryPath, new Map(), {
     projectRoot: config.root,
     publicRoot: config.publicDir,
@@ -28015,7 +28015,7 @@ test("CLI emits complete Web application assets", async () => {
     id: "@velarscript/web",
     capability: "web",
     target: "browser",
-    protocolVersion: 2,
+    protocolVersion: 3,
     apiVersion: "0.11",
     artifactKind: "velar-web-build",
   });

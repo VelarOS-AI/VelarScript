@@ -308,7 +308,7 @@ print(Text.chunks("A😀游戏", 2).join("|"))
   const host = await run(process.execPath, [
     "--input-type=module",
     "--eval",
-    "import {VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION} from '@velarscript/compiler/framework-host'; import {velarFrameworkHost} from '@velarscript/web/host'; if (VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION !== 2 || velarFrameworkHost.protocolVersion !== 2 || velarFrameworkHost.capability !== 'web' || velarFrameworkHost.target !== 'browser') process.exit(1); console.log(velarFrameworkHost.id)",
+    "import {VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION} from '@velarscript/compiler/framework-host'; import {velarFrameworkHost} from '@velarscript/web/host'; if (VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION !== 3 || velarFrameworkHost.protocolVersion !== 3 || velarFrameworkHost.capability !== 'web' || velarFrameworkHost.target !== 'browser') process.exit(1); console.log(velarFrameworkHost.id)",
   ], directory);
   assert.equal(host.stdout, "@velarscript/web\n");
   const desktopApi = await run(process.execPath, [

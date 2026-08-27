@@ -1,10 +1,12 @@
 import {
   VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION,
+  type FrameworkDevelopmentProcessInput,
   type FrameworkHostArtifactsInput,
   type FrameworkHostErrorDocumentInput,
   type FrameworkHostProjectValidationInput,
   type FrameworkHostExtension,
 } from "@velarscript/compiler/framework-host";
+import { startDesktopDevelopmentServices } from "./development-services.ts";
 import { createWebArtifacts, createWebErrorDocument, velarFrameworkHost as webHost, webStaticDeployment } from "@velarscript/web/host";
 import { DESKTOP_MAIN_WINDOW_KIND, VELAR_DESKTOP_API_VERSION, type VelarDesktopConfig } from "./config.ts";
 import { desktopBrowserTestController } from "./test-runtime.ts";
@@ -39,6 +41,18 @@ export const velarFrameworkHost: FrameworkHostExtension = Object.freeze({
       return desktopBrowserTestController(config as VelarDesktopConfig);
     },
   }),
+  /**
+   * `velar dev` runs the same services a packaged application runs, on the
+   * system Node rather than on an embedded runtime a development tree does not
+   * have, and converges them when the dev server closes. It does not watch or
+   * rebuild them: a service's build is the product's own toolchain.
+   */
+  async startDevelopmentProcesses(input: FrameworkDevelopmentProcessInput) {
+    const config = input.config as VelarDesktopConfig;
+    const lines: string[] = [];
+    const started = await startDesktopDevelopmentServices(input.projectRoot, config, (line) => lines.push(line));
+    return Object.freeze({ report: Object.freeze(lines), stop: started.stop });
+  },
   validateProject(input: FrameworkHostProjectValidationInput) {
     const config = input.config as VelarDesktopConfig;
     const imports = new Set(input.modules.flatMap((module) => module.imports));

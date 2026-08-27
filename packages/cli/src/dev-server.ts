@@ -243,6 +243,11 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
     server.once("error", reject);
     server.listen(port, "127.0.0.1", () => resolve());
   });
+  // Long-running processes the target's manifest declares, started beside the
+  // page and converged when this server closes. The framework host owns them;
+  // this server owns only the promise that they do not outlive it.
+  const processes = await framework.host.startDevelopmentProcesses?.({ config: framework.config, projectRoot: config.root }) ?? null;
+  for (const line of processes?.report ?? []) process.stdout.write(line);
   const url = `http://127.0.0.1:${port}${base}`;
   process.stdout.write(`VelarScript dev server: ${url}\n`);
   if (snapshot.errors.length > 0) process.stdout.write(`${snapshot.errors.join("\n\n")}\n`);
@@ -264,6 +269,7 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
   process.once("SIGINT", close);
   process.once("SIGTERM", close);
   await new Promise<void>((resolve) => server.once("close", resolve));
+  await processes?.stop();
 }
 
 function watchDirectoryTree(
