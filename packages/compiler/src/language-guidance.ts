@@ -109,6 +109,10 @@ const stringMemberGuidanceEntries = new Map<string, string>([
   ["toUpperCase", "Use '.upper()'; VelarScript exposes one string uppercase spelling"],
   ["toLowerCase", "Use '.lower()'; VelarScript exposes one string lowercase spelling"],
   ["includes", "Use '.has(text)'; strings and collections share one membership method"],
+  // The List, Set, and Map tables have carried 'contains' since they were
+  // written; a string is the fourth thing membership is asked of, and it is the
+  // one spelling an author reaches for from Java, C#, Kotlin, or Dart.
+  ["contains", "Use '.has(text)'; strings and collections share one membership method"],
   ["toString", "Use 'str(value)' or an f-string; VelarScript has one explicit text conversion spelling"],
   // TXT-I1: the Python spellings, each pointed at the member or the `Text.`
   // namespace function that exists.

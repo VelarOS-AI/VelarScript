@@ -1041,7 +1041,14 @@ const Reports = lazy(() => import("./pages/reports.vel"), "Reports", PageLoading
   `mailto:` or `tel:` target; the JSX URL attributes take the wider allowlist.
 - `navigate(to, {replace, scroll})`, `redirect`, `back`, `forward`, and
   `reload` expose intentional history operations. `currentRoute()` returns a
-  typed snapshot of the current application-relative route. Navigation options
+  typed snapshot of the current application-relative route. The snapshot is
+  frozen, and reading it is live: a `currentRoute()` read inside a reactive
+  position is a dependency on the history exactly as reading a state cell is a
+  dependency on that cell, so chrome outside the `Router` — a title bar, a
+  breadcrumb, a sidebar marking the open page — re-renders on navigation
+  without the mounted page publishing its route back out. One history
+  subscription serves `Router`, `NavLink`, and every `currentRoute()` reader; a
+  read outside a reactive position subscribes to nothing. Navigation options
   are a data-only record with boolean `replace`/`scroll` fields and are fully
   validated before history or scrolling changes. Location getters, History
   methods, URL parsing, PopStateEvent dispatch, animation frames, scrolling,
@@ -1793,6 +1800,19 @@ engines that run after it. A test that changes it restores it itself.
 namespace URI so SVG/HTML lowering can be asserted without arbitrary page
 evaluation. Browser binaries remain an explicit Playwright
 install.
+
+Because the body runs in the test process, a project module the test file
+imports is a *second instance* of that module. The page loaded its copy when
+the browser evaluated the built bundle; the test process evaluates its own copy
+in itself, and the two share nothing. A module-level `state` cell the test
+writes therefore moves the test's copy and not the page's — calling
+`setLocale(Locale.enUS)` from a browser test leaves the page rendering exactly
+what it rendered before, and no assertion about the page will show the change.
+What reaches the page is the `browser` controller; what a project import is for
+is work the test can call and judge on its own, such as a message table or a
+formatter. Anything whose effect has to land in the page is driven through a
+control the page itself offers, and covered for the module's own sake by a
+`.test.vel` unit test.
 
 The CLI executes the whole browser-test run in a dedicated supervised worker.
 One test is bounded to 120 seconds, the aggregate run to 20 minutes, and each

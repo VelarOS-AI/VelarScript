@@ -83,6 +83,16 @@ import {
   type ValueType,
 } from "./types.ts";
 
+/**
+ * The mutable binding an assignment writes into, for the one refusal whose fix
+ * lives on the declaration line rather than the assignment line. See
+ * `enumSingletonCellGuidance`.
+ */
+interface MutableCellTarget {
+  readonly name: string;
+  readonly keyword: "let" | "state";
+}
+
 interface Binding {
   readonly mutable: boolean;
   /** 由普通 `const` 变量声明拥有的一次性值副本；参数、导入和响应式绑定不具备。 */
@@ -6735,7 +6745,11 @@ export class Analyzer implements TypeEnvironment {
       this.typeError(`Operator '${operator}' is not valid for ${describeType(targetType)}`, statement.span);
     }
     const assignmentValid = this.contextuallyAssignable(valueType, targetType, statement.value.span);
-    this.requireAssignable(valueType, targetType, statement.value.span);
+    const mutableCell: MutableCellTarget | null = statement.target.kind === "IdentifierExpression"
+      && targetBinding?.mutable === true && targetBinding.reactiveKind !== "prop"
+      ? { name: statement.target.name, keyword: targetBinding.reactiveKind === "state" ? "state" : "let" }
+      : null;
+    this.requireAssignable(valueType, targetType, statement.value.span, mutableCell);
     if (targetWritable && assignmentValid) {
       if (statement.target.kind === "MemberExpression") {
         // D44 rules 71 and 73: invalidate first, then establish, so the new
@@ -8557,6 +8571,25 @@ export class Analyzer implements TypeEnvironment {
           }
         }
         return source.fields.size === 0 && expectedMap ? expectedMap : { kind: "map", key: stringType, value };
+      }
+      // The same hole one shape further out: a `type` declaration is the most
+      // ordinary record the language has, and it arrives as `named`, so
+      // `Map(pair)` was refused with a message that listed "a record" among the
+      // forms it takes. `fieldsOf` is what tells a record-shaped name from an
+      // extension host scalar or an erased generic, exactly as `Promise.all`
+      // asks it. The runtime has read ordinary records all along.
+      if (source.kind === "named") {
+        const fields = this.fieldsOf(source.identity ?? source.name);
+        if (fields) {
+          let value = unknownType;
+          const fieldType = (field: ValueType): ValueType => source.readonlyView ? this.readonlyDataViewOf(field) : field;
+          for (const field of fields.values()) value = mergeTypes(value, fieldType(field));
+          if (expectedMap) {
+            this.requireAssignable(stringType, expectedMap.key, argument.span);
+            for (const field of fields.values()) this.requireAssignable(fieldType(field), expectedMap.value, argument.span);
+          }
+          return fields.size === 0 && expectedMap ? expectedMap : { kind: "map", key: stringType, value };
+        }
       }
       // A `Record<V>` is the dynamic-key record, and `__velarCreateMap` has
       // always read it. Only the structural `object` shape was accepted here,
@@ -12099,7 +12132,26 @@ export class Analyzer implements TypeEnvironment {
     return null;
   }
 
-  protected requireAssignable(actual: ValueType, expected: ValueType, valueSpan: Span): void {
+  /**
+   * A mutable cell declared without an annotation takes the exact member its
+   * initializer named, so the second member ever stored into it is refused
+   * against the first — `Cannot assign Locale to Locale.zhCN`, reported at the
+   * assignment while the line that has to change is the declaration. The
+   * refusal is right; naming the annotation is what turns it into one edit.
+   */
+  private enumSingletonCellGuidance(
+    actual: ValueType,
+    expected: ValueType,
+    target: MutableCellTarget | null,
+  ): string | null {
+    if (target === null || expected.kind !== "enumMember") return null;
+    if (actual.kind !== "enum" && actual.kind !== "enumMember") return null;
+    if ((actual.identity ?? actual.name) !== (expected.identity ?? expected.name)) return null;
+    if (actual.kind === "enumMember" && actual.member === expected.member) return null;
+    return `'${target.name}' has no annotation, so it took the one member its initializer named; declare the enum to hold any of them — '${target.keyword} ${target.name}: ${expected.name} = ...'`;
+  }
+
+  protected requireAssignable(actual: ValueType, expected: ValueType, valueSpan: Span, mutableCell: MutableCellTarget | null = null): void {
     if (this.contextuallyAssignable(actual, expected, valueSpan)) return;
     const expandedActual = this.expandAliases(actual);
     const expandedExpected = this.expandAliases(expected);
@@ -12130,6 +12182,17 @@ export class Analyzer implements TypeEnvironment {
     const actualDescription = describeType(actual);
     const expectedDescription = describeType(expected);
     if (actualDescription !== expectedDescription) {
+      // The mutable cell that inferred a member singleton: the fix is on a
+      // different line from the report, so the report carries it.
+      const singletonCell = this.enumSingletonCellGuidance(
+        expandedActual.kind === "optional" ? this.expandAliases(expandedActual.inner) : expandedActual,
+        expectedCore,
+        mutableCell,
+      );
+      if (singletonCell !== null) {
+        this.typeError(`Cannot assign ${actualDescription} to ${expectedDescription}; ${singletonCell}`, valueSpan);
+        return;
+      }
       // A readonly projection is refused for one reason and has one fix, and
       // the fix is a signature the author has to write somewhere else. Naming
       // the mismatch without naming that signature is what made component

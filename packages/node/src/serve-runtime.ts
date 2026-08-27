@@ -1513,6 +1513,19 @@ function __velarServeFreezeSchema(value) {
   return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [value]);
 }
 
+/*
+ * D102 后续裁决：线值全为整数的枚举，其 schema 写的是 {"type":"integer",
+ * "enum":[1,2]}——URL 段却是文本，成员判定拿到文本对着数字比，于是每一个请求都
+ * 422。这里回答的只是「该捕获是不是那种枚举」；解码本身走*已有的* number 规则，
+ * 一字未改也一字未加：一个 number 捕获接受什么，它就接受什么。线值混用或全为
+ * 字符串的枚举没有 "integer" 这一行，仍旧按原样文本匹配。
+ */
+function __velarServeIntegerEnum(kind, schema) {
+  if (kind !== "enum" || !schema || typeof schema !== "object") return false;
+  const descriptor = __velarServeOwnDescriptor(schema, "type");
+  return descriptor !== undefined && "value" in descriptor && descriptor.value === "integer";
+}
+
 function __velarServeDefaultSchema(kind) {
   if (kind === "string" || kind === "enum") return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{type: "string"}]);
   if (kind === "number") return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{type: "number"}]);
@@ -2128,7 +2141,12 @@ function __velarServeDecodeScalarValue(raw, kind, name) {
 }
 
 function __velarServeDecodeScalar(raw, parameter) {
-  const value = __velarServeDecodeScalarValue(raw, parameter.kind, parameter.name);
+  // 一个整数线值的枚举捕获，先按 number 捕获解码，再做成员判定;
+  // 解码失败与今天的解码失败是同一个 422。判定读的是已经规范化并冻结的 schema，
+  // 而不是描述符上多出来的一个字段：规范化后的描述符会被中间件重新登记一次，
+  // 多一个字段就是「Route parameter has an unknown field」。
+  const kind = __velarServeIntegerEnum(parameter.kind, parameter.schema) ? "number" : parameter.kind;
+  const value = __velarServeDecodeScalarValue(raw, kind, parameter.name);
   let valid = false;
   try { valid = parameter.check(value) === true; } catch {}
   if (!valid) throw __velarServeRequestProblem(422, {error: "invalid_request", parameter: parameter.name});

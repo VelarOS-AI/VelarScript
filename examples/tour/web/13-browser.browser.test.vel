@@ -92,6 +92,21 @@ test "waiting comes in both the state and the text spelling":
     await browser.waitFor("[data-route='section']")
     expect(await browser.currentPath()).toBe("/section/units")
 
+// Chrome outside the Router. `data-current-route` is rendered by chapter 09's
+// panel, which is a sibling of the `Router` rather than a page inside it, and
+// its text comes from `currentRoute()` alone — no page publishes its route back
+// out for it. The assertion is that it moves without a reload: a snapshot read
+// that established no dependency would still say "/" here.
+test "a currentRoute read outside the Router follows navigation":
+    await browser.open()
+    expect(await browser.text("[data-current-route]")).toBe("/")
+    await browser.click("[data-navigate]")
+    await browser.waitForText("[data-current-route]", "/section/units")
+    expect(await browser.currentPath()).toBe("/section/units")
+    // Back through the browser's own history, not through a Velar call.
+    await browser.click("[data-tour-nav] a[href='/']")
+    await browser.waitForText("[data-current-route]", "/")
+
 test "scrolling and resizing move the page rather than the model":
     await browser.open()
     await browser.viewport(900, 700)

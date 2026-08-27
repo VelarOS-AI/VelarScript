@@ -435,6 +435,63 @@ test("[D90] Map(record) type-checks the form its own diagnostic advertises", () 
   ]);
 });
 
+test("[P1-4] Map(record) accepts the record a `type` declaration names", () => {
+  // The same hole one shape further out. `Record<V>` was fixed above; a `type`
+  // declaration — the most ordinary record the language has — arrives as
+  // `named` and was still refused by the message that lists "a record".
+  const declared = "type Pair:\n    a: string\n    b: string\n\n";
+  assert.deepEqual(codesOf(`${declared}def main():\n    const typed: Pair = {a: "1", b: "2"}\n    const m = Map(typed)\n    print(m.size)\n`), []);
+
+  // The value type is the merge of the declared fields, and the keys are
+  // strings by construction — the same answer the structural form gives.
+  assert.deepEqual(codesOf(`${declared}def take(source: Pair):\n    const m: Map<string, string> = Map(source)\n    print(m.size)\n`), []);
+  // A refused target names each field that cannot reach it, which is what the
+  // structural `object` branch has always done — one report per field, so a
+  // record whose fields all fail says so once per field.
+  assert.deepEqual(
+    messagesOf("type Single:\n    a: string\n\ndef take(source: Single):\n    const m: Map<string, number> = Map(source)\n"),
+    ["Cannot assign Map<string, string> to Map<string, number>", "Cannot assign string to number"],
+  );
+  assert.deepEqual(
+    messagesOf(`${declared}def take(source: Pair):\n    const m: Map<string, number> = Map(source)\n`),
+    ["Cannot assign Map<string, string> to Map<string, number>", "Cannot assign string to number", "Cannot assign string to number"],
+  );
+
+  // A record whose fields disagree merges to the union its fields occupy, and
+  // the field that cannot reach the annotated value type is the one blamed.
+  assert.deepEqual(
+    messagesOf("type Mixed:\n    a: string\n    b: number\n\ndef take(source: Mixed):\n    const m: Map<string, string> = Map(source)\n"),
+    ["Cannot assign Map<string, string | number> to Map<string, string>", "Cannot assign number to string"],
+  );
+
+  // An inherited field is a field: a subtype converts with its whole shape.
+  assert.deepEqual(codesOf("type Base:\n    a: string\n\ntype Child extends Base:\n    b: string\n\ndef take(source: Child):\n    const m = Map(source)\n    print(m.size)\n"), []);
+
+  // A readonly projection keeps projecting through the named form too.
+  assert.deepEqual(
+    messagesOf("type Holder:\n    items: List<number>\n\ndef take(source: readonly Holder):\n    const m = Map(source)\n    const got = m.get(\"items\")\n    if got != null:\n        got.append(1)\n"),
+    ["Cannot call mutating method 'append' through readonly List<number>; it is a read-only view"],
+  );
+
+  // And what genuinely is not a record is still refused, by the same message.
+  // A class is the interesting one: it is nominal and it is not plain data, so
+  // it takes the roster message plus the `@iterate:` sentence that names the
+  // contract it could declare.
+  assert.deepEqual(messagesOf("def main():\n    const m = Map(5)\n"), [
+    "Map construction requires a Map, a List of [key, value] Lists, or a record, received number",
+  ]);
+  assert.deepEqual(messagesOf('def main():\n    const m = Map("text")\n'), [
+    "Map construction requires a Map, a List of [key, value] Lists, or a record, received string",
+  ]);
+  assert.deepEqual(messagesOf("class Bag:\n    def size() -> number: return 0\n\ndef main():\n    const m = Map(Bag())\n"), [
+    "Map construction requires a Map, a List of [key, value] Lists, or a record, received Bag"
+      + "; declare an '@iterate:' block on the class to say which List, Set, Map, or Record iterating it means",
+  ]);
+  assert.deepEqual(messagesOf("enum Kind:\n    alpha\n\ndef main():\n    const m = Map(Kind.alpha)\n"), [
+    "Map construction requires a Map, a List of [key, value] Lists, or a record, received Kind.alpha",
+  ]);
+});
+
 test("[D90] a readonly Record projects a readonly value type through Map(record)", () => {
   assert.deepEqual(
     messagesOf('def take(source: readonly Record<List<number>>):\n    const m = Map(source)\n    const got = m.get("a")\n    if got != null:\n        got.append(1)\n'),
