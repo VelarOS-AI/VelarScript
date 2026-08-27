@@ -266,15 +266,29 @@ async function packagedFixture(): Promise<FixtureProject> {
   return packaged;
 }
 
-function smoke(project: FixtureProject, mode: string, logDirectory: string): { status: number | null; stdout: string; stderr: string } {
-  return spawnSync(
-    join(project.root, "dist", "desktop", "Velar Service Fixture.app", "Contents", "MacOS", "VelarDesktopHost"),
-    ["--headless-smoke"],
-    {
-      encoding: "utf8",
-      env: { ...process.env, VELAR_DESKTOP_PROJECT_ROOT: project.root, FIXTURE_SERVICE_MODE: mode, FIXTURE_SERVICE_LOG_DIR: logDirectory },
-    },
-  );
+const deprivation = resolve("tests/fixtures/desktop/no-external-node.sb");
+
+/**
+ * `deprived` is the same run on a machine stripped of every Node the
+ * application could borrow — `env -i` with a PATH that holds none, and a sandbox
+ * profile that denies the three package-manager roots the host falls back to. A
+ * service that starts there started on the interpreter the bundle carries.
+ */
+function smoke(
+  project: FixtureProject,
+  mode: string,
+  logDirectory: string,
+  deprived = false,
+): { status: number | null; stdout: string; stderr: string } {
+  const host = join(project.root, "dist", "desktop", "Velar Service Fixture.app", "Contents", "MacOS", "VelarDesktopHost");
+  const environment = { VELAR_DESKTOP_PROJECT_ROOT: project.root, FIXTURE_SERVICE_MODE: mode, FIXTURE_SERVICE_LOG_DIR: logDirectory };
+  if (!deprived) return spawnSync(host, ["--headless-smoke"], { encoding: "utf8", env: { ...process.env, ...environment } });
+  return spawnSync("/usr/bin/sandbox-exec", [
+    "-f", deprivation,
+    "/usr/bin/env", "-i", `HOME=${process.env.HOME ?? ""}`, "PATH=/usr/bin",
+    ...Object.entries(environment).map(([name, value]) => `${name}=${value}`),
+    host, "--headless-smoke",
+  ], { encoding: "utf8" });
 }
 
 async function serviceLog(directory: string, name: string): Promise<string[]> {
@@ -339,21 +353,25 @@ test("the packaged smoke starts each service, authenticates, reaches ready, and 
   const project = await packagedFixture();
   const logs = await mkdtemp(join(tmpdir(), "velar-service-log-"));
   try {
-    const accepted = smoke(project, "answer", logs);
-    assert.equal(accepted.status, 0, accepted.stderr);
-    const report = JSON.parse(accepted.stdout) as { services: { name: string; state: string }[] };
-    assert.deepEqual(report.services, [{ name: "notes", state: "ready" }, { name: "once", state: "ready" }]);
+    for (const deprived of [false, true]) {
+      const round = await mkdtemp(join(logs, "round-"));
+      const accepted = smoke(project, "answer", round, deprived);
+      assert.equal(accepted.status, 0, `${deprived ? "deprived" : "ordinary"}: ${accepted.stderr}`);
+      const report = JSON.parse(accepted.stdout) as { runtime: string; services: { name: string; state: string }[] };
+      assert.deepEqual(report.services, [{ name: "notes", state: "ready" }, { name: "once", state: "ready" }]);
+      assert.equal(report.runtime.endsWith("/Contents/MacOS/node"), true, report.runtime);
 
-    // The service's own record of what happened to it: started once, the
-    // handshake accepted, and SIGTERM delivered — the whole of the spec's
-    // "start, authenticate, ready, converge" round, seen from the other side.
-    for (const name of ["notes", "once"]) {
-      const lines = await serviceLog(logs, name);
-      assert.equal(lines.filter((line) => line.startsWith("start ")).length, 1, `${name}: ${lines.join(" | ")}`);
-      assert.equal(lines.includes("hello accepted"), true, `${name}: ${lines.join(" | ")}`);
-      assert.equal(lines.includes("terminated"), true, `${name}: ${lines.join(" | ")}`);
-      const started = lines.find((line) => line.startsWith("start "))!;
-      assert.equal(running(Number(started.split(" ")[2])), false, `${name} outlived the host that started it`);
+      // The service's own record of what happened to it: started once, the
+      // handshake accepted, and SIGTERM delivered — the whole of the spec's
+      // "start, authenticate, ready, converge" round, seen from the other side.
+      for (const name of ["notes", "once"]) {
+        const lines = await serviceLog(round, name);
+        assert.equal(lines.filter((line) => line.startsWith("start ")).length, 1, `${name}: ${lines.join(" | ")}`);
+        assert.equal(lines.includes("hello accepted"), true, `${name}: ${lines.join(" | ")}`);
+        assert.equal(lines.includes("terminated"), true, `${name}: ${lines.join(" | ")}`);
+        const started = lines.find((line) => line.startsWith("start "))!;
+        assert.equal(running(Number(started.split(" ")[2])), false, `${name} outlived the host that started it`);
+      }
     }
   } finally {
     await rm(logs, { recursive: true, force: true });

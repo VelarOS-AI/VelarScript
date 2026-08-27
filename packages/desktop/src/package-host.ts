@@ -20,11 +20,19 @@ export const velarApplicationPackageHost: ApplicationPackageHost = Object.freeze
     const sizes = result.manifest.sizes;
     const runtime = result.manifest.runtime;
     const signing = result.manifest.signing;
+    const services = result.manifest.services;
     return Object.freeze({
       artifactPath: result.applicationBundle,
       details: Object.freeze([
         `Application ${formatBytes(sizes.applicationBytes)} / ${formatBytes(result.manifest.sizeBudgetBytes)} `
-        + `(host ${formatBytes(sizes.hostBytes)}, renderer ${formatBytes(sizes.rendererBytes)}, capabilities ${formatBytes(sizes.capabilityHostBytes)})`,
+        + `(host ${formatBytes(sizes.hostBytes)}, renderer ${formatBytes(sizes.rendererBytes)}, capabilities ${formatBytes(sizes.capabilityHostBytes)}`
+        // Named only when there are any, because a build line that reports
+        // zero bytes of a section this project has none of is a line nobody
+        // reads twice.
+        + `${services.length > 0 ? `, services ${formatBytes(sizes.servicesBytes)}` : ""})`,
+        ...services.length > 0
+          ? [`Services ${services.map((service) => `${service.name} (${service.restart})`).join(", ")}, started before the renderer and converged on quit`]
+          : [],
         runtime.embedded
           ? `Runtime embedded Node.js ${runtime.version} at ${DESKTOP_EMBEDDED_RUNTIME_PATH} (${formatBytes(runtime.bytes)}, self-contained)`
           : `Runtime external Node.js >=${DESKTOP_NODE_MINIMUM_MAJOR} (not embedded)`,
