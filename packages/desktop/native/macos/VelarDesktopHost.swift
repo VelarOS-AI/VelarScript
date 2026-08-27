@@ -231,12 +231,21 @@ private struct WindowConfiguration: Decodable {
     let resizable: Bool
 }
 
+/// A service as the packaged bundle declares it. The payload directory is not
+/// named here: a packaged service always lives at `Resources/services/<name>/`,
+/// so the project path that produced it is a build fact and not a runtime one.
+private struct ServiceConfiguration: Decodable {
+    let entry: String
+    let restart: String
+}
+
 private struct HostConfiguration: Decodable {
     let protocolVersion: Int
     let productName: String
     let identifier: String
     let nodeMinimumMajor: Int
     let windows: [String: WindowConfiguration]
+    let services: [String: ServiceConfiguration]
     let permissions: PermissionConfiguration
 }
 
@@ -1150,6 +1159,7 @@ private final class DesktopBridge: NSObject, WKScriptMessageHandler {
     let windowHandle: Int
     weak var registry: WindowRegistry?
     weak var services: HostServices?
+    weak var supervisor: ServiceSupervisor?
 
     init(
         identifier: String,
@@ -1199,6 +1209,7 @@ private final class DesktopBridge: NSObject, WKScriptMessageHandler {
         for (identity, _) in discarded { discardIncoming(identity: identity) }
         registry?.retire(generation: generation)
         services?.retire(generation: generation)
+        supervisor?.retire(generation: generation)
         worker.retire(generation: generation)
     }
 
@@ -1252,6 +1263,10 @@ private final class DesktopBridge: NSObject, WKScriptMessageHandler {
             }
             if request.capability == "notification" || request.capability == "secure-storage" {
                 handleHostService(request)
+                return
+            }
+            if request.capability == "service" {
+                handleServiceProcess(request)
                 return
             }
             if request.capability != "desktop" {
@@ -1446,6 +1461,71 @@ private final class DesktopBridge: NSObject, WKScriptMessageHandler {
                 complete(identity: identity, value: services.watchClose(.dropped, handle: try streamHandle(), generation: request.generation), error: nil)
             default:
                 throw NSError(domain: "VelarDesktop", code: 404, userInfo: [NSLocalizedDescriptionKey: "Unknown Desktop operation '\(request.operation)'"])
+            }
+        } catch {
+            complete(identity: identity, value: nil, error: error.localizedDescription)
+        }
+    }
+
+    /// The service channel, served here rather than in the capability worker for
+    /// the reason the token exists: the worker is where application-shaped work
+    /// runs, and the credential that authenticates a service channel must not
+    /// live anywhere a document's code can reach. The host dials, the host
+    /// authenticates, and what crosses this bridge is an already-open channel.
+    private func handleServiceProcess(_ request: BridgeRequest) {
+        let identity = BridgeIdentity(generation: request.generation, id: request.id)
+        guard let supervisor else {
+            complete(identity: identity, value: nil, error: "This Desktop application declares no services")
+            return
+        }
+        func serviceFailure(_ operation: String) -> NSError {
+            NSError(domain: "VelarDesktop", code: 400, userInfo: [NSLocalizedDescriptionKey: "Desktop service operation '\(operation)' received invalid arguments"])
+        }
+        func connectionHandle() throws -> Int {
+            guard let handle = request.arguments.first as? Int, handle > 0 else { throw serviceFailure(request.operation) }
+            return handle
+        }
+        do {
+            switch request.operation {
+            case "connect":
+                guard request.arguments.count == 1, let name = request.arguments[0] as? String else { throw serviceFailure("connect") }
+                supervisor.connect(name: name, generation: request.generation) { [weak self] value, error in
+                    self?.complete(identity: identity, value: value, error: error)
+                }
+            case "send":
+                guard request.arguments.count == 2, let handle = request.arguments[0] as? Int, handle > 0,
+                      let message = request.arguments[1] as? String else { throw serviceFailure("send") }
+                supervisor.send(handle: handle, generation: request.generation, message: message) { [weak self] value, error in
+                    self?.complete(identity: identity, value: value, error: error)
+                }
+            case "receive":
+                guard request.arguments.count == 1 else { throw serviceFailure("receive") }
+                supervisor.receive(handle: try connectionHandle(), generation: request.generation) { [weak self] value, error in
+                    self?.complete(identity: identity, value: value, error: error)
+                }
+            case "state":
+                guard request.arguments.count == 1 else { throw serviceFailure("state") }
+                complete(identity: identity, value: supervisor.connectionState(handle: try connectionHandle(), generation: request.generation), error: nil)
+            case "closeInfo":
+                guard request.arguments.count == 1 else { throw serviceFailure("closeInfo") }
+                complete(identity: identity, value: try supervisor.closeInfo(handle: try connectionHandle(), generation: request.generation), error: nil)
+            case "close":
+                guard request.arguments.count == 3, let handle = request.arguments[0] as? Int, handle > 0,
+                      let code = request.arguments[1] as? Int, let reason = request.arguments[2] as? String else { throw serviceFailure("close") }
+                complete(identity: identity, value: supervisor.close(handle: handle, generation: request.generation, code: code, reason: reason), error: nil)
+            case "watchStart":
+                guard request.arguments.isEmpty else { throw serviceFailure("watchStart") }
+                complete(identity: identity, value: try supervisor.watchStart(generation: request.generation), error: nil)
+            case "watchNext":
+                guard request.arguments.count == 1 else { throw serviceFailure("watchNext") }
+                try supervisor.watchNext(handle: try connectionHandle(), generation: request.generation) { [weak self] value in
+                    self?.complete(identity: identity, value: value, error: nil)
+                }
+            case "watchClose":
+                guard request.arguments.count == 1 else { throw serviceFailure("watchClose") }
+                complete(identity: identity, value: supervisor.watchClose(handle: try connectionHandle(), generation: request.generation), error: nil)
+            default:
+                throw NSError(domain: "VelarDesktop", code: 404, userInfo: [NSLocalizedDescriptionKey: "Unknown Desktop service operation '\(request.operation)'"])
             }
         } catch {
             complete(identity: identity, value: nil, error: error.localizedDescription)
@@ -2125,6 +2205,653 @@ private final class HostServices: NSObject, UNUserNotificationCenterDelegate {
     }
 }
 
+// MARK: - Service processes
+
+/// The bounds one service channel keeps. The renderer states the receive bounds
+/// again on its own side of the bridge (packages/desktop/src/compiler.ts) and
+/// the fake host states them a third time
+/// (packages/desktop/src/test-runtime.ts); the three must not drift.
+private let maxServiceConnections = 64
+private let maxServiceQueuedMessages = 1024
+private let maxServiceQueuedBytes = 8 * 1024 * 1024
+private let maxServiceMessageBytes = 8 * 1024 * 1024
+private let maxServicePendingSendBytes = 8 * 1024 * 1024
+private let maxServiceStreams = 32
+/// Both sides of the handshake wait the same 30 seconds, and the same 30 seconds
+/// is the grace a service gets between SIGTERM and SIGKILL. One number, three
+/// places, because a service that is slow to start and a service that is slow to
+/// stop are the same service.
+private let serviceHandshakeTimeout: TimeInterval = 30
+private let serviceTerminationGrace: TimeInterval = 30
+private let serviceRestartInitialDelay: TimeInterval = 1
+private let serviceRestartMaximumDelay: TimeInterval = 30
+private let serviceRestartFailureLimit = 5
+
+/// The frames the host and a service exchange before anything else crosses the
+/// channel, pinned here and in `packages/desktop/README.md`. The host opens
+/// every connection — the readiness probe and each `connect()` alike — by
+/// sending the hello, and a service answers `service-ready` or it is not a
+/// service this host will talk to. The token is the only authority on the
+/// channel: a loopback port is reachable by every process on the machine, so a
+/// service that answers before checking it has no authentication at all.
+private let serviceHelloKey = "velar"
+private let serviceHelloValue = "service-hello"
+private let serviceReadyValue = "service-ready"
+
+private enum ServiceState: String {
+    case starting
+    case ready
+    case restarting
+    case failed
+    case stopped
+}
+
+/// One bounded pull stream of `{name, state}` events. A slow consumer keeps the
+/// latest state per service rather than a history of transitions: a reader that
+/// woke up late wants to know what is true now, and an unbounded transition log
+/// is a queue that grows while nobody reads it.
+private final class ServiceStateWatcher {
+    let handle: Int
+    let generation: String
+    var events: [(name: String, state: ServiceState)] = []
+    var pending: ((Any) -> Void)?
+    var closed = false
+
+    init(handle: Int, generation: String) {
+        self.handle = handle
+        self.generation = generation
+    }
+}
+
+private final class ServiceConnectionRecord {
+    let handle: Int
+    let name: String
+    let generation: String
+    let task: URLSessionWebSocketTask
+    var queue: [String] = []
+    var queuedBytes = 0
+    var pendingSendBytes = 0
+    var pending: ((Any?, String?) -> Void)?
+    var closed = false
+    var closeCode = 1006
+    var closeReason = "the service channel ended without a close frame"
+
+    init(handle: Int, name: String, generation: String, task: URLSessionWebSocketTask) {
+        self.handle = handle
+        self.name = name
+        self.generation = generation
+        self.task = task
+    }
+}
+
+private final class ServiceRecord {
+    let name: String
+    let entry: URL
+    let payload: URL
+    let restartAlways: Bool
+    var state: ServiceState = .starting
+    var process: Process?
+    var token = ""
+    var port: UInt16 = 0
+    var consecutiveFailures = 0
+    /// Bumped on every start and carried by that start's probe and termination
+    /// handler, so a reply belonging to a process this supervisor has already
+    /// replaced is discarded instead of moving the current one's state.
+    var generation = 0
+
+    init(name: String, entry: URL, payload: URL, restartAlways: Bool) {
+        self.name = name
+        self.entry = entry
+        self.payload = payload
+        self.restartAlways = restartAlways
+    }
+}
+
+/// The four things the language does for a product's service processes: start
+/// them, supervise them, converge them when the application quits, and hand the
+/// renderer one authenticated loopback channel to each. It does not sandbox
+/// them, inspect their traffic, or route anything between them — a service is
+/// the product's code under the product's policy, and the manifest declares it
+/// so that it is auditable rather than so that it is confined.
+///
+/// One instance per application, on the main thread beside `HostServices`,
+/// because a service belongs to the application's lifetime rather than to any
+/// window's.
+private final class ServiceSupervisor: NSObject, URLSessionDelegate {
+    private let runtime: URL
+    private let records: [String: ServiceRecord]
+    private let order: [String]
+    private var watchers: [Int: ServiceStateWatcher] = [:]
+    private var connections: [Int: ServiceConnectionRecord] = [:]
+    private var nextWatcherHandle = 1
+    private var nextConnectionHandle = 1
+    private var converging = false
+    private lazy var session = URLSession(configuration: .ephemeral)
+
+    var declaredNames: [String] { order }
+
+    init(runtime: URL, servicesRoot: URL, services: [String: ServiceConfiguration]) {
+        self.runtime = runtime
+        self.order = services.keys.sorted()
+        var records: [String: ServiceRecord] = [:]
+        for name in order {
+            guard let declared = services[name] else { continue }
+            let payload = servicesRoot.appendingPathComponent(name, isDirectory: true)
+            records[name] = ServiceRecord(
+                name: name,
+                entry: payload.appendingPathComponent(declared.entry),
+                payload: payload,
+                restartAlways: declared.restart == "always"
+            )
+        }
+        self.records = records
+        super.init()
+    }
+
+    /// Started before the renderer loads and never awaited. An application that
+    /// needs a service reads `watchServices()` or calls `connect()`; an
+    /// application that does not is not made to wait for one.
+    func start() {
+        for name in order {
+            guard let record = records[name] else { continue }
+            launch(record)
+        }
+    }
+
+    func state(of name: String) -> ServiceState? { records[name]?.state }
+
+    func report() -> [[String: Any]] {
+        order.compactMap { name in
+            guard let record = records[name] else { return nil }
+            return ["name": name, "state": record.state.rawValue]
+        }
+    }
+
+    // MARK: - Lifecycle
+
+    private func launch(_ record: ServiceRecord) {
+        guard !converging else { return }
+        guard let port = allocateLoopbackPort(), let token = randomServiceToken() else {
+            fail(record, "VelarScript Desktop could not allocate a loopback endpoint for service '\(record.name)'")
+            return
+        }
+        record.port = port
+        record.token = token
+        record.generation += 1
+        let generation = record.generation
+        let process = Process()
+        process.executableURL = runtime
+        process.arguments = [record.entry.path]
+        process.currentDirectoryURL = record.payload
+        // The product's own process, so the product's own environment: a service
+        // is not capability-scoped and `desktop.permissions.environment` governs
+        // what the *renderer* may read, not what the product's process inherits.
+        var environment = ProcessInfo.processInfo.environment
+        environment["VELAR_SERVICE_ENDPOINT"] = "127.0.0.1:\(port)"
+        environment["VELAR_SERVICE_TOKEN"] = token
+        process.environment = environment
+        process.terminationHandler = { [weak self] finished in
+            DispatchQueue.main.async {
+                self?.processEnded(record, generation: generation, status: finished.terminationStatus)
+            }
+        }
+        do {
+            try process.run()
+        } catch {
+            record.process = nil
+            publish(record, .starting)
+            recordFailure(record, generation: generation)
+            return
+        }
+        record.process = process
+        publish(record, .starting)
+        probeReadiness(record, generation: generation, deadline: Date().addingTimeInterval(serviceHandshakeTimeout))
+    }
+
+    /// Readiness is the handshake, retried until its deadline: a process that has
+    /// started is not a service until something answers on the endpoint it was
+    /// given, and a refused connection a millisecond after `spawn` is the normal
+    /// case rather than a failure.
+    private func probeReadiness(_ record: ServiceRecord, generation: Int, deadline: Date) {
+        guard !converging, record.generation == generation, record.state != .ready else { return }
+        guard Date() < deadline else {
+            // The readiness deadline is a start that failed, not a service that
+            // is merely slow: the process is ended and the restart policy is
+            // asked what to do next.
+            record.process?.terminate()
+            recordFailure(record, generation: generation)
+            return
+        }
+        handshake(port: record.port, token: record.token) { [weak self] accepted, task in
+            guard let self else { return }
+            // The probe's own connection is closed once it has its answer. It
+            // proved the service authenticates; it is not an application channel.
+            task?.cancel()
+            guard !self.converging, record.generation == generation else { return }
+            if accepted {
+                record.consecutiveFailures = 0
+                self.publish(record, .ready)
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                self?.probeReadiness(record, generation: generation, deadline: deadline)
+            }
+        }
+    }
+
+    private func processEnded(_ record: ServiceRecord, generation: Int, status: Int32) {
+        guard !converging, record.generation == generation else { return }
+        record.process = nil
+        closeConnections(of: record.name, code: 1001, reason: "the service process ended")
+        recordFailure(record, generation: generation)
+    }
+
+    /// One failure, and what the declared policy makes of it. `never` records the
+    /// exit and stops; `always` backs off exponentially from one second to a
+    /// thirty-second cap, and five consecutive failures end in `failed`, which is
+    /// terminal — a restart loop nobody is watching is worse than a state the
+    /// application can show a person.
+    private func recordFailure(_ record: ServiceRecord, generation: Int) {
+        guard record.generation == generation else { return }
+        guard record.restartAlways else {
+            publish(record, .stopped)
+            return
+        }
+        record.consecutiveFailures += 1
+        guard record.consecutiveFailures < serviceRestartFailureLimit else {
+            publish(record, .failed)
+            return
+        }
+        publish(record, .restarting)
+        let delay = min(serviceRestartMaximumDelay, serviceRestartInitialDelay * pow(2, Double(record.consecutiveFailures - 1)))
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, !self.converging, record.generation == generation, record.state == .restarting else { return }
+            self.launch(record)
+        }
+    }
+
+    private func fail(_ record: ServiceRecord, _ message: String) {
+        FileHandle.standardError.write(Data("\(message)\n".utf8))
+        publish(record, .failed)
+    }
+
+    /// SIGTERM, then SIGKILL after the grace period, and no restart in between:
+    /// once the application is quitting a service that exits is converging rather
+    /// than crashing. Blocking here is deliberate — `applicationWillTerminate` is
+    /// the last moment this process can still reap what it started.
+    func converge() {
+        guard !converging else { return }
+        converging = true
+        for (_, connection) in connections { connection.task.cancel() }
+        connections.removeAll(keepingCapacity: false)
+        var running: [ServiceRecord] = []
+        for name in order {
+            guard let record = records[name] else { continue }
+            guard let process = record.process, process.isRunning else {
+                publish(record, .stopped)
+                continue
+            }
+            process.terminate()
+            running.append(record)
+        }
+        let deadline = Date().addingTimeInterval(serviceTerminationGrace)
+        while Date() < deadline, running.contains(where: { $0.process?.isRunning == true }) {
+            usleep(20_000)
+        }
+        for record in running {
+            if let process = record.process, process.isRunning {
+                kill(process.processIdentifier, SIGKILL)
+            }
+            record.process = nil
+            publish(record, .stopped)
+        }
+    }
+
+    // MARK: - The channel
+
+    /// The host dials, the host authenticates, and the renderer receives an
+    /// already-authenticated channel. The token never reaches application code:
+    /// it is generated here, handed to the service process in its environment,
+    /// and spent here on the first frame of every connection.
+    func connect(name: String, generation: String, completion: @escaping (Any?, String?) -> Void) {
+        guard let record = records[name] else {
+            completion(nil, "Desktop service '\(name)' is not declared in 'desktop.services'")
+            return
+        }
+        guard !converging else {
+            completion(nil, "Desktop service '\(name)' is unavailable while the application is quitting")
+            return
+        }
+        guard connections.count < maxServiceConnections else {
+            completion(nil, "Desktop cannot own more than \(maxServiceConnections) service connections")
+            return
+        }
+        guard record.state == .ready else {
+            completion(nil, "Desktop service '\(name)' is \(record.state.rawValue) rather than ready; watchServices() reports when it becomes ready")
+            return
+        }
+        handshake(port: record.port, token: record.token) { [weak self] accepted, task in
+            guard let self else { return }
+            guard accepted, let task else {
+                task?.cancel()
+                completion(nil, "Desktop service '\(name)' did not complete the authenticated handshake")
+                return
+            }
+            guard !self.converging, self.connections.count < maxServiceConnections else {
+                task.cancel()
+                completion(nil, "Desktop service '\(name)' is unavailable")
+                return
+            }
+            let handle = self.nextConnectionHandle
+            self.nextConnectionHandle += 1
+            let connection = ServiceConnectionRecord(handle: handle, name: name, generation: generation, task: task)
+            self.connections[handle] = connection
+            self.receiveNext(connection)
+            completion(handle, nil)
+        }
+    }
+
+    func send(handle: Int, generation: String, message: String, completion: @escaping (Any?, String?) -> Void) {
+        guard let connection = connections[handle], connection.generation == generation, !connection.closed else {
+            completion(nil, "Desktop service connection is closed or unknown")
+            return
+        }
+        let bytes = message.utf8.count
+        guard bytes <= maxServiceMessageBytes else {
+            completion(nil, "Desktop service message exceeds the \(maxServiceMessageBytes)-byte channel bound")
+            return
+        }
+        guard connection.pendingSendBytes + bytes <= maxServicePendingSendBytes else {
+            completion(nil, "Desktop service connection has \(connection.pendingSendBytes) bytes of unsent messages; await send before sending more")
+            return
+        }
+        connection.pendingSendBytes += bytes
+        connection.task.send(.string(message)) { [weak self] error in
+            DispatchQueue.main.async {
+                connection.pendingSendBytes -= bytes
+                guard let error else {
+                    completion(NSNull(), nil)
+                    return
+                }
+                self?.close(handle: handle, generation: generation, code: 1006, reason: "send failed")
+                completion(nil, "Desktop service send failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func receive(handle: Int, generation: String, completion: @escaping (Any?, String?) -> Void) {
+        guard let connection = connections[handle], connection.generation == generation else {
+            completion(NSNull(), nil)
+            return
+        }
+        guard connection.pending == nil else {
+            completion(nil, "ServiceConnection.next already has an active pull")
+            return
+        }
+        if !connection.queue.isEmpty {
+            completion(connection.queue.removeFirst(), nil)
+            connection.queuedBytes = connection.queue.reduce(0) { $0 + $1.utf8.count }
+            return
+        }
+        if connection.closed {
+            connections.removeValue(forKey: handle)
+            completion(NSNull(), nil)
+            return
+        }
+        connection.pending = completion
+    }
+
+    func closeInfo(handle: Int, generation: String) throws -> [String: Any] {
+        guard let connection = connections[handle], connection.generation == generation else {
+            throw NSError(domain: "VelarDesktop", code: 404, userInfo: [NSLocalizedDescriptionKey: "Desktop service connection is unknown"])
+        }
+        return ["code": connection.closeCode, "reason": connection.closeReason]
+    }
+
+    func connectionState(handle: Int, generation: String) -> String {
+        guard let connection = connections[handle], connection.generation == generation else { return "closed" }
+        return connection.closed ? "closed" : "open"
+    }
+
+    @discardableResult
+    func close(handle: Int, generation: String, code: Int, reason: String) -> Bool {
+        guard let connection = connections[handle], connection.generation == generation else { return false }
+        finish(connection, code: code, reason: reason)
+        connections.removeValue(forKey: handle)
+        return true
+    }
+
+    private func receiveNext(_ connection: ServiceConnectionRecord) {
+        connection.task.receive { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self, self.connections[connection.handle] === connection else { return }
+                switch result {
+                case .failure(let error):
+                    self.finish(connection, code: connection.closeCode, reason: error.localizedDescription)
+                case .success(let message):
+                    var text: String
+                    switch message {
+                    case .string(let value):
+                        text = value
+                    case .data(let value):
+                        // The Desktop bridge carries text, so a binary frame is
+                        // refused rather than silently decoded into something
+                        // that is not what the service sent.
+                        _ = value
+                        self.finish(connection, code: 1003, reason: "a Desktop service channel carries text frames")
+                        return
+                    @unknown default:
+                        self.finish(connection, code: 1003, reason: "a Desktop service channel carries text frames")
+                        return
+                    }
+                    self.deliver(connection, text)
+                    if !connection.closed { self.receiveNext(connection) }
+                }
+            }
+        }
+    }
+
+    private func deliver(_ connection: ServiceConnectionRecord, _ text: String) {
+        let bytes = text.utf8.count
+        guard bytes <= maxServiceMessageBytes else {
+            finish(connection, code: 1009, reason: "the service sent a message above the \(maxServiceMessageBytes)-byte channel bound")
+            return
+        }
+        if let pending = connection.pending, connection.queue.isEmpty {
+            connection.pending = nil
+            pending(text, nil)
+            return
+        }
+        // A bounded pull stream that dropped messages would be a channel that
+        // silently loses a product's data, so the answer to a reader that never
+        // reads is to end the channel and say why.
+        guard connection.queue.count < maxServiceQueuedMessages, connection.queuedBytes + bytes <= maxServiceQueuedBytes else {
+            finish(connection, code: 1009, reason: "the application did not read this service channel and its receive queue reached its bound")
+            return
+        }
+        connection.queue.append(text)
+        connection.queuedBytes += bytes
+    }
+
+    private func finish(_ connection: ServiceConnectionRecord, code: Int, reason: String) {
+        guard !connection.closed else { return }
+        connection.closed = true
+        connection.closeCode = code
+        connection.closeReason = reason
+        connection.task.cancel(with: URLSessionWebSocketTask.CloseCode(rawValue: code) ?? .normalClosure, reason: nil)
+        if let pending = connection.pending {
+            connection.pending = nil
+            pending(NSNull(), nil)
+        }
+    }
+
+    private func closeConnections(of name: String, code: Int, reason: String) {
+        for (handle, connection) in connections where connection.name == name {
+            finish(connection, code: code, reason: reason)
+            connections.removeValue(forKey: handle)
+        }
+    }
+
+    /// One connection, one hello, one answer. Every channel this host opens —
+    /// the readiness probe and each application connection — starts the same way,
+    /// so a service implements authentication once.
+    private func handshake(port: UInt16, token: String, completion: @escaping (Bool, URLSessionWebSocketTask?) -> Void) {
+        guard let url = URL(string: "ws://127.0.0.1:\(port)/"),
+              let hello = try? JSONSerialization.data(withJSONObject: [serviceHelloKey: serviceHelloValue, "token": token]),
+              let helloText = String(data: hello, encoding: .utf8) else {
+            completion(false, nil)
+            return
+        }
+        let task = session.webSocketTask(with: url)
+        var settled = false
+        let settle: (Bool, URLSessionWebSocketTask?) -> Void = { accepted, value in
+            DispatchQueue.main.async {
+                guard !settled else { return }
+                settled = true
+                completion(accepted, value)
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + serviceHandshakeTimeout) {
+            guard !settled else { return }
+            task.cancel()
+            settle(false, nil)
+        }
+        task.resume()
+        task.send(.string(helloText)) { error in
+            if error != nil {
+                task.cancel()
+                settle(false, nil)
+                return
+            }
+            task.receive { result in
+                guard case .success(.string(let answer)) = result,
+                      let data = answer.data(using: .utf8),
+                      let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      object[serviceHelloKey] as? String == serviceReadyValue else {
+                    task.cancel()
+                    settle(false, nil)
+                    return
+                }
+                settle(true, task)
+            }
+        }
+    }
+
+    // MARK: - State stream
+
+    func watchStart(generation: String) throws -> Int {
+        guard watchers.count < maxServiceStreams else {
+            throw NSError(domain: "VelarDesktop", code: 429, userInfo: [NSLocalizedDescriptionKey: "Desktop host cannot own more than \(maxServiceStreams) service state streams"])
+        }
+        let handle = nextWatcherHandle
+        nextWatcherHandle += 1
+        let watcher = ServiceStateWatcher(handle: handle, generation: generation)
+        // A stream that started after the services did would otherwise report
+        // nothing until the next transition, so it opens with what is true now.
+        for name in order {
+            guard let record = records[name] else { continue }
+            watcher.events.append((name: name, state: record.state))
+        }
+        watchers[handle] = watcher
+        return handle
+    }
+
+    func watchNext(handle: Int, generation: String, deliver: @escaping (Any) -> Void) throws {
+        guard let watcher = watchers[handle], watcher.generation == generation else {
+            throw NSError(domain: "VelarDesktop", code: 404, userInfo: [NSLocalizedDescriptionKey: "Desktop ServiceStateStream handle is unknown or already released"])
+        }
+        guard watcher.pending == nil else {
+            throw NSError(domain: "VelarDesktop", code: 409, userInfo: [NSLocalizedDescriptionKey: "ServiceStateStream.next already has an active pull"])
+        }
+        if !watcher.events.isEmpty {
+            let event = watcher.events.removeFirst()
+            deliver(["name": event.name, "state": event.state.rawValue])
+            return
+        }
+        watcher.pending = deliver
+    }
+
+    @discardableResult
+    func watchClose(handle: Int, generation: String) -> Bool {
+        guard let watcher = watchers[handle], watcher.generation == generation else { return false }
+        watcher.closed = true
+        watcher.pending = nil
+        watchers.removeValue(forKey: handle)
+        return true
+    }
+
+    func retire(generation: String) {
+        for (handle, watcher) in watchers where watcher.generation == generation {
+            watcher.closed = true
+            watcher.pending = nil
+            watchers.removeValue(forKey: handle)
+        }
+        for (handle, connection) in connections where connection.generation == generation {
+            finish(connection, code: 1001, reason: "the document that owned this service connection went away")
+            connections.removeValue(forKey: handle)
+        }
+    }
+
+    private func publish(_ record: ServiceRecord, _ state: ServiceState) {
+        record.state = state
+        for (_, watcher) in watchers where !watcher.closed {
+            if let pending = watcher.pending, watcher.events.isEmpty {
+                watcher.pending = nil
+                pending(["name": record.name, "state": state.rawValue])
+                continue
+            }
+            // Keep-latest per service: a slow reader learns what each service is
+            // now, not every transition it missed.
+            if let index = watcher.events.firstIndex(where: { $0.name == record.name }) {
+                watcher.events[index] = (name: record.name, state: state)
+                continue
+            }
+            watcher.events.append((name: record.name, state: state))
+        }
+    }
+}
+
+/// A port the operating system chose, released immediately so the service can
+/// bind it. The window between the two is a race this host accepts: the
+/// alternative is passing a bound descriptor into a process the product wrote,
+/// which would make every service implementation depend on inheriting a file
+/// descriptor by number.
+private func allocateLoopbackPort() -> UInt16? {
+    let descriptor = socket(AF_INET, SOCK_STREAM, 0)
+    guard descriptor >= 0 else { return nil }
+    defer { Darwin.close(descriptor) }
+    var address = sockaddr_in()
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_port = 0
+    address.sin_addr.s_addr = inet_addr("127.0.0.1")
+    address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    let bound = withUnsafePointer(to: &address) { pointer in
+        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { rebound in
+            Darwin.bind(descriptor, rebound, socklen_t(MemoryLayout<sockaddr_in>.size))
+        }
+    }
+    guard bound == 0 else { return nil }
+    var assigned = sockaddr_in()
+    var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+    let named = withUnsafeMutablePointer(to: &assigned) { pointer in
+        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { rebound in
+            getsockname(descriptor, rebound, &length)
+        }
+    }
+    guard named == 0 else { return nil }
+    let port = UInt16(bigEndian: assigned.sin_port)
+    return port == 0 ? nil : port
+}
+
+/// 128 bits from the system's own generator, hex-encoded. It is the whole
+/// authentication of a loopback channel every process on the machine can reach,
+/// so it is neither derived from a path nor seeded from a clock.
+private func randomServiceToken() -> String? {
+    var bytes = [UInt8](repeating: 0, count: 16)
+    guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else { return nil }
+    return bytes.map { String(format: "%02x", $0) }.joined()
+}
+
 /// The web view a Desktop window renders into. It exists for one reason: a drag
 /// gesture's real filesystem paths are on the pasteboard of the very operation
 /// that hands the drop to WebKit, and nowhere afterwards.
@@ -2171,6 +2898,7 @@ private final class WindowRegistry: NSObject, NSWindowDelegate {
     private let projectFilesGranted: Bool
     private let worker: NodeCapabilityHost
     private let services: HostServices
+    private let supervisor: ServiceSupervisor?
     private let environmentJSON: String
     private let headless: Bool
     private var records: [Int: WindowRecord] = [:]
@@ -2188,6 +2916,7 @@ private final class WindowRegistry: NSObject, NSWindowDelegate {
         projectFilesGranted: Bool,
         worker: NodeCapabilityHost,
         services: HostServices,
+        supervisor: ServiceSupervisor?,
         environmentJSON: String,
         headless: Bool
     ) {
@@ -2198,6 +2927,7 @@ private final class WindowRegistry: NSObject, NSWindowDelegate {
         self.projectFilesGranted = projectFilesGranted
         self.worker = worker
         self.services = services
+        self.supervisor = supervisor
         self.environmentJSON = environmentJSON
         self.headless = headless
     }
@@ -2415,6 +3145,7 @@ private final class WindowRegistry: NSObject, NSWindowDelegate {
         )
         bridge.registry = self
         bridge.services = services
+        bridge.supervisor = supervisor
         let configuration = WKWebViewConfiguration()
         configuration.setURLSchemeHandler(schemeHandler, forURLScheme: "velar-app")
         let projectDirectoryJSON = try jsonText(projectGrant.directory)
@@ -2578,6 +3309,7 @@ private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
     private var projectGrant: ProjectDirectoryGrant?
     private var registry: WindowRegistry?
     private var services: HostServices?
+    private var supervisor: ServiceSupervisor?
 
     init(headless: Bool, smoke: Bool) {
         self.headless = headless
@@ -2627,6 +3359,16 @@ private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
             let environmentData = try JSONSerialization.data(withJSONObject: environment)
             let environmentJSON = String(data: environmentData, encoding: .utf8)!
             let services = HostServices(identifier: host.identifier, permissions: host.permissions)
+            // Services start before the renderer loads and are not awaited: an
+            // application that needs one reads `watchServices()`, and an
+            // application that does not is never made to wait for a process it
+            // will not talk to.
+            let supervisor = host.services.isEmpty ? nil : ServiceSupervisor(
+                runtime: nodeRuntime.url,
+                servicesRoot: resources.appendingPathComponent("services", isDirectory: true),
+                services: host.services
+            )
+            supervisor?.start()
             let registry = WindowRegistry(
                 host: host,
                 resources: resources,
@@ -2635,6 +3377,7 @@ private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
                 projectFilesGranted: projectFilesGranted,
                 worker: nodeHost,
                 services: services,
+                supervisor: supervisor,
                 environmentJSON: environmentJSON,
                 headless: headless
             )
@@ -2646,13 +3389,11 @@ private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
             self.nodeHost = nodeHost
             self.projectGrant = projectGrant
             self.services = services
+            self.supervisor = supervisor
             self.registry = registry
-            if smoke { runHeadlessSmoke(host: host, runtime: nodeRuntime, worker: nodeHost) }
+            if smoke { runHeadlessSmoke(host: host, runtime: nodeRuntime, worker: nodeHost, supervisor: supervisor) }
         } catch {
-            if smoke {
-                FileHandle.standardError.write(Data("VelarScript Desktop headless smoke failed: \(error.localizedDescription)\n".utf8))
-                exit(1)
-            }
+            if smoke { endSmoke(supervisor, 1, error.localizedDescription) }
             let alert = NSAlert(error: error)
             alert.messageText = "VelarScript Desktop could not start"
             alert.runModal()
@@ -2674,46 +3415,89 @@ private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
     /// same thing: the refusal it gets back was *computed by the worker*, which
     /// only a working interpreter could have done. What is never accepted is
     /// silence, a transport failure, or a different error.
-    private func runHeadlessSmoke(host: HostConfiguration, runtime: ResolvedNodeRuntime, worker: NodeCapabilityHost) {
-        let deadline = DispatchWorkItem {
-            FileHandle.standardError.write(Data("VelarScript Desktop headless smoke failed: the capability round-trip did not answer within 60s\n".utf8))
-            exit(1)
+    private func runHeadlessSmoke(host: HostConfiguration, runtime: ResolvedNodeRuntime, worker: NodeCapabilityHost, supervisor: ServiceSupervisor?) {
+        let deadline = DispatchWorkItem { [weak self] in
+            self?.endSmoke(supervisor, 1, "the capability round-trip did not answer within 60s")
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 60, execute: deadline)
         let granted = host.permissions.files.contains("app-data") || host.permissions.files.contains("project")
-        worker.probe(capability: "fs", operation: "list", arguments: ["."]) { ok, value, error in
+        worker.probe(capability: "fs", operation: "list", arguments: ["."]) { [weak self] ok, value, error in
             deadline.cancel()
+            guard let self else { return }
             if granted {
                 guard ok, value is [Any] else {
-                    FileHandle.standardError.write(Data("VelarScript Desktop headless smoke failed: fs.list answered \(error ?? "an unusable value")\n".utf8))
-                    exit(1)
+                    self.endSmoke(supervisor, 1, "fs.list answered \(error ?? "an unusable value")")
                 }
             } else {
                 guard !ok, let error, error.contains("no granted filesystem scope") else {
-                    FileHandle.standardError.write(Data("VelarScript Desktop headless smoke failed: an application with no file grant answered \(error ?? "a result")\n".utf8))
-                    exit(1)
+                    self.endSmoke(supervisor, 1, "an application with no file grant answered \(error ?? "a result")")
                 }
             }
-            do {
-                try writeReport([
-                    "kind": "velar-desktop-headless-smoke",
-                    "protocolVersion": 1,
-                    "identifier": host.identifier,
-                    "runtimeSource": runtime.source.rawValue,
-                    "runtime": runtime.url.path,
-                    "capability": "fs.list",
-                    "fileScope": granted,
-                    "windowKinds": host.windows.keys.sorted(),
-                ])
-            } catch {
-                FileHandle.standardError.write(Data("VelarScript Desktop headless smoke failed: the report could not be serialized\n".utf8))
-                exit(1)
+            // The worker answered, so the interpreter runs. What is left is the
+            // other half of a packaged application: every declared service was
+            // started, answered the authenticated handshake, and reached ready.
+            self.awaitServices(supervisor, deadline: Date().addingTimeInterval(serviceHandshakeTimeout * 2)) {
+                self.reportSmoke(host: host, runtime: runtime, granted: granted, supervisor: supervisor)
             }
-            // The renderer, the worker and the windows are all live here; the
-            // acceptance is that they started and answered, so the exit is the
-            // last statement rather than a shutdown sequence.
-            exit(0)
         }
+    }
+
+    /// The smoke waits for readiness where the application deliberately does not.
+    /// An application reads `watchServices()` and carries on; the acceptance has
+    /// to answer "did this bundle's services come up", so it is the one caller
+    /// that blocks on the answer.
+    private func awaitServices(_ supervisor: ServiceSupervisor?, deadline: Date, then finish: @escaping () -> Void) {
+        guard let supervisor else {
+            finish()
+            return
+        }
+        let states = supervisor.declaredNames.map { supervisor.state(of: $0) ?? .failed }
+        if states.allSatisfy({ $0 == .ready }) {
+            finish()
+            return
+        }
+        if let terminal = states.first(where: { $0 == .failed || $0 == .stopped }) {
+            endSmoke(supervisor, 1, "a declared service reached the terminal state '\(terminal.rawValue)' instead of ready")
+        }
+        guard Date() < deadline else {
+            let report = supervisor.report().map { "\($0["name"] ?? "?")=\($0["state"] ?? "?")" }.joined(separator: ", ")
+            endSmoke(supervisor, 1, "a declared service did not reach ready in time (\(report))")
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.awaitServices(supervisor, deadline: deadline, then: finish)
+        }
+    }
+
+    private func reportSmoke(host: HostConfiguration, runtime: ResolvedNodeRuntime, granted: Bool, supervisor: ServiceSupervisor?) {
+        do {
+            try writeReport([
+                "kind": "velar-desktop-headless-smoke",
+                "protocolVersion": 1,
+                "identifier": host.identifier,
+                "runtimeSource": runtime.source.rawValue,
+                "runtime": runtime.url.path,
+                "capability": "fs.list",
+                "fileScope": granted,
+                "windowKinds": host.windows.keys.sorted(),
+                "services": supervisor?.report() ?? [],
+            ])
+        } catch {
+            endSmoke(supervisor, 1, "the report could not be serialized")
+        }
+        endSmoke(supervisor, 0, nil)
+    }
+
+    /// Every exit out of the smoke, and the reason there is only one: this path
+    /// calls `exit` rather than terminating the application, so
+    /// `applicationWillTerminate` never runs and nothing it converges is
+    /// converged. A service process that outlived the host that started it would
+    /// be a leak this acceptance produced.
+    private func endSmoke(_ supervisor: ServiceSupervisor?, _ status: Int32, _ failure: String?) -> Never {
+        if let failure {
+            FileHandle.standardError.write(Data("VelarScript Desktop headless smoke failed: \(failure)\n".utf8))
+        }
+        supervisor?.converge()
+        exit(status)
     }
 
     /// A packaged application is a single instance: LaunchServices activates the
@@ -2728,6 +3512,10 @@ private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         registry?.closeAll()
         services?.stop()
+        // Before the capability worker, because a service is the product's own
+        // process: it is given its SIGTERM and its grace while this host is
+        // still alive to send the SIGKILL that follows.
+        supervisor?.converge()
         projectGrant?.release()
         nodeHost?.stop()
     }
@@ -2770,6 +3558,7 @@ private enum VelarDesktopHost {
                     "protocolVersion": 1,
                     "identifier": host.identifier,
                     "windowKinds": host.windows.keys.sorted(),
+                    "services": host.services.keys.sorted(),
                 ]
                 try writeReport(report)
                 return
