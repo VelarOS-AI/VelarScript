@@ -178,7 +178,7 @@ export async function buildDesktopApplication(
       identifier: config.identifier,
       version,
       nodeMinimumMajor: 24,
-      window: config.window,
+      windows: config.windows,
       permissions: config.permissions,
     }, null, 2)}\n`, "utf8");
 

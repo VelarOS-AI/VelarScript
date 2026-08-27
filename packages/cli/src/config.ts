@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstat, readFile, stat } from "node:fs/promises";
+import { lstat, readFile, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -75,6 +75,14 @@ interface ProjectExtension {
   readonly id: string;
   readonly manifestKey: string;
   readonly parse: (value: unknown, manifestPath: string) => unknown;
+  /**
+   * D38 §48 for manifests: the mechanical rewrite `velar fix` applies when this
+   * extension retires a manifest shape. It receives the manifest's whole text
+   * and returns the migrated text, or null when nothing needs migrating. The
+   * extension that owns the shape owns the rewrite, exactly as it owns `parse`,
+   * so the check-time error and the fix are one migration.
+   */
+  readonly migrate?: (manifestText: string, manifestPath: string) => string | null;
 }
 
 interface LoadedExtensions {
@@ -119,6 +127,62 @@ export async function resolveVelarProjectForDocument(path: string): Promise<Vela
   const documentPath = resolve(path);
   const manifestPath = await findManifest(dirname(documentPath));
   return manifestPath ? loadManifest(manifestPath) : standaloneProject(documentPath);
+}
+
+export interface ProjectManifestMigration {
+  readonly manifestPath: string;
+  /**
+   * What each extension rewrote, in application order, without the manifest
+   * path: the command that prints them owns how a path is displayed.
+   */
+  readonly changes: readonly string[];
+}
+
+/**
+ * The manifest half of `velar fix`. A retired manifest shape cannot be
+ * migrated by the source fixer, because the manifest is what fails first:
+ * `resolveVelarProject` refuses to parse it, so nothing downstream ever runs.
+ * This locates the manifest, loads the extensions it names, and lets each
+ * extension that owns a manifest key rewrite its own retired shape before the
+ * project is resolved at all.
+ *
+ * A project with no manifest — a bare `.vel` entry — has nothing to migrate and
+ * answers null rather than failing.
+ */
+export async function migrateVelarProjectManifest(input: string | null, cwd = process.cwd()): Promise<ProjectManifestMigration | null> {
+  const explicit = input ? resolve(cwd, input) : null;
+  const kind = explicit ? await pathKind(explicit) : null;
+  const manifestPath = explicit
+    ? kind === "file" && extname(explicit) === ".vel" ? await findManifest(dirname(explicit))
+      : kind === "directory" ? join(explicit, "velar.json") : explicit
+    : await findManifest(resolve(cwd));
+  if (!manifestPath || !await ordinaryManifestFile(manifestPath)) return null;
+  const metadata = await lstat(manifestPath);
+  if (metadata.size > 1024 * 1024) throw new RangeError(`Cannot read ${manifestPath}: project manifest exceeds 1 MiB`);
+  const original = await readFile(manifestPath, "utf8");
+  let manifest: ManifestShape;
+  try { manifest = JSON.parse(original) as ManifestShape; }
+  catch (error) { throw new Error(`Cannot read ${manifestPath}: ${hostErrorMessage(error)}`); }
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) return null;
+  const extensions = await loadExtensions(dirname(manifestPath), extensionList(manifest.extensions, manifestPath), manifestPath);
+  const changes: string[] = [];
+  let text = original;
+  for (const extension of extensions.project) {
+    if (!extension.migrate) continue;
+    const migrated = extension.migrate(text, manifestPath);
+    if (migrated === null || migrated === text) continue;
+    text = migrated;
+    changes.push(`migrated the '${extension.manifestKey}' manifest section to the shape ${extension.id} publishes today`);
+  }
+  if (changes.length === 0) return { manifestPath, changes: Object.freeze([]) };
+  // The rewrite was computed from the text read above, so a save that landed
+  // since then is not in it; the manifest is left untouched and the conflict is
+  // reported rather than silently reverting the author's edit.
+  if (await readFile(manifestPath, "utf8") !== original) {
+    throw new Error(`${manifestPath}: the manifest changed on disk during this fix pass; nothing was written`);
+  }
+  await writeFile(manifestPath, text, "utf8");
+  return { manifestPath, changes: Object.freeze(changes) };
 }
 
 async function loadManifest(manifestPath: string, entryOverride: string | null = null): Promise<VelarProjectConfig> {
@@ -280,7 +344,8 @@ async function loadExtensions(root: string, names: readonly string[], manifestPa
       compiler.push(extension);
       if (package_.manifestKey !== null) {
         const projectExtension = bundled.project;
-        if (!projectExtension || projectExtension.id !== name || projectExtension.manifestKey !== package_.manifestKey || typeof projectExtension.parse !== "function") {
+        if (!projectExtension || projectExtension.id !== name || projectExtension.manifestKey !== package_.manifestKey || typeof projectExtension.parse !== "function"
+          || (projectExtension.migrate !== undefined && typeof projectExtension.migrate !== "function")) {
           throw new Error(`'${name}/compiler' exports an invalid velarProjectExtension`);
         }
         project.push(projectExtension);
@@ -298,7 +363,8 @@ async function loadExtensions(root: string, names: readonly string[], manifestPa
       compiler.push(extension);
       if (package_.manifestKey !== null) {
         const projectExtension = namespace.velarProjectExtension as Partial<ProjectExtension>;
-        if (!projectExtension || projectExtension.id !== name || projectExtension.manifestKey !== package_.manifestKey || typeof projectExtension.parse !== "function") {
+        if (!projectExtension || projectExtension.id !== name || projectExtension.manifestKey !== package_.manifestKey || typeof projectExtension.parse !== "function"
+          || (projectExtension.migrate !== undefined && typeof projectExtension.migrate !== "function")) {
           throw new Error(`'${name}/compiler' exports an invalid velarProjectExtension`);
         }
         project.push(projectExtension as ProjectExtension);

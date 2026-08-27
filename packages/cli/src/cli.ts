@@ -19,7 +19,7 @@ import {
   runNodeDevelopment,
 } from "./node-application.ts";
 import { createFrameworkArtifacts } from "./framework-host.ts";
-import { resolveVelarProject, type VelarProjectConfig } from "./config.ts";
+import { migrateVelarProjectManifest, resolveVelarProject, type VelarProjectConfig } from "./config.ts";
 import { standardModuleClosure, standardModuleSource, standardModuleSources } from "./standard-modules.ts";
 import { runTests } from "./test-runner.ts";
 import { runProgram } from "./program-runner.ts";
@@ -328,10 +328,22 @@ async function main(arguments_: readonly string[]): Promise<number> {
       process.stderr.write(`velar fix: ${input.error}\n`);
       return 2;
     }
+    // The manifest is migrated first, because a retired manifest shape is what
+    // fails the project resolution below: the source fixer never gets to run
+    // while `velar.json` still names a field this compiler removed.
+    const manifestChanges: string[] = [];
+    try {
+      const migration = await migrateVelarProjectManifest(input);
+      if (migration) manifestChanges.push(...migration.changes.map((change) => `${displayPath(migration.manifestPath)} ${change}`));
+    } catch (error) {
+      process.stderr.write(`velar fix: ${hostErrorMessage(error)}\n`);
+      return 1;
+    }
     let fixConfig: VelarProjectConfig;
     try {
       fixConfig = await resolveVelarProject(input);
     } catch (error) {
+      for (const change of manifestChanges) process.stdout.write(`${change}\n`);
       process.stderr.write(`velar fix: ${hostErrorMessage(error)}\n`);
       return 1;
     }
@@ -339,18 +351,24 @@ async function main(arguments_: readonly string[]): Promise<number> {
     try {
       report = await applyProjectMechanicalFixes(fixConfig, displayPath, 8, await projectTestModules(fixConfig));
     } catch (error) {
+      for (const change of manifestChanges) process.stdout.write(`${change}\n`);
       process.stderr.write(`velar fix: ${hostErrorMessage(error)}\n`);
       return 1;
     }
+    for (const change of manifestChanges) process.stdout.write(`${change}\n`);
     for (const change of report.changes) process.stdout.write(`${change}\n`);
     if (report.remainingDiagnostics.length > 0) process.stderr.write(`${report.remainingDiagnostics.join("\n\n")}\n`);
     // D51 item NEW-D8: a write that failed is named, and the summary that says
     // what did change is printed either way — a rewritten tree is never left
     // unreported.
     for (const failure of report.writeFailures) process.stderr.write(`velar fix: could not write ${failure}\n`);
-    const files = report.changedFiles.length;
+    // The manifest counts as one changed file and each of its migrations as one
+    // fix, so the summary reports the whole rewritten tree rather than only its
+    // `.vel` half.
+    const files = report.changedFiles.length + (manifestChanges.length > 0 ? 1 : 0);
+    const applied = report.changes.length + manifestChanges.length;
     process.stdout.write(
-      `applied ${report.changes.length} mechanical fix${report.changes.length === 1 ? "" : "es"}`
+      `applied ${applied} mechanical fix${applied === 1 ? "" : "es"}`
       + `${files > 0 ? ` in ${files} file${files === 1 ? "" : "s"}` : ""}`
       + `${report.writeFailures.length > 0 ? `; ${report.writeFailures.length} file${report.writeFailures.length === 1 ? "" : "s"} could not be written` : ""}`
       + `; ${report.remainingDiagnostics.length} diagnostic${report.remainingDiagnostics.length === 1 ? " remains" : "s remain"}\n`,

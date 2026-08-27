@@ -171,7 +171,7 @@ function desktopTemplate(name: string, displayName: string, version: string, for
       desktop: {
         productName: displayName,
         identifier: `dev.velarscript.${identifier}`,
-        window: { width: 1040, height: 720, minWidth: 640, minHeight: 480 },
+        windows: { main: { width: 1040, height: 720, minWidth: 640, minHeight: 480 } },
         permissions: { files: [], processes: [], network: [], environment: [], secrets: [] },
       },
     })],

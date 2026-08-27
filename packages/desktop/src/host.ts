@@ -6,7 +6,7 @@ import {
   type FrameworkHostExtension,
 } from "@velarscript/compiler/framework-host";
 import { createWebArtifacts, createWebErrorDocument, velarFrameworkHost as webHost, webStaticDeployment } from "@velarscript/web/host";
-import { VELAR_DESKTOP_API_VERSION, type VelarDesktopConfig } from "./config.ts";
+import { DESKTOP_MAIN_WINDOW_KIND, VELAR_DESKTOP_API_VERSION, type VelarDesktopConfig } from "./config.ts";
 import { desktopBrowserTestController } from "./test-runtime.ts";
 
 export const velarFrameworkHost: FrameworkHostExtension = Object.freeze({
@@ -62,7 +62,10 @@ export const velarFrameworkHost: FrameworkHostExtension = Object.freeze({
 function webConfig(value: unknown) {
   const config = value as VelarDesktopConfig;
   return {
-    title: config.window.title,
+    // Every window loads this one document, so the document title is the main
+    // window's; a window kind's own title is applied by the native host to the
+    // NSWindow it opens, not to the shared page.
+    title: config.windows[DESKTOP_MAIN_WINDOW_KIND]!.title,
     base: "/",
     // A desktop window has no browser tab; its icon is the packaged
     // application icon, not a document `rel="icon"`.

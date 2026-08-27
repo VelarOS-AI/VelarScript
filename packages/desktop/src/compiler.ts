@@ -2,7 +2,7 @@ import { optionalOf, type CompilerExtension, type EnumInfo, type ModuleInterface
 import { VELAR_STRICT_JSON_RUNTIME, VELAR_TYPE_REGISTRY_RUNTIME, VELAR_UTF8_RUNTIME } from "@velarscript/compiler/extension";
 import { velarCompilerExtension as webCompilerExtension, webModuleSource } from "@velarscript/web/compiler";
 import { nodeModuleInterfaces, VELAR_NODE_API_VERSION, VELAR_PROCESS_HOST_RUNTIME } from "@velarscript/node/compiler";
-import { VELAR_DESKTOP_API_VERSION, velarProjectExtension, type VelarDesktopConfig } from "./config.ts";
+import { DESKTOP_MAIN_WINDOW_KIND, VELAR_DESKTOP_API_VERSION, velarProjectExtension, type VelarDesktopConfig } from "./config.ts";
 
 const stringType: ValueType = { kind: "string" };
 const boolType: ValueType = { kind: "bool" };
@@ -14,11 +14,28 @@ function functionType(parameters: readonly ValueType[], result: ValueType, requi
   return { kind: "function", parameters, requiredParameters, result };
 }
 
+function promiseOf(value: ValueType): ValueType {
+  return { kind: "promise", value };
+}
+
+function listOf(element: ValueType): ValueType {
+  return { kind: "list", element };
+}
+
+function objectType(fields: Readonly<Record<string, ValueType>>, optionalFields: readonly string[] = []): ValueType {
+  return {
+    kind: "object",
+    fields: new Map(Object.entries(fields)),
+    ...(optionalFields.length > 0 ? { optionalFields: new Set(optionalFields) } : {}),
+  };
+}
+
 function moduleInterface(
   exports: ReadonlyMap<string, ValueType>,
   namedTypes: ReadonlyMap<string, ReadonlyMap<string, ValueType>> = new Map(),
   namedTypeIdentities: ReadonlyMap<string, string> = new Map(),
   enums: ReadonlyMap<string, EnumInfo> = new Map(),
+  typeAliases: ReadonlyMap<string, ValueType> = new Map(),
 ): ModuleInterface {
   return {
     exports,
@@ -27,7 +44,7 @@ function moduleInterface(
     reExports: new Map(),
     namedTypes,
     namedTypeIdentities,
-    typeAliases: new Map(),
+    typeAliases,
     enums,
     classes: new Map(),
     tests: [],
@@ -93,6 +110,72 @@ const desktopModuleInterface = moduleInterface(new Map([
   ["DesktopPlatform", { identity: desktopPlatformIdentity, members: desktopPlatforms, wireValues: desktopPlatformWireValues }],
 ]));
 
+// `velar/window` — the Desktop window surface. A window kind is declared in
+// `desktop.windows`; nothing here invents one. The handle families follow the
+// two contracts the rest of the target already keeps: an owned resource is
+// released by `close()` (charter section 16, so `using` supplies the release),
+// and an event source is a bounded pull stream with no callback registry, the
+// same shape `velar/fs.watchFiles` publishes.
+const windowStateIdentity = "velar/window#enum:WindowState";
+const windowStateMembers = new Set(["moved", "resized", "focused", "blurred", "closed"]);
+const windowStateWireValues = new Map([...windowStateMembers].map((member) => [member, member]));
+const windowStateType: ValueType = { kind: "enum", name: "WindowState", identity: windowStateIdentity };
+const windowType: ValueType = { kind: "named", name: "Window", identity: "velar/window#type:Window" };
+const windowStateStreamType: ValueType = { kind: "named", name: "WindowStateStream", identity: "velar/window#type:WindowStateStream" };
+const windowBoundsType = objectType({ x: numberType, y: numberType, width: numberType, height: numberType });
+const windowInfoType = objectType({ kind: stringType, key: optionalStringType, focused: boolType });
+// The `Display` record spec section 5 names. It is spelled structurally here
+// because `velar/desktop.displays()` — the L1b half of the same concept —
+// publishes the name, and a type alias is structural, so the two stay one
+// record rather than two.
+const windowDisplayType = objectType({
+  id: stringType,
+  bounds: windowBoundsType,
+  workArea: windowBoundsType,
+  scale: numberType,
+  primary: boolType,
+});
+const openWindowOptionsType = objectType({
+  route: stringType,
+  key: optionalStringType,
+  bounds: optionalOf(windowBoundsType),
+}, ["key", "bounds"]);
+
+const windowModuleInterface = moduleInterface(
+  new Map<string, ValueType>([
+    ["Window", { kind: "typeObject", name: "Window" }],
+    ["WindowBounds", { kind: "typeObject", name: "WindowBounds" }],
+    ["WindowState", { kind: "enumObject", name: "WindowState", identity: windowStateIdentity, members: windowStateMembers }],
+    ["WindowStateStream", { kind: "typeObject", name: "WindowStateStream" }],
+    ["currentWindowKind", functionType([], stringType)],
+    ["currentWindow", functionType([], windowType)],
+    ["openWindow", functionType([stringType, openWindowOptionsType], promiseOf(windowType))],
+    ["windows", functionType([], promiseOf(listOf(windowInfoType)))],
+  ]),
+  new Map([
+    ["Window", new Map<string, ValueType>([
+      ["focus", functionType([], promiseOf(nullType))],
+      ["close", functionType([], promiseOf(nullType))],
+      ["bounds", functionType([], promiseOf(windowBoundsType))],
+      ["setBounds", functionType([windowBoundsType], promiseOf(nullType))],
+      ["display", functionType([], promiseOf(windowDisplayType))],
+      ["watchState", functionType([], promiseOf(windowStateStreamType))],
+    ])],
+    ["WindowStateStream", new Map<string, ValueType>([
+      ["next", functionType([], promiseOf(optionalOf(windowStateType)))],
+      ["close", functionType([], promiseOf(nullType))],
+    ])],
+  ]),
+  new Map([
+    ["Window", "velar/window#type:Window"],
+    ["WindowStateStream", "velar/window#type:WindowStateStream"],
+  ]),
+  new Map([
+    ["WindowState", { identity: windowStateIdentity, members: windowStateMembers, wireValues: windowStateWireValues }],
+  ]),
+  new Map([["WindowBounds", windowBoundsType]]),
+);
+
 const desktopTestModuleInterface = moduleInterface(new Map([
   ["setPlatform", functionType([desktopPlatformType], { kind: "promise", value: nullType })],
   ["appDataDirectory", functionType([], { kind: "promise", value: stringType })],
@@ -101,6 +184,15 @@ const desktopTestModuleInterface = moduleInterface(new Map([
   ["readText", functionType([stringType, { kind: "number" }], { kind: "promise", value: stringType })],
   ["writeText", functionType([stringType, stringType], { kind: "promise", value: nullType })],
   ["removeFile", functionType([stringType], { kind: "promise", value: nullType })],
+  // The fake window registry. `setWindowKind` is the `setPlatform` shape — one
+  // pre-navigation choice, sealed by the first `browser.open()` — and the four
+  // below are the host events a real window system produces, so a test drives
+  // the same stream the native host feeds rather than a second mechanism.
+  ["setWindowKind", functionType([stringType], promiseOf(nullType))],
+  ["openWindows", functionType([], promiseOf(listOf(windowInfoType)))],
+  ["focusWindow", functionType([stringType, optionalStringType], promiseOf(nullType), 1)],
+  ["moveWindow", functionType([stringType, optionalStringType, windowBoundsType], promiseOf(nullType))],
+  ["closeWindow", functionType([stringType, optionalStringType], promiseOf(nullType), 1)],
 ]));
 
 const nodeProcessInterface = nodeModuleInterfaces.get("velar/process")!;
@@ -206,7 +298,297 @@ export async function removeFile(path) {
   if (value !== null) throw new TypeError("Desktop test host returned an invalid remove result");
   return null;
 }
+function testWindowKind(value, operation) {
+  if (typeof value !== "string" || !/^[a-z]+(?:-[a-z]+)*$/u.test(value) || value.length > 32) {
+    throw new TypeError("Desktop test " + operation + " requires a declared window kind");
+  }
+  return value;
+}
+function testWindowKey(value, operation) {
+  if (value == null) return null;
+  if (typeof value !== "string" || !/^[A-Za-z0-9._:-]{1,128}$/u.test(value)) {
+    throw new TypeError("Desktop test " + operation + " key must be at most 128 characters of letters, digits, '.', '_', ':' or '-'");
+  }
+  return value;
+}
+function testWindowBounds(value, operation) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError("Desktop test " + operation + " requires WindowBounds");
+  const output = {};
+  for (const name of ["x", "y", "width", "height"]) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, name);
+    if (!descriptor?.enumerable || !("value" in descriptor) || typeof descriptor.value !== "number" || !Number.isFinite(descriptor.value)) {
+      throw new TypeError("Desktop test " + operation + " requires WindowBounds");
+    }
+    output[name] = descriptor.value;
+  }
+  return output;
+}
+export async function setWindowKind(kind) {
+  const result = await invoke("desktop-test", "setWindowKind", [testWindowKind(kind, "setWindowKind")], 30000);
+  if (result !== null) throw new TypeError("Desktop test host returned an invalid window kind setup result");
+  return null;
+}
+export async function openWindows() {
+  const value = await invoke("window", "list", [], 30000);
+  if (!Array.isArray(value) || value.length > 256) throw new TypeError("Desktop test host returned an invalid window list");
+  const output = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const item = value[index];
+    if (!item || typeof item !== "object" || typeof item.focused !== "boolean") throw new TypeError("Desktop test host returned invalid window information");
+    output[output.length] = Object.freeze({
+      kind: testWindowKind(item.kind, "openWindows"),
+      key: testWindowKey(item.key, "openWindows"),
+      focused: item.focused,
+    });
+  }
+  return output;
+}
+async function windowEvent(operation, args) {
+  const value = await invoke("window-test", operation, args, 30000);
+  if (value !== null) throw new TypeError("Desktop test host returned an invalid " + operation + " result");
+  return null;
+}
+export async function focusWindow(kind, key = null) {
+  return windowEvent("focus", [testWindowKind(kind, "focusWindow"), testWindowKey(key, "focusWindow")]);
+}
+export async function moveWindow(kind, key, bounds) {
+  return windowEvent("move", [testWindowKind(kind, "moveWindow"), testWindowKey(key, "moveWindow"), testWindowBounds(bounds, "moveWindow")]);
+}
+export async function closeWindow(kind, key = null) {
+  return windowEvent("close", [testWindowKind(kind, "closeWindow"), testWindowKey(key, "closeWindow")]);
+}
 `.trimStart();
+
+/**
+ * `velar/window`'s runtime, closed over the window kinds this project's
+ * manifest declares. The kinds are baked in rather than fetched, so an
+ * undeclared kind is refused at the `openWindow` call with the manifest field
+ * that would declare it, before any request reaches the host — and the host
+ * refuses the same kind again on its own side.
+ */
+function desktopWindowSource(kinds: readonly string[]): string {
+  return String.raw`
+${DESKTOP_HOST_ABI_RUNTIME}
+${VELAR_TYPE_REGISTRY_RUNTIME}
+const windowToken = Symbol("velar.desktop.window");
+const windowStreamToken = Symbol("velar.desktop.window.state");
+const declaredWindowKinds = new Set(${JSON.stringify(kinds)});
+const declaredWindowKindList = ${JSON.stringify(kinds.join(", "))};
+const maxWindowInfoItems = 256;
+const maxWindowCoordinate = 1000000;
+const boundsFields = new Set(["x", "y", "width", "height"]);
+const displayFields = new Set(["id", "bounds", "workArea", "scale", "primary"]);
+const infoFields = new Set(["kind", "key", "focused"]);
+const openOptionFields = new Set(["route", "key", "bounds"]);
+function recordOf(value, name, allowed) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError(name + " must be a record");
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) throw new TypeError(name + " must be a plain record");
+  const output = Object.create(null);
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string") throw new TypeError(name + " fields must use string names");
+    if (!allowed.has(key)) throw new TypeError(name + " has unknown field '" + key + "'");
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor?.enumerable || !("value" in descriptor)) throw new TypeError(name + " fields must be enumerable data values");
+    output[key] = descriptor.value;
+  }
+  return output;
+}
+function coordinate(value, name) {
+  if (typeof value !== "number" || !Number.isFinite(value) || Math.abs(value) > maxWindowCoordinate) {
+    throw new RangeError(name + " must be a finite screen coordinate within 1000000 points");
+  }
+  return value;
+}
+function extent(value, name) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 1 || value > maxWindowCoordinate) {
+    throw new RangeError(name + " must be a finite size of at least 1 point");
+  }
+  return value;
+}
+function boundsOf(value, name) {
+  const fields = recordOf(value, name, boundsFields);
+  if (Reflect.ownKeys(fields).length !== 4) throw new TypeError(name + " must contain x, y, width and height");
+  return Object.freeze({
+    x: coordinate(fields.x, name + " x"),
+    y: coordinate(fields.y, name + " y"),
+    width: extent(fields.width, name + " width"),
+    height: extent(fields.height, name + " height"),
+  });
+}
+function displayOf(value) {
+  const fields = recordOf(value, "Desktop display", displayFields);
+  if (Reflect.ownKeys(fields).length !== 5 || typeof fields.id !== "string" || fields.id.length === 0 || fields.id.length > 128
+    || typeof fields.primary !== "boolean" || typeof fields.scale !== "number" || !Number.isFinite(fields.scale)
+    || fields.scale <= 0 || fields.scale > 16) {
+    throw new TypeError("Desktop host returned an invalid display");
+  }
+  return Object.freeze({
+    id: fields.id,
+    bounds: boundsOf(fields.bounds, "Desktop display bounds"),
+    workArea: boundsOf(fields.workArea, "Desktop display work area"),
+    scale: fields.scale,
+    primary: fields.primary,
+  });
+}
+function windowKindOf(value, operation) {
+  if (typeof value !== "string" || value.length === 0 || value.length > 32) {
+    throw new TypeError(operation + " requires a window kind declared in desktop.windows");
+  }
+  if (!declaredWindowKinds.has(value)) {
+    throw new Error(operation + " cannot open the undeclared window kind '" + value
+      + "'; declare it under 'desktop.windows' in this project's velar.json (declared kinds: " + declaredWindowKindList + ")");
+  }
+  return value;
+}
+function windowKeyOf(value, operation) {
+  if (value == null) return null;
+  if (typeof value !== "string" || !/^[A-Za-z0-9._:-]{1,128}$/u.test(value)) {
+    throw new TypeError(operation + " key must be at most 128 characters of letters, digits, '.', '_', ':' or '-'");
+  }
+  return value;
+}
+function routeOf(value) {
+  if (typeof value !== "string" || value.length === 0 || value.length > 2048 || value.includes("\0")) {
+    throw new TypeError("openWindow route must be a bounded in-application path");
+  }
+  if (value[0] !== "/" || value[1] === "/" || value[1] === "\\") {
+    throw new TypeError("openWindow route must start with '/' and stay inside this application");
+  }
+  return value;
+}
+function openOptionsOf(value) {
+  if (value == null) value = {};
+  const fields = recordOf(value, "openWindow options", openOptionFields);
+  return {
+    route: routeOf(fields.route),
+    key: windowKeyOf(fields.key, "openWindow"),
+    bounds: fields.bounds == null ? null : boundsOf(fields.bounds, "openWindow bounds"),
+  };
+}
+function windowHandleOf(value) {
+  if (!Number.isSafeInteger(value) || value < 1) throw new TypeError("Desktop host returned an invalid window handle");
+  return value;
+}
+function infoOf(value) {
+  const fields = recordOf(value, "Desktop window info", infoFields);
+  if (Reflect.ownKeys(fields).length !== 3 || typeof fields.focused !== "boolean" || !declaredWindowKinds.has(fields.kind)) {
+    throw new TypeError("Desktop host returned invalid window information");
+  }
+  return Object.freeze({kind: fields.kind, key: windowKeyOf(fields.key, "windows"), focused: fields.focused});
+}
+function invoke(operation, args, timeout = 30000) {
+  return __velarDesktopHostCall("window", operation, args, timeout);
+}
+async function settle(operation, args) {
+  const value = await invoke(operation, args);
+  if (value !== null) throw new TypeError("Desktop host returned an invalid " + operation + " result");
+  return null;
+}
+export const WindowState = __velarRegisterRuntimeType(Object.freeze({
+  moved: "moved", resized: "resized", focused: "focused", blurred: "blurred", closed: "closed",
+  is(value) { return value === "moved" || value === "resized" || value === "focused" || value === "blurred" || value === "closed"; },
+  parse(value) {
+    if (!WindowState.is(value)) throw new TypeError("Value does not match WindowState");
+    return value;
+  },
+  // D60 rule 149: values() is the third name charter section 6 reserves on
+  // every enum, and it returns a fresh mutable List in declaration order.
+  values() { return ["moved", "resized", "focused", "blurred", "closed"]; },
+}));
+export const WindowBounds = Object.freeze({
+  is(value) { try { boundsOf(value, "WindowBounds"); return true; } catch { return false; } },
+  parse(value) { return boundsOf(value, "WindowBounds"); },
+});
+class WindowStateStreamHandle {
+  constructor(token, handle) {
+    if (token !== windowStreamToken) throw new TypeError("WindowStateStream values are created only by velar/window.watchState");
+    this.handle = windowHandleOf(handle);
+    this.closed = false;
+    this.pending = false;
+    this.next = async () => {
+      if (this.closed) return null;
+      if (this.pending) throw new Error("WindowStateStream.next already has an active pull");
+      this.pending = true;
+      try {
+        const value = await invoke("watchNext", [this.handle], 0);
+        if (value === null) { this.closed = true; return null; }
+        return WindowState.parse(value);
+      } catch (error) {
+        this.closed = true;
+        try { await invoke("watchClose", [this.handle]); } catch {}
+        throw error;
+      } finally {
+        this.pending = false;
+      }
+    };
+    Object.seal(this);
+  }
+  async close() {
+    if (this.closed) return null;
+    this.closed = true;
+    const value = await invoke("watchClose", [this.handle]);
+    if (typeof value !== "boolean") throw new TypeError("Desktop host returned an invalid window state stream release result");
+    return null;
+  }
+}
+class WindowHandle {
+  constructor(token, handle, kind) {
+    if (token !== windowToken) throw new TypeError("Window values are created only by velar/window");
+    this.handle = windowHandleOf(handle);
+    this.kind = kind;
+    this.released = false;
+    Object.seal(this);
+  }
+  async focus() { return settle("focus", [this.handle]); }
+  // Releasing a Window closes it, and closing an already closed window is the
+  // state it is already in, so the second call is not an error: the host
+  // answers false for a handle its registry no longer holds.
+  async close() {
+    if (this.released) return null;
+    this.released = true;
+    const value = await invoke("close", [this.handle]);
+    if (typeof value !== "boolean") throw new TypeError("Desktop host returned an invalid window release result");
+    return null;
+  }
+  async bounds() { return boundsOf(await invoke("bounds", [this.handle]), "Desktop window bounds"); }
+  async setBounds(bounds) { return settle("setBounds", [this.handle, boundsOf(bounds, "setBounds bounds")]); }
+  async display() { return displayOf(await invoke("display", [this.handle])); }
+  async watchState() { return new WindowStateStreamHandle(windowStreamToken, await invoke("watchStart", [this.handle])); }
+}
+export const Window = Object.freeze({
+  is(value) { return value instanceof WindowHandle; },
+  parse(value) { if (!(value instanceof WindowHandle)) throw new TypeError("Value does not match Window"); return value; },
+});
+export const WindowStateStream = Object.freeze({
+  is(value) { return value instanceof WindowStateStreamHandle; },
+  parse(value) { if (!(value instanceof WindowStateStreamHandle)) throw new TypeError("Value does not match WindowStateStream"); return value; },
+});
+export function currentWindowKind() {
+  const value = __velarDesktopHostField("windowKind");
+  if (typeof value !== "string" || !declaredWindowKinds.has(value)) throw new TypeError("Desktop host reported an undeclared window kind");
+  return value;
+}
+export function currentWindow() {
+  return new WindowHandle(windowToken, __velarDesktopHostField("windowHandle"), currentWindowKind());
+}
+export async function openWindow(kind, options = {}) {
+  kind = windowKindOf(kind, "openWindow");
+  return new WindowHandle(windowToken, await invoke("open", [kind, openOptionsOf(options)]), kind);
+}
+export async function windows() {
+  const value = await invoke("list", []);
+  if (!Array.isArray(value) || value.length > maxWindowInfoItems) throw new TypeError("Desktop host returned an invalid window list");
+  const output = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (!descriptor?.enumerable || !("value" in descriptor)) throw new TypeError("Desktop host returned an invalid window list");
+    output[output.length] = infoOf(descriptor.value);
+  }
+  return output;
+}
+`.trimStart();
+}
 
 const DESKTOP_PATH_SOURCE = String.raw`
 ${DESKTOP_HOST_ABI_RUNTIME}
@@ -1248,6 +1630,7 @@ export const http = Object.freeze({
 const desktopModuleInterfaces = new Map(webCompilerExtension.modules!.interfaces);
 desktopModuleInterfaces.set("velar/desktop", desktopModuleInterface);
 desktopModuleInterfaces.set("velar/desktop-test", desktopTestModuleInterface);
+desktopModuleInterfaces.set("velar/window", windowModuleInterface);
 desktopModuleInterfaces.set("velar/fs", nodeModuleInterfaces.get("velar/fs")!);
 desktopModuleInterfaces.set("velar/path", nodeModuleInterfaces.get("velar/path")!);
 desktopModuleInterfaces.set("velar/process", desktopProcessInterface);
@@ -1257,6 +1640,10 @@ const desktopModuleSources = new Map(webCompilerExtension.modules!.sources);
 const desktopModuleDependencies = new Map(webCompilerExtension.modules!.dependencies);
 desktopModuleSources.set("velar/desktop", DESKTOP_MODULE_SOURCE);
 desktopModuleSources.set("velar/desktop-test", DESKTOP_TEST_SOURCE);
+// The fallback source outside a resolved project knows only the kind every
+// manifest declares; `source()` below closes the module over the project's own
+// `desktop.windows` whenever the project config is at hand.
+desktopModuleSources.set("velar/window", desktopWindowSource([DESKTOP_MAIN_WINDOW_KIND]));
 desktopModuleSources.set("velar/fs", DESKTOP_FS_SOURCE);
 desktopModuleSources.set("velar/path", DESKTOP_PATH_SOURCE);
 desktopModuleSources.set("velar/process", DESKTOP_PROCESS_SOURCE);
@@ -1296,6 +1683,10 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
     sources: desktopModuleSources,
     dependencies: desktopModuleDependencies,
     source(specifier: string, projectConfig: unknown) {
+      if (specifier === "velar/window") {
+        const windows = (projectConfig as VelarDesktopConfig | undefined)?.windows;
+        return desktopWindowSource(windows ? Object.keys(windows) : [DESKTOP_MAIN_WINDOW_KIND]);
+      }
       if (specifier === "velar/desktop") return DESKTOP_MODULE_SOURCE;
       if (specifier === "velar/desktop-test") return DESKTOP_TEST_SOURCE;
       if (specifier === "velar/fs") return DESKTOP_FS_SOURCE;

@@ -1,8 +1,34 @@
+import { migrateDesktopManifestText } from "./manifest-migration.ts";
+import { byCodeUnit } from "./stable-order.ts";
+
 export const VELAR_DESKTOP_API_VERSION = "0.10";
 // The budget covers only the native shell, renderer, capability host, and
 // metadata. Product tooling is installed by products rather than bundled into
 // every Desktop application.
 export const DEFAULT_DESKTOP_SIZE_BUDGET_BYTES = 32 * 1024 * 1024;
+
+/**
+ * The window kind a Desktop application always declares and the host always
+ * opens at launch. Every other kind is opened by `openWindow`.
+ */
+export const DESKTOP_MAIN_WINDOW_KIND = "main";
+/**
+ * A window kind is an identity the manifest declares and the host registry
+ * keys on, so the vocabulary is closed on both sides: lowercase words joined
+ * by single hyphens, and at most 32 of them in one application.
+ */
+export const DESKTOP_WINDOW_KIND_LIMIT = 32;
+const desktopWindowKindPattern = /^[a-z]+(?:-[a-z]+)*$/u;
+
+export type DesktopWindowTitleBar = "standard" | "hidden-inset";
+export type DesktopWindowMaterial = "none" | "sidebar";
+export type DesktopWindowStyle = "window" | "panel";
+export type DesktopWindowLevel = "normal" | "floating";
+
+const desktopWindowTitleBars: readonly DesktopWindowTitleBar[] = Object.freeze(["standard", "hidden-inset"]);
+const desktopWindowMaterials: readonly DesktopWindowMaterial[] = Object.freeze(["none", "sidebar"]);
+const desktopWindowStyles: readonly DesktopWindowStyle[] = Object.freeze(["window", "panel"]);
+const desktopWindowLevels: readonly DesktopWindowLevel[] = Object.freeze(["normal", "floating"]);
 
 export interface DesktopWindowConfig {
   readonly title: string;
@@ -10,6 +36,17 @@ export interface DesktopWindowConfig {
   readonly height: number;
   readonly minWidth: number;
   readonly minHeight: number;
+  readonly titleBar: DesktopWindowTitleBar;
+  /** macOS vibrancy behind the renderer; `sidebar` implies a transparent page background. */
+  readonly material: DesktopWindowMaterial;
+  /** `panel` is an NSPanel: non-activating, floating, outside the window cycle. */
+  readonly style: DesktopWindowStyle;
+  readonly frame: boolean;
+  readonly level: DesktopWindowLevel;
+  readonly visibleOnAllWorkspaces: boolean;
+  /** Locked width-to-height ratio, or null when the window is free. */
+  readonly aspectRatio: number | null;
+  readonly resizable: boolean;
 }
 
 export interface DesktopPermissionConfig {
@@ -23,7 +60,12 @@ export interface DesktopPermissionConfig {
 export interface VelarDesktopConfig {
   readonly productName: string;
   readonly identifier: string;
-  readonly window: DesktopWindowConfig;
+  /**
+   * Every window kind this application may open, keyed by kind and always
+   * containing `main`. The record is built in sorted key order so the packaged
+   * `desktop.json` and the generated `velar/window` module are byte-stable.
+   */
+  readonly windows: Readonly<Record<string, DesktopWindowConfig>>;
   readonly permissions: DesktopPermissionConfig;
   readonly build: {
     readonly outDir: string;
@@ -37,11 +79,30 @@ export const velarProjectExtension = Object.freeze({
   parse(value: unknown, manifestPath: string): VelarDesktopConfig {
     return desktopConfig(value, manifestPath);
   },
+  /**
+   * The mechanical manifest rewrite `velar fix` applies for this extension.
+   * The check-time error the old shape raises names this command, so the two
+   * are one migration reported from two places rather than two rules.
+   */
+  migrate(manifestText: string): string | null {
+    return migrateDesktopManifestText(manifestText);
+  },
 });
+
+/**
+ * The one sentence a manifest written against the singular `desktop.window`
+ * shape reads. It is raised before `knownFields` so the author is told what
+ * replaced the field and how to migrate, rather than only that the field is
+ * unknown; `velar fix` performs exactly the rewrite this names.
+ */
+export const DESKTOP_WINDOWS_MIGRATION_MESSAGE =
+  "'desktop.window' was replaced by 'desktop.windows', a map of window kinds whose required 'main' entry is the window the host opens at launch; "
+  + "run 'velar fix' to rewrite 'window: {...}' as 'windows: {\"main\": {...}}'";
 
 function desktopConfig(value: unknown, manifestPath: string): VelarDesktopConfig {
   const desktop = objectField(value, "desktop", manifestPath);
-  knownFields(desktop, new Set(["productName", "identifier", "window", "permissions", "build"]), "desktop", manifestPath);
+  if (desktop.window !== undefined) throw new Error(`${manifestPath}: ${DESKTOP_WINDOWS_MIGRATION_MESSAGE}`);
+  knownFields(desktop, new Set(["productName", "identifier", "windows", "permissions", "build"]), "desktop", manifestPath);
   const productName = stringField(desktop.productName, "desktop.productName");
   if (!/^[^/:\0]{1,80}$/u.test(productName) || productName === "." || productName === "..") {
     throw new Error(`${manifestPath}: 'desktop.productName' must be a safe application name of at most 80 characters`);
@@ -53,23 +114,60 @@ function desktopConfig(value: unknown, manifestPath: string): VelarDesktopConfig
   return Object.freeze({
     productName,
     identifier,
-    window: windowConfig(desktop.window, productName, manifestPath),
+    windows: windowsConfig(desktop.windows, productName, manifestPath),
     permissions: permissionConfig(desktop.permissions, manifestPath),
     build: buildConfig(desktop.build, manifestPath),
   });
 }
 
-function windowConfig(value: unknown, productName: string, manifestPath: string): DesktopWindowConfig {
-  const window = value === undefined ? {} : objectField(value, "desktop.window", manifestPath);
-  knownFields(window, new Set(["title", "width", "height", "minWidth", "minHeight"]), "desktop.window", manifestPath);
-  const width = integerField(window.width, "desktop.window.width", 1180, 480, 8192);
-  const height = integerField(window.height, "desktop.window.height", 760, 320, 8192);
+function windowsConfig(value: unknown, productName: string, manifestPath: string): Readonly<Record<string, DesktopWindowConfig>> {
+  const windows = value === undefined ? { [DESKTOP_MAIN_WINDOW_KIND]: {} } : objectField(value, "desktop.windows", manifestPath);
+  const kinds = Object.keys(windows).sort(byCodeUnit);
+  if (kinds.length > DESKTOP_WINDOW_KIND_LIMIT) {
+    throw new Error(`${manifestPath}: 'desktop.windows' cannot declare more than ${DESKTOP_WINDOW_KIND_LIMIT} window kinds`);
+  }
+  if (!kinds.includes(DESKTOP_MAIN_WINDOW_KIND)) {
+    throw new Error(`${manifestPath}: 'desktop.windows' must declare the '${DESKTOP_MAIN_WINDOW_KIND}' window kind the host opens at launch`);
+  }
+  const output: Record<string, DesktopWindowConfig> = {};
+  for (const kind of kinds) {
+    if (!desktopWindowKindPattern.test(kind) || kind.length > DESKTOP_WINDOW_KIND_LIMIT) {
+      throw new Error(`${manifestPath}: desktop window kind '${kind}' must be lowercase words joined by single hyphens, at most ${DESKTOP_WINDOW_KIND_LIMIT} characters`);
+    }
+    output[kind] = windowConfig(windows[kind], kind, productName, manifestPath);
+  }
+  return Object.freeze(output);
+}
+
+function windowConfig(value: unknown, kind: string, productName: string, manifestPath: string): DesktopWindowConfig {
+  const field = `desktop.windows.${kind}`;
+  const window = value === undefined ? {} : objectField(value, field, manifestPath);
+  knownFields(window, new Set([
+    "title", "width", "height", "minWidth", "minHeight",
+    "titleBar", "material", "style", "frame", "level", "visibleOnAllWorkspaces", "aspectRatio", "resizable",
+  ]), field, manifestPath);
+  const width = integerField(window.width, `${field}.width`, 1180, 480, 8192);
+  const height = integerField(window.height, `${field}.height`, 760, 320, 8192);
+  const style = enumField(window.style, `${field}.style`, desktopWindowStyles, "window");
   return Object.freeze({
-    title: window.title === undefined ? productName : stringField(window.title, "desktop.window.title"),
+    title: window.title === undefined ? productName : stringField(window.title, `${field}.title`),
     width,
     height,
-    minWidth: integerField(window.minWidth, "desktop.window.minWidth", 720, 320, width),
-    minHeight: integerField(window.minHeight, "desktop.window.minHeight", 520, 240, height),
+    // A window smaller than its own floor is a manifest that cannot be
+    // honoured, so the floors are bounded by the size declared beside them.
+    minWidth: integerField(window.minWidth, `${field}.minWidth`, Math.min(720, width), 320, width),
+    minHeight: integerField(window.minHeight, `${field}.minHeight`, Math.min(520, height), 240, height),
+    titleBar: enumField(window.titleBar, `${field}.titleBar`, desktopWindowTitleBars, "standard"),
+    material: enumField(window.material, `${field}.material`, desktopWindowMaterials, "none"),
+    style,
+    frame: booleanField(window.frame, `${field}.frame`, true),
+    // A panel that did not float would be an ordinary window wearing a panel's
+    // name, so `panel` carries the floating level its own definition implies
+    // and `level` narrows nothing further.
+    level: enumField(window.level, `${field}.level`, desktopWindowLevels, style === "panel" ? "floating" : "normal"),
+    visibleOnAllWorkspaces: booleanField(window.visibleOnAllWorkspaces, `${field}.visibleOnAllWorkspaces`, false),
+    aspectRatio: ratioField(window.aspectRatio, `${field}.aspectRatio`),
+    resizable: booleanField(window.resizable, `${field}.resizable`, true),
   });
 }
 
@@ -169,6 +267,22 @@ function integerField(value: unknown, field: string, fallback: number, minimum: 
 function booleanField(value: unknown, field: string, fallback: boolean): boolean {
   if (value === undefined) return fallback;
   if (typeof value !== "boolean") throw new Error(`'${field}' must be a boolean`);
+  return value;
+}
+
+function enumField<T extends string>(value: unknown, field: string, allowed: readonly T[], fallback: T): T {
+  if (value === undefined) return fallback;
+  if (typeof value !== "string" || !allowed.includes(value as T)) {
+    throw new Error(`'${field}' must be one of ${allowed.map((item) => `'${item}'`).join(", ")}`);
+  }
+  return value as T;
+}
+
+function ratioField(value: unknown, field: string): number | null {
+  if (value === undefined) return null;
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0 || value > 100) {
+    throw new Error(`'${field}' must be a finite number greater than 0 and at most 100`);
+  }
   return value;
 }
 

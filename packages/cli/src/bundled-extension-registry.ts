@@ -5,6 +5,8 @@ export interface BundledProjectExtension {
   readonly id: string;
   readonly manifestKey: string;
   readonly parse: (value: unknown, manifestPath: string) => unknown;
+  /** The manifest rewrite `velar fix` applies for this extension; see ProjectExtension. */
+  readonly migrate?: (manifestText: string, manifestPath: string) => string | null;
 }
 
 export interface BundledExtensionDefinition {
