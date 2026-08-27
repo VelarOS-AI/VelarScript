@@ -58,6 +58,15 @@ write — a save that lands mid-pass survives verbatim instead of being reverted
 without a word. A run that could not write a file, or that leaves a diagnostic
 behind, exits non-zero.
 
+`fix` migrates `velar.json` too, and does it first, because a manifest written
+against a shape this compiler removed is what fails before anything else can
+run. A target that retires a manifest shape carries the rewrite with it, and the
+error the old shape raises names this command: `desktop.window` reports that
+`desktop.windows` replaced it, and `velar fix` rewrites `window: {…}` as
+`windows: {"main": {…}}`. The edit is surgical — the one member changes, and the
+rest of the manifest keeps its bytes, key order and indentation — and running it
+a second time changes nothing.
+
 `lsp` orders workspace symbols by match quality first, then by name ignoring
 case, then by path. Ignoring case is the Unicode default case mapping rather
 than a locale-tailored one, so `apple` comes before `Banana` on every machine
@@ -191,6 +200,61 @@ source packages. Their generated `validate` scripts run the appropriate build
 and `npm pack --dry-run --json` so the package contents are checked before
 publication. See [package distribution](package-distribution.md) and
 [static deployment](static-deployment.md).
+
+A Desktop project declares the windows it may open in `desktop.windows`, keyed
+by **window kind**. `main` is required and is the window the host opens at
+launch; every other kind waits for `openWindow`, and a kind that is not declared
+here is refused at the call. A kind name is lowercase words joined by single
+hyphens, and one application declares at most 32 of them. Every field has a
+default, and each one is a closed vocabulary — an unknown field is named with
+its exact path:
+
+```json
+{
+  "formatVersion": 2,
+  "entry": "src/main.vel",
+  "extensions": ["@velarscript/desktop"],
+  "desktop": {
+    "productName": "Example",
+    "identifier": "com.example.app",
+    "windows": {
+      "main": {
+        "title": "Example",
+        "width": 1280, "height": 820,
+        "minWidth": 720, "minHeight": 520,
+        "titleBar": "standard",
+        "material": "none"
+      },
+      "note-preview": {
+        "style": "panel",
+        "frame": false,
+        "level": "floating",
+        "visibleOnAllWorkspaces": true,
+        "aspectRatio": 1.6,
+        "resizable": false,
+        "width": 512, "height": 320
+      }
+    },
+    "permissions": {
+      "files": ["project"],
+      "processes": ["git"],
+      "network": ["https://api.example.com"],
+      "environment": [],
+      "secrets": []
+    }
+  }
+}
+```
+
+`title` defaults to `productName`. `titleBar` is `standard` or `hidden-inset`;
+`material` is `none` or `sidebar` (macOS vibrancy, which implies the page paints
+no background of its own); `style` is `window` or `panel`, where a panel is
+non-activating, floats, and stays out of the window cycle; `frame`, `resizable`
+and `visibleOnAllWorkspaces` are booleans defaulting to `true`, `true` and
+`false`; `level` is `normal` or `floating`, and a panel defaults to `floating`
+because that is what a panel is; `aspectRatio` locks the width-to-height ratio
+when present. The older singular `desktop.window` was removed —
+[`velar fix`](#writing-code) migrates it.
 
 Build output is fixed by the toolchain, not by the machine that runs it.
 Project modules are ordered by UTF-16 code unit over their POSIX-normalized
