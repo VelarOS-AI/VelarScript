@@ -305,7 +305,13 @@ const serviceStateType: ValueType = { kind: "enum", name: "ServiceState", identi
 const serviceConnectionType: ValueType = { kind: "named", name: "ServiceConnection", identity: "velar/service#type:ServiceConnection" };
 const serviceStateStreamType: ValueType = { kind: "named", name: "ServiceStateStream", identity: "velar/service#type:ServiceStateStream" };
 const serviceCloseType = objectType({ code: numberType, reason: stringType });
-const serviceStateEventType = objectType({ name: stringType, state: serviceStateType });
+// `detail` is the only thing the language says about the *inside* of a service,
+// and it says it for the two states where an application has a person to answer
+// to: a bounded tail of what the process wrote to stderr on the way down. It is
+// diagnostic text and nothing else — never parsed, never matched on — and it is
+// null for every other state, because a service that is starting or running or
+// converging has not failed at anything worth quoting.
+const serviceStateEventType = objectType({ name: stringType, state: serviceStateType, detail: optionalStringType });
 
 const serviceModuleInterface = moduleInterface(
   new Map<string, ValueType>([
@@ -364,10 +370,12 @@ const desktopTestModuleInterface = moduleInterface(new Map([
   ["shownNotifications", functionType([], promiseOf(listOf(notificationInputType)))],
   ["activateNotification", functionType([optionalStringType], promiseOf(nullType), 0)],
   // The fake service registry. `setServiceState` injects the transitions a real
-  // supervisor would publish; `serveService` runs a real loopback WebSocket
-  // server in the test process so a `connect()` round trip crosses a socket
-  // rather than a stub, and the handler stays here in VelarScript.
-  ["setServiceState", functionType([stringType, serviceStateType], promiseOf(nullType))],
+  // supervisor would publish — with the failure detail a real one would carry,
+  // so an application's failure path is testable rather than only reachable;
+  // `serveService` runs a real loopback WebSocket server in the test process so
+  // a `connect()` round trip crosses a socket rather than a stub, and the
+  // handler stays here in VelarScript.
+  ["setServiceState", functionType([stringType, serviceStateType, optionalStringType], promiseOf(nullType), 2)],
   ["serveService", functionType([stringType, functionType([stringType], promiseOf(stringType))], promiseOf(nullType))],
   ["serviceRejectsWrongToken", functionType([stringType], promiseOf(boolType))],
   ["stopService", functionType([stringType], promiseOf(nullType))],
@@ -682,7 +690,11 @@ export async function watchDroppedFiles() {
 }
 
 const DESKTOP_TEST_SOURCE = String.raw`
+${VELAR_UTF8_RUNTIME}
 const runtimeKey = Symbol.for("velar.browser.test.v1");
+// The same 4 KiB bound the host applies to a service's captured stderr, so a
+// detail a test can write is a detail a service could actually have produced.
+const maxServiceDetailBytes = 4 * 1024;
 const getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
 const reflectApply = Reflect.apply;
 function invoke(capability, operation, args, timeout) {
@@ -864,11 +876,26 @@ function testServiceName(value, operation) {
   }
   return value;
 }
-export async function setServiceState(name, state) {
+/**
+ * The transitions a real supervisor publishes, including the detail it attaches
+ * to the two states that carry one. A detail on any other state is refused here
+ * rather than dropped: a test that wrote one and saw it vanish would be reading
+ * a stream that does not behave like the host's.
+ */
+export async function setServiceState(name, state, detail = null) {
   if (state !== "starting" && state !== "ready" && state !== "restarting" && state !== "failed" && state !== "stopped") {
     throw new TypeError("Desktop test setServiceState requires a ServiceState value");
   }
-  return testSettle("service-fake", "setState", [testServiceName(name, "setServiceState"), state], "setServiceState");
+  if (detail !== null) {
+    if (typeof detail !== "string") throw new TypeError("Desktop test setServiceState requires text or none for the failure detail");
+    if (state !== "failed" && state !== "restarting") {
+      throw new Error("Desktop test setServiceState carries a failure detail only for the 'failed' and 'restarting' states, not '" + state + "'");
+    }
+    if (__velarUtf8ByteLength(detail) > maxServiceDetailBytes) {
+      throw new RangeError("Desktop test setServiceState detail cannot exceed 4 KiB");
+    }
+  }
+  return testSettle("service-fake", "setState", [testServiceName(name, "setServiceState"), state, detail], "setServiceState");
 }
 /**
  * Starts a real loopback WebSocket server for this service and pumps the
@@ -1277,8 +1304,12 @@ const declaredServiceList = ${JSON.stringify(names.length === 0 ? "none" : names
 // third time (packages/desktop/src/test-runtime.ts); the three must not drift.
 const maxServiceMessageBytes = 8 * 1024 * 1024;
 const maxServiceCloseReasonBytes = 123;
+// A failure detail is a bounded tail of the service's own stderr. The bound is
+// the host's, restated here because a record that arrived larger than the host
+// promised is a host this module does not recognise.
+const maxServiceDetailBytes = 4 * 1024;
 const serviceCloseFields = new Set(["code", "reason"]);
-const serviceEventFields = new Set(["name", "state"]);
+const serviceEventFields = new Set(["name", "state", "detail"]);
 function recordOf(value, name, allowed) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError(name + " must be a record");
   const prototype = Object.getPrototypeOf(value);
@@ -1316,10 +1347,22 @@ function closeInfoOf(value) {
 }
 function eventOf(value) {
   const fields = recordOf(value, "ServiceStateEvent", serviceEventFields);
-  if (Reflect.ownKeys(fields).length !== 2 || !declaredServices.has(fields.name)) {
+  if (Reflect.ownKeys(fields).length !== 3 || !declaredServices.has(fields.name)) {
     throw new TypeError("Desktop host reported a state for an undeclared service");
   }
-  return Object.freeze({name: fields.name, state: ServiceState.parse(fields.state)});
+  const state = ServiceState.parse(fields.state);
+  // Null for every state but the two that failed at something, and bounded when
+  // it is present: an unbounded diagnostic is a service's whole log arriving in
+  // a state event.
+  if (fields.detail !== null) {
+    if (typeof fields.detail !== "string" || __velarUtf8ByteLength(fields.detail) > maxServiceDetailBytes) {
+      throw new TypeError("Desktop host returned an invalid service failure detail");
+    }
+    if (state !== "failed" && state !== "restarting") {
+      throw new TypeError("Desktop host attached a failure detail to the '" + state + "' state");
+    }
+  }
+  return Object.freeze({name: fields.name, state, detail: fields.detail});
 }
 function invoke(operation, args, timeout = 30000) {
   return __velarDesktopHostCall("service", operation, args, timeout);

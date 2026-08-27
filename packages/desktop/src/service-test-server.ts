@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { Duplex } from "node:stream";
+import { DESKTOP_SERVICE_REFUSED_CLOSE_CODE } from "./development-services.ts";
 
 /**
  * The service side of the channel, small enough to be obviously correct and
@@ -92,8 +93,11 @@ export async function startLoopbackServiceServer(options: LoopbackServiceOptions
             && (hello as Record<string, unknown>).velar === "service-hello"
             && (hello as Record<string, unknown>).token === token;
           if (!accepted) {
+            // 1008, and a real close frame rather than a dropped TCP
+            // connection: the pinned refusal is the whole difference between
+            // "this service says no" and "this service is not up yet".
             rejected += 1;
-            socket.end();
+            socket.end(encodeCloseFrame(DESKTOP_SERVICE_REFUSED_CLOSE_CODE));
             return;
           }
           authenticated = true;
@@ -171,6 +175,13 @@ function readFrame(buffer: Buffer): DecodedFrame | null {
   const payload = Buffer.from(buffer.subarray(offset, offset + length));
   if (mask) for (let index = 0; index < payload.length; index += 1) payload[index] = payload[index]! ^ mask[index % 4]!;
   return { opcode, payload, consumed: offset + length };
+}
+
+/** One unmasked close frame carrying its status code, and no reason. */
+function encodeCloseFrame(code: number): Buffer {
+  const payload = Buffer.alloc(2);
+  payload.writeUInt16BE(code, 0);
+  return Buffer.concat([Buffer.from([0x88, payload.length]), payload]);
 }
 
 /** One unmasked server frame, as RFC 6455 requires of a server. */

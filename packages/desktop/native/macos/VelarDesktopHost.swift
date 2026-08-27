@@ -2226,6 +2226,17 @@ private let serviceTerminationGrace: TimeInterval = 30
 private let serviceRestartInitialDelay: TimeInterval = 1
 private let serviceRestartMaximumDelay: TimeInterval = 30
 private let serviceRestartFailureLimit = 5
+/// What a failed service is allowed to say for itself in a state event, and what
+/// it may keep on disk. The renderer states the first of the two again on its own
+/// side (packages/desktop/src/compiler.ts) and the fake host a third time
+/// (packages/desktop/src/test-runtime.ts); the three must not drift.
+///
+/// 4 KiB is a stack trace and the lines around it — enough for an application to
+/// show a person why a service died, and far short of a channel that would carry
+/// a log. The log is the file below, which is where a whole log belongs.
+private let maxServiceDetailBytes = 4 * 1024
+private let maxServiceLogBytes = 1024 * 1024
+private let serviceLogDirectoryName = "service-logs"
 
 /// The frames the host and a service exchange before anything else crosses the
 /// channel, pinned here and in `packages/desktop/README.md`. The host opens
@@ -2234,9 +2245,17 @@ private let serviceRestartFailureLimit = 5
 /// service this host will talk to. The token is the only authority on the
 /// channel: a loopback port is reachable by every process on the machine, so a
 /// service that answers before checking it has no authentication at all.
+///
+/// A hello this host will not accept is closed with 1008 — RFC 6455's policy
+/// violation — and a service owes the host the same code. It is the difference
+/// between a service that read the token and said no and a service that has not
+/// finished binding its port yet; without it both are "the connection ended",
+/// and a misconfigured token would be retried for thirty seconds and then
+/// reported as a service that is merely slow.
 private let serviceHelloKey = "velar"
 private let serviceHelloValue = "service-hello"
 private let serviceReadyValue = "service-ready"
+private let serviceRefusedCloseCode = 1008
 
 private enum ServiceState: String {
     case starting
@@ -2246,6 +2265,232 @@ private enum ServiceState: String {
     case stopped
 }
 
+/// What one handshake found. `unavailable` covers everything that is not yet a
+/// service — nothing listening, no answer, an answer that is not the ready frame
+/// — and `refused` is the one case the service said out loud.
+private enum ServiceHandshakeOutcome {
+    case ready
+    case refused
+    case unavailable
+}
+
+/// A service's whole output, on disk, where a person can read it after the fact.
+/// `watchServices()` carries a 4 KiB tail because a state event is not a log
+/// transport; this is the log, and it is bounded the way a log has to be — one
+/// megabyte live, one rotation kept, nothing older. Both streams land in the
+/// same file in arrival order, because a service's stdout and stderr interleave
+/// in the story of what it was doing when it died.
+private final class ServiceLog {
+    private let path: URL
+    private let rotated: URL
+    private var handle: FileHandle?
+    private var written = 0
+
+    init(directory: URL, name: String) {
+        self.path = directory.appendingPathComponent("\(name).log", isDirectory: false)
+        self.rotated = directory.appendingPathComponent("\(name).log.1", isDirectory: false)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        open()
+    }
+
+    private func open() {
+        let manager = FileManager.default
+        if !manager.fileExists(atPath: path.path) { manager.createFile(atPath: path.path, contents: nil) }
+        handle = try? FileHandle(forWritingTo: path)
+        if let handle {
+            written = Int((try? handle.seekToEnd()) ?? 0)
+        }
+    }
+
+    /// Rotation is a rename and a fresh file, so an open reader keeps reading
+    /// the bytes it already had rather than watching them be overwritten.
+    private func rotate() {
+        guard let handle else { return }
+        try? handle.close()
+        self.handle = nil
+        let manager = FileManager.default
+        try? manager.removeItem(at: rotated)
+        try? manager.moveItem(at: path, to: rotated)
+        written = 0
+        open()
+    }
+
+    func append(_ data: Data) {
+        guard !data.isEmpty else { return }
+        if written + data.count > maxServiceLogBytes { rotate() }
+        guard let handle else { return }
+        // A log that cannot be written is not a reason to lose a service: the
+        // write is attempted and its failure is not propagated anywhere.
+        try? handle.write(contentsOf: data)
+        written += data.count
+    }
+
+    func close() {
+        try? handle?.close()
+        handle = nil
+    }
+}
+
+/// The tail of a service's stderr, kept as bytes rather than as text because the
+/// bound is a byte bound and a service writes bytes. It is decoded once, when a
+/// state event needs it.
+private struct ServiceErrorTail {
+    private var bytes = Data()
+
+    mutating func append(_ data: Data) {
+        bytes.append(data)
+        if bytes.count > maxServiceDetailBytes {
+            bytes = Data(bytes.suffix(maxServiceDetailBytes))
+        }
+    }
+
+    mutating func clear() { bytes = Data() }
+
+    /// A byte tail can begin inside a UTF-8 sequence and end inside another, so
+    /// both partial sequences are dropped rather than decoded into replacement
+    /// characters that say nothing. Control characters go too — a service that
+    /// writes ANSI colour or a progress bar's carriage returns should not be
+    /// able to rewrite the line an application shows a person — except the
+    /// newline, which is what makes a stack trace readable.
+    func text() -> String? {
+        var tail = bytes[...]
+        while let first = tail.first, first & 0xC0 == 0x80 { tail = tail.dropFirst() }
+        tail = tail.prefix(tail.count - incompleteTrailingBytes(tail))
+        guard !tail.isEmpty else { return nil }
+        var text = ""
+        for scalar in String(decoding: tail, as: UTF8.self).unicodeScalars {
+            if scalar == "\n" { text.unicodeScalars.append(scalar); continue }
+            if scalar.value < 0x20 || scalar.value == 0x7F || (scalar.value >= 0x80 && scalar.value <= 0x9F) { continue }
+            text.unicodeScalars.append(scalar)
+        }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// How many bytes at the end belong to a sequence whose remaining bytes were
+    /// never written — a service killed mid-character, or a tail cut at 4 KiB.
+    private func incompleteTrailingBytes(_ tail: Data.SubSequence) -> Int {
+        var scanned = 0
+        var index = tail.endIndex
+        while scanned < 4, index > tail.startIndex {
+            index = tail.index(before: index)
+            let byte = tail[index]
+            scanned += 1
+            if byte & 0xC0 == 0x80 { continue }
+            let expected: Int
+            if byte & 0x80 == 0 { expected = 1 }
+            else if byte & 0xE0 == 0xC0 { expected = 2 }
+            else if byte & 0xF0 == 0xE0 { expected = 3 }
+            else if byte & 0xF8 == 0xF0 { expected = 4 }
+            else { return scanned }
+            return scanned < expected ? scanned : 0
+        }
+        return 0
+    }
+}
+
+/// One service's captured output for the whole of its life across restarts: the
+/// log file it all goes to, and the stderr tail the current start is allowed to
+/// quote. Foundation delivers a file handle's readability callbacks on its own
+/// queue, so everything here is under one lock — the two streams share a file,
+/// and a state event reads the tail from the main thread while a service is
+/// still writing to it.
+private final class ServiceOutputCapture {
+    private let lock = NSLock()
+    private let log: ServiceLog
+    private var tail = ServiceErrorTail()
+    private var outputHandle: FileHandle?
+    private var errorHandle: FileHandle?
+
+    init(directory: URL, name: String) {
+        log = ServiceLog(directory: directory, name: name)
+    }
+
+    /// The two streams of one start. The tail is cleared here because a failure
+    /// is explained by the run that failed, not by the run before it.
+    func begin(output: Pipe, errors: Pipe) {
+        end()
+        lock.lock()
+        tail.clear()
+        lock.unlock()
+        let readOutput = output.fileHandleForReading
+        let readErrors = errors.fileHandleForReading
+        outputHandle = readOutput
+        errorHandle = readErrors
+        readOutput.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard let self, !data.isEmpty else { return }
+            self.lock.lock()
+            self.log.append(data)
+            self.lock.unlock()
+        }
+        readErrors.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard let self, !data.isEmpty else { return }
+            self.lock.lock()
+            self.log.append(data)
+            self.tail.append(data)
+            self.lock.unlock()
+        }
+    }
+
+    /// The end of one start: the handlers are removed and whatever the process
+    /// wrote on the way out is drained before anything asks what it said. The
+    /// drain is non-blocking on purpose — a service's last words are worth
+    /// waiting for, and not worth deadlocking the main thread over.
+    func end() {
+        let readOutput = outputHandle
+        let readErrors = errorHandle
+        outputHandle = nil
+        errorHandle = nil
+        readOutput?.readabilityHandler = nil
+        readErrors?.readabilityHandler = nil
+        let remainingOutput = readOutput.map { drainAvailable($0) } ?? Data()
+        let remainingErrors = readErrors.map { drainAvailable($0) } ?? Data()
+        lock.lock()
+        if !remainingOutput.isEmpty { log.append(remainingOutput) }
+        if !remainingErrors.isEmpty {
+            log.append(remainingErrors)
+            tail.append(remainingErrors)
+        }
+        lock.unlock()
+        try? readOutput?.close()
+        try? readErrors?.close()
+    }
+
+    func detail() -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return tail.text()
+    }
+
+    func close() {
+        end()
+        lock.lock()
+        log.close()
+        lock.unlock()
+    }
+}
+
+/// Everything a descriptor already holds, and nothing more: the descriptor is
+/// put in non-blocking mode first, so a write end this host still owns cannot
+/// turn "read what is left" into "wait for a writer that will never write".
+private func drainAvailable(_ handle: FileHandle) -> Data {
+    let descriptor = handle.fileDescriptor
+    guard descriptor >= 0 else { return Data() }
+    let flags = fcntl(descriptor, F_GETFL, 0)
+    guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0 else { return Data() }
+    var collected = Data()
+    var buffer = [UInt8](repeating: 0, count: 16 * 1024)
+    while collected.count < maxServiceLogBytes {
+        let read = buffer.withUnsafeMutableBytes { Darwin.read(descriptor, $0.baseAddress, $0.count) }
+        if read <= 0 { break }
+        collected.append(contentsOf: buffer[0..<read])
+    }
+    _ = fcntl(descriptor, F_SETFL, flags)
+    return collected
+}
+
 /// One bounded pull stream of `{name, state}` events. A slow consumer keeps the
 /// latest state per service rather than a history of transitions: a reader that
 /// woke up late wants to know what is true now, and an unbounded transition log
@@ -2253,7 +2498,7 @@ private enum ServiceState: String {
 private final class ServiceStateWatcher {
     let handle: Int
     let generation: String
-    var events: [(name: String, state: ServiceState)] = []
+    var events: [(name: String, state: ServiceState, detail: String?)] = []
     var pending: ((Any) -> Void)?
     var closed = false
 
@@ -2290,6 +2535,7 @@ private final class ServiceRecord {
     let payload: URL
     let restartAlways: Bool
     var state: ServiceState = .starting
+    var detail: String?
     var process: Process?
     var token = ""
     var port: UInt16 = 0
@@ -2298,12 +2544,25 @@ private final class ServiceRecord {
     /// handler, so a reply belonging to a process this supervisor has already
     /// replaced is discarded instead of moving the current one's state.
     var generation = 0
+    /// This service's log file and the stderr tail of its current start.
+    var capture: ServiceOutputCapture?
+    /// The host's own account of the last failure, for the case where the
+    /// service produced no stderr to quote — it refused the token, or never got
+    /// far enough to say anything at all.
+    var hostReason: String?
 
     init(name: String, entry: URL, payload: URL, restartAlways: Bool) {
         self.name = name
         self.entry = entry
         self.payload = payload
         self.restartAlways = restartAlways
+    }
+
+    /// What a failing state carries: the service's own last words when it left
+    /// any, and the host's account of the failure when it did not.
+    func failureDetail() -> String? {
+        if let quoted = capture?.detail() { return quoted }
+        return hostReason
     }
 }
 
@@ -2319,6 +2578,7 @@ private final class ServiceRecord {
 /// window's.
 private final class ServiceSupervisor: NSObject, URLSessionDelegate {
     private let runtime: URL
+    private let logDirectory: URL
     private let records: [String: ServiceRecord]
     private let order: [String]
     private var watchers: [Int: ServiceStateWatcher] = [:]
@@ -2330,8 +2590,9 @@ private final class ServiceSupervisor: NSObject, URLSessionDelegate {
 
     var declaredNames: [String] { order }
 
-    init(runtime: URL, servicesRoot: URL, services: [String: ServiceConfiguration]) {
+    init(runtime: URL, servicesRoot: URL, logDirectory: URL, services: [String: ServiceConfiguration]) {
         self.runtime = runtime
+        self.logDirectory = logDirectory
         self.order = services.keys.sorted()
         var records: [String: ServiceRecord] = [:]
         for name in order {
@@ -2367,6 +2628,18 @@ private final class ServiceSupervisor: NSObject, URLSessionDelegate {
         }
     }
 
+    /// The one-line account the headless smoke prints when a service did not come
+    /// up. It carries the detail because a smoke that said only `notes=failed`
+    /// would make a person open the log to learn what `watchServices()` was
+    /// already prepared to tell them.
+    func settlement() -> String {
+        order.compactMap { name -> String? in
+            guard let record = records[name] else { return nil }
+            guard let detail = record.detail else { return "\(name)=\(record.state.rawValue)" }
+            return "\(name)=\(record.state.rawValue): \(detail.replacingOccurrences(of: "\n", with: " "))"
+        }.joined(separator: ", ")
+    }
+
     // MARK: - Lifecycle
 
     private func launch(_ record: ServiceRecord) {
@@ -2378,11 +2651,25 @@ private final class ServiceSupervisor: NSObject, URLSessionDelegate {
         record.port = port
         record.token = token
         record.generation += 1
+        // This start's failure is this start's to explain, so the previous run's
+        // account of itself does not survive into it.
+        record.hostReason = nil
         let generation = record.generation
         let process = Process()
         process.executableURL = runtime
         process.arguments = [record.entry.path]
         process.currentDirectoryURL = record.payload
+        // Both streams are captured: they go to this service's log file whole,
+        // and the last 4 KiB of stderr is what a `failed` or `restarting` event
+        // carries. A service whose output went to the host's own stderr would be
+        // a service nobody can read after the window it crashed behind is gone.
+        let capture = record.capture ?? ServiceOutputCapture(directory: logDirectory, name: record.name)
+        record.capture = capture
+        let output = Pipe()
+        let errors = Pipe()
+        process.standardOutput = output
+        process.standardError = errors
+        capture.begin(output: output, errors: errors)
         // The product's own process, so the product's own environment: a service
         // is not capability-scoped and `desktop.permissions.environment` governs
         // what the *renderer* may read, not what the product's process inherits.
@@ -2399,6 +2686,8 @@ private final class ServiceSupervisor: NSObject, URLSessionDelegate {
             try process.run()
         } catch {
             record.process = nil
+            record.hostReason = "the service could not be started: \(error.localizedDescription)"
+            capture.end()
             publish(record, .starting)
             recordFailure(record, generation: generation)
             return
@@ -2410,27 +2699,39 @@ private final class ServiceSupervisor: NSObject, URLSessionDelegate {
 
     /// Readiness is the handshake, retried until its deadline: a process that has
     /// started is not a service until something answers on the endpoint it was
-    /// given, and a refused connection a millisecond after `spawn` is the normal
-    /// case rather than a failure.
+    /// given, and an unreachable endpoint a millisecond after `spawn` is the
+    /// normal case rather than a failure.
+    ///
+    /// A service that closes the hello with 1008 is the one answer worth ending
+    /// the probe on. It read the token and refused it, and it will refuse the
+    /// same token for the whole of the deadline, so retrying for thirty seconds
+    /// and then reporting a slow start would describe the wrong problem.
     private func probeReadiness(_ record: ServiceRecord, generation: Int, deadline: Date) {
         guard !converging, record.generation == generation, record.state != .ready else { return }
         guard Date() < deadline else {
             // The readiness deadline is a start that failed, not a service that
             // is merely slow: the process is ended and the restart policy is
             // asked what to do next.
+            record.hostReason = "the service did not answer the authenticated handshake within \(Int(serviceHandshakeTimeout))s"
             record.process?.terminate()
             recordFailure(record, generation: generation)
             return
         }
-        handshake(port: record.port, token: record.token) { [weak self] accepted, task in
+        handshake(port: record.port, token: record.token) { [weak self] outcome, task in
             guard let self else { return }
             // The probe's own connection is closed once it has its answer. It
             // proved the service authenticates; it is not an application channel.
             task?.cancel()
             guard !self.converging, record.generation == generation else { return }
-            if accepted {
+            if outcome == .ready {
                 record.consecutiveFailures = 0
                 self.publish(record, .ready)
+                return
+            }
+            if outcome == .refused {
+                record.hostReason = "the service refused the token this host issued it (close \(serviceRefusedCloseCode)); it is reading something other than VELAR_SERVICE_TOKEN"
+                record.process?.terminate()
+                self.recordFailure(record, generation: generation)
                 return
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
@@ -2442,6 +2743,14 @@ private final class ServiceSupervisor: NSObject, URLSessionDelegate {
     private func processEnded(_ record: ServiceRecord, generation: Int, status: Int32) {
         guard !converging, record.generation == generation else { return }
         record.process = nil
+        // Whatever the process wrote on its way out is drained before the state
+        // event that quotes it goes anywhere.
+        record.capture?.end()
+        if record.hostReason == nil {
+            record.hostReason = status == 0
+                ? "the service process exited with status 0"
+                : "the service process exited with status \(status)"
+        }
         closeConnections(of: record.name, code: 1001, reason: "the service process ended")
         recordFailure(record, generation: generation)
     }
@@ -2459,10 +2768,10 @@ private final class ServiceSupervisor: NSObject, URLSessionDelegate {
         }
         record.consecutiveFailures += 1
         guard record.consecutiveFailures < serviceRestartFailureLimit else {
-            publish(record, .failed)
+            publish(record, .failed, detail: record.failureDetail())
             return
         }
-        publish(record, .restarting)
+        publish(record, .restarting, detail: record.failureDetail())
         let delay = min(serviceRestartMaximumDelay, serviceRestartInitialDelay * pow(2, Double(record.consecutiveFailures - 1)))
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self, !self.converging, record.generation == generation, record.state == .restarting else { return }
@@ -2472,7 +2781,8 @@ private final class ServiceSupervisor: NSObject, URLSessionDelegate {
 
     private func fail(_ record: ServiceRecord, _ message: String) {
         FileHandle.standardError.write(Data("\(message)\n".utf8))
-        publish(record, .failed)
+        record.hostReason = message
+        publish(record, .failed, detail: record.failureDetail())
     }
 
     /// SIGTERM, then SIGKILL after the grace period, and no restart in between:
@@ -2505,6 +2815,9 @@ private final class ServiceSupervisor: NSObject, URLSessionDelegate {
             record.process = nil
             publish(record, .stopped)
         }
+        // The log files are the one thing that outlives this process, so they are
+        // closed rather than left to the exit that follows.
+        for name in order { records[name]?.capture?.close() }
     }
 
     // MARK: - The channel
@@ -2530,11 +2843,13 @@ private final class ServiceSupervisor: NSObject, URLSessionDelegate {
             completion(nil, "Desktop service '\(name)' is \(record.state.rawValue) rather than ready; watchServices() reports when it becomes ready")
             return
         }
-        handshake(port: record.port, token: record.token) { [weak self] accepted, task in
+        handshake(port: record.port, token: record.token) { [weak self] outcome, task in
             guard let self else { return }
-            guard accepted, let task else {
+            guard outcome == .ready, let task else {
                 task?.cancel()
-                completion(nil, "Desktop service '\(name)' did not complete the authenticated handshake")
+                completion(nil, outcome == .refused
+                    ? "Desktop service '\(name)' refused the token this host issued it"
+                    : "Desktop service '\(name)' did not complete the authenticated handshake")
                 return
             }
             guard !self.converging, self.connections.count < maxServiceConnections else {
@@ -2695,32 +3010,50 @@ private final class ServiceSupervisor: NSObject, URLSessionDelegate {
     /// One connection, one hello, one answer. Every channel this host opens —
     /// the readiness probe and each application connection — starts the same way,
     /// so a service implements authentication once.
-    private func handshake(port: UInt16, token: String, completion: @escaping (Bool, URLSessionWebSocketTask?) -> Void) {
+    ///
+    /// `refused` is the service closing with 1008 rather than answering, and it
+    /// is separated from `unavailable` because only one of the two is worth
+    /// telling a person about: an endpoint that is not up yet becomes one that
+    /// is, and a token a service will not accept stays one.
+    private func handshake(port: UInt16, token: String, completion: @escaping (ServiceHandshakeOutcome, URLSessionWebSocketTask?) -> Void) {
         guard let url = URL(string: "ws://127.0.0.1:\(port)/"),
               let hello = try? JSONSerialization.data(withJSONObject: [serviceHelloKey: serviceHelloValue, "token": token]),
               let helloText = String(data: hello, encoding: .utf8) else {
-            completion(false, nil)
+            completion(.unavailable, nil)
             return
         }
         let task = session.webSocketTask(with: url)
         var settled = false
-        let settle: (Bool, URLSessionWebSocketTask?) -> Void = { accepted, value in
+        let settle: (ServiceHandshakeOutcome, URLSessionWebSocketTask?) -> Void = { outcome, value in
             DispatchQueue.main.async {
                 guard !settled else { return }
                 settled = true
-                completion(accepted, value)
+                completion(outcome, value)
+            }
+        }
+        // A hello that was delivered and then answered with nothing may have been
+        // refused, and the close frame carrying the code races the read failure
+        // that reports it. A quarter of a second is the grace that lets the code
+        // arrive before it is read; its absence simply means `unavailable`. A
+        // hello that never left at all had nobody to refuse it, so that path
+        // settles immediately and the probe retries at its usual pace.
+        let settleAfterDeliveredHello: () -> Void = {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                let outcome: ServiceHandshakeOutcome = task.closeCode.rawValue == serviceRefusedCloseCode ? .refused : .unavailable
+                settle(outcome, nil)
+                task.cancel()
             }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + serviceHandshakeTimeout) {
             guard !settled else { return }
             task.cancel()
-            settle(false, nil)
+            settle(.unavailable, nil)
         }
         task.resume()
         task.send(.string(helloText)) { error in
             if error != nil {
                 task.cancel()
-                settle(false, nil)
+                settle(.unavailable, nil)
                 return
             }
             task.receive { result in
@@ -2728,11 +3061,10 @@ private final class ServiceSupervisor: NSObject, URLSessionDelegate {
                       let data = answer.data(using: .utf8),
                       let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       object[serviceHelloKey] as? String == serviceReadyValue else {
-                    task.cancel()
-                    settle(false, nil)
+                    settleAfterDeliveredHello()
                     return
                 }
-                settle(true, task)
+                settle(.ready, task)
             }
         }
     }
@@ -2750,7 +3082,7 @@ private final class ServiceSupervisor: NSObject, URLSessionDelegate {
         // nothing until the next transition, so it opens with what is true now.
         for name in order {
             guard let record = records[name] else { continue }
-            watcher.events.append((name: name, state: record.state))
+            watcher.events.append((name: name, state: record.state, detail: record.detail))
         }
         watchers[handle] = watcher
         return handle
@@ -2765,7 +3097,7 @@ private final class ServiceSupervisor: NSObject, URLSessionDelegate {
         }
         if !watcher.events.isEmpty {
             let event = watcher.events.removeFirst()
-            deliver(["name": event.name, "state": event.state.rawValue])
+            deliver(serviceEvent(event.name, event.state, event.detail))
             return
         }
         watcher.pending = deliver
@@ -2792,22 +3124,33 @@ private final class ServiceSupervisor: NSObject, URLSessionDelegate {
         }
     }
 
-    private func publish(_ record: ServiceRecord, _ state: ServiceState) {
+    /// A detail rides with the two states that failed at something and with no
+    /// other, so a reader never has to ask whether the text it is holding
+    /// describes the state it arrived beside.
+    private func publish(_ record: ServiceRecord, _ state: ServiceState, detail: String? = nil) {
+        let carried = (state == .failed || state == .restarting) ? detail : nil
         record.state = state
+        record.detail = carried
         for (_, watcher) in watchers where !watcher.closed {
             if let pending = watcher.pending, watcher.events.isEmpty {
                 watcher.pending = nil
-                pending(["name": record.name, "state": state.rawValue])
+                pending(serviceEvent(record.name, state, carried))
                 continue
             }
             // Keep-latest per service: a slow reader learns what each service is
             // now, not every transition it missed.
             if let index = watcher.events.firstIndex(where: { $0.name == record.name }) {
-                watcher.events[index] = (name: record.name, state: state)
+                watcher.events[index] = (name: record.name, state: state, detail: carried)
                 continue
             }
-            watcher.events.append((name: record.name, state: state))
+            watcher.events.append((name: record.name, state: state, detail: carried))
         }
+    }
+
+    /// The one place a state event is shaped, so the renderer's three fields and
+    /// the host's three fields are the same three fields.
+    private func serviceEvent(_ name: String, _ state: ServiceState, _ detail: String?) -> [String: Any] {
+        ["name": name, "state": state.rawValue, "detail": detail ?? NSNull()]
     }
 }
 
@@ -3366,6 +3709,12 @@ private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
             let supervisor = host.services.isEmpty ? nil : ServiceSupervisor(
                 runtime: nodeRuntime.url,
                 servicesRoot: resources.appendingPathComponent("services", isDirectory: true),
+                // Beside the application's own `app-data` scope rather than
+                // inside it: a service's log is the host's record of what the
+                // product's process said, and an application that can rewrite
+                // the evidence is an application whose crash report proves
+                // nothing.
+                logDirectory: appData.appendingPathComponent(serviceLogDirectoryName, isDirectory: true),
                 services: host.services
             )
             supervisor?.start()
@@ -3461,12 +3810,10 @@ private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
         // smoke before a service that is still backing off has finished proving
         // what its restart policy does.
         if states.allSatisfy({ $0 == .failed || $0 == .stopped }) {
-            let report = supervisor.report().map { "\($0["name"] ?? "?")=\($0["state"] ?? "?")" }.joined(separator: ", ")
-            endSmoke(supervisor, 1, "every declared service settled without becoming ready (\(report))")
+            endSmoke(supervisor, 1, "every declared service settled without becoming ready (\(supervisor.settlement()))")
         }
         guard Date() < deadline else {
-            let report = supervisor.report().map { "\($0["name"] ?? "?")=\($0["state"] ?? "?")" }.joined(separator: ", ")
-            endSmoke(supervisor, 1, "a declared service did not reach ready in time (\(report))")
+            endSmoke(supervisor, 1, "a declared service did not reach ready in time (\(supervisor.settlement()))")
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
             self?.awaitServices(supervisor, deadline: deadline, then: finish)

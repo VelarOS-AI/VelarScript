@@ -251,8 +251,11 @@ test "a service channel round-trips through a real loopback socket":
 
 // The token is the whole authentication of a loopback endpoint every process on
 // the machine can reach, so the service side has to refuse one the host never
-// issued. This asks it to, on the same real socket.
-test "the service side refuses a token the host never issued":
+// issued. This asks it to, on the same real socket, and the refusal is the
+// pinned close code 1008 rather than a dropped connection: a service that is
+// still binding its port also drops connections, and only one of the two is a
+// service saying no.
+test "the service side refuses a token the host never issued with close 1008":
     await serveService(notesIndex, async (request: string) => request)
     expect(await serviceRejectsWrongToken(notesIndex)).toBe(true)
     await stopService(notesIndex)
@@ -279,4 +282,25 @@ test "a service reports its state, and a channel opens only once it is ready":
     expect(stateNames()).toEqual([
         ServiceState.starting, ServiceState.ready, ServiceState.restarting, ServiceState.failed, ServiceState.stopped,
     ])
+    await stopService(notesIndex)
+
+// A service that failed says why: the event carries the tail of what the process
+// wrote to its own standard error, which is what an application shows a person
+// instead of the bare word "failed". The fake takes the detail so a failure path
+// is testable rather than only reachable by breaking a real service.
+test "a failed service carries the tail of what it wrote before it died":
+    const crash = "Error: listen EADDRINUSE 127.0.0.1:51000"
+    await serveService(notesIndex, async (request: string) => request)
+    await browser.open()
+    await setServiceState(notesIndex, ServiceState.failed, crash)
+    await browser.click("[data-watch-services]")
+    await browser.waitForText("[data-service-summary]", f"{notesIndex}: failed — restart the application — {crash}")
+
+    // Only the two states that failed at something carry one, so a detail on any
+    // other state is refused where it is written rather than quietly dropped.
+    let refusal: string = "the fake accepted it"
+    try: await setServiceState(notesIndex, ServiceState.ready, "all is well")
+    catch error: refusal = error.message
+    expect(refusal).toBe(
+        "Desktop test setServiceState carries a failure detail only for the 'failed' and 'restarting' states, not 'ready'")
     await stopService(notesIndex)

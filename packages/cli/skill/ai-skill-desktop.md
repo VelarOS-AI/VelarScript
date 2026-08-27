@@ -118,8 +118,13 @@ The host gives each service a loopback endpoint and a 128-bit token in
 WebSocket server there. Readiness is the handshake: the host sends
 `{"velar":"service-hello","token":"…"}` and the service answers
 `{"velar":"service-ready"}`. A connection that opens with any other token must
-be refused — a loopback port is reachable by every process on the machine, so the
-token is the whole of the channel's authentication. Both sides wait 30 seconds.
+be closed with WebSocket code 1008 and no answer — a loopback port is reachable
+by every process on the machine, so the token is the whole of the channel's
+authentication, and the pinned code is what separates a refusal from a service
+that has not finished starting. Both sides wait 30 seconds. The host's readiness
+probe is indistinguishable from an application `connect()`, so a service sees
+connections open and close that no window asked for and must not read a closed
+authenticated connection as an application-level event.
 
 ```velar fragment
 import {ServiceState, connect, watchServices} from "velar/service"
@@ -133,7 +138,18 @@ async def coreState() -> ServiceState:
     using states = await watchServices()
     const event = await states.next()
     return event?.state ?? ServiceState.stopped
+
+async def whyCoreFailed() -> string:
+    using states = await watchServices()
+    const event = await states.next()
+    return event?.detail ?? "no detail"
 ```
+
+A `ServiceStateEvent` is `{name, state, detail}`. `detail` is up to 4 KiB of what
+the service last wrote to its own standard error, carried by `failed` and
+`restarting` and null for every other state; show it to a person, never match on
+it. The whole of a service's output is a rotating log file under the app-data
+directory, which `packages/desktop/README.md` names.
 
 Application code never holds the token: the host spends it itself on the first
 frame of every connection. An undeclared name fails at the `connect` call, and a

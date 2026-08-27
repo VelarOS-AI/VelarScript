@@ -1,4 +1,5 @@
 import { DESKTOP_MAIN_WINDOW_KIND, type VelarDesktopConfig } from "./config.ts";
+import { DESKTOP_SERVICE_HELLO, DESKTOP_SERVICE_READY, DESKTOP_SERVICE_REFUSED_CLOSE_CODE } from "./development-services.ts";
 import { startLoopbackServiceServer, type LoopbackServiceRequest, type LoopbackServiceServer } from "./service-test-server.ts";
 import type { FrameworkBrowserTestController } from "@velarscript/compiler/framework-host";
 
@@ -126,16 +127,14 @@ async function fakeService(
     return new Promise<string | null>((resolve) => entry.waiting.push(resolve));
   }
   // The proof that the token gates the channel: the same endpoint, a token the
-  // host never issued, and a service that ends the connection instead of
-  // answering it.
+  // host never issued, and a service that closes the connection with the pinned
+  // 1008 instead of answering it. The code is part of the assertion, because a
+  // dropped connection is what a service that has not finished starting also
+  // looks like, and only one of the two is a refusal.
   if (operation === "wrongToken") {
     const refused = entry.server.rejectedHandshakes();
-    try {
-      await openAuthenticatedSocket(entry.server.port, `${entry.server.token}00`);
-    } catch {
-      return entry.server.rejectedHandshakes() > refused;
-    }
-    return false;
+    const code = await refusedHandshakeCloseCode(entry.server.port, `${entry.server.token}00`);
+    return code === DESKTOP_SERVICE_REFUSED_CLOSE_CODE && entry.server.rejectedHandshakes() > refused;
   }
   if (operation === "close") {
     entry.closed = true;
@@ -160,9 +159,9 @@ async function openAuthenticatedSocket(port: number, token: string): Promise<Web
     socket.addEventListener("error", failed, { once: true });
     socket.addEventListener("close", failed, { once: true });
     socket.addEventListener("open", () => {
-      socket.send(JSON.stringify({ velar: "service-hello", token }));
+      socket.send(JSON.stringify({ velar: DESKTOP_SERVICE_HELLO, token }));
       socket.addEventListener("message", (event) => {
-        if (typeof event.data === "string" && (JSON.parse(event.data) as { velar?: string }).velar === "service-ready") {
+        if (typeof event.data === "string" && (JSON.parse(event.data) as { velar?: string }).velar === DESKTOP_SERVICE_READY) {
           socket.removeEventListener("error", failed);
           socket.removeEventListener("close", failed);
           resolve();
@@ -171,6 +170,31 @@ async function openAuthenticatedSocket(port: number, token: string): Promise<Web
     }, { once: true });
   });
   return socket;
+}
+
+/**
+ * The same hello with a token the host never issued, and the close code the
+ * service answered it with. `null` means the connection ended without one,
+ * which is exactly the case the pinned code exists to be distinguishable from.
+ */
+async function refusedHandshakeCloseCode(port: number, token: string): Promise<number | null> {
+  return new Promise<number | null>((settle) => {
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/`);
+    let finished = false;
+    const finish = (code: number | null): void => {
+      if (finished) return;
+      finished = true;
+      settle(code);
+    };
+    socket.addEventListener("error", () => finish(null), { once: true });
+    socket.addEventListener("close", (event) => finish(event.code), { once: true });
+    // An answer to a token this service never issued would be the failure this
+    // asks about, so a message is a refusal that did not happen.
+    socket.addEventListener("message", () => { socket.close(); finish(null); }, { once: true });
+    socket.addEventListener("open", () => {
+      socket.send(JSON.stringify({ velar: DESKTOP_SERVICE_HELLO, token }));
+    }, { once: true });
+  });
 }
 
 /**
@@ -978,6 +1002,10 @@ export function desktopBrowserTestInitScript(
   const declaredServices = new Set(${services});
   const readyServices = new Set(${readyNames});
   const serviceStates = new Map([...declaredServices].map(name => [name, readyServices.has(name) ? "ready" : "starting"]));
+  // The failure detail that goes out beside a state, held per service the way
+  // the host holds it: the tail of what that process last wrote to stderr, and
+  // null for every service that has not failed at anything.
+  const serviceDetails = new Map([...declaredServices].map(name => [name, null]));
   const serviceConnections = new Map();
   const serviceWatchers = new Map();
   const serviceOutbound = [];
@@ -994,19 +1022,20 @@ export function desktopBrowserTestInitScript(
       serviceOutboundWaiting.shift()(serviceOutbound.shift());
     }
   }
-  function publishServiceState(name, state) {
+  function publishServiceState(name, state, detail) {
     serviceStates.set(name, state);
+    serviceDetails.set(name, detail);
     for (const watcher of serviceWatchers.values()) {
       if (watcher.closed) continue;
       if (watcher.pending && watcher.events.length === 0) {
         const deliver = watcher.pending;
         watcher.pending = null;
-        deliver({name, state});
+        deliver({name, state, detail});
         continue;
       }
       const index = watcher.events.findIndex(event => event.name === name);
-      if (index >= 0) watcher.events[index] = {name, state};
-      else watcher.events.push({name, state});
+      if (index >= 0) watcher.events[index] = {name, state, detail};
+      else watcher.events.push({name, state, detail});
     }
     return null;
   }
@@ -1059,7 +1088,7 @@ export function desktopBrowserTestInitScript(
     if (operation === "watchStart") {
       const handle = nextServiceHandle++;
       serviceWatchers.set(handle, {
-        events: [...serviceStates].map(([name, state]) => ({name, state})),
+        events: [...serviceStates].map(([name, state]) => ({name, state, detail: serviceDetails.get(name) ?? null})),
         pending: null,
         closed: false,
       });
@@ -1085,7 +1114,7 @@ export function desktopBrowserTestInitScript(
   async function serviceTestCapability(operation, args) {
     if (operation === "setState") {
       if (!declaredServices.has(args[0])) throw new Error("Desktop test setServiceState cannot name the undeclared service '" + String(args[0]) + "'");
-      return publishServiceState(args[0], args[1]);
+      return publishServiceState(args[0], args[1], args[2] ?? null);
     }
     // The test process pulls what the application sent and pushes back what the
     // real loopback service answered. A bounded wait rather than an open-ended

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { createServer } from "node:net";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -163,6 +163,7 @@ test("a declared service connects and an undeclared one is refused at the call",
   const directory = await mkdtemp(join(tmpdir(), "velar-service-module-"));
   const bridgeKey = Symbol.for("velar.desktop.bridge.v1");
   const calls: { operation: string; args: readonly unknown[] }[] = [];
+  const watchAnswers: unknown[] = [];
   try {
     const bridge = {
       invoke(_capability: string, operation: string, args: readonly unknown[]) {
@@ -174,7 +175,9 @@ test("a declared service connects and an undeclared one is refused at the call",
         if (operation === "closeInfo") return Promise.resolve({ code: 1000, reason: "done" });
         if (operation === "close") return Promise.resolve(true);
         if (operation === "watchStart") return Promise.resolve(3);
-        if (operation === "watchNext") return Promise.resolve({ name: "notes", state: "ready" });
+        // Scripted one event at a time, because the interesting cases are what
+        // arrives *in* an event rather than how many arrive.
+        if (operation === "watchNext") return Promise.resolve(watchAnswers.shift() ?? { name: "notes", state: "ready", detail: null });
         if (operation === "watchClose") return Promise.resolve(true);
         throw new Error(`unexpected service operation '${operation}'`);
       },
@@ -229,7 +232,26 @@ test("a declared service connects and an undeclared one is refused at the call",
     assert.equal(module.ServiceStateStream.is(states), true);
     const event = await states.next();
     assert.equal(module.ServiceStateEvent.is(event), true);
-    assert.deepEqual(event, { name: "notes", state: "ready" });
+    // Three fields, always: a state that did not fail carries a null detail
+    // rather than an absent one, so an application reads one shape.
+    assert.deepEqual(event, { name: "notes", state: "ready", detail: null });
+
+    // A failure quotes the service. The text is the host's to produce and this
+    // module's only to bound — it is never parsed here.
+    watchAnswers.push({ name: "notes", state: "failed", detail: "Error: listen EADDRINUSE 127.0.0.1:51000" });
+    assert.deepEqual(await states.next(), {
+      name: "notes", state: "failed", detail: "Error: listen EADDRINUSE 127.0.0.1:51000",
+    });
+
+    // A detail on a state that did not fail, and a detail past the 4 KiB bound,
+    // are both a host this module does not recognise rather than something it
+    // passes through to the application.
+    watchAnswers.push({ name: "notes", state: "ready", detail: "all is well" });
+    await assert.rejects(states.next(), /attached a failure detail to the 'ready' state/u);
+    const reopened = await module.watchServices();
+    watchAnswers.push({ name: "notes", state: "failed", detail: "x".repeat(4097) });
+    await assert.rejects(reopened.next(), /invalid service failure detail/u);
+
     assert.equal(await states.close(), null);
 
     // A project with no services at all still loads the module — D60 rule 153 —
@@ -405,17 +427,38 @@ test("a crashing service backs off to a terminal state, and 'never' does not res
   if (process.platform !== "darwin") return context.skip("the Desktop host is macOS-only in 0.10");
   const project = await packagedFixture();
   const logs = await mkdtemp(join(tmpdir(), "velar-service-log-"));
+  // The host's own capture, which is a real path under the real app-data root
+  // rather than a fixture directory: it is what a person opens after the fact,
+  // so the test opens the same file.
+  const hostLogs = join(homedir(), "Library", "Application Support", "dev.velarscript.services", "service-logs");
+  await rm(hostLogs, { recursive: true, force: true });
   try {
     const started = Date.now();
     const refused = smoke(project, "exit", logs);
     const elapsed = Date.now() - started;
     assert.equal(refused.status, 1, refused.stdout);
-    assert.match(refused.stderr, /every declared service settled without becoming ready \(notes=failed, once=stopped\)/u);
+    // The failure names the state *and* what the service said on its way down,
+    // with the carriage return the service wrote dropped: a detail an
+    // application shows a person must not be able to rewrite the line it is
+    // shown on. `once` never failed at anything, so it carries no detail.
+    assert.match(
+      refused.stderr,
+      /every declared service settled without becoming ready \(notes=failed: Error: notes refused to start {5}at main\.js, once=stopped\)/u,
+      refused.stderr,
+    );
     // 1 + 2 + 4 + 8 seconds of backoff before the fifth failure is terminal, so
     // the run cannot have been faster than the backoff it is supposed to apply.
     assert.ok(elapsed >= 15_000, `the backoff took only ${elapsed}ms`);
     assert.equal((await serviceLog(logs, "notes")).filter((line) => line.startsWith("start ")).length, 5);
     assert.equal((await serviceLog(logs, "once")).filter((line) => line.startsWith("start ")).length, 1);
+
+    // The whole of each service's output went to its own log file, byte for
+    // byte: the 4 KiB detail summarises one failure, and this is the record of
+    // all five.
+    const captured = await readFile(join(hostLogs, "notes.log"), "utf8");
+    assert.equal(captured.split("Error: notes refused to start").length - 1, 5, captured);
+    assert.equal(captured.includes("\r"), true, "the log keeps the bytes the service actually wrote");
+    assert.deepEqual((await readdir(hostLogs)).sort(), ["notes.log", "once.log"]);
   } finally {
     await rm(logs, { recursive: true, force: true });
   }
@@ -480,21 +523,23 @@ test("velar dev starts the declared services, authenticates them, and converges 
   const logs = await mkdtemp(join(tmpdir(), "velar-service-log-"));
   try {
     // While the services are up, the same endpoint is offered a token the host
-    // never issued. The service side ends the connection instead of answering
-    // it, which is what makes the token's authority a fact rather than a claim.
-    let refused: boolean | null = null;
+    // never issued. The service side closes the connection with the pinned 1008
+    // instead of answering it, which is what makes the token's authority a fact
+    // rather than a claim — and what makes a refusal distinguishable from a
+    // service that has not finished starting.
+    let refused: string | null = null;
     const { output, pids } = await runDevelopmentServer(project, "answer", logs, async (running) => {
       const port = Number(/dev service 'notes': ready on 127\.0\.0\.1:(\d+)/u.exec(running)?.[1]);
       assert.ok(Number.isSafeInteger(port), running);
-      refused = !await handshake(port, "0".repeat(32));
+      refused = await handshake(port, "0".repeat(32));
     });
     // The endpoint is host-assigned and the handshake is real: a service is
     // reported ready only after it answered `service-ready` to a token it was
     // given in its environment.
     assert.match(output, /VelarScript dev service 'notes': ready on 127\.0\.0\.1:\d+/u, output);
     assert.match(output, /VelarScript dev service 'once': ready on 127\.0\.0\.1:\d+/u, output);
-    assert.equal(refused, true, "a token the host never issued must not open a channel");
-    assert.equal((await serviceLog(logs, "notes")).includes("hello refused"), true);
+    assert.equal(refused, "refused", "a token the host never issued must be closed with 1008, not merely dropped");
+    assert.equal((await serviceLog(logs, "notes")).includes("hello refused 1008"), true);
     for (const name of ["notes", "once"]) {
       assert.equal((await serviceLog(logs, name)).includes("hello accepted"), true, name);
     }

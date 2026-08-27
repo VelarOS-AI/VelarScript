@@ -22,9 +22,10 @@ permission-scoped implementations of existing language capabilities:
   archive of itself.
 - `velar/service`: `connect(name)` opens an authenticated loopback channel to a
   process `desktop.services` declares, and `watchServices()` is a bounded pull
-  stream of `starting`, `ready`, `restarting`, `failed` and `stopped`. A
-  `ServiceConnection` is an owned resource with a backpressured send and a
-  bounded pull receive; it carries text.
+  stream of `starting`, `ready`, `restarting`, `failed` and `stopped`, each event
+  carrying a `detail` that is the failing service's own last words and is null
+  for every state that did not fail. A `ServiceConnection` is an owned resource
+  with a backpressured send and a bounded pull receive; it carries text.
 - `velar/notification`: `requestPermission`, `show`, and a bounded pull stream of
   activations. The manifest declares whether the application may notify; the
   operating system separately answers whether it may right now.
@@ -105,6 +106,34 @@ Services start before the renderer loads and are not awaited. On quit the host
 sends SIGTERM and, thirty seconds later, SIGKILL; a service's exit status never
 becomes the application's.
 
+### Why a service failed
+
+A `failed` or `restarting` event carries a `detail`: up to the last 4 KiB of what
+that service wrote to its own standard error, truncated on a character boundary
+and stripped of every control character but the newline. It is diagnostic text
+for a person to read — a stack trace, a bind failure, the line a service printed
+before it gave up — and nothing in the language parses it or matches on it. When
+the service produced no output at all, the host says what it knows instead: that
+the process could not be started, that it exited with a status, that it never
+answered the handshake, or that it refused the token. `detail` is null for
+`starting`, `ready` and `stopped`, because none of those states failed at
+anything.
+
+Four kilobytes is a crash, not a log. The log is a file: the host writes every
+service's standard output and standard error, whole and interleaved in the order
+they arrived, to
+
+```sh
+~/Library/Application Support/<identifier>/service-logs/<name>.log
+```
+
+which grows to one megabyte, rotates once to `<name>.log.1`, and keeps nothing
+older. It sits beside the application's own `app-data` scope rather than inside
+it: the log is the host's record of what the product's process said, and an
+application that could rewrite it is an application whose crash report proves
+nothing. Under `velar dev` there is no such file — a service's streams are the
+terminal's, where a developer is already looking.
+
 ### The handshake
 
 The host allocates a loopback port and a 128-bit token per service and hands
@@ -130,14 +159,21 @@ frames, and this is the whole protocol the language imposes:
 The host sends the first as a text frame immediately after the socket opens and
 waits up to 30 seconds for the second; a service should apply the same 30-second
 bound to a connection that has not sent a hello. A connection whose token is not
-the one the host issued must be closed without an answer: the endpoint is
-loopback and every process on the machine can reach loopback, so the token is
-the whole of this channel's authentication. After the two frames the channel
-carries whatever the product decided it carries; the language reads none of it.
+the one the host issued must be closed without an answer, with WebSocket close
+code **1008**: the endpoint is loopback and every process on the machine can
+reach loopback, so the token is the whole of this channel's authentication. The
+code is part of the contract rather than a courtesy — a dropped connection is
+also what a service that has not finished binding its port looks like, and the
+host retries that one for thirty seconds while reporting the refusal at once.
+After the two frames the channel carries whatever the product decided it
+carries; the language reads none of it.
 
-The readiness probe closes its connection as soon as it has the answer. A
-service that never answers within the deadline is a start that failed, and the
-declared `restart` policy decides what happens next.
+The readiness probe closes its connection as soon as it has the answer, and it
+is indistinguishable from an application `connect()` — the same hello, the same
+token, the same close — so a service will see connections open and close that no
+window asked for and must not treat a closed authenticated connection as an
+application-level event. A service that never answers within the deadline is a
+start that failed, and the declared `restart` policy decides what happens next.
 
 `velar dev` runs the same services from `<project>/<payload>/<entry>` on the
 system Node and converges them when the dev server closes. It performs the same

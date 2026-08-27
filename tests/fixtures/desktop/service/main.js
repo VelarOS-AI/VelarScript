@@ -8,8 +8,9 @@
 // host having to report either.
 //
 //   answer   — serve, accept the host's token, echo; exit on SIGTERM
-//   exit     — record the start and exit, so the restart policy has something
-//              to do
+//   exit     — record the start, write a crash to stderr and exit, so the
+//              restart policy has something to do and the host's capture has
+//              something to quote
 //   silent   — listen and never answer the hello, so readiness times out
 //   stubborn — serve and accept, but ignore SIGTERM, so the SIGKILL deadline
 //              has something to kill
@@ -30,7 +31,16 @@ const record = (line) => {
 };
 
 record(`start ${mode} ${process.pid}`);
-if (mode === "exit") process.exit(1);
+if (mode === "exit") {
+  // On the way out, and on stderr on purpose: this is the text the host is
+  // supposed to capture into `<app-data>/service-logs/<service>.log` whole and
+  // quote back, bounded, as the `detail` of `failed` and `restarting`. The
+  // carriage return is the control character the detail has to drop and the
+  // log has to keep: a detail an application shows a person must not be able
+  // to rewrite the line it is shown on.
+  process.stderr.write(`Error: ${name} refused to start\r\n    at main.js\n`);
+  process.exit(1);
+}
 
 const endpoint = process.env.VELAR_SERVICE_ENDPOINT;
 const token = process.env.VELAR_SERVICE_TOKEN;
@@ -67,8 +77,11 @@ server.on("upgrade", (request, socket) => {
         let hello = null;
         try { hello = JSON.parse(text); } catch { hello = null; }
         if (!hello || hello.velar !== "service-hello" || hello.token !== token) {
-          record("hello refused");
-          return socket.end();
+          // 1008, the pinned refusal in packages/desktop/README.md. A dropped
+          // connection would be indistinguishable from a service that is not
+          // up yet; this says no on purpose and says so in the close code.
+          record("hello refused 1008");
+          return socket.end(encodeCloseFrame(1008));
         }
         record("hello accepted");
         // `silent` accepts the token and answers nothing, which is a service
@@ -109,6 +122,12 @@ function readFrame(buffer) {
   const payload = Buffer.from(buffer.subarray(offset, offset + length));
   if (mask) for (let index = 0; index < payload.length; index += 1) payload[index] ^= mask[index % 4];
   return { opcode, payload, consumed: offset + length };
+}
+
+function encodeCloseFrame(code) {
+  const payload = Buffer.alloc(2);
+  payload.writeUInt16BE(code, 0);
+  return Buffer.concat([Buffer.from([0x88, payload.length]), payload]);
 }
 
 function encodeFrame(message) {

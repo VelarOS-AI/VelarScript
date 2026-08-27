@@ -12,9 +12,14 @@
 // and then whatever the product decided its own channel carries. Here that is
 // one line of text in and one line of text out.
 //
-// A connection that opens with any other token is closed without an answer. The
-// endpoint is loopback, and every process on the machine can reach loopback, so
-// the token is the whole of this channel's authentication.
+// A connection that opens with any other token is closed with 1008 and without
+// an answer. The endpoint is loopback, and every process on the machine can
+// reach loopback, so the token is the whole of this channel's authentication.
+//
+// The host opens a connection this way for its readiness probe too, and that
+// probe is indistinguishable from an application `connect()`. A service will see
+// connections come and go that no window asked for, so nothing here treats a
+// closed authenticated connection as an application-level event.
 
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
@@ -57,7 +62,7 @@ server.on("upgrade", (request, socket) => {
       if (!authenticated) {
         let hello = null;
         try { hello = JSON.parse(text); } catch { hello = null; }
-        if (!hello || hello.velar !== "service-hello" || hello.token !== token) return socket.end();
+        if (!hello || hello.velar !== "service-hello" || hello.token !== token) return socket.end(encodeCloseFrame(1008));
         authenticated = true;
         socket.write(encodeFrame(JSON.stringify({ velar: "service-ready" })));
         continue;
@@ -100,6 +105,13 @@ function readFrame(buffer) {
   const payload = Buffer.from(buffer.subarray(offset, offset + length));
   if (mask) for (let index = 0; index < payload.length; index += 1) payload[index] ^= mask[index % 4];
   return { opcode, payload, consumed: offset + length };
+}
+
+/** The refusal the host reads: a close frame whose status code is 1008. */
+function encodeCloseFrame(code) {
+  const payload = Buffer.alloc(2);
+  payload.writeUInt16BE(code, 0);
+  return Buffer.concat([Buffer.from([0x88, payload.length]), payload]);
 }
 
 function encodeFrame(message) {
