@@ -197,3 +197,20 @@ import {set, get, remove} from "velar/secure-storage"
    为准（tour 用 512×320）。`aspectRatio` 增加 ≤100 上界。
 5. vibrancy 走公开 API（`underPageBackgroundColor = .clear`），视觉效果
    进 P1 新旧壳并排盲测清单验证。
+
+## 9. L1b 裁决追记（2026-08-27）
+
+1. §1 中 `"dropped"` 的「读取用户拖入手势带来的文件与获取其真实路径」
+   **收窄为路径揭示**：`"dropped"` 只授权 `watchDroppedFiles()`；拖入
+   路径不扩展 `velar/fs` 的可读根。§5 的表述为准，§1 的「读取」二字作废。
+   依据：产品架构中读文件的是 sidecar（自有权限），渲染侧只递路径；
+   「纯 Vel 桌面应用无服务进程直接读拖入目录」是尚无真实消费者的类别。
+   重开条件：出现这样的消费者时，以「会话内精确路径授权流向 worker」
+   的形态实施（L1b 报告已给出实现草图）。
+2. L1b 的七项偏差全部采纳：流打开器返回 `Promise`（对齐 `watchFiles`）；
+   `secureStorage` 名字大写（规则赢过示例）；`screenRecording` 驼峰
+   （枚举成员即标识符，D60-149 名册门）；两态探针映射
+   granted/undetermined（不猜 denied）；整模块被拒的 manifest 在
+   `velar check` 期拒绝（对齐 fs/process 既有规则）；合并规则三流各表
+   （power 只报转变、拖入单批深度、激活按 tag 去重队列 64）；
+   桥测试改为「恰好两个 `NSWorkspace.open` 分支、各钉各的 grant」。
