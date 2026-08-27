@@ -244,8 +244,10 @@ def publicUser(source: SourceUser, requestId: string) -> PublicUser:
 `Type.from` is shallow and compile-time checked. It does not accept `unknown`;
 validate untrusted data with `Type.parse` first.
 
-`enum` declares finite string-backed states; a member may map an external
-wire spelling without losing its nominal identity:
+`enum` declares finite states backed by a wire value; a member may map an
+external spelling — a string, or a safe integer where a protocol pins a version
+— without losing its nominal identity. A member satisfies a contract for the
+scalar its own wire value is, and nothing else:
 
 ```velar
 enum Status:
@@ -257,8 +259,14 @@ enum ProviderEventKind:
     textDelta = "response.output_text.delta"
     completed = "response.completed"
 
+enum KernelProtocol:
+    v1 = 1
+    v2 = 2
+
 const status: Status = Status.active
+const protocol: number = KernelProtocol.v2
 print(ProviderEventKind.textDelta)
+print(str(protocol))
 ```
 
 Classes use typed body fields, one explicit constructor, and explicit `self`;

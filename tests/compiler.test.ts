@@ -4501,6 +4501,36 @@ test("[D102-1] the enum wire exit and the equality veto follow the wire value's 
   assert.deepEqual(mixedMember.diagnostics, []);
 });
 
+test("[D102-1] the editor surfaces read a numeric wire member exactly as a string one", () => {
+  // Hover and completion show an enum member as its nominal singleton, and they
+  // show a mapped wire value for neither kind. The ruling asks the numeric form
+  // to be presented like the string form, so the assertion is parity: all three
+  // spellings — mapped string, pinned integer, unmapped — produce one shape.
+  const result = compileCore('enum Wire:\n    textDelta = "response.output_text.delta"\n    v2 = 2\n    plain\n\nprint(str(Wire.v2))\n');
+  assert.deepEqual(result.diagnostics, []);
+  assert.deepEqual(
+    result.semanticIndex.symbols
+      .filter((symbol) => symbol.kind === "enum-member")
+      .map((symbol) => `${symbol.container}.${symbol.name}: ${symbol.type}`),
+    ["Wire.textDelta: Wire.textDelta", "Wire.v2: Wire.v2", "Wire.plain: Wire.plain"],
+  );
+  // The completion list behind `Wire.` carries the same detail for each member
+  // and the same runtime surface after them, integer member included.
+  assert.deepEqual(
+    result.semanticIndex.symbols
+      .find((symbol) => symbol.kind === "enum")
+      ?.members.map((member) => `${member.name} ${member.kind} ${member.type}`),
+    [
+      "textDelta field Wire.textDelta",
+      "v2 field Wire.v2",
+      "plain field Wire.plain",
+      "is method (value: unknown) -> bool",
+      "parse method (value: unknown) -> Wire",
+      "values method () -> List<Wire>",
+    ],
+  );
+});
+
 test("enums reject open strings, foreign members, duplicates, and reserved runtime names", () => {
   const openString = compile(`
 enum Status:

@@ -169,8 +169,9 @@ structural — any value with the right fields satisfies it — and it carries
 and individually `readonly`. A record may extend one concrete record; the child
 inherits its fields and validator checks while assignability stays structural.
 
-`enum` declares a finite, string-backed state. A member may carry an external
-wire spelling (`textDelta = "response.output_text.delta"`) without losing its
+`enum` declares a finite state backed by a wire value. A member may carry an
+external spelling — a string (`textDelta = "response.output_text.delta"`) or a
+safe integer where a protocol pins a version (`v2 = 2`) — without losing its
 nominal identity, and `Kind.values()` returns the members in declaration order.
 An enum member in type position discriminates a union.
 

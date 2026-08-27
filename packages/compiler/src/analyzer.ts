@@ -7913,22 +7913,27 @@ export class Analyzer implements TypeEnvironment {
     return null;
   }
 
-  // ENM-D1: an enum member is a bare string at runtime, so a Set element or
+  // ENM-D1: an enum member is a bare wire value at runtime, so a Set element or
   // Map key type whose union mixes members of different enums — or an enum
-  // with `string` — would collapse nominally distinct keys into one slot.
-  // The same no-intersection principle as D42 item 64, applied where the
-  // collection would silently unify what the type system keeps apart.
+  // with the scalar its own wire values are — would collapse nominally distinct
+  // keys into one slot. The same no-intersection principle as D42 item 64,
+  // applied where the collection would silently unify what the type system
+  // keeps apart. D102 ruling 1: the scalar to watch for follows the wire value,
+  // so `Map<Proto | number, T>` collides exactly as `Map<Kind | string, T>`
+  // does, and a string-backed enum beside `number` collides with neither.
   private rejectCollidingKeyDomain(keySource: ValueType, span: Span, position: string): void {
     const enumIdentities = new Set<string>();
     let enumName: string | null = null;
-    let sawString = false;
+    const enumScalars = new Set<"string" | "number">();
+    const scalars = new Set<"string" | "number">();
     const visit = (source: ValueType): void => {
       const type = this.expandAliases(source);
       if (type.kind === "enum" || type.kind === "enumMember") {
         enumIdentities.add(type.identity);
         enumName ??= type.name;
-      } else if (type.kind === "string") {
-        sawString = true;
+        for (const kind of this.enumWireScalarKinds(type)) enumScalars.add(kind);
+      } else if (type.kind === "string" || type.kind === "number") {
+        scalars.add(type.kind);
       } else if (type.kind === "optional") {
         visit(type.inner);
       } else if (type.kind === "union") {
@@ -7936,12 +7941,18 @@ export class Analyzer implements TypeEnvironment {
       }
     };
     visit(keySource);
-    if (enumIdentities.size === 0 || (enumIdentities.size === 1 && !sawString)) return;
-    const collision = sawString
-      ? `mixes ${enumName ?? "an enum"} with string, and an enum member is a bare string at runtime`
-      : "mixes members of different enums, which are bare strings at runtime";
+    const collidingScalar = [...scalars].find((kind) => enumScalars.has(kind)) ?? null;
+    if (enumIdentities.size === 0 || (enumIdentities.size === 1 && collidingScalar === null)) return;
+    const collision = collidingScalar !== null
+      ? `mixes ${enumName ?? "an enum"} with ${collidingScalar}, and an enum member is a bare ${collidingScalar} at runtime`
+      : "mixes members of different enums, which are bare wire values at runtime";
+    // The deliberate spelling is the enum's own exit, and only the string one
+    // has a function to name: an integer wire value leaves through assignment.
+    const deliberate = collidingScalar === "number"
+      ? "or bind each member to a number first and store that deliberately"
+      : "or store wire strings deliberately with str(member)";
     this.typeError(
-      `A ${position} of ${describeType(keySource)} ${collision}, so nominally distinct keys would collapse into one slot; keep the domains in separate collections, or store wire strings deliberately with str(member)`,
+      `A ${position} of ${describeType(keySource)} ${collision}, so nominally distinct keys would collapse into one slot; keep the domains in separate collections, ${deliberate}`,
       span,
     );
   }

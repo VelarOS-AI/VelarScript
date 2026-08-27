@@ -27,8 +27,9 @@ the alternatives. Data that is modeled precisely makes every function after
 it shorter. Return multiple values as a named record with shorthand fields,
 never through an out-parameter or a class — the type name is free
 documentation. When an external protocol owns the wire spelling, map it in the
-enum instead of writing a conversion function: a string-backed member already
-satisfies `string` contracts directly.
+enum instead of writing a conversion function: a member already satisfies
+contracts for the scalar its wire value is — `string` for a mapped string,
+`number` for a pinned integer such as `v2 = 2`.
 
 ```velar
 enum TicketStatus:
