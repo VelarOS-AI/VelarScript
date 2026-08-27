@@ -2052,8 +2052,12 @@ if (!webFoundationSource.includes("webRuntimeFoundation(WEB_ERROR_HOST_RUNTIME)"
 if (/\bPromise\.prototype\.then|\bError\.isError\s*\(|\berrorHandlers\.(?:has|add|delete)\s*\(/u.test(webOwnedCallbackRuntimeSource + "\n" + webAppModuleSource)) {
   failures.push("packages/web/src/runtime.ts: Web error callbacks or velar/app bypass the captured error/handler ABI");
 }
+// velar/desktop, velar/window, velar/path, velar/fs, velar/process, velar/env
+// and velar/http: every Desktop target module reaches its host through the one
+// captured bridge ABI, and a new module raises this count rather than opening a
+// second door.
 const desktopHostRuntimeUses = desktopCompilerSource.match(/\$\{DESKTOP_HOST_ABI_RUNTIME\}/gu)?.length ?? 0;
-if (desktopHostRuntimeUses !== 6
+if (desktopHostRuntimeUses !== 7
   || /Object\.getOwnPropertyDescriptor\(globalThis, bridgeKey\)|\bbridge\.invoke\s*\(|globalThis\[runtimeKey\]/u.test(desktopCompilerSource)) {
   failures.push("packages/desktop/src/compiler.ts: a Desktop target module bypasses the captured host bridge ABI");
 }
@@ -2088,7 +2092,16 @@ for (const phrase of [
   'forwarded["owner"] = request.generation',
   'func webView(_ webView: WKWebView, didCommit navigation:',
   'worker.retire(generation: generation)',
-  'request.owner !== activeOwner',
+  // A window is a document generation, and an application holds several open at
+  // once, so the live set is a set. The invariant is unchanged: a request is
+  // served only for a generation that is still live, and a generation is
+  // retired when its document navigates away or its window closes.
+  '!activeOwners.has(request.owner)',
+  'activeOwners.delete(owner)',
+  'registry?.retire(generation: generation)',
+  // Each window's responses go back to that window's own web view; a shared one
+  // would deliver another window's answer.
+  'deliverBridgeResponse(encoded, generation: request.identity.generation, to: target)',
   'if (task.owner !== owner)',
   'if (request.owner !== owner)',
   'finishHttp(handle, request)',

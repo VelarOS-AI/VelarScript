@@ -1145,12 +1145,12 @@ test("Desktop windows are opened only for manifest-declared kinds and released i
       module.openWindow("terminal", { route: "/" }),
       /undeclared window kind 'terminal'.*desktop\.windows.*declared kinds: main, note-preview/su,
     );
-    assert.deepEqual(calls, []);
+    assert.equal(calls.length, 0, "an undeclared kind or invalid option must never reach the host");
     await assert.rejects(module.openWindow("note-preview", { route: "https://example.com/" }), /must start with '\/'/u);
     await assert.rejects(module.openWindow("note-preview", { route: "//example.com" }), /stay inside this application/u);
     await assert.rejects(module.openWindow("note-preview", { route: "/", key: "not a key" }), /key must be at most 128 characters/u);
     await assert.rejects(module.openWindow("note-preview", { route: "/", side: "left" }), /unknown field 'side'/u);
-    assert.deepEqual(calls, []);
+    assert.equal(calls.length, 0, "an undeclared kind or invalid option must never reach the host");
 
     assert.equal(module.currentWindowKind(), "main");
     assert.equal(module.Window.is(module.currentWindow()), true);
