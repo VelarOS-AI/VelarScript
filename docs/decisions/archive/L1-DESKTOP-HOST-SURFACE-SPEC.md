@@ -182,3 +182,18 @@ import {set, get, remove} from "velar/secure-storage"
 - 分两波实现：**L1a** = manifest v2 + `velar/window` + Swift 窗口系统 +
   迁移；**L1b** = notification / secure-storage / desktop 增量 + 假件补全
   + tour 与文档收尾。每波结束跑 desktop 全部测试与打包门。
+
+## 8. L1a 裁决追记（2026-08-27，L1b 以此为准）
+
+1. §2 中「`currentWindow()` 的 `using` 释放不关闭当前窗口」**撤回**：
+   `Window` 统一为被拥有资源，释放即关闭、幂等（D51 释放契约唯一）；
+   文档与 tour 教 `const` 持有当前窗口。
+2. §1 中「未声明种类是 check 期错误（字面量时）」降级为**调用处即时
+   失败**并列出已声明种类（生成模块闭合于声明种类；analyzer 无项目配置
+   通道，Core seam 留待真实证据）。
+3. §7 中「worker.js 预计零改动」不成立：窗口即文档代，worker 持有从单
+   `activeOwner` 改为集合，宿主在导航与关窗时显式退休；既有不变量保持。
+4. §1 示例的 `browser-preview` 480×300 违反自身的最小高度规则，以规则
+   为准（tour 用 512×320）。`aspectRatio` 增加 ≤100 上界。
+5. vibrancy 走公开 API（`underPageBackgroundColor = .clear`），视觉效果
+   进 P1 新旧壳并排盲测清单验证。
