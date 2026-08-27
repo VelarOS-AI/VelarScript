@@ -126,9 +126,15 @@ export async function provisionDesktopNodeRuntime(request: DesktopRuntimeRequest
     ], staging);
     const information = await stat(executable);
     if (!information.isFile()) throw new Error(`Node.js runtime archive ${pinned.archive} did not contain a bare 'bin/node' executable`);
+    // The archive passed its digest check, so this cannot be a substituted one —
+    // but an executable this large would still mean the toolchain pinned
+    // something it should not, and nothing that size is going into a cache other
+    // builds will trust. The bundle is checked against the same ceiling again
+    // after signing, where the message names the packaged artifact.
     if (information.size > DESKTOP_RUNTIME_CEILING_BYTES) {
       throw new Error(
-        `Embedded Node.js runtime is ${information.size} bytes, above the ${DESKTOP_RUNTIME_CEILING_BYTES}-byte integrity ceiling this toolchain enforces`,
+        `The Node.js ${DESKTOP_NODE_RUNTIME_VERSION} archive unpacked to a ${information.size}-byte executable, `
+        + `above the ${DESKTOP_RUNTIME_CEILING_BYTES}-byte integrity ceiling this toolchain enforces; nothing was cached`,
       );
     }
     await chmod(executable, 0o755);
