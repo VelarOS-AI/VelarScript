@@ -8558,6 +8558,25 @@ export class Analyzer implements TypeEnvironment {
         }
         return source.fields.size === 0 && expectedMap ? expectedMap : { kind: "map", key: stringType, value };
       }
+      // The same hole one shape further out: a `type` declaration is the most
+      // ordinary record the language has, and it arrives as `named`, so
+      // `Map(pair)` was refused with a message that listed "a record" among the
+      // forms it takes. `fieldsOf` is what tells a record-shaped name from an
+      // extension host scalar or an erased generic, exactly as `Promise.all`
+      // asks it. The runtime has read ordinary records all along.
+      if (source.kind === "named") {
+        const fields = this.fieldsOf(source.identity ?? source.name);
+        if (fields) {
+          let value = unknownType;
+          const fieldType = (field: ValueType): ValueType => source.readonlyView ? this.readonlyDataViewOf(field) : field;
+          for (const field of fields.values()) value = mergeTypes(value, fieldType(field));
+          if (expectedMap) {
+            this.requireAssignable(stringType, expectedMap.key, argument.span);
+            for (const field of fields.values()) this.requireAssignable(fieldType(field), expectedMap.value, argument.span);
+          }
+          return fields.size === 0 && expectedMap ? expectedMap : { kind: "map", key: stringType, value };
+        }
+      }
       // A `Record<V>` is the dynamic-key record, and `__velarCreateMap` has
       // always read it. Only the structural `object` shape was accepted here,
       // so the diagnostic below listed "a record" among the forms it takes and
