@@ -260,6 +260,19 @@ the rendered output, while a deliberate space between two inline elements on the
 same line survives. A text child that normalizes to nothing produces no node,
 and text that must be preserved exactly belongs in an interpolated string.
 
+What an interpolation leaves in the document follows from what its type can be.
+A `string` or a `number` renders as exactly one text node — never nothing, never
+markup — so that is all it is: the node is created once and its text is rewritten
+in place when the value changes, and nothing brackets it. Every other type can
+render nothing, or markup, or several nodes at different times, so its position
+is bracketed by a `velar:start`/`velar:end` comment pair marking the region the
+renderer owns and rebuilds; a keyed list carries
+`velar:keyed-start`/`velar:keyed-end` for the same reason. A `bool` is on that
+side of the line because it renders *nothing*: `{saving}` puts no text in the
+document, in either state. Those comments are the renderer's bookkeeping — they
+never affect rendering, and they are what appears between the two spellings when
+a document is inspected.
+
 ## `velar/look`
 
 Visual unit suffixes are language syntax and require no import. `px`, `rem`,
