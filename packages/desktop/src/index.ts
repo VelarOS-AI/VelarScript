@@ -8,6 +8,8 @@ export {
   desktopExternalNavigationPermitted,
 } from "./config.ts";
 export type {
+  DesktopFileScope,
+  DesktopLinkScheme,
   DesktopPermissionConfig,
   DesktopWindowConfig,
   DesktopWindowLevel,
@@ -22,6 +24,8 @@ export const VELAR_DESKTOP_MODULES = Object.freeze([
   "velar/desktop",
   "velar/desktop-test",
   "velar/window",
+  "velar/notification",
+  "velar/secure-storage",
   "velar/fs",
   "velar/path",
   "velar/process",

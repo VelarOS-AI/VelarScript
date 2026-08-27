@@ -55,6 +55,16 @@ export const velarFrameworkHost: FrameworkHostExtension = Object.freeze({
     if (imports.has("velar/env") && config.permissions.environment.length === 0) {
       failures.push("Desktop source imports 'velar/env' but desktop.permissions.environment grants no variable");
     }
+    // A module whose every export is refused is a manifest mistake rather than
+    // a program to run, so it is reported once here. D60 rule 153 still owns
+    // the call: an individual capability the manifest does declare and the
+    // author reaches wrongly fails where it is used, not where it is imported.
+    if (imports.has("velar/notification") && !config.permissions.notifications) {
+      failures.push("Desktop source imports 'velar/notification' but desktop.permissions.notifications is not true");
+    }
+    if (imports.has("velar/secure-storage") && config.permissions.secureStorage.length === 0) {
+      failures.push("Desktop source imports 'velar/secure-storage' but desktop.permissions.secureStorage grants no name");
+    }
     return Object.freeze(failures);
   },
 });

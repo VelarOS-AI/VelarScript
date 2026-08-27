@@ -240,7 +240,8 @@ function moduleFileName(source) {
  * loaded, which owns JSX, components, and Node-module rejection.
  */
 function exampleExtensions(source, file) {
-  if (['"velar/desktop"', '"velar/desktop-test"', '"velar/window"'].some((module) => source.includes(module))) {
+  if (['"velar/desktop"', '"velar/desktop-test"', '"velar/window"', '"velar/notification"', '"velar/secure-storage"']
+    .some((module) => source.includes(module))) {
     return [velarDesktopCompilerExtension];
   }
   const serverOwned = source.includes('"velar/server"');

@@ -55,6 +55,9 @@ export function desktopBrowserTestInitScript(
 ): string {
   const files = JSON.stringify(config.permissions.files);
   const processes = JSON.stringify(config.permissions.processes);
+  const links = JSON.stringify(config.permissions.links);
+  const secureStorage = JSON.stringify(config.permissions.secureStorage);
+  const notifications = JSON.stringify(config.permissions.notifications);
   const windows = JSON.stringify(config.windows);
   return String.raw`
 (() => {
@@ -538,6 +541,234 @@ export function desktopBrowserTestInitScript(
     throw new Error("Unsupported Desktop test window event '" + operation + "'");
   }
 
+  // The rest of the host surface, reduced to what a browser test can observe.
+  // Every grant is asked a second time here, the way the native host asks it a
+  // second time: the generated module already refused an ungranted call, and a
+  // page that reached the bridge another way is refused again.
+  const linkGrants = new Set(${links});
+  const secureStorageGrants = new Set(${secureStorage});
+  const notificationsDeclared = ${notifications};
+  const droppedFilesGranted = grants.has("dropped");
+  const maxHostEvents = 64;
+  const maxDroppedPaths = 4096;
+  const maxDroppedTextUnits = 2 * 1024 * 1024;
+  const maxSecureStorageValueBytes = 8 * 1024;
+  const notificationInbox = [];
+  const openedLinks = [];
+  const keychain = new Map();
+  const systemPermissions = new Map();
+  const powerWatchers = new Map();
+  const dropWatchers = new Map();
+  const notificationWatchers = new Map();
+  let notificationPermission = "undetermined";
+  let powerState = "resumed";
+  let nextHostWatcherHandle = 1;
+
+  function hostGrant(condition, operation, declaration) {
+    if (!condition) throw new Error("Desktop test " + operation + " requires " + declaration + " in this project's velar.json");
+  }
+  function hostWatcher(watchers, handle, label) {
+    const watcher = watchers.get(handle);
+    if (!watcher) throw new Error("Desktop test " + label + " handle is unknown or already released");
+    return watcher;
+  }
+  function startHostWatcher(watchers, label) {
+    if (watchers.size >= 128) throw new RangeError("Desktop test host cannot own more than 128 " + label + " streams");
+    const handle = nextHostWatcherHandle++;
+    watchers.set(handle, {handle, events: [], pending: null});
+    return handle;
+  }
+  function settleHostWatcher(watcher) {
+    if (!watcher.pending || watcher.events.length === 0) return;
+    const resolveNext = watcher.pending;
+    watcher.pending = null;
+    resolveNext(watcher.events.shift());
+  }
+  function nextHostEvent(watchers, handle, label) {
+    const watcher = hostWatcher(watchers, handle, label);
+    if (watcher.pending) throw new Error(label + ".next already has an active pull");
+    if (watcher.events.length > 0) return watcher.events.shift();
+    return new Promise(resolveNext => { watcher.pending = resolveNext; });
+  }
+  function closeHostWatcher(watchers, handle) {
+    const watcher = watchers.get(handle);
+    if (!watcher) return false;
+    watchers.delete(handle);
+    if (watcher.pending) { const resolveNext = watcher.pending; watcher.pending = null; resolveNext(null); }
+    return true;
+  }
+  // Power is a transition stream: the machine is either asleep or awake, so a
+  // state it is already in publishes nothing. A queue at its bound drops its
+  // oldest entry, because the newest is the state the machine is actually in.
+  function publishPower(state) {
+    if (state === powerState) return null;
+    powerState = state;
+    for (const watcher of powerWatchers.values()) {
+      watcher.events.push(state);
+      if (watcher.events.length > maxHostEvents) watcher.events.shift();
+      settleHostWatcher(watcher);
+    }
+    return null;
+  }
+  // A dropped-files stream is one batch deep. A gesture that arrives while a
+  // batch is still waiting is appended to it in gesture order, so a slow
+  // consumer sees the two drops as one drop rather than losing either. The
+  // batch is bounded, and a merge that would pass the bound drops the oldest
+  // paths in it — the newest gesture is the one the user just made.
+  function publishDroppedFiles(paths) {
+    for (const watcher of dropWatchers.values()) {
+      const merged = watcher.events.length > 0 ? watcher.events[0].paths.concat(paths) : [...paths];
+      while (merged.length > maxDroppedPaths || textUnits(merged) > maxDroppedTextUnits) merged.shift();
+      watcher.events.length = 0;
+      watcher.events.push(Object.freeze({paths: Object.freeze(merged)}));
+      settleHostWatcher(watcher);
+    }
+    return null;
+  }
+  function textUnits(values) {
+    let units = 0;
+    for (const value of values) units += value.length;
+    return units;
+  }
+  // Two activations of the same notification are one activation, so a tag
+  // already queued is not queued twice; a queue at its bound drops its oldest.
+  function publishActivation(tag) {
+    for (const watcher of notificationWatchers.values()) {
+      if (watcher.events.some(event => event.tag === tag)) continue;
+      watcher.events.push(Object.freeze({tag}));
+      if (watcher.events.length > maxHostEvents) watcher.events.shift();
+      settleHostWatcher(watcher);
+    }
+    return null;
+  }
+  function notificationName(value, operation) {
+    if (value == null) return null;
+    if (typeof value !== "string" || value.length === 0 || value.length > 128) throw new TypeError("Desktop test " + operation + " tag is invalid");
+    return value;
+  }
+  function storageName(value, operation) {
+    if (typeof value !== "string" || !secureStorageGrants.has(value)) {
+      throw new Error("Desktop test " + operation + " cannot reach the undeclared secure storage name '" + String(value)
+        + "'; declare it under 'desktop.permissions.secureStorage' (declared names: "
+        + ([...secureStorageGrants].join(", ") || "none") + ")");
+    }
+    return value;
+  }
+
+  async function notificationCapability(operation, args) {
+    hostGrant(notificationsDeclared, operation, "'notifications: true' under 'desktop.permissions'");
+    if (operation === "requestPermission") return notificationPermission;
+    if (operation === "show") {
+      // The operating system's answer is the second gate, and a notification it
+      // never authorized fails rather than being quietly dropped.
+      if (notificationPermission !== "granted") {
+        throw new Error("Desktop test show cannot deliver a notification the operating system has not authorized (permission: " + notificationPermission + ")");
+      }
+      const value = args[0];
+      if (!value || typeof value !== "object" || typeof value.title !== "string" || typeof value.body !== "string"
+        || value.title.length === 0 || value.title.length > 256 || value.body.length === 0 || value.body.length > 1024) {
+        throw new TypeError("Desktop test show requires a bounded notification");
+      }
+      if (notificationInbox.length >= 256) throw new RangeError("Desktop test host cannot hold more than 256 notifications");
+      notificationInbox.push(Object.freeze({title: value.title, body: value.body, tag: notificationName(value.tag, "show")}));
+      return null;
+    }
+    if (operation === "watchStart") return startHostWatcher(notificationWatchers, "NotificationActivationStream");
+    if (operation === "watchNext") return nextHostEvent(notificationWatchers, args[0], "NotificationActivationStream");
+    if (operation === "watchClose") return closeHostWatcher(notificationWatchers, args[0]);
+    throw new Error("Unsupported Desktop test notification operation '" + operation + "'");
+  }
+
+  async function secureStorageCapability(operation, args) {
+    const name = storageName(args[0], operation);
+    if (operation === "set") {
+      const value = args[1];
+      if (typeof value !== "string") throw new TypeError("Desktop test set requires a text value");
+      if (new TextEncoder().encode(value).byteLength > maxSecureStorageValueBytes) throw new RangeError("Desktop test set cannot store more than 8 KiB");
+      keychain.set(name, value);
+      return null;
+    }
+    if (operation === "get") return keychain.has(name) ? keychain.get(name) : null;
+    if (operation === "remove") { keychain.delete(name); return null; }
+    throw new Error("Unsupported Desktop test secure storage operation '" + operation + "'");
+  }
+
+  async function desktopHostSurface(operation, args) {
+    if (operation === "openExternal") {
+      const url = args[0];
+      if (typeof url !== "string" || url.length === 0 || url.length > 2048) throw new TypeError("Desktop test openExternal requires a bounded URL");
+      let scheme;
+      try { scheme = new URL(url).protocol.slice(0, -1); }
+      catch { throw new TypeError("Desktop test openExternal requires an absolute URL"); }
+      hostGrant(linkGrants.has(scheme), "openExternal", "the '" + scheme + "' scheme under 'desktop.permissions.links'");
+      if (openedLinks.length >= 256) throw new RangeError("Desktop test host cannot record more than 256 opened links");
+      openedLinks.push(url);
+      return null;
+    }
+    if (operation === "displays") return [display];
+    if (operation === "permissionStatus") {
+      const kind = args[0];
+      if (kind !== "screenRecording" && kind !== "accessibility" && kind !== "microphone") {
+        throw new TypeError("Desktop test permissionStatus requires a SystemPermission value");
+      }
+      return systemPermissions.get(kind) ?? "undetermined";
+    }
+    if (operation === "powerWatchStart") return startHostWatcher(powerWatchers, "PowerStream");
+    if (operation === "powerWatchNext") return nextHostEvent(powerWatchers, args[0], "PowerStream");
+    if (operation === "powerWatchClose") return closeHostWatcher(powerWatchers, args[0]);
+    if (operation === "dropWatchStart") {
+      hostGrant(droppedFilesGranted, "watchDroppedFiles", "the 'dropped' root in 'desktop.permissions.files'");
+      return startHostWatcher(dropWatchers, "DroppedFilesStream");
+    }
+    if (operation === "dropWatchNext") return nextHostEvent(dropWatchers, args[0], "DroppedFilesStream");
+    if (operation === "dropWatchClose") return closeHostWatcher(dropWatchers, args[0]);
+    return undefined;
+  }
+
+  async function hostTestCapability(capability, operation, args) {
+    if (capability === "notification-test") {
+      if (operation === "setPermission") {
+        if (args[0] !== "granted" && args[0] !== "denied" && args[0] !== "undetermined") {
+          throw new TypeError("Desktop test setNotificationPermission requires a NotificationPermission value");
+        }
+        notificationPermission = args[0];
+        return null;
+      }
+      if (operation === "shown") return notificationInbox.map(item => ({title: item.title, body: item.body, tag: item.tag}));
+      if (operation === "activate") return publishActivation(notificationName(args[0], "activateNotification"));
+      throw new Error("Unsupported Desktop test notification event '" + operation + "'");
+    }
+    if (capability === "secure-storage-test") {
+      if (operation === "names") return [...keychain.keys()].sort();
+      throw new Error("Unsupported Desktop test secure storage event '" + operation + "'");
+    }
+    if (operation === "publishPower") {
+      if (args[0] !== "suspended" && args[0] !== "resumed") throw new TypeError("Desktop test publishPower requires a PowerState value");
+      return publishPower(args[0]);
+    }
+    if (operation === "dropFiles") {
+      hostGrant(droppedFilesGranted, "dropFiles", "the 'dropped' root in 'desktop.permissions.files'");
+      const paths = args[0];
+      if (!Array.isArray(paths) || paths.length === 0 || paths.length > maxDroppedPaths
+        || paths.some(path => typeof path !== "string" || path.length === 0 || path[0] !== "/" || path.length > 4096 || path.includes("\0"))) {
+        throw new TypeError("Desktop test dropFiles requires a non-empty bounded list of absolute paths");
+      }
+      return publishDroppedFiles(paths);
+    }
+    if (operation === "setSystemPermission") {
+      if (args[0] !== "screenRecording" && args[0] !== "accessibility" && args[0] !== "microphone") {
+        throw new TypeError("Desktop test setSystemPermission requires a SystemPermission value");
+      }
+      if (args[1] !== "granted" && args[1] !== "denied" && args[1] !== "undetermined") {
+        throw new TypeError("Desktop test setSystemPermission requires a PermissionStatus value");
+      }
+      systemPermissions.set(args[0], args[1]);
+      return null;
+    }
+    if (operation === "openedLinks") return [...openedLinks];
+    throw new Error("Desktop test capability '" + capability + "' has no operation '" + operation + "'");
+  }
+
   const bridge = Object.freeze({
     platform: ${JSON.stringify(platform)},
     packaged: false,
@@ -550,6 +781,14 @@ export function desktopBrowserTestInitScript(
       if (!Array.isArray(args)) throw new TypeError("Desktop test bridge args must be a list");
       if (capability === "window") return windowCapability(operation, args);
       if (capability === "window-test") return windowTestCapability(operation, args);
+      if (capability === "notification") return notificationCapability(operation, args);
+      if (capability === "secure-storage") return secureStorageCapability(operation, args);
+      // The pre-navigation half of 'desktop-test' is answered by the browser
+      // test controller before this document exists; what reaches here is the
+      // half that produces host events inside a running page.
+      if (capability === "notification-test" || capability === "secure-storage-test" || capability === "desktop-test") {
+        return hostTestCapability(capability, operation, args);
+      }
       if (capability === "desktop") {
         if (operation === "homeDirectory") return "/velar-test/home";
         if (operation === "appDataDirectory") return appDataRoot;
@@ -560,6 +799,8 @@ export function desktopBrowserTestInitScript(
           selectedProjectRoot = projectRoot;
           return selectedProjectRoot;
         }
+        const value = await desktopHostSurface(operation, args);
+        if (value !== undefined) return value;
       }
       if (capability === "fs") return fs(operation, args);
       if (capability === "process") return processCapability(operation, args);

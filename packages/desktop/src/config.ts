@@ -49,12 +49,42 @@ export interface DesktopWindowConfig {
   readonly resizable: boolean;
 }
 
+/**
+ * The URL schemes `openExternal` may hand to the system default handler. The
+ * vocabulary is closed rather than open because an allowlist whose values are
+ * author-supplied text is an allowlist that grows by typo.
+ */
+export type DesktopLinkScheme = "http" | "https" | "mailto";
+const desktopLinkSchemes: readonly DesktopLinkScheme[] = Object.freeze(["http", "https", "mailto"]);
+
+/**
+ * The file roots a Desktop application may reach. `dropped` is not a directory:
+ * it authorizes reading the files a user's own drag gesture brings in, and
+ * learning their real paths. The gesture is the grant, and it lasts for the
+ * session.
+ */
+export type DesktopFileScope = "app-data" | "project" | "dropped";
+const desktopFileScopes: readonly DesktopFileScope[] = Object.freeze(["app-data", "project", "dropped"]);
+
+/**
+ * A named credential slot and a named environment secret follow the same
+ * spelling rule, because the manifest refuses to declare one name in both
+ * lists and a collision rule between two different spellings would never fire.
+ */
+const desktopSecretNamePattern = /^[A-Z_][A-Z0-9_]{0,127}$/u;
+
 export interface DesktopPermissionConfig {
-  readonly files: readonly ("app-data" | "project")[];
+  readonly files: readonly DesktopFileScope[];
   readonly processes: readonly string[];
   readonly network: readonly string[];
   readonly environment: readonly string[];
   readonly secrets: readonly string[];
+  /** The schemes `openExternal` may open; every other scheme is refused. */
+  readonly links: readonly DesktopLinkScheme[];
+  /** Whether this application may deliver system notifications at all. The user still grants the real authorization. */
+  readonly notifications: boolean;
+  /** The keychain entry names `velar/secure-storage` may read and write. */
+  readonly secureStorage: readonly string[];
 }
 
 export interface VelarDesktopConfig {
@@ -173,9 +203,14 @@ function windowConfig(value: unknown, kind: string, productName: string, manifes
 
 function permissionConfig(value: unknown, manifestPath: string): DesktopPermissionConfig {
   const permissions = value === undefined ? {} : objectField(value, "desktop.permissions", manifestPath);
-  knownFields(permissions, new Set(["files", "processes", "network", "environment", "secrets"]), "desktop.permissions", manifestPath);
-  const files = stringList(permissions.files, "desktop.permissions.files", 3);
-  const validFileScopes = new Set(["app-data", "project"]);
+  knownFields(
+    permissions,
+    new Set(["files", "processes", "network", "environment", "secrets", "links", "notifications", "secureStorage"]),
+    "desktop.permissions",
+    manifestPath,
+  );
+  const files = stringList(permissions.files, "desktop.permissions.files", desktopFileScopes.length);
+  const validFileScopes = new Set<string>(desktopFileScopes);
   for (const scope of files) if (!validFileScopes.has(scope)) throw new Error(`${manifestPath}: unknown desktop file scope '${scope}'`);
   const processes = stringList(permissions.processes, "desktop.permissions.processes", 64);
   for (const command of processes) {
@@ -198,10 +233,34 @@ function permissionConfig(value: unknown, manifestPath: string): DesktopPermissi
   }
   const secrets = stringList(permissions.secrets, "desktop.permissions.secrets", 64);
   for (const name of secrets) {
-    if (!/^[A-Z_][A-Z0-9_]{0,127}$/u.test(name)) throw new Error(`${manifestPath}: desktop secret permissions must be uppercase variable names`);
+    if (!desktopSecretNamePattern.test(name)) throw new Error(`${manifestPath}: desktop secret permissions must be uppercase variable names`);
     if (environment.includes(name)) throw new Error(`${manifestPath}: desktop secret '${name}' cannot also be exposed through desktop.permissions.environment`);
   }
-  return Object.freeze({ files: files as DesktopPermissionConfig["files"], processes, network, environment, secrets });
+  const links = stringList(permissions.links, "desktop.permissions.links", desktopLinkSchemes.length);
+  const validLinkSchemes = new Set<string>(desktopLinkSchemes);
+  for (const scheme of links) {
+    if (!validLinkSchemes.has(scheme)) {
+      throw new Error(`${manifestPath}: 'desktop.permissions.links' must contain only ${desktopLinkSchemes.map((item) => `'${item}'`).join(", ")}`);
+    }
+  }
+  const secureStorage = stringList(permissions.secureStorage, "desktop.permissions.secureStorage", 64);
+  for (const name of secureStorage) {
+    if (!desktopSecretNamePattern.test(name)) throw new Error(`${manifestPath}: desktop secure storage permissions must be uppercase variable names`);
+    // An environment-injected opaque value and an application-written credential
+    // slot are different authorities over the same name, so one name may name
+    // only one of them.
+    if (secrets.includes(name)) throw new Error(`${manifestPath}: desktop secure storage name '${name}' cannot also be declared in desktop.permissions.secrets`);
+  }
+  return Object.freeze({
+    files: files as DesktopPermissionConfig["files"],
+    processes,
+    network,
+    environment,
+    secrets,
+    links: links as DesktopPermissionConfig["links"],
+    notifications: booleanField(permissions.notifications, "desktop.permissions.notifications", false),
+    secureStorage,
+  });
 }
 
 // Handing a renderer URL to the system browser is the same question

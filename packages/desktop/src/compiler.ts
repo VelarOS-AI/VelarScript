@@ -93,21 +93,141 @@ function __velarDesktopHostCall(capability, operation, args, timeout = 30000) {
 }
 `.trim();
 
+// The two screen-geometry records `velar/window` and `velar/desktop` share.
+// `WindowBounds` is published by the first and `Display` by the second, and
+// both are type aliases, which are structural: `Window.display()` and
+// `displays()` therefore answer one record rather than two that look alike.
+// This is the single definition; each generated module validates it again on
+// its own side of the bridge, which is the boundary discipline, not a copy of
+// the shape.
+const windowBoundsType = objectType({ x: numberType, y: numberType, width: numberType, height: numberType });
+const displayType = objectType({
+  id: stringType,
+  bounds: windowBoundsType,
+  workArea: windowBoundsType,
+  scale: numberType,
+  primary: boolType,
+});
+
+function enumEntry(module: string, name: string, members: readonly string[]): {
+  readonly identity: string;
+  readonly members: Set<string>;
+  readonly object: ValueType;
+  readonly value: ValueType;
+  readonly info: EnumInfo;
+} {
+  const identity = `${module}#enum:${name}`;
+  const set = new Set(members);
+  return {
+    identity,
+    members: set,
+    object: { kind: "enumObject", name, identity, members: set },
+    value: { kind: "enum", name, identity },
+    // Every module-provided enum in this target maps a member to itself on the
+    // wire; the D60 rule 149 gate reads the runtime binding and requires
+    // `Enum.member === "member"`, so the two cannot drift apart.
+    info: { identity, members: set, wireValues: new Map(members.map((member) => [member, member])) },
+  };
+}
+
 const desktopPlatformIdentity = "velar/desktop#enum:DesktopPlatform";
 const desktopPlatforms = new Set(["macos", "test"]);
 const desktopPlatformWireValues = new Map([...desktopPlatforms].map((member) => [member, member]));
 const desktopPlatformType: ValueType = { kind: "enum", name: "DesktopPlatform", identity: desktopPlatformIdentity };
-const desktopModuleInterface = moduleInterface(new Map([
-  ["DesktopPlatform", { kind: "enumObject", name: "DesktopPlatform", identity: desktopPlatformIdentity, members: desktopPlatforms }],
-  ["platform", functionType([], desktopPlatformType)],
-  ["packaged", functionType([], boolType)],
-  ["homeDirectory", functionType([], { kind: "promise", value: stringType })],
-  ["appDataDirectory", functionType([], { kind: "promise", value: stringType })],
-  ["projectDirectory", functionType([], { kind: "promise", value: stringType })],
-  ["selectedProjectDirectory", functionType([], { kind: "promise", value: optionalStringType })],
-  ["selectProjectDirectory", functionType([], { kind: "promise", value: optionalStringType })],
-]), new Map(), new Map(), new Map([
-  ["DesktopPlatform", { identity: desktopPlatformIdentity, members: desktopPlatforms, wireValues: desktopPlatformWireValues }],
+// The read-only system probes `permissionStatus` answers. `screenRecording` is
+// one word here and `screen-recording` nowhere: an enum member is an identifier
+// in this language, and the runtime gate requires the member to equal its own
+// value, so the hyphenated spelling has no place to live.
+const systemPermission = enumEntry("velar/desktop", "SystemPermission", ["screenRecording", "accessibility", "microphone"]);
+const permissionStatus = enumEntry("velar/desktop", "PermissionStatus", ["granted", "denied", "undetermined"]);
+const powerState = enumEntry("velar/desktop", "PowerState", ["suspended", "resumed"]);
+const powerStreamType: ValueType = { kind: "named", name: "PowerStream", identity: "velar/desktop#type:PowerStream" };
+const droppedFilesStreamType: ValueType = { kind: "named", name: "DroppedFilesStream", identity: "velar/desktop#type:DroppedFilesStream" };
+const droppedFilesType = objectType({ paths: listOf(stringType) });
+
+const desktopModuleInterface = moduleInterface(
+  new Map<string, ValueType>([
+    ["DesktopPlatform", { kind: "enumObject", name: "DesktopPlatform", identity: desktopPlatformIdentity, members: desktopPlatforms }],
+    ["Display", { kind: "typeObject", name: "Display" }],
+    ["DroppedFiles", { kind: "typeObject", name: "DroppedFiles" }],
+    ["DroppedFilesStream", { kind: "typeObject", name: "DroppedFilesStream" }],
+    ["PermissionStatus", permissionStatus.object],
+    ["PowerState", powerState.object],
+    ["PowerStream", { kind: "typeObject", name: "PowerStream" }],
+    ["SystemPermission", systemPermission.object],
+    ["platform", functionType([], desktopPlatformType)],
+    ["packaged", functionType([], boolType)],
+    ["homeDirectory", functionType([], promiseOf(stringType))],
+    ["appDataDirectory", functionType([], promiseOf(stringType))],
+    ["projectDirectory", functionType([], promiseOf(stringType))],
+    ["selectedProjectDirectory", functionType([], promiseOf(optionalStringType))],
+    ["selectProjectDirectory", functionType([], promiseOf(optionalStringType))],
+    ["openExternal", functionType([stringType], promiseOf(nullType))],
+    ["displays", functionType([], promiseOf(listOf(displayType)))],
+    ["permissionStatus", functionType([systemPermission.value], promiseOf(permissionStatus.value))],
+    ["watchPower", functionType([], promiseOf(powerStreamType))],
+    ["watchDroppedFiles", functionType([], promiseOf(droppedFilesStreamType))],
+  ]),
+  new Map([
+    ["PowerStream", new Map<string, ValueType>([
+      ["next", functionType([], promiseOf(optionalOf(powerState.value)))],
+      ["close", functionType([], promiseOf(nullType))],
+    ])],
+    ["DroppedFilesStream", new Map<string, ValueType>([
+      ["next", functionType([], promiseOf(optionalOf(droppedFilesType)))],
+      ["close", functionType([], promiseOf(nullType))],
+    ])],
+  ]),
+  new Map([
+    ["PowerStream", "velar/desktop#type:PowerStream"],
+    ["DroppedFilesStream", "velar/desktop#type:DroppedFilesStream"],
+  ]),
+  new Map([
+    ["DesktopPlatform", { identity: desktopPlatformIdentity, members: desktopPlatforms, wireValues: desktopPlatformWireValues }],
+    ["PermissionStatus", permissionStatus.info],
+    ["PowerState", powerState.info],
+    ["SystemPermission", systemPermission.info],
+  ]),
+  new Map([["Display", displayType], ["DroppedFiles", droppedFilesType]]),
+);
+
+// `velar/notification` — system notification delivery and the activations it
+// produces. The manifest's `notifications` flag is the declaration of intent;
+// the operating system still asks the user, and `requestPermission` is how the
+// application learns that answer.
+const notificationPermission = enumEntry("velar/notification", "NotificationPermission", ["granted", "denied", "undetermined"]);
+const notificationActivationStreamType: ValueType = { kind: "named", name: "NotificationActivationStream", identity: "velar/notification#type:NotificationActivationStream" };
+const notificationActivationType = objectType({ tag: optionalStringType }, ["tag"]);
+const notificationInputType = objectType({ title: stringType, body: stringType, tag: optionalStringType }, ["tag"]);
+
+const notificationModuleInterface = moduleInterface(
+  new Map<string, ValueType>([
+    ["NotificationActivation", { kind: "typeObject", name: "NotificationActivation" }],
+    ["NotificationActivationStream", { kind: "typeObject", name: "NotificationActivationStream" }],
+    ["NotificationPermission", notificationPermission.object],
+    ["requestPermission", functionType([], promiseOf(notificationPermission.value))],
+    ["show", functionType([notificationInputType], promiseOf(nullType))],
+    ["activations", functionType([], promiseOf(notificationActivationStreamType))],
+  ]),
+  new Map([
+    ["NotificationActivationStream", new Map<string, ValueType>([
+      ["next", functionType([], promiseOf(optionalOf(notificationActivationType)))],
+      ["close", functionType([], promiseOf(nullType))],
+    ])],
+  ]),
+  new Map([["NotificationActivationStream", "velar/notification#type:NotificationActivationStream"]]),
+  new Map([["NotificationPermission", notificationPermission.info]]),
+  new Map([["NotificationActivation", notificationActivationType]]),
+);
+
+// `velar/secure-storage` — the named credential slots `desktop.permissions
+// .secureStorage` declares. A name outside that list fails at the call, and a
+// stored value never leaves this module in an error, a log line, or a
+// diagnostic.
+const secureStorageModuleInterface = moduleInterface(new Map<string, ValueType>([
+  ["set", functionType([stringType, stringType], promiseOf(nullType))],
+  ["get", functionType([stringType], promiseOf(optionalStringType))],
+  ["remove", functionType([stringType], promiseOf(nullType))],
 ]));
 
 // `velar/window` — the Desktop window surface. A window kind is declared in
@@ -122,19 +242,7 @@ const windowStateWireValues = new Map([...windowStateMembers].map((member) => [m
 const windowStateType: ValueType = { kind: "enum", name: "WindowState", identity: windowStateIdentity };
 const windowType: ValueType = { kind: "named", name: "Window", identity: "velar/window#type:Window" };
 const windowStateStreamType: ValueType = { kind: "named", name: "WindowStateStream", identity: "velar/window#type:WindowStateStream" };
-const windowBoundsType = objectType({ x: numberType, y: numberType, width: numberType, height: numberType });
 const windowInfoType = objectType({ kind: stringType, key: optionalStringType, focused: boolType });
-// The `Display` record spec section 5 names. It is spelled structurally here
-// because `velar/desktop.displays()` — the L1b half of the same concept —
-// publishes the name, and a type alias is structural, so the two stay one
-// record rather than two.
-const windowDisplayType = objectType({
-  id: stringType,
-  bounds: windowBoundsType,
-  workArea: windowBoundsType,
-  scale: numberType,
-  primary: boolType,
-});
 const openWindowOptionsType = objectType({
   route: stringType,
   key: optionalStringType,
@@ -158,7 +266,8 @@ const windowModuleInterface = moduleInterface(
       ["close", functionType([], promiseOf(nullType))],
       ["bounds", functionType([], promiseOf(windowBoundsType))],
       ["setBounds", functionType([windowBoundsType], promiseOf(nullType))],
-      ["display", functionType([], promiseOf(windowDisplayType))],
+      // The same `Display` record `velar/desktop.displays()` publishes by name.
+      ["display", functionType([], promiseOf(displayType))],
       ["watchState", functionType([], promiseOf(windowStateStreamType))],
     ])],
     ["WindowStateStream", new Map<string, ValueType>([
@@ -193,15 +302,53 @@ const desktopTestModuleInterface = moduleInterface(new Map([
   ["focusWindow", functionType([stringType, optionalStringType], promiseOf(nullType), 1)],
   ["moveWindow", functionType([stringType, optionalStringType, windowBoundsType], promiseOf(nullType))],
   ["closeWindow", functionType([stringType, optionalStringType], promiseOf(nullType), 1)],
+  // The fake notification centre. `setNotificationPermission` is the answer the
+  // operating system would give the user's dialog, `shownNotifications` is the
+  // inbox the host delivered to, and `activateNotification` is the click.
+  ["setNotificationPermission", functionType([notificationPermission.value], promiseOf(nullType))],
+  ["shownNotifications", functionType([], promiseOf(listOf(notificationInputType)))],
+  ["activateNotification", functionType([optionalStringType], promiseOf(nullType), 0)],
+  // The fake keychain reports the names it holds and never the values it holds:
+  // a stored credential does not leave `velar/secure-storage`, and a test seam
+  // that handed one back would be the exception that ends that rule.
+  ["secureStorageNames", functionType([], promiseOf(listOf(stringType)))],
+  // The remaining host event sources: the sleep/wake pair, a drag gesture's
+  // real paths, the read-only system probes, and what was handed to the system
+  // link handler.
+  ["publishPower", functionType([powerState.value], promiseOf(nullType))],
+  ["dropFiles", functionType([listOf(stringType)], promiseOf(nullType))],
+  ["setSystemPermission", functionType([systemPermission.value, permissionStatus.value], promiseOf(nullType))],
+  ["openedLinks", functionType([], promiseOf(listOf(stringType)))],
 ]));
 
 const nodeProcessInterface = nodeModuleInterfaces.get("velar/process")!;
 const desktopProcessInterface: ModuleInterface = nodeProcessInterface;
 
-const DESKTOP_MODULE_SOURCE = String.raw`
+/**
+ * `velar/desktop`'s runtime, closed over the two grants its §5 surface reads:
+ * the link schemes `openExternal` may hand to the system, and whether a drag
+ * gesture's real paths may be read at all. Both are baked in rather than
+ * fetched, so an ungranted call is refused where it is written, with the
+ * manifest field that would grant it — and the native host asks the same
+ * question again on its own side.
+ */
+function desktopModuleSource(links: readonly string[], droppedFiles: boolean): string {
+  return String.raw`
 ${DESKTOP_HOST_ABI_RUNTIME}
 ${VELAR_TYPE_REGISTRY_RUNTIME}
 const __velarDesktopFreeze = Object.freeze;
+const desktopStreamToken = Symbol("velar.desktop.stream");
+const grantedLinkSchemes = new Set(${JSON.stringify(links)});
+const grantedLinkSchemeList = ${JSON.stringify(links.length === 0 ? "none" : links.join(", "))};
+const droppedFilesGranted = ${JSON.stringify(droppedFiles)};
+const maxDisplays = 64;
+const maxDroppedPaths = 4096;
+const maxDroppedTextUnits = 2 * 1024 * 1024;
+const maxDesktopPathUnits = 4096;
+const maxDesktopCoordinate = 1000000;
+const desktopBoundsFields = new Set(["x", "y", "width", "height"]);
+const desktopDisplayFields = new Set(["id", "bounds", "workArea", "scale", "primary"]);
+const desktopDropFields = new Set(["paths"]);
 export const DesktopPlatform = __velarRegisterRuntimeType(__velarDesktopFreeze({
   macos: "macos", test: "test",
   is(value) { return value === "macos" || value === "test"; },
@@ -211,6 +358,114 @@ export const DesktopPlatform = __velarRegisterRuntimeType(__velarDesktopFreeze({
   },
   values() { return ["macos", "test"]; },
 }));
+// D60 rule 149: is, parse and values on every module-provided enum, and a
+// member whose runtime value is its own name.
+export const SystemPermission = __velarRegisterRuntimeType(__velarDesktopFreeze({
+  screenRecording: "screenRecording", accessibility: "accessibility", microphone: "microphone",
+  is(value) { return value === "screenRecording" || value === "accessibility" || value === "microphone"; },
+  parse(value) {
+    if (!SystemPermission.is(value)) throw new TypeError("Value does not match SystemPermission");
+    return value;
+  },
+  values() { return ["screenRecording", "accessibility", "microphone"]; },
+}));
+export const PermissionStatus = __velarRegisterRuntimeType(__velarDesktopFreeze({
+  granted: "granted", denied: "denied", undetermined: "undetermined",
+  is(value) { return value === "granted" || value === "denied" || value === "undetermined"; },
+  parse(value) {
+    if (!PermissionStatus.is(value)) throw new TypeError("Value does not match PermissionStatus");
+    return value;
+  },
+  values() { return ["granted", "denied", "undetermined"]; },
+}));
+export const PowerState = __velarRegisterRuntimeType(__velarDesktopFreeze({
+  suspended: "suspended", resumed: "resumed",
+  is(value) { return value === "suspended" || value === "resumed"; },
+  parse(value) {
+    if (!PowerState.is(value)) throw new TypeError("Value does not match PowerState");
+    return value;
+  },
+  values() { return ["suspended", "resumed"]; },
+}));
+// Every module validates the host's answer on its own side of the bridge, so
+// this record reader is the peer of recordOf in the velar/window, velar/fs and
+// velar/process runtimes rather than a stray copy: the shape is defined once in
+// packages/desktop/src/compiler.ts's type tables, and each module checks it.
+function recordOf(value, name, allowed) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError(name + " must be a record");
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) throw new TypeError(name + " must be a plain record");
+  const output = Object.create(null);
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string") throw new TypeError(name + " fields must use string names");
+    if (!allowed.has(key)) throw new TypeError(name + " has unknown field '" + key + "'");
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor?.enumerable || !("value" in descriptor)) throw new TypeError(name + " fields must be enumerable data values");
+    output[key] = descriptor.value;
+  }
+  return output;
+}
+function boundsOf(value, name) {
+  const fields = recordOf(value, name, desktopBoundsFields);
+  if (Reflect.ownKeys(fields).length !== 4) throw new TypeError(name + " must contain x, y, width and height");
+  for (const key of ["x", "y"]) {
+    if (typeof fields[key] !== "number" || !Number.isFinite(fields[key]) || Math.abs(fields[key]) > maxDesktopCoordinate) {
+      throw new RangeError(name + " " + key + " must be a finite screen coordinate within 1000000 points");
+    }
+  }
+  for (const key of ["width", "height"]) {
+    if (typeof fields[key] !== "number" || !Number.isFinite(fields[key]) || fields[key] < 1 || fields[key] > maxDesktopCoordinate) {
+      throw new RangeError(name + " " + key + " must be a finite size of at least 1 point");
+    }
+  }
+  return __velarDesktopFreeze({x: fields.x, y: fields.y, width: fields.width, height: fields.height});
+}
+function displayOf(value) {
+  const fields = recordOf(value, "Desktop display", desktopDisplayFields);
+  if (Reflect.ownKeys(fields).length !== 5 || typeof fields.id !== "string" || fields.id.length === 0 || fields.id.length > 128
+    || typeof fields.primary !== "boolean" || typeof fields.scale !== "number" || !Number.isFinite(fields.scale)
+    || fields.scale <= 0 || fields.scale > 16) {
+    throw new TypeError("Desktop host returned an invalid display");
+  }
+  return __velarDesktopFreeze({
+    id: fields.id,
+    bounds: boundsOf(fields.bounds, "Desktop display bounds"),
+    workArea: boundsOf(fields.workArea, "Desktop display work area"),
+    scale: fields.scale,
+    primary: fields.primary,
+  });
+}
+function droppedFilesOf(value) {
+  const fields = recordOf(value, "Desktop dropped files", desktopDropFields);
+  if (Reflect.ownKeys(fields).length !== 1 || !Array.isArray(fields.paths) || fields.paths.length === 0 || fields.paths.length > maxDroppedPaths) {
+    throw new TypeError("Desktop host returned an invalid dropped file batch");
+  }
+  const paths = [];
+  let units = 0;
+  for (let index = 0; index < fields.paths.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(fields.paths, String(index));
+    if (!descriptor?.enumerable || !("value" in descriptor) || typeof descriptor.value !== "string"
+      || descriptor.value.length === 0 || descriptor.value[0] !== "/" || descriptor.value.length > maxDesktopPathUnits
+      || descriptor.value.includes("\0")) throw new TypeError("Desktop host returned an invalid dropped file path");
+    units += descriptor.value.length;
+    if (units > maxDroppedTextUnits) throw new RangeError("Desktop dropped file paths cannot exceed 2 MiB of text");
+    paths[paths.length] = descriptor.value;
+  }
+  // The order is the order of the gesture, so it is preserved rather than
+  // sorted: the first file the user dropped is the first path here.
+  return __velarDesktopFreeze({paths});
+}
+export const Display = __velarDesktopFreeze({
+  is(value) { try { displayOf(value); return true; } catch { return false; } },
+  parse(value) { return displayOf(value); },
+});
+export const DroppedFiles = __velarDesktopFreeze({
+  is(value) { try { droppedFilesOf(value); return true; } catch { return false; } },
+  parse(value) { return droppedFilesOf(value); },
+});
+function invoke(operation, args, timeout = 30000) {
+  return __velarDesktopHostCall("desktop", operation, args, timeout);
+}
 export function platform() {
   return DesktopPlatform.parse(__velarDesktopHostField("platform"));
 }
@@ -220,14 +475,14 @@ export function packaged() {
   return value;
 }
 async function path(operation) {
-  const value = await __velarDesktopHostCall("desktop", operation, []);
-  if (typeof value !== "string" || !value.startsWith("/") || value.length > 4096 || value.includes("\0")) throw new TypeError("Desktop host returned an invalid absolute path");
+  const value = await invoke(operation, []);
+  if (typeof value !== "string" || !value.startsWith("/") || value.length > maxDesktopPathUnits || value.includes("\0")) throw new TypeError("Desktop host returned an invalid absolute path");
   return value;
 }
 async function optionalPath(operation, timeout = 30000) {
-  const value = await __velarDesktopHostCall("desktop", operation, [], timeout);
+  const value = await invoke(operation, [], timeout);
   if (value === null) return null;
-  if (typeof value !== "string" || !value.startsWith("/") || value.length > 4096 || value.includes("\0")) throw new TypeError("Desktop host returned an invalid optional project path");
+  if (typeof value !== "string" || !value.startsWith("/") || value.length > maxDesktopPathUnits || value.includes("\0")) throw new TypeError("Desktop host returned an invalid optional project path");
   return value;
 }
 export async function homeDirectory() { return path("homeDirectory"); }
@@ -235,7 +490,107 @@ export async function appDataDirectory() { return path("appDataDirectory"); }
 export async function projectDirectory() { return path("projectDirectory"); }
 export async function selectedProjectDirectory() { return optionalPath("selectedProjectDirectory"); }
 export async function selectProjectDirectory() { return optionalPath("selectProjectDirectory", 0); }
+// The scheme is read off the parsed URL rather than off its text, because a
+// nested scheme such as blob:https://host/id names one scheme and reads as
+// another. The same question is asked again in the native host before
+// NSWorkspace opens anything.
+function linkSchemeOf(url) {
+  if (typeof url !== "string" || url.length === 0 || url.length > 2048 || url.includes("\0")) {
+    throw new TypeError("openExternal requires a bounded URL string");
+  }
+  let parsed;
+  try { parsed = new URL(url); }
+  catch { throw new TypeError("openExternal requires an absolute URL"); }
+  const scheme = parsed.protocol.slice(0, -1);
+  if (!grantedLinkSchemes.has(scheme)) {
+    throw new Error("openExternal cannot open a '" + scheme + "' URL; declare the scheme under 'desktop.permissions.links' in this project's velar.json (granted schemes: " + grantedLinkSchemeList + ")");
+  }
+  return url;
+}
+export async function openExternal(url) {
+  const value = await invoke("openExternal", [linkSchemeOf(url)]);
+  if (value !== null) throw new TypeError("Desktop host returned an invalid openExternal result");
+  return null;
+}
+export async function displays() {
+  const value = await invoke("displays", []);
+  if (!Array.isArray(value) || value.length === 0 || value.length > maxDisplays) throw new TypeError("Desktop host returned an invalid display list");
+  const output = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (!descriptor?.enumerable || !("value" in descriptor)) throw new TypeError("Desktop host returned an invalid display list");
+    output[output.length] = displayOf(descriptor.value);
+  }
+  return output;
+}
+export async function permissionStatus(kind) {
+  return PermissionStatus.parse(await invoke("permissionStatus", [SystemPermission.parse(kind)]));
+}
+// The two bounded pull streams §5 publishes. Both are the shape watchFiles and
+// watchState already keep: one active pull at a time, a release that answers
+// the host once, and a failed pull that closes the stream rather than leaving
+// a handle behind.
+class DesktopStreamHandle {
+  constructor(token, handle, operations, read) {
+    if (token !== desktopStreamToken) throw new TypeError("Desktop streams are created only by velar/desktop");
+    if (!Number.isSafeInteger(handle) || handle < 1) throw new TypeError("Desktop host returned an invalid stream handle");
+    this.handle = handle;
+    this.operations = operations;
+    this.closed = false;
+    this.pending = false;
+    this.next = async () => {
+      if (this.closed) return null;
+      if (this.pending) throw new Error(operations.label + ".next already has an active pull");
+      this.pending = true;
+      try {
+        const value = await invoke(operations.next, [this.handle], 0);
+        if (value === null) { this.closed = true; return null; }
+        return read(value);
+      } catch (error) {
+        this.closed = true;
+        try { await invoke(operations.close, [this.handle]); } catch {}
+        throw error;
+      } finally {
+        this.pending = false;
+      }
+    };
+    Object.seal(this);
+  }
+  async close() {
+    if (this.closed) return null;
+    this.closed = true;
+    const value = await invoke(this.operations.close, [this.handle]);
+    if (typeof value !== "boolean") throw new TypeError("Desktop host returned an invalid " + this.operations.label + " release result");
+    return null;
+  }
+}
+const powerOperations = __velarDesktopFreeze({label: "PowerStream", next: "powerWatchNext", close: "powerWatchClose"});
+const dropOperations = __velarDesktopFreeze({label: "DroppedFilesStream", next: "dropWatchNext", close: "dropWatchClose"});
+export const PowerStream = __velarDesktopFreeze({
+  is(value) { return value instanceof DesktopStreamHandle && value.operations === powerOperations; },
+  parse(value) {
+    if (!PowerStream.is(value)) throw new TypeError("Value does not match PowerStream");
+    return value;
+  },
+});
+export const DroppedFilesStream = __velarDesktopFreeze({
+  is(value) { return value instanceof DesktopStreamHandle && value.operations === dropOperations; },
+  parse(value) {
+    if (!DroppedFilesStream.is(value)) throw new TypeError("Value does not match DroppedFilesStream");
+    return value;
+  },
+});
+export async function watchPower() {
+  return new DesktopStreamHandle(desktopStreamToken, await invoke("powerWatchStart", []), powerOperations, (value) => PowerState.parse(value));
+}
+export async function watchDroppedFiles() {
+  if (!droppedFilesGranted) {
+    throw new Error("watchDroppedFiles requires the 'dropped' root in 'desktop.permissions.files' in this project's velar.json");
+  }
+  return new DesktopStreamHandle(desktopStreamToken, await invoke("dropWatchStart", []), dropOperations, droppedFilesOf);
+}
 `.trimStart();
+}
 
 const DESKTOP_TEST_SOURCE = String.raw`
 const runtimeKey = Symbol.for("velar.browser.test.v1");
@@ -359,6 +714,92 @@ export async function moveWindow(kind, key, bounds) {
 }
 export async function closeWindow(kind, key = null) {
   return windowEvent("close", [testWindowKind(kind, "closeWindow"), testWindowKey(key, "closeWindow")]);
+}
+// Each real capability's test seam is that capability's own name with '-test'
+// after it. The Desktop one is split by *when* rather than by what: the
+// pre-navigation choices above are answered by the browser-test controller,
+// and the host events below fall through to the page's fake host, because a
+// controller that does not handle an operation hands it on.
+function testBoundedText(value, operation, field, maximum) {
+  if (typeof value !== "string" || value.length === 0 || value.length > maximum || value.includes("\0")) {
+    throw new TypeError("Desktop test " + operation + " " + field + " must be text of at most " + maximum + " characters");
+  }
+  return value;
+}
+function testOptionalTag(value, operation) {
+  if (value == null) return null;
+  return testBoundedText(value, operation, "tag", 128);
+}
+async function testSettle(capability, operation, args, name) {
+  const value = await invoke(capability, operation, args, 30000);
+  if (value !== null) throw new TypeError("Desktop test host returned an invalid " + name + " result");
+  return null;
+}
+async function testTextList(capability, operation, name, maximum) {
+  const value = await invoke(capability, operation, [], 30000);
+  if (!Array.isArray(value) || value.length > maximum) throw new TypeError("Desktop test host returned an invalid " + name + " list");
+  const output = [];
+  for (let index = 0; index < value.length; index += 1) {
+    output[output.length] = testBoundedText(value[index], name, "entry", 4096);
+  }
+  return output;
+}
+export async function setNotificationPermission(permission) {
+  if (permission !== "granted" && permission !== "denied" && permission !== "undetermined") {
+    throw new TypeError("Desktop test setNotificationPermission requires a NotificationPermission value");
+  }
+  return testSettle("notification-test", "setPermission", [permission], "setNotificationPermission");
+}
+export async function shownNotifications() {
+  const value = await invoke("notification-test", "shown", [], 30000);
+  if (!Array.isArray(value) || value.length > 256) throw new TypeError("Desktop test host returned an invalid notification inbox");
+  const output = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const item = value[index];
+    if (!item || typeof item !== "object") throw new TypeError("Desktop test host returned an invalid notification");
+    output[output.length] = Object.freeze({
+      title: testBoundedText(item.title, "shownNotifications", "title", 256),
+      body: testBoundedText(item.body, "shownNotifications", "body", 1024),
+      tag: testOptionalTag(item.tag, "shownNotifications"),
+    });
+  }
+  return output;
+}
+export async function activateNotification(tag = null) {
+  return testSettle("notification-test", "activate", [testOptionalTag(tag, "activateNotification")], "activateNotification");
+}
+// Names only. The fake keychain holds values the way the real one does, and
+// neither hands one back through a test seam.
+export async function secureStorageNames() {
+  return testTextList("secure-storage-test", "names", "secureStorageNames", 64);
+}
+export async function publishPower(state) {
+  if (state !== "suspended" && state !== "resumed") throw new TypeError("Desktop test publishPower requires a PowerState value");
+  return testSettle("desktop-test", "publishPower", [state], "publishPower");
+}
+export async function dropFiles(paths) {
+  if (!Array.isArray(paths) || paths.length === 0 || paths.length > 4096) {
+    throw new TypeError("Desktop test dropFiles requires a non-empty bounded List<string> of absolute paths");
+  }
+  const output = [];
+  for (let index = 0; index < paths.length; index += 1) {
+    const path = testBoundedText(paths[index], "dropFiles", "path", 4096);
+    if (path[0] !== "/") throw new TypeError("Desktop test dropFiles requires absolute paths");
+    output[output.length] = path;
+  }
+  return testSettle("desktop-test", "dropFiles", [output], "dropFiles");
+}
+export async function setSystemPermission(kind, status) {
+  if (kind !== "screenRecording" && kind !== "accessibility" && kind !== "microphone") {
+    throw new TypeError("Desktop test setSystemPermission requires a SystemPermission value");
+  }
+  if (status !== "granted" && status !== "denied" && status !== "undetermined") {
+    throw new TypeError("Desktop test setSystemPermission requires a PermissionStatus value");
+  }
+  return testSettle("desktop-test", "setSystemPermission", [kind, status], "setSystemPermission");
+}
+export async function openedLinks() {
+  return testTextList("desktop-test", "openedLinks", "openedLinks", 256);
 }
 `.trimStart();
 
@@ -595,6 +1036,191 @@ export async function windows() {
     output[output.length] = infoOf(descriptor.value);
   }
   return output;
+}
+`.trimStart();
+}
+
+/**
+ * `velar/notification`'s runtime, closed over the manifest's `notifications`
+ * declaration. All three exports fail at the call when the declaration is
+ * absent and name it, rather than failing at the import (D60 rule 153) or
+ * quietly delivering nothing.
+ */
+function desktopNotificationSource(declared: boolean): string {
+  return String.raw`
+${DESKTOP_HOST_ABI_RUNTIME}
+${VELAR_TYPE_REGISTRY_RUNTIME}
+const notificationStreamToken = Symbol("velar.desktop.notification");
+const notificationsDeclared = ${JSON.stringify(declared)};
+const maxNotificationTitle = 256;
+const maxNotificationBody = 1024;
+const maxNotificationTag = 128;
+const notificationFields = new Set(["title", "body", "tag"]);
+const activationFields = new Set(["tag"]);
+function requireNotificationDeclaration(operation) {
+  if (notificationsDeclared) return;
+  throw new Error(operation + " requires 'notifications: true' under 'desktop.permissions' in this project's velar.json");
+}
+function recordOf(value, name, allowed) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError(name + " must be a record");
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) throw new TypeError(name + " must be a plain record");
+  const output = Object.create(null);
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string") throw new TypeError(name + " fields must use string names");
+    if (!allowed.has(key)) throw new TypeError(name + " has unknown field '" + key + "'");
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor?.enumerable || !("value" in descriptor)) throw new TypeError(name + " fields must be enumerable data values");
+    output[key] = descriptor.value;
+  }
+  return output;
+}
+function notificationText(value, field, maximum) {
+  if (typeof value !== "string" || value.length === 0) throw new TypeError("show " + field + " must be non-empty text");
+  if (value.length > maximum || value.includes("\0")) throw new RangeError("show " + field + " cannot exceed " + maximum + " characters");
+  return value;
+}
+function notificationTag(value, operation) {
+  if (value == null) return null;
+  if (typeof value !== "string" || value.length === 0) throw new TypeError(operation + " tag must be non-empty text");
+  if (value.length > maxNotificationTag || value.includes("\0")) throw new RangeError(operation + " tag cannot exceed " + maxNotificationTag + " characters");
+  return value;
+}
+function activationOf(value) {
+  const fields = recordOf(value, "Desktop notification activation", activationFields);
+  if (Reflect.ownKeys(fields).length !== 1) throw new TypeError("Desktop host returned an invalid notification activation");
+  return Object.freeze({tag: notificationTag(fields.tag, "activations")});
+}
+function invoke(operation, args, timeout = 30000) {
+  return __velarDesktopHostCall("notification", operation, args, timeout);
+}
+export const NotificationPermission = __velarRegisterRuntimeType(Object.freeze({
+  granted: "granted", denied: "denied", undetermined: "undetermined",
+  is(value) { return value === "granted" || value === "denied" || value === "undetermined"; },
+  parse(value) {
+    if (!NotificationPermission.is(value)) throw new TypeError("Value does not match NotificationPermission");
+    return value;
+  },
+  values() { return ["granted", "denied", "undetermined"]; },
+}));
+export const NotificationActivation = Object.freeze({
+  is(value) { try { activationOf(value); return true; } catch { return false; } },
+  parse(value) { return activationOf(value); },
+});
+class NotificationActivationStreamHandle {
+  constructor(token, handle) {
+    if (token !== notificationStreamToken) throw new TypeError("NotificationActivationStream values are created only by velar/notification.activations");
+    if (!Number.isSafeInteger(handle) || handle < 1) throw new TypeError("Desktop host returned an invalid notification activation stream handle");
+    this.handle = handle;
+    this.closed = false;
+    this.pending = false;
+    this.next = async () => {
+      if (this.closed) return null;
+      if (this.pending) throw new Error("NotificationActivationStream.next already has an active pull");
+      this.pending = true;
+      try {
+        const value = await invoke("watchNext", [this.handle], 0);
+        if (value === null) { this.closed = true; return null; }
+        return activationOf(value);
+      } catch (error) {
+        this.closed = true;
+        try { await invoke("watchClose", [this.handle]); } catch {}
+        throw error;
+      } finally {
+        this.pending = false;
+      }
+    };
+    Object.seal(this);
+  }
+  async close() {
+    if (this.closed) return null;
+    this.closed = true;
+    const value = await invoke("watchClose", [this.handle]);
+    if (typeof value !== "boolean") throw new TypeError("Desktop host returned an invalid notification activation stream release result");
+    return null;
+  }
+}
+export const NotificationActivationStream = Object.freeze({
+  is(value) { return value instanceof NotificationActivationStreamHandle; },
+  parse(value) {
+    if (!(value instanceof NotificationActivationStreamHandle)) throw new TypeError("Value does not match NotificationActivationStream");
+    return value;
+  },
+});
+export async function requestPermission() {
+  requireNotificationDeclaration("requestPermission");
+  return NotificationPermission.parse(await invoke("requestPermission", [], 0));
+}
+export async function show(notification) {
+  requireNotificationDeclaration("show");
+  const fields = recordOf(notification, "show notification", notificationFields);
+  const value = await invoke("show", [{
+    title: notificationText(fields.title, "title", maxNotificationTitle),
+    body: notificationText(fields.body, "body", maxNotificationBody),
+    tag: notificationTag(fields.tag, "show"),
+  }]);
+  if (value !== null) throw new TypeError("Desktop host returned an invalid show result");
+  return null;
+}
+export async function activations() {
+  requireNotificationDeclaration("activations");
+  return new NotificationActivationStreamHandle(notificationStreamToken, await invoke("watchStart", []));
+}
+`.trimStart();
+}
+
+/**
+ * `velar/secure-storage`'s runtime, closed over the credential names the
+ * manifest declares. A name outside that list never reaches the keychain, and
+ * no stored value is ever put into an error message: the whole point of the
+ * module is that the value stays where it was put.
+ */
+function desktopSecureStorageSource(names: readonly string[]): string {
+  return String.raw`
+${DESKTOP_HOST_ABI_RUNTIME}
+const declaredSecureStorageNames = new Set(${JSON.stringify(names)});
+const declaredSecureStorageNameList = ${JSON.stringify(names.length === 0 ? "none" : names.join(", "))};
+const maxSecureStorageValueBytes = 8 * 1024;
+function storageName(value, operation) {
+  if (typeof value !== "string" || value.length === 0 || value.length > 128) {
+    throw new TypeError(operation + " requires a name declared in desktop.permissions.secureStorage");
+  }
+  if (!declaredSecureStorageNames.has(value)) {
+    throw new Error(operation + " cannot reach the undeclared secure storage name '" + value
+      + "'; declare it under 'desktop.permissions.secureStorage' in this project's velar.json (declared names: " + declaredSecureStorageNameList + ")");
+  }
+  return value;
+}
+// A rejected value is described by its size and never by its content, here and
+// in every message below.
+function storageValue(value) {
+  if (typeof value !== "string") throw new TypeError("set requires a text value");
+  const bytes = new TextEncoder().encode(value).byteLength;
+  if (bytes > maxSecureStorageValueBytes) throw new RangeError("set cannot store more than 8 KiB");
+  return value;
+}
+function invoke(operation, args) {
+  return __velarDesktopHostCall("secure-storage", operation, args, 30000);
+}
+export async function set(name, value) {
+  const result = await invoke("set", [storageName(name, "set"), storageValue(value)]);
+  if (result !== null) throw new TypeError("Desktop host returned an invalid secure storage set result");
+  return null;
+}
+export async function get(name) {
+  const value = await invoke("get", [storageName(name, "get")]);
+  if (value === null) return null;
+  if (typeof value !== "string" || new TextEncoder().encode(value).byteLength > maxSecureStorageValueBytes) {
+    throw new TypeError("Desktop host returned an invalid secure storage value");
+  }
+  return value;
+}
+// Removing what is not there is the state it is already in, so the second call
+// is not an error.
+export async function remove(name) {
+  const result = await invoke("remove", [storageName(name, "remove")]);
+  if (result !== null) throw new TypeError("Desktop host returned an invalid secure storage remove result");
+  return null;
 }
 `.trimStart();
 }
@@ -1640,6 +2266,8 @@ const desktopModuleInterfaces = new Map(webCompilerExtension.modules!.interfaces
 desktopModuleInterfaces.set("velar/desktop", desktopModuleInterface);
 desktopModuleInterfaces.set("velar/desktop-test", desktopTestModuleInterface);
 desktopModuleInterfaces.set("velar/window", windowModuleInterface);
+desktopModuleInterfaces.set("velar/notification", notificationModuleInterface);
+desktopModuleInterfaces.set("velar/secure-storage", secureStorageModuleInterface);
 desktopModuleInterfaces.set("velar/fs", nodeModuleInterfaces.get("velar/fs")!);
 desktopModuleInterfaces.set("velar/path", nodeModuleInterfaces.get("velar/path")!);
 desktopModuleInterfaces.set("velar/process", desktopProcessInterface);
@@ -1647,12 +2275,16 @@ desktopModuleInterfaces.set("velar/http", nodeModuleInterfaces.get("velar/http")
 desktopModuleInterfaces.set("velar/env", nodeModuleInterfaces.get("velar/env")!);
 const desktopModuleSources = new Map(webCompilerExtension.modules!.sources);
 const desktopModuleDependencies = new Map(webCompilerExtension.modules!.dependencies);
-desktopModuleSources.set("velar/desktop", DESKTOP_MODULE_SOURCE);
+// The fallback sources outside a resolved project know only what every manifest
+// declares by default: the one window kind, and no permission at all. `source()`
+// below closes each module over the project's own `desktop` section whenever the
+// project config is at hand, so the ungranted fallback is what a caller outside
+// a project gets, and it fails closed.
+desktopModuleSources.set("velar/desktop", desktopModuleSource([], false));
 desktopModuleSources.set("velar/desktop-test", DESKTOP_TEST_SOURCE);
-// The fallback source outside a resolved project knows only the kind every
-// manifest declares; `source()` below closes the module over the project's own
-// `desktop.windows` whenever the project config is at hand.
 desktopModuleSources.set("velar/window", desktopWindowSource([DESKTOP_MAIN_WINDOW_KIND]));
+desktopModuleSources.set("velar/notification", desktopNotificationSource(false));
+desktopModuleSources.set("velar/secure-storage", desktopSecureStorageSource([]));
 desktopModuleSources.set("velar/fs", DESKTOP_FS_SOURCE);
 desktopModuleSources.set("velar/path", DESKTOP_PATH_SOURCE);
 desktopModuleSources.set("velar/process", DESKTOP_PROCESS_SOURCE);
@@ -1692,11 +2324,22 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
     sources: desktopModuleSources,
     dependencies: desktopModuleDependencies,
     source(specifier: string, projectConfig: unknown) {
+      const desktop = projectConfig as VelarDesktopConfig | undefined;
       if (specifier === "velar/window") {
-        const windows = (projectConfig as VelarDesktopConfig | undefined)?.windows;
+        const windows = desktop?.windows;
         return desktopWindowSource(windows ? Object.keys(windows) : [DESKTOP_MAIN_WINDOW_KIND]);
       }
-      if (specifier === "velar/desktop") return DESKTOP_MODULE_SOURCE;
+      // A caller outside a resolved Desktop project — the standard-module
+      // closure, a documentation fence, a runtime gate — passes a config that
+      // has no `desktop` section at all, and gets the ungranted module: every
+      // permission-bearing call in it fails closed and says which declaration
+      // is missing.
+      const permissions = desktop?.permissions as VelarDesktopConfig["permissions"] | undefined;
+      if (specifier === "velar/desktop") {
+        return desktopModuleSource(permissions?.links ?? [], permissions?.files.includes("dropped") ?? false);
+      }
+      if (specifier === "velar/notification") return desktopNotificationSource(permissions?.notifications ?? false);
+      if (specifier === "velar/secure-storage") return desktopSecureStorageSource(permissions?.secureStorage ?? []);
       if (specifier === "velar/desktop-test") return DESKTOP_TEST_SOURCE;
       if (specifier === "velar/fs") return DESKTOP_FS_SOURCE;
       if (specifier === "velar/path") return DESKTOP_PATH_SOURCE;

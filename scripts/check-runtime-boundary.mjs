@@ -2052,12 +2052,12 @@ if (!webFoundationSource.includes("webRuntimeFoundation(WEB_ERROR_HOST_RUNTIME)"
 if (/\bPromise\.prototype\.then|\bError\.isError\s*\(|\berrorHandlers\.(?:has|add|delete)\s*\(/u.test(webOwnedCallbackRuntimeSource + "\n" + webAppModuleSource)) {
   failures.push("packages/web/src/runtime.ts: Web error callbacks or velar/app bypass the captured error/handler ABI");
 }
-// velar/desktop, velar/window, velar/path, velar/fs, velar/process, velar/env
-// and velar/http: every Desktop target module reaches its host through the one
-// captured bridge ABI, and a new module raises this count rather than opening a
-// second door.
+// velar/desktop, velar/window, velar/notification, velar/secure-storage,
+// velar/path, velar/fs, velar/process, velar/env and velar/http: every Desktop
+// target module reaches its host through the one captured bridge ABI, and a new
+// module raises this count rather than opening a second door.
 const desktopHostRuntimeUses = desktopCompilerSource.match(/\$\{DESKTOP_HOST_ABI_RUNTIME\}/gu)?.length ?? 0;
-if (desktopHostRuntimeUses !== 7
+if (desktopHostRuntimeUses !== 9
   || /Object\.getOwnPropertyDescriptor\(globalThis, bridgeKey\)|\bbridge\.invoke\s*\(|globalThis\[runtimeKey\]/u.test(desktopCompilerSource)) {
   failures.push("packages/desktop/src/compiler.ts: a Desktop target module bypasses the captured host bridge ABI");
 }

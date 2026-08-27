@@ -953,7 +953,8 @@ test("Desktop CLI test host provides deterministic manifest-scoped process handl
     windows: { main: { title: "Test", width: 800, height: 600, minWidth: 480, minHeight: 320,
       titleBar: "standard", material: "none", style: "window", frame: true, level: "normal",
       visibleOnAllWorkspaces: false, aspectRatio: null, resizable: true } },
-    permissions: { files: ["project"], processes: ["git"], network: [], environment: ["PRODUCTION_MODE"], secrets: ["PROVIDER_KEY"] },
+    permissions: { files: ["project"], processes: ["git"], network: [], environment: ["PRODUCTION_MODE"], secrets: ["PROVIDER_KEY"],
+      links: [], notifications: false, secureStorage: [] },
     build: { outDir: "dist/desktop", sizeBudgetBytes: 10 * 1024 * 1024 },
   })
     .replace("const maxListTextUnits = 2 * 1024 * 1024;", "const maxListTextUnits = 8;")
@@ -1026,7 +1027,8 @@ test("Desktop browser-test platform is selected before the first open and then s
     windows: { main: { title: "Test", width: 800, height: 600, minWidth: 480, minHeight: 320,
       titleBar: "standard", material: "none", style: "window", frame: true, level: "normal",
       visibleOnAllWorkspaces: false, aspectRatio: null, resizable: true } },
-    permissions: { files: ["project"], processes: [], network: [], environment: [], secrets: [] },
+    permissions: { files: ["project"], processes: [], network: [], environment: [], secrets: [],
+      links: [], notifications: false, secureStorage: [] },
     build: { outDir: "dist/desktop", sizeBudgetBytes: 10 * 1024 * 1024 },
   } as const;
   const controller = desktopBrowserTestController(config);
