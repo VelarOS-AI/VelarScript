@@ -201,6 +201,67 @@ that is the product's own toolchain.
 of the service side in dependency-free JavaScript, and is the shortest answer to
 "what do I actually have to write".
 
+### Multiplexing over one connection
+
+A `ServiceConnection` is one bounded pull: `next()` admits a single outstanding
+read, so two calls in flight at once cannot both hold it. The shape that answers
+this is a reader and a waiter, and `velar/task`'s `channel(Type, capacity)` is
+the waiter — it is a many-producer, single-consumer queue whose `next()` is the
+wait, so a caller that is owed an answer parks on a channel of its own instead
+of asking again. One reader owns the connection's `next()` and forwards each
+answer to the request that is waiting for it; nothing polls, and nothing sleeps
+between attempts.
+
+```velar fragment
+import {ServiceConnection, connect} from "velar/service"
+import {Cancellation, Channel, channel, task} from "velar/task"
+
+// The product's protocol, not the language's: the channel carries whatever the
+// product decided it carries, and the correlation key is the product's too.
+type Reply:
+    id: string
+    body: string
+
+// One waiter per request in flight. Each channel has exactly one producer — the
+// reader below — and exactly one consumer, the call waiting for its own answer,
+// which is the shape a channel is for.
+const waiting: Map<string, Channel<Reply>> = Map()
+
+// The reader is the only thing that pulls the connection, which is how the
+// single-outstanding-read rule is kept without anyone having to think about it.
+// It decides nothing: it matches an answer to the request waiting for it.
+async def readReplies(link: ServiceConnection, cancellation: Cancellation):
+    while true:
+        const text = await link.next()
+        if text == null:
+            // The connection ended, so every waiter's answer is that there is
+            // none: a closed channel drains and then answers null.
+            for waiter in waiting.values():
+                waiter.close()
+            waiting.clear()
+            return null
+        const reply = Reply.parse(Json.parse(text))
+        waiting.get(reply.id)?.trySend(reply)
+    return null
+
+async def ask(link: ServiceConnection, id: string, request: string) -> Reply?:
+    const answers = channel(Reply, capacity=1)
+    waiting.set(id, answers)
+    await link.send(request)
+    const answer = await answers.next()
+    waiting.remove(id)
+    return answer
+
+export async def count() -> string:
+    using link = await connect("core")
+    using reader = task((cancellation) => readReplies(link, cancellation))
+    return (await ask(link, "1", "count"))?.body ?? ""
+```
+
+The reader is an ordinary `Task`, so `using` cancels and joins it when the scope
+that opened the connection ends; a shell that keeps one connection for the
+application's lifetime keeps the task the same way it keeps the connection.
+
 The permission manifest is the authority. File access is limited to the
 `app-data` and `project` scopes, plus the special `dropped` root that authorizes
 reading the files a user's drag gesture brings in and learning their real paths.
