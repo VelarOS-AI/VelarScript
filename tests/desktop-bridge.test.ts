@@ -153,12 +153,18 @@ test("Desktop WebView bridge chunks large requests and responses without changin
   });
 });
 
-test("Desktop native host opens an external URL only through the granted network origins", async () => {
+test("Desktop native host hands a URL to the system from two branches, each behind its own grant", async () => {
   const hostSource = await readFile(resolve("packages/desktop/native/macos/VelarDesktopHost.swift"), "utf8");
   assert.match(hostSource, /private struct PermissionConfiguration: Decodable \{\n\s*let files: \[String\]\n\s*let network: \[String\]/u);
   assert.match(hostSource, /NavigationPolicy\(bridge: bridge, network: host\.permissions\.network\)/u);
   assert.match(hostSource, /private let externalOrigins: Set<String>/u);
+  // Two acts, two grants: the renderer following a link is governed by
+  // `network`, and `openExternal` handing a URL to the system default handler is
+  // governed by `links`. A third branch, or either of these two losing its
+  // guard, is what this counts.
   const opens = hostSource.split("\n").filter((line) => line.includes("NSWorkspace.shared.open"));
-  assert.equal(opens.length, 1, "the native host hands a URL to the system from exactly one branch");
+  assert.equal(opens.length, 2, "the native host hands a URL to the system from exactly two branches");
   assert.match(hostSource, /\} else if let origin = navigationOrigin\(url\), externalOrigins\.contains\(origin\) \{\n\s*NSWorkspace\.shared\.open\(url\)\n\s*decisionHandler\(\.cancel\)/u);
+  assert.match(hostSource, /guard linkSchemes\.contains\(scheme\) else \{[\s\S]*?desktop\.permissions\.links[\s\S]*?\}\n\s*NSWorkspace\.shared\.open\(url\)/u);
+  assert.match(hostSource, /self\.linkSchemes = Set\(permissions\.links\)/u);
 });
