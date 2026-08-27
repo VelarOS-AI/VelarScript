@@ -364,6 +364,8 @@ export function desktopBrowserTestInitScript(
     }
     return windowKinds[kind];
   }
+  // The fake registry's half of the instance-key rule; see windowKeyOf in
+  // packages/desktop/src/compiler.ts for the other two copies and why.
   function windowKeyValue(value, operation) {
     if (value == null) return null;
     if (typeof value !== "string" || !/^[A-Za-z0-9._:-]{1,128}$/u.test(value)) throw new TypeError("Desktop test " + operation + " key is invalid");

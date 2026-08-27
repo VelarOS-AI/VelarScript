@@ -298,8 +298,11 @@ export async function removeFile(path) {
   if (value !== null) throw new TypeError("Desktop test host returned an invalid remove result");
   return null;
 }
+// The declared kinds live in the manifest, and the fake registry answers from
+// them, so this bounds the argument and lets the registry refuse an undeclared
+// kind by name rather than restating the manifest's own naming rule here.
 function testWindowKind(value, operation) {
-  if (typeof value !== "string" || !/^[a-z]+(?:-[a-z]+)*$/u.test(value) || value.length > 32) {
+  if (typeof value !== "string" || value.length === 0 || value.length > 32) {
     throw new TypeError("Desktop test " + operation + " requires a declared window kind");
   }
   return value;
@@ -441,6 +444,12 @@ function windowKindOf(value, operation) {
   }
   return value;
 }
+// The instance-key rule is re-checked at every boundary it crosses, because a
+// boundary that trusts the last one is a boundary that is not there: this is the
+// renderer's copy, windowKeyValue in packages/desktop/src/test-runtime.ts is the
+// fake registry's, and validate(key:) in
+// packages/desktop/native/macos/VelarDesktopHost.swift is the native host's.
+// The three must not drift.
 function windowKeyOf(value, operation) {
   if (value == null) return null;
   if (typeof value !== "string" || !/^[A-Za-z0-9._:-]{1,128}$/u.test(value)) {

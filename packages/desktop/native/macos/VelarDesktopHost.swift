@@ -1540,6 +1540,9 @@ private final class WindowRegistry: NSObject, NSWindowDelegate {
         }
     }
 
+    /// The native half of the instance-key rule; `windowKeyOf` in
+    /// packages/desktop/src/compiler.ts and `windowKeyValue` in
+    /// packages/desktop/src/test-runtime.ts are the other two.
     private func validate(key: String) throws {
         guard !key.isEmpty, key.count <= 128,
               key.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "." || $0 == "_" || $0 == ":" || $0 == "-") }) else {
