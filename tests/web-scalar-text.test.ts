@@ -439,3 +439,45 @@ mount(<App />, "#app")
     });
   },
 );
+
+test("[F1] the in-place text write goes through the captured accessor, not a replaceable prototype",
+  { timeout: 120_000 },
+  async () => {
+    await mountInChromium(`
+state label: string = "one"
+
+component App:
+    def flip():
+        label = "two"
+
+    return <div>
+        <button type="button" data-flip on:click={flip}>flip</button>
+        <span data-label>{label}</span>
+    </div>
+
+mount(<App />, "#app")
+`.trimStart(), async (page, failures) => {
+      assert.equal(await page.evaluate('document.querySelector("[data-label]").textContent'), "one");
+
+      // The page replaces CharacterData's `data` accessor after the framework
+      // captured it. This is the shape every other host operation in the Web
+      // runtime is hardened against, and it is why __velarText writes through
+      // __velarDomSetData rather than assigning `node.data`: a planted setter
+      // must be able neither to read the application's text nor to swallow it.
+      await page.evaluate(`(() => {
+        window.__stolen = [];
+        Object.defineProperty(CharacterData.prototype, "data", {
+          configurable: true,
+          get() { return "HIJACKED"; },
+          set(next) { window.__stolen.push(next); },
+        });
+      })()`);
+
+      await page.evaluate('document.querySelector("[data-flip]").click()');
+      await page.waitForFunction('document.querySelector("[data-label]").textContent === "two"');
+      assert.equal(await page.evaluate('document.querySelector("[data-label]").firstChild.wholeText'), "two");
+      assert.deepEqual(await page.evaluate("window.__stolen"), []);
+      assert.deepEqual(failures, []);
+    });
+  },
+);
