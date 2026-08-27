@@ -83,14 +83,14 @@ type CreateArticle:
 
 export server articles:
     /// Reports whether this service is ready.
-    @get(p"/health") => {ok: true}
+    @get health(p"/health") => {ok: true}
 
-    @get(p"/articles/{id:number}?{details:bool?}"):
+    @get readArticle(p"/articles/{id:number}?{details:bool?}"):
         if id < 1:
             throw HttpProblem({status: 404, code: "article.not_found", title: "Article not found"})
         return {id, details: details ?? false}
 
-    @post(p"/articles", input: CreateArticle):
+    @post createArticle(p"/articles", input: CreateArticle):
         return created({id: 1, title: input.title})
 
 ```
@@ -113,6 +113,12 @@ Route catalogs may keep patterns in exported `const` objects. Referenced
 patterns require `as name` so the compiler never injects identifiers that are
 hidden inside another declaration. The old `path=` spelling is an error with a
 mechanical fix to the positional form and `as path`.
+
+For a public contract, put one stable source identifier between the role and
+the pattern: `@get readArticle(...)` or `@websocket worldRealtime(...)`.
+Operation identities must be unique after composition, survive `prefix`, and
+are emitted verbatim to OpenAPI. Leave the name out only for a local route whose
+method/path-derived OpenAPI identity is sufficient.
 
 On `POST`, `PUT`, or `PATCH`, one concrete Data parameter is the
 checked JSON body. A `Request` parameter explicitly requests the complete
@@ -282,7 +288,9 @@ task finishes. `setCookie` and
 fields. Never start long-lived work by
 dropping a Promise; use an owned lifecycle, background task, Worker, or process.
 
-`docs` adds a bundled offline UI and OpenAPI 3.1 JSON. Compiler route types
+`docs` adds a bundled offline UI and OpenAPI 3.1 JSON. HTTP and WebSocket
+operations share its `paths` catalog; WebSocket entries use GET, response 101,
+and `x-velar-transport: websocket`. Compiler route types
 and response helpers supply parameter, body, response, content-type, and static
 success-status schemas. Applicable framework-generated 400, 401, 413, 415, and
 422 responses are included automatically; a preceding `///` comment supplies
@@ -317,7 +325,7 @@ session belongs in the route table:
 import {WebSocketConnection} from "velar/websocket"
 
 server realtime:
-    @websocket(p"/worlds/{worldId:string}/realtime", connection: WebSocketConnection):
+    @websocket worldRealtime(p"/worlds/{worldId:string}/realtime", connection: WebSocketConnection):
         async for message in connection:
             await connection.send(message)
 ```
@@ -331,7 +339,8 @@ contains these routes rejects its legacy single `path` option and does not offer
 accepted sessions through `WebSocketServer.next()`.
 
 Set
-`maxBodyBytes` to the supplied application value. `origins` contains exact
+`maxBodyBytes` to the supplied application value. `host` is non-empty text of
+at most 255 code units without NUL. `origins` contains exact
 canonical HTTP/HTTPS origins. The default rejects any upgrade carrying
 `Origin`; no-Origin non-browser clients remain allowed. Use `["*"]` only for an
 intentional unrestricted policy. A rejected browser origin receives 403 before

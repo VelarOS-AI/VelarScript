@@ -966,11 +966,18 @@ test("Node ServeApp routes bind checked inputs, compose, and normalize HTTP outc
   const bridge = Object.getOwnPropertyDescriptor(serveRuntime.ServeApp, "__velarCompilerBridge")?.value as {
     createPattern(source: Record<string, unknown>): unknown;
     createRoute(method: string, path: unknown, parameters: readonly Record<string, unknown>[], handler: (...arguments_: never[]) => Promise<unknown>, metadata?: Record<string, unknown>): unknown;
+    createWebSocket(path: unknown, parameters: readonly Record<string, unknown>[], handler: (...arguments_: never[]) => Promise<unknown>, metadata?: Record<string, unknown>): unknown;
     createApp(name: string, items: readonly unknown[]): unknown;
   } | undefined;
   assert.ok(bridge);
   assert.equal(Object.isFrozen(bridge), true);
-  const health = bridge.createRoute("GET", routePattern(bridge, "/health"), [], async () => ({ok: true}));
+  const health = bridge.createRoute("GET", routePattern(bridge, "/health"), [], async () => ({ok: true}), {operationId: "health"});
+  const realtime = bridge.createWebSocket(
+    routePattern(bridge, "/worlds/{worldId:string}/realtime"),
+    [{name: "connection", source: "connection", kind: "connection", required: true}],
+    async () => null,
+    {operationId: "worldRealtime", summary: "Realtime world session"},
+  );
   const cookies = bridge.createRoute("GET", routePattern(bridge, "/cookies"), [], async () => serveRuntime.setCookie(serveRuntime.setCookie(serveRuntime.json({ok: true}), "first", "1"), "second", "2"));
   // p"" 的查询契约只描述单值参数；重复值属于低层 HTTP 语义，显式通过 Request.queryAll 读取。
   const tags = bridge.createRoute("GET", routePattern(bridge, "/tags"), [
@@ -1016,10 +1023,19 @@ test("Node ServeApp routes bind checked inputs, compose, and normalize HTTP outc
     serveRuntime.prefix("/api", protectedUsers),
     serveRuntime.prefix("/limited", limited),
     doubleNext,
+    realtime,
   ]);
   const document = serveRuntime.openapi(app, "Users API", "2.0.0");
   assert.deepEqual(document.info, {title: "Users API", version: "2.0.0"});
-  assert.deepEqual(Object.keys(document.paths).sort(), ["/api/missing", "/api/users", "/api/users/{id}", "/cookies", "/double-next", "/health", "/limited", "/tags"]);
+  assert.deepEqual(Object.keys(document.paths).sort(), ["/api/missing", "/api/users", "/api/users/{id}", "/cookies", "/double-next", "/health", "/limited", "/tags", "/worlds/{worldId}/realtime"]);
+  assert.equal((document.paths["/health"] as {get: {operationId: string}}).get.operationId, "health");
+  assert.deepEqual(JSON.parse(JSON.stringify((document.paths["/worlds/{worldId}/realtime"] as {get: unknown}).get)), {
+    operationId: "worldRealtime",
+    parameters: [{name: "worldId", in: "path", required: true, schema: {type: "string"}}],
+    responses: {"101": {description: "Switching Protocols"}},
+    "x-velar-transport": "websocket",
+    summary: "Realtime world session",
+  });
   assert.deepEqual(JSON.parse(JSON.stringify((document.paths["/tags"] as {get: {parameters: unknown[]}}).get.parameters)), []);
   assert.deepEqual(JSON.parse(JSON.stringify((document.paths["/api/users/{id}"] as {get: {parameters: unknown[]}}).get.parameters)), [
     {name: "id", in: "path", required: true, schema: {type: "number"}},
@@ -1759,6 +1775,18 @@ test("Node WebSocket listen composes one ServeApp lifecycle and keeps queues glo
     await assert.rejects(
       websocket.listen({port: 0, origins: ["https://client.test/path"]}),
       /must not contain paths/u,
+    );
+    await assert.rejects(
+      websocket.listen({port: 0, host: ""}),
+      /host must be bounded non-empty text/u,
+    );
+    await assert.rejects(
+      websocket.listen({port: 0, host: "x".repeat(256)}),
+      /host must be bounded non-empty text/u,
+    );
+    await assert.rejects(
+      websocket.listen({port: 0, host: "127.0.0.1\0.invalid"}),
+      /host must be bounded non-empty text/u,
     );
     const defaultServer = await websocket.listen({port: 0, host: "127.0.0.1", path: "/default"});
     try {

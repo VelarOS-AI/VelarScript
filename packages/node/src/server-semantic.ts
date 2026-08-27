@@ -34,6 +34,11 @@ export const velarNodeSemanticExtension: CompilerSemanticExtension = Object.free
       const roleSpan = { start: item.signatureSpan.start, end: item.signatureSpan.start + role.length + 1 };
       context.syntaxToken(roleSpan, "decorator");
       context.documentSyntax(roleSpan, `@${role}`);
+      if (item.kind === "NodeRouteDeclaration" && item.operationSpan !== null) {
+        // 操作名属于对外协议身份，不在处理器作用域中声明变量；编辑器使用
+        // 函数色表达“可调用能力”，同时避免把它误导成捕获参数。
+        context.syntaxToken(item.operationSpan, "function");
+      }
       if (item.kind === "NodeRouteDeclaration" && context.source[item.pathSpan.start] === "p") {
         context.documentSyntax({ start: item.pathSpan.start, end: item.pathSpan.start + 1 }, "p");
       }

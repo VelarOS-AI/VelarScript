@@ -147,7 +147,8 @@ const __velarServePatternFields = __velarServeFieldMap(["definition", "pathname"
 const __velarServePatternCaptureFields = __velarServeFieldMap(["name", "wireName", "explicitWireName", "typeName", "optional", "kind", "check", "schema"]);
 const __velarServeProblemFields = __velarServeFieldMap(["status", "code", "title", "detail", "type", "instance", "source", "parameter", "headers"]);
 const __velarServeResponseHandlerFields = __velarServeFieldMap(["responseSchema", "responseContentTypes"]);
-const __velarServeRouteMetadataFields = __velarServeFieldMap(["responseSchema", "responseContentTypes", "maxBodyBytes", "middleware", "documented", "summary", "description", "tags", "status", "errors"]);
+const __velarServeRouteMetadataFields = __velarServeFieldMap(["operationId", "responseSchema", "responseContentTypes", "maxBodyBytes", "middleware", "documented", "summary", "description", "tags", "status", "errors"]);
+const __velarServeWebSocketMetadataFields = __velarServeFieldMap(["operationId", "documented", "summary", "description", "tags"]);
 const __velarServeRouteDocumentationFields = __velarServeFieldMap(["summary", "description", "tags", "status", "errors", "documented"]);
 const __velarServeErrorDocumentationFields = __velarServeFieldMap(["status", "description"]);
 let __velarServeNextToken = 1;
@@ -1278,6 +1279,7 @@ function __velarCreateServeRoute(method, pattern, parameters, handler, metadata 
     throw new __velarServeTypeError("A route with path or query captures must bind its RouteMatch");
   }
   metadata = __velarServeRecord(metadata, __velarServeRouteMetadataFields, "Route metadata");
+  const operationId = __velarServeOperationIdentity(metadata.operationId, "Route operationId");
   const responseSchema = metadata.responseSchema == null ? {} : __velarServeSchema(metadata.responseSchema, "Route response schema");
   const responseContentTypes = metadata.responseContentTypes == null ? ["application/json"] : __velarServeStringList(metadata.responseContentTypes, "Route response content types", 8);
   const maxBodyBytes = metadata.maxBodyBytes == null ? null : __velarServeBodyLimit(metadata.maxBodyBytes);
@@ -1306,6 +1308,7 @@ function __velarCreateServeRoute(method, pattern, parameters, handler, metadata 
     bindRoute,
     parameters: __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [checked]),
     handler,
+    operationId,
     responseSchema,
     responseContentTypes: __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [responseContentTypes]),
     maxBodyBytes,
@@ -1319,7 +1322,7 @@ function __velarCreateServeRoute(method, pattern, parameters, handler, metadata 
   }]);
 }
 
-function __velarCreateServeWebSocket(pattern, parameters, handler, bindRoute = true) {
+function __velarCreateServeWebSocket(pattern, parameters, handler, metadata = {}, bindRoute = true) {
   if (!__velarServeIsPattern(pattern)) throw new __velarServeTypeError("WebSocket path must be a RoutePattern declared with p\"/...\"");
   if (!__velarServeIsArray(parameters) || parameters.length > 64) throw new __velarServeTypeError("WebSocket parameters must be a bounded list");
   const checked = [];
@@ -1361,6 +1364,13 @@ function __velarCreateServeWebSocket(pattern, parameters, handler, bindRoute = t
   if (typeof bindRoute !== "boolean" || !bindRoute && (pattern.pathCaptures.length > 0 || pattern.queryCaptures.length > 0)) {
     throw new __velarServeTypeError("A WebSocket route with path or query captures must bind its RouteMatch");
   }
+  metadata = __velarServeRecord(metadata, __velarServeWebSocketMetadataFields, "WebSocket metadata");
+  const operationId = __velarServeOperationIdentity(metadata.operationId, "WebSocket operationId");
+  const documented = metadata.documented == null ? true : metadata.documented;
+  if (typeof documented !== "boolean") throw new __velarServeTypeError("WebSocket documented metadata must be bool");
+  const summary = __velarServeDocumentationText(metadata.summary, "WebSocket summary", 1024);
+  const description = __velarServeDocumentationText(metadata.description, "WebSocket description", 16384);
+  const tags = metadata.tags == null ? [] : __velarServeStringList(metadata.tags, "WebSocket documentation tags", 32);
   const path = pattern.pathname;
   const segments = __velarServeCall(__velarServeStringSplit, path, ["/"]);
   return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{
@@ -1374,7 +1384,20 @@ function __velarCreateServeWebSocket(pattern, parameters, handler, bindRoute = t
     parameters: __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [checked]),
     connectionIndex,
     handler,
+    operationId,
+    documented,
+    summary,
+    description,
+    tags: __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [tags]),
   }]);
+}
+
+function __velarServeOperationIdentity(value, name) {
+  if (value == null) return null;
+  if (typeof value !== "string" || !__velarServeCall(__velarServeRegExpTest, __velarServeRouteNamePattern, [value])) {
+    throw new __velarServeTypeError(name + " must be a source identifier");
+  }
+  return value;
 }
 
 function __velarCreateServeNotFound(handler, middleware = []) {
@@ -1448,6 +1471,7 @@ function __velarServeErrorDocuments(value) {
 function __velarServeRouteMetadata(route, overrides = null) {
   const metadata = overrides ?? {};
   return {
+    operationId: route.operationId,
     responseSchema: route.responseSchema,
     responseContentTypes: route.responseContentTypes,
     maxBodyBytes: route.maxBodyBytes,
@@ -1458,6 +1482,16 @@ function __velarServeRouteMetadata(route, overrides = null) {
     tags: metadata.tags ?? route.tags,
     status: metadata.status ?? route.status,
     errors: metadata.errors ?? route.errors,
+  };
+}
+
+function __velarServeWebSocketMetadata(route) {
+  return {
+    operationId: route.operationId,
+    documented: route.documented,
+    summary: route.summary,
+    description: route.description,
+    tags: route.tags,
   };
 }
 
@@ -1522,6 +1556,7 @@ function __velarCreateServeApp(name, items) {
   // because the statically invisible half of a collision is exactly the one
   // the author cannot see in his own file.
   const shapes = new __velarServeMap();
+  const operations = new __velarServeMap();
   const describeRoute = entry => "'" + entry.route.method + " " + entry.route.path + "'"
     + (entry.source === null ? " declared by this server" : " composed in from '" + entry.source + "'");
   const append = (route, source, target) => {
@@ -1533,6 +1568,14 @@ function __velarCreateServeApp(name, items) {
         + " and " + describeRoute(previous) + " both answer '" + key + "' — narrow or remove one");
     }
     __velarServeCall(__velarServeMapSet, shapes, [key, {route, source}]);
+    if (route.operationId !== null) {
+      const previousOperation = __velarServeCall(__velarServeMapGet, operations, [route.operationId]);
+      if (previousOperation !== undefined) {
+        throw new __velarServeTypeError("ServeApp '" + name + "' contains duplicate operationId '" + route.operationId + "' on "
+          + describeRoute({route, source}) + " and " + describeRoute(previousOperation));
+      }
+      __velarServeCall(__velarServeMapSet, operations, [route.operationId, {route, source}]);
+    }
     target[target.length] = route;
   };
   for (let index = 0; index < items.length; index += 1) {
@@ -1602,7 +1645,13 @@ export function prefix(path, app) {
     const pathname = path + (route.path === "/" ? "" : route.path);
     const querySuffix = __velarServeCall(__velarServeStringSlice, route.pattern.definition, [route.path.length]);
     const pattern = __velarCreateServePattern({definition: pathname + querySuffix, pathname, path: route.pattern.pathCaptures, query: route.pattern.queryCaptures});
-    webSockets[webSockets.length] = __velarCreateServeWebSocket(pattern, route.parameters, route.handler, route.bindRoute);
+    webSockets[webSockets.length] = __velarCreateServeWebSocket(
+      pattern,
+      route.parameters,
+      route.handler,
+      __velarServeWebSocketMetadata(route),
+      route.bindRoute,
+    );
   }
   const items = [];
   for (let index = 0; index < routes.length; index += 1) items[items.length] = routes[index];
@@ -3017,6 +3066,16 @@ export function openapi(app, title = null, version = "1.0.0") {
   const operationIds = new __velarServeMap();
   const securitySchemes = __velarServeCall(__velarServeObjectCreate, __velarServeObject, [null]);
   const securityNames = new __velarServeMap();
+  // 显式身份是协议事实，先整体占位；这样后生成的展示身份只能让路，不会因
+  // 路由声明顺序改变一个已发布 operationId。
+  for (let index = 0; index < app.routes.length + app.webSockets.length; index += 1) {
+    const route = index < app.routes.length ? app.routes[index] : app.webSockets[index - app.routes.length];
+    if (route.operationId === null) continue;
+    if (__velarServeCall(__velarServeMapHas, operationIds, [route.operationId])) {
+      throw new __velarServeTypeError("OpenAPI operationId '" + route.operationId + "' is declared more than once");
+    }
+    __velarServeCall(__velarServeMapSet, operationIds, [route.operationId, true]);
+  }
   for (let index = 0; index < app.routes.length; index += 1) {
     const route = app.routes[index];
     if (!route.documented) continue;
@@ -3083,11 +3142,8 @@ export function openapi(app, title = null, version = "1.0.0") {
       requestBody = {required: formRequired.length > 0, content: hasUpload ? {"multipart/form-data": {schema}} : {"multipart/form-data": {schema}, "application/x-www-form-urlencoded": {schema}}};
     }
     const documentPath = __velarServeOpenApiPath(route.path);
-    const operationBase = __velarServeOperationId(route.method, documentPath);
-    const operationCount = __velarServeCall(__velarServeMapGet, operationIds, [operationBase]) ?? 0;
-    __velarServeCall(__velarServeMapSet, operationIds, [operationBase, operationCount + 1]);
     const operation = {
-      operationId: operationCount === 0 ? operationBase : operationBase + "_" + (operationCount + 1),
+      operationId: route.operationId ?? __velarServeAllocateOperationId(route.method, documentPath, operationIds),
       parameters,
       responses: __velarServeCall(__velarServeObjectCreate, __velarServeObject, [null]),
     };
@@ -3122,10 +3178,67 @@ export function openapi(app, title = null, version = "1.0.0") {
     const entry = paths[documentPath] ?? (paths[documentPath] = __velarServeCall(__velarServeObjectCreate, __velarServeObject, [null]));
     entry[__velarServeCall(__velarServeStringToLowerCase, route.method, [])] = operation;
   }
+  for (let index = 0; index < app.webSockets.length; index += 1) {
+    const route = app.webSockets[index];
+    if (!route.documented) continue;
+    const parameters = [];
+    for (let captureIndex = 0; captureIndex < route.pattern.pathCaptures.length; captureIndex += 1) {
+      const capture = route.pattern.pathCaptures[captureIndex];
+      parameters[parameters.length] = {name: capture.wireName, in: "path", required: true, schema: capture.schema};
+    }
+    for (let captureIndex = 0; captureIndex < route.pattern.queryCaptures.length; captureIndex += 1) {
+      const capture = route.pattern.queryCaptures[captureIndex];
+      parameters[parameters.length] = {name: capture.wireName, in: "query", required: !capture.optional, schema: capture.schema};
+    }
+    const operationSecurity = __velarServeCall(__velarServeObjectCreate, __velarServeObject, [null]);
+    const securitySeen = new __velarServeMap();
+    for (let item = 0; item < route.parameters.length; item += 1) {
+      const parameter = route.parameters[item];
+      if (parameter.source === "connection" || parameter.source === "request" || parameter.source === "dependency") continue;
+      if (parameter.source === "security") {
+        if (parameter.input !== null) __velarServeOpenApiInputSecurity(parameter.input, securitySchemes, securityNames, operationSecurity, securitySeen);
+        continue;
+      }
+      parameters[parameters.length] = {
+        name: parameter.input?.name || parameter.name,
+        in: parameter.source,
+        required: true,
+        schema: __velarServeSchema(parameter.schema, "OpenAPI WebSocket parameter schema"),
+      };
+    }
+    const documentPath = __velarServeOpenApiPath(route.path);
+    const operation = {
+      operationId: route.operationId ?? __velarServeAllocateOperationId("WEBSOCKET", documentPath, operationIds),
+      parameters,
+      responses: {"101": {description: "Switching Protocols"}},
+      "x-velar-transport": "websocket",
+    };
+    if (route.summary !== null) operation.summary = route.summary;
+    if (route.description !== null) operation.description = route.description;
+    if (route.tags.length > 0) operation.tags = route.tags;
+    if (__velarServeCall(__velarServeOwnKeys, __velarServeReflect, [operationSecurity]).length > 0) operation.security = [operationSecurity];
+    const entry = paths[documentPath] ?? (paths[documentPath] = __velarServeCall(__velarServeObjectCreate, __velarServeObject, [null]));
+    if (entry.get !== undefined) {
+      throw new __velarServeTypeError("OpenAPI cannot describe both GET and WebSocket operations at '" + documentPath + "'");
+    }
+    entry.get = operation;
+  }
   const document = {openapi: "3.1.0", info: {title, version}, paths};
   if (__velarServeCall(__velarServeOwnKeys, __velarServeReflect, [securitySchemes]).length > 0) document.components = {securitySchemes};
   if (__velarUtf8ByteLength(__velarJsonStringify(document)) > __velarServeMaxBodyBytes) throw new __velarServeRangeError("OpenAPI document cannot exceed 16 MiB");
   return document;
+}
+
+function __velarServeAllocateOperationId(method, documentPath, operationIds) {
+  const base = __velarServeOperationId(method, documentPath);
+  let candidate = base;
+  let suffix = 2;
+  while (__velarServeCall(__velarServeMapHas, operationIds, [candidate])) {
+    candidate = base + "_" + suffix;
+    suffix += 1;
+  }
+  __velarServeCall(__velarServeMapSet, operationIds, [candidate, true]);
+  return candidate;
 }
 
 function __velarServeOpenApiFailure(description, responseHandler = null) {

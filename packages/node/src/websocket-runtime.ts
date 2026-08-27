@@ -22,6 +22,7 @@ const __velarWsClearTimeout = globalThis.clearTimeout;
 const __velarWsArrayIsArray = globalThis.Array.isArray;
 const __velarWsObjectGetOwnPropertyDescriptor = globalThis.Object.getOwnPropertyDescriptor;
 const __velarWsObjectFreeze = globalThis.Object.freeze;
+const __velarWsStringIncludes = globalThis.String.prototype.includes;
 const __velarWsSet = globalThis.Set;
 const __velarWsSetHas = __velarWsSet.prototype.has;
 const __velarWsSetAdd = __velarWsSet.prototype.add;
@@ -251,7 +252,9 @@ export async function listen(options) {
   const path = __velarWsOption(options, "path");
   const http = __velarWsOption(options, "http");
   const origins = __velarWsOrigins(__velarWsOption(options, "origins"));
-  if (host !== undefined && typeof host !== "string") throw new TypeError("WebSocket host must be text");
+  if (host !== undefined && (typeof host !== "string" || host.length === 0 || host.length > 255 || __velarWsReflectApply(__velarWsStringIncludes, host, ["\0"]))) {
+    throw new TypeError("WebSocket host must be bounded non-empty text");
+  }
   if (path !== undefined && (typeof path !== "string" || !path.startsWith("/"))) throw new TypeError("WebSocket path must start with '/'");
   const application = __velarServeApp.is(http) ? await __velarServeApp.__velarCompilerBridge.nativeApp(http, maxBodyBytes) : null;
   const declarative = application !== null && application.webSocketRoutes > 0;

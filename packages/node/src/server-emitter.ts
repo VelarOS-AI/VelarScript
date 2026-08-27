@@ -141,14 +141,14 @@ export class NodeJavaScriptEmitter extends JavaScriptEmitter {
       const bodyLines = [...this.emitStatementLines(route.body, depth + 1)];
       if (!this.blockAlwaysReturns(route.body)) bodyLines.push(`${"  ".repeat(depth + 1)}return null;`);
       const body = bodyLines.join("\n");
-      return `__velarCreateServeWebSocket(${this.emitMappedExpression(route.pathExpression)}, [${descriptors}], async (${parameters}) => {${body ? `\n${body}\n${indentation}` : ""}}, ${bindRoute})`;
+      return `__velarCreateServeWebSocket(${this.emitMappedExpression(route.pathExpression)}, [${descriptors}], async (${parameters}) => {${body ? `\n${body}\n${indentation}` : ""}}, {operationId:${JSON.stringify(route.operationId)}}, ${bindRoute})`;
     }
     const response = parseRouteResultHint(this.hints.extensionCalls.get(spanIdentity(route.signatureSpan))) ?? {schema: {}, contentTypes: ["application/json"], status: null};
     const description = this.routeDocumentation(route.span.start);
     const bodyLines = [...this.emitStatementLines(route.body, depth + 1)];
     if (!this.blockAlwaysReturns(route.body)) bodyLines.push(`${"  ".repeat(depth + 1)}return null;`);
     const body = bodyLines.join("\n");
-    return `__velarCreateServeRoute(${JSON.stringify(route.method)}, ${this.emitMappedExpression(route.pathExpression)}, [${descriptors}], async (${parameters}) => {${body ? `\n${body}\n${indentation}` : ""}}, {responseSchema:${JSON.stringify(response.schema)},responseContentTypes:${JSON.stringify(response.contentTypes)},status:${JSON.stringify(response.status)},description:${JSON.stringify(description)}}, ${bindRoute})`;
+    return `__velarCreateServeRoute(${JSON.stringify(route.method)}, ${this.emitMappedExpression(route.pathExpression)}, [${descriptors}], async (${parameters}) => {${body ? `\n${body}\n${indentation}` : ""}}, {operationId:${JSON.stringify(route.operationId)},responseSchema:${JSON.stringify(response.schema)},responseContentTypes:${JSON.stringify(response.contentTypes)},status:${JSON.stringify(response.status)},description:${JSON.stringify(description)}}, ${bindRoute})`;
   }
 
   private emitProjectedRouteParameter(route: NodeRouteDeclaration): string {

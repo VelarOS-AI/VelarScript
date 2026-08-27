@@ -144,7 +144,10 @@ export class VelarNodeParser extends Parser {
     }
 
     const methodName = name.value as NodeHttpMethodName | "websocket";
-    this.expect("leftParen", `Expected '(' after '@${methodName}'`);
+    // `@get operationName(...)` 中的名字是协议身份，不会成为源码绑定；省略时
+    // 保持普通局部服务的简写，由 OpenAPI 根据方法与路径生成展示用身份。
+    const operation = this.check("identifier") ? this.advance() : null;
+    this.expect("leftParen", `Expected '(' after '${operation ? operation.value : `@${methodName}`}'`);
     const legacyPath = this.check("identifier") && this.current().value === "path" && this.peekKind(1) === "assign";
     const legacyStart = legacyPath ? this.advance().span.start : null;
     if (legacyPath) this.advance();
@@ -213,6 +216,8 @@ export class VelarNodeParser extends Parser {
     return {
       kind: "NodeRouteDeclaration",
       name: `${method} ${directPattern?.pattern.definition ?? "<route>"}`,
+      operationId: operation?.value ?? null,
+      operationSpan: operation?.span ?? null,
       method,
       transport,
       pathExpression,

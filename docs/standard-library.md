@@ -385,7 +385,8 @@ keeps one startup/shutdown lifecycle. A ServeApp may declare multiple
 one `WebSocketConnection`, and complete handler lifetime. In that declarative
 mode `WebSocketServer.next()` and the listener's legacy single `path` option are
 unavailable. Its `maxBodyBytes` option bounds HTTP
-bodies on that shared listener. `origins` accepts exact canonical HTTP/HTTPS
+bodies on that shared listener. `host` is non-empty text of at most 255 code
+units without NUL. `origins` accepts exact canonical HTTP/HTTPS
 origins; by default upgrades carrying `Origin` receive 403 before admission,
 while non-browser requests without `Origin` remain allowed. `["*"]` is the
 explicit unrestricted policy. Normal EOF preserves accepted messages
@@ -932,14 +933,14 @@ type CreateArticle:
     title: string
 
 export server app:
-    @get(p"/health") => {ok: true}
+    @get health(p"/health") => {ok: true}
 
-    @get(p"/articles/{id:number}?{details:bool?}"):
+    @get readArticle(p"/articles/{id:number}?{details:bool?}"):
         if id < 1:
             throw HttpProblem({status: 404, code: "article.not_found", title: "Article not found"})
         return {id, details: details ?? false}
 
-    @post(p"/articles", input: CreateArticle) => created({id: 1, title: input.title})
+    @post createArticle(p"/articles", input: CreateArticle) => created({id: 1, title: input.title})
 
     @notFound(request: Request) => {error: "route_not_found", path: request.path}
 
@@ -948,8 +949,8 @@ export server app:
 `server name:` and the Node-only `p"..."` path pattern are enabled by
 `@velarscript/node`. `@get`, `@post`, `@put`, `@patch`, and `@delete` are the
 route roles; `@notFound` is the one unmatched-path fallback on the final
-application; `@response` is its one semantic-result policy. They are anonymous
-compiler declarations, not decorators or runtime functions. A `{name:type}`
+application; `@response` is its one semantic-result policy. They are compiler
+declarations, not decorators or runtime functions. A `{name:type}`
 An inline pattern projects path captures and query fields as immutable handler
 locals. A referenced pattern uses `@get(pattern as route)` and receives a
 `RouteMatch` with `route.pattern`, `route.pathname`, `route.params`, and
@@ -962,6 +963,12 @@ route declaration. `?wire={field:type}` maps distinct names; writing
 `POST`, `PUT`, or `PATCH` is the JSON body. `Request` asks for the complete
 low-level request explicitly. Route bodies may `await` directly and use either
 `=> expression` or an indented block.
+
+An optional identifier after the role gives the route a stable operation
+identity, for example `@get readArticle(...)` or `@websocket
+worldRealtime(...)`. The identity is unique across the final composed app and
+is preserved by `prefix`. OpenAPI emits it verbatim. Anonymous routes remain
+valid and receive a method/path-derived identity for documentation only.
 
 `@notFound` accepts zero parameters or one explicitly typed `Request`.
 Ordinary Data becomes a 404 JSON response; an explicit `ServeResponse` keeps
@@ -1010,6 +1017,9 @@ framework-generated 400, 401, 413, 415, and 422 responses that apply to each
 route; explicit `RouteDocumentation.errors` entries override their
 descriptions. Typed path syntax such as `p"/articles/{id:number}"` is rendered
 as `/articles/{id}` in that document.
+Declarative WebSocket routes appear in the same `paths` table as GET upgrades,
+with response 101 and `x-velar-transport: websocket`; an HTTP GET and WebSocket
+upgrade cannot share one documented path.
 
 The separate `@velarscript/server` application extension composes this Node
 capability. It adds `velar/server`, root `application.yml`

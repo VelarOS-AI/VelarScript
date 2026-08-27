@@ -34,6 +34,12 @@ export interface NodeRouteDeclaration {
   readonly kind: "NodeRouteDeclaration";
   /** Internal diagnostic identity. Routes do not introduce a source binding. */
   readonly name: string;
+  /**
+   * 对外稳定的操作身份。它只描述“这项能力叫什么”，路径仍由 RoutePattern
+   * 单独拥有，因此客户端可以从 OpenAPI 按身份发现 HTTP 与 WebSocket 地址。
+  */
+  readonly operationId: string | null;
+  readonly operationSpan: Span | null;
   readonly method: NodeRouteMethod;
   /** HTTP 请求响应路由，或由框架拥有连接任务的 WebSocket 会话路由。 */
   readonly transport: NodeRouteTransport;

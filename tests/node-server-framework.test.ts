@@ -52,13 +52,14 @@ test("@websocket declares one framework-owned connection and shares RoutePattern
 import {WebSocketConnection} from "velar/websocket"
 
 server realtime:
-    @websocket(p"/worlds/{worldId:string}/realtime", connection: WebSocketConnection):
+    @websocket worldRealtime(p"/worlds/{worldId:string}/realtime", connection: WebSocketConnection):
         print(worldId)
         await connection.close()
 `);
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /__velarCreateServeWebSocket\(/u);
   assert.match(result.code ?? "", /source:"connection",kind:"connection"/u);
+  assert.match(result.code ?? "", /operationId:"worldRealtime"/u);
   assert.match(result.code ?? "", /async \(\{params:\{worldId\},query:\{\}\}, connection\)/u);
 
   const missing = await compileServer(`server realtime:\n    @websocket(p"/realtime"):\n        pass\n`);
@@ -72,6 +73,28 @@ server realtime:
         pass
 `);
   assert.ok(body.diagnostics.some((item) => /must be WebSocketConnection, Request, or an explicit input descriptor/u.test(item.message)));
+});
+
+test("named HTTP and WebSocket operations remain unique after server composition", async () => {
+  const result = await compileServer(`
+server base:
+    @get worldBootstrap(p"/worlds/{worldId:string}") => {id: worldId}
+
+server duplicate:
+    @post worldBootstrap(p"/worlds", input: body<string>) => input
+
+server api:
+    ...base
+    ...duplicate
+`);
+  assert.ok(result.diagnostics.some((item) => /Operation 'worldBootstrap'.*must be unique after server composition/u.test(item.message)));
+
+  const valid = await compileServer(`
+server api:
+    @get worldBootstrap(p"/worlds/{worldId:string}") => {id: worldId}
+`);
+  assert.deepEqual(valid.diagnostics, []);
+  assert.match(valid.code ?? "", /operationId:"worldBootstrap"/u);
 });
 
 test("A11 shortens a redundant same-name query mapping without rejecting it", () => {

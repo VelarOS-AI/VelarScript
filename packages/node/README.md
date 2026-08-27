@@ -33,11 +33,11 @@ type CreateArticle:
     title: string
 
 export server app:
-    @get(p"/health") => {ok: true}
-    @get(p"/articles/{id:string}?{details:bool?}") => {id, details: details ?? false}
-    @post(p"/articles", input: CreateArticle) => created(input)
+    @get health(p"/health") => {ok: true}
+    @get readArticle(p"/articles/{id:string}?{details:bool?}") => {id, details: details ?? false}
+    @post createArticle(p"/articles", input: CreateArticle) => created(input)
 
-    @websocket(p"/worlds/{worldId:string}/realtime", connection: WebSocketConnection):
+    @websocket worldRealtime(p"/worlds/{worldId:string}/realtime", connection: WebSocketConnection):
         async for message in connection:
             await connection.send(message)
 ```
@@ -105,6 +105,15 @@ runtime reflection; applicable framework-generated 400, 401, 413, 415, and 422
 responses are documented automatically. Unexpected handler or middleware failures are
 reported on stderr while the client receives only an opaque 500 response.
 
+An optional source identifier between a route role and `(` gives that operation
+a stable protocol identity: `@get readArticle(...)` and `@websocket
+worldRealtime(...)`. It must be unique after server composition. OpenAPI uses
+the exact identity and includes WebSocket routes as GET upgrades with a 101
+response and `x-velar-transport: websocket`, so a client can discover both
+transports without copying path strings. Omitting the identity keeps the compact
+local-route form and generates a descriptive OpenAPI identity from method and
+path.
+
 The framework covers the ordinary service surface without adding controller or
 decorator vocabulary. Query inputs belong to the `RoutePattern`; other route
 defaults may be explicit `input.header`, `input.cookie`, `input.form`, `input.upload`, or
@@ -129,6 +138,7 @@ handshake rejection, and handler lifetime. Exactly one `WebSocketConnection`
 parameter is required. `velar/websocket.listen({http: app, ...})` composes the
 ServeApp lifecycle on one HTTP/WebSocket port; when the app contains declarative
 WebSocket routes, the listener's legacy single `path` option is rejected.
+`host` is non-empty text of at most 255 code units without NUL.
 `origins` accepts only exact canonical HTTP/HTTPS
 origins. Its default rejects every browser-style upgrade carrying `Origin`;
 requests without `Origin` remain available to non-browser clients, and

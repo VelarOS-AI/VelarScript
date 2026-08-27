@@ -313,6 +313,7 @@ export class VelarNodeAnalyzer extends Analyzer {
     if (!this.isPredeclared(statement)) this.declareBinding(statement.name, false, serveAppType, statement.span);
 
     const routes = new Map<string, ComposedRoute>();
+    const operations = new Map<string, ComposedRoute>();
     let notFound: ComposedFallback | null = null;
     let responsePolicy: NodeResponseDeclaration | null = null;
     for (const item of statement.items) {
@@ -328,7 +329,7 @@ export class VelarNodeAnalyzer extends Analyzer {
           if (responsePolicy) this.typeError("A server can declare only one @response policy", item.span);
           else responsePolicy = composed.responsePolicy;
         }
-        for (const entry of composed.routes) this.recordRoute(entry, routes, item.span);
+        for (const entry of composed.routes) this.recordRoute(entry, routes, operations, item.span);
         continue;
       }
       if (item.kind === "NodeNotFoundDeclaration") {
@@ -344,7 +345,7 @@ export class VelarNodeAnalyzer extends Analyzer {
         this.analyzeResponse(item);
         continue;
       }
-      this.recordRoute({route: item, path: this.routePath(item), spread: null, origin: []}, routes, item.pathSpan);
+      this.recordRoute({route: item, path: this.routePath(item), spread: null, origin: []}, routes, operations, item.pathSpan);
       this.analyzeRoute(item);
     }
   }
@@ -355,7 +356,21 @@ export class VelarNodeAnalyzer extends Analyzer {
    * entries carry an origin: a conflicting route the author cannot see in his own file has to name
    * the server it came from.
    */
-  private recordRoute(entry: ComposedRoute, routes: Map<string, ComposedRoute>, span: Span): void {
+  private recordRoute(
+    entry: ComposedRoute,
+    routes: Map<string, ComposedRoute>,
+    operations: Map<string, ComposedRoute>,
+    span: Span,
+  ): void {
+    if (entry.route.operationId !== null) {
+      const previousOperation = operations.get(entry.route.operationId);
+      if (previousOperation) {
+        this.typeError(
+          `Operation '${entry.route.operationId}' is declared by both ${describeComposedRoute(previousOperation)} and ${describeComposedRoute(entry)}; operation names must be unique after server composition`,
+          span,
+        );
+      } else operations.set(entry.route.operationId, entry);
+    }
     const key = `${entry.route.method} ${routeShape(entry.path)}`;
     const previous = routes.get(key);
     if (previous) {
