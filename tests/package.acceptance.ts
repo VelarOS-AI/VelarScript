@@ -387,6 +387,9 @@ mount(<App />, "#app")
       kind: "velar-desktop-smoke",
       protocolVersion: 1,
       identifier: "dev.velarscript.packed",
+      // The template declares the one window kind every manifest declares, and
+      // the packaged host reports the kinds it will actually open.
+      windowKinds: ["main"],
     });
   }
 
