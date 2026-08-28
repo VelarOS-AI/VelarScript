@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import type { CompileResult, CompilerExtension } from "@velarscript/compiler";
 import { createVelarProject, parseCreateArguments } from "create-velar";
 import { projectImportKey, type ProjectModule, type ProjectResult } from "./project.ts";
-import { additionalProjectRoots, checkResolvedProject, discoverVelarSources, formatCheckOutput } from "./project-check.ts";
+import { checkResolvedProject, discoverVelarSources, formatCheckOutput } from "./project-check.ts";
 import { reproductionHint, writeReproduction } from "./reproduction.ts";
 import { runDevServer } from "./dev-server.ts";
 import {
@@ -356,7 +356,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
     }
     let report;
     try {
-      report = await applyProjectMechanicalFixes(fixConfig, displayPath, 8, await additionalProjectRoots(fixConfig, input));
+      report = await applyProjectMechanicalFixes(fixConfig, input, displayPath);
     } catch (error) {
       for (const change of manifestChanges) process.stdout.write(`${change}\n`);
       process.stderr.write(`velar fix: ${hostErrorMessage(error)}\n`);

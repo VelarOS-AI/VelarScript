@@ -74,6 +74,24 @@ error the old shape raises names this command: `desktop.window` reports that
 rest of the manifest keeps its bytes, key order and indentation — and running it
 a second time changes nothing.
 
+`fix` answers the project's own rules as well as the compiler's. A rule about
+how the *project* is arranged — an application entry must declare `@main`, a
+library entry must not — is enforced where the project is resolved rather than
+where a module is compiled, and both commands now read it from one place, so
+`fix` can no longer report "0 diagnostics remain" over a tree `check` refuses.
+One of those rules migrates mechanically. An entry whose startup is a **single
+non-block statement on one line at the end of the module** gets `@main:` written
+in front of it, which is the rewrite the author would have made letter for
+letter: the inline body has the statement semantics of an indented one, and
+nothing else in the file moves. Two startup statements, a statement with a
+declaration after it, a statement spread over several lines, and a one-line
+statement that heads a block of its own all stay diagnostics — which statement
+runs first is visible in the source today and a fixer that merged them would be
+choosing an order rather than preserving one, and the inline body accepts one
+non-block statement, so wrapping `if ready: start()` would leave source the
+compiler no longer parses. Naming a single file scopes those rules out exactly
+as it scopes out the tree walk.
+
 `lsp` orders workspace symbols by match quality first, then by name ignoring
 case, then by path. Ignoring case is the Unicode default case mapping rather
 than a locale-tailored one, so `apple` comes before `Banana` on every machine

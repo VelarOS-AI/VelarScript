@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const cliPath = fileURLToPath(new URL("../packages/cli/src/cli.ts", import.meta.url));
+const webPackageRoot = fileURLToPath(new URL("../packages/web", import.meta.url));
 
 /**
  * `velar check` covers every `.vel` source under the project, not only the ones
@@ -185,6 +186,244 @@ test("[F4] 'velar check <file>' still scopes itself to that file's graph", async
     const result = project.cli("check", "src/main.vel");
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /Checked 2 modules/u);
+  } finally {
+    await rm(project.root, { recursive: true, force: true });
+  }
+});
+
+/**
+ * A Web project, which is the smallest tree the application-entry contract
+ * applies to: the rule reads `config.framework`, so a plain Core project — the
+ * one every test above uses — never reaches it.
+ */
+async function webProject(files: Readonly<Record<string, string>>): Promise<CliProject> {
+  const root = await mkdtemp(join(tmpdir(), "velar-project-layer-"));
+  const scope = join(root, "node_modules", "@velarscript");
+  await mkdir(scope, { recursive: true });
+  await symlink(webPackageRoot, join(scope, "web"), "dir");
+  await writeFile(join(root, "velar.json"), JSON.stringify({
+    formatVersion: 2,
+    kind: "application",
+    entry: "src/main.vel",
+    outDir: "dist",
+    extensions: ["@velarscript/web"],
+    web: { base: "/", deployment: { spaFallback: true } },
+  }), "utf8");
+  for (const [name, source] of Object.entries(files)) {
+    const path = join(root, name);
+    await mkdir(join(path, ".."), { recursive: true });
+    await writeFile(path, source, "utf8");
+  }
+  return {
+    root,
+    cli(...commandArguments) {
+      const result = spawnSync(process.execPath, [cliPath, ...commandArguments], { cwd: root, encoding: "utf8", timeout: 120_000 });
+      return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+    },
+  };
+}
+
+/** The count `velar fix`'s summary line reports, or -1 when it printed no summary. */
+function remainingDiagnostics(stdout: string): number {
+  return Number(/; (\d+) diagnostics? remains?$/mu.exec(stdout)?.[1] ?? "-1");
+}
+
+const COMPONENT = "component App:\n    return <main><h1>Labs</h1></main>\n";
+
+/**
+ * The trees a project-layer rule refuses, plus the ones it accepts.
+ *
+ * The defect: `velar check` refused a Web entry that performed its startup at
+ * the top level instead of inside `@main`, and `velar fix` over the same
+ * directory printed "applied 0 mechanical fixes; 0 diagnostics remain" and
+ * exited 0. The fixer read the compiler's diagnostic channel, and this rule was
+ * never on it — so the one command an author runs to be told what is wrong
+ * answered that nothing was.
+ *
+ * `fixed` says whether the shape admits a provably equivalent rewrite. It is
+ * deliberately true for exactly one of the four refusals: startup order is the
+ * author's, and a fixer that guessed at it would be wrong silently.
+ */
+const PROJECT_LAYER_FIXTURES: readonly {
+  readonly title: string;
+  readonly files: Readonly<Record<string, string>>;
+  readonly refused: boolean;
+  readonly fixed: boolean;
+}[] = [
+  {
+    title: "the migration shape: one startup statement, at the end of the entry",
+    files: { "src/main.vel": `${COMPONENT}\nmount(<App />, "#app")\n` },
+    refused: true,
+    fixed: true,
+  },
+  {
+    title: "two startup statements, whose order is the author's",
+    files: { "src/main.vel": `${COMPONENT}\nprint("starting")\nmount(<App />, "#app")\n` },
+    refused: true,
+    fixed: false,
+  },
+  {
+    title: "a startup statement with a declaration after it",
+    files: { "src/main.vel": `${COMPONENT}\nmount(<App />, "#app")\n\ndef unused() -> number:\n    return 1\n` },
+    refused: true,
+    fixed: false,
+  },
+  {
+    title: "an entry that performs no startup at all",
+    files: { "src/main.vel": COMPONENT },
+    refused: true,
+    fixed: false,
+  },
+  {
+    title: "a startup statement spread over several lines",
+    files: { "src/main.vel": `${COMPONENT}\nmount(\n    <App />,\n    "#app",\n)\n` },
+    refused: true,
+    fixed: false,
+  },
+  {
+    // The inline `@main: <statement>` body accepts one *non-block* statement,
+    // so wrapping this one where it stands would produce source the compiler
+    // refuses. A rewrite has to leave a tree that still compiles, not merely a
+    // tree that answers the rule it was reaching for.
+    title: "a one-line startup statement that heads a block of its own",
+    files: { "src/main.vel": `${COMPONENT}\nif true: mount(<App />, "#app")\n` },
+    refused: true,
+    fixed: false,
+  },
+  {
+    title: "an entry that already owns its startup",
+    files: { "src/main.vel": `${COMPONENT}\n@main: mount(<App />, "#app")\n` },
+    refused: false,
+    fixed: false,
+  },
+  {
+    title: "a mechanically fixable compiler diagnostic beside a lawful entry",
+    files: {
+      "src/main.vel": `${COMPONENT}\n@main: mount(<App />, "#app")\n`,
+      "src/orphan.vel": "export def one(value: string) -> bool:\n    return value === \"one\"\n",
+    },
+    refused: true,
+    fixed: true,
+  },
+  {
+    title: "a compiler diagnostic no rewrite answers, beside a lawful entry",
+    files: {
+      "src/main.vel": `${COMPONENT}\n@main: mount(<App />, "#app")\n`,
+      "src/orphan.vel": "export def one() -> number:\n    return \"not a number\"\n",
+    },
+    refused: true,
+    fixed: false,
+  },
+];
+
+test("[D101] 'velar fix' reports diagnostics remaining exactly when 'velar check' refuses the tree it leaves", async () => {
+  for (const fixture of PROJECT_LAYER_FIXTURES) {
+    const project = await webProject(fixture.files);
+    try {
+      const before = project.cli("check", ".");
+      assert.equal(before.status !== 0, fixture.refused, `${fixture.title}: check\n${before.stdout}${before.stderr}`);
+
+      const fixed = project.cli("fix", ".");
+      const remaining = remainingDiagnostics(fixed.stdout);
+      assert.notEqual(remaining, -1, `${fixture.title}: fix printed no summary\n${fixed.stdout}${fixed.stderr}`);
+
+      // The agreement, in the only form that means anything: both commands are
+      // asked about the tree as it stands after `fix` has written whatever it
+      // was going to write, and they must give the same verdict about it.
+      const after = project.cli("check", ".");
+      assert.equal(
+        remaining > 0,
+        after.status !== 0,
+        `${fixture.title}: fix reported ${remaining} remaining and check exited ${after.status}\n${fixed.stdout}${after.stderr}`,
+      );
+      // And the exit code carries the same claim the summary line makes, so a
+      // script that reads only the status learns the same thing a reader does.
+      assert.equal(fixed.status !== 0, remaining > 0, `${fixture.title}: fix exit ${fixed.status} with ${remaining} remaining`);
+      assert.equal(after.status === 0, fixture.fixed || !fixture.refused, `${fixture.title}: check after fix exited ${after.status}`);
+    } finally {
+      await rm(project.root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("[D101] the entry migration rewrites the one provable shape and reports the rest verbatim", async () => {
+  const migrated = await webProject({ "src/main.vel": `${COMPONENT}\nmount(<App />, "#app")\n` });
+  try {
+    const fixed = migrated.cli("fix", ".");
+    assert.equal(fixed.status, 0, fixed.stdout + fixed.stderr);
+    assert.match(fixed.stdout, /src\/main\.vel:4:1 fixed application-entry: Move the entry's startup statement into its '@main' region/u);
+    // The region is written where the statement stood, in the inline form the
+    // parser gives the statement semantics of an indented body — so the entry
+    // is the author's own line with a marker in front of it, and nothing else
+    // in the file moved.
+    assert.equal(await readFile(join(migrated.root, "src", "main.vel"), "utf8"), `${COMPONENT}\n@main: mount(<App />, "#app")\n`);
+    // The canonical layout accepts it, which is what makes `fix` then `format`
+    // and `format` then `fix` the same tree.
+    assert.equal(migrated.cli("format", ".", "--check").status, 0);
+    assert.equal(migrated.cli("check", ".").status, 0);
+  } finally {
+    await rm(migrated.root, { recursive: true, force: true });
+  }
+});
+
+test("[D101] a two-statement startup is reported rather than rewritten into a guessed order", async () => {
+  const source = `${COMPONENT}\nprint("starting")\nmount(<App />, "#app")\n`;
+  const project = await webProject({ "src/main.vel": source });
+  try {
+    const fixed = project.cli("fix", ".");
+    assert.equal(fixed.status, 1, fixed.stdout + fixed.stderr);
+    assert.match(fixed.stderr, /Application entry must declare '@main'/u);
+    assert.match(fixed.stdout, /applied 0 mechanical fixes; 1 diagnostic remains/u);
+    // Which statement runs first is visible in the source today. A fixer that
+    // merged the two into one region would be asserting that the order it chose
+    // is the order that was meant, so the file keeps the bytes the author wrote.
+    assert.equal(await readFile(join(project.root, "src", "main.vel"), "utf8"), source);
+  } finally {
+    await rm(project.root, { recursive: true, force: true });
+  }
+});
+
+test("[D101] a library entry's refusal reaches 'velar fix' too, and carries no rewrite", async () => {
+  const root = await mkdtemp(join(tmpdir(), "velar-project-layer-library-"));
+  try {
+    const source = "@main: pass\n";
+    await writeFile(join(root, "velar.json"), JSON.stringify({
+      formatVersion: 2,
+      kind: "library",
+      entry: "src/index.vel",
+      outDir: "dist",
+    }), "utf8");
+    await mkdir(join(root, "src"), { recursive: true });
+    await writeFile(join(root, "src", "index.vel"), source, "utf8");
+    const run = (...commandArguments: readonly string[]) =>
+      spawnSync(process.execPath, [cliPath, ...commandArguments], { cwd: root, encoding: "utf8", timeout: 120_000 });
+
+    assert.equal(run("check", ".").status, 1);
+    const fixed = run("fix", ".");
+    assert.equal(fixed.status, 1, fixed.stdout + fixed.stderr);
+    assert.match(fixed.stderr, /A library entry cannot declare '@main'/u);
+    assert.match(fixed.stdout, /applied 0 mechanical fixes; 1 diagnostic remains/u);
+    // Deleting the region would delete the startup the author wrote, and moving
+    // it needs an application project that does not exist yet.
+    assert.equal(await readFile(join(root, "src", "index.vel"), "utf8"), source);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("[D101] 'velar fix <file>' scopes the project-layer rules out, exactly as 'velar check <file>' does", async () => {
+  const source = `${COMPONENT}\nmount(<App />, "#app")\n`;
+  const project = await webProject({ "src/main.vel": source });
+  try {
+    // A single-file input names its own scope for both commands. Asking a
+    // project-arrangement question about one file would answer it about a
+    // project the author did not name — and would rewrite that file besides.
+    const checked = project.cli("check", "src/main.vel");
+    assert.equal(checked.status, 0, checked.stderr);
+    const fixed = project.cli("fix", "src/main.vel");
+    assert.equal(fixed.status, 0, fixed.stdout + fixed.stderr);
+    assert.match(fixed.stdout, /0 diagnostics remain/u);
+    assert.equal(await readFile(join(project.root, "src", "main.vel"), "utf8"), source);
   } finally {
     await rm(project.root, { recursive: true, force: true });
   }

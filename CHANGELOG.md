@@ -4,6 +4,39 @@ This file records user-visible language, framework, and tooling changes. It is
 not a milestone checklist; the repository test suites and CI are the source of
 truth for acceptance status.
 
+## Unreleased
+
+### Tooling
+
+- `velar fix` can no longer report a clean tree that `velar check` refuses. The
+  rules the CLI enforces about how a *project* is arranged — an application
+  entry must declare `@main`, a library entry must not — are enforced where the
+  project is resolved rather than where a module is compiled, and the fixer read
+  only the compiler's diagnostic channel: a Web project whose startup sat at the
+  top level failed `check` with exit 1 while `fix` over the same directory
+  printed "applied 0 mechanical fixes; 0 diagnostics remain" and exited 0. Both
+  commands now collect those rules from one function, under the same scope
+  rules, so they cannot answer differently about one tree. A rule with no
+  rewrite behind it is reported as the diagnostic it is and counts toward the
+  exit code.
+- `velar fix` performs the `@main` entry migration where it is provable. An
+  entry whose startup is a single non-block statement on one line at the end of
+  the module gets `@main:` written in front of it — the inline body has the
+  statement semantics of an indented one, so the line is carried across verbatim
+  and nothing else in the file moves. Two startup statements, a statement with a
+  declaration after it, a statement spread over several lines, and a one-line
+  statement heading a block of its own each stay a diagnostic: which statement
+  runs first is visible in the source today and a fixer that merged them would
+  be choosing an order rather than preserving one, and the inline body accepts
+  one non-block statement, so wrapping `if ready: start()` would leave source
+  the compiler no longer parses.
+- One file is rewritten once per `velar fix` pass, whatever it is called. A
+  module the author gave a second name — a link inside `src/` pointing at a
+  shared module, a module hard-linked elsewhere in the project — is one file to
+  the filesystem and two roots to the compiler, and the second write was
+  computed from the same snapshot as the first, so it either raced it or
+  reported the same rewrite twice.
+
 ## 0.21.0 — 2026-08-28
 
 ### Desktop applications

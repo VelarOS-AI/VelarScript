@@ -501,6 +501,98 @@ export interface MainBlock {
   readonly span: Span;
 }
 
+/**
+ * The top-level statement forms that declare rather than execute — exactly the
+ * ones a module may keep outside its `@main` region.
+ *
+ * An extension statement is declarative by definition: the framework that owns
+ * `component`, `server` and their kin decides what its own top level means, and
+ * Core cannot read a legal declaration as stray executable code.
+ */
+const MODULE_DECLARATION_STATEMENT_KINDS: ReadonlySet<Statement["kind"]> = new Set<Statement["kind"]>([
+  "ImportDeclaration",
+  "ReExportDeclaration",
+  "ExternModuleDeclaration",
+  "EmbeddedJavaScriptDeclaration",
+  "TypeDeclaration",
+  "TypeAliasDeclaration",
+  "EnumDeclaration",
+  "ClassDeclaration",
+  "VariableDeclaration",
+  "TestDeclaration",
+  "FunctionDeclaration",
+  "MainBlock",
+]);
+
+export function isModuleDeclarationStatement(statement: Statement): boolean {
+  return statement.kind.startsWith("ExtensionStatement:") || MODULE_DECLARATION_STATEMENT_KINDS.has(statement.kind);
+}
+
+/**
+ * Whether the statement heads a suite of its own.
+ *
+ * Three readers need this one answer and had a copy each: the parser, which
+ * refuses a block header as the whole of an inline `header: statement` body;
+ * the formatter, which decides where a compact suite may be kept; and the
+ * application-entry migration, which may only wrap a statement the inline
+ * `@main:` body accepts.
+ */
+export function statementOwnsBlock(statement: Statement): boolean {
+  if (statement.kind.startsWith("ExtensionStatement:")) return true;
+  switch (statement.kind) {
+    case "ExternModuleDeclaration":
+    case "EmbeddedJavaScriptDeclaration":
+    case "TypeDeclaration":
+    case "EnumDeclaration":
+    case "ClassDeclaration":
+    case "TestDeclaration":
+    case "MainBlock":
+    case "FunctionDeclaration":
+    case "IfStatement":
+    case "MatchStatement":
+    case "ForStatement":
+    case "WhileStatement":
+    case "TryStatement":
+      return true;
+    default:
+      return false;
+  }
+}
+
+/**
+ * The module's startup code as it stands at the top level, which is where a
+ * module that has no `@main` region keeps it.
+ *
+ * The parser refuses these statements outright once a `@main` exists, and the
+ * CLI's application-entry contract refuses a *missing* `@main` — the same rule
+ * read from its two ends. This is published so that the second end can tell the
+ * one shape it can migrate mechanically from the shapes it must hand back.
+ */
+export interface ModuleStartupStatement {
+  /** The statement's author span. */
+  readonly span: Span;
+  /** `statementOwnsBlock`, carried so a caller holding no AST can still ask. */
+  readonly opensBlock: boolean;
+}
+
+export interface ModuleStartupCode {
+  /** The top-level statements that are not declarations, in source order. */
+  readonly statements: readonly ModuleStartupStatement[];
+  /** True when the last of them is the module's final top-level statement — nothing declared follows it. */
+  readonly trailing: boolean;
+}
+
+export function moduleStartupCode(program: Program): ModuleStartupCode {
+  const statements: ModuleStartupStatement[] = [];
+  let last = -1;
+  for (const [index, statement] of program.body.entries()) {
+    if (isModuleDeclarationStatement(statement)) continue;
+    statements.push({ span: statement.span, opensBlock: statementOwnsBlock(statement) });
+    last = index;
+  }
+  return { statements, trailing: last >= 0 && last === program.body.length - 1 };
+}
+
 /** The generated function name a `test "name":` block emits and the runner calls. */
 export function testFunctionName(statement: TestDeclaration): string {
   return `__velarTest${statement.span.start}`;

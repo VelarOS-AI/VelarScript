@@ -49,6 +49,7 @@ import type {
   UsingDeclaration,
   VariableDeclaration,
 } from "./ast.ts";
+import { isModuleDeclarationStatement, statementOwnsBlock } from "./ast.ts";
 import { CORE_COMPILER_CONTEXTUAL_NAMES, CORE_STATEMENT_HEAD_KEYWORDS, CORE_WORDS, TYPE_PARAMETER_DECLARATION_FORMS, typeParameterDeclarationFormsPhrase } from "./core-vocabulary.ts";
 import { diagnostic, mechanicalEdits, mechanicalFix, recoveredDiagnostic, type Advisory, type Diagnostic, type DiagnosticFix } from "./diagnostic.ts";
 import { inspectEmbeddedJavaScript, isEmbeddedJavaScriptTokenPayload } from "./embedded-javascript.ts";
@@ -716,24 +717,11 @@ export class Parser {
     }
 
     if (mainIndexes.length === 0) return;
-    const declarationKinds = new Set<Statement["kind"]>([
-      "ImportDeclaration",
-      "ReExportDeclaration",
-      "ExternModuleDeclaration",
-      "EmbeddedJavaScriptDeclaration",
-      "TypeDeclaration",
-      "TypeAliasDeclaration",
-      "EnumDeclaration",
-      "ClassDeclaration",
-      "VariableDeclaration",
-      "TestDeclaration",
-      "FunctionDeclaration",
-      "MainBlock",
-    ]);
     for (const statement of body) {
       // 扩展语句由拥有它的框架定义其声明性质；Core 不能把 component、server
-      // 等合法顶层声明误判成散落执行代码。
-      if (statement.kind.startsWith("ExtensionStatement:") || declarationKinds.has(statement.kind)) continue;
+      // 等合法顶层声明误判成散落执行代码。这份分类由 `ast.ts` 拥有，因为读它的
+      // 不只有这里：缺少 `@main` 的入口要靠同一份分类判断哪些语句是启动代码。
+      if (isModuleDeclarationStatement(statement)) continue;
       this.diagnostics.push(diagnostic(
         "VEL2022",
         "Executable module code must be placed inside the module's '@main' region",
@@ -2289,27 +2277,6 @@ export class Parser {
   }
 
   /** Core declarations and control-flow forms whose syntax owns a body. */
-  private statementOwnsBlock(statement: Statement): boolean {
-    if (statement.kind.startsWith("ExtensionStatement:")) return true;
-    switch (statement.kind) {
-      case "ExternModuleDeclaration":
-      case "EmbeddedJavaScriptDeclaration":
-      case "TypeDeclaration":
-      case "EnumDeclaration":
-      case "ClassDeclaration":
-      case "TestDeclaration":
-      case "MainBlock":
-      case "FunctionDeclaration":
-      case "IfStatement":
-      case "MatchStatement":
-      case "ForStatement":
-      case "WhileStatement":
-      case "TryStatement":
-        return true;
-      default:
-        return false;
-    }
-  }
 
   private parseMatch(start: number): MatchStatement {
     const value = this.parseExpression();
@@ -2567,7 +2534,7 @@ export class Parser {
         this.synchronize();
         return [];
       }
-      if (this.statementOwnsBlock(statement)) {
+      if (statementOwnsBlock(statement)) {
         this.diagnostics.push(diagnostic(
           "VEL2001",
           "An inline suite accepts one non-block statement; move this block header to the next indented line",
