@@ -4,6 +4,16 @@ This file records user-visible language, framework, and tooling changes. It is
 not a milestone checklist; the repository test suites and CI are the source of
 truth for acceptance status.
 
+## 0.23.1 — 2026-08-28
+
+### Application structure intelligence
+
+- Static module cycles now produce the non-blocking project advisory `VEL6010`
+  on every participating import. Safe function and type cycles remain
+  executable, while language servers, editor Problems views, and structure
+  visualizations receive one compiler-owned architectural warning that clears
+  immediately when an incremental edit breaks the cycle.
+
 ## 0.23.0 — 2026-08-28
 
 ### Web applications
