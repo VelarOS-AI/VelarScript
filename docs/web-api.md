@@ -482,6 +482,20 @@ table: a rejected value gets the nearest spelling when it is a near miss, the
 whole set written out when the set is small, and a description of what the set
 holds when it is not.
 
+A shorthand and a longhand it writes cannot share one scope. A Look entry lowers
+to its own single-declaration rule, and the stylesheet orders those rules by
+where each property first appears in the module rather than by the block that
+wrote them, so `padding = spacing(8px)` beside `paddingTop = 0px` has no winner
+the block chose — a Look elsewhere in the module decides it. The pair is
+refused, and the refusal names the shorthand's longhands to write instead. The
+same holds for the `look:` directives on one element; `style:` directives are
+exempt, because they compose one inline style object where the browser's own
+source order settles it. `font` is not in the table at all, for the reason its
+row in the excluded list gives: its value is free text nothing checks, and a
+value that is not a legal `font` shorthand resets all seven of its longhands at
+computed-value time — including the ones written beside it. Write `fontSize`,
+`fontFamily`, `fontWeight`, `lineHeight` and their siblings, which are checked.
+
 The three properties whose CSS grammar is `<position>` — `backgroundPosition`,
 `transformOrigin`, and `objectPosition` — are one kind reading one table, so
 each takes a length, a percentage, or any of the twenty-two placement values:
@@ -540,12 +554,15 @@ native animation. The charter's appendix to section 17 defines the stop grammar
 and every `animate` option.
 
 A stop reuses the Look value checker, so a design token holds its meaning inside
-an animation: a `const` bound to a builder result, a unit token, a number, or a
-keyword string reads in a stop exactly as it reads on a property, whether it was
-declared in this module or imported from a theme module, and a builder call in a
-stop may use named arguments. What a stop still needs is a value the compiler
-can resolve while it compiles — a stop becomes a real `@keyframes` rule, so a
-value that depends on run time, reactive state included, is rejected.
+an animation: a `const` bound to a builder result, a unit token, a number, a
+keyword string, or a `token("--name")` reference reads in a stop exactly as it
+reads on a property, whether it was declared in this module or imported from a
+theme module, and a builder call in a stop may use named arguments. What a stop
+still needs is a value the compiler can resolve while it compiles — a stop
+becomes a real `@keyframes` rule, so a value that depends on run time, reactive
+state included, is rejected. A `token()` reference is resolvable in that sense
+even though the compiler cannot see the value behind the name: what it lowers to
+is `var(--name)`, which is stylesheet text like any other.
 
 ```velar
 import {Color, Length, animate, rgb, shadow} from "velar/look"
@@ -1658,10 +1675,15 @@ React-style effect API.
   a `() -> null` cleanup, and `IntersectionObserver` construction, `observe`,
   `disconnect`, and both entry getters are captured when the module
   initializes.
-- `copyText` and `readClipboardText` require a secure context and may reject
-  when browser permission or user-gesture policy denies access. Each operation
-  snapshots the secure-context and native clipboard host once, then uses the
-  captured platform method rather than a replaceable instance method.
+- `readClipboardText()` and `writeClipboardText(text)` are the system clipboard,
+  and they are the whole of it: a copy button calls `writeClipboardText`. Both
+  require a secure context and may reject when browser permission or
+  user-gesture policy denies access — a write is reliably permitted from inside
+  a user gesture such as a click handler, and a read prompts or is refused
+  outright depending on the engine, so a paste path should prefer the
+  `on:paste` event boundary below. Each operation snapshots the secure-context
+  and native clipboard host once, then uses the captured platform method rather
+  than a replaceable instance method.
 - `clipboardText(event)` and `setClipboardText(event,text)` are the synchronous
   copy/cut/paste event boundary. They require a native `ClipboardEvent`, use only
   `text/plain`, cap text at 16 MiB, and call captured DataTransfer operations.

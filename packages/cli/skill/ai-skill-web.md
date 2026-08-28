@@ -196,6 +196,16 @@ defines it. Do not write `var(--name)` as a string and do not wrap it in
 migrates them. `animation` is the exception: motion is a `keyframes:` value
 passed to `animate(...)`, never a token.
 
+Do not write a CSS shorthand beside a longhand it writes — `padding` with
+`paddingTop`, `border` with `borderColor`, `background` with `backgroundColor`.
+Each Look entry becomes its own CSS rule and the stylesheet orders them
+module-wide, so the block's own order does not decide which survives; the pair
+is refused, and the refusal names the longhands to write instead. There is no
+`font` property: it is a shorthand whose value nothing can check, and a value
+that is not a legal `font` shorthand silently resets `fontSize`, `fontFamily`,
+`fontWeight` and `lineHeight` along with it. Write the longhands, and put a
+size token in `fontSize = token("--ui-font-size-body")`.
+
 A `look` written on a component invocation composes after the look the
 component applies to its own host, per property and per condition: declare a
 property unconditionally to override the component's outright, and declare it

@@ -218,7 +218,11 @@ export const LOOK_PROPERTY_GROUPS: readonly LookPropertyGroup[] = Object.freeze(
   { family: "background", properties: ["background", "backgroundColor", "backgroundImage", "backgroundPosition", "backgroundSize", "backgroundRepeat", "backgroundAttachment", "backgroundClip", "backgroundOrigin", "backgroundBlendMode"] },
   { family: "border and outline", properties: ["border", "borderWidth", "borderStyle", "borderColor", "borderTop", "borderRight", "borderBottom", "borderLeft", "borderTopWidth", "borderRightWidth", "borderBottomWidth", "borderLeftWidth", "borderTopStyle", "borderRightStyle", "borderBottomStyle", "borderLeftStyle", "borderTopColor", "borderRightColor", "borderBottomColor", "borderLeftColor", "borderRadius", "borderTopLeftRadius", "borderTopRightRadius", "borderBottomRightRadius", "borderBottomLeftRadius", "outline", "outlineWidth", "outlineStyle", "outlineColor", "outlineOffset"] },
   { family: "effects", properties: ["boxShadow", "textShadow", "opacity", "filter", "backdropFilter", "content"] },
-  { family: "typography and international text", properties: ["color", "font", "fontFamily", "fontSize", "fontWeight", "fontStyle", "fontStretch", "fontVariant", "fontKerning", "fontOpticalSizing", "fontFeatureSettings", "fontVariationSettings", "lineHeight", "letterSpacing", "wordSpacing", "textAlign", "textIndent", "textDecoration", "textDecorationColor", "textDecorationLine", "textDecorationStyle", "textDecorationThickness", "textUnderlineOffset", "textUnderlinePosition", "textTransform", "textRendering", "whiteSpace", "textOverflow", "textWrap", "overflowWrap", "wordBreak", "hyphens", "tabSize", "writingMode", "textOrientation", "direction", "unicodeBidi"] },
+  // D104: `font` is not here. It is the one shorthand whose whole value space
+  // this family already publishes as checked longhands, and see
+  // LOOK_EXCLUDED_PROPERTIES for why publishing it beside them was worse than
+  // publishing nothing.
+  { family: "typography and international text", properties: ["color", "fontFamily", "fontSize", "fontWeight", "fontStyle", "fontStretch", "fontVariant", "fontKerning", "fontOpticalSizing", "fontFeatureSettings", "fontVariationSettings", "lineHeight", "verticalAlign", "letterSpacing", "wordSpacing", "textAlign", "textIndent", "textDecoration", "textDecorationColor", "textDecorationLine", "textDecorationStyle", "textDecorationThickness", "textUnderlineOffset", "textUnderlinePosition", "textTransform", "textRendering", "whiteSpace", "textOverflow", "textWrap", "overflowWrap", "wordBreak", "hyphens", "tabSize", "writingMode", "textOrientation", "direction", "unicodeBidi"] },
   { family: "lists", properties: ["listStyle", "listStyleType", "listStylePosition", "listStyleImage"] },
   { family: "SVG paint", properties: ["fill", "stroke", "strokeWidth", "strokeLinecap", "strokeLinejoin", "strokeDasharray", "strokeDashoffset"] },
   { family: "transform and transition", properties: ["translate", "scale", "rotate", "transform", "transformOrigin", "transition", "transitionProperty", "transitionDuration", "transitionDelay", "transitionTimingFunction", "animation"] },
@@ -242,11 +246,11 @@ const propertyKinds: readonly (readonly [LookPropertyValueKind, readonly string[
   ["filter", ["filter", "backdropFilter"]],
   ["image", ["backgroundImage", "listStyleImage"]],
   ["line-height", ["lineHeight"]],
-  ["metric", ["gap", "rowGap", "columnGap", "width", "height", "minWidth", "maxWidth", "minHeight", "maxHeight", "inlineSize", "blockSize", "minInlineSize", "maxInlineSize", "minBlockSize", "maxBlockSize", "inset", "top", "right", "bottom", "left", "insetInline", "insetBlock", "insetInlineStart", "insetInlineEnd", "insetBlockStart", "insetBlockEnd", "padding", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "paddingInline", "paddingBlock", "paddingInlineStart", "paddingInlineEnd", "paddingBlockStart", "paddingBlockEnd", "margin", "marginTop", "marginRight", "marginBottom", "marginLeft", "marginInline", "marginBlock", "marginInlineStart", "marginInlineEnd", "marginBlockStart", "marginBlockEnd", "flexBasis", "borderWidth", "borderTopWidth", "borderRightWidth", "borderBottomWidth", "borderLeftWidth", "borderRadius", "borderTopLeftRadius", "borderTopRightRadius", "borderBottomRightRadius", "borderBottomLeftRadius", "outlineWidth", "outlineOffset", "fontSize", "letterSpacing", "wordSpacing", "textIndent", "textDecorationThickness", "textUnderlineOffset", "strokeWidth", "strokeDashoffset", "scrollMargin", "scrollMarginTop", "scrollMarginRight", "scrollMarginBottom", "scrollMarginLeft", "scrollPadding", "scrollPaddingTop", "scrollPaddingRight", "scrollPaddingBottom", "scrollPaddingLeft", "translate", "transformOrigin", "backgroundPosition", "objectPosition", "backgroundSize"]],
+  ["metric", ["gap", "rowGap", "columnGap", "width", "height", "minWidth", "maxWidth", "minHeight", "maxHeight", "inlineSize", "blockSize", "minInlineSize", "maxInlineSize", "minBlockSize", "maxBlockSize", "inset", "top", "right", "bottom", "left", "insetInline", "insetBlock", "insetInlineStart", "insetInlineEnd", "insetBlockStart", "insetBlockEnd", "padding", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "paddingInline", "paddingBlock", "paddingInlineStart", "paddingInlineEnd", "paddingBlockStart", "paddingBlockEnd", "margin", "marginTop", "marginRight", "marginBottom", "marginLeft", "marginInline", "marginBlock", "marginInlineStart", "marginInlineEnd", "marginBlockStart", "marginBlockEnd", "flexBasis", "borderWidth", "borderTopWidth", "borderRightWidth", "borderBottomWidth", "borderLeftWidth", "borderRadius", "borderTopLeftRadius", "borderTopRightRadius", "borderBottomRightRadius", "borderBottomLeftRadius", "outlineWidth", "outlineOffset", "fontSize", "verticalAlign", "letterSpacing", "wordSpacing", "textIndent", "textDecorationThickness", "textUnderlineOffset", "strokeWidth", "strokeDashoffset", "scrollMargin", "scrollMarginTop", "scrollMarginRight", "scrollMarginBottom", "scrollMarginLeft", "scrollPadding", "scrollPaddingTop", "scrollPaddingRight", "scrollPaddingBottom", "scrollPaddingLeft", "translate", "transformOrigin", "backgroundPosition", "objectPosition", "backgroundSize"]],
   ["number", ["opacity", "zIndex", "flexGrow", "flexShrink", "order", "tabSize"]],
   ["number-keyword", ["fontWeight", "aspectRatio", "scale", "flex"]],
   ["shadow", ["boxShadow", "textShadow"]],
-  ["text", ["content", "font", "fontFamily", "fontFeatureSettings", "fontVariationSettings", "gridTemplateAreas", "gridColumn", "gridColumnStart", "gridColumnEnd", "gridRow", "gridRowStart", "gridRowEnd", "gridArea", "clip", "clipPath", "strokeDasharray", "scrollbarColor"]],
+  ["text", ["content", "fontFamily", "fontFeatureSettings", "fontVariationSettings", "gridTemplateAreas", "gridColumn", "gridColumnStart", "gridColumnEnd", "gridRow", "gridRowStart", "gridRowEnd", "gridArea", "clip", "clipPath", "strokeDasharray", "scrollbarColor"]],
   ["track", ["gridTemplateColumns", "gridTemplateRows", "gridAutoColumns", "gridAutoRows"]],
   ["transform", ["transform"]],
   ["transition", ["transition"]],
@@ -457,6 +461,16 @@ export const LOOK_PROPERTY_KEYWORDS: ReadonlyMap<string, ReadonlySet<string>> = 
   ["backgroundAttachment", keywords("scroll", "fixed", "local")],
   ["backgroundClip", keywords("border-box", "padding-box", "content-box", "text")],
   ["backgroundOrigin", keywords("border-box", "padding-box", "content-box")],
+  // D104 rule 3: the property an inline badge sits on. It is `metric` because
+  // its non-keyword half is a length or a percentage of the line height, and it
+  // carries its own table for the same reason `backgroundSize` does — the
+  // shared sizing words are not its vocabulary. CSS 2.1 §10.8.1 is the whole
+  // set, and nothing is recorded as left out: CSS Inline Layout 3's `first` and
+  // `last` baseline sources are unimplemented everywhere, and a `metric`
+  // property records no partial exclusion for the reason D67 rule 172 revoked
+  // `objectPosition`'s — the lengths are the unit half of the kind rather than
+  // a value space to record.
+  ["verticalAlign", keywords("baseline", "sub", "super", "text-top", "text-bottom", "middle", "top", "bottom")],
   ["fontStyle", keywords("normal", "italic", "oblique")],
   ["fontKerning", keywords("auto", "normal", "none")],
   ["fontOpticalSizing", keywords("auto", "none")],
@@ -727,6 +741,18 @@ for (const [property] of LOOK_PARTIAL_KEYWORD_PROPERTIES) {
 
 /** Real CSS properties deliberately outside the checked Look domain. */
 export const LOOK_EXCLUDED_PROPERTIES: ReadonlyMap<string, string> = new Map([
+  // D104 rule 1. `font` was a published `text` property, so `font =
+  // token("--ui-font-body")` type-checked, emitted `font:var(--…)`, and — when
+  // the token held a size and no family — was invalid at computed-value time,
+  // which resets every longhand the shorthand owns rather than dropping one
+  // declaration. Look emits one rule per property, so that reset reached the
+  // font-weight, font-family and line-height written three lines above it: a
+  // consumer carried thirty-six such declarations, none of them live and none
+  // of them diagnosed. Nothing in the value was checkable, because free text is
+  // what the kind accepted; and nothing needed to be, because this family
+  // publishes every part of the shorthand as a checked longhand. That is the
+  // surface D50 rule 92 calls worse than publishing nothing.
+  ["font", "the font shorthand is owned by its longhands — fontStyle, fontVariant, fontWeight, fontStretch, fontSize, lineHeight and fontFamily — because a shorthand's value is free text no compile can check, and a value that is not a legal shorthand fails at computed-value time and resets all seven, including the ones written beside it. A design token carrying a size belongs in fontSize"],
   ["float", "legacy float layout is outside the Grid and Flex layout model"],
   ["clear", "legacy float clearing is outside the Grid and Flex layout model"],
   ...["tableLayout", "borderCollapse", "borderSpacing", "captionSide", "emptyCells"].map((name) => [name, "table formatting properties remain excluded until a typed table-layout contract has evidence"] as const),
@@ -738,6 +764,127 @@ export const LOOK_EXCLUDED_PROPERTIES: ReadonlyMap<string, string> = new Map([
 
 export function cssPropertyName(name: string): string {
   return name.replace(/[A-Z]/gu, (character) => `-${character.toLowerCase()}`);
+}
+
+// ── D104 rule 2: which Look properties write the same CSS declaration ─────────
+// A Look block reads like a rule, and it is not one. Every entry lowers to its
+// own single-declaration rule at equal specificity — `[data-velar-look~="base:
+// padding"]{padding:var(--…)}` — and those rules are sorted by condition rank
+// first and by *first appearance anywhere in the module* second. So between two
+// entries of equal rank the stylesheet's winner is decided by unrelated code:
+// a look earlier in the file that happened to mention `paddingTop` puts
+// `padding-top` ahead of `padding` for every look in the module, and a block
+// that writes `padding` and then `paddingTop` gets the opposite of what it
+// reads like. The order LOK-U8 pinned for conditions was never available
+// between a shorthand and a longhand it writes.
+//
+// CSS resolves this with source order. Look cannot, because the rule for a
+// property is shared by every look that uses it, so there is no per-block order
+// to honour. That leaves one honest answer: two entries in one scope that write
+// the same CSS longhand have no winner the author chose, which is exactly the
+// defect VEL5039 already refuses when the two entries have the same name. This
+// table is what makes the wider case decidable.
+//
+// Only *direct* containment is written; the closure below derives the rest, so
+// `border` reaching `borderTopWidth` through `borderWidth` is not a third place
+// to keep in step (D57 rule 134). Logical and physical boxes stay separate
+// families: CSS cascades `inset-inline-start` and `left` independently, and
+// pretending otherwise would refuse a pair the browser resolves by writing
+// mode.
+const lookDirectShorthands: readonly (readonly [string, readonly string[]])[] = [
+  ["overflow", ["overflowX", "overflowY"]],
+  ["overscrollBehavior", ["overscrollBehaviorX", "overscrollBehaviorY"]],
+  ["flex", ["flexGrow", "flexShrink", "flexBasis"]],
+  ["gap", ["rowGap", "columnGap"]],
+  ["placeItems", ["alignItems", "justifyItems"]],
+  ["placeContent", ["alignContent", "justifyContent"]],
+  ["placeSelf", ["alignSelf", "justifySelf"]],
+  ["inset", ["top", "right", "bottom", "left"]],
+  ["insetInline", ["insetInlineStart", "insetInlineEnd"]],
+  ["insetBlock", ["insetBlockStart", "insetBlockEnd"]],
+  ["padding", ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"]],
+  ["paddingInline", ["paddingInlineStart", "paddingInlineEnd"]],
+  ["paddingBlock", ["paddingBlockStart", "paddingBlockEnd"]],
+  ["margin", ["marginTop", "marginRight", "marginBottom", "marginLeft"]],
+  ["marginInline", ["marginInlineStart", "marginInlineEnd"]],
+  ["marginBlock", ["marginBlockStart", "marginBlockEnd"]],
+  ["scrollMargin", ["scrollMarginTop", "scrollMarginRight", "scrollMarginBottom", "scrollMarginLeft"]],
+  ["scrollPadding", ["scrollPaddingTop", "scrollPaddingRight", "scrollPaddingBottom", "scrollPaddingLeft"]],
+  ["background", ["backgroundColor", "backgroundImage", "backgroundPosition", "backgroundSize", "backgroundRepeat", "backgroundAttachment", "backgroundOrigin", "backgroundClip"]],
+  ["border", ["borderWidth", "borderStyle", "borderColor", "borderTop", "borderRight", "borderBottom", "borderLeft"]],
+  ["borderWidth", ["borderTopWidth", "borderRightWidth", "borderBottomWidth", "borderLeftWidth"]],
+  ["borderStyle", ["borderTopStyle", "borderRightStyle", "borderBottomStyle", "borderLeftStyle"]],
+  ["borderColor", ["borderTopColor", "borderRightColor", "borderBottomColor", "borderLeftColor"]],
+  ["borderTop", ["borderTopWidth", "borderTopStyle", "borderTopColor"]],
+  ["borderRight", ["borderRightWidth", "borderRightStyle", "borderRightColor"]],
+  ["borderBottom", ["borderBottomWidth", "borderBottomStyle", "borderBottomColor"]],
+  ["borderLeft", ["borderLeftWidth", "borderLeftStyle", "borderLeftColor"]],
+  // `outline` writes the three parts and leaves outlineOffset alone.
+  ["outline", ["outlineWidth", "outlineStyle", "outlineColor"]],
+  ["borderRadius", ["borderTopLeftRadius", "borderTopRightRadius", "borderBottomRightRadius", "borderBottomLeftRadius"]],
+  ["textDecoration", ["textDecorationLine", "textDecorationStyle", "textDecorationColor", "textDecorationThickness"]],
+  ["listStyle", ["listStyleType", "listStylePosition", "listStyleImage"]],
+  ["transition", ["transitionProperty", "transitionDuration", "transitionTimingFunction", "transitionDelay"]],
+  ["gridColumn", ["gridColumnStart", "gridColumnEnd"]],
+  ["gridRow", ["gridRowStart", "gridRowEnd"]],
+  ["gridArea", ["gridRow", "gridColumn"]],
+];
+
+function lookShorthandClosure(): ReadonlyMap<string, ReadonlySet<string>> {
+  const direct = new Map(lookDirectShorthands.map(([shorthand, longhands]) => [shorthand, longhands] as const));
+  const closed = new Map<string, ReadonlySet<string>>();
+  const expand = (shorthand: string, seen: ReadonlySet<string>): ReadonlySet<string> => {
+    const cached = closed.get(shorthand);
+    if (cached) return cached;
+    if (seen.has(shorthand)) throw new Error(`Look shorthand '${shorthand}' contains itself`);
+    const inner = new Set([...seen, shorthand]);
+    const reached = new Set<string>();
+    for (const longhand of direct.get(shorthand) ?? []) {
+      reached.add(longhand);
+      if (direct.has(longhand)) for (const nested of expand(longhand, inner)) reached.add(nested);
+    }
+    closed.set(shorthand, reached);
+    return reached;
+  };
+  for (const [shorthand] of direct) expand(shorthand, new Set());
+  return closed;
+}
+
+/**
+ * Every Look property a shorthand writes, transitively. `border` reaches all
+ * twelve side parts through the three per-side shorthands, so a block that
+ * writes `border` and `borderTopColor` is caught by the same lookup as one that
+ * writes `border` and `borderWidth`.
+ */
+export const LOOK_SHORTHAND_LONGHANDS: ReadonlyMap<string, ReadonlySet<string>> = lookShorthandClosure();
+
+for (const [shorthand, longhands] of LOOK_SHORTHAND_LONGHANDS) {
+  if (!LOOK_PROPERTIES.has(shorthand)) throw new Error(`Look shorthand '${shorthand}' is not a published Look property`);
+  for (const longhand of longhands) {
+    if (!LOOK_PROPERTIES.has(longhand)) throw new Error(`Look shorthand '${shorthand}' names '${longhand}', which is not a published Look property`);
+  }
+}
+
+/**
+ * The two properties' overlap, when one writes what the other does — the
+ * shorthand first. Null when the two are independent declarations, which is
+ * every pair the browser resolves on its own.
+ */
+export function lookShorthandOverlap(left: string, right: string): { readonly shorthand: string; readonly longhand: string } | null {
+  if (LOOK_SHORTHAND_LONGHANDS.get(left)?.has(right) === true) return { shorthand: left, longhand: right };
+  if (LOOK_SHORTHAND_LONGHANDS.get(right)?.has(left) === true) return { shorthand: right, longhand: left };
+  return null;
+}
+
+/**
+ * What a refusal offers instead of the pair: the shorthand's own longhands, so
+ * the author can write the one they meant to override beside its siblings. The
+ * list is the direct level rather than the closure — `border` answers with
+ * borderWidth, borderStyle and borderColor rather than with all twelve side
+ * parts, because that is the level a reader replaces it at.
+ */
+export function lookShorthandParts(shorthand: string): readonly string[] {
+  return lookDirectShorthands.find(([name]) => name === shorthand)?.[1] ?? [];
 }
 
 function nameDistance(left: string, right: string): number {

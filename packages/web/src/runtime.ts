@@ -3215,8 +3215,8 @@ function clipboard() {
   return value;
 }
 
-export async function copyText(value) { value = browserText(value, "Clipboard text", 16 * 1024 * 1024); await __velarBrowserCallCaptured(__velarBrowserClipboardWrite, clipboard(), [value], "Clipboard.writeText"); return null; }
 export async function readClipboardText() { return browserText(await __velarBrowserCallCaptured(__velarBrowserClipboardRead, clipboard(), [], "Clipboard.readText"), "Clipboard text", 16 * 1024 * 1024); }
+export async function writeClipboardText(value) { value = browserText(value, "Clipboard text", 16 * 1024 * 1024); await __velarBrowserCallCaptured(__velarBrowserClipboardWrite, clipboard(), [value], "Clipboard.writeText"); return null; }
 export function open(url, target = "_blank") { url = browserText(url, "Browser URL", 2 * 1024 * 1024); target = browserText(target, "Browser target", 256); __velarBrowserCallCaptured(__velarBrowserOpen, __velarBrowserWindow, [url, target, target === "_blank" ? "noopener,noreferrer" : undefined], "open"); return null; }
 export function scrollTo(x, y, behavior = "auto") { __velarBrowserCallCaptured(__velarBrowserScrollTo, __velarBrowserWindow, [{ left: browserNumber(x, "Scroll x"), top: browserNumber(y, "Scroll y"), behavior: scrollBehavior(behavior) }], "scrollTo"); return null; }
 export function scrollIntoView(element, behavior = "smooth") { element = requireElement(element); __velarBrowserCallCaptured(__velarBrowserElementScrollIntoView, element, [{ behavior: scrollBehavior(behavior), block: "nearest" }], "Element.scrollIntoView"); return null; }

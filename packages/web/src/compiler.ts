@@ -741,8 +741,15 @@ export const webModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map
     ["after", namedFunction(["duration", "callback"], [durationType, functionType([], unknownType)], cleanupType)],
     ["location", namedFunction([], [], browserLocationType)],
     ["environment", namedFunction([], [], browserEnvironmentType)],
-    ["copyText", namedFunction(["value"], [stringType], promise(nullType))],
+    // D104 rule 4: the two halves of the system clipboard read as a pair. The
+    // write used to be `copyText`, and a consumer surveying this table for a
+    // "copy this answer" button found `readClipboardText`, `clipboardText` and
+    // `setClipboardText` — a read and an event pair — and concluded the module
+    // could not write. The capability was there under a name that did not
+    // answer the question being asked, which is the same defect as a missing
+    // capability from where the author is standing.
     ["readClipboardText", namedFunction([], [], promise(stringType))],
+    ["writeClipboardText", namedFunction(["value"], [stringType], promise(nullType))],
     ["open", namedFunction(["url", "target"], [stringType, stringType], nullType, 1)],
     ["scrollTo", namedFunction(["x", "y", "behavior"], [numberType, numberType, stringType], nullType, 2)],
     ["scrollIntoView", namedFunction(["element", "behavior"], [webElementType, stringType], nullType, 1)],

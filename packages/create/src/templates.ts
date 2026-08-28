@@ -483,9 +483,9 @@ const AGENT_TARGET_BOUNDARIES: Readonly<Record<AgentGuideTarget, string>> = Obje
 
 const AGENT_TARGET_ESCAPE_HATCHES: Readonly<Record<AgentGuideTarget, string>> = Object.freeze({
   core: "",
-  web: " Explicit `import css unsafe \"./file.css\" before|after look` and `unsafe:html` cover unsupported styling and trusted markup.",
+  web: " A design system's CSS custom property is read inside Look with `token(\"--name\")` from `velar/look`, legal in every Look property; explicit `import css unsafe \"./file.css\" before|after look` and `unsafe:html` cover what Look does not express and trusted markup.",
   node: "",
-  desktop: " Explicit `import css unsafe \"./file.css\" before|after look` and `unsafe:html` cover unsupported renderer styling and trusted markup.",
+  desktop: " A design system's CSS custom property is read inside Look with `token(\"--name\")` from `velar/look`, legal in every Look property; explicit `import css unsafe \"./file.css\" before|after look` and `unsafe:html` cover what Look does not express and trusted markup.",
 });
 
 function agentsGuide(target: AgentGuideTarget): string {

@@ -137,6 +137,11 @@ const FLOORS = Object.freeze({
   // statement form from the language is what may lower this; an extension that
   // stops publishing `syntax` fails on its own terms above.
   "statement-construct": 38,
+  // Still 225: D104 rule 1 moved the `font` shorthand into
+  // LOOK_EXCLUDED_PROPERTIES, where the exemption below withholds it, and rule
+  // 3 published `verticalAlign` in its place. A floor that shrinks is a
+  // deliberate act, which is why the subtraction is acknowledged here even
+  // though the number did not move.
   "look-property": 225,
   "look-hook": 9,
   "look-target": 7,

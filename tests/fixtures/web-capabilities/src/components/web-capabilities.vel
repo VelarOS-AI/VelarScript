@@ -1,4 +1,4 @@
-import {after, copyText, environment, every, frame, location, measure, media, watchMedia, watchOnline, watchVisibility} from "velar/browser"
+import {after, writeClipboardText, environment, every, frame, location, measure, media, watchMedia, watchOnline, watchVisibility} from "velar/browser"
 import {download, pick, readText} from "velar/files"
 import {database, session} from "velar/storage"
 import {iso, now} from "velar/time"
@@ -238,7 +238,7 @@ export component WebCapabilities:
             uploadLabel = f"{uploaded.label}:{uploaded.fileName}:{uploaded.size}"
 
     action copyStatus():
-        await copyText("VelarScript Web API 0.11")
+        await writeClipboardText("VelarScript Web API 0.11")
         clipboardLabel = "Copied"
 
     def saveStatus(): download("velar-status.txt", f"{sessionLabel}/{databaseLabel}")

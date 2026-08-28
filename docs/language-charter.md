@@ -5082,7 +5082,7 @@ string type.
 | Background | `background`, `backgroundColor`, `backgroundImage`, `backgroundPosition`, `backgroundSize`, `backgroundRepeat`, `backgroundAttachment`, `backgroundClip`, `backgroundOrigin`, `backgroundBlendMode` |
 | Border and outline | `border`, `borderWidth`, `borderStyle`, `borderColor`, `borderTop`, `borderRight`, `borderBottom`, `borderLeft`, `borderTopWidth`, `borderRightWidth`, `borderBottomWidth`, `borderLeftWidth`, `borderTopStyle`, `borderRightStyle`, `borderBottomStyle`, `borderLeftStyle`, `borderTopColor`, `borderRightColor`, `borderBottomColor`, `borderLeftColor`, `borderRadius`, `borderTopLeftRadius`, `borderTopRightRadius`, `borderBottomRightRadius`, `borderBottomLeftRadius`, `outline`, `outlineWidth`, `outlineStyle`, `outlineColor`, `outlineOffset` |
 | Effects | `boxShadow`, `textShadow`, `opacity`, `filter`, `backdropFilter`, `content` |
-| Typography and international text | `color`, `font`, `fontFamily`, `fontSize`, `fontWeight`, `fontStyle`, `fontStretch`, `fontVariant`, `fontKerning`, `fontOpticalSizing`, `fontFeatureSettings`, `fontVariationSettings`, `lineHeight`, `letterSpacing`, `wordSpacing`, `textAlign`, `textIndent`, `textDecoration`, `textDecorationColor`, `textDecorationLine`, `textDecorationStyle`, `textDecorationThickness`, `textUnderlineOffset`, `textUnderlinePosition`, `textTransform`, `textRendering`, `whiteSpace`, `textOverflow`, `textWrap`, `overflowWrap`, `wordBreak`, `hyphens`, `tabSize`, `writingMode`, `textOrientation`, `direction`, `unicodeBidi` |
+| Typography and international text | `color`, `fontFamily`, `fontSize`, `fontWeight`, `fontStyle`, `fontStretch`, `fontVariant`, `fontKerning`, `fontOpticalSizing`, `fontFeatureSettings`, `fontVariationSettings`, `lineHeight`, `verticalAlign`, `letterSpacing`, `wordSpacing`, `textAlign`, `textIndent`, `textDecoration`, `textDecorationColor`, `textDecorationLine`, `textDecorationStyle`, `textDecorationThickness`, `textUnderlineOffset`, `textUnderlinePosition`, `textTransform`, `textRendering`, `whiteSpace`, `textOverflow`, `textWrap`, `overflowWrap`, `wordBreak`, `hyphens`, `tabSize`, `writingMode`, `textOrientation`, `direction`, `unicodeBidi` |
 | Lists | `listStyle`, `listStyleType`, `listStylePosition`, `listStyleImage` |
 | SVG paint | `fill`, `stroke`, `strokeWidth`, `strokeLinecap`, `strokeLinejoin`, `strokeDasharray`, `strokeDashoffset` |
 | Transform and transition | `translate`, `scale`, `rotate`, `transform`, `transformOrigin`, `transition`, `transitionProperty`, `transitionDuration`, `transitionDelay`, `transitionTimingFunction`, `animation` |
@@ -5100,12 +5100,25 @@ CSS custom property is read in every one of these families by `token("--name")`,
 which is checked as a reference rather than as a value of the family it appears
 in; a raw `var(--name)` string is refused with that spelling named.
 
-The following 36 real CSS properties are deliberately outside checked Look.
+A Look entry lowers to its own single-declaration CSS rule, and those rules are
+ordered by where each property first appears in the module rather than by the
+block that wrote them. So a scope that sets both a shorthand and a longhand the
+shorthand writes — `padding` beside `paddingTop`, `border` beside `borderColor`
+— has no winner it chose: an unrelated Look elsewhere in the module decides
+which of the two survives. That pair is refused, with the shorthand's longhands
+named, for the same reason a property written twice in one scope is refused.
+The rule holds between the entries of one Look block, between the `look:`
+directives of one element, and inside a condition or target, which is the whole
+of what one compile can see; a shorthand composed in through a spread is beyond
+it, which is the other half of why the `font` shorthand is excluded outright.
+
+The following 37 real CSS properties are deliberately outside checked Look.
 Their diagnostics name this boundary and point to module-level
 `import css unsafe` as the escape hatch.
 
 | Excluded family | Properties | Reason |
 | --- | --- | --- |
+| Font shorthand | `font` | Its longhands own it: `fontStyle`, `fontVariant`, `fontWeight`, `fontStretch`, `fontSize`, `lineHeight`, `fontFamily`. A shorthand's value is free text no compile can check, and one that is not a legal shorthand fails at computed-value time and resets all seven — including the ones written beside it. |
 | Float layout | `float`, `clear` | Legacy float layout is outside the Grid and Flex model. |
 | Table formatting | `tableLayout`, `borderCollapse`, `borderSpacing`, `captionSide`, `emptyCells` | A typed table-layout contract needs evidence before admission. |
 | Multi-column layout | `columns`, `columnCount`, `columnWidth`, `columnFill`, `columnRule`, `columnRuleColor`, `columnRuleStyle`, `columnRuleWidth`, `columnSpan` | Its value and fragmentation model is not yet typed. |
@@ -5121,9 +5134,9 @@ value. A stop is `from:`, `to:`, or an integer percentage from `1%` through
 groups must progress in ascending order. A body contains direct, statically
 lowerable Look properties only. It reuses the Look property and value checker —
 the same literals, unit values, arithmetic, builder calls with positional or
-named arguments, and `const` design tokens declared locally or imported through
-a checked interface — rejects non-interpolating properties, and cannot read
-reactive state. A stop's value is additionally checked as one CSS declaration
+named arguments, `token("--name")` design system references, and `const` design
+tokens declared locally or imported through a checked interface — rejects
+non-interpolating properties, and cannot read reactive state. A stop's value is additionally checked as one CSS declaration
 value, because a stop becomes real stylesheet text rather than a value the
 runtime sets on a custom property: `{`, `}`, `;`, and `@` never appear outside a
 string, and parentheses, strings, and comments all close. This is the one place

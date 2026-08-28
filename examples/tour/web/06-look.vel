@@ -117,7 +117,6 @@ export const vocabularyLook: Look = look:
         side main
     "
 
-    flex = 1
     flexDirection = "row"
     flexGrow = 1
     flexShrink = 0
@@ -130,7 +129,6 @@ export const vocabularyLook: Look = look:
     minWidth = narrow
     maxWidth = wide
     height = "auto"
-    inset = 0px
     top = 8px
 
     padding = inset2
@@ -138,7 +136,6 @@ export const vocabularyLook: Look = look:
     margin = inset4
     marginBlock = inset3
 
-    background = wash
     backgroundColor = brand
     backgroundImage = mark
     backgroundSize = 100%
@@ -177,7 +174,6 @@ export const vocabularyLook: Look = look:
     rotate = 0deg
     transform = "translateZ(0)"
     transformOrigin = 50%
-    transition = fade
     transitionDuration = quick
     transitionDelay = 0ms
     animation = spinning
@@ -193,10 +189,18 @@ export const vocabularyLook: Look = look:
     scrollSnapAlign = "start"
     scrollbarWidth = "thin"
 
-// Every one of the 225 published property names, once, grouped by the family
-// the compiler assigns it. Nothing here is a design; it is the vocabulary, so
-// that a formatter or property-table change has to walk the whole table before
-// it can pass.
+// Every published property name that is not a CSS shorthand, once, grouped by
+// the family the compiler assigns it. Nothing here is a design; it is the
+// vocabulary, so that a formatter or property-table change has to walk the whole
+// table before it can pass.
+//
+// The shorthands are in the two Looks below rather than here, and that split is
+// the vocabulary too: D104 rule 2 refuses a shorthand beside a longhand it
+// writes, because a Look entry lowers to its own CSS rule and those rules are
+// ordered by where each property first appears in the module — so a block
+// holding both has no winner it chose. `border` gets a third Look for the same
+// reason it needs one: it writes `borderWidth` and the four side shorthands,
+// which are themselves shorthands.
 const everyPropertyLook: Look = look:
     // layout and containment
     display = "none"
@@ -206,7 +210,6 @@ const everyPropertyLook: Look = look:
     contain = "layout"
     visibility = "visible"
     zIndex = 1
-    overflow = "visible"
     overflowX = "visible"
     overflowY = "visible"
     resize = "none"
@@ -226,23 +229,18 @@ const everyPropertyLook: Look = look:
     gridAutoColumns = threeUp
     gridAutoRows = threeUp
     gridAutoFlow = "column"
-    gridColumn = "1 / -1"
     gridColumnStart = "1"
     gridColumnEnd = "-1"
-    gridRow = "1 / 2"
     gridRowStart = "1"
     gridRowEnd = "2"
-    gridArea = "main"
 
     // flex and alignment
-    flex = 1
     flexDirection = "row"
     flexGrow = 1
     flexShrink = 1
     flexBasis = 4px
     flexWrap = "nowrap"
     order = 1
-    gap = 4px
     rowGap = 4px
     columnGap = 4px
     alignItems = "normal"
@@ -251,9 +249,6 @@ const everyPropertyLook: Look = look:
     alignContent = "normal"
     alignSelf = "auto"
     justifySelf = "auto"
-    placeItems = "normal"
-    placeContent = "normal"
-    placeSelf = "auto"
 
     // size and inset
     width = 4px
@@ -268,44 +263,34 @@ const everyPropertyLook: Look = look:
     maxInlineSize = 4px
     minBlockSize = 4px
     maxBlockSize = 4px
-    inset = 4px
     top = 4px
     right = 4px
     bottom = 4px
     left = 4px
-    insetInline = 4px
-    insetBlock = 4px
     insetInlineStart = 4px
     insetInlineEnd = 4px
     insetBlockStart = 4px
     insetBlockEnd = 4px
 
     // spacing
-    padding = 4px
     paddingTop = 4px
     paddingRight = 4px
     paddingBottom = 4px
     paddingLeft = 4px
-    paddingInline = 4px
-    paddingBlock = 4px
     paddingInlineStart = 4px
     paddingInlineEnd = 4px
     paddingBlockStart = 4px
     paddingBlockEnd = 4px
-    margin = 4px
     marginTop = 4px
     marginRight = 4px
     marginBottom = 4px
     marginLeft = 4px
-    marginInline = 4px
-    marginBlock = 4px
     marginInlineStart = 4px
     marginInlineEnd = 4px
     marginBlockStart = 4px
     marginBlockEnd = 4px
 
     // background
-    background = wash
     backgroundColor = ink
     backgroundImage = mark
     backgroundPosition = "center"
@@ -317,14 +302,6 @@ const everyPropertyLook: Look = look:
     backgroundBlendMode = "normal"
 
     // border and outline
-    border = hairline
-    borderWidth = 4px
-    borderStyle = "none"
-    borderColor = ink
-    borderTop = hairline
-    borderRight = hairline
-    borderBottom = hairline
-    borderLeft = hairline
     borderTopWidth = 4px
     borderRightWidth = 4px
     borderBottomWidth = 4px
@@ -337,12 +314,10 @@ const everyPropertyLook: Look = look:
     borderRightColor = ink
     borderBottomColor = ink
     borderLeftColor = ink
-    borderRadius = 4px
     borderTopLeftRadius = 4px
     borderTopRightRadius = 4px
     borderBottomRightRadius = 4px
     borderBottomLeftRadius = 4px
-    outline = hairline
     outlineWidth = 4px
     outlineStyle = "none"
     outlineColor = ink
@@ -358,7 +333,6 @@ const everyPropertyLook: Look = look:
 
     // typography and international text
     color = ink
-    font = "600 1rem/1.5 Inter, system-ui, sans-serif"
     fontFamily = "Inter, ui-sans-serif, system-ui, sans-serif"
     fontSize = 4px
     fontWeight = 1
@@ -370,11 +344,11 @@ const everyPropertyLook: Look = look:
     fontFeatureSettings = "'liga' 1"
     fontVariationSettings = "'wght' 600"
     lineHeight = 1.5
+    verticalAlign = "text-bottom"
     letterSpacing = 4px
     wordSpacing = 4px
     textAlign = "start"
     textIndent = 4px
-    textDecoration = "none"
     textDecorationColor = ink
     textDecorationLine = "none"
     textDecorationStyle = "solid"
@@ -396,7 +370,6 @@ const everyPropertyLook: Look = look:
     unicodeBidi = "normal"
 
     // lists
-    listStyle = "none"
     listStyleType = "none"
     listStylePosition = "outside"
     listStyleImage = mark
@@ -416,7 +389,6 @@ const everyPropertyLook: Look = look:
     rotate = 0deg
     transform = "translateZ(0)"
     transformOrigin = "center"
-    transition = fade
     transitionProperty = "opacity"
     transitionDuration = 200ms
     transitionDelay = 200ms
@@ -435,12 +407,10 @@ const everyPropertyLook: Look = look:
 
     // scroll
     scrollBehavior = "auto"
-    scrollMargin = 4px
     scrollMarginTop = 4px
     scrollMarginRight = 4px
     scrollMarginBottom = 4px
     scrollMarginLeft = 4px
-    scrollPadding = 4px
     scrollPaddingTop = 4px
     scrollPaddingRight = 4px
     scrollPaddingBottom = 4px
@@ -448,11 +418,54 @@ const everyPropertyLook: Look = look:
     scrollSnapAlign = "none"
     scrollSnapStop = "normal"
     scrollSnapType = "none"
-    overscrollBehavior = "none"
     overscrollBehaviorX = "none"
     overscrollBehaviorY = "none"
     scrollbarColor = "auto"
     scrollbarWidth = "auto"
+
+// The published shorthands, apart from the two below. Each one writes longhands
+// the Look above writes, which is why they cannot share a block.
+const everyShorthandLook: Look = look:
+    overflow = "visible"
+    gridColumn = "1 / -1"
+    gridRow = "1 / 2"
+    flex = 1
+    gap = 4px
+    placeItems = "normal"
+    placeContent = "normal"
+    placeSelf = "auto"
+    inset = 4px
+    insetInline = 4px
+    insetBlock = 4px
+    padding = 4px
+    paddingInline = 4px
+    paddingBlock = 4px
+    margin = 4px
+    marginInline = 4px
+    marginBlock = 4px
+    background = wash
+    borderWidth = 4px
+    borderStyle = "none"
+    borderColor = ink
+    borderTop = hairline
+    borderRight = hairline
+    borderBottom = hairline
+    borderLeft = hairline
+    borderRadius = 4px
+    outline = hairline
+    textDecoration = "none"
+    listStyle = "none"
+    transition = fade
+    scrollMargin = 4px
+    scrollPadding = 4px
+    overscrollBehavior = "none"
+
+// The two shorthands whose parts are themselves shorthands: `border` writes
+// `borderWidth`, `borderStyle`, `borderColor` and the four side shorthands, and
+// `gridArea` writes `gridRow` and `gridColumn`.
+const everyNestedShorthandLook: Look = look:
+    border = hairline
+    gridArea = "main"
 
 export const propertyVocabulary: Look = everyPropertyLook
 
@@ -478,7 +491,6 @@ export const keywordValueLook: Look = look:
 // `groove`, `upper-roman` or `optimizeLegibility`, and it would just as happily
 // have taken `strokeLinecap = "none"` — a declaration the browser discards.
 export const closedKeywordLook: Look = look:
-    borderStyle = "groove"
     borderTopStyle = "ridge"
     borderRightStyle = "inset"
     borderBottomStyle = "outset"
@@ -504,7 +516,6 @@ export const closedKeywordLook: Look = look:
 export const multiTokenKeywordLook: Look = look:
     objectPosition = "top left"
     gridAutoFlow = "column dense"
-    textDecoration = "underline overline"
     textDecorationLine = "underline line-through"
     textUnderlinePosition = "under left"
     listStyle = "lower-alpha"
@@ -526,12 +537,27 @@ export const wholeVocabularyLook: Look = look:
     alignContent = "last baseline"
     justifyItems = "self-end"
     justifySelf = "baseline"
-    placeItems = "self-start"
-    placeContent = "flex-end"
-    placeSelf = "self-end"
     display = "list-item"
     backgroundRepeat = "repeat no-repeat"
     cursor = "all-scroll"
+
+// The shorthands the Looks above would otherwise carry, kept together because
+// each of them writes a longhand one of those Looks writes. D104 rule 2 refuses
+// that pair in one scope: a Look entry lowers to its own CSS rule, and the
+// stylesheet orders those rules by where each property first appears in the
+// module rather than by the block, so a scope holding both a shorthand and its
+// longhand has no winner it chose. Nine values, one lesson — a shorthand is a
+// whole declaration, and it belongs where nothing it writes is written again.
+export const shorthandCompanionLook: Look = look:
+    flex = 1
+    inset = 0px
+    background = wash
+    transition = fade
+    borderStyle = "groove"
+    textDecoration = "underline overline"
+    placeItems = "self-start"
+    placeContent = "flex-end"
+    placeSelf = "self-end"
 
 // A design system's contract is a set of CSS custom properties, and `token()`
 // is the one checked spelling that reads one. It is legal in every Look
@@ -674,6 +700,9 @@ export component LookPanel:
         <h2>06 — Look</h2>
         <div data-vocabulary look={vocabularyLook}>every published family</div>
         <div data-property-vocabulary look={propertyVocabulary}></div>
+        <div data-shorthand-vocabulary look={everyShorthandLook}></div>
+        <div data-nested-shorthand-vocabulary look={everyNestedShorthandLook}></div>
+        <div data-shorthand-companion look={shorthandCompanionLook}>a shorthand keeps its own scope</div>
         <div data-keyword-values look={keywordValueLook}>keyword values, not only units</div>
         <div data-closed-keywords look={closedKeywordLook}>each property's own closed set</div>
         <div data-multi-token-keywords look={multiTokenKeywordLook}>whole CSS values, not tokens</div>

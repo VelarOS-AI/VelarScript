@@ -196,6 +196,15 @@ and fragmented media are outside the Web application target. So there is no
 Look spelling being avoided — this reaches something Look does not cover at
 all, which is what an escape hatch is for.
 
+Reading a design system's CSS custom properties is not one of those things, and
+this is the mistake worth naming here, because it used to be true. Every metric
+Look property — width, padding, gap, `borderRadius`, `fontSize` — once refused
+`var(--x)` and named this page as the only way out, so a whole visual layer
+would follow its design tokens into a stylesheet. `token("--name")` is now the
+checked spelling and it is legal in every Look property, so a token-driven
+design stays inside Look; a raw `var(--name)` string is refused with `token()`
+named, and `velar fix` migrates it.
+
 `unsafe css` belongs to the Web extension rather than Core, for the same reason
 Core has no `look`: Core does not know what a stylesheet is.
 

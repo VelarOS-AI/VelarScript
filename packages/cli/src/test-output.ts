@@ -1,7 +1,8 @@
 import { mkdir, mkdtemp, readFile, rm, rmdir, writeFile } from "node:fs/promises";
-import { basename, dirname, join, relative } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ProjectModule, ProjectResult, VelarSourcePackage } from "./project.ts";
 import { assertUniqueEmbeddedModuleOutputs, embeddedModuleFileContents, embeddedModuleOutputPath } from "./embedded-modules.ts";
+import { importSpecifierSites } from "./module-assets.ts";
 import { usedPackageResourceExports, writeProjectResources } from "./resource-output.ts";
 
 /**
@@ -54,6 +55,7 @@ export async function createCompiledSandbox(projectRoot: string, prefix: "test" 
     type: "module",
     ...(imports ? { imports } : {}),
   }), "utf8");
+  if (imports) await copyPackageImportTargets(projectRoot, sandbox, imports);
   return sandbox;
 }
 
@@ -65,6 +67,65 @@ async function projectPackageImports(projectRoot: string): Promise<Record<string
       : null;
   } catch {
     return null;
+  }
+}
+
+/** Every string leaf of an `imports` target: a plain path, a fallback array, or a conditions object. */
+function packageImportTargets(value: unknown): readonly string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap(packageImportTargets);
+  if (value !== null && typeof value === "object") return Object.values(value).flatMap(packageImportTargets);
+  return [];
+}
+
+/**
+ * Brings the files a relative `#` import target names into the sandbox.
+ *
+ * The manifest is copied verbatim, and that is right for a target that names a
+ * package: the sandbox lives inside the project precisely so Node's upward
+ * `node_modules` walk still reaches the project's real installation. A target
+ * that names a *path* has no such fallback — it is anchored to the manifest's
+ * own directory, which is now the sandbox — so `velar test` and `velar run`
+ * used to fail to resolve a `#` specifier that `velar check` and `velar build`
+ * both resolve, because those two resolve from the real importer instead.
+ *
+ * The file is mirrored at its project-relative path so its own relative imports
+ * keep their meaning without a byte being rewritten, and those imports are
+ * followed, because a target's neighbours are as necessary to it as the target
+ * is to the compiled tree. Bare and `#` specifiers inside a copied file are not
+ * followed: those resolve exactly as they did before, through the upward walk
+ * and through this same manifest. A target that resolves outside the project is
+ * skipped rather than mirrored somewhere it does not belong — Node rejects that
+ * shape itself, since an `imports` target may not escape its package.
+ */
+async function copyPackageImportTargets(projectRoot: string, sandbox: string, imports: Record<string, unknown>): Promise<void> {
+  const pending = Object.values(imports)
+    .flatMap(packageImportTargets)
+    .filter((target) => target.startsWith("./") || target.startsWith("../"))
+    .map((target) => resolve(projectRoot, target));
+  const copied = new Set<string>();
+  const velarRoot = join(projectRoot, ".velar");
+  while (pending.length > 0) {
+    const source = pending.pop()!;
+    if (copied.has(source)) continue;
+    const inside = relative(projectRoot, source);
+    if (inside.startsWith("..") || isAbsolute(inside) || source === velarRoot || source.startsWith(`${velarRoot}${sep}`)) continue;
+    let contents: Buffer;
+    try {
+      contents = await readFile(source);
+    } catch {
+      // A target that does not exist is the project's own defect, and the
+      // resolution failure names it far better than a copier could.
+      continue;
+    }
+    copied.add(source);
+    const output = join(sandbox, inside);
+    await mkdir(dirname(output), { recursive: true });
+    await writeFile(output, contents);
+    if (!/\.[cm]?js$/u.test(source)) continue;
+    for (const site of importSpecifierSites(contents.toString("utf8"))) {
+      if (site.source.startsWith("./") || site.source.startsWith("../")) pending.push(resolve(dirname(source), site.source));
+    }
   }
 }
 

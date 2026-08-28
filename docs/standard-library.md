@@ -749,7 +749,7 @@ without exposing mutable `Date` objects.
 | `monotonic` | Monotonic milliseconds for elapsed-time measurement. |
 | `parse` | Parse deterministic ISO `YYYY-MM-DD` or a `T` datetime with `Z`/numeric offset to epoch milliseconds, accepting RFC 3339's lowercase `t`/`z` and truncating fractional seconds to milliseconds; return `null` for invalid text. |
 | `iso` | Format epoch milliseconds as an ISO 8601 UTC string; defaults to `now()`. |
-| `format` | Locale-format a time with optional locale and time-zone strings. |
+| `format` | Locale-format a time, or a chosen part of one, with optional locale, time-zone, and date/time style strings. |
 | `date` | Construct local epoch milliseconds from strict year, month, day, and optional time fields. |
 | `utc` | Construct UTC epoch milliseconds from the same strict fields. |
 | `parts` | Return numeric year through millisecond parts in local time or an explicit time zone. |
@@ -781,6 +781,16 @@ a reader of that timestamp means; `:60` anywhere else is a typo rather than a
 timestamp and returns `null`. Non-ISO/native locale text is deliberately
 unsupported.
 Locale and named-time-zone arguments must be actual strings.
+
+`format` takes a `dateStyle` and a `timeStyle`, both defaulting to `medium`, and
+both drawn from the host's own vocabulary: `full`, `long`, `medium`, `short`,
+and `none` for the half a call leaves out. `format(value, locale="en-US",
+dateStyle="none", timeStyle="short")` is the time of day a message list shows,
+and it is the *locale's* time of day — `3:45 PM` where the reader expects a
+twelve-hour clock and `15:45` where they do not. Rendering that from `parts()`
+by padding an hour and a minute by hand gives every locale a twenty-four-hour
+clock, which is why the styles are here rather than left to the caller. Both
+styles `none` is refused: that names no format at all.
 Returned timestamps are checked as finite values inside JavaScript's supported
 date range. Host clock and internationalization results are validated before
 they cross back into VelarScript: invalid clocks, non-string formatting output,

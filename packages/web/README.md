@@ -92,7 +92,10 @@ The package also owns Look, the checked visual language integrated with VelarScr
 values and JSX. `look:` values, ordinary functions, imports/exports, named
 `velar/look` builders, unit-aware properties and arithmetic, bounded `if` conditions, `@state` hooks, and
 `@target` blocks lower to extracted standard CSS with stable readable markers.
-Native and component JSX accept universal `class` and `look` props; inline
-`style` directives are rejected. Raw CSS is available only through an explicit
-`import css unsafe` declaration whose mandatory `before look` or `after look`
-placement defines source order without inventing priority semantics.
+Native and component JSX accept universal `class` and `look` props, checked
+`look:property` and `style:property` directives, and a raw `style` attribute is
+rejected. A design system's CSS custom property is read by `token("--name")`,
+which is legal in every Look property, so a token-driven visual layer stays
+inside Look. Raw CSS is available through an explicit `import css unsafe`
+declaration whose mandatory `before look` or `after look` placement defines
+source order without inventing priority semantics.

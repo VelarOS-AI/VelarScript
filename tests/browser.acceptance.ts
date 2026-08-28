@@ -173,7 +173,14 @@ async function acceptBrowser(
   try {
     owner.browser = await browserType.connect(owner.server.wsEndpoint(), { timeout: 30_000 });
     const browser = owner.browser;
-    const page = await browser.newPage();
+    // The clipboard assertion below needs the two clipboard permissions, and a
+    // default page has no context to grant them on. Chromium is the only engine
+    // that knows the names — Firefox rejects `clipboard-write` outright and
+    // WebKit rejects it when the page opens — and this suite is Chromium by
+    // design, which `tests/ci.acceptance.ts` asserts by refusing to find any
+    // other engine named here.
+    const context = await browser.newContext({ permissions: ["clipboard-read", "clipboard-write"] });
+    const page = await context.newPage();
     const failures: string[] = [];
     let uploadRequests = 0;
     await page.route("**/api/upload", async (route) => {
@@ -270,6 +277,19 @@ async function acceptBrowser(
     assert.equal(await page.locator("[data-file]").textContent(), "velar.txt");
     await page.waitForFunction(() => document.querySelector("[data-upload]")?.textContent === "release-studio:velar.txt:14");
     assert.equal(uploadRequests, 1);
+
+    // D104 rule 4. The fixture has had a copy button since the Web API landed
+    // and nothing ever pressed it, so `writeClipboardText` reached three
+    // engines and a release with no evidence that a click ever put text on the
+    // clipboard. A P2c consumer read the module's export table looking for the
+    // write, did not recognise the name it had then, and shipped a product with
+    // the copy button deliberately left out — which is a naming defect, but the
+    // reason it survived a survey is that no test could be pointed at as proof
+    // the capability worked. The assertion reads the clipboard back rather than
+    // trusting the label, because a label is what the defect looked like.
+    await page.getByRole("button", { name: "Copy status" }).click();
+    await page.waitForFunction(() => document.querySelector("[data-clipboard]")?.textContent === "Copied");
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), "VelarScript Web API 0.11");
 
     if (!production) {
       await page.locator("[data-realtime-socket-url]").fill(`ws://127.0.0.1:${realtimePort}/socket`);

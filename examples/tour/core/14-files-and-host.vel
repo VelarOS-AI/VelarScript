@@ -92,6 +92,14 @@ export def clock() -> string:
 
 export def namedClock() -> string: return format(value=now(), locale="en-GB", timeZone="UTC")
 
+// A part of a time rather than the whole of it. `dateStyle="none"` is the
+// time-of-day a message list shows, and it is the locale's own — twelve-hour
+// with AM/PM where the reader expects that, twenty-four-hour where they do not.
+// `timeStyle="none"` is the other half, and both `none` is refused.
+export def timeOfDay(locale: string) -> string: return format(now(), locale=locale, dateStyle="none", timeStyle="short")
+
+export def dayOnly(locale: string) -> string: return format(now(), locale=locale, dateStyle="full", timeStyle="none")
+
 // ---------------------------------------------------------------------------
 // velar/log — reaches the outside world
 // ---------------------------------------------------------------------------

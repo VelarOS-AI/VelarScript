@@ -72,7 +72,7 @@ export component CascadePanel:
             after look wins an equal-specificity conflict
         </p>
         <div class="tour-cascade-columns" data-cascade-columns>
-            <p>Multi-column layout is one of the 36 properties outside checked Look, so it is written in native CSS.</p>
+            <p>Multi-column layout is one of the 37 properties outside checked Look, so it is written in native CSS.</p>
         </div>
         <ol class="tour-cascade-counter" data-cascade-counter>
             <li>Generated-content counters have no Look spelling.</li>

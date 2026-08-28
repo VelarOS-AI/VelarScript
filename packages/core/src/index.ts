@@ -498,7 +498,15 @@ const coreModuleInterfaces = new Map<string, ModuleInterface>([
     ["monotonic", apiFunction([], [], numberType)],
     ["parse", apiFunction(["value"], [stringType], optional(numberType))],
     ["iso", apiFunction(["value"], [numberType], stringType, 0)],
-    ["format", apiFunction(["value", "locale", "timeZone"], [numberType, stringType, stringType], stringType, 1)],
+    // D104 rule 5: the two style arguments are how `format` answers for a part
+    // of a time rather than the whole of it. `dateStyle="none"` is the
+    // time-of-day rendering a message list wants, and it is the locale's own —
+    // `parts()` plus hand-written zero padding gives every locale a
+    // twenty-four-hour clock, which is wrong wherever the reader expects
+    // AM/PM. Styles are `Intl`'s own vocabulary, projected rather than
+    // reinvented: full, long, medium, short, and `none` for the half this call
+    // leaves out.
+    ["format", apiFunction(["value", "locale", "timeZone", "dateStyle", "timeStyle"], [numberType, stringType, stringType, stringType, stringType], stringType, 1)],
     ["date", apiFunction(["year", "month", "day", "hour", "minute", "second"], [numberType, numberType, numberType, numberType, numberType, numberType], numberType, 3)],
     ["utc", apiFunction(["year", "month", "day", "hour", "minute", "second"], [numberType, numberType, numberType, numberType, numberType, numberType], numberType, 3)],
     ["parts", apiFunction(["value", "timeZone"], [numberType, stringType], timePartsType, 1)],
@@ -2673,6 +2681,13 @@ function finiteNumber(value, name) { if (!__velarTimeCall(__velarTimeNumberIsFin
 function valid(value) { finiteNumber(value, "velar/time timestamp"); if (__velarTimeCall(__velarTimeMathAbs, __velarTimeNativeMath, [value]) > maximumDateMilliseconds) throw new __velarTimeNativeRangeError("velar/time timestamp is outside the JavaScript date range"); return value; }
 function timeText(value, name) { if (typeof value !== "string") throw new __velarTimeNativeTypeError(name + " must be a string"); if (value.length > 1024) throw new __velarTimeNativeRangeError(name + " cannot exceed 1024 characters"); return value; }
 function timeResultText(value, name, maximum = 65536) { if (typeof value !== "string") throw new __velarTimeNativeTypeError(name + " must return a string"); if (value.length > maximum) throw new __velarTimeNativeRangeError(name + " returned too much text"); return value; }
+function timeStyleName(value, name) {
+  value = timeText(value, name);
+  if (value !== "full" && value !== "long" && value !== "medium" && value !== "short" && value !== "none") {
+    throw new __velarTimeNativeTypeError(name + " must be one of full, long, medium, short, or none");
+  }
+  return value;
+}
 function ownData(container, key, name) {
   if (container === null || typeof container !== "object") throw new __velarTimeNativeTypeError(name + " must belong to an object");
   const descriptor = __velarTimeGetOwnPropertyDescriptor(container, key);
@@ -2843,7 +2858,23 @@ export function parse(value) {
   } catch { return null; }
 }
 export function iso(value = now()) { const date = new __velarTimeNativeDate(valid(value)); return timeResultText(__velarTimeCall(__velarTimeToISOString, date, []), "Date.toISOString", 64); }
-export function format(value, locale = "", timeZone = "") { locale = timeText(locale, "Time locale"); timeZone = timeText(timeZone, "Time zone"); const formatter = new __velarTimeDateTimeFormat(locale || undefined, timeZone ? { dateStyle: "medium", timeStyle: "medium", timeZone } : { dateStyle: "medium", timeStyle: "medium" }); const boundFormat = __velarTimeCall(__velarTimeFormatGetter, formatter, []); if (typeof boundFormat !== "function") throw new __velarTimeNativeTypeError("Intl.DateTimeFormat.format must be a function"); const output = __velarTimeCall(boundFormat, undefined, [new __velarTimeNativeDate(valid(value))]); return timeResultText(output, "Intl.DateTimeFormat.format"); }
+export function format(value, locale = "", timeZone = "", dateStyle = "medium", timeStyle = "medium") {
+  locale = timeText(locale, "Time locale");
+  timeZone = timeText(timeZone, "Time zone");
+  dateStyle = timeStyleName(dateStyle, "Time date style");
+  timeStyle = timeStyleName(timeStyle, "Time time style");
+  if (dateStyle === "none" && timeStyle === "none") throw new __velarTimeNativeTypeError("velar/time format needs a date style or a time style; both cannot be none");
+  const options = {
+    ...dateStyle === "none" ? {} : { dateStyle },
+    ...timeStyle === "none" ? {} : { timeStyle },
+    ...timeZone ? { timeZone } : {},
+  };
+  const formatter = new __velarTimeDateTimeFormat(locale || undefined, options);
+  const boundFormat = __velarTimeCall(__velarTimeFormatGetter, formatter, []);
+  if (typeof boundFormat !== "function") throw new __velarTimeNativeTypeError("Intl.DateTimeFormat.format must be a function");
+  const output = __velarTimeCall(boundFormat, undefined, [new __velarTimeNativeDate(valid(value))]);
+  return timeResultText(output, "Intl.DateTimeFormat.format");
+}
 export function date(year, month, day, hour = null, minute = null, second = null) { return build(false, year, month, day, hour ?? 0, minute ?? 0, second ?? 0, 0, hour === null && minute === null && second === null); }
 export function utc(year, month, day, hour = 0, minute = 0, second = 0) { return build(true, year, month, day, hour, minute, second); }
 export function parts(value, timeZone = "") {

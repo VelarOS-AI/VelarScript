@@ -59,6 +59,8 @@ import {
   isLookTokenName,
   isLookVarReference,
   lookOwnKeywords,
+  lookShorthandOverlap,
+  lookShorthandParts,
   lookTokenReference,
   lookVarReferenceName,
   nearestLookName,
@@ -505,6 +507,22 @@ function lookShorthandStringGuidance(name: string, value: Expression): string | 
     return "Use the 'transition(property, duration, easing, delay)' builder; multi-part transition strings bypass the checked Look system";
   }
   return null;
+}
+
+/**
+ * D104 rule 2 — what a refusal says when two entries in one scope write the
+ * same CSS declaration. Written once because two positions raise it: a Look
+ * block's entries and an element's `look:` directives lower to the same
+ * one-rule-per-property stylesheet, so they have the same defect and deserve
+ * the same sentence (D57 rule 134).
+ *
+ * The message leads with the mechanism, because the pair is legal CSS and the
+ * author has every reason to expect source order to settle it. It does not
+ * here: see LOOK_SHORTHAND_LONGHANDS for why the winner is decided module-wide.
+ */
+function lookShorthandOverlapMessage(shorthand: string, longhand: string, subject: string): string {
+  const parts = lookShorthandParts(shorthand);
+  return `${subject} sets '${shorthand}' and '${longhand}', and the shorthand writes the longhand. Look lowers every entry to its own CSS rule and orders those rules by where each property first appears in the module rather than by this block, so which of the two wins is not this code's to choose — an unrelated look elsewhere in the module decides it. Write ${parts.join(", ")} in place of '${shorthand}', or drop '${longhand}'`;
 }
 
 const lookCssWideKeywords = new Set(LOOK_CSS_WIDE_KEYWORDS);
@@ -3045,6 +3063,7 @@ export class VelarWebAnalyzer extends Analyzer {
         this.analyzeLookEntries(entry.entries, true, true, inheritedTerms, repeated ? `${scopeKey}@${entry.name}#${entry.span.start}` : `${scopeKey}@${entry.name}`);
         continue;
       }
+      this.reportLookShorthandOverlap(scopeKey, entry.name, entry.span);
       if (!this.recordLookEntry(scopeKey, entry.name)) {
         this.diagnostics.push(diagnostic("VEL5039", `Look property '${entry.name}' is defined more than once in the same scope`, entry.span));
       }
@@ -3385,6 +3404,45 @@ export class VelarWebAnalyzer extends Analyzer {
       for (const [key, child] of Object.entries(record)) if (key !== "span") visit(child);
     };
     visit(expression);
+  }
+
+  /**
+   * D104 rule 2 — the wider half of the promise VEL5039 already made. A
+   * repeated property name is refused because the second entry overwrites the
+   * first and Look has no source order to settle which is meant; a shorthand
+   * beside a longhand it writes is the same defect with two spellings, and it
+   * is the one that hid thirty-six dead declarations in a consumer's shell.
+   * Reports once against the entry that completes the pair.
+   */
+  private reportLookShorthandOverlap(scopeKey: string, name: string, span: Span): void {
+    for (const other of this.lookEntryScopes.get(scopeKey) ?? []) {
+      const overlap = lookShorthandOverlap(other, name);
+      if (!overlap) continue;
+      this.diagnostics.push(diagnostic("VEL5039", lookShorthandOverlapMessage(overlap.shorthand, overlap.longhand, "This Look scope"), span));
+      return;
+    }
+  }
+
+  /**
+   * The same rule where the properties are written as element directives. A
+   * `look:` directive lowers to exactly the rule a block entry does, so an
+   * element carrying `look:padding` and `look:paddingTop` has the pair in the
+   * same scope as surely as a block does. The `style:` directives are not
+   * checked here: they compose one inline style object, where the browser's own
+   * source order settles the pair.
+   */
+  private reportLookDirectiveOverlap(expression: JSXElementExpression): void {
+    const written: string[] = [];
+    for (const attribute of expression.attributes) {
+      if (!attribute.name.startsWith("look:")) continue;
+      const property = attribute.name.slice("look:".length);
+      if (!LOOK_PROPERTIES.has(property)) continue;
+      const overlapping = written.map((other) => lookShorthandOverlap(other, property)).find(Boolean);
+      if (overlapping) {
+        this.diagnostics.push(diagnostic("VEL5039", lookShorthandOverlapMessage(overlapping.shorthand, overlapping.longhand, `Element '<${expression.tag}>'`), attribute.span));
+      }
+      written.push(property);
+    }
   }
 
   /**
@@ -3730,6 +3788,7 @@ export class VelarWebAnalyzer extends Analyzer {
       ));
     }
     if (attributes.size !== expression.attributes.length) this.diagnostics.push(diagnostic("VEL5014", `JSX element '${expression.tag}' has duplicate attributes`, expression.span));
+    this.reportLookDirectiveOverlap(expression);
     for (const attribute of expression.attributes) {
       if (removedJsxControlAttributes.has(attribute.name)) {
         this.diagnostics.push(diagnostic("VEL5029", `JSX '${attribute.name}' was removed; branch with an ordinary expression such as {condition ? <A /> : <B />}`, attribute.span));

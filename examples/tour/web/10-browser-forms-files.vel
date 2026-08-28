@@ -12,7 +12,7 @@
 // a modal — is written inside a `def` that nothing calls. The spelling is the
 // point; performing it while a reader browses the tour is not.
 
-import {after, blur, capturePointer, clipboardText, closeDialog, copyText, dialogResult, environment, every, focus, frame, location, measure, media, open, readClipboardText, releasePointer, scrollElementTo, scrollIntoView, scrollMetrics, scrollTo, setClipboardText, setTextSelection, showDialog, textSelection, watchIntersection, watchMedia, watchOnline, watchVisibility} from "velar/browser"
+import {after, blur, capturePointer, clipboardText, closeDialog, writeClipboardText, dialogResult, environment, every, focus, frame, location, measure, media, open, readClipboardText, releasePointer, scrollElementTo, scrollIntoView, scrollMetrics, scrollTo, setClipboardText, setTextSelection, showDialog, textSelection, watchIntersection, watchMedia, watchOnline, watchVisibility} from "velar/browser"
 import {checkedValue, clearError, clearErrors, errors, fieldValue, fieldValues, focusFirstError, numberValue, read, reset, setError, setPending, textValue, values} from "velar/forms"
 import {download, pick, readDataUrl, readText} from "velar/files"
 
@@ -297,7 +297,7 @@ export def dialogSpellings(sheet: DialogElement):
     print(dialogResult(sheet))
 
 export async def clipboardSpellings():
-    await copyText("copied by the tour")
+    await writeClipboardText("copied by the tour")
     const pastedText = await readClipboardText()
     print(pastedText)
 

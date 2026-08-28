@@ -8499,7 +8499,7 @@ test("0.11 Web APIs have one versioned typed compiler/runtime contract", async (
   assert.deepEqual(api.modules["velar/forms"], ["checkedValue", "clearError", "clearErrors", "errors", "fieldValue", "fieldValues", "focusFirstError", "numberValue", "read", "reset", "setError", "setPending", "textValue", "values"]);
   assert.deepEqual(api.modules["velar/http"], ["HttpAbortError", "HttpResponseError", "HttpTransportError", "HttpTransportPhase", "formBody", "http"]);
   assert.deepEqual(api.modules["velar/storage"], ["StorageQuotaError", "StorageTransactionError", "StorageUpgradeError", "database", "session", "storage"]);
-  assert.deepEqual(api.modules["velar/browser"], ["after", "blur", "capturePointer", "clipboardText", "closeDialog", "copyText", "dialogResult", "environment", "every", "focus", "frame", "location", "measure", "media", "open", "readClipboardText", "releasePointer", "scrollElementTo", "scrollIntoView", "scrollMetrics", "scrollTo", "setClipboardText", "setTextSelection", "showDialog", "textSelection", "watchIntersection", "watchMedia", "watchOnline", "watchVisibility"]);
+  assert.deepEqual(api.modules["velar/browser"], ["after", "blur", "capturePointer", "clipboardText", "closeDialog", "dialogResult", "environment", "every", "focus", "frame", "location", "measure", "media", "open", "readClipboardText", "releasePointer", "scrollElementTo", "scrollIntoView", "scrollMetrics", "scrollTo", "setClipboardText", "setTextSelection", "showDialog", "textSelection", "watchIntersection", "watchMedia", "watchOnline", "watchVisibility", "writeClipboardText"]);
   assert.deepEqual(api.modules["velar/files"], ["download", "pick", "readDataUrl", "readText"]);
   assert.deepEqual(api.modules["velar/realtime"], ["RealtimeClient", "RealtimeClientFailureAction", "RealtimeClientState", "RealtimeCodec", "RealtimeFailure", "RealtimeOpen", "RealtimeUnavailableError", "eventStream", "realtimeClient"]);
   assert.deepEqual(api.modules["velar/test"], ["expect"]);
@@ -9776,7 +9776,7 @@ ${source}
 const dialog = new FakeDialog();
 const element = new FakeElement();
 const operations = [
-  async () => copyText(42),
+  async () => writeClipboardText(42),
   () => open(42),
   () => scrollTo(Number.NaN, 0),
   () => scrollTo(0, 0, "fast"),
@@ -10085,7 +10085,7 @@ Object.defineProperty(globalThis, "navigator", { configurable: true, value: navi
 ${source}
 Object.defineProperty(navigatorValue, "clipboard", { get() { clipboardOverrideReads += 1; return null; } });
 clipboardValue.writeText = () => calls.push("instance-write");
-await copyText("Velar");
+await writeClipboardText("Velar");
 let openOverrideReads = 0;
 let connectedOverrideReads = 0;
 const dialog = new FakeDialog();

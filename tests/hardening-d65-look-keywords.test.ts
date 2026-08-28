@@ -185,8 +185,13 @@ test("[D65-169] a recorded partial exclusion names a property that publishes a s
 // ---------------------------------------------------------------------------
 
 test("[D65-168] every newly closed property accepts a value its CSS grammar has", { timeout: 300_000 }, async () => {
-  const directory = await webProject("velar-d65-168-accept-", `${lookOf("reachable", closedProperties.map(([property, right]) => [property, right]))}
-@main: mount(<div look={reachable} />, "#app")
+  // One Look per property. `borderStyle` writes the four side styles and
+  // `overscrollBehavior` writes its two axes, and D104 rule 2 refuses a
+  // shorthand beside a longhand it writes — one block holding all twenty-six
+  // would be measuring that refusal rather than the vocabulary.
+  const blocks = closedProperties.map(([property, right], index) => lookOf(`reachable${index}`, [[property, right]]));
+  const directory = await webProject("velar-d65-168-accept-", `${blocks.join("\n")}
+@main: mount(<div look={reachable0} />, "#app")
 `);
   const checked = await run(["check", directory]);
   assert.equal(checked.code, 0, checked.output);
@@ -219,6 +224,9 @@ test("[D65-168] every newly closed property rejects the value only the fallback 
 // ---------------------------------------------------------------------------
 
 test("[D65-169] a multi-token CSS value is written the way CSS writes it", { timeout: 300_000 }, async () => {
+  // `textDecoration` writes `textDecorationLine`, and `overscrollBehavior`
+  // writes the two axes it shares this list with, so the whole-value probes
+  // split across two Looks rather than measuring D104 rule 2's refusal.
   const directory = await webProject("velar-d65-169-multi-", `${lookOf("whole", [
     ["scrollSnapType", "both proximity"],
     ["scrollSnapAlign", "center start"],
@@ -226,10 +234,10 @@ test("[D65-169] a multi-token CSS value is written the way CSS writes it", { tim
     ["gridAutoFlow", "dense column"],
     ["objectPosition", "bottom right"],
     ["textDecorationLine", "overline line-through"],
-    ["textDecoration", "underline overline"],
     ["textUnderlinePosition", "right under"],
     ["overscrollBehavior", "none contain"],
   ])}
+${lookOf("wholeShorthands", [["textDecoration", "underline overline"]])}
 @main: mount(<div look={whole} />, "#app")
 `);
   const checked = await run(["check", directory]);
