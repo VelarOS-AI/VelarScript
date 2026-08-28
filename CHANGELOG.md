@@ -4,6 +4,20 @@ This file records user-visible language, framework, and tooling changes. It is
 not a milestone checklist; the repository test suites and CI are the source of
 truth for acceptance status.
 
+## 0.22.1 — 2026-08-28
+
+### Application structure intelligence
+
+- Added the optional Core-owned `@context("…")` marker for naming the business
+  context of a top-level declaration or framework structure. The bounded static
+  label creates no scope, wrapper, runtime value, or generated JavaScript; code
+  without it keeps the complete compiler-inferred structure.
+- The compiler semantic index and incremental ownership graph now carry the
+  context through stable symbols, patches, focused queries, and language-server
+  responses. Human tools can group the same live graph into clear business
+  views, while AI tools select compact semantic neighborhoods without consuming
+  presentation coordinates or maintaining a second code index.
+
 ## 0.22.0 — 2026-08-28
 
 ### Code intelligence
