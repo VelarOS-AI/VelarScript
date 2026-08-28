@@ -69,12 +69,12 @@ test("compiler-owned ownership graph publishes stable bounded relations", async 
     assert.equal(hotGraph.activity.strategy, "affected-modules");
     assert.equal(hotGraph.activity.modulesVisited, 1);
     assert.deepEqual(
-      [...hotGraph.nodes].sort((left, right) => left.id.localeCompare(right.id)),
-      [...changedGraph.nodes].sort((left, right) => left.id.localeCompare(right.id)),
+      [...hotGraph.nodes].sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)),
+      [...changedGraph.nodes].sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)),
     );
     assert.deepEqual(
-      [...hotGraph.edges].sort((left, right) => left.id.localeCompare(right.id)),
-      [...changedGraph.edges].sort((left, right) => left.id.localeCompare(right.id)),
+      [...hotGraph.edges].sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)),
+      [...changedGraph.edges].sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)),
     );
     const delta = ownershipGraphDelta(graph, hotGraph);
     assert.equal(delta.baseRevision, graph.revision);
@@ -142,12 +142,12 @@ test("one source edit rebuilds one graph fragment instead of the whole project",
     assert.equal(hot.activity.modulesVisited, 1);
     assert.equal(full.activity.modulesVisited, sources.size);
     assert.deepEqual(
-      [...hot.nodes].sort((left, right) => left.id.localeCompare(right.id)),
-      [...full.nodes].sort((left, right) => left.id.localeCompare(right.id)),
+      [...hot.nodes].sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)),
+      [...full.nodes].sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)),
     );
     assert.deepEqual(
-      [...hot.edges].sort((left, right) => left.id.localeCompare(right.id)),
-      [...full.edges].sort((left, right) => left.id.localeCompare(right.id)),
+      [...hot.edges].sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)),
+      [...full.edges].sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)),
     );
     assert.ok(
       hotMs < fullMs * 0.75,
