@@ -4,6 +4,7 @@ import { lstat, readFile, readdir } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import {
   analysisTypeIdentity,
+  advisory,
   compile,
   diagnostic,
   genericApplicationType,
@@ -13,6 +14,7 @@ import {
   readonlyViewOf,
   removedStandardFunctionGuidance,
   type AnalysisContext,
+  type Advisory,
   type ClassInfo,
   type CompilerExtension,
   type CompileResult,
@@ -50,9 +52,10 @@ export interface ProjectModule {
   readonly result: CompileResult;
   /**
    * The module's own compile output, before the project-level cycle check
-   * overlaid its diagnostics. `result` is derived from this on every compile,
-   * so a module whose cycle diagnostic disappears recovers its emitted code
-   * even when incremental reuse hands the previous entry straight back.
+   * overlaid its diagnostics and advisories. `result` is derived from this on
+   * every compile, so a module whose cycle report disappears recovers its
+   * emitted code even when incremental reuse hands the previous entry straight
+   * back.
    */
   readonly compiledResult?: CompileResult;
 }
@@ -1122,6 +1125,7 @@ function moduleDependencies(
 }
 
 const INITIALIZATION_CYCLE_DIAGNOSTIC = "VEL3019";
+const CIRCULAR_IMPORT_ADVISORY = "VEL6010";
 /** MOD-I5: the module-resolution diagnostic family (VEL6xxx). */
 const MODULE_RESOLUTION_DIAGNOSTIC_PREFIX = "VEL6";
 
@@ -1131,7 +1135,8 @@ const MODULE_RESOLUTION_DIAGNOSTIC_PREFIX = "VEL6";
 // source module evaluates later observes an uninitialized live binding and
 // crashes with a bare ReferenceError. The module graph is fully known here,
 // so the defect is diagnosed on the reading line instead. Reads inside
-// function bodies stay legal — pure function cycles are a proper shape — and
+// function bodies stay legal — pure function cycles remain executable and
+// receive the non-blocking project-graph advisory below — and
 // cross-module mutually recursive record types never read a binding at all.
 //
 // The verdict is a property of the sources alone: it is computed from one
@@ -1157,6 +1162,8 @@ function appendInitializationCycleDiagnostics(
 
   const carriesCycleDiagnostic = (module: ProjectModule): boolean =>
     module.result.diagnostics.some((item) => item.code === INITIALIZATION_CYCLE_DIAGNOSTIC);
+  const carriesCycleAdvisory = (module: ProjectModule): boolean =>
+    module.result.advisories.some((item) => item.code === CIRCULAR_IMPORT_ADVISORY);
   const carriesResolutionDiagnostic = (module: ProjectModule): boolean =>
     module.result.diagnostics.some((item) => item.code.startsWith(MODULE_RESOLUTION_DIAGNOSTIC_PREFIX));
   // Nothing to decide and nothing stale to clear: the common project pays only
@@ -1164,15 +1171,19 @@ function appendInitializationCycleDiagnostics(
   // output, so a diagnostic never outlives the cycle (or the resolution
   // failure) that produced it.
   const cycleRelevant = !modules.every((module) => module.result.initializationImportReads.length === 0 && !carriesCycleDiagnostic(module));
+  const topologyRelevant = cycleRelevant
+    || modules.some(carriesCycleAdvisory)
+    || modules.some((module) => module.result.semanticIndex.moduleReferences.some((reference) =>
+      !reference.dynamic && resolveDependency(module.inputPath, reference.source) !== null));
   const resolutionRelevant = resolutions.size > 0 || modules.some(carriesResolutionDiagnostic);
-  if (!cycleRelevant && !resolutionRelevant) return;
+  if (!topologyRelevant && !resolutionRelevant) return;
 
   // Static evaluation edges in source order: import and re-export
   // declarations, excluding dynamic imports (they defer evaluation) and
   // JavaScript or standard modules (they are not .vel graph members).
   const staticDependencies = new Map<string, readonly string[]>();
   const dynamicRoots: string[] = [];
-  if (cycleRelevant) {
+  if (topologyRelevant) {
     for (const [path, module] of loaded) {
       const output: string[] = [];
       const seen = new Set<string>();
@@ -1194,7 +1205,7 @@ function appendInitializationCycleDiagnostics(
   // Tarjan over the static edges: only strongly connected members can read a
   // later-evaluating module, so everything else is skipped immediately.
   const componentOf = new Map<string, number>();
-  if (cycleRelevant) {
+  if (topologyRelevant) {
     stronglyConnectedPaths(loaded.keys(), (path) => staticDependencies.get(path) ?? [])
       .forEach((members, component) => {
         for (const member of members) componentOf.set(member, component);
@@ -1202,7 +1213,21 @@ function appendInitializationCycleDiagnostics(
   }
   const componentSizes = new Map<number, number>();
   for (const component of componentOf.values()) componentSizes.set(component, (componentSizes.get(component) ?? 0) + 1);
-  const cyclic = [...componentSizes.values()].some((size) => size > 1);
+  const cyclicComponents = new Set(
+    [...componentSizes.entries()].filter(([, size]) => size > 1).map(([component]) => component),
+  );
+  for (const [path, dependencies] of staticDependencies) {
+    if (dependencies.includes(path)) {
+      const component = componentOf.get(path);
+      if (component !== undefined) cyclicComponents.add(component);
+    }
+  }
+  const cyclic = cyclicComponents.size > 0;
+  const componentMembers = new Map<number, string[]>();
+  for (const [path, component] of componentOf) {
+    componentMembers.set(component, [...(componentMembers.get(component) ?? []), path]);
+  }
+  const relativePathByInput = new Map(modules.map((module) => [module.inputPath, module.relativePath]));
 
   // The ESM evaluation order: dependency-first post-order following
   // declaration order, with in-progress modules skipped exactly as the host
@@ -1245,6 +1270,24 @@ function appendInitializationCycleDiagnostics(
     // emitted code back.
     const compiled = module.compiledResult ?? module.result;
     const additions: Diagnostic[] = [];
+    const advisoryAdditions: Advisory[] = [];
+    const component = componentOf.get(path);
+    if (cyclic && component !== undefined && cyclicComponents.has(component)) {
+      const members = (componentMembers.get(component) ?? [])
+        .map((member) => relativePathByInput.get(member) ?? basename(member))
+        .sort(byCodeUnit);
+      const message = `Circular module dependency includes ${members.join(", ")}; extract shared contracts into a lower-level module so dependencies flow in one direction`;
+      const seen = new Set<string>();
+      for (const reference of compiled.semanticIndex.moduleReferences) {
+        if (reference.dynamic) continue;
+        const target = resolveDependency(path, reference.source);
+        if (target === null || componentOf.get(target) !== component) continue;
+        const key = `${reference.source}\0${reference.span.start}\0${reference.span.end}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        advisoryAdditions.push(advisory(CIRCULAR_IMPORT_ADVISORY, message, reference.span));
+      }
+    }
     if (cyclic && (componentSizes.get(componentOf.get(path) ?? -1) ?? 0) > 1) {
       for (const read of compiled.initializationImportReads) {
         const imported = resolveDependency(path, read.source);
@@ -1291,28 +1334,33 @@ function appendInitializationCycleDiagnostics(
         additions.push(diagnostic(item.code, item.message, span));
       }
     }
-    if (additions.length === 0) {
+    if (additions.length === 0 && advisoryAdditions.length === 0) {
       if (module.compiledResult === undefined) continue;
       modules[index] = { inputPath: module.inputPath, relativePath: module.relativePath, result: compiled };
       continue;
     }
+    const diagnostics = [...compiled.diagnostics, ...additions]
+      .sort((left, right) => left.span.start - right.span.start || byCodeUnit(left.code, right.code));
+    const advisories = [...compiled.advisories, ...advisoryAdditions]
+      .sort((left, right) => left.span.start - right.span.start || byCodeUnit(left.code, right.code));
     modules[index] = {
       ...module,
       compiledResult: compiled,
-      result: {
-        ...compiled,
-        // The compile() contract keeps diagnostics ordered by span.
-        diagnostics: [...compiled.diagnostics, ...additions]
-          .sort((left, right) => left.span.start - right.span.start || byCodeUnit(left.code, right.code)),
-        // The zero-diagnostics gate for code generation holds after the
-        // project-level check as well.
-        code: null,
-        sourceMap: null,
-        embeddedModules: [],
-        css: null,
-        styleSegments: null,
-        runtimeModules: [],
-      },
+      result: additions.length === 0
+        ? { ...compiled, diagnostics, advisories }
+        : {
+            ...compiled,
+            // The compile() contract keeps reports ordered by span. Advisories
+            // stay visible without entering this zero-diagnostics emit gate.
+            diagnostics,
+            advisories,
+            code: null,
+            sourceMap: null,
+            embeddedModules: [],
+            css: null,
+            styleSegments: null,
+            runtimeModules: [],
+          },
     };
   }
 }

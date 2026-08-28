@@ -182,6 +182,10 @@ cannot converge is a project failure. The convergence identity includes live
 and reactive exports, named-type identities and fields, aliases, enums, and the
 complete public class contract: constructor names, arity, fixed/rest types,
 inheritance, abstract members, getters, fields, and methods.
+Every static module cycle also receives the project-graph advisory `VEL6010` on
+its participating import declarations. The advisory keeps otherwise safe cycles
+executable while giving language servers, editor Problems views, and structure
+visualizations one compiler-owned signal for the same architectural issue.
 Extension-owned cross-module interface values must provide their own bounded,
 deterministic `interfaceExportIdentity`; missing contracts fail the project
 instead of being treated as stable. Changing one of those contracts cannot be

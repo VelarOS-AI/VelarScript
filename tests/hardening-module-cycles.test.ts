@@ -8,6 +8,7 @@ import { compileProject, type ProjectResult } from "../packages/cli/src/project.
 import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
 
 const CYCLE = "VEL3019";
+const CIRCULAR_IMPORT = "VEL6010";
 const CYCLE_MESSAGE = /Move this read into a function, or extract the shared value into a third module; '\.\/[a-z-]+\.vel' has not initialized when this line runs/u;
 
 const projectRoot = join(tmpdir(), "velar-module-cycle-tests");
@@ -25,6 +26,12 @@ function diagnosticsOf(project: ProjectResult, name: string): readonly { code: s
   const module = project.modules.find((candidate) => candidate.inputPath === join(projectRoot, name));
   assert.ok(module, `module ${name} was compiled`);
   return module.result.diagnostics;
+}
+
+function advisoriesOf(project: ProjectResult, name: string): readonly { code: string; message: string }[] {
+  const module = project.modules.find((candidate) => candidate.inputPath === join(projectRoot, name));
+  assert.ok(module, `module ${name} was compiled`);
+  return module.result.advisories;
 }
 
 test("a module initialization cycle is rejected on the reading line with the two-fix teaching message", async () => {
@@ -95,6 +102,8 @@ test("function-body reads stay legal: a pure function cycle compiles and runs", 
     assert.deepEqual(module.result.diagnostics, [], module.inputPath);
     assert.ok(module.result.code, module.inputPath);
     assert.deepEqual(module.result.runtimeModules, [], module.inputPath);
+    assert.deepEqual(module.result.advisories.map((item) => item.code), [CIRCULAR_IMPORT]);
+    assert.match(module.result.advisories[0]?.message ?? "", /Circular module dependency includes left\.vel, right\.vel/u);
   }
 
   // Execution-level: the emitted ESM cycle evaluates and the relay resolves.
@@ -255,5 +264,31 @@ test("modules outside any cycle never pay the check", async () => {
   assert.deepEqual(project.failures, []);
   for (const module of project.modules) {
     assert.deepEqual(module.result.diagnostics, [], module.inputPath);
+    assert.deepEqual(module.result.advisories, [], module.inputPath);
   }
+});
+
+test("an incremental edit clears a stale circular-import advisory", async () => {
+  const cyclicSources = {
+    "left.vel": 'import {right} from "./right.vel"\nexport def left() -> string:\n    return right()\n',
+    "right.vel": 'import {left} from "./left.vel"\nexport def right() -> string:\n    return left()\n',
+  };
+  const initial = await checkProject(cyclicSources, "left.vel");
+  assert.deepEqual(advisoriesOf(initial, "left.vel").map((item) => item.code), [CIRCULAR_IMPORT]);
+  assert.deepEqual(advisoriesOf(initial, "right.vel").map((item) => item.code), [CIRCULAR_IMPORT]);
+
+  const fixedSources = {
+    ...cyclicSources,
+    "right.vel": 'export def right() -> string:\n    return "right"\n',
+  };
+  const overrides = new Map(Object.entries(fixedSources).map(([name, text]) => [join(projectRoot, name), text]));
+  const fixed = await compileProject(
+    join(projectRoot, "left.vel"),
+    overrides,
+    {},
+    initial,
+    new Set([join(projectRoot, "right.vel")]),
+  );
+  assert.deepEqual(advisoriesOf(fixed, "left.vel"), []);
+  assert.deepEqual(advisoriesOf(fixed, "right.vel"), []);
 });
