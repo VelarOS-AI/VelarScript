@@ -40,10 +40,15 @@ function jsxDocumentationKey(name: string): string | null {
 }
 
 function visitJsx(expression: JsxExpression, context: SemanticExtensionContext): void {
+  if (expression.tag) context.syntaxToken(expression.tagSpan, "type");
   if (/^[A-Z]/u.test(expression.tag)) {
     context.reference(expression.tag, expression.tagSpan);
   }
   for (const attribute of expression.attributes) {
+    context.syntaxToken(
+      { start: attribute.span.start, end: attribute.span.start + attribute.name.length },
+      "property",
+    );
     const documentationKey = jsxDocumentationKey(attribute.name);
     if (documentationKey) documentedPrefix(context, attribute.span, attribute.name, documentationKey);
     const owner = context.jsxAttributeOwner(attribute.span, attribute.name);
@@ -108,7 +113,11 @@ export const velarWebSemanticExtension: CompilerSemanticExtension = Object.freez
       context.documentSyntax(context.nameSpan(expression.span, "look"), "look");
       const visit = (entries: typeof expression.entries): void => {
         for (const entry of entries) {
-          if (entry.kind === "LookProperty" || entry.kind === "LookSpread") context.visitExpression(entry.value);
+          if (entry.kind === "LookProperty") {
+            context.syntaxToken(context.nameSpan(entry.span, entry.name), "property");
+            context.visitExpression(entry.value);
+          }
+          else if (entry.kind === "LookSpread") context.visitExpression(entry.value);
           else if (entry.kind === "LookIf") {
             context.visitExpression(entry.condition);
             visit(entry.thenEntries);
@@ -128,7 +137,12 @@ export const velarWebSemanticExtension: CompilerSemanticExtension = Object.freez
     }
     if (isWebKeyframes(expression)) {
       context.documentSyntax(context.nameSpan(expression.span, "keyframes"), "keyframes");
-      for (const stop of expression.stops) for (const entry of stop.entries) context.visitExpression(entry.value);
+      for (const stop of expression.stops) {
+        for (const entry of stop.entries) {
+          context.syntaxToken(context.nameSpan(entry.span, entry.name), "property");
+          context.visitExpression(entry.value);
+        }
+      }
       return true;
     }
     if (isWebExpression(expression) && expression.kind === "ExtensionExpression:web:look-hook") {

@@ -130,6 +130,33 @@ const buttonLook = look:
   assert.equal(projectSyntaxDocumentationAt(project, path, source.indexOf("@before") + 1)?.key, "@before");
 });
 
+test("Web Look and JSX syntax publishes extension-owned property and tag colors without coloring text", async () => {
+  const path = join(tmpdir(), `velar-web-semantic-syntax-${process.pid}.vel`);
+  const source = `
+const shellLook = look:
+    minHeight = 100vh
+    color = "black"
+
+component App:
+    return <main look={shellLook} aria-label="App"><h1>Title</h1></main>
+`.trimStart();
+  const project = await compileProject(path, new Map([[path, source]]), {
+    extensions: [velarWebCompilerExtension],
+  });
+  assert.deepEqual(project.failures, []);
+  assert.deepEqual(project.modules[0]!.result.diagnostics, []);
+
+  const tokens = projectSemanticTokens(project, path)
+    .map((token) => [token.type, source.slice(token.span.start, token.span.end)] as const);
+  assert.ok(tokens.some(([type, text]) => type === "property" && text === "minHeight"));
+  assert.ok(tokens.some(([type, text]) => type === "property" && text === "color"));
+  assert.ok(tokens.some(([type, text]) => type === "type" && text === "main"));
+  assert.ok(tokens.some(([type, text]) => type === "type" && text === "h1"));
+  assert.ok(tokens.some(([type, text]) => type === "property" && text === "look"));
+  assert.ok(tokens.some(([type, text]) => type === "property" && text === "aria-label"));
+  assert.ok(!tokens.some(([, text]) => text === "Title"));
+});
+
 test("an invalid ordinary route string does not masquerade as the Node path-pattern prefix", async () => {
   const path = join(tmpdir(), `velar-server-semantic-invalid-${process.pid}.vel`);
   const source = `server routes:\n    @get("/health") => {ok: true}\n`;
