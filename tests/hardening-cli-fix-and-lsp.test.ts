@@ -47,7 +47,7 @@ function velarPackageManifest(name: string): string {
 
 async function fixProject(root: string) {
   const config = await resolveVelarProject(root);
-  return applyProjectMechanicalFixes(config, (path) => relative(root, path) || path);
+  return applyProjectMechanicalFixes(config, null, (path) => relative(root, path) || path);
 }
 
 test("[CLI-x1] a fix inside an f-string interpolation lands on the interpolation, not on line 1", async () => {

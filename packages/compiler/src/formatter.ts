@@ -1,4 +1,5 @@
 import { CORE_STATEMENT_HEAD_KEYWORDS } from "./core-vocabulary.ts";
+import { statementOwnsBlock } from "./ast.ts";
 import type { Statement } from "./ast.ts";
 import { scanEmbeddedJavaScriptLiteral } from "./embedded-javascript.ts";
 import { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
@@ -221,7 +222,7 @@ function collectCompactSuiteCandidates(statement: Statement, output: CompactSuit
 function compactSuiteEdit(source: string, candidate: CompactSuiteCandidate, indentWidth: number): CompactSuiteEdit | null {
   if (candidate.body.length !== 1) return null;
   const child = candidate.body[0]!;
-  if (statementOwnsCompactSuite(child)) return null;
+  if (statementOwnsBlock(child)) return null;
   const childText = source.slice(child.span.start, child.span.end);
   if (childText.includes("\n") || childText.includes("\r")) return null;
 
@@ -247,28 +248,6 @@ function compactSuiteEdit(source: string, candidate: CompactSuiteCandidate, inde
     end: child.span.start,
     text: `\n${leading}${" ".repeat(indentWidth)}`,
   };
-}
-
-function statementOwnsCompactSuite(statement: Statement): boolean {
-  if (statement.kind.startsWith("ExtensionStatement:")) return true;
-  switch (statement.kind) {
-    case "ExternModuleDeclaration":
-    case "EmbeddedJavaScriptDeclaration":
-    case "TypeDeclaration":
-    case "EnumDeclaration":
-    case "ClassDeclaration":
-    case "TestDeclaration":
-    case "MainBlock":
-    case "FunctionDeclaration":
-    case "IfStatement":
-    case "MatchStatement":
-    case "ForStatement":
-    case "WhileStatement":
-    case "TryStatement":
-      return true;
-    default:
-      return false;
-  }
 }
 
 function protectMultilineStrings(

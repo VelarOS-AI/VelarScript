@@ -5,7 +5,7 @@ import type { VelarProjectConfig } from "./config.ts";
 import { compileProject, compileProjectEntries, type ProjectResult } from "./project.ts";
 import { MAX_VELAR_PROJECT_MODULES } from "./source-limits.ts";
 import { nodeApplicationConfig } from "./node-application.ts";
-import { applicationEntry } from "./application-entry.ts";
+import { applicationEntry, applicationEntryMigration, type ApplicationEntryMigration } from "./application-entry.ts";
 
 /**
  * One compiled root of a `velar check` run: the project entry first, then every
@@ -75,20 +75,9 @@ export async function checkResolvedProject(
     errors: entryErrors,
     advisories: project.modules.flatMap((module) => module.result.advisories.map((item) => formatAdvisory(module.result.source, item))),
   }];
-  // Web、Desktop、Node 和 Server 共用同一入口契约：外部宿主只执行清单选中的
-  // 模块，真正的启动动作必须写在该模块的 @main 区域中。单文件检查仍允许
-  // 检查普通库模块；完整应用项目则在这里统一拦截缺少入口区域的情况。
-  if (!input?.endsWith(".vel") && entryErrors.length === 0) {
-    if (config.kind === "application" && (config.framework || nodeApplicationConfig(config))) {
-      try { applicationEntry(project); }
-      catch (error) { entryErrors.push(error instanceof Error ? error.message : "Application entry validation failed"); }
-    } else if (config.kind === "library") {
-      const entry = project.modules.find((module) => module.inputPath === project.entryPath);
-      if (entry?.result.hasMain) {
-        entryErrors.push(`${project.entryPath}: A library entry cannot declare '@main'; move startup into an application project`);
-      }
-    }
-  }
+  // The project layer's own refusals, on the entry root's channel, from the one
+  // function `velar fix` reads them from too.
+  entryErrors.push(...projectLayerFindings(config, input, project).map((finding) => finding.message));
   // One extra root, compiled on its own. It is deliberately *not* folded into
   // the `compileProjectEntries` call above: every entry handed to that call has
   // its `@main` body emitted, so adding roots there would change what a build
@@ -158,6 +147,72 @@ export function formatCheckOutput(checked: CheckedProject): string {
   return checked.errors.length > 0
     ? `${notices}${advisories}${checked.errors.join("\n\n")}\n`
     : `${notices}${advisories}`;
+}
+
+/**
+ * A refusal the CLI's project layer owns rather than the compiler: a rule about
+ * how the *project* is arranged, which no single module's compile can see.
+ *
+ * `message` is what both commands print, verbatim. `fix` is the provably
+ * equivalent rewrite that answers it, where the shape admits one; a finding with
+ * no fix is a finding `velar fix` reports and leaves alone.
+ */
+export interface ProjectLayerFinding {
+  readonly message: string;
+  readonly fix: ApplicationEntryMigration | null;
+}
+
+/**
+ * Every project-layer rule, evaluated once, for whichever command asked.
+ *
+ * This function is the reason `velar fix` cannot answer "0 diagnostics remain"
+ * over a tree `velar check` refuses. The fixer reads the compiler's diagnostic
+ * channel, and these rules were never on it: an entry missing its `@main` region
+ * failed `check` with exit 1 while `fix` reported a clean tree and exited 0 —
+ * the F4 falsehood again, from the one channel the F4 wave did not share. Roots
+ * were the first half of that sharing (`additionalProjectRoots`); this is the
+ * other half, and neither command owns a copy of a rule.
+ *
+ * Both preconditions are part of the rule set rather than of either caller:
+ *
+ *  - A single-file input names its own scope, exactly as it does for the tree
+ *    walk. Asking a project-arrangement question about one file answers it
+ *    about a project the author did not name.
+ *  - A tree the compiler already refused is not asked. "Does the entry declare
+ *    `@main`" has no reliable answer over a module that did not parse, and
+ *    `check` is already refusing for a better reason.
+ */
+export function projectLayerFindings(
+  config: VelarProjectConfig,
+  input: string | null,
+  project: ProjectResult,
+): readonly ProjectLayerFinding[] {
+  if (input?.endsWith(".vel")) return [];
+  if (project.failures.length > 0 || project.modules.some((module) => module.result.diagnostics.length > 0)) return [];
+  // Web、Desktop、Node 和 Server 共用同一入口契约：外部宿主只执行清单选中的
+  // 模块，真正的启动动作必须写在该模块的 @main 区域中。单文件检查仍允许
+  // 检查普通库模块；完整应用项目则在这里统一拦截缺少入口区域的情况。
+  if (config.kind === "application" && (config.framework || nodeApplicationConfig(config))) {
+    try { applicationEntry(project); }
+    catch (error) {
+      return [{
+        message: error instanceof Error ? error.message : "Application entry validation failed",
+        fix: applicationEntryMigration(project),
+      }];
+    }
+  } else if (config.kind === "library") {
+    const entry = project.modules.find((module) => module.inputPath === project.entryPath);
+    if (entry?.result.hasMain) {
+      // Deleting the region would delete the startup the author wrote, and
+      // moving it needs an application project that does not exist yet. There is
+      // no rewrite here that is the author's own, so there is no fix.
+      return [{
+        message: `${project.entryPath}: A library entry cannot declare '@main'; move startup into an application project`,
+        fix: null,
+      }];
+    }
+  }
+  return [];
 }
 
 /**

@@ -1,7 +1,7 @@
 import { resolveAdvisorySuppressions, type AdvisorySuppression } from "./advisory-suppression.ts";
 import { Analyzer, inferredResultPlaceholderType, isCorePrimitiveName, type AnalysisContext, type ClassField, type ClassInfo, type InitializationImportRead } from "./analyzer.ts";
-import { astNodesOfKind, blockContainsDirectAwait, testFunctionName } from "./ast.ts";
-import type { BindingPattern, DynamicImportExpression, Expression, FunctionDeclaration, Program, Statement, TypeReference } from "./ast.ts";
+import { astNodesOfKind, blockContainsDirectAwait, moduleStartupCode, testFunctionName } from "./ast.ts";
+import type { BindingPattern, DynamicImportExpression, Expression, FunctionDeclaration, ModuleStartupCode, Program, Statement, TypeReference } from "./ast.ts";
 import { diagnostic, type Advisory, type Diagnostic } from "./diagnostic.ts";
 import { JavaScriptEmitter } from "./emitter.ts";
 import { programWithEmbeddedJavaScriptImports } from "./embedded-module.ts";
@@ -43,7 +43,7 @@ export { SourceText, type Span } from "./source.ts";
 export { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
 export { bindingNameRestriction, isCoreReservedBinding, isForbiddenPrototypeMember, isJavaScriptReservedBinding, isSourceIdentifierPart, isSourceIdentifierStart, isValidSourceIdentifier, memberNameRestriction, type BindingNameRestriction, type MemberNameRestriction } from "./source-names.ts";
 export { VELAR_EXTENSION_PROTOCOL_VERSION } from "./extension.ts";
-export { CORE_EXPRESSION_CONSTRUCTS, CORE_STATEMENT_CONSTRUCTS, coreStatementConstructKey } from "./ast.ts";
+export { CORE_EXPRESSION_CONSTRUCTS, CORE_STATEMENT_CONSTRUCTS, coreStatementConstructKey, type ModuleStartupCode, type ModuleStartupStatement } from "./ast.ts";
 // D62 rule 157: the editor's keyword list is the lexer's table plus Core's
 // contextual roster, so it is published rather than retyped downstream.
 export { keywordKinds } from "./token.ts";
@@ -95,6 +95,14 @@ export interface CompileOptions {
 export interface CompileResult {
   /** 模块是否声明了编译器拥有的 `@main` 程序入口。 */
   readonly hasMain: boolean;
+  /**
+   * 模块顶层的启动代码——没有 `@main` 时它就停在那里。
+   *
+   * `hasMain` 只回答入口区域在不在；应用入口契约还要知道「不在的时候，启动代码
+   * 是什么形状」，才能把可证明等价的一种改写交给 `velar fix`，把其余形状原样退
+   * 回给作者。两个问题由同一次解析回答，不需要下游重新解析。
+   */
+  readonly moduleStartup: ModuleStartupCode;
   readonly code: string | null;
   readonly sourceMap: string | null;
   readonly embeddedModules: readonly CompilerEmbeddedJavaScriptModule[];
@@ -337,6 +345,7 @@ function compileUnchecked(text: string, options: CompileOptions): CompileResult 
   );
   return {
     hasMain: parsed.program.body.some((statement) => statement.kind === "MainBlock"),
+    moduleStartup: moduleStartupCode(parsed.program),
     code,
     sourceMap,
     embeddedModules,
@@ -452,6 +461,7 @@ function emptyCompileResult(text: string, options: CompileOptions, reported: Dia
   const program: Program = { kind: "Program", body: [], span: { start: 0, end: 0 } };
   return {
     hasMain: false,
+    moduleStartup: moduleStartupCode(program),
     code: null,
     sourceMap: null,
     embeddedModules: [],
