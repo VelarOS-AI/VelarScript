@@ -13,7 +13,7 @@ browser application activates `@velarscript/web`:
 ```json
 {
   "dependencies": {
-    "@velarscript/server": "0.23.4"
+    "@velarscript/server": "0.24.0"
   }
 }
 ```

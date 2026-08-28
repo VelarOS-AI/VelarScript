@@ -4,6 +4,64 @@ This file records user-visible language, framework, and tooling changes. It is
 not a milestone checklist; the repository test suites and CI are the source of
 truth for acceptance status.
 
+## 0.24.0 — 2026-08-29
+
+### Web
+
+- A component element inside a `{ternary}` interpolation or a keyed map over
+  rebuilt records rebuilds by contract; static child positions and keyed rows
+  written in place preserve the instance. The semantics were already written —
+  this release adds the reconciliation regression suite that pins all four
+  positions, and A4 now also recognizes the derived spelling of keyed row
+  churn (a `computed` building fresh records through a builder) with the same
+  code and the same `velar-allow A4` suppression.
+- A component element returned at the root of a markup-answering `def` is
+  refused where it is written (`VEL5075`); the runtime could never honor it
+  and previously dropped the subtree silently.
+- A module-level root whose construction throws now surfaces the compiler-owned
+  fatal state and reports once through `velar/app` under the `mount` phase,
+  instead of leaving a blank page. Module-level instantiation itself is
+  unchanged.
+- A reactive render that invalidates itself by writing a collection it reads
+  now names the read-write path and the repair in the runaway report.
+- A `//` comment attempt on its own line inside a JSX children region is
+  refused (`VEL5002`) instead of rendering as screen text; a URL or an inline
+  `//` in prose stays text, and the children-region boundary is now stated in
+  the charter and Web docs.
+- **Breaking**: `font` leaves the Look property table. Write the longhands
+  (`fontFamily`, `fontSize`, `fontWeight`, `lineHeight`, …) — the shorthand
+  resets the siblings this family publishes as checked properties, and a
+  `token()` there fails at computed-value time with no diagnostic. The refusal
+  names the longhands. One Look scope holding a shorthand and one of its
+  longhands is now refused the way a doubled property already was.
+- `verticalAlign` joins the Look table as a metric property with its checked
+  keyword set. `keyframes:` stop documentation now names `token()`, and the
+  tour animates one.
+- **Breaking**: `velar/browser`'s clipboard write is spelled
+  `writeClipboardText` (was `copyText`), so the read/write pair reads as a
+  pair. No alias; rename call sites.
+- `watchIntersection` completes the `velar/browser` watcher family (element
+  viewport/container intersection as a bounded watcher). `KeyboardEvent`
+  gains `isComposing`, so an Enter-to-send composer can leave IME composition
+  alone.
+
+### Core and CLI
+
+- `velar/time.format` accepts `dateStyle` and `timeStyle` (Intl's own
+  vocabulary plus `none`), so a time-of-day renders without a second spelling.
+- `velar fix` and `velar check` share one diagnostic truth for project-layer
+  rules, and the `@main` entry migration is mechanical for the single-statement
+  entry class.
+- The dev server resolves `#`-mapped self-imports and linked-package
+  dependencies the way `velar check` does, and compiled sandboxes carry
+  relative `#` targets, fixing `velar test`/`run`/`dev`/`serve` for projects
+  using them.
+
+### Desktop
+
+- `velar/desktop-test`'s served service can push unsolicited frames
+  (`pushService`), so browser tests exercise real push ingestion.
+
 ## 0.23.4 — 2026-08-28
 
 ### Web applications
