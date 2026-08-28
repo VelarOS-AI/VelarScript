@@ -1,6 +1,6 @@
 {
   "name": "@velarscript/web",
-  "version": "0.22.1",
+  "version": "0.23.0",
   "description": "The official VelarScript Web framework contract and browser runtime.",
   "license": "Apache-2.0",
   "type": "module",
@@ -33,7 +33,7 @@
     }
   },
   "dependencies": {
-    "@velarscript/compiler": "0.22.1"
+    "@velarscript/compiler": "0.23.0"
   },
   "exports": {
     ".": {

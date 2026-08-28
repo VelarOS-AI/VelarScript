@@ -4,7 +4,7 @@ This file records user-visible language, framework, and tooling changes. It is
 not a milestone checklist; the repository test suites and CI are the source of
 truth for acceptance status.
 
-## Unreleased
+## 0.23.0 — 2026-08-28
 
 ### Web applications
 
