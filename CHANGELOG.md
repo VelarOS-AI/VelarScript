@@ -4,7 +4,24 @@ This file records user-visible language, framework, and tooling changes. It is
 not a milestone checklist; the repository test suites and CI are the source of
 truth for acceptance status.
 
-## Unreleased
+## 0.22.0 — 2026-08-28
+
+### Code intelligence
+
+- Added `velar graph`, a compiler-owned project logic view for people and AI.
+  Its bounded text form summarizes declarations, ownership, imports, calls, and
+  affected paths; `--json` exposes the same stable semantic graph for tools,
+  while `--focus` and `--depth` select a local neighborhood without rebuilding
+  a second index.
+- Added the declaration-gated `velar/ownershipGraph` language-server request.
+  Responses carry stable node and edge identities, source locations, coverage,
+  revision hashes, and either a complete snapshot or a revision-checked patch.
+  Open-document overlays take precedence over disk contents, so editor and AI
+  requests observe the same current program.
+- Incremental graph refresh now re-analyzes the affected module set and returns
+  only changed and removed fragments when the consumer supplies its previous
+  revision. Hard node and edge limits, cancellation, and activity metadata keep
+  large projects bounded and make refresh cost observable.
 
 ### Tooling
 
