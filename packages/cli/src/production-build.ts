@@ -3,7 +3,7 @@ import { realpathSync } from "node:fs";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
-import { build, type BuildOptions, type Plugin } from "esbuild";
+import { build, type BuildOptions, type Metafile, type Plugin } from "esbuild";
 import { projectStyles } from "./framework-host.ts";
 import { projectImportKey, type ProjectResult } from "./project.ts";
 import { standardModuleSource } from "./standard-modules.ts";
@@ -116,7 +116,7 @@ export async function buildProductionFramework(
     plugins: [velarModules(project, sourceMaps)],
     logLevel: "silent",
   });
-  const entryOutput = Object.entries(result.metafile.outputs).find(([, output]) => Boolean(output.entryPoint));
+  const entryOutput = productionEntryOutput(result.metafile, project.projectRoot, project.entryPath);
   if (!entryOutput) throw new Error("The production bundler did not emit the VelarScript entry module");
   const entryPath = relative(outputDirectory, resolve(project.projectRoot, entryOutput[0])).replaceAll("\\", "/");
 
@@ -153,6 +153,23 @@ export async function buildProductionFramework(
     sourceMaps,
     mode,
   };
+}
+
+/**
+ * esbuild records an `entryPoint` not only for the application's entry but also
+ * for import()-split JavaScript dependencies. The output map is ordered by
+ * emitted path, so taking its first entry point can turn an arbitrary package
+ * chunk into the document script. Select the output whose input is the exact
+ * checked VelarScript application entry instead.
+ */
+export function productionEntryOutput(
+  metafile: Metafile,
+  projectRoot: string,
+  projectEntryPath: string,
+): [string, Metafile["outputs"][string]] | undefined {
+  const expected = resolve(projectEntryPath);
+  return Object.entries(metafile.outputs).find(([, output]) => output.entryPoint !== undefined
+    && resolve(projectRoot, output.entryPoint) === expected);
 }
 
 /**

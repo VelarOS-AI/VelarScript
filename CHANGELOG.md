@@ -4,6 +4,26 @@ This file records user-visible language, framework, and tooling changes. It is
 not a milestone checklist; the repository test suites and CI are the source of
 truth for acceptance status.
 
+## 0.23.4 — 2026-08-28
+
+### Web applications
+
+- `velar/browser.watchIntersection` adds a bounded, typed element-intersection
+  watcher with optional roots and threshold lists.
+- `KeyboardEvent.isComposing` exposes input-method composition state so Enter
+  handlers can avoid committing incomplete CJK input.
+- Production builds now identify the HTML script by the exact checked
+  VelarScript application entry. Third-party `import()` split points no longer
+  compete by output order, so a renderer package with dynamically loaded shader
+  modules cannot replace the application entry with an inert shader chunk.
+
+### Desktop testing
+
+- `velar/desktop-test.pushService` sends unsolicited service messages to every
+  active test connection and reports the number of recipients.
+- Service test cleanup now releases registrations after failures and safely
+  replaces abandoned pumps between tests.
+
 ## 0.23.3 — 2026-08-28
 
 ### Core Standard API
