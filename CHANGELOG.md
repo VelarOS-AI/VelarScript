@@ -4,6 +4,15 @@ This file records user-visible language, framework, and tooling changes. It is
 not a milestone checklist; the repository test suites and CI are the source of
 truth for acceptance status.
 
+## 0.23.2 — 2026-08-28
+
+### Editor intelligence
+
+- The Web extension now publishes semantic colors for checked Look and
+  keyframe property names, JSX element names, and JSX attributes. Editors can
+  distinguish framework syntax from variables without guessing from spelling,
+  while visible JSX text remains ordinary content.
+
 ## 0.23.1 — 2026-08-28
 
 ### Application structure intelligence
