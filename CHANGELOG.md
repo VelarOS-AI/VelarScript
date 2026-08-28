@@ -149,15 +149,6 @@ truth for acceptance status.
   are all strings — or which mixes the two domains — matches the raw text as
   before.
 
-### Runtime
-
-- The Node terminal now delivers every byte it read before its input host
-  exits. The host closed the IPC channel carrying that input in the same turn
-  as its last send, which discarded whatever the channel had not written yet —
-  the end of input among it — so a program reading a large input intermittently
-  failed with `Node terminal input host exited unexpectedly with code 0`
-  instead of receiving what it had already typed.
-
 ### Tooling
 
 - `velar test --browser=firefox` no longer fails a Desktop test over a bridge
@@ -168,6 +159,139 @@ truth for acceptance status.
   design — arrived on the page-error channel and failed a test that had already
   recovered from it. Chromium and WebKit were unaffected. The failure now
   belongs to the caller that asked, on every engine, with its message unchanged.
+
+## 0.20.1 — 2026-08-27
+
+### Application entry
+
+- Every application target now performs its startup inside the selected entry's
+  `@main` region, and `velar check`, `velar build`, `velar package`, and
+  `velar dev` all refuse an entry that declares none. Web, Desktop, Node, and
+  Server have different hosts, but all a host does is execute the module
+  `velar.json` selects; showing a page, listening on a port, or waiting for a
+  service to exit is an application action the entry must own out loud rather
+  than one an extension finds by hunting for an exported name. `velar dev` runs
+  the same check, so a missing region shows a compile-error page instead of the
+  false success of a command that started and a browser that stayed blank.
+  Naming a single `.vel` file is still exempt: it scopes the run to that file.
+- Added `kind` to `velar.json`. It is `application` or `library`, and defaults
+  to `application`. A `kind: "library"` project may use a framework extension's
+  syntax, types, and capabilities without being turned into an application that
+  needs a page or a listening port: no application host is resolved for it, and
+  its entry is refused if it declares `@main` — the same contract read from its
+  other end.
+- Removed the exported startup binding a Node or Server entry used to declare,
+  and with it the `server.app` and `node.app` manifest members; the `node`
+  object now accepts no members at all. The
+  `export const start = application(routes)` binding becomes a `@main` that
+  starts the transport itself: `application(app)` is now `async` and answers a
+  `Server` rather than a startup function, and `run(server)` — new in both
+  `velar/serve` and `velar/websocket` — hands that server to `velar/host`,
+  which stays the sole owner of SIGINT and SIGTERM so two transports cannot
+  install competing handlers.
+- Made `server.configuration` a required member of `velar.json`, and removed
+  the root `application.yml` convention it replaces. The path is
+  project-relative, stays inside the project root, and ends in `.yml`, `.yaml`,
+  or `.json`; the framework scans for no filename at all. A declared file that
+  is missing now fails closed instead of falling back to defaults, and
+  `configuration(Type, maxBytes)` lost its path parameter because the manifest
+  already names the file. The resolved path is published as
+  `applicationConfigurationPath`.
+- `velar-node.json` is `formatVersion` 5: it records the compiled entry module
+  and the declared configuration in place of a startup binding, and the
+  generated `.velar-node-entry.mjs` launcher is no longer written — the
+  compiled entry *is* the executable. The Server extension's API version moved
+  from `0.14` to `0.15`, and the Desktop extension's pin on it with it.
+
+Migration is one line where the startup is one line: `mount(<App />, "#app")`
+becomes `@main: mount(<App />, "#app")`, and several statements become an
+indented `@main:` block holding them in the order they already had. `velar fix`
+did not carry this rewrite when 0.20.1 shipped; it does now, for an entry whose
+startup is a single statement on one line at the end of the module, and it
+reports every other shape rather than choosing an order the source did not
+state. A Node or Server project has three more edits, none of them mechanical:
+delete `server.app` or `node.app`, write `server.configuration`, and replace the
+exported startup binding with a `@main` that awaits `application(routes)` and
+hands the server to `run`.
+
+### Server applications
+
+- Added `supply(app, provider, value)` to `velar/serve`. A process that already
+  built an application-level resource at startup can bind it to an app-scoped
+  `Provider` without process-global state: the binding belongs to the
+  composition, so `prefix`, middleware, docs, and lifecycle wrappers keep it,
+  and the provider's own `release` still owns shutdown. The compiler checks the
+  value against the provider's inferred result type. A provider that is not
+  app-scoped, a second binding of the same provider, and more than 128 supplied
+  providers in one app are each refused.
+
+### Web applications
+
+- A scalar interpolation now renders as one text node. An interpolation whose
+  checked type is `string` or `number` used to be bracketed by a
+  `velar:start`/`velar:end` comment pair and an owned child scope: on the
+  conversation-stream benchmark's 2,000-message transcript that was 607,952
+  comment nodes for 303,976 token spans — 1,247,243 DOM nodes against React's
+  618,681 for the identical element tree, and a cold mount several times slower
+  on every engine. The qualifying set is exactly those two types, and every
+  other type is excluded for the same reason: it does not render as *one* node.
+  `bool` renders none, an optional renders none or one, and WebNode, lists,
+  unions, and enums can render markup or several.
+
+### Tooling and project compilation
+
+- `velar check` now reads **every `.vel` file under the project**, not only the
+  ones the entry imports. A module nothing imports yet — a chapter
+  mid-refactor, a file whose last importer was just deleted — is compiled as a
+  root of its own and its diagnostics are ordinary diagnostics; `build` refuses
+  on them too, and still emits only the graph the entry reaches, because
+  checking is not emitting. Naming a single file scopes the run to that file's
+  graph as before. `velar fix` reads the same roster: widening one without the
+  other would have left `check` refusing a mechanically fixable diagnostic
+  `fix` could not see.
+- Documented the five names a Web module may not bind — `mount`, `tick`,
+  `viewport`, `scheme`, and `motion` — which the compiler already refused with
+  **VEL3007**, and corrected a published example that read an optional bare as
+  a condition where the language requires `!= null`.
+
+## 0.20.0 — 2026-08-27
+
+### Server routes
+
+- A route may now carry a stable operation identity: an optional source
+  identifier between the role and `(`, as in `@get readArticle(...)` or
+  `@websocket worldRealtime(...)`. It must be unique after server composition,
+  survives `prefix`, and is emitted verbatim as the OpenAPI `operationId`. An
+  anonymous route stays valid and receives a method- and path-derived identity
+  for documentation only, so nothing already written has to be rewritten.
+  Uniqueness is checked at compile, again when an app is assembled, and again
+  when OpenAPI is generated, because each of the three is a place a duplicate
+  can first become reachable.
+- Explicit identities are reserved before any derived one is allocated. A
+  derived identity now yields to an explicit one rather than competing with it,
+  so adding a route can no longer change an `operationId` that has already been
+  published; the retired scheme numbered collisions per base name in declaration
+  order, which made a published identity depend on the order routes happened to
+  be declared in.
+- Declarative WebSocket routes now appear in the OpenAPI document, as GET
+  upgrades with a 101 response and `x-velar-transport: websocket`, and carry the
+  `documented`, `summary`, `description`, and `tags` metadata that used to be
+  HTTP-only. One documented path cannot carry both an HTTP GET and a WebSocket
+  upgrade, so a client can discover both transports without copying path strings.
+- An operation name is highlighted as a function in editors. It declares no
+  variable in handler scope, so the function colour says "callable capability"
+  without suggesting it is a captured parameter.
+
+### Runtime
+
+- The Node terminal now delivers every byte it read before its input host
+  exits. The host closed the IPC channel carrying that input in the same turn
+  as its last send, which discarded whatever the channel had not written yet —
+  the end of input among it — so a program reading a large input intermittently
+  failed with `Node terminal input host exited unexpectedly with code 0`
+  instead of receiving what it had already typed.
+- A WebSocket `host` must be non-empty text of at most 255 code units without
+  NUL. It was checked only for being text.
 
 ## 0.19.1 — 2026-08-27
 
