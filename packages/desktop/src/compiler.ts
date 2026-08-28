@@ -374,10 +374,14 @@ const desktopTestModuleInterface = moduleInterface(new Map([
   // so an application's failure path is testable rather than only reachable;
   // `serveService` runs a real loopback WebSocket server in the test process so
   // a `connect()` round trip crosses a socket rather than a stub, and the
-  // handler stays here in VelarScript.
+  // handler stays here in VelarScript. `pushService` is the other leg of the
+  // same envelope: `serveService`'s handler answers what was asked, and this
+  // emits what nobody asked for, which is what a streaming service does. It
+  // answers how many open connections took the frame.
   ["setServiceState", functionType([stringType, serviceStateType, optionalStringType], promiseOf(nullType), 2)],
   ["serveService", functionType([stringType, functionType([stringType], promiseOf(stringType))], promiseOf(nullType))],
   ["serviceRejectsWrongToken", functionType([stringType], promiseOf(boolType))],
+  ["pushService", functionType([stringType, stringType], promiseOf(numberType))],
   ["stopService", functionType([stringType], promiseOf(nullType))],
   // The fake keychain reports the names it holds and never the values it holds:
   // a stored credential does not leave `velar/secure-storage`, and a test seam
@@ -695,6 +699,9 @@ const runtimeKey = Symbol.for("velar.browser.test.v1");
 // The same 4 KiB bound the host applies to a service's captured stderr, so a
 // detail a test can write is a detail a service could actually have produced.
 const maxServiceDetailBytes = 4 * 1024;
+// The same bound ServiceConnection.send puts on a frame, so a frame a test can
+// push is a frame the transport could actually have carried.
+const maxServicePushBytes = 8 * 1024 * 1024;
 const getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
 const reflectApply = Reflect.apply;
 function invoke(capability, operation, args, timeout) {
@@ -898,6 +905,34 @@ export async function setServiceState(name, state, detail = null) {
   return testSettle("service-fake", "setState", [testServiceName(name, "setServiceState"), state, detail], "setServiceState");
 }
 /**
+ * The push leg of the service envelope. serveService's handler answers a
+ * question the application asked; this emits a frame nobody asked for, which is
+ * what a streaming service actually does — a downstream token, a progress
+ * notice, a cache invalidation. Without it a browser test can only exercise the
+ * half of an ingestion path that replies reach.
+ *
+ * The frame is addressed by service name rather than by connection, because a
+ * push is not a reply and carries no request to be correlated with. Every open
+ * connect() to that service receives it, in push order, at its next next()
+ * — pushing to a connection that has none pending queues the frame rather than
+ * dropping it, exactly as a delivered reply does.
+ *
+ * The answer is how many connections took it. A push before the application
+ * connected reaches nobody and answers 0, which is a real ordering mistake in a
+ * test and is worth being able to see rather than having to infer from a
+ * next() that never settles.
+ */
+export async function pushService(name, message) {
+  const service = testServiceName(name, "pushService");
+  if (typeof message !== "string") throw new TypeError("Desktop test pushService requires text");
+  if (__velarUtf8ByteLength(message) > maxServicePushBytes) {
+    throw new RangeError("Desktop test pushService message cannot exceed 8 MiB");
+  }
+  const value = await invoke("service-fake", "push", [service, message], 30000);
+  if (!Number.isSafeInteger(value) || value < 0) throw new TypeError("Desktop test host returned an invalid pushService result");
+  return value;
+}
+/**
  * Starts a real loopback WebSocket server for this service and pumps the
  * application's channel through it: what the page sends leaves over a socket,
  * reaches the handler here, and comes back the same way. The service is reported
@@ -907,8 +942,22 @@ export async function setServiceState(name, state, detail = null) {
 export async function serveService(name, handler) {
   const service = testServiceName(name, "serveService");
   if (typeof handler !== "function") throw new TypeError("Desktop test serveService requires a handler");
-  if (servedServices.has(service)) throw new Error("Desktop test service '" + service + "' is already served; stopService releases it");
+  // The host is asked first, because the host is the authority on whether this
+  // service is served and this module is not. The host controller is rebuilt
+  // for every test; servedServices below is module state that every test in the
+  // file shares. Guarding on the module state made an earlier test's failure
+  // permanent: a test that failed before its stopService left the name
+  // registered here and unknown there, and every later serveService in the file
+  // was refused for a service nothing was actually serving.
   await testSettle("service-test", "serve", [service], "serveService");
+  // The host accepted, so anything still registered under this name belongs to
+  // a test that has already ended. Its pumps are aimed at a controller that no
+  // longer exists, so they are stopped rather than left spinning.
+  const abandoned = servedServices.get(service);
+  if (abandoned) {
+    abandoned.stop();
+    servedServices.delete(service);
+  }
   let running = true;
   // The service half: what arrives on the real socket is handed to the test's
   // own handler, and its answer goes back out the same socket.
@@ -970,12 +1019,20 @@ export async function serviceRejectsWrongToken(name) {
 export async function stopService(name) {
   const service = testServiceName(name, "stopService");
   const served = servedServices.get(service);
-  if (served) served.stop();
-  await testSettle("service-test", "close", [service], "stopService");
+  // The registration is released first, and unconditionally. servedServices
+  // is module state, so it is shared by every test in the file, while the host
+  // controller behind close is rebuilt for each one. A stop that threw after
+  // the pumps were already told to stop used to leave the name registered
+  // forever: serveService then refused it as "already served", and the
+  // stopService that would have cleared it threw first at "is not served" --
+  // so one failing test turned every later service test in the file red. The
+  // deleted entry is kept in served so the pumps are still awaited below.
   if (served) {
+    served.stop();
     servedServices.delete(service);
-    await served.settled;
   }
+  try { await testSettle("service-test", "close", [service], "stopService"); }
+  finally { if (served) await served.settled; }
   try { await setServiceState(service, "stopped"); }
   catch { /* the document a state event would reach may already be gone */ }
   return null;

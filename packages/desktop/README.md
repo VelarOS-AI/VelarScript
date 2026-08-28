@@ -36,7 +36,8 @@ permission-scoped implementations of existing language capabilities:
   same checked contracts as Node, restricted by the Desktop manifest.
 - `velar/desktop-test`: deterministic platform and window-kind selection, a fake
   window registry, notification centre, keychain, power source, drop source and
-  permission probes, and bounded fixture filesystem helpers for official browser
+  permission probes, a served fake service that answers and pushes over a real
+  loopback socket, and bounded fixture filesystem helpers for official browser
   tests.
 
 Language servers, project transactions, product task runners, terminals,
@@ -256,6 +257,39 @@ export async def count() -> string:
     using link = await connect("core")
     using reader = task((cancellation) => readReplies(link, cancellation))
     return (await ask(link, "1", "count"))?.body ?? ""
+```
+
+### Testing a service, including what it pushes
+
+`velar/desktop-test` serves a fake in the test process, and the fake is not a
+stub: `serveService(name, handler)` starts a real loopback WebSocket server,
+performs the real handshake, checks the real token, and pumps the application's
+channel through it, so a message leaves the page, crosses a socket, reaches the
+handler, and comes back. `setServiceState` publishes the transitions a
+supervisor would, `serviceRejectsWrongToken` asks the service side to refuse an
+issued-by-nobody token, and `stopService` releases it.
+
+A handler can only answer what was asked, and that is half of what a service
+does. `pushService(name, message)` is the other half — the frame nobody asked
+for, which is what every streaming downlink is made of. It reaches every open
+`connect()` to that service, arriving at an ordinary `next()`, because on the
+wire a pushed frame and a reply are the same thing and only the product's
+protocol distinguishes them. It answers **how many connections took it**, so a
+push written before the application connected reports `0` rather than leaving a
+`next()` that never settles for a reader to puzzle over. Frames queue in push
+order for a connection that has no pull outstanding, exactly as a reply does.
+
+```velar fragment
+test "a stream frame the service was not asked for reaches the page":
+    await serveService("core", async (request: string) => request)
+    await browser.open()
+    await browser.click("[data-listen]")
+    await browser.waitForText("[data-stream]", "listening")
+
+    expect(await pushService("core", "first token")).toBe(1)
+    expect(await pushService("core", "second token")).toBe(1)
+    await browser.waitForText("[data-stream]", "first token|second token")
+    await stopService("core")
 ```
 
 The reader is an ordinary `Task`, so `using` cancels and joins it when the scope

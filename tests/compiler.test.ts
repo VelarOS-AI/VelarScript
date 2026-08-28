@@ -8499,7 +8499,7 @@ test("0.11 Web APIs have one versioned typed compiler/runtime contract", async (
   assert.deepEqual(api.modules["velar/forms"], ["checkedValue", "clearError", "clearErrors", "errors", "fieldValue", "fieldValues", "focusFirstError", "numberValue", "read", "reset", "setError", "setPending", "textValue", "values"]);
   assert.deepEqual(api.modules["velar/http"], ["HttpAbortError", "HttpResponseError", "HttpTransportError", "HttpTransportPhase", "formBody", "http"]);
   assert.deepEqual(api.modules["velar/storage"], ["StorageQuotaError", "StorageTransactionError", "StorageUpgradeError", "database", "session", "storage"]);
-  assert.deepEqual(api.modules["velar/browser"], ["after", "blur", "capturePointer", "clipboardText", "closeDialog", "copyText", "dialogResult", "environment", "every", "focus", "frame", "location", "measure", "media", "open", "readClipboardText", "releasePointer", "scrollElementTo", "scrollIntoView", "scrollMetrics", "scrollTo", "setClipboardText", "setTextSelection", "showDialog", "textSelection", "watchMedia", "watchOnline", "watchVisibility"]);
+  assert.deepEqual(api.modules["velar/browser"], ["after", "blur", "capturePointer", "clipboardText", "closeDialog", "copyText", "dialogResult", "environment", "every", "focus", "frame", "location", "measure", "media", "open", "readClipboardText", "releasePointer", "scrollElementTo", "scrollIntoView", "scrollMetrics", "scrollTo", "setClipboardText", "setTextSelection", "showDialog", "textSelection", "watchIntersection", "watchMedia", "watchOnline", "watchVisibility"]);
   assert.deepEqual(api.modules["velar/files"], ["download", "pick", "readDataUrl", "readText"]);
   assert.deepEqual(api.modules["velar/realtime"], ["RealtimeClient", "RealtimeClientFailureAction", "RealtimeClientState", "RealtimeCodec", "RealtimeFailure", "RealtimeOpen", "RealtimeUnavailableError", "eventStream", "realtimeClient"]);
   assert.deepEqual(api.modules["velar/test"], ["expect"]);
@@ -11067,8 +11067,11 @@ test("0.6 Core standard library combines typed ergonomics with explicit platform
   // targets, and the typed bounded Channel contributes its type, constructor,
   // and two recovery classes to `velar/task`. D103 then added `velar/look`'s
   // `token`, the one checked spelling for a design system's CSS custom
-  // property, which is why the Web half of this total is one larger.
-  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 297);
+  // property, which is why the Web half of this total is one larger. P2a-4 then
+  // completed `velar/browser`'s watcher family with `watchIntersection`, the
+  // only watcher whose subject is an element rather than the environment, which
+  // is why it is one larger again.
+  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 298);
   assert.equal(Object.values(api.modules).slice(0, 15).reduce((total, exports_) => total + exports_.length, 0), 161);
   assert.equal(api.modules["velar/collections"]?.length, 28);
   assert.equal(api.modules["velar/text"]?.length, 23);

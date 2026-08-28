@@ -11,7 +11,7 @@
 // this test produce the host events a real window system would.
 
 import {DesktopPlatform, PermissionStatus, PowerState, SystemPermission} from "velar/desktop"
-import {activateNotification, appDataDirectory, appliedUpdates, closeWindow, dropFiles, focusWindow, makeDirectory, moveWindow, openWindows, openedLinks, projectDirectory, publishPower, readText, removeFile, secureStorageNames, serveService, serviceRejectsWrongToken, setNotificationPermission, setPlatform, setServiceState, setSigningTeam, setSystemPermission, setWindowKind, shownNotifications, stageUpdate, stopService, writeText} from "velar/desktop-test"
+import {activateNotification, appDataDirectory, appliedUpdates, closeWindow, dropFiles, focusWindow, makeDirectory, moveWindow, openWindows, openedLinks, projectDirectory, publishPower, pushService, readText, removeFile, secureStorageNames, serveService, serviceRejectsWrongToken, setNotificationPermission, setPlatform, setServiceState, setSigningTeam, setSystemPermission, setWindowKind, shownNotifications, stageUpdate, stopService, writeText} from "velar/desktop-test"
 import {NotificationPermission} from "velar/notification"
 import {browser} from "velar/web-test"
 import {expect} from "velar/test"
@@ -247,6 +247,31 @@ test "a service channel round-trips through a real loopback socket":
     // `put`, then `count`, and the answer came back over the socket.
     await browser.click("[data-ask-service]")
     await browser.waitForText("[data-service-summary]", "1")
+    await stopService(notesIndex)
+
+// The other leg of the same envelope. `serveService`'s handler can only answer
+// what was asked, and a streaming service spends most of its life saying things
+// nobody asked for — a token of a reply being generated, a progress notice, a
+// cache invalidation. `pushService` is that leg, and the claim proved here is
+// that a pushed frame is indistinguishable from a reply where it lands: it
+// arrives at an ordinary `next()` on an ordinary `connect()`.
+//
+// The count it answers is what makes the ordering visible rather than silent. A
+// push before anything connected reaches nobody, and a test that could not see
+// that would instead see a `next()` that never settles.
+test "a served fake pushes a frame nobody asked for, and it arrives at next()":
+    await serveService(notesIndex, async (request: string) => request)
+    await browser.open()
+    expect(await pushService(notesIndex, "nobody is listening yet")).toBe(0)
+
+    await browser.click("[data-listen-push]")
+    await browser.waitForText("[data-service-push]", "listening")
+    expect(await pushService(notesIndex, "first token")).toBe(1)
+    expect(await pushService(notesIndex, "second token")).toBe(1)
+
+    // Push order is delivery order, and a frame that arrives before its reader
+    // pulls is queued rather than dropped — the same contract a reply has.
+    await browser.waitForText("[data-service-push]", "first token|second token")
     await stopService(notesIndex)
 
 // The token is the whole authentication of a loopback endpoint every process on

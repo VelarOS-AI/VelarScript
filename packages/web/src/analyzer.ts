@@ -4318,7 +4318,13 @@ function webTypeFields(name: string): ReadonlyMap<string, ValueType> | null {
     ["type", stringType], ["defaultPrevented", boolType], ["preventDefault", functionType([], [], nullType)], ["stopPropagation", functionType([], [], nullType)],
   ]);
   if (name === "Event") return eventFields();
-  if (name === "KeyboardEvent") return new Map([...eventFields(), ["key", stringType], ["code", stringType], ["repeat", boolType], ["altKey", boolType], ["ctrlKey", boolType], ["metaKey", boolType], ["shiftKey", boolType]]);
+  // `isComposing` is on `InputEvent` below and belongs here for the same
+  // reason: while an input method is composing, a keystroke is aimed at the
+  // composer's candidate window rather than at the application. An Enter that
+  // commits a candidate arrives as `keydown` with `isComposing` true, and a
+  // handler that sends on Enter without asking sends half a word — which is the
+  // default for every CJK typist rather than an edge case.
+  if (name === "KeyboardEvent") return new Map([...eventFields(), ["key", stringType], ["code", stringType], ["repeat", boolType], ["isComposing", boolType], ["altKey", boolType], ["ctrlKey", boolType], ["metaKey", boolType], ["shiftKey", boolType]]);
   if (name === "PointerEvent") return new Map([...eventFields(), ["pointerId", numberType], ["pointerType", stringType], ["pressure", numberType], ["button", numberType], ["buttons", numberType], ["clientX", numberType], ["clientY", numberType], ["movementX", numberType], ["movementY", numberType], ["altKey", boolType], ["ctrlKey", boolType], ["metaKey", boolType], ["shiftKey", boolType]]);
   if (name === "InputEvent") return new Map([...eventFields(), ["data", optionalOf(stringType)], ["inputType", stringType], ["isComposing", boolType]]);
   if (name === "CompositionEvent") return new Map([...eventFields(), ["data", stringType]]);

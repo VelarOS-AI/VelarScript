@@ -90,6 +90,13 @@ Two watches that write one `state` both take effect, in that order. Put a value
 that must be correct before anything reads it in a `computed`, which settles
 before any DOM is written and never depends on watch order.
 
+A watch runs before the DOM its own change produces, so **layout read inside a
+watch is the layout from before the change** — `scrollMetrics` and `measure`
+answer the previous frame, silently and with no diagnostic. Read layout from a
+detached `async` statement that does `await frame()` first; the same applies
+immediately after `scrollElementTo`. `tick()` waits for the flush (rendered text
+and structure); `frame()` waits for the paint (geometry).
+
 `@mounted:` runs after insertion and may await. `@cleanup:` runs before removal
 and is synchronous. A component may still declare ordinary methods named
 `mounted` or `cleanup` because compiler-owned names occupy a separate namespace.

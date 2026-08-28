@@ -230,6 +230,24 @@ component Dialog(close: () -> null, submit: () -> null):
 have answered — "was this the element itself, or a descendant?" — which is what
 a backdrop-dismiss handler needs.
 
+A modifier prevents **every** dispatch, which is what a form submit wants and
+almost never what a keystroke wants: `on:keydown.prevent` would swallow typing
+along with the key it was aimed at. Prevention that depends on which event
+arrived is written in the handler body instead, with `event.preventDefault()` —
+a typed field on every event object. That division is the whole design: the
+modifier is the unconditional case, the call is the conditional one, and neither
+replaces the other, which is why there is no per-dispatch modifier to look for.
+
+```velar fragment
+def sendOnEnter(event: KeyboardEvent):
+    // `isComposing` is true while an input method is choosing a candidate, and
+    // Enter is how a candidate is chosen. Sending without asking sends half a
+    // word — the normal case for a CJK typist, not an edge case.
+    if event.key == "Enter" and not event.shiftKey and not event.isComposing:
+        event.preventDefault()
+        send()
+```
+
 An attribute value of `bool` follows the attribute's own convention. A native
 boolean attribute means by presence, so `true` writes it empty and `false`
 removes it. An `aria-*` state means by literal token, so `true` and `false`
@@ -546,7 +564,13 @@ component Form:
 
 An event object carries typed event fields only — `type`,
 `defaultPrevented`, `preventDefault`, `stopPropagation`, and the fields of its
-specific event kind (`key`, `clientX`, `data`, and so on). It deliberately
+specific event kind. A `KeyboardEvent` carries `key`, `code`, `repeat`,
+`isComposing`, and the four modifier flags; a `PointerEvent` carries its
+coordinates, button state, and the same flags; an `InputEvent` carries
+`inputType`, `data`, and `isComposing`. **`isComposing` is on both event kinds
+that can arrive mid-composition, and a handler that acts on Enter has to read
+it** — an input method commits a candidate with Enter, so a composer that does
+not ask sends a half-typed word. It deliberately
 carries no `target` or `currentTarget`: an untyped element reference inside a
 handler is how DOM reading leaks back into application code, and the value the
 handler wanted is available through a binding. Read control values with `bind:`,
@@ -679,6 +703,38 @@ watches run in the order they were written — source order in one module,
 mount order across instances of one component, module initialization order
 across modules — and two watches that write one `state` both take effect in
 that order rather than being refused.
+
+**A watch runs before the DOM its own change produces.** Every `computed` and
+every watch settles to a fixed point first, and only then is the document
+written, once. That is deliberate — it is what stops a corrective watch from
+rendering the value it was written to correct — but it has a consequence that is
+easy to meet and hard to diagnose: **a watch body reads the layout the page had
+before the change, not the layout it is about to have.** `scrollMetrics` inside
+a watch answers the old `contentHeight`; `measure` answers the old box. Nothing
+reports an error, because nothing went wrong — the numbers are simply the
+previous frame's. The symptom is silence: scroll anchoring computed from them
+restores a position that was already correct, so a reader is never thrown, and
+the page just quietly stops doing the thing the watch existed to do.
+
+Layout is read after a frame, not after a flush. A watch body is synchronous, so
+the read moves into a detached `async` statement that waits first:
+
+```velar fragment
+watch items:
+    async anchorAfterPaint()
+
+action anchorAfterPaint():
+    await frame()
+    const metrics = scrollMetrics(list)
+    scrollElementTo(list, 0, metrics.contentHeight - anchoredFromBottom)
+```
+
+`tick()` answers when the flush has settled and the DOM is written, which is the
+right wait for reading rendered *text or structure*. `frame()` from
+`velar/browser` answers after the next paint, which is the right wait for
+reading *geometry* — the browser has not laid the new nodes out until then. The
+same rule applies outside watches: `scrollElementTo` followed immediately by
+`scrollMetrics` reads the position the element had before the scroll.
 
 A component watch is disposed with its component. A **module-scope watch is never
 disposed**: like a module `action`, it lives for the life of the page. That is
@@ -1467,7 +1523,7 @@ import {checkedValue, clearError, clearErrors, errors, fieldValue, fieldValues, 
 ## `velar/browser`
 
 ```velar
-import {after, blur, closeDialog, dialogResult, environment, every, focus, scrollElementTo, scrollMetrics, setTextSelection, showDialog, textSelection, watchOnline, watchVisibility} from "velar/browser"
+import {after, blur, closeDialog, dialogResult, environment, every, focus, frame, scrollElementTo, scrollMetrics, setTextSelection, showDialog, textSelection, watchIntersection, watchOnline, watchVisibility} from "velar/browser"
 
 component EnvironmentStatus:
     const stopReady = after(250ms, () => print("ready"))
@@ -1522,6 +1578,25 @@ React-style effect API.
   `matchMedia` and EventTarget add/remove operations are captured as one host
   ABI, so watcher cleanup remains paired even after ambient or instance
   poisoning.
+- `watchIntersection(element, callback, options={})` is the fourth watcher and
+  the only one whose subject is an element rather than the environment: it
+  reports when that element enters or leaves the viewport, or a scroll container
+  named by `options.root`. It is the checked shape for infinite scroll, lazy
+  loading, and exposure logging. An entry carries `{intersecting, ratio}` and
+  nothing more — a rectangle from an observer entry describes the moment the
+  observation was taken rather than now, so `measure` remains the way to ask
+  where an element is. `options.thresholds` is a `List<number>` of 1 to 32
+  ratios from 0 through 1, defaulting to `[0.0]`; there is no `rootMargin`,
+  because it is a CSS-string dialect the host parses and a checked surface does
+  not take one. The observer delivers a first entry when it starts watching,
+  with no scroll required, which is the difference that matters against asking
+  `scrollMetrics` inside `on:scroll` — a handler that never fires reports
+  nothing, and an element that is already in view never fires one. A single
+  delivery may cover several crossings; the callback receives the newest, which
+  is the only one that still describes the element. Like the others it returns
+  a `() -> null` cleanup, and `IntersectionObserver` construction, `observe`,
+  `disconnect`, and both entry getters are captured when the module
+  initializes.
 - `copyText` and `readClipboardText` require a secure context and may reject
   when browser permission or user-gesture policy denies access. Each operation
   snapshots the secure-context and native clipboard host once, then uses the
@@ -1542,7 +1617,11 @@ React-style effect API.
   native getters, and `scrollElementTo` moves that exact element without
   exposing mutable `scrollTop`/`scrollLeft` fields. Element scrolling and
   measurement call the validated platform prototype rather than an instance
-  override.
+  override. **Every one of these reads answers the layout the browser has
+  already performed**, so a read that follows a change in the same turn — inside
+  a `watch`, or straight after `scrollElementTo` — answers the layout from
+  before it. `await frame()` first; "Watch forms and lifetime" above has the
+  pattern and the reason.
 - `capturePointer(element,pointerId)` and `releasePointer(element,pointerId)`
   keep drag/select ownership on one native Element. IDs are bounded
   non-negative integers and the captured prototype operations retain native

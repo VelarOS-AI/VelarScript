@@ -3070,6 +3070,12 @@ const browserMediaEventMatches = __velarBrowserPrototypeMember(browserMediaEvent
 function browserMediaEventField(event) {
   return __velarBrowserField(event, "matches", browserMediaEventMatches, browserMediaEventConstructor);
 }
+const browserIntersectionObserverConstructor = __velarBrowserConstructor("IntersectionObserver");
+const browserIntersectionEntryConstructor = __velarBrowserConstructor("IntersectionObserverEntry");
+const browserIntersectionObserve = __velarBrowserPrototypeMember(browserIntersectionObserverConstructor, "observe", "value");
+const browserIntersectionDisconnect = __velarBrowserPrototypeMember(browserIntersectionObserverConstructor, "disconnect", "value");
+const browserIntersectionIntersecting = __velarBrowserPrototypeMember(browserIntersectionEntryConstructor, "isIntersecting", "get");
+const browserIntersectionRatio = __velarBrowserPrototypeMember(browserIntersectionEntryConstructor, "intersectionRatio", "get");
 
 function browserNumber(value, name) { if (!Number.isFinite(value)) throw new TypeError(name + " must be a finite number"); return value; }
 function browserBool(value, name) { if (typeof value !== "boolean") throw new TypeError(name + " must be bool"); return value; }
@@ -3358,6 +3364,59 @@ export function watchVisibility(callback) {
   }, callback, "observer", "visibility");
   const remove = __velarBrowserListen(__velarBrowserDocument, "visibilitychange", changed);
   return () => { remove(); return null; };
+}
+function intersectionThresholds(value) {
+  if (value == null) return [0];
+  if (!Array.isArray(value) || Object.getOwnPropertySymbols(value).length > 0
+    || Object.getOwnPropertyNames(value).length !== value.length + 1) {
+    throw new TypeError("Intersection thresholds must be a dense List");
+  }
+  if (value.length === 0 || value.length > 32) throw new RangeError("Intersection thresholds must hold 1 through 32 ratios");
+  const output = new Array(value.length);
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, index);
+    if (!descriptor?.enumerable || !("value" in descriptor)) throw new TypeError("Intersection thresholds cannot use accessors");
+    const threshold = descriptor.value;
+    if (typeof threshold !== "number" || !Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
+      throw new RangeError("Each intersection threshold must be a ratio from 0 through 1");
+    }
+    output[index] = threshold;
+  }
+  return output;
+}
+// One delivery carries every threshold the target crossed since the last one,
+// oldest first. The watcher publishes the newest, which is the only entry that
+// still describes the element now; the older ones describe a layout that has
+// already been superseded by the time the callback runs.
+function intersectionRecord(entries) {
+  if (!Array.isArray(entries) || entries.length === 0) throw new TypeError("The browser delivered an invalid intersection record");
+  const entry = entries[entries.length - 1];
+  const intersecting = browserBool(__velarBrowserField(entry, "isIntersecting", browserIntersectionIntersecting, browserIntersectionEntryConstructor), "Intersection watcher result");
+  const ratio = browserNumber(__velarBrowserField(entry, "intersectionRatio", browserIntersectionRatio, browserIntersectionEntryConstructor), "Intersection watcher ratio");
+  if (ratio < 0 || ratio > 1) throw new RangeError("Intersection watcher ratio must be a ratio from 0 through 1");
+  return Object.freeze({ intersecting, ratio });
+}
+export function watchIntersection(element, callback, options = {}) {
+  element = requireElement(element);
+  if (typeof callback !== "function") throw new TypeError("watchIntersection requires a callback");
+  options = __velarOptions(options, "Intersection watcher options", __velarOptionFields(["root", "thresholds"]));
+  const root = options.root == null ? null : requireElement(options.root);
+  const threshold = intersectionThresholds(options.thresholds);
+  if (typeof browserIntersectionObserverConstructor !== "function"
+    || typeof browserIntersectionObserve !== "function" || typeof browserIntersectionDisconnect !== "function") {
+    throw new TypeError("The browser does not expose native IntersectionObserver");
+  }
+  const observed = (entries) => __velarInvokeOwnedRead(() => intersectionRecord(entries), callback, "observer", "intersection");
+  const observer = new browserIntersectionObserverConstructor(observed, { root, threshold });
+  __velarBrowserCallCaptured(browserIntersectionObserve, observer, [element], "IntersectionObserver.observe");
+  let stopped = false;
+  return () => {
+    if (!stopped) {
+      stopped = true;
+      __velarBrowserCallCaptured(browserIntersectionDisconnect, observer, [], "IntersectionObserver.disconnect");
+    }
+    return null;
+  };
 }
 export function showDialog(dialog) {
   requireDialog(dialog);

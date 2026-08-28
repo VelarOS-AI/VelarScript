@@ -86,7 +86,7 @@ async function fakeService(
       + `declare it under 'desktop.services' (declared services: ${Object.keys(config.services).join(", ") || "none"})`);
   }
   if (operation === "serve") {
-    if (served.has(name)) throw new Error(`Desktop test service '${name}' is already served`);
+    if (served.has(name)) throw new Error(`Desktop test service '${name}' is already served; stopService releases it`);
     const server = await startLoopbackServiceServer();
     const entry: ServedFakeService = {
       server,
@@ -1111,6 +1111,11 @@ export function desktopBrowserTestInitScript(
     }
     throw new Error("Unsupported Desktop test service operation '" + operation + "'");
   }
+  function deliverToServiceConnection(connection, message) {
+    if (connection.pending) { const deliver = connection.pending; connection.pending = null; deliver(message); return; }
+    if (connection.queue.length >= maxServiceQueuedMessages) throw new RangeError("Desktop test service receive queue reached its bound");
+    connection.queue.push(message);
+  }
   async function serviceTestCapability(operation, args) {
     if (operation === "setState") {
       if (!declaredServices.has(args[0])) throw new Error("Desktop test setServiceState cannot name the undeclared service '" + String(args[0]) + "'");
@@ -1133,10 +1138,24 @@ export function desktopBrowserTestInitScript(
     if (operation === "deliver") {
       const connection = serviceConnections.get(args[0]);
       if (!connection || connection.closed) return null;
-      if (connection.pending) { const deliver = connection.pending; connection.pending = null; deliver(args[1]); return null; }
-      if (connection.queue.length >= maxServiceQueuedMessages) throw new RangeError("Desktop test service receive queue reached its bound");
-      connection.queue.push(args[1]);
+      deliverToServiceConnection(connection, args[1]);
       return null;
+    }
+    // deliver answers one connection because it answers one request, and the
+    // request carried the handle. A push has no request to carry one, so it is
+    // addressed by service name and reaches every open connection to it -- the
+    // real envelope's push leg has the same shape, since a service pushing a
+    // stream frame is not replying to anybody. The count is returned so a test
+    // can tell "delivered to nobody" from "delivered", which is the difference
+    // between pushing before connect() and pushing after it.
+    if (operation === "push") {
+      let delivered = 0;
+      for (const connection of serviceConnections.values()) {
+        if (connection.name !== args[0] || connection.closed) continue;
+        deliverToServiceConnection(connection, args[1]);
+        delivered += 1;
+      }
+      return delivered;
     }
     throw new Error("Unsupported Desktop test service seam operation '" + operation + "'");
   }

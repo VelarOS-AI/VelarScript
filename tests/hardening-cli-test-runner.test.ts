@@ -450,6 +450,46 @@ test "a service served before the first open round-trips once the page is there"
   assert.match(result.stdout, /\n3 passed, 0 failed\n/u);
 });
 
+test("[CLI-32] one failed service test does not make the service unservable for the rest of the file", { timeout: 600_000 }, async () => {
+  const directory = await desktopBrowserProject("velar-runner-service-cascade-", {
+    "cascade.browser.test.vel": `
+import {serveService, stopService} from "velar/desktop-test"
+import {expect} from "velar/test"
+
+test "a served service whose test fails before it stops":
+    await serveService("core", async (request: string) => request)
+    expect("this test fails on purpose").toBe("and never reaches stopService")
+    await stopService("core")
+
+test "the next test serves the same name":
+    await serveService("core", async (request: string) => request)
+    await stopService("core")
+`,
+  });
+
+  // The registry serveService guards on is module state, so every test in one
+  // file shares it, while the host controller behind it is rebuilt for each
+  // test. A test that fails before its stopService therefore leaves the two
+  // desynchronized: the name is still registered here, and unknown there.
+  //
+  // stopService used to delete the registration *after* awaiting the host's
+  // close. The recovering test's close is refused — this test's host never
+  // served anything — so the delete was never reached, and the name stayed
+  // registered for the life of the process. Every later serveService in the
+  // file then failed with "already served", which is how a single red test
+  // was observed turning a green 27 into 13 passed / 15 failed.
+  //
+  // The claim is that the *second* test passes. Two failures are expected and
+  // both belong to the first one: the assertion it was written to fail, and the
+  // runner's own report that it left the pumps it started running. Before the
+  // fix this read "0 passed, 3 failed" and the second test's failure was
+  // "already served" — a service nothing was serving.
+  const result = await runCommand(process.execPath, [cli, "test", directory, "--browser=chromium"]);
+  assert.match(result.output, /✓ chromium :: "src\/cascade\.browser\.test\.vel" :: "the next test serves the same name"/u);
+  assert.doesNotMatch(result.output, /already served/u);
+  assert.match(result.stdout, /\n1 passed, 2 failed\n/u);
+});
+
 test("[CLI-3] a test module whose failure left work behind does not hold the run open", { timeout: 120_000 }, async () => {
   const directory = await coreProject("velar-runner-load-hang-", {
     "boom.test.vel": `

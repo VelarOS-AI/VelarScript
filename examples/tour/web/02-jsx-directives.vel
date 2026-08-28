@@ -30,7 +30,7 @@ const inkColor = rgb(24, 31, 46)
 def onPlainEvent(event: Event): print(f"plain: {event.type}")
 
 def onKeyEvent(event: KeyboardEvent):
-    print(f"key: {event.key} {event.code} {event.altKey} {event.ctrlKey} {event.metaKey} {event.shiftKey} {event.repeat}")
+    print(f"key: {event.key} {event.code} {event.altKey} {event.ctrlKey} {event.metaKey} {event.shiftKey} {event.repeat} {event.isComposing}")
 
 def onPointerEvent(event: PointerEvent):
     print(f"pointer: {event.pointerType} {event.pointerId} {event.button} {event.clientX} {event.clientY}")
@@ -58,6 +58,38 @@ component EventDirectives:
         <button type="button" data-once on:click.once={onPlainEvent}>once</button>
         <button type="button" data-stacked on:click.prevent.stop={onPointerEvent}>prevent and stop</button>
     </form>
+
+// A composer that sends on Enter is the ordinary shape, and it is also where
+// both halves of the event contract have to be spelled correctly.
+//
+// `event.isComposing` is the first half. An input method uses Enter to choose a
+// candidate, and that keystroke arrives as a `keydown` like any other; a
+// handler that does not ask sends half a word. For most of the world that is
+// the normal case rather than an edge case.
+//
+// `event.preventDefault()` is the second half, and it is why the five modifiers
+// are not the whole story. `on:keydown.prevent` would prevent *every* keydown,
+// typing included. Prevention that depends on which key arrived can only be
+// written in the handler body — that is the division of labour the modifiers
+// were kept under, not a gap in them.
+component EnterComposer:
+    state draft = ""
+    state sent = "nothing sent"
+    state lastKey = "no key"
+
+    def keyDown(event: KeyboardEvent):
+        lastKey = f"{event.key}:{event.isComposing}"
+        if event.key == "Enter" and not event.shiftKey and not event.isComposing:
+            event.preventDefault()
+            sent = draft == "" ? "nothing to send" : draft
+            draft = ""
+
+    return <div data-composer>
+        <input data-composer-input type="text" bind:value={draft} on:keydown={keyDown} />
+        <p data-composer-sent>{sent}</p>
+        <p data-composer-key>{lastKey}</p>
+        <p data-composer-draft>{draft == "" ? "(empty)" : draft}</p>
+    </div>
 
 // `bind:value` on the supported form controls, `bind:checked` on one checkbox,
 // `bind:group` on radios (the state holds the selected input's `value`) and on
@@ -213,6 +245,7 @@ export component DirectivesPanel:
     return <section data-chapter="02">
         <h2>02 — JSX directives</h2>
         <EventDirectives />
+        <EnterComposer />
         <BindDirectives />
         <StyleDirectives />
         <LiteralDirectives />

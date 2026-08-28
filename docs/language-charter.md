@@ -4280,6 +4280,19 @@ point before a single DOM node is written and never depends on the order
 watches run in — which is why a value that must be correct before anything
 reads it belongs in a `computed`, not in a watch that writes state.
 
+Watches settle before that same DOM commit, and this is the one consequence of
+it worth stating outright: **a watch body reads the layout the page had before
+its own change.** That is what makes the commit glitch-free — a corrective watch
+cannot push an invalid value through the DOM first — and it means a geometry
+read inside a watch answers the previous frame. Nothing reports it, because
+nothing is wrong; the numbers are simply the ones the browser has laid out. A
+watch body is synchronous, so a read that must see the new layout belongs in a
+detached `async` statement that awaits `frame()` first. `tick()` answers once
+the flush has settled and the DOM is written; `frame()` answers after the paint,
+which is when geometry exists to be read. There is no `flush: "post"` option:
+the two waits already name the two moments, and a third spelling would only
+make it possible to ask for the wrong one.
+
 ## 16. Lifecycle
 
 Lifecycle is component-owned and deliberately small:

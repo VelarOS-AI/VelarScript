@@ -2,7 +2,7 @@
 // and `velar/files`.
 //
 // Authority: the three module export tables in packages/web/src/compiler.ts —
-// `velar/browser` (28 exports), `velar/forms` (14), and `velar/files` (4).
+// `velar/browser` (29 exports), `velar/forms` (14), and `velar/files` (4).
 // Charter section 13 owns why these modules exist: an official Web module owns
 // the browser operations it exposes and captures the host objects when it
 // initializes, so a later ambient replacement cannot redirect them.
@@ -12,7 +12,7 @@
 // a modal — is written inside a `def` that nothing calls. The spelling is the
 // point; performing it while a reader browses the tour is not.
 
-import {after, blur, capturePointer, clipboardText, closeDialog, copyText, dialogResult, environment, every, focus, frame, location, measure, media, open, readClipboardText, releasePointer, scrollElementTo, scrollIntoView, scrollMetrics, scrollTo, setClipboardText, setTextSelection, showDialog, textSelection, watchMedia, watchOnline, watchVisibility} from "velar/browser"
+import {after, blur, capturePointer, clipboardText, closeDialog, copyText, dialogResult, environment, every, focus, frame, location, measure, media, open, readClipboardText, releasePointer, scrollElementTo, scrollIntoView, scrollMetrics, scrollTo, setClipboardText, setTextSelection, showDialog, textSelection, watchIntersection, watchMedia, watchOnline, watchVisibility} from "velar/browser"
 import {checkedValue, clearError, clearErrors, errors, fieldValue, fieldValues, focusFirstError, numberValue, read, reset, setError, setPending, textValue, values} from "velar/forms"
 import {download, pick, readDataUrl, readText} from "velar/files"
 
@@ -106,6 +106,48 @@ component MeasurementReadout:
         <button type="button" data-await-frame on:click={awaitFrame} disabled={awaitFrame.pending}>
             Await a frame
         </button>
+    </div>
+
+// `watchIntersection(element, callback, options)` is the fourth watcher, and it
+// answers the one question the other three cannot: is *this element* in view.
+// It is what infinite scroll, lazy loading, and exposure logging are built on,
+// and it is not the same as asking `scrollMetrics` inside `on:scroll` — the
+// observer reports the element's position once when it starts watching, without
+// waiting for a scroll that may never come, and it reports the element rather
+// than the container's numbers.
+//
+// The options record is closed: a `root` scroll container (the viewport when it
+// is absent) and a threshold list of at most 32 ratios. An entry carries
+// `intersecting` and `ratio` and nothing else. One delivery may cover several
+// crossings; the newest is what the callback receives.
+component SentinelPaging:
+    state pages = 1
+    // `unobserved` is a state the callback never writes, so the readout proves
+    // the observer delivered a first entry on its own — no scroll required.
+    state seen = "unobserved"
+    state coverage = "none"
+    let scroller: Element? = null
+    let sentinel: Element? = null
+    let stops: List<() -> null> = []
+
+    def observed(intersecting: bool, ratio: number):
+        seen = intersecting ? "in view" : "below"
+        coverage = ratio > 0.0 ? "partial" : "none"
+        if intersecting and pages < 2: pages += 1
+
+    @mounted:
+        if sentinel != null:
+            stops = [watchIntersection(sentinel, entry => observed(entry.intersecting, entry.ratio), {root: scroller, thresholds: [0.0, 1.0]})]
+
+    @cleanup:
+        for stop in stops: stop()
+
+    return <div data-sentinel-paging>
+        <p data-sentinel-state>{f"{pages}:{seen}:{coverage}"}</p>
+        <div ref={scroller} data-sentinel-root look:height={80px} look:overflowY="auto">
+            <div data-sentinel-filler look:height={240px}>Scroll down to reach the sentinel.</div>
+            <div ref={sentinel} data-sentinel look:height={8px}></div>
+        </div>
     </div>
 
 // Focus, scrolling, text selection, and pointer capture all take the element
@@ -276,6 +318,7 @@ export component CapabilitiesPanel:
         <TimersAndSubscriptions />
         <EnvironmentReadout />
         <MeasurementReadout />
+        <SentinelPaging />
         <ElementControls />
         <ClipboardEvents />
         <FormReadout />

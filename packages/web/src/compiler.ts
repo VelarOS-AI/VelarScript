@@ -168,6 +168,7 @@ function capabilityHandle(fields: Readonly<Record<string, ValueType>>): ValueTyp
 const errorType: ValueType = { kind: "class", name: "Error" };
 const cleanupType = namedFunction([], [], nullType);
 const arrayString: ValueType = { kind: "list", element: stringType };
+const arrayNumber: ValueType = { kind: "list", element: numberType };
 const mapString = (value: ValueType): ValueType => ({ kind: "map", key: stringType, value });
 const webElementType: ValueType = { kind: "union", members: [elementType, inputElementType, canvasElementType, dialogElementType] };
 const fileType: ValueType = { kind: "named", name: "File" };
@@ -332,6 +333,22 @@ const scrollMetricsType = object({
   viewportWidth: numberType, viewportHeight: numberType,
   contentWidth: numberType, contentHeight: numberType,
 });
+// P2a-4 — `watchIntersection` completes the `velar/browser` watcher family for
+// the one question the family could not answer: has *this element* entered or
+// left the viewport. The family's shape is kept exactly — a callback plus a
+// `() -> null` cleanup, never a live host object — and the entry carries the
+// two fields the platform actually guarantees for a single observed target.
+// `time` and the four rectangles are deliberately absent: a rectangle read from
+// an observer entry is a layout snapshot from the *observation* moment rather
+// than from now, so publishing it would invite exactly the read-a-stale-box
+// mistake `measure` exists to avoid.
+//
+// The configuration is closed rather than an options passthrough: a `root` that
+// scopes the observation to a scroll container, and a bounded threshold list.
+// `rootMargin` is not in it — it is a CSS-string dialect parsed by the host,
+// which is the one thing a checked surface must not accept as a string.
+const intersectionEntryType = object({ intersecting: boolType, ratio: numberType });
+const intersectionOptionsType = object({ root: optional(webElementType), thresholds: optional(arrayNumber) });
 const textSelectionType = object({ start: numberType, end: numberType, direction: stringType });
 const fileOptionsType = object({ accept: optional(stringType), multiple: optional(boolType) });
 // D51 (audit 12): the realtime handle is a standard capability handle that
@@ -741,6 +758,7 @@ export const webModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map
     ["capturePointer", namedFunction(["element", "pointerId"], [webElementType, numberType], nullType)],
     ["releasePointer", namedFunction(["element", "pointerId"], [webElementType, numberType], nullType)],
     ["media", namedFunction(["query"], [stringType], boolType)],
+    ["watchIntersection", namedFunction(["element", "callback", "options"], [webElementType, functionType([intersectionEntryType], unknownType), intersectionOptionsType], cleanupType, 2)],
     ["watchMedia", namedFunction(["query", "callback"], [stringType, functionType([boolType], unknownType)], cleanupType)],
     ["watchOnline", namedFunction(["callback"], [functionType([boolType], unknownType)], cleanupType)],
     ["watchVisibility", namedFunction(["callback"], [functionType([boolType], unknownType)], cleanupType)],

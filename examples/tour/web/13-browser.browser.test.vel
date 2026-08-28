@@ -115,6 +115,50 @@ test "scrolling and resizing move the page rather than the model":
     await browser.viewport(1280, 800)
     expect(await browser.text("[data-captured]")).toBe("released")
 
+// `isComposing` reaches source off a real `KeyboardEvent`, and the Enter that
+// sends is stopped from also inserting a newline by `event.preventDefault()` in
+// the handler rather than by a modifier. A synthetic key press is never an
+// input-method commit, so the flag reads `false` here — proving the field is
+// live and typed. The `true` branch needs a real IME, which no driver on any of
+// the three engines can raise; the composer's guard is what stands in for it.
+test "a keydown handler reads isComposing and prevents its own default":
+    await browser.open()
+    await browser.fill("[data-composer-input]", "ready to send")
+    await browser.waitForText("[data-composer-draft]", "ready to send")
+    await browser.press("[data-composer-input]", "Enter")
+    await browser.waitForText("[data-composer-key]", "Enter:false")
+    await browser.waitForText("[data-composer-sent]", "ready to send")
+    await browser.waitForText("[data-composer-draft]", "(empty)")
+
+// `fill` replaces the field's whole value, and a `bind:value` input is where
+// that claim is worth pinning: the driver types over a selection rather than
+// clearing first, and the binding writes the bound state back into the element
+// on every change, so replacement is a property of the two behaving together
+// rather than of either alone. Two fills in a row is the shape that would catch
+// them disagreeing, and it is checked on all three engines because the driver's
+// typing path is the part that differs between them.
+test "fill replaces the value of a bound input rather than appending to it":
+    await browser.open()
+    await browser.fill("[data-composer-input]", "first draft")
+    await browser.waitForText("[data-composer-draft]", "first draft")
+    await browser.fill("[data-composer-input]", "second draft")
+    expect(await browser.text("[data-composer-draft]")).toBe("second draft")
+    await browser.fill("[data-composer-input]", "")
+    expect(await browser.text("[data-composer-draft]")).toBe("(empty)")
+
+// `watchIntersection` is the fourth watcher and the only one whose subject is a
+// specific element. Three claims are made here that a `scrollMetrics` read
+// inside `on:scroll` could not make: the first entry arrives with no scroll at
+// all (the readout leaves `unobserved` on its own), the sentinel entering is
+// reported, and the sentinel leaving is reported too.
+test "the intersection watcher reports a sentinel entering and leaving a scroll container":
+    await browser.open()
+    await browser.waitForText("[data-sentinel-state]", "1:below:none")
+    await browser.scroll("[data-sentinel-root]", 0, 300)
+    await browser.waitForText("[data-sentinel-state]", "2:in view:partial")
+    await browser.scroll("[data-sentinel-root]", 0, 0)
+    await browser.waitForText("[data-sentinel-state]", "2:below:none")
+
 test "navigation timings and interaction timings come from the real browser":
     await browser.open()
     const navigation = await browser.timings()

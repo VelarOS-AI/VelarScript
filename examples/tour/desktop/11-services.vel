@@ -128,8 +128,13 @@ export async def channelState() -> string:
     using channel = await connect(notesIndex)
     return await channel.state()
 
+// A channel somebody else will read from. The exchange above sends first and
+// reads the answer; a downlink has nothing to send and reads whatever arrives.
+export async def openChannel() -> ServiceConnection: return await connect(notesIndex)
+
 export component ServicePanel:
     state summary: string = "—"
+    state received: string = "not listening"
 
     action ask():
         summary = await askOrExplain()
@@ -137,10 +142,25 @@ export component ServicePanel:
     action watch():
         summary = await firstState()
 
+    // The push leg. A service that streams sends frames nobody asked for, and
+    // they arrive on the same `next()` a reply would: the transport carries
+    // frames, and which of them answers a question is the product's protocol to
+    // decide, not the channel's. Publishing `listening` before the first pull is
+    // what lets a reader — and a test — know the channel is open, since an
+    // unasked-for frame sent before anything connected reaches nobody.
+    action listen():
+        using channel = await openChannel()
+        received = "listening"
+        const first = await channel.next()
+        const second = await channel.next()
+        received = f"{first ?? "none"}|{second ?? "none"}"
+
     return <section look={servicePanelLook} data-service-panel>
         <h2>Service processes</h2>
         <p>{f"declared: {notesIndex}"}</p>
         <button on:click={ask} data-ask-service>Ask the service</button>
         <button on:click={watch} data-watch-services>Watch the services</button>
+        <button on:click={listen} data-listen-push>Listen for pushes</button>
         <p data-service-summary>{summary}</p>
+        <p data-service-push>{received}</p>
     </section>
