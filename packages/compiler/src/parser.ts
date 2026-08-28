@@ -12,6 +12,7 @@ import type {
   ClassMethodDeclaration,
   ClassParameter,
   ComparisonChainExpression,
+  ContextMarker,
   EnumDeclaration,
   Expression,
   EmbeddedJavaScriptCapture,
@@ -214,10 +215,12 @@ export class Parser {
   protected readonly diagnostics: Diagnostic[] = [];
   protected readonly advisories: Advisory[] = [];
   private readonly genericCallableNames = new Set<string>();
+  private readonly contextMarkers: ContextMarker[] = [];
   /** Extension-owned contextual keywords: names until a shape claims them. */
   protected readonly contextualKeywords: ReadonlySet<string>;
   private index = 0;
   private parseDepth = 0;
+  private statementBlockDepth = 0;
   private recoveredImportDelimiterBoundary = false;
   /**
    * D65 rule 170: non-zero while `parseParameters` is reading an arrow's
@@ -263,7 +266,12 @@ export class Parser {
 
     const end = this.current().span.end;
     return {
-      program: { kind: "Program", body, span: span(0, end) },
+      program: {
+        kind: "Program",
+        body,
+        ...(this.contextMarkers.length > 0 ? { contextMarkers: this.contextMarkers } : {}),
+        span: span(0, end),
+      },
       diagnostics: this.diagnostics,
       advisories: this.advisories,
     };
@@ -303,6 +311,11 @@ export class Parser {
 
   private parseStatementBody(): Statement | null {
     const start = this.current().span.start;
+
+    if (this.check("at") && this.peekKind(1) === "identifier"
+      && this.peekValue(1) === CORE_COMPILER_CONTEXTUAL_NAMES.declaration[0]) {
+      return this.parseContextMarkedDeclaration(start);
+    }
 
     if (this.check("import") && this.tokens[this.index + 1]?.kind !== "leftParen") {
       this.advance();
@@ -670,6 +683,77 @@ export class Parser {
     }
 
     return { kind: "ExpressionStatement", expression, span: expression.span };
+  }
+
+  /**
+   * `@context("…")` is Core's one author-supplied business label. It annotates
+   * the next top-level declaration in compiler metadata while returning that
+   * declaration unchanged to analysis and emission, so it creates neither a
+   * runtime wrapper nor a hidden scope.
+   */
+  private parseContextMarkedDeclaration(start: number): Statement | null {
+    const atModuleTopLevel = this.statementBlockDepth === 0;
+    const at = this.expect("at", "Expected '@' before 'context'");
+    const marker = this.expect("identifier", "Expected 'context' after '@'");
+    const markerSpan = span(at.span.start, marker.span.end);
+    this.expect("leftParen", "Expected '(' after '@context'");
+    const name = this.expect("string", "Expected one static business context name");
+    const close = this.expect("rightParen", "Expected ')' after the business context name");
+    if (name.value.trim().length === 0) {
+      this.diagnostics.push(diagnostic("VEL2022", "'@context' requires a non-empty business context name", name.span));
+    } else if (name.value.length > 120) {
+      this.diagnostics.push(diagnostic("VEL2022", "An '@context' name cannot exceed 120 code units", name.span));
+    } else if (/\p{Cc}/u.test(name.value)) {
+      this.diagnostics.push(diagnostic("VEL2022", "An '@context' name cannot contain control characters", name.span));
+    }
+    this.expect("newline", "Expected the declaration on the line after '@context(...)'");
+    if (this.check("newline")) {
+      this.diagnostics.push(diagnostic(
+        "VEL2022",
+        "'@context' must be immediately followed by the declaration it describes",
+        span(start, close.span.end),
+      ));
+      this.consumeNewlines();
+    }
+    if (this.check("eof") || this.check("dedent")) {
+      this.diagnostics.push(diagnostic(
+        "VEL2022",
+        "'@context' must be followed by a top-level declaration or framework structure",
+        markerSpan,
+      ));
+      return null;
+    }
+    const target = this.parseStatement();
+    if (!target) return null;
+    if (!atModuleTopLevel
+      || !isModuleDeclarationStatement(target)
+      || target.kind === "ImportDeclaration"
+      || target.kind === "ReExportDeclaration") {
+      this.diagnostics.push(diagnostic(
+        "VEL2022",
+        "'@context' describes a top-level declaration or framework structure, not local code or an import",
+        target.span,
+      ));
+      return target;
+    }
+    if (this.contextMarkers.some((item) => item.targetSpan.start === target.span.start
+      && item.targetSpan.end === target.span.end)) {
+      this.diagnostics.push(diagnostic(
+        "VEL2022",
+        "A declaration can have only one '@context' marker",
+        markerSpan,
+      ));
+      return target;
+    }
+    if (name.value.trim().length > 0 && name.value.length <= 120 && !/\p{Cc}/u.test(name.value)) {
+      this.contextMarkers.push({
+        name: name.value.trim(),
+        nameSpan: name.span,
+        markerSpan,
+        targetSpan: target.span,
+      });
+    }
+    return target;
   }
 
   /**
@@ -2529,7 +2613,9 @@ export class Parser {
     const hasColon = this.check("colon");
     const colon = this.expect("colon", "Expected ':' before an indented block");
     if (hasColon && !this.atStatementEnd()) {
+      this.statementBlockDepth += 1;
       const statement = this.parseStatement();
+      this.statementBlockDepth -= 1;
       if (!statement) {
         this.synchronize();
         return [];
@@ -2551,7 +2637,9 @@ export class Parser {
     const statements: Statement[] = [];
     this.consumeNewlines();
     while (!this.check("dedent") && !this.check("eof")) {
+      this.statementBlockDepth += 1;
       const statement = this.parseStatement();
+      this.statementBlockDepth -= 1;
       if (statement) {
         statements.push(statement);
       } else {

@@ -108,9 +108,41 @@ test("@main is unique, final, and contains a module's executable statements", ()
 
 test("the module compiler namespace is closed while main stays an ordinary source name", () => {
   assert.deepEqual(CORE_COMPILER_CONTEXTUAL_NAMES.module, ["main"]);
+  assert.deepEqual(CORE_COMPILER_CONTEXTUAL_NAMES.declaration, ["context"]);
   assert.equal(messages(`def main(): return "ordinary"\n@entry: print(main())\n`)
     .some((item) => item.includes("module namespace contains only '@main:'")), true);
   assert.deepEqual(messages(`def main(): return "ordinary"\n@main: print(main())\n`), []);
+});
+
+test("@context carries one static business label without changing runtime semantics", () => {
+  const source = [
+    '@context("Order checkout")',
+    'export def submit(orderId: string) -> string:',
+    '    return orderId',
+    '',
+  ].join("\n");
+  const result = compile(source);
+
+  assert.deepEqual(result.diagnostics, []);
+  assert.equal(result.semanticIndex.symbols.find((item) => item.name === "submit")?.context, "Order checkout");
+  assert.equal(result.semanticIndex.symbols.find((item) => item.name === "orderId")?.context, "Order checkout");
+  assert.deepEqual(result.semanticIndex.syntaxDocumentation.map((item) => item.key), ["@context"]);
+  assert.doesNotMatch(result.code ?? "", /Order checkout|context/u);
+  assert.equal(
+    formatSource(source),
+    '@context("Order checkout")\nexport def submit(orderId: string) -> string: return orderId\n',
+  );
+});
+
+test("@context remains bounded, singular, and declaration-only", () => {
+  assert.equal(messages('@context("")\ndef run(): return\n')
+    .some((item) => item.includes("non-empty business context")), true);
+  assert.equal(messages('@context("Flow")\nprint("now")\n')
+    .some((item) => item.includes("top-level declaration")), true);
+  assert.equal(messages('def outer():\n    @context("Inner")\n    def inner(): return\n')
+    .some((item) => item.includes("top-level declaration")), true);
+  assert.equal(messages('@context("Outer")\n@context("Inner")\ndef run(): return\n')
+    .some((item) => item.includes("only one '@context'")), true);
 });
 
 test("test modules keep named test declarations instead of a program entry", () => {

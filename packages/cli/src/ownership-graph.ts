@@ -37,6 +37,7 @@ export interface OwnershipGraphNode {
   readonly name: string;
   /** Compiler-owned declaration documentation, used by presentation clients as a human label. */
   readonly documentation?: string;
+  readonly context?: string;
   readonly path?: string;
   readonly span?: Span;
   readonly selectionSpan?: Span;
@@ -114,6 +115,7 @@ function nodesEqual(left: OwnershipGraphNode, right: OwnershipGraphNode): boolea
     && left.kind === right.kind
     && left.name === right.name
     && left.documentation === right.documentation
+    && left.context === right.context
     && left.path === right.path
     && spansEqual(left.span, right.span)
     && spansEqual(left.selectionSpan, right.selectionSpan)
@@ -451,6 +453,7 @@ async function buildOwnershipGraphScoped(
         kind: symbolKind(symbol),
         name: symbol.name,
         ...(symbol.documentation ? { documentation: symbol.documentation } : {}),
+        ...(symbol.context ? { context: symbol.context } : {}),
         path: symbol.path,
         span: symbol.span,
         selectionSpan: symbol.selectionSpan,

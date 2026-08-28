@@ -110,6 +110,7 @@ export const CORE_CONTEXTUAL_KEYWORD_WORDS: readonly CoreContextualKeywordWord[]
  */
 export const CORE_COMPILER_CONTEXTUAL_NAMES = Object.freeze({
   module: ["main"],
+  declaration: ["context"],
   class: ["dispose", "iterate"],
 } as const);
 

@@ -15,8 +15,10 @@ test("compiler-owned ownership graph publishes stable bounded relations", async 
     'import {label} from "./model.vel"',
     'import {monotonic} from "velar/time"',
     '/// Formats one model value for presentation.',
+    '@context("Presentation")',
     'def local(value: number) -> string:',
     '    return label(value)',
+    '@context("Counter workflow")',
     'component App:',
     '    state count = 1',
     '    computed doubled = count * 2',
@@ -54,6 +56,14 @@ test("compiler-owned ownership graph publishes stable bounded relations", async 
     assert.equal(
       graph.nodes.find((node) => node.kind === "function" && node.name === "local")?.documentation,
       "Formats one model value for presentation.",
+    );
+    assert.equal(
+      graph.nodes.find((node) => node.kind === "function" && node.name === "local")?.context,
+      "Presentation",
+    );
+    assert.equal(
+      graph.nodes.find((node) => node.kind === "action" && node.name === "refresh")?.context,
+      "Counter workflow",
     );
 
     const countId = graph.nodes.find((node) => node.kind === "state" && node.name === "count")?.id;

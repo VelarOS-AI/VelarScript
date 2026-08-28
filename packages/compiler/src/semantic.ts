@@ -40,6 +40,8 @@ export interface SemanticSymbol {
   readonly private: boolean;
   readonly type: string | null;
   readonly documentation: string | null;
+  /** Optional Core-owned business context carried only as compile-time metadata. */
+  readonly context?: string;
   readonly members: readonly SemanticMember[];
   readonly callable?: true;
   readonly typeTarget?: string;
@@ -276,6 +278,11 @@ export function buildSemanticIndex(
   };
 
   const callable = (type: ValueType | undefined): boolean => type?.kind === "function" || type?.kind === "intrinsic" || type?.kind === "action";
+  const contextMarkersBySpecificity = [...(program.contextMarkers ?? [])].sort((left, right) =>
+    (left.targetSpan.end - left.targetSpan.start) - (right.targetSpan.end - right.targetSpan.start));
+  const contextMarkerFor = (declarationSpan: Span) =>
+    contextMarkersBySpecificity.find((marker) =>
+      marker.targetSpan.start <= declarationSpan.start && marker.targetSpan.end >= declarationSpan.end);
 
   const currentScope = (): Scope => scopes.at(-1)!;
   const enterScope = (scopeSpan: Span): void => {
@@ -317,6 +324,13 @@ export function buildSemanticIndex(
     const type = bindingTypes.get(key);
     const memberTypes = bindingMembers.get(key) ?? new Map<string, ValueType>();
     const members = describeMembers(memberTypes);
+    const contextMarker = contextMarkerFor(declarationSpan);
+    const context = contextMarker?.name;
+    const documentationStart = options.documentationStart
+      ?? (contextMarker?.targetSpan.start === declarationSpan.start
+        && contextMarker.targetSpan.end === declarationSpan.end
+        ? contextMarker.markerSpan.start
+        : declarationSpan.start);
     const symbol: SemanticSymbol = {
       id: `${source.path}#${selectionSpan.start}:${name}`,
       name,
@@ -329,7 +343,8 @@ export function buildSemanticIndex(
       mutable,
       private: options.private ?? false,
       type: explicitType ?? (type ? describeType(type) : null),
-      documentation: documentationBefore(source, options.documentationStart ?? declarationSpan.start),
+      documentation: documentationBefore(source, documentationStart),
+      ...(context ? { context } : {}),
       members,
       ...(callable(type) ? { callable: true as const } : {}),
       ...(options.typeTarget ? { typeTarget: options.typeTarget } : {}),
@@ -979,6 +994,10 @@ export function buildSemanticIndex(
     documentSyntax,
   };
 
+  for (const marker of program.contextMarkers ?? []) {
+    syntaxToken(marker.markerSpan, "decorator");
+    documentSyntax(marker.markerSpan, "@context");
+  }
   predeclareTopLevel();
   for (const statement of program.body) visitStatement(statement);
   return {

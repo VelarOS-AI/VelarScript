@@ -59,11 +59,13 @@ function focusNodes(nodes: readonly OwnershipGraphNode[], root: string, query: s
   const normalized = query.trim().toLocaleLowerCase("en-US");
   const exact = nodes.filter((node) => node.id.toLocaleLowerCase("en-US") === normalized
     || node.name.toLocaleLowerCase("en-US") === normalized
-    || portablePath(root, node.path)?.toLocaleLowerCase("en-US") === normalized);
+    || portablePath(root, node.path)?.toLocaleLowerCase("en-US") === normalized
+    || node.context?.toLocaleLowerCase("en-US") === normalized);
   if (exact.length > 0) return exact;
   return nodes.filter((node) => node.name.toLocaleLowerCase("en-US").includes(normalized)
     || node.id.toLocaleLowerCase("en-US").includes(normalized)
-    || portablePath(root, node.path)?.toLocaleLowerCase("en-US").includes(normalized));
+    || portablePath(root, node.path)?.toLocaleLowerCase("en-US").includes(normalized)
+    || node.context?.toLocaleLowerCase("en-US").includes(normalized));
 }
 
 export function createProjectLogicGraph(

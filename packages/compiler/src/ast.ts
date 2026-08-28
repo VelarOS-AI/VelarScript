@@ -3,7 +3,20 @@ import type { Span } from "./source.ts";
 export interface Program {
   readonly kind: "Program";
   readonly body: readonly Statement[];
+  /**
+   * Core-owned, compile-time-only business context attached to top-level
+   * declarations. The marker is kept beside the statement tree so it does not
+   * introduce a runtime wrapper or a lexical scope.
+   */
+  readonly contextMarkers?: readonly ContextMarker[];
   readonly span: Span;
+}
+
+export interface ContextMarker {
+  readonly name: string;
+  readonly nameSpan: Span;
+  readonly markerSpan: Span;
+  readonly targetSpan: Span;
 }
 
 export type CoreStatement =
