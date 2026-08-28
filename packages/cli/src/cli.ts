@@ -50,6 +50,9 @@ import { resolveVelarLibraryBuild, writeVelarLibraryArtifact } from "./library-a
 import { renderJavaScriptOutput, type JavaScriptBuildMode } from "./javascript-output.ts";
 import { NODE_BUILD_MANIFEST_NAME, writeNodeProductionManifest } from "./node-production-build.ts";
 import { verifyApplicationBuild } from "./application-verifier.ts";
+import { VelarProjectSessions } from "./project-session.ts";
+import { buildOwnershipGraph } from "./ownership-graph.ts";
+import { createProjectLogicGraph, renderProjectLogicGraph } from "./logic-graph-output.ts";
 
 
 interface CommandArguments {
@@ -133,6 +136,15 @@ interface DeploymentVerificationArguments {
   readonly json: boolean;
 }
 
+interface GraphArguments {
+  readonly input: string | null;
+  readonly json: boolean;
+  readonly focus: string | null;
+  readonly depth: number;
+  readonly maximumNodes: number;
+  readonly maximumEdges: number;
+}
+
 async function main(arguments_: readonly string[]): Promise<number> {
   const [command, ...rest] = arguments_;
 
@@ -203,6 +215,37 @@ async function main(arguments_: readonly string[]): Promise<number> {
     }
     process.stdout.write(await readFile(new URL(`../skill/${files[kind]}`, import.meta.url), "utf8"));
     return 0;
+  }
+
+  if (command === "graph") {
+    const parsed = parseGraphArguments(rest);
+    if (typeof parsed === "string") {
+      process.stderr.write(`velar graph: ${parsed}\n`);
+      return 2;
+    }
+    try {
+      const config = await resolveVelarProject(parsed.input);
+      const documentPath = parsed.input?.endsWith(".vel") ? resolve(parsed.input) : config.entryPath;
+      const snapshot = await new VelarProjectSessions().snapshot(documentPath);
+      const graph = await buildOwnershipGraph(snapshot.project, {
+        maximumNodes: MAXIMUM_GRAPH_SOURCE_NODES,
+        maximumEdges: MAXIMUM_GRAPH_SOURCE_EDGES,
+      });
+      const diagnostics = snapshot.project.failures.length
+        + snapshot.project.modules.reduce((count, module) => count + module.result.diagnostics.length, 0);
+      const view = createProjectLogicGraph(graph, snapshot.config.root, {
+        ...(parsed.focus ? { focus: parsed.focus } : {}),
+        depth: parsed.depth,
+        maximumNodes: parsed.maximumNodes,
+        maximumEdges: parsed.maximumEdges,
+        diagnostics,
+      });
+      process.stdout.write(parsed.json ? `${JSON.stringify(view, null, 2)}\n` : renderProjectLogicGraph(view));
+      return 0;
+    } catch (error) {
+      process.stderr.write(`velar graph: ${hostErrorMessage(error)}\n`);
+      return 1;
+    }
   }
 
   if (command === "create") {
@@ -1490,6 +1533,64 @@ function parseSingleOptionalInput(arguments_: readonly string[]): string | null 
   return arguments_[0] ?? null;
 }
 
+const MAXIMUM_GRAPH_SOURCE_NODES = 20_000;
+const MAXIMUM_GRAPH_SOURCE_EDGES = 40_000;
+
+function parseGraphBound(option: string, value: string | undefined, maximum: number): number | string {
+  const parsed = value ? Number(value) : Number.NaN;
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > maximum) {
+    return `${option} requires an integer from 1 through ${maximum}`;
+  }
+  return parsed;
+}
+
+function parseGraphArguments(arguments_: readonly string[]): GraphArguments | string {
+  let input: string | null = null;
+  let json = false;
+  let focus: string | null = null;
+  let depth = 2;
+  let maximumNodes = 2_000;
+  let maximumEdges = 4_000;
+  for (let index = 0; index < arguments_.length; index += 1) {
+    const argument = arguments_[index]!;
+    if (argument === "--json") {
+      if (json) return "--json may be provided only once";
+      json = true;
+      continue;
+    }
+    const option = argument.includes("=") ? argument.slice(0, argument.indexOf("=")) : argument;
+    const inline = argument.includes("=") ? argument.slice(argument.indexOf("=") + 1) : undefined;
+    if (option === "--focus") {
+      const value = inline ?? arguments_[index + 1];
+      if (!value || value.startsWith("--") || value.trim().length === 0) return "--focus requires a symbol name, stable node ID, or project-relative path";
+      if (focus !== null) return "--focus may be provided only once";
+      focus = value.trim();
+      if (inline === undefined) index += 1;
+    } else if (option === "--depth") {
+      const value = inline ?? arguments_[index + 1];
+      const parsed = value ? Number(value) : Number.NaN;
+      if (!Number.isSafeInteger(parsed) || parsed < 0 || parsed > 6) return "--depth requires an integer from 0 through 6";
+      depth = parsed;
+      if (inline === undefined) index += 1;
+    } else if (option === "--max-nodes" || option === "--max-edges") {
+      const value = inline ?? arguments_[index + 1];
+      const maximum = option === "--max-nodes" ? MAXIMUM_GRAPH_SOURCE_NODES : MAXIMUM_GRAPH_SOURCE_EDGES;
+      const parsed = parseGraphBound(option, value, maximum);
+      if (typeof parsed === "string") return parsed;
+      if (option === "--max-nodes") maximumNodes = parsed;
+      else maximumEdges = parsed;
+      if (inline === undefined) index += 1;
+    } else if (argument.startsWith("--")) {
+      return `unknown option '${argument}'`;
+    } else if (input !== null) {
+      return `unexpected extra input '${argument}'`;
+    } else {
+      input = argument;
+    }
+  }
+  return { input, json, focus, depth, maximumNodes, maximumEdges };
+}
+
 function parsePreviewArguments(arguments_: readonly string[]): PreviewArguments | string {
   let input: string | null = null;
   let port = 4173;
@@ -1576,6 +1677,7 @@ function printHelp(output: NodeJS.WritableStream = process.stdout): void {
     "  velar package [project-directory]",
     "  velar format [file.vel | project-directory] [--check]",
     "  velar fix [entry.vel | project-directory]",
+    "  velar graph [entry.vel | project-directory] [--focus <symbol|path>] [--depth <0-6>] [--json]",
     "  velar repro [entry.vel | project-directory] [--out-dir <directory>]",
     "  velar skill [core|web|node|server|desktop]",
     "  velar lsp",
@@ -1586,7 +1688,7 @@ function printHelp(output: NodeJS.WritableStream = process.stdout): void {
 
 const commandNames = new Set([
   "check", "create", "install", "add", "remove", "update", "dev", "serve", "build", "build-library", "package", "run", "verify", "preview",
-  "verify-deployment", "test", "format", "fix", "repro", "skill", "lsp",
+  "verify-deployment", "test", "format", "fix", "graph", "repro", "skill", "lsp",
 ]);
 
 function printCommandHelp(command: string, output: NodeJS.WritableStream = process.stdout): void {
@@ -1618,6 +1720,11 @@ function printCommandHelp(command: string, output: NodeJS.WritableStream = proce
       "Usage: velar fix [entry.vel | project-directory]",
       "Applies every mechanical rewrite the compiler's own diagnostics name — retired spellings with one named successor, line-ending semicolons, and the rest of that family — then reports the diagnostics that are left.",
       "Nothing that needs a decision is rewritten, and a second run changes nothing.",
+    ],
+    graph: [
+      "Usage: velar graph [entry.vel | project-directory] [--focus <symbol|path>] [--depth <0-6>] [--max-nodes <count>] [--max-edges <count>] [--json]",
+      "Prints the compiler-owned project logic graph for people and AI tools. The default is a compact project overview; --focus selects a bounded dependency and caller neighborhood.",
+      "Each invocation reads the current project. Editor hosts use revision-qualified ownership graph patches for unsaved hot updates.",
     ],
     repro: [
       "Usage: velar repro [entry.vel | project-directory] [--out-dir <directory>]",

@@ -113,6 +113,16 @@ permanent gate. `velar skill [core|web|node|desktop]` prints one verbatim to
 stdout; Core is the default. Generated `AGENTS.md` files name the exact briefs a
 project needs.
 
+`velar graph` gives people and AI tools the compiler-owned project logic view
+without maintaining another index. The default text form is a compact global
+overview; `--json` preserves stable IDs and source spans, while
+`--focus <symbol> --depth 2` returns a context-bounded caller and dependency
+neighborhood. The language server exposes the same facts for the exact unsaved
+document version and accepts a previous revision so editor hosts can apply a
+small node/edge patch after an incremental compile. Graph fragments for reused
+compiler modules are retained; `activity` reports whether the request visited
+only affected modules or performed a bounded full build.
+
 Use `velar help <command>` or `velar <command> --help` for command-specific
 usage and defaults. Project creation is transactional, manifests reject unknown
 fields, and production/release verification fails closed rather than serving or

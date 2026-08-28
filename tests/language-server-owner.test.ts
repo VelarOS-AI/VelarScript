@@ -16,6 +16,7 @@ test("language server owns versioned ownership graph and emitted JavaScript view
     'import {double} from "./utility.vel"',
     'const values: readonly List<number> = [1]',
     'const sampledAt = monotonic()',
+    '/// Returns the current visible value.',
     'def current() -> number:',
     '    return (values.get(0) ?? 0) + 1',
     'print(current())',
@@ -70,6 +71,8 @@ test("language server owns versioned ownership graph and emitted JavaScript view
     const velar = ((initialize.result as { capabilities: { experimental: { velar: Record<string, unknown> } } }).capabilities.experimental.velar);
     assert.equal(velar.protocolVersion, 5);
     assert.equal(velar.ownershipGraph, true);
+    assert.equal(velar.ownershipGraphPatches, true);
+    assert.equal(velar.ownershipGraphAffectedModules, true);
     assert.equal(velar.emittedJavaScript, true);
     send({ jsonrpc: "2.0", method: "initialized", params: {} });
     send({
@@ -111,16 +114,23 @@ test("language server owns versioned ownership graph and emitted JavaScript view
     });
     const graph = (await waitFor((message) => message.id === 3)).result as {
       document: { version: number };
+      mode: string;
       revision: string;
-      nodes: Array<{ id: string; kind: string; name: string }>;
+      nodes: Array<{ id: string; kind: string; name: string; path?: string; documentation?: string }>;
       edges: Array<{ kind: string; from: string; to: string }>;
       coverage: { modulesIncluded: number; complete: boolean };
       limitReached: boolean;
     };
     assert.equal(graph.document.version, 2);
+    assert.equal(graph.mode, "snapshot");
     assert.equal(graph.revision, emitted.revision);
     assert.ok(graph.nodes.some((node) => node.kind === "module"));
+    assert.ok(graph.nodes.some((node) => node.kind === "module" && node.path === "main.vel"));
     assert.ok(graph.nodes.some((node) => node.kind === "function" && node.name === "current"));
+    assert.equal(
+      graph.nodes.find((node) => node.kind === "function" && node.name === "current")?.documentation,
+      "Returns the current visible value.",
+    );
     assert.ok(graph.nodes.some((node) => node.kind === "readonlyProjection"));
     assert.ok(graph.nodes.some((node) => node.kind === "capability" && node.name === "velar/time"));
     assert.ok(graph.edges.some((edge) => edge.kind === "calls"));
@@ -147,6 +157,44 @@ test("language server owns versioned ownership graph and emitted JavaScript view
     const bounded = (await waitFor((message) => message.id === 5)).result as { nodes: unknown[]; limitReached: boolean };
     assert.equal(bounded.nodes.length, 1);
     assert.equal(bounded.limitReached, true);
+
+    send({
+      jsonrpc: "2.0",
+      method: "textDocument/didChange",
+      params: {
+        textDocument: { uri: mainUri, version: 3 },
+        contentChanges: [{ text: openText.replaceAll("current", "visible") }],
+      },
+    });
+    await waitFor((message) => message.method === "textDocument/publishDiagnostics"
+      && (message.params as { uri?: string; version?: number } | undefined)?.uri === mainUri
+      && (message.params as { version?: number } | undefined)?.version === 3);
+    send({
+      jsonrpc: "2.0",
+      id: 7,
+      method: "velar/ownershipGraph",
+      params: { textDocument: { uri: mainUri }, version: 3, previousRevision: graph.revision },
+    });
+    const patch = (await waitFor((message) => message.id === 7)).result as {
+      document: { version: number };
+      mode: string;
+      baseRevision: string;
+      revision: string;
+      nodes: Array<{ kind: string; name: string }>;
+      removedNodeIds: string[];
+      removedEdgeIds: string[];
+      activity: { strategy: string; modulesVisited: number };
+    };
+    assert.equal(patch.document.version, 3);
+    assert.equal(patch.mode, "patch");
+    assert.equal(patch.baseRevision, graph.revision);
+    assert.notEqual(patch.revision, graph.revision);
+    assert.ok(patch.nodes.some((node) => node.kind === "function" && node.name === "visible"));
+    assert.ok(patch.nodes.length < graph.nodes.length);
+    assert.ok(patch.removedNodeIds.length > 0);
+    assert.ok(patch.removedEdgeIds.length > 0);
+    assert.equal(patch.activity.strategy, "affected-modules");
+    assert.equal(patch.activity.modulesVisited, 1);
 
     send({ jsonrpc: "2.0", id: 6, method: "shutdown", params: null });
     await waitFor((message) => message.id === 6);

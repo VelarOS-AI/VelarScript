@@ -498,6 +498,11 @@ toolchain and print agent-ready markdown without a network request.
 
 ${AGENT_TARGET_BOUNDARIES[target]}
 
+Before a project-wide change, run \`velar graph\`; use
+\`velar graph --focus <symbol> --depth 2\` for a context-bounded dependency and
+caller neighborhood. This is the compiler-owned global view, so do not build a
+second source index.
+
 ## Gates
 
 Run these before considering any change done:

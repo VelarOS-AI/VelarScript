@@ -28499,7 +28499,7 @@ test("language server publishes diagnostics, hover, and completion", async (cont
       semanticTokensProvider: { legend: { tokenTypes: string[]; tokenModifiers: string[] }; full: boolean };
       codeActionProvider: { codeActionKinds: string[] };
       workspaceSymbolProvider: boolean;
-      experimental: { velar: { protocolVersion: number; incrementalSessions: boolean; watchedFiles: boolean; workspaceRescan: boolean; cancellation: boolean; workspaceSearch: boolean; workspaceTextExtensions: string[]; workspaceTextFileLimit: number; workspaceSearchResultLimit: number; workspaceWatchPathLimit: number; workspaceWatchPathCodeUnitLimit: number; workspaceWatchTextCodeUnitLimit: number; ownershipGraph: boolean; ownershipGraphNodeLimit: number; ownershipGraphEdgeLimit: number; emittedJavaScript: boolean; emittedJavaScriptCodeUnitLimit: number } };
+      experimental: { velar: { protocolVersion: number; incrementalSessions: boolean; watchedFiles: boolean; workspaceRescan: boolean; cancellation: boolean; workspaceSearch: boolean; workspaceTextExtensions: string[]; workspaceTextFileLimit: number; workspaceSearchResultLimit: number; workspaceWatchPathLimit: number; workspaceWatchPathCodeUnitLimit: number; workspaceWatchTextCodeUnitLimit: number; ownershipGraph: boolean; ownershipGraphPatches: boolean; ownershipGraphAffectedModules: boolean; ownershipGraphNodeLimit: number; ownershipGraphEdgeLimit: number; emittedJavaScript: boolean; emittedJavaScriptCodeUnitLimit: number } };
     };
     serverInfo: { name: string };
   };
@@ -28519,6 +28519,8 @@ test("language server publishes diagnostics, hover, and completion", async (cont
   assert.equal(initializeResult.capabilities.experimental.velar.workspaceWatchPathCodeUnitLimit, 4_096);
   assert.equal(initializeResult.capabilities.experimental.velar.workspaceWatchTextCodeUnitLimit, 2 * 1024 * 1024);
   assert.equal(initializeResult.capabilities.experimental.velar.ownershipGraph, true);
+  assert.equal(initializeResult.capabilities.experimental.velar.ownershipGraphPatches, true);
+  assert.equal(initializeResult.capabilities.experimental.velar.ownershipGraphAffectedModules, true);
   assert.equal(initializeResult.capabilities.experimental.velar.ownershipGraphNodeLimit, 20_000);
   assert.equal(initializeResult.capabilities.experimental.velar.ownershipGraphEdgeLimit, 40_000);
   assert.equal(initializeResult.capabilities.experimental.velar.emittedJavaScript, true);
