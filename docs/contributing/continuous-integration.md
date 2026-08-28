@@ -63,17 +63,19 @@ npm run release:check
   exactly as in a complete example. Project scaffolds are compiled again by
   packed-package consumer acceptance.
 - The checked-in Web-capabilities fixture (`tests/fixtures/web-capabilities`)
-  imports all twelve public Web modules from real
-  `.vel` source. Its realtime acceptance path creates WebSocket and server-sent
-  event resources inside a component, observes their typed callbacks in
-  Chromium, and releases both resources through component
-  cleanup. Host-side tests do not bypass that source contract by importing the
-  generated realtime JavaScript module directly.
+  imports all twelve application Web modules from real `.vel` source. Its
+  Worker acceptance starts a manifest-declared source entry in Chromium and
+  crosses the checked request/reply boundary in development and production;
+  its realtime path creates WebSocket and server-sent event resources inside a
+  component and releases both through component cleanup. Host-side tests do
+  not bypass those source contracts by importing generated runtime JavaScript
+  directly.
 - Packed-browser acceptance independently creates an application from the
   complete locally packed workspace. Its application graph imports every
-  browser application module the Web extension publishes — twelve today, derived
-  from the extension's own interface table rather than listed, so a thirteenth
-  fails this acceptance until the installed toolchain serves it — while its
+  browser application module the Web extension publishes — twelve today,
+  derived from the public runtime roster and the combined single-owner
+  interface view rather than listed, so a thirteenth fails this acceptance
+  until the installed toolchain serves it — while its
   generated browser test loads `velar/web-test`, which application source may
   not import at all; the installed CLI then checks, tests, builds, verifies,
   and executes that project in Chromium. Docs and component template structure

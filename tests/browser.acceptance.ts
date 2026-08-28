@@ -251,6 +251,8 @@ async function acceptBrowser(
     await page.locator("[data-action-retry]").click();
     await page.waitForFunction(() => document.querySelector("[data-action]")?.textContent === "action-ready");
     await page.waitForFunction(() => document.querySelector("[data-log]")?.textContent === "Runtime configured");
+    await page.waitForFunction(() => document.querySelector("[data-worker]")?.textContent === "worker:17");
+    assert.equal(await page.locator("[data-worker]").textContent(), "worker:17");
     assert.equal(await page.locator("[data-render-stable]").textContent(), "render-stable");
     assert.match(await page.locator("[data-time]").textContent() ?? "", /^\d{4}-\d{2}-\d{2}T/u);
 

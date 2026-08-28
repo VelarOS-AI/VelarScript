@@ -72,6 +72,8 @@ their titles are reproduced verbatim below.
 | [D103](D103-LOOK-TOKEN-REFERENCES.md) | Look 的受检设计令牌引用 | `token("--name")` is one checked token-reference spelling legal in every Look property kind, compiled into the static CSS var() with folding preserved — the design-token contract stays expressible inside the language. |
 | [D104](D104-CONTEXT-MARKER-TERM.md) | `@` 的正式名词是上下文标记 | `@name` is a **context marker** and `@` its **marker introducer**; "annotation" is reserved for type annotations alone. A pure naming ruling — the closed compiler-owned semantics of section 3 are unchanged. |
 | [D105](D105-PLATFORM-NAME-AND-PRONUNCIATION.md) | Velar 是平台名，VelarScript 是语言名 | You write VelarScript, you install **Velar** — the application platform (Core, target extensions, toolchain), named after the split the repo already ran. "Application layer" is the positioning qualifier and the brake; English never says "Velar Framework". Pronunciation fixed: Vel = *well*, Velar = *WAI-ler*. |
+| [D106](D106-APPLICATION-CONTEXT-MARKER.md) | 应用上下文是 Core 静态语义，图与 AI 各自投影 | The optional Core-owned `@context("...")` marker carries an author's business name through the semantic graph without changing execution; human and AI tools project the same compiler facts independently. |
+| [D107](D107-TARGET-RUNTIME-ENUMERATION.md) | 目标运行时清单与类型契约保持单一所有者 | A target runtime roster enumerates every implementation that target supplies, including implementations of Core-owned contracts; the interface remains single-owned and generic CLI composition derives import maps from the enumerable source roster. |
 
 ## archive/
 

@@ -243,7 +243,13 @@ export interface CompilerIntrinsicAnalysisContext {
 
 export interface CompilerModuleExtension {
   readonly apiVersion?: string;
+  /** Contracts introduced or target-specialized by this extension. */
   readonly interfaces: ReadonlyMap<string, ModuleInterface>;
+  /**
+   * Runtime implementations supplied by this target. This also includes a
+   * target implementation of a Core-owned contract such as `velar/worker`;
+   * repeating that Core interface here would create a second type authority.
+   */
   readonly sources: ReadonlyMap<string, string>;
   /**
    * Runtime-module dependencies owned by the same extension module source.

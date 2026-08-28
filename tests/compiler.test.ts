@@ -5856,6 +5856,10 @@ test("dev server exits cleanly after browser requests", async (context) => {
   assert.match(html, /data-velar-error-overlay/);
   assert.match(html, /VelarScript runtime error/);
   assert.match(html, /update\.errors\.length/);
+  assert.match(html, /"velar\/worker":"\/@velar\/worker\.js"/u);
+  const workerRuntime = await fetch("http://127.0.0.1:42879/@velar/worker.js");
+  assert.equal(workerRuntime.status, 200);
+  assert.match(await workerRuntime.text(), /export function worker\(/u);
   const javascript = await (await fetch("http://127.0.0.1:42879/main.js")).text();
   const generatedLines = javascript.split("\n");
   const mountLine = generatedLines.findLastIndex((line) => line.includes("__velarMount(")) + 1;
@@ -8681,14 +8685,18 @@ reload()
   assert.equal(compiled?.semanticIndex.symbols.find((item) => item.name === "typed")?.type, "FormDraft");
 });
 
-test("the official Web package owns the framework contract and CLI only composes it", async () => {
+test("the official Web package publishes its runtime roster and CLI composes the single-owned contracts", async () => {
   assert.equal(VELAR_WEB_API_VERSION, "0.11");
   assert.equal(velarWebFramework.name, "@velarscript/web");
   assert.deepEqual([...velarWebFramework.modules], [...VELAR_WEB_MODULES]);
-  assert.deepEqual([...webModuleInterfaces.keys()].sort(), [...VELAR_WEB_MODULES].sort());
   assert.deepEqual([...webModuleSources.keys()].sort(), [...VELAR_WEB_MODULES].sort());
+  assert.deepEqual(
+    [...webModuleInterfaces.keys()].sort(),
+    VELAR_WEB_MODULES.filter((source) => source !== "velar/worker").sort(),
+  );
+  assert.equal(webModuleInterfaces.has("velar/worker"), false);
   for (const source of VELAR_WEB_MODULES) {
-    assert.ok(webModuleInterfaces.has(source), `missing Web type contract for ${source}`);
+    assert.ok(standardModuleInterface(source), `missing combined type contract for ${source}`);
     assert.ok(webModuleSource(source), `missing Web runtime for ${source}`);
   }
   assert.match(webModuleSource("velar/web", { base: "/framework/" }) ?? "", /const appBase = "\/framework\/"/u);

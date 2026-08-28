@@ -7,15 +7,19 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { velarWorkspacePackageNames } from "../scripts/velar-packages.mjs";
 import { parseNpmPackResult } from "../scripts/npm-pack-result.mjs";
-import { BROWSER_TEST_MODULE, webModuleInterfaces } from "../packages/web/dist/compiler.js";
+import { standardModuleInterfaces } from "../packages/core/dist/index.js";
+import { BROWSER_TEST_MODULE, velarCompilerExtension } from "../packages/web/dist/compiler.js";
+import { VELAR_WEB_MODULES } from "../packages/web/dist/index.js";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const directory = await mkdtemp(join(tmpdir(), "velar-installed-browser-"));
 
 /**
- * Every Web module an application may import, read from the extension's own
- * interface table rather than listed here, so a module published tomorrow
- * fails this acceptance until the installed toolchain really serves it.
+ * Every Web runtime an application may import, read from the package's public
+ * runtime roster rather than listed here, so a module published tomorrow fails
+ * this acceptance until the installed toolchain really serves it. The combined
+ * interface view keeps a shared Core contract such as `velar/worker` under its
+ * single owner while still supplying the Web implementation.
  *
  * `velar/web-test` is the one subtraction, and it is the compiler's own
  * constant rather than a name matched by spelling: importing it from
@@ -33,9 +37,12 @@ const directory = await mkdtemp(join(tmpdir(), "velar-installed-browser-"));
  * with a runtime behind it proves the installed package actually serves the
  * module. A type name would prove only that the interface parsed.
  */
-const applicationWebModules = [...webModuleInterfaces]
-  .filter(([specifier]) => specifier !== BROWSER_TEST_MODULE)
-  .map(([specifier, moduleInterface]) => {
+const installedWebInterfaces = standardModuleInterfaces([velarCompilerExtension]);
+const applicationWebModules = VELAR_WEB_MODULES
+  .filter((specifier) => specifier !== BROWSER_TEST_MODULE)
+  .map((specifier) => {
+    const moduleInterface = installedWebInterfaces.get(specifier);
+    assert.ok(moduleInterface, `${specifier} has no combined installed interface`);
     const probe = [...moduleInterface.exports]
       .filter(([, entry]) => entry?.kind === "function")
       .map(([name]) => name)

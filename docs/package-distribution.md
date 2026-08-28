@@ -341,8 +341,9 @@ successful source build without this consumer test is not considered
 publishable.
 
 The packed browser gate does not stop at a minimal framework import. Its
-generated application imports all nine runtime-facing Web modules from the
-installed `@velarscript/web` tarball, and the generated browser test imports
+generated application imports all twelve application-facing Web modules from
+the installed `@velarscript/web` tarball, including the Core-contracted Web
+Worker implementation, and the generated browser test imports
 `velar/web-test`. The installed CLI must check, test, build, integrity-verify,
 and run the resulting project before the release set is accepted.
 

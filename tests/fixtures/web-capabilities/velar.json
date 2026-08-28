@@ -1,6 +1,9 @@
 {
   "formatVersion": 2,
   "entry": "src/main.vel",
+  "workers": {
+    "capability-probe": "src/capability-worker.vel"
+  },
   "outDir": "dist",
   "publicDir": "public",
   "build": {

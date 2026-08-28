@@ -302,9 +302,9 @@ print(Text.chunks("A😀游戏", 2).join("|"))
   const framework = await run(process.execPath, [
     "--input-type=module",
     "--eval",
-    "import {VELAR_WEB_API_VERSION, VELAR_WEB_MODULES, velarWebFramework, webModuleSource} from '@velarscript/web'; if (VELAR_WEB_API_VERSION !== '0.11' || VELAR_WEB_MODULES.length !== 12 || velarWebFramework.name !== '@velarscript/web' || !webModuleSource('velar/web')?.includes('export function domId') || !webModuleSource('velar/look')?.includes('export function rgb') || !webModuleSource('velar/websocket')?.includes('export function connect') || !webModuleSource('velar/realtime')?.includes('export function realtimeClient')) process.exit(1); console.log(velarWebFramework.modules.join(','))",
+    "import {VELAR_WEB_API_VERSION, VELAR_WEB_MODULES, velarWebFramework, webModuleSource} from '@velarscript/web'; if (VELAR_WEB_API_VERSION !== '0.11' || VELAR_WEB_MODULES.length !== 13 || velarWebFramework.name !== '@velarscript/web' || !webModuleSource('velar/web')?.includes('export function domId') || !webModuleSource('velar/look')?.includes('export function rgb') || !webModuleSource('velar/worker')?.includes('export function worker(') || !webModuleSource('velar/websocket')?.includes('export function connect') || !webModuleSource('velar/realtime')?.includes('export function realtimeClient')) process.exit(1); console.log(velarWebFramework.modules.join(','))",
   ], directory);
-  assert.match(framework.stdout, /velar\/app,velar\/config,velar\/web/u);
+  assert.equal(framework.stdout, "velar/look,velar/app,velar/config,velar/web,velar/forms,velar/http,velar/storage,velar/browser,velar/files,velar/realtime,velar/worker,velar/web-test,velar/websocket\n");
   const host = await run(process.execPath, [
     "--input-type=module",
     "--eval",

@@ -3,7 +3,7 @@ import { realpathSync } from "node:fs";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
-import { build, type Plugin } from "esbuild";
+import { build, type BuildOptions, type Plugin } from "esbuild";
 import { projectStyles } from "./framework-host.ts";
 import { projectImportKey, type ProjectResult } from "./project.ts";
 import { standardModuleSource } from "./standard-modules.ts";
@@ -120,34 +120,13 @@ export async function buildProductionFramework(
   if (!entryOutput) throw new Error("The production bundler did not emit the VelarScript entry module");
   const entryPath = relative(outputDirectory, resolve(project.projectRoot, entryOutput[0])).replaceAll("\\", "/");
 
-  const configuredWorkers = project.extensionConfig.get(CORE_WORKER_CONFIG_KEY);
-  if (configuredWorkers && typeof configuredWorkers === "object" && !Array.isArray(configuredWorkers)) {
-    for (const output of Object.values(configuredWorkers as Record<string, unknown>)) {
-      if (typeof output !== "string" || !output.endsWith(".js") || isAbsoluteBrowserImportPath(output) || output.split("/").includes("..")) {
-        throw new Error("The checked Worker manifest contains an invalid emitted path");
-      }
-      const input = resolve(dirname(project.entryPath), output.replace(/\.js$/u, ".vel"));
-      if (!project.modules.some((module) => resolve(module.inputPath) === input)) throw new Error(`Worker entry '${input}' was not compiled`);
-      const outfile = resolve(outputDirectory, output);
-      await mkdir(dirname(outfile), { recursive: true });
-      await build({
-        absWorkingDir: project.projectRoot,
-        entryPoints: [input],
-        outfile,
-        bundle: true,
-        format: "esm",
-        platform: "browser",
-        target: "es2022",
-        minify: mode === "production",
-        keepNames: mode === "readable",
-        treeShaking: true,
-        sourcemap: sourceMaps ? "linked" : false,
-        sourcesContent: sourceMaps,
-        legalComments: "none",
-        plugins: [velarModules(project, sourceMaps)],
-        logLevel: "silent",
-      });
-    }
+  for (const { input, output } of configuredWorkerEntries(project)) {
+    const outfile = resolve(outputDirectory, output);
+    await mkdir(dirname(outfile), { recursive: true });
+    await build({
+      ...browserWorkerBuildOptions(project, input, mode, sourceMaps ? "linked" : false),
+      outfile,
+    });
   }
 
   const css = projectStyles(project);
@@ -173,6 +152,66 @@ export async function buildProductionFramework(
     dependencies: dependencySummary(project),
     sourceMaps,
     mode,
+  };
+}
+
+/**
+ * Module Workers do not inherit the document import map. Development therefore
+ * serves each declared Worker entry as one in-memory ESM bundle, using the same
+ * checked project graph and resolver as production, while ordinary page modules
+ * retain the incremental unbundled development path.
+ */
+export async function buildDevelopmentWorkerModules(project: ProjectResult): Promise<ReadonlyMap<string, string>> {
+  const modules = new Map<string, string>();
+  for (const { input, output } of configuredWorkerEntries(project)) {
+    const result = await build({
+      ...browserWorkerBuildOptions(project, input, "readable", "inline"),
+      outfile: resolve(project.projectRoot, output),
+      write: false,
+    });
+    const javascript = result.outputFiles?.find((file) => file.path.endsWith(".js"));
+    if (!javascript) throw new Error(`Development Worker entry '${input}' produced no JavaScript`);
+    modules.set(output, javascript.text);
+  }
+  return modules;
+}
+
+function configuredWorkerEntries(project: ProjectResult): readonly { readonly input: string; readonly output: string }[] {
+  const configured = project.extensionConfig.get(CORE_WORKER_CONFIG_KEY);
+  if (!configured || typeof configured !== "object" || Array.isArray(configured)) return [];
+  const entries: { input: string; output: string }[] = [];
+  for (const output of Object.values(configured as Record<string, unknown>)) {
+    if (typeof output !== "string" || !output.endsWith(".js") || isAbsoluteBrowserImportPath(output) || output.split("/").includes("..")) {
+      throw new Error("The checked Worker manifest contains an invalid emitted path");
+    }
+    const input = resolve(dirname(project.entryPath), output.replace(/\.js$/u, ".vel"));
+    if (!project.modules.some((module) => resolve(module.inputPath) === input)) throw new Error(`Worker entry '${input}' was not compiled`);
+    entries.push({ input, output });
+  }
+  return entries;
+}
+
+function browserWorkerBuildOptions(
+  project: ProjectResult,
+  input: string,
+  mode: JavaScriptBuildMode,
+  sourceMap: false | "linked" | "inline",
+): BuildOptions {
+  return {
+    absWorkingDir: project.projectRoot,
+    entryPoints: [input],
+    bundle: true,
+    format: "esm",
+    platform: "browser",
+    target: "es2022",
+    minify: mode === "production",
+    keepNames: mode === "readable",
+    treeShaking: true,
+    sourcemap: sourceMap,
+    sourcesContent: sourceMap !== false,
+    legalComments: "none",
+    plugins: [velarModules(project, sourceMap !== false)],
+    logLevel: "silent",
   };
 }
 

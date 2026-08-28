@@ -5,7 +5,7 @@ import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { formatDiagnostic } from "@velarscript/compiler";
 import type { FrameworkHostArtifacts } from "@velarscript/compiler/framework-host";
-import { compileProject, type ProjectResult } from "./project.ts";
+import { compileProjectEntries, type ProjectResult } from "./project.ts";
 import { createFrameworkArtifacts, frameworkBase } from "./framework-host.ts";
 import { moduleOutput, publicAsset } from "./module-assets.ts";
 import { npmAsset, resolveBrowserNpm, type BrowserNpmPackage } from "./npm.ts";
@@ -15,6 +15,7 @@ import { asHostError, hostErrorMessage } from "./host-error.ts";
 import { assertUniqueEmbeddedModuleOutputs } from "./embedded-modules.ts";
 import { localRequestRefusal } from "./local-request-guard.ts";
 import { applicationEntry } from "./application-entry.ts";
+import { buildDevelopmentWorkerModules } from "./production-build.ts";
 
 interface Snapshot {
   readonly project: ProjectResult;
@@ -23,6 +24,7 @@ interface Snapshot {
   readonly npmPackages: readonly BrowserNpmPackage[];
   readonly compilation: ProjectResult["stats"];
   readonly notices: readonly string[];
+  readonly workerModules: ReadonlyMap<string, string>;
 }
 
 interface DirectoryTreeWatcher {
@@ -202,6 +204,11 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
     }
     if (routedPath === "/styles.css" && snapshot.artifacts) {
       send(response, 200, snapshot.artifacts.css, "text/css; charset=utf-8");
+      return;
+    }
+    const workerModule = snapshot.workerModules.get(routedPath.replace(/^\//u, ""));
+    if (workerModule) {
+      send(response, 200, workerModule, "text/javascript; charset=utf-8");
       return;
     }
     const module = moduleOutput(snapshot.project, routedPath, url.searchParams.get("velar"));
@@ -471,7 +478,8 @@ async function compileSnapshot(
   changedPaths: ReadonlySet<string> = new Set(),
   staleNpmRoots: ReadonlySet<string> = new Set(),
 ): Promise<Snapshot> {
-  const project = await compileProject(
+  const project = await compileProjectEntries(
+    [config.entryPath, ...config.workerEntries.values()],
     config.entryPath,
     new Map(),
     {
@@ -486,11 +494,16 @@ async function compileSnapshot(
   );
   const npm = await resolveBrowserNpm(project, staleNpmRoots);
   const artifactErrors: string[] = [];
+  let workerModules: ReadonlyMap<string, string> = new Map();
   try {
     assertUniqueEmbeddedModuleOutputs(project.modules.map((module) => ({
       ownerPath: module.relativePath.replace(/\.vel$/u, ".js"),
       embeddedModules: module.result.embeddedModules,
     })));
+    const projectFailed = project.failures.length > 0
+      || project.modules.some((module) => module.result.diagnostics.length > 0)
+      || npm.failures.length > 0;
+    if (!projectFailed) workerModules = await buildDevelopmentWorkerModules(project);
   } catch (error) {
     artifactErrors.push(hostErrorMessage(error));
   }
@@ -514,6 +527,7 @@ async function compileSnapshot(
     npmPackages: npm.packages,
     compilation: project.stats,
     notices,
+    workerModules,
   };
 }
 

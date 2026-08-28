@@ -1898,8 +1898,8 @@ unavailable outside `velar test --browser`.
 
 ## Deliberate boundaries
 
-Web API 0.11 does not define SSR/server execution, workers, service workers/PWA,
-WebRTC, WebGPU, directory handles, persistent file handles, or a game runtime.
+Web API 0.11 does not define SSR/server execution, service workers/PWA, WebRTC,
+WebGPU, directory handles, persistent file handles, or a game runtime.
 `CanvasElement.getContext(kind=...)` therefore returns `unknown` rather than an
 untyped browser escape hatch; the future game package will own a checked Canvas
 surface.

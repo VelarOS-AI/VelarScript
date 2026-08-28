@@ -6,6 +6,7 @@ import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { VELAR_WEB_WEBSOCKET_RUNTIME } from "../packages/web/src/websocket-runtime.ts";
 import { VELAR_WEB_WORKER_RUNTIME } from "../packages/web/src/worker-runtime.ts";
+import { webModuleSource, webModuleSources } from "../packages/web/src/runtime.ts";
 
 // The Web worker and WebSocket runtimes ship as emitted module source, so a
 // regression drives the real string: only the two `velar/*` imports become
@@ -130,6 +131,11 @@ class TestTimers {
 
 let scratch: string | null = null;
 let loaded = 0;
+
+test("the Web worker runtime is enumerable for development import maps", () => {
+  assert.equal(webModuleSources.get("velar/worker"), VELAR_WEB_WORKER_RUNTIME);
+  assert.equal(webModuleSource("velar/worker"), VELAR_WEB_WORKER_RUNTIME);
+});
 
 async function moduleUrl(source: string): Promise<string> {
   scratch ??= await mkdtemp(join(tmpdir(), "velar-web-workers-"));

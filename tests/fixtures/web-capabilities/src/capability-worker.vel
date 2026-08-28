@@ -1,0 +1,9 @@
+import {Cancellation} from "velar/task"
+import {serveWorker} from "velar/worker"
+import {CapabilityWorkerReply, CapabilityWorkerRequest} from "./capability-worker-contract.vel"
+
+async def answer(request: CapabilityWorkerRequest, cancellation: Cancellation) -> CapabilityWorkerReply:
+    await cancellation.checkpoint()
+    return {label: f"worker:{request.value}"}
+
+serveWorker(CapabilityWorkerRequest, CapabilityWorkerReply, answer, 4)

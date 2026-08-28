@@ -9,8 +9,10 @@ import {logger, useSink} from "velar/log"
 
 import {formBody, http} from "velar/http"
 import {eventStream} from "velar/realtime"
+import {worker} from "velar/worker"
 import {WebSocketConnection, connect} from "velar/websocket"
 import {border, rgb, spacing} from "velar/look"
+import {CapabilityWorkerReply, CapabilityWorkerRequest} from "../capability-worker-contract.vel"
 
 type CapabilityStatus:
     label: string
@@ -38,6 +40,11 @@ async def loadResourceLabel() -> string:
     resourceAttempts += 1
     if resourceAttempts == 1: throw CapabilityError("Resource recovery ready")
     return "resource-ready"
+
+async def loadWorkerLabel() -> string:
+    using probe = worker("capability-probe", CapabilityWorkerRequest, CapabilityWorkerReply, 4)
+    const reply = await probe.call({value: 17})
+    return reply.label
 
 const capabilitiesLook = look:
     display = "grid"
@@ -145,6 +152,7 @@ export component WebCapabilities:
     state socketUrl = ""
     state eventsUrl = ""
     state realtimeEnabled = false
+    state workerLabel = "worker-pending"
     let panel: Element? = null
 
     def onlineChanged(value: bool): online = value
@@ -240,6 +248,7 @@ export component WebCapabilities:
     @mounted:
         await loadCapabilities()
         await verifyRecovery()
+        workerLabel = await loadWorkerLabel()
         runtimeLog.info("Runtime configured")
 
     @cleanup:
@@ -290,6 +299,7 @@ export component WebCapabilities:
             <span look={summaryItemLook} data-resource>{resourceStatus()}</span>
             <span look={summaryItemLook} data-action>{actionStatus()}</span>
             <span look={summaryItemLook} data-log>{logLabel}</span>
+            <span look={summaryItemLook} data-worker>{workerLabel}</span>
             <span look={summaryItemLook} data-keyboard-event>{keyboardLabel}</span>
             <span look={summaryItemLook} data-input-event>{inputLabel}</span>
             <span look={summaryItemLook} data-pointer-event>{pointerLabel}</span>

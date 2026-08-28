@@ -1,0 +1,5 @@
+export type CapabilityWorkerRequest:
+    value: number
+
+export type CapabilityWorkerReply:
+    label: string

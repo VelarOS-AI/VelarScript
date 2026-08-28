@@ -13,6 +13,7 @@ export const VELAR_WEB_MODULES = Object.freeze([
   "velar/browser",
   "velar/files",
   "velar/realtime",
+  "velar/worker",
   "velar/web-test",
   "velar/websocket",
 ] as const);
