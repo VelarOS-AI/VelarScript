@@ -64,7 +64,7 @@ These names need no import and cannot be shadowed: `const Text = 1` is rejected.
 protects these names. Capabilities stay explicit imports. Durations use `ms` or
 `s`, so write `await Promise.sleep(250ms)`, not a bare number.
 
-Use checked binary, random, and task APIs. Project-specific codecs, storage,
+Use checked binary, hash, random, and task APIs. Project-specific codecs, storage,
 and algorithms come from project-owned modules or dependencies. A direct
 `for index in range(...):` is a native counter; range as a value is a List. Use `UInt16Buffer` for 16-bit numeric state,
 `UInt8Buffer` for compact data, and bounded `UInt32Builder`/`Float32Builder` values for variable-size numeric output. A fixed numeric buffer's `values()` returns one fresh `List<number>` snapshot; do not write an index loop just to copy it.
@@ -76,7 +76,10 @@ the toolchain write it — `velar create my-lib --template library` scaffolds a
 Core library whose release keeps `.vel` source plus a frozen ABI-1 JavaScript
 artifact; `velar build-library` regenerates its JS, ABI-owned source map, portable type
 interface, and hash receipt. Later toolchains load that interface and JS before
-considering source fallback. Other templates select their own framework brief. Each writes
+considering source fallback. Its package manifest declares `velar.targets: ["core"]`:
+Core is the one portability declaration for Core, Node, Web, and Desktop, while
+host-specific targets remain exact and host capabilities remain explicit. Other
+templates select their own framework brief. Each writes
 `velar.json`, a `package.json` whose scripts are the gates, a `src/` tree, a
 passing test, and an `AGENTS.md`.
 

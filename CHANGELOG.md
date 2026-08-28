@@ -4,6 +4,23 @@ This file records user-visible language, framework, and tooling changes. It is
 not a milestone checklist; the repository test suites and CI are the source of
 truth for acceptance status.
 
+## 0.23.3 — 2026-08-28
+
+### Core Standard API
+
+- Added target-neutral `velar/hash.sha256Text`. The synchronous bounded
+  SHA-256 implementation is shared unchanged by Core, Node, Web, and Desktop;
+  it accepts at most 16 MiB of UTF-8 text and returns 64 lowercase hexadecimal
+  characters without exposing a host hash handle or algorithm selector.
+
+### Package environments
+
+- `velar.targets: ["core"]` is now the complete portability declaration for a
+  source package or frozen Core artifact. Core packages can be consumed by
+  Core, Node, Web, and Desktop without repeating every target; Node, Web, and
+  Desktop declarations remain exact, and host capabilities are still checked
+  independently.
+
 ## 0.23.2 — 2026-08-28
 
 ### Editor intelligence

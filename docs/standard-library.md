@@ -98,7 +98,7 @@ installable library, even when it is implemented entirely in VelarScript.
   not re-enter through ambient coercion.
 - Core Node builds copy only imported official modules beside the generated
   output. Portable modules also bundle and tree-shake in Web builds. Local
-  platform modules (`velar/serve`, `velar/fs`, `velar/hash`, `velar/env`, `velar/host`,
+  platform modules (`velar/serve`, `velar/fs`, `velar/env`, `velar/host`,
   `velar/terminal`, `velar/path`, `velar/process`) are
   compile-time rejected for Web targets with platform-specific guidance.
 - Resource-producing APIs are bounded contracts, not best-effort host calls.
@@ -150,7 +150,7 @@ spelling and a `velar fix` rewrite that performs it.
 
 ### Group 2 — pure modules imported by name
 
-`velar/collections`, `velar/binary`, `velar/random`, `velar/task`, `velar/url`,
+`velar/collections`, `velar/binary`, `velar/hash`, `velar/random`, `velar/task`, `velar/url`,
 `velar/test`, and, on Web, `velar/look`.
 
 These compute and touch nothing, so question 1 clears them; they are imported
@@ -166,7 +166,7 @@ question 1 — they read the clock, read entropy, and write to the outside world
 
 ### Group 3 — capabilities
 
-`velar/fs`, `velar/hash`, `velar/path`, `velar/process`, `velar/env`, `velar/host`,
+`velar/fs`, `velar/path`, `velar/process`, `velar/env`, `velar/host`,
 `velar/serve`, `velar/terminal`, `velar/http`, `velar/worker`,
 `velar/websocket`, and the Web modules documented in `web-api.md`.
 
@@ -1280,16 +1280,16 @@ in-root intermediate links, and refuses a final symlink target.
 
 `sha256Text(text)` returns the SHA-256 digest of the text's UTF-8 bytes as
 exactly 64 lowercase hexadecimal characters. Input is limited to 16 MiB of
-UTF-8 text. The module is Node-only and synchronous because its known consumer
-is deterministic build tooling; it exposes neither an algorithm string nor a
-mutable host `Hash` object. Identifiers continue to use `velar/id`, and
+UTF-8 text. The module is a synchronous Core operation shared unchanged by
+Node, Web, and Desktop; it exposes neither an algorithm string nor a mutable
+host `Hash` object. Identifiers continue to use `velar/id`, and
 reproducible non-cryptographic streams continue to use `velar/random`.
 
-The runtime captures Node's SHA-256 constructor, native update/digest methods,
-UTF-8 sizing, reflection, and result validation when the module initializes.
-Later replacement of ambient reflection, string, or Hash prototype operations
-cannot redirect a digest. A missing host operation, invalid host result, wrong
-argument type, or exceeded input budget fails explicitly.
+The runtime implements SHA-256 over Core's bounded binary buffers and captures
+the string/reflection operations used for UTF-8 encoding when the module
+initializes. Later replacement of ambient reflection or string prototype
+operations cannot redirect a digest. A missing intrinsic, wrong argument type,
+or exceeded input budget fails explicitly.
 
 ### `velar/path`
 

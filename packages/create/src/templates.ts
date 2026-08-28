@@ -311,7 +311,7 @@ function libraryTemplate(name: string, displayName: string, version: string, for
     velar: {
       entry: "src/index.vel",
       artifacts: { core: "dist/velar-library.json" },
-      targets: ["core", "node", "web", "desktop"],
+      targets: ["core"],
       requires: { capabilities: [] },
     },
     scripts: {

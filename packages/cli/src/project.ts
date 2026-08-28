@@ -2168,7 +2168,12 @@ function assertVelarPackageTargetCapabilities(
   target: VelarPackageTarget,
   capabilities: ReadonlySet<string>,
 ): void {
-  if (!package_.targets.includes(target)) {
+  // A Core package is target-neutral by definition. Declaring `core` is the
+  // complete portability claim; authors do not repeat node/web/desktop merely
+  // to say that the same source has no host dependency. Target-specific
+  // declarations remain exact because their host contracts are not mutually
+  // substitutable.
+  if (!package_.targets.includes("core") && !package_.targets.includes(target)) {
     throw new Error(`package '${package_.name}' does not support the '${target}' target; supported targets: ${package_.targets.join(", ")}`);
   }
   const missing = package_.requiredCapabilities.filter((capability) => !capabilities.has(capability));

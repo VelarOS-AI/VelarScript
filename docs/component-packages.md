@@ -26,8 +26,10 @@ framework host, and cannot silently activate language syntax.
 ```
 
 - `velar.entry` is the one public source entry resolved by the compiler.
-- `velar.targets` is the complete list of application targets that may compile
-  the source. `velar.requires.capabilities` lists additional host capabilities
+- `velar.targets` states where the source may compile. A portable package uses
+  the single declaration `["core"]`, which is valid in Core, Node, Web, and
+  Desktop consumers; host-specific targets are listed exactly.
+  `velar.requires.capabilities` lists additional host capabilities
   the implementation actually calls; it is empty for a portable component. The
   optional `velar.requires.language` beside it declares the language generation
   the source was written against; see

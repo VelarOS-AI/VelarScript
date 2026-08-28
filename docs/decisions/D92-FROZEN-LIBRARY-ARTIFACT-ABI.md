@@ -29,8 +29,9 @@ name, package version, and source-relative path. Publisher and installer
 absolute paths are never type identity and never appear in generated artifacts.
 
 ABI-1 Core artifacts bundle the target-neutral `velar/*` implementation support
-they used. External npm libraries remain package dependencies. A Core artifact
-may run in any target the package declares; a Node artifact requires Node.
+they used. External npm libraries remain package dependencies. A package that
+declares the Core target may run on every official target; a Node artifact
+requires Node.
 
 ## Boundary
 

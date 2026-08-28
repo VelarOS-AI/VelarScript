@@ -39,8 +39,9 @@ import {
   VELAR_TYPE_VALIDATION_MODULE_SOURCE,
   VELAR_UTF8_RUNTIME,
 } from "@velarscript/compiler/extension";
+import { VELAR_CORE_HASH_RUNTIME } from "./hash-runtime.ts";
 export const CORE_WORKER_CONFIG_KEY = "velar:core-workers-v1";
-export const VELAR_STANDARD_API_VERSION = "0.5";
+export const VELAR_STANDARD_API_VERSION = "0.6";
 
 export const VELAR_WORKER_MANIFEST_MODULE = "velar/worker-manifest";
 
@@ -400,6 +401,9 @@ const coreModuleInterfaces = new Map<string, ModuleInterface>([
     ]),
     new Map([["ByteOrder", { identity: byteOrderIdentity, members: byteOrderMembers, wireValues: byteOrderWireValues }]]),
   )],
+  ["velar/hash", moduleInterface(new Map([
+    ["sha256Text", apiFunction(["text"], [stringType], stringType)],
+  ]))],
   ["velar/random", moduleInterface(
     new Map([
       ["Random", { kind: "typeObject", name: "Random", value: randomType }],
@@ -1737,6 +1741,7 @@ export const Float32Builder = __velarBinaryBuilderType("Float32Builder", __velar
 export function uint32Builder(maxElements) { return __velarBinaryBuilder(maxElements, __velarBinaryNativeUint32Array, 4, "uint32Builder"); }
 export function float32Builder(maxElements) { return __velarBinaryBuilder(maxElements, __velarBinaryNativeFloat32Array, 4, "float32Builder"); }
 `.trimStart()],
+  ["velar/hash", VELAR_CORE_HASH_RUNTIME],
   ["velar/random", String.raw`
 ${VELAR_TYPE_REGISTRY_RUNTIME}
 const __velarRandomNativeObject = globalThis.Object;
@@ -3362,6 +3367,7 @@ export function expect(actual) {
 const coreModuleDependencies: ReadonlyMap<string, readonly string[]> = new Map([
   [VELAR_COLLECTION_LOWERING_MODULE, VELAR_COLLECTION_LOWERING_DEPENDENCIES],
   ["velar/binary", [VELAR_COLLECTION_LOWERING_MODULE]],
+  ["velar/hash", ["velar/binary"]],
   // D50 rule 97.2: 'toEqual' is the language's own equals(a, b).
   ["velar/test", [VELAR_COLLECTION_LOWERING_MODULE] as readonly string[]],
 ]);

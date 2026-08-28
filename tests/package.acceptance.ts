@@ -125,13 +125,13 @@ try {
   assert.equal(installedManifest.license, "Apache-2.0");
   assert.match(await readFile(join(directory, "node_modules", "@velarscript", "cli", "LICENSE"), "utf8"), /Apache License\s+Version 2\.0/u);
   assert.equal(installedManifest.dependencies.playwright, "^1.58.2");
-  assert.equal(installedManifest.dependencies["@velarscript/compiler"], "0.23.2");
-  assert.equal(installedManifest.dependencies["@velarscript/core"], "0.23.2");
-  assert.equal(installedManifest.dependencies["@velarscript/node"], "0.23.2");
-  assert.equal(installedManifest.dependencies["@velarscript/server"], "0.23.2");
-  assert.equal(installedManifest.dependencies["@velarscript/web"], "0.23.2");
-  assert.equal(installedManifest.dependencies["@velarscript/desktop"], "0.23.2");
-  assert.equal(installedManifest.dependencies["create-velar"], "0.23.2");
+  assert.equal(installedManifest.dependencies["@velarscript/compiler"], "0.23.3");
+  assert.equal(installedManifest.dependencies["@velarscript/core"], "0.23.3");
+  assert.equal(installedManifest.dependencies["@velarscript/node"], "0.23.3");
+  assert.equal(installedManifest.dependencies["@velarscript/server"], "0.23.3");
+  assert.equal(installedManifest.dependencies["@velarscript/web"], "0.23.3");
+  assert.equal(installedManifest.dependencies["@velarscript/desktop"], "0.23.3");
+  assert.equal(installedManifest.dependencies["create-velar"], "0.23.3");
   for (const dependency of [
     "@velarscript/database",
     "@velarscript/sqlite",
@@ -156,7 +156,7 @@ try {
   const installedNodeManifest = JSON.parse(await readFile(join(directory, "node_modules", "@velarscript", "node", "package.json"), "utf8")) as {
     dependencies: Record<string, string>;
   };
-  assert.equal(installedNodeManifest.dependencies["@velarscript/compiler"], "0.23.2");
+  assert.equal(installedNodeManifest.dependencies["@velarscript/compiler"], "0.23.3");
   assert.equal(installedNodeManifest.dependencies["@velarscript/sqlite"], undefined);
   assert.equal(installedNodeManifest.dependencies["@velarscript-labs/sqlite"], undefined);
   assert.equal(installedNodeManifest.dependencies.yaml, undefined);
@@ -168,10 +168,10 @@ try {
     kind: "application",
     apiVersion: "0.15",
     manifestKey: "server",
-    composes: {"@velarscript/node": "0.15"},
+    composes: {"@velarscript/node": "0.16"},
   });
-  assert.equal(installedServerManifest.dependencies["@velarscript/compiler"], "0.23.2");
-  assert.equal(installedServerManifest.dependencies["@velarscript/node"], "0.23.2");
+  assert.equal(installedServerManifest.dependencies["@velarscript/compiler"], "0.23.3");
+  assert.equal(installedServerManifest.dependencies["@velarscript/node"], "0.23.3");
   assert.equal(installedServerManifest.dependencies.yaml, "^2.9.0");
   const installedWebManifest = JSON.parse(await readFile(join(directory, "node_modules", "@velarscript", "web", "package.json"), "utf8")) as {
     velar?: { extension?: { kind?: string; apiVersion?: string; manifestKey?: string; extends?: Record<string, string> } };
@@ -199,16 +199,16 @@ try {
     extends: {},
     composes: {
       "@velarscript/web": "0.11",
-      "@velarscript/node": "0.15",
+      "@velarscript/node": "0.16",
     },
   });
   for (const dependency of ["@velarscript/compiler", "@velarscript/node", "@velarscript/web"]) {
-    assert.equal(installedDesktopManifest.dependencies[dependency], "0.23.2");
+    assert.equal(installedDesktopManifest.dependencies[dependency], "0.23.3");
   }
   assert.equal(installedDesktopManifest.dependencies["@velarscript/cli"], undefined);
   assert.equal(installedDesktopManifest.dependencies.esbuild, undefined);
   const version = await run(process.execPath, [installedCli, "--version"], directory);
-  assert.equal(version.stdout, "velar 0.23.2\n");
+  assert.equal(version.stdout, "velar 0.23.3\n");
   const help = await run(process.execPath, [installedCli, "help", "build"], directory);
   assert.match(help.stdout, /Usage: velar build/u);
   assert.match(help.stdout, /standalone Node application/u);
@@ -230,25 +230,27 @@ try {
   await writeFile(join(helperRoot, "package.json"), JSON.stringify({
     name: "consumer-helper",
     version: "1.0.0",
-    velar: { entry: "src/index.vel", targets: ["core", "node", "web", "desktop"], requires: { capabilities: [] } },
+    velar: { entry: "src/index.vel", targets: ["core"], requires: { capabilities: [] } },
   }), "utf8");
   await writeFile(join(helperRoot, "src", "index.vel"), "export def double(value: number) -> number:\n    return value * 2\n", "utf8");
 
   await writeFile(join(directory, "main.vel"), `
 import {sum} from "velar/collections"
+import {sha256Text} from "velar/hash"
 import {double} from "consumer-helper"
 
 export const answer = double(sum(range(0, 7)))
 print(answer)
 print(Text.utf8Size("A😀游戏"))
 print(Text.chunks("A😀游戏", 2).join("|"))
+print(sha256Text("abc"))
 `.trimStart(), "utf8");
   await run(process.execPath, [installedCli, "build", "main.vel", "--out-dir", "dist"], directory);
   const productionCode = await readFile(join(directory, "dist", "main.js"), "utf8");
   assert.match(productionCode, /from\s*["']velar\/collections["']/u);
   assert.doesNotMatch(productionCode, /export const answer/u, "an installed CLI must default to production JavaScript");
   const built = await run(process.execPath, [join(directory, "dist", "main.js")], directory);
-  assert.equal(built.stdout, "42\n11\nA😀|游戏\n");
+  assert.equal(built.stdout, "42\n11\nA😀|游戏\nba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n");
 
   // 逃生出口必须由用户显式选择：它保留稳定、可读的声明名称，同时仍然是
   // 可以直接执行和独立搬走的完整 JavaScript 程序。
@@ -288,14 +290,14 @@ print(Text.chunks("A😀游戏", 2).join("|"))
   const nodeRuntime = await run(process.execPath, [
     "--input-type=module",
     "--eval",
-    "import {VELAR_NODE_API_VERSION,VELAR_NODE_MODULES,velarNodeRuntime} from '@velarscript/node'; import {nodeModuleSources,velarNodeCompilerExtension} from '@velarscript/node/compiler'; const fs=nodeModuleSources.get('velar/fs') ?? ''; const hash=nodeModuleSources.get('velar/hash') ?? ''; const http=nodeModuleSources.get('velar/http') ?? ''; const serve=nodeModuleSources.get('velar/serve') ?? ''; const websocket=nodeModuleSources.get('velar/websocket') ?? ''; if (VELAR_NODE_API_VERSION !== '0.15' || VELAR_NODE_MODULES.length !== 12 || velarNodeRuntime.name !== '@velarscript/node' || velarNodeCompilerExtension.id !== '@velarscript/node' || !fs.includes('export async function readText') || !fs.includes('export async function createText') || !fs.includes('export async function replaceTextIfMatches') || !fs.includes('export async function watchFiles') || !fs.includes('export const FileWatcher') || !fs.includes('__velarNodeHostInvoke(\"fs.createFile\"') || !fs.includes('__velarNodeHostInvoke(\"fs.replaceFileIfMatches\"') || !fs.includes('__velarNodeHostInvoke(\"fs.watchNext\"') || !hash.includes('export function sha256Text') || !http.includes('streamText') || !http.includes('__velarAssertJson') || !http.includes('__velarJsonStringify') || !http.includes('__velarNodeHostInvoke(\"http.request\"') || !http.includes('HttpTransportError') || !http.includes('HttpTransportPhase') || !http.includes('maxResponseChunks') || !serve.includes('parse: async (Type') || !serve.includes('ServeRequest.parse') || !serve.includes('export async function run') || !websocket.includes('export async function listen') || !websocket.includes('export async function run') || !websocket.includes('closeInfo()') || !nodeModuleSources.get('velar/server-test')?.includes('export async function client') || !nodeModuleSources.get('velar/terminal')?.includes('readLine')) process.exit(1); console.log(velarNodeRuntime.modules.join(','))",
+    "import {VELAR_NODE_API_VERSION,VELAR_NODE_MODULES,velarNodeRuntime} from '@velarscript/node'; import {nodeModuleSources,velarNodeCompilerExtension} from '@velarscript/node/compiler'; const fs=nodeModuleSources.get('velar/fs') ?? ''; const http=nodeModuleSources.get('velar/http') ?? ''; const serve=nodeModuleSources.get('velar/serve') ?? ''; const websocket=nodeModuleSources.get('velar/websocket') ?? ''; if (VELAR_NODE_API_VERSION !== '0.16' || VELAR_NODE_MODULES.length !== 11 || velarNodeRuntime.name !== '@velarscript/node' || velarNodeCompilerExtension.id !== '@velarscript/node' || nodeModuleSources.has('velar/hash') || !fs.includes('export async function readText') || !fs.includes('export async function createText') || !fs.includes('export async function replaceTextIfMatches') || !fs.includes('export async function watchFiles') || !fs.includes('export const FileWatcher') || !fs.includes('__velarNodeHostInvoke(\"fs.createFile\"') || !fs.includes('__velarNodeHostInvoke(\"fs.replaceFileIfMatches\"') || !fs.includes('__velarNodeHostInvoke(\"fs.watchNext\"') || !http.includes('streamText') || !http.includes('__velarAssertJson') || !http.includes('__velarJsonStringify') || !http.includes('__velarNodeHostInvoke(\"http.request\"') || !http.includes('HttpTransportError') || !http.includes('HttpTransportPhase') || !http.includes('maxResponseChunks') || !serve.includes('parse: async (Type') || !serve.includes('ServeRequest.parse') || !serve.includes('export async function run') || !websocket.includes('export async function listen') || !websocket.includes('export async function run') || !websocket.includes('closeInfo()') || !nodeModuleSources.get('velar/server-test')?.includes('export async function client') || !nodeModuleSources.get('velar/terminal')?.includes('readLine')) process.exit(1); console.log(velarNodeRuntime.modules.join(','))",
   ], directory);
-  assert.equal(nodeRuntime.stdout, "velar/server-test,velar/serve,velar/fs,velar/hash,velar/env,velar/host,velar/terminal,velar/path,velar/process,velar/http,velar/worker,velar/websocket\n");
+  assert.equal(nodeRuntime.stdout, "velar/server-test,velar/serve,velar/fs,velar/env,velar/host,velar/terminal,velar/path,velar/process,velar/http,velar/worker,velar/websocket\n");
 
   const serverRuntime = await run(process.execPath, [
     "--input-type=module",
     "--eval",
-    "import {VELAR_SERVER_API_VERSION,VELAR_SERVER_MODULES,velarServerFramework} from '@velarscript/server'; import {serverModuleSources,velarCompilerExtension} from '@velarscript/server/compiler'; const configured=velarCompilerExtension.modules?.source?.('velar/server', {configuration:'config/server.yml'}) ?? ''; const server=serverModuleSources.get('velar/server') ?? ''; const realtime=serverModuleSources.get('velar/realtime') ?? ''; if (VELAR_SERVER_API_VERSION !== '0.15' || VELAR_SERVER_MODULES.length !== 2 || velarServerFramework.name !== '@velarscript/server' || velarCompilerExtension.contract?.kind !== 'application' || velarCompilerExtension.contract?.composes?.['@velarscript/node'] !== '0.15' || !configured.includes('applicationConfigurationPath = \"config/server.yml\"') || !server.includes('applicationConfigurationPath = \"\"') || server.includes('applicationConfigurationPath = \"application.yml\"') || !server.includes('export async function application') || !server.includes('export function authenticate') || !server.includes('export function database') || server.includes('export async function realtimeSession') || !realtime.includes('export async function realtimeSession')) process.exit(1); console.log(VELAR_SERVER_MODULES.join(','))",
+    "import {VELAR_SERVER_API_VERSION,VELAR_SERVER_MODULES,velarServerFramework} from '@velarscript/server'; import {serverModuleSources,velarCompilerExtension} from '@velarscript/server/compiler'; const configured=velarCompilerExtension.modules?.source?.('velar/server', {configuration:'config/server.yml'}) ?? ''; const server=serverModuleSources.get('velar/server') ?? ''; const realtime=serverModuleSources.get('velar/realtime') ?? ''; if (VELAR_SERVER_API_VERSION !== '0.15' || VELAR_SERVER_MODULES.length !== 2 || velarServerFramework.name !== '@velarscript/server' || velarCompilerExtension.contract?.kind !== 'application' || velarCompilerExtension.contract?.composes?.['@velarscript/node'] !== '0.16' || !configured.includes('applicationConfigurationPath = \"config/server.yml\"') || !server.includes('applicationConfigurationPath = \"\"') || server.includes('applicationConfigurationPath = \"application.yml\"') || !server.includes('export async function application') || !server.includes('export function authenticate') || !server.includes('export function database') || server.includes('export async function realtimeSession') || !realtime.includes('export async function realtimeSession')) process.exit(1); console.log(VELAR_SERVER_MODULES.join(','))",
   ], directory);
   assert.equal(serverRuntime.stdout, "velar/server,velar/realtime\n");
 
@@ -428,7 +430,7 @@ component App:
   const docsManifest = JSON.parse(await readFile(join(docsProject, "package.json"), "utf8")) as {
     dependencies: Record<string, string>;
   };
-  assert.equal(docsManifest.dependencies["@velarscript/web"], "0.23.2");
+  assert.equal(docsManifest.dependencies["@velarscript/web"], "0.23.3");
   await run(process.execPath, [installedCli, "check", docsProject], directory);
 
   const componentProject = join(directory, "created-component");
@@ -443,7 +445,7 @@ component App:
   assert.equal(componentManifest.velar.entry, "src/index.vel");
   assert.deepEqual(componentManifest.velar.targets, ["web", "desktop"]);
   assert.deepEqual(componentManifest.velar.requires.capabilities, []);
-  assert.equal(componentManifest.peerDependencies["@velarscript/web"], "^0.23.2");
+  assert.equal(componentManifest.peerDependencies["@velarscript/web"], "^0.23.3");
   await run(process.execPath, [installedCli, "check", componentProject], directory);
 
   const nodeProject = join(directory, "created-node");
@@ -452,7 +454,7 @@ component App:
   const nodeManifest = JSON.parse(await readFile(join(nodeProject, "package.json"), "utf8")) as {
     dependencies: Record<string, string>;
   };
-  assert.equal(nodeManifest.dependencies["@velarscript/server"], "0.23.2");
+  assert.equal(nodeManifest.dependencies["@velarscript/server"], "0.23.3");
   assert.equal(nodeManifest.dependencies["@velarscript/node"], undefined);
   const nodeVelarManifest = JSON.parse(await readFile(join(nodeProject, "velar.json"), "utf8"));
   assert.deepEqual(nodeVelarManifest.extensions, ["@velarscript/server"]);
@@ -469,7 +471,7 @@ component App:
   const createdDesktopManifest = JSON.parse(await readFile(join(createdDesktopProject, "package.json"), "utf8")) as {
     dependencies: Record<string, string>;
   };
-  assert.equal(createdDesktopManifest.dependencies["@velarscript/desktop"], "0.23.2");
+  assert.equal(createdDesktopManifest.dependencies["@velarscript/desktop"], "0.23.3");
   assert.match(await readFile(join(createdDesktopProject, "public", "velarscript-mark.svg"), "utf8"), /<path d=/u);
   await run(process.execPath, [installedCli, "check", createdDesktopProject], directory);
 
@@ -480,7 +482,7 @@ component App:
   await writeFile(join(localDependency, "package.json"), `${JSON.stringify({
     name: "local-dependency",
     version: "1.0.0",
-    velar: { entry: "src/index.vel", targets: ["core", "node", "web", "desktop"], requires: { capabilities: [] } },
+    velar: { entry: "src/index.vel", targets: ["core"], requires: { capabilities: [] } },
   }, null, 2)}\n`, "utf8");
   await writeFile(join(localDependency, "src", "index.vel"), `
 export def decode<T>(value: unknown, target: Type<T>) -> T:

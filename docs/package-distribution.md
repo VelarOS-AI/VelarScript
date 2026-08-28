@@ -80,7 +80,7 @@ extension declares `velar.extension`:
   "velar": {
     "entry": "src/index.vel",
     "artifacts": { "core": "dist/velar-library.json" },
-    "targets": ["core", "node", "web", "desktop"],
+    "targets": ["core"],
     "requires": { "capabilities": [] }
   }
 }
@@ -102,16 +102,20 @@ only source fallback. If no compatible artifact exists, the resolver follows
 the source-package rules below exactly as before.
 
 ABI 1 accepts one artifact target per package: `core` or `node`. A `core`
-artifact is target-neutral and may be consumed by Core, Node, Web, or Desktop
-when `velar.targets` permits it; a `node` artifact is admitted only to Node.
+artifact is target-neutral and may be consumed by Core, Node, Web, or Desktop;
+a `node` artifact is admitted only to Node.
 The build bundles the matching `velar/*` implementation support so the artifact
 does not import compiler-private runtime modules, while ordinary npm dependencies
 remain ordinary package imports. Web/Desktop component artifacts require a
 shared reactive/rendering runtime ABI and are not claimed by ABI 1; those
 packages continue to use source mode.
 
-Targets are `core`, `node`, `web`, or `desktop`. An application-owned source
-package may narrow that list and require a host capability. Missing, empty,
+Targets are `core`, `node`, `web`, or `desktop`. Declaring `core` means the
+package is target-neutral and therefore supports Core, Node, Web, and Desktop;
+portable packages write `targets: ["core"]` rather than repeating every host.
+Target-specific declarations are exact, so a package shared by two host targets
+lists both. An application-owned source package may narrow that list and require
+a host capability. Missing, empty,
 duplicated, unknown, or incompatible declarations fail package resolution
 instead of leaking a native dependency into another target.
 
@@ -208,7 +212,7 @@ beside `velar.entry`, and exposes the same file through npm `exports`:
   },
   "velar": {
     "entry": "src/index.vel",
-    "targets": ["core", "node", "web", "desktop"],
+    "targets": ["core"],
     "requires": { "capabilities": [] },
     "resources": {
       "./block-catalog": {

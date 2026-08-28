@@ -6,7 +6,6 @@ export const VELAR_NODE_MODULES = Object.freeze([
   "velar/server-test",
   "velar/serve",
   "velar/fs",
-  "velar/hash",
   "velar/env",
   "velar/host",
   "velar/terminal",

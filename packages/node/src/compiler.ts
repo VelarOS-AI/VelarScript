@@ -17,7 +17,6 @@ import { VELAR_NODE_ENV_RUNTIME } from "./environment-runtime.ts";
 import { VELAR_NODE_FILESYSTEM_RUNTIME } from "./filesystem-runtime.ts";
 import { VELAR_NODE_HTTP_RUNTIME } from "./http-runtime.ts";
 import { VELAR_NODE_HOST_RUNTIME } from "./host-runtime.ts";
-import { VELAR_NODE_HASH_RUNTIME } from "./hash-runtime.ts";
 import { VELAR_NODE_HOST_RUNTIME as VELAR_SHARED_NODE_HOST_RUNTIME } from "./node-host-runtime.ts";
 import { VELAR_NODE_HOST_WORKER_SOURCE } from "./node-host-worker-runtime.ts";
 import { VELAR_PROCESS_HOST_RUNTIME } from "./process-runtime.ts";
@@ -38,7 +37,7 @@ import { httpOutcomeType, routePatternType, serveAppType, serveRequestType, VELA
 
 export { VELAR_PROCESS_HOST_RUNTIME } from "./process-runtime.ts";
 
-export const VELAR_NODE_API_VERSION = "0.15";
+export const VELAR_NODE_API_VERSION = "0.16";
 export const VELAR_NODE_HOST_MODULE = "velar/node-host-v1";
 
 const unknownType: ValueType = { kind: "unknown" };
@@ -634,9 +633,6 @@ export const nodeModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Ma
     new Map([["FileWatcher", "velar/fs#type:FileWatcher"]]),
     new Map([["FileWatchBatch", fileWatchBatchType]]),
   )],
-  ["velar/hash", moduleInterface(new Map([
-    ["sha256Text", functionType(["text"], [stringType], stringType)],
-  ]))],
   ["velar/env", moduleInterface(new Map([
     ["get", functionType(["name"], [stringType], optional(stringType))],
     ["require", functionType(["name"], [stringType], stringType)],
@@ -716,10 +712,6 @@ export const TestResponse = Object.freeze({is(value) { return !!value && typeof 
   ["velar/fs", String.raw`
 ${VELAR_UTF8_RUNTIME}
 ${VELAR_NODE_FILESYSTEM_RUNTIME}
-`.trimStart()],
-  ["velar/hash", String.raw`
-${VELAR_UTF8_RUNTIME}
-${VELAR_NODE_HASH_RUNTIME}
 `.trimStart()],
   ["velar/path", String.raw`
 import { basename as nodeBasename, dirname as nodeDirname, extname, isAbsolute as nodeIsAbsolute, join as nodeJoin, normalize as nodeNormalize, relative as nodeRelative, resolve as nodeResolve } from "node:path";

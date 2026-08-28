@@ -1,7 +1,7 @@
 # @velarscript/node
 
 The official Node.js runtime boundary for VelarScript. It owns the typed module
-contracts and implementations for `velar/fs`, `velar/hash`, `velar/env`, `velar/host`,
+contracts and implementations for `velar/fs`, `velar/env`, `velar/host`,
 `velar/serve`, `velar/path`, `velar/process`, `velar/terminal`,
 `velar/worker`, and `velar/websocket`, plus the Node target of `velar/http`.
 
@@ -18,9 +18,9 @@ represent non-2xx responses, owned cancel/deadline outcomes, and
 request/response network transport failure. The transport phase is typed; retry
 and replay policy stays with the provider or application.
 
-`velar/hash.sha256Text(text)` is the bounded deterministic build-tool digest:
-UTF-8 input, a 16 MiB ceiling, and a 64-character lowercase hexadecimal result.
-It does not expose Node's mutable `Hash` handle or a general cipher surface.
+Core owns `velar/hash.sha256Text(text)` so deterministic digests use the same
+bounded implementation on Node, Web, and Desktop. This package does not replace
+it with `node:crypto` or expose Node's mutable `Hash` handle.
 
 The package also owns Node's native server syntax. A low-level project may
 activate `@velarscript/node` directly, then declare anonymous checked routes:
