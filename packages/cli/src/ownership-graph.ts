@@ -35,6 +35,8 @@ export interface OwnershipGraphNode {
   readonly id: string;
   readonly kind: OwnershipNodeKind;
   readonly name: string;
+  /** Compiler-owned declaration documentation, used by presentation clients as a human label. */
+  readonly documentation?: string;
   readonly path?: string;
   readonly span?: Span;
   readonly selectionSpan?: Span;
@@ -67,6 +69,24 @@ export interface OwnershipGraphResult {
   readonly coverage: OwnershipGraphCoverage;
   readonly limitReached: boolean;
   readonly durationMs: number;
+  readonly activity: {
+    readonly strategy: "full" | "affected-modules";
+    readonly modulesVisited: number;
+  };
+}
+
+/**
+ * One revision-to-revision ownership update. IDs remain compiler-owned and
+ * stable, so an editor or AI host can patch its current view without replacing
+ * the whole graph after every keystroke.
+ */
+export interface OwnershipGraphDelta {
+  readonly baseRevision: string;
+  readonly revision: string;
+  readonly nodes: readonly OwnershipGraphNode[];
+  readonly edges: readonly OwnershipGraphEdge[];
+  readonly removedNodeIds: readonly string[];
+  readonly removedEdgeIds: readonly string[];
 }
 
 export interface OwnershipGraphOptions {
@@ -75,11 +95,77 @@ export interface OwnershipGraphOptions {
   readonly cancelled?: () => boolean;
 }
 
+interface OwnershipGraphScope {
+  readonly modulePaths: ReadonlySet<string>;
+  readonly retainExternalModuleEdges: boolean;
+}
+
 const DEFAULT_MAXIMUM_NODES = 10_000;
 const DEFAULT_MAXIMUM_EDGES = 20_000;
+const moduleContentRevisions = new WeakMap<ProjectModule["result"], string>();
+
+function spansEqual(left: Span | undefined, right: Span | undefined): boolean {
+  return left === right || (left !== undefined && right !== undefined
+    && left.start === right.start && left.end === right.end);
+}
+
+function nodesEqual(left: OwnershipGraphNode, right: OwnershipGraphNode): boolean {
+  return left.id === right.id
+    && left.kind === right.kind
+    && left.name === right.name
+    && left.documentation === right.documentation
+    && left.path === right.path
+    && spansEqual(left.span, right.span)
+    && spansEqual(left.selectionSpan, right.selectionSpan)
+    && left.type === right.type
+    && left.exported === right.exported
+    && left.mutable === right.mutable;
+}
+
+function edgesEqual(left: OwnershipGraphEdge, right: OwnershipGraphEdge): boolean {
+  return left.id === right.id
+    && left.kind === right.kind
+    && left.from === right.from
+    && left.to === right.to
+    && left.path === right.path
+    && spansEqual(left.span, right.span);
+}
+
+/** Produces a transport patch from two complete graphs without interpreting source text. */
+export function ownershipGraphDelta(
+  previous: OwnershipGraphResult,
+  current: OwnershipGraphResult,
+): OwnershipGraphDelta {
+  const previousNodes = new Map(previous.nodes.map((node) => [node.id, node]));
+  const currentNodeIds = new Set(current.nodes.map((node) => node.id));
+  const previousEdges = new Map(previous.edges.map((edge) => [edge.id, edge]));
+  const currentEdgeIds = new Set(current.edges.map((edge) => edge.id));
+  return {
+    baseRevision: previous.revision,
+    revision: current.revision,
+    nodes: current.nodes.filter((node) => {
+      const prior = previousNodes.get(node.id);
+      return prior === undefined || !nodesEqual(prior, node);
+    }),
+    edges: current.edges.filter((edge) => {
+      const prior = previousEdges.get(edge.id);
+      return prior === undefined || !edgesEqual(prior, edge);
+    }),
+    removedNodeIds: previous.nodes.filter((node) => !currentNodeIds.has(node.id)).map((node) => node.id),
+    removedEdgeIds: previous.edges.filter((edge) => !currentEdgeIds.has(edge.id)).map((edge) => edge.id),
+  };
+}
 
 function shortHash(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 24);
+}
+
+function moduleContentRevision(module: ProjectModule): string {
+  const cached = moduleContentRevisions.get(module.result);
+  if (cached !== undefined) return cached;
+  const revision = createHash("sha256").update(module.result.source.text).digest("hex");
+  moduleContentRevisions.set(module.result, revision);
+  return revision;
 }
 
 export function ownershipGraphRevision(project: ProjectResult): string {
@@ -87,7 +173,10 @@ export function ownershipGraphRevision(project: ProjectResult): string {
   for (const module of [...project.modules].sort((left, right) => byCodeUnit(left.inputPath, right.inputPath))) {
     hash.update(relative(project.projectRoot, module.inputPath));
     hash.update("\0");
-    hash.update(module.result.source.text);
+    // Incremental project compilation preserves the result object for every
+    // unaffected module. Cache its content digest so one edit does not make
+    // revision calculation scan every source byte in the project again.
+    hash.update(moduleContentRevision(module));
     hash.update("\0");
   }
   for (const extension of project.compilerExtensions) hash.update(`${extension.id}\0`);
@@ -257,7 +346,11 @@ function edgeIdentity(kind: OwnershipEdgeKind, from: string, to: string, path?: 
   return `edge:${shortHash(`${kind}\0${from}\0${to}\0${path ?? ""}\0${span?.start ?? ""}:${span?.end ?? ""}`)}`;
 }
 
-export async function buildOwnershipGraph(project: ProjectResult, options: OwnershipGraphOptions = {}): Promise<OwnershipGraphResult> {
+async function buildOwnershipGraphScoped(
+  project: ProjectResult,
+  options: OwnershipGraphOptions,
+  scope: OwnershipGraphScope | null,
+): Promise<OwnershipGraphResult> {
   const startedAt = performance.now();
   const maximumNodes = Math.max(1, Math.min(20_000, Math.floor(options.maximumNodes ?? DEFAULT_MAXIMUM_NODES)));
   const maximumEdges = Math.max(1, Math.min(40_000, Math.floor(options.maximumEdges ?? DEFAULT_MAXIMUM_EDGES)));
@@ -271,6 +364,10 @@ export async function buildOwnershipGraph(project: ProjectResult, options: Owner
   let skippedNodes = false;
   let skippedEdges = false;
   const moduleIds = new Map(project.modules.map((module) => [module.inputPath, moduleIdentity(project, module.inputPath)]));
+  const moduleNodeIds = new Set(moduleIds.values());
+  const includedModules = scope
+    ? project.modules.filter((module) => scope.modulePaths.has(module.inputPath))
+    : project.modules;
   const symbolIds = new Map<string, string>();
   const symbolByStableId = new Map<string, SemanticSymbol>();
   const capabilityIds = new Map<string, string>();
@@ -302,7 +399,11 @@ export async function buildOwnershipGraph(project: ProjectResult, options: Owner
     // Asked before the identity is hashed: `uniqueNodes` only grows, so an
     // edge whose ends are not retained now was never retained, cannot already
     // be recorded, and would be filtered out of the answer regardless.
-    if (nodesFinal() && (!uniqueNodes.has(from) || !uniqueNodes.has(to))) {
+    const retainedExternalModule = scope?.retainExternalModuleEdges === true
+      && kind === "imports"
+      && uniqueNodes.has(from)
+      && moduleNodeIds.has(to);
+    if (nodesFinal() && (!uniqueNodes.has(from) || !uniqueNodes.has(to)) && !retainedExternalModule) {
       skippedEdges = true;
       return;
     }
@@ -321,7 +422,7 @@ export async function buildOwnershipGraph(project: ProjectResult, options: Owner
     });
   };
 
-  for (const module of project.modules) {
+  for (const module of includedModules) {
     await checkpoint();
     addNode({
       id: moduleIds.get(module.inputPath)!,
@@ -349,6 +450,7 @@ export async function buildOwnershipGraph(project: ProjectResult, options: Owner
         id,
         kind: symbolKind(symbol),
         name: symbol.name,
+        ...(symbol.documentation ? { documentation: symbol.documentation } : {}),
         path: symbol.path,
         span: symbol.span,
         selectionSpan: symbol.selectionSpan,
@@ -359,7 +461,7 @@ export async function buildOwnershipGraph(project: ProjectResult, options: Owner
     }
   }
 
-  for (const module of project.modules) {
+  for (const module of includedModules) {
     await checkpoint();
     if (exhausted()) break;
     const moduleId = moduleIds.get(module.inputPath)!;
@@ -441,7 +543,9 @@ export async function buildOwnershipGraph(project: ProjectResult, options: Owner
   }
 
   const nodes = [...uniqueNodes.values()];
-  const eligibleEdges = [...uniqueEdges.values()].filter((edge) => uniqueNodes.has(edge.from) && uniqueNodes.has(edge.to));
+  const eligibleEdges = [...uniqueEdges.values()].filter((edge) => uniqueNodes.has(edge.from)
+    && (uniqueNodes.has(edge.to)
+      || (scope?.retainExternalModuleEdges === true && edge.kind === "imports" && moduleNodeIds.has(edge.to))));
   const edges = eligibleEdges.slice(0, maximumEdges);
   const limitReached = skippedNodes || skippedEdges || edges.length < uniqueEdges.size;
   const modulesIncluded = nodes.filter((node) => node.kind === "module").length;
@@ -458,5 +562,112 @@ export async function buildOwnershipGraph(project: ProjectResult, options: Owner
     },
     limitReached,
     durationMs: performance.now() - startedAt,
+    activity: {
+      strategy: scope ? "affected-modules" : "full",
+      modulesVisited: includedModules.length,
+    },
+  };
+}
+
+export async function buildOwnershipGraph(project: ProjectResult, options: OwnershipGraphOptions = {}): Promise<OwnershipGraphResult> {
+  return buildOwnershipGraphScoped(project, options, null);
+}
+
+/**
+ * Reuses graph fragments whose compiler module result was reused by the
+ * incremental project session. A bounded/truncated base cannot be patched
+ * safely, so that uncommon case deliberately falls back to a full build.
+ */
+export async function updateOwnershipGraph(
+  previousGraph: OwnershipGraphResult,
+  previousProject: ProjectResult,
+  project: ProjectResult,
+  options: OwnershipGraphOptions = {},
+): Promise<OwnershipGraphResult> {
+  const startedAt = performance.now();
+  if (previousProject.projectRoot !== project.projectRoot || previousGraph.limitReached) {
+    return buildOwnershipGraph(project, options);
+  }
+  const previousModules = new Map(previousProject.modules.map((module) => [module.inputPath, module]));
+  const currentModules = new Map(project.modules.map((module) => [module.inputPath, module]));
+  const changedCurrentPaths = new Set<string>();
+  const removedPaths = new Set<string>();
+  for (const module of project.modules) {
+    const previous = previousModules.get(module.inputPath);
+    if (!previous || previous.result !== module.result || previous.relativePath !== module.relativePath) {
+      changedCurrentPaths.add(module.inputPath);
+    }
+  }
+  for (const module of previousProject.modules) {
+    if (!currentModules.has(module.inputPath)) removedPaths.add(module.inputPath);
+  }
+  if (changedCurrentPaths.size === 0 && removedPaths.size === 0) {
+    // A compiler-extension configuration change can alter the graph revision
+    // even if a host reused every module result object. It is rare and cannot
+    // be represented as a module fragment, so retain the hot no-op only when
+    // the complete revision also agrees.
+    return previousGraph.revision === ownershipGraphRevision(project)
+      ? previousGraph
+      : buildOwnershipGraph(project, options);
+  }
+  if (changedCurrentPaths.size > 256
+    || (project.modules.length > 8 && changedCurrentPaths.size > project.modules.length * 0.6)) {
+    return buildOwnershipGraph(project, options);
+  }
+
+  const partial = await buildOwnershipGraphScoped(project, options, {
+    modulePaths: changedCurrentPaths,
+    retainExternalModuleEdges: true,
+  });
+  if (partial.limitReached) return buildOwnershipGraph(project, options);
+  if (options.cancelled?.()) throw new Error("Ownership graph request cancelled");
+
+  const affectedPaths = new Set([...changedCurrentPaths, ...removedPaths]);
+  const replacedNodeIds = new Set(previousGraph.nodes
+    .filter((node) => node.path !== undefined && affectedPaths.has(node.path))
+    .map((node) => node.id));
+  const nodeById = new Map(previousGraph.nodes
+    .filter((node) => !replacedNodeIds.has(node.id))
+    .map((node) => [node.id, node]));
+  for (const node of partial.nodes) nodeById.set(node.id, node);
+
+  const partialEdgeIds = new Set(partial.edges.map((edge) => edge.id));
+  const removedModuleNodeIds = new Set(previousGraph.nodes
+    .filter((node) => node.kind === "module" && node.path !== undefined && removedPaths.has(node.path))
+    .map((node) => node.id));
+  const edgeById = new Map(previousGraph.edges
+    .filter((edge) => !replacedNodeIds.has(edge.from)
+      && !removedModuleNodeIds.has(edge.to)
+      && !partialEdgeIds.has(edge.id))
+    .map((edge) => [edge.id, edge]));
+  for (const edge of partial.edges) edgeById.set(edge.id, edge);
+
+  let edges = [...edgeById.values()].filter((edge) => nodeById.has(edge.from) && nodeById.has(edge.to));
+  const incidentNodeIds = new Set(edges.flatMap((edge) => [edge.from, edge.to]));
+  let nodes = [...nodeById.values()].filter((node) => node.kind !== "capability" || incidentNodeIds.has(node.id));
+  const maximumNodes = Math.max(1, Math.min(20_000, Math.floor(options.maximumNodes ?? DEFAULT_MAXIMUM_NODES)));
+  const maximumEdges = Math.max(1, Math.min(40_000, Math.floor(options.maximumEdges ?? DEFAULT_MAXIMUM_EDGES)));
+  if (nodes.length > maximumNodes || edges.length > maximumEdges) return buildOwnershipGraph(project, options);
+  const retainedNodeIds = new Set(nodes.map((node) => node.id));
+  edges = edges.filter((edge) => retainedNodeIds.has(edge.from) && retainedNodeIds.has(edge.to));
+  nodes = nodes.slice(0, maximumNodes);
+  const modulesIncluded = nodes.filter((node) => node.kind === "module").length;
+  return {
+    revision: partial.revision,
+    nodes,
+    edges,
+    coverage: {
+      modulesTotal: project.modules.length,
+      modulesIncluded,
+      complete: modulesIncluded === project.modules.length,
+      callRelations: "direct-local-callees",
+      memberCallRelations: false,
+    },
+    limitReached: false,
+    durationMs: performance.now() - startedAt,
+    activity: {
+      strategy: "affected-modules",
+      modulesVisited: changedCurrentPaths.size,
+    },
   };
 }

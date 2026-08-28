@@ -22,7 +22,14 @@ import { VELAR_VERSION } from "./version.ts";
 import { hostErrorMessage } from "./host-error.ts";
 import { formatSourceChecked } from "./format-guard.ts";
 import { canonicalizePotentialPath, canonicalPathWithinCanonicalRoot } from "./canonical-path.ts";
-import { buildOwnershipGraph, ownershipGraphRevision } from "./ownership-graph.ts";
+import {
+  buildOwnershipGraph,
+  ownershipGraphDelta,
+  ownershipGraphRevision,
+  updateOwnershipGraph,
+  type OwnershipGraphDelta,
+  type OwnershipGraphResult,
+} from "./ownership-graph.ts";
 import {
   type ProjectSemanticToken,
   projectDefinitionAt,
@@ -272,6 +279,11 @@ export async function runLanguageServer(): Promise<void> {
   confinedCanonicalRoot = configuredCanonical ? await canonicalizePotentialPath(configuredCanonical) : null;
   const documents = new Map<string, TextDocument>();
   const sessions = new VelarProjectSessions();
+  const ownershipGraphs = new Map<string, {
+    readonly graph: OwnershipGraphResult;
+    readonly delta: OwnershipGraphDelta | null;
+    readonly project: ProjectResult;
+  }>();
   const workspaceIndex = new WorkspaceTextIndex();
   const pendingRequests = new Set<string>();
   const cancelledRequests = new Set<string>();
@@ -513,6 +525,8 @@ export async function runLanguageServer(): Promise<void> {
                 workspaceWatchPathCodeUnitLimit: MAX_WORKSPACE_CHANGE_PATH_CODE_UNITS,
                 workspaceWatchTextCodeUnitLimit: MAX_WORKSPACE_CHANGE_TEXT_CODE_UNITS,
                 ownershipGraph: true,
+                ownershipGraphPatches: true,
+                ownershipGraphAffectedModules: true,
                 ownershipGraphNodeLimit: MAX_OWNERSHIP_GRAPH_NODES,
                 ownershipGraphEdgeLimit: MAX_OWNERSHIP_GRAPH_EDGES,
                 emittedJavaScript: true,
@@ -688,16 +702,19 @@ export async function runLanguageServer(): Promise<void> {
         const requestedVersionValue = params?.version;
         const maximumNodesValue = params?.maximumNodes;
         const maximumEdgesValue = params?.maximumEdges;
+        const previousRevisionValue = params?.previousRevision;
         if (!descriptor || typeof descriptor.uri !== "string"
           || (requestedVersionValue !== undefined && (typeof requestedVersionValue !== "number" || !Number.isSafeInteger(requestedVersionValue)))
           || (maximumNodesValue !== undefined && (typeof maximumNodesValue !== "number" || !Number.isSafeInteger(maximumNodesValue)))
-          || (maximumEdgesValue !== undefined && (typeof maximumEdgesValue !== "number" || !Number.isSafeInteger(maximumEdgesValue)))) {
-          respondError(message.id, "velar/ownershipGraph requires textDocument.uri and optional integer version, maximumNodes, and maximumEdges", -32602);
+          || (maximumEdgesValue !== undefined && (typeof maximumEdgesValue !== "number" || !Number.isSafeInteger(maximumEdgesValue)))
+          || (previousRevisionValue !== undefined && (typeof previousRevisionValue !== "string" || !/^[a-f0-9]{64}$/u.test(previousRevisionValue)))) {
+          respondError(message.id, "velar/ownershipGraph requires textDocument.uri and optional integer version, maximumNodes, maximumEdges, and 64-character previousRevision", -32602);
           break;
         }
         const requestedVersion = requestedVersionValue as number | undefined;
         const maximumNodes = maximumNodesValue as number | undefined;
         const maximumEdges = maximumEdgesValue as number | undefined;
+        const previousRevision = previousRevisionValue as string | undefined;
         if ((maximumNodes !== undefined && (maximumNodes < 1 || maximumNodes > MAX_OWNERSHIP_GRAPH_NODES))
           || (maximumEdges !== undefined && (maximumEdges < 1 || maximumEdges > MAX_OWNERSHIP_GRAPH_EDGES))) {
           respondError(message.id, `velar/ownershipGraph bounds are 1..${MAX_OWNERSHIP_GRAPH_NODES} nodes and 1..${MAX_OWNERSHIP_GRAPH_EDGES} edges`, -32602);
@@ -717,37 +734,76 @@ export async function runLanguageServer(): Promise<void> {
           respondError(message.id, "VelarScript project is unavailable for this document");
           break;
         }
-        const graph = await buildOwnershipGraph(project, {
+        const graphKey = `${project.projectRoot}\0${maximumNodes ?? "default"}\0${maximumEdges ?? "default"}`;
+        const cached = ownershipGraphs.get(graphKey);
+        const currentRevision = ownershipGraphRevision(project);
+        const graphOptions = {
           ...(maximumNodes === undefined ? {} : { maximumNodes }),
           ...(maximumEdges === undefined ? {} : { maximumEdges }),
           cancelled: () => message.id !== undefined && cancelledRequests.has(requestKey(message.id)),
-        });
+        };
+        let graph: OwnershipGraphResult;
+        let latestDelta: OwnershipGraphDelta | null;
+        if (cached?.graph.revision === currentRevision) {
+          graph = cached.graph;
+          latestDelta = cached.delta;
+          if (cached.project !== project) ownershipGraphs.set(graphKey, { ...cached, project });
+        } else {
+          graph = cached
+            ? await updateOwnershipGraph(cached.graph, cached.project, project, graphOptions)
+            : await buildOwnershipGraph(project, graphOptions);
+          latestDelta = cached ? ownershipGraphDelta(cached.graph, graph) : null;
+          ownershipGraphs.set(graphKey, { graph, delta: latestDelta, project });
+        }
+        const patch = previousRevision === graph.revision
+          ? ownershipGraphDelta(graph, graph)
+          : latestDelta?.baseRevision === previousRevision
+            ? latestDelta
+            : null;
+        const responseNodes = patch?.nodes ?? graph.nodes;
+        const responseEdges = patch?.edges ?? graph.edges;
         respond(message.id, {
           protocolVersion: 1,
+          mode: patch ? "patch" : "snapshot",
+          ...(patch ? {
+            baseRevision: patch.baseRevision,
+            removedNodeIds: patch.removedNodeIds,
+            removedEdgeIds: patch.removedEdgeIds,
+          } : {}),
           rootUri: pathToFileURL(project.projectRoot).href,
           document: { uri: descriptor.uri, version: document.version },
           compilerVersion: VELAR_VERSION,
           revision: graph.revision,
-          nodes: graph.nodes.map((node) => ({
-            id: node.id,
-            kind: node.kind,
-            name: clipLspText(node.name),
-            ...(node.type ? { type: clipLspText(node.type) } : {}),
-            ...(node.exported === undefined ? {} : { exported: node.exported }),
-            ...(node.mutable === undefined ? {} : { mutable: node.mutable }),
-            ...(node.path && node.span ? { uri: pathToFileURL(node.path).href, range: lspRange(sourceFor(project, node.path), node.span) } : {}),
-            ...(node.path && node.selectionSpan ? { selectionRange: lspRange(sourceFor(project, node.path), node.selectionSpan) } : {}),
-          })),
-          edges: graph.edges.map((edge) => ({
-            id: edge.id,
-            kind: edge.kind,
-            from: edge.from,
-            to: edge.to,
-            ...(edge.path && edge.span ? { uri: pathToFileURL(edge.path).href, range: lspRange(sourceFor(project, edge.path), edge.span) } : {}),
-          })),
+          nodes: responseNodes.map((node) => {
+            const sourcePath = node.path && withinWorkspaceRoot(project.projectRoot, node.path) ? node.path : null;
+            return {
+              id: node.id,
+              kind: node.kind,
+              name: clipLspText(node.name),
+              ...(node.documentation ? { documentation: clipLspText(node.documentation) } : {}),
+              ...(node.type ? { type: clipLspText(node.type) } : {}),
+              ...(node.exported === undefined ? {} : { exported: node.exported }),
+              ...(node.mutable === undefined ? {} : { mutable: node.mutable }),
+              ...(sourcePath ? { path: projectRelativeGraphPath(project.projectRoot, sourcePath) } : {}),
+              ...(sourcePath && node.span ? { uri: pathToFileURL(sourcePath).href, range: lspRange(sourceFor(project, sourcePath), node.span) } : {}),
+              ...(sourcePath && node.selectionSpan ? { selectionRange: lspRange(sourceFor(project, sourcePath), node.selectionSpan) } : {}),
+            };
+          }),
+          edges: responseEdges.map((edge) => {
+            const sourcePath = edge.path && withinWorkspaceRoot(project.projectRoot, edge.path) ? edge.path : null;
+            return {
+              id: edge.id,
+              kind: edge.kind,
+              from: edge.from,
+              to: edge.to,
+              ...(sourcePath ? { path: projectRelativeGraphPath(project.projectRoot, sourcePath) } : {}),
+              ...(sourcePath && edge.span ? { uri: pathToFileURL(sourcePath).href, range: lspRange(sourceFor(project, sourcePath), edge.span) } : {}),
+            };
+          }),
           coverage: graph.coverage,
           limitReached: graph.limitReached,
           durationMs: graph.durationMs,
+          activity: graph.activity,
         });
         break;
       }
@@ -1525,6 +1581,10 @@ function configuredCanonicalRoot(): string | null {
 function withinWorkspaceRoot(root: string, path: string): boolean {
   const value = relative(root, resolve(path));
   return value === "" || (!value.startsWith("..") && !isAbsolute(value));
+}
+
+function projectRelativeGraphPath(root: string, path: string): string {
+  return relative(root, resolve(path)).replaceAll("\\", "/");
 }
 
 function workspacePosition(position: WorkspaceIndexPosition): Position {

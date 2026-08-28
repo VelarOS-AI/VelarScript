@@ -22,19 +22,24 @@ one round.
 
 The working loop:
 
-1. Write ordinary code the way a fluent JS/Python author would.
-2. Run `velar check`. Do exactly what each diagnostic says. It reports
+1. Run `velar graph` before a project-wide change to read the compiler-owned
+   module, ownership, call, state, derivation, and capability view. Use
+   `velar graph --focus <symbol> --depth 2` when the full overview is larger
+   than the context you need. The graph is derived from current compiler facts;
+   do not build or maintain a separate source index.
+2. Write ordinary code the way a fluent JS/Python author would.
+3. Run `velar check`. Do exactly what each diagnostic says. It reports
    **advisories** as well — a second channel for a spelling Vel accepts with a
    meaning other than the one your JS/Python reflex intended. An advisory never
    fails the check, and leaving one unresolved means the work is not done:
    either write the spelling it names, or put `// velar-allow <CODE>: <reason>`
    on that line saying why the code is right as written. A suppression with no
    reason, and one that no longer applies, are both compile errors.
-3. Run `velar fix` to apply every rewrite the diagnostics already named
+4. Run `velar fix` to apply every rewrite the diagnostics already named
    (retired spellings with one successor, line-ending semicolons, and the rest
    of that family); it never rewrites anything that needs a decision, so what
    is left after it is the real work.
-4. Run `velar test`. Run `velar format` to settle layout.
+5. Run `velar test`. Run `velar format` to settle layout.
 
 Do not invent workarounds for a diagnostic; it is the language telling you
 the canonical spelling.

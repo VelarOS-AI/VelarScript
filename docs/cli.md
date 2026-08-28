@@ -10,6 +10,7 @@ Inside a project, npm scripts wrap most of these — `npm run dev`, `npm test`,
 
 ```text
 velar check [entry.vel | project-directory]
+velar graph [entry.vel | project-directory] [--focus <symbol|path>] [--depth <0-6>] [--json]
 velar format [file.vel | project-directory] [--check]
 velar fix [entry.vel | project-directory]
 velar repro [entry.vel | project-directory] [--out-dir <directory>]
@@ -42,6 +43,19 @@ includes every advisory — swapping the two names of a `for` header changes
 which name binds which value, so an editor offers it as a quick fix and `fix`
 leaves it alone. `lsp` speaks the Language Server Protocol for editors, and
 shows an advisory as a warning rather than an error.
+
+`graph` prints the compiler-owned logic view of the current project. Its compact
+default keeps modules, components, state, computed values, actions, functions,
+types, capabilities, and their exact ownership, call, read, write, and
+derivation edges. `--json` exposes the same stable IDs and source spans to
+tools. A model can ask for `--focus <symbol> --depth 2` to load only that
+symbol's callers and dependencies when its context is bounded. The command
+reads the current project on every invocation. Editor hosts keep one incremental
+compiler session and ask `velar/ownershipGraph` with the previous revision; the
+server reuses graph fragments for compiler-reused modules and returns a node/edge
+patch for the unsaved document version. A truncated base or broad invalidation
+falls back to one bounded full snapshot, with the update strategy reported in
+`activity`.
 
 Formatting is idempotent, and both `format` and the language server verify it:
 if formatting the result would change it again, the file keeps the bytes you
@@ -473,9 +487,12 @@ pair a newer target extension with the pinned CLI.
 
 ```text
 velar skill [core|web|node|desktop]
+velar graph [project-directory] [--focus <symbol|path>] [--depth <0-6>] [--json]
 ```
 
 Prints one owner-specific language brief, version-locked to the installed
 compiler. Core is the default; framework projects load Core plus the briefs
 named by their generated `AGENTS.md`: [Web](ai-skill-web.md),
 [Node](ai-skill-node.md), or [Desktop](ai-skill-desktop.md).
+Use `velar graph` before a project-wide edit to obtain the current global
+semantic view; use `--focus` for a smaller caller/dependency neighborhood.
