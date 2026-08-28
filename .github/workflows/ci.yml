@@ -69,18 +69,22 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ github.token }}
       # The Node suite is not browser-free: web-error-paths, browser-lifecycle
-      # and module-enum-surface drive a real Chromium, and the historical
-      # hardening waves drive several more.
+      # and module-enum-surface drive a real Chromium, the historical hardening
+      # waves drive several more, and the engine-matrix hardening tests
+      # ([CLI-29], [CLI-31]) run --browser=all — so this job needs all three
+      # engines. The browser-suite job below stays deliberately
+      # Chromium-only per the release-process doc; the matrix tests are the
+      # exception, and they live in test:full.
       - name: Cache the locked Playwright browsers
         uses: actions/cache@v6
         with:
           path: ${{ runner.os == 'macOS' && '~/Library/Caches/ms-playwright' || '~/.cache/ms-playwright' }}
-          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
-      - name: Install the locked Chromium build
-        run: npx playwright install chromium
-      - name: Install Chromium system dependencies
+          key: playwright-all-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - name: Install the locked browser engines
+        run: npx playwright install chromium firefox webkit
+      - name: Install browser system dependencies
         if: runner.os == 'Linux'
-        run: npx playwright install-deps chromium
+        run: npx playwright install-deps chromium firefox webkit
       - name: Read the pinned Desktop runtime version
         if: runner.os == 'macOS'
         id: desktop-runtime
