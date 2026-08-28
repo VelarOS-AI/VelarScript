@@ -3894,11 +3894,16 @@ habit — replaces the value, so the row is destroyed and built again, and a
 focused input inside it loses focus and an open composition ends. Update the
 item in place instead, `items[index].done = true`; the key still names the same
 value and the row survives. The habit is reported rather than left silent:
-advisory `A4` names the list a `map` rebuilds when a keyed position renders it,
-and gives the in-place write. It is also the advisory most often right to
-suppress — a `readonly` list, or a whole table replaced by one API response,
-leaves `map` and a record literal as the only spelling — and a
-`// velar-allow A4: <reason>` on that line is the answer there.
+advisory `A4` names the rows a keyed position renders when something rebuilds
+them, and gives the alternative that keeps them. It reads the rebuild whether it
+is assigned back to the list or derived — a `computed` that builds a fresh
+record per source element rebuilds every row on every recompute, and reaches the
+keyed position the same way; a derived value owns no row it could write, so
+there the alternative is to render the source rows and change the field on
+those. It is also the advisory most often right to suppress — a `readonly` list,
+or a whole table replaced by one API response, leaves building the rows as the
+only spelling — and a `// velar-allow A4: <reason>` on that line is the answer
+there.
 
 An event directive may carry modifiers, appended with dots:
 `on:click.prevent.stop={submit}`. There are exactly five, and no others are
@@ -4326,10 +4331,13 @@ target is a CSS selector string or an element. The root is constructed
 synchronously so the runtime can own its failure as one transaction — a direct
 `await` inside the argument is rejected, so module-level preload work is awaited
 into a binding first. Failure never leaves a blank page: a setup throw, a
-dynamic region that throws while it is first built, and a missing target all
-report through `velar/app` and render an accessible fatal state instead. One
-component instance mounts exactly once; a repeated mount fails explicitly rather
-than moving DOM silently.
+dynamic region that throws while it is first built, a missing target, and a root
+written into a module binding — `const root = <App />` — whose construction
+throws all report through `velar/app` and render an accessible fatal state
+instead. A module-level root that fails to construct does not stop module
+evaluation, so `@main` still runs and the failure surfaces at the mount that
+takes that root. One component instance mounts exactly once; a repeated mount
+fails explicitly rather than moving DOM silently.
 
 `tick()` answers `Promise<null>` that resolves after the pending reactive flush
 has settled, which is how a test observes the DOM that a state write produces.

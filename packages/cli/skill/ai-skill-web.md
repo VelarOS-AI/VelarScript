@@ -109,10 +109,13 @@ Conditional rendering is an expression, and repeated children need stable
 must still be the same value. `items = items.map(item => { ...item, done: true })`
 rebuilds every row, so the keyed list recognises none of them and destroys and
 rebuilds all of its children — an input being typed into loses focus. Change the
-field in place, `items[index].done = true`. The compiler raises advisory **A4**
-where the rewritten list is the one a keyed position renders; `// velar-allow
-A4: <reason>` suppresses it where a `map` is the only spelling, which a
-`readonly` list or one API response makes it.
+field in place, `items[index].done = true`. A `computed` that builds a fresh
+record per source element is the same rebuild, once per recompute; there, render
+the source rows and change the field on those, or carry the source records
+through. The compiler raises advisory **A4** for both spellings where the rebuilt
+rows are the ones a keyed position renders; `// velar-allow A4: <reason>`
+suppresses it where building the rows is the only spelling, which a `readonly`
+list or one API response makes it.
 
 A native element rejects every attribute name beginning with `on` other than
 the `on:` directive itself. `onclick`, `onClick`, and `ONCLICK` are one

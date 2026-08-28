@@ -75,6 +75,7 @@ their titles are reproduced verbatim below.
 | [D106](D106-APPLICATION-CONTEXT-MARKER.md) | 应用上下文是 Core 静态语义，图与 AI 各自投影 | The optional Core-owned `@context("...")` marker carries an author's business name through the semantic graph without changing execution; human and AI tools project the same compiler facts independently. |
 | [D107](D107-TARGET-RUNTIME-ENUMERATION.md) | 目标运行时清单与类型契约保持单一所有者 | A target runtime roster enumerates every implementation that target supplies, including implementations of Core-owned contracts; the interface remains single-owned and generic CLI composition derives import maps from the enumerable source roster. |
 | [D108](D108-CORE-PACKAGE-PORTABILITY.md) | Core 包声明即完整跨目标承诺 | `velar.targets: ["core"]` means one target-neutral package usable by Core, Node, Web, and Desktop; host-specific target declarations stay exact and capabilities remain independently required. |
+| [D109](D109-A4-COVERAGE-AND-MODULE-ROOT-FAILURE.md) | A4 覆盖派生重建；模块级根构造失败不再是白屏 | Two spellings of one defect each reach the contract that already named it: advisory `A4` widens its proof to the derived rebuild (one code, one suppression, a remedy that fits a derived value), and a module-level root whose construction throws now surfaces the fatal state and the `velar/app` report instead of a blank page. |
 
 ## archive/
 

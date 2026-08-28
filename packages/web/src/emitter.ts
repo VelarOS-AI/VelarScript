@@ -61,6 +61,20 @@ interface LookRule {
   readonly sequence: number;
 }
 
+/**
+ * Statements whose body is not module evaluation. A `def`, a class method, and
+ * a `test` run when something calls them, and reach that caller's failure
+ * transaction rather than the module's; a `try` is the author claiming the
+ * failure himself. `@main` is deliberately absent — it is the module's own
+ * final region and evaluates with the rest of the module.
+ */
+const DEFERRED_BODY_STATEMENT_KINDS: ReadonlySet<Statement["kind"]> = new Set<Statement["kind"]>([
+  "FunctionDeclaration",
+  "ClassDeclaration",
+  "TestDeclaration",
+  "TryStatement",
+]);
+
 const FILE_TYPE_RUNTIME = String.raw`
 function __velarFileTypeIs(value) {
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, Symbol.for("velar.file.registry.v1"));
@@ -92,6 +106,20 @@ function __velarReactiveCollectionUnlink(value, child) { __velarReactiveCollecti
 
 export class WebJavaScriptEmitter extends JavaScriptEmitter {
   private currentScope: string | null = null;
+  /**
+   * Whether the statement being emitted runs while the module evaluates, with
+   * nothing standing between its failure and the module's own. It starts true
+   * at the module's top level, stays true through the `@main` region, which is
+   * the same evaluation, and is cleared for every body that runs later or under
+   * an owner of its own: a `def`, a class, a `test`, an arrow, a derived or
+   * watched expression, a `try` the author wrote, and the root argument of
+   * `mount`, whose failure `__velarMount` already owns.
+   *
+   * Only a component element read here answers an instance nobody has caught,
+   * which is the one construction whose throw used to take the whole page with
+   * it; see `__velarModuleInstantiate`.
+   */
+  private moduleEvaluation = true;
   private currentJsxNamespace = '"html"';
   private readonly resourceContents: ReadonlyMap<string, string>;
   private cssOutput = "";
@@ -127,7 +155,19 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     this.webOutput = containsWebSyntax(program);
     this.needsFileTypeHelper = false;
     this.needsLookArithmeticRuntime = [...this.hints.extensionCalls.values()].includes(LOOK_ARITHMETIC_HINT);
+    this.moduleEvaluation = true;
     return super.emit(program);
+  }
+
+  /** Emits `render` with module evaluation switched off, for a body that runs under an owner of its own. */
+  private outsideModuleEvaluation<T>(render: () => T): T {
+    const previous = this.moduleEvaluation;
+    this.moduleEvaluation = false;
+    try {
+      return render();
+    } finally {
+      this.moduleEvaluation = previous;
+    }
   }
 
   css(): string {
@@ -345,6 +385,13 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
   }
 
   protected override emitStatement(statement: Statement, depth: number): string {
+    // Everything a `def`, class, `test` or `try` holds runs under an owner of
+    // its own: a called body reaches whoever called it, and a `try` the author
+    // wrote is the author claiming the failure. Neither is module evaluation,
+    // even when the call happens to be made while the module evaluates.
+    if (DEFERRED_BODY_STATEMENT_KINDS.has(statement.kind) && this.moduleEvaluation) {
+      return this.outsideModuleEvaluation(() => this.emitStatement(statement, depth));
+    }
     if (isWebStatement(statement)) {
       if (statement.kind === "ExtensionStatement:web:unsafe-css") return "";
       if (statement.kind === "ExtensionStatement:web:component") return this.emitComponent(statement, depth);
@@ -354,7 +401,8 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       }
       if (statement.kind === "ExtensionStatement:web:computed") {
         const indentation = "  ".repeat(depth);
-        return `${indentation}${statement.exported ? "export " : ""}const ${statement.name} = __velarComputed(() => (${this.emitMappedExpression(statement.initializer)}));`;
+        const initializer = this.outsideModuleEvaluation(() => this.emitMappedExpression(statement.initializer));
+        return `${indentation}${statement.exported ? "export " : ""}const ${statement.name} = __velarComputed(() => (${initializer}));`;
       }
       if (statement.kind === "ExtensionStatement:web:resource") return "";
       if (statement.kind === "ExtensionStatement:web:action") {
@@ -363,7 +411,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
         // its lifetime is the module and no component disposal applies.
         const indentation = "  ".repeat(depth);
         const parameters = statement.parameters.map((parameter) => this.emitParameter(parameter.name, parameter.defaultValue, parameter.rest)).join(", ");
-        const actionLines = [...this.emitStatementLines(statement.body, depth + 1)];
+        const actionLines = this.outsideModuleEvaluation(() => [...this.emitStatementLines(statement.body, depth + 1)]);
         if (!this.blockAlwaysReturns(statement.body)) actionLines.push(`${"  ".repeat(depth + 1)}return null;`);
         const actionBody = actionLines.join("\n");
         return `${indentation}${statement.exported ? "export " : ""}const ${statement.name} = __velarAction(async (${parameters}) => {${actionBody ? `\n${actionBody}\n${indentation}` : ""}}, __velarGlobalScope, ${JSON.stringify(statement.name)});`;
@@ -371,8 +419,12 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       if (statement.kind === "ExtensionStatement:web:watch") {
         const indentation = "  ".repeat(depth);
         const parameters = [statement.currentName, statement.previousName].filter((name): name is string => name !== null).join(", ");
-        const body = this.emitStatementLines(statement.body, depth + 1).join("\n");
-        return `${indentation}__velarWatch(() => ${this.emitMappedExpression(statement.expression)}, (${parameters}) => {${body ? `\n${body}\n${indentation}` : ""}}, __velarGlobalScope, ${JSON.stringify(webWatchSubjectLabel(statement.expression))});`;
+        const watched = this.outsideModuleEvaluation(() => {
+          const written = this.emitStatementLines(statement.body, depth + 1).join("\n");
+          return { body: written, subject: this.emitMappedExpression(statement.expression) };
+        });
+        const body = watched.body;
+        return `${indentation}__velarWatch(() => ${watched.subject}, (${parameters}) => {${body ? `\n${body}\n${indentation}` : ""}}, __velarGlobalScope, ${JSON.stringify(webWatchSubjectLabel(statement.expression))});`;
       }
     }
     if (statement.kind === "AssignmentStatement") {
@@ -383,6 +435,12 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
   }
 
   protected override emitExpression(expression: Expression): string {
+    // A function value written at module level is a body that runs when it is
+    // called, wherever that is, so its component elements are not the module's
+    // to catch.
+    if (expression.kind === "ArrowFunctionExpression" && this.moduleEvaluation) {
+      return this.outsideModuleEvaluation(() => this.emitExpression(expression));
+    }
     if (isWebUnit(expression)) return JSON.stringify(expression.raw);
     if (isWebKeyframes(expression)) {
       const name = this.keyframeNames.get(spanIdentity(expression.span)) ?? keyframesName(keyframesCanonical(expression, this.lookStaticValues));
@@ -427,7 +485,12 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     }
     if (expression.kind === "CallExpression" && expression.callee.kind === "IdentifierExpression"
       && expression.callee.name === "mount" && expression.arguments.length === 2) {
-      const sourceArguments = expression.arguments.map((argument) => this.emitMappedExpression(argument));
+      // The root is built inside the thunk `__velarMount` runs, so its failure
+      // is already owned by the mount transaction and must keep reaching it as
+      // a throw rather than being turned into a deferred module failure.
+      const sourceArguments = this.outsideModuleEvaluation(
+        () => expression.arguments.map((argument) => this.emitMappedExpression(argument)),
+      );
       const namedOrder = this.hints.namedArgumentOrders.get(spanIdentity(expression.span));
       const arguments_ = namedOrder
         ? namedOrder.map((source) => source === -1 ? "undefined" : `__velarNamedArguments[${source}]`)
@@ -664,7 +727,13 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
         if (reactiveComponent) {
           return `__velarDynamicComponent((__velarDynamicScope) => __velarChild(${arguments_}), ${scope})`;
         }
-        return asChild ? `__velarChild(${arguments_})` : `__velarInstantiate(${arguments_})`;
+        if (asChild) return `__velarChild(${arguments_})`;
+        // D90 R4-b's designed site: `const root = <App />` builds its instance
+        // while the module evaluates, which is outside every transaction the
+        // runtime owns. The site stays legal and eager; only its failure moves,
+        // from an uncaught module-evaluation throw to the same no-blank-page
+        // machinery `mount` has always run.
+        return `${this.moduleEvaluation ? "__velarModuleInstantiate" : "__velarInstantiate"}(${arguments_})`;
       } finally {
         this.currentScope = previousScope;
       }
@@ -2012,6 +2081,47 @@ function __velarFatal(parent, error) {
   __velarDomReplaceChildren(parent, fallback);
 }
 
+// Whether any root has actually mounted, which is the whole question the
+// deferred module failure below has to answer: the no-blank-page promise is
+// about a page with nothing on it, and a page that already has an application
+// on it is not one the fatal state may replace.
+let __velarMountedRoot = false;
+
+// A component element built while the module evaluates sits outside every
+// transaction the runtime owns, so a construction throw there used to escape
+// module evaluation and leave the page blank -- the one initial-render path the
+// promise did not cover. The failure is caught into this value instead, and the
+// module keeps evaluating so the '@main' region still runs: that is where the
+// error handlers are installed and where 'mount' is called, and reporting ahead
+// of both would report to nobody.
+function __velarModuleInstantiate(component, thunks, children, scope, namespace, setRef) {
+  try {
+    return __velarInstantiate(component, thunks, children, scope, namespace, setRef);
+  } catch (error) {
+    const failure = { error, surfaced: false };
+    // The mount that takes this root surfaces the failure at its own target.
+    // Nothing having taken it by the first microtask means nothing ever will,
+    // and a root that was built to be mounted and never was is still a blank
+    // page: it surfaces there instead, into the document body.
+    __velarEnqueue(() => __velarSurfaceModuleFailure(failure, null));
+    return { __velarModuleFailure: failure };
+  }
+}
+
+function __velarSurfaceModuleFailure(failure, parent) {
+  if (failure.surfaced) return null;
+  failure.surfaced = true;
+  // The phase is 'mount' because this is the same failure 'mount(<App />, ...)'
+  // reports under that phase; the two spellings of one root differ in where the
+  // element is written, not in what went wrong.
+  const report = __velarReport(failure.error, "mount", null);
+  try {
+    const target = parent ?? (__velarMountedRoot ? null : __velarDomQuerySelector("body"));
+    if (target) __velarFatal(target, report.error);
+  } catch {}
+  return null;
+}
+
 function __velarMount(evaluate, fallbackTarget = null) {
   let values;
   try {
@@ -2029,6 +2139,15 @@ function __velarMount(evaluate, fallbackTarget = null) {
   const value = values[0];
   const target = values[1];
   const parent = typeof target === "string" ? __velarDomQuerySelector(target) : target;
+  // A root whose construction failed while the module evaluated is answered
+  // here, ahead of the missing-target question: the construction failure is the
+  // cause, and reporting the target instead would name a symptom. The target
+  // still decides where the fatal state renders, and a missing one falls back
+  // to the document body exactly as it does below.
+  if (value && value.__velarModuleFailure) {
+    __velarSurfaceModuleFailure(value.__velarModuleFailure, parent || null);
+    return null;
+  }
   if (!parent) {
     // A missing mount target must keep the no-blank-page promise in every
     // build: the failure is reported through velar/app and the fatal state
@@ -2045,10 +2164,12 @@ function __velarMount(evaluate, fallbackTarget = null) {
     if (value && value.__velarComponent) {
       const result = value.mount(parent);
       if (__velarGraphIsList(globalThis.__velarHotDisposers)) __velarAppendOwned(globalThis.__velarHotDisposers, () => value.destroy());
+      __velarMountedRoot = true;
       return result;
     }
     __velarAppend(parent, value);
     __velarMountScope(__velarGlobalScope);
+    __velarMountedRoot = true;
     return null;
   } catch (failure) {
     const report = __velarReport(failure, "mount", null);

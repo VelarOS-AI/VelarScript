@@ -272,11 +272,21 @@ replaces every value, so every row is destroyed and built again, an input being
 typed into loses focus, and an open composition ends. Change the field in place
 instead, `items[index].done = true`; the key still names the same value and the
 row survives. The rebuild is reported rather than left silent: advisory `A4`
-names the list a `map` rebuilds when a keyed position renders it, and gives the
-in-place write. The advisory never fails a build and never moves an emitted
-byte; `// velar-allow A4: <reason>` suppresses it where the mapped spelling is
-the only one available, which a `readonly` list or a set of rows arriving whole
-from one response makes it.
+names the rows a keyed position renders when something rebuilds them, and gives
+the alternative that keeps them.
+
+`A4` reads the rebuild in whichever of its two spellings the module uses. The
+assigned one is `items = items.map(item => {...item, done: true})` above, and
+its alternative is the field write next to it. The derived one is a `computed`
+that builds its rows — either `computed rows = source.map(item => {…})` or a
+`computed` over a `def` that fills a fresh list with record literals — and it
+rebuilds every row on every recompute, which reaches the keyed position the same
+way. A derived value owns no row it could write, so there the alternatives are
+to render the source rows and change the field on those, or to carry the source
+records through rather than constructing new ones. The advisory never fails a
+build and never moves an emitted byte; `// velar-allow A4: <reason>` suppresses
+either spelling where building the rows is the only one available, which a
+`readonly` list or a set of rows arriving whole from one response makes it.
 
 The same two questions decide whether a **child component keeps its instance**,
 and the answer is worth stating positively because a child that is rebuilt every
@@ -985,9 +995,16 @@ component RuntimeStatus:
   the report and renders a compiler-owned accessible fatal state instead of a
   blank page. That covers every initial-render path in every build: a setup
   throw, a dynamic or keyed region that throws while it is first constructed,
-  and a mount target that does not exist -- the last one reports through the
-  `mount` phase and renders the fatal state into the document body, since the
-  requested target is exactly what is missing. Component setup and initial JSX
+  a mount target that does not exist, and a root written into a module binding
+  -- `const root = <App />` -- whose construction throws while the module
+  evaluates. A missing target reports through the `mount` phase and renders the
+  fatal state into the document body, since the requested target is exactly what
+  is missing. A module-level root that fails to construct does not stop module
+  evaluation: the rest of the module runs, so the `@main` region still installs
+  its error handlers and still calls `mount`, and the failure is reported once
+  through the `mount` phase and rendered into that mount's target. A failed root
+  that is never mounted renders the fatal state into the document body instead,
+  unless another root has already mounted successfully. Component setup and initial JSX
   construction are transactional: failure runs sibling cleanup, destroys the
   incomplete scope, and preserves the original error. Dynamic and keyed
   updates build the replacement first, so a failed update retains the last

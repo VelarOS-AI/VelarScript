@@ -124,7 +124,8 @@ component DynamicChild(value: string):
     dynamicBuilds = dynamicBuilds + 1
     return <span data-dynamic>{value}</span>
 
-/// Keyed over records rebuilt on every recompute: the A4 shape.
+/// Keyed over records rebuilt on every recompute: the A4 shape, in the
+/// derived spelling A4 now names as well as the assigned one.
 component RebuiltKeyChild(row: Row):
     rebuiltKeyBuilds = rebuiltKeyBuilds + 1
     return <span data-rebuilt-key>{row.text}</span>
@@ -149,7 +150,7 @@ def report():
     reported = f"static={staticBuilds} dynamic={dynamicBuilds} rebuiltKey={rebuiltKeyBuilds} stableKey={stableKeyBuilds}"
 
 component App:
-    computed rebuilt = rebuiltRows(text)
+    computed rebuilt = rebuiltRows(text)  // velar-allow A4: this cell measures the rebuild on purpose
 
     return <main>
         <div data-a><StaticChild value={text} /></div>

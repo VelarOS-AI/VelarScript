@@ -156,9 +156,12 @@ console.log("seed:" + trace + ":" + readText(app.node));
 });
 
 test("[closeout co-1] the module-level instantiation site forces its props the same way", () => {
-  // A component element outside any component scope emits a bare
-  // __velarInstantiate rather than __velarChild; both reach the same store, so
-  // both owe the caller the same evaluation order.
+  // A component element outside any component scope instantiates rather than
+  // becoming a child; both reach the same store, so both owe the caller the
+  // same evaluation order. The module-evaluation site goes through
+  // __velarModuleInstantiate, which only catches the construction failure that
+  // used to escape module evaluation -- the store, the order and the eager
+  // forcing are __velarInstantiate's own and unchanged.
   const application = `
 let trace = ""
 
@@ -173,7 +176,7 @@ component Child(first: string, second: string):
 const root = <Child second={note("b")} first={note("a")} />
 `.trimStart();
   const code = emitted(application);
-  assert.match(code, /const root = __velarInstantiate\(Child, \{ second: \(\) => \(note\("b"\)\), first: \(\) => \(note\("a"\)\) \}/u);
+  assert.match(code, /const root = __velarModuleInstantiate\(Child, \{ second: \(\) => \(note\("b"\)\), first: \(\) => \(note\("a"\)\) \}/u);
   assert.equal(execute(code, `
 console.log("root:" + trace + ":" + readText(root.node));
 `), "root:ba|body|:ab\n");

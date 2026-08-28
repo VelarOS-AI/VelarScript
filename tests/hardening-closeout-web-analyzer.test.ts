@@ -187,6 +187,175 @@ component App:
 });
 
 // ---------------------------------------------------------------------------
+// co-3, wider proven shape -- the same churn spelled as a derived value.
+//
+// The P2b reconciliation wave compiled both spellings of one application and
+// found only the assigned one named: `items = items.map(...)` was advised, and
+// the `computed` over a `for`/`append` builder that rebuilds the very same rows
+// was silent, though it is the more idiomatic of the two and is what the
+// consumer actually wrote. Same advisory, same suppression, wider proof.
+// ---------------------------------------------------------------------------
+
+/** The consumer's spelling: a builder `def`, a `computed` over it, a keyed list. */
+const derivedList = (declaration: string, initializer: string) => `
+type Row:
+    key: string
+    text: string
+
+state text = "a"
+state rows: List<Row> = [{ key: "a", text: "a" }]
+
+${declaration}
+component Row_(row: Row):
+    return <span>{row.text}</span>
+
+component App:
+    computed built = ${initializer}
+
+    return <ul>{built.map(row => <Row_ key={row.key} row={row} />)}</ul>
+`;
+
+const straightLineBuilder = `
+def build(value: string) -> List<Row>:
+    const made: List<Row> = []
+    made.append({ key: "r0", text: value })
+    return made
+`;
+
+// The row is rewritten rather than mirrored field for field, which keeps A9 --
+// the exact-projection advisory -- out of the reading; A4's question is the
+// identity of the record, not how its fields were filled.
+const loopBuilder = `
+def build(source: List<Row>) -> List<Row>:
+    const made: List<Row> = []
+    for row in source:
+        made.append({ key: row.key, text: row.text + "!" })
+    return made
+`;
+
+test("[co-3] a 'for'/'append' builder behind a computed is the same advisory", () => {
+  for (const [declaration, initializer] of [[straightLineBuilder, "build(text)"], [loopBuilder, "build(rows)"]] as const) {
+    const reported = advisories(derivedList(declaration, initializer));
+    assert.deepEqual(reported.map((item) => item.code), ["A4"]);
+    const [message] = reported;
+    // The opening is the assignment shape's word for word, because the defect
+    // and its consequence are the same one; only when it happens and what to do
+    // about it differ.
+    assert.match(message!.message, /rebuilds every row of 'built' on every recompute/u);
+    assert.match(message!.message, /every row is a new value/u);
+    assert.match(message!.message, /no longer recognises any of them/u);
+    assert.match(message!.message, /destroys and rebuilds all of its children/u);
+    assert.match(message!.message, /an input being typed into loses focus/u);
+    // A derived value has no row of its own to write, so the remedy names the
+    // two that exist rather than an index write that would not compile.
+    assert.match(message!.message, /render the source rows and change the field on them in place/u);
+    assert.match(message!.message, /carry the source records through instead of constructing new ones/u);
+    assert.doesNotMatch(message!.message, /built\[index\]/u);
+  }
+});
+
+test("[co-3] a computed that maps straight to record literals is the same advisory", () => {
+  const reported = advisories(derivedList("", `rows.map(row => { key: row.key, text: "x" })`));
+  assert.deepEqual(reported.map((item) => item.code), ["A4"]);
+  assert.match(reported[0]!.message, /rebuilds every row of 'built' on every recompute/u);
+});
+
+test("[co-3] the derived shape answers the same suppression machinery", () => {
+  const source = derivedList(straightLineBuilder, "build(text)");
+  const allowed = compile(source.replace(
+    "computed built = build(text)",
+    "computed built = build(text)  // velar-allow A4: the rows arrive from one API response",
+  ));
+  assert.deepEqual(allowed.diagnostics.map((item) => item.code), []);
+  assert.deepEqual((allowed.advisories ?? []).map((item) => item.code), []);
+
+  const bare = compile(source.replace(
+    "computed built = build(text)",
+    "computed built = build(text)  // velar-allow A4",
+  ));
+  assert.deepEqual(bare.diagnostics.map((item) => item.code), ["VEL1011"]);
+});
+
+test("[co-3] adjacent derived shapes that preserve identity stay silent", () => {
+  // A builder that appends the rows it was handed carries the identity through:
+  // that is the alternative the message teaches, so advising it would be
+  // advising the fix. (`A7` names the copy loop, which is a different reading.)
+  const reuse = advisories(derivedList(`
+def build(source: List<Row>) -> List<Row>:
+    const made: List<Row> = []
+    for row in source:
+        if row.text != "":
+            made.append(row)
+    return made
+`, "build(rows)"));
+  assert.deepEqual(reuse.filter((item) => item.code === "A4"), []);
+
+  // A filter answers a shorter list of the same records.
+  assert.deepEqual(advisories(derivedList("", `rows.filter(row => row.text != "")`)), []);
+  // A map that answers its parameter builds nothing.
+  assert.deepEqual(advisories(derivedList("", `rows.map(row => row)`)), []);
+
+  // A builder whose records are constant answers the same content on every
+  // call, so nothing it is derived from can move: there is no recompute to
+  // advise, and proof-first means silence rather than a guess.
+  assert.deepEqual(advisories(derivedList(`
+def build() -> List<Row>:
+    const made: List<Row> = []
+    made.append({ key: "h", text: "Header" })
+    return made
+`, "build()")), []);
+
+  // A `def` this module does not declare cannot be read through at all.
+  assert.deepEqual(advisories(`
+type Row:
+    key: string
+    text: string
+
+state rows: List<Row> = [{ key: "a", text: "a" }]
+
+component Row_(row: Row):
+    return <span>{row.text}</span>
+
+component App:
+    computed built = rows.copy()
+
+    return <ul>{built.map(row => <Row_ key={row.key} row={row} />)}</ul>
+`), []);
+
+  // And a derived value nothing renders by key is nobody's identity problem.
+  assert.deepEqual(advisories(`
+type Row:
+    key: string
+    text: string
+
+state text = "a"
+${straightLineBuilder}
+component App:
+    computed built = build(text)
+
+    return <p>{built.size}</p>
+`), []);
+});
+
+test("[co-3] a plain 'const' in a component body is constructed once and stays silent", () => {
+  // The binding is built when the component is, not on every recompute, so its
+  // records never move. Naming it would be a guess, and the ruling's discipline
+  // is that an advisory fires only where the rebuild is proven.
+  assert.deepEqual(advisories(`
+type Row:
+    key: string
+    text: string
+
+state text = "a"
+${straightLineBuilder}
+component App:
+    const built = build(text)
+
+    return <ul>{built.map(row => <li key={row.key}>{row.text}</li>)}</ul>
+`), []);
+});
+
+// ---------------------------------------------------------------------------
 // co-5 -- a named builder argument fills the slot its name declares
 // ---------------------------------------------------------------------------
 
