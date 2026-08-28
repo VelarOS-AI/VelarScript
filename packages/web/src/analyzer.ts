@@ -1469,6 +1469,53 @@ function subtreeHoldsJsx(value: unknown): boolean {
   return false;
 }
 
+/**
+ * VEL5075: the JSX elements a body's own `return`s *start* with — the roots of
+ * the returned markup, which is where the emitter decides between an instance
+ * and a child. The walk descends through ordinary expression nodes, `.map(...)`
+ * callbacks included, and stops at the first JSX element on every path: inside
+ * one, every JSX position is a child position and needs no verdict. A nested
+ * `def` or `component` owns its own returns, exactly as it does elsewhere here.
+ */
+function returnedMarkupRoots(body: readonly Statement[]): readonly JSXElementExpression[] {
+  const roots: JSXElementExpression[] = [];
+  const collect = (value: unknown): void => {
+    const pending: unknown[] = [value];
+    while (pending.length > 0) {
+      const entry = pending.pop();
+      if (Array.isArray(entry)) {
+        for (const item of entry) pending.push(item);
+        continue;
+      }
+      if (entry === null || typeof entry !== "object") continue;
+      const node = entry as Record<string, unknown>;
+      if (node.kind === "ExtensionExpression:web:jsx") {
+        roots.push(node as unknown as JSXElementExpression);
+        continue;
+      }
+      for (const key of Object.keys(node)) pending.push(node[key]);
+    }
+  };
+  const pending: unknown[] = [...body];
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (Array.isArray(value)) {
+      for (const entry of value) pending.push(entry);
+      continue;
+    }
+    if (value === null || typeof value !== "object") continue;
+    const node = value as Record<string, unknown>;
+    const kind = typeof node.kind === "string" ? node.kind : null;
+    if (kind === "FunctionDeclaration" || kind === "ExtensionStatement:web:component") continue;
+    if (kind === "ReturnStatement") {
+      collect(node.value);
+      continue;
+    }
+    for (const key of Object.keys(node)) pending.push(node[key]);
+  }
+  return roots;
+}
+
 /** The component spelling of a helper's name: components render as a PascalCase tag. */
 function componentSpelling(name: string): string {
   return name.length === 0 ? name : `${name[0]!.toUpperCase()}${name.slice(1)}`;
@@ -1505,6 +1552,8 @@ export class VelarWebAnalyzer extends Analyzer {
   private readonly keyedListRebuilds: KeyedListRebuild[] = [];
   private synchronousReactiveDepth = 0;
   private jsxDepth = 0;
+  /** VEL5075: how many component bodies enclose the declaration being analyzed. */
+  private componentBodyDepth = 0;
   private readonly resources: ReadonlyMap<string, string>;
   private readonly unsafeCssImports = new Set<string>();
   private readonly probedOperandTypes = new Map<string, ValueType>();
@@ -1686,7 +1735,10 @@ export class VelarWebAnalyzer extends Analyzer {
     if (statement.kind === "VariableDeclaration") {
       this.recordRetiredAccessorDeclaration(statement);
     }
-    if (statement.kind === "FunctionDeclaration") this.rejectStatefulWebNodeFunction(statement);
+    if (statement.kind === "FunctionDeclaration") {
+      this.rejectStatefulWebNodeFunction(statement);
+      this.rejectUnownedComponentElement(statement);
+    }
     if (!isWebStatement(statement)) return false;
     switch (statement.kind) {
       case "ExtensionStatement:web:component":
@@ -2036,6 +2088,51 @@ export class VelarWebAnalyzer extends Analyzer {
   // still resolves it to the state binding; a shadowing local wins instead.
   private writableStateName(name: string): boolean {
     return this.reactiveBindingKind(name) === "state";
+  }
+
+  /**
+   * P2b-5: a `def` that answers markup and answers it with a component element.
+   *
+   * Everything about the shape is legal one step out. A component element is a
+   * legal module-level expression — `const root = <App />` is the instantiation
+   * site D90 R4-b rules on, and `mount` takes exactly the instance it evaluates
+   * to. A `def` answering markup is a legal markup helper — dispatch over a
+   * closed vocabulary is what the P2b wave was writing. The defect is only
+   * where the two meet, and it is a representation split the type does not
+   * carry: a component element in a *child* position lowers to `__velarChild`,
+   * which owns a scope and answers a DOM node, while the same element standing
+   * alone lowers to `__velarInstantiate`, which answers an instance. Both are
+   * typed `WebNode`; only one is one. Returned from a helper and handed to a
+   * render, the instance reaches `__velarAppend` and takes the whole subtree
+   * down with "JSX can render only text, finite numbers, bool, enums, WebNode
+   * values, and Lists of those values" — the check-green, runtime-dead shape.
+   *
+   * The walk stops at every JSX element, which is exactly where the emitter
+   * stops: inside one, every position is a child position and every component
+   * element there is already correct — `return <div><Badge /></div>` and an
+   * interpolated `{cond ? <Badge /> : ...}` both work today and must keep
+   * working. Only a component element the returned markup *starts* with is the
+   * defect, including one reached through a `.map(...)` answering a row per
+   * item, which fails the same way for the same reason.
+   */
+  private rejectUnownedComponentElement(statement: Extract<Statement, { readonly kind: "FunctionDeclaration" }>): void {
+    // A helper nested in a component body is emitted with that component's
+    // scope in hand, so its component elements are `__velarChild` and answer
+    // nodes. Only a helper standing outside every component body has nowhere
+    // for the emitter to put them.
+    if (this.componentBodyDepth > 0) return;
+    const answersMarkup = statement.returnType
+      ? carriesWebNode(this.resolveAnnotation(statement.returnType))
+      : bodyReturnsJsx(statement.body);
+    if (!answersMarkup) return;
+    for (const element of returnedMarkupRoots(statement.body)) {
+      if (!/^[A-Z]/u.test(element.tag)) continue;
+      this.diagnostics.push(diagnostic(
+        "VEL5075",
+        `'${statement.name}' answers markup with the component element '<${element.tag} />', and a component element standing on its own is an instance rather than a node: it is built by the position that shows it, and a 'def' is not one, so what this returns fails the moment JSX tries to render it. Write '<${element.tag} />' where it is rendered — a component's own body, or a child position inside markup this returns such as '<div><${element.tag} ... /></div>' — and keep the helper for the native elements it builds.`,
+        element.span,
+      ));
+    }
   }
 
   /**
@@ -2539,6 +2636,9 @@ export class VelarWebAnalyzer extends Analyzer {
   private analyzeComponent(statement: ComponentDeclaration): void {
     const outerConstructorDepth = this.constructorDepth;
     if (!this.isPredeclared(statement)) this.declareBinding(statement.name, false, this.componentType(statement), statement.span);
+    // VEL5075: a `def` written from here to the matching decrement lowers
+    // through this component's scope, so its component elements are children.
+    this.componentBodyDepth += 1;
     this.enterScope();
     this.flowFrameDepth += 1;
     const previousStates = this.componentStates;
@@ -2654,6 +2754,7 @@ export class VelarWebAnalyzer extends Analyzer {
     this.explicitReadonlyPropBindings = previousExplicitReadonlyProps;
     this.flowFrameDepth -= 1;
     this.exitScope();
+    this.componentBodyDepth -= 1;
     this.constructorDepth = outerConstructorDepth;
   }
 

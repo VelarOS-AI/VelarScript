@@ -1443,6 +1443,32 @@ function __velarCleanupObserver(observer) {
   __velarRuntime.cleanupObserver(observer);
 }
 
+// P2b-9: a self-invalidating render used to report only that it happened. The
+// stack top was the graph's own trigger, so it named neither the collection
+// being written nor the scope reading it, and the distance between symptom and
+// cause was the whole debugging cost. Everything below is already known where
+// the budget trips: the observer carries its component and its watch subject,
+// and the graph has just recorded which path re-triggered it. Naming the write
+// is the difference between bisecting a render and reading one line.
+//
+// The advice is attached to the shape that earns it. A "collection" subject
+// means a collection was read for its size or contents and then written in the
+// same pass, and the two spellings that end it are the same two every time:
+// take the position from the loop instead of from the collection, or read the
+// value out before writing. The kind arrives beside the phrase, so nothing here
+// reads a sentence back apart to decide.
+function __velarSelfInvalidationMessage(mode, component, label, subject, kind) {
+  let message = "A reactive " + mode + " cannot invalidate itself more than 100 times";
+  if (component) message += " (" + component + ")";
+  else if (label) message += " (watching " + label + ")";
+  if (!subject) return message;
+  message += ": it writes " + subject + " while reading it";
+  if (kind === "collection") {
+    return message + ". A position taken from the collection being written -- 'items.get(built.size)' inside the loop that appends to 'built' -- reads it on every pass; take the position from a two-slot 'for value, index in ...' instead, or read what you need into a binding before the loop.";
+  }
+  return message + ". Read it into a binding before the code that writes it, so the write cannot reach the read that tracked it.";
+}
+
 // D90 R21: "label" names the observer in a report -- a watch carries its
 // subject as the author spelled it -- and "sequence" is its registration
 // number, which is the order the flush runs the watch tier in. The counter is
@@ -1464,6 +1490,11 @@ function __velarObserver(read, mode, scope, label = "") {
     stopped: false,
     running: false,
     selfInvalidations: 0,
+    // P2b-9: the reactive path whose write landed while this observer was
+    // reading. The graph fills it in only on a self-invalidating write, so the
+    // runaway report can name what to go and look at.
+    selfInvalidationSubject: "",
+    selfInvalidationKind: "",
     dependencies: __velarGraphCreateSet(),
     run() {
       if (observer.stopped) return;
@@ -1484,7 +1515,13 @@ function __velarObserver(read, mode, scope, label = "") {
         observer.selfInvalidations += 1;
         if (observer.selfInvalidations > 100) {
           observer.stop();
-          __velarReport(new RangeError("A reactive " + (mode === "watch" ? "watch" : "render") + " cannot invalidate itself more than 100 times"), mode === "watch" ? "watch" : "render", scope);
+          __velarReport(new RangeError(__velarSelfInvalidationMessage(
+            mode === "watch" ? "watch" : "render",
+            observer.component,
+            observer.label,
+            observer.selfInvalidationSubject,
+            observer.selfInvalidationKind,
+          )), mode === "watch" ? "watch" : "render", scope);
           return;
         }
       } else {

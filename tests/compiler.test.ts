@@ -25219,6 +25219,11 @@ def label(box: Box) -> string:
 
   // Prop expressions are evaluated before children. A call in a prop may make
   // the child fact stale, so the child read carries a runtime guard.
+  //
+  // The element sits inside a native root because that is a child position: a
+  // helper answering markup with a component element standing alone answers an
+  // instance rather than a node and is VEL5075 (P2b-5). Nothing this case is
+  // about changes -- the prop still runs before the children slot is built.
   const propBeforeChildren = compile(`
 type User:
     name: string
@@ -25235,7 +25240,7 @@ def clear(box: Box) -> string:
 
 def label(box: Box) -> WebNode:
     assert box.user != null
-    return <Panel label={clear(box)}>{box.user.name}</Panel>
+    return <div><Panel label={clear(box)}>{box.user.name}</Panel></div>
 `.trimStart());
   assert.deepEqual(propBeforeChildren.diagnostics, []);
   assert.match(propBeforeChildren.code ?? "", /NarrowingError/u);

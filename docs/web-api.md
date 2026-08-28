@@ -278,6 +278,40 @@ byte; `// velar-allow A4: <reason>` suppresses it where the mapped spelling is
 the only one available, which a `readonly` list or a set of rows arriving whole
 from one response makes it.
 
+The same two questions decide whether a **child component keeps its instance**,
+and the answer is worth stating positively because a child that is rebuilt every
+frame loses whatever it was accumulating. Two positions preserve it. A component
+element written as an ordinary child — `<div><Preview text={draft} /></div>` — is
+constructed once for the life of that position: its props are live cells, so a
+prop changing updates the instance instead of replacing it, and its state,
+`@mounted` work, focus and IME composition all survive. A keyed row preserves it
+on the terms above: same key, same value. Every other position rebuilds, because
+every other position is a region rather than a child — a component element inside
+an interpolation, `{ready ? <Preview text={draft} /> : <Empty />}` included, is
+rebuilt whenever anything that interpolation reads changes, `draft` included.
+That is not the ternary's doing: the region's dependencies are every tracked read
+inside it, so a branch that never flips still rebuilds when a prop expression
+changes. Move the element out of the interpolation and branch inside the child,
+or give the position a key, when the instance is meant to live across updates.
+
+A component element is built by the position that shows it, and that decides
+what it evaluates to. In a child position it is a rendered node, which is every
+position inside markup: `<div><Card /></div>` and an interpolated
+`{ready ? <Card /> : null}` alike, wherever that markup is written. Standing on
+its own it is the component *instance* instead — `const root = <App />` is the
+value `mount` takes, and reading `root.node` is how a host reaches its DOM.
+
+The two are not interchangeable, and one helper shape confuses them: a `def`
+that answers `WebNode` and answers it with a component element standing alone,
+`return <Card ... />` or `labels.map(label => <Card label={label} />)`, hands its
+caller an instance where a node is expected, and rendering it fails. That is
+`VEL5075`, refused where the helper is written rather than left to fail at
+render. A `def` that answers markup is otherwise the ordinary way to dispatch
+over a closed vocabulary: it may build native elements freely, it may hold
+component elements in child positions of the markup it returns, and a helper
+nested inside a component body is unrestricted, because the enclosing component
+is the position that owns what it builds.
+
 JSX text is normalized before it becomes a text node. Every whitespace run
 inside a text child collapses to one space; whitespace that exists only because
 the source wrapped is then dropped, so a text run beginning at a line break

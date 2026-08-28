@@ -969,10 +969,35 @@ function __velarCreateRuntime() {
     }
     trackSubscribers(subscribers);
   };
+  // P2b-9: the path a write travelled, in the words the author would recognise.
+  // Only the shape is named -- never a value -- because this reaches a report.
+  // The kind travels beside the phrase rather than being read back out of it:
+  // the reader of this is the runaway report, and it decides which remedy to
+  // give from the kind, not by looking inside a sentence.
+  const describeSubject = (target, key) => {
+    const container = __velarGraphIsList(target) ? "List" : "collection";
+    if (key === iterateKey || key === structureKey) return { kind: "collection", text: "the size or contents of a " + container };
+    if (key === deepKey) return { kind: "value", text: "a nested value of a " + container };
+    if (typeof key === "number") return { kind: "value", text: "element " + key + " of a " + container };
+    if (typeof key === "string") return { kind: "value", text: "field '" + key + "'" };
+    return { kind: "value", text: "a tracked value" };
+  };
   const notify = (target, key) => {
     const byKey = __velarGraphWeakMapRead(dependencies, target);
     const subscribers = byKey ? __velarGraphMapRead(byKey, key) : null;
-    if (subscribers) for (const observer of __velarGraphSetItems(subscribers)) observer.notify();
+    if (subscribers) for (const observer of __velarGraphSetItems(subscribers)) {
+      // A write that lands while its own reader is still running is the
+      // self-invalidating shape, and it is the only one whose path is worth
+      // describing -- so the description is built there and nowhere else, which
+      // keeps every ordinary write to one property read on this path. The
+      // observer's own budget owns the report; this only tells it what to name.
+      if (observer.running) {
+        const subject = describeSubject(target, key);
+        observer.selfInvalidationSubject = subject.text;
+        observer.selfInvalidationKind = subject.kind;
+      }
+      observer.notify();
+    }
   };
   const bump = (target) => {
     __velarGraphWeakMapWrite(versions, target, (__velarGraphWeakMapRead(versions, target) ?? 0) + 1);
@@ -1264,6 +1289,10 @@ function __velarCreateRuntime() {
       stopped: false,
       running: false,
       selfInvalidations: 0,
+      // P2b-9: filled in by the graph's notify when a write lands while this
+      // value is still being derived, so the runaway report names the path.
+      selfInvalidationSubject: "",
+      selfInvalidationKind: "",
       dependencies: __velarGraphCreateSet(),
       notify() {
         // Stopping is shared discipline with DOM and watch observers: a flush
@@ -1281,7 +1310,8 @@ function __velarCreateRuntime() {
           if (observer.selfInvalidations > 100) {
             observer.stopped = true;
             cleanupObserver(observer);
-            reportUntracked(new RangeError("A computed value cannot invalidate itself more than 100 times"));
+            reportUntracked(new RangeError("A computed value cannot invalidate itself more than 100 times"
+              + (observer.selfInvalidationSubject ? ": it writes " + observer.selfInvalidationSubject + " while reading it" : "")));
             return;
           }
         } else {
