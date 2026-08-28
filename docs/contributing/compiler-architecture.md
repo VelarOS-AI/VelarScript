@@ -34,10 +34,10 @@ each Web compiler layer and replaces only its target-owned module sources.
 Adding a Game application follows the same contract; it does not add a Game
 branch to Core AST, `ValueType`, Analyzer, formatter, semantic kinds, or emitter.
 
-### Context annotations
+### Context markers
 
-The source spelling `@name` is a context annotation across Core and every
-compiler extension; `@` is its annotation introducer. It attaches a
+The source spelling `@name` is a context marker across Core and every
+compiler extension; `@` is its marker introducer. It attaches a
 compiler-owned compile-time role to the following declaration or structural
 entry, with the accepted name and role selected by the current syntax context.
 It is not a generic decorator hook and must never be implemented through
@@ -47,7 +47,7 @@ or user registration.
 An owner that adds an `@name` must keep one closed roster for the relevant
 context and use it for parsing, diagnostics, formatting, editor support, and
 coverage. The role is resolved during compilation and lowered directly; no
-runtime `@` lookup or callable annotation object is emitted. Unknown names and
+runtime `@` lookup or callable marker object is emitted. Unknown names and
 known names in the wrong context fail closed. Accepted source has no bare-name
 alias for the same role, although a teaching diagnostic may recover from a
 retired spelling while keeping the compile unsuccessful.

@@ -344,9 +344,9 @@ Classes have typed body fields, **one** explicit constructor, and an explicit
 `self`. Instances are called directly — there is no `new`. A `const`/`let`
 prefix on a constructor parameter declares the field at the same time.
 
-VelarScript calls `@name` a **context annotation**; `@` is the **annotation
-introducer**. A context annotation marks the following declaration or structural
-entry with a compiler-owned compile-time role chosen by the current syntax
+VelarScript calls `@name` a **context marker**; `@` is the **marker
+introducer**. A context marker attaches a compiler-owned compile-time role to
+the following declaration or structural entry, chosen by the current syntax
 context. It is not a function call or runtime decorator, and source code cannot
 define one. The class context currently accepts `@dispose:` and `@iterate:`.
 That closed vocabulary can never collide with yours. `@dispose:` is the
@@ -355,7 +355,7 @@ owning scope — block end, `return`, `break`, `continue`, a throw three frames
 down — in reverse declaration order. An owned value may not leave its scope,
 so return the data you read from it rather than the handle.
 
-The same rule covers every context annotation; the active context decides
+The same rule covers every context marker; the active context decides
 the closed vocabulary and the editor hover explains the exact role and a legal
 example:
 
@@ -498,7 +498,7 @@ test "a single name keeps one initial":
 
 An application service activates `@velarscript/server` in `velar.json`; that
 application extension composes `@velarscript/node`. `server` declares
-an immutable route table; the five HTTP verbs are context annotations with
+an immutable route table; the five HTTP verbs are context markers with
 compiler-owned route roles, not decorators. A Node-owned `p"..."` value is a
 first-class `RoutePattern`: it declares path and query fields once. An inline
 pattern projects those fields directly into the anonymous handler; a referenced
@@ -664,10 +664,10 @@ the gate still checks it in full.)
 
 ## 15. Lifecycle
 
-The component context has two context annotations. `@mounted:` runs once after
+The component context has two context markers. `@mounted:` runs once after
 the DOM is inserted and may `await`. `@cleanup:` runs once before the component
-is destroyed and is synchronous. `@` is the same annotation introducer used in
-classes and Look; it does not mean "lifecycle". Because these annotations are
+is destroyed and is synchronous. `@` is the same marker introducer used in
+classes and Look; it does not mean "lifecycle". Because these markers are
 compiler-owned, a component can still declare its own ordinary
 `def mounted()`.
 

@@ -1,7 +1,12 @@
 # Why VelarScript exists
 
-**An extensible programming language for the AI era, where the framework is
-the language.**
+**An extensible application-layer programming language for the AI era, where
+the framework is the language.**
+
+Two names for one thing: **VelarScript** is the language, and **Velar** is the
+platform it runs on — the Core compiler, the target extensions, and the
+toolchain. Nothing in that list is *the framework*, because the framework is
+the language.
 
 ## What it is for
 
@@ -164,3 +169,7 @@ declared boundaries rather than by default, and that boundary is work.
   surface, not the world.
 - **That migration is free.** It is not. The cost is real, and it is the price
   of being able to remove.
+- **Anything under the application layer.** Interface, state, style, server and
+  desktop are the whole of the surface. Kernels, drivers, engines, and numerics
+  are not a later milestone; that boundary is what keeps Core from accumulating
+  the pile Vel was built to escape, so it is defended rather than scheduled.

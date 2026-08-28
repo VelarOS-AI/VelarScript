@@ -6,9 +6,12 @@ not part of the language.
 
 ## 1. Design contract
 
-VelarScript is an extensible programming language for the AI era, in which the
-framework is the language: one language covers markup, styling, state, tests,
-and the server side, and the compiler checks all of it. A model can write code
+VelarScript is an extensible application-layer programming language for the AI
+era, in which the framework is the language: one language covers markup,
+styling, state, tests, and the server side, and the compiler checks all of it.
+**Velar** names the platform that compiles and runs it — Core, the target
+extensions, and the toolchain — and "application layer" bounds what that
+platform accepts, which is rule 5 stated outward. A model can write code
 faster than anyone can check it, so the bottleneck is trust rather than
 authorship — the human supplies intent, the model writes the VelarScript, and
 the compiler guards each change. Every rule below serves that: uniform output,
@@ -354,41 +357,40 @@ match type:                         // a header ending in ':' above a block
         pass
 ```
 
-### Context annotations: `@name`
+### Context markers: `@name`
 
-VelarScript calls `@name` a **context annotation**. `@` is the **annotation
+VelarScript calls `@name` a **context marker**. `@` is the **marker
 introducer**: it attaches a compiler-owned compile-time role to the declaration
 or structural entry immediately after it, with the accepted name and role
-chosen by the current syntactic context. The annotation never chooses its own
+chosen by the current syntactic context. The marker never chooses its own
 meaning. The module context therefore accepts `@main:`, a class accepts
 `@dispose:` and `@iterate:`, a component accepts `@mounted:` and `@cleanup:`,
-and Look accepts names such as `@hover` and `@before:` under one annotation
-rule, not separate entry, decorator, lifecycle, selector, or protocol meanings
-for `@`.
+and Look accepts names such as `@hover` and `@before:` under one marker rule,
+not separate entry, decorator, lifecycle, selector, or protocol meanings for
+`@`.
 
 The contract is closed and static:
 
-- A context annotation never performs lexical or member lookup. It cannot be shadowed by an
-  author's binding, and `@` is not an identifier character, so `def mounted()`
-  and `@mounted:` can coexist without collision.
-- Core or the active syntax-owning compiler extension owns every accepted annotation
-  and the contexts in which it is valid. Source code and libraries cannot
-  declare, import, export, alias, or register an `@name`. An unknown name, or a
-  known name in the wrong context, is a compile-time error that names the
-  vocabulary accepted there.
-- A context annotation is not an ordinary runtime value. It cannot be stored, passed,
-  returned, called, reflected, or assembled dynamically. The compiler resolves
-  its role statically and lowers that role directly; no `@` name or decorator
-  lookup survives in emitted JavaScript.
+- A context marker never performs lexical or member lookup. It cannot be
+  shadowed by an author's binding, and `@` is not an identifier character, so
+  `def mounted()` and `@mounted:` can coexist without collision.
+- Core or the active syntax-owning compiler extension owns every accepted
+  marker and the contexts in which it is valid. Source code and libraries
+  cannot declare, import, export, alias, or register an `@name`. An unknown
+  name, or a known name in the wrong context, is a compile-time error that
+  names the vocabulary accepted there.
+- A context marker is not an ordinary runtime value. It cannot be stored,
+  passed, returned, called, reflected, or assembled dynamically. The compiler
+  resolves its role statically and lowers that role directly; no `@` name or
+  decorator lookup survives in emitted JavaScript.
 - Any punctuation or payload a particular role permits after `@name` belongs
   to that role's grammar. Parentheses, if a future compiler-owned role defines
-  them, carry static compiler input; they do not turn a context annotation into a function
-  call or a runtime wrapper around the following declaration.
+  them, carry static compiler input; they do not turn a context marker into a
+  function call or a runtime wrapper around the following declaration.
 - One role has one accepted spelling. A compiler diagnostic may recover from a
   retired bare spelling to continue checking the file, but the recovered form
   remains an error, never an alias. New contextual roles in this family use
-  a context annotation; they do not add a competing bare keyword for the same
-  role.
+  a context marker; they do not add a competing bare keyword for the same role.
 
 This rule does not apply to `@` characters inside strings, module specifiers,
 comments, or extension-owned embedded foreign source: those are data for their
@@ -4935,7 +4937,7 @@ The following are not part of VelarScript:
   enters the language
 - JavaScript `splice`, `push`, `shift`, `unshift`, mutating `sort`, or mutating
   `reverse`
-- user-defined decorators or user-defined annotations. Context annotations do
+- user-defined decorators or user-defined annotations. Context markers do
   not reopen them: they are the closed compiler-owned vocabulary defined in
   section 3, never library functions, runtime wrappers, or author-defined
   metadata. Declaration modifiers
@@ -4943,7 +4945,7 @@ The following are not part of VelarScript:
   `private`, `readonly`, and `async`. A library that could change what a
   declaration means would put the reader back to reading the library before
   reading the code; the same reason forbids user-defined type-parameter bounds.
-  A new compiler-owned role uses a context annotation; a new declaration
+  A new compiler-owned role uses a context marker; a new declaration
   attribute uses a modifier keyword. Neither is a user extension point
 - magical JSX control-flow attributes
 - a second spelling of a derived value. `cached(() => value)` and

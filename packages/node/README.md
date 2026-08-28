@@ -89,7 +89,7 @@ inline pattern projects captures and query fields directly as immutable handler
 locals. A referenced pattern must use `as route`; its `RouteMatch` exposes
 `pattern`, `pathname`, `params`, and `query` without injecting hidden names.
 `wire={field:type}` maps distinct query names; a redundant same-name mapping is
-accepted with advisory `A11` and a mechanical shorthand fix. The five route verbs are context annotations
+accepted with advisory `A11` and a mechanical shorthand fix. The five route verbs are context markers
 with compiler-owned route roles rather than decorators. The compiler lowers each `server` to an
 immutable `ServeApp`; `velar/serve` owns runtime matching, checked input
 decoding, automatic JSON, composition, static files, middleware, errors, and

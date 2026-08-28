@@ -8,7 +8,11 @@
 
 [![VelarScript CI](https://github.com/VelarOS-AI/VelarScript/actions/workflows/ci.yml/badge.svg)](https://github.com/VelarOS-AI/VelarScript/actions/workflows/ci.yml)
 
-**面向 AI 时代的一门可扩展的编程语言，语言与框架一体化。**
+**面向 AI 时代的一门可扩展的应用层编程语言，语言与框架一体化。**
+
+**VelarScript 是语言，Velar 是它跑的应用层平台**——Core 编译器、目标扩展、工具链。你写 VelarScript，你装 Velar；就像你写 C#，你装 .NET。区别在范围：Velar 永远只做应用层——界面、状态、样式、服务端、桌面。
+
+> 读作 *WAI-ler-script*（歪勒斯克里普特）。`Velar` 读 `/ˈwaɪ.lɛr/`——`V` 发 `W` 的音，词尾韵同 *well*，不是 *car*。简称 `Vel` 就读 *well*（威尔）；`VelarOS` 读 *WAI-ler-oss*（歪勒沃斯），`OS` 连读成一个词，不拼字母。
 
 模型写代码的速度，已经超过了任何人验证它的速度——瓶颈从「写」移到了「信」。今天在用的每一套技术栈，都是为另一个时代造的：每一行由人写，人脑里装着全部上下文。那个时代承受得起静默的错误，因为写的人知道自己是什么意思。这个前提没有了，而技术栈没有动。Vel 的回答是同一件事的两面：把需要验证的面收成一门语言，再让编译器来做验证。写错的 CSS 取值、拼错的 `aria-*`、漏掉的响应式依赖、一次强转、一个无主的失败——在别处全是静默的，在这里是编译错误。
 
@@ -117,9 +121,9 @@ export component App:
 - [贡献指南](CONTRIBUTING.md)和[贡献者文档](docs/contributing/)
 - [设计决策](docs/decisions/) — 这门语言为何采用现在的设计
 
-## 软件包
+## Velar 的组成
 
-Core 保持与目标平台无关；每种目标平台都由显式的软件包负责，不依赖隐藏的编译器行为。
+这些软件包就是平台本身。Core 保持与目标平台无关；每种目标平台都由显式的软件包负责，不依赖隐藏的编译器行为。这张表里没有哪一个包是「框架」——框架就是语言。
 
 | 软件包 | 职责 |
 | --- | --- |

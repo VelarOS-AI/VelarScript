@@ -32,11 +32,11 @@ binding names with `VEL3007`. Three of them are ordinary words for a Web author,
 so name a scroll container `scroller`, a colour setting `theme`, and an
 animation preference `reducedMotion`.
 
-`@` remains the language-wide annotation introducer, and `@name` is a context
-annotation with a compiler-owned compile-time role. Components own `@mounted:`
+`@` remains the language-wide marker introducer, and `@name` is a context
+marker with a compiler-owned compile-time role. Components own `@mounted:`
 and `@cleanup:`; Look owns conditions such as `@hover` and `@before`. They are
 not decorators, calls, or values, and user code cannot declare new context
-annotations.
+markers.
 
 The toolchain writes `dist/index.html`; do not author it. `web.title` and
 `web.icon` supply document metadata, `public/` is copied through, and other

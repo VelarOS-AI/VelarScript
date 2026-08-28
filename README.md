@@ -8,8 +8,18 @@
 
 [![VelarScript CI](https://github.com/VelarOS-AI/VelarScript/actions/workflows/ci.yml/badge.svg)](https://github.com/VelarOS-AI/VelarScript/actions/workflows/ci.yml)
 
-**An extensible programming language for the AI era, where the framework is the
-language.**
+**An extensible application-layer programming language for the AI era, where
+the framework is the language.**
+
+**VelarScript is the language. Velar is the application platform it runs on** —
+the Core compiler, the target extensions, and the toolchain. You write
+VelarScript and you install Velar, the way you write C# and install .NET; the
+difference is scope, because Velar is only ever the application layer —
+interface, state, style, server, desktop.
+
+> Said *WAI-ler-script*. `Velar` is `/ˈwaɪ.lɛr/` — the `V` sounds like a `W`,
+> and the ending rhymes with *well*, not *car*. The short form `Vel` is said
+> like *well*; `VelarOS` is *WAI-ler-oss*, read as one word.
 
 A model can now write code faster than anyone can check it, so the bottleneck
 has moved from writing to trusting. Every existing stack was built for the era
@@ -162,10 +172,11 @@ The full reasoning is in [Why VelarScript exists](docs/why-velarscript.md).
 - [Contributing](CONTRIBUTING.md) and [contributor docs](docs/contributing/)
 - [Design decisions](docs/decisions/) — why the language is shaped this way
 
-## Packages
+## What Velar is made of
 
-Core stays target-neutral; every target is an explicit package, not hidden
-compiler behavior.
+These packages are the platform. Core stays target-neutral; every target is an
+explicit package, not hidden compiler behavior. No package on this list is *the
+framework* — the framework is the language.
 
 | Package | Owns |
 | --- | --- |

@@ -141,7 +141,7 @@ well, but it is a guarantee rather than a trap.
 | `value is null` | `value == null` / `value != null` — `is` tests runtime types, `null` is a value. |
 | `switch`, or an `if`/`else if` ladder over an enum | `match` with `case _:` as the only fallback. |
 | Renaming a binding away from `type`, `json`, `from`, `match`, or `as` | Don't. Declaration words are contextual: each declares only in its own shape, so `const {type, from} = event` is ordinary code. `enum` and `case` are the exceptions — `enum` is a real VelarScript keyword and `case` is reserved by JavaScript — so neither can be a binding name; both stay fine as record fields, member names, and `match` branches. |
-| Treating `@` as a decorator, call, value, or user extension point | `@` is the annotation introducer and `@name` is a context annotation: it marks the following declaration or structural entry with a compiler-owned compile-time role selected by the current syntax context. The vocabulary is closed; source cannot declare, import, alias, pass, or construct a context annotation. `@main:`, `@dispose:`, and `@iterate:` follow this one rule. |
+| Treating `@` as a decorator, call, value, or user extension point | `@` is the marker introducer and `@name` is a context marker: it marks the following declaration or structural entry with a compiler-owned compile-time role selected by the current syntax context. The vocabulary is closed; source cannot declare, import, alias, pass, or construct a context marker. `@main:`, `@dispose:`, and `@iterate:` follow this one rule. |
 | Two statements on one line | One statement per line; there are no semicolons. As in Python, an ordinary executable suite may keep its one non-block statement after the colon, as in `def stop(): return`, `if condition: action()`, or `case pattern: action()`. Multiple statements, nested blocks, and structural member or branch lists use indentation. Formatting preserves the author's single-line or indented choice. A line starting with `.` or `?.` continues the previous line, so method chains format normally. |
 | `count++` | `count += 1` |
 | `call(name: value)` named argument | `call(name=value)` |
@@ -293,7 +293,7 @@ class Session:
 const session = Session("session-1")
 ```
 
-`@name` is a context annotation with a compiler-owned role and can never collide with yours.
+`@name` is a context marker with a compiler-owned role and can never collide with yours.
 `@dispose:` is the release contract — never called directly — that
 `using name = expression` runs on every exit from the owning scope (block end,
 `return`, `break`, `continue`, throw), in reverse declaration order. A derived

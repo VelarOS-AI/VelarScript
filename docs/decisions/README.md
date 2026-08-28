@@ -70,6 +70,8 @@ their titles are reproduced verbatim below.
 | [D101](D101-DESKTOP-PRODUCT-PROGRAM.md) | 桌面产品级目标计划 | Six work packages (L1–L6) raise the desktop target to product grade for the VelarOS-Desktop shell rewrite, with the boundary, ownership, and stability criteria pinned before implementation starts. |
 | [D102](D102-NUMERIC-WIRE-VALUES-AND-SURPLUS-FIELDS.md) | 枚举数值 wire 值与多余字段语义 | Enum member wire values extend to safe integers (a completion of the existing mechanism, not literal types), and surplus-field stripping is the permanent record semantics — the type is the contract, undeclared data does not exist. |
 | [D103](D103-LOOK-TOKEN-REFERENCES.md) | Look 的受检设计令牌引用 | `token("--name")` is one checked token-reference spelling legal in every Look property kind, compiled into the static CSS var() with folding preserved — the design-token contract stays expressible inside the language. |
+| [D104](D104-CONTEXT-MARKER-TERM.md) | `@` 的正式名词是上下文标记 | `@name` is a **context marker** and `@` its **marker introducer**; "annotation" is reserved for type annotations alone. A pure naming ruling — the closed compiler-owned semantics of section 3 are unchanged. |
+| [D105](D105-PLATFORM-NAME-AND-PRONUNCIATION.md) | Velar 是平台名，VelarScript 是语言名 | You write VelarScript, you install **Velar** — the application platform (Core, target extensions, toolchain), named after the split the repo already ran. "Application layer" is the positioning qualifier and the brake; English never says "Velar Framework". Pronunciation fixed: Vel = *well*, Velar = *WAI-ler*. |
 
 ## archive/
 

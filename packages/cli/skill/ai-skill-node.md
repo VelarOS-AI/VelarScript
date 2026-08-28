@@ -65,9 +65,9 @@ application service, activate `@velarscript/server`; it provides the same
 `velar dev`, `velar serve`, and standalone `velar build` workflow without a
 second runtime configuration source.
 
-`@` remains the language-wide annotation introducer, and `@name` is a context
-annotation with a compiler-owned compile-time role. In a `server` block, the
-available annotations are `@get`, `@post`, `@put`, `@patch`, `@delete`,
+`@` remains the language-wide marker introducer, and `@name` is a context
+marker with a compiler-owned compile-time role. In a `server` block, the
+available markers are `@get`, `@post`, `@put`, `@patch`, `@delete`,
 `@websocket`, `@notFound`, and `@response`. They are not decorators, functions, imports, user-defined
 annotations, first-class values, or user extension points.
 
