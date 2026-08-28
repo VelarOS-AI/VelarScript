@@ -62,6 +62,12 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
     if (rebuildTimer) clearTimeout(rebuildTimer);
     rebuildTimer = setTimeout(() => void rebuild(), 40);
   };
+  // The trees no watcher in this server reports from. `.velar` and
+  // `node_modules` are dropped on every platform; the project's own output
+  // directory is named here because it is configured. A package `imports`
+  // alias can make the project root a package root too, so the package
+  // watchers below take the same set rather than only the tree watcher.
+  const excludedWatchDirectories = new Set([config.outDir, resolve(config.root, ".velar")]);
   const syncPackageWatchers = (project: ProjectResult, npmPackages: readonly BrowserNpmPackage[]): void => {
     npmPackageRoots.clear();
     for (const item of npmPackages) npmPackageRoots.add(item.root);
@@ -87,7 +93,7 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
         dirtyRevision += 1;
         if (name === "package.json" || declarationChanged) forceFullRebuild = true;
         scheduleRebuild();
-      }));
+      }, excludedWatchDirectories));
     }
   };
   const rebuild = (): Promise<void> => {
@@ -246,7 +252,7 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
       dirtyPaths.add(resolve(config.root, fileName));
     }
     scheduleRebuild();
-  }, new Set([config.outDir, resolve(config.root, ".velar")]));
+  }, excludedWatchDirectories);
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(port, "127.0.0.1", () => resolve());

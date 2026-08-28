@@ -331,6 +331,16 @@ the rendered output, while a deliberate space between two inline elements on the
 same line survives. A text child that normalizes to nothing produces no node,
 and text that must be preserved exactly belongs in an interpolated string.
 
+Because that region is text, it has no comment form, and every comment spelling
+an author reaches for there is refused as `VEL5002` rather than
+rendered: `<!-- ... -->` between children, `{/* ... */}` in an interpolation,
+and a `//` or `/* ... */` opener standing at the start of its own physical line
+inside a text run. The last is scoped to that one shape on purpose, because
+everything else that reads as a comment is ordinary content: `https://host` in
+a sentence, and an inline `a // b`, are text and stay text. Write the note
+above the markup where `//` is a comment, or, for a line of literal text that
+begins with an opener, interpolate it — `{"// not a comment"}`.
+
 What an interpolation leaves in the document follows from what its type can be.
 A `string` or a `number` renders as exactly one text node — never nothing, never
 markup — so that is all it is: the node is created once and its text is rewritten

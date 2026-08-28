@@ -321,6 +321,52 @@ function previousPhysicalLineStart(source: string, index: number): number {
   return index;
 }
 
+// The one comment shape a JSX text run can only have meant as a comment: an
+// opener with nothing but whitespace before it on its own physical line. The
+// line start is taken from the whole source rather than the text run, so the
+// text of `<p>// hi</p>` is preceded by its tag and stays text.
+function lineLeadingCommentRegion(source: string, start: number, end: number): { readonly start: number; readonly end: number } | null {
+  for (let index = start; index + 1 < end; index += 1) {
+    if (source[index] !== "/") continue;
+    if (source[index + 1] !== "/" && source[index + 1] !== "*") continue;
+    const lineStart = previousPhysicalLineStart(source, index);
+    if (!/^[ \t]*$/u.test(source.slice(lineStart, index))) continue;
+    return { start: index, end: commentRegionEnd(source, index, end) };
+  }
+  return null;
+}
+
+// A `//` runs to the end of its physical line; a `/* */` runs to its close,
+// counting nested openers the way charter section 2 does. Neither may run
+// past the text run that contains it.
+function commentRegionEnd(source: string, start: number, limit: number): number {
+  if (source[start + 1] === "/") return Math.min(nextPhysicalLineBreak(source, start)?.start ?? limit, limit);
+  let depth = 0;
+  for (let index = start; index + 1 < limit; index += 1) {
+    if (source[index] === "/" && source[index + 1] === "*") {
+      depth += 1;
+      index += 1;
+    } else if (source[index] === "*" && source[index + 1] === "/") {
+      depth -= 1;
+      index += 1;
+      if (depth === 0) return index + 1;
+    }
+  }
+  return limit;
+}
+
+function withoutCommentLines(source: string, start: number, end: number): string {
+  let value = "";
+  let cursor = start;
+  while (cursor < end) {
+    const comment = lineLeadingCommentRegion(source, cursor, end);
+    if (!comment) return value + source.slice(cursor, end);
+    value += source.slice(cursor, comment.start);
+    cursor = comment.end;
+  }
+  return value;
+}
+
 function leadingWhitespace(value: string): string {
   return /^[ \t]*/u.exec(value)?.[0] ?? "";
 }
@@ -426,7 +472,28 @@ class WebJsxScanner {
         } else {
           const textStart = this.index;
           while (this.index < this.source.length && this.peek() !== "<" && this.peek() !== "{") this.index += 1;
-          children.push({ kind: "WebJsxTextSyntax", value: this.source.slice(textStart, this.index), span: { start: textStart, end: this.index } });
+          // WEB-U13, continued: the message above names `//` as the spelling
+          // that works, and `//` inside the markup was the one comment shape
+          // this sink still let through. A children region is text, so the
+          // line became a text node: the P2c blind test found two paragraphs
+          // of this repository's own source comments printed on every
+          // conversation screen, in a build where the formatter, `velar
+          // check`, the unit tests and three browser engines were all green.
+          // Only the shape that cannot be anything but a comment attempt is
+          // refused -- an opener standing at the start of a physical line --
+          // so `https://host` and an inline `a // b` stay the text they read
+          // as, and a line of literal comment text keeps the exact-text
+          // spelling web-api already gives it, `{"// ..."}`. The line is cut
+          // from the text as well as reported, so a tool that renders through
+          // a recovered parse still puts nothing on screen.
+          const comment = lineLeadingCommentRegion(this.source, textStart, this.index);
+          if (comment) {
+            this.report("VEL5002", "JSX has no comment form; move the comment outside the markup, or write '{\"// ...\"}' to render the line as text", comment.start, comment.end);
+          }
+          const value = comment
+            ? withoutCommentLines(this.source, textStart, this.index)
+            : this.source.slice(textStart, this.index);
+          children.push({ kind: "WebJsxTextSyntax", value, span: { start: textStart, end: this.index } });
         }
       }
       if (!this.source.startsWith("</", this.index)) {

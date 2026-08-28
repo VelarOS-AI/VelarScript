@@ -1,6 +1,6 @@
 import { mkdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { build, type Metafile } from "esbuild";
 import type { ProjectResult } from "./project.ts";
@@ -88,8 +88,7 @@ interface InstalledBrowserImport {
 
 /** Resolve one bare package import exactly as a browser ESM import. */
 export async function resolveBrowserNpmEntry(specifier: string, baseDirectory: string): Promise<string> {
-  const require = createRequire(pathToFileURL(join(baseDirectory, "__velar_browser_import__.js")));
-  return (await resolveInstalledBrowserImport(specifier, require)).entry;
+  return (await resolveInstalledBrowserImport(specifier, requireAt(baseDirectory), baseDirectory)).entry;
 }
 
 // Native browser ESM cannot load CommonJS, and many npm packages either
@@ -105,25 +104,44 @@ export async function resolveBrowserNpm(
   invalidateRoots: ReadonlySet<string> = new Set(),
 ): Promise<BrowserNpmResolution> {
   const base = frameworkBase(project.framework);
-  const specifiers = new Set(project.modules.flatMap((module) => module.result.dependencies
-    .filter((dependency) => dependency.javascript && !dependency.source.startsWith(".") && !dependency.source.startsWith("/"))
-    .map((dependency) => dependency.source)));
-  for (const package_ of project.velarPackages) {
-    if (package_.artifact !== null) specifiers.add(package_.name);
+  // Every specifier carries the directories it may be resolved from, in the
+  // order they were learned. `velar build` resolves each import from its own
+  // importer (production-build.ts passes `dirname(sourceModule.inputPath)`) and
+  // `velar test` hands the whole question to Node, so both find a linked
+  // package's dependency where that dependency actually lives. This server used
+  // to resolve everything from one require anchored at the consumer's source
+  // root, so a `file:`-linked package's own dependency -- and then its whole
+  // transitive closure -- had to be flattened onto the consumer's node_modules
+  // chain before the page would load. A browser has one import map and
+  // therefore one URL per specifier, so the resolution is still one per
+  // specifier; what changed is that the anchors that can answer it are tried.
+  const anchors = new Map<string, string[]>();
+  const anchor = (specifier: string, directory: string): void => {
+    const known = anchors.get(specifier);
+    if (!known) anchors.set(specifier, [directory]);
+    else if (!known.includes(directory)) known.push(directory);
+  };
+  for (const module of project.modules) {
+    for (const dependency of module.result.dependencies) {
+      if (!dependency.javascript || dependency.source.startsWith(".") || dependency.source.startsWith("/")) continue;
+      anchor(dependency.source, dirname(module.inputPath));
+    }
   }
-  const require = createRequire(pathToFileURL(join(project.sourceRoot, "package.json")));
+  for (const package_ of project.velarPackages) {
+    if (package_.artifact !== null) anchor(package_.name, project.sourceRoot);
+  }
   const cacheRoot = resolve(project.projectRoot, ".velar", "dev-deps");
   const states = new Map<string, PackageState>();
   const targets = new Map<string, { readonly state: PackageState; readonly subpath: string }>();
   const imports: Record<string, string> = {};
   const failures: string[] = [];
 
-  if (specifiers.size > MAX_BROWSER_NPM_PACKAGES) {
+  if (anchors.size > MAX_BROWSER_NPM_PACKAGES) {
     throw new RangeError(`A browser project cannot import more than ${MAX_BROWSER_NPM_PACKAGES} JavaScript packages`);
   }
 
   const processed = new Set<string>();
-  let queue = [...specifiers];
+  let queue = [...anchors.keys()];
   while (queue.length > 0) {
     const wave = queue;
     queue = [];
@@ -138,7 +156,7 @@ export async function resolveBrowserNpm(
         continue;
       }
       try {
-        const resolvedImport = await resolveInstalledBrowserImport(specifier, require);
+        const resolvedImport = await resolveFromAnchors(specifier, anchors.get(specifier) ?? [project.sourceRoot]);
         const { requestedName, subpath, root, manifest, entry } = resolvedImport;
         const name = browserPackageIdentity(manifest, requestedName);
         let state = states.get(name);
@@ -159,15 +177,23 @@ export async function resolveBrowserNpm(
           };
           states.set(name, state);
         }
-        if (!state.entries.has(subpath)) {
+        // Two specifiers can name one file — a `#` alias whose target is a
+        // package's own entry, `.` and `./index` in one exports map — and the
+        // prebundle reports an output per entry *file*, so registering the file
+        // twice loses one of them. The second specifier takes the subpath the
+        // first was given instead, and both import-map keys land on that one
+        // output.
+        const shared = [...state.entries].find(([, existing]) => existing === entry)?.[0];
+        const routedSubpath = shared ?? subpath;
+        if (!state.entries.has(routedSubpath)) {
           const entryFromRoot = relative(state.root, entry);
           if (!entryFromRoot || entryFromRoot.startsWith("..") || isAbsolute(entryFromRoot)) {
             throw new Error(`the resolved entry '${entryFromRoot}' escapes the package directory`);
           }
-          state.entries.set(subpath, entry);
+          state.entries.set(routedSubpath, entry);
           state.bundled = false;
         }
-        targets.set(specifier, { state, subpath });
+        targets.set(specifier, { state, subpath: routedSubpath });
       } catch (error) {
         failures.push(`Cannot resolve browser npm import '${specifier}': ${hostErrorMessage(error)}`);
       }
@@ -178,6 +204,10 @@ export async function resolveBrowserNpm(
         state.meta = await ensurePackageBundle(state, invalidateRoots.has(state.root));
         state.bundled = true;
         for (const external of state.meta.externals) {
+          // A dependency left external by this package's prebundle is resolved
+          // from *this* package, which is where it is installed when the
+          // package is linked from outside the consumer's tree.
+          anchor(external, state.root);
           if (!processed.has(external)) queue.push(external);
         }
       } catch (error) {
@@ -273,7 +303,30 @@ export function prebundleCacheDirectory(cacheRoot: string, name: string, version
   return cacheDir;
 }
 
-async function resolveInstalledBrowserImport(specifier: string, require: NodeJS.Require): Promise<InstalledBrowserImport> {
+/**
+ * One specifier, resolved from the first directory that can answer it. The
+ * anchors are the importers that named it; the error reported when none can is
+ * the first one's, because that is the importer the author is most likely
+ * looking at.
+ */
+async function resolveFromAnchors(specifier: string, directories: readonly string[]): Promise<InstalledBrowserImport> {
+  let first: unknown = null;
+  for (const directory of directories) {
+    try {
+      return await resolveInstalledBrowserImport(specifier, requireAt(directory), directory);
+    } catch (error) {
+      first ??= error;
+    }
+  }
+  throw first ?? new Error("no importer to resolve it from");
+}
+
+function requireAt(directory: string): NodeJS.Require {
+  return createRequire(pathToFileURL(join(directory, "__velar_browser_import__.js")));
+}
+
+async function resolveInstalledBrowserImport(specifier: string, require: NodeJS.Require, baseDirectory: string): Promise<InstalledBrowserImport> {
+  if (specifier.startsWith("#")) return await resolvePackageImportsAlias(specifier, require, baseDirectory);
   const requestedName = packageNameOf(specifier);
   const subpath = specifier === requestedName ? "." : `.${specifier.slice(requestedName.length)}`;
   if (subpath.split("/").includes("..")) throw new Error(`the subpath '${subpath}' escapes the package directory`);
@@ -285,6 +338,76 @@ async function resolveInstalledBrowserImport(specifier: string, require: NodeJS.
   )) as PackageManifest;
   const entry = await selectBrowserEntry(specifier, root, manifest, subpath);
   return { requestedName, subpath, root, manifest, entry };
+}
+
+/**
+ * A `#` specifier is not a package. `docs/javascript-bridge.md` lists it as the
+ * fourth legal `import js` shape -- "a `#`-mapped import from the importing
+ * package's own `imports` map resolves too" -- and says the host owns resolving
+ * it. `velar check` resolves it with the importer's own require
+ * (project.ts, `judgeJavaScriptSpecifier`) and `velar build` hands it back to
+ * esbuild for the same reason (production-build.ts). This server did neither:
+ * it sent the specifier down the node_modules walk, which cannot find `#x`
+ * under any shape of node_modules, and the failure was unworkaroundable
+ * because even a forced resolution wrote the literal `#` into an import-map
+ * URL, where a browser reads everything after it as a fragment.
+ *
+ * So it resolves the way check does, and is then routed as a subpath of the
+ * package whose manifest declares it -- which is where it belongs, shares that
+ * package's prebundle, and carries no `#` in its URL. The import-map *key*
+ * stays `#x`, because that is the specifier the emitted module asks for.
+ */
+async function resolvePackageImportsAlias(specifier: string, require: NodeJS.Require, baseDirectory: string): Promise<InstalledBrowserImport> {
+  // The alias becomes a prebundle entry name, so it is held to the containment
+  // an exports subpath is held to two functions above: a manifest is untrusted
+  // input, and `imports` keys are as free-form as `exports` keys.
+  if (specifier.split("/").includes("..")) throw new Error(`the imports alias '${specifier}' escapes the package directory`);
+  const resolved = require.resolve(specifier);
+  if (!isAbsolute(resolved)) {
+    throw new Error(`the package imports map resolves it to '${resolved}', which is not a file this server can serve`);
+  }
+  const entry = await realpath(resolved);
+  // The declaring package is the one above the *importer*: an `imports` map is
+  // read from the package that owns the importing file, never from the target.
+  const manifestPath = await nearestPackageManifest(baseDirectory);
+  if (manifestPath === null) {
+    throw new Error("no package.json above the importing module declares an 'imports' map");
+  }
+  const root = await realpath(dirname(manifestPath));
+  const manifest = JSON.parse(await readBoundedText(
+    manifestPath,
+    MAX_PACKAGE_MANIFEST_BYTES,
+    `Package manifest for '${specifier}'`,
+  )) as PackageManifest;
+  return { requestedName: importsOwnerIdentity(manifest, root), subpath: specifier, root, manifest, entry };
+}
+
+/** The manifest Node reads an `imports` map from: the nearest one above the importer. */
+async function nearestPackageManifest(directory: string): Promise<string | null> {
+  let current = resolve(directory);
+  for (let parent = dirname(current); ; parent = dirname(current)) {
+    const candidate = join(current, "package.json");
+    try {
+      if ((await stat(candidate)).isFile()) return candidate;
+    } catch {
+      // Keep walking towards the filesystem root.
+    }
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
+/**
+ * The route and cache name for a package that declares an `imports` map. A
+ * project's own manifest is not an installed dependency and may carry no name
+ * at all, so the directory name stands in, and anything that is not an npm
+ * package name is replaced rather than reaching a path.
+ */
+function importsOwnerIdentity(manifest: PackageManifest, root: string): string {
+  const declared = manifest.name;
+  if (typeof declared === "string" && PACKAGE_NAME.test(declared)) return declared;
+  const fromDirectory = basename(root).toLowerCase().replace(/[^a-z0-9._-]+/gu, "-").replace(/^[^a-z0-9]+/u, "");
+  return PACKAGE_NAME.test(fromDirectory) ? fromDirectory : "velar-package-imports";
 }
 
 async function selectBrowserEntry(specifier: string, root: string, manifest: PackageManifest, subpath: string): Promise<string> {
@@ -435,9 +558,16 @@ function assignEntryOutputNames(subpaths: readonly string[]): Map<string, string
   const names = new Map<string, string>();
   const used = new Set<string>();
   for (const subpath of [...subpaths].sort()) {
+    // `.`, an exports subpath `./a/b`, or a package `imports` alias `#a`. The
+    // resolvers refuse a `..` segment before a subpath reaches here; the sink
+    // is closed a second time because this name is joined onto a cache
+    // directory the next build removes recursively.
     const preferred = subpath === "."
       ? "index"
-      : subpath.slice(2).split("/").map((segment) => segment.replace(/[^A-Za-z0-9_.-]+/gu, "-")).join("/") || "index";
+      : (subpath.startsWith("#") ? subpath.slice(1) : subpath.slice(2))
+        .split("/")
+        .map((segment) => (segment === ".." ? "-" : segment).replace(/[^A-Za-z0-9_.-]+/gu, "-"))
+        .join("/") || "index";
     let name = preferred;
     for (let counter = 2; used.has(name); counter += 1) name = `${preferred}-${counter}`;
     used.add(name);

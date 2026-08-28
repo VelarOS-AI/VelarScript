@@ -908,11 +908,20 @@ Member access on a number literal needs no ceremony either — `1.abs()`,
 `1.` is not a number literal in this language (section 3) and therefore cannot
 swallow the dot.
 
-`//` is always a comment, in every position. There is no floor-division
+`//` is always a comment, in every code position. There is no floor-division
 operator, and `7 // 2` binds `7`: the comment starts at `//`, and the statement
 before it is already complete. The compiler cannot rule the line out — a comment
 is legal there — so it advises instead, and advisory `A1` reports the line while
 still emitting. Floor division is `(a / b).floor()`.
+
+"Code position" is the same boundary section 3's `@` rule draws: a string, a
+module specifier, and extension-owned embedded foreign source are data for
+their own grammar, so a `//` inside one is whatever that grammar says it is and
+not a comment. `"http://host"` is a string containing a URL, and a Web
+extension's markup children are text. Because a comment is the reading an
+author expects there and never gets, an embedded grammar that has no comment
+form must refuse the shapes that can only be comment attempts rather than
+accept them as data; the Web extension's `VEL5002` is that refusal.
 
 `%` keeps the dividend's sign for the same reason JavaScript does, so `-7 % 3`
 is `-1` where Python answers `2`. A literal negative dividend draws advisory

@@ -74,6 +74,13 @@ A resource loads once at mount. Refetching after an input changes is an
 explicit `watch` plus detached `async resource.reload()`. Actions do not queue;
 disable or otherwise guard a trigger when concurrent calls are unwanted.
 
+Markup children are text, and text has no comment form. A `//` or `/* ... */`
+opener standing at the start of its own line inside a children region is
+`VEL5002`, exactly as `<!-- ... -->` and `{/* ... */}` are; it used to render as
+a paragraph of source comment on the page. Put the note above the markup, where
+`//` is a comment, and interpolate the line — `{"// ..."}` — on the rare
+occasion the text really does begin with an opener.
+
 A watch subject is a reactive name — a `state`, a `computed`, a prop, or a
 resource field — or a read path out of one, such as `items[0].done`. An operator
 or a call there is refused; declare the value with `computed` and watch that

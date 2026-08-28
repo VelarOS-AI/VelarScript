@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { chromium, firefox, webkit, type BrowserType } from "playwright";
 import { watchDirectoryBranches } from "../packages/cli/src/dev-server.ts";
 import { compileProject } from "../packages/cli/src/project.ts";
 import { importSpecifierSites, moduleOutput } from "../packages/cli/src/module-assets.ts";
@@ -441,4 +442,158 @@ test("[cli-13] the per-directory watcher never allocates a watch inside an exclu
   await writeFile(join(directory, "dist", "velar-build.json"), '{"x":2}\n', "utf8");
   await new Promise((wait) => setTimeout(wait, 500));
   assert.deepEqual(reported, []);
+});
+
+// ---------------------------------------------------------------------------
+// The P2c blind test's two dev-server findings. Both are the same shape: this
+// server answered a resolution question its own siblings answer differently.
+// `velar check` resolves a `#` specifier with the importer's require
+// (project.ts, `judgeJavaScriptSpecifier`), `velar build` hands it to esbuild
+// (production-build.ts), and `velar test` copies the `imports` map into the
+// sandbox manifest and lets Node do it (test-output.ts) -- while this server
+// sent it down the node_modules walk, which cannot find `#x` under any shape of
+// node_modules. `velar build` also resolves every import from its own importer,
+// where this server used one require anchored at the consumer's source root.
+// ---------------------------------------------------------------------------
+
+function importMapOf(html: string): Readonly<Record<string, string>> {
+  const found = /<script type="importmap">(.*?)<\/script>/su.exec(html);
+  assert.ok(found, `no import map in the served document: ${html.slice(0, 400)}`);
+  return (JSON.parse(found[1]!) as { readonly imports: Record<string, string> }).imports;
+}
+
+/** The rendered text of one element, read by each engine's own module loader. */
+async function renderedText(engine: BrowserType, url: string, selector: string): Promise<string> {
+  const browser = await engine.launch();
+  try {
+    const page = await browser.newPage();
+    const failures: string[] = [];
+    page.on("pageerror", (error) => failures.push(String(error)));
+    page.on("console", (message) => { if (message.type() === "error") failures.push(message.text()); });
+    await page.goto(url, { waitUntil: "load" });
+    const text = await page.locator(selector).textContent({ timeout: 30_000 });
+    assert.deepEqual(failures, [], `${engine.name()} reported page errors`);
+    return text ?? "";
+  } finally {
+    await browser.close();
+  }
+}
+
+test("[P2c-2] velar dev resolves a package.json 'imports' subpath, and its import map carries no '#'", { timeout: 600_000 }, async (context) => {
+  const directory = await temporaryRoot("velar-dev-imports-subpath-");
+  await linkWebExtension(directory);
+  await writeTree(directory, {
+    "package.json": `${JSON.stringify({
+      name: "imports-subpath-fixture",
+      version: "0.1.0",
+      private: true,
+      type: "module",
+      imports: { "#highlight": "./src/highlight-adapter.mjs" },
+    }, null, 2)}\n`,
+    "velar.json": `${JSON.stringify({
+      formatVersion: 2,
+      entry: "src/main.vel",
+      outDir: "dist",
+      extensions: ["@velarscript/web"],
+      web: { title: "imports subpath" },
+    }, null, 2)}\n`,
+    "src/highlight-adapter.mjs": "export const highlight = (text) => `HIGHLIGHTED:${text}`\n",
+    "src/main.vel": `extern module "#highlight":
+    export def highlight(text: string) -> string
+
+import js {highlight} from "#highlight"
+
+component App:
+    return <main data-label>{highlight("hello")}</main>
+
+@main: mount(<App />, "#app")
+`,
+  });
+
+  const server = startDevServer(directory, 42894);
+  context.after(() => stopDevServer(server.child));
+  await server.waitForBanner();
+
+  const document_ = await (await fetch("http://127.0.0.1:42894/")).text();
+  assert.doesNotMatch(document_, /VelarScript build error/u, document_.slice(0, 600));
+  const imports = importMapOf(document_);
+  const target = imports["#highlight"];
+  assert.equal(typeof target, "string", JSON.stringify(imports));
+  // The half of this that no shape of node_modules could work around: a `#` in
+  // the *value* is a URL fragment, so the browser requests the path before it
+  // and never asks for the module at all.
+  assert.doesNotMatch(target!, /#/u, `the import map value still carries a '#': ${target}`);
+
+  const served = await fetch(`http://127.0.0.1:42894${target}`);
+  assert.equal(served.status, 200);
+  assert.match(await served.text(), /HIGHLIGHTED/u);
+
+  // And it is a module every engine's own loader resolves, which is the claim
+  // an HTTP assertion cannot make on its own.
+  for (const engine of [chromium, firefox, webkit]) {
+    assert.equal(await renderedText(engine, "http://127.0.0.1:42894/", "[data-label]"), "HIGHLIGHTED:hello");
+  }
+});
+
+test("[P2c-3] velar dev resolves a linked package's dependency from where that dependency lives", { timeout: 600_000 }, async (context) => {
+  const directory = await temporaryRoot("velar-dev-linked-dependency-");
+  const projectRoot = join(directory, "app");
+  const packageRoot = join(directory, "library");
+  await mkdir(join(projectRoot, "node_modules"), { recursive: true });
+  await linkWebExtension(projectRoot);
+  // The dependency is installed in the *library's* node_modules and nowhere
+  // near the consumer, which is what a `file:` link into a sibling checkout
+  // looks like and what this server used to require flattening.
+  await writeTree(packageRoot, {
+    "node_modules/deep-dep/package.json": `${JSON.stringify({ name: "deep-dep", version: "2.0.0", type: "module", main: "index.js" })}\n`,
+    "node_modules/deep-dep/index.js": "export const decorate = (text) => `DEEP:${text}`\n",
+    "package.json": `${JSON.stringify({
+      name: "linked-kit",
+      version: "1.0.0",
+      type: "module",
+      dependencies: { "deep-dep": "^2.0.0" },
+      velar: { entry: "src/index.vel", targets: ["web"], requires: { capabilities: ["web"] } },
+    }, null, 2)}\n`,
+    "src/index.vel": `extern module "deep-dep":
+    export def decorate(text: string) -> string
+
+import js {decorate} from "deep-dep"
+
+export def label() -> string:
+    return decorate("library")
+`,
+  });
+  await symlink(packageRoot, join(projectRoot, "node_modules", "linked-kit"), "dir");
+  await writeTree(projectRoot, {
+    "package.json": `${JSON.stringify({ name: "linked-consumer", version: "0.1.0", private: true, type: "module" }, null, 2)}\n`,
+    "velar.json": `${JSON.stringify({
+      formatVersion: 2,
+      entry: "src/main.vel",
+      outDir: "dist",
+      extensions: ["@velarscript/web"],
+      web: { title: "linked dependency" },
+    }, null, 2)}\n`,
+    "src/main.vel": `import {label} from "linked-kit"
+
+component App:
+    return <main data-label>{label()}</main>
+
+@main: mount(<App />, "#app")
+`,
+  });
+
+  const server = startDevServer(projectRoot, 42895);
+  context.after(() => stopDevServer(server.child));
+  await server.waitForBanner();
+
+  const document_ = await (await fetch("http://127.0.0.1:42895/")).text();
+  assert.doesNotMatch(document_, /VelarScript build error/u, document_.slice(0, 600));
+  assert.doesNotMatch(document_, /Cannot resolve browser npm import 'deep-dep'/u);
+  const target = importMapOf(document_)["deep-dep"];
+  assert.equal(typeof target, "string");
+  const served = await fetch(`http://127.0.0.1:42895${target}`);
+  assert.equal(served.status, 200);
+  assert.match(await served.text(), /DEEP:/u);
+
+  assert.equal(await renderedText(chromium, "http://127.0.0.1:42895/", "[data-label]"), "DEEP:library");
 });
