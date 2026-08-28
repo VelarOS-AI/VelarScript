@@ -17,9 +17,8 @@ VelarScript and you install Velar, the way you write C# and install .NET; the
 difference is scope, because Velar is only ever the application layer —
 interface, state, style, server, desktop.
 
-> Said *WAI-ler-script*. `Velar` is `/ˈwaɪ.lɛr/` — the `V` sounds like a `W`,
-> and the ending rhymes with *well*, not *car*. The short form `Vel` is said
-> like *well*; `VelarOS` is *WAI-ler-oss*, read as one word.
+> `Velar` is said `/ˈwaɪ.lɛr/` — the `V` sounds like a `W`, and the ending
+> rhymes with *well*, not *car*. The short form `Vel` is said like *well*.
 
 A model can now write code faster than anyone can check it, so the bottleneck
 has moved from writing to trusting. Every existing stack was built for the era

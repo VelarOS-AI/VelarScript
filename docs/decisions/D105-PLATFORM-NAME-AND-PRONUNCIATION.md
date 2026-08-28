@@ -47,10 +47,12 @@
 
 | 写法 | 读作 | 中文近似 |
 |---|---|---|
+| **Velar** | `/ˈwaɪ.lɛr/` | 歪勒 |
 | **Vel** | *well* `/wɛl/` | 威尔 |
-| **Velar** | *WAI-ler* `/ˈwaɪ.lɛr/` | 歪勒（近「我爱了」连读） |
-| **VelarScript** | *WAI-ler-script* `/ˈwaɪ.lɛr.skrɪpt/` | 歪勒斯克里普特 |
-| **VelarOS** | *WAI-ler-oss* `/ˈwaɪ.lɛr.ɒs/` | 歪勒沃斯（`OS` 连读成一个词，不拼字母） |
+
+**只标这两个。** `VelarScript`、`VelarOS` 这类复合词按 `Velar` 顺下来念，
+不单独立条 —— 所有者 2026-08-28 的简化要求：读音只需要介绍 `Velar`
+和它的简称 `Vel`。
 
 ## 落点
 

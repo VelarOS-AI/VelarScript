@@ -7,14 +7,9 @@ written short form of the language. English never says "Velar Framework".
 The reasoning is [D105](../../docs/decisions/D105-PLATFORM-NAME-AND-PRONUNCIATION.md).
 
 Pronunciation is custom, not dictionary: `V` sounds like a `W` and the ending
-rhymes with *well*, not *car*.
-
-| Written | Said |
-| --- | --- |
-| `Vel` | *well* `/wɛl/` |
-| `Velar` | *WAI-ler* `/ˈwaɪ.lɛr/` |
-| `VelarScript` | *WAI-ler-script* `/ˈwaɪ.lɛr.skrɪpt/` |
-| `VelarOS` | *WAI-ler-oss* `/ˈwaɪ.lɛr.ɒs/`, one word, not spelled out |
+rhymes with *well*, not *car*. So `Velar` is `/ˈwaɪ.lɛr/`, and the short form
+`Vel` is said like *well*. Compounds inherit it and are not spelled out
+separately.
 
 ## The mark
 
