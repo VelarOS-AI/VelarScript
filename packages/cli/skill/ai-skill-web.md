@@ -156,6 +156,29 @@ or a typed `look:color={...}` binding. Checked motion is a module-level
 animation string. Unsupported styling uses explicit `import css unsafe
 "./file.css" before look` or `after look`.
 
+A design system's CSS custom property is read with `token("--name")` from
+`velar/look`. It is legal in every Look property — sizes, colours, shadows,
+transitions, fonts — so a design-token codebase stays inside Look rather than
+falling out to `import css unsafe`:
+
+```velar fragment
+import {token} from "velar/look"
+
+const shellChrome = look:
+    width = token("--shell-sidebar-expanded-width")
+    borderRadius = token("--ui-radius-panel")
+    boxShadow = token("--shell-sidebar-shadow")
+    transition = token("--ui-transition-fast")
+    color = token("--ui-color-foreground")
+```
+
+The name must be a literal starting with `--`; a computed name is refused. There
+is no fallback argument — a missing token is fixed where the design system
+defines it. Do not write `var(--name)` as a string and do not wrap it in
+`color(...)`: both are refused with the `token()` spelling named, and `velar fix`
+migrates them. `animation` is the exception: motion is a `keyframes:` value
+passed to `animate(...)`, never a token.
+
 A `look` written on a component invocation composes after the look the
 component applies to its own host, per property and per condition: declare a
 property unconditionally to override the component's outright, and declare it

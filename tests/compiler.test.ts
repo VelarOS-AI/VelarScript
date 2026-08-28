@@ -11057,8 +11057,10 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
   // the sole raw WebSocket transport instead of publishing another transport.
   // `WebSocketClose` exposes the peer's real close code and reason on both
   // targets, and the typed bounded Channel contributes its type, constructor,
-  // and two recovery classes to `velar/task`.
-  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 295);
+  // and two recovery classes to `velar/task`. D103 then added `velar/look`'s
+  // `token`, the one checked spelling for a design system's CSS custom
+  // property, which is why the Web half of this total is one larger.
+  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 296);
   assert.equal(Object.values(api.modules).slice(0, 14).reduce((total, exports_) => total + exports_.length, 0), 160);
   assert.equal(api.modules["velar/collections"]?.length, 28);
   assert.equal(api.modules["velar/text"]?.length, 23);

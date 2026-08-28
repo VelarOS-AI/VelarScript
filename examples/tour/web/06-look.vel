@@ -2,7 +2,7 @@
 //
 // Authority: charter section 17 and its appendix (the published Web visual
 // vocabulary). The compiler's own tables are all in packages/web/src/look.ts:
-// `LOOK_BUILDERS` (20), `LOOK_PUBLIC_TYPE_NAMES` (17), `LOOK_UNIT_TYPES` (13
+// `LOOK_BUILDERS` (21), `LOOK_PUBLIC_TYPE_NAMES` (17), `LOOK_UNIT_TYPES` (13
 // suffixes), `LOOK_HOOKS` (9), `LOOK_TARGETS` (7), `LOOK_MEDIA_SUBJECTS` (3
 // subjects, 5 conditions), `LOOK_PROPERTY_GROUPS` (14 families, 225 properties),
 // `LOOK_PROPERTY_VALUE_KINDS` (18 value kinds), `LOOK_PROPERTY_KEYWORDS` (a
@@ -11,14 +11,15 @@
 // `keyframes:` and `animate(...)` are chapter 07; the CSS escape hatch is
 // chapter 08.
 
-import {alpha, animate, asset, border, clamp, color, darken, hsl, lighten, linearGradient, max, min, minmax, repeat, rgb, rgba, shadow, spacing, tracks, transition} from "velar/look"
+import {alpha, animate, asset, border, clamp, color, darken, hsl, lighten, linearGradient, max, min, minmax, repeat, rgb, rgba, shadow, spacing, token, tracks, transition} from "velar/look"
 import {Angle, Animation, Border, Color, Duration, Image, Keyframes, Length, LengthPercentage, Look, Percentage, Shadow, Spacing, Track, TrackFraction, TrackList, Transition} from "velar/look"
 
-// All 20 builders. `velar/look` exports them as ordinary named values: a
-// builder may be aliased, passed to another function, returned, and called
-// outside a Look block like any other value. `ink` is exported because chapter
-// 07 animates it: a design token declared once travels across modules into a
-// `keyframes:` stop.
+// Twenty of the 21 builders; `token(...)` is the twenty-first and has its own
+// section below, because it belongs to no one value kind. `velar/look` exports
+// them all as ordinary named values: a builder may be aliased, passed to
+// another function, returned, and called outside a Look block like any other
+// value. `ink` is exported because chapter 07 animates it: a design token
+// declared once travels across modules into a `keyframes:` stop.
 export const ink: Color = rgb(24, 31, 46)
 const brand: Color = color("rebeccapurple")
 const veiled: Color = rgba(24, 31, 46, 0.55)
@@ -532,6 +533,31 @@ export const wholeVocabularyLook: Look = look:
     backgroundRepeat = "repeat no-repeat"
     cursor = "all-scroll"
 
+// A design system's contract is a set of CSS custom properties, and `token()`
+// is the one checked spelling that reads one. It is legal in every Look
+// property — the metrics, the colour, the shadow, the transition and the font
+// below are all the same call — and it lowers to `var(--name)` while the module
+// compiles. What the compiler checks is the *reference*: the name is a literal
+// CSS custom property identifier, or the declaration is refused. The value
+// behind the name belongs to the design system, which is what makes a theme
+// able to swap it without recompiling this module.
+export const shellChromeLook: Look = look:
+    width = token("--shell-sidebar-expanded-width")
+    minWidth = token("--shell-sidebar-collapsed-width")
+    padding = token("--ui-space-panel")
+    borderRadius = token("--ui-radius-panel")
+    boxShadow = token("--shell-sidebar-shadow")
+    transition = token("--ui-transition-fast")
+    color = token("--ui-color-foreground")
+    background = token("--ui-color-surface")
+    fontFamily = token("--ui-font-family")
+    backdropFilter = token("--shell-sidebar-backdrop-filter")
+
+    if scheme.dark:
+        boxShadow = token("--shell-sidebar-shadow-dark")
+    if @hover:
+        background = token("--ui-color-surface-hover")
+
 // The three properties whose CSS grammar is `<position>` read one table and
 // take one kind of value: a length, a percentage, or any of the twenty-two
 // placements. `backgroundPosition = "top left"` is the same value in the same
@@ -653,6 +679,7 @@ export component LookPanel:
         <div data-multi-token-keywords look={multiTokenKeywordLook}>whole CSS values, not tokens</div>
         <div data-whole-vocabulary look={wholeVocabularyLook}>the whole vocabulary, or a named part of it</div>
         <div data-position look={positionLook}>one grammar, one kind, one table</div>
+        <div data-shell-chrome look={shellChromeLook}>design tokens, checked</div>
         <div data-stateful look={statefulLook}>states and targets</div>
         <div data-responsive look={responsiveLook}>media conditions</div>
         <button type="button" data-control look={controlLook}>base control</button>

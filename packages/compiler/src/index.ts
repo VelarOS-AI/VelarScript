@@ -555,7 +555,10 @@ function parseModule(text: string, path: string, extensions: readonly CompilerEx
       program: parsed.program,
       diagnostics: [...lexed.diagnostics, ...parserDiagnostics],
       advisories: [...lexed.advisories, ...parsed.advisories],
-      suppressions: lexed.suppressions,
+      // D103: a region an extension scanner claimed whole is lexed again by the
+      // parser, so the suppressions its comments carry arrive from there. Both
+      // producers are read for the same reason both diagnostic channels are.
+      suppressions: [...lexed.suppressions, ...parsed.suppressions],
     };
   } catch (error) {
     // 只有解析器自己的深度预算哨兵才是这条诊断的来源。栈溢出不再在这里被翻译成

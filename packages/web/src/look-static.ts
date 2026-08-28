@@ -1,5 +1,8 @@
 import type { Expression, Program } from "@velarscript/compiler/extension";
-import { LOOK_BORDER_STYLE_NAMES, LOOK_BUILDER_NUMERIC_RANGES, LOOK_BUILDER_SIGNATURES, LOOK_UNIT_TYPES } from "./look.ts";
+import {
+  LOOK_BORDER_STYLE_NAMES, LOOK_BUILDER_NUMERIC_RANGES, LOOK_BUILDER_SIGNATURES, LOOK_UNIT_TYPES,
+  isLookTokenName, lookTokenReference,
+} from "./look.ts";
 import { isWebUnit } from "./ast.ts";
 import { cssString } from "./css-string.ts";
 import { isCssDeclarationValue } from "./css-tokens.ts";
@@ -210,6 +213,17 @@ function staticCssValue(
   if (lowered.some((value) => value === null)) return null;
   const args = lowered as readonly (string | undefined)[];
   const positional = args as readonly string[];
+  // D103: the name is read from the literal rather than from the lowered text,
+  // for the reason shadow's `inset` flag is. The analyzer proves the argument is
+  // a literal custom property identifier and refuses everything else at the
+  // declaration; reading the literal here is what makes this lowering
+  // structurally incapable of writing a name that was never proved — a folded
+  // const, an interpolation — into a compiler-owned stylesheet (LOK-U9).
+  if (name === "token" && args.length === 1) {
+    const written = slots[0]!;
+    if (written.kind !== "LiteralExpression" || typeof written.value !== "string" || !isLookTokenName(written.value)) return null;
+    return lookTokenReference(written.value);
+  }
   if (name === "color" && args.length === 1) return positional[0]!;
   if (name === "rgb" && args.length === 3) return `rgb(${positional.join(" ")})`;
   if (name === "rgba" && args.length === 4) return `rgb(${positional.slice(0, 3).join(" ")} / ${positional[3]})`;

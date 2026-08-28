@@ -4,6 +4,41 @@ This file records user-visible language, framework, and tooling changes. It is
 not a milestone checklist; the repository test suites and CI are the source of
 truth for acceptance status.
 
+## Unreleased
+
+### Web applications
+
+- Look reads a design system's CSS custom properties, through one checked
+  spelling. `token("--name")` is a new `velar/look` builder, and it is legal in
+  **every** Look property — the metrics, `boxShadow` and `transition` that used
+  to refuse a design token outright, the colours that used to take one as
+  unread text, the free-text properties, and `keyframes:` stops alike. The
+  argument is a literal CSS custom property identifier; a computed name, an
+  interpolation, or a name without its leading `--` is refused where it is
+  written, because the reference is the whole of what a compiler that cannot
+  see a token stylesheet is able to check. There is no fallback argument: a
+  missing token is a defect where the design system defines it, not a decision
+  re-made at every use site. The call lowers to `var(--name)` while the module
+  compiles, so no call survives into the emitted module.
+- One spelling replaces two. A literal `var(--name)` string is refused wherever
+  a Look value is checked — `color("var(--name)")` included, which used to pass
+  it through as text nothing read — and both forms carry the mechanical rewrite
+  to `token("--name")`, adding the `velar/look` import when the module has none.
+  The free-text properties still accept free text, so a font stack that ends in
+  `var(--name)` is unaffected; a free-text value that is *nothing but* one
+  reference receives the new advisory `A12` and its rewrite. `animation` is the
+  one property a token cannot carry, because Look generates the `@keyframes`
+  names an animation value refers to.
+
+### Language and diagnostics
+
+- A `velar-allow` suppression is read inside a `look:` block, a `keyframes:`
+  block, and an f-string interpolation. Those regions are lexed by the parser
+  rather than by the module lexer, and their suppressions were dropped: a
+  reasoned suppression written on a Look entry silenced nothing, and a stale one
+  was never reported, so it could rot in place — the failure the suppression
+  rules exist to prevent.
+
 ## 0.22.1 — 2026-08-28
 
 ### Application structure intelligence

@@ -98,6 +98,13 @@ const webGlobals = new Map<string, ValueType>([
 
 const lookModuleExports = new Map<string, ValueType>([
   ...LOOK_PUBLIC_TYPE_NAMES.map((name) => [name, { kind: "typeObject", name, value: { kind: "named", name } } as ValueType] as const),
+  // D103: a token reference has no visual kind of its own, because the design
+  // system owns the value and the compiler cannot see it. `string` is the type
+  // every checked Look property kind already admits alongside its own visual
+  // type, which is what makes one spelling legal in all of them; the kinds keep
+  // their D37 keyword tables, which read literals and folded keywords and so
+  // never see a call.
+  ["token", lookBuilder("token", [stringType], stringType)],
   ["color", lookBuilder("color", [stringType], colorType)],
   ["rgb", lookBuilder("rgb", [numberType, numberType, numberType], colorType)],
   ["rgba", lookBuilder("rgba", [numberType, numberType, numberType, numberType], colorType)],

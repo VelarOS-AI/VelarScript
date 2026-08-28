@@ -9,7 +9,7 @@ import {
   VELAR_UTF8_RUNTIME,
 } from "@velarscript/compiler/extension";
 import { CSS_STRING_RUNTIME } from "./css-string.ts";
-import { LOOK_TRANSITION_PROPERTY_KEYWORDS } from "./look.ts";
+import { LOOK_TOKEN_NAME_PATTERN, LOOK_TRANSITION_PROPERTY_KEYWORDS } from "./look.ts";
 import { VELAR_REACTIVE_BRIDGE_MODULE_SOURCE } from "./reactive-bridge-runtime.ts";
 import { WEB_DOM_HOST_RUNTIME, WEB_ERROR_HOST_RUNTIME, WEB_RUNTIME_FOUNDATION } from "./runtime-foundation.ts";
 import { VELAR_WEB_WORKER_RUNTIME } from "./worker-runtime.ts";
@@ -622,6 +622,20 @@ export const Keyframes = lookType("Keyframes", (value) => lookOwnData(value, "__
 export const Animation = lookType("Animation", (value) => lookOwnData(value, "__velarAnimation") === true
   && typeof lookOwnData(value, "css") === "string");
 
+// D103: every written token() call is folded to its CSS text while the module
+// compiles, because the analyzer has already proved the name is a literal
+// custom property identifier. This implementation is what the published module
+// interface promises anyway — the builder is an ordinary value that may be
+// aliased, passed on, and called outside a look: block — so the same name check
+// answers here rather than trusting a caller the compiler never saw.
+const lookTokenNamePattern = ${LOOK_TOKEN_NAME_PATTERN.toString()};
+export function token(name) {
+  name = lookText(name, "Design token name");
+  if (!lookMatches(lookTokenNamePattern, name)) {
+    throw new TypeError("Design token name '" + name + "' is not a CSS custom property identifier: write '--' followed by one or more letters, digits, hyphens, or underscores");
+  }
+  return "var(" + name + ")";
+}
 export function color(value) { return lookText(value, "Color"); }
 export function rgb(red, green, blue) {
   const channels = [red, green, blue].map((value, index) => lookRange(value, "RGB channel " + (index + 1), 0, 255));

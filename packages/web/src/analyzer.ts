@@ -1,4 +1,4 @@
-import { semanticTypeIdentity, type Diagnostic, type Span } from "@velarscript/compiler";
+import { mechanicalEdits, mechanicalFix, semanticTypeIdentity, type Diagnostic, type DiagnosticEdit, type DiagnosticFix, type Span } from "@velarscript/compiler";
 import {
   Analyzer,
   anyType,
@@ -52,14 +52,21 @@ import {
   LOOK_PROPERTY_KEYWORDS,
   LOOK_PROPERTY_VALUE_KINDS,
   LOOK_TARGETS,
+  LOOK_TOKEN_NAME_RULE,
+  LOOK_TOKEN_NO_FALLBACK_GUIDANCE,
   LOOK_UNIT_TYPES,
   LOOK_UNITLESS_PROPERTIES,
+  isLookTokenName,
+  isLookVarReference,
   lookOwnKeywords,
+  lookTokenReference,
+  lookVarReferenceName,
   nearestLookName,
   type LookPropertyValueKind,
 } from "./look.ts";
 import { collectLookStaticValues, evaluateLookStaticExpression, isLookStaticValue, lookStaticCss, type LookStaticValue } from "./look-static.ts";
 import { keyframeCssValue } from "./keyframes.ts";
+import { byCodeUnit } from "./stable-order.ts";
 import { dynamicChildLeaves, JSX_SCALAR_TEXT_HINT } from "./emitter.ts";
 import {
   isWebCustomElementName,
@@ -149,7 +156,8 @@ const textualWebPrimitiveNames = new Set(["Length", "Percentage", "LengthPercent
 // D72 rule 186: derived from the published table, not restated beside it.
 const webEventTypeNames = WEB_EVENT_TYPE_NAMES;
 const webEventDeadFields = new Set(["target", "currentTarget", "value", "checked"]);
-const diagnostic = (code: string, message: string, sourceSpan: Span): Diagnostic => ({ code, message, span: sourceSpan });
+const diagnostic = (code: string, message: string, sourceSpan: Span, fix?: DiagnosticFix): Diagnostic =>
+  fix ? { code, message, span: sourceSpan, fix } : { code, message, span: sourceSpan };
 const bindTargetGuidance = (directive: string): string =>
   `${directive} requires a writable reactive location: a state name, or a field or index path on one such as ${directive}={form.name} or ${directive}={items[0]}`;
 const LOOK_CONDITION_TERM_LIMIT = 32;
@@ -864,6 +872,51 @@ function lookContributions(
   return { properties, composed };
 }
 
+/**
+ * D103: where one Look value was written — which property it sets, the span of
+ * the whole entry, and the directive spelling if it is one. A migration needs
+ * all three, because a `look:property="text"` attribute and a
+ * `property = "text"` block entry are rewritten differently.
+ */
+interface LookValueSite {
+  readonly property: string;
+  readonly entrySpan: Span;
+  readonly directive: "look" | "style" | null;
+}
+
+/**
+ * D103: where a migration writes a `velar/look` import. `declaration` is the
+ * module's existing import of that module when it has one, so the rewrite grows
+ * that line rather than adding a second import of the same module; `insertAt`
+ * is where a first one goes otherwise — after the last import, or before the
+ * first statement of a module with none.
+ */
+interface LookImportSite {
+  readonly declaration: { readonly span: Span; readonly specifiers: readonly { readonly imported: string; readonly local: string }[] } | null;
+  readonly insertAt: number;
+  readonly leadingBlankLine: boolean;
+}
+
+function collectLookImportSite(program: Program): LookImportSite {
+  let lastImportEnd: number | null = null;
+  for (const statement of program.body) {
+    if (statement.kind !== "ImportDeclaration") continue;
+    lastImportEnd = statement.span.end;
+    if (statement.source !== "velar/look" || statement.javascript || statement.specifiers.some((specifier) => specifier.namespace)) continue;
+    return {
+      declaration: {
+        span: statement.span,
+        specifiers: statement.specifiers.map((specifier) => ({ imported: specifier.imported, local: specifier.local })),
+      },
+      insertAt: statement.span.end,
+      leadingBlankLine: false,
+    };
+  }
+  return lastImportEnd === null
+    ? { declaration: null, insertAt: program.body[0]?.span.start ?? 0, leadingBlankLine: true }
+    : { declaration: null, insertAt: lastImportEnd, leadingBlankLine: false };
+}
+
 /** Local names bound to a velar/look builder, including aliased imports. */
 function collectLookBuilderNames(program: Program): ReadonlyMap<string, string> {
   const names = new Map<string, string>();
@@ -1464,6 +1517,13 @@ export class VelarWebAnalyzer extends Analyzer {
   private readonly honoredJsxKeys = new Set<JSXElementExpression>();
   private readonly reportedJsxKeys = new Set<JSXElementExpression>();
   private lookBuilderNames: ReadonlyMap<string, string> = new Map();
+  /**
+   * D103: the module's `velar/look` import, so the migration off
+   * `color("var(--x)")` can write the `token` import it needs in the same
+   * rewrite. A migration that only changed the call would leave the module
+   * naming a builder it never imported, which is not a mechanical fix.
+   */
+  private lookImport: LookImportSite | null = null;
   private lookDeclarations: ReadonlyMap<string, WebLookExpression | null> = new Map();
   private lookLiteralDepth = 0;
   /**
@@ -1504,6 +1564,7 @@ export class VelarWebAnalyzer extends Analyzer {
   override analyze(program: Program): readonly Diagnostic[] {
     this.lookStaticValues = collectLookStaticValues(program, this.importedLookStaticValues);
     this.lookBuilderNames = collectLookBuilderNames(program);
+    this.lookImport = collectLookImportSite(program);
     this.lookDeclarations = collectLookDeclarations(program);
     for (const name of collectDerivedReactiveNames(program)) this.derivedReactiveNames.add(name);
     this.reportBrowserTestImports(program);
@@ -2783,6 +2844,10 @@ export class VelarWebAnalyzer extends Analyzer {
       this.checkAnimateBuilderCall(expression);
       return;
     }
+    if (builder === "token") {
+      this.checkLookTokenCall(expression);
+      return;
+    }
     const ranges = LOOK_BUILDER_NUMERIC_RANGES.get(builder);
     // A named argument fills the same slot its positional spelling does, so the
     // position comes from the builder's own signature — the one table the
@@ -2828,10 +2893,121 @@ export class VelarWebAnalyzer extends Analyzer {
       if (builder === "transition" && position === 0) {
         this.validateLookStringVocabulary("transitionProperty", argument, "The transition builder's property argument");
       }
+      // D103 rule 4: one spelling. `color(string)` used to be the only checked
+      // Look value that let a design token through, and it let it through as
+      // text nobody read — so the same reference was legal on `color` and
+      // refused on `width`, and the accepting half checked nothing.
+      if (builder === "color" && position === 0) this.reportLookColorVarReference(expression, argument);
     }
     if (builder === "tracks" && expression.arguments.length > 1024) {
       this.diagnostics.push(diagnostic("VEL5042", "tracks cannot contain more than 1024 values", expression.span));
     }
+  }
+
+  /**
+   * D103 rules 1 and 5 — what a checked token reference has to be at the site
+   * that writes it.
+   *
+   * The compiler cannot see a design system's values: no token stylesheet is an
+   * input to this compile, and the whole point of the contract is that the
+   * theme swaps values under the same names. So the reference itself is the
+   * only thing there is to check, and it is checked completely — a literal
+   * name, spelled as a CSS custom property identifier, and nothing else in the
+   * call. A computed name would leave a Look value with no checked part at all,
+   * which is the surface D50 rule 92 says is worse than none.
+   */
+  private checkLookTokenCall(expression: Extract<Expression, { kind: "CallExpression" }>): void {
+    const names = expression.argumentNames;
+    // `token(name="--x")` writes the same one argument the positional spelling
+    // does, so the name position is read from the signature the way every other
+    // builder's is rather than assumed to be index 0.
+    const position = names?.findIndex((entry) => entry === "name") ?? -1;
+    const nameIndex = position >= 0 ? position : names?.[0] === undefined || names[0] === null ? 0 : -1;
+    for (const [index, argument] of expression.arguments.entries()) {
+      if (index === nameIndex) continue;
+      this.diagnostics.push(diagnostic("VEL5042", LOOK_TOKEN_NO_FALLBACK_GUIDANCE, argument.span));
+    }
+    const written = nameIndex >= 0 ? expression.arguments[nameIndex] : undefined;
+    if (!written) return;
+    if (written.kind !== "LiteralExpression" || typeof written.value !== "string") {
+      this.diagnostics.push(diagnostic(
+        "VEL5042",
+        `A design token reference names its custom property in the call: ${LOOK_TOKEN_NAME_RULE}. The compiler cannot see a design system's values, so the name is the whole of what it can check — a computed name, an interpolation, or a binding would leave the reference unchecked`,
+        written.span,
+      ));
+      return;
+    }
+    if (isLookTokenName(written.value)) {
+      // D103 rule 2: the reference is compile-time text, so it is folded here
+      // rather than left as a call the browser makes on every module load. The
+      // fold is stamped only on a call this check has just proved, which is
+      // what keeps the emitter structurally unable to write a name nothing
+      // validated. An aliased builder (`const t = token`) is not resolved here
+      // and keeps the runtime implementation, exactly as every other builder
+      // passed around as a value does.
+      if (expression.arguments.length === 1) {
+        this.extensionLiterals.set(spanIdentity(expression.span), lookTokenReference(written.value));
+      }
+      return;
+    }
+    // A name written without the `--` that makes it a custom property is the
+    // one near miss with a single spelling behind it, so it is migrated rather
+    // than only refused.
+    const prefixed = `--${written.value}`;
+    this.diagnostics.push(diagnostic(
+      "VEL5042",
+      `Design token name '${written.value}' is not a CSS custom property identifier; ${LOOK_TOKEN_NAME_RULE}`,
+      written.span,
+      isLookTokenName(prefixed)
+        ? mechanicalFix(written.span, JSON.stringify(prefixed), `Use "${prefixed}"`)
+        : undefined,
+    ));
+  }
+
+  /**
+   * D103 rule 4 — the migration off the one passthrough that used to work.
+   *
+   * The rewrite carries the `token` import when the module does not already
+   * have one, because a fix that leaves a module naming an unimported builder
+   * is not mechanical. A `var(--x, fallback)` reference has no rewrite: rule 5
+   * closed the contract against per-site fallbacks, so the message says that
+   * rather than offering a migration that would silently drop the fallback.
+   */
+  private reportLookColorVarReference(
+    expression: Extract<Expression, { kind: "CallExpression" }>,
+    argument: Expression,
+  ): void {
+    if (argument.kind !== "LiteralExpression" || typeof argument.value !== "string") return;
+    if (!isLookVarReference(argument.value)) return;
+    const referenced = lookVarReferenceName(argument.value);
+    if (referenced === null) {
+      this.diagnostics.push(diagnostic(
+        "VEL5042",
+        `A design token reference is written token("--name"), and it carries no fallback: ${LOOK_TOKEN_NO_FALLBACK_GUIDANCE}`,
+        argument.span,
+      ));
+      return;
+    }
+    const { call, imported } = this.lookTokenCallText(referenced);
+    const rewrite: DiagnosticEdit = { span: expression.span, text: call };
+    this.diagnostics.push(diagnostic(
+      "VEL5042",
+      `Write a design token reference as ${call}; color("var(...)") passed the reference through as text nothing checked, and token() is the one checked spelling — legal in every Look property, not only the colour ones`,
+      expression.span,
+      mechanicalEdits(imported ? [rewrite] : [this.lookTokenImportEdit(), rewrite], `Use ${call}`),
+    ));
+  }
+
+  /** The one edit that gives this module a `token` import, in the shape D103's migration needs. */
+  private lookTokenImportEdit(): DiagnosticEdit {
+    const site = this.lookImport ?? { declaration: null, insertAt: 0, leadingBlankLine: true };
+    const specifiers = [...(site.declaration?.specifiers ?? []), { imported: "token", local: "token" }];
+    const line = `import {${[...specifiers]
+      .sort((left, right) => byCodeUnit(left.imported, right.imported))
+      .map((specifier) => specifier.imported === specifier.local ? specifier.imported : `${specifier.imported} as ${specifier.local}`)
+      .join(", ")}} from "velar/look"`;
+    if (site.declaration) return { span: site.declaration.span, text: line };
+    return { span: { start: site.insertAt, end: site.insertAt }, text: site.leadingBlankLine ? `${line}\n\n` : `\n${line}` };
   }
 
   private checkAnimateBuilderCall(expression: Extract<Expression, { kind: "CallExpression" }>): void {
@@ -2960,6 +3136,23 @@ export class VelarWebAnalyzer extends Analyzer {
       if (!inline) this.inferExpression(value);
       return false;
     }
+    // D103 rule 1 meets D49. `animation` is the one Look property whose value
+    // names another rule rather than describing one: the `@keyframes` name in
+    // an animation shorthand. Look owns those names — they are generated from
+    // the `keyframes:` value that defines the motion — so a shorthand arriving
+    // from outside this compile is a reference the compiler can check on
+    // neither side, which is the surface D50 rule 92 calls worse than none. The
+    // type refuses it either way; this replaces a bare union dump with the two
+    // spellings that do work.
+    if (name === "animation" && this.isLookTokenCall(value)) {
+      this.diagnostics.push(diagnostic(
+        "VEL5038",
+        "Look animation is the one property a design token cannot carry: an animation value names a '@keyframes' rule, and Look generates those names from the 'keyframes:' value that defines the motion, so a shorthand from a design system names a rule this compile never emitted. Declare a checked 'keyframes:' value and pass animate(frames, duration, ...); token() is legal in every other Look property, and a module-level 'import css unsafe \"./styles.css\" before look' carries a design system's own animation when that boundary is intentional",
+        entrySpan,
+      ));
+      if (!inline) this.inferExpression(value);
+      return false;
+    }
     if (!LOOK_PROPERTIES.has(name)) {
       const nearest = nearestLookName(name, LOOK_PROPERTIES);
       const exclusion = LOOK_EXCLUDED_PROPERTIES.get(name);
@@ -2976,8 +3169,71 @@ export class VelarWebAnalyzer extends Analyzer {
       this.diagnostics.push(diagnostic("VEL5038", shorthandGuidance, value.span));
       return false;
     }
-    if (!this.validateLookStringVocabulary(name, value)) return false;
+    const site: LookValueSite = { property: name, entrySpan, directive };
+    this.adviseLookTokenSpelling(name, value, site);
+    if (!this.validateLookStringVocabulary(name, value, undefined, site)) return false;
     return true;
+  }
+
+  /** Whether this value is written as a call to the module's `token` builder, alias included. */
+  private isLookTokenCall(value: Expression): boolean {
+    return value.kind === "CallExpression" && value.callee.kind === "IdentifierExpression"
+      && this.lookBuilderNames.get(value.callee.name) === "token";
+  }
+
+  /** How this module spells a call to the token builder, honouring an aliased import. */
+  private lookTokenCallText(referenced: string): { readonly call: string; readonly imported: boolean } {
+    const local = [...this.lookBuilderNames].find(([, builder]) => builder === "token")?.[0] ?? null;
+    return { call: `${local ?? "token"}(${JSON.stringify(referenced)})`, imported: local !== null };
+  }
+
+  /**
+   * The edits that replace one written Look value with the checked token call,
+   * in the spelling of the site that wrote it.
+   *
+   * A `look:property="text"` directive is analyzed through a synthetic literal
+   * standing for the whole attribute, so the rewrite replaces the attribute:
+   * splicing a call between an attribute's quotes is not JSX, and a fix that
+   * produces a parse error is not a mechanical fix. The `look:property={...}`
+   * spelling carries a real expression whose span is the value alone, and is
+   * rewritten in place like a block entry.
+   */
+  private lookTokenRewrite(value: Expression, referenced: string, site: LookValueSite): readonly DiagnosticEdit[] {
+    const { call, imported } = this.lookTokenCallText(referenced);
+    const wholeAttribute = site.directive !== null
+      && value.span.start === site.entrySpan.start && value.span.end === site.entrySpan.end;
+    const edit: DiagnosticEdit = {
+      span: value.span,
+      text: wholeAttribute ? `${site.directive!}:${site.property}={${call}}` : call,
+    };
+    return imported ? [edit] : [this.lookTokenImportEdit(), edit];
+  }
+
+  /**
+   * D103 rule 4, free-text half — an advisory rather than a refusal.
+   *
+   * `fontFamily`, `backdropFilter` and the other free-text kinds accept
+   * arbitrary CSS text by construction, and a `var()` inside a larger value is
+   * a legitimate spelling with no single token to rewrite it to: the tail of a
+   * font stack, one layer of a filter list. Refusing there would refuse real
+   * CSS. What is advised is the narrow case where the *whole* value is one
+   * reference, because there `token("--name")` is the checked spelling of the
+   * same thing and the rewrite is unambiguous — which is the bar the `A`
+   * roster is written to.
+   */
+  private adviseLookTokenSpelling(name: string, value: Expression, site: LookValueSite): void {
+    const kind = LOOK_PROPERTY_VALUE_KINDS.get(name);
+    if (kind !== "text" && kind !== "filter" && kind !== "transform") return;
+    if (value.kind !== "LiteralExpression" || typeof value.value !== "string") return;
+    const referenced = lookVarReferenceName(value.value);
+    if (referenced === null) return;
+    const { call } = this.lookTokenCallText(referenced);
+    this.advise(
+      "A12",
+      `Look property '${name}' accepts free text, so this design token reference compiles — as text nothing checks. ${call} is the checked spelling of the same reference, and it is legal in every Look property. A var() inside a larger value, such as a font stack's fallback, has no single token to stand for it and is not advised`,
+      value.span,
+      mechanicalEdits(this.lookTokenRewrite(value, referenced, site), `Use ${call}`),
+    );
   }
 
   /**
@@ -2987,13 +3243,31 @@ export class VelarWebAnalyzer extends Analyzer {
    * refusal that named the longhand there would name a spelling the author
    * never wrote.
    */
-  private validateLookStringVocabulary(name: string, value: Expression, subject = `Look property '${name}'`): boolean {
+  private validateLookStringVocabulary(name: string, value: Expression, subject = `Look property '${name}'`, site?: LookValueSite): boolean {
     const kind = LOOK_PROPERTY_VALUE_KINDS.get(name);
     if (!kind || kind === "text" || kind === "filter" || kind === "transform" || kind === "animation") return true;
     const values = literalStringValues(value) ?? this.foldedLookKeyword(value);
     if (values === null) return true;
     for (const text of values) {
       const normalized = text.trim();
+      // D103 rule 4: this is the refusal the shell wave met — every metric,
+      // shadow and transition property turned a design token reference away and
+      // named `import css unsafe` as the only way out, which is how a product's
+      // whole visual layer ended up outside Look. The reference is still
+      // refused as free text, because free text is what it was; what changed is
+      // that the refusal now names the checked spelling of the same reference
+      // and rewrites to it.
+      const referenced = site && lookVarReferenceName(normalized);
+      if (referenced) {
+        const { call } = this.lookTokenCallText(referenced);
+        this.diagnostics.push(diagnostic(
+          "VEL5038",
+          `${subject} does not accept the text '${normalized}'; write the design token reference as ${call}, which is checked and legal in every Look property`,
+          value.span,
+          mechanicalEdits(this.lookTokenRewrite(value, referenced, site), `Use ${call}`),
+        ));
+        return false;
+      }
       if (kind === "metric" && /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:px|rem|em|vw|vh|vmin|vmax|%|fr|ms|s|deg|turn)$/u.test(normalized)) {
         this.diagnostics.push(diagnostic(
           "VEL5038",

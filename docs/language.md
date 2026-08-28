@@ -737,6 +737,21 @@ component Card(busy: bool, children: WebNode):
 mount(<Card busy={true}><p>Loading</p></Card>, "#app")
 ```
 
+A design system's CSS custom properties are read with `token("--name")`, the one
+checked spelling, legal in every Look property. The compiler checks the
+reference — a literal `--name` — and the design system owns the value behind it,
+so a theme swaps values under the same names without recompiling:
+
+```velar
+import {token} from "velar/look"
+
+const shellChrome = look:
+    width = token("--shell-sidebar-expanded-width")
+    borderRadius = token("--ui-radius-panel")
+    boxShadow = token("--shell-sidebar-shadow")
+    color = token("--ui-color-foreground")
+```
+
 ↳ charter [§17 Look](language-charter.md#17-look-controlled-visual-language)
 · [appendix: the published visual vocabulary](language-charter.md#appendix-to-section-17-published-web-visual-vocabulary)
 

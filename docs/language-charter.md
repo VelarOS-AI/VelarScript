@@ -223,7 +223,9 @@ JavaScript `${...}` in a string, without and under the `f` prefix (section 3).
 existential List query (section 8). `A9` reports a proven manual exact record
 projection and `A10` a proven large same-field mapped projection (section 6).
 `A11` reports a redundant same-name query mapping in a Node `RoutePattern` and
-mechanically removes its repeated `name=` prefix.
+mechanically removes its repeated `name=` prefix. `A12` reports a design token
+reference written as free text in a Look property that accepts free text, and
+rewrites it to the checked `token("--name")` spelling (section 17).
 
 An advisory that is right about the line is answered by writing the unambiguous
 spelling it names. An advisory that is wrong about *this* line is answered in
@@ -4408,6 +4410,7 @@ objects, such as `Length` and `Color`.
 
 The module provides a small checked builder set:
 
+- design tokens: `token`
 - colors: `color`, `rgb`, `rgba`, `hsl`, `alpha`, `lighten`, `darken`
 - visuals: `border`, `shadow`, `linearGradient`, `asset`
 - layout: `minmax`, `repeat`, `tracks`, `spacing`, `min`, `max`, `clamp`
@@ -4451,6 +4454,57 @@ opacity written `alpha=2` is proved at run time instead, like a genuinely
 unknown one. A `keyframes:` stop is unaffected, because a named argument does
 not resolve to static CSS and the stop refuses it on that ground first. Write a
 builder argument positionally where its range is what the value has to satisfy.
+
+### Design token references
+
+A design system's contract is a set of CSS custom properties, and `token()` is
+the checked spelling that reads one. It is legal in **every** Look property —
+metrics, colours, shadows, transitions, fonts, and the free-text properties
+alike — and in a `keyframes:` stop, because a design token is a value, not a
+value kind:
+
+```velar
+import {token} from "velar/look"
+
+export const shellChrome = look:
+    width = token("--shell-sidebar-expanded-width")
+    borderRadius = token("--ui-radius-panel")
+    boxShadow = token("--shell-sidebar-shadow")
+    transition = token("--ui-transition-fast")
+    color = token("--ui-color-foreground")
+    fontFamily = token("--ui-font-family")
+```
+
+The argument is a literal string holding a CSS custom property identifier: `--`
+followed by letters, digits, hyphens, or underscores. A computed name, an
+interpolation, a binding, or a name without its leading `--` is refused where it
+is written. The call lowers to `var(--name)` while the module compiles, so no
+call survives into the emitted module.
+
+What is checked is the **reference** — its spelling and its position. The value
+behind the name belongs to the design system: no token stylesheet is an input to
+this compile, and a theme that swaps values under the same names is the whole
+point of the contract. A token that is missing is a defect where the token is
+defined. That is also why there is no fallback argument: a fallback would be a
+per-site decision standing in for a system-level defect, and the one part of the
+reference nothing could check.
+
+The one property `token()` does not reach is `animation`, whose value names a
+`@keyframes` rule rather than describing one. Look generates those names from
+the `keyframes:` value that defines the motion, so a shorthand arriving from
+outside the compile names a rule the compile never emitted; write the motion
+with `keyframes:` and `animate(...)`, or take a design system's own animation
+through `import css unsafe`.
+
+There is exactly one spelling. A literal `var(--name)` string is refused
+wherever the value is checked — including `color("var(--name)")`, which used to
+pass it through as text nothing read — and `velar fix` rewrites that form
+mechanically, carrying the `token` import when the module has none. The
+free-text properties still accept free text, because a `var()` inside a larger
+value is real CSS with no single token to stand for it: `fontFamily =
+"var(--ui-font-family), system-ui, sans-serif"` is a font stack, not a token
+reference. A free-text value that is *nothing but* one reference receives
+advisory `A12` and its rewrite.
 
 ### Unit values and calculations
 
@@ -5011,7 +5065,10 @@ use `Track` or `TrackList`, and motion uses `Transition` or `Animation`.
 Consequently, spellings such as `display = "flexx"`, `padding = "big"`,
 `padding = "12px"`, `color = "reddish"`, a raw grid-template string, and a
 raw gradient string fail while the module compiles. Use `12px`,
-`tracks(minmax(...))`, and `linearGradient(...)` respectively.
+`tracks(minmax(...))`, and `linearGradient(...)` respectively. A design system's
+CSS custom property is read in every one of these families by `token("--name")`,
+which is checked as a reference rather than as a value of the family it appears
+in; a raw `var(--name)` string is refused with that spelling named.
 
 The following 36 real CSS properties are deliberately outside checked Look.
 Their diagnostics name this boundary and point to module-level

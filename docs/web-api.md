@@ -311,12 +311,48 @@ export const panelLook = look:
         padding = 12px
 ```
 
-The available `velar/look` builders are `color`, `rgb`, `rgba`, `hsl`, `alpha`,
-`lighten`, `darken`, `border`, `shadow`, `linearGradient`, `asset`, `minmax`,
-`repeat`, `tracks`, `transition`, `animate`, `spacing`, `min`, `max`, and
-`clamp`. Each is an ordinary value, so `const make = rgb` aliases it and
+The available `velar/look` builders are `token`, `color`, `rgb`, `rgba`, `hsl`,
+`alpha`, `lighten`, `darken`, `border`, `shadow`, `linearGradient`, `asset`,
+`minmax`, `repeat`, `tracks`, `transition`, `animate`, `spacing`, `min`, `max`,
+and `clamp`. Each is an ordinary value, so `const make = rgb` aliases it and
 higher-order use retains the same checked signature. Importing one by name from
 `velar/look` is retired and teaches the namespace spelling.
+
+`token("--name")` reads a design system's CSS custom property, and it is the one
+spelling that is legal in every Look property — metrics, colours, shadows,
+transitions, fonts, the free-text properties, and `keyframes:` stops alike:
+
+```velar
+import {token} from "velar/look"
+
+export const shellChrome = look:
+    width = token("--shell-sidebar-expanded-width")
+    borderRadius = token("--ui-radius-panel")
+    boxShadow = token("--shell-sidebar-shadow")
+    transition = token("--ui-transition-fast")
+    color = token("--ui-color-foreground")
+    fontFamily = token("--ui-font-family")
+```
+
+The argument must be a literal string holding a CSS custom property identifier —
+`--` followed by letters, digits, hyphens, or underscores. A computed name, an
+interpolation, or a binding is refused where the property is declared, because
+the reference is the only part of a design token the compiler can see: the value
+belongs to the design system, and a theme swapping it under the same name is
+what the contract is for. There is no fallback argument; a missing token is a
+defect where the token is defined. The call lowers to `var(--name)` while the
+module compiles, so the emitted module carries the text and makes no call.
+
+`animation` is the one property `token()` does not reach: its value names a
+`@keyframes` rule, and Look generates those names from the `keyframes:` value
+that defines the motion. Write motion with `keyframes:` and `animate(...)`.
+
+A literal `var(--name)` string is refused wherever a Look value is checked,
+`color("var(--name)")` included, and `velar fix` rewrites it to `token("--name")`
+— adding the import when the module has none. The free-text properties keep
+accepting free text, so `fontFamily = "var(--ui-font-family), system-ui"` is a
+font stack rather than a token reference; a free-text value that is nothing but
+one reference receives advisory `A12` and its rewrite.
 
 Visual addition and subtraction require compatible dimensions. Length mixed
 with Percentage produces LengthPercentage; mixed units lower to `calc(...)`.

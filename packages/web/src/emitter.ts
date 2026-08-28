@@ -404,6 +404,15 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     }
     if (isWebExpression(expression) && expression.kind === "ExtensionExpression:web:look-hook") return "false";
     if (isWebLook(expression)) return this.emitLook(expression);
+    if (expression.kind === "CallExpression") {
+      // D103 rule 2: a checked design token reference is compile-time text. The
+      // analyzer proved the name is a literal custom property identifier and
+      // stamped the CSS it lowers to, so the module carries `"var(--name)"`
+      // rather than a call the browser makes on every load — the same place
+      // `keyframes:` has always folded its builder calls to.
+      const folded = this.hints.extensionLiterals.get(spanIdentity(expression.span));
+      if (folded !== undefined) return JSON.stringify(folded);
+    }
     if (expression.kind === "IdentifierExpression") {
       if (this.hints.reactiveReferences.has(spanIdentity(expression.span))) {
         return `${expression.name}.get()`;

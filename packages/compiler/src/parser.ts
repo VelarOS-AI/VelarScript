@@ -50,6 +50,7 @@ import type {
   UsingDeclaration,
   VariableDeclaration,
 } from "./ast.ts";
+import type { AdvisorySuppression } from "./advisory-suppression.ts";
 import { isModuleDeclarationStatement, statementOwnsBlock } from "./ast.ts";
 import { CORE_COMPILER_CONTEXTUAL_NAMES, CORE_STATEMENT_HEAD_KEYWORDS, CORE_WORDS, TYPE_PARAMETER_DECLARATION_FORMS, typeParameterDeclarationFormsPhrase } from "./core-vocabulary.ts";
 import { diagnostic, mechanicalEdits, mechanicalFix, recoveredDiagnostic, type Advisory, type Diagnostic, type DiagnosticFix } from "./diagnostic.ts";
@@ -125,12 +126,24 @@ export interface ParseResult {
   readonly diagnostics: readonly Diagnostic[];
   /** D89: the advisory channel, accumulated beside the diagnostics and never merged into them. */
   readonly advisories: readonly Advisory[];
+  /**
+   * D103: the `velar-allow` suppressions carried by comments the module lexer
+   * never saw, because they sit inside a region an extension scanner claimed
+   * whole — a `look:` block, a `keyframes:` block, an f-string interpolation.
+   * Those regions are lexed again by `parseNestedExpression`, and its lexer's
+   * suppressions used to be dropped on the floor: a `velar-allow` written on a
+   * Look entry silenced nothing and a stale one was never reported, so a
+   * suppression could rot in place there — the exact failure the charter's
+   * third suppression rule exists to prevent.
+   */
+  readonly suppressions: readonly AdvisorySuppression[];
 }
 
 export interface ExpressionParseResult {
   readonly expression: Expression;
   readonly diagnostics: readonly Diagnostic[];
   readonly advisories: readonly Advisory[];
+  readonly suppressions: readonly AdvisorySuppression[];
 }
 
 const binaryPrecedence: Partial<Record<TokenKind, number>> = {
@@ -214,6 +227,7 @@ export class Parser {
   protected readonly lexicalExtensions: readonly CompilerLexicalExtension[];
   protected readonly diagnostics: Diagnostic[] = [];
   protected readonly advisories: Advisory[] = [];
+  protected readonly suppressions: AdvisorySuppression[] = [];
   private readonly genericCallableNames = new Set<string>();
   private readonly contextMarkers: ContextMarker[] = [];
   /** Extension-owned contextual keywords: names until a shape claims them. */
@@ -274,6 +288,7 @@ export class Parser {
       },
       diagnostics: this.diagnostics,
       advisories: this.advisories,
+      suppressions: this.suppressions,
     };
   }
 
@@ -284,7 +299,7 @@ export class Parser {
     if (!this.check("eof")) {
       this.diagnostics.push(diagnostic("VEL2006", "Unexpected tokens in interpolated expression", this.current().span));
     }
-    return { expression, diagnostics: this.diagnostics, advisories: this.advisories };
+    return { expression, diagnostics: this.diagnostics, advisories: this.advisories, suppressions: this.suppressions };
   }
 
   // An assignment written where only an expression is valid (an interpolated
@@ -3946,11 +3961,20 @@ export class Parser {
     const shiftedTokens = lexed.tokens.map((item) => ({ ...item, span: mappedSpan(item.span) }));
     const shiftedDiagnostics = lexed.diagnostics.map((item) => mappedFix({ ...item, span: mappedSpan(item.span) }));
     const shiftedAdvisories = lexed.advisories.map((item) => mappedFix({ ...item, span: mappedSpan(item.span) }));
+    // A suppression carries two spans of its own — the clause it names and the
+    // text a stale-suppression fix deletes — and both are fragment-local here
+    // for the same reason a fix's edits are.
+    const shiftedSuppressions = lexed.suppressions.map((item) => ({
+      ...item,
+      span: mappedSpan(item.span),
+      removal: mappedSpan(item.removal),
+    }));
     const nested = this.createNestedParser(shiftedTokens);
     nested.inheritParseBudget(this);
     const parsed = nested.parseExpressionFragment();
     this.diagnostics.push(...shiftedDiagnostics, ...parsed.diagnostics);
     this.advisories.push(...shiftedAdvisories, ...parsed.advisories);
+    this.suppressions.push(...shiftedSuppressions, ...parsed.suppressions);
     return parsed.expression;
   }
 
