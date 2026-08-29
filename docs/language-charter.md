@@ -81,6 +81,31 @@ semantics to boundary classes, implementation owners, runtime ABI, failure
 phase, and proof tests. The ledger and implementation may not add behavior that
 is absent from or contradicts this reference.
 
+### 1.2 Surfaces and their versions
+
+The language and each target extension publish a **surface**: the complete set
+of spellings a program can observe — the keywords, the resident namespaces, the
+statement forms, the type-parameter bounds, the `velar/*` module members, and,
+for the Web extension, the Look vocabulary. There are five. `core` is this
+reference together with the standard library; `web`, `node`, `server`, and
+`desktop` are the official target extensions.
+
+Each surface carries a **surface version** of its own, separate from the npm
+version every package in a release steps together. It is a counter, not a
+compatibility grade: any addition, removal, or change to a surface raises that
+surface's number by one, and a surface that did not move keeps its number, so
+the number answers the one question an upgrade raises — which code has to be
+re-read. This reference deliberately does not reproduce the numbers; a version
+written into prose goes stale, which is the defect the mechanism exists to
+remove. `velar --version` prints the five your toolchain ships, each changelog
+section names the ones its release shipped, and a project may record the ones
+it was written against in `velar.json`'s `surfaces`, where a mismatch with what
+is installed is refused rather than allowed through.
+
+An extension's surface version is the `apiVersion` of its published contract.
+That field belongs to `protocolVersion: 1` and keeps its spelling; every text a
+person reads calls it a surface version.
+
 ## 2. Files, comments, and blocks
 
 VelarScript source files use the `.vel` extension.

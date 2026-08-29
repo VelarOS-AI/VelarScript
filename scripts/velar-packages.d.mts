@@ -4,6 +4,7 @@ export interface VelarPackageManifest {
   readonly private?: boolean;
   readonly scripts?: Readonly<Record<string, string>>;
   readonly dependencies?: Readonly<Record<string, string>>;
+  readonly peerDependencies?: Readonly<Record<string, string>>;
   readonly main?: string;
   readonly types?: string;
   readonly exports?: unknown;

@@ -1,6 +1,6 @@
 {
   "name": "@velarscript/compiler",
-  "version": "0.24.0",
+  "version": "0.25.0",
   "description": "The compiler and semantic authority for VelarScript Core and explicit compiler extensions.",
   "license": "Apache-2.0",
   "type": "module",

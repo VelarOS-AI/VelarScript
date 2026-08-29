@@ -4,6 +4,10 @@
   "entry": "main.vel",
   "outDir": "dist",
   "extensions": ["@velarscript/server"],
+  "surfaces": {
+    "core": "0.1",
+    "server": "0.15"
+  },
   "server": {
     "configuration": "application.yml"
   }

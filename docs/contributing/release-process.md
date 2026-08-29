@@ -1,12 +1,16 @@
 # VelarScript Toolchain Release Process
 
-Release line: VelarScript 0.24.0 on 2026-08-29
+Release line: VelarScript 0.25.0 on 2026-08-29
 
 VelarScript ships the compiler, target-neutral Core Standard API, official Node
 runtime, official Server, Web and Desktop frameworks, project creator, and CLI
 as one eight-package version-locked release set. Node, Server, Web, and Desktop
 pin their exact toolchain dependencies; CLI pins Core, compiler, Node, Server,
-Web, Desktop, and creator.
+Web, Desktop, and creator. CLI installs only what it needs to load — Core,
+compiler, Node, and creator — and pins Server, Web, and Desktop as exact
+optional peers instead, so a project installs the targets it declares rather
+than all of them (D111). The pin is exact in both sections: a range, a `^`, or
+a missing entry fails the release gate either way.
 Application libraries, external-service adapters, and provider integrations are
 not workspaces or release artifacts of this repository.
 
@@ -68,7 +72,8 @@ Candidate mode fails unless all of these are true:
 - `origin` matches package repository metadata;
 - all eight packages have an explicit publishable license;
 - compiler, Core, Node, Server, Web, Desktop, creator, and CLI versions and internal
-  toolchain dependencies match exactly.
+  toolchain dependencies match exactly, counting the CLI's exact optional peers
+  on Server, Web, and Desktop.
 
 The GitHub rehearsal workflow adds an OIDC artifact attestation to the packed
 tarballs and uploads them as workflow artifacts. It deliberately contains no

@@ -9,6 +9,12 @@ export const CORE_PROJECT_MANIFEST_FIELDS = Object.freeze([
   "build",
   "extensions",
   "workers",
+  // D110 rule 5. Optional, and deliberately not a `formatVersion` bump: the key
+  // is additive, so every manifest written before it keeps loading. Making it
+  // mandatory would be formatVersion 2 → 3, and that is a separate ruling the
+  // decision explicitly declines to make — in practice every manifest in this
+  // repository carries it, and a format break buys nothing on top of that.
+  "surfaces",
 ] as const);
 
 /** Internal standard-module config carrying logical worker names to output paths. */

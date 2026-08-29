@@ -76,6 +76,8 @@ their titles are reproduced verbatim below.
 | [D107](D107-TARGET-RUNTIME-ENUMERATION.md) | 目标运行时清单与类型契约保持单一所有者 | A target runtime roster enumerates every implementation that target supplies, including implementations of Core-owned contracts; the interface remains single-owned and generic CLI composition derives import maps from the enumerable source roster. |
 | [D108](D108-CORE-PACKAGE-PORTABILITY.md) | Core 包声明即完整跨目标承诺 | `velar.targets: ["core"]` means one target-neutral package usable by Core, Node, Web, and Desktop; host-specific target declarations stay exact and capabilities remain independently required. |
 | [D109](D109-A4-COVERAGE-AND-MODULE-ROOT-FAILURE.md) | A4 覆盖派生重建；模块级根构造失败不再是白屏 | Two spellings of one defect each reach the contract that already named it: advisory `A4` widens its proof to the derived rebuild (one code, one suppression, a remedy that fits a derived value), and a module-level root whose construction throws now surfaces the fatal state and the `velar/app` report instead of a blank page. |
+| [D110](D110-SURFACE-VERSION-PARTITION.md) | 表面版本分区：一个安装号，五个表面号 | One install number stays the train version; each of the five surfaces — core, web, node, server, desktop — carries its own counter, derived from a gated surface digest rather than written by hand, declared in `velar.json`, and checked on upgrade so a version change names what must be reviewed. |
+| [D111](D111-INSTALL-WHAT-THE-PROJECT-DECLARES.md) | 装项目声明的那些，而不是全部 | A project installs what it declares plus what the CLI actually needs at load time: Web, Server, Desktop and Playwright become exactly-pinned optional peers, the language server bundles whichever targets resolve, and the packed-package gate proves the installed tree really shrank. |
 
 ## archive/
 

@@ -42,10 +42,12 @@ These commands do not replace npm. npm owns dependency resolution and the lock;
 VelarScript validates that it is operating inside a format-2 project and synchronizes
 only extension activation metadata. An extension package opts in through its
 own `package.json` `velar.extension` object, so compiler composition has no
-official Web or future Game source-semantic branch. The installed CLI carries
-an explicit allowlist of its matching official Web and Desktop application targets
-solely as a zero-`node_modules` distribution fallback; arbitrary extensions
-still resolve only from the project.
+official Web or future Game source-semantic branch. The installed CLI keeps
+an explicit allowlist of the official application targets it will resolve from
+its own installation rather than from the project, but it no longer installs
+them for you: a project installs the targets it declares, and activating one
+without installing it is refused by name together with the command that fixes
+it (D111). Arbitrary extensions still resolve only from the project.
 
 Format 2 makes the language/framework boundary explicit:
 
@@ -57,6 +59,7 @@ Format 2 makes the language/framework boundary explicit:
   "publicDir": "public",
   "build": { "mode": "production", "sourceMaps": false },
   "extensions": ["@velarscript/web"],
+  "surfaces": { "core": "…", "web": "…" },
   "web": {
     "title": "My VelarScript App",
     "base": "/",
@@ -67,6 +70,30 @@ Format 2 makes the language/framework boundary explicit:
   }
 }
 ```
+
+`surfaces` records the **surface versions** this project was written against —
+`core`, which every project is written in, plus one entry per activated
+extension. The values are the ones `velar --version` prints; they are elided in
+the example above on purpose, because a number written into prose goes stale
+and this key exists to make staleness impossible. `velar create` writes the
+block for you, and `velar --version` is where you read a current one.
+
+The key is optional, and a project that omits it loads exactly as before. A
+declaration that is *present* must be complete: every activated surface and no
+others, because a partial one is a typo rather than a setting. When a declared
+value no longer matches what is installed, every command that loads the project
+refuses and names the surface, both numbers, and the changelog sections to read
+between them. That refusal is the point. VelarScript promises no backward
+compatibility, so the one thing an upgrade owes you is *which* surface moved;
+the manifest turns that from something you could check into something you
+cannot skip. It is not a compatibility range — widening it is not an option,
+because there is nothing to widen: you re-read the code that uses the surface
+and then write the new number.
+
+`surfaces` did not raise `formatVersion`. The key is additive and optional, so
+every manifest written before it keeps loading; making it mandatory would be a
+format break, and a format break buys nothing on top of a key every scaffolded
+project already carries.
 
 `web.icon` names the document favicon as a path relative to `publicDir`. The
 framework host emits `<link rel="icon">` with `web.base` applied and the media

@@ -349,20 +349,44 @@ test("cli-9 the official templates pin what they install and only state what the
   const { createTemplateFiles } = await import("../packages/create/src/templates.ts");
   const { VELAR_PROJECT_TEMPLATES } = await import("../packages/create/src/types.ts");
   // `dependencies` and `devDependencies` decide which copy is installed beside
-  // the pinned CLI, so they are exact. `peerDependencies` installs nothing: it
-  // tells a consumer which target this package needs present, and the copy that
-  // loads is pinned by the consumer's own toolchain. Pinning it exactly would
-  // only refuse the install of a component that would have compiled fine.
+  // the pinned CLI, so every toolchain package in them is exact.
+  // `peerDependencies` installs nothing: it tells a consumer which target this
+  // package needs present, and the copy that loads is pinned by the consumer's
+  // own toolchain. Pinning it exactly would only refuse the install of a
+  // component that would have compiled fine.
+  //
+  // D111 rule 5 put the one non-toolchain package into a template's
+  // devDependencies: Playwright, which a browser-testing template installs for
+  // itself now that the CLI no longer installs it for every project. It is not
+  // part of the toolchain generation, so it carries the CLI's own optional-peer
+  // range — read off the CLI manifest rather than restated here, so the two
+  // cannot drift into a project that resolves a Playwright the toolchain was
+  // never driven against. Which templates declare it is derived from which
+  // templates actually ship a browser test.
+  const cliManifest = JSON.parse(await readFile(join(repositoryRoot, "packages", "cli", "package.json"), "utf8")) as {
+    peerDependencies?: Record<string, string>;
+  };
   let peers = 0;
+  let browserDrivers = 0;
   for (const template of VELAR_PROJECT_TEMPLATES) {
     const files = createTemplateFiles(template, join("/tmp", "example-app"), "0.13.0", 2);
     const manifest = JSON.parse(files.get("package.json") ?? "{}") as Record<string, Record<string, string> | undefined>;
+    const browserTested = [...files.keys()].some((path) => path.endsWith(".browser.test.vel"));
     for (const field of ["dependencies", "devDependencies"]) {
       for (const [name, range] of Object.entries(manifest[field] ?? {})) {
+        if (name === "playwright") {
+          assert.equal(field, "devDependencies", `${template}: Playwright is a development tool`);
+          assert.equal(range, cliManifest.peerDependencies?.playwright,
+            `${template}: devDependencies.playwright must state the CLI's own peer range, got ${range}`);
+          browserDrivers += 1;
+          continue;
+        }
         assert.equal(range, "0.13.0",
           `${template}: ${field}.${name} must pin one toolchain generation exactly, got ${range}`);
       }
     }
+    assert.equal(manifest.devDependencies?.playwright !== undefined, browserTested,
+      `${template}: a template ships a browser test and declares Playwright, or does neither`);
     for (const [name, range] of Object.entries(manifest.peerDependencies ?? {})) {
       assert.equal(range, "^0.13.0",
         `${template}: peerDependencies.${name} states a compatibility range, got ${range}`);
@@ -370,6 +394,7 @@ test("cli-9 the official templates pin what they install and only state what the
     }
   }
   assert.equal(peers, 1, "the component template is the one template that declares a peer");
+  assert.ok(browserDrivers > 0, "no template declares the browser driver its own browser test needs");
 
   // A caret over a prerelease accepts the release it precedes, so a toolchain
   // that is not yet released states its peer exactly.

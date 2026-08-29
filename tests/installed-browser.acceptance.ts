@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -72,10 +72,10 @@ try {
   // A-024: derive the packed set from workspace topology. The 1x1 gate installs
   // it once to obtain the published CLI, then once into the representative
   // generated application whose browser path it proves.
-  const tarballs: string[] = [];
-  for (const name of await velarWorkspacePackageNames(root)) tarballs.push(join(directory, await pack(name)));
-  /** Every packed tarball, as one `npm install` takes them. */
-  const install = (extra: readonly string[], cwd: string) =>
+  const tarballs = new Map<string, string>();
+  for (const name of await velarWorkspacePackageNames(root)) tarballs.set(name, join(directory, await pack(name)));
+  /** The named packed tarballs, as one `npm install` takes them. */
+  const install = (extra: readonly string[], cwd: string, names: readonly string[] = [...tarballs.keys()]) =>
     runNpm([
       "install",
       ...extra,
@@ -83,14 +83,32 @@ try {
       "--no-audit",
       "--no-fund",
       `playwright@${toolchainPlaywright}`,
-      ...tarballs,
+      ...names.map((name) => {
+        const tarball = tarballs.get(name);
+        assert.ok(tarball, `the workspace no longer packs ${name}`);
+        return tarball;
+      }),
     ], cwd);
   await writeFile(join(directory, "package.json"), "{}\n", "utf8");
   await install([], directory);
   const installedCli = join(directory, "node_modules", "@velarscript", "cli", "dist", "cli.js");
   const application = join(directory, "Team & App");
   await run(process.execPath, [installedCli, "create", application], directory);
-  await install(["--save-dev"], application);
+  // D111: the generated application installs the target it declares plus what
+  // the CLI needs in order to load — not every packed target. That is the tree
+  // a real `velar test --browser` now runs under, so it is the tree this gate
+  // runs it under too.
+  await install(["--save-dev"], application, [
+    "@velarscript/compiler",
+    "@velarscript/core",
+    "@velarscript/node",
+    "create-velar",
+    "@velarscript/cli",
+    "@velarscript/web",
+  ]);
+  assert.deepEqual((await readdir(join(application, "node_modules", "@velarscript"))).sort(),
+    ["cli", "compiler", "core", "node", "web"],
+    "a generated Web application installs Web and no other application target");
   await writeFile(join(application, "src", "web-contract.vel"), `${applicationWebModules
     .map(({ specifier, probe }) => `import {${probe}} from "${specifier}"`)
     .join("\n")}

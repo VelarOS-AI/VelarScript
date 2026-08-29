@@ -68,6 +68,12 @@ export async function velarWorkspacePackageNames(root = workspaceRoot) {
  * Every compiled publishable package, in dependency-first order.
  *
  * Build membership and dependency edges are derived from package manifests.
+ * Peers count as edges: whether a package *installs* another one and whether it
+ * *compiles against* it are different questions, and D111 separated them — the
+ * CLI states Web, Server and Desktop as optional peers so a project stops
+ * installing targets it never declared, while its own sources still need their
+ * declarations to type-check. Reading only `dependencies` would have built the
+ * CLI before the three packages whose `.d.ts` it compiles against.
  */
 export async function velarToolchainBuildOrder(root = workspaceRoot) {
   const packages = await velarPublishedToolchainPackages(root);
@@ -79,7 +85,7 @@ export async function velarToolchainBuildOrder(root = workspaceRoot) {
     if (placed.has(entry.name)) return;
     if (visiting.has(entry.name)) throw new Error(`workspace dependency cycle through ${entry.name}`);
     visiting.add(entry.name);
-    for (const dependency of Object.keys(entry.manifest.dependencies ?? {}).sort()) {
+    for (const dependency of Object.keys({ ...entry.manifest.dependencies, ...entry.manifest.peerDependencies }).sort()) {
       const workspace = byName.get(dependency);
       if (workspace) visit(workspace);
     }

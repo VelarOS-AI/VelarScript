@@ -3,7 +3,7 @@ import { lstat, readFile, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { CompilerExtension } from "@velarscript/compiler";
+import { VELAR_CORE_API_VERSION, type CompilerExtension } from "@velarscript/compiler";
 import {
   VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION,
   type FrameworkHostExtension,
@@ -14,6 +14,7 @@ import {
   OFFICIAL_WEB_EXTENSION_PACKAGE,
   isToolchainExtensionPackage,
   resolveExtensionPackages,
+  surfaceOfExtensionPackage,
   validateLoadedExtension,
   type ResolvedExtensionPackage,
 } from "./extension-metadata.ts";
@@ -106,6 +107,7 @@ interface ManifestShape {
   readonly build?: unknown;
   readonly extensions?: unknown;
   readonly workers?: unknown;
+  readonly surfaces?: unknown;
 }
 
 export async function resolveVelarProject(input: string | null, cwd = process.cwd()): Promise<VelarProjectConfig> {
@@ -227,6 +229,7 @@ async function loadManifest(manifestPath: string, entryOverride: string | null =
     "project",
     manifestPath,
   );
+  assertDeclaredSurfaces(manifest.surfaces, installedSurfaces(loadedExtensions.packages), manifestPath);
   const extensionConfig = new Map<string, unknown>(loadedExtensions.project.map((extension) => [
     extension.id,
     extension.parse((manifest as Record<string, unknown>)[extension.manifestKey], manifestPath),
@@ -316,6 +319,74 @@ function workerEntryMap(value: unknown, root: string, manifestPath: string): Rea
     workers.set(name, path);
   }
   return workers;
+}
+
+/**
+ * The surface versions this project actually has installed (D110 rule 1):
+ * `core`, which every project is written in, plus one per activated official
+ * target extension.
+ *
+ * The extensions' numbers are read from the packages that are really installed
+ * for *this* project, not from the ones this CLI was built against, because
+ * "the installed value" is the whole subject of the check below —
+ * `resolveExtensionPackages` already resolves a project's own copy ahead of the
+ * toolchain's.
+ */
+function installedSurfaces(packages: readonly ResolvedExtensionPackage[]): ReadonlyMap<string, string> {
+  const surfaces = new Map<string, string>([["core", VELAR_CORE_API_VERSION]]);
+  for (const package_ of packages) {
+    const surface = surfaceOfExtensionPackage(package_.name);
+    if (surface !== null) surfaces.set(surface, package_.apiVersion);
+  }
+  return surfaces;
+}
+
+/** The complete `surfaces` block for a project, as an author would write it. */
+function surfacesExample(installed: ReadonlyMap<string, string>): string {
+  const lines = [...installed].map(([surface, version]) => `    ${JSON.stringify(surface)}: ${JSON.stringify(version)}`);
+  return [`  "surfaces": {`, lines.join(",\n"), "  }"].join("\n");
+}
+
+/**
+ * D110 rule 5 — what a project says it was written against, checked against
+ * what it has.
+ *
+ * The key is optional; declaring nothing keeps every manifest written before
+ * this ruling loading unchanged. But a declaration that is *present* has to be
+ * complete — `core` plus each activated surface, no more and no fewer — because
+ * a partial one is a typo rather than a setting, and because the value of the
+ * whole mechanism is that a surface you never named cannot drift past you in
+ * silence.
+ *
+ * A mismatch is an error rather than a warning, and that is the point of the
+ * ruling: VelarScript promises no backwards compatibility, so the one thing an
+ * upgrade owes an author is *which* surface moved. A refusal here makes the
+ * re-read mandatory instead of conscientious.
+ */
+function assertDeclaredSurfaces(value: unknown, installed: ReadonlyMap<string, string>, manifestPath: string): void {
+  if (value === undefined) return;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${manifestPath}: 'surfaces' must be an object mapping each surface this project activates to the version it was written against —\n${surfacesExample(installed)}`);
+  }
+  const declared = new Map(Object.entries(value as Record<string, unknown>));
+  const missing = [...installed.keys()].filter((surface) => !declared.has(surface));
+  const extra = [...declared.keys()].filter((surface) => !installed.has(surface));
+  if (missing.length > 0 || extra.length > 0) {
+    const wrong = [
+      missing.length > 0 ? `does not name ${missing.join(", ")}` : "",
+      extra.length > 0 ? `names ${extra.join(", ")}, which this project does not activate` : "",
+    ].filter((part) => part !== "").join(", and ");
+    throw new Error(`${manifestPath}: 'surfaces' ${wrong}. A declaration is complete or absent; a partial one is a typo, not a setting. This project activates ${[...installed.keys()].join(", ")}, so its complete declaration is —\n${surfacesExample(installed)}\n(remove the key entirely to declare nothing)`);
+  }
+  for (const [surface, version] of installed) {
+    const written = declared.get(surface);
+    if (typeof written !== "string" || !/^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u.test(written)) {
+      throw new Error(`${manifestPath}: 'surfaces.${surface}' must be a 'major.minor' surface version written as a string; the installed one is ${JSON.stringify(version)}`);
+    }
+    if (written === version) continue;
+    const section = `${surface[0]!.toUpperCase()}${surface.slice(1)}`;
+    throw new Error(`${manifestPath}: this project is written against ${surface}@${written}, but ${surface}@${version} is installed. The ${section} surface changed, so the code that uses it has to be re-read: work through the '${section}' sections of CHANGELOG.md from ${surface}@${written} to ${surface}@${version}, then write "${surface}": ${JSON.stringify(version)} here. A surface version counts changes to that one surface, so this refusal is the review the upgrade asks for — it is not a compatibility range to widen.`);
+  }
 }
 
 function extensionList(value: unknown, manifestPath: string): readonly string[] {

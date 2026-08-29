@@ -321,9 +321,22 @@ async function readPackageManifests() {
   if (desktop.dependencies?.["@velarscript/cli"] || desktop.peerDependencies?.["@velarscript/cli"]) {
     throw new Error("@velarscript/desktop must not depend on CLI orchestration");
   }
+  // D111 rule 4: Web, Server and Desktop became optional peers of the CLI, so a
+  // project installs the targets it declares instead of all of them. The pin
+  // changed section; it did not soften. Exact equality with the release version
+  // still refuses a missing entry, a range, and a `^`/`~` widening, and the
+  // eight-package version-locked release set is unchanged — `peerDependencies`
+  // is now simply where the CLI states which generation of each official target
+  // it was built against.
   for (const dependency of ["@velarscript/web", "@velarscript/server", "@velarscript/desktop"]) {
-    if (cli.dependencies?.[dependency] !== rootManifest.version) {
+    if (cli.peerDependencies?.[dependency] !== rootManifest.version) {
       throw new Error(`@velarscript/cli must pin the exact official ${dependency} toolchain target`);
+    }
+    if (cli.peerDependenciesMeta?.[dependency]?.optional !== true) {
+      throw new Error(`@velarscript/cli must declare ${dependency} as an optional peer`);
+    }
+    if (cli.dependencies?.[dependency] !== undefined) {
+      throw new Error(`@velarscript/cli must not install ${dependency} into every project`);
     }
   }
   if (cli.dependencies?.["create-velar"] !== rootManifest.version) {

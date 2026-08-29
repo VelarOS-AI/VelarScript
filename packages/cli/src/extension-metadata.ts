@@ -34,6 +34,23 @@ const toolchainExtensionPackages = new Set([
 export function isToolchainExtensionPackage(name: string): boolean {
   return toolchainExtensionPackages.has(name);
 }
+
+const TOOLCHAIN_SCOPE = "@velarscript/";
+
+/**
+ * D110 rule 1: the surface an official target extension publishes, or null for
+ * a package that publishes none.
+ *
+ * Read off the same roster `isToolchainExtensionPackage` answers from, rather
+ * than kept as a second list — the five surfaces and the four official target
+ * packages are the same fact twice, and two copies of it would drift. A
+ * third-party extension carries its own `velar.extension.apiVersion` and is
+ * checked against it, but it is not one of the language's surfaces, so a
+ * manifest never declares a version for it.
+ */
+export function surfaceOfExtensionPackage(name: string): string | null {
+  return toolchainExtensionPackages.has(name) ? name.slice(TOOLCHAIN_SCOPE.length) : null;
+}
 /**
  * BLD-U1: the official web application extension's package identity, exported
  * so configuration diagnostics can teach a complete manifest while the CLI
@@ -136,6 +153,12 @@ let toolchainIdentity: ToolchainIdentity | null = null;
  * `@velarscript/cli` pins every official target extension to its own version
  * and the release gate refuses a candidate whose pins drift, so these are the
  * versions whose compiler generation is the one running here.
+ *
+ * Both dependency sections are read. D111 moved Web, Server and Desktop to
+ * optional peers so a project stops installing targets it never declared, and
+ * that ruling changed which section the pin lives in, not whether it binds:
+ * reading only `dependencies` would have quietly narrowed the generation check
+ * below to the one target that stayed there.
  */
 async function readToolchainIdentity(): Promise<ToolchainIdentity> {
   if (toolchainIdentity) return toolchainIdentity;
@@ -144,9 +167,10 @@ async function readToolchainIdentity(): Promise<ToolchainIdentity> {
     const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
       readonly version?: unknown;
       readonly dependencies?: Readonly<Record<string, unknown>>;
+      readonly peerDependencies?: Readonly<Record<string, unknown>>;
     };
     const pins: Record<string, string> = {};
-    for (const [name, range] of Object.entries(manifest.dependencies ?? {})) {
+    for (const [name, range] of Object.entries({ ...manifest.dependencies, ...manifest.peerDependencies })) {
       if (typeof range === "string" && PACKAGE_VERSION.test(range)) pins[name] = range;
     }
     toolchainIdentity = Object.freeze({
@@ -179,6 +203,22 @@ async function assertToolchainGeneration(packages: readonly ResolvedExtensionPac
     if (pinned === undefined || pinned === package_.version) continue;
     throw new Error(`${package_.manifestPath}: this project resolves ${package_.name} ${package_.version}, but @velarscript/cli ${toolchain.version} is built against ${package_.name} ${pinned}; a VelarScript toolchain is one generation, so install ${package_.name} ${pinned} or @velarscript/cli ${package_.version}`);
   }
+}
+
+/**
+ * D111 rule 6: a package a project names but never installed is a missing
+ * install, not a resolver failure, so the refusal names the package and the
+ * command that supplies it. Since Web, Server and Desktop stopped being
+ * installed into every project by the CLI, this is the ordinary way a manifest
+ * that activates one without depending on it now reaches the toolchain.
+ *
+ * An official target is named at the exact version this toolchain was built
+ * against: a VelarScript toolchain is one generation, and a widened range here
+ * would teach the very install `assertToolchainGeneration` exists to refuse.
+ */
+async function missingExtensionPackage(name: string): Promise<string> {
+  const pinned = (await readToolchainIdentity()).pins[name];
+  return `cannot resolve installed package '${name}'; install it in this project with 'npm install ${pinned === undefined ? name : `${name}@${pinned}`}'`;
 }
 
 export function validateLoadedExtension(
@@ -229,7 +269,7 @@ async function readExtensionPackage(
       peerDependencies: bundled.extends,
     };
   }
-  if (!manifestPath) throw new Error(`cannot resolve installed package '${name}'`);
+  if (!manifestPath) throw new Error(await missingExtensionPackage(name));
   const information = await stat(manifestPath);
   if (information.size > MAX_JSON_BYTES) throw new RangeError(`${manifestPath}: package manifest exceeds 1 MiB`);
   let value: unknown;

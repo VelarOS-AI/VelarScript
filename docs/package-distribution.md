@@ -35,7 +35,10 @@ artifacts from `dist`. Web pins the exact
 matching compiler version. Node pins compiler. Server pins compiler and Node.
 Desktop pins compiler, Node,
 and Web, but never imports or executes the CLI. CLI pins Core, compiler, Node,
-Server, Web, Desktop, and creator as one complete official release generation. It resolves
+Server, Web, Desktop, and creator as one complete official release generation,
+and installs the four of them it needs in order to load. Server, Web, Desktop
+and `playwright` are exact optional peers instead, so a project installs the
+targets it declares rather than all of them (D111). It resolves
 every compiler/project extension declared by the application's format-v2
 manifest from the project first, then discovers and validates optional
 protocol-v1 `/host` and `/package-host` entries from the same owner.
@@ -175,6 +178,15 @@ An extension package instead declares:
   } }
 }
 ```
+
+`apiVersion` is that extension's **surface version**: a counter of how many
+times the vocabulary it publishes has changed, independent of the npm version
+its package steps with. For the official targets it is the number
+`velar --version` prints beside the surface's name, and the one a project
+records in `velar.json`'s `surfaces`. The field keeps the spelling `apiVersion`
+because it belongs to `protocolVersion: 1` and renaming it would be changing the
+protocol; everything a person reads — the CLI, the changelog, the reference
+docs, the diagnostics — says *surface version*.
 
 After npm installs such a package, `velar add` atomically adds its package name
 to `velar.json.extensions`. `velar remove` removes the extension and its owned

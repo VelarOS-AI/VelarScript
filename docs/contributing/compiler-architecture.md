@@ -835,8 +835,11 @@ initialization therefore cannot change which case is selected.
 The compiler, Core Standard API, Node runtime, Server, Web and Desktop frameworks, creator, and CLI build as independent npm packages
 containing emitted JavaScript, source maps, and `.d.ts` declarations. Node, Server, and Web pin
 their exact toolchain dependencies. CLI pins Core, the compiler, Node, Server, Web, Desktop, and
-creator as its official toolchain fallback; normal projects may still install
-their own matching target, which resolves first. Desktop does not depend on or
+creator as one release generation, and installs Core, the compiler, Node and
+the creator, which it needs in order to load. Server, Web and Desktop are exact
+optional peers, so a project installs the targets it declares rather than all of
+them (D111); a project's own copy still resolves ahead of the toolchain's, and a
+target it activates without installing is refused by name. Desktop does not depend on or
 execute CLI.
 Packed tarballs must install and
 execute in a clean consumer; Workbench is neither bundled into nor imported by

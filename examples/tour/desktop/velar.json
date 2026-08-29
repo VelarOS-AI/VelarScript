@@ -7,6 +7,10 @@
   "extensions": [
     "@velarscript/desktop"
   ],
+  "surfaces": {
+    "core": "0.1",
+    "desktop": "0.10"
+  },
   "desktop": {
     "productName": "VelarScript Desktop tour",
     "identifier": "dev.velarscript.tour",

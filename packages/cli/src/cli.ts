@@ -26,13 +26,14 @@ import type { BrowserEngineSelection } from "./browser-test-runner.ts";
 import { buildProductionFramework, PRODUCTION_MANIFEST_NAME, writeProductionManifest } from "./production-build.ts";
 import { formatSourceChecked } from "./format-guard.ts";
 import { VELAR_VERSION } from "./version.ts";
+import { formatSurfaceVersions } from "./surface-versions.ts";
 import { assertRequiredPublicAssets, copyPublicAssets, writeStaticDeployment } from "./static-deployment.ts";
 import { verifyProductionBuild } from "./production-verifier.ts";
 import { runProductionPreview } from "./preview-server.ts";
 import { createDeploymentVerificationReport, verifyRemoteDeployment } from "./deployment-verifier.ts";
 import { readVelarSourceFile } from "./source-limits.ts";
 import { parseDependencyArguments, runDependencyCommand, type DependencyAction } from "./package-manager.ts";
-import { hostErrorMessage, isHostErrorCode } from "./host-error.ts";
+import { hostErrorMessage, isHostErrorCode, isMissingHostModule } from "./host-error.ts";
 import { loadApplicationPackageHost, validateApplicationPackageResult } from "./application-package-host.ts";
 import { buildLanguageServerTool } from "./language-server-tool.ts";
 import { applyProjectMechanicalFixes } from "./mechanical-fixer.ts";
@@ -175,7 +176,10 @@ async function main(arguments_: readonly string[]): Promise<number> {
       process.stderr.write("velar --version: this option does not accept arguments\n");
       return 2;
     }
-    process.stdout.write(`velar ${VELAR_VERSION}\n`);
+    // D110 rule 6: the release number, then the five surfaces it ships. The
+    // first line is what you installed; the second is what an upgrade actually
+    // asks you to re-read, which the release number alone cannot say.
+    process.stdout.write(`velar ${VELAR_VERSION}\n  ${await formatSurfaceVersions()}\n`);
     return 0;
   }
 
@@ -630,7 +634,18 @@ async function main(arguments_: readonly string[]): Promise<number> {
       return 1;
     }
     if (parsed.browser) {
-      const { runBrowserTests } = await import("./browser-test-runner.ts");
+      // D111 rule 6: Playwright is an optional peer, so a project that never
+      // declared it reaches here with nothing to load. That is a missing
+      // install rather than a crash, and it is told the same way the engine
+      // download below it is: name the command that fixes it.
+      let runBrowserTests;
+      try {
+        ({ runBrowserTests } = await import("./browser-test-runner.ts"));
+      } catch (error) {
+        if (!isMissingHostModule(error, "playwright")) throw error;
+        process.stderr.write("velar test: --browser drives real browsers through Playwright, which this project does not install.\nInstall it with: npm install --save-dev playwright\n");
+        return 1;
+      }
       return runBrowserTests(projectConfig, parsed.input, parsed.browser);
     }
     return runTests(projectConfig, parsed.input);

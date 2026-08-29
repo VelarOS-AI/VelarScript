@@ -1,5 +1,45 @@
 import { basename } from "node:path";
-import type { VelarProjectTemplate } from "./types.ts";
+import { VELAR_TEMPLATE_SURFACE_VERSIONS, type VelarProjectTemplate } from "./types.ts";
+
+/**
+ * D110 rule 5: the `surfaces` block a template's `velar.json` declares — `core`,
+ * which every project is written in, plus one surface per official target
+ * extension the template activates.
+ *
+ * Derived from the same extension list the manifest's `extensions` key is
+ * written from, never from a second copy of it: a declaration that names a
+ * surface the project does not activate, or omits one it does, is refused when
+ * the project loads, and two hand-kept lists is how that would happen.
+ */
+function templateSurfaces(extensions: readonly string[]): Readonly<Record<string, string>> {
+  const surfaces: Record<string, string> = { core: VELAR_TEMPLATE_SURFACE_VERSIONS.core! };
+  for (const name of extensions) {
+    const surface = name.startsWith(TOOLCHAIN_SCOPE) ? name.slice(TOOLCHAIN_SCOPE.length) : name;
+    const version = VELAR_TEMPLATE_SURFACE_VERSIONS[surface];
+    if (version === undefined) throw new Error(`no surface version is declared for the extension '${name}'`);
+    surfaces[surface] = version;
+  }
+  return surfaces;
+}
+
+const TOOLCHAIN_SCOPE = "@velarscript/";
+/**
+ * D111 rule 5: `velar test --browser` drives real browsers through Playwright,
+ * and the CLI no longer installs Playwright into every project — it states it
+ * as an optional peer instead. A template that ships a browser test therefore
+ * declares it itself; the Core and Node/Server templates, which ship none, do
+ * not.
+ *
+ * This is the CLI's own peer range rather than an exact pin: Playwright is a
+ * third-party browser driver, not part of the one toolchain generation the
+ * `@velarscript/*` pins above hold together. The packages gate reads the two
+ * against each other so they cannot drift apart.
+ */
+const PLAYWRIGHT_RANGE = "^1.58.2";
+const WEB_EXTENSIONS = Object.freeze(["@velarscript/web"]);
+const NODE_EXTENSIONS = Object.freeze(["@velarscript/server"]);
+const DESKTOP_EXTENSIONS = Object.freeze(["@velarscript/desktop"]);
+const CORE_EXTENSIONS = Object.freeze([] as readonly string[]);
 
 export function createTemplateFiles(
   template: VelarProjectTemplate,
@@ -70,7 +110,8 @@ function nodeTemplate(name: string, displayName: string, version: string, format
       outDir: "dist",
       build: { mode: "production", sourceMaps: false },
       publicDir: "public",
-      extensions: ["@velarscript/server"],
+      extensions: NODE_EXTENSIONS,
+      surfaces: templateSurfaces(NODE_EXTENSIONS),
       server: { configuration: "application.yml" },
     })],
     ["README.md", `# ${displayName}\n\nA VelarScript Server application on the Node runtime.\n\n\`\`\`sh\nnpm install\nnpm run dev\n\`\`\`\n\nOpen \`http://127.0.0.1:3000\`. Edit \`src/app.vel\` to add routes and \`application.yml\` to change server settings. The configuration path is declared by \`server.configuration\` in \`velar.json\`, so it can be renamed or moved without changing source code. Use \`npm run build\` for production output and \`npm start\` to run the checked source with production runtime behavior.\n`],
@@ -166,7 +207,7 @@ function desktopTemplate(name: string, displayName: string, version: string, for
         validate: "npm run format:check && npm run check && npm test && npm run build",
       },
       dependencies: { "@velarscript/desktop": version },
-      devDependencies: { "@velarscript/cli": version },
+      devDependencies: { "@velarscript/cli": version, playwright: PLAYWRIGHT_RANGE },
     })],
     ["velar.json", json({
       formatVersion,
@@ -175,7 +216,8 @@ function desktopTemplate(name: string, displayName: string, version: string, for
       outDir: "dist/renderer",
       build: { mode: "production", sourceMaps: false },
       publicDir: "public",
-      extensions: ["@velarscript/desktop"],
+      extensions: DESKTOP_EXTENSIONS,
+      surfaces: templateSurfaces(DESKTOP_EXTENSIONS),
       desktop: {
         productName: displayName,
         identifier: `dev.velarscript.${identifier}`,
@@ -339,7 +381,8 @@ function libraryTemplate(name: string, displayName: string, version: string, for
       outDir: "dist",
       build: { mode: "production", sourceMaps: false },
       publicDir: "public",
-      extensions: [],
+      extensions: CORE_EXTENSIONS,
+      surfaces: templateSurfaces(CORE_EXTENSIONS),
     })],
     ["README.md", `# ${displayName}\n\nA reusable VelarScript library that publishes its readable \`.vel\` source together with frozen ABI-1 JavaScript and a portable type interface. Consumers load the JavaScript artifact; the source remains available for reading, debugging, and rebuilding.\n\n\`\`\`sh\nnpm install\nnpm run validate\n\`\`\`\n\nAfter bootstrap, use \`npm exec velar -- add <package>\`, \`remove\`, and \`update\` for project-aware dependency changes. The package is private by default. Remove \`private\` only after choosing a public package name, license, and release policy.\n`],
     ["src/index.vel", `export type Greeting:\n    message: string\n    recipient: string\n\nexport def greet(name: string) -> Greeting:\n    const recipient = name.trim()\n    assert recipient != "" else "A greeting requires a name"\n    return {message: f"Hello, {recipient}!", recipient: recipient}\n`],
@@ -382,6 +425,7 @@ function componentTemplate(name: string, displayName: string, version: string, f
     devDependencies: {
       "@velarscript/cli": version,
       "@velarscript/web": version,
+      playwright: PLAYWRIGHT_RANGE,
     },
   };
   const files = new Map([
@@ -396,7 +440,8 @@ function componentTemplate(name: string, displayName: string, version: string, f
       outDir: "dist",
       build: { mode: "production", sourceMaps: false },
       publicDir: "public",
-      extensions: ["@velarscript/web"],
+      extensions: WEB_EXTENSIONS,
+      surfaces: templateSurfaces(WEB_EXTENSIONS),
       web: {
         title: `${displayName} component preview`,
         base: "/",
@@ -443,7 +488,7 @@ function commonWebFiles(
         validate: "npm run format:check && npm run check && npm test && npm run build && npm run verify",
       },
       dependencies: { "@velarscript/web": version },
-      devDependencies: { "@velarscript/cli": version },
+      devDependencies: { "@velarscript/cli": version, playwright: PLAYWRIGHT_RANGE },
     })],
     ["velar.json", json({
       formatVersion,
@@ -452,7 +497,8 @@ function commonWebFiles(
       outDir: "dist",
       build: { mode: "production", sourceMaps: false },
       publicDir: "public",
-      extensions: ["@velarscript/web"],
+      extensions: WEB_EXTENSIONS,
+      surfaces: templateSurfaces(WEB_EXTENSIONS),
       web: {
         title: displayName,
         base: "/",

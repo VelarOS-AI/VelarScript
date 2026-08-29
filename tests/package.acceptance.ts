@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
@@ -120,18 +121,27 @@ try {
   const installedManifest = JSON.parse(await readFile(join(directory, "node_modules", "@velarscript", "cli", "package.json"), "utf8")) as {
     dependencies: Record<string, string>;
     peerDependencies?: Record<string, string>;
+    peerDependenciesMeta?: Record<string, { optional?: boolean } | undefined>;
     license: string;
   };
   assert.equal(installedManifest.license, "Apache-2.0");
   assert.match(await readFile(join(directory, "node_modules", "@velarscript", "cli", "LICENSE"), "utf8"), /Apache License\s+Version 2\.0/u);
-  assert.equal(installedManifest.dependencies.playwright, "^1.58.2");
-  assert.equal(installedManifest.dependencies["@velarscript/compiler"], "0.24.0");
-  assert.equal(installedManifest.dependencies["@velarscript/core"], "0.24.0");
-  assert.equal(installedManifest.dependencies["@velarscript/node"], "0.24.0");
-  assert.equal(installedManifest.dependencies["@velarscript/server"], "0.24.0");
-  assert.equal(installedManifest.dependencies["@velarscript/web"], "0.24.0");
-  assert.equal(installedManifest.dependencies["@velarscript/desktop"], "0.24.0");
-  assert.equal(installedManifest.dependencies["create-velar"], "0.24.0");
+  // D111 rule 2: what the CLI installs is what it needs in order to load.
+  assert.equal(installedManifest.dependencies["@velarscript/compiler"], "0.25.0");
+  assert.equal(installedManifest.dependencies["@velarscript/core"], "0.25.0");
+  assert.equal(installedManifest.dependencies["@velarscript/node"], "0.25.0");
+  assert.equal(installedManifest.dependencies["create-velar"], "0.25.0");
+  // Everything else it can drive is an optional peer, so a project gets it only
+  // by declaring it. Rule 2 again: the three targets stay pinned exactly there,
+  // because D111 changed which section holds the pin, not the pin.
+  for (const target of ["@velarscript/web", "@velarscript/server", "@velarscript/desktop"]) {
+    assert.equal(installedManifest.dependencies[target], undefined, `CLI must not install ${target} into every project`);
+    assert.equal(installedManifest.peerDependencies?.[target], "0.25.0", `CLI must pin the exact ${target} peer`);
+    assert.equal(installedManifest.peerDependenciesMeta?.[target]?.optional, true, `${target} must be an optional peer`);
+  }
+  assert.equal(installedManifest.dependencies.playwright, undefined, "CLI must not install Playwright into every project");
+  assert.equal(installedManifest.peerDependencies?.playwright, "^1.58.2");
+  assert.equal(installedManifest.peerDependenciesMeta?.playwright?.optional, true);
   for (const dependency of [
     "@velarscript/database",
     "@velarscript/sqlite",
@@ -152,11 +162,10 @@ try {
   ]) {
     assert.equal(installedManifest.dependencies[dependency], undefined, `CLI must not own application package ${dependency}`);
   }
-  assert.equal(installedManifest.peerDependencies?.["@velarscript/web"], undefined);
   const installedNodeManifest = JSON.parse(await readFile(join(directory, "node_modules", "@velarscript", "node", "package.json"), "utf8")) as {
     dependencies: Record<string, string>;
   };
-  assert.equal(installedNodeManifest.dependencies["@velarscript/compiler"], "0.24.0");
+  assert.equal(installedNodeManifest.dependencies["@velarscript/compiler"], "0.25.0");
   assert.equal(installedNodeManifest.dependencies["@velarscript/sqlite"], undefined);
   assert.equal(installedNodeManifest.dependencies["@velarscript-labs/sqlite"], undefined);
   assert.equal(installedNodeManifest.dependencies.yaml, undefined);
@@ -170,8 +179,8 @@ try {
     manifestKey: "server",
     composes: {"@velarscript/node": "0.16"},
   });
-  assert.equal(installedServerManifest.dependencies["@velarscript/compiler"], "0.24.0");
-  assert.equal(installedServerManifest.dependencies["@velarscript/node"], "0.24.0");
+  assert.equal(installedServerManifest.dependencies["@velarscript/compiler"], "0.25.0");
+  assert.equal(installedServerManifest.dependencies["@velarscript/node"], "0.25.0");
   assert.equal(installedServerManifest.dependencies.yaml, "^2.9.0");
   const installedWebManifest = JSON.parse(await readFile(join(directory, "node_modules", "@velarscript", "web", "package.json"), "utf8")) as {
     velar?: { extension?: { kind?: string; apiVersion?: string; manifestKey?: string; extends?: Record<string, string> } };
@@ -203,12 +212,16 @@ try {
     },
   });
   for (const dependency of ["@velarscript/compiler", "@velarscript/node", "@velarscript/web"]) {
-    assert.equal(installedDesktopManifest.dependencies[dependency], "0.24.0");
+    assert.equal(installedDesktopManifest.dependencies[dependency], "0.25.0");
   }
   assert.equal(installedDesktopManifest.dependencies["@velarscript/cli"], undefined);
   assert.equal(installedDesktopManifest.dependencies.esbuild, undefined);
   const version = await run(process.execPath, [installedCli, "--version"], directory);
-  assert.equal(version.stdout, "velar 0.24.0\n");
+  // The installation number is exact; the surface line is checked by shape, so a
+  // deliberate surface bump (D110) does not also have to edit this file.
+  const [versionLine, surfaceLine] = version.stdout.split("\n");
+  assert.equal(versionLine, "velar 0.25.0");
+  assert.match(surfaceLine!, /^ {2}core@\d+\.\d+ {3}web@\d+\.\d+ {3}node@\d+\.\d+ {3}server@\d+\.\d+ {3}desktop@\d+\.\d+$/u);
   const help = await run(process.execPath, [installedCli, "help", "build"], directory);
   assert.match(help.stdout, /Usage: velar build/u);
   assert.match(help.stdout, /standalone Node application/u);
@@ -430,7 +443,7 @@ component App:
   const docsManifest = JSON.parse(await readFile(join(docsProject, "package.json"), "utf8")) as {
     dependencies: Record<string, string>;
   };
-  assert.equal(docsManifest.dependencies["@velarscript/web"], "0.24.0");
+  assert.equal(docsManifest.dependencies["@velarscript/web"], "0.25.0");
   await run(process.execPath, [installedCli, "check", docsProject], directory);
 
   const componentProject = join(directory, "created-component");
@@ -445,7 +458,7 @@ component App:
   assert.equal(componentManifest.velar.entry, "src/index.vel");
   assert.deepEqual(componentManifest.velar.targets, ["web", "desktop"]);
   assert.deepEqual(componentManifest.velar.requires.capabilities, []);
-  assert.equal(componentManifest.peerDependencies["@velarscript/web"], "^0.24.0");
+  assert.equal(componentManifest.peerDependencies["@velarscript/web"], "^0.25.0");
   await run(process.execPath, [installedCli, "check", componentProject], directory);
 
   const nodeProject = join(directory, "created-node");
@@ -454,7 +467,7 @@ component App:
   const nodeManifest = JSON.parse(await readFile(join(nodeProject, "package.json"), "utf8")) as {
     dependencies: Record<string, string>;
   };
-  assert.equal(nodeManifest.dependencies["@velarscript/server"], "0.24.0");
+  assert.equal(nodeManifest.dependencies["@velarscript/server"], "0.25.0");
   assert.equal(nodeManifest.dependencies["@velarscript/node"], undefined);
   const nodeVelarManifest = JSON.parse(await readFile(join(nodeProject, "velar.json"), "utf8"));
   assert.deepEqual(nodeVelarManifest.extensions, ["@velarscript/server"]);
@@ -471,9 +484,87 @@ component App:
   const createdDesktopManifest = JSON.parse(await readFile(join(createdDesktopProject, "package.json"), "utf8")) as {
     dependencies: Record<string, string>;
   };
-  assert.equal(createdDesktopManifest.dependencies["@velarscript/desktop"], "0.24.0");
+  assert.equal(createdDesktopManifest.dependencies["@velarscript/desktop"], "0.25.0");
   assert.match(await readFile(join(createdDesktopProject, "public", "velarscript-mark.svg"), "utf8"), /<path d=/u);
   await run(process.execPath, [installedCli, "check", createdDesktopProject], directory);
+  // D111 rule 5: a template that ships browser tests installs their driver
+  // itself, at the CLI's own peer range — read off the packed CLI rather than
+  // written here a second time, so the scaffolded project cannot end up
+  // resolving a Playwright the toolchain was never driven against.
+  const createdDesktopDevelopment = (JSON.parse(await readFile(join(createdDesktopProject, "package.json"), "utf8")) as {
+    devDependencies: Record<string, string>;
+  }).devDependencies;
+  assert.equal(createdDesktopDevelopment.playwright, installedManifest.peerDependencies?.playwright,
+    "the desktop template ships browser tests and must install their driver");
+
+  // -------------------------------------------------------------------------
+  // D111: a project installs what it declares plus what the CLI needs in order
+  // to load, and nothing else. The acceptance is not that the dependency table
+  // reads shorter — it is that the installed tree really is smaller, so both
+  // projects below are installed for real and the directory is then read.
+  //
+  // `loadTimeToolchain` is the whole claim written once. Only it, the CLI, and
+  // whatever the template itself declares are offered to `npm install`, so a
+  // CLI that quietly went back to hard-depending on a target would send npm to
+  // the registry for a version that was never published and fail this install,
+  // instead of reappearing in every consumer's node_modules.
+  const loadTimeToolchain = ["@velarscript/compiler", "@velarscript/core", "@velarscript/node", "create-velar"];
+  const installProject = (root: string, names: readonly string[]) => runNpm([
+    "install",
+    "--save-dev",
+    "--ignore-scripts",
+    "--no-audit",
+    "--no-fund",
+    ...[...loadTimeToolchain, "@velarscript/cli", ...names].map((name) => join(directory, named(name).filename)),
+  ], root);
+  const installedToolchain = async (root: string) =>
+    (await readdir(join(root, "node_modules", "@velarscript"))).sort();
+  const installs = async (root: string, name: string) => {
+    try {
+      await readFile(join(root, "node_modules", name, "package.json"), "utf8");
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  // A Core project: no framework target at all, and no browser test, so it gets
+  // neither an application extension nor a browser driver.
+  const installedCore = join(consumerDirectory, "installed-core");
+  await run(process.execPath, [installedCreate, installedCore, "--template", "library"], directory);
+  await installProject(installedCore, []);
+  assert.deepEqual(await installedToolchain(installedCore), ["cli", "compiler", "core", "node"],
+    "a Core project installs the CLI's load-time toolchain and nothing else");
+  assert.equal(await installs(installedCore, "playwright"), false, "a Core project must not install a browser driver");
+  // D110's surface banner answers for the installation it is in, so a project
+  // with no Web, Server or Desktop package has no number to print for them —
+  // and asking for one must not be how a Core project learns that. Checked by
+  // shape so a surface bump does not also have to edit this file.
+  const coreBanner = await run(process.execPath, [join(installedCore, "node_modules", "@velarscript", "cli", "dist", "cli.js"), "--version"], installedCore);
+  assert.match(coreBanner.stdout.split("\n")[1] ?? "", /^ {2}core@\d+\.\d+ {3}node@\d+\.\d+$/u);
+  await runNpm(["run", "check"], installedCore);
+  await runNpm(["test"], installedCore);
+  await runNpm(["run", "build"], installedCore);
+
+  // A Web project: the one target it declares, plus the browser driver its own
+  // browser test needs (D111 rule 5) — and still no Server or Desktop.
+  const installedWeb = join(consumerDirectory, "installed-web");
+  await run(process.execPath, [installedCreate, installedWeb, "--template", "web"], directory);
+  await installProject(installedWeb, ["@velarscript/web"]);
+  assert.deepEqual(await installedToolchain(installedWeb), ["cli", "compiler", "core", "node", "web"],
+    "a Web project installs Web and no other application target");
+  assert.equal(await installs(installedWeb, "playwright"), true, "a Web project installs the driver its browser test needs");
+  // Asked of the installed tree rather than of the manifest: `velar test
+  // --browser` loads Playwright through the CLI, so the CLI is what has to
+  // resolve it. The browser gate runs the tests themselves.
+  createRequire(join(installedWeb, "node_modules", "@velarscript", "cli", "dist", "cli.js")).resolve("playwright");
+  const webBanner = await run(process.execPath, [join(installedWeb, "node_modules", "@velarscript", "cli", "dist", "cli.js"), "--version"], installedWeb);
+  assert.match(webBanner.stdout.split("\n")[1] ?? "", /^ {2}core@\d+\.\d+ {3}web@\d+\.\d+ {3}node@\d+\.\d+$/u);
+  await runNpm(["run", "check"], installedWeb);
+  await runNpm(["test"], installedWeb);
+  await runNpm(["run", "build"], installedWeb);
+  await runNpm(["run", "verify"], installedWeb);
+  process.stdout.write("VelarScript declared-install acceptance passed: a project installs its own targets, not every target\n");
 
   const localDependency = join(directory, "local-dependency");
   const managedProject = join(directory, "managed-project");

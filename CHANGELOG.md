@@ -4,7 +4,37 @@ This file records user-visible language, framework, and tooling changes. It is
 not a milestone checklist; the repository test suites and CI are the source of
 truth for acceptance status.
 
-## 0.24.0 — 2026-08-29
+Since 0.25.0 each release section carries the **surface versions** it shipped.
+One installation number covers five surfaces that do not move together, so the
+heading of a section says which of them you actually have to re-read. Surface
+versions start counting at 0.25.0 — `core` from `0.1` — and `0.N`'s `N` is how
+many times that surface has changed *since counting began*, never a maturity
+grade: `core@0.1` beside `web@0.11` means Core started counting today, not that
+Core is younger. History is deliberately not recomputed (D110 rule 3).
+
+## 0.25.0 — 2026-08-29
+
+Surfaces: `core@0.1` · `web@0.11` · `node@0.16` · `server@0.15` · `desktop@0.10`
+
+This is the release that starts counting, so these are the numbers the four
+extension contracts already carried plus Core's first one; earlier sections are
+not labelled retroactively. From the next release on, a change to a surface
+without a bump to its number is a build failure —
+`scripts/check-surface-versions.mjs` hashes each surface and compares it against
+`surface-lock.json`.
+
+### Core and CLI — `core@0.1`
+
+- Surface versions arrive (D110). Each of the five surfaces — `core`, `web`,
+  `node`, `server`, `desktop` — carries a version of its own beside the single
+  installation number, `velar --version` prints all five, and `velar.json`
+  accepts an optional `surfaces` block that the compiler checks against what is
+  installed. The compiler refuses a declaration that no longer matches, so an
+  upgrade that moves a surface makes the re-read mandatory rather than
+  conscientious. Core's counting starts here at `0.1`; the number is a counter,
+  not a maturity grade.
+
+## 0.25.0 — 2026-08-29
 
 ### Web
 
@@ -56,6 +86,17 @@ truth for acceptance status.
   dependencies the way `velar check` does, and compiled sandboxes carry
   relative `#` targets, fixing `velar test`/`run`/`dev`/`serve` for projects
   using them.
+- A project installs the targets it declares instead of all of them (D111).
+  `@velarscript/cli` keeps the compiler, Core, the Node runtime and the project
+  creator as dependencies — what it needs in order to load — and states Web,
+  Server, Desktop and `playwright` as exact optional peers, so a Core project's
+  `node_modules` no longer carries three frameworks and a browser driver it
+  never asked for. `velar lsp` bundles the targets it can resolve and passes
+  over the absent ones without complaint, the templates that ship browser tests
+  declare `playwright` themselves, and a project that activates an extension it
+  never installed is now told which package to install rather than shown a
+  resolver failure. Version locking is untouched: the three targets are still
+  pinned exactly, and the release gate still refuses a range.
 
 ### Desktop
 

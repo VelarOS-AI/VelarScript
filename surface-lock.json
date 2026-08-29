@@ -1,0 +1,26 @@
+{
+  "gate": "scripts/check-surface-versions.mjs",
+  "decision": "D110",
+  "surfaces": {
+    "core": {
+      "version": "0.1",
+      "digest": "b37207819f67f237944e03f4de30a75d6da4c050642b12bbb53e1c2508245eea"
+    },
+    "web": {
+      "version": "0.11",
+      "digest": "bbff5b69ce8f87d5e800bf0a16cb4dfaf5093130e70c78b9afbdb45a2572ccf5"
+    },
+    "node": {
+      "version": "0.16",
+      "digest": "4f5503b3d4a7ed18f26975f1b6b220617e7717675526ba4b8fe5b7cbb7b20ab0"
+    },
+    "server": {
+      "version": "0.15",
+      "digest": "d5b4bdf1a1c8db21b8454251d4ff589f63c35d41d9d4d42fbe63949c3673ad00"
+    },
+    "desktop": {
+      "version": "0.10",
+      "digest": "4d2a759864bbb63a1044a62c009df272b02692f90c5ed13a0f7d52549ccb4cd9"
+    }
+  }
+}

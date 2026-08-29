@@ -24,6 +24,28 @@
  * analyzer can all read it without a cycle between them.
  */
 
+/**
+ * D110 rule 3 — the Core surface version. Core is the one surface that had no
+ * version identity at all: Web, Node, Server and Desktop each carried a
+ * `VELAR_*_API_VERSION` while the language itself was described only by the npm
+ * version every package steps together, so "desktop 0.25.0" and "core 0.25.0"
+ * said the same thing about two surfaces that had not moved together in months.
+ *
+ * Counting started at `0.1` in 0.25.0 and history is deliberately not
+ * recomputed: `N` is how many times this surface has changed *since counting
+ * began*, never a maturity grade. Core reading lower than an extension says
+ * only that Core started counting last.
+ *
+ * It lives beside the vocabulary rather than beside the standard library
+ * because the Core surface spans both halves — the words in this file, the
+ * types, the statement constructs, and `packages/core`'s standard modules — and
+ * this module is the one both halves can read. It is *not*
+ * `VELAR_STANDARD_API_VERSION`, which versions the standard-module API report
+ * alone; `scripts/check-surface-versions.mjs` computes the whole Core surface's
+ * digest and refuses a change that leaves this number behind.
+ */
+export const VELAR_CORE_API_VERSION = "0.1";
+
 /** The namespaces that are always in scope and are not values (D51 rule 106). */
 export const PERMANENT_NAMESPACE_NAMES = ["Json", "Promise", "Text", "Math"] as const;
 

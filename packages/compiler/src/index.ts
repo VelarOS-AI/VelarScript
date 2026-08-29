@@ -63,6 +63,7 @@ export {
   CORE_WORDS,
   PERMANENT_NAMESPACE_NAMES,
   TYPE_PARAMETER_DECLARATION_FORMS,
+  VELAR_CORE_API_VERSION,
   typeParameterDeclarationFormsPhrase,
   type CoreContextualKeyword,
   type CoreContextualKeywordWord,

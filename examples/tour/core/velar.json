@@ -3,5 +3,8 @@
   "kind": "application",
   "entry": "main.vel",
   "outDir": "dist",
-  "extensions": []
+  "extensions": [],
+  "surfaces": {
+    "core": "0.1"
+  }
 }

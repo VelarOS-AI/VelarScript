@@ -3,5 +3,8 @@
   "entry": "main.vel",
   "outDir": "dist",
   "publicDir": "public",
-  "extensions": []
+  "extensions": [],
+  "surfaces": {
+    "core": "0.1"
+  }
 }

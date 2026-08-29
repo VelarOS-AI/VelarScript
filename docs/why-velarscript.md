@@ -160,6 +160,16 @@ declared boundaries rather than by default, and that boundary is work.
 - **Backward compatibility. Ever.** This is the mechanism, not a caveat about
   immaturity: refusing the promise is what lets a friction be removed once it
   is found. You pin your toolchain version, and you migrate when you move it.
+  What you are owed in return is knowing *what* to migrate, and that is what
+  **surface versions** are for: each of the five observable surfaces — the
+  language itself, and the Web, Node, Server and Desktop extensions — carries a
+  counter of its own beside the single release number every package steps
+  together. `velar --version` prints all five, each changelog section names its
+  own, and a project's `velar.json` can declare the ones it was written
+  against — in which case a mismatch is refused by name rather than allowed
+  through in silence. A surface whose number did not move is a surface you do
+  not have to re-read, and the numbers are hashed from the vocabulary rather
+  than typed, so they cannot quietly claim otherwise.
 - **A stable channel for long-lived products.** That is a future milestone, to
   be earned by evidence rather than declared by a version number.
 - **Ecosystem breadth by default.** The npm ecosystem is reachable, through

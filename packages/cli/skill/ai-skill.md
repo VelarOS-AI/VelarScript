@@ -88,6 +88,16 @@ Writing the manifest yourself: `formatVersion` is required, `kind` may be
 omitted by a project that loads none, `entry` defaults to `src/main.vel`,
 `outDir` to `dist`, and `publicDir` to `public`.
 
+`surfaces` is optional and records the **surface version** the project was
+written against — `core`, plus one entry per activated extension. `velar create`
+writes it. **Never invent the values**: read them from `velar --version`, which
+prints the five the installed toolchain ships, or leave the key out. A
+declaration that is present must be complete — every activated surface and no
+others — and one that no longer matches what is installed is refused, naming the
+surface, both numbers, and the changelog sections between them. That refusal
+means the surface moved under the project: read those sections, fix the code,
+then write the new number. It is not a range to widen.
+
 A Core project (CLI or library) loads no extensions:
 
 ```json

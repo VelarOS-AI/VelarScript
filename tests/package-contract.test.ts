@@ -245,8 +245,15 @@ test("[A-024] every publishable toolchain package that declares a build is built
   const built = order.map((package_) => package_.name);
   const shouldBuild = published.filter((package_) => package_.manifest.scripts?.build).map((package_) => package_.name);
   assert.deepEqual([...built].sort(), [...shouldBuild].sort(), "a publishable package declares a build the gate does not run");
+  // Peers are edges too. D111 moved Web, Server and Desktop out of the CLI's
+  // `dependencies` so a project stops installing targets it never declared,
+  // while the CLI's own sources still compile against their declarations — an
+  // order derived from `dependencies` alone ran the CLI's `tsc` before the three
+  // `.d.ts` sets it reads. Whether a package installs another and whether it
+  // builds after one are different questions.
   for (const [index, package_] of order.entries()) {
-    const workspaceDependencies = Object.keys(package_.manifest.dependencies ?? {}).filter((name) => built.includes(name));
+    const workspaceDependencies = Object.keys({ ...package_.manifest.dependencies, ...package_.manifest.peerDependencies })
+      .filter((name) => built.includes(name));
     for (const dependency of workspaceDependencies) {
       assert.ok(built.indexOf(dependency) < index, `${package_.name} is built before its workspace dependency ${dependency}`);
     }

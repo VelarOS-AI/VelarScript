@@ -51,6 +51,16 @@ export function isHostErrorCode(value: unknown, code: string): boolean {
   return hostErrorCode(value) === code;
 }
 
+/**
+ * Whether a module load failed because one named package is not installed,
+ * rather than because the module it reached threw on its own. Node names the
+ * package it could not find, and that name is required to match, so a package
+ * that fails for its own reasons is never reported as absent.
+ */
+export function isMissingHostModule(value: unknown, name: string): boolean {
+  return isHostErrorCode(value, "ERR_MODULE_NOT_FOUND") && hostErrorMessage(value).includes(`'${name}'`);
+}
+
 export function asHostError(value: unknown): Error {
   return isNativeError(value)
     ? value

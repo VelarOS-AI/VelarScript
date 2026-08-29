@@ -6,6 +6,39 @@ list from the toolchain you actually have installed.
 Inside a project, npm scripts wrap most of these — `npm run dev`, `npm test`,
 `npm run build`. Use `npx velar <command>` for the rest.
 
+`velar --version` prints two lines: the release you installed, and the
+**surface versions** it ships.
+
+```text
+velar <release>
+  core@<count>   web@<count>   node@<count>   server@<count>   desktop@<count>
+```
+
+The numbers are deliberately not reproduced here — run the command and read
+them off the toolchain you have, which is the only copy that cannot be stale.
+The second line names the surfaces this project has installed. A project
+installs the targets it declares, so a Core project — which declares none —
+prints `core` and `node` alone: there is no Web, Server or Desktop package
+present for a number to be read out of, and one written down here instead
+would be exactly the stale copy this whole mechanism removes.
+
+Every package in a release steps to the same number, so the first line cannot
+say which of the five observable surfaces — the language itself, and the Web,
+Node, Server and Desktop extensions — actually moved. The second line can. A
+surface version is a counter: any addition, removal, or change to that surface
+raises it by one, so a release that leaves a number alone is saying that
+surface is unchanged and the code using it needs no re-reading. The `N` in
+`0.N` is how many times that surface has moved since counting began, not a
+maturity grade: a low number beside a high one means that surface started
+counting later, and nothing more. Counting began for all five in the release
+whose changelog section introduces them, and history was not recomputed. None
+of these numbers is written by hand anywhere: a repository gate hashes each
+surface's complete vocabulary and fails the build when a surface changes
+without its version.
+
+A project records what it was written against with `surfaces` in `velar.json`;
+see [project lifecycle](project-lifecycle.md).
+
 ## Writing code
 
 ```text

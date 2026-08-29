@@ -1,26 +1,17 @@
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  CORE_CONTEXTUAL_KEYWORD_WORDS,
-  CORE_NUMERIC_SUFFIXES,
-  CORE_PRELUDE_NAMES,
-  PERMANENT_NAMESPACE_NAMES,
-  permanentNamespaceCoveringModule,
-} from "@velarscript/compiler";
+import { CORE_CONTEXTUAL_KEYWORD_WORDS } from "@velarscript/compiler";
 import { Parser } from "@velarscript/compiler/extension";
-import { isNodeOnlyModule } from "@velarscript/node/compiler";
 import { resolveVelarProject } from "../packages/cli/src/config.ts";
 import { compileProject } from "../packages/cli/src/project.ts";
-import { standardModuleInterfaces } from "../packages/cli/src/standard-modules.ts";
 import { CORE_STATEMENT_CONSTRUCTS, coreStatementConstructKey } from "../packages/compiler/src/ast.ts";
 import { Lexer } from "../packages/compiler/src/lexer.ts";
 import { forbiddenSourceIdentifiers } from "../packages/compiler/src/source-names.ts";
 import { keywordKinds } from "../packages/compiler/src/token.ts";
-import { TYPE_PARAMETER_DECLARATION_FORMS } from "../packages/compiler/src/core-vocabulary.ts";
-import { typeParameterBoundNames } from "../packages/compiler/src/types.ts";
 import { BROWSER_TEST_MODULE } from "../packages/web/src/browser-test.ts";
-import { LOOK_ABSENT_MEDIA_SUBJECTS, LOOK_EXCLUDED_PROPERTIES, LOOK_HOOKS, LOOK_MEDIA_SUBJECTS, LOOK_PROPERTIES, LOOK_TARGETS } from "../packages/web/src/look.ts";
+import { LOOK_ABSENT_MEDIA_SUBJECTS, LOOK_EXCLUDED_PROPERTIES, LOOK_MEDIA_SUBJECTS } from "../packages/web/src/look.ts";
+import { moduleExportKey, moduleExportSource, targetVocabularyEntries, webTestMemberKey } from "./surface-inventory.mjs";
 
 const CORE_STATEMENT_KINDS = new Set(Object.keys(CORE_STATEMENT_CONSTRUCTS).map((key) => key.split(":", 1)[0]));
 
@@ -44,7 +35,7 @@ const CORE_STATEMENT_KINDS = new Set(Object.keys(CORE_STATEMENT_CONSTRUCTS).map(
  *
  * Two disciplines hold the whole thing up, and both are easy to lose:
  *
- *  1. **No hand-kept list.** Every required name below is read out of a
+ *  1. **No hand-kept list.** Every required name is read out of a
  *     compiler-owned table at run time — `keywordKinds`, the extensions' own
  *     `contextualKeywords` / `reservedBindings` / `numericSuffixes` / `globals`,
  *     `standardModuleInterfaces(extensions)`, `core-vocabulary.ts`,
@@ -52,6 +43,14 @@ const CORE_STATEMENT_KINDS = new Set(Object.keys(CORE_STATEMENT_CONSTRUCTS).map(
  *     and drift is silent — D57 rule 134 named that failure family, and this
  *     repository has already repaired five instances of it. If you find
  *     yourself typing a name into this file, you are writing the next one.
+ *
+ *     That reading now lives in `scripts/surface-inventory.mjs`, because D110
+ *     rule 4 gave it a second reader: the surface-version gate hashes the same
+ *     names, partitioned by the package whose table declared them. Two gates
+ *     each reading the compiler's tables their own way is the same drift one
+ *     size larger — one of them would go on checking a vocabulary the other had
+ *     stopped agreeing with. `targetVocabularyEntries` below is that one
+ *     reading, asked the per-target question this gate needs.
  *
  *  2. **Judgment is by parsed and resolved evidence, never by text search.**
  *     A hard keyword counts when the *lexer* emits its token; a contextual
@@ -269,25 +268,6 @@ function observe(category, key) {
   entry.covered.add(key);
 }
 
-/**
- * Module categories are keyed by (module, name) rather than by name alone:
- * `velar/http` publishes `secretHeader` on Node and `formBody` on the Web, and
- * one target's table would otherwise overwrite the other's. The separator is a
- * character no module source and no identifier can contain. It is built here
- * rather than spelled at each site because the four places that write or read
- * these keys have to agree, and a copy of a key format drifts as silently as a
- * copy of a name list does.
- */
-function moduleExportKey(source, name) {
-  return `${source}\u0000${name}`;
-}
-
-/** The module half of a `moduleExportKey`. */
-function moduleExportSource(key) {
-  const separator = key.indexOf("\u0000");
-  return separator < 0 ? key : key.slice(0, separator);
-}
-
 function recordUnusedImport(imported, path) {
   const key = moduleExportKey(imported.source, imported.imported);
   const where = unusedImports.get(key) ?? new Set();
@@ -474,123 +454,23 @@ if (failures.length > 0) {
 // ── The required inventory, read off the compiler ──────────────────────────
 
 /**
- * Everything one target declares. Called once per tour project, so a name that
- * only one target publishes — `secretHeader` on Node, `formBody` on the Web —
- * enters the inventory from the target that has it instead of being overwritten
- * by whichever table was read last.
+ * Everything one target declares, read through the shared inventory so this
+ * gate and the D110 surface-version gate cannot come to disagree about what
+ * the language publishes. Called once per tour project, so a name that only
+ * one target publishes — `secretHeader` on Node, `formBody` on the Web —
+ * enters the inventory from the target that has it instead of being
+ * overwritten by whichever table was read last.
  */
 function requireTargetVocabulary(config) {
-  const extensions = config.compilerExtensions;
   const target = display(config.manifestPath ? dirname(config.manifestPath) : config.root);
-
-  for (const spelling of Object.keys(keywordKinds)) {
-    require_("hard-keyword", spelling, spelling, "keywordKinds in packages/compiler/src/token.ts");
-  }
-  for (const name of typeParameterBoundNames) {
-    require_("type-parameter-bound", name, `<T: ${name}>`, "typeParameterBoundNames in packages/compiler/src/types.ts");
-  }
-  // D55 rule 120: which declaration forms take `<T>` is a compiler-owned
-  // roster — the same one every refusal aimed at a form that does not take one
-  // is worded from. A form added there without a tour example goes red here.
-  for (const form of TYPE_PARAMETER_DECLARATION_FORMS) {
-    require_("generic-declaration", form, `${form} Name<T>`, "TYPE_PARAMETER_DECLARATION_FORMS in packages/compiler/src/core-vocabulary.ts");
-  }
-  for (const name of PERMANENT_NAMESPACE_NAMES) {
-    require_("permanent-namespace", name, name, "PERMANENT_NAMESPACE_NAMES in packages/compiler/src/core-vocabulary.ts");
-  }
-  for (const name of CORE_PRELUDE_NAMES) {
-    require_("prelude-name", name, name, "CORE_PRELUDE_NAMES in packages/compiler/src/core-vocabulary.ts");
-  }
-  // D62 rules 157/158: Core's own contextual keywords and numeric suffixes.
-  // Both were holes this gate could only print — one had no enumerable table
-  // at all, and the other was reachable only because the Web extension
-  // republishes `ms` and `s` through LOOK_UNIT_TYPES, so a Core-only checkout
-  // checked neither. They are required from Core's roster now, on every target.
-  for (const word of CORE_CONTEXTUAL_KEYWORD_WORDS) {
-    require_("contextual-keyword", word, word, "CORE_CONTEXTUAL_KEYWORDS in packages/compiler/src/core-vocabulary.ts");
-  }
-  for (const suffix of CORE_NUMERIC_SUFFIXES) {
-    require_("numeric-suffix", suffix, `1${suffix}`, "CORE_NUMERIC_SUFFIXES in packages/compiler/src/core-vocabulary.ts");
-  }
-  // D53 rule 117's blind spot: the only category here that names a construct
-  // instead of a name. The roster is a mapped type over the `CoreStatement`
-  // union, so a declaration form the parser can return cannot be absent from
-  // it, and a form nothing in the tour writes is named below.
-  for (const [kind, spelling] of Object.entries(CORE_STATEMENT_CONSTRUCTS)) {
-    require_("statement-construct", kind, spelling, "CORE_STATEMENT_CONSTRUCTS in packages/compiler/src/ast.ts");
-  }
-
-  for (const extension of extensions) {
-    for (const word of extension.lexical?.contextualKeywords ?? []) {
-      require_("contextual-keyword", word, word, `${extension.id} lexical.contextualKeywords`);
-    }
-    for (const suffix of extension.lexical?.numericSuffixes ?? []) {
-      require_("numeric-suffix", suffix, `1${suffix}`, `${extension.id} lexical.numericSuffixes`);
-    }
-    for (const name of extension.analysis?.reservedBindings ?? []) {
-      require_("reserved-binding", name, name, `${extension.id} analysis.reservedBindings`);
-    }
-    for (const name of extension.analysis?.globals?.keys() ?? []) {
-      require_("extension-global", name, name, `${extension.id} analysis.globals`);
-    }
-    // An extension's statements never join `CoreStatement`, so its own roster
-    // is the only table that can name them. Owning a parser and publishing no
-    // roster is the silent version of the hole this category closes, so it is
-    // a failure rather than an empty contribution.
-    if (extension.parser !== undefined && extension.syntax === undefined) {
-      failures.push(`Extension '${extension.id}' registers a parser but publishes no 'syntax.statementConstructs', so the statement forms it adds cannot be required of the tour`);
-    }
-    for (const [key, spelling] of Object.entries(extension.syntax?.statementConstructs ?? {})) {
-      require_("statement-construct", key, spelling, `${extension.id} syntax.statementConstructs`);
-    }
-  }
-  // The standard modules this target admits, and every name each publishes.
-  const capabilities = new Set(extensions.flatMap((extension) => extension.capabilities ?? []));
-  const web = capabilities.has("web") || config.framework?.host?.target === "browser";
-  const interfaces = standardModuleInterfaces(extensions);
-
-  // Look's own tables, required of the targets that publish `velar/look`. The
-  // 20 builders and the 17 public type names are not listed here: they are
-  // that module's exports, so the module walk below already requires every one
-  // of them by the spelling that imports it.
-  if (interfaces.has("velar/look")) {
-    for (const name of LOOK_PROPERTIES) require_("look-property", name, `${name}:`, "LOOK_PROPERTY_GROUPS in packages/web/src/look.ts");
-    for (const name of LOOK_HOOKS) require_("look-hook", name, `@${name}`, "LOOK_HOOKS in packages/web/src/look.ts");
-    for (const name of LOOK_TARGETS) require_("look-target", name, `@${name}`, "LOOK_TARGETS in packages/web/src/look.ts");
-    for (const [subject, features] of LOOK_MEDIA_SUBJECTS) {
-      for (const feature of features) {
-        require_("look-media-feature", `${subject}.${feature}`, `${subject}.${feature}`, "LOOK_MEDIA_SUBJECTS in packages/web/src/look.ts");
-      }
-    }
-  }
-  for (const [source, interface_] of interfaces) {
-    // The project driver's own rule for a module this target cannot import.
-    const owned = extensions.some((extension) => extension.id !== "@velarscript/node" && extension.modules?.interfaces.has(source));
-    if (isNodeOnlyModule(source) && web && !owned) continue;
-    const names = new Set([
-      ...interface_.exports.keys(),
-      ...interface_.classes.keys(),
-      ...interface_.namedTypes.keys(),
-      ...interface_.enums.keys(),
-      ...interface_.typeAliases.keys(),
-    ]);
-    // D56-TOUR-INVENTORY trap 3: a module whose every export retired behind a
-    // resident namespace is not importable at all, so requiring an import line
-    // for it would red-flag four modules that are correctly covered by prefix.
-    const namespace = permanentNamespaceCoveringModule(source, interface_.exports.keys());
-    for (const name of names) {
-      if (namespace) require_("namespace-member", `${namespace}.${name}`, `${namespace}.${name}`, `${source} (${target})`);
-      else require_("module-export", moduleExportKey(source, name), `import {${name}} from "${source}"`, `${source} (${target})`);
-    }
-    if (source === BROWSER_TEST_MODULE) {
-      for (const [controller, type] of interface_.exports) {
-        if (type.kind !== "object") continue;
-        for (const member of type.fields.keys()) {
-          require_("web-test-member", `${source}\u0000${controller}\u0000${member}`, `${controller}.${member} in ${WEB_TEST_TOUR_CHAPTER}`, `${source} ${controller} object fields (${target})`);
-        }
-      }
-    }
-  }
+  const vocabulary = targetVocabularyEntries(config, {
+    target,
+    // D68 rule 176 names one chapter as the complete controller showcase, so
+    // the spelling this gate asks for says where the control has to appear.
+    webTestSpelling: (controller, member) => `${controller}.${member} in ${WEB_TEST_TOUR_CHAPTER}`,
+  });
+  for (const item of vocabulary.entries) require_(item.category, item.key, item.spelling, item.table);
+  failures.push(...vocabulary.failures);
 }
 
 // ── What the tour actually contains, judged after lexing and parsing ───────
@@ -678,7 +558,7 @@ function observeModule({ path, tokens, program, index, contextualKeywords, synta
       if (source !== undefined) observe("module-export", moduleExportKey(source, node.property));
       const controller = webTestControllers.get(object);
       if (controller !== undefined && path.endsWith(WEB_TEST_TOUR_CHAPTER)) {
-        observe("web-test-member", `${BROWSER_TEST_MODULE}\u0000${controller}\u0000${node.property}`);
+        observe("web-test-member", webTestMemberKey(BROWSER_TEST_MODULE, controller, node.property));
       }
     }
     if (node.kind === "IdentifierExpression" && unbound.has(node.span.start)) {
