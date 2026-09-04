@@ -12,6 +12,17 @@ many times that surface has changed *since counting began*, never a maturity
 grade: `core@0.1` beside `web@0.11` means Core started counting today, not that
 Core is younger. History is deliberately not recomputed (D110 rule 3).
 
+## 0.26.1 — 2026-09-04
+
+Surfaces: `core@0.2` · `web@0.11` · `node@0.16` · `server@0.15` · `desktop@0.10`
+
+### Core runtime
+
+- Fixed partially filled `UInt32Builder` and `Float32Builder` finalization.
+  Exact-capacity builders still transfer their backing store without a copy;
+  builders with spare capacity now copy only their initialized elements rather
+  than attempting to write unused capacity past the shorter result buffer.
+
 ## 0.26.0 — 2026-09-04
 
 Surfaces: `core@0.2` · `web@0.11` · `node@0.16` · `server@0.15` · `desktop@0.10`

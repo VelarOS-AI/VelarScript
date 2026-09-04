@@ -123,6 +123,21 @@ print(totalBytes(a.toBytes()))
   assert.doesNotMatch(result.code, /__velarBufferValues/u);
 });
 
+test("binary builders finish partially filled storage without copying unused capacity", async () => {
+  const result = await run(`
+import {float32Builder, uint32Builder} from "velar/binary"
+
+const positions = float32Builder(4096)
+positions.push(1.25)
+positions.push(2.5)
+const indices = uint32Builder(4096)
+indices.push(7)
+print(positions.finish().values())
+print(indices.finish().values())
+`);
+  assert.equal(result.output, "[ 1.25, 2.5 ]\n[ 7 ]\n");
+});
+
 test("values() enforces the universal List item ceiling before allocating", async () => {
   const result = await run(`
 import {uint16Buffer} from "velar/binary"

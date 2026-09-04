@@ -1754,7 +1754,7 @@ const __velarBinaryBuilderPrototype = __velarBinaryFreeze({
   finish() {
     const state = __velarBinaryCall(__velarBinaryWeakMapGet, __velarBinaryBuilders, [this]); if (!state || state.finished) throw new __velarBinaryNativeTypeError("Binary builder is finished");
     let output = state.storage;
-    if (state.size !== output.length) { output = new state.spec.Constructor(state.size); __velarBinaryCall(__velarBinaryTypedArraySet, output, [state.storage]); }
+    if (state.size !== output.length) { output = new state.spec.Constructor(state.size); for (let index = 0; index < state.size; index += 1) output[index] = state.storage[index]; }
     state.finished = true; state.storage = null; return __velarBinaryTrust(output, state.size);
   },
 });
