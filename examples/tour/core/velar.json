@@ -5,6 +5,6 @@
   "outDir": "dist",
   "extensions": [],
   "surfaces": {
-    "core": "0.2"
+    "core": "0.3"
   }
 }

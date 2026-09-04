@@ -11,6 +11,8 @@ export interface SurfaceInventoryEntry {
   readonly spelling: string;
   /** The compiler-owned table this was read from, for a failure to name. */
   readonly table: string;
+  /** Canonical public contract attached to the name, empty for bare vocabulary. */
+  readonly shape: string;
   /**
    * The repository path of that table, which decides the surface. Null when the
    * entry came from a merged per-target view, where no single package owns it.
@@ -21,6 +23,8 @@ export interface SurfaceInventoryEntry {
 export interface SurfaceInventoryName {
   readonly spelling: string;
   readonly tables: ReadonlySet<string>;
+  /** Canonical public contract included in the surface digest. */
+  readonly shape: string;
 }
 
 export interface SurfaceInventoryResult {
@@ -68,6 +72,7 @@ export function surfacePartitionFailures(packages: readonly SurfaceWorkspacePack
 export function moduleExportKey(source: string, name: string): string;
 export function moduleExportSource(key: string): string;
 export function webTestMemberKey(source: string, controller: string, member: string): string;
+export function surfaceDigest(names: ReadonlyMap<string, { readonly shape: string }>): string;
 
 export function coreVocabularyEntries(): SurfaceInventoryEntry[];
 export function extensionVocabularyEntries(extension: CompilerExtension, owner: string | null): {

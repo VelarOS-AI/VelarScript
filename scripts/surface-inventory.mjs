@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import { permanentNamespaceCoveringModule } from "@velarscript/compiler";
 import { standardModuleInterfaces as coreOwnedModuleInterfaces } from "@velarscript/core";
@@ -29,8 +30,9 @@ import { LOOK_HOOKS, LOOK_MEDIA_SUBJECTS, LOOK_PROPERTIES, LOOK_TARGETS } from "
  *
  *  - `check-tour-coverage.mjs` (D56 rule 129) asks whether `examples/tour/`
  *    *exercises* each name, one target at a time.
- *  - `check-surface-versions.mjs` (D110 rule 4) asks whether the set of names a
- *    *package* publishes still hashes to what `surface-lock.json` recorded.
+ *  - `check-surface-versions.mjs` (D110 rule 4) asks whether the names and
+ *    public contracts a *package* publishes still hash to what
+ *    `surface-lock.json` recorded.
  *
  * They must not each enumerate the language. The coverage gate's header already
  * names the discipline that makes it trustworthy — "No hand-kept list: every
@@ -183,8 +185,87 @@ export function webTestMemberKey(source, controller, member) {
   return `${source}\u0000${controller}\u0000${member}`;
 }
 
-function entry(category, key, spelling, table, owner) {
-  return { category, key, spelling, table, owner };
+/** Locale-independent ordering for reproducible contracts and digests. */
+function byCodeUnit(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function entry(category, key, spelling, table, owner, shape = "") {
+  return { category, key, spelling, table, owner, shape };
+}
+
+/**
+ * A deterministic, lossless encoding of compiler-owned contract data.
+ *
+ * `analysisTypeIdentity` is deliberately a semantic identity: for example a
+ * type-object's payload and an enum-object's member roster do not participate
+ * in ordinary assignability. A surface digest asks a stricter question — did
+ * anything a consumer can observe change? — so it serializes every published
+ * contract property, including Maps and Sets, instead of borrowing the
+ * assignability key and quietly inheriting its omissions.
+ */
+function stableContractValue(value) {
+  if (value === null) return ["null"];
+  if (value === undefined) return ["undefined"];
+  if (typeof value === "string" || typeof value === "boolean") return [typeof value, value];
+  if (typeof value === "number") return ["number", Object.is(value, -0) ? "-0" : String(value)];
+  if (Array.isArray(value)) return ["array", value.map(stableContractValue)];
+  if (value instanceof Map) {
+    return ["map", [...value]
+      .map(([key, nested]) => [stableContractValue(key), stableContractValue(nested)])
+      .sort(([left], [right]) => byCodeUnit(JSON.stringify(left), JSON.stringify(right)))];
+  }
+  if (value instanceof Set) {
+    return ["set", [...value].map(stableContractValue).sort((left, right) => byCodeUnit(JSON.stringify(left), JSON.stringify(right)))];
+  }
+  if (typeof value === "object") {
+    return ["object", Object.keys(value).sort(byCodeUnit).map((key) => [key, stableContractValue(value[key])])];
+  }
+  throw new TypeError(`surface contracts cannot contain ${typeof value} values`);
+}
+
+function contractShape(value) {
+  return JSON.stringify(stableContractValue(value));
+}
+
+/** The full public contract attached to one source-visible module name. */
+function moduleItemShape(interface_, name) {
+  const contract = {};
+  if (interface_.exports.has(name)) {
+    contract.export = interface_.exports.get(name);
+    contract.mutable = interface_.mutableExports.has(name);
+    contract.reactive = interface_.reactiveExports.get(name);
+    contract.reExport = interface_.reExports.get(name);
+    contract.hoisted = interface_.hoistedExports?.has(name) ?? false;
+  }
+  if (interface_.namedTypes.has(name)) {
+    contract.namedType = {
+      fields: interface_.namedTypes.get(name),
+      readonlyFields: interface_.namedTypeReadonlyFields?.get(name),
+      identity: interface_.namedTypeIdentities.get(name),
+      base: interface_.namedTypeBases?.get(name),
+    };
+  }
+  const genericType = interface_.genericTypes?.get(name)
+    ?? [...interface_.genericTypes?.values() ?? []].find((item) => item.name === name);
+  if (genericType !== undefined) contract.genericType = genericType;
+  if (interface_.typeAliases.has(name)) contract.typeAlias = interface_.typeAliases.get(name);
+  if (interface_.enums.has(name)) contract.enum = interface_.enums.get(name);
+  if (interface_.classes.has(name)) contract.class = interface_.classes.get(name);
+  return contractShape(contract);
+}
+
+/**
+ * Hash the sorted entry key and its canonical public contract together.
+ * JSON tuples escape delimiter-like content without placing raw NUL bytes from
+ * module keys into the intermediate text.
+ */
+export function surfaceDigest(names) {
+  const input = [...names]
+    .sort(([left], [right]) => byCodeUnit(left, right))
+    .map(([key, value]) => JSON.stringify([key, value.shape]))
+    .join("\n");
+  return createHash("sha256").update(input, "utf8").digest("hex");
 }
 
 /**
@@ -304,22 +385,25 @@ export function moduleVocabularyEntries({ interfaces, table, webTestTable, owner
       ...interface_.namedTypes.keys(),
       ...interface_.enums.keys(),
       ...interface_.typeAliases.keys(),
+      ...[...interface_.genericTypes ?? []].filter(([key, info]) => key === info.name).map(([key]) => key),
     ]);
     const namespace = permanentNamespaceCoveringModule(source, interface_.exports.keys());
     for (const name of names) {
-      if (namespace) entries.push(entry("namespace-member", `${namespace}.${name}`, `${namespace}.${name}`, table(source), owner));
-      else entries.push(entry("module-export", moduleExportKey(source, name), `import {${name}} from "${source}"`, table(source), owner));
+      const shape = moduleItemShape(interface_, name);
+      if (namespace) entries.push(entry("namespace-member", `${namespace}.${name}`, `${namespace}.${name}`, table(source), owner, shape));
+      else entries.push(entry("module-export", moduleExportKey(source, name), `import {${name}} from "${source}"`, table(source), owner, shape));
     }
     if (source !== BROWSER_TEST_MODULE) continue;
     for (const [controller, type] of interface_.exports) {
       if (type.kind !== "object") continue;
-      for (const member of type.fields.keys()) {
+      for (const [member, fieldType] of type.fields) {
         entries.push(entry(
           "web-test-member",
           webTestMemberKey(source, controller, member),
           webTestSpelling ? webTestSpelling(controller, member) : `${controller}.${member}`,
           webTestTable ? webTestTable(controller) : `${source} ${controller} object fields`,
           owner,
+          contractShape(fieldType),
         ));
       }
     }
@@ -457,8 +541,10 @@ export function surfaceInventory() {
     if (named === undefined) throw new Error(`'${item.owner}' resolves to unknown surface '${surface}'`);
     const key = `${item.category}:${item.key}`;
     const existing = named.get(key);
-    if (existing === undefined) named.set(key, { spelling: item.spelling, tables: new Set([item.table]) });
-    else existing.tables.add(item.table);
+    if (existing === undefined) named.set(key, { spelling: item.spelling, tables: new Set([item.table]), shape: item.shape });
+    else if (existing.shape !== item.shape) {
+      failures.push(`surface '${surface}' publishes conflicting contracts for '${item.spelling}' from ${[...existing.tables, item.table].join(" and ")}`);
+    } else existing.tables.add(item.table);
   }
 
   const beneath = new Map([["core", new Set()]]);
@@ -483,8 +569,15 @@ export function surfaceInventory() {
   const surfaces = new Map();
   for (const surface of SURFACE_NAMES) {
     const under = beneath.get(surface) ?? new Set();
-    const inherited = new Set([...under].flatMap((name) => [...(published.get(name) ?? new Map()).keys()]));
-    const names = new Map([...published.get(surface) ?? new Map()].filter(([key]) => !inherited.has(key)));
+    const inherited = new Map();
+    for (const name of under) {
+      for (const [key, value] of published.get(name) ?? new Map()) {
+        const shapes = inherited.get(key) ?? new Set();
+        shapes.add(value.shape);
+        inherited.set(key, shapes);
+      }
+    }
+    const names = new Map([...published.get(surface) ?? new Map()].filter(([key, value]) => !inherited.get(key)?.has(value.shape)));
     surfaces.set(surface, { names, beneath: [...under].sort(), published: (published.get(surface) ?? new Map()).size });
   }
   return { surfaces, failures };

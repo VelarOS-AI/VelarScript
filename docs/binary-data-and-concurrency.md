@@ -122,8 +122,15 @@ import {workerPool} from "velar/worker"
 
 async def generateDataset() -> Bytes:
     using processor = workerPool("processor", DatasetRequest, Bytes, 4, 32)
+    await processor.broadcast({seed: "warm-cache"}, cancellation, 5s)
     return await processor.call(request, cancellation, 5s)
 ```
+
+`broadcast` is the explicit pool-wide initialization/configuration operation:
+it targets each live member exactly once and returns replies in member creation
+order. It rejects before dispatch when the pool cannot reserve one queue slot
+per live member. It does not restart crashed members or make handler effects
+atomic.
 
 ## Binary transport and persistence
 

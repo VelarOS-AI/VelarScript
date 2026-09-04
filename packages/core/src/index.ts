@@ -268,9 +268,13 @@ const workerCallFields = new Map<string, ValueType>([
   ["call", { kind: "function", parameterNames: ["request", "cancellation", "timeout"], parameters: [workerRequestType, optional(cancellationType), optional(durationType)], requiredParameters: 1, result: promise(workerResponseType) }],
   ["close", apiFunction([], [], promise(nullType))],
 ]);
-const workerTemplate = (identity: string, name: string): GenericTypeInfo => ({
-  identity, name, parameterNames: ["Request", "Response"], parameterBounds: [null, null], fields: workerCallFields,
-  readonlyFields: new Set(["call", "close"]),
+const workerPoolFields = new Map<string, ValueType>([
+  ...workerCallFields,
+  ["broadcast", { kind: "function", parameterNames: ["request", "cancellation", "timeout"], parameters: [workerRequestType, optional(cancellationType), optional(durationType)], requiredParameters: 1, result: promise({ kind: "list", element: workerResponseType }) }],
+]);
+const workerTemplate = (identity: string, name: string, fields: ReadonlyMap<string, ValueType>): GenericTypeInfo => ({
+  identity, name, parameterNames: ["Request", "Response"], parameterBounds: [null, null], fields,
+  readonlyFields: new Set(fields.keys()),
 });
 const workerErrorIdentities = new Map([
   ["WorkerBackpressureError", "velar/worker#class:WorkerBackpressureError"],
@@ -457,8 +461,8 @@ const coreModuleInterfaces = new Map<string, ModuleInterface>([
     new Map([...workerErrorIdentities].map(([name, identity]) => [name, taskErrorClass(identity)])),
     new Map(), new Map(), new Map(), new Map(), new Map(),
     new Map([
-      ["Worker", workerTemplate(workerIdentity, "Worker")], [workerIdentity, workerTemplate(workerIdentity, "Worker")],
-      ["WorkerPool", workerTemplate(workerPoolIdentity, "WorkerPool")], [workerPoolIdentity, workerTemplate(workerPoolIdentity, "WorkerPool")],
+      ["Worker", workerTemplate(workerIdentity, "Worker", workerCallFields)], [workerIdentity, workerTemplate(workerIdentity, "Worker", workerCallFields)],
+      ["WorkerPool", workerTemplate(workerPoolIdentity, "WorkerPool", workerPoolFields)], [workerPoolIdentity, workerTemplate(workerPoolIdentity, "WorkerPool", workerPoolFields)],
     ]),
   )],
   ["velar/json", moduleInterface(new Map([

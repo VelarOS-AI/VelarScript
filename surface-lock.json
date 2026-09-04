@@ -3,24 +3,24 @@
   "decision": "D110",
   "surfaces": {
     "core": {
-      "version": "0.2",
-      "digest": "12c84f2fa92ce5110b5b0999edbd13c56d412e433472250fc45dd911e12f0e65"
+      "version": "0.3",
+      "digest": "c1924990d9ba9eb991e4d8676267ed9dce6f6c8b6a43133bf22662a498e288de"
     },
     "web": {
       "version": "0.11",
-      "digest": "bbff5b69ce8f87d5e800bf0a16cb4dfaf5093130e70c78b9afbdb45a2572ccf5"
+      "digest": "a9561574e07118da0be71758b85ed153756339c3d8ee400be444d90ed7099c31"
     },
     "node": {
       "version": "0.16",
-      "digest": "4f5503b3d4a7ed18f26975f1b6b220617e7717675526ba4b8fe5b7cbb7b20ab0"
+      "digest": "91b378800bc519269d3e2956b599ed289772eacd19c6e00398e84e2065f7dc27"
     },
     "server": {
       "version": "0.15",
-      "digest": "d5b4bdf1a1c8db21b8454251d4ff589f63c35d41d9d4d42fbe63949c3673ad00"
+      "digest": "91274c0270f81fa32692e4de947343724bcdd6a0038d75ae8ae6a4bc899ab6ef"
     },
     "desktop": {
       "version": "0.10",
-      "digest": "4d2a759864bbb63a1044a62c009df272b02692f90c5ed13a0f7d52549ccb4cd9"
+      "digest": "e884e8e24097aefff3842b55e00b23ff9b21a33f450c0e37a41877eb269f66b0"
     }
   }
 }

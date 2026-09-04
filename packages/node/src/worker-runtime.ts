@@ -8,6 +8,7 @@ const __velarWorkerStates = new WeakMap();
 const __velarWorkerPoolStates = new WeakMap();
 let __velarWorkerServerInstalled = false;
 const __velarWorkerStructuredClone = globalThis.structuredClone;
+const __velarWorkerCancelGrace = 1000;
 function __velarWorkerInteger(value, minimum, maximum, name) {
   if (!Number.isSafeInteger(value) || value < minimum || value > maximum) throw new RangeError(name + " must be an integer from " + minimum + " through " + maximum);
   return value;
@@ -88,7 +89,10 @@ function __velarWorkerRejectAll(state, failure) {
   state.closed = true;
   for (const pending of state.pending.values()) { if (pending.timer) clearTimeout(pending.timer); pending.unsubscribe(); pending.reject(failure); }
   state.pending.clear();
+  for (const timer of state.abandoned.values()) clearTimeout(timer);
+  state.abandoned.clear();
 }
+function __velarWorkerCrash(state, failure) { __velarWorkerRejectAll(state, failure); state.instance.terminate(); }
 function __velarWorkerClient(name, RequestType, ResponseType, capacity) {
   if (!__velarWorkerIsMainThread) throw new Error("worker() can only be called outside a worker entry");
   if (typeof name !== "string" || !Object.hasOwn(__velarWorkerEntries, name)) throw new RangeError("Unknown worker entry '" + String(name) + "'");
@@ -97,19 +101,21 @@ function __velarWorkerClient(name, RequestType, ResponseType, capacity) {
   const entry = __velarWorkerEntries[name];
   const instance = new __VelarNodeWorker(new URL("../../" + entry, import.meta.url), { type: "module" });
   const value = Object.create(__velarWorkerPrototype);
-  const state = { instance, RequestType, ResponseType, capacity, nextId: 1, pending: new Map(), closed: false };
+  const state = { instance, RequestType, ResponseType, capacity, nextId: 1, pending: new Map(), abandoned: new Map(), closed: false };
   __velarWorkerStates.set(value, state);
   instance.on("message", message => {
-    if (!message || !Number.isSafeInteger(message.id)) { __velarWorkerRejectAll(state, new WorkerCrashedError("Worker returned an invalid message")); instance.terminate(); return; }
+    if (!message || !Number.isSafeInteger(message.id)) { __velarWorkerCrash(state, new WorkerCrashedError("Worker returned an invalid message")); return; }
+    const grace = state.abandoned.get(message.id);
+    if (grace !== undefined) { clearTimeout(grace); state.abandoned.delete(message.id); }
+    if (message.kind === "cancel-ack") return;
     const pending = state.pending.get(message.id); if (!pending) return;
     state.pending.delete(message.id); if (pending.timer) clearTimeout(pending.timer); pending.unsubscribe();
-    if (pending.cancel === "timeout") { pending.reject(new TaskTimeoutError("Worker call timed out after " + pending.timeout)); return; }
     if (pending.cancel === "cancel") { pending.reject(new CancellationError(pending.reason)); return; }
     if (!message.ok) { const remote = message.error ?? {}; const failure = new WorkerCallError((remote.name ? remote.name + ": " : "") + (remote.message ?? "Worker call failed")); if (typeof remote.stack === "string" && remote.stack) failure.stack = failure.stack + "\nRemote worker:\n" + remote.stack; pending.reject(failure); return; }
     try { pending.resolve(__velarWorkerInbound(state.ResponseType, message.value)); } catch (error) { pending.reject(error); }
   });
-  instance.on("error", error => __velarWorkerRejectAll(state, new WorkerCrashedError(error instanceof Error ? error.message : "Worker crashed")));
-  instance.on("exit", code => { if (!state.closed) __velarWorkerRejectAll(state, new WorkerCrashedError("Worker exited unexpectedly with code " + code)); });
+  instance.on("error", error => __velarWorkerCrash(state, new WorkerCrashedError(error instanceof Error ? error.message : "Worker crashed")));
+  instance.on("exit", code => { if (!state.closed) __velarWorkerCrash(state, new WorkerCrashedError("Worker exited unexpectedly with code " + code)); });
   return Object.freeze(value);
 }
 const __velarWorkerPrototype = Object.freeze({
@@ -126,7 +132,7 @@ const __velarWorkerPrototype = Object.freeze({
       state.pending.set(id, pending);
       state.instance.postMessage({ kind: "call", id, value: outbound.value }, outbound.transfers);
       if (cancellation !== null) pending.unsubscribe = Cancellation.__velarOn(cancellation, reason => { if (!state.pending.has(id) || pending.cancel) return; pending.cancel = "cancel"; pending.reason = reason ?? pending.reason; state.instance.postMessage({ kind: "cancel", id, reason: pending.reason }); });
-      if (milliseconds > 0) pending.timer = setTimeout(() => { if (!state.pending.has(id) || pending.cancel) return; pending.cancel = "timeout"; state.instance.postMessage({ kind: "cancel", id, reason: "Worker call timed out" }); }, milliseconds);
+      if (milliseconds > 0) pending.timer = setTimeout(() => { if (!state.pending.has(id) || pending.cancel) return; state.pending.delete(id); pending.unsubscribe(); state.instance.postMessage({ kind: "cancel", id, reason: "Worker call timed out" }); state.abandoned.set(id, setTimeout(() => __velarWorkerCrash(state, new WorkerCrashedError("Worker did not acknowledge a cancelled call within " + __velarWorkerCancelGrace + "ms")), __velarWorkerCancelGrace)); reject(new TaskTimeoutError("Worker call timed out after " + timeout)); }, milliseconds);
     });
   },
   async close() {
@@ -140,10 +146,20 @@ const __velarWorkerPoolPrototype = Object.freeze({
   call(request, cancellation = null, timeout = null) {
     const state = __velarWorkerPoolStates.get(this); if (!state) throw new TypeError("WorkerPool.call requires a WorkerPool receiver");
     if (state.closed) return Promise.reject(new WorkerClosedError("Worker pool is closed"));
-    let selected = state.workers[0], pending = __velarWorkerStates.get(selected).pending.size;
-    for (let index = 1; index < state.workers.length; index += 1) { const candidate = __velarWorkerStates.get(state.workers[index]).pending.size; if (candidate < pending) { selected = state.workers[index]; pending = candidate; } }
-    if (state.workers.reduce((total, worker) => total + __velarWorkerStates.get(worker).pending.size, 0) >= state.capacity) return Promise.reject(new WorkerBackpressureError("Worker pool queue capacity " + state.capacity + " is full"));
+    let total = 0; let selected = null; let pending = 0;
+    for (const item of state.workers) { const member = __velarWorkerStates.get(item); if (member.closed) continue; total += member.pending.size; if (selected === null || member.pending.size < pending) { selected = item; pending = member.pending.size; } }
+    if (selected === null) return Promise.reject(new WorkerCrashedError("Worker pool has no live workers"));
+    if (total >= state.capacity) return Promise.reject(new WorkerBackpressureError("Worker pool queue capacity " + state.capacity + " is full"));
     return selected.call(request, cancellation, timeout);
+  },
+  broadcast(request, cancellation = null, timeout = null) {
+    const state = __velarWorkerPoolStates.get(this); if (!state) throw new TypeError("WorkerPool.broadcast requires a WorkerPool receiver");
+    if (state.closed) return Promise.reject(new WorkerClosedError("Worker pool is closed"));
+    const live = []; let total = 0;
+    for (const item of state.workers) { const member = __velarWorkerStates.get(item); if (member.closed) continue; live.push(item); total += member.pending.size; if (member.pending.size >= member.capacity) return Promise.reject(new WorkerBackpressureError("Worker pool member queue capacity " + member.capacity + " is full")); }
+    if (live.length === 0) return Promise.reject(new WorkerCrashedError("Worker pool has no live workers"));
+    if (total + live.length > state.capacity) return Promise.reject(new WorkerBackpressureError("Worker pool queue capacity " + state.capacity + " cannot accept a broadcast to " + live.length + " workers"));
+    return Promise.all(live.map(item => item.call(request, cancellation, timeout)));
   },
   async close() { const state = __velarWorkerPoolStates.get(this); if (!state) throw new TypeError("WorkerPool.close requires a WorkerPool receiver"); if (state.closed) return null; state.closed = true; await Promise.all(state.workers.map(worker => worker.close())); return null; },
 });
@@ -164,7 +180,7 @@ export function serveWorker(RequestType, ResponseType, handler, capacity = 64) {
   if (typeof handler !== "function") throw new TypeError("serveWorker handler must be an async function"); capacity = __velarWorkerInteger(capacity, 1, 10000, "Worker capacity");
   __velarWorkerServerInstalled = true; const queue = []; const active = new Map(); let running = false;
   const drain = async () => { if (running) return; running = true; while (queue.length) { const message = queue.shift(); const cancellation = Cancellation.__velarCreate(); active.set(message.id, cancellation); try { const request = __velarWorkerInbound(RequestType, message.value); const handled = await handler(request, cancellation); const result = ResponseType.parse(handled); const outbound = __velarWorkerOutbound(result, handled); __velarWorkerParentPort.postMessage({ id: message.id, ok: true, value: outbound.value }, outbound.transfers); } catch (error) { __velarWorkerParentPort.postMessage({ id: message.id, ok: false, error: __velarWorkerFailure(error) }); } finally { active.delete(message.id); } } running = false; };
-  __velarWorkerParentPort.on("message", message => { if (!message || !Number.isSafeInteger(message.id)) return; if (message.kind === "cancel") { const cancellation = active.get(message.id); if (cancellation) Cancellation.__velarCancel(cancellation, typeof message.reason === "string" ? message.reason : "Worker call cancelled"); else { const index = queue.findIndex(item => item.id === message.id); if (index >= 0) { queue.splice(index, 1); __velarWorkerParentPort.postMessage({ id: message.id, ok: false, error: __velarWorkerFailure(new CancellationError(typeof message.reason === "string" ? message.reason : "Worker call cancelled")) }); } } return; } if (message.kind !== "call") return; if (queue.length + active.size >= capacity) { __velarWorkerParentPort.postMessage({ id: message.id, ok: false, error: __velarWorkerFailure(new WorkerBackpressureError()) }); return; } queue.push(message); drain(); });
+  __velarWorkerParentPort.on("message", message => { if (!message || !Number.isSafeInteger(message.id)) return; if (message.kind === "cancel") { __velarWorkerParentPort.postMessage({ id: message.id, kind: "cancel-ack" }); const cancellation = active.get(message.id); if (cancellation) Cancellation.__velarCancel(cancellation, typeof message.reason === "string" ? message.reason : "Worker call cancelled"); else { const index = queue.findIndex(item => item.id === message.id); if (index >= 0) { queue.splice(index, 1); __velarWorkerParentPort.postMessage({ id: message.id, ok: false, error: __velarWorkerFailure(new CancellationError(typeof message.reason === "string" ? message.reason : "Worker call cancelled")) }); } } return; } if (message.kind !== "call") return; if (queue.length + active.size >= capacity) { __velarWorkerParentPort.postMessage({ id: message.id, ok: false, error: __velarWorkerFailure(new WorkerBackpressureError()) }); return; } queue.push(message); drain(); });
   return null;
 }
 `.trimStart();

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,6 +6,7 @@ import {
   SURFACE_NAMES,
   SURFACE_VERSIONS,
   SURFACE_VERSION_SITES,
+  surfaceDigest,
   surfaceInventory,
   surfacePartitionFailures,
 } from "./surface-inventory.mjs";
@@ -32,7 +32,8 @@ import { velarToolchainPackages } from "./velar-packages.mjs";
  *     same reading `check-tour-coverage.mjs` performs — one enumeration, two
  *     questions — because two gates each reading the language their own way is
  *     how they come to disagree without anybody noticing.
- *  2. Each surface's names are sorted and hashed.
+ *  2. Each surface's names and canonical public contracts are sorted and
+ *     hashed together.
  *  3. `surface-lock.json` records what each surface hashed to, beside the
  *     version that was current when it did.
  *  4. A digest that no longer matches while its version stands still is a
@@ -150,7 +151,7 @@ for (const surface of SURFACE_NAMES) {
   const entry = inventory.surfaces.get(surface);
   const version = SURFACE_VERSIONS[surface];
   const names = [...entry.names.keys()].sort(byCodeUnit);
-  const digest = createHash("sha256").update(names.join("\n"), "utf8").digest("hex");
+  const digest = surfaceDigest(entry.names);
   const floor = FLOORS[surface];
 
   summary.push(`  ${surface.padEnd(8)} ${`${surface}@${version}`.padEnd(14)} ${String(names.length).padStart(4)} names  ${digest.slice(0, 16)}…`

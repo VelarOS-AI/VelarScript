@@ -43,9 +43,13 @@ interface WorkerHandle {
   close(): Promise<null>;
 }
 
+interface WorkerPoolHandle extends WorkerHandle {
+  broadcast(request: unknown, cancellation: unknown, timeout: string | null): Promise<unknown[]>;
+}
+
 interface WorkerRuntime {
   worker(name: string, request: unknown, response: unknown, capacity?: number): WorkerHandle;
-  workerPool(name: string, request: unknown, response: unknown, size: number, capacity?: number): WorkerHandle;
+  workerPool(name: string, request: unknown, response: unknown, size: number, capacity?: number): WorkerPoolHandle;
   serveWorker(request: unknown, response: unknown, handler: (value: unknown, cancellation: unknown) => Promise<unknown>, capacity?: number): null;
 }
 
@@ -265,6 +269,40 @@ test("a pool whose members have all crashed rejects with a distinct error", asyn
     return true;
   });
   await pool.close();
+});
+
+test("a pool broadcast reaches each live member once and preserves member order", async () => {
+  const runtime = await loadWorkerRuntime();
+  const pool = runtime.workerPool("probe", anyType, anyType, 3, 6);
+  const members = FakeWorker.instances.slice();
+  const pending = pool.broadcast({ operation: "initialize" }, null, null);
+  assert.deepEqual(members.map(member => member.messages.length), [1, 1, 1]);
+  for (let index = members.length - 1; index >= 0; index -= 1) {
+    const member = members[index];
+    assert.ok(member);
+    const request = member.messages[0];
+    member.emit("message", { data: { id: request?.id, ok: true, value: { member: index } } });
+  }
+  assert.deepEqual(await pending, [{ member: 0 }, { member: 1 }, { member: 2 }]);
+  await pool.close();
+});
+
+test("a pool broadcast checks aggregate capacity before dispatching any member", async () => {
+  const runtime = await loadWorkerRuntime();
+  const pool = runtime.workerPool("probe", anyType, anyType, 2, 3);
+  const occupied = [
+    settle(pool.call({ operation: "work" }, null, null)),
+    settle(pool.call({ operation: "work" }, null, null)),
+  ];
+  await assert.rejects(pool.broadcast({ operation: "initialize" }, null, null), (error: Error) => {
+    assert.equal(error.name, "WorkerBackpressureError");
+    assert.match(error.message, /cannot accept a broadcast to 2 workers/u);
+    return true;
+  });
+  assert.equal(FakeWorker.instances.reduce((total, member) => total + member.messages.length, 0), 2);
+  await pool.close();
+  await delay(0);
+  assert.deepEqual(occupied.map(call => call.outcome()), ["WorkerClosedError", "WorkerClosedError"]);
 });
 
 // web-7: the timeout only posted a cancel and waited for a reply, so a worker

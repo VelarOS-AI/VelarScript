@@ -371,8 +371,11 @@ async for message in messages:
 
 `worker(name, RequestType, ResponseType, capacity=64)` starts one worker;
 `workerPool(name, RequestType, ResponseType, size, capacity=64)` starts a bounded
-pool. Both expose `call(request, cancellation?, timeout?)` and `close()`. A
-worker entry calls `serveWorker(RequestType, ResponseType, handler,
+pool. Both expose `call(request, cancellation?, timeout?)` and `close()`. A pool
+also exposes `broadcast(request, cancellation?, timeout?)`, which preflights
+aggregate and per-member capacity, sends the request once to every live member,
+and returns replies in member-creation order. A worker entry calls
+`serveWorker(RequestType, ResponseType, handler,
 capacity=64)`. Runtime Types validate both directions. Full-storage `Bytes` and
 fixed numeric buffers are found inside bounded, cycle-safe List/Map/record
 graphs. `call` first isolates any caller-owned transferable storage, then

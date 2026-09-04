@@ -1780,6 +1780,13 @@ graphs and the runtime resolves them without exposing bundle URLs. `worker` and
 calls, propagate per-call cancellation and timeout, transfer `Bytes`, and reject
 pending work if the native Worker crashes. A Worker entry uses `serveWorker`.
 
+`WorkerPool.broadcast(request, cancellation?, timeout?)` sends one checked call
+to every live member and returns the checked replies in member-creation order.
+The pool preflights both its aggregate queue and every member queue, so a known
+capacity failure rejects before any member receives the broadcast. This is the
+pool-wide operation for initialization and immutable catalog installation;
+ordinary work continues to use least-loaded `call`.
+
 A pool isolates a failed member. When a member's native Worker crashes, the
 runtime terminates that member, rejects its pending calls, and stops routing to
 it; later `call` requests go to the members still alive, and pool backpressure

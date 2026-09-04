@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import test, { after } from "node:test";
@@ -20,7 +19,7 @@ import { VELAR_DESKTOP_API_VERSION } from "../packages/desktop/src/config.ts";
 import { VELAR_NODE_API_VERSION } from "../packages/node/src/compiler.ts";
 import { VELAR_SERVER_API_VERSION } from "../packages/server/src/compiler.ts";
 import { VELAR_WEB_API_VERSION } from "../packages/web/src/compiler.ts";
-import { SURFACE_NAMES, SURFACE_VERSIONS, surfaceInventory } from "../scripts/surface-inventory.mjs";
+import { SURFACE_NAMES, SURFACE_VERSIONS, surfaceDigest, surfaceInventory } from "../scripts/surface-inventory.mjs";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
 
 // ---------------------------------------------------------------------------
@@ -94,13 +93,27 @@ test("the lock records the digest the inventory computes, surface by surface", a
   const { surfaces, failures } = surfaceInventory();
   assert.deepEqual(failures, [], "the surface inventory could not read a table");
   for (const surface of SURFACE_NAMES) {
-    const names = [...surfaces.get(surface)!.names.keys()].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
-    const digest = createHash("sha256").update(names.join("\n"), "utf8").digest("hex");
+    const names = surfaces.get(surface)!.names;
+    const digest = surfaceDigest(names);
     assert.equal(lock.surfaces[surface]?.digest, digest,
-      `surface-lock.json does not record the ${surface} surface as it stands (${names.length} names); bump ${surface} and update the lock in one commit`);
+      `surface-lock.json does not record the ${surface} surface as it stands (${names.size} names); bump ${surface} and update the lock in one commit`);
     assert.equal(lock.surfaces[surface]?.version, SURFACE_VERSIONS[surface]);
   }
   assert.deepEqual(Object.keys(lock.surfaces).sort(), [...SURFACE_NAMES].sort());
+});
+
+test("the surface digest changes when a public contract changes under the same name", () => {
+  const left = new Map([["module-export:velar/example\0run", { shape: "number -> string" }]]);
+  const right = new Map([["module-export:velar/example\0run", { shape: "string -> string" }]]);
+  assert.notEqual(surfaceDigest(left), surfaceDigest(right));
+});
+
+test("the WorkerPool surface shape includes its pool-wide broadcast contract", () => {
+  const { surfaces, failures } = surfaceInventory();
+  assert.deepEqual(failures, []);
+  const workerPool = surfaces.get("core")!.names.get("module-export:velar/worker\0WorkerPool");
+  assert.ok(workerPool, "velar/worker.WorkerPool is absent from the Core surface inventory");
+  assert.match(workerPool.shape, /broadcast/u);
 });
 
 test("a surface that changes without its version turns the gate red and says how to bump it", async () => {

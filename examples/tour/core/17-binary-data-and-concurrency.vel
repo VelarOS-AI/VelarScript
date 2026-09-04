@@ -85,8 +85,9 @@ export async def workerClientSpellings() -> number:
     using single = worker("tour-data", DataRequest, DataReply, 8)
     using pool = workerPool("tour-data", DataRequest, DataReply, 2, 16)
     const first = await workerValue(single).call({x: 1, y: 2})
+    const initialized = await poolValue(pool).broadcast({x: 0, y: 0})
     const second = await poolValue(pool).call({x: 3, y: 4})
-    return first.checksum + second.checksum
+    return first.checksum + second.checksum + initialized.size
 
 export def workerServerSpelling(): serveWorker(DataRequest, DataReply, generate, 16)
 

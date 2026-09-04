@@ -12,6 +12,30 @@ many times that surface has changed *since counting began*, never a maturity
 grade: `core@0.1` beside `web@0.11` means Core started counting today, not that
 Core is younger. History is deliberately not recomputed (D110 rule 3).
 
+## 0.27.0 — 2026-09-04
+
+Surfaces: `core@0.3` · `web@0.11` · `node@0.16` · `server@0.15` · `desktop@0.10`
+
+### Core and worker runtimes — `core@0.3`
+
+- `WorkerPool.broadcast(request, cancellation?, timeout?)` initializes or
+  notifies every live member once and returns responses in member-creation
+  order. Capacity is checked across the whole pool before dispatch, so an
+  overloaded broadcast never reaches only part of the pool.
+- Node workers now match the Web worker timeout and crash contract: a timed-out
+  caller is rejected immediately, its queue slot is released, cancellation is
+  acknowledged, and an unresponsive worker is terminated after the bounded
+  grace period. Pools skip failed members and report when no live member
+  remains.
+
+### Surface-version gate
+
+- Surface digests now include canonical public contracts as well as exported
+  names. Changing a method, parameter, field, type, mutability marker, or
+  re-export under an existing name can no longer bypass the required surface
+  bump. Existing non-Core lock digests were migrated to the stronger encoding
+  without changing those unchanged surface counters.
+
 ## 0.26.1 — 2026-09-04
 
 Surfaces: `core@0.2` · `web@0.11` · `node@0.16` · `server@0.15` · `desktop@0.10`
