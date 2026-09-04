@@ -18,6 +18,8 @@ test("compiler-owned ownership graph publishes stable bounded relations", async 
     '@context("Presentation")',
     'def local(value: number) -> string:',
     '    return label(value)',
+    'component CounterValue(value: number):',
+    '    return <output>{value}</output>',
     '@context("Counter workflow")',
     'component App:',
     '    state count = 1',
@@ -26,7 +28,7 @@ test("compiler-owned ownership graph publishes stable bounded relations", async 
     '    action refresh():',
     '        count += 1',
     '        print(local(monotonic()))',
-    '    return <button on:click={() => refresh()}>{doubled}</button>',
+    '    return <div><CounterValue value={doubled} /><button on:click={() => refresh()}>{doubled}</button></div>',
     '',
   ].join("\n");
   try {
@@ -65,6 +67,10 @@ test("compiler-owned ownership graph publishes stable bounded relations", async 
       graph.nodes.find((node) => node.kind === "action" && node.name === "refresh")?.context,
       "Counter workflow",
     );
+    const appId = graph.nodes.find((node) => node.kind === "component" && node.name === "App")?.id;
+    const counterValueId = graph.nodes.find((node) => node.kind === "component" && node.name === "CounterValue")?.id;
+    assert.ok(appId && counterValueId);
+    assert.ok(graph.edges.some((edge) => edge.kind === "calls" && edge.from === appId && edge.to === counterValueId));
 
     const countId = graph.nodes.find((node) => node.kind === "state" && node.name === "count")?.id;
     const changed = await compileProject(mainPath, new Map([[mainPath, `// shifted\n${main}`]]), {

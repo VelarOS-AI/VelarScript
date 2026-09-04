@@ -14,6 +14,7 @@ import {
   type WebJsxElementExpression as JsxExpression,
   type WebWatchDeclaration,
 } from "./ast.ts";
+import { lookPropertyDocumentationKey } from "./look.ts";
 
 function documentKeyword(statement: Statement, keyword: string, context: SemanticExtensionContext): void {
   context.documentSyntax(context.nameSpan(statement.span, keyword), keyword);
@@ -42,7 +43,7 @@ function jsxDocumentationKey(name: string): string | null {
 function visitJsx(expression: JsxExpression, context: SemanticExtensionContext): void {
   if (expression.tag) context.syntaxToken(expression.tagSpan, "type");
   if (/^[A-Z]/u.test(expression.tag)) {
-    context.reference(expression.tag, expression.tagSpan);
+    context.callReference(expression.tag, expression.tagSpan);
   }
   for (const attribute of expression.attributes) {
     context.syntaxToken(
@@ -114,7 +115,9 @@ export const velarWebSemanticExtension: CompilerSemanticExtension = Object.freez
       const visit = (entries: typeof expression.entries): void => {
         for (const entry of entries) {
           if (entry.kind === "LookProperty") {
-            context.syntaxToken(context.nameSpan(entry.span, entry.name), "property");
+            const propertySpan = context.nameSpan(entry.span, entry.name);
+            context.syntaxToken(propertySpan, "property");
+            context.documentSyntax(propertySpan, lookPropertyDocumentationKey(entry.name));
             context.visitExpression(entry.value);
           }
           else if (entry.kind === "LookSpread") context.visitExpression(entry.value);
@@ -139,7 +142,9 @@ export const velarWebSemanticExtension: CompilerSemanticExtension = Object.freez
       context.documentSyntax(context.nameSpan(expression.span, "keyframes"), "keyframes");
       for (const stop of expression.stops) {
         for (const entry of stop.entries) {
-          context.syntaxToken(context.nameSpan(entry.span, entry.name), "property");
+          const propertySpan = context.nameSpan(entry.span, entry.name);
+          context.syntaxToken(propertySpan, "property");
+          context.documentSyntax(propertySpan, lookPropertyDocumentationKey(entry.name));
           context.visitExpression(entry.value);
         }
       }

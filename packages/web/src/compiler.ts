@@ -10,7 +10,7 @@ import {
 import { BROWSER_TEST_MODULE, BROWSER_TEST_SOURCE_SUFFIX, browserTestDrivingGuidance } from "./browser-test.ts";
 import { WEB_VOID_ELEMENTS } from "./elements.ts";
 import { WebJavaScriptEmitter } from "./emitter.ts";
-import { velarWebProjectEditorExtension } from "./editor.ts";
+import { velarWebProjectEditorExtension, webLookPropertyDocumentation } from "./editor.ts";
 import { velarWebInspectionExtension } from "./inspection.ts";
 import { VelarWebParser } from "./parser.ts";
 import { scanWebToken, scanWebUnsafeCssLiteral, WEB_CONTEXTUAL_KEYWORDS } from "./lexer.ts";
@@ -900,6 +900,7 @@ const webKeywordDocumentation = Object.freeze({
   "jsx:unsafe:html": "Writes explicitly unsafe HTML text into a native element. The value must be string or string?; use ordinary JSX for trusted structured content.",
   ...webLookHookDocumentation,
   ...webLookTargetDocumentation,
+  ...webLookPropertyDocumentation,
 });
 
 export const velarCompilerExtension: CompilerExtension = Object.freeze({

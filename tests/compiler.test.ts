@@ -25648,8 +25648,9 @@ component App:
   assert.equal(result.semanticIndex.symbols.find((symbol) => symbol.kind === "parameter" && symbol.name === "View")?.type,
     "Component<(row: Row, compact?: bool) -> WebNode>");
   const tagStart = source.indexOf("<View") + 1;
-  assert.ok(result.semanticIndex.references.some((reference) => reference.name === "View"
-    && reference.span.start === tagStart && reference.span.end === tagStart + "View".length));
+  const tagReference = result.semanticIndex.references.find((reference) => reference.name === "View"
+    && reference.span.start === tagStart && reference.span.end === tagStart + "View".length);
+  assert.equal(tagReference?.call, true);
   assert.match(result.code ?? "", /__velarDynamicComponent\(\(__velarDynamicScope\) => __velarChild\(View\.get\(\)/u);
   assert.match(formatSource("type View = Component<(label: string, compact?: bool) -> WebNode>\n"), /compact\?: bool/u);
 

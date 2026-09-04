@@ -78,7 +78,7 @@ export interface SemanticReference {
   readonly span: Span;
   readonly symbolId: string | null;
   readonly write: boolean;
-  /** The reference is the direct callee of a parsed CallExpression. */
+  /** The source site directly invokes the referenced value, through a call expression or component instantiation. */
   readonly call?: true;
 }
 
@@ -185,6 +185,7 @@ export interface SemanticExtensionContext {
   readonly nameSpan: (span: Span, name: string, from?: number) => Span;
   readonly typeReferences: (type: TypeReference | null) => void;
   readonly reference: (name: string, span: Span, write?: boolean) => void;
+  readonly callReference: (name: string, span: Span) => void;
   readonly recordMemberReference: (name: string, span: Span, owner: ValueType, syntax: SemanticMemberReference["syntax"], shorthand?: boolean) => void;
   readonly jsxAttributeOwner: (span: Span, name: string) => ValueType | undefined;
   readonly enterScope: (span: Span) => void;
@@ -982,6 +983,7 @@ export function buildSemanticIndex(
     nameSpan,
     typeReferences,
     reference,
+    callReference: (name, valueSpan) => reference(name, valueSpan, false, true),
     recordMemberReference,
     jsxAttributeOwner: (attributeSpan, name) => jsxAttributeOwners.get(`${attributeSpan.start}:${name}`),
     enterScope,

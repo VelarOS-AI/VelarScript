@@ -238,6 +238,11 @@ export const LOOK_PROPERTY_GROUPS: readonly LookPropertyGroup[] = Object.freeze(
 
 export const LOOK_PROPERTIES = new Set(LOOK_PROPERTY_GROUPS.flatMap((group) => group.properties));
 
+/** Stable editor-documentation key for one checked Look property. */
+export function lookPropertyDocumentationKey(property: string): string {
+  return `look:property:${property}`;
+}
+
 export type LookPropertyValueKind =
   | "animation" | "angle" | "background" | "border" | "color" | "duration" | "filter" | "image" | "keyword"
   | "line-height" | "metric" | "number" | "number-keyword" | "shadow" | "text" | "track" | "transform" | "transition";

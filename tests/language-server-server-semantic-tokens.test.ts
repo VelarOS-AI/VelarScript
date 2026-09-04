@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
-import { join } from "node:path";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { compileProject } from "../packages/cli/src/project.ts";
 import { projectSemanticTokens, projectSyntaxDocumentationAt } from "../packages/cli/src/project-semantic.ts";
 import { velarNodeCompilerExtension } from "../packages/node/src/compiler.ts";
@@ -137,6 +141,12 @@ const shellLook = look:
     minHeight = 100vh
     color = "black"
 
+const fade = keyframes:
+    from:
+        opacity = 0
+    to:
+        opacity = 1
+
 component App:
     return <main look={shellLook} aria-label="App"><h1>Title</h1></main>
 `.trimStart();
@@ -155,6 +165,115 @@ component App:
   assert.ok(tokens.some(([type, text]) => type === "property" && text === "look"));
   assert.ok(tokens.some(([type, text]) => type === "property" && text === "aria-label"));
   assert.ok(!tokens.some(([, text]) => text === "Title"));
+  assert.equal(projectSyntaxDocumentationAt(project, path, source.indexOf("minHeight") + 1)?.key, "look:property:minHeight");
+  assert.equal(projectSyntaxDocumentationAt(project, path, source.indexOf("opacity") + 1)?.key, "look:property:opacity");
+});
+
+test("Web Look property hover publishes checked types, values, and compatible builders", async (context: TestContext) => {
+  const root = await mkdtemp(join(tmpdir(), "velar-look-property-hover-"));
+  const repositoryRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
+  await mkdir(join(root, "node_modules", "@velarscript"), { recursive: true });
+  await symlink(join(repositoryRoot, "packages", "web"), join(root, "node_modules", "@velarscript", "web"), "dir");
+  await writeFile(join(root, "velar.json"), `${JSON.stringify({
+    formatVersion: 2,
+    kind: "application",
+    entry: "main.vel",
+    extensions: ["@velarscript/web"],
+    web: { title: "Look property hover", base: "/" },
+  })}\n`, "utf8");
+  const source = [
+    "const probe = look:",
+    '    display = "grid"',
+    '    alignItems = "center"',
+    "    width = 50%",
+    "    opacity = 0.5",
+    '    filter = "drop-shadow(0px 2px 4px black)"',
+    "",
+  ].join("\n");
+  const sourcePath = join(root, "main.vel");
+  await writeFile(sourcePath, source, "utf8");
+
+  const cliPath = fileURLToPath(new URL("../packages/cli/src/cli.ts", import.meta.url));
+  const child = spawn(process.execPath, [cliPath, "lsp"], { cwd: root, stdio: ["pipe", "pipe", "pipe"] });
+  let stderr = "";
+  child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
+  context.after(async () => {
+    child.stdin.destroy();
+    if (child.exitCode === null) {
+      const exited = once(child, "exit");
+      child.kill();
+      await exited;
+    }
+    await rm(root, { recursive: true, force: true });
+  });
+
+  let buffered = Buffer.alloc(0);
+  const received: Array<Record<string, unknown>> = [];
+  child.stdout.on("data", (chunk: Buffer) => {
+    buffered = Buffer.concat([buffered, chunk]);
+    while (true) {
+      const boundary = buffered.indexOf("\r\n\r\n");
+      if (boundary === -1) break;
+      const size = Number(/Content-Length:\s*(\d+)/iu.exec(buffered.subarray(0, boundary).toString("ascii"))?.[1]);
+      if (!Number.isFinite(size)) break;
+      const end = boundary + 4 + size;
+      if (buffered.length < end) break;
+      received.push(JSON.parse(buffered.subarray(boundary + 4, end).toString("utf8")) as Record<string, unknown>);
+      buffered = buffered.subarray(end);
+    }
+  });
+  const send = (message: unknown): void => {
+    const body = JSON.stringify(message);
+    child.stdin.write(`Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
+  };
+  const reply = async (id: number): Promise<Record<string, unknown>> => {
+    const deadline = Date.now() + 60_000;
+    while (Date.now() < deadline) {
+      const found = received.find((message) => message.id === id);
+      if (found) return found;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    throw new Error(`No language-server reply for request ${id}: ${stderr}`);
+  };
+  const uri = pathToFileURL(sourcePath).href;
+  send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { rootUri: pathToFileURL(root).href, capabilities: {} } });
+  await reply(1);
+  send({ jsonrpc: "2.0", method: "initialized", params: {} });
+  send({
+    jsonrpc: "2.0",
+    method: "textDocument/didOpen",
+    params: { textDocument: { uri, languageId: "velar", version: 1, text: source } },
+  });
+
+  const hover = async (id: number, line: number): Promise<string> => {
+    send({ jsonrpc: "2.0", id, method: "textDocument/hover", params: { textDocument: { uri }, position: { line, character: 7 } } });
+    const result = (await reply(id)).result as { readonly contents?: { readonly value?: string } } | null;
+    return result?.contents?.value ?? "";
+  };
+  const display = await hover(2, 1);
+  assert.match(display, /Allowed value types: `listed keyword`/u);
+  assert.match(display, /`grid`/u);
+  assert.match(display, /`inline-flex`/u);
+  assert.match(display, /`token\(name\)`/u);
+
+  const alignItems = await hover(3, 2);
+  assert.match(alignItems, /Allowed value types: `listed keyword`/u);
+  assert.match(alignItems, /`first baseline`/u);
+  assert.match(alignItems, /`stretch`/u);
+
+  const width = await hover(4, 3);
+  assert.match(width, /Allowed value types: `Length`, `Percentage`, `LengthPercentage`, `Spacing`, `listed keyword`/u);
+  assert.match(width, /`spacing\(first, second\?, third\?, fourth\?\)`/u);
+  assert.match(width, /`clamp\(minimum, preferred, maximum\)`/u);
+
+  const opacity = await hover(5, 4);
+  assert.match(opacity, /Allowed value types: `number`, `listed keyword`/u);
+
+  const filter = await hover(6, 5);
+  assert.match(filter, /Allowed value types: `CSS text`/u);
+  assert.match(filter, /`drop-shadow\(\)`/u);
+  assert.match(filter, /`blur\(\)`/u);
+  assert.match(filter, /Free CSS text is accepted here/u);
 });
 
 test("an invalid ordinary route string does not masquerade as the Node path-pattern prefix", async () => {
