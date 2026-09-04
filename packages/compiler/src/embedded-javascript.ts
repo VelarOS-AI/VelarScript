@@ -11,6 +11,7 @@ import {
   type Program,
 } from "acorn";
 import { scanOpaqueEmbeddedSource } from "./embedded-source.ts";
+import { embeddedJavaScriptEditorTokens, type EmbeddedJavaScriptEditorToken } from "./embedded-javascript-editor.ts";
 import { bindingNameRestriction } from "./source-names.ts";
 import { span, type Span } from "./source.ts";
 
@@ -69,6 +70,7 @@ export interface EmbeddedJavaScriptInspection {
   readonly imports: readonly InspectedEmbeddedJavaScriptImport[];
   readonly dependencies: readonly InspectedEmbeddedJavaScriptDependency[];
   readonly bindings: readonly InspectedEmbeddedJavaScriptBinding[];
+  readonly editorTokens: readonly EmbeddedJavaScriptEditorToken[];
   /**
    * AST-derived edits that turn a checked module body into a factory body:
    * imports leave the body, declaration exports lose only `export`, and export
@@ -163,6 +165,7 @@ export function inspectEmbeddedJavaScript(
   source: string,
   sourceStart: number,
   checked: boolean,
+  capturedParameters: readonly string[] = [],
 ): EmbeddedJavaScriptInspection {
   let program: Program;
   try {
@@ -175,6 +178,7 @@ export function inspectEmbeddedJavaScript(
       imports: [],
       dependencies: [],
       bindings: [],
+      editorTokens: [],
       factoryEdits: [],
       issues: [{
         message: `JavaScript syntax error: ${message}${structuralTerminatorHint(message, source)}`,
@@ -264,7 +268,15 @@ export function inspectEmbeddedJavaScript(
     issue("A captured inline JavaScript block cannot use top-level await; captures are passed to a synchronous factory, and an async factory has not been specified", firstTopLevelAwait(program) ?? program);
   }
 
-  return { exports, imports, dependencies, bindings, factoryEdits, issues };
+  return {
+    exports,
+    imports,
+    dependencies,
+    bindings,
+    editorTokens: embeddedJavaScriptEditorTokens(program, sourceStart, capturedParameters),
+    factoryEdits,
+    issues,
+  };
 }
 
 function rejectRelativeEmbeddedModuleSource(

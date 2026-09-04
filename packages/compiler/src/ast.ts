@@ -1,4 +1,5 @@
 import type { Span } from "./source.ts";
+import type { EmbeddedJavaScriptEditorToken } from "./embedded-javascript-editor.ts";
 
 export interface Program {
   readonly kind: "Program";
@@ -216,6 +217,8 @@ interface EmbeddedJavaScriptDeclarationBase {
   readonly dependencies: readonly EmbeddedJavaScriptDependency[];
   /** All module-level JS bindings; capture parameters may not shadow them. */
   readonly bindings: readonly EmbeddedJavaScriptBinding[];
+  /** Acorn-owned editor classifications; never Velar symbols or references. */
+  readonly editorTokens: readonly EmbeddedJavaScriptEditorToken[];
   /** Acorn-derived source edits; no JavaScript is rediscovered with text matching. */
   readonly factoryEdits: readonly EmbeddedJavaScriptFactoryEdit[];
   readonly span: Span;

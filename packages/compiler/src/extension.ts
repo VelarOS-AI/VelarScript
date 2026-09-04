@@ -272,12 +272,26 @@ export interface CompilerProjectEditorCompletion {
   readonly kind: SemanticSymbol["kind"];
   readonly documentation?: string;
   readonly presentationKind?: SemanticSymbol["presentationKind"];
+  /** Text inserted when it differs from the label shown in the completion list. */
+  readonly insertText?: string;
+  /** Text the editor should match while filtering this completion. */
+  readonly filterText?: string;
+  /** Stable ordering key supplied by the language extension. */
+  readonly sortText?: string;
+  /** Whether insertText uses LSP snippet syntax. */
+  readonly snippet?: boolean;
+}
+
+/** A visible binding plus its import origin when the binding is an import. */
+export interface CompilerProjectEditorVisibleSymbol extends CompilerProjectEditorCompletion {
+  readonly importSource?: string;
+  readonly importedName?: string;
 }
 
 export interface CompilerProjectEditorCompletionContext {
   readonly source: string;
   readonly offset: number;
-  readonly visibleSymbols: readonly CompilerProjectEditorCompletion[];
+  readonly visibleSymbols: readonly CompilerProjectEditorVisibleSymbol[];
   readonly membersAt: (offset: number) => readonly CompilerProjectEditorCompletion[];
 }
 

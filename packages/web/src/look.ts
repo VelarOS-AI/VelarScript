@@ -90,7 +90,13 @@ export interface LookBuilderSignature {
   readonly required: number;
   /** Whether the final parameter collects the remaining arguments. */
   readonly rest?: boolean;
+  /** The visual value produced by this builder, used by type and editor contexts. */
+  readonly result: LookBuilderResultKind;
 }
+
+export type LookBuilderResultKind =
+  | "animation" | "border" | "color" | "image" | "length" | "shadow" | "spacing"
+  | "string" | "track" | "track-list" | "transition";
 
 /**
  * Every velar/look builder and the shape of its call. Three consumers read this
@@ -102,27 +108,27 @@ export interface LookBuilderSignature {
 export const LOOK_BUILDER_SIGNATURES: ReadonlyMap<string, LookBuilderSignature> = new Map<string, LookBuilderSignature>([
   // D103: the design-system reference. One parameter and no second one — see
   // LOOK_TOKEN_NO_FALLBACK_GUIDANCE for why a fallback is not a parameter.
-  ["token", { parameters: ["name"], required: 1 }],
-  ["color", { parameters: ["value"], required: 1 }],
-  ["rgb", { parameters: ["red", "green", "blue"], required: 3 }],
-  ["rgba", { parameters: ["red", "green", "blue", "alpha"], required: 4 }],
-  ["hsl", { parameters: ["hue", "saturation", "lightness"], required: 3 }],
-  ["alpha", { parameters: ["color", "opacity"], required: 2 }],
-  ["lighten", { parameters: ["color", "amount"], required: 2 }],
-  ["darken", { parameters: ["color", "amount"], required: 2 }],
-  ["border", { parameters: ["width", "color", "style"], required: 2 }],
-  ["shadow", { parameters: ["x", "y", "blur", "color", "spread", "inset"], required: 4 }],
-  ["linearGradient", { parameters: ["angle", "start", "end"], required: 3 }],
-  ["asset", { parameters: ["path"], required: 1 }],
-  ["minmax", { parameters: ["minimum", "maximum"], required: 2 }],
-  ["repeat", { parameters: ["count", "size"], required: 2 }],
-  ["tracks", { parameters: ["first"], required: 1, rest: true }],
-  ["transition", { parameters: ["property", "duration", "easing", "delay"], required: 2 }],
-  ["spacing", { parameters: ["first", "second", "third", "fourth"], required: 1 }],
-  ["min", { parameters: ["first", "second"], required: 2 }],
-  ["max", { parameters: ["first", "second"], required: 2 }],
-  ["clamp", { parameters: ["minimum", "preferred", "maximum"], required: 3 }],
-  ["animate", { parameters: ["frames", "duration", "easing", "delay", "count", "loop", "direction", "fill"], required: 2 }],
+  ["token", { parameters: ["name"], required: 1, result: "string" }],
+  ["color", { parameters: ["value"], required: 1, result: "color" }],
+  ["rgb", { parameters: ["red", "green", "blue"], required: 3, result: "color" }],
+  ["rgba", { parameters: ["red", "green", "blue", "alpha"], required: 4, result: "color" }],
+  ["hsl", { parameters: ["hue", "saturation", "lightness"], required: 3, result: "color" }],
+  ["alpha", { parameters: ["color", "opacity"], required: 2, result: "color" }],
+  ["lighten", { parameters: ["color", "amount"], required: 2, result: "color" }],
+  ["darken", { parameters: ["color", "amount"], required: 2, result: "color" }],
+  ["border", { parameters: ["width", "color", "style"], required: 2, result: "border" }],
+  ["shadow", { parameters: ["x", "y", "blur", "color", "spread", "inset"], required: 4, result: "shadow" }],
+  ["linearGradient", { parameters: ["angle", "start", "end"], required: 3, result: "image" }],
+  ["asset", { parameters: ["path"], required: 1, result: "image" }],
+  ["minmax", { parameters: ["minimum", "maximum"], required: 2, result: "track" }],
+  ["repeat", { parameters: ["count", "size"], required: 2, result: "track-list" }],
+  ["tracks", { parameters: ["first"], required: 1, rest: true, result: "track-list" }],
+  ["transition", { parameters: ["property", "duration", "easing", "delay"], required: 2, result: "transition" }],
+  ["spacing", { parameters: ["first", "second", "third", "fourth"], required: 1, result: "spacing" }],
+  ["min", { parameters: ["first", "second"], required: 2, result: "length" }],
+  ["max", { parameters: ["first", "second"], required: 2, result: "length" }],
+  ["clamp", { parameters: ["minimum", "preferred", "maximum"], required: 3, result: "length" }],
+  ["animate", { parameters: ["frames", "duration", "easing", "delay", "count", "loop", "direction", "fill"], required: 2, result: "animation" }],
 ]);
 
 export const LOOK_BUILDERS = new Set(LOOK_BUILDER_SIGNATURES.keys());
@@ -275,6 +281,54 @@ const keywords = (...values: readonly string[]): ReadonlySet<string> => new Set(
  */
 export const LOOK_CSS_WIDE_KEYWORDS: readonly string[] = Object.freeze([...cssWideKeywords]);
 const cssWideKeywordSet: ReadonlySet<string> = new Set(cssWideKeywords);
+
+/** Shared sizing words accepted by metric properties without a property-specific table. */
+export const LOOK_SHARED_METRIC_KEYWORDS: readonly string[] = Object.freeze([
+  "auto", "none", "normal", "min-content", "max-content", "fit-content", "stretch",
+]);
+
+/** Named colors accepted by the checked color and background value kinds. */
+export const LOOK_COLOR_KEYWORDS: readonly string[] = Object.freeze([
+  ...LOOK_CSS_WIDE_KEYWORDS, "transparent", "currentColor", "black", "silver", "gray", "white", "maroon", "red", "purple",
+  "fuchsia", "green", "lime", "olive", "yellow", "navy", "blue", "teal", "aqua", "orange", "aliceblue", "rebeccapurple",
+]);
+
+export interface LookCssFunctionSuggestion {
+  /** CSS function name shown by completion. */
+  readonly name: string;
+  /** A complete, directly insertable example without surrounding quotes. */
+  readonly example: string;
+}
+
+const lookFilterFunctions: readonly LookCssFunctionSuggestion[] = Object.freeze([
+  { name: "blur", example: "blur(4px)" },
+  { name: "brightness", example: "brightness(1)" },
+  { name: "contrast", example: "contrast(1)" },
+  { name: "drop-shadow", example: "drop-shadow(0px 2px 4px rgba(0, 0, 0, 0.25))" },
+  { name: "grayscale", example: "grayscale(1)" },
+  { name: "hue-rotate", example: "hue-rotate(0deg)" },
+  { name: "invert", example: "invert(1)" },
+  { name: "opacity", example: "opacity(1)" },
+  { name: "saturate", example: "saturate(1)" },
+  { name: "sepia", example: "sepia(1)" },
+  { name: "url", example: "url('#filter')" },
+]);
+
+/**
+ * Free-text CSS functions that are legal for a specific Look property. This is
+ * editor vocabulary, not a second validator: only free-text properties appear
+ * here, while closed properties keep using their checked keyword/builder sets.
+ */
+export const LOOK_PROPERTY_CSS_FUNCTIONS: ReadonlyMap<string, readonly LookCssFunctionSuggestion[]> = new Map([
+  ["filter", lookFilterFunctions],
+  ["backdropFilter", lookFilterFunctions],
+  ["clipPath", Object.freeze([
+    { name: "inset", example: "inset(0px)" },
+    { name: "circle", example: "circle(50%)" },
+    { name: "ellipse", example: "ellipse(50% 50%)" },
+    { name: "polygon", example: "polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%)" },
+  ])],
+]);
 
 /**
  * D60 rule 150: `transitionProperty` published a name no author could reach —
@@ -610,6 +664,38 @@ for (const [property, kind] of LOOK_PROPERTY_VALUE_KINDS) {
 export function lookOwnKeywords(property: string): readonly string[] {
   const values = LOOK_PROPERTY_KEYWORDS.get(property);
   return values === undefined ? [] : [...values].filter((value) => !cssWideKeywordSet.has(value));
+}
+
+/** Closed, directly writable string values worth offering for one Look property. */
+export function lookPropertyCompletionKeywords(property: string): readonly string[] {
+  const kind = LOOK_PROPERTY_VALUE_KINDS.get(property);
+  if (!kind || kind === "animation") return [];
+  const own = LOOK_PROPERTY_KEYWORDS.get(property);
+  if (kind === "metric" && own === undefined) return [...LOOK_CSS_WIDE_KEYWORDS, ...LOOK_SHARED_METRIC_KEYWORDS];
+  if (kind === "color" || kind === "background") return LOOK_COLOR_KEYWORDS;
+  if (kind === "image" || kind === "filter" || kind === "transform") return [...LOOK_CSS_WIDE_KEYWORDS, "none"];
+  if (kind === "text") return LOOK_CSS_WIDE_KEYWORDS;
+  return own === undefined ? LOOK_CSS_WIDE_KEYWORDS : [...own];
+}
+
+/** Whether a velar/look builder's result can be assigned directly to a property. */
+export function lookBuilderSupportsProperty(builder: string, property: string): boolean {
+  const result = LOOK_BUILDER_SIGNATURES.get(builder)?.result;
+  const kind = LOOK_PROPERTY_VALUE_KINDS.get(property);
+  if (!result || !kind) return false;
+  switch (result) {
+    case "string": return kind !== "animation";
+    case "animation": return kind === "animation";
+    case "border": return kind === "border";
+    case "color": return kind === "color" || kind === "background";
+    case "image": return kind === "image" || kind === "background";
+    case "length": return kind === "metric" || kind === "line-height";
+    case "shadow": return kind === "shadow";
+    case "spacing": return kind === "metric" || kind === "number-keyword";
+    case "track": return false;
+    case "track-list": return kind === "track";
+    case "transition": return kind === "transition";
+  }
 }
 
 /**

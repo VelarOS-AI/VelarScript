@@ -146,7 +146,7 @@ test("[D103-1] every Look property value kind answers token() the same way, or s
 
 test("[D103-1] token() is a published builder, with the shape every other builder has", () => {
   const signature = LOOK_BUILDER_SIGNATURES.get("token");
-  assert.deepEqual(signature, { parameters: ["name"], required: 1 });
+  assert.deepEqual(signature, { parameters: ["name"], required: 1, result: "string" });
   const exported = webModuleInterfaces.get("velar/look")?.exports.get("token");
   assert.ok(exported && exported.kind === "function");
   assert.deepEqual(exported.parameterNames, ["name"]);
@@ -701,8 +701,8 @@ test("[D103] the language server presents token the way it presents every other 
   const result = completion.result as { items?: readonly CompletionItem[] } | readonly CompletionItem[] | null;
   const items: readonly CompletionItem[] = Array.isArray(result) ? result : (result as { items?: readonly CompletionItem[] } | null)?.items ?? [];
   const labels = new Set(items.map((item) => item.label));
-  assert.ok(labels.has("token"), "the imported token builder is not offered where color is");
-  assert.ok(labels.has("color"));
+  assert.ok(labels.has("token"), "the imported token builder is not offered for a width value");
+  assert.ok(!labels.has("color"), "an incompatible color builder leaked into width completion");
 });
 
 test("[D103] the token-name rule and the var() reader are one table, read by everything that needs them", () => {

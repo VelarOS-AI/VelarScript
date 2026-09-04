@@ -1155,7 +1155,7 @@ export class Parser {
     }
     const sourceSpan = payload?.sourceSpan ?? sourceToken.span;
     const source = payload ? sourceToken.value : "";
-    const inspected = inspectEmbeddedJavaScript(source, sourceSpan.start, !unsafe);
+    const inspected = inspectEmbeddedJavaScript(source, sourceSpan.start, !unsafe, captures.map((capture) => capture.name));
     for (const issue of inspected.issues) this.diagnostics.push(diagnostic("VEL2037", issue.message, issue.span));
     const capturesByName = new Map(captures.map((capture) => [capture.name, capture]));
     for (const binding of inspected.bindings) {
@@ -1192,6 +1192,7 @@ export class Parser {
       imports: inspected.imports,
       dependencies: inspected.dependencies,
       bindings: inspected.bindings,
+      editorTokens: inspected.editorTokens,
       factoryEdits: inspected.factoryEdits,
       contract,
       span: span(start, contract?.span.end ?? sourceToken.span.end),

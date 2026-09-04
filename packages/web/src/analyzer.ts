@@ -41,6 +41,7 @@ import {
   LOOK_EXCLUDED_PROPERTIES,
   LOOK_HOOKS,
   LOOK_CSS_WIDE_KEYWORDS,
+  LOOK_COLOR_KEYWORDS,
   LOOK_LARGE_KEYWORD_SETS,
   LOOK_LENGTH_BUILDERS,
   LOOK_MEDIA_LENGTH_UNITS,
@@ -51,6 +52,7 @@ import {
   LOOK_PROPERTIES,
   LOOK_PROPERTY_KEYWORDS,
   LOOK_PROPERTY_VALUE_KINDS,
+  LOOK_SHARED_METRIC_KEYWORDS,
   LOOK_TARGETS,
   LOOK_TOKEN_NAME_RULE,
   LOOK_TOKEN_NO_FALLBACK_GUIDANCE,
@@ -526,8 +528,7 @@ function lookShorthandOverlapMessage(shorthand: string, longhand: string, subjec
 }
 
 const lookCssWideKeywords = new Set(LOOK_CSS_WIDE_KEYWORDS);
-const lookSharedMetricKeywords = ["auto", "none", "normal", "min-content", "max-content", "fit-content", "stretch"];
-const lookMetricKeywords = new Set([...lookCssWideKeywords, ...lookSharedMetricKeywords]);
+const lookMetricKeywords = new Set([...lookCssWideKeywords, ...LOOK_SHARED_METRIC_KEYWORDS]);
 /**
  * D73 rule 187: what a refusal says the property's *other* half is, so the
  * keyword list it goes on to print reads as the keyword half of a real value
@@ -547,10 +548,7 @@ function lookVocabularyLead(kind: LookPropertyValueKind): string {
     default: return "write one of";
   }
 }
-const lookColorKeywords = new Set([
-  ...lookCssWideKeywords, "transparent", "currentColor", "black", "silver", "gray", "white", "maroon", "red", "purple",
-  "fuchsia", "green", "lime", "olive", "yellow", "navy", "blue", "teal", "aqua", "orange", "aliceblue", "rebeccapurple",
-]);
+const lookColorKeywords = new Set(LOOK_COLOR_KEYWORDS);
 
 /**
  * D67 rule 174 — what a rejected Look string could have been.
@@ -3645,7 +3643,7 @@ export class VelarWebAnalyzer extends Analyzer {
         // a keyword list for it.
         const expected: LookValueGuidance = kind === "metric"
           ? lookVocabularyGuidance(name, normalized,
-            metricKeywords === undefined ? lookSharedMetricKeywords : lookOwnKeywords(name),
+            metricKeywords === undefined ? LOOK_SHARED_METRIC_KEYWORDS : lookOwnKeywords(name),
             "write a unit value such as 16px, 1rem or 50%, or one of")
           : kind === "color" || kind === "background"
             ? { text: "use a checked color() or color keyword", named: false }

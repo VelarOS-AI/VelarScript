@@ -933,6 +933,10 @@ export async function runLanguageServer(): Promise<void> {
           kind: lspCompletionKind(item.presentationKind ?? item.kind),
           detail: clipLspText(item.detail),
           ...(item.documentation ? { documentation: { kind: "markdown", value: clipLspText(item.documentation) } } : {}),
+          ...(item.insertText ? { insertText: clipLspText(item.insertText) } : {}),
+          ...(item.filterText ? { filterText: clipLspText(item.filterText) } : {}),
+          ...(item.sortText ? { sortText: clipLspText(item.sortText) } : {}),
+          ...(item.snippet ? { insertTextFormat: 2 } : {}),
         }));
         const completionContext = document && path && project ? projectCompletionContextAt(project, path, offset) : "ordinary";
         const semanticLabels = new Set(semanticItems.map((item) => item.label));

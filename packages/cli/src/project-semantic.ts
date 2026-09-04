@@ -9,6 +9,7 @@ import {
   semanticSymbolAt,
   semanticVisibleSymbolsAt,
   type SemanticExpression,
+  type EmbeddedJavaScriptEditorToken,
   type SemanticImport,
   type SemanticIndex,
   type SemanticMemberReference,
@@ -56,6 +57,10 @@ export interface ProjectCompletion {
   readonly kind: SemanticSymbol["kind"];
   readonly documentation?: string;
   readonly presentationKind?: SemanticSymbol["presentationKind"];
+  readonly insertText?: string;
+  readonly filterText?: string;
+  readonly sortText?: string;
+  readonly snippet?: boolean;
 }
 
 export type ProjectSemanticTokenType = "type" | "class" | "enum" | "enumMember" | "function" | "method" | "property" | "variable" | "parameter" | "keyword" | "decorator";
@@ -310,10 +315,21 @@ export function projectSemanticTokens(project: ProjectResult, path: string): rea
     const key = `${span.start}:${span.end}`;
     if ((tokens.get(key)?.priority ?? -1) < priority) tokens.set(key, { token, priority });
   };
+  const addEmbedded = (token: EmbeddedJavaScriptEditorToken): void => {
+    if (token.span.end <= token.span.start) return;
+    const key = `${token.span.start}:${token.span.end}`;
+    const projectToken = {
+      span: token.span,
+      type: token.type,
+      modifiers: token.modifiers,
+    } satisfies ProjectSemanticToken;
+    if ((tokens.get(key)?.priority ?? -1) < 6) tokens.set(key, { token: projectToken, priority: 6 });
+  };
 
   for (const token of module.result.semanticIndex.syntaxTokens) {
     add(token.span, null, token.kind, false, 4);
   }
+  for (const token of module.result.embeddedJavaScriptTokens) addEmbedded(token);
 
   for (const symbol of module.result.semanticIndex.symbols) {
     const resolved = projectSymbolAt(project, path, Math.min(symbol.selectionSpan.end, symbol.selectionSpan.start + 1)) ?? symbol;
@@ -354,6 +370,7 @@ export function projectSyntaxDocumentationAt(
 }
 
 function semanticTokenType(symbol: SemanticSymbol): ProjectSemanticTokenType {
+  if (symbol.kind === "import" && symbol.callable) return "function";
   if (symbol.kind.startsWith("extension:function:")) return "function";
   if (symbol.kind.startsWith("extension:parameter:")) return "parameter";
   if (symbol.kind.startsWith("extension:type:")) return "type";
@@ -496,14 +513,17 @@ function extensionCompletionAt(project: ProjectResult, module: ProjectModule, of
 } | null {
   const extensions = project.compilerExtensions.filter((extension) => extension.editor?.project?.complete);
   if (extensions.length === 0) return null;
+  const importsBySymbol = new Map(module.result.semanticIndex.imports.map((item) => [item.localSymbolId, item] as const));
   const visibleSymbols = semanticVisibleSymbolsAt(module.result.semanticIndex, offset).map((symbol) => {
     const resolved = projectSymbolAt(project, module.inputPath, symbol.selectionSpan.start) ?? symbol;
+    const imported = importsBySymbol.get(symbol.id);
     return {
       label: symbol.name,
       detail: symbol.type ?? symbol.kind,
       kind: symbol.kind,
       ...(resolved.presentationKind ? { presentationKind: resolved.presentationKind } : {}),
       ...(resolved.documentation ? { documentation: resolved.documentation } : {}),
+      ...(imported ? { importSource: imported.source, importedName: imported.imported } : {}),
     };
   });
   const membersAt = (memberOffset: number): readonly ProjectCompletion[] => {

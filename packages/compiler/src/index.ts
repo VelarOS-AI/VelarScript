@@ -5,6 +5,7 @@ import type { BindingPattern, DynamicImportExpression, Expression, FunctionDecla
 import { diagnostic, type Advisory, type Diagnostic } from "./diagnostic.ts";
 import { JavaScriptEmitter } from "./emitter.ts";
 import { programWithEmbeddedJavaScriptImports } from "./embedded-module.ts";
+import type { EmbeddedJavaScriptEditorToken } from "./embedded-javascript-editor.ts";
 import type { CompilerEmbeddedJavaScriptModule, CompilerEmitter, CompilerEmitterOptions, CompilerExtension, CompilerInterfaceContext, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface, ModuleTest } from "./extension.ts";
 import { Lexer } from "./lexer.ts";
 import { isParserComplexityFailure, Parser } from "./parser.ts";
@@ -40,6 +41,7 @@ export { applyMechanicalFixes, type AppliedMechanicalFix, type MechanicalFixResu
 export { formatSource } from "./formatter.ts";
 export { collectionMemberGuidance, removedStandardFunctionGuidance, sourceTypeNameGuidance, type CollectionKind, type CollectionMemberGuidance, type SourceTypeGuidance } from "./language-guidance.ts";
 export { SourceText, type Span } from "./source.ts";
+export type { EmbeddedJavaScriptEditorToken, EmbeddedJavaScriptEditorTokenModifier, EmbeddedJavaScriptEditorTokenType } from "./embedded-javascript-editor.ts";
 export { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
 export { bindingNameRestriction, isCoreReservedBinding, isForbiddenPrototypeMember, isJavaScriptReservedBinding, isSourceIdentifierPart, isSourceIdentifierStart, isValidSourceIdentifier, memberNameRestriction, type BindingNameRestriction, type MemberNameRestriction } from "./source-names.ts";
 export { VELAR_EXTENSION_PROTOCOL_VERSION } from "./extension.ts";
@@ -47,7 +49,7 @@ export { CORE_EXPRESSION_CONSTRUCTS, CORE_STATEMENT_CONSTRUCTS, coreStatementCon
 // D62 rule 157: the editor's keyword list is the lexer's table plus Core's
 // contextual roster, so it is published rather than retyped downstream.
 export { keywordKinds } from "./token.ts";
-export type { CompilerAnalysisExtension, CompilerAnalyzerFactory, CompilerEditorCompletion, CompilerEditorExtension, CompilerEmbeddedJavaScriptModule, CompilerEmitter, CompilerEmitterOptions, CompilerExtension, CompilerFormattingExtension, CompilerInspectionExtension, CompilerInterfaceContext, CompilerIntrinsicAnalysisContext, CompilerLexicalExtension, CompilerLexicalScanContext, CompilerLexicalScanResult, CompilerModuleExtension, CompilerParserFactory, CompilerProjectEditorCompletion, CompilerProjectEditorCompletionContext, CompilerProjectEditorCompletionResult, CompilerProjectEditorExtension, CompilerProjectEditorRenameContext, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface, ModuleTest, VelarExtensionContract, VelarExtensionKind } from "./extension.ts";
+export type { CompilerAnalysisExtension, CompilerAnalyzerFactory, CompilerEditorCompletion, CompilerEditorExtension, CompilerEmbeddedJavaScriptModule, CompilerEmitter, CompilerEmitterOptions, CompilerExtension, CompilerFormattingExtension, CompilerInspectionExtension, CompilerInterfaceContext, CompilerIntrinsicAnalysisContext, CompilerLexicalExtension, CompilerLexicalScanContext, CompilerLexicalScanResult, CompilerModuleExtension, CompilerParserFactory, CompilerProjectEditorCompletion, CompilerProjectEditorCompletionContext, CompilerProjectEditorCompletionResult, CompilerProjectEditorExtension, CompilerProjectEditorRenameContext, CompilerProjectEditorVisibleSymbol, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface, ModuleTest, VelarExtensionContract, VelarExtensionKind } from "./extension.ts";
 export { semanticImportAt, semanticModuleReferenceAt, semanticSymbolAt, semanticVisibleSymbolsAt, type CompilerSemanticExtension, type SemanticDeclareOptions, type SemanticExpression, type SemanticExtensionContext, type SemanticFunctionLike, type SemanticImport, type SemanticIndex, type SemanticMember, type SemanticMemberReference, type SemanticModuleReference, type SemanticReference, type SemanticScope, type SemanticSymbol, type SemanticSymbolKind, type SemanticSyntaxDocumentation, type SemanticSyntaxToken, type SemanticSyntaxTokenKind } from "./semantic.ts";
 export { analysisTypeIdentity, binaryStorageKind, describeType, genericApplicationType, isReadonlyView, optionalOf, readonlyViewOf, semanticTypeIdentity, unionOf, VELAR_BYTES_TYPE_IDENTITY, VELAR_FLOAT32_BUFFER_TYPE_IDENTITY, VELAR_UINT8_BUFFER_TYPE_IDENTITY, VELAR_UINT16_BUFFER_TYPE_IDENTITY, VELAR_UINT32_BUFFER_TYPE_IDENTITY, type BinaryStorageKind, type EnumInfo, type GenericApplication, type GenericTypeInfo, type ValueType } from "./types.ts";
 export { permanentNamespaceCoveringModule } from "./analyzer.ts";
@@ -107,6 +109,8 @@ export interface CompileResult {
   readonly code: string | null;
   readonly sourceMap: string | null;
   readonly embeddedModules: readonly CompilerEmbeddedJavaScriptModule[];
+  /** Editor-only roles from embedded JavaScript; separate from Velar symbols/references. */
+  readonly embeddedJavaScriptTokens: readonly EmbeddedJavaScriptEditorToken[];
   readonly css: string | null;
   readonly styleSegments: CompilerStyleSegments | null;
   readonly runtimeModules: readonly string[];
@@ -157,6 +161,8 @@ export interface ModuleInspection {
   readonly resources: readonly CompilerResourceDependency[];
   readonly moduleInterface: ModuleInterface;
   readonly semanticIndex: SemanticIndex;
+  /** Editor-only roles from embedded JavaScript; separate from Velar symbols/references. */
+  readonly embeddedJavaScriptTokens: readonly EmbeddedJavaScriptEditorToken[];
 }
 
 export function inspectModule(text: string, options: Pick<CompileOptions, "path" | "extensions"> = {}): ModuleInspection {
@@ -175,6 +181,7 @@ export function inspectModule(text: string, options: Pick<CompileOptions, "path"
     resources: resourcesOf(parsed.program, extensions),
     moduleInterface: interfaceOf(semanticProgram, parsed.source.path, extensions),
     semanticIndex: buildSemanticIndex(semanticProgram, parsed.source, new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), extensions.flatMap((extension) => extension.semantic ? [extension.semantic] : [])),
+    embeddedJavaScriptTokens: embeddedJavaScriptTokensOf(parsed.program),
   };
 }
 
@@ -371,6 +378,7 @@ function compileUnchecked(text: string, options: CompileOptions): CompileResult 
       analyzer.analyzedGenericTypes(),
     ),
     semanticIndex,
+    embeddedJavaScriptTokens: embeddedJavaScriptTokensOf(parsed.program),
     initializationImportReads: analyzer.moduleInitializationImportReads(),
   };
 }
@@ -466,6 +474,7 @@ function emptyCompileResult(text: string, options: CompileOptions, reported: Dia
     code: null,
     sourceMap: null,
     embeddedModules: [],
+    embeddedJavaScriptTokens: [],
     css: null,
     styleSegments: null,
     runtimeModules: [],
@@ -479,6 +488,12 @@ function emptyCompileResult(text: string, options: CompileOptions, reported: Dia
     semanticIndex: buildSemanticIndex(program, source),
     initializationImportReads: [],
   };
+}
+
+function embeddedJavaScriptTokensOf(program: Program): readonly EmbeddedJavaScriptEditorToken[] {
+  return program.body
+    .flatMap((statement) => statement.kind === "EmbeddedJavaScriptDeclaration" ? statement.editorTokens : [])
+    .sort((left, right) => left.span.start - right.span.start || left.span.end - right.span.end);
 }
 
 function resourcesOf(program: Program, extensions: readonly CompilerExtension[]): readonly CompilerResourceDependency[] {

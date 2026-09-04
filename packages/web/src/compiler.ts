@@ -16,7 +16,7 @@ import { VelarWebParser } from "./parser.ts";
 import { scanWebToken, scanWebUnsafeCssLiteral, WEB_CONTEXTUAL_KEYWORDS } from "./lexer.ts";
 import { webModuleSource, webModuleSources, type VelarWebRuntimeConfig } from "./runtime.ts";
 import { velarWebSemanticExtension } from "./semantic.ts";
-import { LOOK_BUILDER_SIGNATURES, LOOK_BUILDERS, LOOK_HOOKS, LOOK_MEDIA_SUBJECTS, LOOK_PUBLIC_TYPE_NAMES, LOOK_TARGETS, LOOK_UNIT_TYPES } from "./look.ts";
+import { LOOK_BUILDER_SIGNATURES, LOOK_BUILDERS, LOOK_HOOKS, LOOK_MEDIA_SUBJECTS, LOOK_PUBLIC_TYPE_NAMES, LOOK_TARGETS, LOOK_UNIT_TYPES, type LookBuilderResultKind } from "./look.ts";
 import { isWebTypeAssignable, resolveWebTypeSyntax, WEB_OWNED_TYPE_NAMES, webComponentConstructor, webNodeType } from "./types.ts";
 
 export const VELAR_WEB_API_VERSION = "0.11";
@@ -60,6 +60,19 @@ const mountTargetType: ValueType = { kind: "union", members: [stringType, elemen
 const lookScalarType: ValueType = { kind: "union", members: [numberType, stringType, lengthType, percentageType, lengthPercentageType] };
 const trackInputType: ValueType = { kind: "union", members: [numberType, stringType, lengthType, percentageType, lengthPercentageType, trackFractionType, trackType, trackListType] };
 const repeatCountType: ValueType = { kind: "union", members: [numberType, stringType] };
+const lookBuilderResultTypes: Readonly<Record<LookBuilderResultKind, ValueType>> = {
+  animation: animationType,
+  border: borderType,
+  color: colorType,
+  image: imageType,
+  length: lengthType,
+  shadow: shadowType,
+  spacing: spacingType,
+  string: stringType,
+  track: trackType,
+  "track-list": trackListType,
+  transition: transitionType,
+};
 
 function namedFunction(parameterNames: readonly string[], parameters: readonly ValueType[], result: ValueType, requiredParameters = parameters.length): ValueType {
   return { kind: "function", parameterNames, parameters, requiredParameters, result };
@@ -71,7 +84,7 @@ function namedFunction(parameterNames: readonly string[], parameters: readonly V
  * keyframe lowering places named arguments from that same table, so the two
  * cannot disagree about what `spread=0px` means.
  */
-function lookBuilder(name: string, parameters: readonly ValueType[], result: ValueType, rest?: ValueType): ValueType {
+function lookBuilder(name: string, parameters: readonly ValueType[], rest?: ValueType): ValueType {
   const signature = LOOK_BUILDER_SIGNATURES.get(name);
   if (!signature) throw new Error(`velar/look builder '${name}' has no declared signature`);
   if (signature.parameters.length !== parameters.length) {
@@ -86,7 +99,7 @@ function lookBuilder(name: string, parameters: readonly ValueType[], result: Val
     parameters,
     requiredParameters: signature.required,
     ...(rest ? { rest } : {}),
-    result,
+    result: lookBuilderResultTypes[signature.result],
   };
 }
 
@@ -104,30 +117,29 @@ const lookModuleExports = new Map<string, ValueType>([
   // type, which is what makes one spelling legal in all of them; the kinds keep
   // their D37 keyword tables, which read literals and folded keywords and so
   // never see a call.
-  ["token", lookBuilder("token", [stringType], stringType)],
-  ["color", lookBuilder("color", [stringType], colorType)],
-  ["rgb", lookBuilder("rgb", [numberType, numberType, numberType], colorType)],
-  ["rgba", lookBuilder("rgba", [numberType, numberType, numberType, numberType], colorType)],
-  ["hsl", lookBuilder("hsl", [numberType, numberType, numberType], colorType)],
-  ["alpha", lookBuilder("alpha", [colorInputType, numberType], colorType)],
-  ["lighten", lookBuilder("lighten", [colorInputType, numberType], colorType)],
-  ["darken", lookBuilder("darken", [colorInputType, numberType], colorType)],
-  ["border", lookBuilder("border", [lengthType, colorInputType, stringType], borderType)],
-  ["shadow", lookBuilder("shadow", [lengthType, lengthType, lengthType, colorInputType, lengthType, boolType], shadowType)],
-  ["linearGradient", lookBuilder("linearGradient", [angleType, colorInputType, colorInputType], imageType)],
-  ["asset", lookBuilder("asset", [stringType], imageType)],
-  ["minmax", lookBuilder("minmax", [trackInputType, trackInputType], trackType)],
-  ["repeat", lookBuilder("repeat", [repeatCountType, trackInputType], trackListType)],
-  ["tracks", lookBuilder("tracks", [trackInputType], trackListType, trackInputType)],
-  ["transition", lookBuilder("transition", [stringType, durationType, stringType, durationType], transitionType)],
-  ["spacing", lookBuilder("spacing", [lookScalarType, lookScalarType, lookScalarType, lookScalarType], spacingType)],
-  ["min", lookBuilder("min", [lengthType, lengthType], lengthType)],
-  ["max", lookBuilder("max", [lengthType, lengthType], lengthType)],
-  ["clamp", lookBuilder("clamp", [lengthType, lengthType, lengthType], lengthType)],
+  ["token", lookBuilder("token", [stringType])],
+  ["color", lookBuilder("color", [stringType])],
+  ["rgb", lookBuilder("rgb", [numberType, numberType, numberType])],
+  ["rgba", lookBuilder("rgba", [numberType, numberType, numberType, numberType])],
+  ["hsl", lookBuilder("hsl", [numberType, numberType, numberType])],
+  ["alpha", lookBuilder("alpha", [colorInputType, numberType])],
+  ["lighten", lookBuilder("lighten", [colorInputType, numberType])],
+  ["darken", lookBuilder("darken", [colorInputType, numberType])],
+  ["border", lookBuilder("border", [lengthType, colorInputType, stringType])],
+  ["shadow", lookBuilder("shadow", [lengthType, lengthType, lengthType, colorInputType, lengthType, boolType])],
+  ["linearGradient", lookBuilder("linearGradient", [angleType, colorInputType, colorInputType])],
+  ["asset", lookBuilder("asset", [stringType])],
+  ["minmax", lookBuilder("minmax", [trackInputType, trackInputType])],
+  ["repeat", lookBuilder("repeat", [repeatCountType, trackInputType])],
+  ["tracks", lookBuilder("tracks", [trackInputType], trackInputType)],
+  ["transition", lookBuilder("transition", [stringType, durationType, stringType, durationType])],
+  ["spacing", lookBuilder("spacing", [lookScalarType, lookScalarType, lookScalarType, lookScalarType])],
+  ["min", lookBuilder("min", [lengthType, lengthType])],
+  ["max", lookBuilder("max", [lengthType, lengthType])],
+  ["clamp", lookBuilder("clamp", [lengthType, lengthType, lengthType])],
   ["animate", lookBuilder(
     "animate",
     [keyframesType, durationType, stringType, durationType, numberType, boolType, stringType, stringType],
-    animationType,
   )],
 ]);
 
