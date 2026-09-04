@@ -182,7 +182,9 @@ Core Lists use the same direct vocabulary: `append(value)` adds one item,
 The JavaScript-specific variadic `push` surface is not part of VelarScript source.
 Language-level callback methods read a checked shallow snapshot, so callback
 mutation cannot silently extend, truncate, or replace the values participating
-in the current operation.
+in the current operation. `map`, `flatMap`, `filter`, `find`, `some`, and
+`every` pass `(value, index)`; a callback may declare only `value` when it does
+not need the zero-based snapshot position.
 `List<number>.sum()` and ordered `List<T>.min()`/`.max()` are the direct
 aggregation surface. `List.sorted(by=selector)` computes one number/string key
 per snapshot value and is mutually exclusive with the comparator form.

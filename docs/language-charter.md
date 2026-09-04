@@ -230,8 +230,12 @@ targets, spreads, mixed sources, and effectful overrides stay silent. When a
 fresh List is filled only by appending or extending one stable per-item projection,
 optionally under one stable bool guard, the compiler names `List.map`,
 `List.filter`, `List.flatMap`, or their pipeline. Arbitrary calls, getters,
-effects, destination reads, wider loop bodies, two-slot loops, and computed
-sources stay silent.
+effects, destination reads, wider loop bodies, and computed sources stay
+silent. An unguarded two-slot projection keeps the original List position in a
+two-parameter callback; an indexed guarded projection stays explicit because a
+later map would observe post-filter positions. A target extension may prove an
+owned value expression, such as native Web JSX construction, without making
+Core depend on that target's syntax.
 
 An advisory **never blocks a build**. It is not a diagnostic with a softer
 label: it travels in a separate list, and code generation is gated on the
@@ -2187,15 +2191,19 @@ return cannot erase comments; otherwise the author writes the named return or
 keeps the loop with a reasoned `velar-allow A8` on its `for` line.
 
 Advisory `A13` applies the same proof standard to a fresh typed List immediately
-followed by a synchronous single-slot List loop. When the sole body operation is
+followed by a synchronous List loop. When the sole body operation is
 `append` or `extend`, optionally inside one pure `if` guard, it names `map`,
 `filter`, `filter(...).map(...)`, or `flatMap`. The source must be a stable List
 binding or stable data-field path; the predicate and projection may use only
 literals, bindings, checked data-field reads, operators, and the compiler-owned
-pure `Target.from(value)` projection. Calls, class getters, index reads,
-destination reads, computed sources, two-slot loops, and wider bodies stay
-explicit loops. A13 offers a comment-preserving mechanical edit under the same
-rule as A8.
+pure `str(value)` and `Target.from(value)` projections. An unguarded two-slot
+loop becomes a two-parameter `map` or `flatMap` callback and preserves its
+original snapshot index. An indexed guarded loop, arbitrary call, class getter,
+index read, destination read, computed source, or wider body stays explicit.
+An extension may admit its own stable expression form; Web admits native JSX
+whose eager holes pass this same proof, while component/custom-element setup,
+refs, and bindings remain explicit. A13 offers a comment-preserving mechanical
+edit under the same rule as A8.
 
 Direct indexing and indexed assignment are strict. Negative indexes count from
 the end; indexes outside `-size` through `size - 1` throw `IndexError`. Use

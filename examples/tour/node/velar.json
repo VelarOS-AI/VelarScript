@@ -5,7 +5,7 @@
   "outDir": "dist",
   "extensions": ["@velarscript/server"],
   "surfaces": {
-    "core": "0.3",
+    "core": "0.4",
     "server": "0.15"
   },
   "server": {

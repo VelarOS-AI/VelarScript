@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { applyMechanicalFixes, compile, formatSource, type CompileResult } from "@velarscript/compiler";
+import { velarCompilerExtension as webCompilerExtension } from "../packages/web/src/compiler.ts";
 
 function compiled(source: string): CompileResult {
   const result = compile(source.trimStart());
@@ -69,6 +70,59 @@ def flatten(groups: List<Group>) -> List<number>:
 `);
   assert.match(flattened.message, /List\.filter\(\.\.\.\)\.flatMap is the canonical collection pipeline/u);
   assert.match(flattened.message, /groups\.filter\(group => group\.enabled\)\.flatMap\(group => group\.values\)/u);
+});
+
+test("[A13] a two-slot projection keeps the source index in List.map", () => {
+  const source = `${records}
+def numbered(changes: List<Change>) -> List<number>:
+    const output: List<number> = []
+    for change, index in changes: output.append(change.value + index)
+    return output
+`;
+  const reported = a13(source);
+  assert.match(reported.message, /changes\.map\(\(change, index\) => change\.value \+ index\)/u);
+  const fixed = applyMechanicalFixes(source, [reported]).text;
+  assert.deepEqual(compiled(fixed).advisories, []);
+});
+
+test("[A13] an indexed guarded loop stays explicit because filter would renumber it", () => {
+  const source = `${records}
+def positions(changes: List<Change>) -> List<number>:
+    const output: List<number> = []
+    for change, index in changes:
+        if change.changed: output.append(index)
+    return output
+`;
+  assert.deepEqual(compiled(source).advisories, []);
+});
+
+test("[A13] Web proves a native JSX projection while Core owns the map rewrite", () => {
+  const source = `
+type World:
+    id: string
+    name: string
+
+def dots(worlds: List<World>, selectedIndex: number) -> List<WebNode>:
+    const nodes: List<WebNode> = []
+    for world, index in worlds:
+        nodes.append(<button
+            type="button"
+            on:pointerenter={() => print(str(index))}
+            on:click={() => print(str(index))}
+            aria-label={f"Show {world.name}"}
+            aria-current={str(index == selectedIndex)}
+            data-carousel-dot={world.id}
+        ></button>)
+    return nodes
+`.trimStart();
+  const result = compile(source, { extensions: [webCompilerExtension] });
+  assert.deepEqual(result.diagnostics.map((item) => `${item.code}: ${item.message}`), [], source);
+  assert.deepEqual(result.advisories.map((item) => item.code), ["A13"]);
+  const fixed = applyMechanicalFixes(source, result.advisories).text;
+  assert.match(fixed, /worlds\.map\(\(world, index\) => <button/u);
+  const clean = compile(fixed, { extensions: [webCompilerExtension] });
+  assert.deepEqual(clean.diagnostics.map((item) => `${item.code}: ${item.message}`), [], fixed);
+  assert.deepEqual(clean.advisories, []);
 });
 
 test("[A13] a stable member source and bool guard teach filter then map", () => {
@@ -141,12 +195,6 @@ def source() -> List<Change>: return []
 def project() -> List<PublicChange>:
     const output: List<PublicChange> = []
     for change in source(): output.append(PublicChange.from(change))
-    return output
-`,
-    `${records}
-def project(changes: List<Change>) -> List<number>:
-    const output: List<number> = []
-    for change, index in changes: output.append(index)
     return output
 `,
   ];

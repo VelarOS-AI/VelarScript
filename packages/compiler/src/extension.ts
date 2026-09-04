@@ -215,6 +215,17 @@ export interface CompilerAnalysisExtension {
     containsExpression: (expression: Expression) => boolean,
     containsBlock: (statements: readonly Statement[]) => boolean,
   ) => boolean | undefined;
+  /**
+   * Decide whether an extension-owned expression is a stable per-item value
+   * projection for Core's collection canonicalization advisories. Returning
+   * `true` says constructing the expression cannot mutate the iterated List;
+   * `false` owns and rejects the expression, and `undefined` leaves it to
+   * another extension. Nested Core expressions must be delegated to `pure`.
+   */
+  readonly canonicalCollectionProjection?: (
+    expression: Expression,
+    pure: (expression: Expression) => boolean,
+  ) => boolean | undefined;
 }
 
 /** The module a retired namespace's members moved back to, and which names moved. */

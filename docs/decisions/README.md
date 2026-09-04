@@ -79,6 +79,7 @@ their titles are reproduced verbatim below.
 | [D110](D110-SURFACE-VERSION-PARTITION.md) | 表面版本分区：一个安装号，五个表面号 | One install number stays the train version; each of the five surfaces — core, web, node, server, desktop — carries its own counter, derived from a gated surface digest rather than written by hand, declared in `velar.json`, and checked on upgrade so a version change names what must be reviewed. |
 | [D111](D111-INSTALL-WHAT-THE-PROJECT-DECLARES.md) | 装项目声明的那些，而不是全部 | A project installs what it declares plus what the CLI actually needs at load time: Web, Server, Desktop and Playwright become exactly-pinned optional peers, the language server bundles whichever targets resolve, and the packed-package gate proves the installed tree really shrank. |
 | [D112](D112-CANONICAL-LIST-PIPELINE-ADVISORY.md) | List 查询、筛选与投影的规范 API 建议 | A8 expands to proven `every`/`find` queries, while A13 names `map`, `filter`, or `flatMap` pipelines for proven fresh-List builders; effectful and stateful loops stay explicit. |
+| [D113](D113-INDEXED-LIST-CALLBACKS.md) | List 回调携带快照索引 | List transform and predicate callbacks may declare `(value, index)`; A13 preserves an unguarded two-slot loop through that API, while target-owned pure projections stay behind an extension proof hook. |
 
 ## archive/
 

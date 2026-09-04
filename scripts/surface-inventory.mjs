@@ -5,6 +5,7 @@ import { standardModuleInterfaces as coreOwnedModuleInterfaces } from "@velarscr
 import { isNodeOnlyModule } from "@velarscript/node/compiler";
 import { standardModuleInterfaces } from "../packages/cli/src/standard-modules.ts";
 import { CORE_STATEMENT_CONSTRUCTS } from "../packages/compiler/src/ast.ts";
+import { Analyzer } from "../packages/compiler/src/analyzer.ts";
 import {
   CORE_CONTEXTUAL_KEYWORD_WORDS,
   CORE_NUMERIC_SUFFIXES,
@@ -269,9 +270,9 @@ export function surfaceDigest(names) {
 }
 
 /**
- * Core's own tables — the words, the bounds, the declaration forms, the
- * resident namespaces, the prelude, and the statement constructs. Read out of
- * `packages/compiler` at run time, never restated.
+ * Core's closed source vocabulary — the words, the bounds, the declaration
+ * forms, the resident namespaces, the prelude, and the statement constructs.
+ * Read out of `packages/compiler` at run time, never restated.
  */
 export function coreVocabularyEntries() {
   const entries = [];
@@ -311,6 +312,24 @@ export function coreVocabularyEntries() {
     entries.push(entry("statement-construct", kind, spelling, "CORE_STATEMENT_CONSTRUCTS in packages/compiler/src/ast.ts", "packages/compiler/src/ast.ts"));
   }
   return entries;
+}
+
+/**
+ * Structural collection contracts are part of Core's versioned API, but not a
+ * closed spelling vocabulary: ordinary member resolution, rather than a tour
+ * chapter, proves their use. Keep them in the surface digest without turning
+ * every mutable/read-only variant into a duplicate tour requirement.
+ */
+function coreCollectionContractEntries() {
+  return [...Analyzer.coreCollectionMemberContracts()].map(([spelling, contract]) =>
+    entry(
+      "collection-member",
+      spelling,
+      spelling,
+      "Analyzer collection member resolvers in packages/compiler/src/analyzer.ts",
+      "packages/compiler/src/analyzer.ts",
+      contractShape(contract),
+    ));
 }
 
 /**
@@ -501,6 +520,7 @@ export function surfaceInventory() {
   const failures = [];
 
   entries.push(...coreVocabularyEntries());
+  entries.push(...coreCollectionContractEntries());
   entries.push(...moduleVocabularyEntries({
     interfaces: coreOwnedModuleInterfaces([]),
     table: (source) => `${source} (@velarscript/core)`,

@@ -440,6 +440,19 @@ const discardedPurePrimitiveOperations = new Set<PrimitiveOperation>([
   "numberAbs", "numberRound", "numberFloor", "numberCeil", "numberSign", "numberTrunc", "numberToFixed",
   "numberIsInteger", "numberIsNaN", "numberIsFinite",
 ]);
+const CORE_LIST_METHOD_NAMES = Object.freeze([
+  "get", "slice", "append", "extend", "insert", "remove", "pop", "clear", "copy", "has", "count", "index",
+  "find", "some", "every", "map", "flatMap", "filter", "reduce", "join", "sorted", "reversed", "sum", "min", "max",
+] as const);
+const CORE_MAP_METHOD_NAMES = Object.freeze([
+  "get", "set", "getOrSet", "getOrSetWith", "update", "has", "remove", "clear", "copy", "iterator", "keys", "values", "entries",
+] as const);
+const CORE_SET_METHOD_NAMES = Object.freeze([
+  "add", "update", "has", "remove", "clear", "copy", "values", "union", "intersection", "difference",
+] as const);
+const CORE_RECORD_METHOD_NAMES = Object.freeze([
+  "get", "set", "has", "remove", "clear", "copy", "keys", "values", "entries",
+] as const);
 export interface FormReadField {
   readonly name: string;
   readonly kind: "string" | "number" | "bool" | "enum" | "strings";
@@ -1884,6 +1897,38 @@ export class Analyzer implements TypeEnvironment {
         this.scopedGlobalGuidance.set(suffix, collected);
       }
     }
+  }
+
+  /**
+   * D113: the surface-version gate reads the same member resolvers that type
+   * checking uses. Placeholder types retain every parameter/result position,
+   * and mutable plus read-only receivers expose the presence boundary too.
+   */
+  static coreCollectionMemberContracts(): ReadonlyMap<string, ValueType> {
+    const analyzer = new Analyzer();
+    const item: ValueType = { kind: "named", name: "T", identity: "surface:T" };
+    const key: ValueType = { kind: "named", name: "K", identity: "surface:K" };
+    const value: ValueType = { kind: "named", name: "V", identity: "surface:V" };
+    const contracts = new Map<string, ValueType>();
+    const collect = (
+      label: string,
+      names: readonly string[],
+      member: (name: string) => ValueType | null,
+    ): void => {
+      for (const name of ["size", ...names]) {
+        const contract = member(name);
+        if (contract !== null) contracts.set(`${label}.${name}`, contract);
+      }
+    };
+    collect("List", CORE_LIST_METHOD_NAMES, (name) => analyzer.listMember({ kind: "list", element: item }, name));
+    collect("readonly List", CORE_LIST_METHOD_NAMES, (name) => analyzer.listMember({ kind: "list", element: item, readonlyView: true }, name));
+    collect("Map", CORE_MAP_METHOD_NAMES, (name) => analyzer.mapMember({ kind: "map", key, value }, name));
+    collect("readonly Map", CORE_MAP_METHOD_NAMES, (name) => analyzer.mapMember({ kind: "map", key, value, readonlyView: true }, name));
+    collect("Set", CORE_SET_METHOD_NAMES, (name) => analyzer.setMember({ kind: "set", element: item }, name));
+    collect("readonly Set", CORE_SET_METHOD_NAMES, (name) => analyzer.setMember({ kind: "set", element: item, readonlyView: true }, name));
+    collect("Record", CORE_RECORD_METHOD_NAMES, (name) => analyzer.recordMember({ kind: "record", value }, name));
+    collect("readonly Record", CORE_RECORD_METHOD_NAMES, (name) => analyzer.recordMember({ kind: "record", value, readonlyView: true }, name));
+    return contracts;
   }
 
   /**
@@ -4707,12 +4752,15 @@ export class Analyzer implements TypeEnvironment {
   */
   private adviseManualListPipeline(previous: Statement | null, statement: Statement): void {
     if (previous?.kind !== "VariableDeclaration" || statement.kind !== "ForStatement") return;
-    if (statement.asynchronous || statement.secondPattern !== null || statement.pattern.kind !== "NameBindingPattern") return;
+    if (statement.asynchronous || statement.pattern.kind !== "NameBindingPattern") return;
+    if (statement.secondPattern !== null && statement.secondPattern.kind !== "NameBindingPattern") return;
     if (previous.pattern.kind !== "NameBindingPattern") return;
 
     const targetName = previous.pattern.name;
     const itemName = statement.pattern.name;
+    const indexName = statement.secondPattern?.name ?? null;
     if (itemName === targetName) return;
+    if (indexName === targetName || indexName === itemName) return;
     const targetBinding = this.lookup(targetName);
     if (!targetBinding || targetBinding.span.start !== previous.pattern.span.start || targetBinding.span.end !== previous.pattern.span.end) return;
     const target = this.expandAliases(targetBinding.storageType);
@@ -4727,6 +4775,10 @@ export class Analyzer implements TypeEnvironment {
     let appendStatement: Statement | null = statement.body[0] ?? null;
     if (statement.body.length !== 1) return;
     if (appendStatement?.kind === "IfStatement") {
+      // Filtering changes the position seen by a following map. Keep an
+      // indexed guarded loop explicit until one pipeline operator can preserve
+      // the original position across both steps.
+      if (indexName !== null) return;
       if (appendStatement.elseBody !== null || appendStatement.thenBody.length !== 1) return;
       const condition = this.expandAliases(this.inferredExpressionType(appendStatement.condition));
       if (!sameType(condition, boolType)) return;
@@ -4754,7 +4806,8 @@ export class Analyzer implements TypeEnvironment {
     if (predicate === null && identity) return;
     const filtered = predicate === null ? sourceSpelling : `${sourceSpelling}.filter(${itemName} => ${predicate})`;
     const projection = write.operation === "extend" ? "flatMap" : "map";
-    const replacement = identity ? filtered : `${filtered}.${projection}(${itemName} => ${transform})`;
+    const parameters = indexName === null ? itemName : `(${itemName}, ${indexName})`;
+    const replacement = identity ? filtered : `${filtered}.${projection}(${parameters} => ${transform})`;
     const operation = predicate === null
       ? `List.${projection}`
       : identity ? "List.filter" : `List.filter(...).${projection}`;
@@ -4842,16 +4895,46 @@ export class Analyzer implements TypeEnvironment {
         }
         return nested ? `(${spelling})` : spelling;
       }
+      case "ConditionalExpression": {
+        const condition = this.manualListPipelineExpressionSpelling(expression.condition, forbiddenNames, true);
+        const thenValue = this.manualListPipelineExpressionSpelling(expression.thenValue, forbiddenNames, true);
+        const elseValue = this.manualListPipelineExpressionSpelling(expression.elseValue, forbiddenNames, true);
+        if (condition === null || thenValue === null || elseValue === null) return null;
+        const spelling = `${condition} ? ${thenValue} : ${elseValue}`;
+        return nested ? `(${spelling})` : spelling;
+      }
+      case "FStringExpression": {
+        for (const part of expression.parts) {
+          if (part.kind === "expression" && this.manualListPipelineExpressionSpelling(part.value, forbiddenNames) === null) return null;
+        }
+        const written = this.sourceText.slice(expression.span.start, expression.span.end);
+        return written.length > 0 ? written : null;
+      }
       case "CallExpression": {
         if (expression.optional || expression.arguments.length !== 1 || expression.argumentNames?.some((name) => name !== null)) return null;
+        if (expression.callee.kind === "IdentifierExpression" && expression.callee.name === "str") {
+          const argument = this.manualListPipelineExpressionSpelling(expression.arguments[0]!, forbiddenNames);
+          return argument === null ? null : `str(${argument})`;
+        }
         if (!this.recordFromCalls.has(spanIdentity(expression.span))) return null;
         if (expression.callee.kind !== "MemberExpression" || expression.callee.optional
           || expression.callee.property !== "from" || expression.callee.object.kind !== "IdentifierExpression") return null;
         const argument = this.manualListPipelineExpressionSpelling(expression.arguments[0]!, forbiddenNames);
         return argument === null ? null : `${expression.callee.object.name}.from(${argument})`;
       }
-      default:
+      default: {
+        for (const extension of this.analysisExtensions) {
+          const accepted = extension.canonicalCollectionProjection?.(
+            expression,
+            (child) => this.manualListPipelineExpressionSpelling(child, forbiddenNames) !== null,
+          );
+          if (accepted === undefined) continue;
+          if (!accepted) return null;
+          const written = this.sourceText.slice(expression.span.start, expression.span.end);
+          return written.length > 0 ? written : null;
+        }
         return null;
+      }
     }
   }
 
@@ -10057,6 +10140,23 @@ export class Analyzer implements TypeEnvironment {
     const requireCount = (count: number): void => {
       if (!namedPreanalyzed && arguments_.length !== count) this.typeError(`Expected ${count} argument${count === 1 ? "" : "s"} but received ${arguments_.length}`, callSpan);
     };
+    const inferListCallback = (index: number, result: ValueType): ValueType => {
+      const argument = argumentAt(index);
+      if (!argument) return unknownType;
+      const single: ValueType = { kind: "function", parameters: [readonlyElement!], requiredParameters: 1, result };
+      const indexed: ValueType = { kind: "function", parameters: [readonlyElement!, numberType], requiredParameters: 2, result };
+      let callback = namedPreanalyzed
+        ? this.inferredExpressionType(argument)
+        : inferArgument(index, argument.kind === "ArrowFunctionExpression" && argument.parameters.length >= 2 ? indexed : single);
+      const expanded = this.expandAliases(callback);
+      const expected = (expanded.kind === "function" || expanded.kind === "action" || expanded.kind === "intrinsic")
+        && (expanded.parameters.length >= 2 || expanded.rest)
+        ? indexed
+        : single;
+      callback = this.concreteCallableFor(callback, expected, argument.span);
+      this.requireAssignable(callback, expected, argument.span);
+      return callback;
+    };
     // ENM-I3: a membership probe (`has`, `index`, `count`, `remove`, and the
     // Map/Record key of `get`) is judged by intersection with the element or
     // key domain — the per-element `==` question — rather than assignability,
@@ -10083,10 +10183,10 @@ export class Analyzer implements TypeEnvironment {
       }
     };
     const lowered = object.kind === "list"
-      ? ["get", "slice", "append", "extend", "insert", "remove", "pop", "clear", "copy", "has", "count", "index", "find", "some", "every", "map", "flatMap", "filter", "reduce", "join", "sorted", "reversed", "sum", "min", "max"].includes(member.property)
-      : object.kind === "map" ? ["get", "set", "update", "has", "remove", "clear", "copy", "iterator", "keys", "values", "entries"].includes(member.property)
-        : object.kind === "set" ? ["add", "update", "has", "remove", "clear", "copy", "values", "union", "intersection", "difference"].includes(member.property)
-          : object.kind === "record" ? ["get", "set", "has", "remove", "clear", "copy", "keys", "values", "entries"].includes(member.property) : false;
+      ? (CORE_LIST_METHOD_NAMES as readonly string[]).includes(member.property)
+      : object.kind === "map" ? (CORE_MAP_METHOD_NAMES as readonly string[]).includes(member.property)
+        : object.kind === "set" ? (CORE_SET_METHOD_NAMES as readonly string[]).includes(member.property)
+          : object.kind === "record" ? (CORE_RECORD_METHOD_NAMES as readonly string[]).includes(member.property) : false;
     if (lowered && arguments_.some((argument) => argument.kind === "SpreadExpression")) {
       this.typeError(`Spread arguments are not supported by ${describeType(object)}.${member.property}`, callSpan);
     }
@@ -10094,29 +10194,10 @@ export class Analyzer implements TypeEnvironment {
       if (member.property === "map" || member.property === "flatMap") {
         const flat = member.property === "flatMap";
         this.collectionCalls.set(member.span.end, flat ? "listFlatMap" : "listMap");
-        const callbackExpected: ValueType = { kind: "function", parameters: [readonlyElement!], requiredParameters: 1, result: unknownType };
         const callbackArgument = argumentAt(0);
-        // COL-U9: `(x, i) => ...` is the Python/JS index habit; the arity
-        // mismatch would only say "cannot assign" — teach the two-slot loop.
-        // The body still analyzes with honest slot types so the teaching is
-        // the one diagnostic, not the head of a cascade.
-        if (callbackArgument?.kind === "ArrowFunctionExpression" && callbackArgument.parameters.length === 2) {
-          this.inferExpression(callbackArgument, {
-            kind: "function",
-            parameters: [readonlyElement!, numberType],
-            requiredParameters: 2,
-            result: unknownType,
-          });
-          requireCount(1);
-          this.typeError(
-            `List.${member.property} callbacks receive one value; for index-aware iteration write the two-slot loop — for value, index in values`,
-            callbackArgument.span,
-          );
-          return { kind: "list", element: unknownType };
-        }
-        const callback = this.concreteCallableFor(inferArgument(0, callbackExpected), callbackExpected, callbackArgument?.span);
-        if (callbackArgument) this.requireAssignable(callback, callbackExpected, callbackArgument.span);
-        const result = callback.kind === "function" ? callback.result : unknownType;
+        const callback = inferListCallback(0, unknownType);
+        const concrete = this.expandAliases(callback);
+        const result = concrete.kind === "function" ? concrete.result : unknownType;
         requireCount(1);
         if (flat) {
           // COL-U1: flatMap flattens exactly one level, so the transform
@@ -10135,12 +10216,8 @@ export class Analyzer implements TypeEnvironment {
       }
       if (member.property === "filter") {
         this.collectionCalls.set(member.span.end, "listFilter");
-        const callbackExpected: ValueType = { kind: "function", parameters: [readonlyElement!], requiredParameters: 1, result: boolType };
         const callbackArgument = argumentAt(0);
-        if (callbackArgument) {
-          const callback = inferArgument(0, callbackExpected);
-          this.requireAssignable(callback, callbackExpected, callbackArgument.span);
-        }
+        if (callbackArgument) inferListCallback(0, boolType);
         requireCount(1);
         // COL-U3: the exact predicate shape `x => x != null` narrows
         // List<T?> to List<T>. This is a closed-vocabulary special case (the
@@ -10296,12 +10373,8 @@ export class Analyzer implements TypeEnvironment {
         return optionalOf(readonlyElement!);
       }
       if (["some", "every", "find"].includes(member.property)) {
-        const callbackExpected: ValueType = { kind: "function", parameters: [readonlyElement!], requiredParameters: 1, result: boolType };
         const callbackArgument = argumentAt(0);
-        if (callbackArgument) {
-          const callback = inferArgument(0, callbackExpected);
-          this.requireAssignable(callback, callbackExpected, callbackArgument.span);
-        }
+        if (callbackArgument) inferListCallback(0, boolType);
         requireCount(1);
         if (member.property === "find") {
           this.collectionCalls.set(member.span.end, "listFind");
@@ -11424,8 +11497,8 @@ export class Analyzer implements TypeEnvironment {
       result: ValueType,
       requiredParameters = parameters.length,
     ): ValueType => ({ kind: "function", parameterNames, parameters, requiredParameters, result });
-    const test: ValueType = { kind: "function", parameters: [element], requiredParameters: 1, result: boolType };
-    const transform: ValueType = { kind: "function", parameters: [element], requiredParameters: 1, result: unknownType };
+    const test: ValueType = { kind: "function", parameters: [element, numberType], requiredParameters: 1, result: boolType };
+    const transform: ValueType = { kind: "function", parameters: [element, numberType], requiredParameters: 1, result: unknownType };
     const compare: ValueType = { kind: "function", parameters: [element, element], requiredParameters: 2, result: numberType };
     const orderedKey: ValueType = unionOf([numberType, stringType]);
     const selectKey: ValueType = { kind: "function", parameters: [element], requiredParameters: 1, result: orderedKey };
@@ -11473,7 +11546,7 @@ export class Analyzer implements TypeEnvironment {
       case "flatMap":
         return callable(
           ["transform"],
-          [{ kind: "function", parameters: [element], requiredParameters: 1, result: { kind: "list", element: unknownType } }],
+          [{ kind: "function", parameters: [element, numberType], requiredParameters: 1, result: { kind: "list", element: unknownType } }],
           { kind: "list", element: unknownType },
         );
       case "filter":
@@ -11559,13 +11632,17 @@ export class Analyzer implements TypeEnvironment {
   }
 
   // COL-U3: exactly the predicate `x => x != null` (either operand order).
+  // An optional second index parameter does not participate in the proof and
+  // therefore preserves the same narrowing contract.
   // The closed shape keeps this a vocabulary rule, not a predicate-type
   // system: any other body — even `x => not (x == null)` — filters without
   // narrowing.
   private isNullExclusionPredicate(argument: Expression | null): boolean {
     if (argument?.kind !== "ArrowFunctionExpression" || argument.asynchronous) return false;
     const parameter = argument.parameters[0];
-    if (argument.parameters.length !== 1 || !parameter || parameter.rest || parameter.defaultValue) return false;
+    const index = argument.parameters[1];
+    if (argument.parameters.length < 1 || argument.parameters.length > 2 || !parameter || parameter.rest || parameter.defaultValue) return false;
+    if (index?.rest || index?.defaultValue) return false;
     const body = argument.body;
     if (body.kind !== "BinaryExpression" || body.operator !== "!=") return false;
     const matches = (name: Expression, literal: Expression): boolean =>

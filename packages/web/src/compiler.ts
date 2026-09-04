@@ -1,14 +1,15 @@
 import { optionalOf as optional, type ClassInfo, type CompilerExtension, type EnumInfo, type GenericTypeInfo, type ModuleInterface, type ValueType } from "@velarscript/compiler";
-import type { AnalysisContext, CompilerAnalysisExtension, CompilerEmitterOptions, CompilerLexicalExtension, LoweringHints, Token } from "@velarscript/compiler/extension";
+import type { AnalysisContext, CompilerAnalysisExtension, CompilerEmitterOptions, CompilerLexicalExtension, Expression, LoweringHints, Token } from "@velarscript/compiler/extension";
 import { inferWebIntrinsic, routeContextIdentity, VelarWebAnalyzer } from "./analyzer.ts";
 import {
   WEB_STATEMENT_CONSTRUCTS,
   webExpressionContainsDirectAwait,
+  isWebJsx,
   webStatementConstructKey,
   webStatementContainsDirectAwait,
 } from "./ast.ts";
 import { BROWSER_TEST_MODULE, BROWSER_TEST_SOURCE_SUFFIX, browserTestDrivingGuidance } from "./browser-test.ts";
-import { WEB_VOID_ELEMENTS } from "./elements.ts";
+import { WEB_NATIVE_ELEMENTS, WEB_VOID_ELEMENTS } from "./elements.ts";
 import { WebJavaScriptEmitter } from "./emitter.ts";
 import { velarWebProjectEditorExtension, webLookPropertyDocumentation } from "./editor.ts";
 import { velarWebInspectionExtension } from "./inspection.ts";
@@ -50,6 +51,36 @@ const shadowType: ValueType = { kind: "named", name: "Shadow" };
 const imageType: ValueType = { kind: "named", name: "Image" };
 const trackType: ValueType = { kind: "named", name: "Track" };
 const trackListType: ValueType = { kind: "named", name: "TrackList" };
+
+/**
+ * Native JSX construction preserves the order and count of a collection
+ * projection. Attribute and child holes still have to pass Core's stability
+ * proof; event arrows are inert values here and run only after dispatch.
+ * Components, custom elements, refs, and bindings keep the explicit loop
+ * because their setup can execute user code or write through a binding.
+ */
+function webCanonicalCollectionProjection(
+  expression: Expression,
+  pure: (expression: Expression) => boolean,
+): boolean | undefined {
+  if (!isWebJsx(expression)) return undefined;
+  if (expression.tag !== "" && !WEB_NATIVE_ELEMENTS.has(expression.tag)) return false;
+  for (const attribute of expression.attributes) {
+    if (attribute.name === "ref" || attribute.name.startsWith("bind:")) return false;
+    if (typeof attribute.value === "string" || attribute.value === null) continue;
+    if (attribute.name.startsWith("on:") && attribute.value.kind === "ArrowFunctionExpression") continue;
+    if (!pure(attribute.value)) return false;
+  }
+  for (const child of expression.children) {
+    if (child.kind === "JSXText") continue;
+    if (child.kind === "ExtensionExpression:web:jsx") {
+      if (webCanonicalCollectionProjection(child, pure) !== true) return false;
+      continue;
+    }
+    if (!pure(child.expression)) return false;
+  }
+  return true;
+}
 const transitionType: ValueType = { kind: "named", name: "Transition" };
 const keyframesType: ValueType = { kind: "named", name: "Keyframes" };
 const animationType: ValueType = { kind: "named", name: "Animation" };
@@ -947,6 +978,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
   analysis: Object.freeze({
     directAwaitExpression: webExpressionContainsDirectAwait,
     directAwaitStatement: webStatementContainsDirectAwait,
+    canonicalCollectionProjection: webCanonicalCollectionProjection,
     // `Duration` is Core's own primitive; the Web extension reads it but does
     // not register it a second time.
     primitiveTypes: new Set([...WEB_OWNED_TYPE_NAMES].filter((name) => name !== "Duration")),

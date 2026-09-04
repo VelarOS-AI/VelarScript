@@ -116,6 +116,17 @@ test("the WorkerPool surface shape includes its pool-wide broadcast contract", (
   assert.match(workerPool.shape, /broadcast/u);
 });
 
+test("the Core surface hashes collection callback arity and read-only presence", () => {
+  const { surfaces, failures } = surfaceInventory();
+  assert.deepEqual(failures, []);
+  const core = surfaces.get("core")!.names;
+  const map = core.get("collection-member:List.map");
+  assert.ok(map, "List.map is absent from the Core surface inventory");
+  assert.match(map.shape, /number/u);
+  assert.equal(core.has("collection-member:readonly List.append"), false);
+  assert.equal(core.has("collection-member:readonly List.map"), true);
+});
+
 test("a surface that changes without its version turns the gate red and says how to bump it", async () => {
   // A changed digest beside an unchanged version is exactly what a surface
   // edited without a bump produces, so this is that failure, staged from the

@@ -12,6 +12,21 @@ many times that surface has changed *since counting began*, never a maturity
 grade: `core@0.1` beside `web@0.11` means Core started counting today, not that
 Core is younger. History is deliberately not recomputed (D110 rule 3).
 
+## 0.27.2 — 2026-09-05
+
+Surfaces: `core@0.4` · `web@0.11` · `node@0.16` · `server@0.15` · `desktop@0.10`
+
+### Collections and canonical forms — `core@0.4`
+
+- `List.map`, `flatMap`, `filter`, `find`, `some`, and `every` callbacks may
+  declare a second `index` parameter. It is the zero-based position in the
+  stable snapshot those methods already read.
+- A13 now recognizes unguarded two-slot List builders and preserves the index
+  in a two-parameter callback. The Web extension also proves stable native JSX
+  projections, so UI-node builders receive the same editor fix while component
+  setup, refs, bindings, effects, and index-changing filter pipelines remain
+  explicit.
+
 ## 0.27.1 — 2026-09-04
 
 Surfaces: `core@0.3` · `web@0.11` · `node@0.16` · `server@0.15` · `desktop@0.10`

@@ -251,6 +251,8 @@ methods are compiler-checked rather than inherited from JavaScript. Size is
 Prefer the collection API when it states the whole operation: `filter`, `map`,
 and `flatMap` for stateless selection and projection; `some`, `every`, and
 `find` for queries; `sum`, `min`, `max`, and `reduce` for intentional folds.
+The predicate and transform methods receive the value and, when declared, its
+stable snapshot index: `tasks.map((task, index) => f"{index}: {task.title}")`.
 Use `for` when the work mutates state, has custom exits, writes multiple
 outputs, or depends on ordered effects. `velar check` reports A8/A13 only for
 the narrow loop shapes it can prove equivalent.

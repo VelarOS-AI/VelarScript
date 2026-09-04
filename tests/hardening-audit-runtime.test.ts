@@ -428,6 +428,11 @@ const v: List<string?> = ["a", null, "b"]
 print(v.filter(x => x != null).join(","))
 `);
   assert.equal(output, "a,b\n");
+  const indexed = run(`
+const v: List<string?> = ["a", null, "b"]
+print(v.filter((x, index) => x != null).join(","))
+`);
+  assert.equal(indexed, "a,b\n");
   // Any other predicate shape keeps the optional element type.
   rejects(`
 const v: List<string?> = ["a", null]
@@ -460,11 +465,25 @@ test("[COL-U8] List() and Array() in value position teach the literal", () => {
   rejects("const v = Array()\nprint(\"k\")\n", "VEL3008", /Use a '\[\]' List literal/u);
 });
 
-test("[COL-U9] a two-parameter map callback teaches the two-slot loop without a cascade", () => {
-  const result = compile("const v = [1, 2]\nconst out = v.map((x, i) => x + i)\nprint(out.join(\"\"))\n");
-  const messages = result.diagnostics.map((item) => item.message);
-  assert.ok(messages.some((message) => /List\.map callbacks receive one value; for index-aware iteration write the two-slot loop — for value, index in values/u.test(message)), JSON.stringify(messages));
-  assert.ok(!messages.some((message) => /Cannot assign unknown to number/u.test(message)), JSON.stringify(messages));
+test("[COL-U9] List transforms and predicates expose the stable snapshot index", () => {
+  const output = run(`
+const values = ["a", "b", "c"]
+def label(value: string, index: number) -> string: return value + str(index)
+def keep(value: string) -> bool: return value != "b"
+print(values.map((value, index) => value + str(index)).join(","))
+print(values.map(transform=label).join(","))
+print(values.filter(test=keep).join(","))
+print(values.filter((value, index) => index % 2 == 0).join(","))
+print(str(values.some((value, index) => index == 1)))
+print(str(values.every((value, index) => index < 3)))
+print(values.find((value, index) => index == 1) ?? "missing")
+print(values.flatMap((value, index) => [value, str(index)]).join(","))
+`);
+  assert.equal(output, "a0,b1,c2\na0,b1,c2\na,c\na,c\ntrue\ntrue\nb\na,0,b,1,c,2\n");
+  rejects(`
+const values = ["a"]
+print(values.map((value, index, extra) => value).join(","))
+`, "VEL4001", /Cannot assign|parameter/u);
 });
 
 test("[COL-U10] cross-collection mismatches teach the bridge spellings", () => {
