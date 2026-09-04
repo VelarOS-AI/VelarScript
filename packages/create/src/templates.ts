@@ -385,7 +385,7 @@ function libraryTemplate(name: string, displayName: string, version: string, for
       surfaces: templateSurfaces(CORE_EXTENSIONS),
     })],
     ["README.md", `# ${displayName}\n\nA reusable VelarScript library that publishes its readable \`.vel\` source together with frozen ABI-1 JavaScript and a portable type interface. Consumers load the JavaScript artifact; the source remains available for reading, debugging, and rebuilding.\n\n\`\`\`sh\nnpm install\nnpm run validate\n\`\`\`\n\nAfter bootstrap, use \`npm exec velar -- add <package>\`, \`remove\`, and \`update\` for project-aware dependency changes. The package is private by default. Remove \`private\` only after choosing a public package name, license, and release policy.\n`],
-    ["src/index.vel", `export type Greeting:\n    message: string\n    recipient: string\n\nexport def greet(name: string) -> Greeting:\n    const recipient = name.trim()\n    assert recipient != "" else "A greeting requires a name"\n    return {message: f"Hello, {recipient}!", recipient: recipient}\n`],
+    ["src/index.vel", `export type Greeting:\n    message: string\n    recipient: string\n\nexport def greet(name: string) -> Greeting:\n    const recipient = name.trim()\n    assert recipient != "" else "A greeting requires a name"\n    return {message: f"Hello, {recipient}!", recipient}\n`],
     ["src/index.test.vel", `import {expect} from "velar/test"\nimport {greet} from "./index.vel"\n\ntest "greeting":\n    const greeting = greet("Velar")\n    expect(greeting.message).toBe("Hello, Velar!")\n    expect(greeting.recipient).toBe("Velar")\n\ntest "greeting rejects blank names": expect(() => greet("   ")).toThrow()\n`],
   ]);
 }

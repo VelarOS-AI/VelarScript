@@ -21,17 +21,15 @@ const headingLook: Look = look:
     margin = 0
     fontSize = 1.6rem
 
-// A bool attribute value follows the HTML boolean convention: `true` renders
-// the attribute with an empty value and `false` removes it, which is exactly
-// right for `disabled` and wrong for an ARIA state, whose vocabulary is the
-// literal text "true" and "false". So these two write the text.
+// `false` removes an attribute and `true` writes an empty presence value.
+// ARIA needs literal text, so convert its bool state explicitly with `str`.
 component AppearanceChoice(value: Appearance, label: string):
     def choose(): setAppearance(value)
 
     return <button
         type="button"
         look={appearance == value ? primaryControlLook : controlLook}
-        aria-pressed={appearance == value ? "true" : "false"}
+        aria-pressed={str(appearance == value)}
         on:click={choose}
         data-appearance={value}
     >
@@ -44,7 +42,7 @@ component DensityChoice(value: Density, label: string):
     return <button
         type="button"
         look={density == value ? primaryControlLook : controlLook}
-        aria-pressed={density == value ? "true" : "false"}
+        aria-pressed={str(density == value)}
         on:click={choose}
         data-density={value}
     >

@@ -152,7 +152,7 @@ type Box<T>:
     value: T
 
 def hold<T>(Type: Type<T>, value: T) -> Box<T>:
-    return { value: value }
+    return { value }
 
 const viaAlias: Box<Id> = hold(Id, "one")
 const viaExpansion: Box<string> = hold(Id, "two")

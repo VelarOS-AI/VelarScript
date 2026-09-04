@@ -333,7 +333,7 @@ type Sample:
     active: bool
 
 const point = {x: 1, y: 2}
-const sample = {point: point, label: "origin", active: true}
+const sample = {point, label: "origin", active: true}
 const iterations = 2000000
 
 def pointChecks(value: unknown, count: number) -> number:

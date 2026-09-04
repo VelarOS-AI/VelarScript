@@ -25,10 +25,10 @@ This file governs the repository unless a closer `AGENTS.md` narrows the target.
 ## Python / JavaScript reflex and canonical-form table
 
 Vel's parents are JavaScript and Python. These reflexes land in Vel source as
-something else. `A1`–`A6` are **advisories** for those traps; `A7`–`A9` are
-canonical-form advisories, raised only when the compiler can prove the longer
-collection or record spelling has one language-owned replacement. The compiler
-reports all nine and still emits. The rest are already errors whose message
+something else. `A1`–`A6` are **advisories** for those traps; `A7`–`A10` and
+`A13`–`A15` are canonical-form advisories, raised only when the compiler can prove
+the longer collection or record spelling has one language-owned replacement.
+The compiler reports them and still emits. The rest are already errors whose message
 names the successor.
 
 | Reflex | Write instead | Channel |
@@ -40,8 +40,11 @@ names the successor.
 | `"${value}"`, `` `${value}` `` | `f"{value}"` or `` f`{value}` `` — only the `f` prefix interpolates, and `${...}` is legal literal text everywhere else (generating JavaScript source is a real use, and answers with `velar-allow A5`) | `A5` |
 | `f"${value}"` | `f"{value}"` — even under the `f` prefix, `$` keeps the brace after it literal, so `${value}` stays text | `A6` |
 | Empty collection + identity-only copy loop | Initialize from the compiler-owned conversion: `set.values()`, `Set(list)`, `map.keys()` / `map.values()`, `Map(record)`, or the matching `.copy()`; transforms, filters, effects, non-empty destinations, computed sources, and non-adjacent loops do not trigger | `A7` |
-| `for item in items: if test: return true` followed by `return false` | `return items.some(item => test)` — only the exact single-slot, pure-boolean, early-return query over a List triggers; calls, getters, effects, optional conditions, wider bodies, computed sources, and non-adjacent returns do not | `A8` |
+| Single-slot List loop that only returns on a pure condition, followed by the matching exhausted return | Use `some`, `every`, or `find`; only exact early-return query shapes trigger, while calls, getters, effects, optional conditions, wider bodies, computed sources, and non-adjacent returns do not | `A8` |
+| Empty List + loop that only appends or extends a pure per-item projection, optionally under one pure guard | Initialize with `map`, `filter`, `filter(...).map(...)`, or `flatMap`; only stable List sources, data reads/operators, and compiler-owned `Type.from(value)` projections trigger, while calls, getters, effects, destination reads, wider bodies, and computed sources do not | `A13` |
 | A closed target literal mirrors two or more same-name fields from one typed record | `Target.from(source, {overrides})` — target fields are the authority; computed/effectful overrides, partial targets, spreads, and mixed sources do not trigger. `.from` uses target declaration order, so preserve an intentional authored wire order with a reasoned suppression | `A9` |
+| `flag ? "true" : "false"` in a native text attribute | `str(flag)` — the fix is offered only for that exact equivalent conversion, outside HTML bool-presence attributes and component props; it is withheld only when the discarded source contains an authored comment | `A14` |
+| `{field: field}` repeats one ordinary identifier | `{field}` — quoted keys, different values, member/call expressions, and entries whose rewrite would erase a comment do not receive the mechanical fix | `A15` |
 | `enumerate(xs)` | `for value, index in xs:` | error |
 | `with X as y:` | `using y = X` | error |
 | `raise E(...)` | `throw E(...)` | error |
@@ -97,6 +100,8 @@ the advisory channel in
 and its exact collection canonicalization extensions in
 [docs/decisions/D93-CANONICAL-COLLECTION-CONVERSION-ADVISORY.md](docs/decisions/D93-CANONICAL-COLLECTION-CONVERSION-ADVISORY.md)
 and [docs/decisions/D94-CANONICAL-LIST-SOME-ADVISORY.md](docs/decisions/D94-CANONICAL-LIST-SOME-ADVISORY.md),
+the proven List query and pipeline forms in
+[docs/decisions/D112-CANONICAL-LIST-PIPELINE-ADVISORY.md](docs/decisions/D112-CANONICAL-LIST-PIPELINE-ADVISORY.md),
 and the exact record projection in
 [docs/decisions/D95-EXACT-RECORD-PROJECTION.md](docs/decisions/D95-EXACT-RECORD-PROJECTION.md).
 

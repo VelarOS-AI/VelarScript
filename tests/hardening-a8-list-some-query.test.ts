@@ -27,7 +27,7 @@ def hasColumn(columns: List<SchemaColumnRow>, name: string) -> bool:
     return false
 `.trimStart();
   const reported = a8(source);
-  assert.match(reported.message, /List\.some is the canonical existential query/u);
+  assert.match(reported.message, /exactly a List\.some query/u);
   assert.match(reported.message, /return columns\.some\(column => column\.name == name\)/u);
   assert.equal(source.slice(reported.span.start, reported.span.end), "columns");
   assert.equal(reported.fix?.title, "Use 'columns.some(...)'");
@@ -45,6 +45,47 @@ type SchemaColumnRow:
 
 def hasColumn(columns: List<SchemaColumnRow>, name: string) -> bool:
     return columns.some(column => column.name == name)
+`.trimStart());
+  assert.deepEqual(canonical.advisories, []);
+});
+
+test("[A8] exhausted-true and first-item returns teach every and find", () => {
+  const everySource = `
+type Row:
+    ready: bool
+
+def allReady(rows: List<Row>) -> bool:
+    for row in rows:
+        if not row.ready: return false
+    return true
+`.trimStart();
+  const every = a8(everySource);
+  assert.match(every.message, /return rows\.every\(row => row\.ready\)/u);
+  assert.equal(every.fix?.title, "Use 'rows.every(...)'");
+
+  const findSource = `
+type Row:
+    id: string
+
+def rowById(rows: List<Row>, id: string) -> Row?:
+    for row in rows:
+        if row.id == id: return row
+    return null
+`.trimStart();
+  const find = a8(findSource);
+  assert.match(find.message, /return rows\.find\(row => row\.id == id\)/u);
+  assert.equal(find.fix?.title, "Use 'rows.find(...)'");
+
+  const canonical = compiled(`
+type Row:
+    ready: bool
+    id: string
+
+def allReady(rows: List<Row>) -> bool:
+    return rows.every(row => row.ready)
+
+def rowById(rows: List<Row>, id: string) -> Row?:
+    return rows.find(row => row.id == id)
 `.trimStart());
   assert.deepEqual(canonical.advisories, []);
 });
@@ -85,6 +126,23 @@ def hasActive(rows: readonly List<Row>, name: string, enabled: bool) -> bool:
     return rows.some(row => (row.name == name) and (row.active or enabled))
 `.trimStart());
   assert.deepEqual(canonical.advisories, []);
+});
+
+test("[A8] a conditional predicate fix uses VelarScript's ?: spelling and recompiles", () => {
+  const source = `
+def hasSigned(values: List<number>, positive: bool) -> bool:
+    for value in values:
+        if positive ? value > 0 : value < 0:
+            return true
+    return false
+`.trimStart();
+  const reported = a8(source);
+  const fixed = applyMechanicalFixes(source, [reported]).text;
+  assert.equal(fixed, `
+def hasSigned(values: List<number>, positive: bool) -> bool:
+    return values.some(value => positive ? (value > 0) : (value < 0))
+`.trimStart());
+  assert.deepEqual(compiled(fixed).advisories, []);
 });
 
 test("[A8] effects, getters, optional conditions, wider bodies, and non-List sources stay silent", () => {

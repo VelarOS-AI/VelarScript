@@ -248,18 +248,16 @@ def sendOnEnter(event: KeyboardEvent):
         send()
 ```
 
-An attribute value of `bool` follows the attribute's own convention. A native
-boolean attribute means by presence, so `true` writes it empty and `false`
-removes it. An `aria-*` state means by literal token, so `true` and `false`
-write the text `"true"` and `"false"` and the attribute stays on the element
-either way — an ARIA state that is absent reads as its default, which for
-`aria-busy`, `aria-pressed`, `aria-expanded`, `aria-checked`, `aria-selected`,
-`aria-hidden`, `aria-disabled`, and `aria-invalid` is false. `null` removes any
-attribute, which is how an author says the state does not apply here.
+Attribute expressions use one presence rule: `false` and `null` remove the
+attribute, `true` writes it with an empty value, and a string writes that exact
+text. Use `str(flag)` when a bool is the source of a text-valued attribute such
+as an ARIA state. The compiler offers the equivalent rewrite from
+`flag ? "true" : "false"` to `str(flag)`; it does not apply that rewrite to an
+HTML boolean attribute, where text would keep the attribute present.
 
 ```velar fragment
 component SaveButton(saving: bool, pressed: bool):
-    return <button type="button" disabled={saving} aria-busy={saving} aria-pressed={pressed}>Save</button>
+    return <button type="button" disabled={saving} aria-busy={str(saving)} aria-pressed={str(pressed)}>Save</button>
 ```
 
 While `saving` is false the button carries `aria-busy="false"` and no `disabled`

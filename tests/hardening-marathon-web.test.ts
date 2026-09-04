@@ -73,7 +73,7 @@ watch settings.theme.mode:
     changes += 1
 
 def replace(label: string):
-    settings = {...settings, label: label}
+    settings = {...settings, label}
 
 def touch(mode: string):
     settings.theme.mode = mode
@@ -167,7 +167,7 @@ def typeInto(value: string):
     form.one = value
 
 def replaceSection(label: string):
-    form.section = {label: label}
+    form.section = {label}
 `;
 
 test("[beta-7] a primitive record-field write never probes collection identity", { timeout: 180_000 }, (t) => {

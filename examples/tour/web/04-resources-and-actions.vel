@@ -27,7 +27,7 @@ state saveCount = 0
 async def loadProfile(id: string) -> Profile:
     await Promise.sleep(10ms)
     loadCount += 1
-    return {id: id, name: f"Profile {id} (load {loadCount})"}
+    return {id, name: f"Profile {id} (load {loadCount})"}
 
 async def saveProfile(profile: readonly Profile) -> SaveReceipt:
     await Promise.sleep(10ms)

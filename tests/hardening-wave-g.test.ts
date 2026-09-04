@@ -171,7 +171,7 @@ component Panel(label: string) exposes Handle:
     def reset():
         count = 0
 
-    expose {reset: reset}
+    expose {reset}
 
     return <section look={card}>{label}{str(count)}{title.value ?? ""}</section>
 

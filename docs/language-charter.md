@@ -215,18 +215,23 @@ with a meaning other than the one a Python or JavaScript reflex intended.
 `const half = total // 2` binds `total`, because `//` opens a comment. Staying
 silent about that is the trap the language exists to remove; rejecting it would
 refuse a legal comment. So it is reported instead, in a channel of its own.
-Three deliberately narrower canonicalization classes join those traps. When an
+Several deliberately narrow canonicalization classes join those traps. When an
 adjacent empty collection declaration and one identity-only loop are provably
 the long spelling of an existing collection snapshot or constructor, the
-compiler names that one built-in spelling. When a single-slot List loop does
-nothing but return `true` under one stable bool condition and an adjacent
-statement returns `false`, the compiler names `List.some`. A transform, call,
-getter, side effect, optional condition, wider body, computed source, or
-intervening statement proves nothing and stays silent. When a closed target
+compiler names that one built-in spelling. When a single-slot List loop is an
+exact early-return query under one stable bool condition, the compiler names
+`List.some`, `List.every`, or `List.find`. A transform, call, getter, side
+effect, optional condition, wider body, computed source, or intervening
+statement proves nothing and stays silent. When a closed target
 literal mirrors two or more same-name fields from one typed record and every
 remaining field is an identifier or literal override, the compiler names the
 target-owned exact projection `Target.from(source, overrides)`. Partial
-targets, spreads, mixed sources, and effectful overrides stay silent.
+targets, spreads, mixed sources, and effectful overrides stay silent. When a
+fresh List is filled only by appending or extending one stable per-item projection,
+optionally under one stable bool guard, the compiler names `List.map`,
+`List.filter`, `List.flatMap`, or their pipeline. Arbitrary calls, getters,
+effects, destination reads, wider loop bodies, two-slot loops, and computed
+sources stay silent.
 
 An advisory **never blocks a build**. It is not a diagnostic with a softer
 label: it travels in a separate list, and code generation is gated on the
@@ -245,12 +250,19 @@ for `//` read as floor division and `A3` for `%` on a negative literal
 for a keyed list rebuilt by `map` (section 14), and `A5` and `A6` for
 JavaScript `${...}` in a string, without and under the `f` prefix (section 3).
 `A7` reports a proven manual collection conversion and `A8` a proven manual
-existential List query (section 8). `A9` reports a proven manual exact record
+early-return List query (section 8). `A9` reports a proven manual exact record
 projection and `A10` a proven large same-field mapped projection (section 6).
 `A11` reports a redundant same-name query mapping in a Node `RoutePattern` and
 mechanically removes its repeated `name=` prefix. `A12` reports a design token
 reference written as free text in a Look property that accepts free text, and
-rewrites it to the checked `token("--name")` spelling (section 17).
+rewrites it to the checked `token("--name")` spelling (section 17). `A13`
+reports a proven manual List projection/filter builder and names the existing
+collection pipeline (section 8). `A14` rewrites an exact bool-to-text
+conditional in a native text attribute from `flag ? "true" : "false"` to the
+equivalent `str(flag)` spelling (section 14). `A15`
+reports an ordinary record entry whose identifier key and identifier value have
+the same name, and rewrites `{name: name}` to the equivalent `{name}` shorthand
+(section 3).
 
 An advisory that is right about the line is answered by writing the unambiguous
 spelling it names. An advisory that is wrong about *this* line is answered in
@@ -658,6 +670,13 @@ const nextUser = {...user, title: "Owner"}
 const nextValues = [...values, 4]
 ```
 
+The explicit `{id: id}` form remains legal, but advisory `A15` offers the
+equivalent `{id}` shorthand when the key and value are the same ordinary
+identifier. Quoted keys, aliases, member reads, calls, and parenthesized values
+remain explicit mappings. A comment inside the entry keeps the advisory but
+withholds its mechanical rewrite, while commas, surrounding layout, and a
+trailing comment sit outside the edit and remain byte-for-byte unchanged.
+
 Record construction is controlled even though its surface stays familiar.
 Fields evaluate once from left to right, later fields replace earlier fields,
 and names such as `__proto__` are ordinary own data fields rather than object
@@ -1017,7 +1036,7 @@ type User:
     name: string
 
 async def fetchUser(id: string) -> User:
-    return {id: id, name: "Ada"}
+    return {id, name: "Ada"}
 
 type Api:
     user: (id: string) -> Promise<User>
@@ -2137,10 +2156,10 @@ List members:
 | `reversed()` | Reversed copy. |
 | `join(separator="")` | Joined string for `List<string>`. |
 
-Advisory `A8` catches the exact long form of `some`: a synchronous single-slot
-loop over a plain List binding, whose sole body statement is an `if` with no
-`else`, whose sole true branch is `return true`, immediately followed by
-`return false` in the same function block. Its condition must have the exact
+Advisory `A8` catches exact early-return long forms of `some`, `every`, and
+`find`: a synchronous single-slot loop over a plain List binding, whose sole
+body statement is an `if` with no `else`, immediately followed by the matching
+exhausted return in the same function block. Its condition must have the exact
 type `bool` and consist only of literals, bindings, checked data-field reads,
 and operators. For example:
 
@@ -2150,16 +2169,33 @@ type SchemaColumnRow:
 
 def hasColumn(columns: List<SchemaColumnRow>, name: string) -> bool:
     return columns.some(column => column.name == name)
+
+def everyColumnHasAName(columns: List<SchemaColumnRow>) -> bool:
+    return columns.every(column => column.name != "")
+
+def columnNamed(columns: List<SchemaColumnRow>, name: string) -> SchemaColumnRow?:
+    return columns.find(column => column.name == name)
 ```
 
-The expanded early-return loop reports that spelling. A call, class getter,
+The matching expanded early-return loops report those spellings. A call, class getter,
 `bool?` condition, second loop slot, async loop, second body statement,
 computed source, `else`, or intervening statement stays ordinary code. Those
-forms can change state or depend on List iteration's live length, while `some`
-uses a stable input snapshot, so the compiler does not claim equivalence. The
-report carries no automatic edit because replacing the loop and following
-return could erase comments; the author writes the named return or keeps the
-loop with a reasoned `velar-allow A8` on its `for` line.
+forms can change state or depend on List iteration's live length, while query
+methods use a stable input snapshot, so the compiler does not claim equivalence. The
+report carries a mechanical edit only when replacing the loop and following
+return cannot erase comments; otherwise the author writes the named return or
+keeps the loop with a reasoned `velar-allow A8` on its `for` line.
+
+Advisory `A13` applies the same proof standard to a fresh typed List immediately
+followed by a synchronous single-slot List loop. When the sole body operation is
+`append` or `extend`, optionally inside one pure `if` guard, it names `map`,
+`filter`, `filter(...).map(...)`, or `flatMap`. The source must be a stable List
+binding or stable data-field path; the predicate and projection may use only
+literals, bindings, checked data-field reads, operators, and the compiler-owned
+pure `Target.from(value)` projection. Calls, class getters, index reads,
+destination reads, computed sources, two-slot loops, and wider bodies stay
+explicit loops. A13 offers a comment-preserving mechanical edit under the same
+rule as A8.
 
 Direct indexing and indexed assignment are strict. Negative indexes count from
 the end; indexes outside `-size` through `size - 1` throw `IndexError`. Use
@@ -3871,18 +3907,16 @@ attribute value: format an object explicitly before rendering it. Raw HTML is
 an explicit string-only boundary, written as `unsafe:html={trustedMarkup}`; it
 cannot be combined with children.
 
-A `bool` reaches an attribute the way that attribute means. A native HTML
-boolean attribute — `disabled`, `checked`, `hidden`, `readonly` — means by
-presence, so `true` writes it with an empty value and `false` removes it. An
-`aria-*` state means by literal token, so `true` and `false` write the text
-`"true"` and `"false"` and the attribute is never removed. The distinction is
-the platform's, not the language's: removing an ARIA state says "unspecified",
-which assistive technology reads as that state's default — for `aria-busy`,
-`aria-pressed`, `aria-expanded`, `aria-checked`, `aria-selected`, and their
-kin, that default is *false*, so a removed attribute would assert the opposite
-of a `true` the author wrote. One spelling, `aria-busy={submit.pending}`, is
-therefore correct on both attribute families. `null` still removes any
-attribute, ARIA included: that is the author saying the state does not apply.
+Every native attribute uses one visible boundary rule. `false` and `null`
+remove it, `true` writes it with an empty value, and a string writes that exact
+text. This keeps presence separate from text: `aria-busy={false}` is absent,
+while `aria-busy={str(false)}` is the literal token `"false"`. Use `str(value)`
+when a bool or number is intended as attribute text. Advisory `A14` recognizes
+the exact expanded spelling `flag ? "true" : "false"` on a text-valued native
+attribute. It offers the equivalent `str(flag)` edit when the discarded part
+contains no comment; comments inside `flag` survive because that source is
+copied verbatim. HTML bool-presence attributes and component props are outside
+that rewrite.
 
 Use ordinary conditional expressions or functions for conditional children:
 

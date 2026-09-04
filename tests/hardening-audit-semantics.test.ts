@@ -334,7 +334,7 @@ test("[ASY-U2 + D90 R17] awaiting an unchecked boundary value is rejected toward
   // D90 R17: the unsafe import arrives as unknown, and the refusal is the
   // one boundary message `any` and `unknown` now share.
   rejects(
-    "import js unsafe {mystery} from \"node:process\"\nasync def f():\n    await mystery\ndef g():\n    async f()\ng()\n",
+    "import js unsafe {mystery} from \"node:process\"\nasync def f():\n    await mystery\ndef g():\n    detach f()\ng()\n",
     /Cannot await unknown; an unchecked thenable runs foreign hooks and can leak raw undefined/u,
   );
 });

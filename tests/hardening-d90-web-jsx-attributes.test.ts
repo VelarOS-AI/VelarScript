@@ -19,9 +19,9 @@ import {
  * carry as much weight as the positives: a false positive on a legitimate
  * attribute blocks a correct program, which is worse than the old silence.
  *
- * D61 bounds the value half — an `aria-*` attribute given a `bool` renders the
- * literal text and the author is never made to write the ternary — so the
- * token vocabularies are read against a string literal only.
+ * D61 bounds the value half — `false`/`null` remove an attribute, `true` writes
+ * an empty presence value, and text is written literally. A14 shortens an
+ * expanded bool-to-text conditional to `str(value)` without changing output.
  *
  * coherence-6c: the `velar/storage` guidance used to reach only browser tests.
  */
@@ -37,6 +37,95 @@ function attributeMessages(source: string): string[] {
 function element(attributes: string): string {
   return `component Panel():\n    return <div ${attributes}>hi</div>\n`;
 }
+
+function applyFixes(source: string, edits: readonly { readonly span: { readonly start: number; readonly end: number }; readonly text: string }[]): string {
+  return [...edits]
+    .sort((left, right) => right.span.start - left.span.start)
+    .reduce((text, edit) => `${text.slice(0, edit.span.start)}${edit.text}${text.slice(edit.span.end)}`, source);
+}
+
+test("[A14] native text attributes replace a hand-written bool conversion with str()", () => {
+  const source = [
+    "component Panel(open: bool, inside: List<string>):",
+    '    return <div data-processed-activity={str(inside.size)} aria-expanded={open ? "true" : "false"}></div>',
+    "",
+  ].join("\n");
+  const result = compile(source, { extensions: [webCompilerExtension] });
+  assert.deepEqual(result.diagnostics, []);
+  assert.deepEqual(result.advisories.map((item) => item.code), ["A14"]);
+  assert.deepEqual(result.advisories.map((item) => item.fix?.edits[0]?.text), ["str(open)"]);
+
+  const fixed = applyFixes(source, result.advisories.flatMap((item) => item.fix?.edits ?? []));
+  assert.equal(fixed, [
+    "component Panel(open: bool, inside: List<string>):",
+    "    return <div data-processed-activity={str(inside.size)} aria-expanded={str(open)}></div>",
+    "",
+  ].join("\n"));
+  const clean = compile(fixed, { extensions: [webCompilerExtension] });
+  assert.deepEqual(clean.diagnostics, []);
+  assert.deepEqual(clean.advisories, []);
+});
+
+test("[A14] comment-looking text inside the preserved condition does not withhold the fix", () => {
+  const source = [
+    "component Panel(url: string):",
+    '    return <div data-match={url == "https://example.test/*" ? "true" : "false"}></div>',
+    "",
+  ].join("\n");
+  const result = compile(source, { extensions: [webCompilerExtension] });
+  assert.deepEqual(result.diagnostics, []);
+  assert.deepEqual(result.advisories.map((item) => item.code), ["A14"]);
+  assert.deepEqual(result.advisories.map((item) => item.fix?.edits[0]?.text), ['str(url == "https://example.test/*")']);
+});
+
+test("[A14] component props, HTML bool-presence attributes, optional bools, and existing str() calls stay untouched", () => {
+  const source = [
+    "component Child(label: string):",
+    "    return <span>{label}</span>",
+    "",
+    "component Panel(open: bool, optionalOpen: bool?, count: number, inside: List<string>):",
+    '    return <div data-count={str(count)} disabled={open ? "true" : "false"}>',
+    '        <section DISABLED={open ? "true" : "false"} headingreset={open ? "true" : "false"}>still presence-controlled</section>',
+    '        <Child label={open ? "true" : "false"} />',
+    '        <i data-optional={optionalOpen ? "true" : "false"}></i>',
+    "        <i data-size={str(/* retain why */ inside.size)}></i>",
+    "    </div>",
+    "",
+  ].join("\n");
+  const result = compile(source, { extensions: [webCompilerExtension] });
+  assert.deepEqual(result.diagnostics, []);
+  assert.deepEqual(result.advisories, []);
+});
+
+test("[A14] a comment keeps the guidance but withholds the mechanical edit", () => {
+  const source = [
+    "component Panel(open: bool):",
+    '    return <div aria-expanded={open ? /* explain the token */ "true" : "false"}></div>',
+    "",
+  ].join("\n");
+  const result = compile(source, { extensions: [webCompilerExtension] });
+  assert.deepEqual(result.diagnostics, []);
+  assert.deepEqual(result.advisories.map((item) => item.code), ["A14"]);
+  assert.equal(result.advisories[0]?.fix, undefined);
+});
+
+test("[A14] invalid elements and custom-element attributes stay outside the native rewrite", () => {
+  const invalid = compile([
+    "component Panel(open: bool):",
+    '    return <dv data-open={open ? "true" : "false"}></dv>',
+    "",
+  ].join("\n"), { extensions: [webCompilerExtension] });
+  assert.ok(invalid.diagnostics.some((item) => item.code === "VEL5061"));
+  assert.deepEqual(invalid.advisories, []);
+
+  const custom = compile([
+    "component Panel(open: bool):",
+    '    return <my-widget data-open={open ? "true" : "false"}></my-widget>',
+    "",
+  ].join("\n"), { extensions: [webCompilerExtension] });
+  assert.deepEqual(custom.diagnostics, []);
+  assert.deepEqual(custom.advisories, []);
+});
 
 test("[D90] the React attribute reflexes name the VelarScript spelling and rewrite to it", () => {
   for (const [wrong, right] of [
@@ -119,7 +208,7 @@ test("[D90] an out-of-vocabulary ARIA token and role are named against their clo
   assert.ok(live[0]!.includes("off, polite, assertive"), live[0]!);
 });
 
-test("[D90] D61 stands: an aria-* attribute given a bool or any expression is never touched", () => {
+test("[D90] ARIA accepts explicit text and dynamic presence expressions", () => {
   assert.deepEqual(reported("component Panel(pending: bool):\n    return <div aria-hidden={true} aria-busy={pending} aria-pressed={pending}>hi</div>\n"), []);
   assert.deepEqual(reported("component Panel(state: string):\n    return <div aria-live={state} role={state}>hi</div>\n"), []);
 });

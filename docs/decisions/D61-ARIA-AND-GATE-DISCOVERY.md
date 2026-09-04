@@ -4,64 +4,31 @@
 
 ---
 
-## 第 155 条 —— `aria-*` 上的 bool 渲染成字面文本 `"true"` / `"false"`
+## 第 155 条 —— 属性存在性与属性文本使用两种值
 
-### 实测
+### 裁决
 
-`packages/web/src/emitter.ts:1889`：
+所有原生 JSX 属性遵循同一条可见规则：
 
-```js
-function __velarAttributeValue(value, name) {
-  if (value === true) return "";      // ← 所有属性一视同仁
-```
+- `null` 与 `false` 删除属性；
+- `true` 写入值为空字符串的存在属性；
+- 字符串写入其字面文本。
 
-配合 `__velarAttr` 在 `false` 时**移除属性**。
+因此 `disabled={saving}` 直接表达存在性，而 ARIA 的字面 token 用
+`aria-busy={str(saving)}` 表达。`aria-busy={false}` 是未指定，
+`aria-busy={str(false)}` 才是明确的 `aria-busy="false"`；两者不会共享一个
+隐式转换规则。
 
-**这对 HTML 布尔属性是对的**（`disabled`、`checked`、`readonly` 用存在/缺席表意），
-**对 ARIA 是错的** —— ARIA 的词汇是**字面 token** `"true"` / `"false"`。
-
-### 它不是「没效果」，是「说反了」
-
-`aria-busy=""` 不是一个合法 token，用户代理按默认值处理 —— 而 `aria-busy` 的默认是
-**false**。所以作者写 `aria-busy={submit.pending}`，在 pending 为真时，
-**属性宣称的恰好是相反的事实**。
-
-同理 `aria-pressed`、`aria-expanded`、`aria-checked`、`aria-selected`、
-`aria-hidden`、`aria-disabled`、`aria-invalid`。移除属性 ≠ `aria-*="false"`：
-前者是「未指定」，后者是「明确为否」，两者在辅助技术里不等价。
-
-### 语言自己已经在按正确的方式写
-
-`packages/web/src/runtime.ts:1694`、`:1789` —— `velar/forms` 内部写的是
-`formSetAttribute(field, "aria-invalid", "true")` 与 `aria-busy "true"`。
-**同一个运行时里，库自己写字符串，作者写的 JSX 得到空串。**
-
-现存语料里已经有一处：`examples/production-web/src/components/newsletter.vel:54`
-的 `aria-busy={submit.pending}` 今天渲染出 `aria-busy=""`。
-**它在门禁里绿了很久**，因为没有任何东西检查属性的语义。
-
-### 裁决：采纳实施波的建议 ②
-
-**`aria-*` 属性收到 `bool` 时渲染字面文本 `"true"` / `"false"`，且永不移除属性。**
-文本、数字、枚举照旧（`aria-label`、`aria-valuenow`、`aria-controls` 不受影响 ——
-它们本来就不写 bool）。
-
-不采纳的两条：
-
-- **① 只写进典章**：依赖每个作者记住一条例外，正是「一个拼写一个意思」要消灭的东西。
-  而这条例外的**失败是静默的**，且受害者是最没有能力报告它的那批人。
-- **③ 报诊断要求显式文本**（`aria-pressed={x ? "true" : "false"}`）：把一个只有
-  一种合理解释的写法变成三倍长度的仪式。作者写 bool 的意图在 ARIA 上没有第二种读法。
-
-**判据是双亲法**：母亲（DOM）说 ARIA 取字面文本 —— 行为按母亲；
-父亲（拼写）说作者写 `bool` 最自然 —— 拼写按父亲。**这正是两者不冲突的情形。**
+手写 `saving ? "true" : "false"` 与 `str(saving)` 等价但更长。编译器以 A14
+提示前者。等价性证明只覆盖恰好两个字符串分支的非可选 bool 转换和原生文本属性；
+HTML 布尔/存在性属性与组件参数不在范围内。机械修复还要求将被丢弃的部分没有
+注释；条件本身按原文放进 `str(...)`，其中的注释会被保留。
 
 ### 回归
 
-`aria-*={true}` / `={false}` 各渲染出字面文本；`false` 时属性**仍在**；
-非 ARIA 的布尔属性（`disabled`）行为不变；`aria-label={text}` 不受影响。
-`newsletter.vel:54` 那处随之修好（若该文件已随退役删除，则在 `examples/app` 或
-展示里立一处等价断言）。
+浏览器回归同时读取动态 `data-*`、ARIA 和 HTML 布尔属性：`false` 与 `null` 时
+按存在性消失，`str(false)` 保留字面文本；切换为 true 后，存在属性值为空字符串，
+`str(true)` 的值为 `"true"`。裸属性统一写为空字符串。
 
 ---
 

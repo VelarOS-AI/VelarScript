@@ -1975,7 +1975,8 @@ export class Analyzer implements TypeEnvironment {
     for (const statement of program.body) {
       this.analyzeStatement(statement);
       this.adviseManualCollectionConversion(previous, statement);
-      this.adviseManualListSome(previous, statement);
+      this.adviseManualListPipeline(previous, statement);
+      this.adviseManualListQuery(previous, statement);
       previous = statement;
     }
     // D90 R12 reports last for the same reason: whether a class member is at
@@ -4694,22 +4695,176 @@ export class Analyzer implements TypeEnvironment {
   }
 
   /**
-   * A8: the exact existential-query loop has one compiler-owned List spelling:
+   * A13: a fresh List filled by one pure projection, with an optional pure
+   * guard, is the expanded form of List.map or List.filter(...).map(...).
    *
-   *     for column in columns:
-   *         if column.name == name:
-   *             return true
-   *     return false
-   *
-   * becomes `return columns.some(column => column.name == name)`. This is a
-   * proof, not a general loop-style preference. The source is a plain List
-   * binding, the loop has one name slot, both boolean returns are literals,
-   * and the predicate is a non-optional bool made only from data reads and
-   * operators. A call or class member can hide a mutation/getter, and List
-   * iteration is live while `some` snapshots its inputs, so either shape keeps
-   * the expanded loop silent.
+   * This stays deliberately narrower than a general loop-style lint. List
+   * pipelines snapshot their input while a `for` observes live growth, so the
+   * proof accepts only stable List data, stable data reads/operators, and the
+   * compiler-owned pure `Type.from(value)` projection. Calls, getters, index
+   * reads, writes, a second body statement, two-slot loops, and reads from the
+   * destination keep the loop silent.
+  */
+  private adviseManualListPipeline(previous: Statement | null, statement: Statement): void {
+    if (previous?.kind !== "VariableDeclaration" || statement.kind !== "ForStatement") return;
+    if (statement.asynchronous || statement.secondPattern !== null || statement.pattern.kind !== "NameBindingPattern") return;
+    if (previous.pattern.kind !== "NameBindingPattern") return;
+
+    const targetName = previous.pattern.name;
+    const itemName = statement.pattern.name;
+    if (itemName === targetName) return;
+    const targetBinding = this.lookup(targetName);
+    if (!targetBinding || targetBinding.span.start !== previous.pattern.span.start || targetBinding.span.end !== previous.pattern.span.end) return;
+    const target = this.expandAliases(targetBinding.storageType);
+    if (target.kind !== "list" || !this.isEmptyCollectionInitializer(previous.initializer, "list")) return;
+
+    const source = this.expandAliases(this.inferredExpressionType(statement.iterable));
+    if (source.kind !== "list") return;
+    const sourceSpelling = this.manualListPipelineSourceSpelling(statement.iterable, targetName);
+    if (sourceSpelling === null) return;
+
+    let predicate: string | null = null;
+    let appendStatement: Statement | null = statement.body[0] ?? null;
+    if (statement.body.length !== 1) return;
+    if (appendStatement?.kind === "IfStatement") {
+      if (appendStatement.elseBody !== null || appendStatement.thenBody.length !== 1) return;
+      const condition = this.expandAliases(this.inferredExpressionType(appendStatement.condition));
+      if (!sameType(condition, boolType)) return;
+      predicate = this.manualListPipelineExpressionSpelling(appendStatement.condition, new Set([targetName]));
+      if (predicate === null) return;
+      appendStatement = appendStatement.thenBody[0] ?? null;
+    }
+
+    const write = this.manualListPipelineWrite(appendStatement, targetName);
+    if (write === null) return;
+    const transform = this.manualListPipelineExpressionSpelling(write.value, new Set([targetName]));
+    if (transform === null) return;
+    // The `if` body can read a value under a flow fact, while a later `map`
+    // callback is analyzed independently from the preceding `filter`. Keep the
+    // conservative boundary at every narrowed projection: some facts may come
+    // from an enclosing branch and survive the rewrite, but admitting those
+    // would require proving their origin. This guarantees the advertised
+    // pipeline compiles (notably for `row.label != null` then `row.label`).
+    if (predicate !== null && this.expressionUsesRuntimeNarrowing(write.value)) return;
+
+    const identity = write.operation === "append"
+      && write.value.kind === "IdentifierExpression"
+      && write.value.name === itemName;
+    // A7 already owns the unfiltered identity copy and names List.copy().
+    if (predicate === null && identity) return;
+    const filtered = predicate === null ? sourceSpelling : `${sourceSpelling}.filter(${itemName} => ${predicate})`;
+    const projection = write.operation === "extend" ? "flatMap" : "map";
+    const replacement = identity ? filtered : `${filtered}.${projection}(${itemName} => ${transform})`;
+    const operation = predicate === null
+      ? `List.${projection}`
+      : identity ? "List.filter" : `List.filter(...).${projection}`;
+    this.advise(
+      "A13",
+      `This empty List is filled only by a pure per-item ${predicate === null ? "projection" : "filter and projection"}; ${operation} is the canonical collection pipeline. Initialize '${targetName}' with '${replacement}' instead of writing this loop`,
+      statement.iterable.span,
+      this.commentPreservingMechanicalFix(
+        span(previous.initializer.span.start, statement.span.end),
+        replacement,
+        `Initialize '${targetName}' with a collection pipeline`,
+      ),
+    );
+  }
+
+  private manualListPipelineSourceSpelling(expression: Expression, targetName: string): string | null {
+    if (expression.kind === "IdentifierExpression") return expression.name === targetName ? null : expression.name;
+    if (expression.kind !== "MemberExpression" || expression.optional || !this.stableDataMember(expression.object, expression.property)) return null;
+    const object = this.manualListPipelineSourceSpelling(expression.object, targetName);
+    return object === null ? null : `${object}.${expression.property}`;
+  }
+
+  private manualListPipelineWrite(
+    statement: Statement | null,
+    targetName: string,
+  ): { readonly operation: "append" | "extend"; readonly value: Expression } | null {
+    if (statement?.kind !== "ExpressionStatement") return null;
+    const call = statement.expression;
+    if (call.kind !== "CallExpression" || call.optional || call.callee.kind !== "MemberExpression" || call.callee.optional) return null;
+    if (call.callee.object.kind !== "IdentifierExpression" || call.callee.object.name !== targetName) return null;
+    const operation = this.collectionCalls.get(call.callee.span.end);
+    if (operation !== "listAppend" && operation !== "listExtend") return null;
+    const [value] = this.orderedDirectCallArguments(call, [operation === "listAppend" ? "value" : "values"]);
+    return value ? { operation: operation === "listAppend" ? "append" : "extend", value } : null;
+  }
+
+  /** True when this expression was accepted using a flow fact from its branch. */
+  private expressionUsesRuntimeNarrowing(expression: Expression): boolean {
+    for (const key of this.runtimeNarrowings.keys()) {
+      const separator = key.indexOf(":");
+      if (separator < 0) continue;
+      const start = Number(key.slice(0, separator));
+      const end = Number(key.slice(separator + 1));
+      if (start >= expression.span.start && end <= expression.span.end) return true;
+    }
+    return false;
+  }
+
+  /** Rebuilds the pure data-expression subset admitted inside an A13 pipeline. */
+  private manualListPipelineExpressionSpelling(
+    expression: Expression,
+    forbiddenNames: ReadonlySet<string>,
+    nested = false,
+  ): string | null {
+    switch (expression.kind) {
+      case "LiteralExpression":
+        return expression.raw;
+      case "IdentifierExpression":
+        return forbiddenNames.has(expression.name) ? null : expression.name;
+      case "MemberExpression": {
+        if (!this.canonicalCollectionMemberReadIsStable(expression)) return null;
+        const object = this.manualListPipelineExpressionSpelling(expression.object, forbiddenNames, true);
+        return object === null ? null : `${object}${expression.optional ? "?." : "."}${expression.property}`;
+      }
+      case "UnaryExpression": {
+        if (expression.operator === "await") return null;
+        const operand = this.manualListPipelineExpressionSpelling(expression.operand, forbiddenNames, true);
+        if (operand === null) return null;
+        const spelling = `${expression.operator === "not" ? "not " : expression.operator}${operand}`;
+        return nested ? `(${spelling})` : spelling;
+      }
+      case "BinaryExpression": {
+        const left = this.manualListPipelineExpressionSpelling(expression.left, forbiddenNames, true);
+        const right = this.manualListPipelineExpressionSpelling(expression.right, forbiddenNames, true);
+        if (left === null || right === null) return null;
+        const spelling = `${left} ${expression.operator} ${right}`;
+        return nested ? `(${spelling})` : spelling;
+      }
+      case "ComparisonChainExpression": {
+        const operands = expression.operands.map((operand) => this.manualListPipelineExpressionSpelling(operand, forbiddenNames, true));
+        if (operands.some((operand) => operand === null)) return null;
+        let spelling = operands[0]!;
+        for (let index = 0; index < expression.operators.length; index += 1) {
+          spelling += ` ${expression.operators[index]} ${operands[index + 1]}`;
+        }
+        return nested ? `(${spelling})` : spelling;
+      }
+      case "CallExpression": {
+        if (expression.optional || expression.arguments.length !== 1 || expression.argumentNames?.some((name) => name !== null)) return null;
+        if (!this.recordFromCalls.has(spanIdentity(expression.span))) return null;
+        if (expression.callee.kind !== "MemberExpression" || expression.callee.optional
+          || expression.callee.property !== "from" || expression.callee.object.kind !== "IdentifierExpression") return null;
+        const argument = this.manualListPipelineExpressionSpelling(expression.arguments[0]!, forbiddenNames);
+        return argument === null ? null : `${expression.callee.object.name}.from(${argument})`;
+      }
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * A8: the exact early-return List queries have compiler-owned spellings:
+   * `some`, `every`, and `find`. This is a proof, not a general loop-style
+   * preference. The source is a plain List binding, the loop has one name
+   * slot, and the predicate is a non-optional bool made only from data reads
+   * and operators. A call or class member can hide a mutation/getter, and List
+   * iteration is live while query methods snapshot their inputs, so either
+   * shape keeps the expanded loop silent.
    */
-  private adviseManualListSome(previous: Statement | null, statement: Statement): void {
+  private adviseManualListQuery(previous: Statement | null, statement: Statement): void {
     if (previous?.kind !== "ForStatement" || statement.kind !== "ReturnStatement") return;
     if (this.functionDepth === 0 || this.constructorDepth > 0 || this.finallyLoopDepths.length > 0) return;
     if (previous.asynchronous || previous.secondPattern !== null || previous.pattern.kind !== "NameBindingPattern") return;
@@ -4720,23 +4875,39 @@ export class Analyzer implements TypeEnvironment {
     if (previous.body.length !== 1 || previous.body[0]!.kind !== "IfStatement") return;
     const branch = previous.body[0]!;
     if (branch.elseBody !== null || branch.thenBody.length !== 1 || branch.thenBody[0]!.kind !== "ReturnStatement") return;
-    if (!this.isBooleanLiteralReturn(branch.thenBody[0]!, true) || !this.isBooleanLiteralReturn(statement, false)) return;
     const condition = this.expandAliases(this.inferredExpressionType(branch.condition));
     if (!sameType(condition, boolType)) return;
-    const predicate = this.manualSomePredicateSpelling(branch.condition);
+    const predicate = this.manualListQueryPredicateSpelling(branch.condition);
     if (predicate === null) return;
 
     const sourceName = previous.iterable.name;
     const itemName = previous.pattern.name;
-    const replacement = `return ${sourceName}.some(${itemName} => ${predicate})`;
+    const branchReturn = branch.thenBody[0]!;
+    let member: "some" | "every" | "find";
+    let callback = predicate;
+    if (this.isBooleanLiteralReturn(branchReturn, true) && this.isBooleanLiteralReturn(statement, false)) {
+      member = "some";
+    } else if (this.isBooleanLiteralReturn(branchReturn, false) && this.isBooleanLiteralReturn(statement, true)) {
+      member = "every";
+      callback = branch.condition.kind === "UnaryExpression" && branch.condition.operator === "not"
+        ? this.manualListQueryPredicateSpelling(branch.condition.operand) ?? ""
+        : `not (${predicate})`;
+      if (callback === "") return;
+    } else if (this.isLoopSlotReturn(branchReturn, itemName) && this.isNullLiteralReturn(statement)) {
+      member = "find";
+    } else {
+      return;
+    }
+
+    const replacement = `return ${sourceName}.${member}(${itemName} => ${callback})`;
     this.advise(
       "A8",
-      `This loop returns true on the first matching List item and false after exhaustion; List.some is the canonical existential query. Write '${replacement}' instead`,
+      `This loop is exactly a List.${member} query written as early returns. Write '${replacement}' instead`,
       previous.iterable.span,
       this.commentPreservingMechanicalFix(
         span(previous.span.start, statement.span.end),
         replacement,
-        `Use '${sourceName}.some(...)'`,
+        `Use '${sourceName}.${member}(...)'`,
       ),
     );
   }
@@ -4747,38 +4918,50 @@ export class Analyzer implements TypeEnvironment {
       && statement.value.value === expected;
   }
 
+  private isNullLiteralReturn(statement: Statement): boolean {
+    return statement.kind === "ReturnStatement"
+      && statement.value?.kind === "LiteralExpression"
+      && statement.value.value === null;
+  }
+
+  private isLoopSlotReturn(statement: Statement, itemName: string): boolean {
+    return statement.kind === "ReturnStatement"
+      && statement.value?.kind === "IdentifierExpression"
+      && statement.value.name === itemName;
+  }
+
   /**
    * Rebuilds only the expression subset whose evaluation cannot hide a call,
    * write, await, dynamic import, or class getter. Parenthesizing nested
    * operators preserves their AST grouping without needing the source text.
    */
-  private manualSomePredicateSpelling(expression: Expression, nested = false): string | null {
+  private manualListQueryPredicateSpelling(expression: Expression, nested = false): string | null {
     switch (expression.kind) {
       case "LiteralExpression":
         return expression.raw;
       case "IdentifierExpression":
         return expression.name;
       case "MemberExpression": {
-        if (!this.manualSomeMemberReadIsStable(expression)) return null;
-        const object = this.manualSomePredicateSpelling(expression.object, true);
+        if (!this.canonicalCollectionMemberReadIsStable(expression)) return null;
+        const object = this.manualListQueryPredicateSpelling(expression.object, true);
         return object === null ? null : `${object}${expression.optional ? "?." : "."}${expression.property}`;
       }
       case "UnaryExpression": {
         if (expression.operator === "await") return null;
-        const operand = this.manualSomePredicateSpelling(expression.operand, true);
+        const operand = this.manualListQueryPredicateSpelling(expression.operand, true);
         if (operand === null) return null;
         const spelling = `${expression.operator === "not" ? "not " : expression.operator}${operand}`;
         return nested ? `(${spelling})` : spelling;
       }
       case "BinaryExpression": {
-        const left = this.manualSomePredicateSpelling(expression.left, true);
-        const right = this.manualSomePredicateSpelling(expression.right, true);
+        const left = this.manualListQueryPredicateSpelling(expression.left, true);
+        const right = this.manualListQueryPredicateSpelling(expression.right, true);
         if (left === null || right === null) return null;
         const spelling = `${left} ${expression.operator} ${right}`;
         return nested ? `(${spelling})` : spelling;
       }
       case "ComparisonChainExpression": {
-        const operands = expression.operands.map((operand) => this.manualSomePredicateSpelling(operand, true));
+        const operands = expression.operands.map((operand) => this.manualListQueryPredicateSpelling(operand, true));
         if (operands.some((operand) => operand === null)) return null;
         let spelling = operands[0]!;
         for (let index = 0; index < expression.operators.length; index += 1) {
@@ -4787,11 +4970,11 @@ export class Analyzer implements TypeEnvironment {
         return nested ? `(${spelling})` : spelling;
       }
       case "ConditionalExpression": {
-        const condition = this.manualSomePredicateSpelling(expression.condition, true);
-        const thenValue = this.manualSomePredicateSpelling(expression.thenValue, true);
-        const elseValue = this.manualSomePredicateSpelling(expression.elseValue, true);
+        const condition = this.manualListQueryPredicateSpelling(expression.condition, true);
+        const thenValue = this.manualListQueryPredicateSpelling(expression.thenValue, true);
+        const elseValue = this.manualListQueryPredicateSpelling(expression.elseValue, true);
         if (condition === null || thenValue === null || elseValue === null) return null;
-        const spelling = `${thenValue} if ${condition} else ${elseValue}`;
+        const spelling = `${condition} ? ${thenValue} : ${elseValue}`;
         return nested ? `(${spelling})` : spelling;
       }
       default:
@@ -4799,7 +4982,7 @@ export class Analyzer implements TypeEnvironment {
     }
   }
 
-  private manualSomeMemberReadIsStable(expression: Extract<Expression, { kind: "MemberExpression" }>): boolean {
+  private canonicalCollectionMemberReadIsStable(expression: Extract<Expression, { kind: "MemberExpression" }>): boolean {
     const stableOwner = (type: ValueType): boolean => {
       const owner = this.expandAliases(nonOptional(type));
       if (owner.kind === "union") return owner.members.every(stableOwner);
@@ -4961,12 +5144,36 @@ export class Analyzer implements TypeEnvironment {
   /**
    * A canonical-form advisory may offer an editor fix only when replacing its
    * proven-equivalent syntax cannot silently discard an authored comment.
-   * VelarScript comments start with `//`; a matching string literal may
-   * conservatively withhold the fix, which is preferable to erasing prose.
+   * Both line and block comments conservatively withhold the fix, which is
+   * preferable to erasing prose.
    */
   private commentPreservingMechanicalFix(rewriteSpan: Span, replacement: string, title: string): DiagnosticFix | undefined {
-    if (this.sourceText.slice(rewriteSpan.start, rewriteSpan.end).includes("//")) return undefined;
+    const written = this.sourceText.slice(rewriteSpan.start, rewriteSpan.end);
+    if (written.includes("//") || written.includes("/*")) return undefined;
     return mechanicalFix(rewriteSpan, replacement, title);
+  }
+
+  /**
+   * A15: `{name: name}` and `{name}` are the same record entry when both
+   * occurrences are ordinary identifiers. Quoted and keyword-named keys are
+   * deliberately excluded: the AST keeps their decoded value, so comparing
+   * names alone would erase syntax the author actually wrote. Parenthesized,
+   * member, call, and every different-name value remain ordinary mappings.
+   *
+   * The edit owns only the entry, never its comma or surrounding layout. A
+   * comment between the key and value withholds the edit rather than dropping
+   * prose; a trailing comment sits outside the entry span and is preserved.
+   */
+  private adviseRedundantObjectProperty(
+    property: Extract<Expression, { kind: "ObjectExpression" }>["properties"][number] & { kind: "ObjectProperty" },
+  ): void {
+    if (!property.sameNameIdentifierValue) return;
+    this.advise(
+      "A15",
+      `Object field '${property.name}' repeats the same-name identifier it reads; use the shorthand '{${property.name}}'`,
+      property.span,
+      this.commentPreservingMechanicalFix(property.span, property.name, `Use object shorthand '${property.name}'`),
+    );
   }
 
   // D32 item 30: a Promise-typed expression statement is a floating promise —
@@ -6653,7 +6860,8 @@ export class Analyzer implements TypeEnvironment {
         }
       }
       this.adviseManualCollectionConversion(previous, statement);
-      this.adviseManualListSome(previous, statement);
+      this.adviseManualListPipeline(previous, statement);
+      this.adviseManualListQuery(previous, statement);
       previous = statement;
     }
     if (completedFlow) this.restoreFlowFacts(completedFlow);
@@ -7208,6 +7416,7 @@ export class Analyzer implements TypeEnvironment {
             const actual = this.inferExpression(property.value, expected.kind === "optional" ? expected.inner : expected);
             fields.set(property.name, expected.kind === "unknown" ? this.widenAggregateSingleton(actual) : actual);
             if (expected.kind !== "unknown") this.requireAssignable(actual, expected, property.value.span);
+            this.adviseRedundantObjectProperty(property);
           } else {
             containsSpread = true;
             const spread = this.inferExpression(property.value);
@@ -11474,7 +11683,8 @@ export class Analyzer implements TypeEnvironment {
     }
   }
 
-  private inferredExpressionType(expression: Expression): ValueType {
+  /** Lets target analyzers inspect a child type already proven in this pass without analyzing it twice. */
+  protected inferredExpressionType(expression: Expression): ValueType {
     const source = expression.kind === "SpreadExpression" ? expression.value : expression;
     return this.inferredExpressionTypes.get(spanIdentity(source.span)) ?? unknownType;
   }

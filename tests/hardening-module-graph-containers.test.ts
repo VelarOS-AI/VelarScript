@@ -115,7 +115,7 @@ component Panel(title: string) exposes Handle:
     def focus():
         pass
 
-    expose {focus: focus, loaded: import("./dep.vel")}
+    expose {focus: focus, loaded: import("./dep.vel")} // velar-allow A15: the probe needs a distinct value span for this container
     return <p>{title}</p>
 `;
 
@@ -414,7 +414,7 @@ async def statements() -> List<string>:
     // ExpressionStatement.expression
     print(f"container expression {(await import("./dep-expression-statement.vel")).name}")
     // DetachStatement.expression
-    detach detach(import("./dep-async-statement.vel"))
+    detach observe(import("./dep-async-statement.vel"))
     return ["statements"]
 
 async def owned() -> List<string>:

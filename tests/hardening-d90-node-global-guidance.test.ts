@@ -158,12 +158,12 @@ test("[D90] `module` is a keyword, so it is answered by the keyword rule rather 
 
 test("[D90] the answer does not depend on which side of the '=' the name stands on", () => {
   // The sink, not the spelling: there are two unresolved-name sites in the
-  // analyzer, and only the read site consulted guidance. `exports = {run: run}`
+  // analyzer, and only the read site consulted guidance. `exports = {run}`
   // is the CommonJS reflex this packet exists to answer, and it reaches the
   // assignment site, so it used to earn a bare "Unknown name" while
   // `const value = exports` earned the module that replaced it.
   for (const [name, source] of [
-    ["exports", 'def run():\n  print("x")\n\nexports = {run: run}\n'],
+    ["exports", 'def run():\n  print("x")\n\nexports = {run}\n'],
     ["fetch", "def go():\n  fetch = 1\n"],
     ["process", "def go():\n  process = 1\n"],
     ["WebSocket", "def go():\n  WebSocket = 1\n"],

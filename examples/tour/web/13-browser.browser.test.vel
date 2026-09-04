@@ -48,12 +48,10 @@ test "text, attributes, geometry, styles, namespaces, counts, and visibility rea
     expect(vocabularyBox.bottom >= vocabularyBox.top).toBe(true)
     expect(await browser.style("[data-vocabulary]", "gap")).toBe("16px")
 
-// A bool on an `aria-*` attribute is a literal token in the rendered DOM, and
-// `false` keeps the attribute rather than removing it. A native boolean
-// attribute keeps meaning by presence. Both halves are read here from the real
-// browser, because both are claims about what the page says to a screen reader
-// rather than about what the compiler emitted.
-test "a bool renders as an ARIA token and as a native boolean attribute":
+// `str(bool)` writes an ARIA token while a raw bool controls attribute
+// presence. Both halves are read here from the real browser because both are
+// claims about the rendered accessibility surface rather than compiler text.
+test "text renders as an ARIA token and bool controls a native attribute":
     await browser.open()
     expect(await browser.attribute("[data-aria]", "aria-busy")).toBe("false")
     expect(await browser.attribute("[data-aria]", "aria-expanded")).toBe("false")

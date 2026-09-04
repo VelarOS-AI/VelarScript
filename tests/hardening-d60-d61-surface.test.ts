@@ -7,8 +7,8 @@ import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-
 import { repositoryRoot } from "./repository-root.ts";
 
 // ---------------------------------------------------------------------------
-// The four surface defects an author walks straight into: D61 rule 155 (a bool
-// on an `aria-*` attribute asserted the opposite of what the author wrote),
+// The four surface defects an author walks straight into: D61 rule 155 (ARIA
+// text has to distinguish a missing attribute from the string "false"),
 // D60 rule 150 (seven Look properties published a name whose values could not
 // be written), D60 rule 151 (`keyframes:` did not reuse the Look value checker
 // the charter promises it reuses), and D60 rule 153 (a capability module failed
@@ -78,35 +78,38 @@ async function desktopProject(prefix: string, files: ReadonlyMap<string, string>
 }
 
 // ---------------------------------------------------------------------------
-// D61 rule 155 — an ARIA state is a literal token, not presence and absence.
+// D61 rule 155 — bool/null control presence; strings carry attribute text.
 // ---------------------------------------------------------------------------
 
-test("[D61-155] a bool on aria-* renders the literal token in a real browser", { timeout: 300_000 }, async () => {
+test("[D61-155] str(bool) carries ARIA text while bool controls presence", { timeout: 300_000 }, async () => {
   const directory = await webProject("velar-d61-155-aria-", new Map([
     ["main.vel", `component AriaProbe:
     state busy = false
+    state note: string? = "ready"
 
     def toggle():
         busy = not busy
+        note = null
 
     return <section>
-        <p data-probe aria-busy={busy} aria-hidden={busy} aria-label="probe">{f"busy {busy}"}</p>
-        <button type="button" data-press aria-pressed={busy} disabled={busy} on:click={toggle}>press</button>
+        <p data-probe data-busy={busy} data-count={2} data-note={note} data-null={null} aria-disabled={busy} aria-busy={str(busy)} aria-hidden={str(busy)} aria-label="probe">{f"busy {busy}"}</p>
+        <button type="button" data-press aria-pressed={str(busy)} disabled={busy} on:click={toggle}>press</button>
     </section>
 
 @main: mount(<AriaProbe />, "#app")
 `],
-    // Before rule 155 every assertion below read "" or null: a true bool became
-    // the empty string, which is not an ARIA token, and a false bool removed
-    // the attribute -- so aria-busy={pending} claimed the opposite of the truth
-    // while pending was true, and said nothing at all while it was false.
     ["aria.browser.test.vel", `import {expect} from "velar/test"
 import {browser} from "velar/web-test"
 
-test "an aria bool is a literal token and never leaves the element":
+test "text is a value and bool is presence":
     await browser.open()
     expect(await browser.attribute("[data-probe]", "aria-busy")).toBe("false")
     expect(await browser.attribute("[data-probe]", "aria-hidden")).toBe("false")
+    expect(await browser.attribute("[data-probe]", "data-busy")).toBe(null)
+    expect(await browser.attribute("[data-probe]", "data-count")).toBe("2")
+    expect(await browser.attribute("[data-probe]", "data-note")).toBe("ready")
+    expect(await browser.attribute("[data-probe]", "data-null")).toBe(null)
+    expect(await browser.attribute("[data-probe]", "aria-disabled")).toBe(null)
     expect(await browser.attribute("[data-press]", "aria-pressed")).toBe("false")
     expect(await browser.attribute("[data-probe]", "aria-label")).toBe("probe")
     expect(await browser.attribute("[data-press]", "disabled")).toBe(null)
@@ -114,6 +117,9 @@ test "an aria bool is a literal token and never leaves the element":
     await browser.waitForText("[data-probe]", "busy true")
     expect(await browser.attribute("[data-probe]", "aria-busy")).toBe("true")
     expect(await browser.attribute("[data-probe]", "aria-hidden")).toBe("true")
+    expect(await browser.attribute("[data-probe]", "data-busy")).toBe("")
+    expect(await browser.attribute("[data-probe]", "data-note")).toBe(null)
+    expect(await browser.attribute("[data-probe]", "aria-disabled")).toBe("")
     expect(await browser.attribute("[data-press]", "aria-pressed")).toBe("true")
     expect(await browser.attribute("[data-press]", "disabled")).toBe("")
 `],
@@ -123,16 +129,16 @@ test "an aria bool is a literal token and never leaves the element":
   assert.match(result.output, /1 passed, 0 failed/u);
 });
 
-test("[D61-155] a static aria bool attribute renders the token, and other attributes are unchanged", { timeout: 300_000 }, async () => {
+test("[D61-155] a bare attribute is present with an empty value", { timeout: 300_000 }, async () => {
   const directory = await webProject("velar-d61-155-static-", new Map([
     ["main.vel", `@main: mount(<p data-probe aria-hidden aria-label="static" hidden>bare</p>, "#app")
 `],
     ["static.browser.test.vel", `import {expect} from "velar/test"
 import {browser} from "velar/web-test"
 
-test "a bare aria attribute is the true token, a bare native attribute stays empty":
+test "bare attributes use one presence spelling":
     await browser.open()
-    expect(await browser.attribute("[data-probe]", "aria-hidden")).toBe("true")
+    expect(await browser.attribute("[data-probe]", "aria-hidden")).toBe("")
     expect(await browser.attribute("[data-probe]", "aria-label")).toBe("static")
     expect(await browser.attribute("[data-probe]", "hidden")).toBe("")
 `],

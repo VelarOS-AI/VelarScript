@@ -3659,12 +3659,27 @@ export class Parser {
                 ? "A quoted object field requires ':' and a value"
                 : `'${name.value}' is a VelarScript keyword, so no binding spells it; write '${name.value}: value'`, name.span));
             }
+            const valueStart = this.current();
             const value = hasValue
               ? this.parseExpression()
               : name.kind === "identifier"
                 ? { kind: "IdentifierExpression", name: name.value, span: name.span } satisfies IdentifierExpression
                 : { kind: "LiteralExpression", value: null, raw: "null", span: name.span } satisfies Expression;
-            properties.push({ kind: "ObjectProperty", name: name.value, value, ...(hasValue ? {} : { shorthand: true }), span: span(name.span.start, value.span.end) });
+            const sameNameIdentifierValue = hasValue
+              && name.kind === "identifier"
+              && valueStart.kind === "identifier"
+              && value.kind === "IdentifierExpression"
+              && value.name === name.value
+              && value.span.start === valueStart.span.start
+              && value.span.end === valueStart.span.end;
+            properties.push({
+              kind: "ObjectProperty",
+              name: name.value,
+              value,
+              ...(hasValue ? {} : { shorthand: true }),
+              ...(sameNameIdentifierValue ? { sameNameIdentifierValue: true } : {}),
+              span: span(name.span.start, value.span.end),
+            });
           } while (this.match("comma") && !this.check("rightBrace"));
         }
         const close = this.expect("rightBrace", "Expected '}' after object fields");

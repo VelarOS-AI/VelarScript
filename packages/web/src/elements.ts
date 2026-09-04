@@ -18,8 +18,28 @@ export const WEB_NATIVE_ELEMENT_GROUPS: readonly WebElementGroup[] = Object.free
 
 export const WEB_NATIVE_ELEMENTS = new Set(WEB_NATIVE_ELEMENT_GROUPS.flatMap((group) => group.elements));
 
+/** Native elements in the HTML namespace (excluding the SVG and MathML groups). */
+export const WEB_HTML_ELEMENTS = new Set(
+  WEB_NATIVE_ELEMENT_GROUPS
+    .filter((group) => group.family !== "SVG" && group.family !== "MathML")
+    .flatMap((group) => group.elements),
+);
+
 export const WEB_VOID_ELEMENTS = new Set([
   "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr",
+]);
+
+/**
+ * HTML attributes whose ordinary bool form is expressed by presence. This is
+ * the standard Boolean roster plus `hidden`, whose common bool use has the same
+ * shape. It is deliberately not a list of every attribute with a missing-value
+ * default: text-valued attributes such as `download` still own their strings.
+ */
+export const WEB_BOOL_PRESENCE_HTML_ATTRIBUTES: ReadonlySet<string> = new Set([
+  "allowfullscreen", "alpha", "async", "autofocus", "autoplay", "checked", "controls", "default", "defer",
+  "disabled", "formnovalidate", "headingreset", "hidden", "inert", "ismap", "itemscope", "loop", "multiple", "muted",
+  "nomodule", "novalidate", "open", "playsinline", "readonly", "required", "reversed", "selected",
+  "shadowrootclonable", "shadowrootcustomelementregistry", "shadowrootdelegatesfocus", "shadowrootserializable",
 ]);
 
 const WEB_RESERVED_CUSTOM_ELEMENT_NAMES = new Set([

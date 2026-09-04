@@ -124,6 +124,15 @@ rows are the ones a keyed position renders; `// velar-allow A4: <reason>`
 suppresses it where building the rows is the only spelling, which a `readonly`
 list or one API response makes it.
 
+Native attributes separate presence from text. `false` and `null` remove an
+attribute, `true` writes an empty value, and a string writes its exact text.
+Write `aria-expanded={str(open)}` when the token `"true"` or `"false"` is
+required. Advisory **A14** recognizes the exact equivalent conversion from
+`open ? "true" : "false"` to `str(open)` on a native text attribute. It offers
+the quick fix when discarded source has no comment; comments inside `open`
+survive because that source is copied verbatim. HTML bool-presence attributes
+and component props stay outside the rewrite.
+
 A native element rejects every attribute name beginning with `on` other than
 the `on:` directive itself. `onclick`, `onClick`, and `ONCLICK` are one
 attribute to the browser, and the browser compiles that attribute's value as

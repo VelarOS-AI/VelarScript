@@ -78,6 +78,8 @@ import {
   WEB_ARIA_ENUMERATED_VALUES,
   WEB_ARIA_ROLES,
   WEB_ARIA_ROLE_SYNONYMS,
+  WEB_BOOL_PRESENCE_HTML_ATTRIBUTES,
+  WEB_HTML_ELEMENTS,
   WEB_MISSPELLED_ATTRIBUTES,
   WEB_NATIVE_ELEMENTS,
 } from "./elements.ts";
@@ -1741,12 +1743,15 @@ export class VelarWebAnalyzer extends Analyzer {
   private readonly plainCallSpans = new Map<string, Span>();
   /** D57 rule 138: `velar/web-test` is legal only where the browser runner looks. */
   private readonly webModulePath: string | null;
+  /** The source coordinates used by mechanical JSX attribute rewrites. */
+  private readonly webSourceText: string;
   /** D74: only props whose authors wrote a readonly contract receive prop-specific guidance. */
   private explicitReadonlyPropBindings: ReadonlyMap<string, number> = new Map();
 
   constructor(context: AnalysisContext = {}, extensions: readonly CompilerAnalysisExtension[] = []) {
     super(context, extensions);
     this.webModulePath = context.path ?? null;
+    this.webSourceText = context.sourceText ?? "";
     this.resources = context.resources ?? new Map();
     const webImports = [...(context.extensionImports?.get("@velarscript/web") ?? [])];
     this.importedLookStaticValues = new Map(
@@ -4264,8 +4269,56 @@ export class VelarWebAnalyzer extends Analyzer {
       && !isInvalidType(inferred) && !this.isJsxAttributeValue(inferred)) {
       this.diagnostics.push(diagnostic("VEL5047", `Native JSX attributes require text, finite numbers, bool, enums, or null; received ${describeType(inferred)}`, attribute.span));
     }
+    if (!isInvalidType(inferred)) this.adviseNativeBooleanTextConversion(expression.tag, attribute);
     if (attribute.name.startsWith("on:click") && !["button", "a", "input", "select", "textarea", "summary"].includes(expression.tag)
       && !expression.attributes.some((item) => item.name === "role")) this.diagnostics.push(diagnostic("VEL5023", `Clickable <${expression.tag}> requires an explicit role`, expression.span));
+  }
+
+  /**
+   * A14: `condition ? "true" : "false"` is the expanded spelling of the Core
+   * text conversion `str(condition)`. Keep that conversion explicit at a DOM
+   * text boundary instead of teaching every attribute its own coercion rule.
+   *
+   * The rule does not reach component props or HTML bool-presence attributes.
+   * A string "false" keeps such an attribute present; accepting that spelling
+   * as canonical would hide a likely presence bug whose direct expression is
+   * the bool itself.
+   */
+  private adviseNativeBooleanTextConversion(tag: string, attribute: JSXAttribute): void {
+    if (!WEB_NATIVE_ELEMENTS.has(tag)) return;
+    const value = attribute.value;
+    if (!value || typeof value === "string" || !this.plainNativeTextAttribute(tag, attribute.name)) return;
+    const written = this.webSourceText.slice(value.span.start, value.span.end);
+    if (written.length === 0) return;
+
+    if (value.kind === "ConditionalExpression"
+      && value.thenValue.kind === "LiteralExpression" && value.thenValue.value === "true"
+      && value.elseValue.kind === "LiteralExpression" && value.elseValue.value === "false") {
+      if (this.expandAliases(this.inferredExpressionType(value.condition)).kind !== "bool") return;
+      const replacement = this.webSourceText.slice(value.condition.span.start, value.condition.span.end);
+      if (!replacement) return;
+      // The condition is copied verbatim into str(...), so comments inside it
+      // survive. Only comments in discarded punctuation/branches make the
+      // mechanical rewrite unsafe.
+      const omitted = `${this.webSourceText.slice(value.span.start, value.condition.span.start)}${this.webSourceText.slice(value.condition.span.end, value.span.end)}`;
+      this.advise(
+        "A14",
+        `Native attribute '${attribute.name}' spells this bool as text; write the equivalent str(condition) conversion directly`,
+        value.span,
+        omitted.includes("//") || omitted.includes("/*")
+          ? undefined
+          : mechanicalFix(value.span, `str(${replacement})`, `Convert the bool with str() for '${attribute.name}'`),
+      );
+    }
+  }
+
+  /** Directives and compiler-owned control attributes do not use DOM text conversion. */
+  private plainNativeTextAttribute(tag: string, name: string): boolean {
+    if (WEB_MISSPELLED_ATTRIBUTES.has(name) || /^aria[A-Z]/u.test(name)) return false;
+    if (name.startsWith("aria-") && !WEB_ARIA_ATTRIBUTES.has(name)) return false;
+    if (WEB_HTML_ELEMENTS.has(tag) && WEB_BOOL_PRESENCE_HTML_ATTRIBUTES.has(name.toLowerCase())) return false;
+    return name !== "class" && name !== "host" && name !== "key" && name !== "look" && name !== "ref"
+      && name !== "style" && !/^(?:bind|class|look|on|style|unsafe):/u.test(name) && !/^on/iu.test(name);
   }
 
   /**
@@ -4283,11 +4336,12 @@ export class VelarWebAnalyzer extends Analyzer {
    * the React / JavaScript-property spellings, the ARIA attribute names (ARIA,
    * unlike HTML, admits no custom names), and the ARIA and role vocabularies.
    *
-   * D61 bounds the value half. It ruled that an `aria-*` attribute given a
-   * `bool` renders the literal text "true"/"false", and explicitly rejected
-   * making the author write `aria-pressed={x ? "true" : "false"}` as ceremony.
-   * So a token vocabulary is read only against a string literal; an expression
-   * value is a runtime question and is never touched here.
+   * D61 bounds the value half. Every native attribute uses the same presence
+   * rule: false/null remove it, true writes an empty value, and strings carry
+   * literal text. A token vocabulary is therefore read only against a string
+   * literal; expression values are runtime questions. A14 separately shortens
+   * an explicit bool-to-text conditional to `str(bool)` when that rewrite is
+   * provably equivalent.
    *
    * Returns true when it reported, so the caller does not stack a value-shape
    * message on an attribute whose name is already answered.

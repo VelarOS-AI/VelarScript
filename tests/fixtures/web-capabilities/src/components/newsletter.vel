@@ -51,7 +51,7 @@ export component Newsletter:
         const current = submitFailure
         return current != null ? <p role="alert">{current.message}</p> : <></>
 
-    return <form look={formLook} ref={form} on:submit.prevent={submit} aria-busy={submit.pending}>
+    return <form look={formLook} ref={form} on:submit.prevent={submit} aria-busy={str(submit.pending)}>
         <label look={labelLook} for="newsletter-email">Release newsletter</label>
         <input look={inputLook} id="newsletter-email" name="email" type="email" bind:value={email} />
         <button look={buttonLook} type="submit" disabled={submit.pending}>Subscribe</button>

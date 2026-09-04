@@ -97,7 +97,7 @@ type User:
     id: string
 
 async def loadUser(id: string) -> User:
-    return {id: id}
+    return {id}
 
 detach loadUser("u1")
 `.trimStart());

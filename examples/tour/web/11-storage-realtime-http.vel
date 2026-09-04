@@ -221,7 +221,7 @@ export async def requestSpellings(cover: File):
     body.file("cover", cover, "cover.png")
     body.files("gallery", [cover])
 
-    const request = http.post("/api/drafts", {body: body, headers: Map([["accept", "application/json"]]), timeout: 5000, maxBytes: 65536, credentials: "same-origin", cache: "no-store"})
+    const request = http.post("/api/drafts", {body, headers: Map([["accept", "application/json"]]), timeout: 5000, maxBytes: 65536, credentials: "same-origin", cache: "no-store"})
     const response = await request.response()
     await response.streamText(async chunk => print(chunk))
     keepBlob(await http.get("/api/cover").blob())

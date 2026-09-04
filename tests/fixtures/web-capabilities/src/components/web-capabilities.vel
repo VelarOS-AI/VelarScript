@@ -234,7 +234,7 @@ export component WebCapabilities:
             const body = formBody()
             body.field("label", "release-studio")
             body.file("asset", file)
-            const uploaded = await http.post(f"{config.apiBase}/upload", {body: body}).parse(UploadResponse)
+            const uploaded = await http.post(f"{config.apiBase}/upload", {body}).parse(UploadResponse)
             uploadLabel = f"{uploaded.label}:{uploaded.fileName}:{uploaded.size}"
 
     action copyStatus():

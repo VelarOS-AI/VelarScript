@@ -51,7 +51,7 @@ test("[D90 R17] the four former any-exceptions fall out of the one unknown rule"
   ]);
 
   // Await: the boundary thenable is refused toward a declared contract.
-  const awaited = messages(`${unsafeImport}async def f():\n    await mystery\ndef g():\n    async f()\ng()\n`);
+  const awaited = messages(`${unsafeImport}async def f():\n    await mystery\ndef g():\n    detach f()\ng()\n`);
   assert.ok(awaited.some((item) => /Cannot await unknown; an unchecked thenable runs foreign hooks and can leak raw undefined — declare the source in an extern contract/u.test(item)), awaited.join("\n"));
 
   // str() and the f-string share the text-conversion contract and describe

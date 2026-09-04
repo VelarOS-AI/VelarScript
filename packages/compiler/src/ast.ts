@@ -1037,6 +1037,8 @@ export interface ObjectProperty {
   readonly value: Expression;
   /** Written as `{name}`: the field name and the binding it reads are one word. */
   readonly shorthand?: boolean;
+  /** Written explicitly as `{name: name}` with ordinary identifier tokens on both sides. */
+  readonly sameNameIdentifierValue?: boolean;
   readonly span: Span;
 }
 

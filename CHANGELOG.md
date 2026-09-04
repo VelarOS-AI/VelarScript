@@ -12,6 +12,32 @@ many times that surface has changed *since counting began*, never a maturity
 grade: `core@0.1` beside `web@0.11` means Core started counting today, not that
 Core is younger. History is deliberately not recomputed (D110 rule 3).
 
+## 0.27.1 — 2026-09-04
+
+Surfaces: `core@0.3` · `web@0.11` · `node@0.16` · `server@0.15` · `desktop@0.10`
+
+### Language and editor tooling
+
+- Exact, side-effect-free `List` loops can now be shortened through editor
+  fixes to `some`, `every`, `find`, `map`, `filter`, or `flatMap`. Fixes are
+  withheld when comments, effects, unstable sources, or branch-only type
+  narrowing would change meaning.
+- Same-name object fields such as `{id: id}` now offer the equivalent
+  shorthand `{id}` while preserving surrounding layout and comments.
+- Language-service coverage now includes the expanded built-in collection
+  vocabulary, Look property/value completions and hover types, and the current
+  function and declaration forms.
+
+### Web attributes
+
+- Native element attributes now use one value contract: `null` and `false`
+  remove the attribute, `true` writes an empty present attribute, strings stay
+  exact, and finite numbers use their text form.
+- A native text attribute written as `flag ? "true" : "false"` now offers the
+  equivalent `str(flag)` fix. Component props, HTML boolean-presence
+  attributes, optional booleans, custom elements, and comment-sensitive forms
+  remain explicit.
+
 ## 0.27.0 — 2026-09-04
 
 Surfaces: `core@0.3` · `web@0.11` · `node@0.16` · `server@0.15` · `desktop@0.10`

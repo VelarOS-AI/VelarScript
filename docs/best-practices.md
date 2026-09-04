@@ -134,6 +134,14 @@ Collection work is method chains: `filter`, `map`, `sorted(by=...)`,
 genuine cursor algorithms, not the default. Need the position? Use the
 two-slot loop, never a shadow counter.
 
+When a loop only fills a fresh List from another List, use the collection API
+that states the data flow: `map` for projection, `filter` for selection,
+`filter(...).map(...)` for both, and `flatMap` when each input contributes a
+List. Queries likewise use `some`, `every`, and `find`. Keep an explicit `for`
+for mutation, custom early exits, multiple outputs, stateful accumulation, or
+effects. `velar check` reports A8/A13 when it can prove an expanded loop is one
+of these APIs.
+
 Membership is `in`. Three or more `or value == ...` comparisons means the
 values wanted to be a `Set` constant. Mutate state directly — deep reactivity
 is the default, so rebuild-the-list spellings are noise.
