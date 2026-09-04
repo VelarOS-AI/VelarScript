@@ -142,7 +142,7 @@ obeys one rule, and it is the checked one — narrow it with `value is T`, or
 parse a declared shape.
 
 Numbers and strings carry their operations as **methods**, not as free
-functions: `value.round()`, `value.isNaN()`, `text.isBlank()`,
+functions: `value.round()`, `value.sign()`, `value.trunc()`, `value.isNaN()`, `text.isBlank()`,
 `text.split("\n")`.
 
 ```velar
@@ -168,6 +168,8 @@ structural — any value with the right fields satisfies it — and it carries
 `parse` and `is` for untrusted data. Fields may be optional (`name: string?`)
 and individually `readonly`. A record may extend one concrete record; the child
 inherits its fields and validator checks while assignability stays structural.
+Use `readonly type Name:` when the entire record contract, including inherited
+fields and nested data, is read-only.
 
 `enum` declares a finite state backed by a wire value. A member may carry an
 external spelling — a string (`textDelta = "response.output_text.delta"`) or a
@@ -215,6 +217,9 @@ where the *type* is written with `->` and the *value* passed to it with `=>`.
 A generic function names a bound only when its body needs the capability:
 `<T: Comparable>` to order, `<T: Text>` to interpolate, `<T: Data>` to
 serialize.
+
+A `def` is visible throughout its lexical block, so a helper may be written
+after its first call and sibling helpers may recurse into each other.
 
 ```velar
 type Transform = (value: number) -> number
@@ -269,6 +274,7 @@ const ownerCursor = owners.iterator()
 const firstOwner = ownerCursor.next()
 const eventsByDay: Map<string, List<Task>> = Map()
 eventsByDay.getOrSet("today", []).append(tasks[0])
+eventsByDay.getOrSetWith("tomorrow", () => []).append(tasks[1])
 const words = Set(["done", "closed"])
 
 print(ordered.join(" | "))
@@ -647,7 +653,7 @@ component TicketPanel(id: string):
         await saveDraft(id, draft)
 
     watch id:
-        async ticket.reload()
+        detach ticket.reload()
 
     return <section>
         <h2>{heading}</h2>

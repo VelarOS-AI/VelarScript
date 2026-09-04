@@ -671,7 +671,7 @@ action main():
     await tick()
     print(f"trail={trail}")
 
-async main()
+detach main()
 `,
   };
 }

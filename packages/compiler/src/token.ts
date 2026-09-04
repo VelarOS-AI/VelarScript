@@ -11,6 +11,7 @@ export type TokenKind =
   | "let"
   | "def"
   | "async"
+  | "detach"
   | "await"
   | "export"
   | "import"
@@ -138,6 +139,7 @@ export const keywordKinds: Readonly<Record<string, TokenKind>> = {
   let: "let",
   def: "def",
   async: "async",
+  detach: "detach",
   await: "await",
   export: "export",
   import: "import",

@@ -692,14 +692,14 @@ stated plainly: **a resource does not refetch when its inputs change.**
 
 Refetch-on-change is therefore written, not assumed. The spelling is a `watch`
 on the input plus a `reload()`; because a watch body is synchronous, the reload
-is started with the detached `async` statement:
+is started with the detached `detach` statement:
 
 ```velar fragment
 component Profile(userId: string):
     resource profile: User = loadUser(userId)
 
     watch userId:
-        async profile.reload()
+        detach profile.reload()
 
     return <section>
         {profile.loading ? <p aria-busy="true">Loading…</p> : <h2>{profile.value?.name ?? "Unknown"}</h2>}
@@ -788,11 +788,11 @@ restores a position that was already correct, so a reader is never thrown, and
 the page just quietly stops doing the thing the watch existed to do.
 
 Layout is read after a frame, not after a flush. A watch body is synchronous, so
-the read moves into a detached `async` statement that waits first:
+the read moves into a detached `detach` statement that waits first:
 
 ```velar fragment
 watch items:
-    async anchorAfterPaint()
+    detach anchorAfterPaint()
 
 action anchorAfterPaint():
     await frame()
@@ -975,7 +975,7 @@ component RuntimeStatus:
   cannot redirect either manual reports or managed asynchronous failures.
 - The compiler reports failures from initial `mount`, reactive `render` and
   synchronous `watch` blocks, synchronous or asynchronous events, `@mounted`,
-  and `@cleanup`. A detached `async` statement reports its rejection through
+  and `@cleanup`. A detached `detach` statement reports its rejection through
   this same chain under the distinct `detached` phase; with no handler
   installed the failure surfaces through the host runtime, never silently.
 - Event handlers and lifecycle callbacks are non-tracking execution boundaries.
@@ -988,7 +988,7 @@ component RuntimeStatus:
   the component that triggers them or at module scope when a shared store owns
   the operation and its `pending`/`error` surface; setup that must finish after
   insertion belongs in `@mounted`. Process- and page-lifetime work with no UI
-  surface uses the `async` statement, which runs a checked `Promise<null>`
+  surface uses the `detach` statement, which runs a checked `Promise<null>`
   expression detached and reports failure through the `velar/app` chain with
   the `detached` phase.
 - An `action` failure reports exactly once, through the `action` phase with the

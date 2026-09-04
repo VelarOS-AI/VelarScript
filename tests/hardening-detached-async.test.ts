@@ -19,7 +19,7 @@ function executeModule(code: string): ReturnType<typeof spawnSync> {
   });
 }
 
-test("a floating Promise expression statement is intercepted with both current spellings", () => {
+test("a floating Promise expression statement points to both ownership choices", () => {
   const result = compile(`
 async def boom():
     throw Error("background failure")
@@ -31,7 +31,7 @@ print("after the call")
   assert.equal(result.diagnostics[0]?.code, FLOATING);
   assert.equal(
     result.diagnostics[0]?.message,
-    "This call returns Promise<null>; 'await boom()' to wait for it, or 'async boom()' to run it detached",
+    "This call returns Promise<null>; 'await boom()' to wait for it, or 'detach boom()' to run it detached",
   );
 });
 
@@ -45,7 +45,7 @@ def use(client: Client):
 `.trimStart());
   assert.equal(member.diagnostics.length, 1, member.diagnostics.map((item) => item.message).join("\n"));
   assert.equal(member.diagnostics[0]?.code, FLOATING);
-  assert.match(member.diagnostics[0]?.message ?? "", /'await client\.push\(\)' to wait for it, or 'async client\.push\(\)'/u);
+  assert.match(member.diagnostics[0]?.message ?? "", /'await client\.push\(\)' to wait for it, or 'detach client\.push\(\)'/u);
 
   const union = compile(`
 async def tick():
@@ -70,20 +70,20 @@ pending
   assert.equal(held.diagnostics[0]?.code, FLOATING);
 });
 
-test("'await boom()' and 'async boom()' are both legal, at module scope and inside bodies", () => {
+test("'await boom()' and 'detach boom()' are both legal, at module scope and inside bodies", () => {
   const result = compile(`
 async def boom():
     pass
 
 await boom()
-async boom()
+detach boom()
 
 def fire():
-    async boom()
+    detach boom()
 
 async def sequence():
     await boom()
-    async boom()
+    detach boom()
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
   // The detached Promise takes the same normalization every other Promise
@@ -99,7 +99,7 @@ type User:
 async def loadUser(id: string) -> User:
     return {id: id}
 
-async loadUser("u1")
+detach loadUser("u1")
 `.trimStart());
   assert.equal(result.diagnostics.length, 1, result.diagnostics.map((item) => item.message).join("\n"));
   assert.equal(result.diagnostics[0]?.code, DETACHED_TYPE);
@@ -111,14 +111,14 @@ test("a non-Promise expression cannot detach", () => {
 def plain():
     pass
 
-async plain()
+detach plain()
 `.trimStart());
   assert.equal(result.diagnostics.length, 1, result.diagnostics.map((item) => item.message).join("\n"));
   assert.equal(result.diagnostics[0]?.code, DETACHED_TYPE);
-  assert.equal(result.diagnostics[0]?.message, "'async' runs a Promise<null> expression detached; this expression is null");
+  assert.equal(result.diagnostics[0]?.message, "'detach' requires a Promise<null> expression; this expression is null");
 });
 
-test("the async statement is statement-position only", () => {
+test("the detach statement is statement-position only", () => {
   const result = compile(`
 async def boom():
     pass
@@ -129,10 +129,22 @@ const held = async boom()
   assert.ok(result.diagnostics.some((item) => item.code.startsWith("VEL2")));
 });
 
-test("a bare 'async' names all three continuations", () => {
+test("a bare 'async' names only declaration continuations", () => {
   const result = compile("async\n");
   assert.equal(result.diagnostics[0]?.code, "VEL2001");
-  assert.equal(result.diagnostics[0]?.message, "'async' must be followed by 'def', 'for', or a call to run detached");
+  assert.equal(result.diagnostics[0]?.message, "'async' must be followed by 'def' or 'for'; use 'detach expression' for detached work");
+  assert.equal(result.diagnostics[0]?.fix?.edits[0]?.text, "detach");
+});
+
+test("the retired detached async spelling is rejected with a mechanical migration", () => {
+  const result = compile(`
+async def boom():
+    pass
+
+async boom()
+`.trimStart());
+  assert.equal(result.diagnostics[0]?.code, "VEL2001");
+  assert.equal(result.diagnostics[0]?.fix?.edits[0]?.text, "detach");
 });
 
 test("Node: a detached failure is reported on stderr and the process does not die", () => {
@@ -140,14 +152,14 @@ test("Node: a detached failure is reported on stderr and the process does not di
 async def boom():
     throw Error("detached failure")
 
-async boom()
+detach boom()
 print("after the call")
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "after the call\n");
-  assert.match(String(execution.stderr), /Detached async task failed: Error: detached failure/u);
+  assert.match(String(execution.stderr), /Detached task failed: Error: detached failure/u);
 });
 
 test("Node: a foreign non-Error rejection is normalized to Error before the report", () => {
@@ -155,7 +167,7 @@ test("Node: a foreign non-Error rejection is normalized to Error before the repo
 async def tick():
     pass
 
-async tick()
+detach tick()
 print("still running")
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
@@ -165,7 +177,7 @@ print("still running")
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "still running\n");
   // The report carries a real Error normalized from the raw string.
-  assert.match(String(execution.stderr), /Detached async task failed: Error: raw failure/u);
+  assert.match(String(execution.stderr), /Detached task failed: Error: raw failure/u);
 });
 
 test("Node: a resolved detached task reports nothing", () => {
@@ -173,7 +185,7 @@ test("Node: a resolved detached task reports nothing", () => {
 async def tick():
     pass
 
-async tick()
+detach tick()
 print("done")
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
@@ -193,7 +205,7 @@ state ready = true
 async def boom():
     throw Error("web detached failure")
 
-async boom()
+detach boom()
 print("web module continues")
 `.trimStart(), { extensions: [velarCompilerExtension] });
   assert.deepEqual(result.diagnostics, []);
@@ -224,7 +236,7 @@ state ready = true
 async def boom():
     throw Error("pre-runtime failure")
 
-async boom()
+detach boom()
 `.trimStart(), { extensions: [velarCompilerExtension] });
   assert.deepEqual(result.diagnostics, []);
   // With no onError handler installed the report escalates. In a browser that
@@ -292,7 +304,7 @@ async def boom():
     throw Error("detached boom")
 
 def fire():
-    async boom()
+    detach boom()
 
 def bump():
     clicks += 1

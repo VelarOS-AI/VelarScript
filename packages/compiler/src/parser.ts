@@ -371,6 +371,11 @@ export class Parser {
       this.skipMistypedDeclaration();
       return { kind: "PassStatement", span: this.previous().span };
     }
+    if (this.readonlyTypeDeclarationAhead()) {
+      this.advance();
+      this.advance();
+      return this.parseTypeDefinition(start, exported, true);
+    }
     // Core's module entry wins before a target extension examines other
     // contextual `@name` roles. This keeps `@main` available in Node/Web
     // entries while leaving route and lifecycle diagnostics with their owner.
@@ -387,6 +392,19 @@ export class Parser {
     }
     const abstract = this.match("abstract");
     const asynchronous = this.match("async");
+    const asyncToken = asynchronous ? this.previous() : null;
+
+    if (!asynchronous && this.match("detach")) {
+      const detachToken = this.previous();
+      if (exported) this.diagnostics.push(diagnostic("VEL2001", "A 'detach' statement cannot be exported", detachToken.span));
+      if (abstract) this.diagnostics.push(diagnostic("VEL2001", "'abstract' cannot prefix a 'detach' statement", detachToken.span));
+      if (this.check("newline") || this.check("dedent") || this.check("eof")) {
+        this.diagnostics.push(diagnostic("VEL2001", "'detach' must be followed by a Promise<null> expression", detachToken.span));
+        return null;
+      }
+      const expression = this.parseExpression();
+      return { kind: "DetachStatement", expression, span: span(start, expression.span.end) };
+    }
 
     const extensionStatement = this.parseExtensionStatement(start, { exported, abstract, asynchronous });
     if (extensionStatement !== undefined) return extensionStatement;
@@ -407,18 +425,20 @@ export class Parser {
     }
 
     if (asynchronous) {
-      // The detached-execution statement: 'async <expression>'. 'def' and
-      // 'for' consumed their spellings above, so any remaining continuation
-      // is the expression form; the analyzer requires its checked type to be
-      // Promise<null>.
-      if (exported) this.diagnostics.push(diagnostic("VEL2001", "An 'async' statement cannot be exported", this.previous().span));
-      if (abstract) this.diagnostics.push(diagnostic("VEL2001", "'abstract' cannot prefix an 'async' statement", this.previous().span));
+      // `async` only declares asynchronous work. Detached execution has its
+      // own verb, so the retired spelling gets one mechanical migration and
+      // never remains a second legal form of the same operation.
+      if (exported) this.diagnostics.push(diagnostic("VEL2001", "A detached statement cannot be exported", asyncToken!.span));
+      if (abstract) this.diagnostics.push(diagnostic("VEL2001", "'abstract' cannot prefix a detached statement", asyncToken!.span));
       if (this.check("newline") || this.check("dedent") || this.check("eof")) {
-        this.diagnostics.push(diagnostic("VEL2001", "'async' must be followed by 'def', 'for', or a call to run detached", this.previous().span));
+        this.diagnostics.push(diagnostic("VEL2001", "'async' must be followed by 'def' or 'for'; use 'detach expression' for detached work", asyncToken!.span,
+          mechanicalFix(asyncToken!.span, "detach", "Use 'detach' for detached work")));
         return null;
       }
+      this.diagnostics.push(diagnostic("VEL2001", "'async' only declares 'async def' and 'async for'; use 'detach expression' for detached work", asyncToken!.span,
+        mechanicalFix(asyncToken!.span, "detach", "Use 'detach' for detached work")));
       const expression = this.parseExpression();
-      return { kind: "AsyncStatement", expression, span: span(start, expression.span.end) };
+      return { kind: "DetachStatement", expression, span: span(start, expression.span.end) };
     }
 
     if (abstract && !this.check("class")) {
@@ -838,6 +858,13 @@ export class Parser {
   private typeDeclarationAhead(): boolean {
     if (!this.checkWord(CORE_WORDS.type) || this.peekKind(1) !== "identifier") return false;
     const shape = this.peekKind(2);
+    return shape === "colon" || shape === "assign" || shape === "less" || shape === "extends";
+  }
+
+  /** `readonly` remains an ordinary name unless the complete record declaration head follows. */
+  private readonlyTypeDeclarationAhead(): boolean {
+    if (!this.checkWord(CORE_WORDS.readonly) || this.peekValue(1) !== CORE_WORDS.type || this.peekKind(2) !== "identifier") return false;
+    const shape = this.peekKind(3);
     return shape === "colon" || shape === "assign" || shape === "less" || shape === "extends";
   }
 
@@ -1755,11 +1782,18 @@ export class Parser {
     return parameters;
   }
 
-  private parseTypeDefinition(start: number, exported: boolean): TypeDeclaration | TypeAliasDeclaration {
+  private parseTypeDefinition(start: number, exported: boolean, readonly = false): TypeDeclaration | TypeAliasDeclaration {
     const name = this.expect("identifier", "Expected a type name");
     const typeParameters = this.parseTypeParameters();
     if (this.match("assign")) {
       const target = this.parseTypeReference();
+      if (readonly) {
+        this.diagnostics.push(diagnostic(
+          "VEL2025",
+          "'readonly type' declares a record body; for an alias, put 'readonly' on the target — type Name = readonly Other",
+          span(start, name.span.end),
+        ));
+      }
       // D55 rule 120 admits the generic *record*. An alias names an
       // instantiation — `type Boxed = Box<string>` — which is rule 123's whole
       // idiom, so a parameter list here has nothing to bind and the refusal
@@ -1810,7 +1844,7 @@ export class Parser {
       this.consumeNewlines();
     }
     const close = this.expect("dedent", "Expected the end of type fields");
-    return { kind: "TypeDeclaration", exported, name: name.value, ...(typeParameters ? { typeParameters } : {}), base, fields, span: span(start, fields.at(-1)?.span.end ?? close.span.end) };
+    return { kind: "TypeDeclaration", exported, readonly, name: name.value, ...(typeParameters ? { typeParameters } : {}), base, fields, span: span(start, fields.at(-1)?.span.end ?? close.span.end) };
   }
 
   private parseEnumDeclaration(start: number, exported: boolean): EnumDeclaration {

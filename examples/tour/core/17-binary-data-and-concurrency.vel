@@ -41,6 +41,8 @@ export def numericBufferSpellings() -> number:
     const identifierCopy = uint32FromBytes(identifiers.slice(0, 1).toBytes(ByteOrder.little), ByteOrder.little)
     const measurements: Float32Buffer = float32Buffer(3)
     measurements[0] = 0.5
+    let measured = 0
+    for value, index in measurements: measured += value + index
     const measurementCopy = float32FromBytes(measurements.copy().toBytes(ByteOrder.little), ByteOrder.little)
     const indexBuilder: UInt32Builder = uint32Builder(6)
     indexBuilder.push(0)
@@ -49,7 +51,7 @@ export def numericBufferSpellings() -> number:
     const positionBuilder: Float32Builder = float32Builder(6)
     positionBuilder.push(1.25)
     const builtPositions = positionBuilder.finish()
-    return flagCopy[0] + samples.size + identifierCopy[0] + Math.trunc(measurementCopy[0]) + builtIndices.size + builtPositions.size
+    return flagCopy[0] + samples.size + identifierCopy[0] + measurementCopy[0].trunc() + measured.trunc() + builtIndices.size + builtPositions.size
 
 async def cancellableWork(cancellation: Cancellation) -> number:
     await cancellation.checkpoint()

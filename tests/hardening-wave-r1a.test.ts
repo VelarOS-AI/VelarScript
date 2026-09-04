@@ -82,7 +82,7 @@ action main():
     await tick()
     print(f"x={x}")
 
-async main()
+detach main()
 `;
 }
 

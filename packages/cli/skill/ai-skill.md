@@ -67,7 +67,7 @@ protects these names. Capabilities stay explicit imports. Durations use `ms` or
 Use checked binary, hash, random, and task APIs. Project-specific codecs, storage,
 and algorithms come from project-owned modules or dependencies. A direct
 `for index in range(...):` is a native counter; range as a value is a List. Use `UInt16Buffer` for 16-bit numeric state,
-`UInt8Buffer` for compact data, and bounded `UInt32Builder`/`Float32Builder` values for variable-size numeric output. A fixed numeric buffer's `values()` returns one fresh `List<number>` snapshot; do not write an index loop just to copy it.
+`UInt8Buffer` for compact data, and bounded `UInt32Builder`/`Float32Builder` values for variable-size numeric output. Iterate a fixed numeric buffer directly with `for value, index in buffer:` when reading it without allocation. Its `values()` method remains the explicit fresh `List<number>` snapshot.
 
 ## Project setup
 
@@ -170,10 +170,10 @@ well, but it is a guarantee rather than a trap.
 | `x if cond else y` | `cond ? x : y` |
 | `&&`, `\|\|`, `!value`, `===`, `var`, `elif`, `None`, `undefined` | `and`, `or`, `not value`, `==`, `let`/`const`, `else if`, `null`, `null`. `!` **after** a value is a different operator: `value!` unwraps `T?` to `T` and raises `AssertionError` when it is absent. `!=` still wins by longest match, so an unwrap before an equality test needs its space — `value! == other`. |
 | `f"{user}"` or `str(user)` on a record | Text conversion accepts strings, numbers, bools, enums, and `null` only. `print(user)` inspects a value; permanent `Json.stringify(user)` builds data text without an import. |
-| Calling an async function and moving on | A dropped Promise is a compile error. `await task()` to wait; `async task()` to run it detached. |
+| Calling an async function and moving on | A dropped Promise is a compile error. `await task()` to wait; `detach task()` to run it detached. |
 | `flag or name ?? fallback` | Parenthesize — `??` never shares an unparenthesized chain with `and`/`or`. |
 | `map[key]` reads | `map.get(key)` returns `T?`. On Lists, `[index]` throws on a bug; `.get(index)` returns `null` when absence is an expected answer. |
-| Repeated `Map.get` + null check to build buckets | `map.getOrSet(key, fallback)` is the shortest spelling when absence means insertion. An explicit `const value = map.get(key)` plus null branch is also linear: once the local `const` is proven present, later reads do not deep-check the mutable value again. Use the explicit branch when creation needs more than one statement. |
+| Repeated `Map.get` + null check to build buckets | `map.getOrSet(key, fallback)` is shortest for a cheap value; use `map.getOrSetWith(key, () => create())` when construction must happen only on absence. An explicit `const value = map.get(key)` plus null branch is also linear and remains the spelling for multi-statement creation. |
 | Copying `map.keys()` just to read the first key | `const cursor = map.iterator()` followed by `cursor.next()`. A pull returns `{value: K}?`, so exhaustion stays distinct from a legal `null` key. Ordinary full traversal remains a `for` loop. |
 | `[...text]` or `list(text)` for characters | `text.split("")` — the empty separator splits per Unicode code point. |
 | `x !== x` or `Number.isNaN(x)` | Number predicates are members: `x.isNaN()`, `x.isFinite()`, `x.isInteger()`. `NaN == NaN` is `true` — equality is SameValueZero. |

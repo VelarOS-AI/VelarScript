@@ -109,8 +109,8 @@ const largestOf = Math.max(3, 1, 2)
 
 const clamped = Math.clamp(11, 0, 10)
 const namedClamp = Math.clamp(value=11, minimum=0, maximum=10)
-const sign = Math.sign(-4)
-const truncated = Math.trunc(3.7)
+const sign = (-4).sign()
+const truncated = (3.7).trunc()
 
 const squareRoot = Math.sqrt(9)
 const cubeRoot = Math.cbrt(27)

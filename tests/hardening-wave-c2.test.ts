@@ -593,7 +593,7 @@ async def main():
         print("retry surfaced " + error.code)
     return null
 
-async main()
+detach main()
 `.trimStart());
   assert.equal(output, "retry surfaced IndexError\n");
 });
@@ -859,7 +859,7 @@ async def main():
     await session.write("owned\\n")
     return null
 
-async main()
+detach main()
 `.trimStart(),
   });
   try {

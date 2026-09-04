@@ -295,7 +295,7 @@ test("[alpha-4] a module without Web syntax keeps the Core detached-task contrac
 async def boom():
     throw Error("data module failure")
 
-async boom()
+detach boom()
 print("still running")
 `);
   assert.ok(!dataOnly.includes("__velarDetachedRegistryKey"),
@@ -315,7 +315,7 @@ state ready = true
 async def boom():
     throw Error("web failure")
 
-async boom()
+detach boom()
 `);
   assert.ok(webModule.includes("__velarDetachedRegistryKey"), "Web output lost the velar/app detached-report path");
 });

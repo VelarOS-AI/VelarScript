@@ -2,7 +2,7 @@
 ///
 /// Charter section 7 apart from the checked value methods, which chapter 6
 /// owns. Result inference, named arguments, defaults, rest and spread, the
-/// `async` statement, and the three closed bounds.
+/// `detach` statement, and the three closed bounds.
 
 import {User} from "./04-records-aliases-enums.vel"
 
@@ -128,10 +128,10 @@ const asyncDeclarationType: (id: string) -> Promise<User> = loadUser
 export async def inferredAsyncResult(): print("an async declaration with no value result infers -> null")
 
 export async def awaitsAndDetaches():
-    // `await` waits; the `async` statement runs detached and requires a
+    // `await` waits; `detach` starts detached work and requires a
     // checked `Promise<null>`.
     await loadUser("u-1")
-    async inferredAsyncResult()
+    detach inferredAsyncResult()
 
 const asyncArrow = async (id: string) => await loadUser(id)
 

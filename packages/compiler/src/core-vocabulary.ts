@@ -44,7 +44,7 @@
  * alone; `scripts/check-surface-versions.mjs` computes the whole Core surface's
  * digest and refuses a change that leaves this number behind.
  */
-export const VELAR_CORE_API_VERSION = "0.1";
+export const VELAR_CORE_API_VERSION = "0.2";
 
 /** The namespaces that are always in scope and are not values (D51 rule 106). */
 export const PERMANENT_NAMESPACE_NAMES = ["Json", "Promise", "Text", "Math"] as const;
@@ -102,7 +102,7 @@ export const CORE_CONTEXTUAL_KEYWORDS = [
   { word: "get", shape: "a class getter: 'get empty() -> bool:'", statementSubjectFollows: false },
   { word: "json", shape: "a checked JSON resource import: 'import json data from \"package/data\"'", statementSubjectFollows: false },
   { word: "match", shape: "a match statement: 'match value:'", statementSubjectFollows: true },
-  { word: "readonly", shape: "a read-only record field or type: 'readonly tags: List<string>'", statementSubjectFollows: false },
+  { word: "readonly", shape: "a read-only record field, record declaration, or type view: 'readonly tags: List<string>', 'readonly type Snapshot:', 'readonly Snapshot'", statementSubjectFollows: false },
   { word: "test", shape: "a test declaration: 'test \"a name\":'", statementSubjectFollows: false },
   { word: "type", shape: "a record type or a type alias: 'type User:', 'type Id = string'", statementSubjectFollows: false },
   { word: "using", shape: "a scoped resource binding: 'using file = open(path)'", statementSubjectFollows: false },

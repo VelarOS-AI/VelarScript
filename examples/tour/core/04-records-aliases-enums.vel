@@ -13,12 +13,12 @@ export type User:
     name: string
     avatar: string?
 
-type Nested:
+readonly type Nested:
     owner: User
     tags: List<string>
     lookup: Map<string, number>
     counts: Record<number>
-    readonly frozenId: string
+    frozenId: string
 
 // ---------------------------------------------------------------------------
 // Aliases: the same `type` keyword, with `=`

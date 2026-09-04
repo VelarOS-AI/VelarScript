@@ -63,7 +63,7 @@ component ResourceWithReload(userId: string):
     resource profile: Profile = loadProfile(userId)
 
     watch userId:
-        async profile.reload()
+        detach profile.reload()
 
     return <div data-resource-with-reload>
         <p data-value>{profile.value?.name ?? "no value yet"}</p>
@@ -71,7 +71,7 @@ component ResourceWithReload(userId: string):
     </div>
 
 // Rule 2, both spellings in one component. A watch body is synchronous, so the
-// reload there is started with the detached `async` statement; an action body
+// reload there is started with the detached `detach` statement; an action body
 // is asynchronous, so the same call is awaited and its Promise of `null` is the
 // point where the reload has settled.
 component ReloadSpellings(userId: string):
@@ -82,7 +82,7 @@ component ReloadSpellings(userId: string):
     // component's own state, and the watch writes it directly.
     watch userId:
         detachedStarts += 1
-        async profile.reload()
+        detach profile.reload()
 
     action reloadAndReport() -> string:
         await profile.reload()
@@ -144,7 +144,7 @@ component GuardedAction(profile: Profile):
         finished += 1
 
     def saveOnce():
-        if not save.pending: async save()
+        if not save.pending: detach save()
 
     return <div data-guarded-action>
         <p data-pending>{save.pending ? "pending" : "settled"}</p>

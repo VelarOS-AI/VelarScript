@@ -26,6 +26,10 @@ const Cancellation = {
 };
 `;
 
+const BINARY_STUB = `
+const __velarWorkerBinaryRuntime = { __velarAdoptTransferredBuffer(value) { return value; } };
+`;
+
 const WEBSOCKET_TIMER_PRELUDE = `
 const __velarTestTimers = globalThis.__velarWebSocketTestTimers;
 const setTimeout = (handler, delay) => __velarTestTimers.set(handler, delay);
@@ -58,11 +62,13 @@ interface WebSocketRuntime {
 interface WorkerMessage {
   readonly kind?: string;
   readonly id?: number;
+  readonly value?: unknown;
 }
 
 class FakeWorker {
   static instances: FakeWorker[] = [];
   readonly messages: WorkerMessage[] = [];
+  readonly transferLists: unknown[][] = [];
   readonly listeners = new Map<string, ((event: unknown) => void)[]>();
   terminated = false;
   readonly url: URL;
@@ -73,7 +79,7 @@ class FakeWorker {
     list.push(handler);
     this.listeners.set(type, list);
   }
-  postMessage(message: WorkerMessage): void { this.messages.push(message); }
+  postMessage(message: WorkerMessage, transfers: unknown[] = []): void { this.messages.push(message); this.transferLists.push(transfers); }
   terminate(): void { this.terminated = true; }
   emit(type: string, event: unknown): void { for (const handler of this.listeners.get(type) ?? []) handler(event); }
   kinds(): (string | undefined)[] { return this.messages.map(message => message.kind); }
@@ -137,6 +143,40 @@ test("the Web worker runtime is enumerable for development import maps", () => {
   assert.equal(webModuleSource("velar/worker"), VELAR_WEB_WORKER_RUNTIME);
 });
 
+test("worker messages transfer the one validated buffer snapshot and adopt valid replies without reparsing", async () => {
+  const runtime = await loadWorkerRuntime();
+  let parsedRequest: { data: Uint8Array } | null = null;
+  let responseParses = 0;
+  const RequestType = {
+    is: () => true,
+    parse(value: { data: Uint8Array }) {
+      parsedRequest = { data: new Uint8Array(value.data) };
+      return parsedRequest;
+    },
+  };
+  const ResponseType = {
+    is: (value: unknown) => typeof value === "object" && value !== null && "data" in value,
+    parse(value: unknown) { responseParses += 1; return value; },
+  };
+  const handle = runtime.worker("probe", RequestType, ResponseType, 2);
+  const instance = FakeWorker.instances[0];
+  assert.ok(instance);
+  const source = { data: new Uint8Array([1, 2, 3]) };
+  const pending = handle.call(source, null, null);
+  const sent = instance.messages[0];
+  const validatedRequest = parsedRequest as { data: Uint8Array } | null;
+  assert.ok(validatedRequest);
+  assert.equal(sent?.value, validatedRequest, "the validated snapshot is the transferred payload, not a second clone");
+  assert.equal(instance.transferLists[0]?.[0], validatedRequest.data.buffer);
+  assert.equal(source.data.byteLength, 3, "caller-owned input is never selected for transfer");
+
+  const reply = { data: new Uint8Array([4, 5]) };
+  instance.emit("message", { data: { id: sent?.id, ok: true, value: reply } });
+  assert.equal(await pending, reply, "a valid received graph is already worker-owned");
+  assert.equal(responseParses, 0, "valid replies are not copied again through Type.parse");
+  await handle.close();
+});
+
 async function moduleUrl(source: string): Promise<string> {
   scratch ??= await mkdtemp(join(tmpdir(), "velar-web-workers-"));
   const file = join(scratch, "runtime-" + String(loaded++) + ".mjs");
@@ -147,7 +187,8 @@ async function moduleUrl(source: string): Promise<string> {
 async function loadWorkerRuntime(): Promise<WorkerRuntime> {
   const source = VELAR_WEB_WORKER_RUNTIME
     .replace('import { workerEntries as __velarWorkerEntries } from "velar/worker-manifest";', "")
-    .replace('import { Cancellation, CancellationError, TaskTimeoutError } from "velar/task";', WORKER_STUBS);
+    .replace('import { Cancellation, CancellationError, TaskTimeoutError } from "velar/task";', WORKER_STUBS)
+    .replace('import { Bytes as __velarWorkerBinaryRuntime } from "velar/binary";', BINARY_STUB);
   const url = await moduleUrl(source);
   FakeWorker.instances = [];
   const previous = Reflect.get(globalThis, "Worker") as unknown;

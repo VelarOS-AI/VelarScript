@@ -430,7 +430,7 @@ async def main():
     print(await replay({retries: 5}))
     print(await replay("not a settings record"))
 
-async main()
+detach main()
 ```
 
 ## 10. Tests are the specification

@@ -2,7 +2,7 @@ import { blockContainsDirectAwait } from "./ast.ts";
 import type {
   ArrowFunctionExpression,
   AssignmentStatement,
-  AsyncStatement,
+  DetachStatement,
   BindingPattern,
   ClassDeclaration,
   ClassDisposeBlock,
@@ -385,9 +385,9 @@ export interface ClassInfo {
 
 export type CollectionRuntimeKind = "list" | "map" | "set" | "record";
 
-export type CollectionOperation = "listGet" | "mapGet" | "recordGet" | "slice" | "listAppend" | "listExtend" | "listInsert" | "listRemove" | "listPop" | "listClear" | "listCopy" | "listHas" | "listCount" | "listIndex" | "listFind" | "listSome" | "listEvery" | "listMap" | "listFilter" | "listFlatMap" | "listReduce" | "listJoin" | "listSorted" | "listReversed" | "listSum" | "listMin" | "listMax" | "setAdd" | "setUpdate" | "setHas" | "setRemove" | "setClear" | "setValues" | "setCopy" | "setUnion" | "setIntersection" | "setDifference" | "mapSet" | "mapGetOrSet" | "mapUpdate" | "mapHas" | "mapRemove" | "mapClear" | "mapIterator" | "mapKeys" | "mapValues" | "mapEntries" | "mapCopy" | "recordSet" | "recordHas" | "recordRemove" | "recordClear" | "recordKeys" | "recordValues" | "recordEntries" | "recordCopy";
+export type CollectionOperation = "listGet" | "mapGet" | "recordGet" | "slice" | "listAppend" | "listExtend" | "listInsert" | "listRemove" | "listPop" | "listClear" | "listCopy" | "listHas" | "listCount" | "listIndex" | "listFind" | "listSome" | "listEvery" | "listMap" | "listFilter" | "listFlatMap" | "listReduce" | "listJoin" | "listSorted" | "listReversed" | "listSum" | "listMin" | "listMax" | "setAdd" | "setUpdate" | "setHas" | "setRemove" | "setClear" | "setValues" | "setCopy" | "setUnion" | "setIntersection" | "setDifference" | "mapSet" | "mapGetOrSet" | "mapGetOrSetWith" | "mapUpdate" | "mapHas" | "mapRemove" | "mapClear" | "mapIterator" | "mapKeys" | "mapValues" | "mapEntries" | "mapCopy" | "recordSet" | "recordHas" | "recordRemove" | "recordClear" | "recordKeys" | "recordValues" | "recordEntries" | "recordCopy";
 
-export type PrimitiveOperation = "stringTrim" | "stringUpper" | "stringLower" | "stringSlice" | "stringChar" | "stringHas" | "stringIndex" | "stringCount" | "stringStartsWith" | "stringEndsWith" | "stringSplit" | "stringReplace" | "stringReplaceAll" | "stringPadStart" | "stringPadEnd" | "stringRepeat" | "stringIsBlank" | "numberAbs" | "numberRound" | "numberFloor" | "numberCeil" | "numberToFixed" | "numberIsInteger" | "numberIsNaN" | "numberIsFinite";
+export type PrimitiveOperation = "stringTrim" | "stringUpper" | "stringLower" | "stringSlice" | "stringChar" | "stringHas" | "stringIndex" | "stringCount" | "stringStartsWith" | "stringEndsWith" | "stringSplit" | "stringReplace" | "stringReplaceAll" | "stringPadStart" | "stringPadEnd" | "stringRepeat" | "stringIsBlank" | "numberAbs" | "numberRound" | "numberFloor" | "numberCeil" | "numberSign" | "numberTrunc" | "numberToFixed" | "numberIsInteger" | "numberIsNaN" | "numberIsFinite";
 
 const listCollectionOperations = new Map<string, CollectionOperation>([
   ["get", "listGet"], ["slice", "slice"], ["append", "listAppend"], ["extend", "listExtend"],
@@ -398,7 +398,7 @@ const listCollectionOperations = new Map<string, CollectionOperation>([
   ["sorted", "listSorted"], ["reversed", "listReversed"], ["sum", "listSum"], ["min", "listMin"], ["max", "listMax"],
 ]);
 const mapCollectionOperations = new Map<string, CollectionOperation>([
-  ["get", "mapGet"], ["set", "mapSet"], ["getOrSet", "mapGetOrSet"], ["update", "mapUpdate"], ["has", "mapHas"],
+  ["get", "mapGet"], ["set", "mapSet"], ["getOrSet", "mapGetOrSet"], ["getOrSetWith", "mapGetOrSetWith"], ["update", "mapUpdate"], ["has", "mapHas"],
   ["remove", "mapRemove"], ["clear", "mapClear"], ["copy", "mapCopy"], ["iterator", "mapIterator"],
   ["keys", "mapKeys"], ["values", "mapValues"], ["entries", "mapEntries"],
 ]);
@@ -418,7 +418,7 @@ const stringPrimitiveOperations = new Map<string, PrimitiveOperation>([
   ["padStart", "stringPadStart"], ["padEnd", "stringPadEnd"], ["repeat", "stringRepeat"], ["isBlank", "stringIsBlank"],
 ]);
 const numberPrimitiveOperations = new Map<string, PrimitiveOperation>([
-  ["abs", "numberAbs"], ["round", "numberRound"], ["floor", "numberFloor"], ["ceil", "numberCeil"], ["toFixed", "numberToFixed"],
+  ["abs", "numberAbs"], ["round", "numberRound"], ["floor", "numberFloor"], ["ceil", "numberCeil"], ["sign", "numberSign"], ["trunc", "numberTrunc"], ["toFixed", "numberToFixed"],
   ["isInteger", "numberIsInteger"], ["isNaN", "numberIsNaN"], ["isFinite", "numberIsFinite"],
 ]);
 
@@ -437,7 +437,7 @@ const discardedPurePrimitiveOperations = new Set<PrimitiveOperation>([
   "stringTrim", "stringUpper", "stringLower", "stringSlice", "stringChar",
   "stringStartsWith", "stringEndsWith", "stringReplace", "stringReplaceAll",
   "stringPadStart", "stringPadEnd", "stringRepeat", "stringSplit", "stringIsBlank",
-  "numberAbs", "numberRound", "numberFloor", "numberCeil", "numberToFixed",
+  "numberAbs", "numberRound", "numberFloor", "numberCeil", "numberSign", "numberTrunc", "numberToFixed",
   "numberIsInteger", "numberIsNaN", "numberIsFinite",
 ]);
 export interface FormReadField {
@@ -468,7 +468,7 @@ export interface LoweringHints {
   readonly collectionSizes: ReadonlyMap<number, CollectionRuntimeKind>;
   readonly collectionIndexes: ReadonlyMap<string, "list" | "record">;
   readonly collectionMemberships: ReadonlyMap<string, CollectionRuntimeKind | "string">;
-  readonly collectionIterations: ReadonlyMap<number, CollectionRuntimeKind | "string">;
+  readonly collectionIterations: ReadonlyMap<number, CollectionRuntimeKind | "string" | "binary">;
   /** Concrete `Target.from(source, overrides?)` calls lowered as exact record projections. */
   readonly recordFromCalls: ReadonlyMap<string, RecordFromHint>;
   /** Concrete `Target.mapFrom(source, transform)` calls lowered as mapped record projections. */
@@ -1144,8 +1144,6 @@ const mathNamespaceMembers: ReadonlyMap<string, ValueType> = new Map<string, Val
   ["min", { kind: "intrinsic", name: "math.min", parameters: [numberType], requiredParameters: 1, result: numberType }],
   ["max", { kind: "intrinsic", name: "math.max", parameters: [numberType], requiredParameters: 1, result: numberType }],
   ["clamp", numberFunction(["value", "minimum", "maximum"], [numberType, numberType, numberType])],
-  ["sign", numberFunction(["value"], [numberType])],
-  ["trunc", numberFunction(["value"], [numberType])],
   ["sqrt", numberFunction(["value"], [numberType])],
   ["cbrt", numberFunction(["value"], [numberType])],
   ["pow", numberFunction(["base", "exponent"], [numberType, numberType])],
@@ -1538,7 +1536,7 @@ export class Analyzer implements TypeEnvironment {
   private readonly collectionSizes = new Map<number, CollectionRuntimeKind>();
   private readonly collectionIndexes = new Map<string, "list" | "record">();
   private readonly collectionMemberships = new Map<string, CollectionRuntimeKind | "string">();
-  private readonly collectionIterations = new Map<number, CollectionRuntimeKind | "string">();
+  private readonly collectionIterations = new Map<number, CollectionRuntimeKind | "string" | "binary">();
   private readonly recordFromCalls = new Map<string, RecordFromHint>();
   private readonly recordMapFromCalls = new Map<string, RecordMapFromHint>();
   private readonly binaryCalls = new Map<number, "bufferCopy" | "bufferSlice" | "bufferToBytes" | "bufferValues">();
@@ -2074,13 +2072,19 @@ export class Analyzer implements TypeEnvironment {
           }
         });
       }
-      // D44 rule 72: a `readonly` field modifier makes the same deep promise
-      // as a `readonly T` annotation, so it obeys the same pure-data rule.
+      // D44 rule 72: a `readonly` field modifier and a `readonly type`
+      // declaration make the same deep promise as a `readonly T` annotation,
+      // so both obey the same pure-data rule.
       if (valid && declaration.kind === "TypeDeclaration") {
         withParameters(() => {
-          for (const field of declaration.fields) {
-            if (!field.readonly) continue;
-            const violation = this.findClassInReadonlyData(this.resolveAnnotation(field.type));
+          const declaredFields = new Map(declaration.fields.map((field) => [field.name, field]));
+          const fields = declaration.readonly
+            ? [...(this.fieldsOf(this.namedTypeIdentities.get(declaration.name) ?? declaration.name) ?? new Map())]
+              .map(([name, type]) => ({ name, type, span: declaredFields.get(name)?.span ?? declaration.span }))
+            : declaration.fields.filter((field) => field.readonly)
+              .map((field) => ({ name: field.name, type: this.resolveAnnotation(field.type), span: field.span }));
+          for (const field of fields) {
+            const violation = this.findClassInReadonlyData(field.type);
             if (!violation) continue;
             this.typeError(
               `'readonly' accepts only pure data at every depth; '${declaration.name}.${field.name}${violation.suffix}' is class '${violation.className}' — model it as a data record, or drop 'readonly'`,
@@ -3353,6 +3357,9 @@ export class Analyzer implements TypeEnvironment {
           target.fields.set(field.name, this.resolveAnnotation(field.type));
           if (field.readonly) target.readonlyFields.add(field.name);
         }
+        if (statement.readonly) {
+          for (const name of target.fields.keys()) target.readonlyFields.add(name);
+        }
         this.typeDeclarationFields.set(statement.span.start, [...target.fields].map(([name, type]) => ({ name, type })));
       });
       resolving.pop();
@@ -4248,9 +4255,12 @@ export class Analyzer implements TypeEnvironment {
         // asynchronous form's declaration inside asyncPullElementType, so the
         // asynchronous side takes the operand unprojected.
         const iterable = statement.asynchronous ? inferredIterable : this.iterationSource(statement.iterable, inferredIterable);
+        const binaryIterable = !statement.asynchronous && binaryStorageKind(iterable) !== null;
         if (!statement.asynchronous
           && (iterable.kind === "list" || iterable.kind === "map" || iterable.kind === "set" || iterable.kind === "record" || iterable.kind === "string")) {
           this.collectionIterations.set(statement.span.start, iterable.kind);
+        } else if (binaryIterable) {
+          this.collectionIterations.set(statement.span.start, "binary");
         }
         for (const name of pendingLoopNames) this.pendingScopeDeclarations.at(-1)!.delete(name);
         let first: ValueType;
@@ -4274,15 +4284,17 @@ export class Analyzer implements TypeEnvironment {
           second = numberType;
           this.asyncForStatements.add(statement.span.start);
         } else {
-          first = iterable.kind === "list" || iterable.kind === "set"
+          first = binaryIterable ? numberType
+            : iterable.kind === "list" || iterable.kind === "set"
             ? iterable.readonlyView ? this.readonlyDataViewOf(iterable.element) : iterable.element
             : iterable.kind === "map" ? iterable.readonlyView ? this.readonlyDataViewOf(iterable.key) : iterable.key
               : iterable.kind === "record" || iterable.kind === "string" ? stringType : unknownType;
-          second = iterable.kind === "map" || iterable.kind === "record"
+          second = binaryIterable ? numberType
+            : iterable.kind === "map" || iterable.kind === "record"
             ? iterable.readonlyView ? this.readonlyDataViewOf(iterable.value) : iterable.value
             : iterable.kind === "list" || iterable.kind === "set" || iterable.kind === "string" ? numberType
               : unknownType;
-          if (iterable.kind !== "list" && iterable.kind !== "set" && iterable.kind !== "map" && iterable.kind !== "record" && iterable.kind !== "string" && iterable.kind !== "any") {
+          if (!binaryIterable && iterable.kind !== "list" && iterable.kind !== "set" && iterable.kind !== "map" && iterable.kind !== "record" && iterable.kind !== "string" && iterable.kind !== "any") {
             this.typeError(iterable.kind === "enumObject"
               ? `Cannot iterate over the enum itself; ${iterable.name}.values() returns the members as a List — for member in ${iterable.name}.values():`
               : `Cannot iterate over ${describeType(iterable)}${this.iterationGuidance(iterable)}`, statement.iterable.span);
@@ -4515,8 +4527,8 @@ export class Analyzer implements TypeEnvironment {
         this.checkDiscardedPureResult(statement.expression);
         break;
       }
-      case "AsyncStatement":
-        this.analyzeAsyncStatement(statement);
+      case "DetachStatement":
+        this.analyzeDetachStatement(statement);
         break;
     }
   }
@@ -4959,7 +4971,7 @@ export class Analyzer implements TypeEnvironment {
 
   // D32 item 30: a Promise-typed expression statement is a floating promise —
   // nothing waits for it and nothing owns its failure. The diagnostic teaches
-  // both current spellings: 'await' waits, the 'async' statement detaches.
+  // both current spellings: 'await' waits, while 'detach' owns a detached task.
   private checkFloatingPromiseStatement(type: ValueType, expression: Expression): void {
     if (isInvalidType(type)) return;
     if (!this.carriesPromise(this.expandAliases(type))) return;
@@ -4967,8 +4979,8 @@ export class Analyzer implements TypeEnvironment {
     this.diagnostics.push(diagnostic(
       "VEL4027",
       spelling
-        ? `This call returns ${describeType(type)}; 'await ${spelling}' to wait for it, or 'async ${spelling}' to run it detached`
-        : `This expression is ${describeType(type)}; 'await' it to wait for it, or prefix it with 'async' to run it detached`,
+        ? `This call returns ${describeType(type)}; 'await ${spelling}' to wait for it, or 'detach ${spelling}' to run it detached`
+        : `This expression is ${describeType(type)}; 'await' it to wait for it, or prefix it with 'detach' to run it detached`,
       expression.span,
     ));
   }
@@ -5062,17 +5074,17 @@ export class Analyzer implements TypeEnvironment {
     return callee === null ? null : `${callee}(${expression.arguments.length > 0 ? "..." : ""})`;
   }
 
-  // D32 item 30: 'async <expression>' runs detached, so only Promise<null>
+  // D32 item 30: 'detach <expression>' runs detached, so only Promise<null>
   // may detach — a non-null resolved value would be lost silently, and a
   // non-Promise value has nothing to detach.
-  private analyzeAsyncStatement(statement: AsyncStatement): void {
+  private analyzeDetachStatement(statement: DetachStatement): void {
     const type = this.inferExpression(statement.expression);
     if (isInvalidType(type)) return;
     const expanded = this.expandAliases(type);
     if (expanded.kind !== "promise") {
       this.diagnostics.push(diagnostic(
         "VEL4028",
-        `'async' runs a Promise<null> expression detached; this expression is ${describeType(type)}`,
+        `'detach' requires a Promise<null> expression; this expression is ${describeType(type)}`,
         statement.expression.span,
       ));
       return;
@@ -8527,6 +8539,25 @@ export class Analyzer implements TypeEnvironment {
     contextualType: ValueType = unknownType,
     optionalCall = false,
   ): ValueType {
+    if (calleeExpression.kind === "MemberExpression"
+      && !calleeExpression.optional
+      && calleeExpression.object.kind === "IdentifierExpression"
+      && calleeExpression.object.name === "Math"
+      && (calleeExpression.property === "sign" || calleeExpression.property === "trunc")
+      && arguments_.length === 1
+      && arguments_[0]!.kind !== "SpreadExpression") {
+      const argument = arguments_[0]!;
+      this.requireAssignable(this.inferExpression(argument), numberType, argument.span);
+      const method = calleeExpression.property;
+      const replacement = `(${this.sourceText.slice(argument.span.start, argument.span.end)}).${method}()`;
+      this.diagnostics.push(recoveredDiagnostic(
+        "VEL3008",
+        `Use '${replacement}'; '${method}' is a number method, not a Math namespace member`,
+        callSpan,
+        this.commentPreservingMechanicalFix(callSpan, replacement, `Use number method '.${method}()'`),
+      ));
+      return numberType;
+    }
     const hasNamed = argumentNames?.some((name) => name !== null) ?? false;
     const javaScriptBoundary = this.javaScriptBoundaryCallee(calleeExpression);
     if (javaScriptBoundary) {
@@ -9719,7 +9750,7 @@ export class Analyzer implements TypeEnvironment {
     if (object.kind !== "list" && object.kind !== "map" && object.kind !== "set" && object.kind !== "record") return null;
     const mutating = object.kind === "list"
       ? new Set(["append", "extend", "insert", "remove", "pop", "clear"])
-      : object.kind === "map" ? new Set(["set", "getOrSet", "update", "remove", "clear"])
+      : object.kind === "map" ? new Set(["set", "getOrSet", "getOrSetWith", "update", "remove", "clear"])
         : object.kind === "set" ? new Set(["add", "update", "remove", "clear"])
           : new Set(["set", "remove", "clear"]);
     if (object.readonlyView && mutating.has(member.property)) {
@@ -10119,6 +10150,24 @@ export class Analyzer implements TypeEnvironment {
         const value = inferArgument(1, object.value);
         if (keyArgument) this.requireAssignable(key, object.key, keyArgument.span);
         if (valueArgument) this.requireAssignable(value, object.value, valueArgument.span);
+        requireCount(2);
+        return object.value;
+      }
+      if (member.property === "getOrSetWith") {
+        this.collectionCalls.set(member.span.end, "mapGetOrSetWith");
+        const keyArgument = argumentAt(0);
+        const factoryArgument = argumentAt(1);
+        const key = inferArgument(0, object.key);
+        const factoryType: ValueType = {
+          kind: "function",
+          parameterNames: [],
+          parameters: [],
+          requiredParameters: 0,
+          result: object.value,
+        };
+        const factory = inferArgument(1, factoryType);
+        if (keyArgument) this.requireAssignable(key, object.key, keyArgument.span);
+        if (factoryArgument) this.requireAssignable(factory, factoryType, factoryArgument.span);
         requireCount(2);
         return object.value;
       }
@@ -11274,7 +11323,9 @@ export class Analyzer implements TypeEnvironment {
       case "abs":
       case "round":
       case "floor":
-      case "ceil": return callable([], [], numberType);
+      case "ceil":
+      case "sign":
+      case "trunc": return callable([], [], numberType);
       case "toFixed": return callable(["digits"], [numberType], stringType);
       case "isInteger":
       case "isNaN":
@@ -11333,6 +11384,9 @@ export class Analyzer implements TypeEnvironment {
       case "getOrSet":
         if (map.readonlyView) return null;
         return callable(["key", "fallback"], [map.key, map.value], map.value);
+      case "getOrSetWith":
+        if (map.readonlyView) return null;
+        return callable(["key", "factory"], [map.key, callable([], [], map.value)], map.value);
       case "update":
         if (map.readonlyView) return null;
         return callable(["values"], [map], nullType);
@@ -14034,7 +14088,8 @@ export class Analyzer implements TypeEnvironment {
           declarationSpan,
         ));
       } else {
-        this.diagnostics.push(diagnostic("VEL3004", `Name '${name}' is already declared in this scope`, declarationSpan));
+        const laterSpan = existing.span.start > declarationSpan.start ? existing.span : declarationSpan;
+        this.diagnostics.push(diagnostic("VEL3004", `Name '${name}' is already declared in this scope`, laterSpan));
       }
       return;
     }
@@ -14275,10 +14330,10 @@ export class Analyzer implements TypeEnvironment {
     }
     if (type.kind === "string") return new Map(["size", "trim", "upper", "lower", "slice", "char", "has", "index", "count", "startsWith", "endsWith", "split", "replace", "replaceAll", "padStart", "padEnd", "repeat", "isBlank"]
       .map((name) => [name, this.stringMember(name)!]));
-    if (type.kind === "number") return new Map(["abs", "round", "floor", "ceil", "toFixed", "isInteger", "isNaN", "isFinite"]
+    if (type.kind === "number") return new Map(["abs", "round", "floor", "ceil", "sign", "trunc", "toFixed", "isInteger", "isNaN", "isFinite"]
       .map((name) => [name, this.numberMember(name)!]));
     if (type.kind === "list") return available(["size", "get", "slice", "append", "extend", "insert", "has", "remove", "pop", "clear", "copy", "count", "index", "sorted", "reversed", "map", "flatMap", "filter", "reduce", "some", "every", "find", "join", "sum", "min", "max"], (name) => this.listMember(type, name));
-    if (type.kind === "map") return available(["size", "get", "set", "getOrSet", "update", "has", "remove", "clear", "copy", "iterator", "keys", "values", "entries"], (name) => this.mapMember(type, name));
+    if (type.kind === "map") return available(["size", "get", "set", "getOrSet", "getOrSetWith", "update", "has", "remove", "clear", "copy", "iterator", "keys", "values", "entries"], (name) => this.mapMember(type, name));
     if (type.kind === "record") return available(["size", "get", "set", "has", "remove", "clear", "copy", "keys", "values", "entries"], (name) => this.recordMember(type, name));
     if (type.kind === "set") return available(["size", "add", "update", "has", "remove", "clear", "copy", "values", "union", "intersection", "difference"], (name) => this.setMember(type, name));
     if (type.kind === "action") return new Map([
@@ -14423,6 +14478,19 @@ export class Analyzer implements TypeEnvironment {
   // reported as the ambiguity it is.
   protected prescanScopeDeclarations(statements: readonly Statement[]): void {
     const pending = this.pendingScopeDeclarations.at(-1)!;
+    // JavaScript block functions are available throughout their lexical
+    // block, and module-level VelarScript defs already follow that rule. Make
+    // every lexical block coherent: only defs are predeclared; const/let and
+    // owned bindings retain declaration order and TDZ diagnostics.
+    for (const statement of statements) {
+      if (statement.kind !== "FunctionDeclaration") continue;
+      this.declareBinding(statement.name, false, this.functionType(statement), statement.span);
+      const binding = this.scopes.at(-1)!.get(statement.name);
+      if (binding?.span.start === statement.span.start && binding.span.end === statement.span.end) {
+        this.functionResultKeys.set(binding, this.functionResultKey(statement));
+      }
+      this.predeclared.add(statement);
+    }
     for (const statement of statements) {
       if (statement.kind === "VariableDeclaration") {
         this.collectPatternNames(statement.pattern, (name) => {

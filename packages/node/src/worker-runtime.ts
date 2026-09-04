@@ -2,6 +2,7 @@ export const VELAR_NODE_WORKER_RUNTIME = String.raw`
 import { Worker as __VelarNodeWorker, isMainThread as __velarWorkerIsMainThread, parentPort as __velarWorkerParentPort } from "node:worker_threads";
 import { workerEntries as __velarWorkerEntries } from "velar/worker-manifest";
 import { Cancellation, CancellationError, TaskTimeoutError } from "velar/task";
+import { Bytes as __velarWorkerBinaryRuntime } from "velar/binary";
 
 const __velarWorkerStates = new WeakMap();
 const __velarWorkerPoolStates = new WeakMap();
@@ -24,7 +25,7 @@ function __velarWorkerDuration(value) {
   if (!Number.isFinite(milliseconds) || milliseconds < 0 || milliseconds > 2147483647) throw new RangeError("Worker timeout is outside the supported range");
   return milliseconds;
 }
-function __velarWorkerTransfer(value) {
+function __velarWorkerTransfer(value, adopt = false) {
   const transfers = [];
   const buffers = new Set();
   const objects = new Set();
@@ -42,10 +43,13 @@ function __velarWorkerTransfer(value) {
       const supported = item instanceof Uint8Array || item instanceof Uint16Array || item instanceof Uint32Array || item instanceof Float32Array;
       const buffer = item.buffer;
       if (supported && buffer instanceof ArrayBuffer && item.byteOffset === 0 && item.byteLength === buffer.byteLength
-        && buffer.byteLength > 0 && transferBytes + buffer.byteLength <= 64 * 1024 * 1024 && !buffers.has(buffer)) {
-        buffers.add(buffer);
-        transfers.push(buffer);
-        transferBytes += buffer.byteLength;
+        && transferBytes + buffer.byteLength <= 64 * 1024 * 1024) {
+        if (adopt) __velarWorkerBinaryRuntime.__velarAdoptTransferredBuffer(item);
+        if (buffer.byteLength > 0 && !buffers.has(buffer)) {
+          buffers.add(buffer);
+          transfers.push(buffer);
+          transferBytes += buffer.byteLength;
+        }
       }
       continue;
     }
@@ -57,12 +61,19 @@ function __velarWorkerTransfer(value) {
   }
   return transfers;
 }
-function __velarWorkerOutbound(value) {
-  const sourceTransfers = __velarWorkerTransfer(value);
-  if (sourceTransfers.length === 0) return { value, transfers: sourceTransfers };
+function __velarWorkerOutbound(value, source) {
+  const transfers = __velarWorkerTransfer(value);
+  if (transfers.length === 0) return { value, transfers };
+  const sourceTransfers = new Set(__velarWorkerTransfer(source));
+  if (!transfers.some(buffer => sourceTransfers.has(buffer))) return { value, transfers };
   if (typeof __velarWorkerStructuredClone !== "function") throw new Error("The structured clone API is unavailable");
   const snapshot = __velarWorkerStructuredClone(value);
   return { value: snapshot, transfers: __velarWorkerTransfer(snapshot) };
+}
+function __velarWorkerInbound(Type, value) {
+  if (!Type.is(value)) return Type.parse(value);
+  __velarWorkerTransfer(value, true);
+  return value;
 }
 function __velarWorkerFailure(error) {
   return { name: typeof error?.name === "string" ? error.name : "Error", message: typeof error?.message === "string" ? error.message : String(error), stack: typeof error?.stack === "string" ? error.stack : "" };
@@ -95,7 +106,7 @@ function __velarWorkerClient(name, RequestType, ResponseType, capacity) {
     if (pending.cancel === "timeout") { pending.reject(new TaskTimeoutError("Worker call timed out after " + pending.timeout)); return; }
     if (pending.cancel === "cancel") { pending.reject(new CancellationError(pending.reason)); return; }
     if (!message.ok) { const remote = message.error ?? {}; const failure = new WorkerCallError((remote.name ? remote.name + ": " : "") + (remote.message ?? "Worker call failed")); if (typeof remote.stack === "string" && remote.stack) failure.stack = failure.stack + "\nRemote worker:\n" + remote.stack; pending.reject(failure); return; }
-    try { pending.resolve(state.ResponseType.parse(message.value)); } catch (error) { pending.reject(error); }
+    try { pending.resolve(__velarWorkerInbound(state.ResponseType, message.value)); } catch (error) { pending.reject(error); }
   });
   instance.on("error", error => __velarWorkerRejectAll(state, new WorkerCrashedError(error instanceof Error ? error.message : "Worker crashed")));
   instance.on("exit", code => { if (!state.closed) __velarWorkerRejectAll(state, new WorkerCrashedError("Worker exited unexpectedly with code " + code)); });
@@ -108,7 +119,7 @@ const __velarWorkerPrototype = Object.freeze({
     if (state.pending.size >= state.capacity) return Promise.reject(new WorkerBackpressureError("Worker queue capacity " + state.capacity + " is full"));
     if (cancellation !== null && !Cancellation.is(cancellation)) return Promise.reject(new TypeError("Worker cancellation must be Cancellation or null"));
     let validated; try { validated = state.RequestType.parse(request); } catch (error) { return Promise.reject(error); }
-    let outbound; try { outbound = __velarWorkerOutbound(validated); } catch (error) { return Promise.reject(error); }
+    let outbound; try { outbound = __velarWorkerOutbound(validated, request); } catch (error) { return Promise.reject(error); }
     const milliseconds = __velarWorkerDuration(timeout); const id = state.nextId++;
     return new Promise((resolve, reject) => {
       const pending = { resolve, reject, cancel: null, reason: "Worker call cancelled", timeout, timer: null, unsubscribe: () => null };
@@ -152,7 +163,7 @@ export function serveWorker(RequestType, ResponseType, handler, capacity = 64) {
   RequestType = __velarWorkerRuntimeType(RequestType, "Worker request Type"); ResponseType = __velarWorkerRuntimeType(ResponseType, "Worker response Type");
   if (typeof handler !== "function") throw new TypeError("serveWorker handler must be an async function"); capacity = __velarWorkerInteger(capacity, 1, 10000, "Worker capacity");
   __velarWorkerServerInstalled = true; const queue = []; const active = new Map(); let running = false;
-  const drain = async () => { if (running) return; running = true; while (queue.length) { const message = queue.shift(); const cancellation = Cancellation.__velarCreate(); active.set(message.id, cancellation); try { const request = RequestType.parse(message.value); const result = ResponseType.parse(await handler(request, cancellation)); const outbound = __velarWorkerOutbound(result); __velarWorkerParentPort.postMessage({ id: message.id, ok: true, value: outbound.value }, outbound.transfers); } catch (error) { __velarWorkerParentPort.postMessage({ id: message.id, ok: false, error: __velarWorkerFailure(error) }); } finally { active.delete(message.id); } } running = false; };
+  const drain = async () => { if (running) return; running = true; while (queue.length) { const message = queue.shift(); const cancellation = Cancellation.__velarCreate(); active.set(message.id, cancellation); try { const request = __velarWorkerInbound(RequestType, message.value); const handled = await handler(request, cancellation); const result = ResponseType.parse(handled); const outbound = __velarWorkerOutbound(result, handled); __velarWorkerParentPort.postMessage({ id: message.id, ok: true, value: outbound.value }, outbound.transfers); } catch (error) { __velarWorkerParentPort.postMessage({ id: message.id, ok: false, error: __velarWorkerFailure(error) }); } finally { active.delete(message.id); } } running = false; };
   __velarWorkerParentPort.on("message", message => { if (!message || !Number.isSafeInteger(message.id)) return; if (message.kind === "cancel") { const cancellation = active.get(message.id); if (cancellation) Cancellation.__velarCancel(cancellation, typeof message.reason === "string" ? message.reason : "Worker call cancelled"); else { const index = queue.findIndex(item => item.id === message.id); if (index >= 0) { queue.splice(index, 1); __velarWorkerParentPort.postMessage({ id: message.id, ok: false, error: __velarWorkerFailure(new CancellationError(typeof message.reason === "string" ? message.reason : "Worker call cancelled")) }); } } return; } if (message.kind !== "call") return; if (queue.length + active.size >= capacity) { __velarWorkerParentPort.postMessage({ id: message.id, ok: false, error: __velarWorkerFailure(new WorkerBackpressureError()) }); return; } queue.push(message); drain(); });
   return null;
 }

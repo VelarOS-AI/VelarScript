@@ -134,7 +134,7 @@ component DatabaseRound:
         report = "cleared"
 
     @mounted:
-        async openAndRead()
+        detach openAndRead()
 
     return <div data-database>
         <p data-database-state>{report}</p>

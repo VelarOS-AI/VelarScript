@@ -235,7 +235,7 @@ test "runner continues after the failure":
 // ---------------------------------------------------------------------------
 
 test("[WEB-N3] a detached action failure reports exactly once and superseded failures carry their detail", { timeout: 180_000 }, async () => {
-  // The audit's rt4 evidence: a detached `async failing()` reported the same
+  // The audit's rt4 evidence: a `detach failing()` statement reported the same
   // failure twice (action phase, then a detail-less detached phase), while a
   // superseded older-generation failure arrived only as that empty detached
   // report. The action's own report now wins -- every action failure reports
@@ -256,8 +256,8 @@ action fires(tag: string, delay: Duration):
     throw Error(f"bang {tag}")
 
 test "fire and forget failures report once with detail":
-    async fires("old", 20ms)
-    async fires("new", 60ms)
+    detach fires("old", 20ms)
+    detach fires("new", 60ms)
     await Promise.sleep(150ms)
     await tick()
     expect(fires.error?.message ?? "null").toBe("bang new")

@@ -339,7 +339,7 @@ import {expect} from "velar/test"
 import {neverEnds} from "./helpers.vel"
 
 test "A leaves work that never ends":
-    async neverEnds()
+    detach neverEnds()
     expect(1).toBe(1)
 `,
     "b.test.vel": `
@@ -347,7 +347,7 @@ import {expect} from "velar/test"
 import {failsLate} from "./helpers.vel"
 
 test "B starts work that fails after it returns":
-    async failsLate()
+    detach failsLate()
     expect(1).toBe(1)
 `,
   });
@@ -375,7 +375,7 @@ import {expect} from "velar/test"
 import {failsSoon} from "./helpers.vel"
 
 test "A fails an assertion and leaks a detached failure":
-    async failsSoon()
+    detach failsSoon()
     await Promise.sleep(50ms)
     expect(1).toBe(0)
 `,
@@ -664,7 +664,7 @@ import {expect} from "velar/test"
 import {failsSoon} from "./helpers.vel"
 
 test "fails an assertion and leaks a detached failure":
-    async failsSoon()
+    detach failsSoon()
     await Promise.sleep(50ms)
     expect(1).toBe(0)
 `,

@@ -182,7 +182,7 @@ test("[D29 14] discarding a compiler-owned pure result is an error", () => {
   }
 });
 
-test("[D29 14] mutate-and-return, null-returning mutators, user calls, and async statements stay legal", () => {
+test("[D29 14] mutate-and-return, null-returning mutators, user calls, and detach statements stay legal", () => {
   // The scope discipline: the compiler judges only its own operations, and
   // only the ones that do not modify their receiver.
   const legal = compile(`
@@ -212,7 +212,7 @@ async def background():
     return
 
 await background()
-async background()
+detach background()
 `.trimStart());
   assert.deepEqual(legal.diagnostics, []);
 });

@@ -273,7 +273,7 @@ test("[ASY-D2 + BLD-D1] any unowned error during a test fails that test; the run
 
   // A detached failure during one test fails that test; later tests still run.
   const detached = await runCli({
-    "boom.test.vel": "async def boom():\n    throw Error(\"detached failure\")\n\ntest \"green\":\n    async boom()\n\ntest \"still runs\":\n    pass\n",
+    "boom.test.vel": "async def boom():\n    throw Error(\"detached failure\")\n\ntest \"green\":\n    detach boom()\n\ntest \"still runs\":\n    pass\n",
   }, ["test", "<dir>/boom.test.vel"]);
   assert.equal(detached.status, 1, detached.stdout + detached.stderr);
   assert.match(detached.stderr, /green/u);

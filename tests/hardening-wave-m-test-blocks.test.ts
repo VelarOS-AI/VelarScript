@@ -99,7 +99,7 @@ import {expect} from "velar/test"
 import {failLater} from "./main.vel"
 
 test "a detached failure belongs to the test that started it":
-    async failLater()
+    detach failLater()
     await Promise.sleep(10ms)
     expect(1).toBe(1)
 `.trimStart()],

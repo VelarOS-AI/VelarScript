@@ -47,7 +47,7 @@ export type CoreStatement =
   | PassStatement
   | AssignmentStatement
   | ExpressionStatement
-  | AsyncStatement;
+  | DetachStatement;
 
 export type Statement = CoreStatement | ExtensionStatement;
 
@@ -78,10 +78,11 @@ export type Statement = CoreStatement | ExtensionStatement;
  */
 export type CoreStatementConstructKey = Exclude<
   CoreStatement,
-  EmbeddedJavaScriptDeclaration | VariableDeclaration | FunctionDeclaration | ClassDeclaration | ForStatement
+  EmbeddedJavaScriptDeclaration | TypeDeclaration | VariableDeclaration | FunctionDeclaration | ClassDeclaration | ForStatement
 >["kind"]
   | "EmbeddedJavaScriptDeclaration:checked"
   | "EmbeddedJavaScriptDeclaration:unsafe"
+  | `TypeDeclaration:${"type" | "readonly-type"}`
   | `VariableDeclaration:${VariableDeclaration["binding"]}`
   | `FunctionDeclaration:${"def" | "async-def"}`
   | `ClassDeclaration:${"class" | "abstract-class"}`
@@ -93,7 +94,8 @@ export const CORE_STATEMENT_CONSTRUCTS = Object.freeze({
   ExternModuleDeclaration: 'extern module "node:crypto":',
   "EmbeddedJavaScriptDeclaration:checked": "extern js(capture: T)`…`:",
   "EmbeddedJavaScriptDeclaration:unsafe": "unsafe js`…`",
-  TypeDeclaration: "type Name:",
+  "TypeDeclaration:type": "type Name:",
+  "TypeDeclaration:readonly-type": "readonly type Name:",
   TypeAliasDeclaration: "type Name = string",
   EnumDeclaration: "enum Name:",
   "ClassDeclaration:class": "class Name:",
@@ -119,7 +121,7 @@ export const CORE_STATEMENT_CONSTRUCTS = Object.freeze({
   PassStatement: "pass",
   AssignmentStatement: "name = value",
   ExpressionStatement: "call()",
-  AsyncStatement: "async call()",
+  DetachStatement: "detach call()",
 } satisfies { readonly [Kind in CoreStatementConstructKey]: string });
 
 /** The tour key for one Core statement, including every multi-form projection. */
@@ -129,6 +131,8 @@ export function coreStatementConstructKey(statement: CoreStatement): CoreStateme
       return `EmbeddedJavaScriptDeclaration:${statement.form}`;
     case "VariableDeclaration":
       return `VariableDeclaration:${statement.binding}`;
+    case "TypeDeclaration":
+      return `TypeDeclaration:${statement.readonly ? "readonly-type" : "type"}`;
     case "FunctionDeclaration":
       return `FunctionDeclaration:${statement.asynchronous ? "async-def" : "def"}`;
     case "ClassDeclaration":
@@ -327,6 +331,8 @@ export interface AssertStatement {
 export interface TypeDeclaration {
   readonly kind: "TypeDeclaration";
   readonly exported: boolean;
+  /** Every field, including inherited fields, is exposed as deeply read-only. */
+  readonly readonly: boolean;
   readonly name: string;
   /** D55 rule 120: `type Box<T>` / `type Box<T: Data>`, the same list `def` takes. */
   readonly typeParameters?: readonly TypeParameterDeclaration[];
@@ -900,13 +906,13 @@ export interface ExpressionStatement {
 }
 
 /**
- * `async <expression>` runs a `Promise<null>` expression detached: the
+ * `detach <expression>` runs a `Promise<null>` expression detached: the
  * statement does not wait, and the emitter hands the Promise to a
  * compiler-owned observer that reports rejection through the host error
  * channel instead of letting it float.
  */
-export interface AsyncStatement {
-  readonly kind: "AsyncStatement";
+export interface DetachStatement {
+  readonly kind: "DetachStatement";
   readonly expression: Expression;
   readonly span: Span;
 }
@@ -1289,7 +1295,7 @@ export function statementContainsDirectAwait(
       return expression(core.target) || expression(core.value);
     case "ExpressionStatement":
       return expression(core.expression);
-    case "AsyncStatement":
+    case "DetachStatement":
       // Detached execution does not wait, so it never makes its frame async.
       return false;
     case "ImportDeclaration":

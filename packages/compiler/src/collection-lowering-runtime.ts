@@ -80,6 +80,7 @@ export const VELAR_COLLECTION_LOWERING_EXPORTS = [
   "__velarSetDifference",
   "__velarMapSet",
   "__velarMapGetOrSet",
+  "__velarMapGetOrSetWith",
   "__velarMapUpdate",
   "__velarMapCopy",
   "__velarRecordFields",
@@ -844,6 +845,27 @@ function __velarMapGetOrSet(value, key, fallback) {
   __velarReactiveCollectionLink(value, fallback);
   __velarReactiveCollectionTrigger(value, key, true, true);
   return __velarReactiveCollectionRead(value, key, fallback);
+}
+
+// Expensive cache entries need the same atomic missing-key operation without
+// computing a value that the Map already owns. The zero-argument factory runs
+// exactly once, only after the capacity check and absence check succeed.
+function __velarMapGetOrSetWith(value, key, factory) {
+  value = __velarReactiveRaw(value);
+  key = __velarReactiveRaw(key);
+  const size = __velarCheckedMapSize(value, "Map.getOrSetWith");
+  if (size > __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A Map cannot exceed 1000000 entries");
+  __velarReactiveCollectionTrack(value, key);
+  if (__velarCollectionSetMapMapHas(value, key)) {
+    return __velarReactiveCollectionRead(value, key, __velarCollectionSetMapMapGet(value, key));
+  }
+  if (size >= __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A Map cannot exceed 1000000 entries");
+  const created = __velarReactiveRaw(__velarCollectionHostCall(factory, undefined, []));
+  __velarCollectionSetMapMapSet(value, key, created);
+  __velarReactiveCollectionLink(value, key);
+  __velarReactiveCollectionLink(value, created);
+  __velarReactiveCollectionTrigger(value, key, true, true);
+  return __velarReactiveCollectionRead(value, key, created);
 }
 
 function __velarMapUpdate(value, items) {

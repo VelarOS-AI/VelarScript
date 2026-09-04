@@ -12,6 +12,8 @@ const __velarNumberMathAbs = __velarNumberGetOwnPropertyDescriptor(__velarNumber
 const __velarNumberMathRound = __velarNumberGetOwnPropertyDescriptor(__velarNumberNativeMath, "round")?.value;
 const __velarNumberMathFloor = __velarNumberGetOwnPropertyDescriptor(__velarNumberNativeMath, "floor")?.value;
 const __velarNumberMathCeil = __velarNumberGetOwnPropertyDescriptor(__velarNumberNativeMath, "ceil")?.value;
+const __velarNumberMathSign = __velarNumberGetOwnPropertyDescriptor(__velarNumberNativeMath, "sign")?.value;
+const __velarNumberMathTrunc = __velarNumberGetOwnPropertyDescriptor(__velarNumberNativeMath, "trunc")?.value;
 const __velarNumberIsSafeInteger = __velarNumberGetOwnPropertyDescriptor(__velarNumberNativeNumber, "isSafeInteger")?.value;
 const __velarNumberNativeIsInteger = __velarNumberGetOwnPropertyDescriptor(__velarNumberNativeNumber, "isInteger")?.value;
 const __velarNumberNativeIsNaN = __velarNumberGetOwnPropertyDescriptor(__velarNumberNativeNumber, "isNaN")?.value;
@@ -26,6 +28,8 @@ function __velarNumberAbs(value) { return __velarNumberCall(__velarNumberMathAbs
 function __velarNumberRound(value) { return __velarNumberCall(__velarNumberMathRound, __velarNumberNativeMath, [__velarNumberValue(value)]); }
 function __velarNumberFloor(value) { return __velarNumberCall(__velarNumberMathFloor, __velarNumberNativeMath, [__velarNumberValue(value)]); }
 function __velarNumberCeil(value) { return __velarNumberCall(__velarNumberMathCeil, __velarNumberNativeMath, [__velarNumberValue(value)]); }
+function __velarNumberSign(value) { return __velarNumberCall(__velarNumberMathSign, __velarNumberNativeMath, [__velarNumberValue(value)]); }
+function __velarNumberTrunc(value) { return __velarNumberCall(__velarNumberMathTrunc, __velarNumberNativeMath, [__velarNumberValue(value)]); }
 function __velarNumberToFixed(value, digits) {
   if (!__velarNumberCall(__velarNumberIsSafeInteger, __velarNumberNativeNumber, [digits]) || digits < 0 || digits > 100) throw new __velarNumberNativeRangeError("Number.toFixed digits must be an integer from 0 through 100");
   return __velarNumberCall(__velarNativeNumberToFixed, __velarNumberValue(value), [digits]);

@@ -61,7 +61,7 @@ component TicketPanel(id: string):
         await saveDraft(id, draft)
 
     watch id:
-        async ticket.reload()
+        detach ticket.reload()
 
     return <section>
         <h2>{heading}</h2>
@@ -71,7 +71,7 @@ component TicketPanel(id: string):
 ```
 
 A resource loads once at mount. Refetching after an input changes is an
-explicit `watch` plus detached `async resource.reload()`. Actions do not queue;
+explicit `watch` plus `detach resource.reload()`. Actions do not queue;
 disable or otherwise guard a trigger when concurrent calls are unwanted.
 
 Markup children are text, and text has no comment form. A `//` or `/* ... */`
@@ -100,7 +100,7 @@ before any DOM is written and never depends on watch order.
 A watch runs before the DOM its own change produces, so **layout read inside a
 watch is the layout from before the change** — `scrollMetrics` and `measure`
 answer the previous frame, silently and with no diagnostic. Read layout from a
-detached `async` statement that does `await frame()` first; the same applies
+detached `detach` statement that does `await frame()` first; the same applies
 immediately after `scrollElementTo`. `tick()` waits for the flush (rendered text
 and structure); `frame()` waits for the paint (geometry).
 

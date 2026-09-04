@@ -119,7 +119,7 @@ const FLOORS = Object.freeze({
   "extension-global": 2,
   "permanent-namespace": 4,
   "prelude-name": 5,
-  "namespace-member": 66,
+  "namespace-member": 64,
   "module-export": 236,
   // D68 rule 176: all four velar/web-test controllers are tour-owned. Read the
   // object fields out of the compiler interface so a newly published control

@@ -571,7 +571,7 @@ Run these before considering any change done:
 - Conditions accept only \`bool\`; test presence with \`value != null\`.
 - One statement per line; no \`++\`; named arguments are \`name=value\`.
 - \`match\` dispatches finite states; \`case _:\` is the fallback.
-- \`await task()\` or detached \`async task()\` — a dropped Promise is a
+- \`await task()\` or \`detach task()\` — a dropped Promise is a
   compile error.
 - \`range(...)\` is a Core prelude function and needs no import.
 - JSON data uses \`import json raw from "package/subpath"\`; the value is

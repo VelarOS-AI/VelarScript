@@ -1067,7 +1067,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
     interfaces: webModuleInterfaces,
     sources: webModuleSources,
     dependencies: new Map([
-      ["velar/worker", ["velar/worker-manifest", "velar/task"]],
+      ["velar/worker", ["velar/worker-manifest", "velar/task", "velar/binary"]],
       ["velar/http", ["velar/binary"]],
       ["velar/storage", ["velar/binary"]],
       ["velar/realtime", ["velar/websocket"]],

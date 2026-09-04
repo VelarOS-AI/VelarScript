@@ -32,6 +32,8 @@ export {
   __velarNumberRound as numberRound,
   __velarNumberFloor as numberFloor,
   __velarNumberCeil as numberCeil,
+  __velarNumberSign as numberSign,
+  __velarNumberTrunc as numberTrunc,
   __velarNumberToFixed as numberToFixed,
   __velarNumberIsInteger as numberIsInteger,
   __velarNumberIsNaN as numberIsNaN,

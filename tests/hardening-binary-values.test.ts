@@ -68,6 +68,61 @@ print(a.values().size + snapshot(b).size + c.values().size + d.values().size)
   assert.equal(result.output, "0\n");
 });
 
+test("fixed numeric buffers iterate values and indexes without allocating a List snapshot", async () => {
+  const result = await run(`
+import {Bytes, UInt8Buffer, UInt16Buffer, UInt32Buffer, Float32Buffer, uint8Buffer, uint16Buffer, uint32Buffer, float32Buffer} from "velar/binary"
+
+def total8(values: readonly UInt8Buffer) -> number:
+    let total = 0
+    for value, index in values:
+        total += value + index
+    return total
+
+def total16(values: readonly UInt16Buffer) -> number:
+    let total = 0
+    for value in values:
+        total += value
+    return total
+
+def total32(values: readonly UInt32Buffer) -> number:
+    let total = 0
+    for value in values:
+        total += value
+    return total
+
+def totalFloat(values: readonly Float32Buffer) -> number:
+    let total = 0
+    for value in values:
+        total += value
+    return total
+
+def totalBytes(values: Bytes) -> number:
+    let total = 0
+    for value in values:
+        total += value
+    return total
+
+const a = uint8Buffer(2)
+a[0] = 4
+a[1] = 6
+const b = uint16Buffer(1)
+b[0] = 7
+const c = uint32Buffer(1)
+c[0] = 8
+const d = float32Buffer(1)
+d[0] = 1.5
+print(total8(a))
+print(total16(b))
+print(total32(c))
+print(totalFloat(d))
+print(totalBytes(a.toBytes()))
+`);
+  assert.equal(result.output, "11\n7\n8\n1.5\n10\n");
+  assert.match(result.code, /__velarBinaryRuntime\.__velarBufferPairIterator\(values\)/u);
+  assert.match(result.code, /__velarBinaryRuntime\.__velarBufferIterator\(values\)/u);
+  assert.doesNotMatch(result.code, /__velarBufferValues/u);
+});
+
 test("values() enforces the universal List item ceiling before allocating", async () => {
   const result = await run(`
 import {uint16Buffer} from "velar/binary"

@@ -12,6 +12,37 @@ many times that surface has changed *since counting began*, never a maturity
 grade: `core@0.1` beside `web@0.11` means Core started counting today, not that
 Core is younger. History is deliberately not recomputed (D110 rule 3).
 
+## 0.26.0 — 2026-09-04
+
+Surfaces: `core@0.2` · `web@0.11` · `node@0.16` · `server@0.15` · `desktop@0.10`
+
+### Core and CLI — `core@0.2`
+
+- **Breaking**: detached work is now written `detach task()`. `async` has one
+  role again: it qualifies functions, arrows, and asynchronous iteration. The
+  compiler rejects the previous detached statement spelling and offers the
+  mechanical rewrite.
+- Local `def` declarations are visible throughout their lexical block, matching
+  top-level functions and allowing forward calls and mutually recursive helper
+  functions without declaration-order workarounds.
+- `readonly type Name:` declares a wholly read-only data record. The contract
+  includes inherited fields and projects transitively through nested records
+  and collections; mixed records continue to use field-level `readonly`.
+- Number sign and truncation are consistently value methods: use
+  `value.sign()` and `value.trunc()`. The duplicate `Math.sign` and
+  `Math.trunc` namespace entries are removed with mechanical call-site
+  guidance.
+- `Map.getOrSetWith(key, factory)` adds atomic lazy initialization without
+  constructing a fallback on the existing-key path. Its zero-argument factory
+  is contextually checked to return the Map's value type.
+- `Bytes` and fixed numeric buffers are directly iterable, including the
+  optional index slot, so read-only numeric loops no longer allocate a
+  `List<number>` snapshot. Builder finalization reuses an already exact backing
+  store.
+- Typed Worker messages transfer the single validated binary snapshot. A
+  receiver adopts a valid worker-owned buffer graph without reparsing it, while
+  inputs that still alias caller-owned buffers retain the defensive clone.
+
 ## 0.25.0 — 2026-08-29
 
 Surfaces: `core@0.1` · `web@0.11` · `node@0.16` · `server@0.15` · `desktop@0.10`

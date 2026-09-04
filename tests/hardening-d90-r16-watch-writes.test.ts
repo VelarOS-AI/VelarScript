@@ -205,7 +205,7 @@ action main():
     await tick()
     print(f"total={total}")
 
-async main()
+detach main()
 `;
 }
 
@@ -253,7 +253,7 @@ action main():
     await tick()
     print(f"calls={calls} declared={declared}")
 
-async main()
+detach main()
 `);
   assert.equal(output, "derived=1\ninner=1\ncalls=1 declared=1\n");
 });
@@ -277,7 +277,7 @@ action main():
     await tick()
     print(f"n={box.n} size={log.size}")
 
-async main()
+detach main()
 `);
   assert.equal(output, "n=1 size=1\n");
 });
@@ -406,7 +406,7 @@ action main():
     await tick()
     print(f"hits={hits}")
 
-async main()
+detach main()
 `,
   };
 }
@@ -475,7 +475,7 @@ action main():
     await tick()
     print(f"log={log.size} {log[0]} {log[1]}")
 
-async main()
+detach main()
 `,
   };
   assert.deepEqual(await projectMessages(project), []);
@@ -498,7 +498,7 @@ component Profile(userId: string):
     resource profile: string = loadName(userId)
 
     watch userId:
-        async profile.reload()
+        detach profile.reload()
 
     return <p data-name>{profile.value ?? "loading"}</p>
 

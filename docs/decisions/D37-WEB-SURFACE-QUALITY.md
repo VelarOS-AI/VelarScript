@@ -1,7 +1,7 @@
 # D37 — 第七轮语法排查：Look 值收紧与 Web 表面错误质量（已批准，待实施）
 
 用户于 2026-08-12 批准。判据同 D28-D36。所有现状结论均由真编译器探针验证。
-同轮裁决背景：`async` 语句关键字维持不换 `sync`（sync 字面义与行为相反，
+同轮裁决背景：`detach` 语句关键字维持不换 `sync`（sync 字面义与行为相反，
 反向误解；母亲 Python 有语句位独立 async 先例 `async for`/`async with`；
 若第五期盲测出现混淆证据再议 `detach`）。
 
@@ -83,7 +83,7 @@ JSX 未闭合 VEL5004、`bind:value` 错误元素 VEL5019 定向、重复属性 
 Look 未知属性 VEL5038、Look 重复属性 VEL5039、Look 坏展开类型错、look 条件
 `else` 可用、`await` 进 watch 的教学诊断优秀（「Computed callbacks and watch
 blocks are synchronous; use resource, action, or mounted for async work」）、
-`mounted:` 直接 `await` 可用、`async` 语句在组件体/mounted 内合法、空 enum/
+`mounted:` 直接 `await` 可用、`detach` 语句在组件体/mounted 内合法、空 enum/
 class 报错清晰。
 
 ## 组件内异步的完整使用图（本轮用户提问的成文答案，进 charter §15/§16 与 AI 简报）
@@ -94,7 +94,7 @@ class 报错清晰。
 | 用户触发的**操作** | `action save(): await ...` | 组件/模块所有；`pending`/`error` 面；销毁后调用被拒 |
 | 挂载后需要**等待**的初始化 | `mounted:` 内直接 `await` | 组件生命周期钩子本身 async-capable |
 | 变更响应 | `watch`（同步体） | 异步工作转 action/mounted（诊断已教） |
-| 明确**不等**、可越过组件生命周期的旁路任务 | `async task()` | **页面生命周期**，非组件所有；失败走 velar/app `detached` 阶段，不进组件 error 面 |
+| 明确**不等**、可越过组件生命周期的旁路任务 | `detach task()` | **页面生命周期**，非组件所有；失败走 velar/app `detached` 阶段，不进组件 error 面 |
 
 **卸载竞态语义（用户 2026-08-12 裁决：安全丢弃）**：`mounted:` 的 `await`
 未完成时组件被卸载，续体继续执行（JS 不可取消 Promise），但对**该实例自有

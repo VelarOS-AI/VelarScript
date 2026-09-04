@@ -948,7 +948,7 @@ export function buildSemanticIndex(
         break;
       case "AssignmentStatement": visitExpression(statement.target, true); visitExpression(statement.value); break;
       case "ExpressionStatement": visitExpression(statement.expression); break;
-      case "AsyncStatement": visitExpression(statement.expression); break;
+      case "DetachStatement": visitExpression(statement.expression); break;
       case "BreakStatement":
       case "ContinueStatement":
       case "PassStatement": break;

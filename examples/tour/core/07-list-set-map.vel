@@ -144,12 +144,13 @@ export def mapMembers() -> string:
     const keys = users.keys()
     const values = users.values()
     const entries = users.entries()
+    const cached = users.getOrSetWith("generated", () => {id: "generated", name: "Lin"})
 
     // `Map.update` merges another Map; `Set.update` accepts a Set or a List.
     scores.update(Map([["Ada", 10]]))
     users.clear()
 
-    return f"{size} {selected?.name} {missing == null} {present} {removed} {copied.size} {keys.size} {values.size} {entries.size} {scores.size} {flags.size}"
+    return f"{size} {selected?.name} {missing == null} {present} {removed} {copied.size} {keys.size} {values.size} {entries.size} {cached.name} {scores.size} {flags.size}"
 
 // ---------------------------------------------------------------------------
 // Record<T> — the JSON-shaped counterpart to Map<K, V>

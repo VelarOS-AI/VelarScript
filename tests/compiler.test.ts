@@ -665,6 +665,38 @@ const invalid = () => await task()
   assert.ok(incompatible.diagnostics.some((item) => /Cannot assign \(value: number\) -> Promise<number> to \(number\) -> number/u.test(item.message)));
 });
 
+test("local def declarations are visible throughout their lexical block", () => {
+  const source = `
+def parity(value: number) -> string:
+    const result = even(value)
+
+    def even(current: number) -> string:
+        if current == 0:
+            return "even"
+        return odd(current - 1)
+
+    def odd(current: number) -> string:
+        if current == 0:
+            return "odd"
+        return even(current - 1)
+
+    return result
+
+print(parity(6))
+print(parity(7))
+`.trimStart();
+  const result = compile(source);
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "even\nodd\n");
+
+  const collisionSource = "def outer():\n    const value = 1\n    def value():\n        pass\n";
+  const collision = compile(collisionSource);
+  assert.equal(collision.diagnostics.filter((item) => item.code === "VEL3004").length, 1);
+  assert.equal(collision.diagnostics.find((item) => item.code === "VEL3004")?.span.start, collisionSource.indexOf("def value"));
+});
+
 test("callback parameter names do not constrain structural function assignability", () => {
   const result = compile(`
 type Handler = (request: string) -> string
@@ -2854,6 +2886,47 @@ parsed("checked")
 
   const unknown = compile("type MissingValue = Missing\nconst value: MissingValue = null\n");
   assert.ok(unknown.diagnostics.some((item) => /Unknown type 'Missing'/u.test(item.message)));
+});
+
+test("readonly type declarations make their complete inherited data shape immutable", () => {
+  const valid = compile(`
+type Located:
+    position: List<number>
+
+readonly type Snapshot extends Located:
+    name: string
+    metadata: Record<string>
+
+const value: Snapshot = {position: [1, 2], name: "spawn", metadata: {kind: "safe"}}
+print(value.name + ":" + str(value.position.size))
+`.trimStart());
+  assert.deepEqual(valid.diagnostics, []);
+  const execution = executeModule(valid.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "spawn:2\n");
+
+  const invalid = compile(`
+type Located:
+    position: List<number>
+
+readonly type Snapshot extends Located:
+    name: string
+
+const value: Snapshot = {position: [1, 2], name: "spawn"}
+value.name = "changed"
+value.position.append(3)
+`.trimStart());
+  assert.deepEqual(invalid.diagnostics.map((item) => item.message), [
+    "Cannot assign to read-only field 'name'",
+    "Cannot call mutating method 'append' through readonly List<number>; it is a read-only view",
+  ]);
+
+  const alias = compile("readonly type Names = List<string>\n");
+  assert.deepEqual(alias.diagnostics.map((item) => item.code), ["VEL2025"]);
+  assert.match(alias.diagnostics[0]?.message ?? "", /type Name = readonly Other/u);
+
+  const formatted = "export readonly type Snapshot:\n    name: string\n";
+  assert.equal(formatSource(formatted), formatted);
 });
 
 test("readonly data views are transitive compile-time contracts without runtime freezing", () => {
@@ -7142,7 +7215,7 @@ async def sideEffect():
     return null
 
 def label(value: string) -> string:
-    async sideEffect()
+    detach sideEffect()
     return shout(value)
 
 state items: List<string> = []
@@ -11071,11 +11144,11 @@ test("0.6 Core standard library combines typed ergonomics with explicit platform
   // completed `velar/browser`'s watcher family with `watchIntersection`, the
   // only watcher whose subject is an element rather than the environment, which
   // is why it is one larger again.
-  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 298);
-  assert.equal(Object.values(api.modules).slice(0, 15).reduce((total, exports_) => total + exports_.length, 0), 161);
+  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 296);
+  assert.equal(Object.values(api.modules).slice(0, 15).reduce((total, exports_) => total + exports_.length, 0), 159);
   assert.equal(api.modules["velar/collections"]?.length, 28);
   assert.equal(api.modules["velar/text"]?.length, 23);
-  assert.equal(api.modules["velar/math"]?.length, 30);
+  assert.equal(api.modules["velar/math"]?.length, 28);
   assert.deepEqual(api.modules["velar/hash"], ["sha256Text"]);
   assert.deepEqual(api.modules["velar/json"], ["clone", "isSerializable", "parse", "stableStringify", "stringify", "tryParse"]);
   assert.deepEqual(api.modules["velar/async"], ["all", "map", "race", "retry", "series", "sleep", "timeout"]);
@@ -12424,7 +12497,6 @@ test("velar/math never reintroduces JavaScript numeric coercion", () => {
   const execution = executeModule(`${source}
 console.log(gcd(54, 24), lcm(6, 8));
 for (const operation of [
-  () => sign("2"),
   () => min(1, "2"),
   () => clamp(1, "0", 2),
   () => pow(2, "3"),
@@ -12438,7 +12510,6 @@ for (const operation of [
 }
 const OriginalTypeError = TypeError;
 Math.random = () => 1;
-Math.sign = () => 99;
 Math.min = () => 99;
 Math.max = () => 99;
 Math.floor = () => 99;
@@ -12450,15 +12521,14 @@ globalThis.TypeError = class PoisonTypeError extends Error {};
 globalThis.RangeError = class PoisonRangeError extends Error {};
 const sample = random();
 const integer = randomInt(10);
-console.log(sign(-2), min(4, 2), max(4, 2), clamp(3, 1, 2), gcd(54, 24), lcm(6, 8), sample >= 0 && sample < 1, integer >= 0 && integer < 10);
-try { sign("2"); console.log("accepted"); } catch (error) { console.log(error instanceof OriginalTypeError); }
+console.log(min(4, 2), max(4, 2), clamp(3, 1, 2), gcd(54, 24), lcm(6, 8), sample >= 0 && sample < 1, integer >= 0 && integer < 10);
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, [
     "6 24",
-    "TypeError", "TypeError", "TypeError", "TypeError", "TypeError",
+    "TypeError", "TypeError", "TypeError", "TypeError",
     "TypeError", "RangeError", "TypeError", "RangeError",
-    "-1 2 4 2 6 24 true true", "true", "",
+    "2 4 2 6 24 true true", "",
   ].join("\n"));
 
   for (const [replacement, expected] of [["1", "RangeError"], ['"0.5"', "TypeError"]]) {
@@ -12732,7 +12802,7 @@ console.log(typeIdentity, rangeIdentity, poisonCalls);
 test("Number methods capture their complete host ABI at initialization", () => {
   const result = compile(`
 def numberProbe(value: number) -> string:
-    return f"{value.abs()}|{value.round()}|{value.floor()}|{value.ceil()}|{value.toFixed(2)}"
+    return f"{value.abs()}|{value.round()}|{value.floor()}|{value.ceil()}|{value.sign()}|{value.trunc()}|{value.toFixed(2)}"
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
   const execution = executeModule(`${result.code ?? ""}
@@ -12742,7 +12812,7 @@ const originalDefineProperty = Object.defineProperty;
 let poisonCalls = 0;
 const poison = () => { poisonCalls += 1; throw new OriginalTypeError("poisoned number host"); };
 for (const [owner, name] of [
-  [Math, "abs"], [Math, "round"], [Math, "floor"], [Math, "ceil"],
+  [Math, "abs"], [Math, "round"], [Math, "floor"], [Math, "ceil"], [Math, "sign"], [Math, "trunc"],
   [Number, "isSafeInteger"], [Number.prototype, "toFixed"],
   [Object, "getOwnPropertyDescriptor"], [Reflect, "apply"],
 ]) originalDefineProperty(owner, name, { configurable: true, writable: true, value: poison });
@@ -12759,7 +12829,7 @@ try { __velarNumberToFixed(1, 101); } catch (error) { rangeIdentity = error inst
 console.log(typeIdentity, rangeIdentity, poisonCalls);
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "1.6|2|1|2|1.60\ntrue true 0\n");
+  assert.equal(execution.stdout, "1.6|2|1|2|1|1|1.60\ntrue true 0\n");
 });
 
 test("standard modules bound pathological allocation and timer inputs before effects", () => {
@@ -16040,8 +16110,8 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     devDependencies: Record<string, string>;
   };
-  assert.equal(createdPackage.dependencies["@velarscript/web"], "0.25.0");
-  assert.equal(createdPackage.devDependencies["@velarscript/cli"], "0.25.0");
+  assert.equal(createdPackage.dependencies["@velarscript/web"], "0.26.0");
+  assert.equal(createdPackage.devDependencies["@velarscript/cli"], "0.26.0");
   assert.equal(createdPackage.scripts.format, "velar format");
   assert.equal(createdPackage.scripts["format:check"], "velar format --check");
   assert.equal(createdPackage.scripts["test:browser"], "velar test --browser");
@@ -16177,8 +16247,8 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   assert.deepEqual(componentPackage.velar.requires.capabilities, []);
   assert.equal(componentPackage.scripts["pack:check"], "npm pack --dry-run --json");
   assert.match(componentPackage.scripts.validate ?? "", /npm run pack:check$/u);
-  assert.equal(componentPackage.peerDependencies["@velarscript/web"], "^0.25.0");
-  assert.equal(componentPackage.devDependencies["@velarscript/web"], "0.25.0");
+  assert.equal(componentPackage.peerDependencies["@velarscript/web"], "^0.26.0");
+  assert.equal(componentPackage.devDependencies["@velarscript/web"], "0.26.0");
   assert.match(await readFile(join(componentRoot, "src", "index.vel"), "utf8"), /export component InfoCard/u);
   assert.deepEqual(JSON.parse(await readFile(join(componentRoot, "velar.json"), "utf8")).extensions, ["@velarscript/web"]);
   await linkWorkspaceWebExtension(componentRoot);
@@ -16203,7 +16273,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     scripts: Record<string, string>;
   };
-  assert.equal(nodePackage.dependencies["@velarscript/server"], "0.25.0");
+  assert.equal(nodePackage.dependencies["@velarscript/server"], "0.26.0");
   assert.equal(nodePackage.dependencies["@velarscript/node"], undefined);
   assert.equal(nodePackage.scripts.dev, "velar dev");
   assert.equal(nodePackage.scripts.start, "velar serve");
@@ -16231,7 +16301,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     scripts: Record<string, string>;
   };
-  assert.equal(desktopPackage.dependencies["@velarscript/desktop"], "0.25.0");
+  assert.equal(desktopPackage.dependencies["@velarscript/desktop"], "0.26.0");
   assert.equal(desktopPackage.scripts.package, "velar package");
   assert.equal(desktopPackage.scripts["test:browser"], "velar test --browser=all");
   const desktopAgents = await readFile(join(desktopRoot, "AGENTS.md"), "utf8");
@@ -16295,7 +16365,7 @@ test("CLI help is command-specific and malformed top-level invocations fail clea
   const creator = resolve("packages/create/src/cli.ts");
   const creatorVersion = spawnSync(process.execPath, [creator, "--version"], { encoding: "utf8" });
   assert.equal(creatorVersion.status, 0, creatorVersion.stderr);
-  assert.equal(creatorVersion.stdout, "create-velar 0.25.0\n");
+  assert.equal(creatorVersion.stdout, "create-velar 0.26.0\n");
   const creatorMissing = spawnSync(process.execPath, [creator], { encoding: "utf8" });
   assert.equal(creatorMissing.status, 2);
   assert.match(creatorMissing.stderr, /expected one project directory/u);
@@ -17772,6 +17842,45 @@ def fill(scores: readonly Map<string, number>):
   ]);
 });
 
+test("Map.getOrSetWith creates a missing value lazily and contextually types its factory", () => {
+  const result = compile(`
+const buckets: Map<string, List<number>> = Map()
+let factoryCalls = 0
+
+def createBucket() -> List<number>:
+    factoryCalls += 1
+    return [factoryCalls]
+
+const first = buckets.getOrSetWith("terrain", createBucket)
+const existing = buckets.getOrSetWith(factory=() => [], key="terrain")
+const empty = buckets.getOrSetWith("caves", () => [])
+empty.append(9)
+print(first == existing)
+print(first)
+print(empty)
+print(factoryCalls)
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(result.code ?? "", /__velarMapGetOrSetWith\(buckets,/u);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "true\n[ 1 ]\n[ 9 ]\n1\n");
+
+  const invalid = compile(`
+const scores: Map<string, number> = Map()
+scores.getOrSetWith("bad", () => "wrong")
+`.trimStart());
+  assert.deepEqual(invalid.diagnostics.map((item) => item.message), ["Cannot assign () -> string to () -> number"]);
+
+  const readonlyMap = compile(`
+def fill(scores: readonly Map<string, number>):
+    scores.getOrSetWith("a", () => 1)
+`.trimStart());
+  assert.deepEqual(readonlyMap.diagnostics.map((item) => item.message), [
+    "Cannot call mutating method 'getOrSetWith' through readonly Map<string, number>; it is a read-only view",
+  ]);
+});
+
 test("optional collection annotations contextually type empty values", () => {
   const result = compileCore(`
 type Names = List<string>
@@ -18151,7 +18260,9 @@ test("project compilation shares primitive method runtime without publishing it"
     "numberIsInteger",
     "numberIsNaN",
     "numberRound",
+    "numberSign",
     "numberToFixed",
+    "numberTrunc",
     // D41 item 61: the dispatching comparator behind ordered comparisons of
     // `Comparable`-bounded type parameters.
     "orderCompare",
@@ -28361,7 +28472,7 @@ test("CLI emits complete Web application assets", async () => {
     apiVersion: "0.11",
     artifactKind: "velar-web-build",
   });
-  assert.deepEqual(manifest.compiler, { name: "velar", version: "0.25.0" });
+  assert.deepEqual(manifest.compiler, { name: "velar", version: "0.26.0" });
   assert.match(manifest.buildId, /^[a-f0-9]{64}$/u);
   assert.equal(manifest.sourceMaps, true);
   assert.equal(manifest.entry, `assets/${javascript}`);
@@ -29217,7 +29328,7 @@ test("string and number methods are checked, bindable, and Unicode-aware", async
   const api = standardModuleApi();
   assert.ok(["length", "char", "slice", "trim", "lower", "upper", "startsWith", "endsWith", "includes", "split", "replace", "replaceAll", "repeat", "padStart", "padEnd"]
     .every((name) => !api.modules["velar/text"]?.includes(name)));
-  assert.ok(["abs", "round", "floor", "ceil"].every((name) => !api.modules["velar/math"]?.includes(name)));
+  assert.ok(["abs", "round", "floor", "ceil", "sign", "trunc"].every((name) => !api.modules["velar/math"]?.includes(name)));
 
   const result = compile(`
 const sample = "VelarScript"
@@ -29252,6 +29363,8 @@ print((-2).abs())
 print(1.5.round())
 print(1.5.floor())
 print(1.5.ceil())
+print((-1.5).sign())
+print(decimal.trunc())
 print(decimal.toFixed(digits=2))
 
 let receiverReads = 0
@@ -29282,7 +29395,7 @@ print(maybe?.trim() ?? "missing")
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, [
     "5", "3", "A😀B", "😀", "b", "null", "😀b", "def", "abc", "true", "1", "3", "3", "-1", "4", "2", "4", "true", "true", "a|b", "x-a", "x-x", "007", "700", "abab",
-    "0", "2", "2", "1", "2", "3.14", "ela", "1", "3", "3", "missing", "",
+    "0", "2", "2", "1", "2", "-1", "3", "3.14", "ela", "1", "3", "3", "missing", "",
   ].join("\n"));
 
   // Removed function forms and JavaScript spellings point at the one current method surface.
@@ -29299,6 +29412,8 @@ print(word.indexOf("e"))
 print((1).toString())
 print(trim(word))
 print(abs(1))
+print(Math.sign(-1))
+print(Math.trunc(1.5))
 `.trimStart());
   const messages = guided.diagnostics.map((item) => item.message);
   assert.ok(messages.some((message) => /Use '\.size'/u.test(message)));
@@ -29310,6 +29425,9 @@ print(abs(1))
   assert.ok(messages.some((message) => /Use 'str\(value\)'/u.test(message)));
   assert.ok(messages.some((message) => /Use 'value\.trim\(\)'/u.test(message)));
   assert.ok(messages.some((message) => /Use 'value\.abs\(\)'/u.test(message)));
+  assert.ok(messages.some((message) => /'sign' is a number method/u.test(message)));
+  assert.ok(messages.some((message) => /'trunc' is a number method/u.test(message)));
+  assert.ok(guided.diagnostics.filter((item) => item.fix?.title.startsWith("Use number method")).length === 2);
 
   const directory = await makeTemporaryDirectory("velar-method-guidance-");
   const entry = join(directory, "main.vel");

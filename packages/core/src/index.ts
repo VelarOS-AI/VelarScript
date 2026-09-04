@@ -340,8 +340,6 @@ const coreModuleInterfaces = new Map<string, ModuleInterface>([
     ["min", intrinsic("math.min", [numberType], numberType)],
     ["max", intrinsic("math.max", [numberType], numberType)],
     ["clamp", apiFunction(["value", "minimum", "maximum"], [numberType, numberType, numberType], numberType)],
-    ["sign", apiFunction(["value"], [numberType], numberType)],
-    ["trunc", apiFunction(["value"], [numberType], numberType)],
     ["sqrt", apiFunction(["value"], [numberType], numberType)],
     ["cbrt", apiFunction(["value"], [numberType], numberType)],
     ["pow", apiFunction(["base", "exponent"], [numberType, numberType], numberType)],
@@ -1375,8 +1373,6 @@ function __velarMathHostData(owner, key, kind) {
 function __velarMathHostOperation(owner, key) { return __velarMathHostData(owner, key, "function"); }
 const __velarMathMin = __velarMathHostOperation(__velarMathNativeMath, "min");
 const __velarMathMax = __velarMathHostOperation(__velarMathNativeMath, "max");
-const __velarMathSign = __velarMathHostOperation(__velarMathNativeMath, "sign");
-const __velarMathTrunc = __velarMathHostOperation(__velarMathNativeMath, "trunc");
 const __velarMathSqrt = __velarMathHostOperation(__velarMathNativeMath, "sqrt");
 const __velarMathCbrt = __velarMathHostOperation(__velarMathNativeMath, "cbrt");
 const __velarMathPow = __velarMathHostOperation(__velarMathNativeMath, "pow");
@@ -1413,8 +1409,6 @@ export const infinity = __velarMathHostData(__velarMathNativeNumber, "POSITIVE_I
 export function min(...values) { if (!values.length) throw new __velarMathNativeRangeError("min requires at least one number"); let result = requireOrderedNumber(values[0], "Math.min"); for (let index = 1; index < values.length; index += 1) result = __velarMathCall(__velarMathMin, [result, requireOrderedNumber(values[index], "Math.min")]); return result; }
 export function max(...values) { if (!values.length) throw new __velarMathNativeRangeError("max requires at least one number"); let result = requireOrderedNumber(values[0], "Math.max"); for (let index = 1; index < values.length; index += 1) result = __velarMathCall(__velarMathMax, [result, requireOrderedNumber(values[index], "Math.max")]); return result; }
 export function clamp(value, minimum, maximum) { value = requireOrderedNumber(value, "Math.clamp"); minimum = requireOrderedNumber(minimum, "Math.clamp"); maximum = requireOrderedNumber(maximum, "Math.clamp"); if (minimum > maximum) throw new __velarMathNativeRangeError("clamp minimum cannot exceed maximum"); return __velarMathCall(__velarMathMin, [maximum, __velarMathCall(__velarMathMax, [minimum, value])]); }
-export function sign(value) { return unary(value, __velarMathSign, "sign"); }
-export function trunc(value) { return unary(value, __velarMathTrunc, "trunc"); }
 export function sqrt(value) { return unary(value, __velarMathSqrt, "sqrt"); }
 export function cbrt(value) { return unary(value, __velarMathCbrt, "cbrt"); }
 export function pow(left, right) { return binary(left, right, __velarMathPow, "pow"); }
@@ -1584,6 +1578,9 @@ export const Bytes = __velarRegisterRuntimeType(__velarBinaryFreeze({
   __velarBufferSlice,
   __velarBufferToBytes,
   __velarBufferValues,
+  __velarBufferIterator,
+  __velarBufferPairIterator,
+  __velarAdoptTransferredBuffer,
 }));
 export const UInt8Buffer = __velarRegisterRuntimeType(__velarBinaryFreeze({
   is(value) { return __velarBinaryWithinLimit(value, "Uint8Array", 1); },
@@ -1681,6 +1678,29 @@ function __velarBufferValues(value) {
   for (let index = 0; index < length; index += 1) output[index] = value[index];
   return output;
 }
+function* __velarBufferIterator(value) {
+  const spec = __velarBinarySpec(value);
+  const length = __velarBinarySize(value);
+  __velarBinarySizeLimit(length, spec.bytes, spec.name + " iteration");
+  for (let index = 0; index < length; index += 1) yield value[index];
+}
+function* __velarBufferPairIterator(value) {
+  let index = 0;
+  for (const item of __velarBufferIterator(value)) yield [item, index++];
+}
+// Worker structured cloning gives the receiver exclusive ownership of every
+// transferred full-buffer view. Validate that view once and register its
+// length in the same private fast-path memo used by standard-library-created
+// buffers; no public source operation can claim this privilege.
+function __velarAdoptTransferredBuffer(value) {
+  const spec = __velarBinarySpec(value, "Transferred binary buffer");
+  const length = __velarBinarySize(value);
+  __velarBinarySizeLimit(length, spec.bytes, spec.name + " transfer");
+  if (!spec.integer) {
+    for (let index = 0; index < length; index += 1) __velarBinaryFloat32Value(value[index]);
+  }
+  return __velarBinaryTrust(value, length);
+}
 function __velarBufferSlice(value, start = 0, end = __velarBinarySize(value)) {
   const spec = __velarBinarySpec(value);
   const length = __velarBinarySize(value);
@@ -1733,7 +1753,9 @@ const __velarBinaryBuilderPrototype = __velarBinaryFreeze({
   },
   finish() {
     const state = __velarBinaryCall(__velarBinaryWeakMapGet, __velarBinaryBuilders, [this]); if (!state || state.finished) throw new __velarBinaryNativeTypeError("Binary builder is finished");
-    const output = new state.spec.Constructor(state.size); for (let index = 0; index < state.size; index += 1) output[index] = state.storage[index]; state.finished = true; state.storage = null; return __velarBinaryTrust(output, state.size);
+    let output = state.storage;
+    if (state.size !== output.length) { output = new state.spec.Constructor(state.size); __velarBinaryCall(__velarBinaryTypedArraySet, output, [state.storage]); }
+    state.finished = true; state.storage = null; return __velarBinaryTrust(output, state.size);
   },
 });
 function __velarBinaryBuilder(maximum, Constructor, bytes, name) {
@@ -2298,7 +2320,7 @@ function asyncFanout(values, name) { values = __velarRequireList(values, name); 
 function durationMilliseconds(value, name) { if (typeof value !== "string") throw new __velarAsyncTypeError(name + " requires Duration; write a value such as 200ms or 2s"); const match = __velarAsyncApply(__velarAsyncRegExpExec, __velarAsyncDurationPattern, [value]); if (!match) throw new __velarAsyncTypeError(name + " requires Duration; write a value such as 200ms or 2s"); const milliseconds = __velarAsyncNumber(match[1]) * (match[2] === "s" ? 1000 : 1); if (!__velarAsyncNumberIsFinite(milliseconds) || milliseconds < 0 || milliseconds > __velarMaxTimerMilliseconds) throw new __velarAsyncRangeError(name + " requires a Duration from 0ms through 2147483647ms"); return milliseconds; }
 export function sleep(duration) { const milliseconds = durationMilliseconds(duration, "sleep"); return new __velarAsyncPromise((resolve) => __velarAsyncApply(__velarAsyncSetTimeout, __velarAsyncGlobal, [() => resolve(null), milliseconds])); }
 function normalize(value) { return value === undefined ? null : value; }
-function reportAsyncLoser(failure) { try { const runtime = globalThis[__velarAsyncDetachedRegistryKey]; if (runtime && typeof runtime.report === "function") { runtime.report(failure, { phase: "detached", detail: "async combinator loser", unhandled: true }); return null; } if (typeof __velarAsyncConsoleError === "function") __velarAsyncApply(__velarAsyncConsoleError, __velarAsyncConsole, ["Detached async task failed: " + (failure && failure.stack ? failure.stack : String(failure))]); } catch {} return null; }
+function reportAsyncLoser(failure) { try { const runtime = globalThis[__velarAsyncDetachedRegistryKey]; if (runtime && typeof runtime.report === "function") { runtime.report(failure, { phase: "detached", detail: "async combinator loser", unhandled: true }); return null; } if (typeof __velarAsyncConsoleError === "function") __velarAsyncApply(__velarAsyncConsoleError, __velarAsyncConsole, ["Detached task failed: " + (failure && failure.stack ? failure.stack : String(failure))]); } catch {} return null; }
 function actualPromise(value, name) { try { return __velarAsyncApply(__velarAsyncPromiseThen, value, [normalize]); } catch { throw new __velarAsyncTypeError(name + " requires actual Promises"); } }
 function optionalActualPromise(value) { try { return __velarAsyncApply(__velarAsyncPromiseThen, value, [normalize]); } catch { return null; } }
 function promiseList(values, name) { const output = new __velarListArray(values.length); for (let index = 0; index < values.length; index += 1) output[index] = actualPromise(values[index], name); return output; }

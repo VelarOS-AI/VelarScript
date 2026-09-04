@@ -203,7 +203,7 @@ async def late():
     throw Error("a straggler started by the browser test")
 
 test "starting work that outlives the test":
-    async late()
+    detach late()
     expect(1).toBe(1)
 `.trimStart(),
   });
@@ -234,7 +234,7 @@ async def late():
     throw Error("started by the first test")
 
 test "the first test starts detached work":
-    async late()
+    detach late()
     expect(1).toBe(1)
 
 test "the second test is innocent":
@@ -264,7 +264,7 @@ async def late():
     throw Error("a mapped failure")
 
 test "a detached failure carries a source location":
-    async late()
+    detach late()
     expect(1).toBe(1)
 `.trimStart(),
   });

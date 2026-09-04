@@ -110,7 +110,7 @@ component RealtimeProbe(socketUrl: string, eventsUrl: string):
 
     @cleanup:
         const live = connection
-        if live != null: async live.close()
+        if live != null: detach live.close()
         events.close()
 
     return <span data-realtime>{socketLabel}/{eventLabel}</span>

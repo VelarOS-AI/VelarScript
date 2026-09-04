@@ -199,7 +199,7 @@ parentheses instead of trailing the operator.
 
 A statement exists to do something. An expression statement is therefore
 restricted to the shapes that can: a call, an assignment, `await`, and the
-detached `async` statement. A statement whose whole content is a value —
+detached `detach` statement. A statement whose whole content is a value —
 a comparison, a literal, a name, arithmetic, a `??` fallback, a conditional, an
 index, a collection, a unary value, or a bare string — is rejected, because the
 result is computed and thrown away. Each shape is answered with the thing the
@@ -1080,8 +1080,8 @@ parameter or binding; a read-only view cannot flow back into a mutable
 contract because that would let the recipient mutate through the alias.
 
 ```velar fragment
-type Profile:
-    readonly id: string
+readonly type Profile:
+    id: string
     details: Details
     tags: List<Tag>
 
@@ -1093,6 +1093,11 @@ let selected: readonly Profile = owned
 selected = loadProfile()
 print(display(owned))
 ```
+
+`readonly type Name:` is the declaration-level spelling when every field is
+read-only. It covers fields inherited from a base record as well as fields
+written in the body. Use the field modifier only for a deliberately mixed
+record whose remaining fields stay writable.
 
 A `readonly` record view is transitive through reads: `profile.details`, list
 elements, Map keys and values, Set elements, Record values, destructuring, and
@@ -2000,15 +2005,15 @@ inspect List elements. Rename a conflicting top-level member or keep that value
 outside the resolved result.
 
 A Promise-typed expression statement is rejected: nothing waits for it and
-nothing owns its failure. The two current spellings state the intent
-explicitly — `await` waits, and the `async` statement runs detached:
+nothing owns its failure. The two ownership spellings state the intent
+explicitly — `await` waits, and `detach` starts detached work:
 
 ```velar fragment
 await save()
-async save()
+detach save()
 ```
 
-`async <expression>` is statement-position only and requires a checked
+`detach <expression>` is statement-position only and requires a checked
 `Promise<null>`. A non-null resolved value would be lost silently, so a
 result is awaited, or discarded explicitly inside an async def, before the
 task detaches. A detached task never floats: the compiler hands its Promise
@@ -2017,7 +2022,7 @@ it through the host error channel without ending the program — the console
 error channel on Node output, and the `velar/app` error chain with the
 distinct `detached` phase on web output. Inside components, UI-owned async
 work still belongs to `action`, which carries reactive pending/error state
-and the component lifecycle; the `async` statement serves process- and
+and the component lifecycle; the `detach` statement serves process- and
 page-lifetime work.
 
 ### Type parameters
@@ -2244,8 +2249,8 @@ const scores = Map([["Ada", 9], ["Lin", 7]])
 const flags = Map({preview: true, compact: false})
 ```
 
-Map members are `size`, `get`, `set`, `getOrSet`, `update`, `remove`, `has`,
-`clear`, `copy`, `iterator`, `keys`, `values`, and `entries`.
+Map members are `size`, `get`, `set`, `getOrSet`, `getOrSetWith`, `update`,
+`remove`, `has`, `clear`, `copy`, `iterator`, `keys`, `values`, and `entries`.
 
 `get(key)` is the read contract and returns `V?`. `getOrSet(key, fallback)` is
 the mutating grouping/cache contract: it returns the stored `V` when the key is
@@ -2254,6 +2259,11 @@ the fallback expression is evaluated before the method runs. The result is
 `V`, not `V?`, so repeated bucket appends do not create a collection-valued
 flow narrowing whose safety guard must walk the growing bucket on every read.
 `getOrSet` is unavailable through a `readonly Map`.
+
+`getOrSetWith(key, factory)` is the lazy form. The zero-argument factory runs
+only when the key is absent, after the Map has accepted the insertion; its
+result is inserted and returned as `V`. The existing-value path never invokes
+the factory. Like `getOrSet`, it is unavailable through a `readonly Map`.
 
 `iterator()` creates a live insertion-order key cursor. Its `next()` method
 pulls at most one key and returns `{value: K}`; after exhaustion it returns
@@ -4227,12 +4237,12 @@ export component Profile(userId: string):
     resource profile: User = loadUser(userId)
 
     watch userId:
-        async profile.reload()
+        detach profile.reload()
 
     return <p>{profile.value?.name ?? "Loading…"}</p>
 ```
 
-A watch body is synchronous, so the reload is started with the detached `async`
+A watch body is synchronous, so the reload is started with a `detach`
 statement rather than awaited; its failure still reports through the resource's
 own `error` field and the Web error chain.
 
@@ -4326,7 +4336,7 @@ cannot push an invalid value through the DOM first — and it means a geometry
 read inside a watch answers the previous frame. Nothing reports it, because
 nothing is wrong; the numbers are simply the ones the browser has laid out. A
 watch body is synchronous, so a read that must see the new layout belongs in a
-detached `async` statement that awaits `frame()` first. `tick()` answers once
+detached `detach` statement that awaits `frame()` first. `tick()` answers once
 the flush has settled and the DOM is written; `frame()` answers after the paint,
 which is when geometry exists to be read. There is no `flush: "post"` option:
 the two waits already name the two moments, and a third spelling would only
@@ -5318,5 +5328,6 @@ branch narrows `value` to the validated type. An exported derived value is
 declared `export computed name = expression` and read bare by every importing
 module; there is no second exported form, because there is no second spelling
 for a derived value. Numeric finiteness and integer tests use
-`value.isFinite()` and `value.isInteger()`; the duplicate `Math.` spellings are
-not part of the namespace.
+`value.isFinite()` and `value.isInteger()`. Numeric sign and truncation likewise
+use `value.sign()` and `value.trunc()`; duplicate `Math.` spellings are not part
+of the namespace.

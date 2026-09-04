@@ -280,7 +280,7 @@ async def record(pending: Promise<Dep>) -> string:
     const loaded = await pending
     return loaded.name
 
-async def detach(pending: Promise<Dep>):
+async def observe(pending: Promise<Dep>):
     const loaded = await pending
     detached = loaded.name == "async-statement"
 
@@ -413,8 +413,8 @@ async def assignments() -> List<string>:
 async def statements() -> List<string>:
     // ExpressionStatement.expression
     print(f"container expression {(await import("./dep-expression-statement.vel")).name}")
-    // AsyncStatement.expression
-    async detach(import("./dep-async-statement.vel"))
+    // DetachStatement.expression
+    detach detach(import("./dep-async-statement.vel"))
     return ["statements"]
 
 async def owned() -> List<string>:

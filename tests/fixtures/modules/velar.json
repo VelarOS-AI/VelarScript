@@ -5,6 +5,6 @@
   "publicDir": "public",
   "extensions": [],
   "surfaces": {
-    "core": "0.1"
+    "core": "0.2"
   }
 }

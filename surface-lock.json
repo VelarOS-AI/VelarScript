@@ -3,8 +3,8 @@
   "decision": "D110",
   "surfaces": {
     "core": {
-      "version": "0.1",
-      "digest": "b37207819f67f237944e03f4de30a75d6da4c050642b12bbb53e1c2508245eea"
+      "version": "0.2",
+      "digest": "12c84f2fa92ce5110b5b0999edbd13c56d412e433472250fc45dd911e12f0e65"
     },
     "web": {
       "version": "0.11",

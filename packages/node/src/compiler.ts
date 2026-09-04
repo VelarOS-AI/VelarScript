@@ -1246,7 +1246,7 @@ ${VELAR_NODE_SERVE_RUNTIME}
 
 export const nodeModuleDependencies: ReadonlyMap<string, readonly string[]> = new Map([
   ["velar/server-test", ["velar/serve"]],
-  ["velar/worker", ["velar/worker-manifest", "velar/task"]],
+  ["velar/worker", ["velar/worker-manifest", "velar/task", "velar/binary"]],
   ["velar/websocket", ["velar/serve", "velar/host"]],
   ["velar/http", [VELAR_NODE_HOST_MODULE, "velar/binary"]],
   ["velar/fs", [VELAR_NODE_HOST_MODULE, "velar/binary"]],

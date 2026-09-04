@@ -1,7 +1,7 @@
 # D32 — 第四轮语法排查：强转洞、浮动 Promise、混用括号（已批准，待实施）
 
 用户于 2026-08-12 批准三条修复；fire-and-forget 出口经用户驳回 `background()`
-包裹函数（「包一个 background 有些麻烦」）后改为 **`async` 语句**。判据同
+包裹函数（「包一个 background 有些麻烦」）后改为 **`detach` 语句**。判据同
 D28-D31。所有现状结论均由真编译器探针验证。
 
 ---
@@ -49,7 +49,7 @@ JSX children 位守住了该契约（对象被拒），同一个值放进 f-stri
 
 ---
 
-## 第 30 条 —— 浮动 Promise 编译期拦截 + `async` 语句（缺陷族）
+## 第 30 条 —— 浮动 Promise 编译期拦截 + `detach` 语句（缺陷族）
 
 ### 现状（实测）
 
@@ -69,8 +69,8 @@ lint，佐证这是 JS 头号异步笔误。
 1. **拦截**：静态类型为 `Promise<T>`（含携带 Promise 的 optional/联合）的
    **表达式语句** → 编译错误。诊断教两个拼写：
    `This call returns Promise<null>; 'await boom()' to wait for it, or
-   'async boom()' to run it detached`。
-2. **出口是 `async` 语句**（用户裁决，取代被驳回的 `background()` 包裹）：
+   'detach boom()' to run it detached`。
+2. **出口是 `detach` 语句**（用户裁决，取代被驳回的 `background()` 包裹）：
 
    ```
    await save()     // 等它
@@ -80,15 +80,15 @@ lint，佐证这是 JS 头号异步笔误。
    - **对称即教学**：`await` = 等，`async` = 不等。复用既有关键字，零新词、
      零导入、六个字符。
    - 语法：语句头 `async` 现有 def / for 两分支，新增表达式分支
-     `async <expression>`；表达式的检查类型必须是 **`Promise<null>`**。
-   - **结果会丢的任务不许分离**：`async loadUser(id)`（`Promise<User>`）→
+     `detach <expression>`；表达式的检查类型必须是 **`Promise<null>`**。
+   - **结果会丢的任务不许分离**：`detach loadUser(id)`（`Promise<User>`）→
      错误 `The result would be lost; await it, or discard it explicitly in an
      async def`。丢弃永远是显式动作。
    - **失败路径有主**：发射器把 `async expr` 包进编译器自有 helper —— 观察
      rejection，归一化为 `Error`，走宿主错误通道（Node：stderr 报告，**不崩
      进程**；Web：velar/app 错误链，独立 detached 阶段标记），永不静默。
    - 组件内 UI 异步仍归 `action`（组件生命周期所有、pending/error 面）；
-     `async` 语句是进程/页面生命周期。charter §7 async 段落与 web-api 写明分工。
+     `detach` 语句是进程/页面生命周期。charter §7 async 段落与 web-api 写明分工。
 3. **作用域纪律（v1）**：只管表达式语句位。存进绑定的 Promise 不追 ——
    「存了没等」需要逃逸分析，D1/D2 已裁决不做全程序分析；记入对抗搜捕维度，
    等真实证据再议。
@@ -96,7 +96,7 @@ lint，佐证这是 JS 头号异步笔误。
    忘写 `await` 这个最常见笔误静默合法化 —— `save()` 后紧跟读取保存结果的代码，
    时序 bug 无声出现。六个字符买回这层保护。
 5. 与 D30 第 17 条组合后，表达式语句的合法集合一句话：**非 Promise 的调用族 +
-   `await` 表达式 + `async` 语句**。
+   `await` 表达式 + `detach` 语句**。
 
 ---
 
@@ -131,7 +131,7 @@ JS 把 `||`/`&&` 与 `??` 的无括号混用直接定为 SyntaxError —— 两�
 
 - D31 第 23 条（模块初始化环）
 - 本文第 29 条（f-string/str 白名单）
-- 本文第 30 条（浮动 Promise + `async` 语句，语法与发射器 helper 同批落地 ——
+- 本文第 30 条（浮动 Promise + `detach` 语句，语法与发射器 helper 同批落地 ——
   没有出口就没有合法拼写）
 - 本文第 31 条（混用括号）
 
@@ -142,8 +142,8 @@ JS 把 `||`/`&&` 与 `??` 的无括号混用直接定为 SyntaxError —— 两�
 
 - 记录/List/自有 toString 字段在 f-string 与 `str()` 中均被编译期拒绝且诊断教
   两个出口；白名单类型（含 optional、枚举、Infinity/NaN 数字）照常工作（执行级）。
-- 裸 `boom()` 语句被拦截；`await boom()` 与 `async boom()` 均合法；
-  `async loadUser(id)`（非 null resolved）被拒；detached 失败走归一化报告且
+- 裸 `boom()` 语句被拦截；`await boom()` 与 `detach boom()` 均合法；
+  `detach loadUser(id)`（非 null resolved）被拒；detached 失败走归一化报告且
   进程不死（执行级，Node 与浏览器各一）。
 - `false or null ?? true` 及反向混用被诊断；加括号后两种分组均合法且语义符合
   括号（执行级真值表）。

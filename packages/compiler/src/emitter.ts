@@ -376,7 +376,7 @@ export class JavaScriptEmitter {
           ["stringPadStart", "__velarStringPadStart"], ["stringPadEnd", "__velarStringPadEnd"], ["stringRepeat", "__velarStringRepeat"],
           ["stringIsBlank", "__velarStringIsBlank"], ["stringCompare", "__velarStringCompare"], ["orderCompare", "__velarOrderCompare"],
           ["numberAbs", "__velarNumberAbs"], ["numberRound", "__velarNumberRound"], ["numberFloor", "__velarNumberFloor"],
-          ["numberCeil", "__velarNumberCeil"], ["numberToFixed", "__velarNumberToFixed"],
+          ["numberCeil", "__velarNumberCeil"], ["numberSign", "__velarNumberSign"], ["numberTrunc", "__velarNumberTrunc"], ["numberToFixed", "__velarNumberToFixed"],
           ["numberIsInteger", "__velarNumberIsInteger"], ["numberIsNaN", "__velarNumberIsNaN"], ["numberIsFinite", "__velarNumberIsFinite"],
         ].filter(([, local]) => usesGeneratedName(local!));
         helpers.push(`import { ${imports.map(([exported, local]) => `${exported} as ${local}`).join(", ")} } from ${JSON.stringify(VELAR_PRIMITIVE_METHOD_MODULE)};`);
@@ -913,8 +913,8 @@ export class JavaScriptEmitter {
     return this.sharedRuntimeModules;
   }
 
-  // The compiler-owned observer behind the 'async <expression>' statement
-  // (docs/contributing/runtime-boundary.md, B-DETACHED-ASYNC). The Promise and Reflect
+  // The compiler-owned observer behind the 'detach <expression>' statement
+  // (docs/contributing/runtime-boundary.md, B-DETACHED-TASK). The Promise and Reflect
   // operations and the console channel are captured at module initialization;
   // rejection is normalized to Error and reported on the host error channel
   // without ending the process. Hosts with their own error chain override
@@ -943,7 +943,7 @@ export class JavaScriptEmitter {
       "    let error = null;",
       "    try { error = __velarNormalizeError(failure); } catch {}",
       "    const trace = error === null ? \"A detached task failed\" : __velarDetachedTrace(error);",
-      "    __velarDetachedApply(__velarDetachedConsoleError, __velarDetachedConsole, [\"Detached async task failed: \" + trace]);",
+      "    __velarDetachedApply(__velarDetachedConsoleError, __velarDetachedConsole, [\"Detached task failed: \" + trace]);",
       "  } catch {}",
       "  return null;",
       "}",
@@ -1220,12 +1220,16 @@ export class JavaScriptEmitter {
             branch.body.forEach(visitStatement);
           });
           break;
-        case "ForStatement": visitExpression(statement.iterable); statement.body.forEach(visitStatement); break;
+        case "ForStatement":
+          if (this.hints.collectionIterations.get(statement.span.start) === "binary") this.needsBinaryHelpers = true;
+          visitExpression(statement.iterable);
+          statement.body.forEach(visitStatement);
+          break;
         case "WhileStatement": visitExpression(statement.condition); statement.body.forEach(visitStatement); break;
         case "TryStatement": statement.tryBody.forEach(visitStatement); statement.catchBody?.forEach(visitStatement); statement.finallyBody?.forEach(visitStatement); break;
         case "AssignmentStatement": visitExpression(statement.target); visitExpression(statement.value); break;
         case "ExpressionStatement": visitExpression(statement.expression); break;
-        case "AsyncStatement":
+        case "DetachStatement":
           // The detached-task observer normalizes rejection values, so the
           // error-normalization runtime travels with it.
           this.needsDetachedTaskHelper = true;
@@ -1603,9 +1607,10 @@ export class JavaScriptEmitter {
             `${indentation}}`,
           ].join("\n");
         }
-        this.needsCollectionHelpers = true;
         const iterable = this.emitMappedExpression(statement.iterable);
         const collectionKind = this.hints.collectionIterations.get(statement.span.start);
+        if (collectionKind === "binary") this.needsBinaryHelpers = true;
+        else this.needsCollectionHelpers = true;
         const iteratorHelper = collectionKind ? this.collectionIteratorHelper(collectionKind, false) : "__velarCollectionIterator";
         if (!statement.secondPattern && statement.pattern.kind === "NameBindingPattern") {
           const body = this.emitStatementLines(statement.body, depth + 1).join("\n");
@@ -1754,11 +1759,11 @@ export class JavaScriptEmitter {
         }
       case "ExpressionStatement":
         return `${indentation}${this.emitMappedExpression(statement.expression, false)};`;
-      case "AsyncStatement":
+      case "DetachStatement":
         // Detached execution never floats: the compiler-owned observer
         // adopts the Promise, normalizes rejection to Error, and reports it
         // through the host error channel (see docs/contributing/runtime-boundary.md,
-        // B-DETACHED-ASYNC). The expression takes the same Promise
+        // B-DETACHED-TASK). The expression takes the same Promise
         // normalization every other Promise consumer applies, so a foreign
         // thenable or an `undefined` from an extern boundary fails as an owned
         // 'Expected an actual Promise' instead of a host-voiced
@@ -3708,6 +3713,7 @@ export class JavaScriptEmitter {
       case "setDifference": return "__velarSetDifference";
       case "mapSet": return "__velarMapSet";
       case "mapGetOrSet": return "__velarMapGetOrSet";
+      case "mapGetOrSetWith": return "__velarMapGetOrSetWith";
       case "mapUpdate": return "__velarMapUpdate";
       case "mapHas": return "__velarMapHas";
       case "mapRemove": return "__velarMapRemove";
@@ -3738,7 +3744,10 @@ export class JavaScriptEmitter {
     }
   }
 
-  private collectionIteratorHelper(kind: "list" | "map" | "set" | "record" | "string", pair: boolean): string {
+  private collectionIteratorHelper(kind: "list" | "map" | "set" | "record" | "string" | "binary", pair: boolean): string {
+    if (kind === "binary") return pair
+      ? "__velarBinaryRuntime.__velarBufferPairIterator"
+      : "__velarBinaryRuntime.__velarBufferIterator";
     if (pair) {
       if (kind === "map") return "__velarReactiveMapPairIterator";
       if (kind === "record") return "__velarReactiveRecordPairIterator";
@@ -3805,6 +3814,8 @@ export class JavaScriptEmitter {
       case "numberRound": return "__velarNumberRound";
       case "numberFloor": return "__velarNumberFloor";
       case "numberCeil": return "__velarNumberCeil";
+      case "numberSign": return "__velarNumberSign";
+      case "numberTrunc": return "__velarNumberTrunc";
       case "numberToFixed": return "__velarNumberToFixed";
       case "numberIsInteger": return "__velarNumberIsInteger";
       case "numberIsNaN": return "__velarNumberIsNaN";
