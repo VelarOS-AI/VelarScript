@@ -27,12 +27,12 @@ import {
   type ClassField,
   type ClassInfo,
   type CollectionOperation,
+  type CompilerAnalysisExtension,
   type CollectionRuntimeKind,
   type PrimitiveOperation,
   type RuntimeNarrowingGuard,
 } from "../contracts.ts";
 import { mechanicalFix, type DiagnosticFix } from "../diagnostic.ts";
-import { type CompilerAnalysisExtension } from "../extension.ts";
 import { collectionMemberGuidance, stringMemberGuidance, type CollectionKind } from "../language-guidance.ts";
 import { span, spanIdentity, type Span } from "../source.ts";
 import {

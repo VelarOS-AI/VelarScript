@@ -285,8 +285,26 @@ for (const file of await sourceFiles(join(root, "packages", "compiler", "src", "
 }
 const compilerAnalysisIncludes = (phrase) => [...compilerAnalysisSources.values()].some((source) => source.includes(phrase));
 const COMPILER_ANALYSIS_LAYER = "packages/compiler/src/analyzer.ts and analysis/*.ts";
-const compilerEmitterSource = await readFile(join(root, "packages", "compiler", "src", "emitter.ts"), "utf8");
+// D114 R1c: the emission layer is `emitter.ts` plus every collaborator it owns
+// under `emit/`, read as one text at run time so a module added later is
+// covered without editing anything here. Every assertion below is about what
+// the layer emits, not about which of its files says it.
+const compilerEmitterSource = (await Promise.all([
+  readFile(join(root, "packages", "compiler", "src", "emitter.ts"), "utf8"),
+  ...(await sourceFiles(join(root, "packages", "compiler", "src", "emit"))).map((file) => readFile(file, "utf8")),
+])).join("\n");
+// Three of the checks below are slices anchored on where a family's emission
+// begins and ends, so they name the module that holds it rather than the joined
+// layer: `emit/validators.ts` and `emit/type-checks.ts` for the runtime `Type`
+// declaration, `emit/matching.ts` for the structural match.
+const compilerEmitValidatorSource = await readFile(join(root, "packages", "compiler", "src", "emit", "validators.ts"), "utf8");
+const compilerEmitTypeCheckSource = await readFile(join(root, "packages", "compiler", "src", "emit", "type-checks.ts"), "utf8");
+const compilerEmitMatchingSource = await readFile(join(root, "packages", "compiler", "src", "emit", "matching.ts"), "utf8");
 const compilerExtensionSource = await readFile(join(root, "packages", "compiler", "src", "extension.ts"), "utf8");
+const compilerContractsSource = await readFile(join(root, "packages", "compiler", "src", "contracts.ts"), "utf8");
+// D114 R1c: `CompilerAnalysisExtension` and the intrinsic context it hands an
+// extension are declared in `contracts.ts` now; the protocol is both files.
+const compilerExtensionProtocolIncludes = (phrase) => compilerExtensionSource.includes(phrase) || compilerContractsSource.includes(phrase);
 const compilerIndexSource = await readFile(join(root, "packages", "compiler", "src", "index.ts"), "utf8");
 const compilerClassRuntimeSource = await readFile(join(root, "packages", "compiler", "src", "class-runtime.ts"), "utf8");
 const compilerCollectionRuntimeSource = await readFile(join(root, "packages", "compiler", "src", "collection-runtime.ts"), "utf8");
@@ -302,7 +320,16 @@ const webReactiveBridgeRuntimeSource = await readFile(join(root, "packages", "we
 const compilerTextRuntimeSource = await readFile(join(root, "packages", "compiler", "src", "text-runtime.ts"), "utf8");
 const compilerTypeRegistryRuntimeSource = await readFile(join(root, "packages", "compiler", "src", "type-registry-runtime.ts"), "utf8");
 const compilerTypeValidationRuntimeSource = await readFile(join(root, "packages", "compiler", "src", "type-validation-runtime.ts"), "utf8");
-const compilerTypesSource = await readFile(join(root, "packages", "compiler", "src", "types.ts"), "utf8");
+// D114 R1c: the type model is `types.ts` plus every module it re-exports from
+// `types/`, and the analysis half of the extension protocol moved from
+// `extension.ts` to `contracts.ts`. Both are read as the layer they now are,
+// at run time, so a module added later is covered without editing a list here.
+const compilerTypesSources = new Map([["packages/compiler/src/types.ts", await readFile(join(root, "packages", "compiler", "src", "types.ts"), "utf8")]]);
+for (const file of await sourceFiles(join(root, "packages", "compiler", "src", "types"))) {
+  compilerTypesSources.set(display(file), await readFile(file, "utf8"));
+}
+const compilerTypesIncludes = (phrase) => [...compilerTypesSources.values()].some((source) => source.includes(phrase));
+const COMPILER_TYPES_LAYER = "packages/compiler/src/types.ts and types/*.ts";
 const compilerAstSource = await readFile(join(root, "packages", "compiler", "src", "ast.ts"), "utf8");
 const compilerParserSource = await readFile(join(root, "packages", "compiler", "src", "parser.ts"), "utf8");
 const compilerFormatterSource = await readFile(join(root, "packages", "compiler", "src", "formatter.ts"), "utf8");
@@ -373,8 +400,8 @@ for (const [path, source] of coreTargetBoundarySources) {
   }
 }
 for (const phrase of ["ExtensionValueType", "resolveTypeSyntax", "isTypeAssignable", "memberType"]) {
-  const source = phrase === "ExtensionValueType" ? compilerTypesSource : compilerExtensionSource;
-  if (!source.includes(phrase)) failures.push(`packages/compiler: target type extension contract is missing '${phrase}'`);
+  const includes = phrase === "ExtensionValueType" ? compilerTypesIncludes : compilerExtensionProtocolIncludes;
+  if (!includes(phrase)) failures.push(`packages/compiler: target type extension contract is missing '${phrase}'`);
 }
 for (const phrase of ["VELAR_WEB_TYPE_EXTENSION_ID", "resolveWebTypeSyntax", "isWebTypeAssignable", "webComponentConstructor"]) {
   if (!webTypesSource.includes(phrase)) failures.push(`packages/web/src/types.ts: Web does not own '${phrase}'`);
@@ -489,7 +516,7 @@ for (const name of reactiveBridgeExports) {
 for (const phrase of [
   "private readonly requiredRuntimeModules = new Set<string>()",
   "runtimeModules(): readonly string[]",
-  "this.requiredRuntimeModules.add(VELAR_REACTIVE_BRIDGE_MODULE)",
+  "this.host.requiredRuntimeModules.add(VELAR_REACTIVE_BRIDGE_MODULE)",
   "from ${JSON.stringify(VELAR_REACTIVE_BRIDGE_MODULE)}",
 ]) {
   if (!compilerEmitterSource.includes(phrase)) failures.push(`packages/compiler/src/emitter.ts: shared compiler runtime contract is missing '${phrase}'`);
@@ -1173,14 +1200,14 @@ for (const phrase of [
   'if (pattern.kind === "runtimeType")',
   'export function typeContainsRuntimeTypeCheck',
 ]) {
-  if (!compilerTypesSource.includes(phrase)) failures.push(`packages/compiler/src/types.ts: missing first-class Type<T> contract '${phrase}'`);
+  if (!compilerTypesIncludes(phrase)) failures.push(`${COMPILER_TYPES_LAYER}: missing first-class Type<T> contract '${phrase}'`);
 }
 for (const phrase of [
   'readonly kind: "record"',
   'if (syntax.name === "Record")',
   'return `${type.readonlyView ? "readonly " : ""}Record<${describeType(type.value)}>`',
 ]) {
-  if (!compilerTypesSource.includes(phrase)) failures.push(`packages/compiler/src/types.ts: missing Record<T> contract '${phrase}'`);
+  if (!compilerTypesIncludes(phrase)) failures.push(`${COMPILER_TYPES_LAYER}: missing Record<T> contract '${phrase}'`);
 }
 for (const phrase of [
   'if (type.kind === "record") return this.jsonSerializable(type.value, seen)',
@@ -1768,8 +1795,8 @@ for (const phrase of [
   if (!compilerEmitterSource.includes(phrase)) failures.push(`packages/compiler/src/emitter.ts: collection dependency ownership is missing '${phrase}'`);
 }
 for (const phrase of [
-  '() => (${this.emitMappedExpression(value)})',
-  '() => (${this.emitMappedExpression(property.value)})',
+  '() => (${this.host.emitMappedExpression(value)})',
+  '() => (${this.host.emitMappedExpression(property.value)})',
 ]) {
   if (!compilerEmitterSource.includes(phrase)) failures.push(`packages/compiler/src/emitter.ts: controlled collection thunk does not parenthesize '${phrase}'`);
 }
@@ -1836,7 +1863,7 @@ for (const phrase of [
 if (/\b(?:Array\.isArray|Object\.(?:getOwnPropertyDescriptor|freeze)|Reflect\.apply)\s*\(|\b(?:WeakMap|Set)\.prototype\b|\bnew (?:WeakMap|Set|TypeError)\b|instanceof Promise|\.(?:get|set|has|add|delete)\s*\(/u.test(compilerTypeValidationRuntimeSource)) {
   failures.push("packages/compiler/src/type-validation-runtime.ts: runtime Type graph traversal bypasses its captured WeakMap, Set, Promise, reflection, freeze, or Error ABI");
 }
-const emittedRuntimeTypeDeclarationSource = compilerEmitterSource.slice(compilerEmitterSource.indexOf("  private emitTypeDeclaration"), compilerEmitterSource.indexOf("  private emitClass"));
+const emittedRuntimeTypeDeclarationSource = `${compilerEmitValidatorSource.slice(compilerEmitValidatorSource.indexOf("  emitTypeDeclaration("))}\n${compilerEmitTypeCheckSource}`;
 if (/\b(?:Array\.isArray|Object\.(?:getOwnPropertyDescriptor|freeze)|Boolean)\s*\(|\bnew (?:WeakMap|Set|TypeError)\b|\binstanceof\b|__state\.active\.(?:get|set|delete)\s*\(|__active(?:\?|)\.(?:has|add|delete)\s*\(/u.test(emittedRuntimeTypeDeclarationSource)
   || !emittedRuntimeTypeDeclarationSource.includes("__velarValidationState()")
   || !emittedRuntimeTypeDeclarationSource.includes("__velarValidationOwnDescriptor")
@@ -1877,7 +1904,7 @@ if (/Reflect\.deleteProperty\s*\(|Object\.freeze\s*\(|for \(const field|\.values
 const recordLoweringStart = compilerEmitterSource.indexOf('"function __velarSetRecordField');
 const objectBindingStart = compilerEmitterSource.indexOf('"function __velarRequireBindingObject');
 const listBindingStart = compilerEmitterSource.indexOf('"function __velarRequireBindingList');
-const emittedRecordLoweringSource = compilerEmitterSource.slice(recordLoweringStart, compilerEmitterSource.indexOf("    if (this.needsObjectBindingHelpers)", recordLoweringStart));
+const emittedRecordLoweringSource = compilerEmitterSource.slice(recordLoweringStart, compilerEmitterSource.indexOf("      this.selectRecordConstructionHelpers(", recordLoweringStart));
 const emittedObjectBindingSource = compilerEmitterSource.slice(objectBindingStart, compilerEmitterSource.indexOf("    if (this.needsListBindingHelpers)", objectBindingStart));
 const emittedListBindingSource = compilerEmitterSource.slice(listBindingStart, compilerEmitterSource.indexOf("    if (this.needsNumberHelper)", listBindingStart));
 if (/\b(?:Array\.isArray|Object\.(?:prototype|getOwnPropertyDescriptor|getOwnPropertyNames|getOwnPropertySymbols|defineProperty)|Reflect\.apply)\b|\.call\s*\(|for \(const|new (?:TypeError|RangeError)/u.test(emittedRecordLoweringSource)
@@ -1895,8 +1922,7 @@ if (/\b(?:Array\.isArray|Object\.getOwnPropertyDescriptor|Reflect\.apply)\b|\.pu
   || !emittedListBindingSource.includes("__velarCollectionListGetOwnPropertyDescriptor")) {
   failures.push("packages/compiler/src/emitter.ts: List binding lowering bypasses the captured List host ABI");
 }
-const structuralMatchEnd = compilerEmitterSource.indexOf("  protected emitBindingPatternStatements");
-const emittedStructuralMatchSource = compilerEmitterSource.slice(compilerEmitterSource.lastIndexOf('case "MatchListPattern"', structuralMatchEnd), structuralMatchEnd);
+const emittedStructuralMatchSource = compilerEmitMatchingSource.slice(compilerEmitMatchingSource.lastIndexOf('case "MatchListPattern"'));
 if (/\b(?:Array\.isArray|Object\.(?:getOwnPropertyDescriptor|getOwnPropertyNames|getOwnPropertySymbols|defineProperty)|Reflect\.apply)\b/u.test(emittedStructuralMatchSource)
   || emittedStructuralMatchSource.includes('lines.push(`${indentation}for (const')
   || !emittedStructuralMatchSource.includes("__velarCollectionListGetOwnPropertyDescriptor")

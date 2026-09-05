@@ -47,13 +47,12 @@ import type {
   UsingDeclaration,
 } from "./ast.ts";
 import {
-  disposeMemberKey,
-  iterateAsyncMemberKey,
-  iterateMemberKey,
+  disposeMemberKey, iterateAsyncMemberKey, iterateMemberKey,
   type AnalysisContext,
   type ClassField,
   type ClassInfo,
   type CollectionRuntimeKind,
+  type CompilerAnalysisExtension,
   type DisposalContract,
   type FormReadField,
   type InitializationImportRead,
@@ -61,12 +60,12 @@ import {
   type RecordFromHint,
   type RecordMapFromHint,
   type RecordTypeField,
+  type RetiredNamespace,
   type RuntimeNarrowingGuard,
 } from "./contracts.ts";
 import { isPermanentNamespaceName, type PermanentNamespaceName } from "./core-vocabulary.ts";
 import { advisory, diagnostic, mechanicalEdits, mechanicalFix, recoveredDiagnostic, type Advisory, type Diagnostic, type DiagnosticEdit, type DiagnosticFix } from "./diagnostic.ts";
 import { VELAR_HOST_ERROR_NAMES, VELAR_HOST_ERROR_PATH_NAMES } from "./error-runtime.ts";
-import type { CompilerAnalysisExtension, RetiredNamespace } from "./extension.ts";
 import { removedGlobalFunctionGuidance, REST_PARAMETER_ELEMENT_TYPE_MESSAGE } from "./language-guidance.ts";
 import { bindingNameRestriction } from "./source-names.ts";
 import { span, spanIdentity, type Span } from "./source.ts";

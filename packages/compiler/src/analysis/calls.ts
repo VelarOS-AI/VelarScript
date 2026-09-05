@@ -26,9 +26,8 @@
  * live rather than freezing at construction.
  */
 import { type ArrowFunctionExpression, type Expression } from "../ast.ts";
-import { type ClassInfo, type FormReadField } from "../contracts.ts";
+import { type ClassInfo, type CompilerAnalysisExtension, type FormReadField } from "../contracts.ts";
 import { diagnostic, recoveredDiagnostic, type Diagnostic, type DiagnosticFix } from "../diagnostic.ts";
-import { type CompilerAnalysisExtension } from "../extension.ts";
 import { spanIdentity, type Span } from "../source.ts";
 import {
   anyType,

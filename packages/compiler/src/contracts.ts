@@ -12,11 +12,14 @@
  * `analyzer.ts` re-exports every one of them: nothing that imported a name
  * from `./analyzer.ts` has to change.
  */
+import { type Expression, type Statement } from "./ast.ts";
 import { type PermanentNamespaceName } from "./core-vocabulary.ts";
 import { type Span } from "./source.ts";
 import {
   type BinaryStorageKind,
   type EnumInfo,
+  type ExtensionTypeSyntaxResolver,
+  type ExtensionValueType,
   type GenericApplication,
   type GenericTypeInfo,
   type TypeParameterBound,
@@ -339,4 +342,103 @@ export interface DisposalContract {
   readonly member: string;
   readonly asynchronous: boolean;
   readonly owner: "class" | "capability";
+}
+
+/**
+ * D114 R1c: the analysis half of the extension protocol —
+ * `CompilerAnalysisExtension`, the retired-namespace migration it carries, and
+ * the intrinsic context an extension's `inferIntrinsic` hook is handed. These
+ * were declared in `extension.ts`, which also re-exports the `Analyzer` class
+ * *value*; that made every analysis collaborator that named one of these types
+ * a member of the compiler's import ring. They are a contract between the
+ * analyzer and a target extension, not part of the extension module's own
+ * assembly, so they live here beside the other cross-stage contracts and
+ * `extension.ts` re-exports all three as types: nothing that imported a name
+ * from `./extension.ts` has to change.
+ */
+export interface CompilerAnalysisExtension {
+  readonly primitiveTypes?: ReadonlySet<string>;
+  readonly primitiveParents?: ReadonlyMap<string, ReadonlySet<string>>;
+  readonly primitiveMutableFields?: ReadonlyMap<string, ReadonlySet<string>>;
+  readonly globals?: ReadonlyMap<string, ValueType>;
+  readonly reservedBindings?: ReadonlySet<string>;
+  readonly globalGuidance?: ReadonlyMap<string, string>;
+  /**
+   * Guidance that replaces `globalGuidance` inside a module whose path ends
+   * with the keyed suffix. The right door for a reserved global depends on
+   * where the author is standing: `document` inside a component means JSX and
+   * refs, and inside a `.browser.test.vel` it means `velar/web-test`.
+   */
+  readonly globalGuidanceByPathSuffix?: ReadonlyMap<string, ReadonlyMap<string, string>>;
+  /**
+   * D52 rule 114: a namespace prefix the language invented and then withdrew,
+   * keyed by the retired name. It is `permanentNamespace` run backwards — that
+   * one turns an import into a prefix, this one turns a prefix back into the
+   * import — so the migration teaches the named import that replaced it and
+   * carries the mechanical rewrite (drop the prefix, add the import) with it.
+   */
+  readonly retiredNamespaces?: ReadonlyMap<string, RetiredNamespace>;
+  /** Resolve target-owned type syntax without teaching Core the target's types. */
+  readonly resolveTypeSyntax?: ExtensionTypeSyntaxResolver;
+  /** Decide compatibility inside a target-owned type family. */
+  readonly isTypeAssignable?: (
+    actual: ExtensionValueType,
+    expected: ExtensionValueType,
+    assign: (actual: ValueType, expected: ValueType) => boolean,
+  ) => boolean | undefined;
+  /** Resolve target-owned runtime members; null means the target owns the type but the member is absent. */
+  readonly memberType?: (type: ExtensionValueType, property: string) => ValueType | null | undefined;
+  /**
+   * Declare whether a target-owned value has a total, hook-free text form.
+   * `true` admits the value to f-strings and `str()`, `false` records an owned
+   * rejection, and `undefined` leaves the type for another extension or Core.
+   */
+  readonly textForm?: (type: ValueType) => boolean | undefined;
+  readonly inferIntrinsic?: (context: CompilerIntrinsicAnalysisContext) => ValueType | undefined;
+  /** Frame-aware traversal for expression nodes owned by this extension. */
+  readonly directAwaitExpression?: (
+    expression: Expression,
+    contains: (expression: Expression) => boolean,
+  ) => boolean | undefined;
+  /** Frame-aware traversal for statement nodes owned by this extension. */
+  readonly directAwaitStatement?: (
+    statement: Statement,
+    containsExpression: (expression: Expression) => boolean,
+    containsBlock: (statements: readonly Statement[]) => boolean,
+  ) => boolean | undefined;
+  /**
+   * Decide whether an extension-owned expression is a stable per-item value
+   * projection for Core's collection canonicalization advisories. Returning
+   * `true` says constructing the expression cannot mutate the iterated List;
+   * `false` owns and rejects the expression, and `undefined` leaves it to
+   * another extension. Nested Core expressions must be delegated to `pure`.
+   */
+  readonly canonicalCollectionProjection?: (
+    expression: Expression,
+    pure: (expression: Expression) => boolean,
+  ) => boolean | undefined;
+}
+
+/** The module a retired namespace's members moved back to, and which names moved. */
+export interface RetiredNamespace {
+  readonly module: string;
+  readonly members: ReadonlySet<string>;
+}
+
+export interface CompilerIntrinsicAnalysisContext {
+  readonly intrinsic: Extract<ValueType, { kind: "intrinsic" }>;
+  readonly argumentAt: (index: number) => Expression | null;
+  readonly callSpan: Span;
+  readonly arity: (minimum?: number, maximum?: number) => void;
+  readonly inferAt: (index: number, expected?: ValueType) => ValueType;
+  readonly callbackAt: (index: number, parameters: readonly ValueType[], result: ValueType) => ValueType;
+  readonly runtimeTypeAt: (index: number) => ValueType;
+  readonly typeError: (message: string, span: Span) => void;
+  readonly isAssignable: (actual: ValueType, expected: ValueType) => boolean;
+  readonly expandAliases: (type: ValueType) => ValueType;
+  readonly jsonSerializable: (type: ValueType) => boolean | null;
+  readonly isHttpFormBody: (type: ValueType) => boolean;
+  readonly declaredFieldsOf: (identity: string) => ReadonlyMap<string, ValueType> | null;
+  readonly formReadField: (name: string, type: ValueType, span: Span) => FormReadField | null;
+  readonly recordFormRead: (sourceSpan: Span, fields: readonly FormReadField[]) => void;
 }

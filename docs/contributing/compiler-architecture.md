@@ -686,6 +686,53 @@ initialization therefore cannot change which case is selected.
   what it depends on. Analyzer state a collaborator reads mid-walk — the class
   under analysis, the constructor and field-initializer depths — arrives through
   getters on that interface, so the reads stay live.
+  `contracts.ts` also holds the analysis half of the extension protocol —
+  `CompilerAnalysisExtension`, `RetiredNamespace` and
+  `CompilerIntrinsicAnalysisContext` — so an analysis collaborator names a
+  protocol type without importing `extension.ts`, which re-exports all three;
+  that is what keeps `analyzer.ts` and its collaborators out of the package's
+  import ring.
+  `types/` is the type model split by the question each module answers:
+  `model.ts` (the `ValueType` union, the singletons, structural identity, and
+  the constructors that build a type from other types) is the floor and imports
+  nothing from its siblings; `bounds.ts` is what a type-parameter bound grants
+  and who is refused for not keeping it; `readonly.ts` is the readonly
+  projection; `display.ts` is `describeType` and the two generic application
+  constructors that must produce exactly the text it renders; `from-syntax.ts`
+  turns written type syntax into a type and back into the text a reader wrote;
+  `unification.ts` is `mergeTypes` and the generic parameter solver; and
+  `assignability.ts` decides whether a value of one type may stand where
+  another is expected. `types.ts` re-exports all of it, so every existing
+  `from "./types.ts"` import is unchanged.
+  `parser/` holds the syntax families the `Parser` owns as collaborators rather
+  than as more of itself: `statements/{declarations,classes,control-flow,modules}.ts`,
+  `expressions/{primary,postfix,operators}.ts`, `patterns.ts` (binding and case
+  patterns) and `type-syntax.ts`, with `tokens.ts` for the pure token tables
+  both `parser.ts` and its collaborators read. `Parser` stays the class Web and
+  Node subclass — every `protected` member is declared there — and each
+  collaborator declares the host interface it needs (`ClassParserHost`,
+  `OperatorParserHost`, …), which `parser.ts` satisfies with one live-reading
+  object: the token cursor moves under the collaborators, so `index`,
+  `current()` and the diagnostics array are the parser's own, not a snapshot.
+  `parseStatementBody` is now a dispatcher over six phases, each answering for
+  one family of statement heads and returning `undefined` when it did not claim
+  the statement, so the order they run in is the order the grammar reads them.
+  `emit/` holds the emission families the `JavaScriptEmitter` owns the same way:
+  `statements.ts`, `expressions.ts`, `classes.ts`, `matching.ts`,
+  `validators.ts` (the runtime `Type` a declaration compiles to) and
+  `type-checks.ts` (the predicate that `Type` is), `runtime-imports.ts` (which
+  helpers a program's lowering uses), `helper-names.ts` (the runtime name each
+  lowering calls), `source-map.ts` (the mapping bookkeeping) and `javascript.ts`
+  (the pure tables and renderers both `emitter.ts` and its collaborators read).
+  Every one of the 32 `protected` members is still declared on
+  `JavaScriptEmitter`, forwarding to the family that owns its body, so a Web or
+  Node override reaches the same seam it always did. The emitter's host is
+  built once and passed to all of them: its state half must stay live
+  accessors, because a family recording "this module needs the collection
+  helpers" sets the emitter's own flag and `emit()` reads it afterwards.
+  `emit()` is now a 69-line orchestration over named phases — reset, emit the
+  statements, then five runtime-import selection phases in the order they ran
+  as one 653-line method.
 - `packages/web` owns component/JSX syntax activation, reactive and lifecycle
   analysis, semantic symbols/references, Web intrinsic typing, project graph
   traversal, exported component/reactive interfaces, DOM/CSS emission, Web

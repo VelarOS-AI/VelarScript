@@ -15,7 +15,7 @@ import {
   VELAR_CORE_API_VERSION,
 } from "../packages/compiler/src/core-vocabulary.ts";
 import { keywordKinds } from "../packages/compiler/src/token.ts";
-import { typeParameterBoundNames } from "../packages/compiler/src/types.ts";
+import { typeParameterBoundNames } from "../packages/compiler/src/types/model.ts";
 import { velarCompilerExtension as desktopExtension } from "../packages/desktop/src/compiler.ts";
 import { VELAR_DESKTOP_API_VERSION } from "../packages/desktop/src/config.ts";
 import { VELAR_NODE_API_VERSION, velarNodeCompilerExtension as nodeExtension } from "../packages/node/src/compiler.ts";
@@ -280,7 +280,7 @@ export function coreVocabularyEntries() {
     entries.push(entry("hard-keyword", spelling, spelling, "keywordKinds in packages/compiler/src/token.ts", "packages/compiler/src/token.ts"));
   }
   for (const name of typeParameterBoundNames) {
-    entries.push(entry("type-parameter-bound", name, `<T: ${name}>`, "typeParameterBoundNames in packages/compiler/src/types.ts", "packages/compiler/src/types.ts"));
+    entries.push(entry("type-parameter-bound", name, `<T: ${name}>`, "typeParameterBoundNames in packages/compiler/src/types/model.ts", "packages/compiler/src/types/model.ts"));
   }
   // D55 rule 120: which declaration forms take `<T>` is a compiler-owned
   // roster — the same one every refusal aimed at a form that does not take one

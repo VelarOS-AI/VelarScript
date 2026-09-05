@@ -1,4 +1,4 @@
-import type { AnalysisContext, ClassInfo, FormReadField, LoweringHints } from "./contracts.ts";
+import type { AnalysisContext, ClassInfo, CompilerAnalysisExtension, LoweringHints } from "./contracts.ts";
 import type { Analyzer } from "./analyzer.ts";
 import type { CoreExpression, CoreStatement, Expression, Parameter, Program, Statement, TypeReference, TypeSyntax } from "./ast.ts";
 import type { Advisory, Diagnostic } from "./diagnostic.ts";
@@ -6,7 +6,7 @@ import type { Parser } from "./parser.ts";
 import type { SourceText, Span } from "./source.ts";
 import type { CompilerSemanticExtension, SemanticSymbol } from "./semantic.ts";
 import type { Token } from "./token.ts";
-import type { EnumInfo, ExtensionTypeSyntaxResolver, ExtensionValueType, GenericTypeInfo, ValueType } from "./types.ts";
+import type { EnumInfo, GenericTypeInfo, ValueType } from "./types.ts";
 
 export { expressionContainsDirectAwait } from "./ast.ts";
 export { VELAR_CLASS_FIELD_MODULE, VELAR_CLASS_FIELD_MODULE_SOURCE, VELAR_CLASS_FIELD_RUNTIME } from "./class-runtime.ts";
@@ -47,7 +47,7 @@ export type {
   TypeReference,
   TypeSyntax,
 } from "./ast.ts";
-export type { AnalysisContext, ClassField, ClassInfo, FormReadField, LoweringHints } from "./contracts.ts";
+export type { AnalysisContext, ClassField, ClassInfo, CompilerAnalysisExtension, CompilerIntrinsicAnalysisContext, FormReadField, LoweringHints, RetiredNamespace } from "./contracts.ts";
 export { Parser } from "./parser.ts";
 export { spanIdentity } from "./source.ts";
 export type { Span } from "./source.ts";
@@ -164,93 +164,6 @@ export interface CompilerLexicalScanResult {
   /** D89: an extension scanner reaches the advisory channel on the same terms as the diagnostic one. */
   readonly advisories?: readonly Advisory[];
   readonly startsLine?: boolean;
-}
-
-export interface CompilerAnalysisExtension {
-  readonly primitiveTypes?: ReadonlySet<string>;
-  readonly primitiveParents?: ReadonlyMap<string, ReadonlySet<string>>;
-  readonly primitiveMutableFields?: ReadonlyMap<string, ReadonlySet<string>>;
-  readonly globals?: ReadonlyMap<string, ValueType>;
-  readonly reservedBindings?: ReadonlySet<string>;
-  readonly globalGuidance?: ReadonlyMap<string, string>;
-  /**
-   * Guidance that replaces `globalGuidance` inside a module whose path ends
-   * with the keyed suffix. The right door for a reserved global depends on
-   * where the author is standing: `document` inside a component means JSX and
-   * refs, and inside a `.browser.test.vel` it means `velar/web-test`.
-   */
-  readonly globalGuidanceByPathSuffix?: ReadonlyMap<string, ReadonlyMap<string, string>>;
-  /**
-   * D52 rule 114: a namespace prefix the language invented and then withdrew,
-   * keyed by the retired name. It is `permanentNamespace` run backwards — that
-   * one turns an import into a prefix, this one turns a prefix back into the
-   * import — so the migration teaches the named import that replaced it and
-   * carries the mechanical rewrite (drop the prefix, add the import) with it.
-   */
-  readonly retiredNamespaces?: ReadonlyMap<string, RetiredNamespace>;
-  /** Resolve target-owned type syntax without teaching Core the target's types. */
-  readonly resolveTypeSyntax?: ExtensionTypeSyntaxResolver;
-  /** Decide compatibility inside a target-owned type family. */
-  readonly isTypeAssignable?: (
-    actual: ExtensionValueType,
-    expected: ExtensionValueType,
-    assign: (actual: ValueType, expected: ValueType) => boolean,
-  ) => boolean | undefined;
-  /** Resolve target-owned runtime members; null means the target owns the type but the member is absent. */
-  readonly memberType?: (type: ExtensionValueType, property: string) => ValueType | null | undefined;
-  /**
-   * Declare whether a target-owned value has a total, hook-free text form.
-   * `true` admits the value to f-strings and `str()`, `false` records an owned
-   * rejection, and `undefined` leaves the type for another extension or Core.
-   */
-  readonly textForm?: (type: ValueType) => boolean | undefined;
-  readonly inferIntrinsic?: (context: CompilerIntrinsicAnalysisContext) => ValueType | undefined;
-  /** Frame-aware traversal for expression nodes owned by this extension. */
-  readonly directAwaitExpression?: (
-    expression: Expression,
-    contains: (expression: Expression) => boolean,
-  ) => boolean | undefined;
-  /** Frame-aware traversal for statement nodes owned by this extension. */
-  readonly directAwaitStatement?: (
-    statement: Statement,
-    containsExpression: (expression: Expression) => boolean,
-    containsBlock: (statements: readonly Statement[]) => boolean,
-  ) => boolean | undefined;
-  /**
-   * Decide whether an extension-owned expression is a stable per-item value
-   * projection for Core's collection canonicalization advisories. Returning
-   * `true` says constructing the expression cannot mutate the iterated List;
-   * `false` owns and rejects the expression, and `undefined` leaves it to
-   * another extension. Nested Core expressions must be delegated to `pure`.
-   */
-  readonly canonicalCollectionProjection?: (
-    expression: Expression,
-    pure: (expression: Expression) => boolean,
-  ) => boolean | undefined;
-}
-
-/** The module a retired namespace's members moved back to, and which names moved. */
-export interface RetiredNamespace {
-  readonly module: string;
-  readonly members: ReadonlySet<string>;
-}
-
-export interface CompilerIntrinsicAnalysisContext {
-  readonly intrinsic: Extract<ValueType, { kind: "intrinsic" }>;
-  readonly argumentAt: (index: number) => Expression | null;
-  readonly callSpan: Span;
-  readonly arity: (minimum?: number, maximum?: number) => void;
-  readonly inferAt: (index: number, expected?: ValueType) => ValueType;
-  readonly callbackAt: (index: number, parameters: readonly ValueType[], result: ValueType) => ValueType;
-  readonly runtimeTypeAt: (index: number) => ValueType;
-  readonly typeError: (message: string, span: Span) => void;
-  readonly isAssignable: (actual: ValueType, expected: ValueType) => boolean;
-  readonly expandAliases: (type: ValueType) => ValueType;
-  readonly jsonSerializable: (type: ValueType) => boolean | null;
-  readonly isHttpFormBody: (type: ValueType) => boolean;
-  readonly declaredFieldsOf: (identity: string) => ReadonlyMap<string, ValueType> | null;
-  readonly formReadField: (name: string, type: ValueType, span: Span) => FormReadField | null;
-  readonly recordFormRead: (sourceSpan: Span, fields: readonly FormReadField[]) => void;
 }
 
 export interface CompilerModuleExtension {
