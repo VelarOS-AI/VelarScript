@@ -70,6 +70,20 @@ export const CORE_RECORD_METHOD_NAMES = Object.freeze([
 ] as const);
 
 /**
+ * Every name a collection publishes: `size`, which is a property rather than a
+ * method, and the method roster above it. Member resolution and the editor's
+ * completion read these one roster, so a member the checker accepts is a member
+ * the editor offers — before D114 F4 the editor kept its own copy of the list,
+ * and that copy predated the S3 pipeline members. The `…_METHOD_NAMES` rosters
+ * stay separate because the surface-version digest counts methods, and `size`
+ * is not one.
+ */
+export const CORE_LIST_MEMBER_NAMES: readonly string[] = Object.freeze(["size", ...CORE_LIST_METHOD_NAMES]);
+export const CORE_MAP_MEMBER_NAMES: readonly string[] = Object.freeze(["size", ...CORE_MAP_METHOD_NAMES]);
+export const CORE_SET_MEMBER_NAMES: readonly string[] = Object.freeze(["size", ...CORE_SET_METHOD_NAMES]);
+export const CORE_RECORD_MEMBER_NAMES: readonly string[] = Object.freeze(["size", ...CORE_RECORD_METHOD_NAMES]);
+
+/**
  * The collection methods that change their receiver, by the kind of collection
  * the receiver is. `readonly` refuses exactly these through a read-only view,
  * and the Web extension's watch analysis asks the same question of a watch

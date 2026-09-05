@@ -26,7 +26,6 @@ import {
   stringType,
   unionOf,
   unknownType,
-  type ExtensionValueType,
   type ValueType,
 } from "../../types.ts";
 import { argumentNoun, trimTrailingOmittedArguments, type NamedArguments } from "./named-arguments.ts";

@@ -12,7 +12,7 @@
 import { blockContainsDirectAwait, testFunctionName } from "../../../ast.ts";
 import type { BindingPattern, Expression, Program, Statement } from "../../../ast.ts";
 import { type ClassField } from "../../../contracts.ts";
-import type { CompilerExtension, CompilerInterfaceContext } from "../../../extension.ts";
+import type { CompilerExtension } from "../../../extension.ts";
 import { inferredResultPlaceholderType } from "../../functions.ts";
 import {
   bindNamedTypeParameters,

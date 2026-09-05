@@ -11,7 +11,7 @@
 import { type AdvisoryRecordShape } from "../advisories.ts";
 import { type Expression } from "../../ast.ts";
 import { type Diagnostic, type DiagnosticFix } from "../../diagnostic.ts";
-import { type Span, span, spanIdentity } from "../../source.ts";
+import { type Span, spanIdentity } from "../../source.ts";
 import {
   type ValueType,
   describeType,

@@ -680,8 +680,16 @@ initialization therefore cannot change which case is selected.
   `intrinsics.ts` the standard-module intrinsics, `named-arguments.ts` the
   argument plan every one of them shares, and `seeding.ts` the type parameters a
   call's position seeds.
-  `MemberAccess` (`analysis/members.ts`) owns what a receiver publishes under a
-  name, and the checked value methods a string or a number carries with it.
+  `analysis/published-members.ts` owns what a receiver publishes: the type under
+  one name, and the whole roster of names it has. Both questions are answered
+  from one set of resolvers, because they used to be answered twice — the type
+  checker resolved one name at a time and the semantic index built the editor's
+  roster from its own member lists — and the two drifted apart. Nothing in it
+  reports a diagnostic or records a lowering fact.
+  `MemberAccess` (`analysis/members.ts`) owns the *access*: it asks
+  `published-members.ts` what the receiver has, and decides what to say and what
+  to lower when the answer is nothing. `MemberAccessHost` extends
+  `PublishedMembersHost`, so the two read one host object.
   `analysis/vocabulary.ts` is not a collaborator but the permanent Core
   vocabulary — the `Json`, `Promise`, `Text` and `Math` namespace types, the
   prelude types, and the retired-module import rosters derived from them —
@@ -739,7 +747,9 @@ initialization therefore cannot change which case is selected.
   be written to.
   `analysis/semantic-index.ts` is what the editor is told — the type at every
   expression, the members of every binding — which is not type checking, since
-  nothing in it can refuse a program.
+  nothing in it can refuse a program. The members it records are
+  `published-members.ts`'s roster, so a member the checker accepts is the member
+  the editor shows and the reverse.
   `analysis/statements/` is one module per family of statement heads:
   `functions.ts` (a declaration's frame, its parameters, the arrow that is the
   same thing in expression position, and the callable type a name is bound to),

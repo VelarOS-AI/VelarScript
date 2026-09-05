@@ -9,7 +9,7 @@
  * D115 §三 it is its own module rather than another hundred lines of
  * `analyzer.ts`.
  */
-import type { Program, Statement } from "../ast.ts";
+import type { Program } from "../ast.ts";
 import { diagnostic, mechanicalEdits, type Diagnostic, type DiagnosticEdit } from "../diagnostic.ts";
 import { spanIdentity, type Span } from "../source.ts";
 import { permanentNamespaceImportRoster } from "./vocabulary.ts";

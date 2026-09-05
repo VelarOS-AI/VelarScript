@@ -24,7 +24,6 @@ import {
   nullType,
   numberType,
   optionalOf,
-  readonlyViewOf,
   resolvedAsyncType,
   stringType,
   unknownType,

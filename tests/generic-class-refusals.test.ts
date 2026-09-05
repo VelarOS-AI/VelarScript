@@ -268,16 +268,83 @@ def name(value: Shape<number>) -> string:
         case Shape:
             return "shape"
 `), []);
-  // Counting for nothing cuts both ways: the refused spelling closes no match
-  // either, so the fallback report stands and names the spelling that works.
+});
+
+// ---------------------------------------------------------------------------
+// F4: a refused arm suspends the match's coverage verdict
+// ---------------------------------------------------------------------------
+//
+// Counting for nothing was half the fix. An arm that covers nothing also leaves
+// the match looking inexhaustive, so the same one mistake went on to earn
+// VEL4015 and, through the function's fall-through, VEL4006 — three reports for
+// one wrong pattern. While any arm is refused the match has no coverage verdict
+// to give: the author fixes the arm, and hears about coverage on the next run.
+
+const ERASED = "VEL4022 Type arguments are erased at runtime, so 'Shape<number>' cannot be checked; check 'Shape' itself";
+
+test("[F4] a refused arm alone earns exactly one report", () => {
   assert.deepEqual(messages(`${shapes}
 def name(value: Shape<number>) -> string:
     match value:
         case Shape<number>:
             return "shape"
+`), [ERASED]);
+});
+
+test("[F4] a refused arm with a following wildcard earns exactly one report", () => {
+  assert.deepEqual(messages(`${shapes}
+def name(value: Shape<number>) -> string:
+    match value:
+        case Shape<number>:
+            return "shape"
+        case _:
+            return "other"
+`), [ERASED]);
+});
+
+test("[F4] a refused arm suspends the redundancy verdict on the arms beside it", () => {
+  // `case Round:` after `case _:` is genuinely already covered, and says so
+  // when every arm means something (the test below). Beside a refused arm it
+  // does not: the author has not finished writing the set of arms yet.
+  assert.deepEqual(messages(`${shapes}
+def name(value: Shape<number>) -> string:
+    match value:
+        case Shape<number>:
+            return "applied"
+        case _:
+            return "wild"
+        case Round:
+            return "round"
+`), [ERASED]);
+  // The refusal in the *last* arm suspends the verdict for the arms before it
+  // too, which is why the redundancy reports are issued from the whole match's
+  // verdict rather than from the arm that decided one.
+  assert.deepEqual(messages(`${shapes}
+def name(value: Shape<number>) -> string:
+    match value:
+        case _:
+            return "wild"
+        case Shape<number>:
+            return "applied"
+`), [ERASED]);
+});
+
+test("[F4] a match with no refused arm keeps its coverage verdict", () => {
+  assert.deepEqual(messages(`${shapes}
+def name(value: Shape<number>) -> string:
+    match value:
+        case _:
+            return "wild"
+        case Round:
+            return "round"
+`), ["VEL4014 This match branch is already covered"]);
+  assert.deepEqual(messages(`${shapes}
+def name(value: Shape<number>) -> string:
+    match value:
+        case Round:
+            return "round"
 `), [
     "VEL4006 Function 'name' can finish without returning string",
     "VEL4015 Match on Shape<number> is missing a fallback; class hierarchies are open — end with 'case Shape:' or 'case _:'",
-    "VEL4022 Type arguments are erased at runtime, so 'Shape<number>' cannot be checked; check 'Shape' itself",
   ]);
 });

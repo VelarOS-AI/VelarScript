@@ -10,7 +10,7 @@
 import { type Expression } from "../../ast.ts";
 import { type Diagnostic, type DiagnosticFix, diagnostic } from "../../diagnostic.ts";
 import { bindingNameRestriction } from "../../source-names.ts";
-import { type Span, span, spanIdentity } from "../../source.ts";
+import { type Span, spanIdentity } from "../../source.ts";
 import {
   type ValueType,
   describeType,

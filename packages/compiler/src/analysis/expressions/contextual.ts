@@ -12,8 +12,8 @@
  */
 import { type BindingPattern, type Expression } from "../../ast.ts";
 import { type Diagnostic, diagnostic } from "../../diagnostic.ts";
-import { type Span, span, spanIdentity } from "../../source.ts";
-import { type ValueType, isAssignable, isInvalidType, optionalOf, unknownType } from "../../types.ts";
+import { type Span, spanIdentity } from "../../source.ts";
+import { type ValueType, isInvalidType, optionalOf, unknownType } from "../../types.ts";
 import { type Binding } from "../scopes.ts";
 
 /**
