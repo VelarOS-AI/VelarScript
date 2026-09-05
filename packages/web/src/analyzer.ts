@@ -1808,6 +1808,11 @@ export class VelarWebAnalyzer extends Analyzer {
    * to `WEB_OWNED_TYPE_NAMES` extends this protection with it. The last time
    * this family was repaired by listing names instead of deriving them, the
    * list drifted; D57 rule 135 is the same repair on the Core roster.
+   *
+   * Core now says the same sentence about its own built-in type names —
+   * `builtinTypeNameDeclarationMessage` in packages/compiler/src/analyzer.ts,
+   * reported as VEL3007. The rosters differ; the wording is meant to read
+   * alike, so a change to either sentence belongs in both.
    */
   private rejectWebOwnedTypeNames(program: Program): void {
     const reject = (name: string, errorSpan: Span, noun: string): void => {

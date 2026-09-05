@@ -857,6 +857,63 @@ const corePrimitiveNames = new Set(["string", "number", "bool", "null", "unknown
 // this roster is what tells a wrong type-parameter bound apart from an unknown
 // one, so `<T: Function>` still says which kind of mistake it is.
 const builtinTypeNames = new Set(["string", "number", "bool", "null", "unknown", "any", "List", "Set", "Map", "Record", "Promise", "Function", "Type", "Duration"]);
+
+/**
+ * The declaration positions that also introduce a *type* name, named for the
+ * one sentence that refuses a built-in spelling in any of them.
+ */
+type BuiltinTypeNamePosition = "type" | "class" | "enum" | "imported name" | "import alias";
+
+/**
+ * D72 rule 186 over the Core roster, and charter §5 and §7: the built-in type
+ * names are reserved. A user declaration spelled with one used to be accepted
+ * where it was written and then lose at every use — `type Duration:` compiled,
+ * and `const d: Duration = {label: "a"}` was told it could not assign to a type
+ * the author had just declared. Half the roster lost the other way and shadowed
+ * the built-in for bare uses only, so `type List:` left `List` meaning the user
+ * record and `List<string>` on the next line still meaning the built-in. D51
+ * rule 109 puts the refusal at the declaration, the only place a rename is
+ * cheap.
+ *
+ * Two refusals already say this sentence about smaller rosters:
+ * `rejectReservedTypeNames` for the three type-parameter bounds (D51 rule 109,
+ * VEL4021) and `rejectWebOwnedTypeNames` in packages/web/src/analyzer.ts for
+ * the Web type names (VEL5065). This is the same sentence over Core's own
+ * roster, so all three read alike. Before it, only `number`, `Set`, `Map` and
+ * `Promise` were refused, and only incidentally — they are *also* reserved Core
+ * bindings — so one rule reached four of fourteen names by accident.
+ *
+ * Unlike its two siblings this is asked from `declareBinding` rather than from
+ * a pass over `program.body`, because those four names carry both answers and
+ * only the declaration site can decide which sentence the author earns: the
+ * reserved-binding report and this one are the two arms of one `if`, so a name
+ * that is a built-in type and a reserved Core binding is still one mistake with
+ * one report. The roster is `builtinTypeNames`, which `isDeclaredTypeName`
+ * already reads, so a built-in added there is covered here without a new
+ * branch.
+ */
+function builtinTypeNameDeclarationMessage(name: string, position: BuiltinTypeNamePosition): string {
+  const article = /^[aeiou]/iu.test(position) ? "an" : "a";
+  return `'${name}' is a Core type name, so it cannot also name ${article} ${position}`
+    + "; every use of it resolves to the built-in. Rename this declaration";
+}
+
+/**
+ * Which reserved-type-name question an import specifier asks. A standard-module
+ * import of the name under itself *is* the built-in surface — `velar/look`
+ * republishes `Duration`, and the tour imports it that way — so only a binding
+ * that would make the name mean something else is refused. That is the carve-out
+ * D72 rule 186 already makes for `import {Color} from "velar/look"`; a module
+ * scope import and a block-scoped one ask it here rather than each deciding it.
+ */
+function importTypeNamePosition(
+  statement: Extract<Statement, { kind: "ImportDeclaration" }>,
+  specifier: { readonly imported: string; readonly local: string },
+): BuiltinTypeNamePosition | undefined {
+  if (specifier.local !== specifier.imported) return "import alias";
+  return statement.source.startsWith("velar/") ? undefined : "imported name";
+}
+
 /**
  * D64 rule 163: the scope in this sentence is load-bearing, and it is also why
  * the sentence is written once instead of in each of the four declaration
@@ -2259,6 +2316,7 @@ export class Analyzer implements TypeEnvironment {
             false,
             undefined,
             statement.source,
+            importTypeNamePosition(statement, specifier),
           );
           this.recordImportedBindingSource(statement.javascript, statement.source, specifier.local, specifier.namespace ? null : specifier.imported);
           this.recordImportedBindingOrigin(specifier.local, statement.source, specifier.span);
@@ -2267,7 +2325,7 @@ export class Analyzer implements TypeEnvironment {
         }
         this.predeclared.add(statement);
       } else if (statement.kind === "TypeDeclaration" || statement.kind === "TypeAliasDeclaration") {
-        this.declareBinding(statement.name, false, { kind: "typeObject", name: statement.name }, statement.span);
+        this.declareTypeNameBinding(statement.name, { kind: "typeObject", name: statement.name }, statement.span, "type");
         this.predeclared.add(statement);
       } else if (statement.kind === "EnumDeclaration") {
         const info = this.enums.get(statement.name) ?? {
@@ -2275,10 +2333,10 @@ export class Analyzer implements TypeEnvironment {
           members: new Set(statement.members.map((member) => member.name)),
           wireValues: new Map(statement.members.map((member) => [member.name, member.value])),
         };
-        this.declareBinding(statement.name, false, { kind: "enumObject", name: statement.name, identity: info.identity, members: info.members }, statement.span);
+        this.declareTypeNameBinding(statement.name, { kind: "enumObject", name: statement.name, identity: info.identity, members: info.members }, statement.span, "enum");
         this.predeclared.add(statement);
       } else if (statement.kind === "ClassDeclaration") {
-        this.declareBinding(statement.name, false, { kind: "classConstructor", name: statement.name }, statement.span);
+        this.declareTypeNameBinding(statement.name, { kind: "classConstructor", name: statement.name }, statement.span, "class");
         // The name is hoisted for analysis so deferred bodies may reference
         // classes declared later, but the emitted `class` statement is not
         // hoisted at runtime. Remember where the declaration evaluates so an
@@ -3595,6 +3653,7 @@ export class Analyzer implements TypeEnvironment {
               false,
               undefined,
               statement.source,
+              importTypeNamePosition(statement, specifier),
             );
             this.recordImportedBindingSource(statement.javascript, statement.source, specifier.local, specifier.namespace ? null : specifier.imported);
             this.recordImportedBindingOrigin(specifier.local, statement.source, specifier.span);
@@ -5506,7 +5565,7 @@ export class Analyzer implements TypeEnvironment {
   }
 
   private analyzeTypeDeclaration(statement: TypeDeclaration): void {
-    if (!this.predeclared.has(statement)) this.declareBinding(statement.name, false, { kind: "typeObject", name: statement.name }, statement.span);
+    if (!this.predeclared.has(statement)) this.declareTypeNameBinding(statement.name, { kind: "typeObject", name: statement.name }, statement.span, "type");
     // D55 rule 124: the parameter-list rules — duplicate names, a reserved
     // bound name used as a parameter, shadowing a declared type, an unknown
     // bound — are about the list and not about which declaration carries it,
@@ -5530,7 +5589,7 @@ export class Analyzer implements TypeEnvironment {
   }
 
   private analyzeTypeAliasDeclaration(statement: TypeAliasDeclaration): void {
-    if (!this.predeclared.has(statement)) this.declareBinding(statement.name, false, { kind: "typeObject", name: statement.name }, statement.span);
+    if (!this.predeclared.has(statement)) this.declareTypeNameBinding(statement.name, { kind: "typeObject", name: statement.name }, statement.span, "type");
   }
 
   private analyzeClassDeclaration(statement: ClassDeclaration): void {
@@ -5545,7 +5604,7 @@ export class Analyzer implements TypeEnvironment {
     for (const member of [...statement.fields, ...statement.getters, ...statement.methods]) {
       this.validateClassMemberName(member.name, member.span);
     }
-    if (!this.predeclared.has(statement)) this.declareBinding(statement.name, false, { kind: "classConstructor", name: statement.name }, statement.span);
+    if (!this.predeclared.has(statement)) this.declareTypeNameBinding(statement.name, { kind: "classConstructor", name: statement.name }, statement.span, "class");
     const baseName = statement.base?.name ?? null;
     if (baseName) {
       const baseBinding = this.lookup(baseName) ?? this.builtin(baseName);
@@ -14490,6 +14549,15 @@ export class Analyzer implements TypeEnvironment {
       && (expression.callee.name === "Map" || expression.callee.name === "Set");
   }
 
+  /**
+   * A `type`, `class` or `enum` name. Every one of them declares a binding and
+   * a type name at once, so they ask `declareBinding` the reserved-type-name
+   * question here rather than each repeating the argument list that carries it.
+   */
+  private declareTypeNameBinding(name: string, type: ValueType, declarationSpan: Span, position: BuiltinTypeNamePosition): void {
+    this.declareBinding(name, false, type, declarationSpan, false, undefined, undefined, position);
+  }
+
   protected declareBinding(
     name: string,
     mutable: boolean,
@@ -14498,28 +14566,43 @@ export class Analyzer implements TypeEnvironment {
     internal = false,
     declaredType = type,
     importSource?: string,
+    /**
+     * Set when this binding also introduces a *type* name, which is the one
+     * question `builtinTypeNameDeclarationMessage` answers. A `const` or a
+     * parameter leaves it unset: naming a local `List` shadows the built-in
+     * value, but `List` in a type position still means the built-in there, so
+     * the reserved-type-name rule has nothing to say about it.
+     */
+    typeNamePosition?: BuiltinTypeNamePosition,
   ): void {
     this.pendingScopeDeclarations.at(-1)?.delete(name);
     if (!internal) {
-      const restriction = bindingNameRestriction(name, this.extensionReservedBindings);
-      if (restriction && restriction !== "invalid" && restriction !== "keyword" && restriction !== "source") {
-        const message = restriction === "javascript"
-          ? name === "arguments"
-            ? "Use named parameters; VelarScript does not expose the JavaScript 'arguments' binding"
-            : `'${name}' is reserved by JavaScript and cannot be used as a VelarScript binding`
-          : restriction === "compiler"
-            ? `'${name}' uses a reserved compiler prefix '__velar'`
-            : restriction === "core"
-              ? `'${name}' is a reserved Core binding`
-              : restriction === "extension"
-                ? `'${name}' is a reserved extension binding`
-                : `'${name}' is not available as a VelarScript binding`;
-        // The name is still declared after the report: a rejected parameter or
-        // loop binding whose body reads it would otherwise add an "Unknown
-        // name" for every use of the one mistake. No code is emitted from a
-        // module that reported a diagnostic, so the invalid spelling never
-        // reaches generated JavaScript.
-        this.diagnostics.push(diagnostic("VEL3007", message, declarationSpan));
+      // One mistake, one report: `type Promise:` is a reserved Core binding and
+      // a built-in type name both, and the built-in type name is what the
+      // author wrote it as, so that sentence is the one it earns.
+      if (typeNamePosition !== undefined && builtinTypeNames.has(name)) {
+        this.diagnostics.push(diagnostic("VEL3007", builtinTypeNameDeclarationMessage(name, typeNamePosition), declarationSpan));
+      } else {
+        const restriction = bindingNameRestriction(name, this.extensionReservedBindings);
+        if (restriction && restriction !== "invalid" && restriction !== "keyword" && restriction !== "source") {
+          const message = restriction === "javascript"
+            ? name === "arguments"
+              ? "Use named parameters; VelarScript does not expose the JavaScript 'arguments' binding"
+              : `'${name}' is reserved by JavaScript and cannot be used as a VelarScript binding`
+            : restriction === "compiler"
+              ? `'${name}' uses a reserved compiler prefix '__velar'`
+              : restriction === "core"
+                ? `'${name}' is a reserved Core binding`
+                : restriction === "extension"
+                  ? `'${name}' is a reserved extension binding`
+                  : `'${name}' is not available as a VelarScript binding`;
+          // The name is still declared after the report: a rejected parameter or
+          // loop binding whose body reads it would otherwise add an "Unknown
+          // name" for every use of the one mistake. No code is emitted from a
+          // module that reported a diagnostic, so the invalid spelling never
+          // reaches generated JavaScript.
+          this.diagnostics.push(diagnostic("VEL3007", message, declarationSpan));
+        }
       }
     }
     // D52 rules 114/116: every name the module binds anywhere. A migration

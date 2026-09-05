@@ -1003,6 +1003,13 @@ annotation position, and the message names `unknown` — which is also what an
 undeclared foreign value arrives as. Ordinary VelarScript code uses `unknown`
 and validates it before use (section 12).
 
+The built-in Core types above are reserved type names: a user `type`, `class`,
+`enum`, type parameter, or imported name may not be spelled with one of them,
+because every use of the name would resolve to the built-in instead, and the
+declaration is refused where it is written rather than at the uses that would
+lose to it. The Web extension's own type names are reserved the same way
+(section 6).
+
 `Promise` has one bounded convenience spelling, which normalizes to the
 existing Core type; it does not introduce a runtime constructor:
 
