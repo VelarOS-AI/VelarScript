@@ -2073,11 +2073,25 @@ const flags: List<bool> = mapValues(["a", ""], value => value != "")
 Type arguments are inferred at each call site; there is no explicit
 instantiation syntax. Fixed arguments bind parameters first, then callback
 arrows are checked against those bindings and their results solve the rest.
-A parameter the call leaves unsolved becomes `unknown`. Type parameters are
-erased at runtime, so `is T`, `case T`, and every other runtime-checked
-position require a concrete type instead. `def` declarations — top-level,
-exported, extern, and class methods — and `type` records take type parameters;
-generic `class` and `component` declarations do not.
+A parameter the arguments leave unsolved is solved from the position the call
+is written in, when that position carries a type — the same positions that
+settle an empty collection (section 8), matched against the declared result
+type. The expected type seeds only what the arguments left open; an
+argument-solved parameter is never overridden, so a disagreement is reported at
+the call as the ordinary mismatch. A parameter neither the arguments nor the
+position can solve becomes `unknown`.
+
+```velar fragment
+def empty<T>() -> List<T>:
+    return []
+
+const names: List<string> = empty()
+```
+
+Type parameters are erased at runtime, so `is T`, `case T`, and every other
+runtime-checked position require a concrete type instead. `def` declarations —
+top-level, exported, extern, and class methods — and `type` records take type
+parameters; generic `class` and `component` declarations do not.
 
 #### Bounds
 
@@ -2473,7 +2487,10 @@ record-literal field, a ternary arm, a list element, and a `??` fallback. A
 construction whose element type never reaches a name is outside the rule, so
 `print(Set().size)` stays legal. An optional collection annotation still
 contextually types a present collection value, so `[]`, `Set()`, and `Map()`
-written under one do not lose their element or key/value contracts.
+written under one do not lose their element or key/value contracts. These are
+also the positions that solve a generic call's remaining type parameters
+(section 7): what a position says about an element it says about a type
+argument, and a position that says nothing says nothing to either.
 
 List spread evaluates each ordinary item and spread source once in source order.
 Every spread source is validated and copied by index rather than through a

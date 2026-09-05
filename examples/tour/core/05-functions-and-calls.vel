@@ -149,11 +149,19 @@ export def mapValues<T, U>(items: List<T>, transform: (T) -> U) -> List<U>: retu
 const flags: List<bool> = mapValues(["a", ""], value => value != "")
 
 // Type arguments are inferred at each call site; there is no explicit
-// instantiation syntax. A parameter the call leaves unsolved becomes `unknown`.
+// instantiation syntax.
 export def identity<T>(value: T) -> T: return value
 
 const identicalText = identity("a")
 const identicalNumber = identity(1)
+
+// What the arguments leave unsolved, the position solves: the annotation is
+// the call's expected type, exactly as it is for an empty `[]`, so `T` here is
+// `string`. A parameter neither the arguments nor the position can solve
+// becomes `unknown`.
+export def empty<T>() -> List<T>: return []
+
+const emptyNames: List<string> = empty()
 
 // Class methods take type parameters too.
 class Registry:
@@ -198,5 +206,5 @@ export const chapterFive = {
     emptyRecordFactory, doesNothing, described, localName, summed, spreadInto,
     fixedThenSpread, pending, asyncArrow, contextuallyTypedArrow,
     contextuallyTypedAsyncArrow, flags, identicalText, identicalNumber,
-    labelled, rankedText, encodedRecord,
+    emptyNames, labelled, rankedText, encodedRecord,
 }

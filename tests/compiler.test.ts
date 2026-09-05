@@ -1649,11 +1649,15 @@ const wrong: List<number> = pair(1, "two")
 `.trimStart());
   assert.deepEqual(narrowed.diagnostics.map((item) => item.message), ["Cannot assign List<number | string> to List<number>"]);
 
+  // D114 item ①: an annotated binding is a contextual position and now solves
+  // `T` from it, so the parameter stays unsolved only where no position offers
+  // a type. tests/generic-contextual-inference.test.ts owns the seeded side.
   const unsolved = compile(`
 def make<T>() -> List<T>:
     return []
 
-const wrong: List<number> = make()
+const values = make()
+const wrong: List<number> = values
 `.trimStart());
   assert.deepEqual(unsolved.diagnostics.map((item) => item.message), ["Cannot assign List<unknown> to List<number>"]);
 });
