@@ -326,8 +326,8 @@ function coreCollectionContractEntries() {
       "collection-member",
       spelling,
       spelling,
-      "Analyzer collection member resolvers in packages/compiler/src/analyzer.ts",
-      "packages/compiler/src/analyzer.ts",
+      "Analyzer collection member resolvers in packages/compiler/src/analysis/collections.ts",
+      "packages/compiler/src/analysis/collections.ts",
       contractShape(contract),
     ));
 }

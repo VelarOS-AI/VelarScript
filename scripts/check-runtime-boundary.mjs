@@ -276,6 +276,15 @@ const nodeServeRuntimeSource = await readFile(join(root, "packages", "node", "sr
 const nodeTerminalRuntimeSource = await readFile(join(root, "packages", "node", "src", "terminal-runtime.ts"), "utf8");
 const nodeTerminalWorkerRuntimeSource = await readFile(join(root, "packages", "node", "src", "terminal-worker-runtime.ts"), "utf8");
 const compilerAnalyzerSource = await readFile(join(root, "packages", "compiler", "src", "analyzer.ts"), "utf8");
+// D114 R1a/R1b: the analysis layer is `analyzer.ts` plus the collaborators it
+// owns under `analysis/`. A phrase this gate pins is pinned to the layer, not
+// to whichever file of it currently holds the code.
+const compilerAnalysisSources = new Map([["packages/compiler/src/analyzer.ts", compilerAnalyzerSource]]);
+for (const file of await sourceFiles(join(root, "packages", "compiler", "src", "analysis"))) {
+  compilerAnalysisSources.set(display(file), await readFile(file, "utf8"));
+}
+const compilerAnalysisIncludes = (phrase) => [...compilerAnalysisSources.values()].some((source) => source.includes(phrase));
+const COMPILER_ANALYSIS_LAYER = "packages/compiler/src/analyzer.ts and analysis/*.ts";
 const compilerEmitterSource = await readFile(join(root, "packages", "compiler", "src", "emitter.ts"), "utf8");
 const compilerExtensionSource = await readFile(join(root, "packages", "compiler", "src", "extension.ts"), "utf8");
 const compilerIndexSource = await readFile(join(root, "packages", "compiler", "src", "index.ts"), "utf8");
@@ -344,14 +353,20 @@ for (const [file, source] of cliSources) {
   }
 }
 
-const coreTargetBoundarySources = new Map([
-  ["packages/compiler/src/ast.ts", compilerAstSource],
-  ["packages/compiler/src/types.ts", compilerTypesSource],
-  ["packages/compiler/src/analyzer.ts", compilerAnalyzerSource],
-  ["packages/compiler/src/parser.ts", compilerParserSource],
-  ["packages/compiler/src/formatter.ts", compilerFormatterSource],
-  ["packages/compiler/src/semantic.ts", compilerSemanticSource],
-]);
+// D114 R1b: every Core compiler module is scanned, not a fixed list of six.
+// The list went stale the moment `contracts.ts` and `analysis/*.ts` were split
+// out of `analyzer.ts`, and a list that has to be edited whenever a module is
+// added is a gate that silently stops covering the new module. The emitted
+// runtime sources are excluded because they are JavaScript held in template
+// literals, checked by their own rules above.
+const coreTargetBoundarySources = new Map();
+for (const file of await sourceFiles(join(root, "packages", "compiler", "src"))) {
+  if (/-runtime\.ts$/u.test(file)) continue;
+  // The rule is that Core must not *embed* a target-owned name. Naming one in
+  // prose is how the extension contract explains itself, so the scan reads the
+  // code with its comments removed.
+  coreTargetBoundarySources.set(display(file), codeWithoutComments(await readFile(file, "utf8")));
+}
 for (const [path, source] of coreTargetBoundarySources) {
   for (const targetName of ["WebNode", "ComponentDeclaration", "JSX", "LookExpression", "MountedBlock", "UnsafeCssImportDeclaration"]) {
     if (source.includes(targetName)) failures.push(`${path}: Core embeds target-owned '${targetName}' instead of using the compiler extension contract`);
@@ -1147,9 +1162,9 @@ if (/__velarOptions\([^\n]*new Set\s*\(/u.test(webRuntimeSource)
 }
 if ((webCompilerSource.match(/namedIntrinsic\("runtime\.parseAsync"/gu)?.length ?? 0) !== 2
   || (nodeCompilerSource.match(/namedIntrinsic\("runtime\.parseAsync"/gu)?.length ?? 0) !== 4
-  || !compilerAnalyzerSource.includes('case "runtime.parseAsync"')
-  || !compilerAnalyzerSource.includes("arity();")
-  || !compilerAnalyzerSource.includes("this.reportPromiseResolutionHazard(parsed")) {
+  || !compilerAnalysisIncludes('case "runtime.parseAsync"')
+  || !compilerAnalysisIncludes("arity();")
+  || !compilerAnalysisIncludes("this.host.reportPromiseResolutionHazard(parsed")) {
   failures.push("compiler/Web/Node: HTTP and serve async runtime-Type parsing must share one Promise-safe Core intrinsic");
 }
 for (const phrase of [
@@ -1172,7 +1187,7 @@ for (const phrase of [
   'object.kind === "record"',
   'Record keys may be absent',
 ]) {
-  if (!compilerAnalyzerSource.includes(phrase)) failures.push(`packages/compiler/src/analyzer.ts: missing Record<T> analysis contract '${phrase}'`);
+  if (!compilerAnalysisIncludes(phrase)) failures.push(`${COMPILER_ANALYSIS_LAYER}: missing Record<T> analysis contract '${phrase}'`);
 }
 if (!compilerTypeValidationRuntimeSource.includes("function __velarRecordTypeIs(value, check)")) {
   failures.push("packages/compiler/src/type-validation-runtime.ts: missing controlled Record<T> validation operation");
@@ -1193,7 +1208,7 @@ for (const phrase of [
   'Type<T> is a static runtime-Type carrier and cannot itself be checked at runtime',
   'Type<T> is a static runtime-Type carrier and cannot be embedded',
 ]) {
-  if (!compilerAnalyzerSource.includes(phrase)) failures.push(`packages/compiler/src/analyzer.ts: missing Type<T> ownership or diagnostic '${phrase}'`);
+  if (!compilerAnalysisIncludes(phrase)) failures.push(`${COMPILER_ANALYSIS_LAYER}: missing Type<T> ownership or diagnostic '${phrase}'`);
 }
 if ((projectCompilerSource.match(/case "runtimeType":/gu)?.length ?? 0) < 3
   || !projectCompilerSource.includes('value: renameType(type.value, aliases)')) {
@@ -2380,6 +2395,37 @@ async function sourceFiles(directory) {
     else if (entry.isFile() && /\.(?:ts|js|mjs|swift)$/u.test(path)) files.push(path);
   }
   return files.sort();
+}
+
+/** Source with its comments blanked out, for scans that judge code and not prose. */
+function codeWithoutComments(source) {
+  let out = "";
+  let index = 0;
+  let quote = null;
+  while (index < source.length) {
+    const character = source[index];
+    if (quote) {
+      if (character === "\\") { out += source.slice(index, index + 2); index += 2; continue; }
+      if (character === quote) quote = null;
+      out += character;
+      index += 1;
+      continue;
+    }
+    if (character === "\"" || character === "'" || character === "`") { quote = character; out += character; index += 1; continue; }
+    if (character === "/" && source[index + 1] === "/") {
+      while (index < source.length && source[index] !== "\n") index += 1;
+      continue;
+    }
+    if (character === "/" && source[index + 1] === "*") {
+      index += 2;
+      while (index < source.length && !(source[index] === "*" && source[index + 1] === "/")) index += 1;
+      index += 2;
+      continue;
+    }
+    out += character;
+    index += 1;
+  }
+  return out;
 }
 
 async function readFile(path, encoding) {

@@ -665,9 +665,27 @@ initialization therefore cannot change which case is selected.
   owns the side tables the analyzer records for the emitter and assembles the
   finished `LoweringHints`, and `Advisories` owns the A roster — the advisory
   proofs that name a Python or JavaScript reflex, or the canonical spelling of a
-  collection or record form. A collaborator never names the `Analyzer` type; it
-  declares the interface it needs (`AdvisoryHost`, `AnalyzerOwnedHints`), and
-  that interface is the record of what it depends on.
+  collection or record form.
+  `CollectionInference` (`analysis/collections.ts`) owns the compiler-owned
+  collection vocabulary: what a List, Map, Set or Record publishes as its
+  members, what one call of a member means, and the migration off the retired
+  `velar/collections` module those members replaced.
+  `CallInference` (`analysis/calls.ts`) owns everything that happens between a
+  call's parentheses: the callee's kind, the three-phase generic solver, the
+  standard-module intrinsics, and the named-argument plan every one of them
+  shares.
+  `MemberAccess` (`analysis/members.ts`) owns what a receiver publishes under a
+  name, and the checked value methods a string or a number carries with it.
+  `analysis/vocabulary.ts` is not a collaborator but the permanent Core
+  vocabulary — the `Json`, `Promise`, `Text` and `Math` namespace types, the
+  prelude types, and the retired-module import rosters derived from them —
+  which three of the clusters read and none of them owns.
+  A collaborator never names the `Analyzer` type; it declares the interface it
+  needs (`AdvisoryHost`, `AnalyzerOwnedHints`, `CollectionInferenceHost`,
+  `CallInferenceHost`, `MemberAccessHost`), and that interface is the record of
+  what it depends on. Analyzer state a collaborator reads mid-walk — the class
+  under analysis, the constructor and field-initializer depths — arrives through
+  getters on that interface, so the reads stay live.
 - `packages/web` owns component/JSX syntax activation, reactive and lifecycle
   analysis, semantic symbols/references, Web intrinsic typing, project graph
   traversal, exported component/reactive interfaces, DOM/CSS emission, Web

@@ -8852,7 +8852,17 @@ test("the official Web package publishes its runtime roster and CLI composes the
 
   const [coreParser, coreAnalyzer, coreSemantic, coreIndex, coreEmitter, webCompiler, webParser, webAnalyzer, webSemantic, webInspection, webEmitter, webEditor] = await Promise.all([
     readFile(resolve("packages/compiler/src/parser.ts"), "utf8"),
-    readFile(resolve("packages/compiler/src/analyzer.ts"), "utf8"),
+    // D114 R1a/R1b: the analysis layer is `analyzer.ts` plus every collaborator
+    // it owns under `analysis/`, so the target-name checks below read all of it
+    // rather than the one file the code used to live in. The directory is read
+    // at run time so a module added later is covered without editing this list.
+    readdir(resolve("packages/compiler/src/analysis"))
+      .then((names) => Promise.all([
+        readFile(resolve("packages/compiler/src/analyzer.ts"), "utf8"),
+        ...names.filter((name) => name.endsWith(".ts"))
+          .map((name) => readFile(resolve(`packages/compiler/src/analysis/${name}`), "utf8")),
+      ]))
+      .then((sources) => sources.join("\n")),
     readFile(resolve("packages/compiler/src/semantic.ts"), "utf8"),
     readFile(resolve("packages/compiler/src/index.ts"), "utf8"),
     readFile(resolve("packages/compiler/src/emitter.ts"), "utf8"),

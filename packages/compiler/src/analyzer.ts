@@ -1,4 +1,24 @@
-import { Advisories } from "./analysis/advisories.ts";
+import { Advisories, type AdvisoryHost } from "./analysis/advisories.ts";
+import { argumentNoun, boundVocabularyGuidance, CallInference, continuesOptionalChain, type CallInferenceHost } from "./analysis/calls.ts";
+import { discardedPurePrimitiveOperations, MemberAccess, type MemberAccessHost } from "./analysis/members.ts";
+import {
+  CollectionInference,
+  type CollectionInferenceHost,
+  CORE_LIST_METHOD_NAMES,
+  CORE_MAP_METHOD_NAMES,
+  CORE_RECORD_METHOD_NAMES,
+  CORE_SET_METHOD_NAMES,
+  discardedPureCollectionOperations,
+  mutatingCollectionMethods,
+  retiredCollectionExport,
+} from "./analysis/collections.ts";
+import {
+  coreVocabularyType,
+  coreVocabularyTypes,
+  durationType,
+  permanentNamespaceImportRoster,
+  permanentNamespaceImportRosters,
+} from "./analysis/vocabulary.ts";
 import { LoweringRecorder } from "./analysis/lowering-recorder.ts";
 import { blockContainsDirectAwait } from "./ast.ts";
 import type {
@@ -10,7 +30,6 @@ import type {
   ClassDisposeBlock,
   ClassIterateBlock,
   Expression,
-  ExternClassDeclaration,
   ExternFunctionDeclaration,
   ExternConstantDeclaration,
   ForStatement,
@@ -34,38 +53,33 @@ import {
   type AnalysisContext,
   type ClassField,
   type ClassInfo,
-  type CollectionOperation,
   type CollectionRuntimeKind,
   type DisposalContract,
   type FormReadField,
   type InitializationImportRead,
   type LoweringHints,
-  type PrimitiveOperation,
   type RecordFromHint,
   type RecordMapFromHint,
   type RecordTypeField,
   type RuntimeNarrowingGuard,
 } from "./contracts.ts";
-import { isPermanentNamespaceName, type CoreVocabularyName, type PermanentNamespaceName } from "./core-vocabulary.ts";
+import { isPermanentNamespaceName, type PermanentNamespaceName } from "./core-vocabulary.ts";
 import { advisory, diagnostic, mechanicalEdits, mechanicalFix, recoveredDiagnostic, type Advisory, type Diagnostic, type DiagnosticEdit, type DiagnosticFix } from "./diagnostic.ts";
 import { VELAR_HOST_ERROR_NAMES, VELAR_HOST_ERROR_PATH_NAMES } from "./error-runtime.ts";
 import type { CompilerAnalysisExtension, RetiredNamespace } from "./extension.ts";
-import { collectionMemberGuidance, removedGlobalFunctionGuidance, stringMemberGuidance, REST_PARAMETER_ELEMENT_TYPE_MESSAGE, type CollectionKind } from "./language-guidance.ts";
+import { removedGlobalFunctionGuidance, REST_PARAMETER_ELEMENT_TYPE_MESSAGE } from "./language-guidance.ts";
 import { bindingNameRestriction } from "./source-names.ts";
 import { span, spanIdentity, type Span } from "./source.ts";
 import {
-  analysisTypeIdentity,
   anyType,
   binaryStorageKind,
   boolType,
   boundGrants,
   boundaryUnknownType,
   classApplicationType,
-  collectGenericBoundViolations,
   collectTypeArgumentBoundViolations,
   describeType,
   genericApplicationIdentity,
-  genericApplicationName,
   genericApplicationType,
   instantiateGenericCallable,
   invalidType,
@@ -89,11 +103,9 @@ import {
   sameTypeIgnoringCallableParameterNames,
   stringType,
   substituteTypeParameters,
-  textConvertibleType,
   typeContainsAnyOutput,
   typeContainsParameter,
   typeContainsRuntimeTypeCheck,
-  unifyTypeParameters,
   unionOf,
   unknownType,
   type EnumInfo,
@@ -131,6 +143,14 @@ export type {
   RecordTypeField,
   RuntimeNarrowingGuard,
 } from "./contracts.ts";
+// D114 R1b: the collection vocabulary and its checking moved to
+// `./analysis/collections.ts`. `mutatingCollectionMethods` is the one name of
+// that cluster this module published, so it is re-exported here and an existing
+// `from "./analyzer.ts"` import of it keeps working unchanged.
+export { mutatingCollectionMethods } from "./analysis/collections.ts";
+// D114 R1b: the permanent Core vocabulary moved to `./analysis/vocabulary.ts`,
+// and the three names of it this module published are re-exported here.
+export { MATH_NAMESPACE_MEMBERS, permanentNamespaceCoveringModule, TEXT_NAMESPACE_MEMBERS } from "./analysis/vocabulary.ts";
 
 /**
  * The mutable binding an assignment writes into, for the one refusal whose fix
@@ -280,14 +300,6 @@ interface ReturnContext {
   resultHoleCauses?: Set<string>;
 }
 
-type CallableValueType = Extract<ValueType, { readonly kind: "function" | "action" | "intrinsic" }>;
-
-interface NamedArgumentPlan {
-  readonly ordered: readonly Expression[];
-  readonly targets: readonly (number | null)[];
-  readonly valid: boolean;
-}
-
 interface AnalyzableFunctionDeclaration {
   readonly kind: string;
   readonly name: string;
@@ -377,111 +389,6 @@ function collectOutputTypeNames(type: ValueType, classes: string[], records: str
       return;
     default:
   }
-}
-
-function continuesOptionalChain(expression: Expression): boolean {
-  if (expression.kind === "MemberExpression") {
-    return expression.optional || continuesOptionalChain(expression.object);
-  }
-  if (expression.kind === "IndexExpression") {
-    return expression.optional || continuesOptionalChain(expression.object);
-  }
-  if (expression.kind === "CallExpression") {
-    return continuesOptionalChain(expression.callee);
-  }
-  return false;
-}
-
-const listCollectionOperations = new Map<string, CollectionOperation>([
-  ["get", "listGet"], ["slice", "slice"], ["append", "listAppend"], ["extend", "listExtend"],
-  ["insert", "listInsert"], ["remove", "listRemove"], ["pop", "listPop"],
-  ["clear", "listClear"], ["copy", "listCopy"], ["has", "listHas"], ["count", "listCount"],
-  ["index", "listIndex"], ["find", "listFind"], ["some", "listSome"], ["every", "listEvery"],
-  ["map", "listMap"], ["filter", "listFilter"], ["flatMap", "listFlatMap"], ["reduce", "listReduce"], ["join", "listJoin"],
-  ["sorted", "listSorted"], ["reversed", "listReversed"], ["sum", "listSum"], ["min", "listMin"], ["max", "listMax"],
-  // D114 S3: the pipeline members that replaced the retired velar/collections
-  // functions. They are compiler-owned checked value methods like the rest.
-  ["unique", "listUnique"], ["compact", "listCompact"], ["flatten", "listFlatten"], ["chunk", "listChunk"],
-  ["partition", "listPartition"], ["groupBy", "listGroupBy"], ["keyBy", "listKeyBy"], ["countBy", "listCountBy"],
-  ["zip", "listZip"], ["repeat", "listRepeat"],
-]);
-const mapCollectionOperations = new Map<string, CollectionOperation>([
-  ["get", "mapGet"], ["set", "mapSet"], ["getOrSet", "mapGetOrSet"], ["getOrSetWith", "mapGetOrSetWith"], ["update", "mapUpdate"], ["has", "mapHas"],
-  ["remove", "mapRemove"], ["clear", "mapClear"], ["copy", "mapCopy"], ["iterator", "mapIterator"],
-  ["keys", "mapKeys"], ["values", "mapValues"], ["entries", "mapEntries"],
-]);
-const setCollectionOperations = new Map<string, CollectionOperation>([
-  ["add", "setAdd"], ["update", "setUpdate"], ["has", "setHas"], ["remove", "setRemove"],
-  ["clear", "setClear"], ["copy", "setCopy"], ["values", "setValues"],
-  ["union", "setUnion"], ["intersection", "setIntersection"], ["difference", "setDifference"],
-]);
-const recordCollectionOperations = new Map<string, CollectionOperation>([
-  ["get", "recordGet"], ["set", "recordSet"], ["has", "recordHas"], ["remove", "recordRemove"],
-  ["clear", "recordClear"], ["copy", "recordCopy"], ["keys", "recordKeys"], ["values", "recordValues"], ["entries", "recordEntries"],
-]);
-const stringPrimitiveOperations = new Map<string, PrimitiveOperation>([
-  ["trim", "stringTrim"], ["upper", "stringUpper"], ["lower", "stringLower"], ["slice", "stringSlice"],
-  ["char", "stringChar"], ["has", "stringHas"], ["index", "stringIndex"], ["count", "stringCount"], ["startsWith", "stringStartsWith"], ["endsWith", "stringEndsWith"],
-  ["split", "stringSplit"], ["replace", "stringReplace"], ["replaceAll", "stringReplaceAll"],
-  ["padStart", "stringPadStart"], ["padEnd", "stringPadEnd"], ["repeat", "stringRepeat"], ["isBlank", "stringIsBlank"],
-]);
-const numberPrimitiveOperations = new Map<string, PrimitiveOperation>([
-  ["abs", "numberAbs"], ["round", "numberRound"], ["floor", "numberFloor"], ["ceil", "numberCeil"], ["sign", "numberSign"], ["trunc", "numberTrunc"], ["toFixed", "numberToFixed"],
-  ["isInteger", "numberIsInteger"], ["isNaN", "numberIsNaN"], ["isFinite", "numberIsFinite"],
-]);
-
-// D29 item 14: compiler-owned value/collection methods that return a fresh
-// value without mutating their receiver. An expression statement that calls
-// one of these and drops the result is always a bug. Mutate-and-return
-// operations (pop/remove) and null-returning mutators stay legal,
-// and user-function purity is deliberately never analyzed (D26 retired that).
-const discardedPureCollectionOperations = new Set<CollectionOperation>([
-  "listGet", "mapGet", "recordGet", "slice", "listCopy", "listCount", "listIndex", "listFind", "listSome", "listEvery",
-  "listMap", "listFilter", "listFlatMap", "listReduce", "listJoin", "listSorted", "listReversed",
-  "listSum", "listMin", "listMax", "setCopy", "setUnion", "setIntersection", "setDifference", "mapCopy", "recordCopy",
-  "listUnique", "listCompact", "listFlatten", "listChunk", "listPartition", "listGroupBy", "listKeyBy", "listCountBy",
-  "listZip", "listRepeat",
-  "listHas", "mapHas", "setHas", "recordHas", "mapIterator", "mapKeys", "recordKeys", "mapValues", "setValues", "recordValues", "mapEntries", "recordEntries",
-]);
-const discardedPurePrimitiveOperations = new Set<PrimitiveOperation>([
-  "stringTrim", "stringUpper", "stringLower", "stringSlice", "stringChar",
-  "stringStartsWith", "stringEndsWith", "stringReplace", "stringReplaceAll",
-  "stringPadStart", "stringPadEnd", "stringRepeat", "stringSplit", "stringIsBlank",
-  "numberAbs", "numberRound", "numberFloor", "numberCeil", "numberSign", "numberTrunc", "numberToFixed",
-  "numberIsInteger", "numberIsNaN", "numberIsFinite",
-]);
-const CORE_LIST_METHOD_NAMES = Object.freeze([
-  "get", "slice", "append", "extend", "insert", "remove", "pop", "clear", "copy", "has", "count", "index",
-  "find", "some", "every", "map", "flatMap", "filter", "reduce", "join", "sorted", "reversed", "sum", "min", "max",
-  "unique", "compact", "flatten", "chunk", "partition", "groupBy", "keyBy", "countBy", "zip", "repeat",
-] as const);
-const CORE_MAP_METHOD_NAMES = Object.freeze([
-  "get", "set", "getOrSet", "getOrSetWith", "update", "has", "remove", "clear", "copy", "iterator", "keys", "values", "entries",
-] as const);
-const CORE_SET_METHOD_NAMES = Object.freeze([
-  "add", "update", "has", "remove", "clear", "copy", "values", "union", "intersection", "difference",
-] as const);
-const CORE_RECORD_METHOD_NAMES = Object.freeze([
-  "get", "set", "has", "remove", "clear", "copy", "keys", "values", "entries",
-] as const);
-
-/**
- * The collection methods that change their receiver, by the kind of collection
- * the receiver is. `readonly` refuses exactly these through a read-only view,
- * and the Web extension's watch analysis asks the same question of a watch
- * body: a call of one of these on the watched collection is a write of the
- * subject, exactly as an assignment to it is.
- *
- * One roster, one answer. Two copies of it would be one concept with two
- * definitions -- the shape this repository keeps finding -- and the copy that
- * fell behind would be the one that decided whether a program compiles.
- */
-export function mutatingCollectionMethods(kind: "list" | "map" | "set" | "record"): ReadonlySet<string> {
-  return kind === "list"
-    ? new Set(["append", "extend", "insert", "remove", "pop", "clear"])
-    : kind === "map" ? new Set(["set", "getOrSet", "getOrSetWith", "update", "remove", "clear"])
-      : kind === "set" ? new Set(["add", "update", "remove", "clear"])
-        : new Set(["set", "remove", "clear"]);
 }
 
 /**
@@ -736,12 +643,6 @@ const asyncResultAnnotationMessage =
   "An async result annotation in a declaration names the resolved value; write '-> T', not '-> Promise<T>'";
 const memberNarrowingPrefix = "\u0000member:";
 
-/** What each bound admits, written the way a rejected call needs to hear it. */
-const boundVocabularyGuidance: Readonly<Record<TypeParameterBound, string>> = {
-  Text: "a Text parameter accepts the types with a hook-free text form — strings, numbers, bools, enums, and null",
-  Comparable: "a Comparable parameter accepts the types with a runtime order — numbers and strings",
-  Data: "a Data parameter accepts JSON-shaped data — strings, numbers, bools, null, enums, and the Lists, records, and Records built from them",
-};
 const coreGlobalGuidance = new Map([
   ["arguments", "Use named parameters; VelarScript does not expose the JavaScript 'arguments' binding"],
   ["console", "Use print(value) or an explicit JavaScript boundary instead of the console global"],
@@ -864,350 +765,6 @@ const foreignBuiltinNames: ReadonlySet<string> = new Set([
   "process", "Buffer", "require", "__dirname", "__filename", "module", "exports", "global",
   "localStorage", "sessionStorage", "fetch", "document", "window", "navigator", "alert",
 ]);
-
-const durationType: ValueType = { kind: "named", name: "Duration" };
-const namespaceFunction = (
-  name: string,
-  parameterNames: readonly string[],
-  parameters: readonly ValueType[],
-  result: ValueType,
-  requiredParameters = parameters.length,
-): ValueType => ({ kind: "intrinsic", name, parameterNames, parameters, requiredParameters, result });
-const promiseOf = (value: ValueType): ValueType => ({ kind: "promise", value });
-/**
- * A synchronous cursor returns an optional wrapper rather than `T?` directly.
- * The wrapper keeps exhaustion distinct from a legitimate `null` collection
- * value: `null` means there is no next item, while `{value: null}` is an item.
- */
-const iteratorOf = (value: ValueType): ValueType => {
-  const step: ValueType = {
-    kind: "object",
-    fields: new Map([["value", value]]),
-    readonlyFields: new Set(["value"]),
-  };
-  return {
-    kind: "object",
-    fields: new Map([["next", {kind: "function", parameters: [], requiredParameters: 0, result: optionalOf(step)}]]),
-    readonlyFields: new Set(["next"]),
-  };
-};
-const jsonNamespaceType: ValueType = {
-  kind: "object",
-  fields: new Map([
-    ["parse", namespaceFunction("json.parse", ["text", "target"], [stringType, unknownType], unknownType, 1)],
-    ["tryParse", namespaceFunction("json.tryParse", ["text", "target", "fallback"], [stringType, unknownType, unknownType], unknownType, 1)],
-    ["stringify", namespaceFunction("json.stringify", ["value", "pretty"], [unknownType, { kind: "union", members: [boolType, numberType] }], stringType, 1)],
-    ["stableStringify", namespaceFunction("json.stableStringify", ["value", "pretty"], [unknownType, { kind: "union", members: [boolType, numberType] }], stringType, 1)],
-    ["clone", namespaceFunction("json.clone", ["value", "target"], [unknownType, unknownType], unknownType, 1)],
-    ["isSerializable", { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: boolType }],
-  ]),
-  readonlyFields: new Set(["parse", "tryParse", "stringify", "stableStringify", "clone", "isSerializable"]),
-};
-// D50 rule 90: every pure computation lives in a permanent namespace. `Text.`
-// is the extension toolbox beside the core string methods — the method table
-// stays exactly as it is, and these are the operations most programs never
-// touch but must still be able to find without an import.
-const textFunction = (
-  parameterNames: readonly string[],
-  parameters: readonly ValueType[],
-  result: ValueType,
-  requiredParameters = parameters.length,
-): ValueType => ({ kind: "function", parameterNames, parameters, requiredParameters, result });
-const listOfString: ValueType = { kind: "list", element: stringType };
-const listOfNumber: ValueType = { kind: "list", element: numberType };
-const textPatternOptionsType: ValueType = {
-  kind: "object",
-  fields: new Map([
-    ["ignoreCase", optionalOf(boolType)],
-    ["multiline", optionalOf(boolType)],
-    ["dotAll", optionalOf(boolType)],
-  ]),
-};
-const textMatchType: ValueType = {
-  kind: "object",
-  fields: new Map([
-    ["value", stringType],
-    ["index", numberType],
-    ["groups", { kind: "list", element: optionalOf(stringType) }],
-  ]),
-};
-const textNamespaceMembers: ReadonlyMap<string, ValueType> = new Map([
-  ["trimStart", textFunction(["value"], [stringType], stringType)],
-  ["trimEnd", textFunction(["value"], [stringType], stringType)],
-  ["capitalize", textFunction(["value"], [stringType], stringType)],
-  ["title", textFunction(["value"], [stringType], stringType)],
-  ["lines", textFunction(["value"], [stringType], listOfString)],
-  ["lineStarts", textFunction(["value"], [stringType], listOfNumber)],
-  ["chunks", textFunction(["value", "size"], [stringType, numberType], listOfString)],
-  ["words", textFunction(["value"], [stringType], listOfString)],
-  ["slug", textFunction(["value"], [stringType], stringType)],
-  // TXT-U3: equality is code-point-sequence identity, so canonically
-  // equivalent text is not equal. `normalize` is the boundary tool that makes
-  // it equal — macOS filenames arrive NFD while typed text is usually NFC.
-  ["normalize", textFunction(["value", "form"], [stringType, stringType], stringType, 1)],
-  ["truncate", textFunction(["value", "length", "suffix"], [stringType, numberType, stringType], stringType, 2)],
-  ["indent", textFunction(["value", "prefix"], [stringType, stringType], stringType, 1)],
-  ["dedent", textFunction(["value"], [stringType], stringType)],
-  ["normalizeWhitespace", textFunction(["value"], [stringType], stringType)],
-  ["utf8Size", textFunction(["value"], [stringType], numberType)],
-  ["escapeHtml", textFunction(["value"], [stringType], stringType)],
-  // TXT-U4: one code point in, one code point out. `codePoint` answers null
-  // when the argument is not exactly one character, and `fromCodePoint`
-  // rejects surrogate halves so no call can build unpaired text.
-  ["codePoint", textFunction(["value"], [stringType], optionalOf(numberType))],
-  ["fromCodePoint", textFunction(["value"], [numberType], stringType)],
-  ["matches", textFunction(["value", "expression", "options"], [stringType, stringType, textPatternOptionsType], boolType, 2)],
-  ["findMatch", textFunction(["value", "expression", "options"], [stringType, stringType, textPatternOptionsType], optionalOf(textMatchType), 2)],
-  ["findMatches", textFunction(["value", "expression", "options"], [stringType, stringType, textPatternOptionsType], { kind: "list", element: textMatchType }, 2)],
-  ["replaceMatches", textFunction(["value", "expression", "replacement", "options"], [stringType, stringType, stringType, textPatternOptionsType], stringType, 3)],
-  ["splitPattern", textFunction(["value", "expression", "options"], [stringType, stringType, textPatternOptionsType], listOfString, 2)],
-]);
-export const TEXT_NAMESPACE_MEMBERS: readonly string[] = [...textNamespaceMembers.keys()];
-const textNamespaceType: ValueType = {
-  kind: "object",
-  fields: new Map(textNamespaceMembers),
-  readonlyFields: new Set(textNamespaceMembers.keys()),
-};
-const promiseNamespaceType: ValueType = {
-  kind: "object",
-  fields: new Map([
-    ["all", namespaceFunction("async.all", ["values"], [unknownType], promiseOf(unknownType))],
-    ["race", namespaceFunction("async.race", ["values"], [{ kind: "list", element: unknownType }], promiseOf(unknownType))],
-    ["sleep", { kind: "function", parameterNames: ["duration"], parameters: [durationType], requiredParameters: 1, result: promiseOf(nullType) }],
-    ["timeout", namespaceFunction("async.timeout", ["value", "duration", "message"], [promiseOf(unknownType), durationType, stringType], promiseOf(unknownType), 2)],
-    ["retry", namespaceFunction("async.retry", ["task", "attempts", "delay"], [unknownType, numberType, durationType], promiseOf(unknownType), 1)],
-    ["map", namespaceFunction("async.map", ["values", "worker", "concurrency"], [{ kind: "list", element: unknownType }, unknownType, numberType], promiseOf({ kind: "list", element: unknownType }), 2)],
-    ["series", namespaceFunction("async.series", ["tasks"], [{ kind: "list", element: unknownType }], promiseOf({ kind: "list", element: unknownType }))],
-  ]),
-  readonlyFields: new Set(["all", "race", "sleep", "timeout", "retry", "map", "series"]),
-};
-// D52 rule 116: `JSON`, `Promise`, and `Math` are the three namespace-shaped
-// globals every JavaScript author already has in muscle memory. We carried the
-// first two and made the third an import, which was an oversight rather than a
-// decision. What belongs on a number is already a number method (`abs`,
-// `round`, `floor`, `ceil`, `isFinite`, `isInteger`), so what remains here is
-// exactly what cannot be one: the constants, the multi-argument functions, and
-// the transcendentals.
-const numberFunction = (
-  parameterNames: readonly string[],
-  parameters: readonly ValueType[],
-  requiredParameters = parameters.length,
-): ValueType => ({ kind: "function", parameterNames, parameters, requiredParameters, result: numberType });
-const mathNamespaceMembers: ReadonlyMap<string, ValueType> = new Map<string, ValueType>([
-  ["pi", numberType], ["e", numberType], ["tau", numberType], ["infinity", numberType],
-  // min and max are pure rest calls and therefore have no named rest value.
-  ["min", { kind: "intrinsic", name: "math.min", parameters: [numberType], requiredParameters: 1, result: numberType }],
-  ["max", { kind: "intrinsic", name: "math.max", parameters: [numberType], requiredParameters: 1, result: numberType }],
-  ["clamp", numberFunction(["value", "minimum", "maximum"], [numberType, numberType, numberType])],
-  ["sqrt", numberFunction(["value"], [numberType])],
-  ["cbrt", numberFunction(["value"], [numberType])],
-  ["pow", numberFunction(["base", "exponent"], [numberType, numberType])],
-  ["exp", numberFunction(["value"], [numberType])],
-  ["log", numberFunction(["value", "base"], [numberType, numberType], 1)],
-  ["log2", numberFunction(["value"], [numberType])],
-  ["log10", numberFunction(["value"], [numberType])],
-  ["sin", numberFunction(["value"], [numberType])],
-  ["cos", numberFunction(["value"], [numberType])],
-  ["tan", numberFunction(["value"], [numberType])],
-  ["asin", numberFunction(["value"], [numberType])],
-  ["acos", numberFunction(["value"], [numberType])],
-  ["atan", numberFunction(["value"], [numberType])],
-  ["atan2", numberFunction(["y", "x"], [numberType, numberType])],
-  ["degrees", numberFunction(["radians"], [numberType])],
-  ["radians", numberFunction(["degrees"], [numberType])],
-  ["hypot", numberFunction(["x", "y"], [numberType, numberType])],
-  ["random", numberFunction([], [])],
-  // randomInt has one-bound and minimum/maximum positional forms.
-  ["randomInt", { kind: "function", parameters: [numberType, numberType], requiredParameters: 1, result: numberType }],
-  ["gcd", numberFunction(["left", "right"], [numberType, numberType])],
-  ["lcm", numberFunction(["left", "right"], [numberType, numberType])],
-]);
-export const MATH_NAMESPACE_MEMBERS: readonly string[] = [...mathNamespaceMembers.keys()];
-const mathNamespaceType: ValueType = {
-  kind: "object",
-  fields: new Map(mathNamespaceMembers),
-  readonlyFields: new Set(mathNamespaceMembers.keys()),
-};
-
-/**
- * D57 rule 135: the Core vocabulary's types, keyed by the roster itself. The
- * `Record<CoreVocabularyName, ValueType>` annotation is the pin — a namespace
- * or prelude name added to `core-vocabulary.ts` and not given a type here (or
- * given one here and left off the roster) is a compile error, and the binding
- * refusal in `source-names.ts` reads the same roster, so the protection can
- * never lag the vocabulary again.
- */
-const coreVocabularyTypes: Record<CoreVocabularyName, ValueType> = {
-  number: { kind: "function", parameterNames: ["text"], parameters: [stringType], requiredParameters: 1, result: optionalOf(numberType) },
-  // D32 item 29: `str` is compiler-owned text conversion, so its parameter
-  // carries the conversion domain rather than `any`. A bare `str` stays a
-  // legal first-class value, and every indirect call site — `const c = str`,
-  // `values.map(str)` — is checked against the same whitelist the direct
-  // call form uses instead of executing a 'toString' hook.
-  str: { kind: "function", parameterNames: ["value"], parameters: [textConvertibleType], requiredParameters: 1, result: stringType },
-  // `print` inspects any value by contract; its domain is the top type for
-  // assignment targets (D90 R17 keeps `any` for boundary declarations only).
-  print: { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: nullType },
-  // D47 rule 81: equals(a, b) — deep structural comparison over data.
-  // Pure computation, so it lives in the prelude beside str/print; the
-  // call site owns the domain checks (inferEqualsCall).
-  equals: { kind: "intrinsic", name: "core.equals", parameterNames: ["a", "b"], parameters: [unknownType, unknownType], requiredParameters: 2, result: boolType },
-  range: { kind: "intrinsic", name: "collections.range", parameterNames: ["start", "end", "step"], parameters: [numberType, numberType, numberType], requiredParameters: 1, result: { kind: "list", element: numberType } },
-  Json: jsonNamespaceType,
-  Promise: promiseNamespaceType,
-  Text: textNamespaceType,
-  Math: mathNamespaceType,
-};
-
-function coreVocabularyType(name: string): ValueType | null {
-  return Object.hasOwn(coreVocabularyTypes, name) ? coreVocabularyTypes[name as CoreVocabularyName] : null;
-}
-
-/**
- * D50 rule 90 / D52 rule 116: the modules whose named imports retired, and the
- * prefix that replaced them. `velar/collections` is the odd one — `range` went
- * to the Core prelude rather than to a namespace, so its migration drops the
- * import and adds no prefix at all.
- *
- * D57 rule 136: the member sets are read off the namespace types rather than
- * restated, so this table cannot claim a member the namespace does not carry.
- */
-const permanentNamespaceImportRosters: ReadonlyMap<string, { readonly namespace: PermanentNamespaceName | null; readonly members: ReadonlySet<string> }> = new Map([
-  ["velar/json", { namespace: "Json", members: namespaceMemberNames(jsonNamespaceType) }],
-  ["velar/async", { namespace: "Promise", members: namespaceMemberNames(promiseNamespaceType) }],
-  ["velar/text", { namespace: "Text", members: namespaceMemberNames(textNamespaceType) }],
-  ["velar/math", { namespace: "Math", members: namespaceMemberNames(mathNamespaceType) }],
-  ["velar/collections", { namespace: null, members: new Set(["range"]) }],
-]);
-
-/**
- * D114 S3 / D35: `velar/collections` retired. Twelve of its exports duplicated
- * a List method word for word, four were `get`/`slice` under other names, three
- * survived only because the method side lacked `min(by=)`, `max(by=)` and a
- * descending order, and the rest are List members now. `range` is unaffected —
- * it was already the Core prelude name, and its import keeps the VEL3008 the
- * roster above reports.
- *
- * Each entry carries the retired function's own parameter names, so a
- * named-argument call can be read back into positions before it is rewritten,
- * and the member call that replaces it. A `rewrite` of null is guidance only:
- * `enumerate`'s `{index, value}` records have consumers no edit can reach.
- */
-interface RetiredCollectionExport {
-  /** The retired function's declared parameters, first one being the receiver. */
-  readonly parameters: readonly string[];
-  readonly guidance: string;
-  readonly rewrite: {
-    readonly member: string;
-    /** Literal arguments the member call leads with, e.g. `get(0)` for `first`. */
-    readonly fixedArguments: readonly string[];
-    /** The name each remaining retired argument is passed under; null is positional. */
-    readonly argumentNames: readonly (string | null)[];
-    /** `repeat(value, count)` repeats a one-element List, so its receiver is `[value]`. */
-    readonly receiverIsListOfArgument?: true;
-  } | null;
-}
-
-const RETIRED_COLLECTION_MODULE = "velar/collections";
-
-function retiredCollectionEntry(
-  parameters: readonly string[],
-  guidance: string,
-  rewrite: RetiredCollectionExport["rewrite"],
-): RetiredCollectionExport {
-  return { parameters, guidance: `${guidance}; velar/collections retired into checked List members`, rewrite };
-}
-
-function retiredCollectionMethod(
-  parameters: readonly string[],
-  member: string,
-  argumentNames: readonly (string | null)[] = parameters.slice(1).map(() => null),
-): RetiredCollectionExport {
-  const rendered = parameters.slice(1)
-    .map((name, index) => (argumentNames[index] ? `${argumentNames[index]}=${name}` : name))
-    .join(", ");
-  return retiredCollectionEntry(parameters, `Use '${parameters[0]}.${member}(${rendered})'`, {
-    member,
-    fixedArguments: [],
-    argumentNames,
-  });
-}
-
-const retiredCollectionExports: ReadonlyMap<string, RetiredCollectionExport> = new Map([
-  // Exact duplicates: the member takes the same arguments under the same names.
-  ["find", retiredCollectionMethod(["values", "test"], "find")],
-  ["index", retiredCollectionMethod(["values", "value"], "index")],
-  ["has", retiredCollectionMethod(["values", "value"], "has")],
-  ["count", retiredCollectionMethod(["values", "value"], "count")],
-  ["some", retiredCollectionMethod(["values", "test"], "some")],
-  ["every", retiredCollectionMethod(["values", "test"], "every")],
-  ["sum", retiredCollectionMethod(["values"], "sum")],
-  ["join", retiredCollectionMethod(["values", "separator"], "join")],
-  ["reversed", retiredCollectionMethod(["values"], "reversed")],
-  // Positional windows the language already spells with `get` and `slice`.
-  ["first", retiredCollectionEntry(["values"], "Use 'values.get(0)'", { member: "get", fixedArguments: ["0"], argumentNames: [] })],
-  ["last", retiredCollectionEntry(["values"], "Use 'values.get(-1)'", { member: "get", fixedArguments: ["-1"], argumentNames: [] })],
-  ["take", retiredCollectionEntry(["values", "count"], "Use 'values.slice(0, count)'", { member: "slice", fixedArguments: ["0"], argumentNames: [null] })],
-  ["drop", retiredCollectionEntry(["values", "count"], "Use 'values.slice(count)'", { member: "slice", fixedArguments: [], argumentNames: [null] })],
-  // The selector family the method side now completes.
-  ["sortBy", retiredCollectionMethod(["values", "key", "descending"], "sorted", ["by", "descending"])],
-  ["minBy", retiredCollectionMethod(["values", "key"], "min", ["by"])],
-  ["maxBy", retiredCollectionMethod(["values", "key"], "max", ["by"])],
-  // The itertools-shaped functions, now members under the same names.
-  ["unique", retiredCollectionMethod(["values"], "unique")],
-  ["compact", retiredCollectionMethod(["values"], "compact")],
-  ["flatten", retiredCollectionMethod(["values"], "flatten")],
-  ["chunk", retiredCollectionMethod(["values", "size"], "chunk")],
-  ["partition", retiredCollectionMethod(["values", "test"], "partition")],
-  ["groupBy", retiredCollectionMethod(["values", "key"], "groupBy")],
-  ["keyBy", retiredCollectionMethod(["values", "key"], "keyBy")],
-  ["countBy", retiredCollectionMethod(["values", "key"], "countBy")],
-  ["zip", retiredCollectionMethod(["left", "right"], "zip")],
-  ["repeat", retiredCollectionEntry(["value", "count"], "Use '[value].repeat(count)', which repeats the whole List the way string.repeat does", {
-    member: "repeat",
-    fixedArguments: [],
-    argumentNames: [null],
-    receiverIsListOfArgument: true,
-  })],
-  // D35: the two-slot `for` is the one spelling, and the {index, value}
-  // records this produced are read at sites no edit here can see.
-  ["enumerate", retiredCollectionEntry(["values", "start"], "Use 'for value, index in values:'", null)],
-]);
-
-function retiredCollectionExport(source: string, name: string): RetiredCollectionExport | null {
-  return source === RETIRED_COLLECTION_MODULE ? retiredCollectionExports.get(name) ?? null : null;
-}
-
-function namespaceMemberNames(namespace: ValueType): ReadonlySet<string> {
-  return new Set(namespace.kind === "object" ? namespace.fields.keys() : []);
-}
-
-function permanentNamespaceImportRoster(source: string): { readonly namespace: PermanentNamespaceName | null; readonly members: ReadonlySet<string> } | null {
-  return permanentNamespaceImportRosters.get(source) ?? null;
-}
-
-/**
- * D57 rule 136: the permanent namespace that reaches every export of a retired
- * standard module, or null while the module still publishes something of its
- * own. Derived from the roster VEL3008 rejects imports with, so a diagnostic
- * cannot list a module as importable after its members moved behind a prefix.
- */
-export function permanentNamespaceCoveringModule(source: string, exports: Iterable<string>): PermanentNamespaceName | null {
-  const roster = permanentNamespaceImportRosters.get(source);
-  if (!roster?.namespace) return null;
-  for (const name of exports) if (!roster.members.has(name)) return null;
-  return roster.namespace;
-}
-
-function argumentNoun(expected: string): "argument" | "arguments" {
-  return expected === "1" || expected === "at least 1" ? "argument" : "arguments";
-}
-
-function trimTrailingOmittedArguments(sources: readonly number[]): readonly number[] {
-  let length = sources.length;
-  while (length > 0 && sources[length - 1] === -1) length -= 1;
-  return sources.slice(0, length);
-}
 
 export function isCorePrimitiveName(name: string): boolean {
   return corePrimitiveNames.has(name);
@@ -1505,6 +1062,28 @@ export class Analyzer implements TypeEnvironment {
    * the constructor, which is the exact list of what the proofs depend on.
    */
   private readonly advisoryRoster: Advisories;
+  /**
+   * D114 R1b: the compiler-owned collection vocabulary — what a List, Map, Set
+   * or Record publishes, what one call of a member means, and the migration off
+   * the `velar/collections` module those members replaced. It reaches this
+   * analyzer only through the `CollectionInferenceHost` interface built in the
+   * constructor, which is the exact list of what the cluster depends on.
+   */
+  private readonly collections: CollectionInference;
+  /**
+   * D114 R1b: everything that happens between a call's parentheses — the
+   * callee's kind, the generic solver, the standard-module intrinsics and the
+   * named-argument plan. It reaches this analyzer only through the
+   * `CallInferenceHost` interface built in the constructor.
+   */
+  private readonly calls: CallInference;
+  /**
+   * D114 R1b: what a receiver publishes under a name — every member access, and
+   * the checked value methods a string or a number carries. It reaches this
+   * analyzer only through the `MemberAccessHost` interface built in the
+   * constructor.
+   */
+  private readonly members: MemberAccess;
   private readonly reportedBoundViolations = new Set<string>();
   /** D51 rule 101: arrows that read a `using`-owned binding, by arrow span. */
   private readonly arrowOwnedCaptures = new Map<string, { readonly handle: string; readonly depth: number }>();
@@ -1657,8 +1236,6 @@ export class Analyzer implements TypeEnvironment {
   private readonly retiredNamespaces = new Map<string, RetiredNamespace>();
   /** Every `Retired.member` read, collected so one migration can carry the whole rewrite. */
   private readonly retiredNamespaceUses: { readonly namespace: string; readonly member: string | null; readonly span: Span; readonly memberEnd: number; readonly bare: boolean }[] = []; 
-  /** The property each member access asks for, keyed by the receiver's span. */
-  private readonly memberAccessProperties = new Map<string, { readonly property: string; readonly end: number }>();
   /** Every name this module declares anywhere, so a rewrite can prove it collides with nothing. */
   private readonly declaredNames = new Set<string>();
   private readonly promiseInitializerBindings = new WeakSet<Binding>();
@@ -1667,30 +1244,14 @@ export class Analyzer implements TypeEnvironment {
   private readonly permanentNamespaceImportReads: { readonly local: string; readonly source: string; readonly imported: string; readonly span: Span }[] = [];
   /** The import each such local came from, keyed by the local name. */
   private readonly permanentNamespaceImportOrigins = new Map<string, { readonly source: string; readonly imported: string; readonly specifier: Span }>();
-  // D114 S3: the retired velar/collections names this module imported, the
-  // proved reads of each, and the call each read sits in.
-  private readonly retiredCollectionImportOrigins = new Map<string, { readonly imported: string; readonly specifier: Span }>();
-  private readonly retiredCollectionImportReads: { readonly local: string; readonly imported: string; readonly span: Span }[] = [];
-  private readonly retiredCollectionCalls = new Map<string, Extract<Expression, { kind: "CallExpression" }>>();
 
   constructor(context: AnalysisContext = {}, extensions: readonly CompilerAnalysisExtension[] = []) {
     this.analysisExtensions = extensions;
     this.sourceText = context.sourceText ?? "";
-    this.advisoryRoster = new Advisories({
-      sourceText: this.sourceText,
-      analysisExtensions: this.analysisExtensions,
-      typeAliases: this.typeAliases,
-      lowering: this.lowering,
-      advise: (code, message, adviceSpan, fix) => { this.advise(code, message, adviceSpan, fix); },
-      expandAliases: (type) => this.expandAliases(type),
-      inferredExpressionType: (expression) => this.inferredExpressionType(expression),
-      lookup: (name) => this.lookup(name),
-      collectPatternNames: (pattern, add) => { this.collectPatternNames(pattern, add); },
-      commentPreservingMechanicalFix: (rewriteSpan, replacement, title) => this.commentPreservingMechanicalFix(rewriteSpan, replacement, title),
-      canonicalCollectionMemberReadIsStable: (expression) => this.canonicalCollectionMemberReadIsStable(expression),
-      recordProjectionShape: (type) => this.recordProjectionShape(type),
-      stableDataMember: (objectExpression, property) => this.stableDataMember(objectExpression, property),
-    });
+    this.advisoryRoster = new Advisories(this.advisoryHost());
+    this.collections = new CollectionInference(this.collectionHost());
+    this.calls = new CallInference(this.callHost());
+    this.members = new MemberAccess(this.memberHost());
     this.executeMain = context.executeMain !== false;
     this.inferredFunctionResultSeeds = context.inferredFunctionResults ?? new Map();
     this.finalizeFunctionResultInference = context.finalizeFunctionResultInference === true;
@@ -1818,6 +1379,189 @@ export class Analyzer implements TypeEnvironment {
     }
   }
 
+  /** D114 R1a: what the A roster is allowed to ask of this analyzer. */
+  private advisoryHost(): AdvisoryHost {
+    return {
+      sourceText: this.sourceText,
+      analysisExtensions: this.analysisExtensions,
+      typeAliases: this.typeAliases,
+      lowering: this.lowering,
+      advise: (code, message, adviceSpan, fix) => { this.advise(code, message, adviceSpan, fix); },
+      expandAliases: (type) => this.expandAliases(type),
+      inferredExpressionType: (expression) => this.inferredExpressionType(expression),
+      lookup: (name) => this.lookup(name),
+      collectPatternNames: (pattern, add) => { this.collectPatternNames(pattern, add); },
+      commentPreservingMechanicalFix: (rewriteSpan, replacement, title) => this.commentPreservingMechanicalFix(rewriteSpan, replacement, title),
+      canonicalCollectionMemberReadIsStable: (expression) => this.canonicalCollectionMemberReadIsStable(expression),
+      recordProjectionShape: (type) => this.recordProjectionShape(type),
+      stableDataMember: (objectExpression, property) => this.stableDataMember(objectExpression, property),
+    };
+  }
+
+  /** D114 R1b: what the collection cluster is allowed to ask of this analyzer. */
+  private collectionHost(): CollectionInferenceHost {
+    return {
+      sourceText: this.sourceText,
+      diagnostics: this.diagnostics,
+      lowering: this.lowering,
+      semanticExpressionOwners: this.semanticExpressionOwners,
+      typeError: (message, errorSpan, fix) => { this.typeError(message, errorSpan, fix); },
+      requireAssignable: (actual, expected, valueSpan) => { this.requireAssignable(actual, expected, valueSpan); },
+      requireMembershipIntersection: (probe, domain, probeSpan, operation) => this.requireMembershipIntersection(probe, domain, probeSpan, operation),
+      rejectFreshCollectionProbe: (probe, operation, probes) => this.rejectFreshCollectionProbe(probe, operation, probes),
+      rejectCollidingKeyDomain: (keySource, keySpan, position) => { this.rejectCollidingKeyDomain(keySource, keySpan, position); },
+      expandAliases: (type) => this.expandAliases(type),
+      readonlyDataViewOf: (type) => this.readonlyDataViewOf(type),
+      inferExpression: (expression, contextualType) => this.inferExpression(expression, contextualType),
+      inferredOrAnalyze: (expression) => this.inferredOrAnalyze(expression),
+      inferredExpressionType: (expression) => this.inferredExpressionType(expression),
+      recordSemanticExpression: (expression, type) => { this.recordSemanticExpression(expression, type); },
+      concreteCallableFor: (actual, expected, errorSpan) => this.concreteCallableFor(actual, expected, errorSpan),
+      isAssignableHere: (actual, expected) => isAssignable(actual, expected, this),
+      checkArguments: (arguments_, parameters, callSpan, requiredParameters) => { this.checkArguments(arguments_, parameters, callSpan, requiredParameters); },
+      planNamedArguments: (arguments_, argumentNames, parameters, parameterNames, requiredParameters, callSpan, rest) =>
+        this.calls.planNamedArguments(arguments_, argumentNames, parameters, parameterNames, requiredParameters, callSpan, rest),
+      orderedTypeCategory: (source) => this.orderedTypeCategory(source),
+      unorderedTypeGuidance: (...types) => this.unorderedTypeGuidance(...types),
+      renderNamedImport: (source, specifiers) => this.renderNamedImport(source, specifiers),
+    };
+  }
+
+  /** D114 R1b: what the call cluster is allowed to ask of this analyzer. */
+  private callHost(): CallInferenceHost {
+    // A call reads the analyzer's live walk state — the class under analysis,
+    // the constructor and field-initializer depths, the sanctioned `super(...)`
+    // site — so those arrive as getters rather than as values captured here.
+    const analyzer = this;
+    return {
+      get allowedSuperCall() { return analyzer.allowedSuperCall; },
+      analysisExtensions: analyzer.analysisExtensions,
+      boundaryReceiverText: (expression) => analyzer.boundaryReceiverText(expression),
+      callExpressionCallees: analyzer.callExpressionCallees,
+      checkArguments: (arguments_, parameters, callSpan, requiredParameters, rest, argumentNames, parameterNames) => { analyzer.checkArguments(arguments_, parameters, callSpan, requiredParameters, rest, argumentNames, parameterNames); },
+      checkTestMatcherComparand: (calleeExpression, arguments_) => { analyzer.checkTestMatcherComparand(calleeExpression, arguments_); },
+      get classFieldInitializerDepth() { return analyzer.classFieldInitializerDepth; },
+      classInfo: (key) => analyzer.classInfo(key),
+      classes: analyzer.classes,
+      collections: analyzer.collections,
+      commentPreservingMechanicalFix: (rewriteSpan, replacement, title) => analyzer.commentPreservingMechanicalFix(rewriteSpan, replacement, title),
+      concreteCallableFor: (actual, expected, errorSpan) => analyzer.concreteCallableFor(actual, expected, errorSpan),
+      get constructorDepth() { return analyzer.constructorDepth; },
+      contextualCollectionType: (type) => analyzer.contextualCollectionType(type),
+      get currentClass() { return analyzer.currentClass; },
+      diagnostics: analyzer.diagnostics,
+      enumMeetDomain: (left, right) => analyzer.enumMeetDomain(left, right),
+      equalityGuidance: (leftSource, rightSource) => analyzer.equalityGuidance(leftSource, rightSource),
+      equalityTypesIntersect: (leftSource, rightSource) => analyzer.equalityTypesIntersect(leftSource, rightSource),
+      equalsDomainViolation: (source, seen) => analyzer.equalsDomainViolation(source, seen),
+      expandAliases: (type, seen) => analyzer.expandAliases(type, seen),
+      fieldsOf: (identity) => analyzer.fieldsOf(identity),
+      formReadField: (name, source, fieldSpan) => analyzer.formReadField(name, source, fieldSpan),
+      inModuleInitializationPosition: () => analyzer.inModuleInitializationPosition(),
+      inferExpression: (expression, contextualType) => analyzer.inferExpression(expression, contextualType),
+      inferExtensionCall: (_callee, _arguments, _argumentNames, _callSpan) => analyzer.inferExtensionCall(_callee, _arguments, _argumentNames, _callSpan),
+      inferPrimitiveCall: (member, arguments_, argumentNames, callSpan) => analyzer.members.inferPrimitiveCall(member, arguments_, argumentNames, callSpan),
+      inferRecordFromCall: (member, sourceArguments, argumentNames, callSpan) => analyzer.inferRecordFromCall(member, sourceArguments, argumentNames, callSpan),
+      inferRecordMapFromCall: (member, sourceArguments, argumentNames, callSpan) => analyzer.inferRecordMapFromCall(member, sourceArguments, argumentNames, callSpan),
+      inferredExpressionType: (expression) => analyzer.inferredExpressionType(expression),
+      get instanceFieldInitializerDepth() { return analyzer.instanceFieldInitializerDepth; },
+      invalidDeclaredTypes: analyzer.invalidDeclaredTypes,
+      invalidateMutableCollectionCallReceiver: (callee) => { analyzer.invalidateMutableCollectionCallReceiver(callee); },
+      isHttpFormBody: (source) => analyzer.isHttpFormBody(source),
+      isSubclassOf: (actual, expected) => analyzer.isSubclassOf(actual, expected),
+      iterationGuidance: (type) => analyzer.iterationGuidance(type),
+      iterationSource: (expression, type) => analyzer.iterationSource(expression, type),
+      javaScriptBindings: analyzer.javaScriptBindings,
+      jsonSerializable: (source, seen) => analyzer.jsonSerializable(source, seen),
+      lookup: (name) => analyzer.lookup(name),
+      lowering: analyzer.lowering,
+      memberAccessReceivers: analyzer.memberAccessReceivers,
+      namedTypes: analyzer.namedTypes,
+      noteGenericApplications: (type, seen) => { analyzer.noteGenericApplications(type, seen); },
+      optionalExecutionNarrowings: (expression) => analyzer.optionalExecutionNarrowings(expression),
+      readonlyDataViewOf: (type) => analyzer.readonlyDataViewOf(type),
+      recordMemberAccessProperty: (expression) => { analyzer.members.recordMemberAccessProperty(expression); },
+      recordRuntimeObjectShape: (expression, owner) => { analyzer.recordRuntimeObjectShape(expression, owner); },
+      rejectCollidingKeyDomain: (keySource, span, position) => { analyzer.rejectCollidingKeyDomain(keySource, span, position); },
+      rejectDisjointEnumValidatorProbe: (calleeExpression, arguments_) => { analyzer.rejectDisjointEnumValidatorProbe(calleeExpression, arguments_); },
+      reportPromiseCarrierHazard: (type, errorSpan) => { analyzer.reportPromiseCarrierHazard(type, errorSpan); },
+      reportPromiseResolutionHazard: (type, errorSpan) => { analyzer.reportPromiseResolutionHazard(type, errorSpan); },
+      requireAssignable: (actual, expected, valueSpan) => { analyzer.requireAssignable(actual, expected, valueSpan); },
+      requireTextConvertible: (type, span, site) => { analyzer.requireTextConvertible(type, span, site); },
+      runtimeTypeObjectValue: (type) => analyzer.runtimeTypeObjectValue(type),
+      satisfiesBound: (type, bound) => analyzer.satisfiesBound(type, bound),
+      sourceText: analyzer.sourceText,
+      testExpectOperands: analyzer.testExpectOperands,
+      typeAliases: analyzer.typeAliases,
+      typeArgumentsRemovedCalls: analyzer.typeArgumentsRemovedCalls,
+      typeError: (message, errorSpan, fix) => { analyzer.typeError(message, errorSpan, fix); },
+      typesIntersect: (leftSource, rightSource, enumStringVeto) => analyzer.typesIntersect(leftSource, rightSource, enumStringVeto),
+      withTemporaryNarrowings: (narrowed, narrowingSpan, analyze) => analyzer.withTemporaryNarrowings(narrowed, narrowingSpan, analyze),
+      isAssignableHere: (actual, expected) => isAssignable(actual, expected, analyzer),
+    };
+  }
+
+  /** D114 R1b: what the member cluster is allowed to ask of this analyzer. */
+  private memberHost(): MemberAccessHost {
+    // The same live reads a call makes: the class under analysis, the `super`
+    // context, the static-initialization frame, the walk depths.
+    const analyzer = this;
+    return {
+      aliasedEnumTarget: (name) => analyzer.aliasedEnumTarget(name),
+      get analysisExtensions() { return analyzer.analysisExtensions; },
+      get asynchronousFunctions() { return analyzer.asynchronousFunctions; },
+      boundaryValidationGuidance: (expression, property) => analyzer.boundaryValidationGuidance(expression, property),
+      get callExpressionCallees() { return analyzer.callExpressionCallees; },
+      checkArguments: (arguments_, parameters, callSpan, requiredParameters, rest, argumentNames, parameterNames) => { analyzer.checkArguments(arguments_, parameters, callSpan, requiredParameters, rest, argumentNames, parameterNames); },
+      classInfo: (key) => analyzer.classInfo(key),
+      get classes() { return analyzer.classes; },
+      get collections() { return analyzer.collections; },
+      conditionSubjectText: (condition) => analyzer.conditionSubjectText(condition),
+      get constructorDepth() { return analyzer.constructorDepth; },
+      get currentClass() { return analyzer.currentClass; },
+      declaresPrivateMember: (className, name, staticMember) => analyzer.declaresPrivateMember(className, name, staticMember),
+      discriminatedDataField: (original, property) => analyzer.discriminatedDataField(original, property),
+      displayExternalClasses: (type) => analyzer.displayExternalClasses(type),
+      enumRuntimeMember: (name, identity, members, property) => analyzer.enumRuntimeMember(name, identity, members, property),
+      expandAliases: (type, seen) => analyzer.expandAliases(type, seen),
+      fieldsOf: (identity) => analyzer.fieldsOf(identity),
+      findField: (className, name) => analyzer.findField(className, name),
+      findGetter: (className, name) => analyzer.findGetter(className, name),
+      findMethod: (className, name) => analyzer.findMethod(className, name),
+      findStaticField: (className, name) => analyzer.findStaticField(className, name),
+      findStaticFieldOwner: (className, name) => analyzer.findStaticFieldOwner(className, name),
+      findStaticGetter: (className, name) => analyzer.findStaticGetter(className, name),
+      findStaticMethod: (className, name) => analyzer.findStaticMethod(className, name),
+      get functionDepth() { return analyzer.functionDepth; },
+      getterAccessProperty: (expression) => analyzer.getterAccessProperty(expression),
+      inferredOrAnalyze: (expression) => analyzer.inferredOrAnalyze(expression),
+      get invalidDeclaredTypes() { return analyzer.invalidDeclaredTypes; },
+      isSubclassOf: (actual, expected) => analyzer.isSubclassOf(actual, expected),
+      lookup: (name) => analyzer.lookup(name),
+      lookupMemberNarrowing: (path) => analyzer.lookupMemberNarrowing(path),
+      get lowering() { return analyzer.lowering; },
+      get memberAccessReceivers() { return analyzer.memberAccessReceivers; },
+      privateFieldForAccess: (className, name, staticMember) => analyzer.privateFieldForAccess(className, name, staticMember),
+      get privateGetters() { return analyzer.privateGetters; },
+      privateMethodForAccess: (className, name, staticMember) => analyzer.privateMethodForAccess(className, name, staticMember),
+      get privateStaticFields() { return analyzer.privateStaticFields; },
+      get promiseInitializerBindings() { return analyzer.promiseInitializerBindings; },
+      readonlyDataViewOf: (type) => analyzer.readonlyDataViewOf(type),
+      readonlyFieldsOf: (identity) => analyzer.readonlyFieldsOf(identity),
+      recordSemanticExpression: (expression, type) => { analyzer.recordSemanticExpression(expression, type); },
+      recoveredTypeError: (message, errorSpan, fix) => { analyzer.recoveredTypeError(message, errorSpan, fix); },
+      runtimeTypeObjectValue: (type) => analyzer.runtimeTypeObjectValue(type),
+      get semanticExpressionOwners() { return analyzer.semanticExpressionOwners; },
+      semanticMembersOf: (original) => analyzer.semanticMembersOf(original),
+      stableMemberAccessPath: (expression) => analyzer.stableMemberAccessPath(expression),
+      get staticFieldInitialization() { return analyzer.staticFieldInitialization; },
+      get superMemberContext() { return analyzer.superMemberContext; },
+      get testExpectOperands() { return analyzer.testExpectOperands; },
+      typeError: (message, errorSpan, fix) => { analyzer.typeError(message, errorSpan, fix); },
+      uniqueNearestName: (requested, candidates) => uniqueNearestName(requested, candidates),
+    };
+  }
+
   /**
    * D113: the surface-version gate reads the same member resolvers that type
    * checking uses. Placeholder types retain every parameter/result position,
@@ -1839,14 +1583,14 @@ export class Analyzer implements TypeEnvironment {
         if (contract !== null) contracts.set(`${label}.${name}`, contract);
       }
     };
-    collect("List", CORE_LIST_METHOD_NAMES, (name) => analyzer.listMember({ kind: "list", element: item }, name));
-    collect("readonly List", CORE_LIST_METHOD_NAMES, (name) => analyzer.listMember({ kind: "list", element: item, readonlyView: true }, name));
-    collect("Map", CORE_MAP_METHOD_NAMES, (name) => analyzer.mapMember({ kind: "map", key, value }, name));
-    collect("readonly Map", CORE_MAP_METHOD_NAMES, (name) => analyzer.mapMember({ kind: "map", key, value, readonlyView: true }, name));
-    collect("Set", CORE_SET_METHOD_NAMES, (name) => analyzer.setMember({ kind: "set", element: item }, name));
-    collect("readonly Set", CORE_SET_METHOD_NAMES, (name) => analyzer.setMember({ kind: "set", element: item, readonlyView: true }, name));
-    collect("Record", CORE_RECORD_METHOD_NAMES, (name) => analyzer.recordMember({ kind: "record", value }, name));
-    collect("readonly Record", CORE_RECORD_METHOD_NAMES, (name) => analyzer.recordMember({ kind: "record", value, readonlyView: true }, name));
+    collect("List", CORE_LIST_METHOD_NAMES, (name) => analyzer.collections.listMember({ kind: "list", element: item }, name));
+    collect("readonly List", CORE_LIST_METHOD_NAMES, (name) => analyzer.collections.listMember({ kind: "list", element: item, readonlyView: true }, name));
+    collect("Map", CORE_MAP_METHOD_NAMES, (name) => analyzer.collections.mapMember({ kind: "map", key, value }, name));
+    collect("readonly Map", CORE_MAP_METHOD_NAMES, (name) => analyzer.collections.mapMember({ kind: "map", key, value, readonlyView: true }, name));
+    collect("Set", CORE_SET_METHOD_NAMES, (name) => analyzer.collections.setMember({ kind: "set", element: item }, name));
+    collect("readonly Set", CORE_SET_METHOD_NAMES, (name) => analyzer.collections.setMember({ kind: "set", element: item, readonlyView: true }, name));
+    collect("Record", CORE_RECORD_METHOD_NAMES, (name) => analyzer.collections.recordMember({ kind: "record", value }, name));
+    collect("readonly Record", CORE_RECORD_METHOD_NAMES, (name) => analyzer.collections.recordMember({ kind: "record", value, readonlyView: true }, name));
     return contracts;
   }
 
@@ -1935,7 +1679,7 @@ export class Analyzer implements TypeEnvironment {
     this.registerExternModules(program);
     this.validateReExports(program);
     this.registerPermanentNamespaceImports(program);
-    this.registerRetiredCollectionImports(program);
+    this.collections.registerRetiredCollectionImports(program);
     this.predeclareTopLevel(program);
     let previous: Statement | null = null;
     for (const statement of program.body) {
@@ -1956,7 +1700,7 @@ export class Analyzer implements TypeEnvironment {
     this.reportRetiredNamespaceUses(program);
     this.reportPermanentNamespaceImports(program);
     this.reportPermanentNamespaceReExports(program);
-    this.reportRetiredCollectionImports(program);
+    this.collections.reportRetiredCollectionImports(program);
     // D85 rule 209 reports last for the same reason: a hole reaches a caller
     // through a callee the module may not declare until later, so the second
     // report is deleted once every hole in the module is on record.
@@ -6848,7 +6592,7 @@ export class Analyzer implements TypeEnvironment {
       targetBinding = binding;
       targetType = operator !== "=" ? binding.type : (binding.storageBinding ?? binding).declaredType;
     } else if (statement.target.kind === "MemberExpression") {
-      targetType = this.inferMember(
+      targetType = this.members.inferMember(
         statement.target.object,
         statement.target.property,
         statement.target.optional,
@@ -7161,7 +6905,7 @@ export class Analyzer implements TypeEnvironment {
           // module is known, so the one migration can carry the whole rewrite —
           // the prefix comes off here and the import goes on at the top.
           if (this.retiredNamespaces.has(expression.name)) {
-            const access = this.memberAccessProperties.get(spanIdentity(expression.span));
+            const access = this.members.memberAccessProperties.get(spanIdentity(expression.span));
             this.retiredNamespaceUses.push({
               namespace: expression.name,
               member: access?.property ?? null,
@@ -7205,9 +6949,9 @@ export class Analyzer implements TypeEnvironment {
           // D114 S3: the same proof for the retired velar/collections names —
           // the specifier's span identity is what shows the read reached the
           // import rather than a local of the same name shadowing it.
-          const retired = this.retiredCollectionImportOrigins.get(expression.name);
+          const retired = this.collections.retiredCollectionImportOrigins.get(expression.name);
           if (retired && lexical.span.start === retired.specifier.start && lexical.span.end === retired.specifier.end) {
-            this.retiredCollectionImportReads.push({ local: expression.name, imported: retired.imported, span: expression.span });
+            this.collections.retiredCollectionImportReads.push({ local: expression.name, imported: retired.imported, span: expression.span });
           }
         }
         if (!lexical && (isPermanentNamespaceName(expression.name) || expression.name === "range")) {
@@ -7643,17 +7387,17 @@ export class Analyzer implements TypeEnvironment {
       case "ArrowFunctionExpression":
         return this.inferArrow(expression, contextualType);
       case "CallExpression": {
-        if (expression.callee.kind === "IdentifierExpression" && this.retiredCollectionImportOrigins.has(expression.callee.name)) {
-          this.retiredCollectionCalls.set(spanIdentity(expression.callee.span), expression);
+        if (expression.callee.kind === "IdentifierExpression" && this.collections.retiredCollectionImportOrigins.has(expression.callee.name)) {
+          this.collections.retiredCollectionCalls.set(spanIdentity(expression.callee.span), expression);
         }
         this.recordDeferredCallEdge(expression.callee, expression.span);
         if (expression.typeArgumentsRemoved === true) this.typeArgumentsRemovedCalls.add(spanIdentity(expression.span));
-        const result = this.inferCall(expression.callee, expression.arguments, expression.argumentNames, expression.span, contextualType, expression.optional);
+        const result = this.calls.inferCall(expression.callee, expression.arguments, expression.argumentNames, expression.span, contextualType, expression.optional);
         if (this.expandAliases(result).kind === "null") this.lowering.normalizedNullResults.add(spanIdentity(expression.span));
         return result;
       }
       case "MemberExpression":
-        return this.inferMember(expression.object, expression.property, expression.optional, expression.span);
+        return this.members.inferMember(expression.object, expression.property, expression.optional, expression.span);
       case "IndexExpression": {
         const original = this.expandAliases(this.inferExpression(expression.object));
         const guarded = expression.optional && (original.kind === "optional" || original.kind === "null");
@@ -8419,21 +8163,6 @@ export class Analyzer implements TypeEnvironment {
   // ordering site is the one rejection with a non-obvious way out, because the
   // runtime value is a bare string and the order the author means is never the
   // member-name alphabet (D42 item 65).
-  /**
-   * D42 item 65: the key a selector answers. A literal arrow reports the
-   * contextual key type rather than its own once the body checks out, so the
-   * body's recorded type is the honest source for an inline arrow; a named
-   * function answers with its declared result.
-   */
-  private selectorKeyType(argument: Expression | null, selector: ValueType | null): ValueType | null {
-    if (!argument || selector === null) return null;
-    if (argument.kind === "ArrowFunctionExpression") return this.inferredExpressionType(argument.body);
-    const callable = this.expandAliases(selector);
-    return callable.kind === "function" || callable.kind === "action" || callable.kind === "intrinsic"
-      ? callable.result
-      : null;
-  }
-
   private unorderedTypeGuidance(...types: readonly ValueType[]): string {
     return types.some((type) => this.mentionsEnumType(type))
       ? "; an enum carries no runtime order, so state the order explicitly with sorted(by=rank) or a string-backed enum whose values encode it"
@@ -8659,763 +8388,9 @@ export class Analyzer implements TypeEnvironment {
     };
   }
 
-  /**
-   * D114 定案: a class type parameter still unsolved at the construction is an
-   * error at the construction — the same stance section 8 takes for an empty
-   * collection, and reported with the same code, because it is the same
-   * sentence: nothing at this position says what the value holds. The report
-   * names both ways out, an annotation on the position and an argument that
-   * fixes the parameter, because those are the only two there are.
-   */
-  private inferGenericConstruction(
-    callee: Extract<ValueType, { kind: "classConstructor" }>,
-    info: ClassInfo,
-    arguments_: readonly Expression[],
-    argumentNames: readonly (string | null)[] | undefined,
-    callSpan: Span,
-    contextualType: ValueType,
-    suppressUnsolvedReport = false,
-  ): ValueType {
-    const names = info.typeParameterNames ?? [];
-    const declaration = info.identity ?? callee.identity ?? callee.name;
-    const pattern = classApplicationType(
-      declaration,
-      callee.name,
-      names.map((name, index): ValueType => ({ kind: "parameter", name, index })),
-    );
-    const constructor: Extract<ValueType, { kind: "function" }> = {
-      kind: "function",
-      typeParameterNames: names,
-      ...(info.typeParameterBounds ? { typeParameterBounds: info.typeParameterBounds } : {}),
-      parameters: info.parameters,
-      ...(info.parameterNames ? { parameterNames: info.parameterNames } : {}),
-      requiredParameters: info.requiredParameters,
-      ...(info.constructorRest ? { rest: info.constructorRest } : {}),
-      result: pattern,
-    };
-    const unsolved = new Set<number>();
-    const reportsBefore = this.diagnostics.length;
-    const result = this.inferGenericCall(constructor, arguments_, argumentNames, callSpan, contextualType, unsolved);
-    // A construction the inference already reported on — a wrong argument
-    // count, most of all — has one mistake on record, and the unsolved
-    // parameter is downstream of it. One mistake, one report.
-    if (this.diagnostics.length > reportsBefore) return result;
-    // A position whose own annotation was already refused has said what it had
-    // to say; the construction reads as unsolved only because of that report.
-    const positionAlreadyReported = isInvalidType(this.expandAliases(contextualType));
-    if (unsolved.size > 0 && !suppressUnsolvedReport && !positionAlreadyReported) {
-      const listed = [...unsolved].map((index) => `'${names[index]}'`).join(", ");
-      const example = `${callee.name}<${names.map((name, index) => unsolved.has(index) ? "string" : name).join(", ")}>`;
-      this.diagnostics.push(diagnostic(
-        "VEL4039",
-        `Constructing '${callee.name}' leaves type parameter${unsolved.size === 1 ? "" : "s"} ${listed} unsolved; nothing at this position says what ${unsolved.size === 1 ? "it stands" : "they stand"} for — annotate the binding ('const value: ${example} = ${callee.name}(...)'), or pass an argument that solves ${unsolved.size === 1 ? "it" : "them"}`,
-        callSpan,
-      ));
-    }
-    return result;
-  }
 
-  private inferCall(
-    calleeExpression: Expression,
-    arguments_: readonly Expression[],
-    argumentNames: readonly (string | null)[] | undefined,
-    callSpan: Span,
-    contextualType: ValueType = unknownType,
-    optionalCall = false,
-  ): ValueType {
-    if (calleeExpression.kind === "MemberExpression"
-      && !calleeExpression.optional
-      && calleeExpression.object.kind === "IdentifierExpression"
-      && calleeExpression.object.name === "Math"
-      && (calleeExpression.property === "sign" || calleeExpression.property === "trunc")
-      && arguments_.length === 1
-      && arguments_[0]!.kind !== "SpreadExpression") {
-      const argument = arguments_[0]!;
-      this.requireAssignable(this.inferExpression(argument), numberType, argument.span);
-      const method = calleeExpression.property;
-      const replacement = `(${this.sourceText.slice(argument.span.start, argument.span.end)}).${method}()`;
-      this.diagnostics.push(recoveredDiagnostic(
-        "VEL3008",
-        `Use '${replacement}'; '${method}' is a number method, not a Math namespace member`,
-        callSpan,
-        this.commentPreservingMechanicalFix(callSpan, replacement, `Use number method '.${method}()'`),
-      ));
-      return numberType;
-    }
-    const hasNamed = argumentNames?.some((name) => name !== null) ?? false;
-    const javaScriptBoundary = this.javaScriptBoundaryCallee(calleeExpression);
-    if (javaScriptBoundary) {
-      this.lowering.javaScriptCallBoundaries.add(spanIdentity(callSpan));
-      // BRG-U10: at module initialization, a synchronous non-Error throw
-      // from an extern call would reach the host raw; the emitter wraps
-      // these sites so the value is normalized through the owned channel.
-      if (this.inModuleInitializationPosition()) this.lowering.moduleTopLevelHostCalls.add(spanIdentity(callSpan));
-    }
-    if (calleeExpression.kind === "SuperExpression") {
-      if (optionalCall) this.typeError("A base constructor call cannot be optional", callSpan);
-      const baseName = this.currentClass ? this.classInfo(this.currentClass)?.base ?? null : null;
-      if (this.constructorDepth === 0 || !baseName || spanIdentity(callSpan) !== this.allowedSuperCall) {
-        this.typeError("'super(...)' is only available as the first statement of a derived constructor", callSpan);
-        for (const argument of arguments_) this.inferExpression(argument);
-        return nullType;
-      }
-      const base = this.classInfo(baseName);
-      this.checkArguments(arguments_, base?.parameters ?? [], callSpan, base?.requiredParameters, base?.constructorRest, argumentNames, base?.parameterNames);
-      return nullType;
-    }
-    if (optionalCall) {
-      const original = this.inferExpression(calleeExpression);
-      const resolvedOriginal = this.expandAliases(original);
-      const callee = resolvedOriginal.kind === "optional" ? resolvedOriginal.inner : resolvedOriginal;
-      if (isInvalidType(callee)) return invalidType;
-      if (callee.kind === "function" || callee.kind === "action") {
-        const result = this.withTemporaryNarrowings(this.optionalExecutionNarrowings(calleeExpression), callSpan, () => {
-          if (callee.typeParameterNames?.length) {
-            return this.inferGenericCall(callee, arguments_, argumentNames, callSpan, nonOptional(this.expandAliases(contextualType)));
-          }
-          this.checkArguments(arguments_, callee.parameters, callSpan, callee.requiredParameters, callee.rest, argumentNames, callee.parameterNames);
-          return callee.result;
-        });
-        this.lowering.optionalCallees.add(spanIdentity(callSpan));
-        return optionalOf(result);
-      }
-      if (callee.kind === "any") {
-        this.withTemporaryNarrowings(this.optionalExecutionNarrowings(calleeExpression), callSpan, () => {
-          for (const argument of arguments_) this.inferExpression(argument);
-        });
-        this.lowering.optionalCallees.add(spanIdentity(callSpan));
-        return anyType;
-      }
-      this.typeError(`Optional call requires a function, received ${describeType(original)}`, callSpan);
-      for (const argument of arguments_) this.inferExpression(argument);
-      return unknownType;
-    }
-    // The built-in str() shares the f-string text-conversion contract: its
-    // argument is checked against the conversion whitelist instead of the
-    // declared 'any' parameter. A user binding named 'str' shadows the
-    // builtin and keeps its own declared parameter checking.
-    if (calleeExpression.kind === "IdentifierExpression" && calleeExpression.name === "str"
-      && !this.lookup("str") && arguments_.length === 1
-      && arguments_[0]!.kind !== "SpreadExpression"
-      && (argumentNames?.[0] == null || argumentNames[0] === "value")) {
-      const argument = arguments_[0]!;
-      this.requireTextConvertible(this.inferExpression(argument), argument.span, "str");
-      return stringType;
-    }
-    if (calleeExpression.kind === "IdentifierExpression" && calleeExpression.name === "Map") {
-      const collectionContext = this.contextualCollectionType(contextualType);
-      const expectedMap = collectionContext?.kind === "map" ? collectionContext : null;
-      const named = this.planNamedArguments(arguments_, argumentNames, [unknownType], ["source"], 0, callSpan);
-      if (named && !named.valid) {
-        for (const argument of arguments_) this.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument);
-        return expectedMap ?? { kind: "map", key: unknownType, value: unknownType };
-      }
-      const ordered = named?.ordered ?? arguments_;
-      if (ordered.length > 1) this.typeError(`Expected 0-1 arguments but received ${ordered.length}`, callSpan);
-      const argument = ordered[0];
-      if (!argument || (argument.kind === "IdentifierExpression" && argument.name === "\u0000omitted-named-argument")) {
-        return expectedMap ?? { kind: "map", key: unknownType, value: unknownType };
-      }
-      if (argument.kind === "ListExpression") {
-        let key = unknownType;
-        let value = unknownType;
-        for (const entry of argument.elements) {
-          if (entry.kind !== "ListExpression" || entry.elements.length !== 2 || entry.elements.some((item) => item.kind === "SpreadExpression")) {
-            this.inferExpression(entry);
-            this.typeError("Map entry construction requires each List item to contain exactly [key, value]", entry.span);
-            continue;
-          }
-          const entryKey = this.inferExpression(entry.elements[0]!, expectedMap?.key ?? unknownType);
-          const entryValue = this.inferExpression(entry.elements[1]!, expectedMap?.value ?? unknownType);
-          if (expectedMap) {
-            this.requireAssignable(entryKey, expectedMap.key, entry.elements[0]!.span);
-            this.requireAssignable(entryValue, expectedMap.value, entry.elements[1]!.span);
-          }
-          key = mergeTypes(key, entryKey);
-          value = mergeTypes(value, entryValue);
-        }
-        for (const extra of ordered.slice(1)) this.inferExpression(extra);
-        if (argument.elements.length > 0) this.rejectCollidingKeyDomain(key, argument.span, "Map key type");
-        return argument.elements.length === 0 && expectedMap ? expectedMap : { kind: "map", key, value };
-      }
-      // D68 rule 177: `Map(bag)` reads what `@iterate:` answers, so a class
-      // that iterates as a Map converts like the Map it names.
-      const source = this.iterationSource(argument, this.inferExpression(argument, expectedMap ?? unknownType));
-      for (const extra of ordered.slice(1)) this.inferExpression(extra);
-      if (source.kind === "map") return {
-        kind: "map",
-        key: source.readonlyView ? this.readonlyDataViewOf(source.key) : source.key,
-        value: source.readonlyView ? this.readonlyDataViewOf(source.value) : source.value,
-      };
-      if (source.kind === "list") {
-        const sourceElement = source.readonlyView ? this.readonlyDataViewOf(source.element) : source.element;
-        if (sourceElement.kind === "list") {
-          const entryElement = sourceElement.readonlyView ? this.readonlyDataViewOf(sourceElement.element) : sourceElement.element;
-          this.rejectCollidingKeyDomain(entryElement, argument.span, "Map key type");
-          return { kind: "map", key: entryElement, value: entryElement };
-        }
-      }
-      if (source.kind === "object") {
-        let value = unknownType;
-        for (const field of source.fields.values()) value = mergeTypes(value, source.readonlyView ? this.readonlyDataViewOf(field) : field);
-        if (expectedMap) {
-          this.requireAssignable(stringType, expectedMap.key, argument.span);
-          for (const field of source.fields.values()) {
-            this.requireAssignable(source.readonlyView ? this.readonlyDataViewOf(field) : field, expectedMap.value, argument.span);
-          }
-        }
-        return source.fields.size === 0 && expectedMap ? expectedMap : { kind: "map", key: stringType, value };
-      }
-      // The same hole one shape further out: a `type` declaration is the most
-      // ordinary record the language has, and it arrives as `named`, so
-      // `Map(pair)` was refused with a message that listed "a record" among the
-      // forms it takes. `fieldsOf` is what tells a record-shaped name from an
-      // extension host scalar or an erased generic, exactly as `Promise.all`
-      // asks it. The runtime has read ordinary records all along.
-      if (source.kind === "named") {
-        const fields = this.fieldsOf(source.identity ?? source.name);
-        if (fields) {
-          let value = unknownType;
-          const fieldType = (field: ValueType): ValueType => source.readonlyView ? this.readonlyDataViewOf(field) : field;
-          for (const field of fields.values()) value = mergeTypes(value, fieldType(field));
-          if (expectedMap) {
-            this.requireAssignable(stringType, expectedMap.key, argument.span);
-            for (const field of fields.values()) this.requireAssignable(fieldType(field), expectedMap.value, argument.span);
-          }
-          return fields.size === 0 && expectedMap ? expectedMap : { kind: "map", key: stringType, value };
-        }
-      }
-      // A `Record<V>` is the dynamic-key record, and `__velarCreateMap` has
-      // always read it. Only the structural `object` shape was accepted here,
-      // so the diagnostic below listed "a record" among the forms it takes and
-      // then refused one. Keys of a record are strings by construction.
-      if (source.kind === "record") {
-        const value = source.readonlyView ? this.readonlyDataViewOf(source.value) : source.value;
-        if (expectedMap) {
-          this.requireAssignable(stringType, expectedMap.key, argument.span);
-          this.requireAssignable(value, expectedMap.value, argument.span);
-        }
-        return { kind: "map", key: stringType, value };
-      }
-      if (source.kind === "any") return { kind: "map", key: anyType, value: anyType };
-      this.typeError(`Map construction requires a Map, a List of [key, value] Lists, or a record, received ${describeType(source)}${this.iterationGuidance(source)}`, argument.span);
-      return { kind: "map", key: unknownType, value: unknownType };
-    }
-    if (calleeExpression.kind === "IdentifierExpression" && calleeExpression.name === "Set") {
-      const collectionContext = this.contextualCollectionType(contextualType);
-      const named = this.planNamedArguments(arguments_, argumentNames, [unknownType], ["source"], 0, callSpan);
-      if (named && !named.valid) {
-        for (const argument of arguments_) this.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument);
-        return collectionContext?.kind === "set" ? collectionContext : { kind: "set", element: unknownType };
-      }
-      const ordered = named?.ordered ?? arguments_;
-      if (ordered.length > 1) this.typeError(`Expected 0-1 arguments but received ${ordered.length}`, callSpan);
-      const argument = ordered[0];
-      if (!argument || (argument.kind === "IdentifierExpression" && argument.name === "\u0000omitted-named-argument")) {
-        return collectionContext?.kind === "set" ? collectionContext : { kind: "set", element: unknownType };
-      }
-      // D68 rule 177: `Set(bag)` reads the same contract every other consumer
-      // reads, so the eight sites never disagree about what a class iterates as.
-      const source = this.iterationSource(
-        argument,
-        this.inferExpression(argument, collectionContext?.kind === "set" ? { kind: "list", element: collectionContext.element } : unknownType),
-      );
-      for (const extra of ordered.slice(1)) this.inferExpression(extra);
-      if (source.kind === "list" || source.kind === "set") {
-        const element = source.readonlyView ? this.readonlyDataViewOf(source.element) : source.element;
-        this.rejectCollidingKeyDomain(element, argument.span, "Set element type");
-        return { kind: "set", element };
-      }
-      if (source.kind === "any") return { kind: "set", element: anyType };
-      this.typeError(`Set construction requires a List or Set, received ${describeType(source)}${this.iterationGuidance(source)}`, argument.span);
-      return { kind: "set", element: unknownType };
-    }
 
-    if (calleeExpression.kind === "MemberExpression" && calleeExpression.object.kind !== "SuperExpression") {
-      // The collection/primitive call paths infer the receiver before
-      // inferMember can sanction it, so a class-name receiver (`P.make(...)`)
-      // is sanctioned here first (D45 rule 75).
-      this.memberAccessReceivers.add(spanIdentity(calleeExpression.object.span));
-      this.recordMemberAccessProperty(calleeExpression);
-      const recordFromResult = this.inferRecordFromCall(calleeExpression, arguments_, argumentNames, callSpan);
-      if (recordFromResult) return recordFromResult;
-      const recordMapFromResult = this.inferRecordMapFromCall(calleeExpression, arguments_, argumentNames, callSpan);
-      if (recordMapFromResult) return recordMapFromResult;
-      const primitiveResult = this.inferPrimitiveCall(calleeExpression, arguments_, argumentNames, callSpan);
-      if (primitiveResult) return primitiveResult;
-      const collectionResult = this.inferCollectionCall(calleeExpression, arguments_, argumentNames, callSpan);
-      if (collectionResult) {
-        this.invalidateMutableCollectionCallReceiver(calleeExpression);
-        return collectionResult;
-      }
-    }
 
-    // A direct call is a sanctioned class-name position (D45 rule 75), and a
-    // member callee is a method call rather than a method-value read (D44
-    // rule 74). Both facts are recorded before the callee is inferred.
-    this.callExpressionCallees.add(spanIdentity(calleeExpression.span));
-    const diagnosticsBeforeCallee = this.diagnostics.length;
-    const inferredCallee = this.inferExpression(calleeExpression);
-    const callee = this.expandAliases(inferredCallee);
-    const calleeAlreadyDiagnosed = this.diagnostics.length > diagnosticsBeforeCallee;
-    if (callee.kind === "classConstructor") {
-      this.lowering.constructorCalls.add(spanIdentity(callSpan));
-      const info = this.classInfo(callee.identity ?? callee.name) ?? this.classInfo(callee.name);
-      if (info?.abstract) this.typeError(`Cannot instantiate abstract class '${callee.name}'`, callSpan);
-      // A field initializer runs on every construction, so constructing the
-      // declaring class (or one of its subclasses, whose construction runs
-      // these same initializers) can never finish — it overflows the stack at
-      // the first construction. Arrows inside the initializer stay legal:
-      // they defer the construction (classFieldInitializerDepth is zeroed).
-      if (this.classFieldInitializerDepth > 0 && this.instanceFieldInitializerDepth > 0 && this.currentClass
-        && (callee.name === this.currentClass || this.isSubclassOf(callee.name, this.currentClass))) {
-        this.typeError(
-          `Field initializer constructs '${callee.name}' on every '${this.currentClass}' construction and can never finish; assign it in the constructor from a parameter, or create it lazily`,
-          callSpan,
-        );
-      }
-      // BRG-U6: extern constructors are not inherited (a derived extern
-      // class without its own `constructor(...)` takes zero arguments —
-      // opposite of JavaScript), so calling one with arguments teaches the
-      // redeclaration instead of a bare arity mismatch.
-      if (info && callee.identity?.startsWith("js:") === true && info.base !== null
-        && info.parameters.length === 0 && info.requiredParameters === 0 && !info.constructorRest
-        && arguments_.length > 0 && !argumentNames?.some((name) => name !== null)) {
-        for (const argument of arguments_) this.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument);
-        this.typeError(
-          `Extern class '${callee.name}' declares no constructor, and extern constructors are not inherited from the base class; redeclare 'constructor(...)' on '${callee.name}' with the base signature`,
-          callSpan,
-        );
-        return {
-          kind: "class",
-          name: callee.name,
-          ...(callee.identity ? { identity: callee.identity } : {}),
-        };
-      }
-      // D55 rule 120 layer two: constructing a generic class is a generic call
-      // whose result pattern is the class at its own parameters. The
-      // constructor's arguments solve what they can (phases 1 and 2) and the
-      // position solves the rest (phase 3, D114 item ①) — the same three phases
-      // a generic `def` goes through, because it is the same question.
-      if (info?.typeParameterNames?.length) {
-        return this.inferGenericConstruction(
-          callee,
-          info,
-          arguments_,
-          argumentNames,
-          callSpan,
-          contextualType,
-          // `Stack<number>()` already told the author where the arguments go
-          // (VEL2031, D55 rule 123); naming the missing solution here would
-          // report one mistake twice and contradict the fix already offered.
-          this.typeArgumentsRemovedCalls.has(spanIdentity(callSpan)),
-        );
-      }
-      this.checkArguments(arguments_, info?.parameters ?? [], callSpan, info?.requiredParameters, info?.constructorRest, argumentNames, info?.parameterNames);
-      return {
-        kind: "class",
-        name: callee.name,
-        ...(callee.identity ? { identity: callee.identity } : {}),
-      };
-    }
-    if (callee.kind === "intrinsic") {
-      const result = this.inferIntrinsicCall(callee, arguments_, argumentNames, callSpan);
-      return result;
-    }
-    if (callee.kind === "extension") {
-      const extensionResult = this.inferExtensionCall(callee, arguments_, argumentNames, callSpan);
-      if (extensionResult) return extensionResult;
-    }
-    if (callee.kind === "function" || callee.kind === "action") {
-      if (callee.typeParameterNames?.length) {
-        const result = this.inferGenericCall(callee, arguments_, argumentNames, callSpan, contextualType);
-        this.reportPromiseCarrierHazard(result, callSpan);
-        if (result.kind === "optional") this.lowering.optionalCalls.add(spanIdentity(callSpan));
-        return result;
-      }
-      if (calleeExpression.kind === "MemberExpression" && calleeExpression.property === "parse"
-        && arguments_[0]?.kind === "ObjectExpression" && callee.result.kind === "named") {
-        this.recordRuntimeObjectShape(arguments_[0], callee.result);
-      }
-      const diagnosticsBeforeArguments = this.diagnostics.length;
-      this.checkArguments(arguments_, callee.parameters, callSpan, callee.requiredParameters, callee.rest, argumentNames, callee.parameterNames);
-      this.rejectDisjointEnumValidatorProbe(calleeExpression, arguments_);
-      // One mistake, one diagnostic: the matcher gate speaks only when the
-      // argument itself checked out, because an unassignable comparand has
-      // already been named in the words the author needs.
-      if (this.diagnostics.length === diagnosticsBeforeArguments) {
-        this.checkTestMatcherComparand(calleeExpression, arguments_);
-      }
-      this.reportPromiseCarrierHazard(callee.result, callSpan);
-      if (callee.result.kind === "optional") this.lowering.optionalCalls.add(spanIdentity(callSpan));
-      return callee.result;
-    }
-    if (callee.kind === "optional" && (callee.inner.kind === "function" || callee.inner.kind === "action")) {
-      const inner = callee.inner;
-      const result = this.withTemporaryNarrowings(this.optionalExecutionNarrowings(calleeExpression), callSpan, () => {
-        if (inner.typeParameterNames?.length) {
-          return this.inferGenericCall(inner, arguments_, argumentNames, callSpan, nonOptional(this.expandAliases(contextualType)));
-        }
-        this.checkArguments(arguments_, inner.parameters, callSpan, inner.requiredParameters, inner.rest, argumentNames, inner.parameterNames);
-        return inner.result;
-      });
-      this.reportPromiseCarrierHazard(result, callSpan);
-      if (!continuesOptionalChain(calleeExpression)) {
-        this.typeError("Use a presence check or an optional access chain before calling an optional function", calleeExpression.span);
-      }
-      this.lowering.optionalCalls.add(spanIdentity(callSpan));
-      this.lowering.optionalCallees.add(spanIdentity(callSpan));
-      return optionalOf(result);
-    }
-    if (callee.kind === "any") {
-      if (hasNamed) this.typeError("Named arguments require a statically known callable signature", callSpan);
-      for (const argument of arguments_) {
-        this.inferExpression(argument);
-      }
-      return anyType;
-    }
-    if (callee.kind === "unknown") {
-      if (isInvalidType(callee)) return invalidType;
-      if (!calleeAlreadyDiagnosed) {
-        if (hasNamed) this.typeError("Named arguments require a statically known callable signature", callSpan);
-        for (const argument of arguments_) {
-          this.inferExpression(argument);
-        }
-        // D90 R17: a call needs a declared signature — `Type.parse` validates
-        // data, so the way in for a callable is the extern contract.
-        const receiver = calleeExpression ? this.boundaryReceiverText(calleeExpression) : null;
-        this.typeError(
-          `Cannot call an unknown JavaScript value without a declaration or validation; declare the signature — an 'extern module' contract or a contracted 'extern js' block gives ${receiver ? `'${receiver}'` : "the value"} a checked type — or validate the data it came from with 'Type.parse' first`,
-          callSpan,
-        );
-      }
-      return unknownType;
-    }
-    if (callee.kind === "typeObject") {
-      for (const argument of arguments_) {
-        this.inferExpression(argument);
-      }
-      this.typeError(
-        `Use a record literal '{field: value, ...}' to build a '${callee.name}' value; a 'type' declares a shape, not a constructor`,
-        callSpan,
-      );
-      return this.invalidDeclaredTypes.has(callee.name)
-        ? invalidType
-        : this.typeAliases.get(callee.name) ?? { kind: "named", name: callee.name };
-    }
-    for (const argument of arguments_) {
-      this.inferExpression(argument);
-    }
-    this.typeError(`${describeType(callee)} is not callable`, callSpan);
-    return unknownType;
-  }
-
-  private javaScriptBoundaryCallee(expression: Expression): boolean {
-    if (expression.kind === "IdentifierExpression") {
-      if (this.javaScriptBindings.has(expression.name)) return true;
-      const type = this.lookup(expression.name)?.type;
-      return (type?.kind === "class" || type?.kind === "classConstructor") && type.identity?.startsWith("js:") === true;
-    }
-    if (expression.kind !== "MemberExpression") return false;
-    if (this.javaScriptBoundaryCallee(expression.object)) return true;
-    const type = expression.object.kind === "IdentifierExpression" ? this.lookup(expression.object.name)?.type : null;
-    return (type?.kind === "class" || type?.kind === "classConstructor") && type.identity?.startsWith("js:") === true;
-  }
-
-  // Three-phase call-site unification for generic callables: phase 1 infers
-  // non-arrow arguments and collects bindings; phase 2 gives arrows contextual
-  // types with the phase-1 substitution applied, then unifies their results;
-  // phase 3 (D114 item ①) matches the declared result against the type the
-  // position expects and seeds whatever the arguments left open. Type
-  // parameters no phase solved substitute unknown.
-  private inferGenericCall(
-    callee: Extract<ValueType, { kind: "function" | "action" }>,
-    arguments_: readonly Expression[],
-    argumentNames: readonly (string | null)[] | undefined,
-    callSpan: Span,
-    contextualType: ValueType = unknownType,
-    unsolved?: Set<number>,
-  ): ValueType {
-    const parameterCount = callee.typeParameterNames?.length ?? 0;
-    const bindings: (ValueType | null)[] = Array.from({ length: parameterCount }, () => null);
-    // D55 rule 120 layer two: a method of a generic class carries the class's
-    // parameters above its own, at indexes the published list does not reach.
-    // Those are fixed by the receiver, never solved by the call, so they are
-    // bound to themselves before unification and restored after it — otherwise
-    // `self.mapTo(f)` would let an argument redefine the class's own `T`.
-    const rigid = new Map<number, ValueType>();
-    const noteRigid = (type: ValueType): void => {
-      typeContainsParameter(type, (parameter) => {
-        if (parameter.index >= parameterCount) rigid.set(parameter.index, parameter);
-        return false;
-      });
-    };
-    for (const parameter of callee.parameters) noteRigid(parameter);
-    if (callee.rest) noteRigid(callee.rest);
-    noteRigid(callee.result);
-    for (const [index, type] of rigid) bindings[index] = type;
-    // NEW-D3: parameters an `unknown` argument reached are solved-to-unknown,
-    // which no bound admits; they are tracked apart from `bindings` so that
-    // `unknown` still never poisons a merge with a concrete argument.
-    const unknownParameters = new Set<number>();
-    const fieldsOf = (identity: string): ReadonlyMap<string, ValueType> | null => this.fieldsOf(identity);
-    // A solved type argument is canonicalized the same way an annotation's is;
-    // see the `parameter` branch of `unifyInto` for why the `Type<T>` path is
-    // the one that would otherwise carry an unexpanded alias into `Channel<T>`.
-    const expandAliases = (type: ValueType): ValueType => this.expandAliases(type);
-    // D55 rule 121: substituting into `Box<T>` produces an instantiation this
-    // module may never have written down, and it still has to have a field
-    // table — otherwise `def unwrap<T>(box: Box<T>)` would solve T correctly
-    // and then fail to accept the very record that solved it.
-    const substitute = (declared: ValueType): ValueType => {
-      const substituted = substituteTypeParameters(declared, bindings);
-      this.noteGenericApplications(substituted);
-      return substituted;
-    };
-    const solvedContext = (declared: ValueType): ValueType =>
-      typeContainsParameter(declared, (parameter) => bindings[parameter.index] == null) ? unknownType : substitute(declared);
-
-    interface PlannedArgument {
-      readonly value: Expression;
-      readonly declared: ValueType | null;
-      readonly errorSpan: Span;
-      readonly spreadList: boolean;
-    }
-    const planned: PlannedArgument[] = [];
-    const plan = this.planNamedArguments(arguments_, argumentNames, callee.parameters, callee.parameterNames, callee.requiredParameters, callSpan, callee.rest);
-    if (plan) {
-      for (const [source, target] of plan.targets.entries()) {
-        const argument = arguments_[source]!;
-        const value = argument.kind === "SpreadExpression" ? argument.value : argument;
-        planned.push({ value, declared: target === null ? null : callee.parameters[target] ?? callee.rest ?? null, errorSpan: argument.span, spreadList: false });
-      }
-      if (!plan.valid) {
-        for (const item of planned) this.inferExpression(item.value, item.declared ? solvedContext(item.declared) : unknownType);
-        return substitute(callee.result);
-      }
-    } else {
-      const hasSpread = arguments_.some((argument) => argument.kind === "SpreadExpression");
-      if (!hasSpread && (arguments_.length < callee.requiredParameters || (!callee.rest && arguments_.length > callee.parameters.length))) {
-        const expected = callee.rest
-          ? `at least ${callee.requiredParameters}`
-          : callee.requiredParameters === callee.parameters.length ? String(callee.parameters.length) : `${callee.requiredParameters}-${callee.parameters.length}`;
-        this.typeError(`Expected ${expected} ${argumentNoun(expected)} but received ${arguments_.length}`, callSpan);
-      }
-      let fixedIndex = 0;
-      let sawSpread = false;
-      for (const argument of arguments_) {
-        if (argument.kind === "SpreadExpression") {
-          sawSpread = true;
-          if (!callee.rest) this.typeError("Call spread requires a callable with a rest parameter", argument.span);
-          else if (fixedIndex < callee.parameters.length) {
-            this.typeError(`Provide all ${callee.parameters.length} fixed argument${callee.parameters.length === 1 ? "" : "s"} before a call spread`, argument.span);
-          }
-          planned.push({ value: argument.value, declared: callee.rest ?? null, errorSpan: argument.span, spreadList: true });
-          fixedIndex = callee.parameters.length;
-          continue;
-        }
-        const declared = sawSpread ? callee.rest ?? null : callee.parameters[fixedIndex] ?? callee.rest ?? null;
-        planned.push({ value: argument, declared, errorSpan: argument.span, spreadList: false });
-        if (!sawSpread && fixedIndex < callee.parameters.length) fixedIndex += 1;
-      }
-    }
-
-    const actuals = new Map<PlannedArgument, ValueType>();
-    const deferredArrows: PlannedArgument[] = [];
-    for (const item of planned) {
-      if (item.value.kind === "ArrowFunctionExpression") {
-        deferredArrows.push(item);
-        continue;
-      }
-      const context = item.declared
-        ? solvedContext(item.spreadList ? { kind: "list", element: item.declared } : item.declared)
-        : unknownType;
-      // D68 rule 177: a call spread consumes an iterable, so it reads the
-      // `@iterate:` answer — `f(...bag)` is `f(...bag.items)`, refusal included.
-      const actual = item.spreadList
-        ? this.iterationSource(item.value, this.inferExpression(item.value, context))
-        : this.inferExpression(item.value, context);
-      actuals.set(item, actual);
-      if (!item.declared) continue;
-      if (item.spreadList) {
-        const expanded = this.expandAliases(actual);
-        if (expanded.kind === "list") unifyTypeParameters(item.declared, expanded.element, bindings, fieldsOf, unknownParameters, expandAliases);
-      } else {
-        unifyTypeParameters(item.declared, actual, bindings, fieldsOf, unknownParameters, expandAliases);
-      }
-    }
-    for (const item of deferredArrows) {
-      const context = item.declared ? substitute(item.declared) : unknownType;
-      const actual = this.inferExpression(item.value, context);
-      actuals.set(item, actual);
-      if (item.declared) unifyTypeParameters(item.declared, actual, bindings, fieldsOf, unknownParameters, expandAliases);
-    }
-    for (const [index, type] of rigid) bindings[index] = type;
-    const seeded = this.seedTypeParametersFromPosition(callee.result, bindings, unknownParameters, contextualType, fieldsOf, expandAliases);
-    for (let index = 0; index < parameterCount; index += 1) {
-      if (bindings[index] == null && !unknownParameters.has(index)) unsolved?.add(index);
-    }
-    this.reportGenericBoundViolations(callee, bindings, planned, callSpan, unknownParameters, seeded);
-    for (const item of planned) {
-      const actual = actuals.get(item) ?? unknownType;
-      if (!item.declared) continue;
-      if (item.spreadList) {
-        const expanded = this.expandAliases(actual);
-        if (expanded.kind === "list") this.requireAssignable(expanded.element, substitute(item.declared), item.errorSpan);
-        else if (expanded.kind !== "any") this.typeError(`Call spread requires a List, received ${describeType(actual)}${this.iterationGuidance(actual)}`, item.errorSpan);
-        continue;
-      }
-      this.requireAssignable(actual, substitute(item.declared), item.errorSpan);
-    }
-    return substitute(callee.result);
-  }
-
-  /**
-   * D114 item ①, the ruling D77 rule 194 left open: a type parameter the
-   * arguments leave open is solved from the position the call is written in.
-   * The position is the one `contextualType` already carries — the same
-   * channel section 8 reads to settle an empty `[]`, `Set()`, or `Map()` — so
-   * "what is a contextual type" has one definition and cannot drift into
-   * `const names: List<string> = []` passing while `= empty()` does not.
-   *
-   * Two disciplines make this seeding and never a guess:
-   *
-   * - It never overrides. Candidates are unified into a separate table and
-   *   copied back only where the arguments solved nothing, so a disagreement
-   *   between an argument and the annotation stays the ordinary mismatch the
-   *   position already reported (D114 item ①), not a new diagnostic. A
-   *   parameter only an `unknown` argument reached counts as reached: its
-   *   bound violation is the argument's, and seeding over it would move that
-   *   report to the position and change its words.
-   * - It matches structurally, through `unifyTypeParameters` — the same walk
-   *   an argument takes, so the shapes a type argument can be read out of are
-   *   one list rather than two: a container's element, a Map's key and value,
-   *   a Record's or a Promise's value, an optional's inner type, a callable's
-   *   parameters and result, one generic record application's arguments
-   *   against the same declaration, and so on down. A shape that walk does not
-   *   pair leaves the parameter open, and phase 4 substitutes `unknown` as
-   *   before.
-   *
-   * The `readonly` qualifier belongs to the position rather than to the type
-   * argument: `readonly List<string>` seeds `T = string`, and a bare `T` in
-   * result position takes the mutable spelling of the expected type, which is
-   * the only one a type argument can be written with. An optional annotation
-   * is read through for the same reason section 8 reads it through
-   * (`contextualCollectionType` recurses on `optional`, so `const tags:
-   * Set<string>? = Set()` keeps its element contract): a result that is itself
-   * optional pairs with it directly, and any other result shape matches the
-   * type the annotation holds.
-   */
-  private seedTypeParametersFromPosition(
-    result: ValueType,
-    bindings: (ValueType | null)[],
-    unknownParameters: ReadonlySet<number>,
-    contextualType: ValueType,
-    fieldsOf: (identity: string) => ReadonlyMap<string, ValueType> | null,
-    expandAliases: (type: ValueType) => ValueType,
-  ): ReadonlySet<number> {
-    const seeded = new Set<number>();
-    const open = (parameter: Extract<ValueType, { kind: "parameter" }>): boolean =>
-      bindings[parameter.index] == null && !unknownParameters.has(parameter.index);
-    if (!typeContainsParameter(result, open)) return seeded;
-    const expected = expandAliases(mutableViewOf(contextualType));
-    // `unknown` and `any` are the two positions that say nothing about the
-    // value they receive, which is why section 8 refuses to settle an empty
-    // collection at either; a type argument reads them the same way.
-    if (expected.kind === "unknown" || expected.kind === "any" || isInvalidType(expected)) return seeded;
-    const match = (against: ValueType, pattern: ValueType = result): (ValueType | null)[] => {
-      const table: (ValueType | null)[] = bindings.map(() => null);
-      unifyTypeParameters(pattern, against, table, fieldsOf, undefined, expandAliases);
-      return table;
-    };
-    let candidates = match(expected);
-    if (expected.kind === "optional" && candidates.every((candidate) => candidate === null)) {
-      candidates = match(expandAliases(expected.inner));
-    }
-    // D55 rule 120 layer two: the position may name a *base* of what the call
-    // produces — `const numbers: Stack<number> = Boxes()`. The pattern matched
-    // against it is then this result's own ancestor that applies the
-    // declaration the position named, with the call's parameters still in it.
-    if (candidates.every((candidate) => candidate === null)) {
-      const ancestor = this.classPatternForPosition(result, expected.kind === "optional" ? expandAliases(expected.inner) : expected);
-      if (ancestor) candidates = match(expected.kind === "optional" ? expandAliases(expected.inner) : expected, ancestor);
-    }
-    for (const [index, candidate] of candidates.entries()) {
-      if (!candidate || bindings[index] != null || unknownParameters.has(index)) continue;
-      if (candidate.kind === "unknown" || isInvalidType(candidate)) continue;
-      bindings[index] = candidate;
-      seeded.add(index);
-    }
-    return seeded;
-  }
-
-  /**
-   * The ancestor of a class result that applies the declaration a position
-   * named, with this call's own type parameters carried through the chain. A
-   * class is invariant in its arguments (D77 rule 194 item 1), so this walks
-   * the *declaration* chain only — it never widens an argument.
-   */
-  private classPatternForPosition(result: ValueType, expected: ValueType): ValueType | null {
-    if (result.kind !== "class" || !result.application) return null;
-    if (expected.kind !== "class") return null;
-    const target = expected.application?.declaration ?? expected.identity ?? expected.name;
-    let application: GenericApplication = result.application;
-    const seen = new Set<string>();
-    while (!seen.has(application.declaration)) {
-      if (application.declaration === target || application.name === target) {
-        return classApplicationType(application.declaration, application.name, application.arguments);
-      }
-      seen.add(application.declaration);
-      const template = this.classes.get(application.declaration) ?? this.classes.get(application.name);
-      const base = template?.baseApplication;
-      if (!base) return null;
-      const names = template?.typeParameterNames ?? [];
-      const table = names.map((_, index) => application.arguments[index] ?? unknownType);
-      application = { ...base, arguments: base.arguments.map((argument) => substituteTypeParameters(argument, table)) };
-    }
-    return null;
-  }
-
-  /**
-   * D41 item 61 check site 1: once the two-phase inference has solved the
-   * bindings, every bound is verified before the ordinary assignability loop
-   * runs, so a rejected type argument is reported once, at its cause.
-   */
-  private reportGenericBoundViolations(
-    callee: Extract<ValueType, { kind: "function" | "action" | "intrinsic" }>,
-    bindings: readonly (ValueType | null)[],
-    planned: readonly { readonly declared: ValueType | null; readonly errorSpan: Span }[],
-    callSpan: Span,
-    unknownParameters?: ReadonlySet<number>,
-    seeded?: ReadonlySet<number>,
-  ): void {
-    const violations = collectGenericBoundViolations(callee, bindings, (type, bound) => this.satisfiesBound(type, bound), unknownParameters);
-    for (const violation of violations) {
-      // "Report at the cause" (D31 item 27). The one shape it cannot serve is
-      // a parameter several arguments merged into: there is no single cause,
-      // so the call itself reports and names the type that was solved.
-      // A seeded parameter (D114 item ①) has no argument cause at all — the
-      // position solved it — so it reports at the call and names the solver
-      // it actually had. Same sentence, true subject.
-      const causes = seeded?.has(violation.index)
-        ? []
-        : planned.filter((item) => item.declared !== null
-          && typeContainsParameter(item.declared, (parameter) => parameter.index === violation.index));
-      const solver = seeded?.has(violation.index) ? "the expected type solves" : "the arguments solve";
-      const guidance = boundVocabularyGuidance[violation.bound];
-      this.diagnostics.push(causes.length === 1
-        ? diagnostic(
-          "VEL4031",
-          `Type parameter '${violation.name}' is bound by ${violation.bound}, so this argument cannot be ${describeType(violation.solved)}; ${guidance}`,
-          causes[0]!.errorSpan,
-        )
-        : diagnostic(
-          "VEL4031",
-          `Type parameter '${violation.name}' is bound by ${violation.bound} but ${solver} it to ${describeType(violation.solved)}; ${guidance}`,
-          callSpan,
-        ));
-    }
-  }
 
   /**
    * D41 item 61 check site 2: a generic callable used as a value is solved and
@@ -9466,434 +8441,6 @@ export class Analyzer implements TypeEnvironment {
     return true;
   }
 
-  private inferIntrinsicCall(
-    intrinsic: Extract<ValueType, { kind: "intrinsic" }>,
-    sourceArguments: readonly Expression[],
-    argumentNames: readonly (string | null)[] | undefined,
-    callSpan: Span,
-  ): ValueType {
-    if (intrinsic.name === "collections.range") {
-      return this.inferRangeCall(intrinsic, sourceArguments, argumentNames, callSpan);
-    }
-    if (intrinsic.name === "core.equals") {
-      return this.inferEqualsCall(intrinsic, sourceArguments, argumentNames, callSpan);
-    }
-    let arguments_ = sourceArguments;
-    let namedPreanalyzed = false;
-    const deferredNamedArrows = new Set<Expression>();
-    const named = this.planNamedArguments(
-      sourceArguments,
-      argumentNames,
-      intrinsic.parameters,
-      intrinsic.parameterNames,
-      intrinsic.requiredParameters,
-      callSpan,
-      intrinsic.rest,
-    );
-    if (named) {
-      for (const [source, target] of named.targets.entries()) {
-        const argument = sourceArguments[source]!;
-        const value = argument.kind === "SpreadExpression" ? argument.value : argument;
-        if (value.kind === "ArrowFunctionExpression") deferredNamedArrows.add(value);
-        else {
-          const declared = target === null ? unknownType : intrinsic.parameters[target] ?? intrinsic.rest ?? unknownType;
-          // D90 R17: an accept-anything parameter is spelled `List<unknown>`
-          // in the vocabulary tables, and that spelling carries no element
-          // information — preanalyzing a literal against it would launder
-          // `[1, 2]` into a list the handler can read no numbers from, so the
-          // literal keeps its own inferred element and the handler's own
-          // expected type does the checking.
-          const context = declared.kind === "list" && declared.element.kind === "unknown" ? unknownType : declared;
-          this.inferExpression(value, context);
-        }
-      }
-      if (!named.valid) {
-        for (const argument of deferredNamedArrows) this.inferExpression(argument);
-        return intrinsic.result;
-      }
-      arguments_ = named.ordered;
-      namedPreanalyzed = true;
-    }
-    const omitted = (argument: Expression | undefined): boolean => argument?.kind === "IdentifierExpression" && argument.name === "\u0000omitted-named-argument";
-    const argumentAt = (index: number): Expression | null => {
-      const argument = arguments_[index];
-      return !argument || omitted(argument) ? null : argument;
-    };
-    const suppliedCount = arguments_.reduce((count, argument) => count + (omitted(argument) ? 0 : 1), 0);
-    const arity = (minimum = intrinsic.requiredParameters, maximum = intrinsic.parameters.length): void => {
-      if (suppliedCount < minimum || suppliedCount > maximum) {
-        const expected = maximum === Number.POSITIVE_INFINITY
-          ? `at least ${minimum}`
-          : minimum === maximum ? String(minimum) : `${minimum}-${maximum}`;
-        this.typeError(`Expected ${expected} ${argumentNoun(expected)} but received ${suppliedCount}`, callSpan);
-      }
-    };
-    const inferAt = (index: number, expected: ValueType = unknownType): ValueType => {
-      const argument = argumentAt(index);
-      if (!argument) return unknownType;
-      const deferred = deferredNamedArrows.has(argument);
-      const actual = namedPreanalyzed && !deferred
-        ? this.inferredExpressionType(argument)
-        : this.inferExpression(argument, expected);
-      if (deferred) deferredNamedArrows.delete(argument);
-      if (expected.kind !== "unknown") this.requireAssignable(actual, expected, argument.span);
-      return actual;
-    };
-    const arrayAt = (index: number): { readonly type: ValueType; readonly element: ValueType } => {
-      const type = inferAt(index);
-      if (type.kind === "list") return { type, element: type.element };
-      if (type.kind === "any") return { type, element: anyType };
-      const argument = argumentAt(index);
-      if (argument) this.typeError(`Expected a List, received ${describeType(type)}`, argument.span);
-      return { type, element: unknownType };
-    };
-    const callbackAt = (index: number, parameters: readonly ValueType[], result: ValueType): ValueType => {
-      const expected: ValueType = { kind: "function", parameters, requiredParameters: parameters.length, result };
-      return this.concreteCallableFor(inferAt(index, expected), expected, argumentAt(index)?.span);
-    };
-    const callbackResult = (type: ValueType): ValueType => type.kind === "function" || type.kind === "action" || type.kind === "intrinsic" ? type.result : type.kind === "any" ? anyType : unknownType;
-    const promiseValue = (type: ValueType, index: number): ValueType => {
-      if (type.kind === "promise") return type.value;
-      if (type.kind === "any") return anyType;
-      const argument = argumentAt(index);
-      if (argument) this.typeError(`Expected a Promise, received ${describeType(type)}`, argument.span);
-      return unknownType;
-    };
-    const runtimeTypeAt = (index: number): ValueType => {
-      const type = inferAt(index);
-      if (type.kind === "typeObject") return this.runtimeTypeObjectValue(type);
-      if (type.kind === "enumObject") return { kind: "enum", name: type.name, identity: type.identity };
-      if (type.kind === "runtimeType") return type.value;
-      if (type.kind === "any") return anyType;
-      const argument = argumentAt(index);
-      if (argument) {
-        this.typeError(
-          "Runtime parsing requires a VelarScript runtime type: pass a declared type, enum, or alias name — 'type Saved = List<Item>' makes 'Saved' one. A primitive spelling ('string') and a generic spelling ('List<Item>') are types, not values",
-          argument.span,
-        );
-      }
-      return unknownType;
-    };
-
-    for (const extension of this.analysisExtensions) {
-      const result = extension.inferIntrinsic?.({
-        intrinsic,
-        argumentAt,
-        callSpan,
-        arity,
-        inferAt,
-        callbackAt,
-        runtimeTypeAt,
-        typeError: (message, errorSpan) => this.typeError(message, errorSpan),
-        isAssignable: (actual, expected) => isAssignable(actual, expected, this),
-        expandAliases: (type) => this.expandAliases(type),
-        jsonSerializable: (type) => this.jsonSerializable(type),
-        isHttpFormBody: (type) => this.isHttpFormBody(type),
-        declaredFieldsOf: (name) => this.namedTypes.get(name) ?? null,
-        formReadField: (name, type, fieldSpan) => this.formReadField(name, type, fieldSpan),
-        recordFormRead: (sourceSpan, fields) => this.lowering.formReads.set(spanIdentity(sourceSpan), fields),
-      });
-      if (result) return result;
-    }
-
-    switch (intrinsic.name) {
-      case "json.parse": {
-        arity(1, 2);
-        inferAt(0, stringType);
-        return argumentAt(1) ? runtimeTypeAt(1) : unknownType;
-      }
-      case "json.tryParse": {
-        arity(1, 3);
-        inferAt(0, stringType);
-        const parsed = argumentAt(1) ? runtimeTypeAt(1) : unknownType;
-        if (argumentAt(2)) {
-          inferAt(2, parsed);
-          return parsed;
-        }
-        return optionalOf(parsed);
-      }
-      case "json.stringify":
-      case "json.stableStringify": {
-        arity(1, 2);
-        const value = inferAt(0);
-        const serializable = this.jsonSerializable(value);
-        const argument = argumentAt(0);
-        if (serializable === false && argument) {
-          this.typeError(`JSON accepts only records, Lists, enums, primitives, and optionals; received ${describeType(value)}`, argument.span);
-        }
-        inferAt(1, { kind: "union", members: [boolType, numberType] });
-        return stringType;
-      }
-      case "json.clone": {
-        arity(1, 2);
-        const original = inferAt(0);
-        const argument = argumentAt(0);
-        if (this.jsonSerializable(original) === false && argument) {
-          this.typeError(`JSON accepts only records, Lists, enums, primitives, and optionals; received ${describeType(original)}`, argument.span);
-        }
-        return argumentAt(1) ? runtimeTypeAt(1) : original;
-      }
-      case "runtime.parseAsync": {
-        arity();
-        const parsed = runtimeTypeAt(0);
-        for (let index = 1; index < intrinsic.parameters.length; index += 1) {
-          inferAt(index, intrinsic.parameters[index]);
-        }
-        this.reportPromiseResolutionHazard(parsed, argumentAt(0)?.span ?? callSpan);
-        return { kind: "promise", value: parsed };
-      }
-      case "async.all":
-      case "async.race": {
-        arity(1, 1);
-        const argument = argumentAt(0);
-        const input = inferAt(0);
-        const unwrap = (source: ValueType): ValueType | null => {
-          const expanded = this.expandAliases(source);
-          if (expanded.kind === "promise") return expanded.value;
-          if (expanded.kind === "any") return anyType;
-          if (expanded.kind === "union") {
-            const members = expanded.members.map(unwrap);
-            return members.every((member): member is ValueType => member !== null) ? unionOf(members) : null;
-          }
-          return null;
-        };
-        if (intrinsic.name === "async.all" && (input.kind === "object" || input.kind === "record"
-          || input.kind === "named" && this.fieldsOf(input.identity ?? input.name) !== null)) {
-          if (input.kind === "record") {
-            const resolved = unwrap(input.value);
-            if (!resolved) this.typeError(`Promise.all requires every record field to be a Promise, received ${describeType(input)}`, argument?.span ?? callSpan);
-            return { kind: "promise", value: { kind: "record", value: resolved ?? unknownType } };
-          }
-          const fields = input.kind === "object" ? input.fields : this.fieldsOf(input.identity ?? input.name) ?? new Map();
-          const output = new Map<string, ValueType>();
-          for (const [name, field] of fields) {
-            const resolved = unwrap(field);
-            if (!resolved) this.typeError(`Promise.all record field '${name}' must be a Promise, received ${describeType(field)}`, argument?.span ?? callSpan);
-            output.set(name, resolved ?? unknownType);
-          }
-          return { kind: "promise", value: { kind: "object", fields: output } };
-        }
-        if (input.kind !== "list" && input.kind !== "any") {
-          this.typeError(`Expected a List of Promises${intrinsic.name === "async.all" ? " or a record of Promises" : ""}, received ${describeType(input)}`, argument?.span ?? callSpan);
-          return { kind: "promise", value: intrinsic.name === "async.all" ? { kind: "list", element: unknownType } : unknownType };
-        }
-        const value = input.kind === "list" ? input.element : anyType;
-        const resolved = unwrap(value);
-        if (!resolved) this.typeError(`Expected a List of Promises, received List<${describeType(value)}>`, argument?.span ?? callSpan);
-        if (intrinsic.name === "async.all" && this.expandAliases(value).kind === "union") {
-          this.typeError("Mixed result types need named fields; use Promise.all({name: loadName(), count: loadCount()})", argument?.span ?? callSpan);
-        }
-        const result = resolved ?? unknownType;
-        if (intrinsic.name === "async.race") this.reportPromiseResolutionHazard(result, argument?.span ?? callSpan);
-        return { kind: "promise", value: intrinsic.name === "async.all" ? { kind: "list", element: result } : result };
-      }
-      case "async.timeout": {
-        arity(2, 3);
-        const value = promiseValue(inferAt(0), 0);
-        this.reportPromiseResolutionHazard(value, argumentAt(0)?.span ?? callSpan);
-        inferAt(1, durationType);
-        inferAt(2, stringType);
-        return { kind: "promise", value };
-      }
-      case "async.retry": {
-        arity(1, 3);
-        const task = callbackAt(0, [], unknownType);
-        inferAt(1, numberType);
-        inferAt(2, durationType);
-        const result = callbackResult(task);
-        const resolved = result.kind === "promise" ? result.value : result;
-        this.reportPromiseResolutionHazard(resolved, argumentAt(0)?.span ?? callSpan);
-        return { kind: "promise", value: resolved };
-      }
-      case "async.map": {
-        arity(2, 3);
-        const element = arrayAt(0).element;
-        const worker = callbackAt(1, [element], unknownType);
-        inferAt(2, numberType);
-        const result = callbackResult(worker);
-        return { kind: "promise", value: { kind: "list", element: result.kind === "promise" ? result.value : result } };
-      }
-      case "async.series": {
-        arity(1, 1);
-        const task = arrayAt(0).element;
-        if (task.kind !== "function" && task.kind !== "intrinsic" && task.kind !== "any") {
-          this.typeError(`series expects a List of functions, received List<${describeType(task)}>`, argumentAt(0)?.span ?? callSpan);
-        }
-        const result = callbackResult(task);
-        return { kind: "promise", value: { kind: "list", element: result.kind === "promise" ? result.value : result } };
-      }
-      case "url.join": {
-        arity(1, Number.POSITIVE_INFINITY);
-        for (let index = 0; index < arguments_.length; index += 1) inferAt(index, stringType);
-        return stringType;
-      }
-      case "math.min":
-      case "math.max": {
-        arity(1, Number.POSITIVE_INFINITY);
-        for (let index = 0; index < arguments_.length; index += 1) inferAt(index, numberType);
-        return numberType;
-      }
-      case "test.expect": {
-        arity(1, 1);
-        const actual = inferAt(0);
-        const matched = this.expandAliases(actual);
-        this.testExpectOperands.set(spanIdentity(callSpan), matched);
-        const dynamic = matched.kind === "any" || matched.kind === "unknown";
-        const fields = new Map<string, ValueType>([
-          ["toBe", { kind: "function", parameterNames: ["expected"], parameters: [actual], requiredParameters: 1, result: nullType }],
-          ["toEqual", { kind: "function", parameterNames: ["expected"], parameters: [actual], requiredParameters: 1, result: nullType }],
-        ]);
-        if (matched.kind === "bool" || dynamic) {
-          fields.set("toBeTruthy", { kind: "function", parameters: [], requiredParameters: 0, result: nullType });
-          fields.set("toBeFalsy", { kind: "function", parameters: [], requiredParameters: 0, result: nullType });
-        }
-        if (matched.kind === "list" || matched.kind === "string" || dynamic) {
-          // D90 R17: an accept-anything parameter position is `unknown`, the
-          // top type for assignment targets; `any` stays a value kind only.
-          const contained = matched.kind === "list" ? matched.element : matched.kind === "string" ? stringType : unknownType;
-          fields.set("toContain", { kind: "function", parameterNames: ["expected"], parameters: [contained], requiredParameters: 1, result: nullType });
-          fields.set("toHaveLength", { kind: "function", parameterNames: ["length"], parameters: [numberType], requiredParameters: 1, result: nullType });
-        }
-        if (matched.kind === "string" || dynamic) {
-          fields.set("toMatch", { kind: "function", parameterNames: ["expression"], parameters: [stringType], requiredParameters: 1, result: nullType });
-        }
-        const callable = matched.kind === "function" || matched.kind === "intrinsic" || matched.kind === "action";
-        if (callable || dynamic) fields.set("toThrow", { kind: "function", parameters: [], requiredParameters: 0, result: nullType });
-        if (matched.kind === "promise" || dynamic || (callable && matched.result.kind === "promise")) {
-          fields.set("toReject", { kind: "function", parameters: [], requiredParameters: 0, result: { kind: "promise", value: nullType } });
-        }
-        return { kind: "object", fields };
-      }
-      default:
-        this.checkArguments(arguments_, intrinsic.parameters, callSpan, intrinsic.requiredParameters, intrinsic.rest);
-        return intrinsic.result;
-    }
-  }
-
-  private inferRangeCall(
-    intrinsic: Extract<ValueType, { kind: "intrinsic" }>,
-    arguments_: readonly Expression[],
-    argumentNames: readonly (string | null)[] | undefined,
-    callSpan: Span,
-  ): ValueType {
-    const hasNamed = argumentNames?.some((name) => name !== null) ?? false;
-    if (!hasNamed) {
-      if (arguments_.length < 1 || arguments_.length > 3) {
-        this.typeError(`Expected 1-3 arguments but received ${arguments_.length}`, callSpan);
-      }
-      for (const argument of arguments_) {
-        const value = argument.kind === "SpreadExpression" ? argument.value : argument;
-        if (argument.kind === "SpreadExpression") this.typeError("range does not accept a call spread", argument.span);
-        this.requireAssignable(this.inferExpression(value, numberType), numberType, value.span);
-      }
-      return intrinsic.result;
-    }
-
-    const plan = this.planNamedArguments(
-      arguments_,
-      argumentNames,
-      intrinsic.parameters,
-      intrinsic.parameterNames,
-      0,
-      callSpan,
-    );
-    if (!plan) return intrinsic.result;
-    for (const [source, target] of plan.targets.entries()) {
-      const argument = arguments_[source]!;
-      const value = argument.kind === "SpreadExpression" ? argument.value : argument;
-      const expected = target === null ? unknownType : numberType;
-      const actual = this.inferExpression(value, expected);
-      if (target !== null) this.requireAssignable(actual, numberType, value.span);
-    }
-    if (!plan.valid) return intrinsic.result;
-
-    const sources = Array<number>(3).fill(-1);
-    for (const [source, target] of plan.targets.entries()) if (target !== null) sources[target] = source;
-    const hasStart = sources[0] !== -1;
-    const hasEnd = sources[1] !== -1;
-    const hasStep = sources[2] !== -1;
-    if (!hasEnd || (!hasStart && hasStep)) {
-      this.typeError(
-        "Named range calls use range(end = ...), range(start = ..., end = ...), or range(start = ..., end = ..., step = ...)",
-        callSpan,
-      );
-      return intrinsic.result;
-    }
-    this.lowering.namedArgumentOrders.set(
-      spanIdentity(callSpan),
-      trimTrailingOmittedArguments(hasStart ? [sources[0]!, sources[1]!, sources[2]!] : [sources[1]!]),
-    );
-    return intrinsic.result;
-  }
-
-  // D47 rule 81: equals(a, b) is deep structural comparison over data, so the
-  // call site enforces the data domain — class instances compare by identity
-  // ('=='), functions and Promises have no structural content, unknown/any
-  // must be validated first — and the two operands must intersect, D42's own
-  // constant-comparison principle.
-  private inferEqualsCall(
-    intrinsic: Extract<ValueType, { kind: "intrinsic" }>,
-    sourceArguments: readonly Expression[],
-    argumentNames: readonly (string | null)[] | undefined,
-    callSpan: Span,
-  ): ValueType {
-    const plan = this.planNamedArguments(
-      sourceArguments,
-      argumentNames,
-      intrinsic.parameters,
-      intrinsic.parameterNames,
-      intrinsic.requiredParameters,
-      callSpan,
-    );
-    const operands: { type: ValueType; span: Span }[] = [];
-    if (plan) {
-      for (const [source, target] of plan.targets.entries()) {
-        const argument = sourceArguments[source]!;
-        const value = argument.kind === "SpreadExpression" ? argument.value : argument;
-        if (argument.kind === "SpreadExpression") this.typeError("equals does not accept a call spread", argument.span);
-        const type = this.inferExpression(value);
-        if (target === 0 || target === 1) operands[target] = { type, span: value.span };
-      }
-      if (!plan.valid) return intrinsic.result;
-      this.lowering.namedArgumentOrders.set(spanIdentity(callSpan), trimTrailingOmittedArguments(
-        [0, 1].map((target) => {
-          for (const [source, mapped] of plan.targets.entries()) if (mapped === target) return source;
-          return -1;
-        }),
-      ));
-    } else {
-      if (sourceArguments.length !== 2) {
-        this.typeError(`Expected 2 arguments but received ${sourceArguments.length}`, callSpan);
-      }
-      for (const argument of sourceArguments) {
-        const value = argument.kind === "SpreadExpression" ? argument.value : argument;
-        if (argument.kind === "SpreadExpression") this.typeError("equals does not accept a call spread", argument.span);
-        const type = this.inferExpression(value);
-        if (operands.length < 2) operands.push({ type, span: value.span });
-      }
-      if (sourceArguments.length !== 2) return intrinsic.result;
-    }
-    let violated = false;
-    for (const operand of operands) {
-      if (!operand) continue;
-      const violation = this.equalsDomainViolation(operand.type);
-      if (violation) {
-        this.typeError(`equals compares data structurally, and ${violation}`, operand.span);
-        violated = true;
-      }
-    }
-    if (!violated && operands[0] && operands[1] && !this.equalityTypesIntersect(operands[0].type, operands[1].type)) {
-      this.typeError(
-        this.typesIntersect(operands[0].type, operands[1].type, false)
-          ? `${describeType(operands[0].type)} and ${describeType(operands[1].type)} can meet only where an enum member matches a raw ${this.enumMeetDomain(operands[0].type, operands[1].type)},`
-            + ` and the enum and ${this.enumMeetDomain(operands[0].type, operands[1].type)} domains never meet in equals${this.equalityGuidance(operands[0].type, operands[1].type)}`
-          : `${describeType(operands[0].type)} and ${describeType(operands[1].type)} have no values in common, so equals(a, b) is always false${this.equalityGuidance(operands[0].type, operands[1].type)}`,
-        callSpan,
-      );
-    }
-    this.lowering.equalsCalls.add(spanIdentity(callSpan));
-    return intrinsic.result;
-  }
 
   /** The reason a type cannot participate in equals(a, b), or null when it is pure data. */
   private equalsDomainViolation(source: ValueType, seen: Set<string> = new Set()): string | null {
@@ -9952,728 +8499,6 @@ export class Analyzer implements TypeEnvironment {
     }
   }
 
-  private inferCollectionCall(
-    member: Extract<Expression, { kind: "MemberExpression" }>,
-    sourceArguments: readonly Expression[],
-    argumentNames: readonly (string | null)[] | undefined,
-    callSpan: Span,
-  ): ValueType | null {
-    const object = this.expandAliases(this.inferredOrAnalyze(member.object));
-    if (object.kind !== "list" && object.kind !== "map" && object.kind !== "set" && object.kind !== "record") return null;
-    const mutating = mutatingCollectionMethods(object.kind);
-    if (object.readonlyView && mutating.has(member.property)) {
-      for (const argument of sourceArguments) this.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument);
-      this.typeError(`Cannot call mutating method '${member.property}' through ${describeType(object)}; it is a read-only view`, member.span);
-      return invalidType;
-    }
-    const readonlyElement = (object.kind === "list" || object.kind === "set") && object.readonlyView
-      ? this.readonlyDataViewOf(object.element)
-      : object.kind === "list" || object.kind === "set" ? object.element : null;
-    const comparisonElement = object.kind === "list" || object.kind === "set" ? this.readonlyDataViewOf(object.element) : null;
-    const readonlyKey = object.kind === "map" && object.readonlyView ? this.readonlyDataViewOf(object.key) : object.kind === "map" ? object.key : null;
-    const comparisonKey = object.kind === "map" ? this.readonlyDataViewOf(object.key) : null;
-    const readonlyValue = (object.kind === "map" || object.kind === "record") && object.readonlyView
-      ? this.readonlyDataViewOf(object.value)
-      : object.kind === "map" || object.kind === "record" ? object.value : null;
-    this.semanticExpressionOwners.set(`${member.span.start}:${member.span.end}`, nonOptional(object));
-    const memberType = object.kind === "list" ? this.listMember(object, member.property)
-      : object.kind === "map" ? this.mapMember(object, member.property)
-        : object.kind === "set" ? this.setMember(object, member.property)
-          : object.kind === "record" ? this.recordMember(object, member.property)
-          : unknownType;
-    this.recordSemanticExpression(member, memberType ?? unknownType);
-    let arguments_ = sourceArguments;
-    let namedPreanalyzed = false;
-    const callableMember: CallableValueType | null = memberType
-      && (memberType.kind === "function" || memberType.kind === "action" || memberType.kind === "intrinsic")
-      ? memberType
-      : null;
-    const named = callableMember
-      ? this.planNamedArguments(
-        sourceArguments,
-        argumentNames,
-        callableMember.parameters,
-        callableMember.parameterNames,
-        callableMember.requiredParameters,
-        callSpan,
-        callableMember.rest,
-      )
-      : null;
-    if (named) {
-      const inferSource = (contextForTarget: (target: number) => ValueType): void => {
-        for (const [source, target] of named.targets.entries()) {
-          const argument = sourceArguments[source]!;
-          this.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument, target === null ? unknownType : contextForTarget(target));
-        }
-      };
-      if (!named.valid) {
-        // A plan that did not resolve cannot solve a published type parameter
-        // either — `reduce`'s accumulator is the only one — so the arguments
-        // are inferred without a contextual type and the call answers
-        // `unknown` rather than leaking the parameter into the program.
-        const open = (callableMember!.typeParameterNames?.length ?? 0) > 0;
-        inferSource((target) => open ? unknownType : callableMember!.parameters[target] ?? unknownType);
-        return open ? unknownType : callableMember!.result;
-      }
-      if (object.kind === "list" && member.property === "reduce") {
-        let initial = unknownType;
-        let deferred: ArrowFunctionExpression | null = null;
-        for (const [source, target] of named.targets.entries()) {
-          const argument = sourceArguments[source]!;
-          if (target === 0 && argument.kind === "ArrowFunctionExpression") deferred = argument;
-          else if (target === 1) initial = this.inferExpression(argument);
-          else this.inferExpression(argument);
-        }
-        if (deferred) {
-          this.inferExpression(deferred, {
-            kind: "function",
-            parameters: [initial, readonlyElement!, numberType],
-            requiredParameters: 3,
-            result: initial,
-          });
-        }
-      } else {
-        inferSource((target) => callableMember!.parameters[target] ?? unknownType);
-      }
-      arguments_ = named.ordered;
-      namedPreanalyzed = true;
-    }
-    const omitted = (argument: Expression | undefined): boolean => argument?.kind === "IdentifierExpression" && argument.name === "\u0000omitted-named-argument";
-    const argumentAt = (index: number): Expression | null => {
-      const argument = arguments_[index];
-      return !argument || omitted(argument) ? null : argument;
-    };
-    const inferArgument = (index: number, contextualType: ValueType = unknownType): ValueType => {
-      const argument = argumentAt(index);
-      if (!argument) return unknownType;
-      return namedPreanalyzed ? this.inferredExpressionType(argument) : this.inferExpression(argument, contextualType);
-    };
-    const checkCollectionArguments = (parameters: readonly ValueType[], requiredParameters = parameters.length): void => {
-      if (!namedPreanalyzed) {
-        this.checkArguments(arguments_, parameters, callSpan, requiredParameters);
-        return;
-      }
-      for (const [index, expected] of parameters.entries()) {
-        const argument = argumentAt(index);
-        if (argument) this.requireAssignable(this.inferredExpressionType(argument), expected, argument.span);
-      }
-    };
-    const requireCount = (count: number): void => {
-      if (!namedPreanalyzed && arguments_.length !== count) this.typeError(`Expected ${count} argument${count === 1 ? "" : "s"} but received ${arguments_.length}`, callSpan);
-    };
-    // D113, completed by D114 S3b item A: one contract for every List operation
-    // that receives an element — the value and the zero-based position in the
-    // snapshot the operation reads. A callback that needs only the value
-    // declares only the value and is assignable to that contract the way
-    // JavaScript admits it, by ignoring an argument it did not ask for, so the
-    // contract the author is shown is the contract assignability judges.
-    // `judgeResult` is false for a key selector, whose *shape* is what
-    // assignability judges: whether the key it answers is ordered, or usable as
-    // a Map key, is asked once by the single authority for that question, so a
-    // `Comparable`-bounded key is not refused by the union spelling here
-    // (D42 item 65). A selector the shape check already refused is recorded, so
-    // that authority stays silent instead of naming the same argument twice.
-    const rejectedListCallbacks = new Set<number>();
-    const listCallbackContract = (result: ValueType): ValueType => ({
-      kind: "function",
-      parameters: [readonlyElement!, numberType],
-      requiredParameters: 2,
-      result,
-    });
-    const inferListCallback = (index: number, result: ValueType, judgeResult = true): ValueType => {
-      const argument = argumentAt(index);
-      if (!argument) return unknownType;
-      const expected = listCallbackContract(result);
-      const judged = judgeResult ? expected : listCallbackContract(unknownType);
-      let callback = namedPreanalyzed ? this.inferredExpressionType(argument) : inferArgument(index, expected);
-      callback = this.concreteCallableFor(callback, judged, argument.span);
-      const reported = this.diagnostics.length;
-      this.requireAssignable(callback, judged, argument.span);
-      if (this.diagnostics.length > reported) rejectedListCallbacks.add(index);
-      return callback;
-    };
-    // ENM-I3: a membership probe (`has`, `index`, `count`, `remove`, and the
-    // Map/Record key of `get`) is judged by intersection with the element or
-    // key domain — the per-element `==` question — rather than assignability,
-    // whose enum -> string one-way exit would launder a bare-string match.
-    const checkProbeArgument = (domain: ValueType, operation: string, probes: "element" | "key" = "element"): void => {
-      requireCount(1);
-      const argument = argumentAt(0);
-      if (!argument) return;
-      if (argument.kind === "SpreadExpression") {
-        this.inferExpression(argument.value);
-        return;
-      }
-      const probe = namedPreanalyzed ? this.inferredExpressionType(argument) : this.inferExpression(argument, domain);
-      // The domain mismatch is the more precise answer where both apply, so
-      // the fresh-literal rejection speaks only when the probe's type is right
-      // and identity is the sole reason it can never match.
-      if (!this.requireMembershipIntersection(probe, domain, argument.span, operation)) {
-        this.rejectFreshCollectionProbe(argument, operation, probes);
-      }
-      if (!namedPreanalyzed) {
-        for (const extra of arguments_.slice(1)) {
-          if (!omitted(extra)) this.inferExpression(extra.kind === "SpreadExpression" ? extra.value : extra);
-        }
-      }
-    };
-    const lowered = object.kind === "list"
-      ? (CORE_LIST_METHOD_NAMES as readonly string[]).includes(member.property)
-      : object.kind === "map" ? (CORE_MAP_METHOD_NAMES as readonly string[]).includes(member.property)
-        : object.kind === "set" ? (CORE_SET_METHOD_NAMES as readonly string[]).includes(member.property)
-          : object.kind === "record" ? (CORE_RECORD_METHOD_NAMES as readonly string[]).includes(member.property) : false;
-    if (lowered && arguments_.some((argument) => argument.kind === "SpreadExpression")) {
-      this.typeError(`Spread arguments are not supported by ${describeType(object)}.${member.property}`, callSpan);
-    }
-    if (object.kind === "list") {
-      if (member.property === "map" || member.property === "flatMap") {
-        const flat = member.property === "flatMap";
-        this.lowering.collectionCalls.set(member.span.end, flat ? "listFlatMap" : "listMap");
-        const callbackArgument = argumentAt(0);
-        const callback = inferListCallback(0, unknownType);
-        const concrete = this.expandAliases(callback);
-        const result = concrete.kind === "function" ? concrete.result : unknownType;
-        requireCount(1);
-        if (flat) {
-          // COL-U1: flatMap flattens exactly one level, so the transform
-          // must produce a List; the element of that List is the result
-          // element.
-          const expandedResult = this.expandAliases(result);
-          if (callbackArgument && expandedResult.kind !== "list" && expandedResult.kind !== "any" && expandedResult.kind !== "unknown" && !isInvalidType(expandedResult)) {
-            this.typeError(
-              `List.flatMap transform must return a List, received ${describeType(expandedResult)}; use map for one-value transforms`,
-              callbackArgument.span,
-            );
-          }
-          return { kind: "list", element: expandedResult.kind === "list" ? expandedResult.element : unknownType };
-        }
-        return { kind: "list", element: result };
-      }
-      if (member.property === "filter") {
-        this.lowering.collectionCalls.set(member.span.end, "listFilter");
-        const callbackArgument = argumentAt(0);
-        if (callbackArgument) inferListCallback(0, boolType);
-        requireCount(1);
-        // COL-U3: the exact predicate shape `x => x != null` narrows
-        // List<T?> to List<T>. This is a closed-vocabulary special case (the
-        // NaN twin is already taught); user predicate types stay unanalyzed.
-        if (this.isNullExclusionPredicate(argumentAt(0)) && this.expandAliases(readonlyElement!).kind === "optional") {
-          return { kind: "list", element: nonOptional(this.expandAliases(readonlyElement!)) };
-        }
-        return { kind: "list", element: readonlyElement! };
-      }
-      if (member.property === "reduce") {
-        this.lowering.collectionCalls.set(member.span.end, "listReduce");
-        const callbackArgument = argumentAt(0);
-        const deferredArrow = callbackArgument?.kind === "ArrowFunctionExpression";
-        let callback = callbackArgument && !deferredArrow ? inferArgument(0) : unknownType;
-        const initial = inferArgument(1);
-        // D113, completed by D114 S3c: the combine is an element callback, so
-        // after the accumulator it receives the element and the element's
-        // zero-based position in the snapshot `__velarListReduce` folds over.
-        const callbackExpected: ValueType = { kind: "function", parameters: [initial, readonlyElement!, numberType], requiredParameters: 3, result: initial };
-        if (callbackArgument) {
-          if (deferredArrow) callback = inferArgument(0, callbackExpected);
-          this.requireAssignable(callback, callbackExpected, callbackArgument.span);
-        }
-        requireCount(2);
-        return initial;
-      }
-      if (member.property === "append") {
-        this.lowering.collectionCalls.set(member.span.end, "listAppend");
-        const argument = argumentAt(0);
-        const value = inferArgument(0, object.element);
-        if (argument) this.requireAssignable(value, object.element, argument.span);
-        requireCount(1);
-        return nullType;
-      }
-      if (member.property === "extend") {
-        this.lowering.collectionCalls.set(member.span.end, "listExtend");
-        const argument = argumentAt(0);
-        const source = argument ? this.expandAliases(inferArgument(0)) : unknownType;
-        if (argument) this.requireAssignable(source, object, argument.span);
-        requireCount(1);
-        return nullType;
-      }
-      if (member.property === "insert") {
-        this.lowering.collectionCalls.set(member.span.end, "listInsert");
-        const indexArgument = argumentAt(0);
-        if (indexArgument) this.requireAssignable(inferArgument(0, numberType), numberType, indexArgument.span);
-        const argument = argumentAt(1);
-        const value = inferArgument(1, object.element);
-        if (argument) this.requireAssignable(value, object.element, argument.span);
-        requireCount(2);
-        return nullType;
-      }
-      if (member.property === "remove") {
-        this.lowering.collectionCalls.set(member.span.end, "listRemove");
-        checkProbeArgument(comparisonElement!, "List.remove");
-        return boolType;
-      }
-      if (member.property === "pop") {
-        this.lowering.collectionCalls.set(member.span.end, "listPop");
-        checkCollectionArguments([numberType], 0);
-        return object.element;
-      }
-      if (member.property === "clear" || member.property === "copy" || member.property === "reversed") {
-        this.lowering.collectionCalls.set(member.span.end, member.property === "clear" ? "listClear" : member.property === "copy" ? "listCopy" : "listReversed");
-        checkCollectionArguments([]);
-        return member.property === "clear" ? nullType : { kind: "list", element: readonlyElement! };
-      }
-      if (member.property === "has" || member.property === "count") {
-        this.lowering.collectionCalls.set(member.span.end, member.property === "has" ? "listHas" : "listCount");
-        checkProbeArgument(comparisonElement!, `List.${member.property}`);
-        return member.property === "has" ? boolType : numberType;
-      }
-      if (member.property === "sorted") {
-        this.lowering.collectionCalls.set(member.span.end, "listSorted");
-        // A comparator is not an element callback: it receives two elements to
-        // weigh against each other, so it keeps its own `(left, right)` shape
-        // while `by=` takes the element contract every other callback takes.
-        const comparator: ValueType = { kind: "function", parameters: [readonlyElement!, readonlyElement!], requiredParameters: 2, result: numberType };
-        const selector: ValueType = { kind: "function", parameters: [readonlyElement!], requiredParameters: 1, result: unionOf([numberType, stringType]) };
-        const compareArgument = argumentAt(0);
-        const byArgument = argumentAt(1);
-        const descendingArgument = argumentAt(2);
-        const positionalSelector = !namedPreanalyzed
-          && compareArgument?.kind === "ArrowFunctionExpression"
-          && compareArgument.parameters.length === 1
-          && !argumentNames?.some((name) => name !== null);
-        let byType: ValueType | null = null;
-        if (!namedPreanalyzed) {
-          if (compareArgument) this.requireAssignable(inferArgument(0, positionalSelector ? selector : comparator), positionalSelector ? selector : comparator, compareArgument.span);
-          if (byArgument) byType = inferListCallback(1, unionOf([numberType, stringType]), false);
-          if (descendingArgument) this.requireAssignable(inferArgument(2, boolType), boolType, descendingArgument.span);
-          if (arguments_.length > 3) {
-            for (const extra of arguments_.slice(3)) this.inferExpression(extra);
-            this.typeError(`Expected 0-3 arguments but received ${arguments_.length}`, callSpan);
-          }
-        } else {
-          if (compareArgument) this.requireAssignable(this.inferredExpressionType(compareArgument), comparator, compareArgument.span);
-          if (byArgument) byType = inferListCallback(1, unionOf([numberType, stringType]), false);
-          if (descendingArgument) this.requireAssignable(this.inferredExpressionType(descendingArgument), boolType, descendingArgument.span);
-        }
-        // ORD-3: assignability admits an enum key, because an enum member is
-        // assignable to `string`, so the ordered-key question has to be asked
-        // separately at the one decision point.
-        const byKey = this.selectorKeyType(byArgument, byType);
-        if (byArgument && byKey !== null && !rejectedListCallbacks.has(1) && this.orderedTypeCategory(byKey) === null) {
-          this.typeError(
-            `sorted(by=) key must return only string or only number, received ${describeType(byKey)}${this.unorderedTypeGuidance(byKey)}`,
-            byArgument.span,
-          );
-        }
-        if (byArgument && !argumentNames?.includes("by")) {
-          this.typeError("Use 'sorted(by=selector)'; the key-function alternative is named", byArgument.span);
-        }
-        if (positionalSelector) this.typeError("Use 'sorted(by=selector)'; the key-function alternative is named", compareArgument.span);
-        if (descendingArgument && !argumentNames?.includes("descending")) {
-          this.typeError("Use 'sorted(descending=true)'; the order flag is named", descendingArgument.span);
-        }
-        if (compareArgument && byArgument) {
-          this.typeError("sorted accepts either a comparator or 'by=selector', not both", callSpan);
-        }
-        // D114 S3: a comparator already states the order, so a second way to
-        // say it would be two spellings of one fact — and a reader would have
-        // to decide which wins.
-        if (compareArgument && descendingArgument) {
-          this.typeError("sorted(descending=) applies to the default order or a 'by=selector'; the comparator already states the order", callSpan);
-        }
-        if (!compareArgument && !byArgument && this.orderedTypeCategory(object.element) === null) {
-          this.typeError(
-            `List<${describeType(object.element)}>.sorted() requires an explicit comparator${this.unorderedTypeGuidance(object.element)}`,
-            callSpan,
-          );
-        }
-        return { kind: "list", element: readonlyElement! };
-      }
-      if (member.property === "sum") {
-        this.lowering.collectionCalls.set(member.span.end, "listSum");
-        checkCollectionArguments([]);
-        if (object.element.kind !== "any" && object.element.kind !== "unknown" && !isAssignable(object.element, numberType, this)) {
-          this.typeError(`List.sum requires List<number>, received ${describeType(object)}`, member.span);
-        }
-        return numberType;
-      }
-      if (member.property === "min" || member.property === "max") {
-        this.lowering.collectionCalls.set(member.span.end, member.property === "min" ? "listMin" : "listMax");
-        // D114 S3: `by=` completes the selector family the retired
-        // velar/collections minBy/maxBy carried, under sorted(by=)'s rules.
-        const byArgument = argumentAt(0);
-        const byType = byArgument ? inferListCallback(0, unionOf([numberType, stringType]), false) : null;
-        if (!namedPreanalyzed && arguments_.length > 1) {
-          for (const extra of arguments_.slice(1)) this.inferExpression(extra);
-          this.typeError(`Expected 0-1 arguments but received ${arguments_.length}`, callSpan);
-        }
-        const byKey = this.selectorKeyType(byArgument, byType);
-        if (byArgument && byKey !== null && !rejectedListCallbacks.has(0) && this.orderedTypeCategory(byKey) === null) {
-          this.typeError(
-            `${member.property}(by=) key must return only string or only number, received ${describeType(byKey)}${this.unorderedTypeGuidance(byKey)}`,
-            byArgument.span,
-          );
-        }
-        if (byArgument && !argumentNames?.includes("by")) {
-          this.typeError(`Use '${member.property}(by=selector)'; the key-function alternative is named`, byArgument.span);
-        }
-        if (!byArgument && this.orderedTypeCategory(object.element) === null) {
-          this.typeError(
-            `List.${member.property} requires List<number> or List<string>, received ${describeType(object)}${this.unorderedTypeGuidance(object.element)}`,
-            member.span,
-          );
-        }
-        return optionalOf(readonlyElement!);
-      }
-      if (["some", "every", "find"].includes(member.property)) {
-        const callbackArgument = argumentAt(0);
-        if (callbackArgument) inferListCallback(0, boolType);
-        requireCount(1);
-        if (member.property === "find") {
-          this.lowering.collectionCalls.set(member.span.end, "listFind");
-          return optionalOf(readonlyElement!);
-        }
-        this.lowering.collectionCalls.set(member.span.end, member.property === "some" ? "listSome" : "listEvery");
-        return boolType;
-      }
-      if (member.property === "index") {
-        this.lowering.collectionCalls.set(member.span.end, "listIndex");
-        checkProbeArgument(comparisonElement!, "List.index");
-        return optionalOf(numberType);
-      }
-      if (member.property === "join") {
-        this.lowering.collectionCalls.set(member.span.end, "listJoin");
-        checkCollectionArguments([stringType], 0);
-        if (object.element.kind !== "any" && object.element.kind !== "unknown" && !isAssignable(object.element, stringType, this)) {
-          this.typeError(`List.join requires List<string>, received ${describeType(object)}`, member.span);
-        }
-        return stringType;
-      }
-      if (member.property === "get") {
-        this.lowering.collectionCalls.set(member.span.end, "listGet");
-        checkCollectionArguments([numberType]);
-        return optionalOf(readonlyElement!);
-      }
-      if (member.property === "slice") {
-        this.lowering.collectionCalls.set(member.span.end, "slice");
-        checkCollectionArguments([numberType, numberType], 0);
-        return { kind: "list", element: readonlyElement! };
-      }
-      // ── D114 S3: the pipeline members ────────────────────────────────────
-      if (member.property === "unique") {
-        this.lowering.collectionCalls.set(member.span.end, "listUnique");
-        checkCollectionArguments([]);
-        return { kind: "list", element: readonlyElement! };
-      }
-      if (member.property === "compact") {
-        this.lowering.collectionCalls.set(member.span.end, "listCompact");
-        checkCollectionArguments([]);
-        const element = this.expandAliases(readonlyElement!);
-        // The same stance `x != null` takes on a value that can never be null
-        // (section 4): a removal with nothing to remove is a constant, and a
-        // silently constant operation is a logic bug.
-        if (element.kind !== "optional" && element.kind !== "any" && element.kind !== "unknown" && !isInvalidType(element)) {
-          this.typeError(
-            `List<${describeType(element)}>.compact() has nothing to remove; the element type has no null arm, so drop the call`,
-            member.span,
-          );
-          return { kind: "list", element: readonlyElement! };
-        }
-        return { kind: "list", element: nonOptional(element) };
-      }
-      if (member.property === "flatten") {
-        this.lowering.collectionCalls.set(member.span.end, "listFlatten");
-        checkCollectionArguments([]);
-        const element = this.expandAliases(readonlyElement!);
-        if (element.kind === "any" || element.kind === "unknown" || isInvalidType(element)) return { kind: "list", element: unknownType };
-        if (element.kind !== "list") {
-          this.typeError(
-            `List.flatten removes exactly one List level, so it requires List<List<T>>, received ${describeType(object)}`,
-            member.span,
-          );
-          return { kind: "list", element: unknownType };
-        }
-        return { kind: "list", element: element.element };
-      }
-      if (member.property === "chunk") {
-        this.lowering.collectionCalls.set(member.span.end, "listChunk");
-        checkCollectionArguments([numberType]);
-        requireCount(1);
-        return { kind: "list", element: { kind: "list", element: readonlyElement! } };
-      }
-      if (member.property === "repeat") {
-        this.lowering.collectionCalls.set(member.span.end, "listRepeat");
-        checkCollectionArguments([numberType]);
-        requireCount(1);
-        return { kind: "list", element: readonlyElement! };
-      }
-      if (member.property === "partition") {
-        this.lowering.collectionCalls.set(member.span.end, "listPartition");
-        if (argumentAt(0)) inferListCallback(0, boolType);
-        requireCount(1);
-        const half: ValueType = { kind: "list", element: readonlyElement! };
-        return { kind: "object", fields: new Map([["matches", half], ["rest", half]]) };
-      }
-      if (member.property === "groupBy" || member.property === "keyBy" || member.property === "countBy") {
-        this.lowering.collectionCalls.set(member.span.end, member.property === "groupBy"
-          ? "listGroupBy"
-          : member.property === "keyBy" ? "listKeyBy" : "listCountBy");
-        const keyArgument = argumentAt(0);
-        const keyCallback = keyArgument ? inferListCallback(0, unknownType, false) : null;
-        requireCount(1);
-        const key = this.selectorKeyType(keyArgument, keyCallback) ?? unknownType;
-        // ENM-D1: the result is a Map, so its key obeys the one Map key rule.
-        if (keyArgument) this.rejectCollidingKeyDomain(key, keyArgument.span, "Map key type");
-        return {
-          kind: "map",
-          key,
-          value: member.property === "groupBy"
-            ? { kind: "list", element: readonlyElement! }
-            : member.property === "keyBy" ? readonlyElement! : numberType,
-        };
-      }
-      if (member.property === "zip") {
-        this.lowering.collectionCalls.set(member.span.end, "listZip");
-        const other = argumentAt(0);
-        const partner = other ? this.expandAliases(inferArgument(0)) : unknownType;
-        if (other && partner.kind !== "list" && partner.kind !== "any" && partner.kind !== "unknown" && !isInvalidType(partner)) {
-          this.typeError(`List.zip requires a List partner, received ${describeType(partner)}`, other.span);
-        }
-        requireCount(1);
-        // The pair aliases the partner's elements, so they keep exactly the
-        // view the partner published — read-only through a read-only List, and
-        // the plain element otherwise.
-        const second = partner.kind !== "list"
-          ? unknownType
-          : partner.readonlyView ? this.readonlyDataViewOf(partner.element) : partner.element;
-        return {
-          kind: "list",
-          element: { kind: "object", fields: new Map([["first", readonlyElement!], ["second", second]]) },
-        };
-      }
-    }
-
-    if (object.kind === "map") {
-      if (member.property === "set") {
-        this.lowering.collectionCalls.set(member.span.end, "mapSet");
-        const keyArgument = argumentAt(0);
-        const valueArgument = argumentAt(1);
-        // D85 rule 211: the receiver's declared key and value types are the
-        // contextual types of this call, exactly as `List.append` passes its
-        // element type. Without them an empty `[]`, an arrow, or any other
-        // value that reads its shape from context arrives as `unknown`.
-        const key = inferArgument(0, object.key);
-        const value = inferArgument(1, object.value);
-        if (keyArgument) this.requireAssignable(key, object.key, keyArgument.span);
-        if (valueArgument) this.requireAssignable(value, object.value, valueArgument.span);
-        requireCount(2);
-        return nullType;
-      }
-      if (member.property === "getOrSet") {
-        this.lowering.collectionCalls.set(member.span.end, "mapGetOrSet");
-        const keyArgument = argumentAt(0);
-        const valueArgument = argumentAt(1);
-        const key = inferArgument(0, object.key);
-        const value = inferArgument(1, object.value);
-        if (keyArgument) this.requireAssignable(key, object.key, keyArgument.span);
-        if (valueArgument) this.requireAssignable(value, object.value, valueArgument.span);
-        requireCount(2);
-        return object.value;
-      }
-      if (member.property === "getOrSetWith") {
-        this.lowering.collectionCalls.set(member.span.end, "mapGetOrSetWith");
-        const keyArgument = argumentAt(0);
-        const factoryArgument = argumentAt(1);
-        const key = inferArgument(0, object.key);
-        const factoryType: ValueType = {
-          kind: "function",
-          parameterNames: [],
-          parameters: [],
-          requiredParameters: 0,
-          result: object.value,
-        };
-        const factory = inferArgument(1, factoryType);
-        if (keyArgument) this.requireAssignable(key, object.key, keyArgument.span);
-        if (factoryArgument) this.requireAssignable(factory, factoryType, factoryArgument.span);
-        requireCount(2);
-        return object.value;
-      }
-      if (member.property === "update") {
-        this.lowering.collectionCalls.set(member.span.end, "mapUpdate");
-        const argument = argumentAt(0);
-        const source = argument ? this.expandAliases(inferArgument(0)) : unknownType;
-        if (argument) this.requireAssignable(source, object, argument.span);
-        requireCount(1);
-        return nullType;
-      }
-      if (member.property === "get") {
-        this.lowering.collectionCalls.set(member.span.end, "mapGet");
-        if (!namedPreanalyzed && sourceArguments.length === 2 && !sourceArguments.some((argument) => argument.kind === "SpreadExpression")) {
-          const key = inferArgument(0, comparisonKey!);
-          const keyArgument = argumentAt(0);
-          if (keyArgument) this.requireMembershipIntersection(key, comparisonKey!, keyArgument.span, "Map.get");
-          inferArgument(1);
-          this.typeError("Use 'get(key) ?? fallback'; Map.get has one optional-result contract", callSpan);
-          return optionalOf(readonlyValue!);
-        }
-        checkProbeArgument(comparisonKey!, "Map.get", "key");
-        return optionalOf(readonlyValue!);
-      }
-      if (member.property === "iterator") {
-        this.lowering.collectionCalls.set(member.span.end, "mapIterator");
-        checkCollectionArguments([]);
-        return iteratorOf(readonlyKey!);
-      }
-      if (member.property === "keys") {
-        this.lowering.collectionCalls.set(member.span.end, "mapKeys");
-        checkCollectionArguments([]);
-        return { kind: "list", element: readonlyKey! };
-      }
-      if (member.property === "values") {
-        this.lowering.collectionCalls.set(member.span.end, "mapValues");
-        checkCollectionArguments([]);
-        return { kind: "list", element: readonlyValue! };
-      }
-      if (member.property === "entries") {
-        this.lowering.collectionCalls.set(member.span.end, "mapEntries");
-        checkCollectionArguments([]);
-        return { kind: "list", element: { kind: "object", fields: new Map([["key", readonlyKey!], ["value", readonlyValue!]]) } };
-      }
-      if (member.property === "has") {
-        this.lowering.collectionCalls.set(member.span.end, "mapHas");
-        checkProbeArgument(comparisonKey!, "Map.has", "key");
-        return boolType;
-      }
-      if (member.property === "remove") {
-        this.lowering.collectionCalls.set(member.span.end, "mapRemove");
-        checkProbeArgument(comparisonKey!, "Map.remove", "key");
-        return boolType;
-      }
-      if (member.property === "clear") {
-        this.lowering.collectionCalls.set(member.span.end, "mapClear");
-        checkCollectionArguments([]);
-        return nullType;
-      }
-      if (member.property === "copy") {
-        this.lowering.collectionCalls.set(member.span.end, "mapCopy");
-        checkCollectionArguments([]);
-        return { kind: "map", key: readonlyKey!, value: readonlyValue! };
-      }
-    }
-    if (object.kind === "record") {
-      if (member.property === "set") {
-        this.lowering.collectionCalls.set(member.span.end, "recordSet");
-        checkCollectionArguments([stringType, object.value]);
-        return nullType;
-      }
-      if (member.property === "get") {
-        this.lowering.collectionCalls.set(member.span.end, "recordGet");
-        checkProbeArgument(stringType, "Record.get", "key");
-        return optionalOf(readonlyValue!);
-      }
-      if (member.property === "keys") {
-        this.lowering.collectionCalls.set(member.span.end, "recordKeys");
-        checkCollectionArguments([]);
-        return { kind: "list", element: stringType };
-      }
-      if (member.property === "values") {
-        this.lowering.collectionCalls.set(member.span.end, "recordValues");
-        checkCollectionArguments([]);
-        return { kind: "list", element: readonlyValue! };
-      }
-      if (member.property === "entries") {
-        this.lowering.collectionCalls.set(member.span.end, "recordEntries");
-        checkCollectionArguments([]);
-        return { kind: "list", element: { kind: "object", fields: new Map([["key", stringType], ["value", readonlyValue!]]) } };
-      }
-      if (member.property === "has") {
-        this.lowering.collectionCalls.set(member.span.end, "recordHas");
-        checkProbeArgument(stringType, "Record.has", "key");
-        return boolType;
-      }
-      if (member.property === "remove") {
-        this.lowering.collectionCalls.set(member.span.end, "recordRemove");
-        checkProbeArgument(stringType, "Record.remove", "key");
-        return boolType;
-      }
-      if (member.property === "clear") {
-        this.lowering.collectionCalls.set(member.span.end, "recordClear");
-        checkCollectionArguments([]);
-        return nullType;
-      }
-      if (member.property === "copy") {
-        this.lowering.collectionCalls.set(member.span.end, "recordCopy");
-        checkCollectionArguments([]);
-        return { kind: "record", value: readonlyValue! };
-      }
-    }
-    if (object.kind === "set") {
-      if (member.property === "add") {
-        this.lowering.collectionCalls.set(member.span.end, "setAdd");
-        const argument = argumentAt(0);
-        const value = inferArgument(0, object.element);
-        requireCount(1);
-        if (argument) this.requireAssignable(value, object.element, argument.span);
-        return nullType;
-      }
-      if (member.property === "update") {
-        this.lowering.collectionCalls.set(member.span.end, "setUpdate");
-        const argument = argumentAt(0);
-        const accepted: ValueType = { kind: "union", members: [object, { kind: "list", element: object.element }] };
-        const source = argument ? this.expandAliases(inferArgument(0)) : unknownType;
-        if (argument) this.requireAssignable(source, accepted, argument.span);
-        requireCount(1);
-        return nullType;
-      }
-      if (member.property === "has") {
-        this.lowering.collectionCalls.set(member.span.end, "setHas");
-        checkProbeArgument(comparisonElement!, "Set.has");
-        return boolType;
-      }
-      if (member.property === "remove") {
-        this.lowering.collectionCalls.set(member.span.end, "setRemove");
-        checkProbeArgument(comparisonElement!, "Set.remove");
-        return boolType;
-      }
-      if (member.property === "clear") {
-        this.lowering.collectionCalls.set(member.span.end, "setClear");
-        checkCollectionArguments([]);
-        return nullType;
-      }
-      if (member.property === "values") {
-        this.lowering.collectionCalls.set(member.span.end, "setValues");
-        checkCollectionArguments([]);
-        return { kind: "list", element: readonlyElement! };
-      }
-      if (member.property === "copy") {
-        this.lowering.collectionCalls.set(member.span.end, "setCopy");
-        checkCollectionArguments([]);
-        return { kind: "set", element: readonlyElement! };
-      }
-      if (member.property === "union" || member.property === "intersection" || member.property === "difference") {
-        // COL-U2: the Set algebra. Each copies; the other operand's element
-        // domain must intersect this Set's (the same per-member `==`
-        // question the probes ask), so an enum Set never meets a bare-string
-        // Set here.
-        this.lowering.collectionCalls.set(
-          member.span.end,
-          member.property === "union" ? "setUnion" : member.property === "intersection" ? "setIntersection" : "setDifference",
-        );
-        const argument = argumentAt(0);
-        const source = argument ? this.expandAliases(inferArgument(0, { kind: "set", element: comparisonElement! })) : unknownType;
-        requireCount(1);
-        if (argument && source.kind === "set") {
-          this.requireMembershipIntersection(source.element, comparisonElement!, argument.span, `Set.${member.property}`);
-        } else if (argument && source.kind !== "any" && !isInvalidType(source)) {
-          this.typeError(`Set.${member.property} requires a Set, received ${describeType(source)}`, argument.span);
-        }
-        if (member.property === "union" && argument && source.kind === "set") {
-          return { kind: "set", element: mergeTypes(readonlyElement!, this.readonlyDataViewOf(source.element)) };
-        }
-        return { kind: "set", element: readonlyElement! };
-      }
-    }
-    return null;
-  }
-
   /**
    * A concrete record Type owns one compiler-only constructor:
    *
@@ -10723,7 +8548,7 @@ export class Analyzer implements TypeEnvironment {
       return invalidType;
     }
 
-    const named = this.planNamedArguments(
+    const named = this.calls.planNamedArguments(
       sourceArguments,
       argumentNames,
       [unknownType, unknownType],
@@ -10883,7 +8708,7 @@ export class Analyzer implements TypeEnvironment {
       return invalidType;
     }
 
-    const named = this.planNamedArguments(
+    const named = this.calls.planNamedArguments(
       sourceArguments,
       argumentNames,
       [unknownType, unknownType],
@@ -11018,482 +8843,6 @@ export class Analyzer implements TypeEnvironment {
     };
   }
 
-  private inferPrimitiveCall(
-    member: Extract<Expression, { kind: "MemberExpression" }>,
-    arguments_: readonly Expression[],
-    argumentNames: readonly (string | null)[] | undefined,
-    callSpan: Span,
-  ): ValueType | null {
-    const object = this.inferredOrAnalyze(member.object);
-    if (object.kind !== "string" && object.kind !== "number") return null;
-    const memberType = object.kind === "string" ? this.stringMember(member.property) : this.numberMember(member.property);
-    if (!memberType || memberType.kind !== "function") return null;
-    this.semanticExpressionOwners.set(`${member.span.start}:${member.span.end}`, object);
-    this.recordSemanticExpression(member, memberType);
-    const operation = object.kind === "string"
-      ? stringPrimitiveOperations.get(member.property)
-      : numberPrimitiveOperations.get(member.property);
-    if (operation) this.lowering.primitiveCalls.set(member.span.end, operation);
-    this.checkArguments(
-      arguments_,
-      memberType.parameters,
-      callSpan,
-      memberType.requiredParameters,
-      memberType.rest,
-      argumentNames,
-      memberType.parameterNames,
-    );
-    return memberType.result;
-  }
-
-  private planNamedArguments(
-    arguments_: readonly Expression[],
-    argumentNames: readonly (string | null)[] | undefined,
-    parameters: readonly ValueType[],
-    parameterNames: readonly string[] | undefined,
-    requiredParameters: number,
-    callSpan: Span,
-    rest?: ValueType,
-  ): NamedArgumentPlan | null {
-    if (!argumentNames?.some((name) => name !== null)) return null;
-    if (!parameterNames || parameterNames.length !== parameters.length || parameterNames.some((name) => !name)) {
-      this.typeError("This callable does not expose stable parameter names", callSpan);
-      return {
-        ordered: arguments_,
-        targets: arguments_.map(() => null),
-        valid: false,
-      };
-    }
-
-    const sources = Array<number>(parameters.length).fill(-1);
-    const targets: (number | null)[] = [];
-    let nextPositional = 0;
-    let valid = !arguments_.some((argument) => argument.kind === "SpreadExpression");
-    if (!valid) this.typeError("Named arguments cannot be combined with a call spread", callSpan);
-    for (const [source, argument] of arguments_.entries()) {
-      const name = argumentNames[source] ?? null;
-      let target: number;
-      if (name === null) {
-        while (nextPositional < sources.length && sources[nextPositional] !== -1) nextPositional += 1;
-        target = nextPositional++;
-      } else {
-        target = parameterNames.indexOf(name);
-        if (target === -1) {
-          this.typeError(`Unknown named argument '${name}'`, argument.span);
-          targets.push(null);
-          valid = false;
-          continue;
-        }
-      }
-      if (target >= sources.length) {
-        this.typeError(rest
-          ? "Named calls cannot pass values to a rest parameter"
-          : "This fixed-arity call has no position for another argument", argument.span);
-        targets.push(null);
-        valid = false;
-        continue;
-      }
-      if (sources[target] !== -1) {
-        this.typeError(`Parameter '${parameterNames[target]}' is provided more than once`, argument.span);
-        targets.push(null);
-        valid = false;
-        continue;
-      }
-      sources[target] = source;
-      targets.push(target);
-    }
-    const missing = parameterNames.filter((_, index) => index < requiredParameters && sources[index] === -1);
-    if (missing.length > 0) {
-      this.typeError(`Missing required named argument${missing.length === 1 ? "" : "s"}: ${missing.join(", ")}`, callSpan);
-      valid = false;
-    }
-    this.lowering.namedArgumentOrders.set(spanIdentity(callSpan), trimTrailingOmittedArguments(sources));
-    return {
-      ordered: sources.map((source) => source === -1
-        ? { kind: "IdentifierExpression", name: "\u0000omitted-named-argument", span: callSpan } satisfies Expression
-        : arguments_[source]!),
-      targets,
-      valid,
-    };
-  }
-
-  private inferMember(
-    objectExpression: Expression,
-    property: string,
-    optional: boolean,
-    memberSpan: Span,
-    useNarrowing = true,
-    readValue = true,
-  ): ValueType {
-    if (objectExpression.kind === "SuperExpression") {
-      if (optional) this.typeError("Optional access is not valid on 'super'", memberSpan);
-      const base = this.currentClass ? this.classInfo(this.currentClass)?.base ?? null : null;
-      if (!base || !this.superMemberContext) {
-        this.typeError("'super' member access is only available directly inside a derived constructor, method, getter, field initializer, or nested arrow", objectExpression.span);
-        return unknownType;
-      }
-      const staticMember = this.superMemberContext === "static";
-      const method = staticMember ? this.findStaticMethod(base, property) : this.findMethod(base, property);
-      const methodType = staticMember ? method as ValueType | null : (method as { readonly type: ValueType } | null)?.type ?? null;
-      const getter = staticMember ? this.findStaticGetter(base, property) : this.findGetter(base, property);
-      const getterType = staticMember ? getter as ValueType | null : (getter as { readonly type: ValueType } | null)?.type ?? null;
-      const field = staticMember ? this.findStaticField(base, property) : null;
-      if (!method && !getter && !field) {
-        this.typeError(`Base class '${base}' has no ${staticMember ? "static " : ""}method${staticMember ? ", getter, or field" : " or getter"} '${property}'`, memberSpan);
-        return unknownType;
-      }
-      this.semanticExpressionOwners.set(
-        `${memberSpan.start}:${memberSpan.end}`,
-        staticMember ? { kind: "classConstructor", name: base } : { kind: "class", name: base },
-      );
-      // D44 rule 74: reading a base method as a value binds at the reference
-      // site. `super` cannot be captured by a receiver temporary, so the
-      // emitter binds it to `this` directly.
-      if (method && !getter && !field && readValue
-        && !this.callExpressionCallees.has(spanIdentity(memberSpan))) {
-        this.lowering.classMethodReferences.add(spanIdentity(memberSpan));
-      }
-      return methodType ?? getterType ?? field!.type;
-    }
-    // A member access is a sanctioned class-name position (D45 rule 75).
-    this.memberAccessReceivers.add(spanIdentity(objectExpression.span));
-    this.memberAccessProperties.set(spanIdentity(objectExpression.span), { property, end: memberSpan.end });
-    const original = this.inferredOrAnalyze(objectExpression);
-    this.semanticExpressionOwners.set(`${memberSpan.start}:${memberSpan.end}`, nonOptional(original));
-    const resolvedOriginal = this.expandAliases(original);
-    const object = nonOptional(resolvedOriginal);
-    const binaryKind = binaryStorageKind(object);
-    if (binaryKind && property === "size") this.lowering.binarySizes.set(memberSpan.end, binaryKind);
-    if (binaryKind && binaryKind !== "bytes") {
-      if (property === "copy") this.lowering.binaryCalls.set(memberSpan.end, "bufferCopy");
-      if (property === "slice") this.lowering.binaryCalls.set(memberSpan.end, "bufferSlice");
-      if (property === "toBytes") this.lowering.binaryCalls.set(memberSpan.end, "bufferToBytes");
-      if (property === "values") this.lowering.binaryCalls.set(memberSpan.end, "bufferValues");
-    }
-    const guardedCollectionOperation = object.kind === "list"
-      ? listCollectionOperations.get(property) ?? null
-      : object.kind === "map"
-        ? mapCollectionOperations.get(property) ?? null
-      : object.kind === "set"
-          ? setCollectionOperations.get(property) ?? null
-          : object.kind === "record"
-            ? recordCollectionOperations.get(property) ?? null
-          : null;
-    if (guardedCollectionOperation) {
-      this.lowering.collectionCalls.set(memberSpan.end, guardedCollectionOperation);
-    }
-    const guardedPrimitiveOperation = object.kind === "string"
-      ? stringPrimitiveOperations.get(property) ?? null
-      : object.kind === "number"
-        ? numberPrimitiveOperations.get(property) ?? null
-        : null;
-    if (guardedPrimitiveOperation) this.lowering.primitiveCalls.set(memberSpan.end, guardedPrimitiveOperation);
-    const basePath = this.stableMemberAccessPath(objectExpression);
-    const narrowedMember = basePath ? this.lookupMemberNarrowing(`${basePath}.${property}`) : null;
-    let result = unknownType;
-
-    if (object.kind === "any") {
-      result = anyType;
-    } else if (object.kind === "unknown") {
-      if (isInvalidType(object)) result = invalidType;
-      else this.typeError(`Cannot access '${property}' on unknown without validation${this.boundaryValidationGuidance(objectExpression, property)}`, memberSpan);
-    } else if (object.kind === "string") {
-      result = this.stringMember(property) ?? unknownType;
-      if (property === "size") this.lowering.stringSizes.add(memberSpan.end);
-      if (result.kind === "unknown") this.typeError(stringMemberGuidance(property) ?? `${describeType(object)} has no member '${property}'`, memberSpan);
-    } else if (object.kind === "number") {
-      result = this.numberMember(property) ?? unknownType;
-      if (result.kind === "unknown") {
-        this.typeError(property === "toString"
-          ? "Use 'str(value)' or an f-string; VelarScript has one explicit text conversion spelling"
-          : `${describeType(object)} has no member '${property}'`, memberSpan);
-      }
-    } else if (object.kind === "list") {
-      result = this.listMember(object, property) ?? unknownType;
-      if (property === "size") this.lowering.collectionSizes.set(memberSpan.end, "list");
-      if (result.kind === "unknown") {
-        const guidance = collectionMemberGuidance("List", property);
-        const recovered = guidance?.replacement ? this.listMember(object, guidance.replacement) : null;
-        const nearest = guidance ? null : uniqueNearestName(property, this.semanticMembersOf(object).keys());
-        const message = `${this.collectionMemberError("List", property)}${nearest ? `; did you mean '${nearest}'?` : ""}`;
-        if (recovered) {
-          this.recoveredTypeError(message, memberSpan, this.collectionMemberFix("List", property, memberSpan));
-          result = recovered;
-        } else this.typeError(message, memberSpan, this.collectionMemberFix("List", property, memberSpan));
-      }
-    } else if (object.kind === "set") {
-      result = this.setMember(object, property) ?? unknownType;
-      if (property === "size") this.lowering.collectionSizes.set(memberSpan.end, "set");
-      if (result.kind === "unknown") {
-        const nearest = collectionMemberGuidance("Set", property) ? null : uniqueNearestName(property, this.semanticMembersOf(object).keys());
-        this.typeError(`${this.collectionMemberError("Set", property)}${nearest ? `; did you mean '${nearest}'?` : ""}`, memberSpan, this.collectionMemberFix("Set", property, memberSpan));
-      }
-    } else if (object.kind === "map") {
-      result = this.mapMember(object, property) ?? unknownType;
-      if (property === "size") this.lowering.collectionSizes.set(memberSpan.end, "map");
-      if (result.kind === "unknown") {
-        const nearest = collectionMemberGuidance("Map", property) ? null : uniqueNearestName(property, this.semanticMembersOf(object).keys());
-        this.typeError(`${this.collectionMemberError("Map", property)}${nearest ? `; did you mean '${nearest}'?` : ""}`, memberSpan, this.collectionMemberFix("Map", property, memberSpan));
-      }
-    } else if (object.kind === "record") {
-      result = this.recordMember(object, property) ?? unknownType;
-      if (property === "size") this.lowering.collectionSizes.set(memberSpan.end, "record");
-      if (result.kind === "unknown") this.typeError(`Record fields are dynamic; use ${describeType(object)}[${JSON.stringify(property)}]`, memberSpan);
-    } else if (object.kind === "promise") {
-      const awaited = this.expandAliases(object.value);
-      const memberAfterAwait = this.semanticMembersOf(awaited).get(property);
-      const receiverName = objectExpression.kind === "IdentifierExpression" ? objectExpression.name : null;
-      const binding = receiverName ? this.lookup(receiverName) : null;
-      const canAwait = this.functionDepth === 0 || this.asynchronousFunctions.at(-1) === true;
-      if (memberAfterAwait && receiverName && binding && this.promiseInitializerBindings.has(binding) && canAwait) {
-        this.typeError(
-          `${describeType(object)} has no member '${property}'; add 'await' at the initializer — 'const ${receiverName} = await ...' — then read '${receiverName}.${property}'`,
-          memberSpan,
-        );
-      } else {
-        this.typeError(`${describeType(object)} has no member '${property}'`, memberSpan);
-      }
-      result = invalidType;
-    } else if (object.kind === "action") {
-      if (property === "pending") result = boolType;
-      else if (property === "error") result = optionalOf({ kind: "class", name: "Error" });
-      else this.typeError(`Action has no member '${property}'`, memberSpan);
-    } else if (object.kind === "union") {
-      const candidates = object.members.map((member) => this.discriminatedDataField(member, property));
-      if (candidates.every((candidate): candidate is ValueType => candidate !== null)) {
-        if (!readValue && !candidates.every((candidate) => sameType(candidate, candidates[0]!))) {
-          this.typeError(
-            `Cannot assign field '${property}' through ${describeType(object)} because its variants require different field types; narrow the owner first`,
-            memberSpan,
-          );
-          result = invalidType;
-        } else {
-          result = readValue ? unionOf(candidates) : candidates[0]!;
-        }
-      } else {
-        this.typeError(`${describeType(object)} has no common field '${property}'`, memberSpan);
-      }
-    } else if (object.kind === "object") {
-      result = object.fields.get(property) ?? unknownType;
-      if (object.optionalFields?.has(property) && result.kind !== "unknown") result = optionalOf(result);
-      if (object.readonlyFields?.has(property) && result.kind !== "unknown") result = this.readonlyDataViewOf(result);
-      if (!object.fields.has(property)) {
-        const expectOperand = objectExpression.kind === "CallExpression"
-          ? this.testExpectOperands.get(spanIdentity(objectExpression.span))
-          : undefined;
-        if (property === "toHaveLength" && expectOperand?.kind === "set") {
-          this.typeError("Set has no length matcher; write 'expect(set.size).toBe(expected)'", memberSpan);
-        } else {
-          const nearest = uniqueNearestName(property, object.fields.keys());
-          this.typeError(`Object has no field '${property}'${nearest ? `; did you mean '${nearest}'?` : ""}`, memberSpan);
-        }
-      }
-    } else if (object.kind === "extension") {
-      let owned = false;
-      for (const extension of this.analysisExtensions) {
-        const member = extension.memberType?.(object, property);
-        if (member === undefined) continue;
-        owned = true;
-        if (member) result = member;
-        else this.typeError(`${describeType(object)} has no member '${property}'`, memberSpan);
-        break;
-      }
-      if (!owned) this.typeError(`${describeType(object)} has no member '${property}'`, memberSpan);
-    } else if (object.kind === "named") {
-      const fields = this.fieldsOf(object.identity ?? object.name);
-      result = fields?.get(property) ?? unknownType;
-      if (this.readonlyFieldsOf(object.identity ?? object.name)?.has(property) && result.kind !== "unknown") result = this.readonlyDataViewOf(result);
-      if (!fields?.has(property)) {
-        this.typeError(`Type '${object.name}' has no field '${property}'`, memberSpan);
-      }
-    } else if (object.kind === "class") {
-      const classKey = object.identity ?? object.name;
-      const privateField = this.privateFieldForAccess(classKey, property, false);
-      const privateMethod = this.privateMethodForAccess(classKey, property, false);
-      const field = this.findField(classKey, property);
-      const getter = this.findGetter(classKey, property);
-      const method = this.findMethod(classKey, property);
-      result = privateField?.type ?? privateMethod ?? field?.type ?? getter?.type ?? method?.type ?? unknownType;
-      const privateGetter = Boolean(privateField && (this.privateGetters.get(this.currentClass ?? "")?.has(property) ?? false));
-      if (privateField || privateMethod) {
-        this.lowering.privateMembers.add(spanIdentity(memberSpan));
-      } else if (!field && !getter && !method && this.declaresPrivateMember(classKey, property, false)) {
-        this.typeError(`Member '${property}' is private to class '${object.name}'`, memberSpan);
-      } else if (!field && !getter && !method) {
-        this.typeError(`Class '${object.name}' has no member '${property}'`, memberSpan);
-      }
-      // D50 rule 89: `code` is not stored anywhere. The read recovers the
-      // declared class name the lowering wrote into `.name`, so the string and
-      // the class identity cannot drift apart, and a host error no Velar class
-      // declared answers the contract it does satisfy: "Error".
-      // An extern class declares its own JavaScript members, so a 'code' it
-      // publishes is that host property and stays an ordinary read.
-      const errorCodeRead = property === "code" && !classKey.startsWith("js:") && this.isSubclassOf(classKey, "Error");
-      if (readValue && errorCodeRead) this.lowering.errorCodeReads.add(spanIdentity(memberSpan));
-      if (readValue && field && !classKey.startsWith("js:") && !errorCodeRead
-        && !(property === "cause" && this.isSubclassOf(classKey, "Error"))) {
-        // Error's `cause` is host-managed and legitimately absent (ASY-U3);
-        // the read normalizes undefined to null instead of tripping the
-        // initialization guard.
-        this.lowering.instanceFieldReads.add(spanIdentity(memberSpan));
-      }
-      if (readValue && privateField
-        && !(this.privateGetters.get(this.currentClass ?? "")?.has(property) ?? false)) {
-        this.lowering.privateInstanceFieldReads.add(spanIdentity(memberSpan));
-      }
-      // D44 rule 74: methods live on the prototype, so reading one as a value
-      // (`const read = a.read`) evaluates the receiver once and binds at the
-      // reference site — the collection-method rule of charter section 8.
-      if (readValue && (method || privateMethod) && !field && !getter && !privateField
-        && !this.callExpressionCallees.has(spanIdentity(memberSpan))) {
-        this.lowering.classMethodReferences.add(spanIdentity(memberSpan));
-      }
-      // CLS-D9: while a constructor runs, derived state does not exist yet,
-      // so a constructor body may only observe members its own class fully
-      // owns. An abstract member always resolves to a derived implementation,
-      // and a member some visible subclass overrides may — either observes
-      // fields that are not initialized until the derived constructor runs.
-      if (this.constructorDepth > 0
-        && objectExpression.kind === "IdentifierExpression" && objectExpression.name === "self"
-        && this.currentClass && classKey === this.currentClass) {
-        const abstractMember = (getter?.abstract ?? false) || (method?.abstract ?? false);
-        const overrider = !abstractMember && (getter || method)
-          ? [...this.classes.keys()].find((candidate) => candidate !== classKey
-            && this.isSubclassOf(candidate, classKey)
-            && (this.classInfo(candidate)?.methods.has(property) || this.classInfo(candidate)?.getters.has(property)))
-          : undefined;
-        if (abstractMember) {
-          this.typeError(
-            `Constructor of '${object.name}' cannot use abstract member '${property}': the derived implementation would run before the derived constructor initializes its state. Move this use into the derived constructor`,
-            memberSpan,
-          );
-        } else if (overrider !== undefined) {
-          this.typeError(
-            `Constructor of '${object.name}' cannot use '${property}': '${overrider}' overrides it, so the override would run before '${overrider}' initializes its state. Move this use into the derived constructor`,
-            memberSpan,
-          );
-        }
-      }
-    } else if (object.kind === "classConstructor") {
-      const key = object.identity ?? object.name;
-      const privateField = this.privateFieldForAccess(key, property, true);
-      const privateMethod = this.privateMethodForAccess(key, property, true);
-      const fieldOwner = this.findStaticFieldOwner(key, property);
-      const field = fieldOwner?.field ?? null;
-      const getter = this.findStaticGetter(key, property);
-      const method = this.findStaticMethod(key, property);
-      result = privateField?.type ?? privateMethod ?? field?.type ?? getter ?? method ?? unknownType;
-      if (privateField || privateMethod) {
-        this.lowering.privateMembers.add(spanIdentity(memberSpan));
-      } else if (!field && !getter && !method && this.declaresPrivateMember(key, property, true)) {
-        this.typeError(`Static member '${property}' is private to class '${object.name}'`, memberSpan);
-      } else if (!field && !getter && !method) {
-        this.typeError(`Class '${object.name}' has no static member '${property}'`, memberSpan);
-      }
-      if (readValue && (field || privateField)) {
-        const initialization = this.staticFieldInitialization;
-        const ownField = initialization?.className === key
-          && (this.classInfo(key)?.staticFields.has(property)
-            || this.privateStaticFields.get(key)?.has(property));
-        if (ownField && !initialization.initialized.has(property)) {
-          this.typeError(
-            `Static field '${property}' is read before it is initialized; declare it earlier or defer the read`,
-            memberSpan,
-          );
-        }
-        if (field && fieldOwner && !key.startsWith("js:")) {
-          this.lowering.staticFieldReads.set(spanIdentity(memberSpan), fieldOwner.depth);
-        }
-      }
-      // D44 rule 74: a static method read as a value binds its class at the
-      // reference site, the same rule instance method references follow.
-      if (readValue && (method || privateMethod) && !field && !getter && !privateField
-        && !this.callExpressionCallees.has(spanIdentity(memberSpan))) {
-        this.lowering.classMethodReferences.add(spanIdentity(memberSpan));
-      }
-    } else if (object.kind === "enumObject") {
-      const enumResult = this.enumRuntimeMember(object.name, object.identity, object.members, property);
-      if (enumResult) {
-        result = enumResult;
-      } else {
-        this.typeError(
-          `Enum '${object.name}' has no member '${property}'; ${object.name}.values() lists the members in declaration order`,
-          memberSpan,
-        );
-      }
-    } else if (object.kind === "typeObject") {
-      // ENM-I4: identities follow aliases (charter section 12), so an alias
-      // whose target is an enum answers member access, values(), is, and
-      // parse exactly as the enum itself does.
-      const aliasedEnum = this.aliasedEnumTarget(object.name);
-      if (aliasedEnum) {
-        const enumResult = this.enumRuntimeMember(aliasedEnum.name, aliasedEnum.identity, aliasedEnum.members, property);
-        if (enumResult) {
-          result = enumResult;
-        } else {
-          this.typeError(
-            `Enum '${aliasedEnum.name}' has no member '${property}'; ${object.name}.values() lists the members in declaration order`,
-            memberSpan,
-          );
-        }
-      } else if (property === "is") {
-        result = { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: boolType };
-      } else if (property === "parse") {
-        result = {
-          kind: "function",
-          parameterNames: ["value"],
-          parameters: [unknownType],
-          requiredParameters: 1,
-          result: this.invalidDeclaredTypes.has(object.name)
-            ? invalidType
-            : this.runtimeTypeObjectValue(object),
-        };
-      } else {
-        this.typeError(`Type '${object.name}' has no runtime member '${property}'`, memberSpan);
-      }
-    } else if (object.kind === "runtimeType") {
-      if (property === "is") {
-        result = { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: boolType };
-      } else if (property === "parse") {
-        result = { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: object.value };
-      } else {
-        this.typeError(`${describeType(object)} has no runtime member '${property}'`, memberSpan);
-      }
-    } else {
-      this.typeError(`${describeType(object)} has no member '${property}'`, memberSpan);
-    }
-
-    if (isReadonlyView(object) && result.kind !== "unknown" && result.kind !== "any") {
-      result = this.readonlyDataViewOf(result);
-    }
-    result = this.displayExternalClasses(result);
-    if (useNarrowing && narrowedMember) {
-      result = narrowedMember;
-      this.lowering.runtimeNarrowings.set(spanIdentity(memberSpan), {
-        expected: narrowedMember,
-        description: `.${property}`,
-      });
-    }
-
-    if (optional) {
-      const finalType = resolvedOriginal.kind === "optional" || resolvedOriginal.kind === "null" ? optionalOf(result) : result;
-      if (finalType.kind === "optional") this.lowering.optionalMembers.add(spanIdentity(memberSpan));
-      return finalType;
-    }
-    if (resolvedOriginal.kind === "optional") {
-      // FLW-S2: '?.' on a getter would compute it a second time, so the
-      // receiver decides which of the two fixes is the honest one.
-      const getter = this.getterAccessProperty(objectExpression);
-      const text = getter ? this.conditionSubjectText(objectExpression) : null;
-      this.typeError(getter
-        ? `'${getter}' is a getter, so '?.' would compute it a second time`
-          + `; bind it once with 'const ${getter} = ${text ?? `...${getter}`}' and read that name instead`
-        : `Use optional access '?.' for ${describeType(original)}`, memberSpan);
-    }
-    if (result.kind === "optional") this.lowering.optionalMembers.add(spanIdentity(memberSpan));
-    return result;
-  }
-
   /**
    * A record shorthand names a binding. Reserved names have no binding to name,
    * so `{computed}` and `{print}` used to reach past the author entirely and
@@ -11527,335 +8876,6 @@ export class Analyzer implements TypeEnvironment {
       if (property.value.kind === "ObjectExpression" && nested.kind === "named") {
         this.recordRuntimeObjectShape(property.value, nested);
       }
-    }
-  }
-
-  private listMember(list: Extract<ValueType, { kind: "list" }>, property: string): ValueType | null {
-    const element = list.readonlyView ? this.readonlyDataViewOf(list.element) : list.element;
-    const comparison = this.readonlyDataViewOf(list.element);
-    const owned: ValueType = { kind: "list", element };
-    const callable = (
-      parameterNames: readonly string[],
-      parameters: readonly ValueType[],
-      result: ValueType,
-      requiredParameters = parameters.length,
-    ): ValueType => ({ kind: "function", parameterNames, parameters, requiredParameters, result });
-    // D113, completed by D114 S3b item A: every callback that receives an
-    // element is handed the value and the snapshot index, so the published
-    // contract says two arguments arrive. A callback that declares only `value`
-    // is assignable to it the way JavaScript admits one — by ignoring the
-    // argument it did not ask for.
-    const test: ValueType = { kind: "function", parameters: [element, numberType], requiredParameters: 2, result: boolType };
-    const transform: ValueType = { kind: "function", parameters: [element, numberType], requiredParameters: 2, result: unknownType };
-    const compare: ValueType = { kind: "function", parameters: [element, element], requiredParameters: 2, result: numberType };
-    const orderedKey: ValueType = unionOf([numberType, stringType]);
-    const selectKey: ValueType = { kind: "function", parameters: [element, numberType], requiredParameters: 2, result: orderedKey };
-    const selectAnyKey: ValueType = { kind: "function", parameters: [element, numberType], requiredParameters: 2, result: unknownType };
-    switch (property) {
-      case "size":
-        return numberType;
-      case "get":
-        return callable(["index"], [numberType], optionalOf(element));
-      case "slice":
-        return callable(["start", "end"], [numberType, numberType], owned, 0);
-      case "append":
-        if (list.readonlyView) return null;
-        return callable(["value"], [list.element], nullType);
-      case "extend":
-        if (list.readonlyView) return null;
-        return callable(["values"], [list], nullType);
-      case "insert":
-        if (list.readonlyView) return null;
-        return callable(["index", "value"], [numberType, list.element], nullType);
-      case "remove":
-        if (list.readonlyView) return null;
-        return callable(["value"], [comparison], boolType);
-      case "pop":
-        if (list.readonlyView) return null;
-        return callable(["index"], [numberType], list.element, 0);
-      case "clear":
-        if (list.readonlyView) return null;
-        return callable([], [], nullType);
-      case "copy":
-      case "reversed":
-        return callable([], [], owned);
-      case "has":
-        return callable(["value"], [comparison], boolType);
-      case "count":
-        return callable(["value"], [comparison], numberType);
-      case "sorted":
-        return callable(["compare", "by", "descending"], [compare, selectKey, boolType], owned, 0);
-      case "sum":
-        return callable([], [], numberType);
-      case "min":
-      case "max":
-        return callable(["by"], [selectKey], optionalOf(element), 0);
-      // D114 S3: the pipeline members. Each answers a fresh container, so a
-      // read-only receiver publishes them exactly as `map` and `filter`.
-      case "unique":
-        return callable([], [], owned);
-      case "repeat":
-        return callable(["count"], [numberType], owned);
-      case "compact":
-        return callable([], [], { kind: "list", element: nonOptional(this.expandAliases(element)) });
-      case "flatten": {
-        const inner = this.expandAliases(element);
-        return callable([], [], { kind: "list", element: inner.kind === "list" ? inner.element : unknownType });
-      }
-      case "chunk":
-        return callable(["size"], [numberType], { kind: "list", element: owned });
-      case "partition":
-        return callable(["test"], [test], { kind: "object", fields: new Map([["matches", owned], ["rest", owned]]) });
-      case "groupBy":
-        return callable(["key"], [selectAnyKey], { kind: "map", key: unknownType, value: owned });
-      case "keyBy":
-        return callable(["key"], [selectAnyKey], { kind: "map", key: unknownType, value: element });
-      case "countBy":
-        return callable(["key"], [selectAnyKey], { kind: "map", key: unknownType, value: numberType });
-      case "zip":
-        // The partner's element type is whatever it is: a List<T> parameter
-        // would be invariant and refuse every concrete List, so the argument
-        // is judged at the call site the way `reduce`'s is.
-        return callable(
-          ["other"],
-          [unknownType],
-          { kind: "list", element: { kind: "object", fields: new Map([["first", element], ["second", unknownType]]) } },
-        );
-      case "map":
-        return callable(["transform"], [transform], { kind: "list", element: unknownType });
-      case "flatMap":
-        return callable(
-          ["transform"],
-          [{ kind: "function", parameters: [element, numberType], requiredParameters: 2, result: { kind: "list", element: unknownType } }],
-          { kind: "list", element: unknownType },
-        );
-      case "filter":
-        return callable(["test"], [test], owned);
-      // D113, completed by D114 S3c: the combine receives an element, so it
-      // receives that element's snapshot position too, in the parameter after
-      // the element. The accumulator is the fold's own type, bound from
-      // `initial`, so the published contract names it rather than erasing it to
-      // `unknown` — the contract a bound `const fold = values.reduce` and a
-      // `values?.reduce(...)` are checked against is then the same
-      // `(accumulator, value, index)` the direct call and the runtime use.
-      case "reduce": {
-        const accumulator: ValueType = { kind: "parameter", name: "U", index: 0 };
-        return {
-          kind: "function",
-          typeParameterNames: ["U"],
-          parameterNames: ["combine", "initial"],
-          parameters: [
-            { kind: "function", parameters: [accumulator, element, numberType], requiredParameters: 3, result: accumulator },
-            accumulator,
-          ],
-          requiredParameters: 2,
-          result: accumulator,
-        };
-      }
-      case "some":
-      case "every":
-        return callable(["test"], [test], boolType);
-      case "find":
-        return callable(["test"], [test], optionalOf(element));
-      case "index":
-        return callable(["value"], [comparison], optionalOf(numberType));
-      case "join":
-        return callable(["separator"], [stringType], stringType, 0);
-      default:
-        return null;
-    }
-  }
-
-  private stringMember(property: string): ValueType | null {
-    const callable = (
-      parameterNames: readonly string[],
-      parameters: readonly ValueType[],
-      result: ValueType,
-      requiredParameters = parameters.length,
-    ): ValueType => ({ kind: "function", parameterNames, parameters, requiredParameters, result });
-    switch (property) {
-      case "size": return numberType;
-      case "trim":
-      case "upper":
-      case "lower": return callable([], [], stringType);
-      case "slice": return callable(["start", "end"], [numberType, numberType], stringType, 0);
-      case "char": return callable(["index"], [numberType], optionalOf(stringType));
-      case "has": return callable(["text"], [stringType], boolType);
-      case "index": return callable(["text", "start"], [stringType, numberType], optionalOf(numberType), 1);
-      case "count": return callable(["text"], [stringType], numberType);
-      case "startsWith":
-      case "endsWith": return callable(["text"], [stringType], boolType);
-      case "split": return callable(["separator"], [stringType], { kind: "list", element: stringType });
-      case "replace":
-      case "replaceAll": return callable(["from", "to"], [stringType, stringType], stringType);
-      case "padStart":
-      case "padEnd": return callable(["size", "fill"], [numberType, stringType], stringType, 1);
-      case "repeat": return callable(["count"], [numberType], stringType);
-      case "isBlank": return callable([], [], boolType);
-      default: return null;
-    }
-  }
-
-  private numberMember(property: string): ValueType | null {
-    const callable = (parameterNames: readonly string[], parameters: readonly ValueType[], result: ValueType): ValueType => ({
-      kind: "function", parameterNames, parameters, requiredParameters: parameters.length, result,
-    });
-    switch (property) {
-      case "abs":
-      case "round":
-      case "floor":
-      case "ceil":
-      case "sign":
-      case "trunc": return callable([], [], numberType);
-      case "toFixed": return callable(["digits"], [numberType], stringType);
-      case "isInteger":
-      case "isNaN":
-      case "isFinite": return callable([], [], boolType);
-      default: return null;
-    }
-  }
-
-  private collectionMemberError(kind: CollectionKind, property: string): string {
-    const guidance = collectionMemberGuidance(kind, property);
-    return `${kind} has no member '${property}'${guidance ? `; ${guidance.message}` : ""}`;
-  }
-
-  /**
-   * D38 §48: a retired collection member whose guidance names one successor
-   * member is a mechanical rename of the member name itself.
-   */
-  private collectionMemberFix(kind: CollectionKind, property: string, memberSpan: Span): DiagnosticFix | undefined {
-    const guidance = collectionMemberGuidance(kind, property);
-    if (!guidance?.replacement || !guidance.title || memberSpan.end - memberSpan.start < property.length) return undefined;
-    return mechanicalFix(span(memberSpan.end - property.length, memberSpan.end), guidance.replacement, guidance.title);
-  }
-
-  // COL-U3: exactly the predicate `x => x != null` (either operand order).
-  // An optional second index parameter does not participate in the proof and
-  // therefore preserves the same narrowing contract.
-  // The closed shape keeps this a vocabulary rule, not a predicate-type
-  // system: any other body — even `x => not (x == null)` — filters without
-  // narrowing.
-  private isNullExclusionPredicate(argument: Expression | null): boolean {
-    if (argument?.kind !== "ArrowFunctionExpression" || argument.asynchronous) return false;
-    const parameter = argument.parameters[0];
-    const index = argument.parameters[1];
-    if (argument.parameters.length < 1 || argument.parameters.length > 2 || !parameter || parameter.rest || parameter.defaultValue) return false;
-    if (index?.rest || index?.defaultValue) return false;
-    const body = argument.body;
-    if (body.kind !== "BinaryExpression" || body.operator !== "!=") return false;
-    const matches = (name: Expression, literal: Expression): boolean =>
-      name.kind === "IdentifierExpression" && name.name === parameter.name
-      && literal.kind === "LiteralExpression" && literal.value === null;
-    return matches(body.left, body.right) || matches(body.right, body.left);
-  }
-
-  private mapMember(map: Extract<ValueType, { kind: "map" }>, property: string): ValueType | null {
-    const key = map.readonlyView ? this.readonlyDataViewOf(map.key) : map.key;
-    const comparisonKey = this.readonlyDataViewOf(map.key);
-    const value = map.readonlyView ? this.readonlyDataViewOf(map.value) : map.value;
-    const copy: ValueType = { kind: "map", key, value };
-    const callable = (parameterNames: readonly string[], parameters: readonly ValueType[], result: ValueType): ValueType => ({
-      kind: "function", parameterNames, parameters, requiredParameters: parameters.length, result,
-    });
-    switch (property) {
-      case "size":
-        return numberType;
-      case "get":
-        return callable(["key"], [comparisonKey], optionalOf(value));
-      case "set":
-        if (map.readonlyView) return null;
-        return callable(["key", "value"], [map.key, map.value], nullType);
-      case "getOrSet":
-        if (map.readonlyView) return null;
-        return callable(["key", "fallback"], [map.key, map.value], map.value);
-      case "getOrSetWith":
-        if (map.readonlyView) return null;
-        return callable(["key", "factory"], [map.key, callable([], [], map.value)], map.value);
-      case "update":
-        if (map.readonlyView) return null;
-        return callable(["values"], [map], nullType);
-      case "has":
-        return callable(["key"], [comparisonKey], boolType);
-      case "remove":
-        if (map.readonlyView) return null;
-        return callable(["key"], [comparisonKey], boolType);
-      case "clear":
-        if (map.readonlyView) return null;
-        return callable([], [], nullType);
-      case "copy":
-        return callable([], [], copy);
-      case "iterator":
-        return callable([], [], iteratorOf(key));
-      case "keys":
-        return callable([], [], { kind: "list", element: key });
-      case "values":
-        return callable([], [], { kind: "list", element: value });
-      case "entries":
-        return callable([], [], { kind: "list", element: { kind: "object", fields: new Map([["key", key], ["value", value]]) } });
-      default:
-        return null;
-    }
-  }
-
-  private recordMember(record: Extract<ValueType, { kind: "record" }>, property: string): ValueType | null {
-    const value = record.readonlyView ? this.readonlyDataViewOf(record.value) : record.value;
-    const copy: ValueType = { kind: "record", value };
-    const callable = (parameterNames: readonly string[], parameters: readonly ValueType[], result: ValueType): ValueType => ({
-      kind: "function", parameterNames, parameters, requiredParameters: parameters.length, result,
-    });
-    switch (property) {
-      case "size": return numberType;
-      case "get": return callable(["key"], [stringType], optionalOf(value));
-      case "set": return record.readonlyView ? null : callable(["key", "value"], [stringType, record.value], nullType);
-      case "has": return callable(["key"], [stringType], boolType);
-      case "remove": return record.readonlyView ? null : callable(["key"], [stringType], boolType);
-      case "clear": return record.readonlyView ? null : callable([], [], nullType);
-      case "copy": return callable([], [], copy);
-      case "keys": return callable([], [], { kind: "list", element: stringType });
-      case "values": return callable([], [], { kind: "list", element: value });
-      case "entries": return callable([], [], { kind: "list", element: { kind: "object", fields: new Map([["key", stringType], ["value", value]]) } });
-      default: return null;
-    }
-  }
-
-  private setMember(set: Extract<ValueType, { kind: "set" }>, property: string): ValueType | null {
-    const element = set.readonlyView ? this.readonlyDataViewOf(set.element) : set.element;
-    const comparison = this.readonlyDataViewOf(set.element);
-    const copy: ValueType = { kind: "set", element };
-    const callable = (parameterNames: readonly string[], parameters: readonly ValueType[], result: ValueType): ValueType => ({
-      kind: "function", parameterNames, parameters, requiredParameters: parameters.length, result,
-    });
-    switch (property) {
-      case "size":
-        return numberType;
-      case "add":
-        if (set.readonlyView) return null;
-        return callable(["value"], [set.element], nullType);
-      case "update":
-        if (set.readonlyView) return null;
-        return callable(["values"], [{ kind: "union", members: [set, { kind: "list", element: set.element }] }], nullType);
-      case "has":
-        return callable(["value"], [comparison], boolType);
-      case "remove":
-        if (set.readonlyView) return null;
-        return callable(["value"], [comparison], boolType);
-      case "clear":
-        if (set.readonlyView) return null;
-        return callable([], [], nullType);
-      case "copy":
-        return callable([], [], copy);
-      case "values":
-        return callable([], [], { kind: "list", element });
-      case "union":
-      case "intersection":
-      case "difference":
-        // COL-U2: the Set algebra copies — like sorted — and never mutates
-        // either operand. The other operand is judged by the same
-        // element-domain comparison question the membership probes use.
-        return callable(["other"], [{ kind: "set", element: comparison }], copy);
-      default:
-        return null;
     }
   }
 
@@ -11928,7 +8948,7 @@ export class Analyzer implements TypeEnvironment {
     callSpan: Span,
     rest?: ValueType,
   ): readonly Expression[] | null {
-    const plan = this.planNamedArguments(
+    const plan = this.calls.planNamedArguments(
       arguments_,
       argumentNames,
       parameters,
@@ -13667,10 +10687,6 @@ export class Analyzer implements TypeEnvironment {
     return owner;
   }
 
-  private recordMemberAccessProperty(expression: Extract<Expression, { kind: "MemberExpression" }>): void {
-    this.memberAccessProperties.set(spanIdentity(expression.object.span), { property: expression.property, end: expression.span.end });
-  }
-
   /** The import line a migration writes, in the sorted shape every module here already uses. */
   private renderNamedImport(source: string, specifiers: readonly { readonly imported: string; readonly local: string }[]): string {
     const rendered = [...specifiers]
@@ -13686,179 +10702,6 @@ export class Analyzer implements TypeEnvironment {
     if (lastImport) return { span: { start: lastImport.end, end: lastImport.end }, text: `\n${line}` };
     const offset = program.body[0]?.span.start ?? 0;
     return { span: { start: offset, end: offset }, text: `${line}\n\n` };
-  }
-
-  private registerRetiredCollectionImports(program: Program): void {
-    for (const statement of program.body) {
-      if (statement.kind !== "ImportDeclaration" || statement.javascript || statement.source !== RETIRED_COLLECTION_MODULE) continue;
-      for (const specifier of statement.specifiers) {
-        if (specifier.namespace || !retiredCollectionExports.has(specifier.imported)) continue;
-        this.retiredCollectionImportOrigins.set(specifier.local, { imported: specifier.imported, specifier: specifier.span });
-      }
-    }
-  }
-
-  /**
-   * D114 S3: one report per retired name, carrying the rewrite when the whole
-   * migration of that name is mechanical — every call site in the module plus
-   * the specifier itself. One name at a time, because that is the unit an
-   * author reads and the unit `velar fix` can apply against one snapshot; two
-   * names in one import line take two passes, which is what `velar fix`
-   * already does with every overlapping edit.
-   *
-   * The reports are recovered: the import binds as an unchecked value, so a
-   * retirement produces one diagnostic per name instead of that plus a call
-   * error at every site it left behind.
-   */
-  private reportRetiredCollectionImports(program: Program): void {
-    for (const statement of program.body) {
-      if (statement.kind === "ReExportDeclaration" && statement.source === RETIRED_COLLECTION_MODULE) {
-        for (const specifier of statement.specifiers) {
-          const retired = retiredCollectionExports.get(specifier.imported);
-          if (!retired) continue;
-          this.diagnostics.push(recoveredDiagnostic(
-            "VEL3008",
-            `${retired.guidance}; a re-export cannot restore a retired import spelling`,
-            specifier.span,
-          ));
-        }
-        continue;
-      }
-      if (statement.kind !== "ImportDeclaration" || statement.javascript || statement.source !== RETIRED_COLLECTION_MODULE) continue;
-      const migration = this.retiredCollectionMigration(statement);
-      for (const specifier of statement.specifiers) {
-        if (specifier.namespace) {
-          // D50 rule 97.3: the namespace form reaches every retired member at
-          // once, so which member each `local.member` read wanted is a rewrite
-          // this migration does not claim to know.
-          this.diagnostics.push(recoveredDiagnostic(
-            "VEL3008",
-            "velar/collections retired into checked List members; drop the namespace import and call the member on the List — values.groupBy(key)",
-            specifier.span,
-          ));
-          continue;
-        }
-        const retired = retiredCollectionExports.get(specifier.imported);
-        if (!retired) continue;
-        this.diagnostics.push(recoveredDiagnostic("VEL3008", retired.guidance, specifier.span, migration?.fixes.get(specifier)));
-      }
-    }
-  }
-
-  /**
-   * The whole migration of one import line, as one rewrite.
-   *
-   * Every mechanically migratable name in the line carries the *same* edit
-   * list, because the import statement is one span and two rewrites of it
-   * cannot both be applied against one snapshot: per-name import edits would
-   * make `velar fix` migrate one name per pass and run out of passes on a line
-   * that imports more than a handful. Identical edit lists deduplicate in
-   * `applyMechanicalFixes`, so the pass applies the migration once and the line
-   * is left holding exactly the names no edit can rewrite.
-   */
-  private retiredCollectionMigration(
-    statement: Extract<Statement, { kind: "ImportDeclaration" }>,
-  ): { readonly fixes: ReadonlyMap<unknown, DiagnosticFix> } | null {
-    if (this.rewriteErasesComment(statement.span)) return null;
-    const migrated: { readonly specifier: typeof statement.specifiers[number]; readonly edits: readonly DiagnosticEdit[]; readonly member: string }[] = [];
-    for (const specifier of statement.specifiers) {
-      if (specifier.namespace) continue;
-      const retired = retiredCollectionExports.get(specifier.imported);
-      if (!retired?.rewrite) continue;
-      const edits = this.retiredCollectionCallEdits(specifier, retired);
-      if (edits === null) continue;
-      migrated.push({ specifier, edits, member: retired.rewrite.member });
-    }
-    if (migrated.length === 0) return null;
-    const survivors = statement.specifiers.filter((other) => !migrated.some((plan) => plan.specifier === other));
-    const edits: DiagnosticEdit[] = [...migrated.flatMap((plan) => plan.edits)];
-    edits.push(survivors.length === 0
-      ? { span: { start: statement.span.start, end: statement.span.end + 1 }, text: "" }
-      : {
-        span: statement.span,
-        text: this.renderNamedImport(statement.source, survivors.map((other) => ({ imported: other.imported, local: other.local }))),
-      });
-    const fix = mechanicalEdits(edits, migrated.length === 1
-      ? `Use the List member '.${migrated[0]!.member}()'`
-      : "Use the List members that replaced velar/collections");
-    return { fixes: new Map(migrated.map((plan) => [plan.specifier, fix])) };
-  }
-
-  /**
-   * The call-site edits one retired name needs, or null when any read of it is
-   * not mechanically rewritable: a read that is not a call, a spread, an
-   * argument plan with a hole, or a rewrite that would erase an authored
-   * comment. A name with no reads left behind answers with no edits, and its
-   * specifier still leaves the import.
-   */
-  private retiredCollectionCallEdits(
-    specifier: Extract<Statement, { kind: "ImportDeclaration" }>["specifiers"][number],
-    retired: RetiredCollectionExport,
-  ): readonly DiagnosticEdit[] | null {
-    const edits: DiagnosticEdit[] = [];
-    const seen = new Set<string>();
-    for (const read of this.retiredCollectionImportReads) {
-      if (read.local !== specifier.local || read.imported !== specifier.imported) continue;
-      const identity = spanIdentity(read.span);
-      if (seen.has(identity)) continue;
-      seen.add(identity);
-      const call = this.retiredCollectionCalls.get(identity);
-      if (!call) return null;
-      if (this.rewriteErasesComment(call.span)) return null;
-      const replacement = this.retiredCollectionCallText(call, retired);
-      if (replacement === null) return null;
-      edits.push({ span: call.span, text: replacement });
-    }
-    return edits;
-  }
-
-  /** The member call one retired function call becomes, or null when it is not that shape. */
-  private retiredCollectionCallText(
-    call: Extract<Expression, { kind: "CallExpression" }>,
-    retired: RetiredCollectionExport,
-  ): string | null {
-    const rewrite = retired.rewrite;
-    if (!rewrite || call.optional) return null;
-    const ordered: (Expression | null)[] = retired.parameters.map(() => null);
-    for (const [index, argument] of call.arguments.entries()) {
-      if (argument.kind === "SpreadExpression") return null;
-      const name = call.argumentNames?.[index] ?? null;
-      const position = name === null ? index : retired.parameters.indexOf(name);
-      if (position < 0 || position >= ordered.length || ordered[position] !== null) return null;
-      ordered[position] = argument;
-    }
-    const receiver = ordered[0];
-    if (!receiver) return null;
-    const supplied = ordered.slice(1);
-    while (supplied.length > 0 && supplied.at(-1) === null) supplied.pop();
-    if (supplied.some((argument) => argument === null)) return null;
-    const written = (expression: Expression): string => this.sourceText.slice(expression.span.start, expression.span.end);
-    const receiverText = rewrite.receiverIsListOfArgument
-      ? `[${written(receiver)}]`
-      : this.postfixReceiverText(receiver);
-    const rendered = [...rewrite.fixedArguments];
-    for (const [index, argument] of supplied.entries()) {
-      const name = rewrite.argumentNames[index] ?? null;
-      rendered.push(name === null ? written(argument!) : `${name}=${written(argument!)}`);
-    }
-    return `${receiverText}.${rewrite.member}(${rendered.join(", ")})`;
-  }
-
-  /**
-   * A receiver keeps its parentheses when a `.member` suffix would otherwise
-   * bind tighter than the expression it is attached to — a ternary, an
-   * operator chain, an arrow, an `await`.
-   */
-  private postfixReceiverText(receiver: Expression): string {
-    const written = this.sourceText.slice(receiver.span.start, receiver.span.end);
-    const postfixSafe = ["IdentifierExpression", "MemberExpression", "IndexExpression", "CallExpression", "ListExpression", "ObjectExpression", "RequiredExpression", "SuperExpression"];
-    return postfixSafe.includes(receiver.kind) ? written : `(${written})`;
-  }
-
-  /** Both line and block comments withhold a rewrite rather than erasing prose. */
-  private rewriteErasesComment(span: Span): boolean {
-    const written = this.sourceText.slice(span.start, span.end);
-    return written.includes("//") || written.includes("/*");
   }
 
   private registerPermanentNamespaceImports(program: Program): void {
@@ -15126,13 +11969,13 @@ export class Analyzer implements TypeEnvironment {
       return common;
     }
     if (type.kind === "string") return new Map(["size", "trim", "upper", "lower", "slice", "char", "has", "index", "count", "startsWith", "endsWith", "split", "replace", "replaceAll", "padStart", "padEnd", "repeat", "isBlank"]
-      .map((name) => [name, this.stringMember(name)!]));
+      .map((name) => [name, this.members.stringMember(name)!]));
     if (type.kind === "number") return new Map(["abs", "round", "floor", "ceil", "sign", "trunc", "toFixed", "isInteger", "isNaN", "isFinite"]
-      .map((name) => [name, this.numberMember(name)!]));
-    if (type.kind === "list") return available(["size", "get", "slice", "append", "extend", "insert", "has", "remove", "pop", "clear", "copy", "count", "index", "sorted", "reversed", "map", "flatMap", "filter", "reduce", "some", "every", "find", "join", "sum", "min", "max"], (name) => this.listMember(type, name));
-    if (type.kind === "map") return available(["size", "get", "set", "getOrSet", "getOrSetWith", "update", "has", "remove", "clear", "copy", "iterator", "keys", "values", "entries"], (name) => this.mapMember(type, name));
-    if (type.kind === "record") return available(["size", "get", "set", "has", "remove", "clear", "copy", "keys", "values", "entries"], (name) => this.recordMember(type, name));
-    if (type.kind === "set") return available(["size", "add", "update", "has", "remove", "clear", "copy", "values", "union", "intersection", "difference"], (name) => this.setMember(type, name));
+      .map((name) => [name, this.members.numberMember(name)!]));
+    if (type.kind === "list") return available(["size", "get", "slice", "append", "extend", "insert", "has", "remove", "pop", "clear", "copy", "count", "index", "sorted", "reversed", "map", "flatMap", "filter", "reduce", "some", "every", "find", "join", "sum", "min", "max"], (name) => this.collections.listMember(type, name));
+    if (type.kind === "map") return available(["size", "get", "set", "getOrSet", "getOrSetWith", "update", "has", "remove", "clear", "copy", "iterator", "keys", "values", "entries"], (name) => this.collections.mapMember(type, name));
+    if (type.kind === "record") return available(["size", "get", "set", "has", "remove", "clear", "copy", "keys", "values", "entries"], (name) => this.collections.recordMember(type, name));
+    if (type.kind === "set") return available(["size", "add", "update", "has", "remove", "clear", "copy", "values", "union", "intersection", "difference"], (name) => this.collections.setMember(type, name));
     if (type.kind === "action") return new Map([
       ["pending", boolType],
       ["error", optionalOf({ kind: "class", name: "Error" })],
