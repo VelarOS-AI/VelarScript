@@ -707,3 +707,28 @@ F3 的两条上报进 F4：(a) `case Shape<number>:` **单独**出现时从 1 �
     客户端的契约），`HttpProblem.code` 按宪章等于类名，skill / tour / 标准库文档同步。
 13. **SV-U2 静态 `root` 相对什么**：今天相对进程工作目录，换目录启动全部 404。建议：相对路径以应用自己的
     目录（发射入口所在目录）为基，绝对路径照给；写进文档。
+
+### R2 落地（2026-09-06，D115 P3 的编译器部分；合并 `105219f`）
+
+15 个 `*-runtime.ts`（3,321 行，33 个 `String.raw` 常量）成为 `packages/compiler/runtime/` 下 34 个真 JS 文件
+加 `manifest.json`（族、常量、组成部分、每个文件定义与依赖的 `__velar…` 助手名——用 acorn 解析得出，
+不手写）。`scripts/generate-runtime-sources.mjs` 生成 `src/runtime-sources.generated.ts`（每个常量一个
+`export const`，JSON 字串字面量或由先前常量拼接），并对 12 处「插值已解析进文件文本」的站点逐一断言
+它仍等于所属常量渲染出的文本（改 `VELAR_TYPE_REGISTRY_VERSION` 门立刻红——比模板时代更严）。
+26 处 `${VELAR_X_RUNTIME}` 片段组合不解析进文本（否则同一段运行时写两遍、共享模块与独立内联形态漂移），
+由 manifest 的部分表在生成时拼接。模块说明符与导出名册这些非运行时体的 TS 常量进手写的
+`src/runtime-modules.ts`；`runtime-abi.ts` 只有 TS 常量与类型，原样保留。旧路径全部删除、无门面。
+与 D115 §三平铺 15 个名字的两处偏差：`collection-host` 是六个片段文件（发射器逐片选用于独立输出），
+没有 `primitive.js`（该模块就是 `text.js` + `number.js` + 导出块）。
+
+门禁：`check:runtime-sources`（重生成 + diff，拒绝 manifest 未列的运行时文件）挂在 `check:file-budget` 之后；
+`build-packages` 先重生成再构建；`check-runtime-boundary` 经 manifest 读 `runtime/*.js`，新增规则拒绝
+`packages/compiler/src` 里任何多行 `String.raw` 字面量（留空名单与作用域表给 web / node / core / desktop
+后续片），R1f 发现的四处死读删掉（git 史证明它们自 R1b 改成目录遍历后就成了孤儿，遍历本身覆盖这四个文件）。
+`packages/compiler/package.json` 不变——`runtime/` 是构建输入，打包消费验收绿证明之。
+828 文件指纹逐字节相同；允许名单 37 → 36 文件（`collection-lowering-runtime.ts` 离开）。
+
+一条旁证进后续队列：`tests/desktop-services.test.ts:481`「a crashing service backs off to a terminal state」
+断言 5 条重启日志、在 CPU 争用下见到 4 条（三个 worktree 并发跑门时出现一次，单跑 10/10 绿）——
+Desktop 服务监督器的退避计数按墙钟，测试要改成按事件等待。
+
