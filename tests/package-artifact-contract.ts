@@ -11,7 +11,7 @@ import {
 import {
   addVelarLibraryArtifactBudgetFile,
   assertArtifactByteLength,
-  assertVelarLibraryArtifactSourceMap,
+  assertVelarLibraryArtifactSourceMaps,
   authenticateArtifactTextBytes,
   createVelarLibraryArtifactBudget,
   decodeArtifactUtf8,
@@ -237,7 +237,7 @@ function inspectPackedModuleClosure(
   });
   if (snapshots.length !== [...claims.values()].filter((claim) => claim.javascript).length) return;
   try {
-    for (const snapshot of snapshots) assertVelarLibraryArtifactSourceMap(snapshot);
+    assertVelarLibraryArtifactSourceMaps(receipt.formatVersion, snapshots);
   } catch (error) {
     context.failures.push(`${context.manifest.name}: packed artifact source map is invalid: ${errorMessage(error)}`);
     return;

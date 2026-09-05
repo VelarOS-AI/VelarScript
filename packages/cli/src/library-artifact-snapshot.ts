@@ -203,6 +203,15 @@ export function assertVelarLibraryArtifactSourceMap(snapshot: VelarLibraryArtifa
   validateSourceMapV3(snapshot.sourceMap, snapshot.sourceMapPath);
 }
 
+/** Applies only the source-map contract introduced by receipt format 2. */
+export function assertVelarLibraryArtifactSourceMaps(
+  formatVersion: 1 | 2,
+  snapshots: readonly VelarLibraryArtifactJavaScriptSnapshot[],
+): void {
+  if (formatVersion === 1) return;
+  for (const snapshot of snapshots) assertVelarLibraryArtifactSourceMap(snapshot);
+}
+
 function validateSourceMapV3(text: string, path: string): void {
   let value: unknown;
   try {

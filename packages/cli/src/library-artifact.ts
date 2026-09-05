@@ -5,7 +5,7 @@ import type { ModuleInterface } from "@velarscript/compiler";
 import {
   artifactSnapshotContents,
   assertVelarLibraryArtifactBudgets,
-  assertVelarLibraryArtifactSourceMap,
+  assertVelarLibraryArtifactSourceMaps,
   authorizeArtifactFile,
   readAuthenticatedArtifactText,
   readAuthorizedArtifactText,
@@ -13,7 +13,7 @@ import {
   type VelarLibraryArtifactJavaScriptSnapshot,
 } from "./library-artifact-snapshot.ts";
 import { assertVelarLibraryArtifactModuleClosure } from "./library-artifact-module-closure.ts";
-import { assertArtifactRuntimeDependencies } from "./package-runtime-dependencies.ts";
+import { assertConsumedArtifactRuntimeDependencies } from "./package-runtime-dependencies.ts";
 import { validateVelarLibraryModuleInterface as validateModuleInterface } from "./library-artifact-interface.ts";
 import {
   assertVelarLibraryArtifactReceiptPackagePaths,
@@ -288,15 +288,14 @@ export async function loadVelarLibraryArtifactSet(options: {
         });
       })
     : []);
-  for (const snapshot of [...sharedEntrySnapshots, ...sharedChunkSnapshots]) {
-    assertVelarLibraryArtifactSourceMap(snapshot);
-  }
+  assertVelarLibraryArtifactSourceMaps(receipt.formatVersion, [...sharedEntrySnapshots, ...sharedChunkSnapshots]);
   const external = assertVelarLibraryArtifactModuleClosure(
     [...sharedEntrySnapshots, ...sharedChunkSnapshots],
     options.packageName,
     receipt.target,
   );
-  await assertArtifactRuntimeDependencies(
+  await assertConsumedArtifactRuntimeDependencies(
+    receipt.formatVersion,
     external,
     options.runtimeDependencies ?? new Set(),
     options.packageRoot,

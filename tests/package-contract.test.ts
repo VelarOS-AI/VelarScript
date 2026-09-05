@@ -367,6 +367,7 @@ test("a v1 Velar library receipt promises its JavaScript, source map, and interf
     version: "1.0.0",
     type: "module",
     files: ["src", "dist", "README.md"],
+    dependencies: { yaml: "^2.9.0" },
     exports: { ".": "./dist/index.js" },
     velar: {
       entry: "src/index.vel",
@@ -483,23 +484,40 @@ test("a v1 Velar library receipt promises its JavaScript, source map, and interf
     && failure.includes("formatVersion")
   ), invalidInterfaceFailures.join("\n"));
 
-  const invalidSourceMap = "{}\n";
-  const invalidSourceMapReceipt = {
+  const legacyJavaScript = 'import { parse as parseYaml } from "yaml";\nexport const value = parseYaml\n';
+  const legacySourceMap = "{}\n";
+  const legacyReceipt = {
     ...receipt,
     entry: {
       ...receipt.entry,
-      sha256: { ...receipt.entry.sha256, sourceMap: sha256(invalidSourceMap) },
+      sha256: {
+        ...receipt.entry.sha256,
+        javascript: sha256(legacyJavaScript),
+        sourceMap: sha256(legacySourceMap),
+      },
     },
   };
-  const sourceMapFailures = await packageContentFailures(manifest, complete.packed, async (path) => {
-    if (path === "dist/velar-library.json") return Buffer.from(`${JSON.stringify(invalidSourceMapReceipt)}\n`);
-    if (path === "dist/index.js.map") return Buffer.from(invalidSourceMap);
+  const legacyFailures = await packageContentFailures(manifest, complete.packed, async (path) => {
+    if (path === "dist/velar-library.json") return Buffer.from(`${JSON.stringify(legacyReceipt)}\n`);
+    if (path === "dist/index.js") return Buffer.from(legacyJavaScript);
+    if (path === "dist/index.js.map") return Buffer.from(legacySourceMap);
     return read(path);
   });
-  assert.ok(sourceMapFailures.some((failure) =>
-    failure.includes("packed artifact source map is invalid")
-    && failure.includes("must contain version 3")
-  ), sourceMapFailures.join("\n"));
+  assert.deepEqual(legacyFailures, []);
+  const undeclaredLegacyFailures = await packageContentFailures(
+    { ...manifest, dependencies: {} },
+    complete.packed,
+    async (path) => {
+      if (path === "dist/velar-library.json") return Buffer.from(`${JSON.stringify(legacyReceipt)}\n`);
+      if (path === "dist/index.js") return Buffer.from(legacyJavaScript);
+      if (path === "dist/index.js.map") return Buffer.from(legacySourceMap);
+      return read(path);
+    },
+  );
+  assert.ok(undeclaredLegacyFailures.some((failure) =>
+    failure.includes("retains runtime import 'yaml'")
+    && failure.includes("package.json#dependencies does not declare 'yaml'")
+  ), undeclaredLegacyFailures.join("\n"));
 
   const escapingJavaScript = linkedJavaScript('import "/outside.js";\nexport const value = 1', "index.js.map");
   const escapingReceipt = {
@@ -588,6 +606,27 @@ test("a v2 Velar library receipt covers every exact package entry and packed out
   });
   const read = complete.readPackedFile;
   assert.deepEqual(await packageContentFailures(manifest, complete.packed, read), []);
+
+  const invalidSourceMap = "{}\n";
+  const invalidSourceMapReceipt = {
+    ...receipt,
+    entries: {
+      ...receipt.entries,
+      ".": {
+        ...rootEntry,
+        sha256: { ...rootEntry.sha256, sourceMap: sha256(invalidSourceMap) },
+      },
+    },
+  };
+  const sourceMapFailures = await packageContentFailures(manifest, complete.packed, async (path) => {
+    if (path === "dist/velar-library.json") return Buffer.from(`${JSON.stringify(invalidSourceMapReceipt)}\n`);
+    if (path === "dist/index.js.map") return Buffer.from(invalidSourceMap);
+    return read(path);
+  });
+  assert.ok(sourceMapFailures.some((failure) =>
+    failure.includes("packed artifact source map is invalid")
+    && failure.includes("must contain version 3")
+  ), sourceMapFailures.join("\n"));
 
   const mismatchedExport = {
     ...manifest,

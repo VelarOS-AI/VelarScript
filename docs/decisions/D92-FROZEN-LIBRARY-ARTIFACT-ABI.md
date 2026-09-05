@@ -37,10 +37,11 @@ complete declared artifact set — every entry, interface, shared chunk, and
 source map — once per package and target before decoding the selected interface
 through a bounded strict schema. Verification reads each file from the same
 authorized file handle and keeps immutable JavaScript/source-map snapshots for
-commands that materialize that artifact. Each authenticated map is strict UTF-8
-source-map v3 JSON, and each JavaScript snapshot must end in exactly one
-`sourceMappingURL` naming its
-receipt-declared map. A library that imports another frozen
+commands that materialize that artifact. Format 1 retains its original
+authenticated UTF-8 map contract and does not require a JavaScript
+`sourceMappingURL`. Format 2 additionally requires every map to be strict UTF-8
+source-map v3 JSON and every JavaScript snapshot to end in exactly one
+`sourceMappingURL` naming its receipt-declared map. A library that imports another frozen
 library emits the original bare package specifier: the dependency remains an
 npm dependency of the new library, under its own package owner, rather than
 joining the new artifact's bundle graph. Interface bytes have one 8 MiB aggregate limit and
@@ -66,7 +67,9 @@ they used. In the published library artifact, external npm libraries remain
 ordinary package dependencies. Before that artifact is written, each such
 dependency must expose an existing ESM entry through explicit Node and browser
 export conditions; a legacy or CommonJS-only package cannot support a Core
-claim. Every retained bare dependency must also be declared in the publishing
+claim. Format 2 consumers repeat that target proof against the installed
+dependency graph. Format 1 consumers retain the shipped ownership contract and
+do not retroactively apply the newer target proof. Every retained bare dependency must also be declared in the publishing
 package's `dependencies`, never supplied only by `devDependencies` or a
 workspace hoist. A package that declares the Core target may run on every official target;
 a Node artifact requires Node.

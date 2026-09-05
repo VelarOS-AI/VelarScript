@@ -110,9 +110,11 @@ interface. Interface files share an 8 MiB aggregate limit and JavaScript
 entries plus chunks share a 16 MiB aggregate limit per receipt.
 JavaScript and source maps are then consumed from those immutable
 verified snapshots rather than reopened by a bundler. npm's tarball and
-lockfile integrity protect the receipt itself. A map is strict UTF-8
-source-map v3 JSON, and its JavaScript file ends in exactly one
-`sourceMappingURL` naming that receipt-declared map.
+lockfile integrity protect the receipt itself. Format 1 keeps its original
+authenticated UTF-8 map contract and permits JavaScript without a
+`sourceMappingURL`. Format 2 additionally requires a strict UTF-8 source-map v3
+JSON map and exactly one trailing `sourceMappingURL` naming that
+receipt-declared map.
 
 The authenticated entries and chunks form a closed local ESM graph. Relative
 static imports, re-exports, and literal dynamic imports must resolve inside
@@ -142,10 +144,12 @@ library package's normal npm dependencies. Web/Desktop component artifacts
 require a shared reactive/rendering runtime ABI and are not claimed by ABI 1;
 those packages continue to use source mode.
 
-Both artifact production and loading verify every retained bare import against
-the package's `dependencies` and artifact target. Source checks apply the same
-ownership rule inside package-owned JavaScript helpers reached through
-`#imports` or self exports.
+Artifact production verifies every retained bare import against the package's
+`dependencies` and artifact target. Format 2 loading repeats both checks against
+the installed graph. Format 1 loading retains its original dependency-ownership
+check without retroactively applying the newer target proof. Source checks
+apply the same ownership rule inside package-owned JavaScript helpers reached
+through `#imports` or self exports.
 
 Because those npm imports remain runtime-owned, `check` proves their exact
 entry before a Core artifact can claim portability. The dependency must have an
