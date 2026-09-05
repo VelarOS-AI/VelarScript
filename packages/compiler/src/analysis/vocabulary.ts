@@ -17,10 +17,27 @@ import {
   stringType,
   textConvertibleType,
   unknownType,
+  type TypeParameterBound,
   type ValueType,
 } from "../types.ts";
 
 export const durationType: ValueType = { kind: "named", name: "Duration" };
+
+/**
+ * D41 item 61: the one sentence each type-parameter bound is explained with,
+ * wherever it is refused — at a call, at a construction, at a generic
+ * application in a type position, or against a contract that solves it.
+ *
+ * D114: it was defined in `./calls/generic-calls.ts` and read from three
+ * clusters, which made `declarations` import `calls` to print a sentence. The
+ * bound vocabulary is closed and language-owned, so the table belongs with the
+ * rest of the vocabulary and every refusal site reads the one definition.
+ */
+export const boundVocabularyGuidance: Readonly<Record<TypeParameterBound, string>> = {
+  Text: "a Text parameter accepts the types with a hook-free text form — strings, numbers, bools, enums, and null",
+  Comparable: "a Comparable parameter accepts the types with a runtime order — numbers and strings",
+  Data: "a Data parameter accepts JSON-shaped data — strings, numbers, bools, null, enums, and the Lists, records, and Records built from them",
+};
 
 const namespaceFunction = (
   name: string,

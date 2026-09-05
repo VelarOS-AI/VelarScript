@@ -231,3 +231,53 @@ def loop():
         print(str(value))
 `), []);
 });
+
+// ---------------------------------------------------------------------------
+// D114 follow-up: a refused pattern counts for nothing
+// ---------------------------------------------------------------------------
+
+test("[D114] a refused applied pattern reports once and does not cover the wildcard", () => {
+  // The applied pattern is refused by VEL4022, so it may not also be credited
+  // as coverage: crediting it made `case _:` look redundant and answered one
+  // mistake with two reports.
+  assert.deepEqual(messages(`${shapes}
+def name(value: Shape<number>) -> string:
+    match value:
+        case Shape<number>:
+            return "shape"
+        case _:
+            return "other"
+`), ["VEL4022 Type arguments are erased at runtime, so 'Shape<number>' cannot be checked; check 'Shape' itself"]);
+});
+
+test("[D114] a legal bare pattern that covers the subject still makes the wildcard redundant", () => {
+  assert.deepEqual(messages(`${shapes}
+def name(value: Shape<number>) -> string:
+    match value:
+        case Shape:
+            return "shape"
+        case _:
+            return "other"
+`), ["VEL4014 This match branch is already covered"]);
+});
+
+test("[D114] exhaustiveness without a wildcard still asks for the bare pattern", () => {
+  assert.deepEqual(messages(`${shapes}
+def name(value: Shape<number>) -> string:
+    match value:
+        case Shape:
+            return "shape"
+`), []);
+  // Counting for nothing cuts both ways: the refused spelling closes no match
+  // either, so the fallback report stands and names the spelling that works.
+  assert.deepEqual(messages(`${shapes}
+def name(value: Shape<number>) -> string:
+    match value:
+        case Shape<number>:
+            return "shape"
+`), [
+    "VEL4006 Function 'name' can finish without returning string",
+    "VEL4015 Match on Shape<number> is missing a fallback; class hierarchies are open — end with 'case Shape:' or 'case _:'",
+    "VEL4022 Type arguments are erased at runtime, so 'Shape<number>' cannot be checked; check 'Shape' itself",
+  ]);
+});

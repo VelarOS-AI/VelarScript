@@ -296,8 +296,7 @@ const messages = channel(Message, capacity=64)
 await messages.send({kind: "changed", value: "0,0,0"})
 messages.close()
 
-async for message in messages:
-    print(message.value)
+async for message in messages: print(message.value)
 ```
 
 ## Workers and pull-based WebSockets
@@ -803,8 +802,7 @@ remaining on the existing JavaScript runtime.
 ```velar fragment
 import {LogRecord, logger, setLevel, useSink} from "velar/log"
 
-def sendRecord(record: LogRecord):
-    postToCollector(record.scope, record.level, record.message)
+def sendRecord(record: LogRecord): postToCollector(record.scope, record.level, record.message)
 
 component BuildStatus:
     const buildLog = logger("build")
@@ -913,7 +911,6 @@ export server app:
     @post createArticle(p"/articles", input: CreateArticle) => created({id: 1, title: input.title})
 
     @notFound(request: Request) => {error: "route_not_found", path: request.path}
-
 ```
 
 `server name:` and the Node-only `p"..."` path pattern are enabled by
@@ -1087,15 +1084,13 @@ type MessageInput:
     text: string
 
 async def handle(request: ServeRequest) -> ServeResponse:
-    if request.path == "/api/health":
-        return {status: 200, json: {ok: true}}
+    if request.path == "/api/health": return {status: 200, json: {ok: true}}
     if request.path == "/api/message":
         try:
             const input = await request.parse(MessageInput, maxBytes=65536)
             return {status: 200, text: input.text}
         catch error:
-            if error is RequestBodyTooLargeError:
-                return {status: 413, json: {error: "Request body is too large"}}
+            if error is RequestBodyTooLargeError: return {status: 413, json: {error: "Request body is too large"}}
             throw error
     return fileResponse(root="dist", path=request.path, fallback="index.html")
 

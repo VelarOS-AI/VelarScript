@@ -193,8 +193,7 @@ type User extends Entity:
     avatar: string?
     status: Status
 
-def line(user: User) -> string:
-    return f"{user.id} {user.name} {user.status}"
+def line(user: User) -> string: return f"{user.id} {user.name} {user.status}"
 
 const user: User = {id: "u-1", name: "Ada", avatar: null, status: Status.active}
 print(line(user))
@@ -227,14 +226,11 @@ after its first call and sibling helpers may recurse into each other.
 ```velar
 type Transform = (value: number) -> number
 
-def apply(values: List<number>, using: Transform) -> List<number>:
-    return values.map(using)
+def apply(values: List<number>, using: Transform) -> List<number>: return values.map(using)
 
-def scale(value: number, factor: number = 2) -> number:
-    return value * factor
+def scale(value: number, factor: number = 2) -> number: return value * factor
 
-def join<T: Text>(values: List<T>) -> string:
-    return values.map(str).join(", ")
+def join<T: Text>(values: List<T>) -> string: return values.map(str).join(", ")
 
 const doubled = apply([1, 2, 3], value => scale(value))
 print(join(doubled))
@@ -338,21 +334,15 @@ type Charge:
 
 def advance(phase: Phase) -> Phase:
     match phase:
-        case Phase.todo:
-            return Phase.doing
-        case Phase.doing:
-            return Phase.done
-        case _:
-            return Phase.todo
+        case Phase.todo: return Phase.doing
+        case Phase.doing: return Phase.done
+        case _: return Phase.todo
 
 def describe(event: Charge) -> string:
     match event:
-        case {kind: "charge", amount} if amount > 100:
-            return f"large charge of {amount}"
-        case {kind: "charge", amount}:
-            return f"charge of {amount}"
-        case _:
-            return "other"
+        case {kind: "charge", amount} if amount > 100: return f"large charge of {amount}"
+        case {kind: "charge", amount}: return f"charge of {amount}"
+        case _: return "other"
 
 let phase = Phase.todo
 for step in range(3):
@@ -402,14 +392,11 @@ language feature.
 class Session:
     let open: bool = true
 
-    constructor(const name: string):
-        pass
+    constructor(const name: string): pass
 
-    def close():
-        self.open = false
+    def close(): self.open = false
 
-    @dispose:
-        self.close()
+    @dispose: self.close()
 
 def work(name: string) -> string:
     using session = Session(name)
@@ -444,8 +431,7 @@ form, for when it must survive a log or a JSON boundary.
 type Settings:
     retries: number
 
-def defaultSettings() -> Settings:
-    return {retries: 3}
+def defaultSettings() -> Settings: return {retries: 3}
 
 def load(raw: unknown) -> Settings:
     const settings = try Settings.parse(raw) ?? defaultSettings()
@@ -453,11 +439,9 @@ def load(raw: unknown) -> Settings:
     return settings
 
 def read(values: List<number>, index: number) -> string:
-    try:
-        return str(values[index])
+    try: return str(values[index])
     catch error:
-        if error is IndexError:
-            return "out of range"
+        if error is IndexError: return "out of range"
         throw error
 
 print(str(load({retries: 5}).retries))
@@ -498,8 +482,7 @@ extern module "some-sdk":
 
 import js {load} from "some-sdk"
 
-export def payload() -> Payload:
-    return Payload.parse(load())
+export def payload() -> Payload: return Payload.parse(load())
 
 @main: print(f"{Math.max(1, 2)} {Json.stringify({id: "p-1"})}")
 ```
@@ -517,14 +500,11 @@ sentence about the behaviour, quoted verbatim by the reporter. The body may
 ```velar
 import {expect} from "velar/test"
 
-def initials(name: string) -> string:
-    return name.split(" ").map(part => part.slice(0, 1)).join("")
+def initials(name: string) -> string: return name.split(" ").map(part => part.slice(0, 1)).join("")
 
-test "a full name becomes its initials":
-    expect(initials("Ada Lovelace")).toBe("AL")
+test "a full name becomes its initials": expect(initials("Ada Lovelace")).toBe("AL")
 
-test "a single name keeps one initial":
-    expect(initials("Ada")).toBe("A")
+test "a single name keeps one initial": expect(initials("Ada")).toBe("A")
 ```
 
 ↳ charter [§12 Modules and JavaScript boundaries](language-charter.md#12-modules-and-javascript-boundaries)
@@ -562,7 +542,6 @@ export server app:
     @post(p"/articles", input: CreateArticle) => created({id: 1, title: input.title})
 
     @notFound(request: Request) => {error: "route_not_found", path: request.path}
-
 ```
 
 `p"..."` belongs to the Node extension rather than Core's string system.
@@ -714,8 +693,7 @@ component Chart(points: readonly List<number>):
     let canvas: CanvasElement? = null
 
     @mounted:
-        if canvas != null:
-            print(f"drawing {points.size} points")
+        if canvas != null: print(f"drawing {points.size} points")
 
     @cleanup:
         print("releasing")

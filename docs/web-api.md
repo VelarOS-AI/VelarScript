@@ -87,14 +87,11 @@ type EditorHandle:
 component Editor(initial: string = "draft") exposes EditorHandle:
     state text = initial
 
-    def focusEditor():
-        pass
+    def focusEditor(): pass
 
-    def reset():
-        text = initial
+    def reset(): text = initial
 
-    def value() -> string:
-        return text
+    def value() -> string: return text
 
     expose {focus: focusEditor, reset, value}
     return <input host bind:value={text} />
@@ -103,8 +100,7 @@ component Page:
     let editor: EditorHandle? = null
 
     @mounted:
-        if editor != null:
-            editor.focus()
+        if editor != null: editor.focus()
 
     return <Editor ref={editor} look:borderWidth={1px} />
 ```
@@ -944,8 +940,7 @@ state latestBySession: Map<string, Message> = Map()
 
 def appendChunk(replyId: string, chunk: string):
     const reply = messagesById.get(replyId)
-    if reply != null:
-        reply.text += chunk
+    if reply != null: reply.text += chunk
 
 component SessionList:
     return <ul>{sessions.map(session =>
@@ -969,13 +964,11 @@ import {onError, reportError} from "velar/app"
 component RuntimeStatus:
     state message = "ready"
 
-    def capture(phase: string, detail: string):
-        message = phase + ":" + detail
+    def capture(phase: string, detail: string): message = phase + ":" + detail
 
     const stopErrors = onError(report => capture(report.phase, report.error.message))
 
-    def failDeliberately():
-        reportError(Error("Manual failure"), "manual", "diagnostic action")
+    def failDeliberately(): reportError(Error("Manual failure"), "manual", "diagnostic action")
 
     @cleanup:
         stopErrors()
@@ -1884,8 +1877,7 @@ def decode(message: string | Bytes) -> ServerEvent:
     if message is string: return Json.parse(message, ServerEvent)
     throw Error("Binary events are not supported")
 
-def encode(command: Command) -> string | Bytes:
-    return Json.stringify(command)
+def encode(command: Command) -> string | Bytes: return Json.stringify(command)
 
 async def opened(client: RealtimeClient<Command>, open: RealtimeOpen):
     // generation 每次成功连接都会递增；重连后在这里重新订阅或请求快照。
@@ -1895,9 +1887,9 @@ const live = realtimeClient(
     () => "wss://example.test/live",
     {decode, encode},
     async (event, _client) => print(event.event),
-    opened=opened,
-    failed=async (_failure, _client) => RealtimeClientFailureAction.reconnect,
-    options={reconnectDelays: [0ms, 1s, 2s, 5s], reconnectJitter: 0.2},
+    opened = opened,
+    failed = async (_failure, _client) => RealtimeClientFailureAction.reconnect,
+    options = {reconnectDelays: [0ms, 1s, 2s, 5s], reconnectJitter: 0.2},
 )
 
 await live.start()

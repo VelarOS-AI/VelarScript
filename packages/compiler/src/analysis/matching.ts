@@ -200,12 +200,16 @@ export class MatchAnalysis {
     const bindings = new Map<string, { readonly type: ValueType; readonly span: Span }>();
     let patternNarrowings: ReadonlyMap<string, ValueType> = new Map();
     let patternSurviving: ReadonlyMap<string, ValueType> = new Map();
+    // `invalidType` is the one answer a refused pattern gives back; the
+    // refusal itself is already reported where it was decided.
+    let patternRefused = false;
     const patternBaseline = this.host.flowFacts.flowSnapshotAfterInvalidations(flowBaseline, coverage.fallthroughInvalidations);
     const patternInvalidations = this.host.flowFacts.analyzeIsolatedFlow(patternBaseline, () => {
       this.host.enterScope();
       try {
         this.host.applyNarrowings(coverage.fallthroughNarrowings, branch.pattern.span);
         const narrowedMatch = this.analyzeMatchPattern(branch.pattern, coverage.fallthroughType, bindings);
+        patternRefused = narrowedMatch === invalidType;
         patternSurviving = this.host.flowMerge.survivingNarrowings(coverage.fallthroughNarrowings);
         patternNarrowings = this.host.narrowing.combineNarrowings(
           patternSurviving,
@@ -217,6 +221,12 @@ export class MatchAnalysis {
     });
     if (branchReachable) coverage.fallthroughInvalidations.push(patternInvalidations);
     const rootPattern = this.unwrapMatchAs(branch.pattern);
+    // D114: a refused pattern counts for nothing. `case Shape<number>:` earns
+    // VEL4022 because type arguments are erased, and crediting it as coverage
+    // anyway made the following `case _:` look redundant — one mistake, two
+    // reports. It does not satisfy the subject either, so a match that has no
+    // other fallback still asks for the bare `case Shape:` the refusal names.
+    if (patternRefused) return { branchReachable, bindings, patternNarrowings, patternSurviving, rootPattern };
     if (rootPattern.kind === "MatchValuePattern") {
       for (const value of rootPattern.values) {
         const key = this.host.coverage.matchValueKey(value);
