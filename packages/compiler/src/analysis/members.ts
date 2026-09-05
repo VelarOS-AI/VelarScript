@@ -58,8 +58,8 @@ import {
   mapCollectionOperations,
   recordCollectionOperations,
   setCollectionOperations,
-  type CollectionInference,
-} from "./collections.ts";
+} from "./collections/operations.ts";
+import { type CollectionInference } from "./collections/inference.ts";
 
 
 export const stringPrimitiveOperations = new Map<string, PrimitiveOperation>([
@@ -75,7 +75,7 @@ export const numberPrimitiveOperations = new Map<string, PrimitiveOperation>([
 
 // D29 item 14, the primitive half: the string and number methods that answer a
 // fresh value without touching their receiver. See
-// `discardedPureCollectionOperations` in `./analysis/collections.ts` for the
+// `discardedPureCollectionOperations` in `./collections/operations.ts` for the
 // rule both rosters serve.
 export const discardedPurePrimitiveOperations = new Set<PrimitiveOperation>([
   "stringTrim", "stringUpper", "stringLower", "stringSlice", "stringChar",

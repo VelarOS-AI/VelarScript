@@ -332,14 +332,26 @@ print(str(rows.sorted(by=row => row.name).size))
 });
 
 test("[D42 65] exactly one predicate answers \"is this ordered\"", async () => {
-  const analyzer = await import("node:fs/promises")
-    .then((fs) => fs.readFile(resolve(repositoryRoot, "packages/compiler/src/analyzer.ts"), "utf8"));
+  // D115 §三: the decision moved to analysis/expressions/equality.ts, so this
+  // reads the whole analysis layer — `analyzer.ts` plus every collaborator
+  // under `analysis/` — rather than the one file it used to live in. A layer
+  // read this way stays covered when the next slice moves it again.
+  const fs = await import("node:fs/promises");
+  const source = resolve(repositoryRoot, "packages/compiler/src");
+  const names = await fs.readdir(resolve(source, "analysis"), { recursive: true });
+  const analysis = (await Promise.all([
+    fs.readFile(resolve(source, "analyzer.ts"), "utf8"),
+    ...names.filter((name) => name.endsWith(".ts")).map((name) => fs.readFile(resolve(source, "analysis", name), "utf8")),
+  ])).join("\n");
   // Four mechanisms giving three answers was the structural root of ORD-1/2/3.
   // The retired names must not come back.
-  assert.ok(!/defaultSortableType/u.test(analyzer), "defaultSortableType came back");
-  assert.ok(!/listAggregationOrderedType/u.test(analyzer), "listAggregationOrderedType came back");
-  assert.ok(!/isCollectionOrderKey/u.test(analyzer), "isCollectionOrderKey came back");
-  assert.equal(analyzer.match(/private orderedTypeCategory\(/gu)?.length, 1, "the single ordering decision point moved or multiplied");
+  assert.ok(!/defaultSortableType/u.test(analysis), "defaultSortableType came back");
+  assert.ok(!/listAggregationOrderedType/u.test(analysis), "listAggregationOrderedType came back");
+  assert.ok(!/isCollectionOrderKey/u.test(analysis), "isCollectionOrderKey came back");
+  // One implementation, however many hosts declare it: a host member ends its
+  // line with `;`, an implementation opens a body.
+  const implementations = analysis.match(/^ {2}orderedTypeCategory\([^\n]*\{$/gmu) ?? [];
+  assert.equal(implementations.length, 1, "the single ordering decision point moved or multiplied");
 });
 
 // ---------------------------------------------------------------------------

@@ -17,8 +17,8 @@ import {
   unknownType,
   type GenericApplication,
   type ValueType,
-} from "../types.ts";
-import type { ClassInfo } from "../contracts.ts";
+} from "../../types.ts";
+import type { ClassInfo } from "../../contracts.ts";
 
 /**
  * D114 item ①, the ruling D77 rule 194 left open: a type parameter the

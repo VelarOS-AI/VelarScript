@@ -32,7 +32,7 @@ import {
   type ValueType,
 } from "../../types.ts";
 import { coreVocabularyType, permanentNamespaceImportRoster, permanentNamespaceImportRosters } from "../vocabulary.ts";
-import { retiredCollectionExport } from "../retired-collections.ts";
+import { retiredCollectionExport } from "../collections/retired.ts";
 import { type ClassRegistry } from "../classes/registry.ts";
 import { type TypeReferences } from "../declarations/references.ts";
 import { type Binding } from "../scopes.ts";

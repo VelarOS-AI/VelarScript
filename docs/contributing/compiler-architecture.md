@@ -666,14 +666,20 @@ initialization therefore cannot change which case is selected.
   finished `LoweringHints`, and `Advisories` owns the A roster — the advisory
   proofs that name a Python or JavaScript reflex, or the canonical spelling of a
   collection or record form.
-  `CollectionInference` (`analysis/collections.ts`) owns the compiler-owned
-  collection vocabulary: what a List, Map, Set or Record publishes as its
-  members, what one call of a member means, and the migration off the retired
-  `velar/collections` module those members replaced.
-  `CallInference` (`analysis/calls.ts`) owns everything that happens between a
-  call's parentheses: the callee's kind, the three-phase generic solver, the
-  standard-module intrinsics, and the named-argument plan every one of them
-  shares.
+  `analysis/collections/` owns the compiler-owned collection vocabulary: what a
+  List, Map, Set or Record publishes as its members, what one call of a member
+  means, and the migration off the retired `velar/collections` module those
+  members replaced. `inference.ts` is the `CollectionInference` facade,
+  `operations.ts` the member and lowering rosters, `call.ts` the per-call object
+  and the host interface, `members.ts` the four member resolvers, `list.ts`,
+  `map.ts`, `set.ts` and `record.ts` the per-kind operation families, and
+  `retired.ts` the migration.
+  `analysis/calls/` owns everything that happens between a call's parentheses:
+  `inference.ts` is the `CallInference` facade and the callee-kind dispatch,
+  `generic-calls.ts` the three-phase generic solver and the bound guidance,
+  `intrinsics.ts` the standard-module intrinsics, `named-arguments.ts` the
+  argument plan every one of them shares, and `seeding.ts` the type parameters a
+  call's position seeds.
   `MemberAccess` (`analysis/members.ts`) owns what a receiver publishes under a
   name, and the checked value methods a string or a number carries with it.
   `analysis/vocabulary.ts` is not a collaborator but the permanent Core
@@ -703,6 +709,12 @@ initialization therefore cannot change which case is selected.
   the re-export forms and D90 R12's rule that a public surface may not carry an
   inferred `any` out of the module, and `initialization.ts` for which reads run
   while the module itself evaluates.
+  `analysis/modules/interfaces/` is what a compiled module publishes to the
+  modules that import it: `assembly.ts` is `interfaceOf` and the three sections
+  that precede it — the nominal identities, the resolvers, and the draft tables
+  — `declarations.ts` is what each declaration and each exported statement
+  contributes, and `tables.ts` holds the records those sections thread plus the
+  three mappings every one of them applies to a type on its way out.
   `analysis/scopes.ts` is the scope stack: the chain a lookup walks, the
   declarations a scope has promised, and the rules a declaration passes to enter
   one; `analysis/nearest-names.ts` is the bounded edit distance and bucketed
@@ -715,6 +727,19 @@ initialization therefore cannot change which case is selected.
   function declaration: the analyzable declaration shape, the frame a body's
   returns are collected into, and the placeholder that stands for a result still
   being inferred.
+  `analysis/expressions/` is what an expression means, one subject per file:
+  `identifiers.ts` for a bare name, `literals.ts` for a List or record literal,
+  `operators.ts` for `await`, `!`, `try`, the ternary, `is` and an index read,
+  `binary.ts` for the binary operators and the comparison chain, `equality.ts`
+  for when two values may be compared at all, `contextual.ts` for the type a
+  position expects and the report a position that expected nothing earns,
+  `assignability.ts` for `requireAssignable`, `guidance.ts` for the sentences a
+  refusal ends with, `projections.ts` for `Target.from` and `Target.mapFrom`,
+  `text.ts` for the text-conversion contract, and `assignment.ts` for what may
+  be written to.
+  `analysis/semantic-index.ts` is what the editor is told — the type at every
+  expression, the members of every binding — which is not type checking, since
+  nothing in it can refuse a program.
   `analyzer.ts` keeps the class Web and Node subclass — every one of its 66
   `protected` members is still declared there — plus construction, the host
   objects the clusters read it through, and two dispatchers: `analyzeStatement`
@@ -724,8 +749,8 @@ initialization therefore cannot change which case is selected.
   family; the rest are the two or three lines that were always the whole case.
   A collaborator never names the `Analyzer` type; it declares the interface it
   needs (`AdvisoryHost`, `AnalyzerOwnedHints`, `CollectionInferenceHost`,
-  `CallInferenceHost`, `MemberAccessHost`), and that interface is the record of
-  what it depends on. Analyzer state a collaborator reads mid-walk — the class
+  `CallInferenceHost`, `MemberAccessHost`, and the twelve faces the expression
+  directory declares), and that interface is the record of what it depends on. Analyzer state a collaborator reads mid-walk — the class
   under analysis, the constructor and field-initializer depths — arrives through
   getters on that interface, so the reads stay live.
   `contracts.ts` also holds the analysis half of the extension protocol —
