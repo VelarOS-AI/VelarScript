@@ -31,7 +31,7 @@ import {
   terminateBrowserServer,
   type BrowserWorkerReport,
 } from "./browser-process-owner.ts";
-
+import { projectPackageTarget } from "./project-package-target.ts";
 /**
  * The one thing an author who reached this failure did not know. A
  * `.browser.test.vel` body runs in the test process and drives a page that is
@@ -797,7 +797,7 @@ async function compileBrowserTest(
     publicRoot: config.publicDir,
     extensions: config.compilerExtensions,
     extensionConfig: config.extensionConfig,
-    framework: config.framework,
+    framework: config.framework, packageTarget: projectPackageTarget(config),
     exportTestFunctions: true,
   });
   const errors = [

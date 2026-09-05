@@ -1,7 +1,6 @@
-import { createRequire, findPackageJSON, isBuiltin } from "node:module";
+import { isBuiltin } from "node:module";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
-import { lstat, readFile, readdir } from "node:fs/promises";
-import { pathToFileURL } from "node:url";
+import { lstat, readFile, readdir, stat } from "node:fs/promises";
 import {
   analysisTypeIdentity,
   advisory,
@@ -31,19 +30,45 @@ import type { ResolvedFrameworkHost } from "./config.ts";
 import { isNodeOnlyModule, nodeModuleDiagnostic } from "@velarscript/node/compiler";
 import { isStandardModule, standardModuleInterface, standardModuleInterfaces } from "./standard-modules.ts";
 import { loadTypeScriptDeclarations, type TypeScriptDeclarationBridge } from "./typescript-declarations.ts";
-import { MAX_VELAR_PROJECT_MODULES, readVelarSourceFile, validateVelarSourceText } from "./source-limits.ts";
+import { MAX_VELAR_PROJECT_MODULES, resolveVelarSourceSnapshot, type VelarSourceFileSnapshot } from "./source-limits.ts";
 import { readBoundedText } from "./bounded-text.ts";
 import { hostErrorMessage, isHostErrorCode } from "./host-error.ts";
 import { canonicalizePotentialPath } from "./canonical-path.ts";
 import { byCodeUnit } from "./stable-order.ts";
-import { VELAR_VERSION } from "./version.ts";
 import {
-  loadVelarLibraryArtifact,
+  loadVelarLibraryArtifactSet,
   packageStableModulePath,
   rebaseModuleInterfaceIdentities,
   type LoadedVelarLibraryArtifact,
-  type VelarLibraryArtifactTarget,
 } from "./library-artifact.ts";
+import { assertVelarPackageEntrySubpath, assertVelarPackageSubpath, type VelarPackageSubpath } from "./package-entry.ts";
+import { npmPackageNameFromSpecifier } from "./package-name.ts";
+import type { JavaScriptPackageTarget } from "./package-imports.ts";
+import { assertJavaScriptDataModuleTarget } from "./javascript-data-module.ts";
+import { judgeJavaScriptSpecifier, type JavaScriptSpecifierDiagnostic } from "./javascript-dependency-target.ts";
+import { findPackageSelfReferenceRoot } from "./package-scope.ts";
+import {
+  JavaScriptOnlyPackageError,
+  assertVelarPackageCompatibility,
+  assertVelarPackageTargetCapabilities,
+  canonicalVelarPackageEntryPaths,
+  parseVelarSourcePackageManifest,
+  type ParsedVelarSourcePackageManifest,
+  type VelarPackageEntry,
+  type VelarPackageLanguageRange,
+  type VelarPackageResource,
+  type VelarPackageTarget,
+} from "./source-package-manifest.ts";
+
+export type {
+  VelarLanguageBound,
+  VelarLanguageGeneration,
+  VelarPackageEntry,
+  VelarPackageLanguageRange,
+  VelarPackageResource,
+  VelarPackageTarget,
+} from "./source-package-manifest.ts";
+export type { VelarPackageSubpath } from "./package-entry.ts";
 
 const MAX_PROJECT_RESOURCES = 1024;
 const MAX_JSON_RESOURCE_BYTES = 4 * 1024 * 1024;
@@ -51,6 +76,8 @@ const MAX_JSON_RESOURCE_BYTES = 4 * 1024 * 1024;
 export interface ProjectModule {
   readonly inputPath: string;
   readonly relativePath: string;
+  /** SHA-256 of the exact UTF-8 bytes that produced this compile result. */
+  readonly sourceSha256: string;
   readonly result: CompileResult;
   /**
    * The module's own compile output, before the project-level cycle check
@@ -77,6 +104,8 @@ export interface VelarSourcePackage {
   readonly version: string;
   readonly root: string;
   readonly entryPath: string;
+  /** Every declared source entry, including the root under `.`. */
+  readonly entries: ReadonlyMap<VelarPackageSubpath, VelarPackageEntry>;
   readonly resources: readonly VelarPackageResource[];
   readonly targets: readonly VelarPackageTarget[];
   readonly requiredCapabilities: readonly string[];
@@ -86,39 +115,8 @@ export interface VelarSourcePackage {
    * package that says nothing is checked exactly as it was before.
    */
   readonly requiredLanguage: VelarPackageLanguageRange | null;
-  /** Frozen ABI-1 JavaScript selected for this project target, or source mode. */
-  readonly artifact: LoadedVelarLibraryArtifact | null;
-}
-
-/**
- * D90 R13: a declared language generation range, kept alongside the author's
- * own spelling — whitespace-normalized, nothing else — so the mismatch error
- * quotes the manifest back rather than a re-rendering of the parsed bounds.
- */
-export interface VelarPackageLanguageRange {
-  readonly text: string;
-  readonly lower: VelarLanguageBound | null;
-  readonly upper: VelarLanguageBound | null;
-}
-
-export interface VelarLanguageBound {
-  readonly generation: VelarLanguageGeneration;
-  readonly inclusive: boolean;
-}
-
-/** A language generation: `<major>.<minor>`, the two components a patch release never moves. */
-export interface VelarLanguageGeneration {
-  readonly major: number;
-  readonly minor: number;
-}
-
-export type VelarPackageTarget = "core" | "node" | "web" | "desktop";
-
-export interface VelarPackageResource {
-  readonly subpath: `./${string}` | null;
-  readonly relativePath: string;
-  readonly inputPath: string;
-  readonly kind: "json";
+  /** Frozen ABI-1 entries selected by imports in this project, keyed by public subpath. */
+  readonly artifacts: ReadonlyMap<VelarPackageSubpath, LoadedVelarLibraryArtifact>;
 }
 
 export interface ProjectResource {
@@ -153,6 +151,8 @@ export interface ProjectResult {
   readonly velarImports: ReadonlyMap<string, string>;
   /** Installed artifact interfaces keyed by importer and package specifier. */
   readonly velarArtifactInterfaces: ReadonlyMap<string, ModuleInterface>;
+  /** Selected frozen artifacts keyed by importer and package specifier. */
+  readonly velarArtifactImports: ReadonlyMap<string, LoadedVelarLibraryArtifact>;
   readonly resources: readonly ProjectResource[];
   readonly resourceImports: ReadonlyMap<string, ProjectResource>;
   readonly externalTypeDependencies: ReadonlyMap<string, ReadonlySet<string>>;
@@ -186,6 +186,12 @@ export interface CompileProjectOptions {
   readonly extensions?: readonly CompilerExtension[];
   readonly extensionConfig?: ReadonlyMap<string, unknown>;
   readonly framework?: ResolvedFrameworkHost | null;
+  /**
+   * The exact package target owned by a caller. Config-backed entry points
+   * derive it once from VelarProjectConfig so every command and extra root
+   * enforces the same boundary; artifact builds may pin an explicit target.
+   */
+  readonly packageTarget?: VelarPackageTarget;
   readonly exportTestFunctions?: boolean;
   /**
    * 是否为已编译模块构建 Source Map。默认开启；`check` 和关闭映射的生产构建
@@ -204,6 +210,7 @@ interface LoadedModule {
   readonly inputPath: string;
   readonly relativePath: string;
   readonly text: string;
+  readonly sourceSha256: string;
   readonly inspection: ModuleInspection;
   readonly package: VelarSourcePackage | null;
   readonly resourceContents: ReadonlyMap<string, string>;
@@ -214,8 +221,34 @@ interface PendingModule {
   readonly package: VelarSourcePackage | null;
 }
 
+function projectModuleResult(
+  module: Pick<ProjectModule, "inputPath" | "relativePath" | "sourceSha256">,
+  result: CompileResult,
+): ProjectModule {
+  return { inputPath: module.inputPath, relativePath: module.relativePath, sourceSha256: module.sourceSha256, result };
+}
+
 export function projectImportKey(importerPath: string, source: string): string {
   return `${resolve(importerPath)}\0${source}`;
+}
+
+function registerVelarPackage(
+  packages: Map<string, VelarSourcePackage>,
+  candidate: VelarSourcePackage,
+): VelarSourcePackage {
+  const existing = packages.get(candidate.name);
+  if (existing && existing.root !== candidate.root) {
+    throw new Error(`VelarScript package '${candidate.name}' resolves to multiple installed versions; use one package instance per application build`);
+  }
+  if (!existing) {
+    packages.set(candidate.name, candidate);
+    return candidate;
+  }
+  const artifacts = new Map(existing.artifacts);
+  for (const [subpath, artifact] of candidate.artifacts) artifacts.set(subpath, artifact);
+  const merged = artifacts.size === existing.artifacts.size ? existing : { ...existing, artifacts };
+  packages.set(candidate.name, merged);
+  return merged;
 }
 
 /**
@@ -225,10 +258,15 @@ export function projectImportKey(importerPath: string, source: string): string {
  * during the dependency walk and overlays them onto the importer's compile
  * result next to the initialization-cycle diagnostics.
  */
-interface ModuleResolutionDiagnostic {
-  readonly code: string;
-  readonly message: string;
-  readonly source: string;
+type ModuleResolutionDiagnostic = JavaScriptSpecifierDiagnostic;
+
+interface JavaScriptDependencyContext {
+  readonly packageTarget: VelarPackageTarget;
+  readonly resolutionTarget: JavaScriptPackageTarget;
+  readonly resolveSpecifiers: boolean;
+  readonly failures: ProjectFailure[];
+  readonly verdicts: Map<string, ModuleResolutionDiagnostic | null>;
+  readonly recordResolution: (importerPath: string, source: string, code: string, message: string) => void;
 }
 
 export async function compileProject(
@@ -260,14 +298,18 @@ export async function compileProjectEntries(
   const framework = options.framework ?? null;
   const capabilities = new Set(compilerExtensions.flatMap((extension) => extension.capabilities ?? []));
   const packageCapabilities = new Set(capabilities);
-  if (packageCapabilities.size === 0 && framework === null) packageCapabilities.add("node");
-  const packageTarget: VelarPackageTarget = packageCapabilities.has("desktop")
+  if (options.packageTarget !== undefined && options.packageTarget !== "core") packageCapabilities.add(options.packageTarget);
+  else if (options.packageTarget === undefined && packageCapabilities.size === 0 && framework === null) packageCapabilities.add("node");
+  const packageTarget: VelarPackageTarget = options.packageTarget ?? (packageCapabilities.has("desktop")
     ? "desktop"
     : packageCapabilities.has("web")
       ? "web"
       : packageCapabilities.has("node")
         ? "node"
-        : "core";
+        : "core");
+  const javascriptPackageTarget: JavaScriptPackageTarget = packageTarget === "web" || framework?.host.target === "browser"
+    ? "browser"
+    : "node";
   const initialEntries = [...new Set(entries.map((entry) => resolve(entry)))];
   const pending: PendingModule[] = initialEntries.slice(0, MAX_VELAR_PROJECT_MODULES).map((inputPath) => ({ inputPath, package: null }));
   const scheduled = new Set(pending.map((module) => module.inputPath));
@@ -278,17 +320,27 @@ export async function compileProjectEntries(
   const declarationCache = new Map<string, Promise<TypeScriptDeclarationBridge | null>>();
   const externalTypeDependencies = new Map<string, Set<string>>();
   const interfaceCache = new Map<string, ModuleInspection["moduleInterface"]>();
-  const velarPackages = new Map<string, VelarSourcePackage>();
+  const velarPackages = new Map<string, VelarSourcePackage>(), velarPackageResolutionCache = createVelarPackageResolutionCache();
   const velarImports = new Map<string, string>();
   const velarArtifactInterfaces = new Map<string, ModuleInterface>();
+  const velarArtifactImports = new Map<string, LoadedVelarLibraryArtifact>();
   const resources = new Map<string, ProjectResource>();
   const resourceImports = new Map<string, ProjectResource>();
   const unsafeCssOwners = new Map<string, string>();
+  const javascriptSpecifierVerdicts = new Map<string, ModuleResolutionDiagnostic | null>();
   const resolutionDiagnostics = new Map<string, ModuleResolutionDiagnostic[]>();
   const recordResolution = (importerPath: string, source: string, code: string, message: string): void => {
     const list = resolutionDiagnostics.get(importerPath) ?? [];
     list.push({ code, message, source });
     resolutionDiagnostics.set(importerPath, list);
+  };
+  const javascriptDependencies: JavaScriptDependencyContext = {
+    packageTarget,
+    resolutionTarget: javascriptPackageTarget,
+    resolveSpecifiers: options.resolveJavaScriptSpecifiers !== false,
+    failures,
+    verdicts: javascriptSpecifierVerdicts,
+    recordResolution,
   };
   // The importing statement behind each scheduled module, so a failure that
   // only surfaces when the target is visited (a missing file, a
@@ -298,7 +350,6 @@ export async function compileProjectEntries(
   // symlink-resolved) path of every visited module detects a second spelling
   // of the same file before it double-instantiates.
   const canonicalModuleKeys = new Map<string, string>();
-  const javascriptSpecifierVerdicts = new Map<string, ModuleResolutionDiagnostic | null>();
   const canonicalBoundaries = new Map<string, Promise<string>>();
   const canonicalBoundary = (boundary: string): Promise<string> => {
     let pending = canonicalBoundaries.get(boundary);
@@ -372,12 +423,9 @@ export async function compileProjectEntries(
       }
       canonicalModuleKeys.set(canonicalInput, inputPath);
     }
-    let text: string;
+    let source: VelarSourceFileSnapshot;
     try {
-      const overridden = overrides.get(inputPath);
-      text = overridden === undefined
-        ? await readVelarSourceFile(inputPath)
-        : validateVelarSourceText(overridden, inputPath);
+      source = await resolveVelarSourceSnapshot(inputPath, overrides.get(inputPath));
     } catch (error) {
       // MOD-U5: a missing module lands on the import that asked for it, in
       // owned words, with the closest on-disk name when one is near.
@@ -396,6 +444,7 @@ export async function compileProjectEntries(
       failures.push({ path: inputPath, message: hostErrorMessage(error) });
       continue;
     }
+    const { text, sha256: sourceSha256 } = source;
     const relativePath = normalizeModulePath(pendingModule.package
       ? join("__velar_packages__", pendingModule.package.name, pathWithinBoundary)
       : relative(sourceRoot, inputPath));
@@ -404,14 +453,10 @@ export async function compileProjectEntries(
     for (const resource of inspection.resources) {
       if (resource.kind === "json") {
         try {
-          const resolved = await resolveJsonResource(resource.source, inputPath, pendingModule.package, sourceRoot);
+          const resolved = await resolveJsonResource(resource.source, inputPath, pendingModule.package, sourceRoot, velarPackageResolutionCache);
           if (resolved.package_) {
             assertVelarPackageCompatibility(resolved.package_, packageTarget, packageCapabilities);
-            const existing = velarPackages.get(resolved.package_.name);
-            if (existing && existing.root !== resolved.package_.root) {
-              throw new Error(`VelarScript package '${resolved.package_.name}' resolves to multiple installed versions; use one package instance per application build`);
-            }
-            velarPackages.set(resolved.package_.name, resolved.package_);
+            registerVelarPackage(velarPackages, resolved.package_);
           }
           const content = overrides.get(resolved.resource.inputPath)
             ?? await readJsonResource(resolved.resource.inputPath, resource.source);
@@ -486,33 +531,12 @@ export async function compileProjectEntries(
         failures.push({ path: inputPath, message: `Cannot load ${resource.kind} resource '${resource.source}': ${hostErrorMessage(error)}` });
       }
     }
-    loaded.set(inputPath, { inputPath, relativePath, text, inspection, package: pendingModule.package, resourceContents });
+    loaded.set(inputPath, { inputPath, relativePath, text, sourceSha256, inspection, package: pendingModule.package, resourceContents });
 
     for (const dependency of inspection.dependencies) {
       if (dependency.resource) continue;
       if (dependency.javascript) {
-        if (dependency.source.startsWith(".")) {
-          failures.push({
-            path: inputPath,
-            message: `Relative JavaScript import target '${dependency.source}' cannot be emitted; move the JavaScript module into a package and import it by package name`,
-          });
-          continue;
-        }
-        // BRG-U2: a bare `import js` specifier resolves at check time. A
-        // mistyped package name used to pass check and crash the run with a
-        // raw ERR_MODULE_NOT_FOUND pointing at emitted artifacts, and a
-        // VelarScript package imported through `import js` crashed the same
-        // way while the mirror mistake had teaching.
-        if (options.resolveJavaScriptSpecifiers !== false
-          && !dependency.source.startsWith("data:") && !isBuiltin(dependency.source)) {
-          const key = projectImportKey(inputPath, dependency.source);
-          let verdict = javascriptSpecifierVerdicts.get(key);
-          if (verdict === undefined) {
-            verdict = await judgeJavaScriptSpecifier(dependency.source, inputPath);
-            javascriptSpecifierVerdicts.set(key, verdict);
-          }
-          if (verdict) recordResolution(inputPath, dependency.source, verdict.code, verdict.message);
-        }
+        await checkJavaScriptDependency(dependency.source, inputPath, javascriptDependencies);
         continue;
       }
       if (isNodeOnlyModule(dependency.source) && (capabilities.has("web") || framework?.host.target === "browser")
@@ -567,20 +591,16 @@ export async function compileProjectEntries(
           continue;
         }
         try {
-          const package_ = await resolveVelarSourcePackage(dependency.source, inputPath, packageTarget, packageCapabilities);
-          const existing = velarPackages.get(package_.name);
-          if (existing && existing.root !== package_.root) {
-            recordResolution(inputPath, dependency.source, "VEL6002", `VelarScript package '${package_.name}' resolves to multiple installed versions; use one package instance per application build`);
-            continue;
-          }
-          velarPackages.set(package_.name, package_);
+          const resolvedPackage = await resolveVelarSourcePackage(dependency.source, inputPath, packageTarget, packageCapabilities, velarPackageResolutionCache);
+          const package_ = registerVelarPackage(velarPackages, resolvedPackage.package_);
           const importKey = projectImportKey(inputPath, dependency.source);
-          if (package_.artifact) {
-            velarArtifactInterfaces.set(importKey, package_.artifact.moduleInterface);
+          if (resolvedPackage.artifact) {
+            velarArtifactInterfaces.set(importKey, resolvedPackage.artifact.moduleInterface);
+            velarArtifactImports.set(importKey, resolvedPackage.artifact);
           } else {
-            velarImports.set(importKey, package_.entryPath);
-            importOrigins.set(package_.entryPath, { importer: inputPath, source: dependency.source });
-            enqueue({ inputPath: package_.entryPath, package: package_ });
+            velarImports.set(importKey, resolvedPackage.entry.inputPath);
+            importOrigins.set(resolvedPackage.entry.inputPath, { importer: inputPath, source: dependency.source });
+            enqueue({ inputPath: resolvedPackage.entry.inputPath, package: package_ });
           }
         } catch (error) {
           if (error instanceof JavaScriptOnlyPackageError) {
@@ -630,7 +650,7 @@ export async function compileProjectEntries(
   const modules: ProjectModule[] = [];
   const previousModules = new Map(previous?.modules.map((module) => [module.inputPath, module]));
   const affected = previous
-    ? affectedModules(loaded, velarImports, resourceImports, previous, previousModules, changedPaths)
+    ? affectedModules(loaded, velarImports, velarArtifactImports, resourceImports, previous, previousModules, changedPaths)
     : new Set(loaded.keys());
   if (previous) {
     const currentExecutionEntries = new Set(initialEntries);
@@ -706,7 +726,7 @@ export async function compileProjectEntries(
         const result = module.package === null
           ? compiled
           : { ...compiled, moduleInterface: stableSourcePackageInterface(module, compiled.moduleInterface, loaded) };
-        nextResults.set(module.inputPath, { inputPath: module.inputPath, relativePath: module.relativePath, result });
+        nextResults.set(module.inputPath, projectModuleResult(module, result));
       }
       passResults = nextResults;
       for (const [path, compiled] of nextResults) compiledInterfaces.set(path, compiled.result.moduleInterface);
@@ -788,6 +808,7 @@ export async function compileProjectEntries(
     velarPackages: [...velarPackages.values()],
     velarImports,
     velarArtifactInterfaces,
+    velarArtifactImports,
     resources: [...resources.values()],
     resourceImports,
     externalTypeDependencies,
@@ -845,64 +866,52 @@ async function nearestModuleName(targetPath: string): Promise<string | null> {
   }
 }
 
-// BRG-U2: judge a bare `import js` specifier at check time. The package must
-// exist next to the importer, and a VelarScript package reached through
-// `import js` gets the reverse-direction teaching.
-async function judgeJavaScriptSpecifier(source: string, importerPath: string): Promise<ModuleResolutionDiagnostic | null> {
-  if (source.startsWith("velar/compiler-runtime-") && source.endsWith("-v1")) {
-    return {
-      code: "VEL6006",
-      message: `JavaScript import ${JSON.stringify(source)} names a compiler-internal runtime module; it is emitted only as generated implementation support and cannot be imported from VelarScript source`,
-      source,
-    };
+async function checkJavaScriptDependency(
+  source: string,
+  importerPath: string,
+  context: JavaScriptDependencyContext,
+): Promise<void> {
+  if (source.startsWith(".")) {
+    context.failures.push({
+      path: importerPath,
+      message: `Relative JavaScript import target '${source}' cannot be emitted; move the JavaScript module into a package and import it by package name`,
+    });
+    return;
   }
-  if (source.startsWith("node:")) {
-    return {
-      code: "VEL6006",
-      message: `JavaScript builtin import ${JSON.stringify(source)} is not a Node builtin; fix the specifier`,
-      source,
-    };
+  if (isBuiltin(source)) {
+    if (context.packageTarget !== "node") {
+      context.recordResolution(
+        importerPath,
+        source,
+        "VEL6006",
+        `JavaScript Node builtin import ${JSON.stringify(source)} is available only to the Node target; the current target is '${context.packageTarget}'`,
+      );
+    }
+    return;
   }
-  if (source.startsWith("#")) {
+  if (source.startsWith("data:")) {
     try {
-      createRequire(pathToFileURL(importerPath)).resolve(source);
-      return null;
+      assertJavaScriptDataModuleTarget(source, context.packageTarget);
     } catch (error) {
-      return {
-        code: "VEL6006",
-        message: `JavaScript package import ${JSON.stringify(source)} is not defined by the importing project's package.json#imports map, or its target does not resolve: ${hostErrorMessage(error)}`,
+      context.recordResolution(
+        importerPath,
         source,
-      };
+        "VEL6006",
+        `Inline JavaScript data module is not valid for the '${context.packageTarget}' target: ${hostErrorMessage(error)}`,
+      );
     }
+    return;
   }
-  let manifestPath: string | undefined;
-  try {
-    manifestPath = findPackageJSON(source, pathToFileURL(importerPath)) ?? undefined;
-  } catch {
-    manifestPath = undefined;
+  if (!context.resolveSpecifiers) return;
+  const key = projectImportKey(importerPath, source);
+  let verdict = context.verdicts.get(key);
+  if (verdict === undefined) {
+    verdict = await judgeJavaScriptSpecifier(source, importerPath, context.resolutionTarget, context.packageTarget);
+    context.verdicts.set(key, verdict);
   }
-  if (manifestPath === undefined) {
-    return {
-      code: "VEL6006",
-      message: `JavaScript package import ${JSON.stringify(source)} does not resolve to an installed package; install it, or fix the specifier`,
-      source,
-    };
-  }
-  try {
-    const manifest = JSON.parse(await readBoundedText(manifestPath, 1024 * 1024, `Package manifest for '${source}'`)) as { velar?: { entry?: unknown } };
-    if (typeof manifest.velar?.entry === "string" && manifest.velar.entry.length > 0) {
-      const packageName = packageNameOf(source);
-      return {
-        code: "VEL6006",
-        message: `'${packageName}' is a VelarScript package; import it without 'js' — import {name} from ${JSON.stringify(packageName)}`,
-        source,
-      };
-    }
-  } catch {
-    // An unreadable manifest is the package's own problem; the import stands.
-  }
-  return null;
+  if (verdict) context.recordResolution(importerPath, source, verdict.code, verdict.message);
 }
+
 
 /**
  * D57 rule 136: how one standard module appears in the VEL6003 listing. A
@@ -977,6 +986,7 @@ function importedReactiveAssignmentDiagnostics(
 function affectedModules(
   loaded: ReadonlyMap<string, LoadedModule>,
   velarImports: ReadonlyMap<string, string>,
+  velarArtifactImports: ReadonlyMap<string, LoadedVelarLibraryArtifact>,
   resourceImports: ReadonlyMap<string, ProjectResource>,
   previous: ProjectResult,
   previousModules: ReadonlyMap<string, ProjectModule>,
@@ -988,20 +998,32 @@ function affectedModules(
     path: string,
     values: readonly { readonly source: string; readonly javascript: boolean }[],
     imports: ReadonlyMap<string, string>,
+    artifacts: ReadonlyMap<string, LoadedVelarLibraryArtifact>,
   ): void => {
     for (const dependency of values) {
       if (dependency.javascript) continue;
       const target = dependency.source.startsWith(".") && extname(dependency.source) === ".vel"
         ? resolve(dirname(path), dependency.source)
         : imports.get(projectImportKey(path, dependency.source));
-      if (!target) continue;
-      const dependents = reverse.get(target) ?? new Set<string>();
-      dependents.add(path);
-      reverse.set(target, dependents);
+      const artifact = artifacts.get(projectImportKey(path, dependency.source));
+      const targets = target === undefined
+        ? artifactInputs(artifact)
+        : [target, ...artifactInputs(artifact)];
+      for (const dependencyPath of targets) {
+        const dependents = reverse.get(dependencyPath) ?? new Set<string>();
+        dependents.add(path);
+        reverse.set(dependencyPath, dependents);
+      }
     }
   };
-  for (const module of loaded.values()) dependencies(module.inputPath, module.inspection.dependencies, velarImports);
-  for (const module of previous.modules) dependencies(module.inputPath, module.result.dependencies, previous.velarImports);
+  for (const module of loaded.values()) {
+    dependencies(module.inputPath, module.inspection.dependencies, velarImports, velarArtifactImports);
+  }
+  const previousArtifactImports = previous.velarArtifactImports
+    ?? new Map<string, LoadedVelarLibraryArtifact>();
+  for (const module of previous.modules) {
+    dependencies(module.inputPath, module.result.dependencies, previous.velarImports, previousArtifactImports);
+  }
   const resources = (
     path: string,
     values: readonly { readonly source: string }[],
@@ -1039,6 +1061,22 @@ function affectedModules(
   // a question the caller's map already answers in constant time.
   for (const module of loaded.keys()) if (!previousModules.has(module)) affected.add(module);
   return affected;
+}
+
+function artifactInputs(artifact: LoadedVelarLibraryArtifact | undefined): readonly string[] {
+  return artifact
+    ? [
+        artifact.receiptPath,
+        artifact.entryPath,
+        artifact.sourceMapPath,
+        artifact.interfacePath,
+        ...artifact.entrySnapshots.flatMap((snapshot) => [snapshot.path, snapshot.sourceMapPath]),
+        ...artifact.interfacePaths,
+        ...artifact.chunkPaths,
+        ...artifact.chunkSnapshots.flatMap((snapshot) => [snapshot.path, snapshot.sourceMapPath]),
+      ]
+      .map((path) => resolve(path))
+    : [];
 }
 
 function dependencyFirstCompilationGroups(
@@ -1344,7 +1382,7 @@ function appendInitializationCycleDiagnostics(
     }
     if (additions.length === 0 && advisoryAdditions.length === 0) {
       if (module.compiledResult === undefined) continue;
-      modules[index] = { inputPath: module.inputPath, relativePath: module.relativePath, result: compiled };
+      modules[index] = projectModuleResult(module, compiled);
       continue;
     }
     const diagnostics = [...compiled.diagnostics, ...additions]
@@ -1902,28 +1940,53 @@ function stableSourcePackageInterface(
   }));
 }
 
-/**
- * MOD-U7: the package is installed and its manifest reads fine — it is simply
- * a JavaScript package. That is the mirror image of BRG-U2 (a VelarScript
- * package reached through `import js`), and it earns the same
- * reverse-direction teaching instead of a manifest-field complaint that never
- * mentions the bridge the author actually needs.
- */
-class JavaScriptOnlyPackageError extends Error {}
+/** A package manifest is one identity; each import selects one exact public entry. */
+interface ResolvedVelarSourcePackage {
+  readonly package_: VelarSourcePackage;
+  readonly subpath: VelarPackageSubpath;
+  readonly entry: VelarPackageEntry;
+  readonly artifact: LoadedVelarLibraryArtifact | null;
+}
+
+interface CachedVelarSourcePackageManifest {
+  readonly key: string;
+  readonly manifest: ParsedVelarSourcePackageManifest;
+  readonly package_: VelarSourcePackage;
+}
+
+interface VelarPackageResolutionCache {
+  readonly manifests: Map<string, Promise<CachedVelarSourcePackageManifest>>;
+  readonly artifacts: Map<string, Promise<ReadonlyMap<VelarPackageSubpath, LoadedVelarLibraryArtifact>>>;
+  readonly selfRoots: Map<string, Promise<string | null>>;
+}
+
+function createVelarPackageResolutionCache(): VelarPackageResolutionCache {
+  return { manifests: new Map(), artifacts: new Map(), selfRoots: new Map() };
+}
 
 async function resolveVelarSourcePackage(
   source: string,
   importerPath: string,
-  target?: VelarPackageTarget,
-  capabilities?: ReadonlySet<string>,
-): Promise<VelarSourcePackage> {
+  target: VelarPackageTarget | undefined,
+  capabilities: ReadonlySet<string> | undefined,
+  cache: VelarPackageResolutionCache,
+): Promise<ResolvedVelarSourcePackage> {
   const name = packageNameOf(source);
-  if (source !== name) throw new Error("package subpaths are not supported; import the package entry by name");
+  const subpath = packageSubpath(source, name);
+  const selfRoot = await packageSelfReferenceRoot(name, importerPath, cache);
+  if (selfRoot !== null) {
+    // A package checks its current sources, never an artifact left by an older
+    // build. The regular manifest parser still owns the exact entry, target,
+    // capability, language, and package-root boundaries.
+    const resolved = await velarPackageAtRoot(name, selfRoot, subpath, undefined, undefined, cache);
+    if (target !== undefined) assertVelarPackageCompatibility(resolved.package_, target, capabilities ?? new Set());
+    return resolved;
+  }
   let directory = dirname(importerPath);
   while (true) {
     const root = join(directory, "node_modules", ...name.split("/"));
     try {
-      return await velarPackageAtRoot(name, root, target, capabilities);
+      return await velarPackageAtRoot(name, root, subpath, target, capabilities, cache);
     } catch (error) {
       if (error instanceof SyntaxError) throw error;
       if (!isHostErrorCode(error, "ENOENT")) throw error;
@@ -1934,328 +1997,99 @@ async function resolveVelarSourcePackage(
   }
 }
 
-interface VelarPackageManifestShape {
-  readonly name?: unknown;
-  readonly version?: unknown;
-  readonly exports?: unknown;
-  readonly velar?: {
-    readonly entry?: unknown;
-    readonly artifacts?: unknown;
-    readonly resources?: unknown;
-    readonly targets?: unknown;
-    readonly requires?: unknown;
-  };
-}
-
 async function velarPackageAtRoot(
   name: string,
   root: string,
+  subpath: VelarPackageSubpath = ".",
   target?: VelarPackageTarget,
   capabilities?: ReadonlySet<string>,
-): Promise<VelarSourcePackage> {
-  const manifest = JSON.parse(await readBoundedText(
-    join(root, "package.json"),
-    1024 * 1024,
-    `Package manifest for '${name}'`,
-  )) as VelarPackageManifestShape;
-  if (manifest.name !== undefined && manifest.name !== name) {
-    throw new Error(`package name is '${String(manifest.name)}', expected '${name}'`);
+  cache?: VelarPackageResolutionCache,
+): Promise<ResolvedVelarSourcePackage> {
+  const resolvedCache = cache ?? createVelarPackageResolutionCache();
+  const resolvedManifest = await velarPackageManifestAtRoot(name, root, resolvedCache);
+  const { manifest, package_ } = resolvedManifest;
+  const entry = manifest.entries.get(subpath);
+  if (!entry) {
+    throw new Error(`Package '${name}' does not declare VelarScript entry '${subpath}' in package.json#velar.entries`);
   }
-  const version = typeof manifest.version === "string" && manifest.version !== "" ? manifest.version : "0.0.0";
-  const entry = manifest.velar?.entry;
-  if (typeof entry !== "string" || entry.length === 0) {
-    throw new JavaScriptOnlyPackageError("package.json must declare 'velar.entry'");
+  if (target === undefined) return { package_, subpath, entry, artifact: null };
+  const directArtifactTarget = target === "core" || target === "node" ? target : null;
+  const artifactTarget = directArtifactTarget !== null && manifest.artifactDescriptors.has(directArtifactTarget)
+    ? directArtifactTarget
+    : target !== "core" && manifest.artifactDescriptors.has("core") ? "core" : null;
+  if (artifactTarget === null) {
+    assertVelarPackageCompatibility(package_, target, capabilities ?? new Set());
+    return { package_, subpath, entry, artifact: null };
   }
-  if (isAbsolute(entry)) throw new Error("'velar.entry' must be relative to the package root");
-  const entryPath = resolve(root, entry);
-  if (escapesRoot(relative(root, entryPath))) throw new Error("'velar.entry' cannot escape the package root");
-  if (extname(entryPath) !== ".vel") throw new Error("'velar.entry' must point to a .vel source file");
-  const targets = packageTargets(manifest.velar?.targets);
-  const requires = packageRequiresFields(manifest.velar?.requires);
-  const requiredCapabilities = packageRequiredCapabilities(requires);
-  const requiredLanguage = packageRequiredLanguage(requires);
-  const package_: VelarSourcePackage = {
-    name,
-    version,
-    root,
-    entryPath,
-    resources: packageResources(name, root, manifest.velar!.resources, manifest.exports),
-    targets,
-    requiredCapabilities,
-    requiredLanguage,
-    artifact: null,
-  };
-  const artifacts = packageArtifactDescriptors(manifest.velar?.artifacts);
-  if (artifacts.size > 0 && manifest.version === undefined) throw new Error("A package declaring 'velar.artifacts' must declare its version");
-  if (target === undefined) return package_;
-  const artifactTarget = artifacts.has(target as VelarLibraryArtifactTarget)
-    ? target as VelarLibraryArtifactTarget
-    : target !== "core" && artifacts.has("core")
-      ? "core"
-      : null;
-  if (artifactTarget !== null) {
-    assertVelarPackageTargetCapabilities(package_, target, capabilities ?? new Set());
-    const artifact = await loadVelarLibraryArtifact({
+  assertVelarPackageTargetCapabilities(package_, target, capabilities ?? new Set());
+  const artifactKey = `${resolvedManifest.key}\0${artifactTarget}`;
+  let pendingArtifacts = resolvedCache.artifacts.get(artifactKey);
+  if (!pendingArtifacts) {
+    pendingArtifacts = loadVelarLibraryArtifactSet({
       packageRoot: root,
       packageName: name,
-      packageVersion: version,
-      sourceEntry: entry,
-      descriptor: artifacts.get(artifactTarget)!,
+      packageVersion: manifest.version,
+      packageEntries: manifest.entries,
+      descriptor: manifest.artifactDescriptors.get(artifactTarget)!,
       target: artifactTarget,
       packageExports: manifest.exports,
+      runtimeDependencies: manifest.runtimeDependencies,
     });
-    return { ...package_, artifact };
+    resolvedCache.artifacts.set(artifactKey, pendingArtifacts);
   }
-  assertVelarPackageCompatibility(package_, target, capabilities ?? new Set());
-  return package_;
-}
-
-function packageArtifactDescriptors(value: unknown): ReadonlyMap<VelarLibraryArtifactTarget, string> {
-  if (value === undefined) return new Map();
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("'velar.artifacts' must be an object mapping core or node to a receipt path");
-  }
-  const entries = Object.entries(value as Record<string, unknown>);
-  if (entries.length !== 1) throw new Error("Velar library ABI 1 requires exactly one artifact target per package");
-  const artifacts = new Map<VelarLibraryArtifactTarget, string>();
-  for (const [target, descriptor] of entries) {
-    if (target !== "core" && target !== "node") throw new Error(`Velar library ABI 1 does not support artifact target '${target}'; supported targets are core and node`);
-    if (typeof descriptor !== "string" || descriptor === "" || /[\u0000-\u001f\u007f]/u.test(descriptor) || isAbsolute(descriptor) || descriptor.includes("\\")
-      || descriptor.split("/").some((part) => part === "" || part === "." || part === "..")) {
-      throw new Error(`'velar.artifacts.${target}' must be a normalized package-relative receipt path`);
-    }
-    artifacts.set(target, descriptor);
-  }
-  return artifacts;
-}
-
-const velarPackageTargets = new Set<VelarPackageTarget>(["core", "node", "web", "desktop"]);
-
-function packageTargets(value: unknown): readonly VelarPackageTarget[] {
-  if (!Array.isArray(value) || value.length === 0 || value.length > velarPackageTargets.size) {
-    throw new Error("'velar.targets' must be a non-empty list of core, node, web, or desktop");
-  }
-  const targets: VelarPackageTarget[] = [];
-  for (const target of value) {
-    if (typeof target !== "string" || !velarPackageTargets.has(target as VelarPackageTarget)) {
-      throw new Error("'velar.targets' entries must be core, node, web, or desktop");
-    }
-    if (targets.includes(target as VelarPackageTarget)) throw new Error(`'velar.targets' contains duplicate '${target}'`);
-    targets.push(target as VelarPackageTarget);
-  }
-  return targets;
-}
-
-/**
- * D90 R13 asks the 'velar' section for an optional language generation. It is
- * spelled 'velar.requires.language' because 'velar.requires' is already the
- * package's "what I need from the toolchain" block: the language generation is
- * one more thing it needs, and it belongs next to 'capabilities' rather than
- * beside 'entry' and 'targets', which describe what the package *is*.
- *
- * The section is validated once, here, so that the readers below take an object
- * this function has already proved rather than an `unknown` each of them would
- * have to re-check.
- */
-function packageRequiresFields(value: unknown): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("'velar.requires' must be an object");
-  }
-  const fields = value as Record<string, unknown>;
-  const unknown = Object.keys(fields).filter((field) => field !== "capabilities" && field !== "language");
-  if (unknown.length > 0) {
-    throw new Error(`'velar.requires' has unknown field '${unknown[0]}'; the supported fields are 'capabilities' and 'language'`);
-  }
-  return fields;
-}
-
-function packageRequiredCapabilities(fields: Record<string, unknown>): readonly string[] {
-  const capabilities = fields.capabilities;
-  if (!Array.isArray(capabilities) || capabilities.length > 16) {
-    throw new Error("'velar.requires.capabilities' must be a list with at most 16 entries");
-  }
-  const required: string[] = [];
-  for (const capability of capabilities) {
-    if (typeof capability !== "string" || !/^[a-z][a-z0-9-]{0,63}$/u.test(capability)) {
-      throw new Error("'velar.requires.capabilities' entries must be normalized capability names");
-    }
-    if (required.includes(capability)) throw new Error(`'velar.requires.capabilities' contains duplicate '${capability}'`);
-    required.push(capability);
-  }
-  return required;
-}
-
-/**
- * D90 R13: the language generation this toolchain implements is VELAR_VERSION
- * without its patch component — a patch release never moves the language.
- */
-const TOOLCHAIN_LANGUAGE_GENERATION = VELAR_VERSION.split(".").slice(0, 2).join(".");
-
-const languageGenerationPattern = /^(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})$/u;
-
-function parseLanguageGeneration(text: string): VelarLanguageGeneration | null {
-  const match = languageGenerationPattern.exec(text);
-  if (match === null) return null;
-  return { major: Number(match[1]), minor: Number(match[2]) };
-}
-
-function compareLanguageGenerations(left: VelarLanguageGeneration, right: VelarLanguageGeneration): number {
-  return left.major !== right.major ? left.major - right.major : left.minor - right.minor;
-}
-
-/**
- * D90 R13: reads the optional 'velar.requires.language' range. The grammar is
- * language-owned and deliberately small — one or two whitespace-separated
- * clauses over `<major>.<minor>`, because a package declares the *generation*
- * it was written against and a patch component would promise something the
- * language does not track.
- */
-function packageRequiredLanguage(fields: Record<string, unknown>): VelarPackageLanguageRange | null {
-  const declared = fields.language;
-  if (declared === undefined) return null;
-  const malformed = new Error("'velar.requires.language' must be a language generation such as '0.12' or a range such as '>=0.11 <0.14'");
-  if (typeof declared !== "string") throw malformed;
-  // The clauses carry the meaning; the whitespace between them does not. A
-  // manifest is hand-edited JSON, and an invisible trailing space is not a
-  // reason to tell an author that '0.12 ' is not a generation.
-  const text = declared.trim().split(/\s+/u).join(" ");
-  const clauses = text.split(" ");
-  if (clauses.length > 2) throw malformed;
-  let lower: VelarLanguageBound | null = null;
-  let upper: VelarLanguageBound | null = null;
-  for (const clause of clauses) {
-    const operator = /^(>=|<=|>|<)/u.exec(clause)?.[0] ?? "";
-    const generation = parseLanguageGeneration(clause.slice(operator.length));
-    if (generation === null) throw malformed;
-    if (operator === ">=" || operator === ">") {
-      if (lower !== null) throw malformed;
-      lower = { generation, inclusive: operator === ">=" };
-    } else if (operator === "<=" || operator === "<") {
-      if (upper !== null) throw malformed;
-      upper = { generation, inclusive: operator === "<=" };
-    } else {
-      // A bare generation is exactly that generation — it is both bounds at
-      // once, so it never combines with another clause.
-      if (clauses.length !== 1) throw malformed;
-      lower = { generation, inclusive: true };
-      upper = { generation, inclusive: true };
-    }
-  }
-  if (lower !== null && upper !== null) {
-    // A range that admits no generation at all is a typo, not a requirement.
-    const order = compareLanguageGenerations(lower.generation, upper.generation);
-    if (order > 0 || (order === 0 && !(lower.inclusive && upper.inclusive))) throw malformed;
-  }
-  return { text, lower, upper };
-}
-
-function languageRangeAdmits(range: VelarPackageLanguageRange, generation: VelarLanguageGeneration): boolean {
-  if (range.lower !== null) {
-    const order = compareLanguageGenerations(generation, range.lower.generation);
-    if (order < 0 || (order === 0 && !range.lower.inclusive)) return false;
-  }
-  if (range.upper !== null) {
-    const order = compareLanguageGenerations(generation, range.upper.generation);
-    if (order > 0 || (order === 0 && !range.upper.inclusive)) return false;
-  }
-  return true;
-}
-
-function assertVelarPackageCompatibility(
-  package_: VelarSourcePackage,
-  target: VelarPackageTarget,
-  capabilities: ReadonlySet<string>,
-): void {
-  // D90 R13: the generation comes first. A package written for another
-  // generation of the language is not a package whose target list and
-  // capability list can be trusted, and "it belongs to the previous language"
-  // is the more useful thing for its author to hear.
-  const declaredLanguage = package_.requiredLanguage;
-  if (declaredLanguage !== null) {
-    const current = parseLanguageGeneration(TOOLCHAIN_LANGUAGE_GENERATION);
-    if (current === null) throw new Error(`VelarScript toolchain version '${VELAR_VERSION}' is not a language generation`);
-    if (!languageRangeAdmits(declaredLanguage, current)) {
-      throw new Error(`package '${package_.name}' requires VelarScript language ${declaredLanguage.text}; this toolchain implements ${TOOLCHAIN_LANGUAGE_GENERATION}; install a release of '${package_.name}' published for ${TOOLCHAIN_LANGUAGE_GENERATION}, or run the toolchain the package asks for — its sources are not wrong, they belong to another generation of the language`);
-    }
-  }
-  assertVelarPackageTargetCapabilities(package_, target, capabilities);
-}
-
-function assertVelarPackageTargetCapabilities(
-  package_: VelarSourcePackage,
-  target: VelarPackageTarget,
-  capabilities: ReadonlySet<string>,
-): void {
-  // A Core package is target-neutral by definition. Declaring `core` is the
-  // complete portability claim; authors do not repeat node/web/desktop merely
-  // to say that the same source has no host dependency. Target-specific
-  // declarations remain exact because their host contracts are not mutually
-  // substitutable.
-  if (!package_.targets.includes("core") && !package_.targets.includes(target)) {
-    throw new Error(`package '${package_.name}' does not support the '${target}' target; supported targets: ${package_.targets.join(", ")}`);
-  }
-  const missing = package_.requiredCapabilities.filter((capability) => !capabilities.has(capability));
-  if (missing.length > 0) {
-    throw new Error(`package '${package_.name}' requires host ${missing.length === 1 ? "capability" : "capabilities"} ${missing.map((name) => `'${name}'`).join(", ")}`);
-  }
-}
-
-function packageResources(name: string, root: string, value: unknown, exports: unknown): readonly VelarPackageResource[] {
-  if (value === undefined) return [];
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("'velar.resources' must be an object mapping exact package subpaths to resource declarations");
-  }
-  const entries = Object.entries(value as Record<string, unknown>);
-  if (entries.length > 128) throw new RangeError("'velar.resources' cannot declare more than 128 resources");
-  return entries.map(([subpath, declaration]) => {
-    if (!/^\.\/[A-Za-z0-9][A-Za-z0-9._/-]*$/u.test(subpath)
-      || subpath.slice(2).split("/").some((part) => part === "" || part === "." || part === "..")) {
-      throw new Error(`'velar.resources' key '${subpath}' must be an exact './name' package subpath without wildcards or traversal`);
-    }
-    if (declaration === null || typeof declaration !== "object" || Array.isArray(declaration)) {
-      throw new Error(`'velar.resources.${subpath}' must contain 'path' and 'type'`);
-    }
-    const fields = declaration as Record<string, unknown>;
-    const unknown = Object.keys(fields).filter((field) => field !== "path" && field !== "type");
-    if (unknown.length > 0) {
-      throw new Error(`'velar.resources.${subpath}' has unknown field '${unknown[0]}'; the supported fields are 'path' and 'type'`);
-    }
-    if (fields.type !== "json") throw new Error(`'velar.resources.${subpath}.type' must be 'json'`);
-    if (typeof fields.path !== "string" || fields.path === "" || isAbsolute(fields.path)
-      || fields.path.includes("\\") || fields.path.split("/").some((part) => part === "" || part === "." || part === "..")) {
-      throw new Error(`'velar.resources.${subpath}.path' must be a normalized package-relative file path`);
-    }
-    if (extname(fields.path).toLowerCase() !== ".json") {
-      throw new Error(`'velar.resources.${subpath}.path' must point to a .json file`);
-    }
-    const target = `./${fields.path}`;
-    const declaredTargets = packageExportTargets(exports, subpath);
-    if (declaredTargets.length === 0) {
-      throw new Error(`Package '${name}' must expose resource '${subpath}' through package.json 'exports'`);
-    }
-    if (declaredTargets.some((candidate) => candidate !== target)) {
-      throw new Error(`Package '${name}' resource '${subpath}' must point to '${target}' in every package.json export condition`);
-    }
-    return {
-      subpath: subpath as `./${string}`,
-      relativePath: fields.path,
-      inputPath: resolve(root, ...fields.path.split("/")),
-      kind: "json" as const,
-    };
-  });
-}
-
-function packageExportTargets(exports: unknown, subpath: string): string[] {
-  if (exports === null || typeof exports !== "object" || Array.isArray(exports)) return [];
-  const target = (exports as Record<string, unknown>)[subpath];
-  const output: string[] = [];
-  const visit = (value: unknown): void => {
-    if (typeof value === "string") output.push(value);
-    else if (Array.isArray(value)) value.forEach(visit);
-    else if (value !== null && typeof value === "object") Object.values(value).forEach(visit);
+  const artifact = (await pendingArtifacts).get(subpath);
+  if (!artifact) throw new Error(`Velar library artifact does not publish entry '${subpath}'`);
+  return {
+    package_: { ...package_, artifacts: new Map([[subpath, artifact]]) },
+    subpath,
+    entry,
+    artifact,
   };
-  visit(target);
-  return output;
+}
+
+async function velarPackageManifestAtRoot(
+  name: string,
+  root: string,
+  cache: VelarPackageResolutionCache,
+): Promise<CachedVelarSourcePackageManifest> {
+  const key = `${resolve(root)}\0${name}`;
+  let pending = cache.manifests.get(key);
+  if (!pending) {
+    pending = (async () => {
+      const value = JSON.parse(await readBoundedText(
+        join(root, "package.json"),
+        1024 * 1024,
+        `Package manifest for '${name}'`,
+      ));
+      const manifest = parseVelarSourcePackageManifest(name, root, value);
+      await canonicalVelarPackageEntryPaths(name, root, manifest.entries);
+      return {
+        key,
+        manifest,
+        package_: {
+          name,
+          version: manifest.version,
+          root,
+          entryPath: manifest.entries.get(".")!.inputPath,
+          entries: manifest.entries,
+          resources: manifest.resources,
+          targets: manifest.targets,
+          requiredCapabilities: manifest.requiredCapabilities,
+          requiredLanguage: manifest.requiredLanguage,
+          artifacts: new Map(),
+        },
+      };
+    })();
+    cache.manifests.set(key, pending);
+  }
+  return pending;
+}
+
+function packageSubpath(source: string, name: string): VelarPackageSubpath {
+  if (source === name) return ".";
+  const subpath = `.${source.slice(name.length)}`;
+  assertVelarPackageEntrySubpath(subpath, `Package import '${source}'`);
+  return subpath;
 }
 
 async function resolveJsonResource(
@@ -2263,6 +2097,7 @@ async function resolveJsonResource(
   importerPath: string,
   ownerPackage: VelarSourcePackage | null,
   sourceRoot: string,
+  cache: VelarPackageResolutionCache,
 ): Promise<{ readonly resource: VelarPackageResource; readonly package_: VelarSourcePackage | null }> {
   if (source.startsWith(".")) {
     const inputPath = resolve(dirname(importerPath), source);
@@ -2281,33 +2116,28 @@ async function resolveJsonResource(
   if (isAbsolute(source)) throw new Error("JSON resource paths must be relative or an exact package resource subpath");
   const name = packageNameOf(source);
   if (source === name) throw new Error("A JSON resource import must name a declared package subpath");
-  const subpath = `.${source.slice(name.length)}` as `./${string}`;
-  const package_ = await resolveResourcePackage(name, source, importerPath);
+  const subpath = `.${source.slice(name.length)}`;
+  assertVelarPackageSubpath(subpath, `JSON resource import '${source}'`);
+  const package_ = await resolveResourcePackage(name, source, importerPath, cache);
   const resource = package_.resources.find((candidate) => candidate.subpath === subpath);
   if (!resource) throw new Error(`Package '${name}' does not declare JSON resource '${subpath}' in package.json#velar.resources`);
   await authorizeJsonResource(resource.inputPath, package_.root, source);
   return { resource, package_ };
 }
 
-async function resolveResourcePackage(name: string, source: string, importerPath: string): Promise<VelarSourcePackage> {
+async function resolveResourcePackage(
+  name: string,
+  source: string,
+  importerPath: string,
+  cache: VelarPackageResolutionCache,
+): Promise<VelarSourcePackage> {
+  const selfRoot = await packageSelfReferenceRoot(name, importerPath, cache);
+  if (selfRoot !== null) return (await velarPackageAtRoot(name, selfRoot, ".", undefined, undefined, cache)).package_;
   let directory = dirname(importerPath);
-  while (true) {
-    try {
-      const manifest = JSON.parse(await readBoundedText(join(directory, "package.json"), 1024 * 1024, `Package manifest for '${name}'`)) as { readonly name?: unknown };
-      if (manifest.name === name) return await velarPackageAtRoot(name, directory);
-    } catch (error) {
-      if (error instanceof SyntaxError) throw error;
-      if (!isHostErrorCode(error, "ENOENT")) throw error;
-    }
-    const parent = dirname(directory);
-    if (parent === directory) break;
-    directory = parent;
-  }
-  directory = dirname(importerPath);
   while (true) {
     const root = join(directory, "node_modules", ...name.split("/"));
     try {
-      return await velarPackageAtRoot(name, root);
+      return (await velarPackageAtRoot(name, root, ".", undefined, undefined, cache)).package_;
     } catch (error) {
       if (error instanceof SyntaxError) throw error;
       if (!isHostErrorCode(error, "ENOENT")) throw error;
@@ -2316,6 +2146,19 @@ async function resolveResourcePackage(name: string, source: string, importerPath
     if (parent === directory) throw new Error(`package '${name}' is not installed for resource import '${source}'`);
     directory = parent;
   }
+}
+
+async function packageSelfReferenceRoot(
+  name: string,
+  importerPath: string,
+  cache: VelarPackageResolutionCache,
+): Promise<string | null> {
+  const key = `${name}\0${dirname(importerPath)}`;
+  let pending = cache.selfRoots.get(key);
+  if (pending) return pending;
+  pending = findPackageSelfReferenceRoot(name, importerPath);
+  cache.selfRoots.set(key, pending);
+  return pending;
 }
 
 async function authorizeJsonResource(inputPath: string, boundary: string, source: string): Promise<void> {
@@ -2343,13 +2186,7 @@ async function readJsonResource(inputPath: string, source: string): Promise<stri
 }
 
 function packageNameOf(source: string): string {
-  const parts = source.split("/");
-  if (source.startsWith("@")) {
-    if (parts.length < 2 || !parts[0] || !parts[1]) throw new Error(`invalid package name '${source}'`);
-    return parts.slice(0, 2).join("/");
-  }
-  if (!parts[0]) throw new Error(`invalid package name '${source}'`);
-  return parts[0];
+  return npmPackageNameFromSpecifier(source, `Package import '${source}'`);
 }
 
 function escapesRoot(relativePath: string): boolean {

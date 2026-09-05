@@ -1,21 +1,49 @@
 import { mkdir, realpath, rm, stat, writeFile } from "node:fs/promises";
-import { createRequire } from "node:module";
+import { createRequire, isBuiltin } from "node:module";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { build, type Metafile } from "esbuild";
-import type { ProjectResult } from "./project.ts";
+import { projectImportKey, type ProjectResult } from "./project.ts";
 import { readBoundedText } from "./bounded-text.ts";
 import { frameworkBase } from "./framework-host.ts";
 import { hostErrorMessage } from "./host-error.ts";
 import { resolveInstalledPackageRoot } from "./installed-package.ts";
+import {
+  devDependencyFingerprint,
+  invalidateDevDependencyFingerprint,
+  MAX_DEV_DEPENDENCY_INPUTS,
+  normalizedPrebundlePath,
+  rememberDevDependencyFingerprint,
+  reusableDevDependencyFingerprint,
+  validDevDependencyFingerprint,
+  type DevDependencyFingerprint,
+} from "./npm-prebundle-cache.ts";
+import { NPM_PACKAGE_NAME, npmPackageNameFromSpecifier } from "./package-name.ts";
+import {
+  resolvePackageImportsSpecifier,
+  type JavaScriptPackageManifest,
+} from "./package-imports.ts";
+import type { VelarPackageSubpath } from "./package-entry.ts";
 import { VELAR_VERSION } from "./version.ts";
+import type { VelarLibraryArtifactJavaScriptSnapshot } from "./library-artifact.ts";
+import {
+  FROZEN_ARTIFACT_NAMESPACE_PREFIX,
+  frozenArtifactInputPath,
+  frozenArtifactPrebundle,
+  matchingFrozenArtifact,
+  projectFrozenArtifacts,
+  type FrozenArtifactSnapshotSet,
+} from "./npm-frozen-artifact.ts";
+import {
+  BROWSER_ESM_PACKAGE_CONDITIONS,
+  externalPackageExportTargets,
+} from "./package-exports.ts";
 
 const MAX_BROWSER_NPM_PACKAGES = 4096;
 // npm's own package-name grammar, the same one the extension loader applies to
 // an extension's identity. A dependency's self-declared `name` reaches a cache
 // directory that is later removed recursively, a dev-server route, and an
 // import-map key, so it is untrusted input until it parses as a package name.
-const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*|[a-z0-9][a-z0-9._-]*)$/u;
 const MAX_PACKAGE_MANIFEST_BYTES = 1024 * 1024;
 const MAX_DEV_DEPENDENCY_META_BYTES = 1024 * 1024;
 
@@ -23,7 +51,7 @@ const MAX_DEV_DEPENDENCY_META_BYTES = 1024 * 1024;
 // bare specifiers resolve with the same conditions the production bundler uses
 // for a browser import: "browser", "import", and the community "module"
 // condition, in the package's own declaration order.
-const BROWSER_IMPORT_CONDITIONS: ReadonlySet<string> = new Set(["browser", "import", "module", "default"]);
+const BROWSER_IMPORT_CONDITIONS = BROWSER_ESM_PACKAGE_CONDITIONS;
 const NODE_REQUIRE_CONDITIONS: ReadonlySet<string> = new Set(["require", "node", "default"]);
 
 export interface BrowserNpmPackage {
@@ -41,29 +69,23 @@ export interface BrowserNpmResolution {
   readonly failures: readonly string[];
 }
 
-interface PackageManifest {
-  readonly name?: string;
-  readonly version?: string;
-  readonly type?: string;
-  readonly exports?: unknown;
-  readonly browser?: unknown;
-  readonly module?: unknown;
-  readonly main?: unknown;
-}
+type PackageManifest = JavaScriptPackageManifest;
 
 // One prebundled package version in <project>/.velar/dev-deps. The metadata
 // file makes a cache hit self-describing: entry outputs for the import map,
 // every emitted file for completeness checks, and the external bare imports
 // that still need import-map entries of their own.
 interface DevDependencyMeta {
-  readonly formatVersion: 1;
+  readonly formatVersion: 3;
   readonly velar: string;
   readonly name: string;
   readonly version: string;
   readonly entries: Readonly<Record<string, string>>;
   readonly files: readonly string[];
   readonly externals: readonly string[];
+  readonly fingerprint: DevDependencyFingerprint;
 }
+
 
 interface PackageState {
   readonly name: string;
@@ -73,6 +95,8 @@ interface PackageState {
   readonly route: string;
   readonly cacheDir: string;
   readonly entries: Map<string, string>;
+  artifactReceiptPath: string | null;
+  artifactSnapshots: ReadonlyMap<string, VelarLibraryArtifactJavaScriptSnapshot>;
   meta: DevDependencyMeta | null;
   bundled: boolean;
   failure: string | null;
@@ -86,9 +110,63 @@ interface InstalledBrowserImport {
   readonly entry: string;
 }
 
+export interface BrowserNpmEntryResolution {
+  readonly entry: string;
+  readonly packageRoot: string;
+}
+
 /** Resolve one bare package import exactly as a browser ESM import. */
 export async function resolveBrowserNpmEntry(specifier: string, baseDirectory: string): Promise<string> {
-  return (await resolveInstalledBrowserImport(specifier, requireAt(baseDirectory), baseDirectory)).entry;
+  return (await resolveBrowserNpmEntryWithRoot(specifier, baseDirectory)).entry;
+}
+
+/** Resolve an entry and retain the package root a development watcher owns. */
+export async function resolveBrowserNpmEntryWithRoot(
+  specifier: string,
+  baseDirectory: string,
+): Promise<BrowserNpmEntryResolution> {
+  const resolved = await resolveInstalledBrowserImport(specifier, requireAt(baseDirectory), baseDirectory);
+  return { entry: resolved.entry, packageRoot: resolved.root };
+}
+
+function attachFrozenArtifact(state: PackageState, artifact: FrozenArtifactSnapshotSet): void {
+  if (state.artifactReceiptPath && state.artifactReceiptPath !== artifact.receiptPath) {
+    throw new Error(`Browser package '${state.name}' resolves entries from more than one frozen artifact receipt`);
+  }
+  state.artifactReceiptPath = artifact.receiptPath;
+  state.artifactSnapshots = artifact.snapshots;
+}
+
+function packageStateForBrowserImport(
+  states: Map<string, PackageState>,
+  resolvedImport: InstalledBrowserImport,
+  cacheRoot: string,
+  artifact: FrozenArtifactSnapshotSet | null,
+): PackageState {
+  const { requestedName, root, manifest } = resolvedImport;
+  const name = browserPackageIdentity(manifest, requestedName);
+  const existing = states.get(name);
+  if (existing) {
+    if (artifact) attachFrozenArtifact(existing, artifact);
+    return existing;
+  }
+  const version = typeof manifest.version === "string" && manifest.version !== "" ? manifest.version : "0.0.0";
+  const state: PackageState = {
+    name,
+    version,
+    root,
+    manifest,
+    route: `/@npm/${name}/`,
+    cacheDir: prebundleCacheDirectory(cacheRoot, name, version),
+    entries: new Map(),
+    artifactReceiptPath: artifact?.receiptPath ?? null,
+    artifactSnapshots: artifact?.snapshots ?? new Map(),
+    meta: null,
+    bundled: false,
+    failure: null,
+  };
+  states.set(name, state);
+  return state;
 }
 
 // Native browser ESM cannot load CommonJS, and many npm packages either
@@ -102,8 +180,10 @@ export async function resolveBrowserNpmEntry(specifier: string, baseDirectory: s
 export async function resolveBrowserNpm(
   project: ProjectResult,
   invalidateRoots: ReadonlySet<string> = new Set(),
+  includedModulePaths: ReadonlySet<string> | null = null,
 ): Promise<BrowserNpmResolution> {
   const base = frameworkBase(project.framework);
+  const frozenArtifacts = projectFrozenArtifacts(project);
   // Every specifier carries the directories it may be resolved from, in the
   // order they were learned. `velar build` resolves each import from its own
   // importer (production-build.ts passes `dirname(sourceModule.inputPath)`) and
@@ -121,14 +201,15 @@ export async function resolveBrowserNpm(
     if (!known) anchors.set(specifier, [directory]);
     else if (!known.includes(directory)) known.push(directory);
   };
-  for (const module of project.modules) {
+  const includedModules = includedModulePaths === null
+    ? project.modules
+    : project.modules.filter((module) => includedModulePaths.has(resolve(module.inputPath)));
+  for (const module of includedModules) {
     for (const dependency of module.result.dependencies) {
-      if (!dependency.javascript || dependency.source.startsWith(".") || dependency.source.startsWith("/")) continue;
-      anchor(dependency.source, dirname(module.inputPath));
+      if (dependency.source.startsWith(".") || dependency.source.startsWith("/")) continue;
+      const frozen = project.velarArtifactImports.has(projectImportKey(module.inputPath, dependency.source));
+      if (dependency.javascript || frozen) anchor(dependency.source, dirname(module.inputPath));
     }
-  }
-  for (const package_ of project.velarPackages) {
-    if (package_.artifact !== null) anchor(package_.name, project.sourceRoot);
   }
   const cacheRoot = resolve(project.projectRoot, ".velar", "dev-deps");
   const states = new Map<string, PackageState>();
@@ -157,26 +238,9 @@ export async function resolveBrowserNpm(
       }
       try {
         const resolvedImport = await resolveFromAnchors(specifier, anchors.get(specifier) ?? [project.sourceRoot]);
-        const { requestedName, subpath, root, manifest, entry } = resolvedImport;
-        const name = browserPackageIdentity(manifest, requestedName);
-        let state = states.get(name);
-        if (!state) {
-          const version = typeof manifest.version === "string" && manifest.version !== "" ? manifest.version : "0.0.0";
-          const cacheDir = prebundleCacheDirectory(cacheRoot, name, version);
-          state = {
-            name,
-            version,
-            root,
-            manifest,
-            route: `/@npm/${name}/`,
-            cacheDir,
-            entries: new Map(),
-            meta: null,
-            bundled: false,
-            failure: null,
-          };
-          states.set(name, state);
-        }
+        const { subpath, entry } = resolvedImport;
+        const frozenArtifact = matchingFrozenArtifact(frozenArtifacts, specifier, entry);
+        const state = packageStateForBrowserImport(states, resolvedImport, cacheRoot, frozenArtifact);
         // Two specifiers can name one file — a `#` alias whose target is a
         // package's own entry, `.` and `./index` in one exports map — and the
         // prebundle reports an output per entry *file*, so registering the file
@@ -233,22 +297,34 @@ export async function resolveBrowserNpm(
     }
     imports[specifier] = withBase(base, `${target.state.route}${output}`);
   }
-  for (const package_ of project.velarPackages) {
-    // Artifact packages are ordinary ESM packages at runtime and were
-    // prebundled above. Only source-fallback packages need an import-map entry
-    // pointing at the project's compiled module tree.
-    if (package_.artifact !== null) continue;
-    const entry = project.modules.find((module) => module.inputPath === package_.entryPath);
-    if (!entry) {
-      failures.push(`VelarScript package '${package_.name}' entry was not compiled`);
-      continue;
+  if (includedModulePaths === null) {
+    for (const package_ of project.velarPackages) {
+      // Artifact packages were prebundled above; source fallback points at compiled modules.
+      if (package_.artifacts.size > 0) continue;
+      for (const [subpath, declared] of package_.entries) {
+        const entry = project.modules.find((module) => module.inputPath === declared.inputPath);
+        if (entry) imports[velarPackageSpecifier(package_.name, subpath)] = sourcePackageRoute(base, entry.relativePath);
+      }
     }
-    imports[package_.name] = withBase(
-      base,
-      `/${entry.relativePath.replace(/\.vel$/u, ".js").replaceAll("\\", "/")}`,
-    );
+  } else {
+    for (const module of includedModules) {
+      for (const dependency of module.result.dependencies) {
+        const target = project.velarImports.get(projectImportKey(module.inputPath, dependency.source));
+        if (!target) continue;
+        const entry = project.modules.find((candidate) => candidate.inputPath === target);
+        if (entry) imports[dependency.source] = sourcePackageRoute(base, entry.relativePath);
+      }
+    }
   }
   return { packages, imports, failures };
+}
+
+function sourcePackageRoute(base: string, relativePath: string): string {
+  return withBase(base, `/${relativePath.replace(/\.vel$/u, ".js").replaceAll("\\", "/")}`);
+}
+
+function velarPackageSpecifier(name: string, subpath: "." | `./${string}`): string {
+  return subpath === "." ? name : `${name}/${subpath.slice(2)}`;
 }
 
 export async function npmAsset(packages: readonly BrowserNpmPackage[], pathname: string): Promise<{ readonly path: string; readonly sizeBytes: number; readonly contentType: string } | null> {
@@ -282,7 +358,7 @@ export async function npmAsset(packages: readonly BrowserNpmPackage[], pathname:
  */
 export function browserPackageIdentity(manifest: PackageManifest, requestedName: string): string {
   const declared = manifest.name;
-  if (typeof declared === "string" && declared === requestedName && PACKAGE_NAME.test(declared)) return declared;
+  if (typeof declared === "string" && declared === requestedName && NPM_PACKAGE_NAME.test(declared)) return declared;
   return requestedName;
 }
 
@@ -303,22 +379,37 @@ export function prebundleCacheDirectory(cacheRoot: string, name: string, version
   return cacheDir;
 }
 
-/**
- * One specifier, resolved from the first directory that can answer it. The
- * anchors are the importers that named it; the error reported when none can is
- * the first one's, because that is the importer the author is most likely
- * looking at.
- */
+/** Resolve every answering anchor and refuse a browser-global ambiguity. */
 async function resolveFromAnchors(specifier: string, directories: readonly string[]): Promise<InstalledBrowserImport> {
-  let first: unknown = null;
+  const resolved: InstalledBrowserImport[] = [];
+  const unresolved: { readonly anchor: string; readonly message: string }[] = [];
   for (const directory of directories) {
     try {
-      return await resolveInstalledBrowserImport(specifier, requireAt(directory), directory);
+      resolved.push(await resolveInstalledBrowserImport(specifier, requireAt(directory), directory));
     } catch (error) {
-      first ??= error;
+      unresolved.push({ anchor: resolve(directory), message: hostErrorMessage(error) });
     }
   }
-  throw first ?? new Error("no importer to resolve it from");
+  if (unresolved.length > 0) {
+    const anchors = unresolved
+      .sort((left, right) => left.anchor < right.anchor ? -1 : left.anchor > right.anchor ? 1 : 0)
+      .map((item) => `${JSON.stringify(item.anchor)}: ${item.message}`);
+    throw new Error(`actual importer ${anchors.length === 1 ? "anchor cannot" : "anchors cannot all"} resolve it: ${anchors.join("; ")}; a browser import map cannot supply a dependency that an actual importer cannot resolve`);
+  }
+  if (resolved.length === 0) throw new Error("no importer to resolve it from");
+  const targets = new Map(resolved.map((item) => [`${item.root}\0${item.entry}`, item]));
+  if (targets.size > 1) {
+    const descriptions = [...targets.values()]
+      .sort((left, right) => left.root < right.root ? -1 : left.root > right.root ? 1 : left.entry < right.entry ? -1 : 1)
+      .map((item) => {
+        const version = typeof item.manifest.version === "string" && item.manifest.version !== ""
+          ? item.manifest.version
+          : "0.0.0";
+        return `${JSON.stringify(item.root)} (version ${JSON.stringify(version)}, entry ${JSON.stringify(`./${relative(item.root, item.entry).replaceAll("\\", "/")}`)})`;
+      });
+    throw new Error(`importer anchors resolve it to multiple canonical package targets: ${descriptions.join("; ")}; a browser import map can expose only one target for a bare specifier`);
+  }
+  return resolved[0]!;
 }
 
 function requireAt(directory: string): NodeJS.Require {
@@ -326,9 +417,9 @@ function requireAt(directory: string): NodeJS.Require {
 }
 
 async function resolveInstalledBrowserImport(specifier: string, require: NodeJS.Require, baseDirectory: string): Promise<InstalledBrowserImport> {
-  if (specifier.startsWith("#")) return await resolvePackageImportsAlias(specifier, require, baseDirectory);
-  const requestedName = packageNameOf(specifier);
-  const subpath = specifier === requestedName ? "." : `.${specifier.slice(requestedName.length)}`;
+  if (specifier.startsWith("#")) return await resolvePackageImportsAlias(specifier, baseDirectory);
+  const requestedName = npmPackageNameFromSpecifier(specifier, `Browser npm import '${specifier}'`);
+  const subpath = (specifier === requestedName ? "." : `.${specifier.slice(requestedName.length)}`) as VelarPackageSubpath;
   if (subpath.split("/").includes("..")) throw new Error(`the subpath '${subpath}' escapes the package directory`);
   const root = await resolveInstalledPackageRoot(requestedName, specifier, require);
   const manifest = JSON.parse(await readBoundedText(
@@ -336,7 +427,7 @@ async function resolveInstalledBrowserImport(specifier: string, require: NodeJS.
     MAX_PACKAGE_MANIFEST_BYTES,
     `Package manifest for '${specifier}'`,
   )) as PackageManifest;
-  const entry = await selectBrowserEntry(specifier, root, manifest, subpath);
+  const entry = await realpath(await selectBrowserEntry(specifier, root, manifest, subpath));
   return { requestedName, subpath, root, manifest, entry };
 }
 
@@ -344,57 +435,33 @@ async function resolveInstalledBrowserImport(specifier: string, require: NodeJS.
  * A `#` specifier is not a package. `docs/javascript-bridge.md` lists it as the
  * fourth legal `import js` shape -- "a `#`-mapped import from the importing
  * package's own `imports` map resolves too" -- and says the host owns resolving
- * it. `velar check` resolves it with the importer's own require
- * (project.ts, `judgeJavaScriptSpecifier`) and `velar build` hands it back to
- * esbuild for the same reason (production-build.ts). This server did neither:
- * it sent the specifier down the node_modules walk, which cannot find `#x`
- * under any shape of node_modules, and the failure was unworkaroundable
- * because even a forced resolution wrote the literal `#` into an import-map
- * URL, where a browser reads everything after it as a fragment.
+ * it. Check, development, and production all select it through the shared
+ * target-aware resolver; a literal `#` can therefore remain only as the
+ * import-map key, never in the URL where a browser would read it as a fragment.
  *
- * So it resolves the way check does, and is then routed as a subpath of the
- * package whose manifest declares it -- which is where it belongs, shares that
- * package's prebundle, and carries no `#` in its URL. The import-map *key*
- * stays `#x`, because that is the specifier the emitted module asks for.
+ * Relative targets are routed through the package that declares the map. An
+ * external-package target keeps that package's own identity and bundle; only
+ * the import-map key stays `#x`, because that is what emitted code requests.
  */
-async function resolvePackageImportsAlias(specifier: string, require: NodeJS.Require, baseDirectory: string): Promise<InstalledBrowserImport> {
-  // The alias becomes a prebundle entry name, so it is held to the containment
-  // an exports subpath is held to two functions above: a manifest is untrusted
-  // input, and `imports` keys are as free-form as `exports` keys.
-  if (specifier.split("/").includes("..")) throw new Error(`the imports alias '${specifier}' escapes the package directory`);
-  const resolved = require.resolve(specifier);
-  if (!isAbsolute(resolved)) {
-    throw new Error(`the package imports map resolves it to '${resolved}', which is not a file this server can serve`);
-  }
-  const entry = await realpath(resolved);
-  // The declaring package is the one above the *importer*: an `imports` map is
-  // read from the package that owns the importing file, never from the target.
-  const manifestPath = await nearestPackageManifest(baseDirectory);
-  if (manifestPath === null) {
-    throw new Error("no package.json above the importing module declares an 'imports' map");
-  }
-  const root = await realpath(dirname(manifestPath));
-  const manifest = JSON.parse(await readBoundedText(
-    manifestPath,
-    MAX_PACKAGE_MANIFEST_BYTES,
-    `Package manifest for '${specifier}'`,
-  )) as PackageManifest;
-  return { requestedName: importsOwnerIdentity(manifest, root), subpath: specifier, root, manifest, entry };
-}
-
-/** The manifest Node reads an `imports` map from: the nearest one above the importer. */
-async function nearestPackageManifest(directory: string): Promise<string | null> {
-  let current = resolve(directory);
-  for (let parent = dirname(current); ; parent = dirname(current)) {
-    const candidate = join(current, "package.json");
-    try {
-      if ((await stat(candidate)).isFile()) return candidate;
-    } catch {
-      // Keep walking towards the filesystem root.
+async function resolvePackageImportsAlias(specifier: string, baseDirectory: string): Promise<InstalledBrowserImport> {
+  const resolved = await resolvePackageImportsSpecifier(specifier, baseDirectory, "browser");
+  if (resolved.target.kind === "external") {
+    if (isBuiltin(resolved.target.specifier)) {
+      throw new Error(`Node builtin '${resolved.target.specifier}' cannot run in a browser build`);
     }
-    if (parent === current) return null;
-    current = parent;
+    return resolveInstalledBrowserImport(
+      resolved.target.specifier,
+      requireAt(resolved.ownerRoot),
+      resolved.ownerRoot,
+    );
   }
+  return {
+    requestedName: importsOwnerIdentity(resolved.ownerManifest, resolved.ownerRoot),
+    subpath: specifier,
+    root: resolved.ownerRoot,
+    manifest: resolved.ownerManifest,
+    entry: resolved.target.path,
+  };
 }
 
 /**
@@ -405,12 +472,17 @@ async function nearestPackageManifest(directory: string): Promise<string | null>
  */
 function importsOwnerIdentity(manifest: PackageManifest, root: string): string {
   const declared = manifest.name;
-  if (typeof declared === "string" && PACKAGE_NAME.test(declared)) return declared;
+  if (typeof declared === "string" && NPM_PACKAGE_NAME.test(declared)) return declared;
   const fromDirectory = basename(root).toLowerCase().replace(/[^a-z0-9._-]+/gu, "-").replace(/^[^a-z0-9]+/u, "");
-  return PACKAGE_NAME.test(fromDirectory) ? fromDirectory : "velar-package-imports";
+  return NPM_PACKAGE_NAME.test(fromDirectory) ? fromDirectory : "velar-package-imports";
 }
 
-async function selectBrowserEntry(specifier: string, root: string, manifest: PackageManifest, subpath: string): Promise<string> {
+async function selectBrowserEntry(
+  specifier: string,
+  root: string,
+  manifest: PackageManifest,
+  subpath: VelarPackageSubpath,
+): Promise<string> {
   if (manifest.exports !== undefined && manifest.exports !== null) {
     const target = resolveExportsTarget(manifest.exports, subpath, BROWSER_IMPORT_CONDITIONS);
     if (target === null) {
@@ -451,6 +523,7 @@ async function selectBrowserEntry(specifier: string, root: string, manifest: Pac
 // bundler; `force` drops it after the watcher saw the installed files change.
 async function ensurePackageBundle(state: PackageState, force: boolean): Promise<DevDependencyMeta> {
   const metaPath = join(state.cacheDir, "meta.json");
+  if (force) invalidateDevDependencyFingerprint(metaPath);
   if (!force) {
     const cached = await readDevDependencyMeta(metaPath);
     if (cached
@@ -458,7 +531,8 @@ async function ensurePackageBundle(state: PackageState, force: boolean): Promise
       && cached.name === state.name
       && cached.version === state.version
       && [...state.entries.keys()].every((subpath) => typeof cached.entries[subpath] === "string")
-      && await filesExist(state.cacheDir, cached.files)) {
+      && await filesExist(state.cacheDir, cached.files)
+      && await reusableDevDependencyFingerprint(metaPath, state, cached.fingerprint)) {
       return cached;
     }
   }
@@ -470,11 +544,13 @@ async function ensurePackageBundle(state: PackageState, force: boolean): Promise
     splitting: true,
     format: "esm",
     platform: "browser",
+    conditions: [...BROWSER_ESM_PACKAGE_CONDITIONS],
     target: "es2022",
     outdir: state.cacheDir,
     write: false,
     metafile: true,
     packages: "external",
+    plugins: state.artifactReceiptPath ? [frozenArtifactPrebundle(state)] : [],
     chunkNames: "chunk-[hash]",
     sourcemap: false,
     legalComments: "none",
@@ -482,7 +558,10 @@ async function ensurePackageBundle(state: PackageState, force: boolean): Promise
   });
   const entryFileSubpaths = new Map<string, string>();
   for (const [subpath, entry] of state.entries) {
-    entryFileSubpaths.set(relative(state.root, entry).replaceAll("\\", "/"), subpath);
+    const canonical = resolve(entry);
+    entryFileSubpaths.set(state.artifactSnapshots.has(canonical)
+      ? frozenArtifactInputPath(canonical)
+      : relative(state.root, canonical).replaceAll("\\", "/"), subpath);
   }
   const entries: Record<string, string> = {};
   const files: string[] = [];
@@ -503,14 +582,17 @@ async function ensurePackageBundle(state: PackageState, force: boolean): Promise
     }
     entries[subpath] = relativeOutput;
   }
+  const fingerprint = await devDependencyFingerprint(state, Object.keys(result.metafile.inputs)
+    .filter((input) => !input.startsWith(FROZEN_ARTIFACT_NAMESPACE_PREFIX)));
   const meta: DevDependencyMeta = {
-    formatVersion: 1,
+    formatVersion: 3,
     velar: VELAR_VERSION,
     name: state.name,
     version: state.version,
     entries,
     files: files.sort(),
     externals: [...collectExternalImports(result.metafile)].sort(),
+    fingerprint,
   };
   await rm(state.cacheDir, { recursive: true, force: true });
   await mkdir(state.cacheDir, { recursive: true });
@@ -519,8 +601,10 @@ async function ensurePackageBundle(state: PackageState, force: boolean): Promise
     await writeFile(file.path, file.contents);
   }
   await writeFile(metaPath, `${JSON.stringify(meta, null, 2)}\n`, "utf8");
+  rememberDevDependencyFingerprint(metaPath, fingerprint);
   return meta;
 }
+
 
 async function readDevDependencyMeta(path: string): Promise<DevDependencyMeta | null> {
   let parsed: unknown;
@@ -531,11 +615,15 @@ async function readDevDependencyMeta(path: string): Promise<DevDependencyMeta | 
   }
   if (!parsed || typeof parsed !== "object") return null;
   const meta = parsed as Partial<DevDependencyMeta>;
-  if (meta.formatVersion !== 1 || typeof meta.velar !== "string" || typeof meta.name !== "string" || typeof meta.version !== "string") return null;
+  if (meta.formatVersion !== 3 || typeof meta.velar !== "string" || typeof meta.name !== "string" || typeof meta.version !== "string") return null;
   if (!meta.entries || typeof meta.entries !== "object" || Array.isArray(meta.entries)) return null;
-  if (!Array.isArray(meta.files) || !meta.files.every((file) => typeof file === "string")) return null;
-  if (!Array.isArray(meta.externals) || !meta.externals.every((item) => typeof item === "string")) return null;
-  if (!Object.values(meta.entries).every((value) => typeof value === "string")) return null;
+  if (!Array.isArray(meta.files) || meta.files.length > MAX_DEV_DEPENDENCY_INPUTS * 2
+    || !meta.files.every((file) => typeof file === "string" && normalizedPrebundlePath(file))) return null;
+  if (!Array.isArray(meta.externals) || meta.externals.length > MAX_BROWSER_NPM_PACKAGES
+    || !meta.externals.every((item) => typeof item === "string")) return null;
+  if (Object.keys(meta.entries).length > MAX_BROWSER_NPM_PACKAGES
+    || !Object.values(meta.entries).every((value) => typeof value === "string" && normalizedPrebundlePath(value))) return null;
+  if (!validDevDependencyFingerprint(meta.fingerprint, MAX_BROWSER_NPM_PACKAGES)) return null;
   return meta as DevDependencyMeta;
 }
 
@@ -592,59 +680,12 @@ function collectExternalImports(metafile: Metafile): readonly string[] {
   return [...specifiers];
 }
 
-function resolveExportsTarget(exports: unknown, subpath: string, conditions: ReadonlySet<string>): string | null {
-  const map = normalizeExports(exports);
-  const exact = map.get(subpath);
-  if (exact !== undefined) return resolveTargetValue(exact, "", conditions);
-  let bestKey: string | null = null;
-  let bestPrefix = -1;
-  for (const key of map.keys()) {
-    const star = key.indexOf("*");
-    if (star === -1) continue;
-    const prefix = key.slice(0, star);
-    const suffix = key.slice(star + 1);
-    if (subpath.length >= prefix.length + suffix.length
-      && subpath.startsWith(prefix)
-      && subpath.endsWith(suffix)
-      && prefix.length > bestPrefix) {
-      bestKey = key;
-      bestPrefix = prefix.length;
-    }
-  }
-  if (bestKey === null) return null;
-  const suffixLength = bestKey.length - bestKey.indexOf("*") - 1;
-  const matched = subpath.slice(bestPrefix, subpath.length - suffixLength);
-  return resolveTargetValue(map.get(bestKey), matched, conditions);
-}
-
-function normalizeExports(exports: unknown): ReadonlyMap<string, unknown> {
-  if (typeof exports === "string" || Array.isArray(exports)) return new Map([[".", exports]]);
-  if (exports !== null && typeof exports === "object") {
-    const entries = Object.entries(exports);
-    if (entries.every(([key]) => key === "." || key.startsWith("./"))) return new Map(entries);
-    return new Map([[".", exports]]);
-  }
-  return new Map();
-}
-
-function resolveTargetValue(target: unknown, starReplacement: string, conditions: ReadonlySet<string>): string | null {
-  if (typeof target === "string") return target.replaceAll("*", starReplacement);
-  if (Array.isArray(target)) {
-    for (const item of target) {
-      const resolved = resolveTargetValue(item, starReplacement, conditions);
-      if (resolved !== null) return resolved;
-    }
-    return null;
-  }
-  if (target !== null && typeof target === "object") {
-    for (const [condition, value] of Object.entries(target)) {
-      if (!conditions.has(condition)) continue;
-      const resolved = resolveTargetValue(value, starReplacement, conditions);
-      if (resolved !== null) return resolved;
-    }
-    return null;
-  }
-  return null;
+function resolveExportsTarget(
+  exports: unknown,
+  subpath: VelarPackageSubpath,
+  conditions: ReadonlySet<string>,
+): string | null {
+  return externalPackageExportTargets(exports, subpath, [conditions])[0] ?? null;
 }
 
 async function firstExistingFile(candidates: readonly string[]): Promise<string | null> {
@@ -657,11 +698,6 @@ async function firstExistingFile(candidates: readonly string[]): Promise<string 
     }
   }
   return null;
-}
-
-function packageNameOf(specifier: string): string {
-  const parts = specifier.split("/");
-  return specifier.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0] ?? specifier;
 }
 
 function npmContentType(path: string): string {

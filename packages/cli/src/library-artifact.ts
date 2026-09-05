@@ -1,43 +1,67 @@
 import { createHash } from "node:crypto";
-import { lstat, realpath } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import type { ModuleInterface } from "@velarscript/compiler";
-import { readBoundedText } from "./bounded-text.ts";
+import {
+  artifactSnapshotContents,
+  assertVelarLibraryArtifactBudgets,
+  assertVelarLibraryArtifactSourceMaps,
+  authorizeArtifactFile,
+  readAuthenticatedArtifactText,
+  readAuthorizedArtifactText,
+  VELAR_LIBRARY_ARTIFACT_LIMITS,
+  type VelarLibraryArtifactJavaScriptSnapshot,
+} from "./library-artifact-snapshot.ts";
+import { assertVelarLibraryArtifactModuleClosure } from "./library-artifact-module-closure.ts";
+import { assertConsumedArtifactRuntimeDependencies } from "./package-runtime-dependencies.ts";
+import { validateVelarLibraryModuleInterface as validateModuleInterface } from "./library-artifact-interface.ts";
+import {
+  assertVelarLibraryArtifactReceiptPackagePaths,
+  assertVelarLibraryArtifactReceiptEntries,
+  validateVelarLibraryArtifactReceipt,
+  velarLibraryArtifactReceiptEntry,
+  type VelarLibraryArtifactReceipt,
+  type VelarLibraryArtifactTarget,
+} from "./library-artifact-receipt.ts";
+import { assertVelarPackageEntrySubpath, type VelarPackageSubpath } from "./package-entry.ts";
+import { packageRuntimeExportTargets } from "./package-exports.ts";
+import { nearestPackageTypeForFile } from "./package-scope.ts";
+
+export type {
+  VelarLibraryArtifactChunkReceipt,
+  VelarLibraryArtifactEntryReceipt,
+  VelarLibraryArtifactReceipt,
+  VelarLibraryArtifactReceiptV1,
+  VelarLibraryArtifactReceiptV2,
+  VelarLibraryArtifactTarget,
+} from "./library-artifact-receipt.ts";
+export {
+  artifactSnapshotContents,
+  assertArtifactSnapshotCurrent,
+  type VelarLibraryArtifactJavaScriptSnapshot,
+} from "./library-artifact-snapshot.ts";
 
 /** The first frozen JavaScript/package-interface contract shipped by VelarScript. */
 export const VELAR_LIBRARY_ABI_VERSION = 1;
-
-export type VelarLibraryArtifactTarget = "core" | "node";
 
 export interface LoadedVelarLibraryArtifact {
   readonly abiVersion: 1;
   readonly target: VelarLibraryArtifactTarget;
   readonly compilerVersion: string;
   readonly receiptPath: string;
-  readonly entryPath: string;
-  readonly interfacePath: string;
-  readonly moduleInterface: ModuleInterface;
-}
-
-export interface VelarLibraryArtifactReceipt {
-  readonly formatVersion: 1;
-  readonly kind: "velar-library-artifact";
-  readonly abiVersion: 1;
-  readonly package: { readonly name: string; readonly version: string };
-  readonly target: VelarLibraryArtifactTarget;
-  readonly compilerVersion: string;
+  readonly subpath: VelarPackageSubpath;
   readonly sourceEntry: string;
-  readonly sources: readonly { readonly path: string; readonly sha256: string }[];
-  readonly entry: {
-    readonly javascript: string;
-    readonly sourceMap: string;
-    readonly interface: string;
-    readonly sha256: {
-      readonly javascript: string;
-      readonly sourceMap: string;
-      readonly interface: string;
-    };
-  };
+  readonly entryPath: string;
+  readonly sourceMapPath: string;
+  readonly interfacePath: string;
+  /** Every public interface authenticated by the same package/target receipt. */
+  readonly interfacePaths: readonly string[];
+  readonly chunkPaths: readonly string[];
+  readonly entrySnapshot: VelarLibraryArtifactJavaScriptSnapshot;
+  /** Every public entry authenticated by the same package/target receipt. */
+  readonly entrySnapshots: readonly VelarLibraryArtifactJavaScriptSnapshot[];
+  readonly chunkSnapshots: readonly VelarLibraryArtifactJavaScriptSnapshot[];
+  readonly moduleInterface: ModuleInterface;
 }
 
 interface PortableObject {
@@ -51,13 +75,9 @@ type WireValue = null | boolean | number | string | {
   readonly value: readonly WireValue[] | readonly (readonly [WireValue, WireValue])[];
 };
 
-const MAX_INTERFACE_BYTES = 8 * 1024 * 1024;
-const MAX_ARTIFACT_FILE_BYTES = 64 * 1024 * 1024;
+const ARTIFACT_STAT_CONCURRENCY = 16;
 const MAX_WIRE_NODES = 1_000_000;
 const MAX_WIRE_DEPTH = 128;
-const SHA256 = /^[a-f0-9]{64}$/u;
-const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*|[a-z0-9][a-z0-9._-]*)$/u;
-const PACKAGE_VERSION = /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
 
 export function sha256Text(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
@@ -105,7 +125,9 @@ export function encodeVelarLibraryInterface(interface_: ModuleInterface): string
 }
 
 export function decodeVelarLibraryInterface(text: string): ModuleInterface {
-  if (Buffer.byteLength(text, "utf8") > MAX_INTERFACE_BYTES) throw new RangeError(`Velar library interface exceeds ${MAX_INTERFACE_BYTES} bytes`);
+  if (Buffer.byteLength(text, "utf8") > VELAR_LIBRARY_ARTIFACT_LIMITS.interfaceBytes) {
+    throw new RangeError(`Velar library interface exceeds ${VELAR_LIBRARY_ARTIFACT_LIMITS.interfaceBytes} bytes`);
+  }
   const envelope = record(JSON.parse(text), "Velar library interface");
   exactKeys(envelope, ["formatVersion", "abiVersion", "interface"], "Velar library interface");
   if (envelope.formatVersion !== 1) throw new Error("Velar library interface formatVersion must be 1");
@@ -182,374 +204,238 @@ export async function loadVelarLibraryArtifact(options: {
   readonly packageRoot: string;
   readonly packageName: string;
   readonly packageVersion: string;
+  readonly packageEntries: ReadonlyMap<VelarPackageSubpath, { readonly relativePath: string }>;
+  readonly subpath?: VelarPackageSubpath;
   readonly sourceEntry: string;
   readonly descriptor: string;
   readonly target: VelarLibraryArtifactTarget;
   readonly packageExports: unknown;
+  readonly runtimeDependencies?: ReadonlySet<string>;
 }): Promise<LoadedVelarLibraryArtifact> {
+  const subpath = options.subpath ?? ".";
+  if (subpath !== ".") assertVelarPackageEntrySubpath(subpath, "Velar library artifact subpath");
+  const artifacts = await loadVelarLibraryArtifactSet(options);
+  const artifact = artifacts.get(subpath);
+  if (!artifact) throw new Error(`Velar library artifact does not publish entry '${subpath}'`);
+  if (artifact.sourceEntry !== options.sourceEntry) {
+    throw new Error(`Velar library artifact entry '${subpath}' identifies source '${artifact.sourceEntry}', expected '${options.sourceEntry}' from package.json`);
+  }
+  return artifact;
+}
+
+/** Loads and authenticates one package/target receipt as a single bounded unit. */
+export async function loadVelarLibraryArtifactSet(options: {
+  readonly packageRoot: string;
+  readonly packageName: string;
+  readonly packageVersion: string;
+  readonly packageEntries: ReadonlyMap<VelarPackageSubpath, { readonly relativePath: string }>;
+  readonly descriptor: string;
+  readonly target: VelarLibraryArtifactTarget;
+  readonly packageExports: unknown;
+  readonly runtimeDependencies?: ReadonlySet<string>;
+}): Promise<ReadonlyMap<VelarPackageSubpath, LoadedVelarLibraryArtifact>> {
+  const packageIdentity = await realpath(options.packageRoot);
   const receiptPath = artifactPath(options.packageRoot, options.descriptor, "velar.artifacts receipt");
-  const receiptText = await readArtifactText(options.packageRoot, receiptPath, 4 * 1024 * 1024, "Velar library artifact receipt");
-  const receipt = validateReceipt(JSON.parse(receiptText));
+  const receiptFile = await authorizeArtifactFile(packageIdentity, receiptPath, VELAR_LIBRARY_ARTIFACT_LIMITS.receiptBytes, "Velar library artifact receipt");
+  const receiptText = await readAuthorizedArtifactText(receiptFile);
+  const receipt = validateVelarLibraryArtifactReceipt(JSON.parse(receiptText));
+  assertVelarLibraryArtifactReceiptPackagePaths(receipt, options.descriptor);
   if (receipt.package.name !== options.packageName || receipt.package.version !== options.packageVersion) {
     throw new Error(`Velar library artifact identifies '${receipt.package.name}@${receipt.package.version}', expected '${options.packageName}@${options.packageVersion}'`);
   }
   if (receipt.target !== options.target) throw new Error(`Velar library artifact target '${receipt.target}' does not match manifest key '${options.target}'`);
-  if (receipt.sourceEntry !== options.sourceEntry) throw new Error(`Velar library artifact sourceEntry '${receipt.sourceEntry}' does not match velar.entry '${options.sourceEntry}'`);
+  assertVelarLibraryArtifactReceiptEntries(receipt, options.packageEntries);
   const receiptRoot = dirname(receiptPath);
-  const entryPath = artifactPath(receiptRoot, receipt.entry.javascript, "artifact JavaScript entry");
-  const sourceMapPath = artifactPath(receiptRoot, receipt.entry.sourceMap, "artifact source map");
-  const interfacePath = artifactPath(receiptRoot, receipt.entry.interface, "artifact interface");
-  const exported = packageExportTargets(options.packageExports, ".");
-  const expectedExport = `./${relative(options.packageRoot, entryPath).replaceAll("\\", "/")}`;
-  if (exported.length === 0 || exported.some((target) => target !== expectedExport)) {
-    throw new Error(`Package '${options.packageName}' must export its Velar artifact entry as '${expectedExport}' in every package.json export condition`);
+  const { files, entries, artifactJavaScriptPaths, scopedJavaScriptPaths, chunkPaths } = collectArtifactClaims(receipt, receiptRoot, options);
+
+  // Authorize and account for the complete receipt before reading one output,
+  // preventing its bounded lists from multiplying aggregate allocation.
+  const claims = [...files.values()];
+  const authorized = await mapBounded(claims, ARTIFACT_STAT_CONCURRENCY, async (claim) => ({
+    ...claim,
+    ...await authorizeArtifactFile(packageIdentity, claim.path, claim.maximum, claim.label),
+  }));
+  assertVelarLibraryArtifactBudgets(authorized.map((file) => ({ size: file.size, interface: file.interface, javascript: artifactJavaScriptPaths.has(file.path) })), receiptFile.size);
+  for (const path of scopedJavaScriptPaths) {
+    if (await nearestPackageTypeForFile(options.packageRoot, path, "Velar library JavaScript artifact") !== "module") {
+      throw new Error(`Package '${options.packageName}' must place every .js Velar library artifact inside a package scope with package.json 'type' set to 'module'`);
+    }
   }
-  const [javascript, sourceMap, interfaceText] = await Promise.all([
-    readArtifactText(options.packageRoot, entryPath, MAX_ARTIFACT_FILE_BYTES, "Velar library JavaScript artifact"),
-    readArtifactText(options.packageRoot, sourceMapPath, MAX_ARTIFACT_FILE_BYTES, "Velar library source map"),
-    readArtifactText(options.packageRoot, interfacePath, MAX_INTERFACE_BYTES, "Velar library interface"),
-  ]);
-  for (const [label, content, expected] of [
-    ["JavaScript", javascript, receipt.entry.sha256.javascript],
-    ["source map", sourceMap, receipt.entry.sha256.sourceMap],
-    ["interface", interfaceText, receipt.entry.sha256.interface],
-  ] as const) {
-    const actual = sha256Text(content);
-    if (actual !== expected) throw new Error(`Velar library artifact ${label} hash mismatch; the package is incomplete or was modified after its receipt was written`);
+
+  // Read one file at a time. Besides bounding memory, this verifies aliased
+  // entries and common chunks exactly once for this package/target set.
+  const interfaces = new Map<string, ModuleInterface>();
+  const contents = new Map<string, string>();
+  const identities = new Map<string, string>();
+  for (const file of authorized) {
+    const content = await readAuthenticatedArtifactText(file, file.expected, file.hashLabel);
+    identities.set(file.path, file.identity);
+    if (file.interface) interfaces.set(file.path, decodeVelarLibraryInterface(content));
+    else contents.set(file.path, content);
   }
-  return {
-    abiVersion: 1,
+  const { byPath: entrySnapshotsByPath, all: sharedEntrySnapshots } = artifactEntrySnapshots(entries, identities, contents);
+  const sharedInterfacePaths = Object.freeze([...new Set([...entries.values()].map((paths) => identities.get(paths.interfacePath)!))]);
+  const sharedChunkPaths = Object.freeze(chunkPaths.slice());
+  const sharedChunkSnapshots = Object.freeze(receipt.formatVersion === 2
+    ? receipt.chunks.map((chunk): VelarLibraryArtifactJavaScriptSnapshot => {
+        const javascriptPath = artifactPath(receiptRoot, chunk.javascript, "artifact chunk JavaScript");
+        const sourceMapPath = artifactPath(receiptRoot, chunk.sourceMap, "artifact chunk source map");
+        return Object.freeze({
+          path: identities.get(javascriptPath)!,
+          code: contents.get(javascriptPath)!,
+          sourceMapPath: identities.get(sourceMapPath)!,
+          sourceMap: contents.get(sourceMapPath)!,
+        });
+      })
+    : []);
+  assertVelarLibraryArtifactSourceMaps(receipt.formatVersion, [...sharedEntrySnapshots, ...sharedChunkSnapshots]);
+  const external = assertVelarLibraryArtifactModuleClosure(
+    [...sharedEntrySnapshots, ...sharedChunkSnapshots],
+    options.packageName,
+    receipt.target,
+  );
+  await assertConsumedArtifactRuntimeDependencies(
+    receipt.formatVersion,
+    external,
+    options.runtimeDependencies ?? new Set(),
+    options.packageRoot,
+    options.packageName,
+    receipt.target,
+  );
+  return new Map([...entries].map(([subpath, paths]) => [subpath, {
+    abiVersion: 1 as const,
     target: receipt.target,
     compilerVersion: receipt.compilerVersion,
     receiptPath,
-    entryPath,
-    interfacePath,
-    moduleInterface: decodeVelarLibraryInterface(interfaceText),
-  };
+    subpath,
+    sourceEntry: paths.entry.sourceEntry,
+    entryPath: paths.entryPath,
+    sourceMapPath: paths.sourceMapPath,
+    interfacePath: paths.interfacePath,
+    interfacePaths: sharedInterfacePaths,
+    chunkPaths: sharedChunkPaths,
+    entrySnapshot: entrySnapshotsByPath.get(identities.get(paths.entryPath)!)!,
+    entrySnapshots: sharedEntrySnapshots,
+    chunkSnapshots: sharedChunkSnapshots,
+    moduleInterface: interfaces.get(paths.interfacePath)!,
+  }]));
 }
 
-function validateReceipt(value: unknown): VelarLibraryArtifactReceipt {
-  const receipt = record(value, "Velar library artifact receipt");
-  exactKeys(receipt, ["formatVersion", "kind", "abiVersion", "package", "target", "compilerVersion", "sourceEntry", "sources", "entry"], "Velar library artifact receipt");
-  if (receipt.formatVersion !== 1 || receipt.kind !== "velar-library-artifact" || receipt.abiVersion !== 1) {
-    throw new Error("Velar library artifact receipt must declare formatVersion 1, kind 'velar-library-artifact', and ABI 1");
-  }
-  const package_ = record(receipt.package, "Velar library artifact package identity");
-  exactKeys(package_, ["name", "version"], "Velar library artifact package identity");
-  if (typeof package_.name !== "string" || !PACKAGE_NAME.test(package_.name) || typeof package_.version !== "string" || !PACKAGE_VERSION.test(package_.version)) {
-    throw new Error("Velar library artifact package identity must contain a package name and semantic version");
-  }
-  if (receipt.target !== "core" && receipt.target !== "node") throw new Error("Velar library ABI 1 target must be 'core' or 'node'");
-  if (typeof receipt.compilerVersion !== "string" || !PACKAGE_VERSION.test(receipt.compilerVersion)) {
-    throw new Error("Velar library artifact compilerVersion must be a semantic version");
-  }
-  normalizedRelativePath(receipt.sourceEntry, "Velar library artifact sourceEntry");
-  if (!Array.isArray(receipt.sources) || receipt.sources.length === 0 || receipt.sources.length > 10_000) {
-    throw new Error("Velar library artifact sources must be a non-empty bounded list");
-  }
-  const sourcePaths = new Set<string>();
-  for (const source of receipt.sources) {
-    const item = record(source, "Velar library artifact source");
-    exactKeys(item, ["path", "sha256"], "Velar library artifact source");
-    normalizedRelativePath(item.path, "Velar library artifact source path");
-    if (sourcePaths.has(item.path as string)) throw new Error(`Velar library artifact repeats source '${String(item.path)}'`);
-    sourcePaths.add(item.path as string);
-    hash(item.sha256, "Velar library artifact source hash");
-  }
-  const entry = record(receipt.entry, "Velar library artifact entry");
-  exactKeys(entry, ["javascript", "sourceMap", "interface", "sha256"], "Velar library artifact entry");
-  normalizedRelativePath(entry.javascript, "Velar library artifact JavaScript path");
-  normalizedRelativePath(entry.sourceMap, "Velar library artifact source map path");
-  normalizedRelativePath(entry.interface, "Velar library artifact interface path");
-  if (new Set([entry.javascript, entry.sourceMap, entry.interface]).size !== 3) {
-    throw new Error("Velar library artifact JavaScript, source map, and interface paths must be distinct");
-  }
-  const hashes = record(entry.sha256, "Velar library artifact hashes");
-  exactKeys(hashes, ["javascript", "sourceMap", "interface"], "Velar library artifact hashes");
-  hash(hashes.javascript, "Velar library JavaScript hash");
-  hash(hashes.sourceMap, "Velar library source map hash");
-  hash(hashes.interface, "Velar library interface hash");
-  return receipt as unknown as VelarLibraryArtifactReceipt;
+type ArtifactSetLoadOptions = Parameters<typeof loadVelarLibraryArtifactSet>[0];
+
+interface ArtifactClaimCollection {
+  readonly files: ReadonlyMap<string, ArtifactFileClaim>;
+  readonly entries: ReadonlyMap<VelarPackageSubpath, ArtifactEntryPaths>;
+  readonly artifactJavaScriptPaths: ReadonlySet<string>;
+  readonly scopedJavaScriptPaths: ReadonlySet<string>;
+  readonly chunkPaths: readonly string[];
 }
 
-function validateModuleInterface(value: unknown, label: string): asserts value is ModuleInterface {
-  const interface_ = record(value, label);
-  exactKeys(interface_, [
-    "exports", "mutableExports", "reactiveExports", "reExports", "hoistedExports", "namedTypes",
-    "namedTypeReadonlyFields", "namedTypeIdentities", "namedTypeBases", "genericTypes", "typeAliases",
-    "enums", "classes", "tests", "extensionExports", "extensionData",
-  ], label, true);
-  stringMap(interface_.exports, `${label}.exports`, validateValueType);
-  stringSet(interface_.mutableExports, `${label}.mutableExports`);
-  stringMap(interface_.reactiveExports, `${label}.reactiveExports`, (item, itemLabel) => {
-    if (item !== "state") throw new Error(`${itemLabel} must be 'state'`);
-  });
-  stringMap(interface_.reExports, `${label}.reExports`, (item, itemLabel) => {
-    const target = record(item, itemLabel);
-    exactKeys(target, ["source", "imported"], itemLabel);
-    nonEmptyString(target.source, `${itemLabel}.source`);
-    nonEmptyString(target.imported, `${itemLabel}.imported`);
-  });
-  if (interface_.hoistedExports !== undefined) stringSet(interface_.hoistedExports, `${label}.hoistedExports`);
-  stringMap(interface_.namedTypes, `${label}.namedTypes`, (item, itemLabel) => stringMap(item, itemLabel, validateValueType));
-  if (interface_.namedTypeReadonlyFields !== undefined) stringMap(interface_.namedTypeReadonlyFields, `${label}.namedTypeReadonlyFields`, (item, itemLabel) => stringSet(item, itemLabel));
-  stringMap(interface_.namedTypeIdentities, `${label}.namedTypeIdentities`, (item, itemLabel) => nonEmptyString(item, itemLabel));
-  if (interface_.namedTypeBases !== undefined) stringMap(interface_.namedTypeBases, `${label}.namedTypeBases`, validateValueType);
-  if (interface_.genericTypes !== undefined) stringMap(interface_.genericTypes, `${label}.genericTypes`, validateGenericTypeInfo);
-  stringMap(interface_.typeAliases, `${label}.typeAliases`, validateValueType);
-  stringMap(interface_.enums, `${label}.enums`, validateEnumInfo);
-  stringMap(interface_.classes, `${label}.classes`, validateClassInfo);
-  if (!Array.isArray(interface_.tests) || interface_.tests.length > 100_000) throw new Error(`${label}.tests must be a bounded list`);
-  for (const [index, item] of interface_.tests.entries()) {
-    const test = record(item, `${label}.tests[${index}]`);
-    exactKeys(test, ["name", "title"], `${label}.tests[${index}]`);
-    nonEmptyString(test.name, `${label}.tests[${index}].name`);
-    if (typeof test.title !== "string") throw new Error(`${label}.tests[${index}].title must be a string`);
+function collectArtifactClaims(
+  receipt: VelarLibraryArtifactReceipt,
+  receiptRoot: string,
+  options: ArtifactSetLoadOptions,
+): ArtifactClaimCollection {
+  const files = new Map<string, ArtifactFileClaim>();
+  const entries = new Map<VelarPackageSubpath, ArtifactEntryPaths>();
+  const artifactJavaScriptPaths = new Set<string>();
+  const scopedJavaScriptPaths = new Set<string>();
+  for (const subpath of options.packageEntries.keys()) {
+    const entry = velarLibraryArtifactReceiptEntry(receipt, subpath);
+    if (!entry.javascript.endsWith(".js") && !entry.javascript.endsWith(".mjs")) {
+      throw new Error(`Velar library artifact entry '${subpath}' must use an ESM .js or .mjs file`);
+    }
+    const entryPath = artifactPath(receiptRoot, entry.javascript, "artifact JavaScript entry");
+    const sourceMapPath = artifactPath(receiptRoot, entry.sourceMap, "artifact source map");
+    const interfacePath = artifactPath(receiptRoot, entry.interface, "artifact interface");
+    artifactJavaScriptPaths.add(entryPath);
+    if (entry.javascript.endsWith(".js")) scopedJavaScriptPaths.add(entryPath);
+    const exported = packageRuntimeExportTargets(options.packageExports, subpath, receipt.target);
+    const expectedExport = `./${relative(options.packageRoot, entryPath).replaceAll("\\", "/")}`;
+    if (exported.length === 0 || exported.some((target) => target !== expectedExport)) {
+      throw new Error(`Package '${options.packageName}' must export Velar entry '${subpath}' as '${expectedExport}' for every supported ESM runtime condition`);
+    }
+    addArtifactFile(files, entryPath, VELAR_LIBRARY_ARTIFACT_LIMITS.fileBytes, "Velar library JavaScript artifact", "JavaScript", entry.sha256.javascript);
+    addArtifactFile(files, sourceMapPath, VELAR_LIBRARY_ARTIFACT_LIMITS.fileBytes, "Velar library source map", "source map", entry.sha256.sourceMap);
+    addArtifactFile(files, interfacePath, VELAR_LIBRARY_ARTIFACT_LIMITS.interfaceBytes, "Velar library interface", "interface", entry.sha256.interface, true);
+    entries.set(subpath, { entry, entryPath, sourceMapPath, interfacePath });
   }
-  stringMap(interface_.extensionExports, `${label}.extensionExports`, (item, itemLabel) => stringMap(item, itemLabel, validatePortableData));
-  stringMap(interface_.extensionData, `${label}.extensionData`, validatePortableData);
+  const chunkPaths: string[] = [];
+  if (receipt.formatVersion === 2) {
+    for (const chunk of receipt.chunks) {
+      const javascriptPath = artifactPath(receiptRoot, chunk.javascript, "artifact chunk JavaScript");
+      const sourceMapPath = artifactPath(receiptRoot, chunk.sourceMap, "artifact chunk source map");
+      artifactJavaScriptPaths.add(javascriptPath);
+      if (chunk.javascript.endsWith(".js")) scopedJavaScriptPaths.add(javascriptPath);
+      addArtifactFile(files, javascriptPath, VELAR_LIBRARY_ARTIFACT_LIMITS.fileBytes, "Velar library artifact chunk JavaScript", "chunk JavaScript", chunk.sha256.javascript);
+      addArtifactFile(files, sourceMapPath, VELAR_LIBRARY_ARTIFACT_LIMITS.fileBytes, "Velar library artifact chunk source map", "chunk source map", chunk.sha256.sourceMap);
+      chunkPaths.push(javascriptPath, sourceMapPath);
+    }
+  }
+  return { files, entries, artifactJavaScriptPaths, scopedJavaScriptPaths, chunkPaths };
 }
 
-function validateValueType(value: unknown, label: string, depth = 0): void {
-  if (depth > MAX_WIRE_DEPTH) throw new RangeError(`${label} exceeds the ABI type nesting limit`);
-  const type = record(value, label);
-  if (typeof type.kind !== "string") throw new Error(`${label}.kind must be a string`);
-  const nested = (item: unknown, itemLabel: string): void => validateValueType(item, itemLabel, depth + 1);
-  switch (type.kind) {
-    case "unknown":
-      exactKeys(type, ["kind", "restricted", "boundary"], label, true);
-      trueFlag(type.restricted, `${label}.restricted`);
-      trueFlag(type.boundary, `${label}.boundary`);
-      return;
-    case "any":
-      exactKeys(type, ["kind", "textConvertible"], label, true);
-      trueFlag(type.textConvertible, `${label}.textConvertible`);
-      return;
-    case "null": case "string": case "number": case "bool":
-      exactKeys(type, ["kind"], label);
-      return;
-    case "optional":
-      exactKeys(type, ["kind", "inner"], label);
-      nested(type.inner, `${label}.inner`);
-      return;
-    case "list": case "set":
-      exactKeys(type, ["kind", "element", "readonlyView"], label, true);
-      nested(type.element, `${label}.element`);
-      trueFlag(type.readonlyView, `${label}.readonlyView`);
-      return;
-    case "map":
-      exactKeys(type, ["kind", "key", "value", "readonlyView"], label, true);
-      nested(type.key, `${label}.key`);
-      nested(type.value, `${label}.value`);
-      trueFlag(type.readonlyView, `${label}.readonlyView`);
-      return;
-    case "record":
-      exactKeys(type, ["kind", "value", "readonlyView"], label, true);
-      nested(type.value, `${label}.value`);
-      trueFlag(type.readonlyView, `${label}.readonlyView`);
-      return;
-    case "promise": case "runtimeType":
-      exactKeys(type, ["kind", "value"], label);
-      nested(type.value, `${label}.value`);
-      return;
-    case "object":
-      exactKeys(type, ["kind", "fields", "readonlyFields", "optionalFields", "readonlyView", "capabilityHandle"], label, true);
-      stringMap(type.fields, `${label}.fields`, nested);
-      if (type.readonlyFields !== undefined) stringSet(type.readonlyFields, `${label}.readonlyFields`);
-      if (type.optionalFields !== undefined) stringSet(type.optionalFields, `${label}.optionalFields`);
-      trueFlag(type.readonlyView, `${label}.readonlyView`);
-      trueFlag(type.capabilityHandle, `${label}.capabilityHandle`);
-      return;
-    case "parameter":
-      exactKeys(type, ["kind", "name", "index"], label);
-      nonEmptyString(type.name, `${label}.name`);
-      nonNegativeInteger(type.index, `${label}.index`);
-      return;
-    case "named":
-      exactKeys(type, ["kind", "name", "identity", "readonlyView", "application"], label, true);
-      nonEmptyString(type.name, `${label}.name`);
-      optionalString(type.identity, `${label}.identity`);
-      trueFlag(type.readonlyView, `${label}.readonlyView`);
-      if (type.application !== undefined) {
-        const application = record(type.application, `${label}.application`);
-        exactKeys(application, ["declaration", "name", "arguments"], `${label}.application`);
-        nonEmptyString(application.declaration, `${label}.application.declaration`);
-        nonEmptyString(application.name, `${label}.application.name`);
-        valueTypeList(application.arguments, `${label}.application.arguments`, nested);
+function artifactEntrySnapshots(
+  entries: ReadonlyMap<VelarPackageSubpath, ArtifactEntryPaths>,
+  identities: ReadonlyMap<string, string>,
+  contents: ReadonlyMap<string, string>,
+): { readonly byPath: ReadonlyMap<string, VelarLibraryArtifactJavaScriptSnapshot>; readonly all: readonly VelarLibraryArtifactJavaScriptSnapshot[] } {
+  const byPath = new Map<string, VelarLibraryArtifactJavaScriptSnapshot>();
+  for (const paths of entries.values()) {
+    const path = identities.get(paths.entryPath)!;
+    const sourceMapPath = identities.get(paths.sourceMapPath)!;
+    const existing = byPath.get(path);
+    if (existing) {
+      if (existing.sourceMapPath !== sourceMapPath
+        || existing.code !== contents.get(paths.entryPath)
+        || existing.sourceMap !== contents.get(paths.sourceMapPath)) {
+        throw new Error(`Velar library artifact entry '${path}' has conflicting verified snapshots`);
       }
-      return;
-    case "class": case "classConstructor":
-      exactKeys(type, ["kind", "name", "identity"], label, true);
-      nonEmptyString(type.name, `${label}.name`);
-      optionalString(type.identity, `${label}.identity`);
-      return;
-    case "enum":
-      exactKeys(type, ["kind", "name", "identity"], label);
-      nonEmptyString(type.name, `${label}.name`);
-      nonEmptyString(type.identity, `${label}.identity`);
-      return;
-    case "enumMember":
-      exactKeys(type, ["kind", "name", "identity", "member"], label);
-      nonEmptyString(type.name, `${label}.name`);
-      nonEmptyString(type.identity, `${label}.identity`);
-      nonEmptyString(type.member, `${label}.member`);
-      return;
-    case "enumObject":
-      exactKeys(type, ["kind", "name", "identity", "members"], label);
-      nonEmptyString(type.name, `${label}.name`);
-      nonEmptyString(type.identity, `${label}.identity`);
-      stringSet(type.members, `${label}.members`);
-      return;
-    case "typeObject":
-      exactKeys(type, ["kind", "name", "value"], label, true);
-      nonEmptyString(type.name, `${label}.name`);
-      if (type.value !== undefined) nested(type.value, `${label}.value`);
-      return;
-    case "function": case "action": case "intrinsic":
-      exactKeys(type, ["kind", "name", "typeParameterNames", "typeParameterBounds", "parameters", "parameterNames", "requiredParameters", "rest", "result"], label, true);
-      if (type.kind === "intrinsic") nonEmptyString(type.name, `${label}.name`);
-      else if (type.name !== undefined) throw new Error(`${label}.name is only valid on an intrinsic type`);
-      callableFields(type, label, nested);
-      return;
-    case "extension": {
-      exactKeys(type, ["kind", "extensionId", "family", "role", "nominal", "properties", "requiredProperties", "arguments", "metadata", "display"], label, true);
-      nonEmptyString(type.extensionId, `${label}.extensionId`);
-      nonEmptyString(type.family, `${label}.family`);
-      nonEmptyString(type.role, `${label}.role`);
-      optionalString(type.nominal, `${label}.nominal`);
-      stringMap(type.properties, `${label}.properties`, nested);
-      stringSet(type.requiredProperties, `${label}.requiredProperties`);
-      valueTypeList(type.arguments, `${label}.arguments`, nested);
-      if (type.metadata !== undefined) stringRecord(type.metadata, `${label}.metadata`);
-      validateExtensionDisplay(type.display, `${label}.display`);
-      return;
+      continue;
     }
-    case "union":
-      exactKeys(type, ["kind", "members"], label);
-      valueTypeList(type.members, `${label}.members`, nested);
-      return;
-    default:
-      throw new Error(`${label}.kind '${type.kind}' is not part of Velar library ABI 1`);
+    byPath.set(path, Object.freeze({
+      path,
+      code: contents.get(paths.entryPath)!,
+      sourceMapPath,
+      sourceMap: contents.get(paths.sourceMapPath)!,
+    }));
   }
+  return { byPath, all: Object.freeze([...byPath.values()]) };
 }
 
-function callableFields(type: Record<string, unknown>, label: string, nested: (value: unknown, label: string) => void): void {
-  if (type.typeParameterNames !== undefined) stringList(type.typeParameterNames, `${label}.typeParameterNames`);
-  if (type.typeParameterBounds !== undefined) boundList(type.typeParameterBounds, `${label}.typeParameterBounds`);
-  valueTypeList(type.parameters, `${label}.parameters`, nested);
-  if (type.parameterNames !== undefined) stringList(type.parameterNames, `${label}.parameterNames`, true);
-  nonNegativeInteger(type.requiredParameters, `${label}.requiredParameters`);
-  if (type.rest !== undefined) nested(type.rest, `${label}.rest`);
-  nested(type.result, `${label}.result`);
+interface ArtifactEntryPaths {
+  readonly entry: ReturnType<typeof velarLibraryArtifactReceiptEntry>;
+  readonly entryPath: string;
+  readonly sourceMapPath: string;
+  readonly interfacePath: string;
 }
 
-function validateGenericTypeInfo(value: unknown, label: string): void {
-  const info = record(value, label);
-  exactKeys(info, ["identity", "name", "parameterNames", "parameterBounds", "fields", "readonlyFields"], label, true);
-  nonEmptyString(info.identity, `${label}.identity`);
-  nonEmptyString(info.name, `${label}.name`);
-  stringList(info.parameterNames, `${label}.parameterNames`);
-  boundList(info.parameterBounds, `${label}.parameterBounds`);
-  stringMap(info.fields, `${label}.fields`, validateValueType);
-  if (info.readonlyFields !== undefined) stringSet(info.readonlyFields, `${label}.readonlyFields`);
+interface ArtifactFileClaim {
+  readonly path: string;
+  readonly maximum: number;
+  readonly label: string;
+  readonly hashLabel: string;
+  readonly expected: string;
+  readonly interface: boolean;
 }
 
-function validateEnumInfo(value: unknown, label: string): void {
-  const info = record(value, label);
-  exactKeys(info, ["identity", "members", "wireValues"], label);
-  nonEmptyString(info.identity, `${label}.identity`);
-  stringSet(info.members, `${label}.members`);
-  // D102 ruling 1: a wire value is a string or a safe integer. The artifact is
-  // an untrusted input, so the integer bound is re-checked here rather than
-  // assumed from the declaration site that produced it — a fraction or an
-  // unsafe integer arriving in a frozen artifact would be a wire value the
-  // language cannot have declared.
-  stringMap(info.wireValues, `${label}.wireValues`, (item, itemLabel) => {
-    if (typeof item === "string") return;
-    if (typeof item !== "number" || !Number.isSafeInteger(item)) {
-      throw new Error(`${itemLabel} must be a string or a safe integer`);
-    }
-  });
-  if ((info.members as ReadonlySet<string>).size !== (info.wireValues as ReadonlyMap<string, string | number>).size
-    || [...info.members as ReadonlySet<string>].some((member) => !(info.wireValues as ReadonlyMap<string, string | number>).has(member))) {
-    throw new Error(`${label}.wireValues must define exactly one value for every enum member`);
-  }
-}
-
-function validateClassInfo(value: unknown, label: string): void {
-  const info = record(value, label);
-  exactKeys(info, [
-    "identity", "dispose", "iterate", "iterateAsync", "parameters", "parameterNames", "requiredParameters",
-    "constructorRest", "base", "abstract", "fields", "getters", "abstractGetters", "methods", "abstractMethods",
-    "staticFields", "staticGetters", "staticMethods",
-  ], label, true);
-  optionalString(info.identity, `${label}.identity`);
-  if (info.dispose !== undefined && info.dispose !== "sync" && info.dispose !== "async") throw new Error(`${label}.dispose must be 'sync' or 'async'`);
-  if (info.iterate !== undefined) validateValueType(info.iterate, `${label}.iterate`);
-  if (info.iterateAsync !== undefined) validateValueType(info.iterateAsync, `${label}.iterateAsync`);
-  valueTypeList(info.parameters, `${label}.parameters`, validateValueType);
-  if (info.parameterNames !== undefined) stringList(info.parameterNames, `${label}.parameterNames`, true);
-  nonNegativeInteger(info.requiredParameters, `${label}.requiredParameters`);
-  if (info.constructorRest !== undefined) validateValueType(info.constructorRest, `${label}.constructorRest`);
-  if (info.base !== null && typeof info.base !== "string") throw new Error(`${label}.base must be a string or null`);
-  if (typeof info.abstract !== "boolean") throw new Error(`${label}.abstract must be a bool`);
-  stringMap(info.fields, `${label}.fields`, validateClassField);
-  stringSet(info.getters, `${label}.getters`);
-  stringSet(info.abstractGetters, `${label}.abstractGetters`);
-  stringMap(info.methods, `${label}.methods`, validateValueType);
-  stringSet(info.abstractMethods, `${label}.abstractMethods`);
-  stringMap(info.staticFields, `${label}.staticFields`, validateClassField);
-  stringSet(info.staticGetters, `${label}.staticGetters`);
-  stringMap(info.staticMethods, `${label}.staticMethods`, validateValueType);
-}
-
-function validateClassField(value: unknown, label: string): void {
-  const field = record(value, label);
-  exactKeys(field, ["mutable", "type"], label);
-  if (typeof field.mutable !== "boolean") throw new Error(`${label}.mutable must be a bool`);
-  validateValueType(field.type, `${label}.type`);
-}
-
-function validateExtensionDisplay(value: unknown, label: string): void {
-  const display = record(value, label);
-  if (display.kind === "named") {
-    exactKeys(display, ["kind", "name"], label);
-    nonEmptyString(display.name, `${label}.name`);
-  } else if (display.kind === "constructor") {
-    exactKeys(display, ["kind", "prefix", "name"], label);
-    if (typeof display.prefix !== "string") throw new Error(`${label}.prefix must be a string`);
-    nonEmptyString(display.name, `${label}.name`);
-  } else if (display.kind === "properties") {
-    exactKeys(display, ["kind", "name", "result", "hiddenOptionalProperties"], label, true);
-    nonEmptyString(display.name, `${label}.name`);
-    nonEmptyString(display.result, `${label}.result`);
-    if (display.hiddenOptionalProperties !== undefined) stringMap(display.hiddenOptionalProperties, `${label}.hiddenOptionalProperties`, (item, itemLabel) => nonEmptyString(item, itemLabel));
-  } else {
-    throw new Error(`${label}.kind must be named, constructor, or properties`);
-  }
-}
-
-function validatePortableData(value: unknown, label: string, depth = 0): void {
-  if (depth > MAX_WIRE_DEPTH) throw new RangeError(`${label} exceeds the ABI data nesting limit`);
-  if (value === null || typeof value === "string" || typeof value === "boolean") return;
-  if (typeof value === "number" && Number.isFinite(value)) return;
-  if (Array.isArray(value)) {
-    for (const [index, item] of value.entries()) validatePortableData(item, `${label}[${index}]`, depth + 1);
-    return;
-  }
-  if (value instanceof Set) {
-    for (const item of value) validatePortableData(item, `${label} set value`, depth + 1);
-    return;
-  }
-  if (value instanceof Map) {
-    for (const [key, item] of value) {
-      if (typeof key !== "string") throw new Error(`${label} map keys must be strings`);
-      validatePortableData(item, `${label}.${key}`, depth + 1);
+function addArtifactFile(
+  files: Map<string, ArtifactFileClaim>,
+  path: string,
+  maximum: number,
+  label: string,
+  hashLabel: string,
+  expected: string,
+  interface_ = false,
+): void {
+  const existing = files.get(path);
+  if (existing) {
+    if (existing.expected !== expected || existing.interface !== interface_) {
+      throw new Error(`Velar library artifact output '${path}' has conflicting claims`);
     }
     return;
   }
-  const object = record(value, label);
-  for (const [key, item] of Object.entries(object)) validatePortableData(item, `${label}.${key}`, depth + 1);
+  files.set(path, { path, maximum, label, hashLabel, expected, interface: interface_ });
 }
 
 function record(value: unknown, label: string): Record<string, unknown> {
@@ -559,73 +445,13 @@ function record(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function exactKeys(value: Record<string, unknown>, allowed: readonly string[], label: string, optional = false): void {
+function exactKeys(value: Record<string, unknown>, allowed: readonly string[], label: string): void {
   const allowedSet = new Set(allowed);
   const unknown = Object.keys(value).find((key) => !allowedSet.has(key));
   if (unknown) throw new Error(`${label} has unknown field '${unknown}'`);
-  if (!optional) {
-    const missing = allowed.find((key) => !Object.hasOwn(value, key));
-    if (missing) throw new Error(`${label} is missing field '${missing}'`);
-  }
+  const missing = allowed.find((key) => !Object.hasOwn(value, key));
+  if (missing) throw new Error(`${label} is missing field '${missing}'`);
 }
-
-function stringMap(value: unknown, label: string, validate: (item: unknown, label: string) => void): void {
-  if (!(value instanceof Map) || value.size > 100_000) throw new Error(`${label} must be a bounded map`);
-  const seen = new Set<string>();
-  for (const [key, item] of value) {
-    if (typeof key !== "string" || key === "") throw new Error(`${label} keys must be non-empty strings`);
-    if (seen.has(key)) throw new Error(`${label} repeats '${key}'`);
-    seen.add(key);
-    validate(item, `${label}.${key}`);
-  }
-}
-
-function stringSet(value: unknown, label: string): void {
-  if (!(value instanceof Set) || value.size > 100_000 || [...value].some((item) => typeof item !== "string" || item === "")) {
-    throw new Error(`${label} must be a bounded set of non-empty strings`);
-  }
-}
-
-function valueTypeList(value: unknown, label: string, validate: (item: unknown, label: string) => void): void {
-  if (!Array.isArray(value) || value.length > 100_000) throw new Error(`${label} must be a bounded list`);
-  value.forEach((item, index) => validate(item, `${label}[${index}]`));
-}
-
-function stringList(value: unknown, label: string, allowEmpty = false): void {
-  if (!Array.isArray(value) || value.length > 100_000 || value.some((item) => typeof item !== "string" || (!allowEmpty && item === ""))) {
-    throw new Error(`${label} must be a bounded list of ${allowEmpty ? "strings" : "non-empty strings"}`);
-  }
-}
-
-function boundList(value: unknown, label: string): void {
-  if (!Array.isArray(value) || value.length > 100_000 || value.some((item) => item !== null && item !== "Comparable" && item !== "Text" && item !== "Data")) {
-    throw new Error(`${label} must contain only Comparable, Text, Data, or null`);
-  }
-}
-
-function stringRecord(value: unknown, label: string): void {
-  const object = record(value, label);
-  for (const [key, item] of Object.entries(object)) {
-    if (key === "" || typeof item !== "string") throw new Error(`${label} must map non-empty strings to strings`);
-  }
-}
-
-function trueFlag(value: unknown, label: string): void {
-  if (value !== undefined && value !== true) throw new Error(`${label} must be true when present`);
-}
-
-function nonEmptyString(value: unknown, label: string): asserts value is string {
-  if (typeof value !== "string" || value === "") throw new Error(`${label} must be a non-empty string`);
-}
-
-function optionalString(value: unknown, label: string): void {
-  if (value !== undefined) nonEmptyString(value, label);
-}
-
-function nonNegativeInteger(value: unknown, label: string): void {
-  if (!Number.isSafeInteger(value) || (value as number) < 0) throw new Error(`${label} must be a non-negative integer`);
-}
-
 function normalizedRelativePath(value: unknown, label: string): asserts value is string {
   if (typeof value !== "string" || value === "" || /[\u0000-\u001f\u007f]/u.test(value) || isAbsolute(value) || value.includes("\\")
     || value.split("/").some((part) => part === "" || part === "." || part === "..")) {
@@ -641,30 +467,20 @@ function artifactPath(root: string, value: unknown, label: string): string {
   return path;
 }
 
-async function readArtifactText(packageRoot: string, path: string, maximum: number, label: string): Promise<string> {
-  const [rootIdentity, metadata] = await Promise.all([realpath(packageRoot), lstat(path)]);
-  if (!metadata.isFile() || metadata.isSymbolicLink()) throw new Error(`${label} must be an ordinary file`);
-  const identity = await realpath(path);
-  const fromRoot = relative(rootIdentity, identity);
-  if (!fromRoot || fromRoot.startsWith("..") || isAbsolute(fromRoot)) throw new Error(`${label} escapes its package directory`);
-  return readBoundedText(identity, maximum, label);
-}
-
-function hash(value: unknown, label: string): asserts value is string {
-  if (typeof value !== "string" || !SHA256.test(value)) throw new Error(`${label} must be a lowercase SHA-256 digest`);
-}
-
-function packageExportTargets(exports: unknown, subpath: string): string[] {
-  if (typeof exports === "string") return subpath === "." ? [exports] : [];
-  if (exports === null || typeof exports !== "object" || Array.isArray(exports)) return [];
-  const fields = exports as Record<string, unknown>;
-  const target = Object.keys(fields).some((key) => key.startsWith(".")) ? fields[subpath] : subpath === "." ? exports : undefined;
-  const output: string[] = [];
-  const visit = (value: unknown): void => {
-    if (typeof value === "string") output.push(value);
-    else if (Array.isArray(value)) value.forEach(visit);
-    else if (value !== null && typeof value === "object") Object.values(value).forEach(visit);
-  };
-  visit(target);
+async function mapBounded<T, R>(
+  values: readonly T[],
+  concurrency: number,
+  operation: (value: T) => Promise<R>,
+): Promise<R[]> {
+  const output = new Array<R>(values.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(concurrency, values.length) }, async () => {
+    while (next < values.length) {
+      const index = next;
+      next += 1;
+      output[index] = await operation(values[index]!);
+    }
+  });
+  await Promise.all(workers);
   return output;
 }

@@ -31,7 +31,7 @@ legal space is exactly three shapes:
 - a **package** specifier — `"lodash"`, `"@scope/name"`, or a package subpath
   such as `"highlight.js/lib/common"`;
 - a **host builtin** — `"node:process"` and the other `node:` modules, plus the
-  bare builtin names;
+  bare builtin names, in a Node-target project only;
 - a **`data:` URL** — `"data:text/javascript,export const x = 1"`, which is how
   first-party tests declare a tiny module inline.
 
@@ -42,13 +42,27 @@ belongs to the compiler, and a hand-written sibling `.js` file has no place in
 it. Move that JavaScript into a package — a workspace package is enough — and
 import it by name.
 
-Bare `import js` specifiers resolve at check time in a project compile: a
-package that is not installed next to the importer is a check error instead of
-a raw `ERR_MODULE_NOT_FOUND` pointing at emitted artifacts, and a VelarScript
-source package reached through `import js` is answered with the
-reverse-direction teaching (import it without `js`). Node builtins, `node:`,
-`data:`, and `#`-mapped specifiers are exempt from that existence probe because
-the host owns their resolution.
+Bare `import js` specifiers resolve at check time in a project compile: the
+exact package export and selected file must exist under the emitted host's ESM
+conditions. A Core package must expose a provable ESM export under both Node and
+browser conditions; an implicit CommonJS or legacy `main` entry is not a Core
+contract. A VelarScript source package reached through `import js` is answered
+with the reverse-direction teaching (import it without `js`). Unreadable package
+manifests, blocked or absent subpaths, and missing selected files are therefore
+owned `VEL6006` diagnostics rather than later bundler failures.
+
+Package-owned JavaScript reached through `#imports` or a self export is checked
+as a bounded module graph. Its external bare imports must be declared by that
+package's `dependencies`; a publisher-only dev dependency or workspace hoist
+cannot satisfy the runtime ownership boundary.
+
+Node builtins belong only to the Node target. A `data:` module is decoded and
+parsed during check with bounded aggregate work; its nested graph may contain
+only other checked data modules, plus Node builtins when the project target is
+Node. This keeps a builtin hidden inside inline JavaScript from bypassing the
+Core/Web target boundary. A Core `#` mapping is checked with the same Node and
+browser condition sets as `build-library` and must select one target that can be
+frozen into the shared artifact.
 
 Here, safe means statically checked against one trusted declaration contract.
 It does not sandbox JavaScript, attest a package, or automatically inspect every

@@ -8,6 +8,7 @@ import { compileProject } from "./project.ts";
 import { compiledTestModulePath, createCompiledSandbox, removeCompiledSandbox, writeCompiledTestProject } from "./test-output.ts";
 import { prepareStandardModules } from "./test-runner.ts";
 import { uncaughtProgramEntrySource } from "./uncaught-program-error.ts";
+import { projectPackageTarget } from "./project-package-target.ts";
 
 // velar/host owns a 30-second in-program graceful-shutdown window. The outer
 // launcher must not truncate that public contract; this margin only catches a
@@ -31,6 +32,7 @@ export async function runProgram(
     extensions: config.compilerExtensions,
     extensionConfig: config.extensionConfig,
     framework: config.framework,
+    packageTarget: projectPackageTarget(config),
   });
   for (const notice of project.notices) process.stderr.write(`${notice.path}: notice: ${notice.message}\n`);
   const errors = [

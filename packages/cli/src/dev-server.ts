@@ -16,12 +16,18 @@ import { assertUniqueEmbeddedModuleOutputs } from "./embedded-modules.ts";
 import { localRequestRefusal } from "./local-request-guard.ts";
 import { applicationEntry } from "./application-entry.ts";
 import { buildDevelopmentWorkerModules } from "./production-build.ts";
+import { projectPackageTarget } from "./project-package-target.ts";
+import { projectModuleClosure } from "./project-module-closure.ts";
 
 interface Snapshot {
   readonly project: ProjectResult;
   readonly artifacts: FrameworkHostArtifacts | null;
   readonly errors: readonly string[];
+  /** The package-owned part of the import map, exactly as supplied to the host. */
+  readonly packageImportsKey: string;
   readonly npmPackages: readonly BrowserNpmPackage[];
+  /** Page and Worker npm roots whose source changes require a rebuild. */
+  readonly npmWatchRoots: readonly string[];
   readonly compilation: ProjectResult["stats"];
   readonly notices: readonly string[];
   readonly workerModules: ReadonlyMap<string, string>;
@@ -29,6 +35,14 @@ interface Snapshot {
 
 interface DirectoryTreeWatcher {
   close(): void;
+}
+
+interface DevelopmentRebuild {
+  readonly previous: ProjectResult | null;
+  readonly changedPaths: ReadonlySet<string>;
+  readonly staleNpmRoots: ReadonlySet<string>;
+  readonly revision: number;
+  readonly packageImportsKey: string;
 }
 
 export interface BranchDirectoryTreeWatcher extends DirectoryTreeWatcher {
@@ -68,12 +82,12 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
   // alias can make the project root a package root too, so the package
   // watchers below take the same set rather than only the tree watcher.
   const excludedWatchDirectories = new Set([config.outDir, resolve(config.root, ".velar")]);
-  const syncPackageWatchers = (project: ProjectResult, npmPackages: readonly BrowserNpmPackage[]): void => {
+  const syncPackageWatchers = (project: ProjectResult, npmWatchRoots: readonly string[]): void => {
     npmPackageRoots.clear();
-    for (const item of npmPackages) npmPackageRoots.add(item.root);
+    for (const root of npmWatchRoots) npmPackageRoots.add(root);
     const roots = new Set([
       ...project.velarPackages.map((item) => item.root),
-      ...npmPackages.map((item) => item.root),
+      ...npmWatchRoots,
     ]);
     for (const [root, watcher] of packageWatchers) {
       if (roots.has(root)) continue;
@@ -98,20 +112,19 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
   };
   const rebuild = (): Promise<void> => {
     if (compiling) return compiling;
-    const previous = forceFullRebuild ? null : snapshot.project;
-    const rebuildRevision = dirtyRevision;
-    compiling = compileSnapshot(config, previous, dirtyPaths, staleNpmRoots).then((next) => {
-      if (!closing) syncPackageWatchers(next.project, next.npmPackages);
+    const rebuild = captureDevelopmentRebuild(snapshot, forceFullRebuild, dirtyRevision, dirtyPaths, staleNpmRoots);
+    compiling = compileSnapshot(config, rebuild.previous, rebuild.changedPaths, rebuild.staleNpmRoots).then((next) => {
       snapshot = next.errors.length > 0 && snapshot.artifacts
         ? { ...snapshot, errors: next.errors, notices: next.notices, compilation: next.project.stats }
         : next;
-      if (next.errors.length === 0 && dirtyRevision === rebuildRevision) {
+      if (!closing) syncPackageWatchers(snapshot.project, snapshot.npmWatchRoots);
+      if (next.errors.length === 0 && dirtyRevision === rebuild.revision) {
         dirtyPaths.clear();
         staleNpmRoots.clear();
         forceFullRebuild = false;
       }
       revision += 1;
-      const update = JSON.stringify({ revision, errors: next.errors, compilation: next.project.stats });
+      const update = JSON.stringify({ revision, errors: next.errors, compilation: next.project.stats, fullReload: requiresFullReload(rebuild, next) });
       for (const client of clients) client.write(`event: reload\ndata: ${update}\n\n`);
       process.stdout.write(next.errors.length === 0
         ? `VelarScript app rebuilt in ${next.project.stats.durationMs}ms (${next.project.stats.compiledModules} compiled, ${next.project.stats.reusedModules} reused)\n`
@@ -120,13 +133,13 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
       const message = `VelarScript rebuild failed: ${hostErrorMessage(error)}`;
       snapshot = { ...snapshot, errors: [message] };
       revision += 1;
-      const update = JSON.stringify({ revision, errors: snapshot.errors, compilation: snapshot.compilation });
+      const update = JSON.stringify({ revision, errors: snapshot.errors, compilation: snapshot.compilation, fullReload: false });
       for (const client of clients) client.write(`event: reload\ndata: ${update}\n\n`);
       process.stderr.write(`${message}\n`);
       process.stdout.write("VelarScript app has 1 error\n");
     }).finally(() => {
       compiling = null;
-      if (!closing && dirtyRevision !== rebuildRevision) scheduleRebuild();
+      if (!closing && dirtyRevision !== rebuild.revision) scheduleRebuild();
     });
     return compiling;
   };
@@ -168,7 +181,7 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
       });
       response.write("event: ready\ndata: connected\n\n");
       if (snapshot.errors.length > 0 && snapshot.artifacts) {
-        response.write(`event: reload\ndata: ${JSON.stringify({ revision, errors: snapshot.errors })}\n\n`);
+        response.write(`event: reload\ndata: ${JSON.stringify({ revision, errors: snapshot.errors, fullReload: false })}\n\n`);
       }
       clients.add(response);
       request.on("close", () => clients.delete(response));
@@ -244,7 +257,7 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
     send(response, 404, "Not found\n", "text/plain; charset=utf-8");
   });
 
-  syncPackageWatchers(snapshot.project, snapshot.npmPackages);
+  syncPackageWatchers(snapshot.project, snapshot.npmWatchRoots);
   const watcher = watchDirectoryTree(config.root, (_event, fileName) => {
     if (!fileName?.endsWith(".vel") && !fileName?.endsWith(".json") && !fileName?.startsWith(relativePublic(config))) return;
     dirtyRevision += 1;
@@ -284,6 +297,30 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
   process.once("SIGTERM", close);
   await new Promise<void>((resolve) => server.once("close", resolve));
   await processes?.stop();
+}
+
+/** Capture one rebuild boundary before asynchronous compilation can observe later watcher writes. */
+function captureDevelopmentRebuild(
+  snapshot: Snapshot,
+  forceFullRebuild: boolean,
+  revision: number,
+  changedPaths: ReadonlySet<string>,
+  staleNpmRoots: ReadonlySet<string>,
+): DevelopmentRebuild {
+  return {
+    previous: forceFullRebuild ? null : snapshot.project,
+    changedPaths: new Set(changedPaths),
+    staleNpmRoots: new Set(staleNpmRoots),
+    revision,
+    packageImportsKey: snapshot.packageImportsKey,
+  };
+}
+
+function requiresFullReload(rebuild: DevelopmentRebuild, next: Snapshot): boolean {
+  // A Worker bundle has no live module-swap protocol. Reloading the document
+  // is what retires existing Worker instances after one of its npm roots moved.
+  return next.errors.length === 0
+    && (rebuild.staleNpmRoots.size > 0 || next.packageImportsKey !== rebuild.packageImportsKey);
 }
 
 function watchDirectoryTree(
@@ -494,13 +531,16 @@ async function compileSnapshot(
       extensions: config.compilerExtensions,
       extensionConfig: config.extensionConfig,
       framework: config.framework,
+      packageTarget: projectPackageTarget(config),
     },
     previous,
     changedPaths,
   );
-  const npm = await resolveBrowserNpm(project, staleNpmRoots);
+  const pageModules = projectModuleClosure(project, [project.entryPath]);
+  const npm = await resolveBrowserNpm(project, staleNpmRoots, pageModules);
   const artifactErrors: string[] = [];
   let workerModules: ReadonlyMap<string, string> = new Map();
+  const workerNpmRoots = new Set<string>();
   try {
     assertUniqueEmbeddedModuleOutputs(project.modules.map((module) => ({
       ownerPath: module.relativePath.replace(/\.vel$/u, ".js"),
@@ -509,7 +549,7 @@ async function compileSnapshot(
     const projectFailed = project.failures.length > 0
       || project.modules.some((module) => module.result.diagnostics.length > 0)
       || npm.failures.length > 0;
-    if (!projectFailed) workerModules = await buildDevelopmentWorkerModules(project);
+    if (!projectFailed) workerModules = await buildDevelopmentWorkerModules(project, workerNpmRoots);
   } catch (error) {
     artifactErrors.push(hostErrorMessage(error));
   }
@@ -530,7 +570,9 @@ async function compileSnapshot(
     project,
     artifacts: errors.length === 0 ? createFrameworkArtifacts(project, true, npm.imports) : null,
     errors,
+    packageImportsKey: JSON.stringify(npm.imports),
     npmPackages: npm.packages,
+    npmWatchRoots: [...new Set([...npm.packages.map((package_) => package_.root), ...workerNpmRoots])].sort(),
     compilation: project.stats,
     notices,
     workerModules,

@@ -3570,10 +3570,25 @@ module that owns program startup places its directly awaited work in `@main`;
 that region runs only for the selected entry after its imported dependencies
 have initialized.
 
-Relative `.vel` modules and package exports are supported. Project modules are
-checked as one dependency graph. A function or value may carry the shape of an
-unexported or unimported record across that graph, so its fields remain checked,
-but the record's source name is not silently declared in the consumer. Import a
+Relative `.vel` modules and installed package entries are supported. Importing
+an exact package name selects its mandatory `velar.entry`; appending a package
+subpath selects only the matching `velar.entries["./subpath"]`. This split is
+the same for scoped packages. Subpaths are exact, static, extensionless names:
+there is no wildcard, directory, `index.vel`, or nearest-prefix fallback.
+Their keys begin `./` followed by an ASCII letter or digit, use only ASCII
+letters, digits, `.`, `_`, `-`, and `/`, contain no empty, `.` or `..` segment,
+and do not end in `.vel`. The mapped source is a normalized package-relative
+`.vel` path with forward slashes and no empty, `.` or `..` segment. A package
+has at most 256 entries including the root; every entry shares its package
+identity, language generation, target,
+capability declarations, and package-root containment. An entry and a JSON
+resource cannot claim the same public subpath. The complete source and frozen
+artifact layout is specified in
+[package distribution](package-distribution.md#package-source-entries).
+
+Project modules are checked as one dependency graph. A function or value may
+carry the shape of an unexported or unimported record across that graph, so its
+fields remain checked, but the record's source name is not silently declared in the consumer. Import a
 type explicitly when naming it in an annotation:
 
 ```velar fragment
@@ -3682,7 +3697,7 @@ the block finished initializing. A function the block exports still closes over
 the live variable and answers with the current one.
 
 A module can re-export another module's named exports without creating local
-bindings, which is how a package entry exposes symbols from its internal
+bindings, which is how each package entry exposes symbols from its internal
 modules (a barrel). Re-exported names join the module's interface under their
 aliases with the full origin contract, including live-export mutability, and
 lower to native ES-module re-exports. Namespace re-export (`export * from`)
@@ -5292,9 +5307,10 @@ learn.
 
 Domain functionality for one application category — including editor, game,
 chart, or similar tooling — never joins the Standard library. It publishes as
-an ordinary installable package with a `velar.entry` source entry and is
-imported by package name after npm installation. A library's implementation in
-portable VelarScript does not grant it a `velar/*` identity.
+an ordinary installable package with a root `velar.entry` and any needed exact
+`velar.entries` subpaths, then is imported by those package specifiers after npm
+installation. A library's implementation in portable VelarScript does not
+grant it a `velar/*` identity.
 
 Membership also means jurisdiction. Every `velar/*` module surface is under
 this reference's rules with full force — rules 2 and 3 (section 1) bind an

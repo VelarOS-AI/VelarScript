@@ -48,9 +48,10 @@ import {
   VELAR_EMBEDDED_MODULE_MARKER,
 } from "./embedded-modules.ts";
 import { resourceOutputRelativePath, writeBuildResourcePackageManifests, writeProjectResources } from "./resource-output.ts";
-import { resolveVelarLibraryBuild, writeVelarLibraryArtifact } from "./library-artifact-build.ts";
+import { checkVelarLibraryEntries, resolveVelarLibraryBuild, writeVelarLibraryArtifact } from "./library-artifact-build.ts";
 import { renderJavaScriptOutput, type JavaScriptBuildMode } from "./javascript-output.ts";
 import { NODE_BUILD_MANIFEST_NAME, writeNodeProductionManifest } from "./node-production-build.ts";
+import { assertBuildOutputBoundary } from "./package-scope.ts";
 import { verifyApplicationBuild } from "./application-verifier.ts";
 import { VelarProjectSessions } from "./project-session.ts";
 import { buildOwnershipGraph } from "./ownership-graph.ts";
@@ -481,14 +482,14 @@ async function main(arguments_: readonly string[]): Promise<number> {
     try {
       const config = await resolveVelarProject(parsed.input);
       const library = await resolveVelarLibraryBuild(config);
-      const checked = await checkResolvedProject(library.project, parsed.input ?? library.project.root);
-      process.stderr.write(formatCheckOutput(checked));
-      if (checked.errors.length > 0) return 1;
-      staging = await prepareBuildStaging(library.outputRoot, { declared: true, forced: false });
-      await writeVelarLibraryArtifact(library, checked.project, staging, parsed.mode ?? config.build.mode);
+      const checked = await checkVelarLibraryEntries(library, parsed.input);
+      process.stderr.write(checked.output);
+      if (checked.failed) return 1;
+      staging = await prepareBuildStaging(library.outputRoot, { declared: true, forced: false, projectRoot: config.root });
+      await writeVelarLibraryArtifact(library, checked.projects, staging, parsed.mode ?? config.build.mode);
       await replaceOutputDirectory(staging, library.outputRoot);
       staging = null;
-      process.stdout.write(`Built Velar library ABI 1 ${library.packageName}@${library.packageVersion} (${library.target}) -> ${library.receiptPath}\n`);
+      process.stdout.write(`Built Velar library ABI 1 ${library.packageName}@${library.packageVersion} (${library.target}${library.entries.size === 1 ? "" : `, ${library.entries.size} entries`}) -> ${library.receiptPath}\n`);
       return 0;
     } catch (error) {
       if (staging !== null) await rm(staging, { recursive: true, force: true });
@@ -736,7 +737,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
           frameworkBuild = writeFrameworkProductionApplication(
             project,
             outputDirectory,
-            { forced: false, declared: false },
+            { forced: false, declared: false, projectRoot: projectConfig.root },
             "production",
             projectConfig.build.sourceMaps,
           );
@@ -772,8 +773,8 @@ async function main(arguments_: readonly string[]): Promise<number> {
       await assertNodeStandardModuleOutputAvailable(dirname(outputPath), project);
       await mkdir(dirname(outputPath), { recursive: true });
       const result = project.modules[0]!.result;
-      if (needsStandaloneJavaScriptBundle(result)) {
-        const bundled = await bundleStandaloneJavaScript(outputPath, result, project.resources, "readable", buildSourceMaps);
+      if (needsStandaloneJavaScriptBundle(result, project.velarArtifactImports)) {
+        const bundled = await bundleStandaloneJavaScript(outputPath, result, project.resources, "readable", buildSourceMaps, project.velarArtifactImports);
         await writeCompiled(outputPath, result, true, bundled.code, bundled.sourceMap, false, buildSourceMaps, buildMode);
       } else {
         await writeCompiled(outputPath, result, true, null, null, true, buildSourceMaps, buildMode);
@@ -788,12 +789,8 @@ async function main(arguments_: readonly string[]): Promise<number> {
   }
 
   const outputDirectory = parsed.outputDirectory ? resolve(parsed.outputDirectory) : projectConfig.outDir;
-  // `outDir` is the project manifest's own declaration of a directory velar
-  // owns, and config.ts already refuses one that is the project root or that
-  // overlaps the entry or the public directory. `--out-dir` carries no such
-  // declaration, so a path it names has to prove ownership before the build
-  // replaces what is there.
-  const replacement: BuildOutputReplacement = { forced: parsed.force, declared: outputDirectory === projectConfig.outDir };
+  // Manifest outDir declares Velar ownership; an override must prove it.
+  const replacement: BuildOutputReplacement = { forced: parsed.force, declared: outputDirectory === projectConfig.outDir, projectRoot: projectConfig.root };
   if (project.framework) {
     try {
       await writeFrameworkProductionApplication(project, outputDirectory, replacement, buildMode, buildSourceMaps);
@@ -833,7 +830,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
       await writeCompiled(outputPath, module.result, false, rewriteVelarPackageImports(project, module), null, true, buildSourceMaps, buildMode);
     });
     await writeProjectResources(project, staging, "build", buildMode);
-    await writeBuildResourcePackageManifests(project, staging);
+    await writeBuildResourcePackageManifests(project, staging, buildMode, buildSourceMaps);
     await writeNodeStandardModules(staging, project, false, buildMode);
     await replaceOutputDirectory(staging, outputDirectory);
   } catch (error) {
@@ -906,7 +903,7 @@ async function writeNodeProductionApplication(
       await writeCompiled(outputPath, module.result, false, rewriteVelarPackageImports(project, module), null, true, sourceMaps, mode);
     });
     await writeProjectResources(project, staging, "build", mode);
-    await writeBuildResourcePackageManifests(project, staging);
+    await writeBuildResourcePackageManifests(project, staging, mode, sourceMaps);
     await writeNodeStandardModules(staging, project, false, mode);
     await copyPublicAssets(project.publicRoot, join(staging, "public"), true);
     if (config.configuration !== null) await copyConfiguredServerConfiguration(project.projectRoot, staging, config.configuration);
@@ -951,6 +948,7 @@ interface BuildOutputReplacement {
   readonly forced: boolean;
   /** The path is the project manifest's own `outDir`, which declares velar owns it. */
   readonly declared: boolean;
+  readonly projectRoot?: string;
 }
 
 interface BuildStagingOwnership {
@@ -968,6 +966,7 @@ interface BuildStagingOwnership {
  */
 async function prepareBuildStaging(outputDirectory: string, replacement: BuildOutputReplacement): Promise<string> {
   const normalizedOutput = resolve(outputDirectory);
+  if (replacement.projectRoot !== undefined) await assertBuildOutputBoundary(replacement.projectRoot, normalizedOutput, replacement.declared);
   await assertReplaceableBuildOutput(normalizedOutput, replacement);
   const parent = dirname(normalizedOutput);
   await mkdir(parent, { recursive: true });

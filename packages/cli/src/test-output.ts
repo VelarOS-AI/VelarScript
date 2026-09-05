@@ -3,7 +3,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import type { ProjectModule, ProjectResult, VelarSourcePackage } from "./project.ts";
 import { assertUniqueEmbeddedModuleOutputs, embeddedModuleFileContents, embeddedModuleOutputPath } from "./embedded-modules.ts";
 import { importSpecifierSites } from "./module-assets.ts";
-import { usedPackageResourceExports, writeProjectResources } from "./resource-output.ts";
+import { writeProjectResources, writeSandboxPackageManifests } from "./resource-output.ts";
 
 /**
  * D51 rule 105: the verdict line is the last link in the trust chain, so what
@@ -141,13 +141,7 @@ export async function removeCompiledSandbox(sandbox: string): Promise<void> {
 
 export async function writeCompiledTestProject(project: ProjectResult, outputRoot: string, sourceMaps = true): Promise<void> {
   await writeProjectResources(project, outputRoot, "sandbox");
-  // A frozen package stays a bare ESM import and resolves to its installed
-  // package.json#exports. Shadow manifests are only for compiled source
-  // fallback; writing one for an artifact would hide the very JS entry the
-  // package published.
-  for (const package_ of project.velarPackages) {
-    if (package_.artifact === null) await writePackageManifest(project, package_, outputRoot);
-  }
+  await writeSandboxPackageManifests(project, outputRoot);
   assertUniqueEmbeddedModuleOutputs(project.modules.map((module) => ({
     ownerPath: compiledTestModulePath(project, module, outputRoot),
     embeddedModules: module.result.embeddedModules,
@@ -180,20 +174,6 @@ function packageForModule(project: ProjectResult, inputPath: string): VelarSourc
     if (path === "" || (!path.startsWith("..") && !path.startsWith("/"))) return package_;
   }
   return null;
-}
-
-async function writePackageManifest(project: ProjectResult, package_: VelarSourcePackage, outputRoot: string): Promise<void> {
-  const root = join(outputRoot, "node_modules", ...package_.name.split("/"));
-  const entry = `./${compiledRelativePath(package_.root, package_.entryPath).replaceAll("\\", "/")}`;
-  const resources = usedPackageResourceExports(project, package_.name);
-  await mkdir(root, { recursive: true });
-  await writeFile(join(root, "package.json"), JSON.stringify({
-    name: package_.name,
-    private: true,
-    type: "module",
-    main: entry,
-    exports: Object.keys(resources).length === 0 ? entry : { ".": entry, ...resources },
-  }), "utf8");
 }
 
 function compiledRelativePath(root: string, inputPath: string): string {

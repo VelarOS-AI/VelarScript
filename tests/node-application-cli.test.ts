@@ -79,7 +79,7 @@ test("Node application target creates, serves, and builds a standalone productio
     };
     assert.equal(receipt.formatVersion, 5);
     assert.equal(receipt.kind, "velar-node-build");
-    assert.deepEqual(receipt.compiler, { name: "velar", version: "0.28.0" });
+    assert.deepEqual(receipt.compiler, { name: "velar", version: "0.28.2" });
     assert.match(receipt.buildId, /^[a-f0-9]{64}$/u);
     assert.equal(receipt.mode, "production");
     assert.equal(receipt.entry, "main.js");

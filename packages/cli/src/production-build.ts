@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
+import { isBuiltin } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
-import { build, type BuildOptions, type Metafile, type Plugin } from "esbuild";
+import { build, type BuildOptions, type Metafile, type Plugin, type PluginBuild } from "esbuild";
 import { projectStyles } from "./framework-host.ts";
 import { projectImportKey, type ProjectResult } from "./project.ts";
 import { standardModuleSource } from "./standard-modules.ts";
@@ -11,12 +12,17 @@ import { VELAR_VERSION } from "./version.ts";
 import type { StaticDeploymentSummary } from "./static-deployment.ts";
 import { fileIdentity, MAX_PRODUCTION_ASSETS } from "./file-integrity.ts";
 import { hostErrorMessage } from "./host-error.ts";
-import { resolveBrowserNpmEntry } from "./npm.ts";
+import { resolveBrowserNpmEntry, resolveBrowserNpmEntryWithRoot } from "./npm.ts";
 import { isNodeOnlyModule, nodeModuleDiagnostic } from "@velarscript/node/compiler";
 import { assertUniqueEmbeddedModuleOutputs, embeddedModuleOutputPath } from "./embedded-modules.ts";
 import { BUILD_STAGING_MARKER } from "./build-staging.ts";
 import { CORE_WORKER_CONFIG_KEY } from "./project-format.ts";
 import type { JavaScriptBuildMode } from "./javascript-output.ts";
+import {
+  artifactSnapshotContents,
+  type VelarLibraryArtifactJavaScriptSnapshot,
+} from "./library-artifact.ts";
+import { BROWSER_ESM_PACKAGE_CONDITIONS } from "./package-exports.ts";
 
 export interface ProductionBuildResult {
   readonly framework: ProductionFrameworkIdentity;
@@ -102,6 +108,7 @@ export async function buildProductionFramework(
     splitting: true,
     format: "esm",
     platform: "browser",
+    conditions: [...BROWSER_ESM_PACKAGE_CONDITIONS],
     target: "es2022",
     minify: mode === "production",
     keepNames: mode === "readable",
@@ -178,11 +185,14 @@ export function productionEntryOutput(
  * checked project graph and resolver as production, while ordinary page modules
  * retain the incremental unbundled development path.
  */
-export async function buildDevelopmentWorkerModules(project: ProjectResult): Promise<ReadonlyMap<string, string>> {
+export async function buildDevelopmentWorkerModules(
+  project: ProjectResult,
+  npmPackageRoots: Set<string> = new Set(),
+): Promise<ReadonlyMap<string, string>> {
   const modules = new Map<string, string>();
   for (const { input, output } of configuredWorkerEntries(project)) {
     const result = await build({
-      ...browserWorkerBuildOptions(project, input, "readable", "inline"),
+      ...browserWorkerBuildOptions(project, input, "readable", "inline", npmPackageRoots),
       outfile: resolve(project.projectRoot, output),
       write: false,
     });
@@ -213,6 +223,7 @@ function browserWorkerBuildOptions(
   input: string,
   mode: JavaScriptBuildMode,
   sourceMap: false | "linked" | "inline",
+  npmPackageRoots?: Set<string>,
 ): BuildOptions {
   return {
     absWorkingDir: project.projectRoot,
@@ -220,6 +231,7 @@ function browserWorkerBuildOptions(
     bundle: true,
     format: "esm",
     platform: "browser",
+    conditions: [...BROWSER_ESM_PACKAGE_CONDITIONS],
     target: "es2022",
     minify: mode === "production",
     keepNames: mode === "readable",
@@ -227,7 +239,7 @@ function browserWorkerBuildOptions(
     sourcemap: sourceMap,
     sourcesContent: sourceMap !== false,
     legalComments: "none",
-    plugins: [velarModules(project, sourceMap !== false)],
+    plugins: [velarModules(project, sourceMap !== false, npmPackageRoots)],
     logLevel: "silent",
   };
 }
@@ -343,8 +355,9 @@ function assetRole(path: string, build: ProductionBuildResult): ProductionBuildM
   return "asset";
 }
 
-function velarModules(project: ProjectResult, sourceMaps: boolean): Plugin {
+function velarModules(project: ProjectResult, sourceMaps: boolean, npmPackageRoots?: Set<string>): Plugin {
   const modulesByPath = new Map<string, ProjectResult["modules"][number]>();
+  const artifactSnapshots = projectArtifactSnapshots(project);
   const resourcesByWrapperPath = new Map(project.resources
     .filter((resource) => resource.source.startsWith("."))
     .map((resource) => [resolve(`${resource.inputPath}.js`), resource]));
@@ -415,6 +428,7 @@ function velarModules(project: ProjectResult, sourceMaps: boolean): Plugin {
         const contents = standardModuleSource(arguments_.path, project.extensionConfig, project.compilerExtensions);
         return contents ? { contents, loader: "js" } : { errors: [{ text: `Unknown VelarScript standard module '${arguments_.path}'` }] };
       });
+      setupFrozenArtifactModules(context, artifactSnapshots, sourceMaps, npmPackageRoots);
       context.onResolve({ filter: /^\.\.?\// }, (arguments_) => {
         const sourceModule = moduleAt(arguments_.importer);
         if (!sourceModule || !arguments_.path.endsWith(".js")) return null;
@@ -428,35 +442,118 @@ function velarModules(project: ProjectResult, sourceMaps: boolean): Plugin {
       context.onResolve({ filter: /^[^./]/ }, async (arguments_) => {
         if (isAbsoluteBrowserImportPath(arguments_.path)) return null;
         if (arguments_.path.startsWith("velar/")) return null;
-        // Package-internal `imports` aliases belong to the importing package's
-        // manifest. esbuild already resolves them with browser/import
-        // conditions; they are not installed package names.
-        if (arguments_.path.startsWith("#")) return null;
         const sourceModule = moduleAt(arguments_.importer) ?? embeddedByPath.get(resolve(arguments_.importer))?.module ?? null;
         if (arguments_.path.startsWith("node:")) {
           return { errors: [buildImportError(sourceModule ?? undefined, arguments_.path, `Node builtin '${arguments_.path}' cannot run in a browser build`, embeddedByPath.get(resolve(arguments_.importer))?.sourceSpan)] };
         }
         try {
           if (sourceModule) {
-            const velarTarget = project.velarImports.get(projectImportKey(sourceModule.inputPath, arguments_.path));
+            const importKey = projectImportKey(sourceModule.inputPath, arguments_.path);
+            const velarTarget = project.velarImports.get(importKey);
             if (velarTarget) {
               const targetModule = moduleAt(velarTarget);
               if (!targetModule) return { errors: [{ text: `VelarScript package module '${arguments_.path}' was not compiled` }] };
               return { path: targetModule.inputPath };
             }
+            const artifact = project.velarArtifactImports.get(importKey);
+            if (artifact) return { path: artifact.entrySnapshot.path, namespace: "velar-frozen-artifact" };
           }
           const base = sourceModule
             ? dirname(sourceModule.inputPath)
             : arguments_.namespace === "velar-standard"
               ? dirname(fileURLToPath(import.meta.url))
               : arguments_.resolveDir || project.projectRoot;
-          return { path: await resolveBrowserNpmEntry(arguments_.path, base) };
+          if (!npmPackageRoots) return { path: await resolveBrowserNpmEntry(arguments_.path, base) };
+          const resolved = await resolveBrowserNpmEntryWithRoot(arguments_.path, base);
+          npmPackageRoots.add(resolved.packageRoot);
+          return { path: resolved.entry };
         } catch (error) {
           return { errors: [buildImportError(sourceModule ?? undefined, arguments_.path, `Cannot resolve browser import '${arguments_.path}': ${hostErrorMessage(error)}`, embeddedByPath.get(resolve(arguments_.importer))?.sourceSpan)] };
         }
       });
     },
   };
+}
+
+interface ProductionArtifactSnapshot {
+  readonly receiptPath: string;
+  readonly snapshot: VelarLibraryArtifactJavaScriptSnapshot;
+}
+
+function projectArtifactSnapshots(project: ProjectResult): ReadonlyMap<string, ProductionArtifactSnapshot> {
+  const snapshots = new Map<string, ProductionArtifactSnapshot>();
+  const receipts = new Set<string>();
+  for (const artifact of project.velarArtifactImports.values()) {
+    const receiptPath = resolve(artifact.receiptPath);
+    if (receipts.has(receiptPath)) continue;
+    receipts.add(receiptPath);
+    for (const snapshot of artifact.entrySnapshots) registerArtifactSnapshot(snapshots, artifact.receiptPath, snapshot);
+    for (const snapshot of artifact.chunkSnapshots) registerArtifactSnapshot(snapshots, artifact.receiptPath, snapshot);
+  }
+  return snapshots;
+}
+
+function setupFrozenArtifactModules(
+  context: PluginBuild,
+  snapshots: ReadonlyMap<string, ProductionArtifactSnapshot>,
+  sourceMaps: boolean,
+  npmPackageRoots?: Set<string>,
+): void {
+  context.onResolve({ filter: /^\.\.?\//, namespace: "velar-frozen-artifact" }, (arguments_) => {
+    const importer = snapshots.get(arguments_.importer);
+    const target = resolve(dirname(arguments_.importer), arguments_.path);
+    const resolved = snapshots.get(target);
+    return importer && resolved?.receiptPath === importer.receiptPath
+      ? { path: target, namespace: "velar-frozen-artifact" }
+      : { errors: [{ text: `Frozen artifact relative import '${arguments_.path}' is not covered by its verified receipt` }] };
+  });
+  context.onResolve({ filter: /^[^./]/, namespace: "velar-frozen-artifact" }, async (arguments_) => {
+    if (arguments_.path.startsWith("velar/")) return { path: arguments_.path, namespace: "velar-standard" };
+    if (isBuiltin(arguments_.path)) {
+      return { errors: [{ text: `Node builtin '${arguments_.path}' cannot run in a browser build` }] };
+    }
+    if (isAbsoluteBrowserImportPath(arguments_.path) || arguments_.path.includes("\\") || arguments_.path.includes(":")) {
+      return { errors: [{ text: `Frozen artifact import '${arguments_.path}' is not a permitted relative or bare package import` }] };
+    }
+    const item = snapshots.get(arguments_.importer);
+    if (!item) return { errors: [{ text: `Frozen artifact module '${arguments_.importer}' was not present in its verified receipt` }] };
+    try {
+      const base = dirname(item.snapshot.path);
+      if (!npmPackageRoots) return { path: await resolveBrowserNpmEntry(arguments_.path, base) };
+      const resolved = await resolveBrowserNpmEntryWithRoot(arguments_.path, base);
+      npmPackageRoots.add(resolved.packageRoot);
+      return { path: resolved.entry };
+    } catch (error) {
+      return { errors: [{ text: `Cannot resolve browser import '${arguments_.path}' from frozen artifact '${item.snapshot.path}': ${hostErrorMessage(error)}` }] };
+    }
+  });
+  context.onResolve({ filter: /.*/, namespace: "velar-frozen-artifact" }, (arguments_) => ({
+    errors: [{ text: `Frozen artifact import '${arguments_.path}' is not a permitted relative or bare package import` }],
+  }));
+  context.onLoad({ filter: /.*/, namespace: "velar-frozen-artifact" }, (arguments_) => {
+    const item = snapshots.get(arguments_.path);
+    return item
+      ? {
+          contents: artifactSnapshotContents(item.snapshot, sourceMaps),
+          loader: "js",
+          resolveDir: dirname(item.snapshot.path),
+        }
+      : { errors: [{ text: `Frozen artifact module '${arguments_.path}' was not present in its verified receipt` }] };
+  });
+}
+
+function registerArtifactSnapshot(
+  snapshots: Map<string, ProductionArtifactSnapshot>,
+  receiptPath: string,
+  snapshot: VelarLibraryArtifactJavaScriptSnapshot,
+): void {
+  const existing = snapshots.get(snapshot.path);
+  if (existing && (resolve(existing.receiptPath) !== resolve(receiptPath)
+    || existing.snapshot.code !== snapshot.code || existing.snapshot.sourceMap !== snapshot.sourceMap
+    || existing.snapshot.sourceMapPath !== snapshot.sourceMapPath)) {
+    throw new Error(`Frozen artifact '${snapshot.path}' has conflicting verified snapshots`);
+  }
+  snapshots.set(snapshot.path, { receiptPath: resolve(receiptPath), snapshot });
 }
 
 function buildImportError(

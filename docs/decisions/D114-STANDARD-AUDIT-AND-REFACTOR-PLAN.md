@@ -434,3 +434,18 @@ P2b-9 报出写入路径）；编译期有 D69 死 watch、主题是计算、调
   是否收回这几个名字，另议。
 - **所有者 2026-09-05：姊妹仓迁移不做。**「波次布局」里的迁移波取消；本仓只保证 `velar fix` 对退役
   拼写的机械改写正确（审计 D-D1 修复后），迁移本身不由本仓发起。
+
+## R1 进度记录（2026-09-05，分支 `refactor/r1-compiler-split`）
+
+| 片 | 内容 | analyzer.ts | 结果 |
+|---|---|---:|---|
+| R1a | `contracts.ts`；`analysis/lowering-recorder.ts`（52 张侧表）；`analysis/advisories.ts`（A 名册 20 方法，A8 因读活跃遍历深度留下） | 17,485 → 16,403 | 指纹一致、缝 140 不变、导出不变；emitter↔analyzer 值边消失 |
+| R1b | `analysis/{collections,calls,members,vocabulary}.ts`；六个大方法（721/394/376/303/141/135 行）按族拆到 120 行内；边界门禁改目录遍历并去注释扫描 | 16,403 → 13,246 | 同上；超 120 行函数 41 → 35 |
+| R1c | 协议类型入 `contracts.ts`（环缩到 4 模块 / 3 条类再导出值边）；`types/` 七模块、`parser/` 十模块、`emit/` 十模块；`parseStatementBody` 402 → 41、`emit()` 653 → 69 | 13,323 | 同上；allowlist 44 文件 / 75 函数 → 43 / 60 |
+
+| R1d | `analysis/flow/`（5）、`declarations/`（5）、`classes/`（4）、`modules/`（3）、`scopes.ts`、`matching.ts`、`match-coverage.ts`、`functions.ts`；20 个宿主接口共 401 成员（从按目录并集 953 收窄）；`analyzeStatement` 1,004 → 69、`inferExpressionType` 597 → 63 | 13,318 → 7,310 | 同上；allowlist 43 / 60 → 43 / 52 |
+
+约定落地：一个 worktree、一条分支、同一绝对路径比对指纹；语言波合入后重取基线（F1 的 H-U1
+改了发射的运行时前奏，产物按设计变化）。下一片 R1d：analyzer 余下簇（流事实与收窄、类、声明、
+模块接口、作用域）、`analysis/collections.ts`（1,706）与 `calls.ts`（1,661）按 D115 §三拆子目录、
+lexer / formatter / semantic 拆分——等 F2 合入后开。

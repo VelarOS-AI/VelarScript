@@ -12,6 +12,89 @@ many times that surface has changed *since counting began*, never a maturity
 grade: `core@0.1` beside `web@0.11` means Core started counting today, not that
 Core is younger. History is deliberately not recomputed (D110 rule 3).
 
+## 0.28.2 — 2026-09-05
+
+Surfaces: `core@0.6` · `web@0.12` · `node@0.16` · `server@0.15` · `desktop@0.10`
+
+### Frozen artifact compatibility
+
+- Installed receipt format 1 artifacts keep their published contract: their
+  source maps remain hash-authenticated and strict UTF-8, while consumers no
+  longer require a version-3 map or a trailing `sourceMappingURL` that older
+  toolchains did not emit.
+- Format 1 consumers still enforce receipt shape, paths, ordinary files,
+  aggregate budgets, interface decoding, a closed ESM graph, target builtin
+  boundaries, and declared runtime dependency ownership. The newer installed
+  dependency target proof applies to format 2; current producers continue to
+  prove every retained dependency before writing either artifact format.
+
+## 0.28.1 — 2026-09-05
+
+Surfaces: `core@0.6` · `web@0.12` · `node@0.16` · `server@0.15` · `desktop@0.10`
+
+### Exact package entries
+
+- A source package may now publish up to 256 exact entry points: the mandatory
+  `velar.entry` root plus `velar.entries` subpaths such as `./worker`. Scoped
+  and unscoped imports share the same exact split, every entry keeps one
+  package identity and target/capability contract, and undeclared directory,
+  wildcard, and nearest-prefix fallbacks remain errors.
+- `build-library` validates every entry against its npm conditional export.
+  Root-only packages retain receipt format 1 and `index.js`; multi-entry
+  packages use receipt format 2 and one ESM splitting graph, so shared modules
+  keep one runtime state and class identity across public entries.
+
+### Frozen artifact integrity
+
+- Consumers authenticate every entry, interface, shared chunk, and source map
+  from ordinary files before using a selected subpath. SHA-256 is computed
+  over the original bytes, UTF-8 decoding is fatal, JavaScript and maps become
+  immutable snapshots, and `run`/`test` revalidate installed bytes immediately
+  before launch.
+- The whole receipt is bounded before allocation: interfaces share an 8 MiB
+  limit, JavaScript entries and chunks share a 16 MiB limit, reads have fixed
+  concurrency, and the compiler-owned ESM inspector applies token and AST-node
+  budgets. Relative imports and literal dynamic imports must close over the
+  authenticated set; computed dynamic imports and residual package-owned
+  aliases fail closed.
+- Generated package trees now reject NFC/case and file/directory collisions as
+  well as Windows device names, forbidden characters, and trailing dots or
+  spaces. Source maps must be valid version-3 maps linked exactly once to their
+  generated entry or chunk, and packed-package checks read one stable tarball
+  snapshot instead of reopening a mutable archive.
+- Source receipts hash the original bounded bytes and reject malformed UTF-8.
+  Frozen generic-class interfaces now validate parameter vectors, arity, and
+  canonical constructor identity before any untrusted ABI reaches analysis.
+
+### Command and package consistency
+
+- `check`, `run`, `test`, `dev`, application builds, Worker builds, and library
+  builds now select the same source-or-frozen entry and consume the same
+  authenticated graph. Browser prebundles fingerprint snapshot bytes instead
+  of reopening mutable installed files.
+- A library that depends on a frozen library preserves that package's bare npm
+  import rather than flattening its private dependency graph. Node therefore
+  resolves nested dependencies from their original owner, while portable
+  single-file builds continue to reject unsupported external dependency edges
+  explicitly.
+- Core library checks now use the same Core target as publication, so a
+  Node-only source package or frozen artifact cannot enter a Core receipt.
+  Package tarball gates derive the full source, resource, entry, chunk, map,
+  export, and receipt contract from each manifest and verify its exact bytes.
+- Web checks, development, and production now resolve `package.json#imports`
+  with the same browser conditions; Node commands use Node conditions. A
+  changed browser prebundle or import map reloads the document instead of
+  reusing stale modules, while ordinary VelarScript edits remain hot.
+- JavaScript bridge checks recursively inspect package-owned helpers, self
+  exports, and inline data modules. Core and Web reject hidden Node builtins;
+  exact subpaths and conditional ESM exports must exist for the target, and
+  every bare edge retained by a library artifact must be owned by an ordinary
+  `package.json#dependencies` declaration.
+- Development derives the document import map only from the page entry graph.
+  Module Workers keep independently bundled dependency graphs and separately
+  watched npm roots, so page and Worker packages may own different versions of
+  the same transitive dependency without an artificial import-map conflict.
+
 ## 0.28.0 — 2026-09-05
 
 Surfaces: `core@0.6` · `web@0.12` · `node@0.16` · `server@0.15` · `desktop@0.10`

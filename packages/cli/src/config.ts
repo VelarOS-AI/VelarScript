@@ -25,6 +25,7 @@ import {
   unsupportedProjectFormat,
 } from "./project-format.ts";
 import { bundledExtension } from "./bundled-extension-registry.ts";
+import { canonicalizePotentialPath } from "./canonical-path.ts";
 import type { JavaScriptBuildMode } from "./javascript-output.ts";
 
 export { CURRENT_PROJECT_FORMAT_VERSION } from "./project-format.ts";
@@ -247,6 +248,7 @@ async function loadManifest(manifestPath: string, entryOverride: string | null =
   const framework = resolveFrameworkHost(loadedExtensions, extensionConfig, projectKind, manifestPath);
   assertProjectPaths(root, entry, outDir, publicDir, manifestPath);
   for (const workerEntry of workerEntries.values()) assertProjectPaths(root, workerEntry, outDir, publicDir, manifestPath);
+  await assertCanonicalProjectPaths(root, entry, outDir, publicDir, workerEntries, manifestPath);
   return {
     formatVersion,
     kind: projectKind,
@@ -616,6 +618,39 @@ function assertProjectPaths(root: string, entry: string, outDir: string, publicD
   if (isWithin(outDir, entry)) throw new Error(`${manifestPath}: 'entry' cannot be inside 'outDir'`);
   if (isWithin(outDir, publicDir) || isWithin(publicDir, outDir)) {
     throw new Error(`${manifestPath}: 'outDir' and 'publicDir' cannot overlap`);
+  }
+}
+
+async function assertCanonicalProjectPaths(
+  root: string,
+  entry: string,
+  outDir: string,
+  publicDir: string,
+  workerEntries: ReadonlyMap<string, string>,
+  manifestPath: string,
+): Promise<void> {
+  const declaredInputs = [
+    ["entry", entry],
+    ["publicDir", publicDir],
+    ...[...workerEntries].map(([name, path]) => [`workers.${name}`, path]),
+  ] as const;
+  const [canonicalRoot, canonicalOutDir, ...canonicalInputs] = await Promise.all([
+    canonicalizePotentialPath(root),
+    canonicalizePotentialPath(outDir),
+    ...declaredInputs.map(([, path]) => canonicalizePotentialPath(path)),
+  ]);
+  if (canonicalOutDir === canonicalRoot || !isWithin(canonicalRoot, canonicalOutDir)) {
+    throw new Error(`${manifestPath}: 'outDir' cannot escape the project through a symbolic link`);
+  }
+  for (const [index, [field]] of declaredInputs.entries()) {
+    if (!isWithin(canonicalRoot, canonicalInputs[index]!)) {
+      throw new Error(`${manifestPath}: '${field}' cannot escape the project through a symbolic link`);
+    }
+  }
+  const [canonicalEntry, canonicalPublicDir, ...canonicalWorkers] = canonicalInputs;
+  assertProjectPaths(canonicalRoot, canonicalEntry!, canonicalOutDir, canonicalPublicDir!, manifestPath);
+  for (const workerEntry of canonicalWorkers) {
+    assertProjectPaths(canonicalRoot, workerEntry, canonicalOutDir, canonicalPublicDir!, manifestPath);
   }
 }
 

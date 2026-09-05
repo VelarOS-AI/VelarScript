@@ -1,2 +1,2 @@
-export const VELAR_VERSION = "0.28.0";
+export const VELAR_VERSION = "0.28.2";
 export { VELAR_STANDARD_API_VERSION } from "@velarscript/core";
