@@ -732,3 +732,29 @@ F3 的两条上报进 F4：(a) `case Shape<number>:` **单独**出现时从 1 �
 断言 5 条重启日志、在 CPU 争用下见到 4 条（三个 worktree 并发跑门时出现一次，单跑 10/10 绿）——
 Desktop 服务监督器的退避计数按墙钟，测试要改成按事件等待。
 
+
+### F4 落地（2026-09-06，合并 `678711c`）
+
+① `analysis/published-members.ts` 成为「接收者发布哪些成员」的唯一定义：检查器（`MemberAccess`）与语义
+索引读同一个 `member()` / `roster()`，索引里那套第二实现删掉；两边原先不一致处以检查器为准——编辑器
+少了 S3 新增的十个 List 管道成员、枚举别名只给 `is`/`parse`、私有字段经应用接收者显示 `T?` 而非
+`number?`，全部归一。`Target.from` 保留为有解释的不对称（补全给、裸读拒——投影规则只认调用形态）。
+② 方法 / 静态方法 / getter / 泛型方法的声明符号发布类形状已算出的可调用类型，悬停与 `def` 同形
+（构造器没有独立符号：Vel 的构造器是类声明的参数表，类符号已发布）。③ 被拒臂悬停整条 `match` 的
+判决：VEL4014 记在 `MatchCoverage.redundancy` 上、走完全部臂再发，`blockAlwaysReturns` 把带被拒臂的
+match 视为离开块——`case Shape<number>:` 单独出现一条、加 `case _:` 一条。④ `ClassMembersHost` 与
+`ClassRolesHost` 各一处重复 `findMethod` 删除（全仓 329 个源文件的接口只有这两处）。⑤ `analyzer.ts`
+27 个死导入 + R1 拆分留在兄弟模块的 7 个 + 提取自留的 4 个，全部删除；`noUnusedLocals` 在 root
+tsconfig 关着，在 create / node / server / web 的 build tsconfig 开着，compiler / cli / core / desktop 没开
+——正是死导入所在。⑥ Node 收割器的 `__velarNodeProcessOwnerAlive(pid, exited)`：ESRCH 即消失，EPERM
+在收割器自己的 SIGKILL 已送达后即消失（pid 复用）；答 EPERM 的组从 100 次尝试 / 200 次信号 ≈ 5 秒
+降到 1 次 / 2 次，答 ESRCH 的组零信号释放。进程组信号函数移到 `process-runtime.ts`，`compiler.ts`
+留在预算内（1,482 / 1,490）。指纹只变 `velar/process.js` 两个文件（⑥），①–⑤ 逐字节不变。
+
+进后续队列（F6 卫生波）：`tests/desktop-services.test.ts`「a crashing service backs off to a terminal
+state」`rm -rf` 并断言的是**共享的绝对宿主路径** `~/Library/Application Support/dev.velarscript.services/
+service-logs`，不随 worktree 隔离——多个 checkout 并发跑 node 套件必然互相污染（`gate-lock` 只在
+checkout 内串行）；Desktop 宿主夹具要有按 checkout 的应用数据根。`compiler` / `cli` / `core` / `desktop`
+四包的 build tsconfig 补 `noUnusedLocals: true`，让死导入这一类自我执行（`packages/cli/src` 尚有四个：
+`ownership-graph.ts` `SemanticReference`、`preview-server.ts` `join`、`project.ts` `stat`、
+`typescript-declarations.ts` `describeType`——等 F5-node 落地后一并清）。
