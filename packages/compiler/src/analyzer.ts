@@ -10095,8 +10095,13 @@ export class Analyzer implements TypeEnvironment {
         }
       };
       if (!named.valid) {
-        inferSource((target) => callableMember!.parameters[target] ?? unknownType);
-        return callableMember!.result;
+        // A plan that did not resolve cannot solve a published type parameter
+        // either — `reduce`'s accumulator is the only one — so the arguments
+        // are inferred without a contextual type and the call answers
+        // `unknown` rather than leaking the parameter into the program.
+        const open = (callableMember!.typeParameterNames?.length ?? 0) > 0;
+        inferSource((target) => open ? unknownType : callableMember!.parameters[target] ?? unknownType);
+        return open ? unknownType : callableMember!.result;
       }
       if (object.kind === "list" && member.property === "reduce") {
         let initial = unknownType;
@@ -10110,8 +10115,8 @@ export class Analyzer implements TypeEnvironment {
         if (deferred) {
           this.inferExpression(deferred, {
             kind: "function",
-            parameters: [initial, readonlyElement!],
-            requiredParameters: 2,
+            parameters: [initial, readonlyElement!, numberType],
+            requiredParameters: 3,
             result: initial,
           });
         }
@@ -10251,7 +10256,10 @@ export class Analyzer implements TypeEnvironment {
         const deferredArrow = callbackArgument?.kind === "ArrowFunctionExpression";
         let callback = callbackArgument && !deferredArrow ? inferArgument(0) : unknownType;
         const initial = inferArgument(1);
-        const callbackExpected: ValueType = { kind: "function", parameters: [initial, readonlyElement!], requiredParameters: 2, result: initial };
+        // D113, completed by D114 S3c: the combine is an element callback, so
+        // after the accumulator it receives the element and the element's
+        // zero-based position in the snapshot `__velarListReduce` folds over.
+        const callbackExpected: ValueType = { kind: "function", parameters: [initial, readonlyElement!, numberType], requiredParameters: 3, result: initial };
         if (callbackArgument) {
           if (deferredArrow) callback = inferArgument(0, callbackExpected);
           this.requireAssignable(callback, callbackExpected, callbackArgument.span);
@@ -11711,8 +11719,27 @@ export class Analyzer implements TypeEnvironment {
         );
       case "filter":
         return callable(["test"], [test], owned);
-      case "reduce":
-        return callable(["combine", "initial"], [unknownType, unknownType], unknownType);
+      // D113, completed by D114 S3c: the combine receives an element, so it
+      // receives that element's snapshot position too, in the parameter after
+      // the element. The accumulator is the fold's own type, bound from
+      // `initial`, so the published contract names it rather than erasing it to
+      // `unknown` — the contract a bound `const fold = values.reduce` and a
+      // `values?.reduce(...)` are checked against is then the same
+      // `(accumulator, value, index)` the direct call and the runtime use.
+      case "reduce": {
+        const accumulator: ValueType = { kind: "parameter", name: "U", index: 0 };
+        return {
+          kind: "function",
+          typeParameterNames: ["U"],
+          parameterNames: ["combine", "initial"],
+          parameters: [
+            { kind: "function", parameters: [accumulator, element, numberType], requiredParameters: 3, result: accumulator },
+            accumulator,
+          ],
+          requiredParameters: 2,
+          result: accumulator,
+        };
+      }
       case "some":
       case "every":
         return callable(["test"], [test], boolType);
