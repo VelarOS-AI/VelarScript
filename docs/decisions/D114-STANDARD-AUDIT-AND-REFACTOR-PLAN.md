@@ -316,3 +316,11 @@ S2、S7、S8 不需要裁决。①② 定下后 S1→S2 与 S3 可以并行两�
   双报（VEL5065 + VEL3007，两句都真）；`type null:` 只有解析器的关键字恢复消息；`readonly`
   在证据名册里但不是类型名，`type readonly:` 仍被接受后不可用。`builtinTypeNames` 不在表面
   摘要的哈希表里，与上一条同一缺口。
+- **S3 上报**：(a) `List.join` 原本没有模块版 `join` 承诺的 16 MiB 输出上界——D114 表里
+  「逐字相同」写错了；退役时补上上界，确认。(b) 逐名的 import 修复无法收敛（同一 import
+  语句一个 span），改为同一行所有可机械迁移的名字共享一份编辑表，一趟完成——采纳，与
+  常驻命名空间导入退役的先例一致。(c) `sorted(by=)` 是唯一不带 index 的元素回调——裁决：
+  补齐，List 的元素回调一律 `(value, index)`，无例外（S3b）。(d) 回调型 List 方法经
+  一等绑定或 `?.` 接收者调用时全部被拒（`const keep = values.filter; keep(v => v > 1)`），
+  以及 `optional?.copy()` 类型丢掉可选——D113 之前就有的实现缺陷，宪章的承诺没被代码
+  兑现；S3b 修。(e) `standard-library.md` 里的退役叙事删掉，参考文档不是迁移指南。
