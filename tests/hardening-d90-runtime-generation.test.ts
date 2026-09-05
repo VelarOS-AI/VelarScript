@@ -81,14 +81,16 @@ ${outcomeProbe(`__velarJsonStringify({ a: 1 })`)}
 });
 
 test("[fr-5] Core's List guard fails closed on a foreign reactive generation", () => {
-  const collections = standardModuleSource("velar/collections");
-  assert.ok(collections, "velar/collections must have a Core module source");
+  // D114 S3: `velar/collections` retired, so the guard is probed through
+  // another Core module that reaches the same shared List runtime.
+  const url = standardModuleSource("velar/url");
+  assert.ok(url, "velar/url must have a Core module source");
   const { stdout } = runInRealm(`
 ${registryPrelude(FOREIGN_SCHEMA_VERSION)}
-${collections}
-${outcomeProbe(`JSON.stringify(reversed([1, 2]))`)}
+${url}
+${outcomeProbe(`query({ tags: [1, 2] })`)}
 `.trimStart());
-  // Before the split this printed `returned [2,1]`: every element was copied
+  // Before the split this printed the query text: every element was copied
   // raw and each `collectionRead` dependency the caller needed was lost.
   assertNamesBothSchemas(stdout.trim(), "VelarScript reactive runtime");
 });
@@ -125,19 +127,19 @@ ${outcomeProbe(`(() => { ${WEB_RUNTIME_FOUNDATION}\nreturn "loaded"; })()`)}
 });
 
 test("[fr-5] an absent registry keeps the silent path exactly as it was", () => {
-  const collections = standardModuleSource("velar/collections");
-  assert.ok(collections, "velar/collections must have a Core module source");
+  const url = standardModuleSource("velar/url");
+  assert.ok(url, "velar/url must have a Core module source");
   const { stdout } = runInRealm(`
 ${VELAR_STRICT_JSON_RUNTIME}
-${collections}
+${url}
 ${VELAR_REACTIVE_BRIDGE_RUNTIME}
 ${outcomeProbe(`__velarJsonStringify({ a: 1 })`)}
-${outcomeProbe(`JSON.stringify(reversed([1, 2]))`)}
+${outcomeProbe(`query({ tags: [1, 2] })`)}
 ${outcomeProbe(`JSON.stringify(__velarReactiveRaw([3]))`)}
 `.trimStart());
   // No registry is the blessed "no reactive runtime in this realm" case the
   // runtime-boundary ledger keeps for ordinary Core behavior.
-  assert.deepEqual(stdout.trim().split("\n"), [`returned {"a":1}`, "returned [2,1]", "returned [3]"]);
+  assert.deepEqual(stdout.trim().split("\n"), [`returned {"a":1}`, "returned tags=1&tags=2", "returned [3]"]);
 });
 
 test("[fr-6] a registered value that no longer presents the Type surface is refused", () => {

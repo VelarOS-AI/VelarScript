@@ -227,7 +227,6 @@ const permanentNamespaceCompletionDetail: Record<PermanentNamespaceName, string>
 };
 
 const standardModuleCompletionDetail = new Map([
-  ["velar/collections", "Typed collection transforms and Python-style iteration helpers"],
   ["velar/math", "Numeric constants, transforms, and random helpers"],
   ["velar/async", "Promise composition, timeout, retry, and concurrency helpers"],
   ["velar/url", "URL parsing, joining, encoding, and query helpers"],

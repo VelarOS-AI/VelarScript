@@ -250,9 +250,11 @@ methods are compiler-checked rather than inherited from JavaScript. Size is
 
 Prefer the collection API when it states the whole operation: `filter`, `map`,
 and `flatMap` for stateless selection and projection; `some`, `every`, and
-`find` for queries; `sum`, `min`, `max`, and `reduce` for intentional folds.
-The predicate and transform methods receive the value and, when declared, its
-stable snapshot index: `tasks.map((task, index) => f"{index}: {task.title}")`.
+`find` for queries; `sum`, `min`, `max`, and `reduce` for intentional folds;
+`groupBy`, `keyBy`, `countBy`, `partition`, `chunk`, `zip`, `unique`,
+`compact`, and `flatten` when the answer is a different collection.
+The predicate, transform, and key methods receive the value and, when declared,
+its stable snapshot index: `tasks.map((task, index) => f"{index}: {task.title}")`.
 Use `for` when the work mutates state, has custom exits, writes multiple
 outputs, or depends on ordered effects. `velar check` reports A8/A13 only for
 the narrow loop shapes it can prove equivalent.
@@ -274,6 +276,8 @@ const tasks: List<Task> = [
 tasks.append({title: "Fix the gate", priority: 3})
 
 const ordered = tasks.sorted(by=task => task.priority).map(task => task.title)
+const urgent = tasks.sorted(by=task => task.priority, descending=true)
+const byPriority = tasks.groupBy(task => task.priority)
 const total = tasks.map(task => task.priority).sum()
 const first = tasks[0].title
 const missing = tasks.get(99)?.title ?? "none"
@@ -289,6 +293,7 @@ const words = Set(["done", "closed"])
 print(ordered.join(" | "))
 if firstOwner != null: print(firstOwner.value)
 print(f"{total} {first} {missing} {owners.get("t-1")} {"done" in words}")
+print(f"{urgent[0].title} {byPriority.size}")
 ```
 
 ↳ charter [§8 Collections](language-charter.md#8-collections)

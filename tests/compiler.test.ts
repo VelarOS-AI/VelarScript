@@ -131,6 +131,22 @@ function executeModule(code: string): ReturnType<typeof spawnSync> {
 }
 
 /**
+ * D114 S3: the collection functions `velar/collections` published are
+ * compiler-owned List members now, so their runtime is proved by emitting it.
+ * A standalone compile inlines the whole collection lowering runtime, and
+ * `executeModule` appends JavaScript to that same module scope, so every
+ * `__velarList*` helper is reachable there by name.
+ */
+function emittedCollectionRuntime(): string {
+  const emitted = compileCore(`
+export def total(values: List<number>) -> number:
+    return values.sum()
+`.trimStart());
+  assert.deepEqual(emitted.diagnostics, []);
+  return emitted.code ?? "";
+}
+
+/**
  * A standard module with its hidden runtime dependencies linked as data URLs,
  * so the source can be executed inline. velar/test reaches for the Core
  * comparison rather than restating it (D50 rule 97.2), so inlining it now
@@ -10767,14 +10783,20 @@ test("browser npm assets cannot escape a package through symbolic links", async 
 });
 
 test("List boundaries reject accessor elements without invoking them", () => {
-  const collections = standardModuleSource("velar/collections") ?? "";
-  const collectionsExecution = executeModule(`
+  // D114 S3: the aggregation used to be `velar/collections.sum`; it is the
+  // compiler-owned `List.sum` member now, so the boundary is proved through
+  // emitted code rather than through a module source.
+  const aggregation = compile(`
+export def total(values: List<number>) -> number:
+    return values.sum()
+`.trimStart());
+  assert.deepEqual(aggregation.diagnostics, []);
+  const collectionsExecution = executeModule(`${aggregation.code}
 let reads = 0;
 const values = [];
 Object.defineProperty(values, 0, { enumerable: true, get() { reads += 1; return 1; } });
 values.length = 1;
-${collections}
-try { sum(values); console.log("accepted"); } catch (error) { console.log(error.name); }
+try { total(values); console.log("accepted"); } catch (error) { console.log(error.name); }
 console.log(reads);
 `);
   assert.equal(collectionsExecution.status, 0, String(collectionsExecution.stderr));
@@ -11121,7 +11143,7 @@ const wrongMember = wrongValue.count
 test("0.6 Core standard library combines typed ergonomics with explicit platform boundaries", async () => {
   const api = standardModuleApi();
   assert.deepEqual(Object.keys(api.modules), [
-    "velar/collections", "velar/text", "velar/math", "velar/binary", "velar/hash", "velar/random", "velar/task", "velar/worker", "velar/json", "velar/async", "velar/url", "velar/time", "velar/id", "velar/log", "velar/test",
+    "velar/text", "velar/math", "velar/binary", "velar/hash", "velar/random", "velar/task", "velar/worker", "velar/json", "velar/async", "velar/url", "velar/time", "velar/id", "velar/log", "velar/test",
     "velar/websocket", "velar/look", "velar/app", "velar/config", "velar/web", "velar/http", "velar/storage", "velar/forms", "velar/browser", "velar/files", "velar/realtime", "velar/web-test",
   ]);
   // Text gained codePoint/fromCodePoint, velar/json retired deepEqual, and
@@ -11144,9 +11166,11 @@ test("0.6 Core standard library combines typed ergonomics with explicit platform
   // completed `velar/browser`'s watcher family with `watchIntersection`, the
   // only watcher whose subject is an element rather than the environment, which
   // is why it is one larger again.
-  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 296);
-  assert.equal(Object.values(api.modules).slice(0, 15).reduce((total, exports_) => total + exports_.length, 0), 159);
-  assert.equal(api.modules["velar/collections"]?.length, 28);
+  // D114 S3 retired `velar/collections` and its 28 exports into checked List
+  // members, so the total drops by 28 and the Core prefix of this list is
+  // fourteen modules rather than fifteen.
+  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 268);
+  assert.equal(Object.values(api.modules).slice(0, 14).reduce((total, exports_) => total + exports_.length, 0), 131);
   assert.equal(api.modules["velar/text"]?.length, 23);
   assert.equal(api.modules["velar/math"]?.length, 28);
   assert.deepEqual(api.modules["velar/hash"], ["sha256Text"]);
@@ -11165,7 +11189,6 @@ test("0.6 Core standard library combines typed ergonomics with explicit platform
   const entry = join(directory, "main.vel");
   const output = join(directory, "dist");
   await writeFile(entry, `
-import {chunk, compact, enumerate, every, find, flatten, groupBy, join as joinItems, partition, repeat as repeatValue, sortBy, sum, unique, zip} from "velar/collections"
 import {decode, encode, isExternal, join as joinUrl, parse as parseUrl, parseQuery, query, withHash, withQuery} from "velar/url"
 import {iso, parse as parseTime, parts, utc} from "velar/time"
 import {level as logLevel, log, logger, setLevel, useSink} from "velar/log"
@@ -11180,24 +11203,24 @@ const users: List<User> = [
     {name: "Bea", role: "admin"},
 ]
 const values = range(1, 6)
-const indexed = enumerate(values, 10)
-const pairs = zip(values, repeatValue("x", 5))
-const grouped = groupBy(users, user => user.role)
-const ordered = sortBy(users, user => user.name)
-const splitUsers = partition(users, user => user.role == "admin")
-const found = find(users, user => user.name == "Lin")
+const indexed = values.map((value, index) => {index: index + 10, value})
+const pairs = values.zip(["x"].repeat(5))
+const grouped = users.groupBy(user => user.role)
+const ordered = users.sorted(by=user => user.name)
+const splitUsers = users.partition(user => user.role == "admin")
+const found = users.find(user => user.name == "Lin")
 const maybe: List<string?> = ["a", null, "b"]
-print(sum(values))
+print(values.sum())
 print(indexed[0].index)
 print(pairs[0].second)
 print(grouped.get("admin")?.size ?? 0)
 print(ordered[0].name)
 print(splitUsers.rest.size)
 print(found?.name ?? "missing")
-print(joinItems(compact(maybe), ","))
-print(flatten(chunk(values, 2)).size)
-print(unique([1, 1, 2]).size)
-print(every(values, value => value > 0))
+print(maybe.compact().join(","))
+print(values.chunk(2).flatten().size)
+print([1, 1, 2].unique().size)
+print(values.every(value => value > 0))
 
 print(Text.capitalize("vELAR"))
 print(Text.title("next_generation web"))
@@ -11222,13 +11245,13 @@ const patternMatches = Text.findMatches("a1 b22", "([a-z])([0-9]+)")
 print(patternMatches.size)
 print(patternMatches[1].groups[1] ?? "missing")
 print(Text.replaceMatches("a1 b22", "[0-9]+", "#"))
-print(joinItems(Text.splitPattern("a, b; c", " *[,;] *"), "|"))
+print(Text.splitPattern("a, b; c", " *[,;] *").join("|"))
 print(Text.matches("first\\nlast", "^last$", {multiline: true}))
 print(Text.matches("a\\nb", "^a.b$", {dotAll: true}))
 const optionalPatternMatch = Text.findMatch("b", "(a)?b")
 print(optionalPatternMatch?.groups?.[0] ?? "null")
 print(Text.replaceMatches("x1", "[0-9]", "$&"))
-print(joinItems(Text.splitPattern("a1b", "([0-9])"), "|"))
+print(Text.splitPattern("a1b", "([0-9])").join("|"))
 // D90 R11: the options record is closed when it is written as a literal at
 // this annotated parameter, so the runtime's unknown-option guard is now
 // reached the only way it still can be — through a value the compiler cannot
@@ -11320,7 +11343,6 @@ print(logLevel())
 
 test("Core builtins and standard modules share one named-argument ABI", async () => {
   const intentionallyPositional = new Map<string, ReadonlySet<string>>([
-    ["velar/collections", new Set(["range"])],
     ["velar/math", new Set(["min", "max", "randomInt"])],
     ["velar/url", new Set(["join"])],
   ]);
@@ -11343,7 +11365,7 @@ test("Core builtins and standard modules share one named-argument ABI", async ()
     if (type.kind === "union") for (const member of type.members) assertNamedSurface(member, `${path} member`);
   };
   for (const source of [
-    "velar/collections", "velar/text", "velar/math", "velar/binary", "velar/hash", "velar/random", "velar/task", "velar/worker", "velar/websocket", "velar/json", "velar/async",
+    "velar/text", "velar/math", "velar/binary", "velar/hash", "velar/random", "velar/task", "velar/worker", "velar/websocket", "velar/json", "velar/async",
     "velar/url", "velar/time", "velar/id", "velar/log", "velar/test",
   ]) {
     for (const [name, type] of standardModuleInterface(source)!.exports) {
@@ -11355,7 +11377,6 @@ test("Core builtins and standard modules share one named-argument ABI", async ()
   const entry = join(directory, "main.vel");
   const output = join(directory, "dist");
   await writeFile(entry, `
-import {enumerate, join as joinItems} from "velar/collections"
 import {expect} from "velar/test"
 
 type User:
@@ -11373,8 +11394,16 @@ def markValues(label: string, values: List<string>) -> List<string>:
     print(value=label)
     return values
 
-print(value=joinItems(separator=markText("separator", ","), values=markValues("values", ["a", "b"])))
-print(value=enumerate(start=10, values=["x"])[0].index)
+def markNumber(label: string, value: number) -> number:
+    print(value=label)
+    return value
+
+// D114 S3: the collection half of this ABI is a checked List member now. The
+// receiver evaluates first, and the named arguments after it still evaluate in
+// source order rather than in parameter order: end before start.
+print(value=markValues("values", ["a", "b"]).join(separator=markText("separator", ",")))
+print(value=["x", "y", "z"].slice(end=markNumber("end", 3), start=markNumber("start", 1)).size)
+print(value=[10].repeat(count=1)[0])
 print(value=3.14159.toFixed(digits=2))
 print(value=" Velar ".trim())
 
@@ -11406,7 +11435,7 @@ print(value=doubled[1])
   assert.equal(build.status, 0, String(build.stderr));
   const execution = spawnSync(process.execPath, [join(output, "main.js")], { encoding: "utf8" });
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "separator\nvalues\na,b\n10\n3.14\nVelar\nAda\nLin\ntrue\n12\n12\nboom\n9\ntrue\n4\n");
+  assert.equal(execution.stdout, "values\nseparator\na,b\nend\nstart\n2\n10\n3.14\nVelar\nAda\nLin\ntrue\n12\n12\nboom\n9\ntrue\n4\n");
 
   const invalid = compileCore(`
 print(item="wrong")
@@ -12131,18 +12160,17 @@ console.log(parts(0, "UTC").year, timePartLengthReads);
 });
 
 test("collection ordering, predicates, equality, and List boundaries follow VelarScript semantics", async () => {
-  const source = standardModuleSource("velar/collections") ?? "";
-  const execution = executeModule(`${source}
+  const execution = executeModule(`${emittedCollectionRuntime()}
 const values = [{ id: "a", key: 1 }, { id: "b", key: 2 }, { id: "c", key: 2 }, { id: "d", key: 1 }];
-console.log(sortBy(values, value => value.key).map(value => value.id).join(""));
-console.log(sortBy(values, value => value.key, true).map(value => value.id).join(""));
-console.log(has([-0], 0), count([-0], 0), has([NaN], NaN), count([NaN], NaN));
+console.log(__velarListSorted(values, null, value => value.key).map(value => value.id).join(""));
+console.log(__velarListSorted(values, null, value => value.key, true).map(value => value.id).join(""));
+console.log(__velarListHas([-0], 0), __velarListCount([-0], 0), __velarListHas([NaN], NaN), __velarListCount([NaN], NaN));
 for (const operation of [
-  () => some([1], () => "yes"),
-  () => partition([1], () => 1),
-  () => sortBy([1, 2], value => value === 1 ? "one" : 2),
-  () => sortBy([1], () => NaN),
-  () => range(1e20, 1e20 + 65536, 1),
+  () => __velarListSome([1], () => "yes"),
+  () => __velarListPartition([1], () => 1),
+  () => __velarListSorted([1, 2], null, value => value === 1 ? "one" : 2),
+  () => __velarListSorted([1], null, () => NaN),
+  () => __velarListSorted([1], value => 0, null, true),
 ]) {
   try { operation(); console.log("accepted"); } catch (error) { console.log(error.name); }
 }
@@ -12150,7 +12178,7 @@ const sparse = []; sparse.length = 1;
 const extended = [1]; extended.label = "hidden";
 const frozen = Object.freeze([1]);
 for (const list of [sparse, extended, frozen]) {
-  try { take(list, 1); console.log("accepted"); } catch (error) { console.log(error.name); }
+  try { __velarCollectionSlice(list, 0, 1); console.log("accepted"); } catch (error) { console.log(error.name); }
 }
 class HostileList extends Array {
   [Symbol.iterator]() { throw new Error("iterator override"); }
@@ -12159,41 +12187,39 @@ class HostileList extends Array {
 }
 const hostile = new HostileList(1, 2);
 for (const operation of [
-  () => enumerate(hostile).length,
-  () => zip(hostile, hostile).length,
-  () => chunk(hostile, 1).length,
-  () => partition(hostile, value => value > 0).matches.length,
-  () => groupBy(hostile, value => value).size,
-  () => keyBy(hostile, value => value).size,
-  () => countBy(hostile, value => value).size,
-  () => minBy(hostile, value => value),
+  () => __velarListZip(hostile, hostile).length,
+  () => __velarListChunk(hostile, 1).length,
+  () => __velarListPartition(hostile, value => value > 0).matches.length,
+  () => __velarListGroupBy(hostile, value => value).size,
+  () => __velarListKeyBy(hostile, value => value).size,
+  () => __velarListCountBy(hostile, value => value).size,
+  () => __velarListUnique(hostile).length,
+  () => __velarListRepeat(hostile, 1).length,
+  () => __velarListMin(hostile, value => value),
 ]) console.log(operation());
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, [
     "adbc", "bcad", "true 1 true 1",
-    "TypeError", "TypeError", "TypeError", "TypeError", "RangeError",
+    "TypeError", "TypeError", "TypeError", "TypeError", "TypeError",
     "TypeError", "TypeError", "TypeError",
-    "2", "2", "2", "2", "2", "2", "2", "1", "",
+    "2", "2", "2", "2", "2", "2", "2", "2", "1", "",
   ].join("\n"));
 
   const directory = await makeTemporaryDirectory("velar-collection-keys-");
   const entry = join(directory, "main.vel");
   await writeFile(entry, `
-import {maxBy, minBy, sortBy} from "velar/collections"
-
-const sorted = sortBy([1], value => true)
-const lowest = minBy([1], value => null)
-const highest = maxBy([1], value => {label: "one"})
+const sorted = [1].sorted(by=value => true)
+const lowest = [1].min(by=value => null)
+const highest = [1].max(by=value => {label: "one"})
 `.trimStart(), "utf8");
   const invalid = await compileProject(entry);
   assert.deepEqual(invalid.failures, []);
   assert.equal(invalid.modules.flatMap((module) => module.result.diagnostics).filter((item) => /key must return only string or only number/u.test(item.message)).length, 3);
 });
 
-test("velar/collections captures its host operations when the module initializes", () => {
-  const source = standardModuleSource("velar/collections") ?? "";
-  const execution = executeModule(`${source}
+test("the emitted collection runtime captures its host operations when the module initializes", () => {
+  const execution = executeModule(`${emittedCollectionRuntime()}
 const OriginalTypeError = TypeError;
 const nativeMapGet = Map.prototype.get;
 const nativeIsFrozen = Object.isFrozen;
@@ -12222,27 +12248,27 @@ globalThis.Set = class PoisonSet {};
 globalThis.TypeError = class PoisonTypeError extends Error {};
 globalThis.RangeError = class PoisonRangeError extends Error {};
 
-const enumerated = enumerate(["a"], 2);
-const grouped = groupBy([1, 2, 3], value => value % 2);
-const keyed = keyBy(["a", "bb"], value => value.length);
-const counted = countBy(["x", "x", "y"], value => value);
+const zipped = __velarListZip([1, 2], ["a"]);
+const grouped = __velarListGroupBy([1, 2, 3], value => value % 2);
+const keyed = __velarListKeyBy(["a", "bb"], value => value.length);
+const counted = __velarListCountBy(["x", "x", "y"], value => value);
 console.log(JSON.stringify([
-  range(3), enumerated, zip([1, 2], ["a"]), unique(["a", "a", "b"]),
-  chunk([1, 2, 3], 2), flatten([[1], [2, 3]]), compact([1, null, 2]),
-  reversed([1, 2, 3]), take([1, 2, 3], 2), drop([1, 2, 3], 1),
+  zipped, __velarListUnique(["a", "a", "b"]),
+  __velarListChunk([1, 2, 3], 2), __velarListFlatten([[1], [2, 3]]), __velarListCompact([1, null, 2]),
+  __velarListReversed([1, 2, 3]), __velarCollectionSlice([1, 2, 3], 0, 2), __velarCollectionSlice([1, 2, 3], 1),
 ]));
-console.log(find([1, 2], value => value === 2), index([-0], 0), has([NaN], NaN), count([1, 1, 2], 1), some([1], value => value === 1), every([1, 2], value => value > 0));
-console.log(JSON.stringify(partition([1, 2, 3], value => value % 2 === 1)), nativeIsFrozen(enumerated[0]));
+console.log(__velarListFind([1, 2], value => value === 2), __velarListIndex([-0], 0), __velarListHas([NaN], NaN), __velarListCount([1, 1, 2], 1), __velarListSome([1], value => value === 1), __velarListEvery([1, 2], value => value > 0));
+console.log(JSON.stringify(__velarListPartition([1, 2, 3], value => value % 2 === 1)), nativeIsFrozen(zipped[0]));
 console.log(JSON.stringify([nativeMapGet.call(grouped, 1), nativeMapGet.call(keyed, 2), nativeMapGet.call(counted, "x")]));
-const sorted = sortBy([{ value: "a", key: 2 }, { value: "b", key: 1 }], item => item.key);
+const sorted = __velarListSorted([{ value: "a", key: 2 }, { value: "b", key: 1 }], null, item => item.key);
 console.log(JSON.stringify([sorted[0].value, sorted[1].value]));
-console.log(minBy([3, 1, 2], value => value), maxBy([3, 1, 2], value => value), sum([1, 2, 3]), join(["a", "b"], "-"), JSON.stringify(repeat("x", 2)));
-try { sum([1, "2"]); console.log("accepted"); } catch (error) { console.log(error instanceof OriginalTypeError); }
+console.log(__velarListMin([3, 1, 2], value => value), __velarListMax([3, 1, 2], value => value), __velarListSum([1, 2, 3]), __velarListJoin(["a", "b"], "-"), JSON.stringify(__velarListRepeat(["x"], 2)));
+try { __velarListSum([1, "2"]); console.log("accepted"); } catch (error) { console.log(error instanceof OriginalTypeError); }
 console.log(poisonedCalls);
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, [
-    '[[0,1,2],[{"index":2,"value":"a"}],[{"first":1,"second":"a"}],["a","b"],[[1,2],[3]],[1,2,3],[1,2],[3,2,1],[1,2],[2,3]]',
+    '[[{"first":1,"second":"a"}],["a","b"],[[1,2],[3]],[1,2,3],[1,2],[3,2,1],[1,2],[2,3]]',
     "2 0 true 2 true true",
     '{"matches":[1,3],"rest":[2]} true',
     '[[1,3],"bb",2]',
@@ -12833,27 +12859,28 @@ console.log(typeIdentity, rangeIdentity, poisonCalls);
 });
 
 test("standard modules bound pathological allocation and timer inputs before effects", () => {
-  const collections = standardModuleSource("velar/collections") ?? "";
-  const collectionExecution = executeModule(`${collections}
+  const collectionExecution = executeModule(`${emittedCollectionRuntime()}
 const oversized = []; oversized.length = 1000001;
 const originalJoin = Array.prototype.join;
 let nativeJoinCalls = 0;
 Array.prototype.join = () => { nativeJoinCalls += 1; throw new Error("late join allocation"); };
 for (const operation of [
-  () => repeat("item", 1000001),
-  () => sum(oversized),
-  () => join(["x".repeat(8 * 1024 * 1024), "x".repeat(8 * 1024 * 1024 + 1)]),
-  () => join(["left", "right"], "x".repeat(16 * 1024 * 1024)),
+  () => __velarListRepeat(["item"], 1000001),
+  () => __velarListSum(oversized),
+  () => __velarListJoin(["x".repeat(8 * 1024 * 1024), "x".repeat(8 * 1024 * 1024 + 1)]),
+  () => __velarListJoin(["left", "right"], "x".repeat(16 * 1024 * 1024)),
 ]) {
   try { operation(); console.log("accepted"); } catch (error) { console.log(error.name); }
 }
-console.log(join(["x".repeat(8 * 1024 * 1024), "x".repeat(8 * 1024 * 1024)]).length);
-console.log(join(["only"], "x".repeat(16 * 1024 * 1024 + 1)));
+console.log(__velarListJoin(["x".repeat(8 * 1024 * 1024), "x".repeat(8 * 1024 * 1024)]).length);
+console.log(__velarListJoin(["only"], "x".repeat(16 * 1024 * 1024 + 1)));
 console.log(nativeJoinCalls);
 Array.prototype.join = originalJoin;
 `);
   assert.equal(collectionExecution.status, 0, String(collectionExecution.stderr));
-  assert.equal(collectionExecution.stdout, "RangeError\nRangeError\nRangeError\nRangeError\n16777216\nonly\n0\n");
+  // The oversized sparse array fails the member's dense-List proof, which is a
+  // TypeError, before its length is ever compared with the item ceiling.
+  assert.equal(collectionExecution.stdout, "RangeError\nTypeError\nRangeError\nRangeError\n16777216\nonly\n0\n");
 
   const text = standardModuleSource("velar/text") ?? "";
   const textExecution = executeModule(`${text}
@@ -14594,10 +14621,8 @@ test("0.6 Core standard library rejects invalid typed calls before runtime", asy
   const directory = await makeTemporaryDirectory("velar-standard-library-invalid-");
   const entry = join(directory, "main.vel");
   await writeFile(entry, `
-import {flatten, sum} from "velar/collections"
-
-const total = sum(["one", "two"])
-const flat = flatten([1, 2])
+const total = ["one", "two"].sum()
+const flat = [1, 2].flatten()
 const parsed = Json.parse("{}", 42)
 const resolved = await Promise.all([1, 2])
 const mapped = await Promise.map([1, 2], value => value, "many")
@@ -14608,8 +14633,8 @@ const options = Text.matches("42", "[0-9]+", {ignoreCase: "yes"})
   const project = await compileProject(entry);
   assert.deepEqual(project.failures, []);
   const messages = project.modules.flatMap((module) => module.result.diagnostics).map((item) => item.message).join("\n");
-  assert.match(messages, /sum expects List<number>, received List<string>/u);
-  assert.match(messages, /flatten expects a List of Lists, received List<number>/u);
+  assert.match(messages, /List\.sum requires List<number>, received List<string>/u);
+  assert.match(messages, /List\.flatten removes exactly one List level, so it requires List<List<T>>, received List<number>/u);
   assert.match(messages, /Runtime parsing requires a VelarScript runtime type/u);
   assert.match(messages, /Expected a List of Promises, received List<number>/u);
   assert.match(messages, /Cannot assign string to number/u);
@@ -20611,10 +20636,11 @@ print(record.get("second") ?? 0)
   assert.deepEqual(result.diagnostics, []);
   assert.equal(result.semanticIndex.symbols.find((symbol) => symbol.name === "pairs")?.type, "Map<string, number>");
   assert.equal(result.semanticIndex.symbols.find((symbol) => symbol.name === "record")?.type, "Map<string, number>");
-  const collectionRuntime = standardModuleSource("velar/collections") ?? "";
-  // The prelude `range` lowers to a runtime import; the concatenated runtime
-  // already defines it, so the import line becomes a local alias.
-  const execution = executeModule(`${collectionRuntime}\n${(result.code ?? "").replace(/^import .*velar\/collections.*;\n/mu, "const __velarRange = range;\n")}`);
+  // D114 S3: the prelude `range` lowers to an import of its own compiler-owned
+  // runtime module. The concatenated runtime already defines `__velarRange`, so
+  // the import line is dropped rather than aliased.
+  const rangeRuntime = standardModuleSource("velar/compiler-runtime-range-v1") ?? "";
+  const execution = executeModule(`${rangeRuntime}\n${(result.code ?? "").replace(/^import .*compiler-runtime-range-v1.*;\n/mu, "")}`);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "4:0:3\n3:5:1\n7\n2\n");
 
@@ -28952,7 +28978,10 @@ test("language server publishes diagnostics, hover, and completion", async (cont
   assert.match(JSON.stringify(completed.result), /throw/);
   assert.match(JSON.stringify(completed.result), /assert/);
   assert.doesNotMatch(JSON.stringify(completed.result), /"label":"invert"/u);
-  assert.match(JSON.stringify(completed.result), /velar\/collections/);
+  assert.match(JSON.stringify(completed.result), /velar\/url/);
+  // D114 S3: velar/collections retired into checked List members, so it is no
+  // longer an importable module the editor may offer.
+  assert.doesNotMatch(JSON.stringify(completed.result), /velar\/collections/u);
   // D57 rule 136: velar/async retired into the Promise namespace, so completing
   // it as an import would offer a spelling VEL3008 refuses. The namespace is
   // what the editor offers now.

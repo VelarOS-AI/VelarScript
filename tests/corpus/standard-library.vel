@@ -1,5 +1,3 @@
-import {groupBy} from "velar/collections"
-
 import {withQuery} from "velar/url"
 import {iso, utc} from "velar/time"
 
@@ -13,7 +11,7 @@ const users: List<User> = [
     {name: "Bea", role: "admin"},
 ]
 
-const grouped = groupBy(users, user => user.role)
+const grouped = users.groupBy(user => user.role)
 const scores = Map({Ada: 9, Lin: 7})
 const parsed = Json.parse(`{"name":"Nova","role":"admin"}`, User)
 const banner = "

@@ -71,7 +71,7 @@ function assertNoOrdinaryItems(items: readonly CompletionProbeItem[]): void {
 }
 
 const completionPrelude = `
-import {drop} from "velar/collections"
+import {normalize as drop} from "velar/url"
 import {
     animate as makeAnimation,
     border,

@@ -385,7 +385,7 @@ export interface ClassInfo {
 
 export type CollectionRuntimeKind = "list" | "map" | "set" | "record";
 
-export type CollectionOperation = "listGet" | "mapGet" | "recordGet" | "slice" | "listAppend" | "listExtend" | "listInsert" | "listRemove" | "listPop" | "listClear" | "listCopy" | "listHas" | "listCount" | "listIndex" | "listFind" | "listSome" | "listEvery" | "listMap" | "listFilter" | "listFlatMap" | "listReduce" | "listJoin" | "listSorted" | "listReversed" | "listSum" | "listMin" | "listMax" | "setAdd" | "setUpdate" | "setHas" | "setRemove" | "setClear" | "setValues" | "setCopy" | "setUnion" | "setIntersection" | "setDifference" | "mapSet" | "mapGetOrSet" | "mapGetOrSetWith" | "mapUpdate" | "mapHas" | "mapRemove" | "mapClear" | "mapIterator" | "mapKeys" | "mapValues" | "mapEntries" | "mapCopy" | "recordSet" | "recordHas" | "recordRemove" | "recordClear" | "recordKeys" | "recordValues" | "recordEntries" | "recordCopy";
+export type CollectionOperation = "listGet" | "mapGet" | "recordGet" | "slice" | "listAppend" | "listExtend" | "listInsert" | "listRemove" | "listPop" | "listClear" | "listCopy" | "listHas" | "listCount" | "listIndex" | "listFind" | "listSome" | "listEvery" | "listMap" | "listFilter" | "listFlatMap" | "listReduce" | "listJoin" | "listSorted" | "listReversed" | "listSum" | "listMin" | "listMax" | "listUnique" | "listCompact" | "listFlatten" | "listChunk" | "listPartition" | "listGroupBy" | "listKeyBy" | "listCountBy" | "listZip" | "listRepeat" | "setAdd" | "setUpdate" | "setHas" | "setRemove" | "setClear" | "setValues" | "setCopy" | "setUnion" | "setIntersection" | "setDifference" | "mapSet" | "mapGetOrSet" | "mapGetOrSetWith" | "mapUpdate" | "mapHas" | "mapRemove" | "mapClear" | "mapIterator" | "mapKeys" | "mapValues" | "mapEntries" | "mapCopy" | "recordSet" | "recordHas" | "recordRemove" | "recordClear" | "recordKeys" | "recordValues" | "recordEntries" | "recordCopy";
 
 export type PrimitiveOperation = "stringTrim" | "stringUpper" | "stringLower" | "stringSlice" | "stringChar" | "stringHas" | "stringIndex" | "stringCount" | "stringStartsWith" | "stringEndsWith" | "stringSplit" | "stringReplace" | "stringReplaceAll" | "stringPadStart" | "stringPadEnd" | "stringRepeat" | "stringIsBlank" | "numberAbs" | "numberRound" | "numberFloor" | "numberCeil" | "numberSign" | "numberTrunc" | "numberToFixed" | "numberIsInteger" | "numberIsNaN" | "numberIsFinite";
 
@@ -396,6 +396,11 @@ const listCollectionOperations = new Map<string, CollectionOperation>([
   ["index", "listIndex"], ["find", "listFind"], ["some", "listSome"], ["every", "listEvery"],
   ["map", "listMap"], ["filter", "listFilter"], ["flatMap", "listFlatMap"], ["reduce", "listReduce"], ["join", "listJoin"],
   ["sorted", "listSorted"], ["reversed", "listReversed"], ["sum", "listSum"], ["min", "listMin"], ["max", "listMax"],
+  // D114 S3: the pipeline members that replaced the retired velar/collections
+  // functions. They are compiler-owned checked value methods like the rest.
+  ["unique", "listUnique"], ["compact", "listCompact"], ["flatten", "listFlatten"], ["chunk", "listChunk"],
+  ["partition", "listPartition"], ["groupBy", "listGroupBy"], ["keyBy", "listKeyBy"], ["countBy", "listCountBy"],
+  ["zip", "listZip"], ["repeat", "listRepeat"],
 ]);
 const mapCollectionOperations = new Map<string, CollectionOperation>([
   ["get", "mapGet"], ["set", "mapSet"], ["getOrSet", "mapGetOrSet"], ["getOrSetWith", "mapGetOrSetWith"], ["update", "mapUpdate"], ["has", "mapHas"],
@@ -431,6 +436,8 @@ const discardedPureCollectionOperations = new Set<CollectionOperation>([
   "listGet", "mapGet", "recordGet", "slice", "listCopy", "listCount", "listIndex", "listFind", "listSome", "listEvery",
   "listMap", "listFilter", "listFlatMap", "listReduce", "listJoin", "listSorted", "listReversed",
   "listSum", "listMin", "listMax", "setCopy", "setUnion", "setIntersection", "setDifference", "mapCopy", "recordCopy",
+  "listUnique", "listCompact", "listFlatten", "listChunk", "listPartition", "listGroupBy", "listKeyBy", "listCountBy",
+  "listZip", "listRepeat",
   "listHas", "mapHas", "setHas", "recordHas", "mapIterator", "mapKeys", "recordKeys", "mapValues", "setValues", "recordValues", "mapEntries", "recordEntries",
 ]);
 const discardedPurePrimitiveOperations = new Set<PrimitiveOperation>([
@@ -443,6 +450,7 @@ const discardedPurePrimitiveOperations = new Set<PrimitiveOperation>([
 const CORE_LIST_METHOD_NAMES = Object.freeze([
   "get", "slice", "append", "extend", "insert", "remove", "pop", "clear", "copy", "has", "count", "index",
   "find", "some", "every", "map", "flatMap", "filter", "reduce", "join", "sorted", "reversed", "sum", "min", "max",
+  "unique", "compact", "flatten", "chunk", "partition", "groupBy", "keyBy", "countBy", "zip", "repeat",
 ] as const);
 const CORE_MAP_METHOD_NAMES = Object.freeze([
   "get", "set", "getOrSet", "getOrSetWith", "update", "has", "remove", "clear", "copy", "iterator", "keys", "values", "entries",
@@ -930,11 +938,11 @@ const coreGlobalGuidance = new Map([
   ["parseFloat", "Use 'number(text)'; VelarScript has one text-to-number conversion"],
   // D89 (message correction): `enumerate` and `zip` are the two Python loop
   // reflexes that reached an unadorned "Unknown name" with no successor at all
-  // — `zip` even earned a "did you mean 'Map'?". `enumerate` has a spelling
-  // that needs no import, so the loop is named first; `zip` has none, so its
-  // guidance is the import that makes it exist.
-  ["enumerate", "Use the two-slot loop — 'for value, index in values:' — which binds the value first; 'enumerate' is an import from \"velar/collections\" when you want the '{index, value}' List itself"],
-  ["zip", "Import the builder — 'import {zip} from \"velar/collections\"' — it pairs two Lists as '{first, second}' up to the shorter length"],
+  // — `zip` even earned a "did you mean 'Map'?". D114 S3 then made both
+  // spellings language-owned: the two-slot loop replaces one, and the other is
+  // a List member, so neither names a module any more.
+  ["enumerate", "Use the two-slot loop — 'for value, index in values:' — which binds the value first; VelarScript has no enumerate function"],
+  ["zip", "Use 'left.zip(right)'; pairing two Lists as '{first, second}' up to the shorter length is a List member"],
   ["stringify", "Use Json.stringify(value) directly; VelarScript's pure namespaces need no import"],
   ["parse", "Use Json.parse(text) directly; VelarScript's pure namespaces need no import"],
   // D90 (coherence): the rest of the Python builtin surface a model reaches
@@ -1237,6 +1245,104 @@ const permanentNamespaceImportRosters: ReadonlyMap<string, { readonly namespace:
   ["velar/math", { namespace: "Math", members: namespaceMemberNames(mathNamespaceType) }],
   ["velar/collections", { namespace: null, members: new Set(["range"]) }],
 ]);
+
+/**
+ * D114 S3 / D35: `velar/collections` retired. Twelve of its exports duplicated
+ * a List method word for word, four were `get`/`slice` under other names, three
+ * survived only because the method side lacked `min(by=)`, `max(by=)` and a
+ * descending order, and the rest are List members now. `range` is unaffected —
+ * it was already the Core prelude name, and its import keeps the VEL3008 the
+ * roster above reports.
+ *
+ * Each entry carries the retired function's own parameter names, so a
+ * named-argument call can be read back into positions before it is rewritten,
+ * and the member call that replaces it. A `rewrite` of null is guidance only:
+ * `enumerate`'s `{index, value}` records have consumers no edit can reach.
+ */
+interface RetiredCollectionExport {
+  /** The retired function's declared parameters, first one being the receiver. */
+  readonly parameters: readonly string[];
+  readonly guidance: string;
+  readonly rewrite: {
+    readonly member: string;
+    /** Literal arguments the member call leads with, e.g. `get(0)` for `first`. */
+    readonly fixedArguments: readonly string[];
+    /** The name each remaining retired argument is passed under; null is positional. */
+    readonly argumentNames: readonly (string | null)[];
+    /** `repeat(value, count)` repeats a one-element List, so its receiver is `[value]`. */
+    readonly receiverIsListOfArgument?: true;
+  } | null;
+}
+
+const RETIRED_COLLECTION_MODULE = "velar/collections";
+
+function retiredCollectionEntry(
+  parameters: readonly string[],
+  guidance: string,
+  rewrite: RetiredCollectionExport["rewrite"],
+): RetiredCollectionExport {
+  return { parameters, guidance: `${guidance}; velar/collections retired into checked List members`, rewrite };
+}
+
+function retiredCollectionMethod(
+  parameters: readonly string[],
+  member: string,
+  argumentNames: readonly (string | null)[] = parameters.slice(1).map(() => null),
+): RetiredCollectionExport {
+  const rendered = parameters.slice(1)
+    .map((name, index) => (argumentNames[index] ? `${argumentNames[index]}=${name}` : name))
+    .join(", ");
+  return retiredCollectionEntry(parameters, `Use '${parameters[0]}.${member}(${rendered})'`, {
+    member,
+    fixedArguments: [],
+    argumentNames,
+  });
+}
+
+const retiredCollectionExports: ReadonlyMap<string, RetiredCollectionExport> = new Map([
+  // Exact duplicates: the member takes the same arguments under the same names.
+  ["find", retiredCollectionMethod(["values", "test"], "find")],
+  ["index", retiredCollectionMethod(["values", "value"], "index")],
+  ["has", retiredCollectionMethod(["values", "value"], "has")],
+  ["count", retiredCollectionMethod(["values", "value"], "count")],
+  ["some", retiredCollectionMethod(["values", "test"], "some")],
+  ["every", retiredCollectionMethod(["values", "test"], "every")],
+  ["sum", retiredCollectionMethod(["values"], "sum")],
+  ["join", retiredCollectionMethod(["values", "separator"], "join")],
+  ["reversed", retiredCollectionMethod(["values"], "reversed")],
+  // Positional windows the language already spells with `get` and `slice`.
+  ["first", retiredCollectionEntry(["values"], "Use 'values.get(0)'", { member: "get", fixedArguments: ["0"], argumentNames: [] })],
+  ["last", retiredCollectionEntry(["values"], "Use 'values.get(-1)'", { member: "get", fixedArguments: ["-1"], argumentNames: [] })],
+  ["take", retiredCollectionEntry(["values", "count"], "Use 'values.slice(0, count)'", { member: "slice", fixedArguments: ["0"], argumentNames: [null] })],
+  ["drop", retiredCollectionEntry(["values", "count"], "Use 'values.slice(count)'", { member: "slice", fixedArguments: [], argumentNames: [null] })],
+  // The selector family the method side now completes.
+  ["sortBy", retiredCollectionMethod(["values", "key", "descending"], "sorted", ["by", "descending"])],
+  ["minBy", retiredCollectionMethod(["values", "key"], "min", ["by"])],
+  ["maxBy", retiredCollectionMethod(["values", "key"], "max", ["by"])],
+  // The itertools-shaped functions, now members under the same names.
+  ["unique", retiredCollectionMethod(["values"], "unique")],
+  ["compact", retiredCollectionMethod(["values"], "compact")],
+  ["flatten", retiredCollectionMethod(["values"], "flatten")],
+  ["chunk", retiredCollectionMethod(["values", "size"], "chunk")],
+  ["partition", retiredCollectionMethod(["values", "test"], "partition")],
+  ["groupBy", retiredCollectionMethod(["values", "key"], "groupBy")],
+  ["keyBy", retiredCollectionMethod(["values", "key"], "keyBy")],
+  ["countBy", retiredCollectionMethod(["values", "key"], "countBy")],
+  ["zip", retiredCollectionMethod(["left", "right"], "zip")],
+  ["repeat", retiredCollectionEntry(["value", "count"], "Use '[value].repeat(count)', which repeats the whole List the way string.repeat does", {
+    member: "repeat",
+    fixedArguments: [],
+    argumentNames: [null],
+    receiverIsListOfArgument: true,
+  })],
+  // D35: the two-slot `for` is the one spelling, and the {index, value}
+  // records this produced are read at sites no edit here can see.
+  ["enumerate", retiredCollectionEntry(["values", "start"], "Use 'for value, index in values:'", null)],
+]);
+
+function retiredCollectionExport(source: string, name: string): RetiredCollectionExport | null {
+  return source === RETIRED_COLLECTION_MODULE ? retiredCollectionExports.get(name) ?? null : null;
+}
 
 function namespaceMemberNames(namespace: ValueType): ReadonlySet<string> {
   return new Set(namespace.kind === "object" ? namespace.fields.keys() : []);
@@ -1768,6 +1874,11 @@ export class Analyzer implements TypeEnvironment {
   private readonly permanentNamespaceImportReads: { readonly local: string; readonly source: string; readonly imported: string; readonly span: Span }[] = [];
   /** The import each such local came from, keyed by the local name. */
   private readonly permanentNamespaceImportOrigins = new Map<string, { readonly source: string; readonly imported: string; readonly specifier: Span }>();
+  // D114 S3: the retired velar/collections names this module imported, the
+  // proved reads of each, and the call each read sits in.
+  private readonly retiredCollectionImportOrigins = new Map<string, { readonly imported: string; readonly specifier: Span }>();
+  private readonly retiredCollectionImportReads: { readonly local: string; readonly imported: string; readonly span: Span }[] = [];
+  private readonly retiredCollectionCalls = new Map<string, Extract<Expression, { kind: "CallExpression" }>>();
 
   constructor(context: AnalysisContext = {}, extensions: readonly CompilerAnalysisExtension[] = []) {
     this.analysisExtensions = extensions;
@@ -2015,6 +2126,7 @@ export class Analyzer implements TypeEnvironment {
     this.registerExternModules(program);
     this.validateReExports(program);
     this.registerPermanentNamespaceImports(program);
+    this.registerRetiredCollectionImports(program);
     this.predeclareTopLevel(program);
     let previous: Statement | null = null;
     for (const statement of program.body) {
@@ -2035,6 +2147,7 @@ export class Analyzer implements TypeEnvironment {
     this.reportRetiredNamespaceUses(program);
     this.reportPermanentNamespaceImports(program);
     this.reportPermanentNamespaceReExports(program);
+    this.reportRetiredCollectionImports(program);
     // D85 rule 209 reports last for the same reason: a hole reaches a caller
     // through a callee the module may not declare until later, so the second
     // report is deleted once every hole in the module is on record.
@@ -7352,6 +7465,13 @@ export class Analyzer implements TypeEnvironment {
           if (origin && lexical.span.start === origin.specifier.start && lexical.span.end === origin.specifier.end) {
             this.permanentNamespaceImportReads.push({ local: expression.name, source: origin.source, imported: origin.imported, span: expression.span });
           }
+          // D114 S3: the same proof for the retired velar/collections names —
+          // the specifier's span identity is what shows the read reached the
+          // import rather than a local of the same name shadowing it.
+          const retired = this.retiredCollectionImportOrigins.get(expression.name);
+          if (retired && lexical.span.start === retired.specifier.start && lexical.span.end === retired.specifier.end) {
+            this.retiredCollectionImportReads.push({ local: expression.name, imported: retired.imported, span: expression.span });
+          }
         }
         if (!lexical && (isPermanentNamespaceName(expression.name) || expression.name === "range")) {
           this.builtinValueReferences.set(spanIdentity(expression.span), expression.name);
@@ -7770,6 +7890,9 @@ export class Analyzer implements TypeEnvironment {
       case "ArrowFunctionExpression":
         return this.inferArrow(expression, contextualType);
       case "CallExpression": {
+        if (expression.callee.kind === "IdentifierExpression" && this.retiredCollectionImportOrigins.has(expression.callee.name)) {
+          this.retiredCollectionCalls.set(spanIdentity(expression.callee.span), expression);
+        }
         this.recordDeferredCallEdge(expression.callee, expression.span);
         const result = this.inferCall(expression.callee, expression.arguments, expression.argumentNames, expression.span, contextualType, expression.optional);
         if (this.expandAliases(result).kind === "null") this.normalizedNullResults.add(spanIdentity(expression.span));
@@ -8598,6 +8721,21 @@ export class Analyzer implements TypeEnvironment {
   // ordering site is the one rejection with a non-obvious way out, because the
   // runtime value is a bare string and the order the author means is never the
   // member-name alphabet (D42 item 65).
+  /**
+   * D42 item 65: the key a selector answers. A literal arrow reports the
+   * contextual key type rather than its own once the body checks out, so the
+   * body's recorded type is the honest source for an inline arrow; a named
+   * function answers with its declared result.
+   */
+  private selectorKeyType(argument: Expression | null, selector: ValueType | null): ValueType | null {
+    if (!argument || selector === null) return null;
+    if (argument.kind === "ArrowFunctionExpression") return this.inferredExpressionType(argument.body);
+    const callable = this.expandAliases(selector);
+    return callable.kind === "function" || callable.kind === "action" || callable.kind === "intrinsic"
+      ? callable.result
+      : null;
+  }
+
   private unorderedTypeGuidance(...types: readonly ValueType[]): string {
     return types.some((type) => this.mentionsEnumType(type))
       ? "; an enum carries no runtime order, so state the order explicitly with sorted(by=rank) or a string-backed enum whose values encode it"
@@ -9543,140 +9681,6 @@ export class Analyzer implements TypeEnvironment {
     }
 
     switch (intrinsic.name) {
-      case "collections.enumerate": {
-        arity(1, 2);
-        const { element } = arrayAt(0);
-        inferAt(1, numberType);
-        return { kind: "list", element: { kind: "object", fields: new Map([["index", numberType], ["value", element]]) } };
-      }
-      case "collections.zip": {
-        arity(2, 2);
-        const left = arrayAt(0).element;
-        const right = arrayAt(1).element;
-        return { kind: "list", element: { kind: "object", fields: new Map([["first", left], ["second", right]]) } };
-      }
-      case "collections.unique":
-      case "collections.reversed":
-      case "collections.compact": {
-        arity(1, 1);
-        const { element } = arrayAt(0);
-        return { kind: "list", element: intrinsic.name === "collections.compact" ? nonOptional(element) : element };
-      }
-      case "collections.repeat": {
-        arity(2, 2);
-        const element = inferAt(0);
-        inferAt(1, numberType);
-        return { kind: "list", element };
-      }
-      case "collections.has":
-      case "collections.count": {
-        arity(2, 2);
-        const element = arrayAt(0).element;
-        inferAt(1, element);
-        return intrinsic.name === "collections.has" ? boolType : numberType;
-      }
-      case "collections.take":
-      case "collections.drop": {
-        arity(2, 2);
-        const { element } = arrayAt(0);
-        inferAt(1, numberType);
-        return { kind: "list", element };
-      }
-      case "collections.chunk": {
-        arity(2, 2);
-        const { element } = arrayAt(0);
-        inferAt(1, numberType);
-        return { kind: "list", element: { kind: "list", element } };
-      }
-      case "collections.flatten": {
-        arity(1, 1);
-        const outer = arrayAt(0).element;
-        if (outer.kind === "list") return outer;
-        if (outer.kind === "any") return { kind: "list", element: anyType };
-        const argument = argumentAt(0);
-        if (argument) this.typeError(`flatten expects a List of Lists, received List<${describeType(outer)}>`, argument.span);
-        return { kind: "list", element: unknownType };
-      }
-      case "collections.groupBy":
-      case "collections.keyBy":
-      case "collections.countBy": {
-        arity(2, 2);
-        const element = arrayAt(0).element;
-        const key = callbackResult(callbackAt(1, [element], unknownType));
-        if (intrinsic.name === "collections.groupBy") return { kind: "map", key, value: { kind: "list", element } };
-        if (intrinsic.name === "collections.countBy") return { kind: "map", key, value: numberType };
-        return { kind: "map", key, value: element };
-      }
-      case "collections.sortBy": {
-        arity(2, 3);
-        const element = arrayAt(0).element;
-        const key = callbackResult(callbackAt(1, [element], unknownType));
-        const keyArgument = argumentAt(1);
-        if (this.orderedTypeCategory(key) === null && keyArgument) {
-          this.typeError(`sortBy key must return only string or only number, received ${describeType(key)}${this.unorderedTypeGuidance(key)}`, keyArgument.span);
-        }
-        inferAt(2, boolType);
-        return { kind: "list", element };
-      }
-      case "collections.partition": {
-        arity(2, 2);
-        const element = arrayAt(0).element;
-        callbackAt(1, [element], boolType);
-        const list: ValueType = { kind: "list", element };
-        return { kind: "object", fields: new Map([["matches", list], ["rest", list]]) };
-      }
-      case "collections.find": {
-        arity(2, 2);
-        const element = arrayAt(0).element;
-        callbackAt(1, [element], boolType);
-        return optionalOf(element);
-      }
-      case "collections.some":
-      case "collections.every": {
-        arity(2, 2);
-        const element = arrayAt(0).element;
-        callbackAt(1, [element], boolType);
-        return boolType;
-      }
-      case "collections.index": {
-        arity(2, 2);
-        const element = arrayAt(0).element;
-        inferAt(1, element);
-        return optionalOf(numberType);
-      }
-      case "collections.first":
-      case "collections.last": {
-        arity(1, 1);
-        return optionalOf(arrayAt(0).element);
-      }
-      case "collections.minBy":
-      case "collections.maxBy": {
-        arity(2, 2);
-        const element = arrayAt(0).element;
-        const key = callbackResult(callbackAt(1, [element], unknownType));
-        const keyArgument = argumentAt(1);
-        if (this.orderedTypeCategory(key) === null && keyArgument) {
-          this.typeError(`${intrinsic.name === "collections.minBy" ? "minBy" : "maxBy"} key must return only string or only number, received ${describeType(key)}${this.unorderedTypeGuidance(key)}`, keyArgument.span);
-        }
-        return optionalOf(element);
-      }
-      case "collections.sum": {
-        arity(1, 1);
-        const element = arrayAt(0).element;
-        if (!isAssignable(element, numberType, this) && element.kind !== "any") {
-          this.typeError(`sum expects List<number>, received List<${describeType(element)}>`, argumentAt(0)?.span ?? callSpan);
-        }
-        return numberType;
-      }
-      case "collections.join": {
-        arity(1, 2);
-        const element = arrayAt(0).element;
-        if (!isAssignable(element, stringType, this) && element.kind !== "any") {
-          this.typeError(`join expects List<string>, received List<${describeType(element)}>`, argumentAt(0)?.span ?? callSpan);
-        }
-        inferAt(1, stringType);
-        return stringType;
-      }
       case "json.parse": {
         arity(1, 2);
         inferAt(0, stringType);
@@ -10140,7 +10144,14 @@ export class Analyzer implements TypeEnvironment {
     const requireCount = (count: number): void => {
       if (!namedPreanalyzed && arguments_.length !== count) this.typeError(`Expected ${count} argument${count === 1 ? "" : "s"} but received ${arguments_.length}`, callSpan);
     };
-    const inferListCallback = (index: number, result: ValueType): ValueType => {
+    // D113: one callback shape for every List operation that receives an
+    // element — one parameter, or two when the callback asks for the snapshot
+    // index. `judgeResult` is false for a key selector, whose *shape* is what
+    // assignability judges: whether the key it answers is ordered, or usable as
+    // a Map key, is asked once by the single authority for that question, so a
+    // `Comparable`-bounded key is not refused by the union spelling here
+    // (D42 item 65).
+    const inferListCallback = (index: number, result: ValueType, judgeResult = true): ValueType => {
       const argument = argumentAt(index);
       if (!argument) return unknownType;
       const single: ValueType = { kind: "function", parameters: [readonlyElement!], requiredParameters: 1, result };
@@ -10153,8 +10164,9 @@ export class Analyzer implements TypeEnvironment {
         && (expanded.parameters.length >= 2 || expanded.rest)
         ? indexed
         : single;
-      callback = this.concreteCallableFor(callback, expected, argument.span);
-      this.requireAssignable(callback, expected, argument.span);
+      const judged = judgeResult ? expected : { ...expected, result: unknownType };
+      callback = this.concreteCallableFor(callback, judged, argument.span);
+      this.requireAssignable(callback, judged, argument.span);
       return callback;
     };
     // ENM-I3: a membership probe (`has`, `index`, `count`, `remove`, and the
@@ -10298,6 +10310,7 @@ export class Analyzer implements TypeEnvironment {
         const selectorShape: ValueType = { kind: "function", parameters: [readonlyElement!], requiredParameters: 1, result: unknownType };
         const compareArgument = argumentAt(0);
         const byArgument = argumentAt(1);
+        const descendingArgument = argumentAt(2);
         const positionalSelector = !namedPreanalyzed
           && compareArgument?.kind === "ArrowFunctionExpression"
           && compareArgument.parameters.length === 1
@@ -10309,9 +10322,10 @@ export class Analyzer implements TypeEnvironment {
             byType = inferArgument(1, selector);
             this.requireAssignable(byType, selectorShape, byArgument.span);
           }
-          if (arguments_.length > 2) {
-            for (const extra of arguments_.slice(2)) this.inferExpression(extra);
-            this.typeError(`Expected 0-2 arguments but received ${arguments_.length}`, callSpan);
+          if (descendingArgument) this.requireAssignable(inferArgument(2, boolType), boolType, descendingArgument.span);
+          if (arguments_.length > 3) {
+            for (const extra of arguments_.slice(3)) this.inferExpression(extra);
+            this.typeError(`Expected 0-3 arguments but received ${arguments_.length}`, callSpan);
           }
         } else {
           if (compareArgument) this.requireAssignable(this.inferredExpressionType(compareArgument), comparator, compareArgument.span);
@@ -10319,19 +10333,12 @@ export class Analyzer implements TypeEnvironment {
             byType = this.inferredExpressionType(byArgument);
             this.requireAssignable(byType, selectorShape, byArgument.span);
           }
+          if (descendingArgument) this.requireAssignable(this.inferredExpressionType(descendingArgument), boolType, descendingArgument.span);
         }
         // ORD-3: assignability admits an enum key, because an enum member is
         // assignable to `string`, so the ordered-key question has to be asked
-        // separately at the one decision point. A literal selector reports the
-        // contextual `number | string` rather than its own key type once the
-        // body checks out, so the body's recorded type is the honest source
-        // for an inline arrow.
-        const byCallable = byType === null ? null : this.expandAliases(byType);
-        const byKey = byArgument?.kind === "ArrowFunctionExpression"
-          ? this.inferredExpressionType(byArgument.body)
-          : byCallable !== null && (byCallable.kind === "function" || byCallable.kind === "action" || byCallable.kind === "intrinsic")
-            ? byCallable.result
-            : null;
+        // separately at the one decision point.
+        const byKey = this.selectorKeyType(byArgument, byType);
         if (byArgument && byKey !== null && isAssignable(byType!, selectorShape, this) && this.orderedTypeCategory(byKey) === null) {
           this.typeError(
             `sorted(by=) key must return only string or only number, received ${describeType(byKey)}${this.unorderedTypeGuidance(byKey)}`,
@@ -10342,8 +10349,17 @@ export class Analyzer implements TypeEnvironment {
           this.typeError("Use 'sorted(by=selector)'; the key-function alternative is named", byArgument.span);
         }
         if (positionalSelector) this.typeError("Use 'sorted(by=selector)'; the key-function alternative is named", compareArgument.span);
+        if (descendingArgument && !argumentNames?.includes("descending")) {
+          this.typeError("Use 'sorted(descending=true)'; the order flag is named", descendingArgument.span);
+        }
         if (compareArgument && byArgument) {
           this.typeError("sorted accepts either a comparator or 'by=selector', not both", callSpan);
+        }
+        // D114 S3: a comparator already states the order, so a second way to
+        // say it would be two spellings of one fact — and a reader would have
+        // to decide which wins.
+        if (compareArgument && descendingArgument) {
+          this.typeError("sorted(descending=) applies to the default order or a 'by=selector'; the comparator already states the order", callSpan);
         }
         if (!compareArgument && !byArgument && this.orderedTypeCategory(object.element) === null) {
           this.typeError(
@@ -10363,8 +10379,25 @@ export class Analyzer implements TypeEnvironment {
       }
       if (member.property === "min" || member.property === "max") {
         this.collectionCalls.set(member.span.end, member.property === "min" ? "listMin" : "listMax");
-        checkCollectionArguments([]);
-        if (this.orderedTypeCategory(object.element) === null) {
+        // D114 S3: `by=` completes the selector family the retired
+        // velar/collections minBy/maxBy carried, under sorted(by=)'s rules.
+        const byArgument = argumentAt(0);
+        const byType = byArgument ? inferListCallback(0, unionOf([numberType, stringType]), false) : null;
+        if (!namedPreanalyzed && arguments_.length > 1) {
+          for (const extra of arguments_.slice(1)) this.inferExpression(extra);
+          this.typeError(`Expected 0-1 arguments but received ${arguments_.length}`, callSpan);
+        }
+        const byKey = this.selectorKeyType(byArgument, byType);
+        if (byArgument && byKey !== null && this.orderedTypeCategory(byKey) === null) {
+          this.typeError(
+            `${member.property}(by=) key must return only string or only number, received ${describeType(byKey)}${this.unorderedTypeGuidance(byKey)}`,
+            byArgument.span,
+          );
+        }
+        if (byArgument && !argumentNames?.includes("by")) {
+          this.typeError(`Use '${member.property}(by=selector)'; the key-function alternative is named`, byArgument.span);
+        }
+        if (!byArgument && this.orderedTypeCategory(object.element) === null) {
           this.typeError(
             `List.${member.property} requires List<number> or List<string>, received ${describeType(object)}${this.unorderedTypeGuidance(object.element)}`,
             member.span,
@@ -10405,6 +10438,98 @@ export class Analyzer implements TypeEnvironment {
         this.collectionCalls.set(member.span.end, "slice");
         checkCollectionArguments([numberType, numberType], 0);
         return { kind: "list", element: readonlyElement! };
+      }
+      // ── D114 S3: the pipeline members ────────────────────────────────────
+      if (member.property === "unique") {
+        this.collectionCalls.set(member.span.end, "listUnique");
+        checkCollectionArguments([]);
+        return { kind: "list", element: readonlyElement! };
+      }
+      if (member.property === "compact") {
+        this.collectionCalls.set(member.span.end, "listCompact");
+        checkCollectionArguments([]);
+        const element = this.expandAliases(readonlyElement!);
+        // The same stance `x != null` takes on a value that can never be null
+        // (section 4): a removal with nothing to remove is a constant, and a
+        // silently constant operation is a logic bug.
+        if (element.kind !== "optional" && element.kind !== "any" && element.kind !== "unknown" && !isInvalidType(element)) {
+          this.typeError(
+            `List<${describeType(element)}>.compact() has nothing to remove; the element type has no null arm, so drop the call`,
+            member.span,
+          );
+          return { kind: "list", element: readonlyElement! };
+        }
+        return { kind: "list", element: nonOptional(element) };
+      }
+      if (member.property === "flatten") {
+        this.collectionCalls.set(member.span.end, "listFlatten");
+        checkCollectionArguments([]);
+        const element = this.expandAliases(readonlyElement!);
+        if (element.kind === "any" || element.kind === "unknown" || isInvalidType(element)) return { kind: "list", element: unknownType };
+        if (element.kind !== "list") {
+          this.typeError(
+            `List.flatten removes exactly one List level, so it requires List<List<T>>, received ${describeType(object)}`,
+            member.span,
+          );
+          return { kind: "list", element: unknownType };
+        }
+        return { kind: "list", element: element.element };
+      }
+      if (member.property === "chunk") {
+        this.collectionCalls.set(member.span.end, "listChunk");
+        checkCollectionArguments([numberType]);
+        requireCount(1);
+        return { kind: "list", element: { kind: "list", element: readonlyElement! } };
+      }
+      if (member.property === "repeat") {
+        this.collectionCalls.set(member.span.end, "listRepeat");
+        checkCollectionArguments([numberType]);
+        requireCount(1);
+        return { kind: "list", element: readonlyElement! };
+      }
+      if (member.property === "partition") {
+        this.collectionCalls.set(member.span.end, "listPartition");
+        if (argumentAt(0)) inferListCallback(0, boolType);
+        requireCount(1);
+        const half: ValueType = { kind: "list", element: readonlyElement! };
+        return { kind: "object", fields: new Map([["matches", half], ["rest", half]]) };
+      }
+      if (member.property === "groupBy" || member.property === "keyBy" || member.property === "countBy") {
+        this.collectionCalls.set(member.span.end, member.property === "groupBy"
+          ? "listGroupBy"
+          : member.property === "keyBy" ? "listKeyBy" : "listCountBy");
+        const keyArgument = argumentAt(0);
+        const keyCallback = keyArgument ? inferListCallback(0, unknownType, false) : null;
+        requireCount(1);
+        const key = this.selectorKeyType(keyArgument, keyCallback) ?? unknownType;
+        // ENM-D1: the result is a Map, so its key obeys the one Map key rule.
+        if (keyArgument) this.rejectCollidingKeyDomain(key, keyArgument.span, "Map key type");
+        return {
+          kind: "map",
+          key,
+          value: member.property === "groupBy"
+            ? { kind: "list", element: readonlyElement! }
+            : member.property === "keyBy" ? readonlyElement! : numberType,
+        };
+      }
+      if (member.property === "zip") {
+        this.collectionCalls.set(member.span.end, "listZip");
+        const other = argumentAt(0);
+        const partner = other ? this.expandAliases(inferArgument(0)) : unknownType;
+        if (other && partner.kind !== "list" && partner.kind !== "any" && partner.kind !== "unknown" && !isInvalidType(partner)) {
+          this.typeError(`List.zip requires a List partner, received ${describeType(partner)}`, other.span);
+        }
+        requireCount(1);
+        // The pair aliases the partner's elements, so they keep exactly the
+        // view the partner published — read-only through a read-only List, and
+        // the plain element otherwise.
+        const second = partner.kind !== "list"
+          ? unknownType
+          : partner.readonlyView ? this.readonlyDataViewOf(partner.element) : partner.element;
+        return {
+          kind: "list",
+          element: { kind: "object", fields: new Map([["first", readonlyElement!], ["second", second]]) },
+        };
       }
     }
 
@@ -11502,6 +11627,10 @@ export class Analyzer implements TypeEnvironment {
     const compare: ValueType = { kind: "function", parameters: [element, element], requiredParameters: 2, result: numberType };
     const orderedKey: ValueType = unionOf([numberType, stringType]);
     const selectKey: ValueType = { kind: "function", parameters: [element], requiredParameters: 1, result: orderedKey };
+    // D113: every callback that receives an element carries the snapshot index
+    // as an optional second parameter.
+    const indexedSelectKey: ValueType = { kind: "function", parameters: [element, numberType], requiredParameters: 1, result: orderedKey };
+    const selectAnyKey: ValueType = { kind: "function", parameters: [element, numberType], requiredParameters: 1, result: unknownType };
     switch (property) {
       case "size":
         return numberType;
@@ -11535,12 +11664,43 @@ export class Analyzer implements TypeEnvironment {
       case "count":
         return callable(["value"], [comparison], numberType);
       case "sorted":
-        return callable(["compare", "by"], [compare, selectKey], owned, 0);
+        return callable(["compare", "by", "descending"], [compare, selectKey, boolType], owned, 0);
       case "sum":
         return callable([], [], numberType);
       case "min":
       case "max":
-        return callable([], [], optionalOf(element));
+        return callable(["by"], [indexedSelectKey], optionalOf(element), 0);
+      // D114 S3: the pipeline members. Each answers a fresh container, so a
+      // read-only receiver publishes them exactly as `map` and `filter`.
+      case "unique":
+        return callable([], [], owned);
+      case "repeat":
+        return callable(["count"], [numberType], owned);
+      case "compact":
+        return callable([], [], { kind: "list", element: nonOptional(this.expandAliases(element)) });
+      case "flatten": {
+        const inner = this.expandAliases(element);
+        return callable([], [], { kind: "list", element: inner.kind === "list" ? inner.element : unknownType });
+      }
+      case "chunk":
+        return callable(["size"], [numberType], { kind: "list", element: owned });
+      case "partition":
+        return callable(["test"], [test], { kind: "object", fields: new Map([["matches", owned], ["rest", owned]]) });
+      case "groupBy":
+        return callable(["key"], [selectAnyKey], { kind: "map", key: unknownType, value: owned });
+      case "keyBy":
+        return callable(["key"], [selectAnyKey], { kind: "map", key: unknownType, value: element });
+      case "countBy":
+        return callable(["key"], [selectAnyKey], { kind: "map", key: unknownType, value: numberType });
+      case "zip":
+        // The partner's element type is whatever it is: a List<T> parameter
+        // would be invariant and refuse every concrete List, so the argument
+        // is judged at the call site the way `reduce`'s is.
+        return callable(
+          ["other"],
+          [unknownType],
+          { kind: "list", element: { kind: "object", fields: new Map([["first", element], ["second", unknownType]]) } },
+        );
       case "map":
         return callable(["transform"], [transform], { kind: "list", element: unknownType });
       case "flatMap":
@@ -12030,6 +12190,21 @@ export class Analyzer implements TypeEnvironment {
   private importType(statement: Extract<Statement, { kind: "ImportDeclaration" }>, local: string, imported: string, namespace: boolean, importSpan: Span): ValueType {
     if (statement.resource === "json") return unknownType;
     if (!statement.javascript) {
+      // D114 S3: a retired velar/collections name reports once at its
+      // specifier and then recovers as its own declared shape with unchecked
+      // values, so one retirement does not also produce an arity or
+      // named-argument error at every site it left behind. Core no longer owns
+      // what these functions mean, so only their parameter names survive.
+      const retiredCollection = namespace ? null : retiredCollectionExport(statement.source, imported);
+      if (retiredCollection !== null) {
+        return {
+          kind: "function",
+          parameterNames: retiredCollection.parameters,
+          parameters: retiredCollection.parameters.map(() => anyType),
+          requiredParameters: 0,
+          result: anyType,
+        };
+      }
       const type = this.importBindings.get(local) ?? unknownType;
       if (type.kind === "classConstructor" && type.identity) this.classDisplayNames.set(type.identity, local);
       return type;
@@ -13375,6 +13550,179 @@ export class Analyzer implements TypeEnvironment {
     if (lastImport) return { span: { start: lastImport.end, end: lastImport.end }, text: `\n${line}` };
     const offset = program.body[0]?.span.start ?? 0;
     return { span: { start: offset, end: offset }, text: `${line}\n\n` };
+  }
+
+  private registerRetiredCollectionImports(program: Program): void {
+    for (const statement of program.body) {
+      if (statement.kind !== "ImportDeclaration" || statement.javascript || statement.source !== RETIRED_COLLECTION_MODULE) continue;
+      for (const specifier of statement.specifiers) {
+        if (specifier.namespace || !retiredCollectionExports.has(specifier.imported)) continue;
+        this.retiredCollectionImportOrigins.set(specifier.local, { imported: specifier.imported, specifier: specifier.span });
+      }
+    }
+  }
+
+  /**
+   * D114 S3: one report per retired name, carrying the rewrite when the whole
+   * migration of that name is mechanical — every call site in the module plus
+   * the specifier itself. One name at a time, because that is the unit an
+   * author reads and the unit `velar fix` can apply against one snapshot; two
+   * names in one import line take two passes, which is what `velar fix`
+   * already does with every overlapping edit.
+   *
+   * The reports are recovered: the import binds as an unchecked value, so a
+   * retirement produces one diagnostic per name instead of that plus a call
+   * error at every site it left behind.
+   */
+  private reportRetiredCollectionImports(program: Program): void {
+    for (const statement of program.body) {
+      if (statement.kind === "ReExportDeclaration" && statement.source === RETIRED_COLLECTION_MODULE) {
+        for (const specifier of statement.specifiers) {
+          const retired = retiredCollectionExports.get(specifier.imported);
+          if (!retired) continue;
+          this.diagnostics.push(recoveredDiagnostic(
+            "VEL3008",
+            `${retired.guidance}; a re-export cannot restore a retired import spelling`,
+            specifier.span,
+          ));
+        }
+        continue;
+      }
+      if (statement.kind !== "ImportDeclaration" || statement.javascript || statement.source !== RETIRED_COLLECTION_MODULE) continue;
+      const migration = this.retiredCollectionMigration(statement);
+      for (const specifier of statement.specifiers) {
+        if (specifier.namespace) {
+          // D50 rule 97.3: the namespace form reaches every retired member at
+          // once, so which member each `local.member` read wanted is a rewrite
+          // this migration does not claim to know.
+          this.diagnostics.push(recoveredDiagnostic(
+            "VEL3008",
+            "velar/collections retired into checked List members; drop the namespace import and call the member on the List — values.groupBy(key)",
+            specifier.span,
+          ));
+          continue;
+        }
+        const retired = retiredCollectionExports.get(specifier.imported);
+        if (!retired) continue;
+        this.diagnostics.push(recoveredDiagnostic("VEL3008", retired.guidance, specifier.span, migration?.fixes.get(specifier)));
+      }
+    }
+  }
+
+  /**
+   * The whole migration of one import line, as one rewrite.
+   *
+   * Every mechanically migratable name in the line carries the *same* edit
+   * list, because the import statement is one span and two rewrites of it
+   * cannot both be applied against one snapshot: per-name import edits would
+   * make `velar fix` migrate one name per pass and run out of passes on a line
+   * that imports more than a handful. Identical edit lists deduplicate in
+   * `applyMechanicalFixes`, so the pass applies the migration once and the line
+   * is left holding exactly the names no edit can rewrite.
+   */
+  private retiredCollectionMigration(
+    statement: Extract<Statement, { kind: "ImportDeclaration" }>,
+  ): { readonly fixes: ReadonlyMap<unknown, DiagnosticFix> } | null {
+    if (this.rewriteErasesComment(statement.span)) return null;
+    const migrated: { readonly specifier: typeof statement.specifiers[number]; readonly edits: readonly DiagnosticEdit[]; readonly member: string }[] = [];
+    for (const specifier of statement.specifiers) {
+      if (specifier.namespace) continue;
+      const retired = retiredCollectionExports.get(specifier.imported);
+      if (!retired?.rewrite) continue;
+      const edits = this.retiredCollectionCallEdits(specifier, retired);
+      if (edits === null) continue;
+      migrated.push({ specifier, edits, member: retired.rewrite.member });
+    }
+    if (migrated.length === 0) return null;
+    const survivors = statement.specifiers.filter((other) => !migrated.some((plan) => plan.specifier === other));
+    const edits: DiagnosticEdit[] = [...migrated.flatMap((plan) => plan.edits)];
+    edits.push(survivors.length === 0
+      ? { span: { start: statement.span.start, end: statement.span.end + 1 }, text: "" }
+      : {
+        span: statement.span,
+        text: this.renderNamedImport(statement.source, survivors.map((other) => ({ imported: other.imported, local: other.local }))),
+      });
+    const fix = mechanicalEdits(edits, migrated.length === 1
+      ? `Use the List member '.${migrated[0]!.member}()'`
+      : "Use the List members that replaced velar/collections");
+    return { fixes: new Map(migrated.map((plan) => [plan.specifier, fix])) };
+  }
+
+  /**
+   * The call-site edits one retired name needs, or null when any read of it is
+   * not mechanically rewritable: a read that is not a call, a spread, an
+   * argument plan with a hole, or a rewrite that would erase an authored
+   * comment. A name with no reads left behind answers with no edits, and its
+   * specifier still leaves the import.
+   */
+  private retiredCollectionCallEdits(
+    specifier: Extract<Statement, { kind: "ImportDeclaration" }>["specifiers"][number],
+    retired: RetiredCollectionExport,
+  ): readonly DiagnosticEdit[] | null {
+    const edits: DiagnosticEdit[] = [];
+    const seen = new Set<string>();
+    for (const read of this.retiredCollectionImportReads) {
+      if (read.local !== specifier.local || read.imported !== specifier.imported) continue;
+      const identity = spanIdentity(read.span);
+      if (seen.has(identity)) continue;
+      seen.add(identity);
+      const call = this.retiredCollectionCalls.get(identity);
+      if (!call) return null;
+      if (this.rewriteErasesComment(call.span)) return null;
+      const replacement = this.retiredCollectionCallText(call, retired);
+      if (replacement === null) return null;
+      edits.push({ span: call.span, text: replacement });
+    }
+    return edits;
+  }
+
+  /** The member call one retired function call becomes, or null when it is not that shape. */
+  private retiredCollectionCallText(
+    call: Extract<Expression, { kind: "CallExpression" }>,
+    retired: RetiredCollectionExport,
+  ): string | null {
+    const rewrite = retired.rewrite;
+    if (!rewrite || call.optional) return null;
+    const ordered: (Expression | null)[] = retired.parameters.map(() => null);
+    for (const [index, argument] of call.arguments.entries()) {
+      if (argument.kind === "SpreadExpression") return null;
+      const name = call.argumentNames?.[index] ?? null;
+      const position = name === null ? index : retired.parameters.indexOf(name);
+      if (position < 0 || position >= ordered.length || ordered[position] !== null) return null;
+      ordered[position] = argument;
+    }
+    const receiver = ordered[0];
+    if (!receiver) return null;
+    const supplied = ordered.slice(1);
+    while (supplied.length > 0 && supplied.at(-1) === null) supplied.pop();
+    if (supplied.some((argument) => argument === null)) return null;
+    const written = (expression: Expression): string => this.sourceText.slice(expression.span.start, expression.span.end);
+    const receiverText = rewrite.receiverIsListOfArgument
+      ? `[${written(receiver)}]`
+      : this.postfixReceiverText(receiver);
+    const rendered = [...rewrite.fixedArguments];
+    for (const [index, argument] of supplied.entries()) {
+      const name = rewrite.argumentNames[index] ?? null;
+      rendered.push(name === null ? written(argument!) : `${name}=${written(argument!)}`);
+    }
+    return `${receiverText}.${rewrite.member}(${rendered.join(", ")})`;
+  }
+
+  /**
+   * A receiver keeps its parentheses when a `.member` suffix would otherwise
+   * bind tighter than the expression it is attached to — a ternary, an
+   * operator chain, an arrow, an `await`.
+   */
+  private postfixReceiverText(receiver: Expression): string {
+    const written = this.sourceText.slice(receiver.span.start, receiver.span.end);
+    const postfixSafe = ["IdentifierExpression", "MemberExpression", "IndexExpression", "CallExpression", "ListExpression", "ObjectExpression", "RequiredExpression", "SuperExpression"];
+    return postfixSafe.includes(receiver.kind) ? written : `(${written})`;
+  }
+
+  /** Both line and block comments withhold a rewrite rather than erasing prose. */
+  private rewriteErasesComment(span: Span): boolean {
+    const written = this.sourceText.slice(span.start, span.end);
+    return written.includes("//") || written.includes("/*");
   }
 
   private registerPermanentNamespaceImports(program: Program): void {

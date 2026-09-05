@@ -434,12 +434,10 @@ test("[D50-90] capability modules never became permanent", async () => {
   // the compiler rather than of a field on the module interface: importing
   // from a permanent module is diagnosed, and importing a toolbox is not.
   const permanent = ["velar/json", "velar/async", "velar/text", "velar/math"];
-  const imported = ["velar/collections", "velar/url", "velar/time", "velar/id", "velar/log", "velar/test"];
+  const imported = ["velar/url", "velar/time", "velar/id", "velar/log", "velar/test"];
   const interfaces = standardModuleInterfaces();
   for (const name of [...permanent, ...imported]) {
-    // `range` is the one prelude name inside velar/collections, so it retires
-    // on its own terms; the module itself stays an ordinary import.
-    const first = [...interfaces.get(name)!.exports.keys()].find((key) => key !== "range")!;
+    const first = [...interfaces.get(name)!.exports.keys()][0]!;
     const entry = join(tmpdir(), `velar-r2-permanent-${name.replace("/", "-")}`, "main.vel");
     const project = await compileProject(entry, new Map([[entry, `import {${first}} from ${JSON.stringify(name)}\n`]]));
     const migrations = project.modules.flatMap((module) => module.result.diagnostics)

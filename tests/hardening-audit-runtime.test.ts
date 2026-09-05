@@ -222,10 +222,10 @@ test("[MOD-U5] absolute paths and bare .vel specifiers each teach the relative s
 
 test("[MOD-U6] an unknown velar/* module lists the standard modules with a near-name suggestion", async () => {
   const result = await runCli({
-    "main.vel": "import {unique} from \"velar/collectons\"\nprint(\"k\")\n",
+    "main.vel": "import {sha256Text} from \"velar/hashh\"\nprint(\"k\")\n",
   }, ["check", "<dir>/main.vel"]);
   assert.equal(result.status, 1, result.stdout + result.stderr);
-  assert.match(result.stderr, /VEL6003: Unknown standard module "velar\/collectons"; did you mean "velar\/collections"\?/u);
+  assert.match(result.stderr, /VEL6003: Unknown standard module "velar\/hashh"; did you mean "velar\/hash"\?/u);
   assert.match(result.stderr, /velar\/json/u);
   assert.doesNotMatch(result.stderr, /subpaths are not supported/u);
 });
@@ -512,19 +512,17 @@ print(str("�" <= "\u{1F525}"))
   assert.equal(output, `true\nz,�,\u{1F525}\n�|\u{1F525}\n�,\u{1F525}\ntrue\n`);
 });
 
-test("[TXT-D1] sortBy/minBy/maxBy in velar/collections use the same code-point order", async () => {
+test("[TXT-D1] sorted(by=)/min(by=)/max(by=) use the same code-point order", async () => {
   const result = await runCli({
     "main.vel": `
-import {maxBy, minBy, sortBy} from "velar/collections"
-
 type Row:
     label: string
 
 const rows: List<Row> = [{label: "\u{1F525}"}, {label: "�"}]
-const ordered = sortBy(rows, row => row.label)
+const ordered = rows.sorted(by=row => row.label)
 print(ordered.map(row => row.label).join(","))
-const low = minBy(rows, row => row.label)
-const high = maxBy(rows, row => row.label)
+const low = rows.min(by=row => row.label)
+const high = rows.max(by=row => row.label)
 assert low != null
 assert high != null
 print(low.label + "|" + high.label)

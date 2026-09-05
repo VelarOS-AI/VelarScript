@@ -1,9 +1,9 @@
 /// Chapter 7 — `List`, `Set`, `Map`, and `Record<T>`: every member and the
 /// iteration-order contract.
 ///
-/// Charter section 8. These are the compiler-owned checked methods; the
-/// `velar/collections` toolbox in chapter 8 is a different table that happens
-/// to look similar.
+/// Charter section 8. These are the compiler-owned checked methods; chapter 8
+/// carries the rest of the List table — the pipeline members that reshape a
+/// List into another collection.
 
 type User:
     id: string

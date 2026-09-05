@@ -270,22 +270,21 @@ print(str(values.sorted().size))
 `, enumOrdering);
 });
 
-test("[D42 65 / ORD-3] the free-function key predicates agree with the method ones", async () => {
+test("[D42 65 / ORD-3] the keyed selector members agree with the default order", async () => {
   const project = await compileProject(join(projectRoot, "main.vel"), projectSources({
-    "main.vel": `import {sortBy, minBy, maxBy} from "velar/collections"
-${PRIORITY}type Row:
+    "main.vel": `${PRIORITY}type Row:
     priority: Priority
 const rows: List<Row> = [{priority: Priority.high}]
-print(str(sortBy(rows, row => row.priority).size))
-print(str(minBy(rows, row => row.priority) == null))
-print(str(maxBy(rows, row => row.priority) == null))
+print(str(rows.sorted(by=row => row.priority).size))
+print(str(rows.min(by=row => row.priority) == null))
+print(str(rows.max(by=row => row.priority) == null))
 `,
   }), {});
   const messages = project.modules.flatMap((module) => module.result.diagnostics).map((item) => item.message);
   assert.equal(messages.length, 3, JSON.stringify(messages));
-  assert.ok(messages.some((message) => /sortBy key must return only string or only number, received Priority/u.test(message)));
-  assert.ok(messages.some((message) => /minBy key must return only string or only number, received Priority/u.test(message)));
-  assert.ok(messages.some((message) => /maxBy key must return only string or only number, received Priority/u.test(message)));
+  assert.ok(messages.some((message) => /sorted\(by=\) key must return only string or only number, received Priority/u.test(message)));
+  assert.ok(messages.some((message) => /min\(by=\) key must return only string or only number, received Priority/u.test(message)));
+  assert.ok(messages.some((message) => /max\(by=\) key must return only string or only number, received Priority/u.test(message)));
   assert.ok(messages.every((message) => /an enum carries no runtime order/u.test(message)));
 });
 

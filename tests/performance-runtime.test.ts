@@ -400,7 +400,7 @@ test("acyclic runtime Type checks stay on the straight-line validation path", { 
 });
 
 test("direct integer range validation does not replay the complete loop", async (t) => {
-  const source = coreStandardModuleSource("velar/collections");
+  const source = coreStandardModuleSource("velar/compiler-runtime-range-v1");
   assert.ok(source);
   const runtimeUrl = `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
   const runtime = await import(runtimeUrl) as {

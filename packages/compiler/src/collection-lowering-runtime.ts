@@ -72,6 +72,16 @@ export const VELAR_COLLECTION_LOWERING_EXPORTS = [
   "__velarListSorted",
   "__velarListReversed",
   "__velarListFlatMap",
+  "__velarListUnique",
+  "__velarListCompact",
+  "__velarListFlatten",
+  "__velarListChunk",
+  "__velarListPartition",
+  "__velarListGroupBy",
+  "__velarListKeyBy",
+  "__velarListCountBy",
+  "__velarListZip",
+  "__velarListRepeat",
   "__velarSetAdd",
   "__velarSetUpdate",
   "__velarSetCopy",
@@ -687,10 +697,38 @@ function __velarListEvery(value, predicate) { const items = __velarCopyList(valu
 function __velarListMap(value, transform) { const items = __velarCopyList(value, "List.map"); __velarReactiveCollectionTrack(value); const output = new __velarCollectionNativeArray(items.length); for (let index = 0; index < items.length; index += 1) { const item = transform(__velarReactiveCollectionRead(value, index, items[index]), index); output[index] = item === undefined ? null : __velarReactiveRaw(item); } return __velarAdoptList(output); }
 function __velarListFilter(value, predicate) { const items = __velarCopyList(value, "List.filter"); __velarReactiveCollectionTrack(value); const output = []; for (let index = 0; index < items.length; index += 1) { const item = __velarReactiveCollectionRead(value, index, items[index]); const accepted = predicate(item, index); if (typeof accepted !== "boolean") throw new __velarCollectionNativeTypeError("List.filter predicate must return bool"); if (accepted) output[output.length] = __velarReactiveRaw(item); } return __velarAdoptList(output); }
 function __velarListReduce(value, combine, initial) { const items = __velarCopyList(value, "List.reduce"); __velarReactiveCollectionTrack(value); let result = initial; for (let index = 0; index < items.length; index += 1) { const next = combine(result, __velarReactiveCollectionRead(value, index, items[index])); result = next === undefined ? null : next; } return result; }
-function __velarListJoin(value, separator = "") { value = __velarValidateOwnedList(value, "List.join"); __velarReactiveCollectionTrack(value); if (typeof separator !== "string") throw new __velarCollectionNativeTypeError("List.join separator must be string"); const owned = __velarListIsOwned(value); for (let index = 0; index < value.length; index += 1) if (typeof __velarListElement(value, index, "List.join", owned) !== "string") throw new __velarCollectionNativeTypeError("List.join requires string values"); return __velarCollectionListHostJoin(value, separator); }
+// D114 S3: the 16 MiB output bound came with the retired velar/collections
+// 'join'. It is the language's one text ceiling, and a mechanical rewrite off
+// the retired spelling must not quietly drop a checked boundary, so the member
+// carries it: the whole result is measured before the host join allocates.
+const __velarMaxCollectionTextCodeUnits = 16 * 1024 * 1024;
+function __velarListJoin(value, separator = "") {
+  value = __velarValidateOwnedList(value, "List.join");
+  __velarReactiveCollectionTrack(value);
+  if (typeof separator !== "string") throw new __velarCollectionNativeTypeError("List.join separator must be string");
+  const owned = __velarListIsOwned(value);
+  let units = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const item = __velarListElement(value, index, "List.join", owned);
+    if (typeof item !== "string") throw new __velarCollectionNativeTypeError("List.join requires string values");
+    if (item.length > __velarMaxCollectionTextCodeUnits - units) throw new __velarCollectionListNativeRangeError("List.join output cannot exceed 16 MiB");
+    units += item.length;
+  }
+  const separators = value.length > 1 ? value.length - 1 : 0;
+  if (separators > 0 && separator.length * separators > __velarMaxCollectionTextCodeUnits - units) {
+    throw new __velarCollectionListNativeRangeError("List.join output cannot exceed 16 MiB");
+  }
+  return __velarCollectionListHostJoin(value, separator);
+}
 function __velarOrderedListValue(value, name, kind = null) { const current = typeof value; if (current === "number" && __velarCollectionListIsNaN(value)) throw new __velarCollectionNativeTypeError(name + " found NaN, which has no ordering; drop it with filter(x => not x.isNaN()) or fix the upstream computation"); if ((current !== "string" && current !== "number") || (kind !== null && current !== kind)) throw new __velarCollectionNativeTypeError(name + " requires uniform numbers or strings"); return current; }
-function __velarListSorted(value, compare = null, by = null) {
+// D114 S3: 'descending' reverses the comparison rather than the finished List,
+// so equal keys keep their input order in both directions -- the host sort is
+// stable and a negated comparison still answers 0 for a tie.
+function __velarListDirected(order, descending) { return descending ? (order < 0 ? 1 : order > 0 ? -1 : 0) : order; }
+function __velarListSorted(value, compare = null, by = null, descending = false) {
   if (compare !== null && by !== null) throw new __velarCollectionNativeTypeError("List.sorted accepts either a comparator or by, not both");
+  if (typeof descending !== "boolean") throw new __velarCollectionNativeTypeError("List.sorted descending must be bool");
+  if (compare !== null && descending) throw new __velarCollectionNativeTypeError("List.sorted comparator already states the order, so descending cannot be combined with it");
   if (compare !== null && typeof compare !== "function") throw new __velarCollectionNativeTypeError("List.sorted comparator must be a function");
   if (by !== null && typeof by !== "function") throw new __velarCollectionNativeTypeError("List.sorted by must be a function");
   __velarReactiveCollectionTrack(value);
@@ -699,7 +737,7 @@ function __velarListSorted(value, compare = null, by = null) {
     let kind = null;
     const decorated = new __velarCollectionNativeArray(output.length);
     for (let index = 0; index < output.length; index += 1) { const item = output[index]; const key = by(__velarReactiveCollectionRead(value, index, item)); kind = __velarOrderedListValue(key, "List.sorted by", kind); decorated[index] = { item, key }; }
-    __velarCollectionListHostSort(decorated, (left, right) => __velarOrderedCompare(kind, left.key, right.key));
+    __velarCollectionListHostSort(decorated, (left, right) => __velarListDirected(__velarOrderedCompare(kind, left.key, right.key), descending));
     const selected = new __velarCollectionNativeArray(decorated.length);
     for (let index = 0; index < decorated.length; index += 1) selected[index] = decorated[index].item;
     return __velarAdoptList(selected);
@@ -707,13 +745,33 @@ function __velarListSorted(value, compare = null, by = null) {
   let kind = null;
   if (compare === null) { for (let index = 0; index < output.length; index += 1) kind = __velarOrderedListValue(output[index], "List.sorted()", kind); }
   const compareValues = compare ?? ((left, right) => { kind = __velarOrderedListValue(left, "List.sorted()", kind); __velarOrderedListValue(right, "List.sorted()", kind); return __velarOrderedCompare(kind, left, right); });
-  __velarCollectionListHostSort(output, (left, right) => { const order = compareValues(left, right); if (typeof order !== "number" || !__velarCollectionListIsFinite(order)) throw new __velarCollectionNativeTypeError("List.sorted comparator must return a finite number"); return order; });
+  __velarCollectionListHostSort(output, (left, right) => { const order = compareValues(left, right); if (typeof order !== "number" || !__velarCollectionListIsFinite(order)) throw new __velarCollectionNativeTypeError("List.sorted comparator must return a finite number"); return __velarListDirected(order, descending); });
   return output;
 }
 function __velarListSum(value) { const items = __velarCopyList(value, "List.sum"); __velarReactiveCollectionTrack(value); let total = 0; for (let index = 0; index < items.length; index += 1) { const item = __velarReactiveCollectionRead(value, index, items[index]); if (typeof item !== "number") throw new __velarCollectionNativeTypeError("List.sum requires numbers"); if (__velarCollectionListIsNaN(item)) throw new __velarCollectionNativeTypeError("List.sum found NaN, which poisons the total; drop it with filter(x => not x.isNaN()) or fix the upstream computation"); total += item; } return total; }
-function __velarListExtremum(value, maximum) { const items = __velarCopyList(value, maximum ? "List.max" : "List.min"); __velarReactiveCollectionTrack(value); if (items.length === 0) return null; let result = __velarReactiveCollectionRead(value, 0, items[0]); let kind = __velarOrderedListValue(result, maximum ? "List.max" : "List.min"); for (let index = 1; index < items.length; index += 1) { const item = __velarReactiveCollectionRead(value, index, items[index]); __velarOrderedListValue(item, maximum ? "List.max" : "List.min", kind); const order = __velarOrderedCompare(kind, item, result); if (maximum ? order > 0 : order < 0) result = item; } return result; }
-function __velarListMin(value) { return __velarListExtremum(value, false); }
-function __velarListMax(value) { return __velarListExtremum(value, true); }
+// D114 S3: 'by' selects an ordered key per snapshot value, exactly as
+// sorted(by=) does, and the winning *element* is answered -- never its key.
+function __velarListExtremum(value, maximum, by = null) {
+  const operation = maximum ? "List.max" : "List.min";
+  if (by !== null && typeof by !== "function") throw new __velarCollectionNativeTypeError(operation + " by must be a function");
+  const name = by === null ? operation : operation + " by";
+  const items = __velarCopyList(value, operation);
+  __velarReactiveCollectionTrack(value);
+  if (items.length === 0) return null;
+  let result = __velarReactiveCollectionRead(value, 0, items[0]);
+  let selected = by === null ? result : by(result, 0);
+  let kind = __velarOrderedListValue(selected, name);
+  for (let index = 1; index < items.length; index += 1) {
+    const item = __velarReactiveCollectionRead(value, index, items[index]);
+    const candidate = by === null ? item : by(item, index);
+    __velarOrderedListValue(candidate, name, kind);
+    const order = __velarOrderedCompare(kind, candidate, selected);
+    if (maximum ? order > 0 : order < 0) { result = item; selected = candidate; }
+  }
+  return result;
+}
+function __velarListMin(value, by = null) { return __velarListExtremum(value, false, by); }
+function __velarListMax(value, by = null) { return __velarListExtremum(value, true, by); }
 function __velarListReversed(value) { __velarReactiveCollectionTrack(value); const output = __velarCopyList(value, "List.reversed"); __velarCollectionListHostReverse(output); return output; }
 // COL-U1: map-then-flatten-one-level. The transform must return a List for
 // every element; its items append in order, under the one 1,000,000 budget.
@@ -727,6 +785,146 @@ function __velarListFlatMap(value, transform) {
     const partOwned = __velarListIsOwned(values);
     if (output.length + values.length > __velarMaxCollectionItems) throw new __velarCollectionListNativeRangeError("A List cannot exceed 1000000 items");
     for (let cursor = 0; cursor < values.length; cursor += 1) output[output.length] = __velarCollectionValue(__velarReactiveRaw(__velarListElement(values, cursor, "List.flatMap", partOwned)));
+  }
+  return __velarAdoptList(output);
+}
+
+// D114 S3: the pipeline members the retired velar/collections module used to
+// spell as functions. Each reads the same checked shallow snapshot map/filter
+// read, answers a fresh container, and stays under the one 1,000,000 budget.
+function __velarListUnique(value) {
+  const items = __velarCopyList(value, "List.unique");
+  __velarReactiveCollectionTrack(value);
+  const seen = new __velarCollectionNativeSet();
+  const output = [];
+  for (let index = 0; index < items.length; index += 1) {
+    const item = __velarReactiveRaw(__velarReactiveCollectionRead(value, index, items[index]));
+    if (__velarCollectionSetMapSetHas(seen, item)) continue;
+    __velarCollectionSetMapSetAdd(seen, item);
+    output[output.length] = item;
+  }
+  return __velarAdoptList(output);
+}
+function __velarListCompact(value) {
+  const items = __velarCopyList(value, "List.compact");
+  __velarReactiveCollectionTrack(value);
+  const output = [];
+  for (let index = 0; index < items.length; index += 1) {
+    const item = __velarReactiveCollectionRead(value, index, items[index]);
+    if (item === null || item === undefined) continue;
+    output[output.length] = __velarReactiveRaw(item);
+  }
+  return __velarAdoptList(output);
+}
+// Exactly one level, like flatMap's second half: an element that is not a List
+// is refused rather than passed through.
+function __velarListFlatten(value) {
+  const items = __velarCopyList(value, "List.flatten");
+  __velarReactiveCollectionTrack(value);
+  const output = [];
+  for (let index = 0; index < items.length; index += 1) {
+    const part = __velarValidateOwnedList(__velarReactiveCollectionRead(value, index, items[index]), "List.flatten element");
+    const partOwned = __velarListIsOwned(part);
+    if (output.length + part.length > __velarMaxCollectionItems) throw new __velarCollectionListNativeRangeError("A List cannot exceed 1000000 items");
+    for (let cursor = 0; cursor < part.length; cursor += 1) output[output.length] = __velarCollectionValue(__velarReactiveRaw(__velarListElement(part, cursor, "List.flatten", partOwned)));
+  }
+  return __velarAdoptList(output);
+}
+function __velarListChunk(value, size) {
+  if (!__velarCollectionListIsSafeInteger(size) || size <= 0) throw new __velarCollectionListNativeRangeError("List.chunk size requires a positive integer");
+  const items = __velarCopyList(value, "List.chunk");
+  __velarReactiveCollectionTrack(value);
+  const output = [];
+  for (let index = 0; index < items.length; index += size) {
+    const length = __velarCollectionListMinimum(size, items.length - index);
+    const part = new __velarCollectionNativeArray(length);
+    for (let offset = 0; offset < length; offset += 1) part[offset] = __velarReactiveRaw(__velarReactiveCollectionRead(value, index + offset, items[index + offset]));
+    output[output.length] = __velarAdoptList(part);
+  }
+  return __velarAdoptList(output);
+}
+function __velarListPartition(value, predicate) {
+  const items = __velarCopyList(value, "List.partition");
+  __velarReactiveCollectionTrack(value);
+  const matches = [];
+  const rest = [];
+  for (let index = 0; index < items.length; index += 1) {
+    const item = __velarReactiveCollectionRead(value, index, items[index]);
+    const accepted = predicate(item, index);
+    if (typeof accepted !== "boolean") throw new __velarCollectionNativeTypeError("List.partition predicate must return bool");
+    const output = accepted ? matches : rest;
+    output[output.length] = __velarReactiveRaw(item);
+  }
+  return __velarCollectionRecordFreeze({ matches: __velarAdoptList(matches), rest: __velarAdoptList(rest) });
+}
+function __velarListKey(key, item, index, name) {
+  if (typeof key !== "function") throw new __velarCollectionNativeTypeError(name + " requires a function");
+  return __velarCollectionValue(__velarReactiveRaw(key(item, index)));
+}
+function __velarListGroupBy(value, key) {
+  const items = __velarCopyList(value, "List.groupBy");
+  __velarReactiveCollectionTrack(value);
+  const output = new __velarCollectionNativeMap();
+  const groups = [];
+  for (let index = 0; index < items.length; index += 1) {
+    const item = __velarReactiveCollectionRead(value, index, items[index]);
+    const name = __velarListKey(key, item, index, "List.groupBy");
+    const group = __velarCollectionSetMapMapGet(output, name);
+    if (group === undefined) {
+      const created = [__velarReactiveRaw(item)];
+      groups[groups.length] = created;
+      __velarCollectionSetMapMapSet(output, name, created);
+    } else group[group.length] = __velarReactiveRaw(item);
+  }
+  for (let index = 0; index < groups.length; index += 1) __velarAdoptList(groups[index]);
+  return output;
+}
+function __velarListKeyBy(value, key) {
+  const items = __velarCopyList(value, "List.keyBy");
+  __velarReactiveCollectionTrack(value);
+  const output = new __velarCollectionNativeMap();
+  for (let index = 0; index < items.length; index += 1) {
+    const item = __velarReactiveCollectionRead(value, index, items[index]);
+    __velarCollectionSetMapMapSet(output, __velarListKey(key, item, index, "List.keyBy"), __velarReactiveRaw(item));
+  }
+  return output;
+}
+function __velarListCountBy(value, key) {
+  const items = __velarCopyList(value, "List.countBy");
+  __velarReactiveCollectionTrack(value);
+  const output = new __velarCollectionNativeMap();
+  for (let index = 0; index < items.length; index += 1) {
+    const name = __velarListKey(key, __velarReactiveCollectionRead(value, index, items[index]), index, "List.countBy");
+    const current = __velarCollectionSetMapMapGet(output, name);
+    __velarCollectionSetMapMapSet(output, name, (current === undefined ? 0 : current) + 1);
+  }
+  return output;
+}
+function __velarListZip(value, other) {
+  const items = __velarCopyList(value, "List.zip");
+  const partners = __velarCopyList(other, "List.zip");
+  __velarReactiveCollectionTrack(value);
+  __velarReactiveCollectionTrack(other);
+  const length = __velarCollectionListMinimum(items.length, partners.length);
+  const output = new __velarCollectionNativeArray(length);
+  for (let index = 0; index < length; index += 1) {
+    output[index] = __velarCollectionRecordFreeze({
+      first: __velarReactiveRaw(__velarReactiveCollectionRead(value, index, items[index])),
+      second: __velarReactiveRaw(__velarReactiveCollectionRead(other, index, partners[index])),
+    });
+  }
+  return __velarAdoptList(output);
+}
+// The whole List, 'count' times -- the meaning string.repeat has.
+function __velarListRepeat(value, count) {
+  if (!__velarCollectionListIsSafeInteger(count) || count < 0) throw new __velarCollectionListNativeRangeError("List.repeat count requires a non-negative integer");
+  const items = __velarCopyList(value, "List.repeat");
+  __velarReactiveCollectionTrack(value);
+  if (items.length * count > __velarMaxCollectionItems) throw new __velarCollectionListNativeRangeError("A List cannot exceed 1000000 items");
+  const output = new __velarCollectionNativeArray(items.length * count);
+  let cursor = 0;
+  for (let round = 0; round < count; round += 1) {
+    for (let index = 0; index < items.length; index += 1) output[cursor++] = __velarReactiveRaw(__velarReactiveCollectionRead(value, index, items[index]));
   }
   return __velarAdoptList(output);
 }

@@ -21,6 +21,7 @@ import { blockContainsDirectAwait, expressionContainsDirectAwait as containsDire
 import { VELAR_CLASS_FIELD_MODULE, VELAR_CLASS_FIELD_RUNTIME } from "./class-runtime.ts";
 import { VELAR_COLLECTION_HOST_EXPORTS, VELAR_COLLECTION_HOST_MODULE, VELAR_COLLECTION_IDENTITY_RUNTIME, VELAR_COLLECTION_LIST_RUNTIME, VELAR_COLLECTION_RECORD_RUNTIME, VELAR_COLLECTION_SET_MAP_RUNTIME, VELAR_COLLECTION_TYPE_RUNTIME } from "./collection-runtime.ts";
 import { VELAR_COLLECTION_LOWERING_EXPORTS, VELAR_COLLECTION_LOWERING_MODULE, VELAR_COLLECTION_LOWERING_RUNTIME } from "./collection-lowering-runtime.ts";
+import { VELAR_RANGE_MODULE } from "./range-runtime.ts";
 import { describeType, formatTypeReference, formatTypeSyntax, mapNestedTypes, resolveTypeReference, semanticTypeIdentity, typeContainsParameter, type BinaryStorageKind, type GenericApplication, type ValueType } from "./types.ts";
 import { disposeMemberKey, iterateAsyncMemberKey, iterateMemberKey, type LoweringHints } from "./analyzer.ts";
 import { VELAR_ASSERTION_ERROR_RUNTIME, VELAR_ERROR_NORMALIZATION_MODULE, VELAR_ERROR_NORMALIZATION_RUNTIME, VELAR_HOST_ERROR_NAMES, VELAR_HOST_ERROR_RUNTIME } from "./error-runtime.ts";
@@ -239,12 +240,12 @@ export class JavaScriptEmitter {
     // analyzer still records the source-level `range` reference, so select the
     // value import from emitted identifiers instead of that broader fact.
     if (builtinValues.has("range") && statementIdentifiers.has("__velarRange")) {
-      helpers.push('import { range as __velarRange } from "velar/collections";');
-      this.requiredRuntimeModules.add("velar/collections");
+      helpers.push(`import { range as __velarRange } from ${JSON.stringify(VELAR_RANGE_MODULE)};`);
+      this.requiredRuntimeModules.add(VELAR_RANGE_MODULE);
     }
     if (this.hints.nativeRangeForStatements.size > 0) {
-      helpers.push('import { range as __velarCountedRangeOwner } from "velar/collections";');
-      this.requiredRuntimeModules.add("velar/collections");
+      helpers.push(`import { range as __velarCountedRangeOwner } from ${JSON.stringify(VELAR_RANGE_MODULE)};`);
+      this.requiredRuntimeModules.add(VELAR_RANGE_MODULE);
     }
     if (this.needsBinaryHelpers) {
       helpers.push('import { Bytes as __velarBinaryRuntime } from "velar/binary";');
@@ -3701,6 +3702,16 @@ export class JavaScriptEmitter {
       case "listSum": return "__velarListSum";
       case "listMin": return "__velarListMin";
       case "listMax": return "__velarListMax";
+      case "listUnique": return "__velarListUnique";
+      case "listCompact": return "__velarListCompact";
+      case "listFlatten": return "__velarListFlatten";
+      case "listChunk": return "__velarListChunk";
+      case "listPartition": return "__velarListPartition";
+      case "listGroupBy": return "__velarListGroupBy";
+      case "listKeyBy": return "__velarListKeyBy";
+      case "listCountBy": return "__velarListCountBy";
+      case "listZip": return "__velarListZip";
+      case "listRepeat": return "__velarListRepeat";
       case "setAdd": return "__velarSetAdd";
       case "setUpdate": return "__velarSetUpdate";
       case "setHas": return "__velarSetHas";

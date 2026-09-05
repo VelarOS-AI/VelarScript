@@ -84,6 +84,7 @@ const __velarCollectionListOwnSymbolsOperation = __velarCollectionGetOwnProperty
 const __velarCollectionListDefinePropertyOperation = __velarCollectionGetOwnPropertyDescriptor(__velarCollectionNativeObject, "defineProperty")?.value;
 const __velarCollectionListObjectIsOperation = __velarCollectionGetOwnPropertyDescriptor(__velarCollectionNativeObject, "is")?.value;
 const __velarCollectionListIntegerOperation = __velarCollectionGetOwnPropertyDescriptor(__velarCollectionListNativeNumber, "isInteger")?.value;
+const __velarCollectionListSafeIntegerOperation = __velarCollectionGetOwnPropertyDescriptor(__velarCollectionListNativeNumber, "isSafeInteger")?.value;
 const __velarCollectionListNaNOperation = __velarCollectionGetOwnPropertyDescriptor(__velarCollectionListNativeNumber, "isNaN")?.value;
 const __velarCollectionListFiniteOperation = __velarCollectionGetOwnPropertyDescriptor(__velarCollectionListNativeNumber, "isFinite")?.value;
 const __velarCollectionListMaximumOperation = __velarCollectionGetOwnPropertyDescriptor(__velarCollectionListNativeMath, "max")?.value;
@@ -98,6 +99,7 @@ function __velarCollectionListOwnSymbols(value) { return __velarCollectionHostCa
 function __velarCollectionListDefineProperty(value, key, descriptor) { return __velarCollectionHostCall(__velarCollectionListDefinePropertyOperation, __velarCollectionNativeObject, [value, key, descriptor]); }
 function __velarCollectionListObjectIs(left, right) { return __velarCollectionHostCall(__velarCollectionListObjectIsOperation, __velarCollectionNativeObject, [left, right]); }
 function __velarCollectionListIsInteger(value) { return __velarCollectionHostCall(__velarCollectionListIntegerOperation, __velarCollectionListNativeNumber, [value]); }
+function __velarCollectionListIsSafeInteger(value) { return __velarCollectionHostCall(__velarCollectionListSafeIntegerOperation, __velarCollectionListNativeNumber, [value]); }
 function __velarCollectionListIsNaN(value) { return __velarCollectionHostCall(__velarCollectionListNaNOperation, __velarCollectionListNativeNumber, [value]); }
 function __velarCollectionListIsFinite(value) { return __velarCollectionHostCall(__velarCollectionListFiniteOperation, __velarCollectionListNativeNumber, [value]); }
 function __velarCollectionListMaximum(...values) { return __velarCollectionHostCall(__velarCollectionListMaximumOperation, __velarCollectionListNativeMath, values); }
@@ -189,6 +191,7 @@ export const VELAR_COLLECTION_HOST_EXPORTS = [
   "__velarCollectionListDefineProperty",
   "__velarCollectionListObjectIs",
   "__velarCollectionListIsInteger",
+  "__velarCollectionListIsSafeInteger",
   "__velarCollectionListIsNaN",
   "__velarCollectionListIsFinite",
   "__velarCollectionListMaximum",
