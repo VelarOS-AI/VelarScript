@@ -17,6 +17,8 @@ import { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
 import {
   bindNamedTypeParameters,
   boolType,
+  classApplicationType,
+  genericApplicationIdentity,
   genericApplicationType,
   invalidType,
   isTypeParameterBound,
@@ -51,7 +53,7 @@ export { CORE_EXPRESSION_CONSTRUCTS, CORE_STATEMENT_CONSTRUCTS, coreStatementCon
 export { keywordKinds } from "./token.ts";
 export type { CompilerAnalysisExtension, CompilerAnalyzerFactory, CompilerEditorCompletion, CompilerEditorExtension, CompilerEmbeddedJavaScriptModule, CompilerEmitter, CompilerEmitterOptions, CompilerExtension, CompilerFormattingExtension, CompilerInspectionExtension, CompilerInterfaceContext, CompilerIntrinsicAnalysisContext, CompilerLexicalExtension, CompilerLexicalScanContext, CompilerLexicalScanResult, CompilerModuleExtension, CompilerParserFactory, CompilerProjectEditorCompletion, CompilerProjectEditorCompletionContext, CompilerProjectEditorCompletionResult, CompilerProjectEditorExtension, CompilerProjectEditorRenameContext, CompilerProjectEditorVisibleSymbol, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface, ModuleTest, VelarExtensionContract, VelarExtensionKind } from "./extension.ts";
 export { semanticImportAt, semanticModuleReferenceAt, semanticSymbolAt, semanticVisibleSymbolsAt, type CompilerSemanticExtension, type SemanticDeclareOptions, type SemanticExpression, type SemanticExtensionContext, type SemanticFunctionLike, type SemanticImport, type SemanticIndex, type SemanticMember, type SemanticMemberReference, type SemanticModuleReference, type SemanticReference, type SemanticScope, type SemanticSymbol, type SemanticSymbolKind, type SemanticSyntaxDocumentation, type SemanticSyntaxToken, type SemanticSyntaxTokenKind } from "./semantic.ts";
-export { analysisTypeIdentity, binaryStorageKind, describeType, genericApplicationType, isReadonlyView, optionalOf, readonlyViewOf, semanticTypeIdentity, unionOf, VELAR_BYTES_TYPE_IDENTITY, VELAR_FLOAT32_BUFFER_TYPE_IDENTITY, VELAR_UINT8_BUFFER_TYPE_IDENTITY, VELAR_UINT16_BUFFER_TYPE_IDENTITY, VELAR_UINT32_BUFFER_TYPE_IDENTITY, type BinaryStorageKind, type EnumInfo, type GenericApplication, type GenericTypeInfo, type ValueType } from "./types.ts";
+export { analysisTypeIdentity, binaryStorageKind, classApplicationType, describeType, genericApplicationIdentity, genericApplicationType, isReadonlyView, optionalOf, readonlyViewOf, semanticTypeIdentity, unionOf, VELAR_BYTES_TYPE_IDENTITY, VELAR_FLOAT32_BUFFER_TYPE_IDENTITY, VELAR_UINT8_BUFFER_TYPE_IDENTITY, VELAR_UINT16_BUFFER_TYPE_IDENTITY, VELAR_UINT32_BUFFER_TYPE_IDENTITY, type BinaryStorageKind, type EnumInfo, type GenericApplication, type GenericTypeInfo, type ValueType } from "./types.ts";
 export { permanentNamespaceCoveringModule } from "./analyzer.ts";
 export type { AnalysisContext, ClassField, ClassInfo, InitializationImportRead } from "./analyzer.ts";
 export {
@@ -979,6 +981,13 @@ function interfaceOf(
       });
       const analyzed = analyzedClasses.get(statement.name);
       if (analyzed) {
+        const analyzedBaseApplication = analyzed.baseApplication
+          ? {
+            ...analyzed.baseApplication,
+            declaration: classIdentities.get(analyzed.baseApplication.declaration) ?? analyzed.baseApplication.declaration,
+            arguments: analyzed.baseApplication.arguments.map(resolveAnalyzed),
+          }
+          : undefined;
         classes.set(statement.name, {
           ...analyzed,
           identity,
@@ -988,7 +997,13 @@ function interfaceOf(
           // with the class, so an imported Bag iterates in the importing module
           // exactly as it does in its own.
           ...(analyzed.iterate ? { iterate: resolveAnalyzed(analyzed.iterate) } : {}),
-          base: analyzed.base ? classIdentities.get(analyzed.base) ?? analyzed.base : null,
+          // D55 rule 120 layer two: a generic base crosses as its parts, and its
+          // key is recomputed from them — `Stack<number>` is a function of the
+          // declaration identity and the arguments, not a name any table holds.
+          ...(analyzedBaseApplication ? { baseApplication: analyzedBaseApplication } : {}),
+          base: analyzedBaseApplication
+            ? genericApplicationIdentity(analyzedBaseApplication.declaration, analyzedBaseApplication.arguments)
+            : analyzed.base ? classIdentities.get(analyzed.base) ?? analyzed.base : null,
           fields: new Map([...analyzed.fields].map(([name, field]) => [name, { ...field, type: resolveAnalyzed(field.type) }])),
           methods: new Map([...analyzed.methods].map(([name, type]) => [name, resolveAnalyzed(type)])),
           staticFields: new Map([...analyzed.staticFields].map(([name, field]) => [name, { ...field, type: resolveAnalyzed(field.type) }])),
@@ -1188,6 +1203,14 @@ function resolveNominals(
     const arguments_ = type.application.arguments.map((argument) => resolveNominals(argument, classIdentities, enumNames, namedTypeIdentities));
     const declaration = namedTypeIdentities.get(type.application.name) ?? type.application.declaration;
     return genericApplicationType(declaration, type.application.name, arguments_, type.readonlyView === true);
+  }
+  // D55 rule 120 layer two: a class application makes the same crossing a
+  // record application makes — declaration identity and every argument — so the
+  // two sides of the boundary compute one instantiation identity for it.
+  if (type.kind === "class" && type.application) {
+    const arguments_ = type.application.arguments.map((argument) => resolveNominals(argument, classIdentities, enumNames, namedTypeIdentities));
+    const declaration = classIdentities.get(type.application.name) ?? type.application.declaration;
+    return classApplicationType(declaration, type.application.name, arguments_);
   }
   if (type.kind === "named" && classIdentities.has(type.name)) {
     const identity = classIdentities.get(type.name)!;

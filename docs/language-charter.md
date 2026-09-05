@@ -1091,8 +1091,8 @@ rejects `let name?: T` for that reason and not as a ban on the character.
 
 VelarScript does not provide TypeScript conditional types, mapped types,
 overload sets, declaration merging, or type assertions. Type parameters exist
-on `def` functions and on `type` records; generic `class` and `component`
-declarations are not part of the language.
+on `def` functions, on `type` records, and on `class` declarations; generic
+`component` declarations are not part of the language.
 
 ### Read-only data views
 
@@ -2068,7 +2068,10 @@ settle an empty collection (section 8), matched against the declared result
 type. The expected type seeds only what the arguments left open; an
 argument-solved parameter is never overridden, so a disagreement is reported at
 the call as the ordinary mismatch. A parameter neither the arguments nor the
-position can solve becomes `unknown`.
+position can solve becomes `unknown`. An `await` or a `try` written between the
+position and the call passes the position through — the awaited call is matched
+against `Promise` of what the position expects, and a `try` against the value it
+would wrap.
 
 ```velar fragment
 def empty<T>() -> List<T>:
@@ -2079,8 +2082,8 @@ const names: List<string> = empty()
 
 Type parameters are erased at runtime, so `is T`, `case T`, and every other
 runtime-checked position require a concrete type instead. `def` declarations —
-top-level, exported, extern, and class methods — and `type` records take type
-parameters; generic `class` and `component` declarations do not.
+top-level, exported, extern, and class methods — `type` records, and `class`
+declarations take type parameters; `component` declarations do not.
 
 #### Bounds
 
@@ -3073,6 +3076,96 @@ the same collection for the synchronous form, the same element for the
 asynchronous one — by the same invariance rule every other override follows. A
 base-typed binding would otherwise walk a different element type, or stream
 where it was promised a collection.
+
+### Generic classes
+
+A class declares type parameters exactly as a `def` and a `type` do, with the
+same closed bound vocabulary (section 7):
+
+```velar
+class Stack<T: Comparable>:
+    private let items: List<T> = []
+
+    def push(value: T):
+        self.items.append(value)
+
+    def pop() -> T?:
+        return self.items.size > 0 ? self.items.pop() : null
+
+    def ordered() -> List<T>:
+        return self.items.sorted()
+
+    def mapped<U>(transform: (T) -> U) -> List<U>:
+        return self.items.map(transform)
+
+    @iterate:
+        return self.items.copy()
+
+const numbers: Stack<number> = Stack()
+numbers.push(1)
+
+class DoubledStack extends Stack<number>:
+    override def push(value: number):
+        super.push(value * 2)
+
+const doubled: Stack<number> = DoubledStack()
+print(f"{numbers.ordered().size} {doubled.pop() ?? 0}")
+```
+
+The parameters are in scope in fields, constructor parameters and parameter
+properties, methods, getters, and the `@dispose:` and `@iterate:` blocks. They
+are not in scope in a static member: a static field, getter, or method belongs
+to the class rather than to an instantiation, so `T` has no value there and
+naming one is refused where it is written. A method keeps its own `<U>` beside
+the class's `<T>` — a method parameter that repeats a class parameter's name is
+refused as a redeclaration, so the two never collide — and the bound grants the
+body exactly what section 7's table says, which is what lets `ordered()` sort.
+
+`Stack<number>` is a type in every type position: an annotation, a field, a
+parameter, a result, a nested `List<Stack<number>>`, and a module interface. A
+bare `Stack` is not a type at all — it is a type constructor, and the refusal
+names the arity it is missing, exactly as a bare generic record's does. A
+generic class's reference to itself passes its own parameters through
+unchanged: `let next: Stack<T>?` is a field, `Stack<List<T>>` is refused on its
+line, for the reason section 6 gives a record.
+
+Type arguments are never written at a construction: `Stack(...)` solves them
+the way a generic call does — the constructor's arguments first, then callback
+results, then the position the construction is written in (section 7). A
+parameter none of the three solves is an error at the construction, and the
+report names both ways out: annotate the position, or pass an argument that
+fixes it. That is the same stance section 8 takes for an empty `[]`, and it is
+the same report.
+
+A class is **invariant** in its type arguments. `Stack<number>` is assignable
+to `Stack<number>` and to nothing else in that family — not to
+`Stack<number | string>`, not from it, in either direction, and whether or not
+the field it disagrees about is read-only. That is a different rule from
+section 6's, where a generic record is variant field by field, and the reason
+is the shape of the two things: a record is data, so a read-only field can
+safely widen, while a class puts `T` in method *parameters* as well as in
+results, and a parameter that widened would accept what the receiver cannot
+hold. One rule each, and neither one is the other's exception.
+
+Inheritance applies a generic class: `class DoubledStack extends Stack<number>`
+names one instantiation, and `class LoggedStack<T: Comparable> extends Stack<T>`
+passes its own parameter through. A base that names a generic class without
+applying it is refused with the same arity message a type position gives.
+`DoubledStack` is assignable to `Stack<number>`, and `LoggedStack<number>` is
+too, because the base chain carries the arguments it was applied with. An
+override is compared against the base member with those arguments already
+substituted, so `override def push(value: number)` matches `push(value: T)` at
+`T = number` and any other signature is refused by the ordinary invariance rule.
+
+Type arguments are erased at runtime. `is Stack<number>`, `is not
+Stack<number>`, and `case Stack<number>:` are refused — the runtime check is an
+instance check, which cannot tell one instantiation from another — and the
+message says to check `Stack` itself. Bare `is Stack` and `case Stack:` are
+accepted: they prove the class and say nothing about the arguments, so a
+subject already typed `Stack<X>` keeps `X` in that arm and one that is not
+gains `unknown` at every argument. Class matching is exhaustive by the same
+rule section 9 states. `readonly` never covers a class, at any depth, so
+`readonly Stack<number>` is refused exactly as `readonly Stack` is.
 
 Inheritance is explicit:
 

@@ -410,6 +410,14 @@ def work(name: string) -> string:
 print(work("import"))
 ```
 
+A class takes type parameters the way a `def` and a `type` do — `class
+Stack<T: Comparable>:` — and applies them at every use: `Stack<number>` is the
+type, a bare `Stack` is not one, and `Stack()` reads its arguments from the
+constructor call and from the position, never from a written `<...>`. A class
+is invariant in them (a `Stack<number>` is not a `Stack<number | string>`), the
+arguments are erased at runtime (`is Stack` checks the class, `is Stack<number>`
+is refused), and a static member does not see them.
+
 ↳ charter [§10 Classes](language-charter.md#10-classes)
 
 ## 10. Errors and assertions

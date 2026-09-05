@@ -5,8 +5,10 @@ import { pathToFileURL } from "node:url";
 import {
   analysisTypeIdentity,
   advisory,
+  classApplicationType,
   compile,
   diagnostic,
+  genericApplicationIdentity,
   genericApplicationType,
   inspectModule,
   optionalOf,
@@ -1475,6 +1477,16 @@ export function moduleInterfaceIdentity(
       // release contract and whether it must await. Neither is represented by
       // the ordinary class members below, so both states belong here.
       info.dispose ?? "",
+      // D55 rule 120 layer two, and batch M's lesson one layer out again: a
+      // dependent compiled against the parameter list, the bounds, and the
+      // arguments this class applies to its base. A bound that does not enter
+      // this hash is a constraint that silently disappears from every module
+      // already built against it.
+      node("type-parameter-names", info.typeParameterNames ?? []),
+      node("type-parameter-bounds", (info.typeParameterBounds ?? []).map((bound) => bound ?? "")),
+      node("base-application", info.baseApplication
+        ? [info.baseApplication.declaration, info.baseApplication.name, types(info.baseApplication.arguments)]
+        : []),
       node("parameter-names", info.parameterNames ?? []),
       String(info.requiredParameters),
       types(info.parameters),
@@ -2643,14 +2655,28 @@ function mapClassInfo(
   mapType: (type: ValueType) => ValueType,
   mapBase: (base: string) => string,
 ): ClassInfo {
+  // D55 rule 120 layer two: a generic base crosses as its parts. The key is
+  // recomputed from the mapped declaration and arguments rather than mapped as
+  // a string, because `Stack<number>` is not a name any table is keyed by — it
+  // is a function of two things that each cross on their own.
+  const baseApplication = info.baseApplication
+    ? {
+      ...info.baseApplication,
+      declaration: mapBase(info.baseApplication.declaration),
+      arguments: info.baseApplication.arguments.map(mapType),
+    }
+    : undefined;
   return {
     ...info,
     // D68 rule 177: the iteration contract is part of the class, so its answer
     // is transformed with every other type-bearing member.
     ...(info.iterate ? { iterate: mapType(info.iterate) } : {}),
+    ...(baseApplication ? { baseApplication } : {}),
     parameters: info.parameters.map(mapType),
     ...(info.constructorRest ? { constructorRest: mapType(info.constructorRest) } : {}),
-    base: info.base ? mapBase(info.base) : null,
+    base: baseApplication
+      ? genericApplicationIdentity(baseApplication.declaration, baseApplication.arguments)
+      : info.base ? mapBase(info.base) : null,
     fields: new Map([...info.fields].map(([name, field]) => [name, { ...field, type: mapType(field.type) }])),
     methods: new Map([...info.methods].map(([name, type]) => [name, mapType(type)])),
     staticFields: new Map([...info.staticFields].map(([name, field]) => [name, { ...field, type: mapType(field.type) }])),
@@ -2675,6 +2701,17 @@ function renameType(type: ValueType, aliases: ReadonlyMap<string, string>): Valu
       }
       return { ...type, name: aliases.get(type.name) ?? type.name };
     case "class":
+      // D55 rule 120 layer two: an instantiation renames through the class it
+      // applies, never through its display text — `Stack<number>` is not a
+      // name an import can alias, but `Stack` is.
+      if (type.application) {
+        return classApplicationType(
+          type.application.declaration,
+          aliases.get(type.application.name) ?? type.application.name,
+          type.application.arguments.map((argument) => renameType(argument, aliases)),
+        );
+      }
+      return { ...type, name: aliases.get(type.name) ?? type.name };
     case "enum":
     case "enumMember":
     case "classConstructor":
@@ -2755,6 +2792,14 @@ function resolveKnownNominals(
       ?? namedTypeIdentities.get(type.application.name)
       ?? type.application.declaration;
     return genericApplicationType(declaration, type.application.name, arguments_, type.readonlyView === true);
+  }
+  // D55 rule 120 layer two: the same crossing for a class application — the
+  // declaration becomes the identity the exporting module published, so both
+  // sides compute one instantiation identity for `Stack<number>`.
+  if (type.kind === "class" && type.application) {
+    const arguments_ = type.application.arguments.map(resolveNested);
+    const declaration = classes.get(type.application.name)?.identity ?? type.application.declaration;
+    return classApplicationType(declaration, type.application.name, arguments_);
   }
   if (type.kind === "named" && classes.has(type.name)) {
     const identity = classes.get(type.name)?.identity;

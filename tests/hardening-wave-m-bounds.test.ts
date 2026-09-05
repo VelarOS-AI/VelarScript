@@ -212,10 +212,11 @@ def label<T: User>(value: T) -> string:
   assert.match(userType[0]!, /never an arbitrary type/u);
 });
 
-test("[D41 61 / D55 124] a bound is legal on both declaration forms that take a type parameter", () => {
+test("[D41 61 / D55 124] a bound is legal on every declaration form that takes a type parameter", () => {
   // D55 rule 124: the 4x3 grant table is a pure function of the bound, so a
-  // `type` carries one with exactly the meaning a `def` gives it — and the
-  // forms that take no type parameter still refuse the whole list.
+  // `type` carries one with exactly the meaning a `def` gives it — and D55
+  // rule 120 layer two adds `class` to the same roster, checked the same way
+  // at the same instantiation site.
   assert.deepEqual(diagnostics(`
 type Box<T: Text>:
     value: T
@@ -229,10 +230,25 @@ type Box<T: Text>:
 
 type Bad = Box<Box<string>>
 `).some((item) => item.startsWith("VEL4031")));
-  assert.ok(diagnostics(`
+  assert.deepEqual(diagnostics(`
 class Box<T: Text>:
     let value: string = ""
-`).some((item) => item.startsWith("VEL2023") || item.startsWith("VEL2025")));
+
+    def label(item: T) -> string:
+        return f"{item}"
+
+const box: Box<number> = Box()
+print(box.label(1))
+`), []);
+  assert.ok(diagnostics(`
+type Opaque:
+    close: () -> null
+
+class Box<T: Text>:
+    let value: string = ""
+
+const box: Box<Opaque> = Box()
+`).some((item) => item.startsWith("VEL4031")));
 });
 
 test("[D41 61] a class method and an extern declaration both carry their bound", () => {

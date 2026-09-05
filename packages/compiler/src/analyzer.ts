@@ -39,9 +39,12 @@ import {
   boolType,
   boundGrants,
   boundaryUnknownType,
+  classApplicationType,
   collectGenericBoundViolations,
   collectTypeArgumentBoundViolations,
   describeType,
+  genericApplicationIdentity,
+  genericApplicationName,
   genericApplicationType,
   instantiateGenericCallable,
   invalidType,
@@ -350,6 +353,27 @@ export interface ClassField {
 
 export interface ClassInfo {
   readonly identity?: string;
+  /**
+   * D55 rule 120 layer two: the class's own type parameters, present on the
+   * declaration entry and absent from every instantiation of it. Their absence
+   * is what tells a written `Stack<number>` from the type constructor `Stack`,
+   * which is not a type at all (rule 126).
+   */
+  readonly typeParameterNames?: readonly string[];
+  readonly typeParameterBounds?: readonly (TypeParameterBound | null)[];
+  /**
+   * The application this entry is — `Stack<number>` records the declaration it
+   * instantiates and the arguments it applied, so substitution, the module
+   * interface, and the emitted `instanceof` receiver all read one place.
+   */
+  readonly application?: GenericApplication;
+  /**
+   * The application this class's `extends` writes, when the base is generic.
+   * `base` is already the instantiated key; this keeps the parts so
+   * instantiating *this* class can rebuild the base key with the arguments
+   * substituted (`class MyStack<T> extends Stack<T>` at `T := number`).
+   */
+  readonly baseApplication?: GenericApplication;
   /** D43 item 69: the class declares `@dispose:`, and whether releasing awaits. */
   readonly dispose?: "sync" | "async";
   /**
@@ -1539,6 +1563,34 @@ export class Analyzer implements TypeEnvironment {
   private readonly invalidExternTypeReferences = new WeakSet<TypeReference>();
   private readonly enums = new Map<string, EnumInfo>();
   private readonly classes = new Map<string, ClassInfo>();
+  /**
+   * D55 rule 120 layer two: every class instantiation seen, by identity,
+   * waiting for its member table to be asked for. It is the class-side twin of
+   * `genericApplications` and is read only through `classInfo`, so no lookup
+   * can find a generic class's members unsubstituted.
+   */
+  private readonly classApplications = new Map<string, GenericApplication>();
+  /** Built instantiations, by identity. Kept apart from `this.classes` so no declaration roster ever sees one. */
+  private readonly classInstantiations = new Map<string, ClassInfo>();
+  /** The declarations behind the class entries, for the type parameters a member is checked under. */
+  private readonly classDeclarations = new Map<string, ClassDeclaration>();
+  /** Whether `registerClassShapes` has run, so an instantiation built before it is never cached. */
+  private classShapesRegistered = false;
+  /**
+   * The `is`/`case` type syntaxes a bare generic class name may stand in. The
+   * runtime check is `instanceof`, which knows nothing about type arguments, so
+   * `is Stack` is the whole of what can be asked there — while a type position
+   * still refuses the bare name for having no arity (D55 rule 126).
+   */
+  private readonly bareGenericClassPositions = new WeakSet<TypeSyntax>();
+  /** Calls whose written `<...>` VEL2031 already reported, so no second report names the same mistake. */
+  private readonly typeArgumentsRemovedCalls = new Set<string>();
+  /**
+   * While a static member of a generic class is being read: the class's type
+   * parameter names. A static member belongs to the class, not to an
+   * instantiation, so naming one there is refused where it is written.
+   */
+  private staticMemberTypeParameters: { readonly className: string; readonly names: ReadonlySet<string> } | null = null;
   private readonly classDisplayNames = new Map<string, string>();
   private readonly externModules = new Map<string, ReadonlyMap<string, ValueType>>();
   private readonly externTypeImports = new Map<string, ValueType>();
@@ -2000,6 +2052,7 @@ export class Analyzer implements TypeEnvironment {
     this.registerExternTypeImports(program);
     this.registerTypeShapes(program);
     this.rejectPolymorphicRecursion(program);
+    this.rejectPolymorphicClassRecursion(program);
     this.validateDataTypeDeclarations(program);
     for (const statement of program.body) {
       if (statement.kind !== "ImportDeclaration") continue;
@@ -2162,8 +2215,11 @@ export class Analyzer implements TypeEnvironment {
   }
 
   private validateCoreDeclarationSignatures(program: Program): void {
-    const validateFunction = (statement: Pick<FunctionDeclaration, "typeParameters" | "parameters" | "returnType">): void => {
-      this.withTypeParameterFrame(this.typeParameterFrame(statement.typeParameters), () => {
+    const validateFunction = (
+      statement: Pick<FunctionDeclaration, "typeParameters" | "parameters" | "returnType">,
+      classParameters?: readonly TypeParameterDeclaration[],
+    ): void => {
+      this.withTypeParameterFrame(this.memberTypeParameterFrame(classParameters, statement.typeParameters), () => {
         for (const parameter of statement.parameters) {
           if (parameter.type) this.validateTypeReference(parameter.type);
         }
@@ -2176,12 +2232,39 @@ export class Analyzer implements TypeEnvironment {
       } else if (statement.kind === "FunctionDeclaration") {
         validateFunction(statement);
       } else if (statement.kind === "ClassDeclaration") {
-        for (const parameter of statement.parameters) {
-          if (parameter.type) this.validateTypeReference(parameter.type);
-        }
-        for (const field of statement.fields) this.validateTypeReference(field.type);
-        for (const getter of statement.getters) validateFunction(getter);
-        for (const method of statement.methods) validateFunction(method);
+        // D55 rule 120 layer two: the class's own parameters are in scope for
+        // every instance member and for none of the static ones, and this is
+        // the pass that decides each annotation's validity once — a frame
+        // missing here would freeze `T` as "Unknown type" for the whole module.
+        const classParameters = statement.typeParameters?.length ? statement.typeParameters : undefined;
+        const staticNames = classParameters ? new Set(classParameters.map((parameter) => parameter.name)) : null;
+        const asStatic = <T>(action: () => T): T => {
+          if (!staticNames) return action();
+          const outer = this.staticMemberTypeParameters;
+          this.staticMemberTypeParameters = { className: statement.name, names: staticNames };
+          try {
+            return action();
+          } finally {
+            this.staticMemberTypeParameters = outer;
+          }
+        };
+        this.withTypeParameterFrame(this.typeParameterFrame(classParameters), () => {
+          for (const parameter of statement.parameters) {
+            if (parameter.type) this.validateTypeReference(parameter.type);
+          }
+          for (const field of statement.fields) {
+            if (field.static) asStatic(() => this.withTypeParameterFrame(new Map(), () => this.validateTypeReference(field.type)));
+            else this.validateTypeReference(field.type);
+          }
+          for (const getter of statement.getters) {
+            if (getter.static) asStatic(() => validateFunction(getter));
+            else validateFunction(getter, classParameters);
+          }
+          for (const method of statement.methods) {
+            if (method.static) asStatic(() => validateFunction(method));
+            else validateFunction(method, classParameters);
+          }
+        });
       }
     }
   }
@@ -2457,7 +2540,7 @@ export class Analyzer implements TypeEnvironment {
         // Matching shapes share the one contract silently; a disagreement is
         // reported here, at the later declaration, instead of forking the
         // identity into two contracts that can never assign to each other.
-        const existing = this.classes.get(identity);
+        const existing = this.classInfo(identity);
         if (existing && externClassContract(existing) !== externClassContract(info)) {
           this.diagnostics.push(diagnostic(
             "VEL4005",
@@ -2676,6 +2759,16 @@ export class Analyzer implements TypeEnvironment {
    */
   private noteGenericApplications(type: ValueType, seen = new Set<string>()): void {
     switch (type.kind) {
+      // D55 rule 120 layer two: a class instantiation is noted the same way a
+      // record's is, so `classInfo` can build its member table when asked.
+      case "class": {
+        const application = type.application;
+        if (!application || !type.identity || seen.has(type.identity)) return;
+        seen.add(type.identity);
+        this.noteClassApplication(type.identity, application);
+        for (const argument of application.arguments) this.noteGenericApplications(argument, seen);
+        return;
+      }
       case "named": {
         const application = type.application;
         if (!application || !type.identity || seen.has(type.identity)) return;
@@ -2759,6 +2852,26 @@ export class Analyzer implements TypeEnvironment {
   }
 
   /**
+   * D55 rule 120 layer two: an application whose name is a generic class. The
+   * declaration key is the class's identity where it has one and its local name
+   * otherwise, which is the same key `this.classes` is filed under, so the
+   * instantiation and its template are always found together.
+   */
+  private resolveGenericClassApplication(type: Extract<ValueType, { kind: "named" }>): ValueType | null {
+    const application = type.application;
+    if (!application || type.identity) return null;
+    const info = this.classes.get(application.name);
+    if (!info?.typeParameterNames?.length) return null;
+    const arguments_ = application.arguments.map((argument) => this.resolveNamedClasses(argument));
+    const built = classApplicationType(info.identity ?? application.name, application.name, arguments_);
+    const cached = this.canonicalGenericApplications.get(built.identity!);
+    if (cached) return cached;
+    this.canonicalGenericApplications.set(built.identity!, built);
+    this.noteGenericApplications(built);
+    return built;
+  }
+
+  /**
    * D55 rules 124 and 126: everything an instantiation has to answer for at the
    * place it is written — arity, the declared bounds, and the one argument
    * shape a runtime-validated record can never hold.
@@ -2819,6 +2932,138 @@ export class Analyzer implements TypeEnvironment {
       this.diagnostics.push(diagnostic(
         "VEL4031",
         `Type parameter '${violation.name}' of '${info.name}' is bound by ${violation.bound}, so this argument cannot be ${describeType(violation.solved)}; ${boundVocabularyGuidance[violation.bound]}`,
+        syntax.arguments[violation.index]?.span ?? syntax.span,
+      ));
+    }
+    return violations.length === 0;
+  }
+
+  /**
+   * D55 rule 120 layer two: `extends Stack<number>` — the base must apply a
+   * generic class fully, and a base that is not generic takes no arguments at
+   * all. The refusals are the type position's, because `extends` is a type
+   * position: the same missing-arity teaching, the same bound check.
+   */
+  private checkGenericClassBase(statement: ClassDeclaration, base: NonNullable<ClassDeclaration["base"]>): void {
+    const parameters = this.classes.get(base.name)?.typeParameterNames;
+    if (!parameters?.length) {
+      if (base.typeArguments?.length) {
+        this.typeError(`Class '${base.name}' declares no type parameters, so it takes no type arguments`, base.span);
+      }
+      return;
+    }
+    if (!base.typeArguments?.length) {
+      this.typeError(
+        `Generic class '${base.name}' needs ${parameters.length === 1 ? "a type argument" : `${parameters.length} type arguments`}; write 'extends ${base.name}<${parameters.join(", ")}>' with concrete types`,
+        base.nameSpan,
+      );
+      return;
+    }
+    const syntax: Extract<TypeSyntax, { kind: "GenericTypeSyntax" }> = {
+      kind: "GenericTypeSyntax",
+      name: base.name,
+      nameSpan: base.nameSpan,
+      arguments: base.typeArguments,
+      span: base.span,
+    };
+    const argumentsValid = base.typeArguments
+      .map((argument) => this.validateTypeReference({ syntax: argument, span: argument.span }))
+      .every(Boolean);
+    if (!argumentsValid) return;
+    this.validateGenericClassApplication(base.name, this.classes.get(base.name)!, syntax);
+    void statement;
+  }
+
+  /**
+   * D55 rule 125 reaching layer two: a generic class's reference to itself —
+   * in a field, a parameter, a result, or its own base — must pass its own
+   * parameters straight through. `class Node<T>: let next: Node<T>?` is
+   * homogeneous and reaches a fixed point; `Node<List<T>>` would demand
+   * `Node<List<List<T>>>` at every depth, without end. Reported on the line
+   * that writes it, exactly as the record rule is.
+   */
+  private rejectPolymorphicClassRecursion(program: Program): void {
+    const declarations = program.body.filter((statement): statement is ClassDeclaration =>
+      statement.kind === "ClassDeclaration" && (statement.typeParameters?.length ?? 0) > 0);
+    if (declarations.length === 0) return;
+    const local = new Set(declarations.map((statement) => statement.name));
+    for (const statement of declarations) {
+      const parameters = statement.typeParameters!.map((parameter) => parameter.name);
+      const check = (syntax: TypeSyntax): void => {
+        switch (syntax.kind) {
+          case "GenericTypeSyntax": {
+            if (local.has(syntax.name)) {
+              const passesThrough = syntax.arguments.length === parameters.length
+                && syntax.arguments.every((argument, index) =>
+                  argument.kind === "NamedTypeSyntax" && argument.name === parameters[index]);
+              if (!passesThrough) {
+                this.diagnostics.push(diagnostic(
+                  "VEL4021",
+                  `Recursive generic class '${statement.name}' must use its own type parameters where it refers to '${syntax.name}'; write '${syntax.name}<${parameters.join(", ")}>' — arguments that change with the depth would need a new instantiation at every depth, without end`,
+                  syntax.span,
+                ));
+              }
+            }
+            syntax.arguments.forEach(check);
+            return;
+          }
+          case "ReadonlyTypeSyntax":
+          case "OptionalTypeSyntax":
+            return check(syntax.inner);
+          case "UnionTypeSyntax":
+            return syntax.members.forEach(check);
+          case "FunctionTypeSyntax":
+            syntax.parameters.forEach((parameter) => check(parameter.type));
+            return check(syntax.result);
+          default:
+            return;
+        }
+      };
+      const annotation = (reference: TypeReference | null): void => {
+        if (reference) check(reference.syntax);
+      };
+      for (const parameter of statement.parameters) annotation(parameter.type);
+      for (const field of statement.fields) annotation(field.type);
+      for (const getter of statement.getters) annotation(getter.returnType);
+      for (const method of statement.methods) {
+        for (const parameter of method.parameters) annotation(parameter.type);
+        annotation(method.returnType);
+      }
+      for (const argument of statement.base?.typeArguments ?? []) check(argument);
+    }
+  }
+
+  /**
+   * D55 rules 124 and 126 on the class side: arity and the declared bounds,
+   * decided by the same grant table and reported in the same shape. A class is
+   * never runtime-validated field by field, so the `Type<T>` argument refusal
+   * a record carries has nothing to say here.
+   */
+  private validateGenericClassApplication(
+    name: string,
+    info: ClassInfo,
+    syntax: Extract<TypeSyntax, { kind: "GenericTypeSyntax" }>,
+  ): boolean {
+    const parameters = info.typeParameterNames ?? [];
+    const arity = parameters.length;
+    if (syntax.arguments.length !== arity) {
+      this.typeError(
+        `Generic class '${name}' takes ${arity === 1 ? "1 type argument" : `${arity} type arguments`}, not ${syntax.arguments.length}; write '${name}<${parameters.join(", ")}>'`,
+        syntax.span,
+      );
+      return false;
+    }
+    const arguments_ = syntax.arguments.map((argument) => this.resolveAnnotation({ syntax: argument, span: argument.span }));
+    const violations = collectTypeArgumentBoundViolations(
+      parameters,
+      info.typeParameterBounds ?? parameters.map(() => null),
+      arguments_,
+      (type, bound) => this.satisfiesBound(type, bound),
+    );
+    for (const violation of violations) {
+      this.diagnostics.push(diagnostic(
+        "VEL4031",
+        `Type parameter '${violation.name}' of '${name}' is bound by ${violation.bound}, so this argument cannot be ${describeType(violation.solved)}; ${boundVocabularyGuidance[violation.bound]}`,
         syntax.arguments[violation.index]?.span ?? syntax.span,
       ));
     }
@@ -3103,15 +3348,32 @@ export class Analyzer implements TypeEnvironment {
     return this.predeclared.has(statement);
   }
 
+  /**
+   * D55 rule 120 layer two: the chain is walked over *keys*, and an
+   * instantiation's key already carries its arguments — `IntStack`'s base is
+   * `Stack<number>`, and `MyStack<number>`'s is the `Stack<number>` its own
+   * arguments produced. So substitution happens once, when the entry is built,
+   * and this walk needs no argument table of its own.
+   *
+   * One extra edge exists only for the erased runtime check: an instantiation
+   * also reaches its bare declaration, because `is Stack` is `instanceof Stack`
+   * and every `Stack<X>` passes it. That edge cannot widen anything an author
+   * wrote, because a bare generic class is not a type (rule 126) — it can only
+   * be reached from an `is`/`case` pattern.
+   */
   isSubclassOf(actual: string, expected: string): boolean {
-    let current: string | null = actual;
+    const pending = [actual];
     const visited = new Set<string>();
-    while (current && !visited.has(current)) {
+    while (pending.length > 0) {
+      const current = pending.pop()!;
       if (current === expected) return true;
+      if (visited.has(current)) continue;
       visited.add(current);
-      const info = this.classes.get(current);
-      if (info?.identity === expected) return true;
-      current = info?.base ?? null;
+      const info = this.classInfo(current);
+      if (!info) continue;
+      if (info.identity === expected) return true;
+      if (info.base) pending.push(info.base);
+      if (info.application) pending.push(info.application.declaration, info.application.name);
     }
     return false;
   }
@@ -3454,8 +3716,15 @@ export class Analyzer implements TypeEnvironment {
 
   private registerClassNames(program: Program): void {
     for (const statement of program.body) {
-      if (statement.kind !== "ClassDeclaration" || this.classes.has(statement.name)) continue;
+      if (statement.kind !== "ClassDeclaration") continue;
+      // D55 rule 120 layer two: the declaration is recorded even when the name
+      // is already taken, because the type parameters a member is resolved
+      // under come from the declaration being read, not from whichever entry
+      // won the name.
+      this.classDeclarations.set(statement.name, statement);
+      if (this.classes.has(statement.name)) continue;
       this.classes.set(statement.name, {
+        ...this.classTypeParameterFacts(statement),
         parameters: [],
         requiredParameters: 0,
         base: statement.base?.name ?? null,
@@ -3472,11 +3741,76 @@ export class Analyzer implements TypeEnvironment {
     }
   }
 
+  /** D55 rule 120 layer two: the declared parameter list of a class, as the class entry carries it. */
+  private classTypeParameterFacts(statement: ClassDeclaration): {
+    readonly typeParameterNames?: readonly string[];
+    readonly typeParameterBounds?: readonly (TypeParameterBound | null)[];
+  } {
+    if (!statement.typeParameters?.length) return {};
+    const frame = this.typeParameterFrame(statement.typeParameters);
+    const bounds = this.typeParameterBoundVector(statement.typeParameters);
+    return {
+      typeParameterNames: [...frame.keys()],
+      ...(bounds ? { typeParameterBounds: bounds } : {}),
+    };
+  }
+
+  /** The class type parameters in scope for a member of `className`, or undefined outside a generic class. */
+  private classTypeParameterDeclarations(className: string | null): readonly TypeParameterDeclaration[] | undefined {
+    if (!className) return undefined;
+    const declared = this.classDeclarations.get(className)?.typeParameters;
+    return declared?.length ? declared : undefined;
+  }
+
+  /**
+   * D55 rule 120 layer two: the frame a class member is resolved under. The
+   * member's own parameters take the low indexes and the class's take the ones
+   * above them, so a method may declare `<U>` beside the class's `<T>` and the
+   * two never share a De Bruijn index. The order matters and is this way round
+   * for one reason: a callable's `typeParameterNames` must line up with index
+   * 0 upward, and only the member's own parameters belong on that list — the
+   * class's are fixed by the receiver, not solved at the call. Everything above
+   * `typeParameterNames.length` is therefore a class parameter, in every
+   * member, whatever its own arity, which is what lets one substitution rule
+   * serve them all (`substituteClassMemberType`).
+   */
+  private memberTypeParameterFrame(
+    classParameters: readonly TypeParameterDeclaration[] | undefined,
+    ownParameters: readonly TypeParameterDeclaration[] | undefined,
+  ): ReadonlyMap<string, ValueType> {
+    if (!classParameters?.length) return this.typeParameterFrame(ownParameters);
+    return this.typeParameterFrame([...ownParameters ?? [], ...classParameters]);
+  }
+
   private registerClassShapes(program: Program): void {
     for (const statement of program.body) {
       if (statement.kind !== "ClassDeclaration") {
         continue;
       }
+      // D55 rule 120 layer two: every member of a generic class is read under
+      // the class's own parameters, and every static member is read without
+      // them — a static member belongs to the class, not to an instantiation.
+      this.withTypeParameterFrame(this.typeParameterFrame(statement.typeParameters), () => {
+        this.registerClassShape(statement);
+      });
+    }
+    this.classShapesRegistered = true;
+  }
+
+  private registerClassShape(statement: ClassDeclaration): void {
+    {
+      const classParameters = this.classTypeParameterDeclarations(statement.name);
+      const staticNames = classParameters ? new Set(classParameters.map((parameter) => parameter.name)) : null;
+      const withoutClassParameters = <T>(action: () => T): T => {
+        if (!staticNames) return action();
+        const outer = this.staticMemberTypeParameters;
+        this.staticMemberTypeParameters = { className: statement.name, names: staticNames };
+        try {
+          return this.withTypeParameterFrame(new Map(), action);
+        } finally {
+          this.staticMemberTypeParameters = outer;
+        }
+      };
       const fields = new Map<string, ClassField>();
       const staticFields = new Map<string, ClassField>();
       const privateFields = new Map<string, ClassField>();
@@ -3500,14 +3834,21 @@ export class Analyzer implements TypeEnvironment {
           : field.static ? staticFields : fields;
         target.set(field.name, {
           mutable: field.binding === "let",
-          type: this.resolveValidatedAnnotation(field.type),
+          type: field.static
+            ? withoutClassParameters(() => this.resolveValidatedAnnotation(field.type))
+            : this.resolveValidatedAnnotation(field.type),
         });
       }
       for (const getter of statement.getters) {
         const target = getter.private
           ? getter.static ? privateStaticFields : privateFields
           : getter.static ? staticFields : fields;
-        target.set(getter.name, { mutable: false, type: this.resolveValidatedResult(getter.returnType) });
+        target.set(getter.name, {
+          mutable: false,
+          type: getter.static
+            ? withoutClassParameters(() => this.resolveValidatedResult(getter.returnType))
+            : this.resolveValidatedResult(getter.returnType),
+        });
         if (getter.private) (getter.static ? privateStaticGetters : privateGetters).add(getter.name);
         else if (getter.static) staticGetters.add(getter.name);
         else {
@@ -3521,7 +3862,9 @@ export class Analyzer implements TypeEnvironment {
       const privateMethods = new Map<string, ValueType>();
       const privateStaticMethods = new Map<string, ValueType>();
       for (const method of statement.methods) {
-        const type = this.functionType(method);
+        const type = method.static
+          ? withoutClassParameters(() => this.functionType(method))
+          : this.classMethodType(statement, method);
         if (method.private) (method.static ? privateStaticMethods : privateMethods).set(method.name, type);
         else if (method.static) staticMethods.set(method.name, type);
         else {
@@ -3535,7 +3878,13 @@ export class Analyzer implements TypeEnvironment {
       this.privateStaticFields.set(statement.name, privateStaticFields);
       this.privateStaticGetters.set(statement.name, privateStaticGetters);
       this.privateStaticMethods.set(statement.name, privateStaticMethods);
+      const baseApplication = this.resolvedClassBaseApplication(statement);
       this.classes.set(statement.name, {
+        ...this.classTypeParameterFacts(statement),
+        ...(baseApplication ? { baseApplication } : {}),
+        base: baseApplication
+          ? genericApplicationIdentity(baseApplication.declaration, baseApplication.arguments)
+          : statement.base?.name ?? null,
         ...(statement.dispose
           ? {
             dispose: blockContainsDirectAwait(
@@ -3556,7 +3905,6 @@ export class Analyzer implements TypeEnvironment {
         parameters: statement.parameters.map((parameter) => this.resolveValidatedAnnotation(parameter.type)),
         parameterNames: statement.parameters.map((parameter) => parameter.name),
         requiredParameters: statement.parameters.filter((parameter) => !parameter.defaultValue).length,
-        base: statement.base?.name ?? null,
         abstract: statement.abstract,
         fields,
         getters,
@@ -5417,6 +5765,16 @@ export class Analyzer implements TypeEnvironment {
   }
 
   private analyzeClassDeclaration(statement: ClassDeclaration): void {
+    // D55 rule 120 layer two: the same list, the same procedure — duplicate
+    // names, reserved bound words, and a name that shadows a declared type are
+    // about the list, not about which declaration carries it.
+    this.checkTypeParameterDeclarations(statement.typeParameters);
+    this.withTypeParameterFrame(this.typeParameterFrame(statement.typeParameters), () => {
+      this.analyzeClassBody(statement);
+    });
+  }
+
+  private analyzeClassBody(statement: ClassDeclaration): void {
     const outerConstructorDepth = this.constructorDepth;
     const outerClass = this.currentClass;
     const outerSuperMemberContext = this.superMemberContext;
@@ -5430,6 +5788,11 @@ export class Analyzer implements TypeEnvironment {
     }
     if (!this.predeclared.has(statement)) this.declareBinding(statement.name, false, { kind: "classConstructor", name: statement.name }, statement.span);
     const baseName = statement.base?.name ?? null;
+    // D55 rule 120 layer two: every inherited-member question is asked of the
+    // base *instantiation*, so `override def push(value: number)` is compared
+    // against `push(value: T)` with T already solved to `number`.
+    const baseKey = this.classInfo(statement.name)?.base ?? baseName;
+    if (statement.base) this.checkGenericClassBase(statement, statement.base);
     if (baseName) {
       const baseBinding = this.lookup(baseName) ?? this.builtin(baseName);
       if (baseName === "ValidationError" || baseName === "AssertionError" || baseName === "NarrowingError"
@@ -5514,9 +5877,9 @@ export class Analyzer implements TypeEnvironment {
     if (statement.initialization) this.analyzeClassInitialization(statement);
     if (statement.dispose) {
       this.analyzeClassDispose(statement, statement.dispose);
-      this.checkDisposalChain(statement, baseName);
+      this.checkDisposalChain(statement, baseKey);
     }
-    if (statement.iterate) this.analyzeClassIterate(statement, statement.iterate, baseName);
+    if (statement.iterate) this.analyzeClassIterate(statement, statement.iterate, baseKey);
     this.superMemberContext = null;
     this.flowFrameDepth -= 1;
     this.exitScope();
@@ -5561,14 +5924,14 @@ export class Analyzer implements TypeEnvironment {
     for (const field of instanceFields) {
       if (ownFields.has(field.name)) this.typeError(`Class '${statement.name}' declares field '${field.name}' more than once`, field.span);
       ownFields.add(field.name);
-      const reserved = this.errorContractMemberRejection(baseName, field.name);
+      const reserved = this.errorContractMemberRejection(baseKey, field.name);
       if (reserved) {
         this.typeError(reserved, field.span);
         continue;
       }
-      const inheritedField = baseName ? this.findField(baseName, field.name) : null;
-      const inheritedGetter = baseName ? this.findGetter(baseName, field.name) : null;
-      const inheritedMethod = baseName ? this.findMethod(baseName, field.name) : null;
+      const inheritedField = baseKey ? this.findField(baseKey, field.name) : null;
+      const inheritedGetter = baseKey ? this.findGetter(baseKey, field.name) : null;
+      const inheritedMethod = baseKey ? this.findMethod(baseKey, field.name) : null;
       if (field.private && (inheritedField || inheritedGetter || inheritedMethod)) {
         this.typeError(`Private field '${field.name}' conflicts with an inherited public member`, field.span);
         continue;
@@ -5587,9 +5950,9 @@ export class Analyzer implements TypeEnvironment {
     for (const field of statement.fields.filter((candidate) => candidate.static)) {
       if (ownStaticFields.has(field.name)) this.typeError(`Class '${statement.name}' declares static field '${field.name}' more than once`, field.span);
       ownStaticFields.add(field.name);
-      const inheritedMethod = baseName ? this.findStaticMethod(baseName, field.name) : null;
-      const inheritedGetter = baseName ? this.findStaticGetter(baseName, field.name) : null;
-      const inheritedField = baseName ? this.findStaticField(baseName, field.name) : null;
+      const inheritedMethod = baseKey ? this.findStaticMethod(baseKey, field.name) : null;
+      const inheritedGetter = baseKey ? this.findStaticGetter(baseKey, field.name) : null;
+      const inheritedField = baseKey ? this.findStaticField(baseKey, field.name) : null;
       if (field.private && (inheritedField || inheritedGetter || inheritedMethod)) {
         this.typeError(`Private static field '${field.name}' conflicts with an inherited public static member`, field.span);
         continue;
@@ -5622,11 +5985,11 @@ export class Analyzer implements TypeEnvironment {
       if (statement.methods.some((method) => method.name === getter.name && method.static === getter.static)) {
         this.typeError(`${getter.static ? "Static g" : "G"}etter '${getter.name}' conflicts with a method declared by class '${statement.name}'`, getter.span);
       }
-      const inheritedField = baseName ? (getter.static ? this.findStaticField(baseName, getter.name) : this.findField(baseName, getter.name)) : null;
-      const inheritedMethod = baseName ? (getter.static ? this.findStaticMethod(baseName, getter.name) : this.findMethod(baseName, getter.name)) : null;
-      const inheritedGetter = baseName ? (getter.static
-        ? this.findStaticGetter(baseName, getter.name)
-        : this.findGetter(baseName, getter.name)) : null;
+      const inheritedField = baseKey ? (getter.static ? this.findStaticField(baseKey, getter.name) : this.findField(baseKey, getter.name)) : null;
+      const inheritedMethod = baseKey ? (getter.static ? this.findStaticMethod(baseKey, getter.name) : this.findMethod(baseKey, getter.name)) : null;
+      const inheritedGetter = baseKey ? (getter.static
+        ? this.findStaticGetter(baseKey, getter.name)
+        : this.findGetter(baseKey, getter.name)) : null;
       const inheritedGetterType = getter.static
         ? inheritedGetter as ValueType | null
         : (inheritedGetter as { readonly type: ValueType } | null)?.type ?? null;
@@ -5665,14 +6028,14 @@ export class Analyzer implements TypeEnvironment {
       if (method.static && ownStaticFields.has(method.name)) {
         this.typeError(`Static method '${method.name}' conflicts with a static field declared by class '${statement.name}'`, method.span);
       }
-      if (!method.private && baseName && (method.static
-        ? this.findStaticField(baseName, method.name) || this.findStaticGetter(baseName, method.name)
-        : this.findField(baseName, method.name) || this.findGetter(baseName, method.name))) {
+      if (!method.private && baseKey && (method.static
+        ? this.findStaticField(baseKey, method.name) || this.findStaticGetter(baseKey, method.name)
+        : this.findField(baseKey, method.name) || this.findGetter(baseKey, method.name))) {
         this.typeError(`${method.static ? "Static m" : "M"}ethod '${method.name}' conflicts with an inherited ${method.static ? "static " : ""}field or getter`, method.span);
       }
-      if (method.private && baseName && (method.static
-        ? this.findStaticField(baseName, method.name) || this.findStaticGetter(baseName, method.name) || this.findStaticMethod(baseName, method.name)
-        : this.findField(baseName, method.name) || this.findGetter(baseName, method.name) || this.findMethod(baseName, method.name))) {
+      if (method.private && baseKey && (method.static
+        ? this.findStaticField(baseKey, method.name) || this.findStaticGetter(baseKey, method.name) || this.findStaticMethod(baseKey, method.name)
+        : this.findField(baseKey, method.name) || this.findGetter(baseKey, method.name) || this.findMethod(baseKey, method.name))) {
         this.typeError(`Private${method.static ? " static" : ""} method '${method.name}' conflicts with an inherited public member`, method.span);
       }
       if (ownMethods.has(`${method.static ? "static:" : "instance:"}${method.name}`)) {
@@ -5694,8 +6057,8 @@ export class Analyzer implements TypeEnvironment {
       if (method.private && method.override) {
         this.typeError(`Private method '${method.name}' cannot use 'override'`, method.span);
       }
-      const inherited = baseName && !method.private
-        ? method.static ? this.findStaticMethod(baseName, method.name) : this.findMethod(baseName, method.name)
+      const inherited = baseKey && !method.private
+        ? method.static ? this.findStaticMethod(baseKey, method.name) : this.findMethod(baseKey, method.name)
         : null;
       const inheritedType = method.static
         ? inherited as ValueType | null
@@ -5705,7 +6068,7 @@ export class Analyzer implements TypeEnvironment {
       } else if (!method.override && inherited && !method.abstract) {
         this.typeError(`${method.static ? "Static m" : "M"}ethod '${method.name}' overrides a base method and must use 'override'`, method.span);
       }
-      if (method.override && inheritedType && !sameTypeIgnoringCallableParameterNames(this.functionType(method), inheritedType)) {
+      if (method.override && inheritedType && !sameTypeIgnoringCallableParameterNames(this.classMethodType(statement, method), inheritedType)) {
         this.typeError(`Override '${method.name}' must keep the base method signature ${describeType(inheritedType)}`, method.span);
       }
       if (method.abstract) this.validateMethodSignature(method);
@@ -5782,7 +6145,7 @@ export class Analyzer implements TypeEnvironment {
       && first.expression.callee.kind === "SuperExpression"
       ? spanIdentity(first.expression.span)
       : null;
-    this.declareBinding("self", false, { kind: "class", name: statement.name }, initialization.span, true);
+    this.declareBinding("self", false, this.selfClassType(statement.name), initialization.span, true);
     this.analyzeStatements(initialization.body);
     this.allowedSuperCall = outerAllowedSuperCall;
     this.constructorDepth -= 1;
@@ -6001,7 +6364,7 @@ export class Analyzer implements TypeEnvironment {
     const inherited = baseName ? this.disposalChain(baseName) : [];
     if (inherited.length === 0) return;
     this.classDisposeChains.set(spanIdentity(statement.span), inherited.includes("async") ? "async" : "sync");
-    const own = this.classes.get(statement.name)?.dispose ?? "sync";
+    const own = this.classInfo(statement.name)?.dispose ?? "sync";
     if (own === "async" && !inherited.includes("async")) {
       this.diagnostics.push(diagnostic(
         "VEL4035",
@@ -6018,7 +6381,7 @@ export class Analyzer implements TypeEnvironment {
     const visited = new Set<string>();
     while (current && !visited.has(current)) {
       visited.add(current);
-      const info: ClassInfo | undefined = this.classes.get(current);
+      const info: ClassInfo | undefined = this.classInfo(current);
       if (info?.dispose) chain.push(info.dispose);
       current = info?.base ?? null;
     }
@@ -6081,7 +6444,7 @@ export class Analyzer implements TypeEnvironment {
     this.superMemberContext = "instance";
     this.asynchronousFunctions.push(true);
     this.returnContexts.push({ expected: nullType, inferredReturns: null, observedReturns: null, declarationKind: "Function" });
-    this.declareBinding("self", false, { kind: "class", name: statement.name }, block.span, true);
+    this.declareBinding("self", false, this.selfClassType(statement.name), block.span, true);
     this.analyzeStatements(block.body);
     this.returnContexts.pop();
     this.asynchronousFunctions.pop();
@@ -6156,7 +6519,7 @@ export class Analyzer implements TypeEnvironment {
     this.asynchronousFunctions.push(awaits);
     const inferredReturns: ValueType[] = [];
     this.returnContexts.push({ expected: unknownType, inferredReturns, observedReturns: null, declarationKind: "Iteration contract" });
-    this.declareBinding("self", false, { kind: "class", name: statement.name }, block.span, true);
+    this.declareBinding("self", false, this.selfClassType(statement.name), block.span, true);
     this.analyzeStatements(block.body);
     this.returnContexts.pop();
     this.asynchronousFunctions.pop();
@@ -6186,7 +6549,7 @@ export class Analyzer implements TypeEnvironment {
       validated.form === "async" && !isInvalidType(validated.source) ? optionalOf(validated.source) : validated.source,
     );
     if (validated.form === "async") this.asyncIterateBlocks.add(spanIdentity(block.keywordSpan));
-    const info = this.classes.get(statement.name);
+    const info = this.classInfo(statement.name);
     if (info) {
       // Drop the other form's field: an earlier pass may have seeded it before
       // this pass's answer settled which form the block is.
@@ -6282,7 +6645,7 @@ export class Analyzer implements TypeEnvironment {
     const visited = new Set<string>();
     while (current && !visited.has(current)) {
       visited.add(current);
-      const info: ClassInfo | undefined = this.classes.get(current);
+      const info: ClassInfo | undefined = this.classInfo(current);
       if (info?.iterate) return info.iterate;
       current = info?.base ?? null;
     }
@@ -6295,7 +6658,7 @@ export class Analyzer implements TypeEnvironment {
     const visited = new Set<string>();
     while (current && !visited.has(current)) {
       visited.add(current);
-      const info: ClassInfo | undefined = this.classes.get(current);
+      const info: ClassInfo | undefined = this.classInfo(current);
       if (info?.iterateAsync) return info.iterateAsync;
       current = info?.base ?? null;
     }
@@ -6368,7 +6731,7 @@ export class Analyzer implements TypeEnvironment {
       this.typeError(`Derived constructor for '${statement.name}' must call 'super(...)' first`, statement.initialization.span);
     }
     if (statement.base && !statement.initialization) {
-      const base = this.classes.get(statement.base.name);
+      const base = this.classInfo(statement.base.name);
       if ((base?.requiredParameters ?? 0) > 0) {
         this.typeError(`Class '${statement.name}' requires a constructor that calls 'super(...)'`, statement.span);
       }
@@ -6430,12 +6793,142 @@ export class Analyzer implements TypeEnvironment {
     });
   }
 
+  /**
+   * D55 rule 120 layer two: the class entry behind a key, building the
+   * instantiation the key names if that is what it is. Every question about a
+   * class member goes through here rather than through `this.classes`, so a
+   * generic class's members can never be read with their parameters still in
+   * them.
+   */
+  private classInfo(key: string): ClassInfo | undefined {
+    return this.classes.get(key) ?? this.classInstantiations.get(key) ?? this.buildClassInstantiation(key);
+  }
+
+  /** Records an instantiation so `classInfo` can build its member table when asked. */
+  private noteClassApplication(identity: string, application: GenericApplication): void {
+    if (!this.classApplications.has(identity)) this.classApplications.set(identity, application);
+  }
+
+  /**
+   * D55 rule 121's mechanism on the class side: an instantiation's member table
+   * is the declaration's with the arguments substituted, keyed by the
+   * instantiation's own identity. Building it on demand rather than where the
+   * application was written is what makes `class Node<T>: let next: Node<T>?`
+   * terminate — the application is noted while the declaration is still being
+   * read, and substituted only once someone asks.
+   */
+  private buildClassInstantiation(identity: string): ClassInfo | undefined {
+    const application = this.classApplications.get(identity);
+    if (!application) return undefined;
+    const template = this.classes.get(application.declaration) ?? this.classes.get(application.name);
+    const names = template?.typeParameterNames;
+    if (!template || !names?.length) return undefined;
+    const bindings = names.map((_, index) => application.arguments[index] ?? unknownType);
+    const map = (type: ValueType): ValueType => {
+      const substituted = this.substituteClassMemberType(type, bindings);
+      this.noteGenericApplications(substituted);
+      return substituted;
+    };
+    const baseApplication = template.baseApplication
+      ? { ...template.baseApplication, arguments: template.baseApplication.arguments.map(map) }
+      : undefined;
+    const base = baseApplication
+      ? genericApplicationIdentity(baseApplication.declaration, baseApplication.arguments)
+      : template.base;
+    const { typeParameterNames: _names, typeParameterBounds: _bounds, ...rest } = template;
+    const info: ClassInfo = {
+      ...rest,
+      identity,
+      application,
+      base,
+      ...(baseApplication ? { baseApplication } : {}),
+      parameters: template.parameters.map(map),
+      ...(template.constructorRest ? { constructorRest: map(template.constructorRest) } : {}),
+      ...(template.iterate ? { iterate: map(template.iterate) } : {}),
+      ...(template.iterateAsync ? { iterateAsync: map(template.iterateAsync) } : {}),
+      fields: new Map([...template.fields].map(([name, field]) => [name, { ...field, type: map(field.type) }])),
+      methods: new Map([...template.methods].map(([name, type]) => [name, map(type)])),
+    };
+    if (baseApplication && base) this.noteClassApplication(base, baseApplication);
+    // The shape pass has to have finished before an instantiation is worth
+    // keeping: one built from a placeholder entry would freeze an empty member
+    // table under a real identity.
+    if (this.classShapesRegistered) this.classInstantiations.set(identity, info);
+    return info;
+  }
+
+  /**
+   * Substitutes the class's own type arguments into one member type. A method
+   * that declares its own `<U>` carries both lists — the class's first — so the
+   * substitution replaces the class's indexes and renumbers the method's own
+   * back down to zero, which is exactly what makes `Stack<number>.mapTo<U>`
+   * a one-parameter generic method again.
+   */
+  private substituteClassMemberType(type: ValueType, bindings: readonly ValueType[]): ValueType {
+    if ((type.kind === "function" || type.kind === "action" || type.kind === "intrinsic") && type.typeParameterNames?.length) {
+      // The member's own parameters keep their indexes exactly — they are the
+      // ones the call still solves — and the class's, which start where the
+      // published list ends, take the arguments. Nothing is renumbered, so the
+      // method stays the same generic method it was declared as.
+      const own = type.typeParameterNames;
+      const table: ValueType[] = [
+        ...own.map((name, index): ValueType => ({ kind: "parameter", name, index })),
+        ...bindings,
+      ];
+      return {
+        ...type,
+        parameters: type.parameters.map((parameter) => substituteTypeParameters(parameter, table)),
+        ...(type.rest ? { rest: substituteTypeParameters(type.rest, table) } : {}),
+        result: substituteTypeParameters(type.result, table),
+      };
+    }
+    return substituteTypeParameters(type, bindings);
+  }
+
+  /**
+   * D55 rule 120 layer two: `self` inside a generic class is that class at its
+   * own parameters. The arguments are read out of the frame in force here,
+   * because a class parameter's index depends on how many the member itself
+   * declared — which is exactly what makes `self.push(value)` compare `T`
+   * against the same `T` the annotation resolved to.
+   */
+  private selfClassType(className: string): ValueType {
+    const info = this.classes.get(className);
+    const names = info?.typeParameterNames;
+    if (!names?.length) return { kind: "class", name: className };
+    const frame = this.typeParameterFrames.at(-1);
+    const arguments_ = names.map((name, index): ValueType => frame?.get(name) ?? { kind: "parameter", name, index });
+    const type = classApplicationType(info?.identity ?? className, className, arguments_);
+    this.noteGenericApplications(type);
+    return type;
+  }
+
+  /** The method type of a class member, read under the class's type parameters as well as its own. */
+  private classMethodType(statement: ClassDeclaration, method: ClassDeclaration["methods"][number]): ValueType {
+    return this.functionType(method, statement.typeParameters);
+  }
+
+  /**
+   * D55 rule 120 layer two: `extends Stack<number>` resolved under this class's
+   * own parameters, so `class MyStack<T> extends Stack<T>` passes them through
+   * and instantiating `MyStack<number>` reaches `Stack<number>`.
+   */
+  private resolvedClassBaseApplication(statement: ClassDeclaration): GenericApplication | undefined {
+    const base = statement.base;
+    if (!base?.typeArguments?.length) return undefined;
+    const declaration = this.classes.get(base.name)?.identity ?? base.name;
+    const arguments_ = base.typeArguments.map((syntax) => this.resolveAnnotation({ syntax, span: syntax.span }));
+    const application: GenericApplication = { declaration, name: base.name, arguments: arguments_ };
+    this.noteClassApplication(genericApplicationIdentity(declaration, arguments_), application);
+    return application;
+  }
+
   private findField(className: string, name: string): ClassField | null {
     let current: string | null = className;
     const visited = new Set<string>();
     while (current && !visited.has(current)) {
       visited.add(current);
-      const info = this.classes.get(current);
+      const info = this.classInfo(current);
       const field = info?.getters.has(name) ? null : info?.fields.get(name);
       if (field) return field;
       current = info?.base ?? null;
@@ -6448,7 +6941,7 @@ export class Analyzer implements TypeEnvironment {
     const visited = new Set<string>();
     while (current && !visited.has(current)) {
       visited.add(current);
-      const info = this.classes.get(current);
+      const info = this.classInfo(current);
       const getter = info?.getters.has(name) ? info.fields.get(name) : null;
       if (getter) return { owner: current, type: getter.type, abstract: info?.abstractGetters.has(name) ?? false };
       current = info?.base ?? null;
@@ -6461,7 +6954,7 @@ export class Analyzer implements TypeEnvironment {
     const visited = new Set<string>();
     while (current && !visited.has(current)) {
       visited.add(current);
-      const info = this.classes.get(current);
+      const info = this.classInfo(current);
       const method = info?.methods.get(name);
       if (method) return { owner: current, type: method, abstract: info?.abstractMethods.has(name) ?? false };
       current = info?.base ?? null;
@@ -6563,7 +7056,7 @@ export class Analyzer implements TypeEnvironment {
     let depth = 0;
     while (current && !visited.has(current)) {
       visited.add(current);
-      const info = this.classes.get(current);
+      const info = this.classInfo(current);
       const field = info?.staticGetters.has(name) ? null : info?.staticFields.get(name);
       if (field) return { field, depth };
       current = info?.base ?? null;
@@ -6577,7 +7070,7 @@ export class Analyzer implements TypeEnvironment {
     const visited = new Set<string>();
     while (current && !visited.has(current)) {
       visited.add(current);
-      const info = this.classes.get(current);
+      const info = this.classInfo(current);
       const getter = info?.staticGetters.has(name) ? info.staticFields.get(name) : null;
       if (getter) return getter.type;
       current = info?.base ?? null;
@@ -6590,7 +7083,7 @@ export class Analyzer implements TypeEnvironment {
     const visited = new Set<string>();
     while (current && !visited.has(current)) {
       visited.add(current);
-      const info = this.classes.get(current);
+      const info = this.classInfo(current);
       const method = info?.staticMethods.get(name);
       if (method) return method;
       current = info?.base ?? null;
@@ -6604,7 +7097,10 @@ export class Analyzer implements TypeEnvironment {
       ? className === this.currentClass
       : this.isSubclassOf(className, this.currentClass);
     if (!accessible) return null;
-    return (staticMember ? this.privateStaticFields : this.privateFields).get(this.currentClass)?.get(name) ?? null;
+    const field = (staticMember ? this.privateStaticFields : this.privateFields).get(this.currentClass)?.get(name) ?? null;
+    if (!field || staticMember) return field;
+    const substituted = this.privateMemberType(field.type, className);
+    return substituted === field.type ? field : { ...field, type: substituted };
   }
 
   private privateMethodForAccess(className: string, name: string, staticMember: boolean): ValueType | null {
@@ -6613,7 +7109,44 @@ export class Analyzer implements TypeEnvironment {
       ? className === this.currentClass
       : this.isSubclassOf(className, this.currentClass);
     if (!accessible) return null;
-    return (staticMember ? this.privateStaticMethods : this.privateMethods).get(this.currentClass)?.get(name) ?? null;
+    const method = (staticMember ? this.privateStaticMethods : this.privateMethods).get(this.currentClass)?.get(name) ?? null;
+    return method && !staticMember ? this.privateMemberType(method, className) : method;
+  }
+
+  /**
+   * D55 rule 120 layer two: a private member lives in its own table, keyed by
+   * the declaring class rather than by an instantiation, so it is the one
+   * member surface `classInfo` does not substitute. It is substituted here
+   * instead — with the arguments the *receiver* applies to the declaring class,
+   * found by walking the receiver's own chain — because a private field of
+   * `Stack<T>` read through `self` is `T` and read through a `Stack<number>`
+   * receiver is `number`, exactly as a public one is.
+   */
+  private privateMemberType(type: ValueType, receiverKey: string): ValueType {
+    const owner = this.currentClass;
+    if (!owner) return type;
+    const application = this.classApplicationFor(receiverKey, owner);
+    const template = application
+      ? this.classes.get(application.declaration) ?? this.classes.get(application.name)
+      : null;
+    const names = template?.typeParameterNames;
+    if (!application || !names?.length) return type;
+    return this.substituteClassMemberType(type, names.map((_, index) => application.arguments[index] ?? unknownType));
+  }
+
+  /** The arguments a receiver's chain applies to one declaration in it. */
+  private classApplicationFor(receiverKey: string, declarationKey: string): GenericApplication | null {
+    let current: string | null = receiverKey;
+    const seen = new Set<string>();
+    while (current && !seen.has(current)) {
+      seen.add(current);
+      const info = this.classInfo(current);
+      if (!info) return null;
+      const application = info.application;
+      if (application && (application.declaration === declarationKey || application.name === declarationKey)) return application;
+      current = info.base;
+    }
+    return null;
   }
 
   private declaresPrivateMember(className: string, name: string, staticMember: boolean): boolean {
@@ -6628,7 +7161,7 @@ export class Analyzer implements TypeEnvironment {
     const visited = new Set<string>();
     while (current && !visited.has(current)) {
       visited.add(current);
-      const info = this.classes.get(current);
+      const info = this.classInfo(current);
       if (!info) break;
       chain.unshift(info);
       current = info.base;
@@ -6747,7 +7280,19 @@ export class Analyzer implements TypeEnvironment {
       this.functionResultKeys.set(callableBinding, this.functionResultKey(statement as FunctionDeclaration));
     }
     this.checkTypeParameterDeclarations(statement.typeParameters);
-    this.typeParameterFrames.push(this.typeParameterFrame(statement.typeParameters));
+    // D55 rule 120 layer two: an instance member of a generic class is read
+    // under the class's parameters as well as its own; a static one is not,
+    // because it belongs to the class rather than to an instantiation.
+    const memberClassParameters = declareSelf ? this.classTypeParameterDeclarations(className) : undefined;
+    this.rejectClassTypeParameterRedeclaration(memberClassParameters, statement.typeParameters, className);
+    const outerStaticTypeParameters = this.staticMemberTypeParameters;
+    if (!declareSelf && className) {
+      const classParameters = this.classTypeParameterDeclarations(className);
+      if (classParameters) {
+        this.staticMemberTypeParameters = { className, names: new Set(classParameters.map((parameter) => parameter.name)) };
+      }
+    }
+    this.typeParameterFrames.push(this.memberTypeParameterFrame(memberClassParameters, statement.typeParameters));
     this.enterScope();
     this.flowFrameDepth += 1;
     this.functionDepth += 1;
@@ -6794,8 +7339,7 @@ export class Analyzer implements TypeEnvironment {
     };
     this.returnContexts.push(returnContext);
     if (className && declareSelf) {
-      const selfType: ValueType = { kind: "class", name: className };
-      this.declareBinding("self", false, selfType, statement.span, true);
+      this.declareBinding("self", false, this.selfClassType(className), statement.span, true);
     }
     for (const [index, parameter] of statement.parameters.entries()) {
       // D89 (message correction): a method body already has `self`, so writing
@@ -6876,7 +7420,31 @@ export class Analyzer implements TypeEnvironment {
     this.flowFrameDepth -= 1;
     this.exitScope();
     this.typeParameterFrames.pop();
+    this.staticMemberTypeParameters = outerStaticTypeParameters;
     this.constructorDepth = outerConstructorDepth;
+  }
+
+  /**
+   * D55 rule 120 layer two: a method may declare its own type parameters beside
+   * the class's, and the two never collide — because a name that would collide
+   * is refused here. Shadowing would leave one word meaning two types in one
+   * signature, which is the refusal D51 rule 109 already gives a bound name.
+   */
+  private rejectClassTypeParameterRedeclaration(
+    classParameters: readonly TypeParameterDeclaration[] | undefined,
+    ownParameters: readonly TypeParameterDeclaration[] | undefined,
+    className: string | null,
+  ): void {
+    if (!classParameters?.length || !ownParameters?.length) return;
+    const declared = new Set(classParameters.map((parameter) => parameter.name));
+    for (const parameter of ownParameters) {
+      if (!declared.has(parameter.name)) continue;
+      this.diagnostics.push(diagnostic(
+        "VEL4021",
+        `Type parameter '${parameter.name}' is already declared by class '${className}' and is in scope here; rename this one`,
+        parameter.span,
+      ));
+    }
   }
 
   /**
@@ -7004,7 +7572,7 @@ export class Analyzer implements TypeEnvironment {
         targetWritable = false;
       } else if (owner.kind === "class") {
         const key = owner.identity ?? owner.name;
-        const info = this.classes.get(key) ?? this.classes.get(owner.name);
+        const info = this.classInfo(key) ?? this.classInfo(owner.name);
         const privateField = this.privateFieldForAccess(key, statement.target.property, false);
         const privateMethod = this.privateMethodForAccess(key, statement.target.property, false);
         const field = this.findField(key, statement.target.property);
@@ -7556,7 +8124,19 @@ export class Analyzer implements TypeEnvironment {
       case "SpreadExpression":
         return this.inferExpression(expression.value);
       case "UnaryExpression": {
-        const operand = this.inferExpression(expression.operand);
+        // D114 item ①: `await` adds no position of its own, it passes the
+        // enclosing one through. The awaited operand is matched against
+        // `Promise` of what the position expects — the only shape an operand
+        // of `await` could have produced that value with — so `const rows:
+        // List<string> = await loadAll(url)` solves the call's `T` exactly as
+        // the unawaited spelling does. `try` is transparent the same way
+        // already (its operand takes the non-optional part of the position)
+        // and parentheses carry no node at all, so `try await (...)` composes
+        // without any of the three knowing about the others.
+        const operand = this.inferExpression(
+          expression.operand,
+          expression.operator === "await" ? this.awaitedOperandContext(contextualType) : unknownType,
+        );
         if (expression.operator === "await") {
           if (this.parameterDefaultDepth > 0) {
             this.diagnostics.push(diagnostic("VEL4007", "'await' cannot be used in a parameter default value", expression.span));
@@ -7743,6 +8323,7 @@ export class Analyzer implements TypeEnvironment {
         }
       case "IsExpression": {
         const subject = this.inferExpression(expression.value);
+        this.allowBareGenericClassName(expression.type);
         const checked = this.resolveAnnotation(expression.type);
         const valid = this.validateTypeReference(expression.type);
         if (valid && this.rejectErasedRuntimeCheck(checked, expression.type.span)) return invalidType;
@@ -7771,6 +8352,7 @@ export class Analyzer implements TypeEnvironment {
         return this.inferArrow(expression, contextualType);
       case "CallExpression": {
         this.recordDeferredCallEdge(expression.callee, expression.span);
+        if (expression.typeArgumentsRemoved === true) this.typeArgumentsRemovedCalls.add(spanIdentity(expression.span));
         const result = this.inferCall(expression.callee, expression.arguments, expression.argumentNames, expression.span, contextualType, expression.optional);
         if (this.expandAliases(result).kind === "null") this.normalizedNullResults.add(spanIdentity(expression.span));
         return result;
@@ -8823,6 +9405,62 @@ export class Analyzer implements TypeEnvironment {
     };
   }
 
+  /**
+   * D114 定案: a class type parameter still unsolved at the construction is an
+   * error at the construction — the same stance section 8 takes for an empty
+   * collection, and reported with the same code, because it is the same
+   * sentence: nothing at this position says what the value holds. The report
+   * names both ways out, an annotation on the position and an argument that
+   * fixes the parameter, because those are the only two there are.
+   */
+  private inferGenericConstruction(
+    callee: Extract<ValueType, { kind: "classConstructor" }>,
+    info: ClassInfo,
+    arguments_: readonly Expression[],
+    argumentNames: readonly (string | null)[] | undefined,
+    callSpan: Span,
+    contextualType: ValueType,
+    suppressUnsolvedReport = false,
+  ): ValueType {
+    const names = info.typeParameterNames ?? [];
+    const declaration = info.identity ?? callee.identity ?? callee.name;
+    const pattern = classApplicationType(
+      declaration,
+      callee.name,
+      names.map((name, index): ValueType => ({ kind: "parameter", name, index })),
+    );
+    const constructor: Extract<ValueType, { kind: "function" }> = {
+      kind: "function",
+      typeParameterNames: names,
+      ...(info.typeParameterBounds ? { typeParameterBounds: info.typeParameterBounds } : {}),
+      parameters: info.parameters,
+      ...(info.parameterNames ? { parameterNames: info.parameterNames } : {}),
+      requiredParameters: info.requiredParameters,
+      ...(info.constructorRest ? { rest: info.constructorRest } : {}),
+      result: pattern,
+    };
+    const unsolved = new Set<number>();
+    const reportsBefore = this.diagnostics.length;
+    const result = this.inferGenericCall(constructor, arguments_, argumentNames, callSpan, contextualType, unsolved);
+    // A construction the inference already reported on — a wrong argument
+    // count, most of all — has one mistake on record, and the unsolved
+    // parameter is downstream of it. One mistake, one report.
+    if (this.diagnostics.length > reportsBefore) return result;
+    // A position whose own annotation was already refused has said what it had
+    // to say; the construction reads as unsolved only because of that report.
+    const positionAlreadyReported = isInvalidType(this.expandAliases(contextualType));
+    if (unsolved.size > 0 && !suppressUnsolvedReport && !positionAlreadyReported) {
+      const listed = [...unsolved].map((index) => `'${names[index]}'`).join(", ");
+      const example = `${callee.name}<${names.map((name, index) => unsolved.has(index) ? "string" : name).join(", ")}>`;
+      this.diagnostics.push(diagnostic(
+        "VEL4039",
+        `Constructing '${callee.name}' leaves type parameter${unsolved.size === 1 ? "" : "s"} ${listed} unsolved; nothing at this position says what ${unsolved.size === 1 ? "it stands" : "they stand"} for — annotate the binding ('const value: ${example} = ${callee.name}(...)'), or pass an argument that solves ${unsolved.size === 1 ? "it" : "them"}`,
+        callSpan,
+      ));
+    }
+    return result;
+  }
+
   private inferCall(
     calleeExpression: Expression,
     arguments_: readonly Expression[],
@@ -8861,13 +9499,13 @@ export class Analyzer implements TypeEnvironment {
     }
     if (calleeExpression.kind === "SuperExpression") {
       if (optionalCall) this.typeError("A base constructor call cannot be optional", callSpan);
-      const baseName = this.currentClass ? this.classes.get(this.currentClass)?.base ?? null : null;
+      const baseName = this.currentClass ? this.classInfo(this.currentClass)?.base ?? null : null;
       if (this.constructorDepth === 0 || !baseName || spanIdentity(callSpan) !== this.allowedSuperCall) {
         this.typeError("'super(...)' is only available as the first statement of a derived constructor", callSpan);
         for (const argument of arguments_) this.inferExpression(argument);
         return nullType;
       }
-      const base = this.classes.get(baseName);
+      const base = this.classInfo(baseName);
       this.checkArguments(arguments_, base?.parameters ?? [], callSpan, base?.requiredParameters, base?.constructorRest, argumentNames, base?.parameterNames);
       return nullType;
     }
@@ -9068,7 +9706,7 @@ export class Analyzer implements TypeEnvironment {
     const calleeAlreadyDiagnosed = this.diagnostics.length > diagnosticsBeforeCallee;
     if (callee.kind === "classConstructor") {
       this.constructorCalls.add(spanIdentity(callSpan));
-      const info = this.classes.get(callee.identity ?? callee.name) ?? this.classes.get(callee.name);
+      const info = this.classInfo(callee.identity ?? callee.name) ?? this.classInfo(callee.name);
       if (info?.abstract) this.typeError(`Cannot instantiate abstract class '${callee.name}'`, callSpan);
       // A field initializer runs on every construction, so constructing the
       // declaring class (or one of its subclasses, whose construction runs
@@ -9099,6 +9737,25 @@ export class Analyzer implements TypeEnvironment {
           name: callee.name,
           ...(callee.identity ? { identity: callee.identity } : {}),
         };
+      }
+      // D55 rule 120 layer two: constructing a generic class is a generic call
+      // whose result pattern is the class at its own parameters. The
+      // constructor's arguments solve what they can (phases 1 and 2) and the
+      // position solves the rest (phase 3, D114 item ①) — the same three phases
+      // a generic `def` goes through, because it is the same question.
+      if (info?.typeParameterNames?.length) {
+        return this.inferGenericConstruction(
+          callee,
+          info,
+          arguments_,
+          argumentNames,
+          callSpan,
+          contextualType,
+          // `Stack<number>()` already told the author where the arguments go
+          // (VEL2031, D55 rule 123); naming the missing solution here would
+          // report one mistake twice and contradict the fix already offered.
+          this.typeArgumentsRemovedCalls.has(spanIdentity(callSpan)),
+        );
       }
       this.checkArguments(arguments_, info?.parameters ?? [], callSpan, info?.requiredParameters, info?.constructorRest, argumentNames, info?.parameterNames);
       return {
@@ -9223,8 +9880,26 @@ export class Analyzer implements TypeEnvironment {
     argumentNames: readonly (string | null)[] | undefined,
     callSpan: Span,
     contextualType: ValueType = unknownType,
+    unsolved?: Set<number>,
   ): ValueType {
-    const bindings: (ValueType | null)[] = Array.from({ length: callee.typeParameterNames?.length ?? 0 }, () => null);
+    const parameterCount = callee.typeParameterNames?.length ?? 0;
+    const bindings: (ValueType | null)[] = Array.from({ length: parameterCount }, () => null);
+    // D55 rule 120 layer two: a method of a generic class carries the class's
+    // parameters above its own, at indexes the published list does not reach.
+    // Those are fixed by the receiver, never solved by the call, so they are
+    // bound to themselves before unification and restored after it — otherwise
+    // `self.mapTo(f)` would let an argument redefine the class's own `T`.
+    const rigid = new Map<number, ValueType>();
+    const noteRigid = (type: ValueType): void => {
+      typeContainsParameter(type, (parameter) => {
+        if (parameter.index >= parameterCount) rigid.set(parameter.index, parameter);
+        return false;
+      });
+    };
+    for (const parameter of callee.parameters) noteRigid(parameter);
+    if (callee.rest) noteRigid(callee.rest);
+    noteRigid(callee.result);
+    for (const [index, type] of rigid) bindings[index] = type;
     // NEW-D3: parameters an `unknown` argument reached are solved-to-unknown,
     // which no bound admits; they are tracked apart from `bindings` so that
     // `unknown` still never poisons a merge with a concrete argument.
@@ -9321,7 +9996,11 @@ export class Analyzer implements TypeEnvironment {
       actuals.set(item, actual);
       if (item.declared) unifyTypeParameters(item.declared, actual, bindings, fieldsOf, unknownParameters, expandAliases);
     }
+    for (const [index, type] of rigid) bindings[index] = type;
     const seeded = this.seedTypeParametersFromPosition(callee.result, bindings, unknownParameters, contextualType, fieldsOf, expandAliases);
+    for (let index = 0; index < parameterCount; index += 1) {
+      if (bindings[index] == null && !unknownParameters.has(index)) unsolved?.add(index);
+    }
     this.reportGenericBoundViolations(callee, bindings, planned, callSpan, unknownParameters, seeded);
     for (const item of planned) {
       const actual = actuals.get(item) ?? unknownType;
@@ -9390,14 +10069,22 @@ export class Analyzer implements TypeEnvironment {
     // value they receive, which is why section 8 refuses to settle an empty
     // collection at either; a type argument reads them the same way.
     if (expected.kind === "unknown" || expected.kind === "any" || isInvalidType(expected)) return seeded;
-    const match = (against: ValueType): (ValueType | null)[] => {
+    const match = (against: ValueType, pattern: ValueType = result): (ValueType | null)[] => {
       const table: (ValueType | null)[] = bindings.map(() => null);
-      unifyTypeParameters(result, against, table, fieldsOf, undefined, expandAliases);
+      unifyTypeParameters(pattern, against, table, fieldsOf, undefined, expandAliases);
       return table;
     };
     let candidates = match(expected);
     if (expected.kind === "optional" && candidates.every((candidate) => candidate === null)) {
       candidates = match(expandAliases(expected.inner));
+    }
+    // D55 rule 120 layer two: the position may name a *base* of what the call
+    // produces — `const numbers: Stack<number> = Boxes()`. The pattern matched
+    // against it is then this result's own ancestor that applies the
+    // declaration the position named, with the call's parameters still in it.
+    if (candidates.every((candidate) => candidate === null)) {
+      const ancestor = this.classPatternForPosition(result, expected.kind === "optional" ? expandAliases(expected.inner) : expected);
+      if (ancestor) candidates = match(expected.kind === "optional" ? expandAliases(expected.inner) : expected, ancestor);
     }
     for (const [index, candidate] of candidates.entries()) {
       if (!candidate || bindings[index] != null || unknownParameters.has(index)) continue;
@@ -9406,6 +10093,33 @@ export class Analyzer implements TypeEnvironment {
       seeded.add(index);
     }
     return seeded;
+  }
+
+  /**
+   * The ancestor of a class result that applies the declaration a position
+   * named, with this call's own type parameters carried through the chain. A
+   * class is invariant in its arguments (D77 rule 194 item 1), so this walks
+   * the *declaration* chain only — it never widens an argument.
+   */
+  private classPatternForPosition(result: ValueType, expected: ValueType): ValueType | null {
+    if (result.kind !== "class" || !result.application) return null;
+    if (expected.kind !== "class") return null;
+    const target = expected.application?.declaration ?? expected.identity ?? expected.name;
+    let application: GenericApplication = result.application;
+    const seen = new Set<string>();
+    while (!seen.has(application.declaration)) {
+      if (application.declaration === target || application.name === target) {
+        return classApplicationType(application.declaration, application.name, application.arguments);
+      }
+      seen.add(application.declaration);
+      const template = this.classes.get(application.declaration) ?? this.classes.get(application.name);
+      const base = template?.baseApplication;
+      if (!base) return null;
+      const names = template?.typeParameterNames ?? [];
+      const table = names.map((_, index) => application.arguments[index] ?? unknownType);
+      application = { ...base, arguments: base.arguments.map((argument) => substituteTypeParameters(argument, table)) };
+    }
+    return null;
   }
 
   /**
@@ -11170,7 +11884,7 @@ export class Analyzer implements TypeEnvironment {
   ): ValueType {
     if (objectExpression.kind === "SuperExpression") {
       if (optional) this.typeError("Optional access is not valid on 'super'", memberSpan);
-      const base = this.currentClass ? this.classes.get(this.currentClass)?.base ?? null : null;
+      const base = this.currentClass ? this.classInfo(this.currentClass)?.base ?? null : null;
       if (!base || !this.superMemberContext) {
         this.typeError("'super' member access is only available directly inside a derived constructor, method, getter, field initializer, or nested arrow", objectExpression.span);
         return unknownType;
@@ -11403,7 +12117,7 @@ export class Analyzer implements TypeEnvironment {
         const overrider = !abstractMember && (getter || method)
           ? [...this.classes.keys()].find((candidate) => candidate !== classKey
             && this.isSubclassOf(candidate, classKey)
-            && (this.classes.get(candidate)?.methods.has(property) || this.classes.get(candidate)?.getters.has(property)))
+            && (this.classInfo(candidate)?.methods.has(property) || this.classInfo(candidate)?.getters.has(property)))
           : undefined;
         if (abstractMember) {
           this.typeError(
@@ -11436,7 +12150,7 @@ export class Analyzer implements TypeEnvironment {
       if (readValue && (field || privateField)) {
         const initialization = this.staticFieldInitialization;
         const ownField = initialization?.className === key
-          && (this.classes.get(key)?.staticFields.has(property)
+          && (this.classInfo(key)?.staticFields.has(property)
             || this.privateStaticFields.get(key)?.has(property));
         if (ownField && !initialization.initialized.has(property)) {
           this.typeError(
@@ -11957,7 +12671,7 @@ export class Analyzer implements TypeEnvironment {
     }
     if (!className) return;
     const method = statement as FunctionDeclaration & { readonly static?: boolean; readonly private?: boolean; readonly accessor?: boolean };
-    const info = this.classes.get(className);
+    const info = this.classInfo(className);
     if (!info) return;
     if ("accessor" in method) {
       const fields: ReadonlyMap<string, ClassField> | undefined = method.private
@@ -12006,16 +12720,23 @@ export class Analyzer implements TypeEnvironment {
     return candidates.reduce((result, candidate) => mergeTypes(result, candidate));
   }
 
-  private functionType(statement: FunctionDeclaration): ValueType {
-    const frame = this.typeParameterFrame(statement.typeParameters);
+  private functionType(statement: FunctionDeclaration, classParameters?: readonly TypeParameterDeclaration[]): ValueType {
+    // D55 rule 120 layer two: a method of a generic class is checked under its
+    // own parameters *and* the class's, but only its own are solved at a call —
+    // the class's are already fixed by the receiver. So the frame carries both
+    // and the callable publishes the first ones only; everything above that
+    // count is a class parameter, which `substituteClassMemberType` supplies
+    // when the class is instantiated.
+    const frame = this.memberTypeParameterFrame(classParameters, statement.typeParameters);
+    const own = this.typeParameterFrame(statement.typeParameters);
     const bounds = this.typeParameterBoundVector(statement.typeParameters);
     return this.withTypeParameterFrame(frame, () => {
       const result = this.inferredFunctionResult(statement);
       const rest = statement.parameters.find((parameter) => parameter.rest);
       return {
         kind: "function",
-        ...(frame.size > 0 ? { typeParameterNames: [...frame.keys()] } : {}),
-        ...(frame.size > 0 && bounds ? { typeParameterBounds: bounds } : {}),
+        ...(own.size > 0 ? { typeParameterNames: [...own.keys()] } : {}),
+        ...(own.size > 0 && bounds ? { typeParameterBounds: bounds } : {}),
         parameters: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => this.resolveValidatedAnnotation(parameter.type)),
         parameterNames: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => parameter.name),
         requiredParameters: statement.parameters.filter((parameter) => !parameter.rest && !parameter.defaultValue).length,
@@ -12893,6 +13614,19 @@ export class Analyzer implements TypeEnvironment {
     return null;
   }
 
+  /**
+   * D114 item ①: what an `await` says to the expression it awaits. A position
+   * that expects `T` is awaiting something that produces `Promise<T>`, and a
+   * position that expects nothing keeps expecting nothing — silence has to stay
+   * silence, because section 8's empty-collection rule reads this same channel
+   * and `await []` must go on saying exactly what it said.
+   */
+  private awaitedOperandContext(contextualType: ValueType): ValueType {
+    const expanded = this.expandAliases(contextualType);
+    if (expanded.kind === "unknown" || expanded.kind === "any" || isInvalidType(expanded)) return unknownType;
+    return { kind: "promise", value: contextualType };
+  }
+
   private formReadField(name: string, source: ValueType, fieldSpan: Span): FormReadField | null {
     const expanded = this.expandAliases(source);
     const optional = expanded.kind === "optional";
@@ -13112,6 +13846,19 @@ export class Analyzer implements TypeEnvironment {
       ));
       return true;
     }
+    // D77 rule 194 item 2: a class carries no per-instantiation validator —
+    // `instanceof Stack` cannot tell `Stack<number>` from `Stack<string>` — so
+    // the arguments are refused in the same words a type parameter is, and for
+    // the same reason. A generic *record* is monomorphized and stays checkable.
+    const erasedClass = this.erasedClassArgumentCheck(checked);
+    if (erasedClass) {
+      this.diagnostics.push(diagnostic(
+        "VEL4022",
+        `Type arguments are erased at runtime, so '${describeType(erasedClass)}' cannot be checked; check '${erasedClass.application!.name}' itself`,
+        errorSpan,
+      ));
+      return true;
+    }
     let name = "";
     if (!typeContainsParameter(checked, (parameter) => {
       name = parameter.name;
@@ -13119,6 +13866,74 @@ export class Analyzer implements TypeEnvironment {
     })) return false;
     this.diagnostics.push(diagnostic("VEL4022", `Type parameter '${name}' is erased at runtime and cannot be checked; check against a concrete type instead`, errorSpan));
     return true;
+  }
+
+  /** The first class instantiation inside a runtime-checked type, if the type carries one. */
+  private erasedClassArgumentCheck(type: ValueType): Extract<ValueType, { kind: "class" }> | null {
+    if (type.kind === "class") return type.application ? type : null;
+    if (type.kind === "optional") return this.erasedClassArgumentCheck(type.inner);
+    if (type.kind === "union") {
+      for (const member of type.members) {
+        const found = this.erasedClassArgumentCheck(member);
+        if (found) return found;
+      }
+      return null;
+    }
+    if (type.kind === "list" || type.kind === "set") return this.erasedClassArgumentCheck(type.element);
+    if (type.kind === "map") return this.erasedClassArgumentCheck(type.key) ?? this.erasedClassArgumentCheck(type.value);
+    if (type.kind === "record") return this.erasedClassArgumentCheck(type.value);
+    if (type.kind === "object") {
+      for (const field of type.fields.values()) {
+        const found = this.erasedClassArgumentCheck(field);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * D77 rule 194 item 2: `is Stack` and `case Stack:` are the two positions a
+   * bare generic class name may stand in — the check is `instanceof`, which
+   * says nothing about the arguments. Only the outermost name is allowed to be
+   * bare; `is List<Stack>` still needs `Stack`'s arity, because that check does
+   * read the argument.
+   */
+  private allowBareGenericClassName(reference: TypeReference): void {
+    if (reference.syntax.kind === "NamedTypeSyntax") this.bareGenericClassPositions.add(reference.syntax);
+  }
+
+  /**
+   * D77 rule 194 item 2: what a bare `is Stack` proves about the subject. The
+   * check confirms the family and nothing else, so a subject that already names
+   * its arguments keeps them, and one that does not gains the only arguments an
+   * `instanceof` can prove — `unknown` at every position.
+   */
+  private erasedClassCheckType(source: ValueType, checked: ValueType): ValueType {
+    if (checked.kind !== "class" || checked.application) return checked;
+    const parameters = this.classInfo(checked.identity ?? checked.name)?.typeParameterNames;
+    if (!parameters?.length) return checked;
+    const known: ValueType[] = [];
+    const collect = (candidate: ValueType): void => {
+      const expanded = this.expandAliases(candidate);
+      if (expanded.kind === "union") {
+        for (const member of expanded.members) collect(member);
+        return;
+      }
+      if (expanded.kind === "optional") return collect(expanded.inner);
+      if (expanded.kind === "class" && expanded.application
+        && this.isSubclassOf(expanded.identity ?? expanded.name, checked.identity ?? checked.name)) {
+        known.push(expanded);
+      }
+    };
+    collect(source);
+    if (known.length > 0) return unionOf(known);
+    const erased = classApplicationType(
+      checked.identity ?? checked.name,
+      checked.name,
+      parameters.map(() => unknownType),
+    );
+    this.noteGenericApplications(erased);
+    return erased;
   }
 
   protected resolveAnnotation(reference: TypeReference | null): ValueType {
@@ -13157,6 +13972,10 @@ export class Analyzer implements TypeEnvironment {
     if (type.kind === "named" && type.application) {
       const resolved = this.resolveGenericApplication(type, (argument) => this.resolveNamedClasses(argument));
       if (resolved) return resolved;
+      // D55 rule 120 layer two: the same canonicalization for a class
+      // application, so `Stack<number>` written in two modules is one identity.
+      const instantiated = this.resolveGenericClassApplication(type);
+      if (instantiated) return instantiated;
     }
     if (type.kind === "named" && !type.identity) {
       const parameter = this.typeParameterFrames.at(-1)?.get(type.name);
@@ -13192,7 +14011,7 @@ export class Analyzer implements TypeEnvironment {
       if (imported && imported === this.externTypeImports.get(type.name) && imported.kind === "class") return imported;
     }
     if (type.kind === "named" && this.classes.has(type.name)) {
-      const info = this.classes.get(type.name);
+      const info = this.classInfo(type.name);
       return {
         kind: "class",
         name: type.name,
@@ -13280,6 +14099,18 @@ export class Analyzer implements TypeEnvironment {
           // teaches the arity rather than quietly reading it as
           // `Box<unknown>`, which would hand back a validator that accepts
           // everything the author forgot to describe.
+          // D55 rule 120 layer two: a static member belongs to the class, not
+          // to an instantiation, so the class's parameters are out of scope
+          // there. Reported where it is written, because "Unknown type 'T'" is
+          // true and useless — the name exists, it just has no value here.
+          if (this.staticMemberTypeParameters?.names.has(syntax.name)) {
+            this.diagnostics.push(diagnostic(
+              "VEL4021",
+              `Type parameter '${syntax.name}' belongs to class '${this.staticMemberTypeParameters.className}', and a static member belongs to the class rather than to an instantiation, so '${syntax.name}' has no value here; declare '<${syntax.name}>' on this member, or make it an instance member`,
+              syntax.span,
+            ));
+            return false;
+          }
           if (this.genericTypes.has(syntax.name)) {
             const info = this.genericTypes.get(syntax.name)!;
             this.typeError(
@@ -13287,6 +14118,21 @@ export class Analyzer implements TypeEnvironment {
               syntax.span,
             );
             return false;
+          }
+          // D55 rule 126 reaching layer two: a bare generic class name has no
+          // identity, no member table, and no instantiation behind it — it is
+          // a type constructor. The one position that reads it anyway is the
+          // erased runtime check `is Stack`, which is why that position asks
+          // for it by name.
+          {
+            const parameters = this.classes.get(syntax.name)?.typeParameterNames;
+            if (parameters?.length && !this.bareGenericClassPositions.has(syntax)) {
+              this.typeError(
+                `Generic class '${syntax.name}' needs ${parameters.length === 1 ? "a type argument" : `${parameters.length} type arguments`}; write '${syntax.name}<${parameters.join(", ")}>' with concrete types`,
+                syntax.span,
+              );
+              return false;
+            }
           }
           if (this.primitiveNames.has(syntax.name)
             || this.namedTypes.has(syntax.name)
@@ -13342,6 +14188,11 @@ export class Analyzer implements TypeEnvironment {
           if (generic) {
             const argumentsValid = syntax.arguments.map(validate).every(Boolean);
             return argumentsValid && this.validateGenericApplication(generic, syntax);
+          }
+          const genericClass = this.classes.get(syntax.name);
+          if (genericClass?.typeParameterNames?.length) {
+            const argumentsValid = syntax.arguments.map(validate).every(Boolean);
+            return argumentsValid && this.validateGenericClassApplication(syntax.name, genericClass, syntax);
           }
           if (syntax.name !== "List" && syntax.name !== "Set" && syntax.name !== "Map" && syntax.name !== "Record" && syntax.name !== "Promise" && syntax.name !== "Function" && syntax.name !== "Type") {
             const resolved = resolver({ syntax, span: syntax.span });
@@ -13795,6 +14646,7 @@ export class Analyzer implements TypeEnvironment {
             return invalidType;
           }
         }
+        this.allowBareGenericClassName(pattern.type);
         const checked = this.resolveAnnotation(pattern.type);
         const valid = this.validateTypeReference(pattern.type);
         if (valid && this.rejectErasedRuntimeCheck(checked, pattern.type.span)) return invalidType;
@@ -14024,8 +14876,9 @@ export class Analyzer implements TypeEnvironment {
     return rests.length > 0 ? unionOf(rests) : { kind: "object", fields: new Map() };
   }
 
-  private narrowMatchType(input: ValueType, checked: ValueType): ValueType {
+  private narrowMatchType(input: ValueType, rawChecked: ValueType): ValueType {
     const source = this.expandAliases(input);
+    const checked = this.erasedClassCheckType(source, rawChecked);
     if (source.kind === "any" || source.kind === "unknown") return checked;
     if (source.kind === "union") {
       const members = source.members
@@ -14730,7 +15583,7 @@ export class Analyzer implements TypeEnvironment {
       const visited = new Set<string>();
       while (current && !visited.has(current)) {
         visited.add(current);
-        const info = this.classes.get(current);
+        const info = this.classInfo(current);
         for (const [name, field] of info?.fields ?? []) if (!members.has(name)) members.set(name, this.displayExternalClasses(field.type));
         for (const [name, method] of info?.methods ?? []) if (!members.has(name)) members.set(name, this.displayExternalClasses(method));
         current = info?.base ?? null;
@@ -14748,7 +15601,7 @@ export class Analyzer implements TypeEnvironment {
       const visited = new Set<string>();
       while (current && !visited.has(current)) {
         visited.add(current);
-        const info = this.classes.get(current);
+        const info = this.classInfo(current);
         for (const [name, field] of info?.staticFields ?? []) if (!members.has(name)) members.set(name, this.displayExternalClasses(field.type));
         for (const [name, method] of info?.staticMethods ?? []) if (!members.has(name)) members.set(name, this.displayExternalClasses(method));
         current = info?.base ?? null;
@@ -14962,7 +15815,7 @@ export class Analyzer implements TypeEnvironment {
       const name = classes.pop()!;
       if (reachable.has(name)) continue;
       reachable.add(name);
-      const info = this.classes.get(name);
+      const info = this.classInfo(name);
       if (!info) continue;
       if (info.base) classes.push(info.base);
       reach(info.iterate);
@@ -15581,8 +16434,9 @@ export class Analyzer implements TypeEnvironment {
     return null;
   }
 
-  private runtimeCheckedType(input: ValueType, checked: ValueType): ValueType {
+  private runtimeCheckedType(input: ValueType, rawChecked: ValueType): ValueType {
     const source = this.expandAliases(input);
+    const checked = this.erasedClassCheckType(source, rawChecked);
     // D85 rule 210: `unknown` is the one checked domain that proves nothing,
     // so a check against it leaves the subject's own type alone. Without this
     // a membership probe against a container whose element or key type is

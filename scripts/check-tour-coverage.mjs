@@ -126,9 +126,10 @@ const FLOORS = Object.freeze({
   // cannot land without chapter 13 demonstrating it.
   "web-test-member": 33,
   "type-parameter-bound": 3,
-  // D55 rule 120: `def` and `type`. A form removed from the roster without a
-  // ruling drops this below its floor rather than quietly checking less.
-  "generic-declaration": 2,
+  // D55 rule 120: `def`, `type`, and — at layer two — `class`. A form removed
+  // from the roster without a ruling drops this below its floor rather than
+  // quietly checking less.
+  "generic-declaration": 3,
   // The 26 members of `CoreStatement`, the Web extension's 16 refined
   // constructs, and Node's server declaration. `unsafe css` counts twice
   // because its `source` is a tagged union whose spellings are separately
@@ -596,6 +597,7 @@ function observeModule({ path, tokens, program, index, contextualKeywords, synta
     if (Array.isArray(node.typeParameters) && node.typeParameters.length > 0) {
       if (node.kind === "FunctionDeclaration") observe("generic-declaration", "def");
       if (node.kind === "TypeDeclaration") observe("generic-declaration", "type");
+      if (node.kind === "ClassDeclaration") observe("generic-declaration", "class");
     }
   });
 
