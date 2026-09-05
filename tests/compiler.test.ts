@@ -29784,7 +29784,7 @@ import js {IncomingMessage, request} from "node:http"
 const message: IncomingMessage = request("/status")
 print(describe(message))
 `.trimStart(), "utf8");
-  const unified = await compileProject(mainPath);
+  const unified = await compileProject(mainPath, new Map(), { packageTarget: "node" });
   assert.deepEqual(unified.failures, []);
   assert.deepEqual(unified.modules.flatMap((module) => module.result.diagnostics), []);
 
@@ -29805,7 +29805,7 @@ import js {IncomingMessage, request} from "node:http"
 const message: IncomingMessage = request("/status")
 print(describe(message))
 `.trimStart(), "utf8");
-  const conflicting = await compileProject(mainPath);
+  const conflicting = await compileProject(mainPath, new Map(), { packageTarget: "node" });
   assert.deepEqual(conflicting.failures, []);
   assert.ok((conflicting.modules.find((module) => module.inputPath === mainPath)?.result.diagnostics ?? [])
     .some((item) => item.code === "VEL4005"
@@ -29816,22 +29816,22 @@ print(describe(message))
   await writeFile(mainPath, `
 import {describe} from "./library.vel"
 
-extern module "node:http2":
+extern module "node:https":
     export class IncomingMessage:
         const url: string
         pass
 
     export def request(target: string) -> IncomingMessage
 
-import js {IncomingMessage, request} from "node:http2"
+import js {IncomingMessage, request} from "node:https"
 
 const message: IncomingMessage = request("/status")
 print(describe(message))
 `.trimStart(), "utf8");
-  const mismatched = await compileProject(mainPath);
+  const mismatched = await compileProject(mainPath, new Map(), { packageTarget: "node" });
   assert.deepEqual(mismatched.failures, []);
   assert.ok((mismatched.modules.find((module) => module.inputPath === mainPath)?.result.diagnostics ?? [])
-    .some((item) => /Cannot assign IncomingMessage to a different IncomingMessage contract \(the value is the extern class from "node:http2" and the target is the extern class from "node:http"\)/u.test(item.message)));
+    .some((item) => /Cannot assign IncomingMessage to a different IncomingMessage contract \(the value is the extern class from "node:https" and the target is the extern class from "node:http"\)/u.test(item.message)));
 });
 
 test("velar test and velar run resolve bridged npm dependencies from the project", async () => {

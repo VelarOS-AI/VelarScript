@@ -46,8 +46,9 @@ npm run release:check
 - The packed-package gate derives the toolchain set from `packages/*`:
   every publishable workspace package is packed and checked against what
   its own manifest promises a consumer — LICENSE, README, and every path named
-  by `main`, `types`, `exports`, `bin` or `velar.entry` — installed into the
-  clean consumer, and imported through every specifier it publishes. A package
+  by `main`, `types`, `exports`, `bin`, `velar.entry`, `velar.entries`,
+  `velar.artifacts`, or `velar.resources` — installed into the clean consumer,
+  and imported through every specifier it publishes. A package
   added to the workspace therefore enters all checks on the day it exists.
 - The check gate extracts every `velar` fence from README, package guides, and
   language/API documentation. Fences are read by CommonMark's rules rather than

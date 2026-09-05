@@ -1,6 +1,6 @@
 # VelarScript Toolchain Distribution
 
-Status: stable package contract for the published VelarScript 0.13 toolchain
+Status: stable package contract for the published VelarScript toolchain
 
 The repository contains one npm workspace layer: the version-locked language
 toolchain and official target frameworks under `packages/`:
@@ -71,17 +71,22 @@ follows the ranges already declared in `package.json` rather than silently
 moving every dependency to a new major.
 
 A reusable VelarScript package keeps its readable source and may publish a
-frozen runtime artifact beside it. It declares `velar.entry`, its supported
-`velar.targets`, and a bounded `velar.requires.capabilities` list. A compiler/framework
+frozen runtime artifact beside it. It declares the mandatory root
+`velar.entry`, optional exact `velar.entries`, its supported `velar.targets`,
+and a bounded `velar.requires.capabilities` list. A compiler/framework
 extension declares `velar.extension`:
 
 ```json
 {
   "type": "module",
   "files": ["src", "dist"],
-  "exports": { ".": "./dist/index.js" },
+  "exports": {
+    ".": "./dist/index.js",
+    "./worker": "./dist/worker.js"
+  },
   "velar": {
     "entry": "src/index.vel",
+    "entries": { "./worker": "src/worker.vel" },
     "artifacts": { "core": "dist/velar-library.json" },
     "targets": ["core"],
     "requires": { "capabilities": [] }
@@ -89,29 +94,125 @@ extension declares `velar.extension`:
 }
 ```
 
-`velar build-library` checks the source and writes Velar library ABI 1
-JavaScript, its source map, a portable `.veli` public interface, and a receipt
-that hashes all three. The receipt also records the package name/version,
-compiler version, artifact target, source entry, and hashes of the source used
-for the build. npm's tarball/lockfile integrity protects the receipt; the
-consumer verifies every generated-file hash before trusting the interface.
+`velar build-library` checks every declared entry, then emits all distinct
+entries in one ESM splitting build. A root-only package retains receipt
+`formatVersion: 1` and the existing `index.*` layout. A package with subpath
+entries writes `formatVersion: 2`: `entries` covers `.` and every exact
+subpath, `sources` is the de-duplicated union of their checked source graphs,
+and `chunks` lists every generated shared JavaScript chunk and mandatory source
+map with their SHA-256 hashes. The shared graph prevents duplicated module
+state and runtime class identity while leaving runtime ABI 1 unchanged.
+
+The publication gate verifies every entry, interface, source, shared chunk,
+and source map present in the tarball. A consumer verifies the complete
+declared artifact set once per package and target before trusting any selected
+interface. Interface files share an 8 MiB aggregate limit and JavaScript
+entries plus chunks share a 16 MiB aggregate limit per receipt.
+JavaScript and source maps are then consumed from those immutable
+verified snapshots rather than reopened by a bundler. npm's tarball and
+lockfile integrity protect the receipt itself. A map is strict UTF-8
+source-map v3 JSON, and its JavaScript file ends in exactly one
+`sourceMappingURL` naming that receipt-declared map.
+
+The authenticated entries and chunks form a closed local ESM graph. Relative
+static imports, re-exports, and literal dynamic imports must resolve inside
+that set, and computed dynamic imports are rejected. Absolute and URL imports,
+package aliases and self-references, malformed bare specifiers, and Node
+builtins in a Core artifact are rejected. `build-library` inlines source-level
+JavaScript data modules; a residual `data:` edge therefore fails closed instead
+of introducing a second unauthenticated graph. Artifact, source, and
+generated-output paths must also survive Windows: device names, forbidden
+characters, trailing dots or spaces, NFC/case aliases, and file/directory
+hierarchy aliases fail before publication or materialization.
 
 Artifact resolution is deliberately first. When a compatible artifact exists,
-the compiler loads its interface for type checking and leaves the package import
-as an ordinary bare ESM import of `package.json#exports`. It does not open,
-parse, or compile the installed `.vel`, so a later language generation can run
-that release without rewriting its source. `velar.requires.language` governs
+the compiler loads the selected entry's interface for type checking and leaves
+that package import as an ordinary bare ESM import of `package.json#exports`.
+It does not open, parse, or compile the installed `.vel`, so a later language
+generation can run that release without rewriting its source. `velar.requires.language` governs
 only source fallback. If no compatible artifact exists, the resolver follows
 the source-package rules below exactly as before.
 
 ABI 1 accepts one artifact target per package: `core` or `node`. A `core`
 artifact is target-neutral and may be consumed by Core, Node, Web, or Desktop;
 a `node` artifact is admitted only to Node.
-The build bundles the matching `velar/*` implementation support so the artifact
-does not import compiler-private runtime modules, while ordinary npm dependencies
-remain ordinary package imports. Web/Desktop component artifacts require a
-shared reactive/rendering runtime ABI and are not claimed by ABI 1; those
-packages continue to use source mode.
+The published frozen library bundles the matching `velar/*` implementation
+support, while ordinary npm libraries remain bare imports declared through the
+library package's normal npm dependencies. Web/Desktop component artifacts
+require a shared reactive/rendering runtime ABI and are not claimed by ABI 1;
+those packages continue to use source mode.
+
+Both artifact production and loading verify every retained bare import against
+the package's `dependencies` and artifact target. Source checks apply the same
+ownership rule inside package-owned JavaScript helpers reached through
+`#imports` or self exports.
+
+Because those npm imports remain runtime-owned, `check` proves their exact
+entry before a Core artifact can claim portability. The dependency must have an
+explicit `exports` branch that selects an existing ESM file under both Node and
+browser conditions. A legacy `main`, a CommonJS-only target, a blocked or
+missing subpath, and an unreadable manifest fail as `VEL6006`. Node artifacts
+use the Node ESM condition set and may retain Node-compatible legacy packages;
+Web and Desktop checks use the browser condition set. Package `imports` aliases
+use these same condition authorities, including `node-addons`, `module-sync`,
+and `module`, so check and bundling cannot select different branches.
+
+That ownership rule also applies to a frozen VelarScript dependency. If library
+`C` imports frozen library `B`, `build-library` authenticates `B`'s complete
+receipt and emits the original `B` package specifier. `B` and its relative
+entry/chunk closure are not flattened into `C`; an npm dependency imported by
+`B` therefore continues to resolve from `B`'s installed package boundary.
+
+`run` and `test` keep a frozen entry anchored to its installed package, so a
+dependency installed below that package resolves from its actual owner rather
+than from an arbitrary consumer-level copy. They revalidate the package's
+complete entry and shared-chunk set immediately before launch; the installed
+dependency tree must remain unchanged while the command runs. Portable
+framework-free and Node
+application builds currently require frozen packages without external npm
+imports; they fail explicitly instead of flattening a package-local dependency
+tree or silently changing native, optional, dynamic-import, or asset behavior.
+
+Browser development has one import-map target per bare specifier. If actual
+importer anchors resolve the same specifier to different canonical package
+instances, development fails closed instead of selecting one version
+arbitrarily; the dependency graph must be aligned for that mode.
+
+### Package source entries
+
+Importing `toolkit` selects the mandatory `velar.entry`; importing
+`toolkit/worker` selects `velar.entries["./worker"]`. Scoped names follow the
+same split, so `@scope/toolkit/worker` still selects `./worker`. There is no
+directory, `index.vel`, wildcard, or nearest-prefix fallback: an undeclared
+subpath is an error.
+
+`velar.entries` maps at most 255 exact public subpaths to source files, for 256
+entries including the root. A key matches
+`./[A-Za-z0-9][A-Za-z0-9._/-]*`, has no wildcard, empty, `.` or `..` segment,
+and does not end in `.vel`. A value is a normalized package-relative `.vel`
+path: forward slashes only, no absolute path, control character, or empty,
+`.` or `..` segment. All entries share one package identity and the same
+language, target, and capability declarations; their relative imports remain
+inside that package root. Several public subpaths may intentionally name the
+same source file. `velar.entries` and `velar.resources` must not claim the same
+public subpath because one import specifier cannot be both code and JSON.
+
+For a frozen artifact, each declared entry must have a matching exact npm
+export. A Core build resolves both Node ESM and browser ESM conditions, and a
+Node build resolves Node ESM conditions; every applicable branch must select
+one generated `.js` or `.mjs` file for that entry. A root-only format-1 receipt
+retains the legacy `index.js` output and therefore requires a surviving
+`package.json` scope with `"type": "module"`; `.mjs` outputs are available to
+multi-entry format-2 receipts. `types` and `require` are
+separate package promises and may point elsewhere. `build-library` does not
+generate TypeScript declarations, so any declared `.d.ts` must live outside
+the transactionally replaced output directory and be published separately.
+Different source entries cannot claim the same generated artifact paths; two
+subpaths that alias one source may share one artifact only when they export the
+same JavaScript file. A compatible receipt covers all entries: resolution does
+not mix artifact-backed and source-backed entries from one package. The
+`__velar_chunks/` directory below the receipt is reserved for format-2 shared
+outputs and cannot be named by an entry export.
 
 Targets are `core`, `node`, `web`, or `desktop`. Declaring `core` means the
 package is target-neutral and therefore supports Core, Node, Web, and Desktop;
@@ -211,7 +312,7 @@ about the namespace, not about the extension.
 ### Package resources
 
 A source package that exposes static JSON data declares an exact resource map
-beside `velar.entry`, and exposes the same file through npm `exports`:
+beside its source entries, and exposes the same file through npm `exports`:
 
 ```json
 {
@@ -250,7 +351,7 @@ must be ordinary files contained by the package after symbolic links are
 only tells the compiler which data subpaths it is allowed to copy, watch,
 serve, or bundle.
 
-`velar test` reconstructs the used package entry and resource subpath exports
+`velar test` reconstructs the used package entries and resource subpath exports
 inside its sandbox. Framework-free builds copy the exact checked JSON bytes,
 generate an ESM value wrapper, and rewrite emitted imports to that output-local
 wrapper so npm self-references cannot escape back to a source package manifest;
@@ -337,8 +438,8 @@ Extension-owned manifest keys cannot claim Core fields such as `entry` or
 `extensions`, nor host-object keys such as `constructor`; project-format
 ownership is checked before any extension code or configuration parser runs.
 
-The `library` creator template publishes a Core-only source entry. The
-`component` template uses the same `velar.entry` mechanism for a Web component,
+The `library` creator template publishes a Core-only root source entry. The
+`component` template uses the same source-entry mechanism for a Web component,
 declares `@velarscript/web` as its peer contract, and keeps its demo application
 and tests out of the published `files` inventory. Component packages therefore
 remain ordinary source libraries rather than hidden framework extensions.
@@ -378,8 +479,8 @@ officially curated optional dependencies, not VelarScript Core workspaces,
 Standard modules, target frameworks, or toolchain release artifacts. The Core
 repository never imports them. Companion packages publish publicly under the
 separate `@velarscript-labs/*` npm scope; they never reuse `@velarscript/*` or a
-`velar/*` module identity. The compiler resolves an installed package's
-`velar.entry` through the same public package
+`velar/*` module identity. The compiler resolves an installed package's root
+`velar.entry` or exact `velar.entries` subpath through the same public package
 protocol used for every other installed dependency and never grants it a hidden
 Standard-module path.
 

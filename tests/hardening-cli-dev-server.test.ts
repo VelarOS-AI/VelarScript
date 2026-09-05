@@ -597,3 +597,115 @@ component App:
 
   assert.equal(await renderedText(chromium, "http://127.0.0.1:42895/", "[data-label]"), "DEEP:library");
 });
+
+async function writeWorkerIsolationPackage(
+  root: string,
+  name: string,
+  exportName: string,
+  version: string,
+  marker: string,
+): Promise<void> {
+  await writeTree(root, {
+    "package.json": `${JSON.stringify({
+      name,
+      version: "1.0.0",
+      type: "module",
+      dependencies: { shared: version },
+      velar: { entry: "src/index.vel", targets: ["web"], requires: { capabilities: ["web"] } },
+    }, null, 2)}\n`,
+    "src/index.vel": `extern module "shared":
+    export const marker: string
+
+import js {marker} from "shared"
+
+export def ${exportName}() -> string:
+    return marker
+`,
+    "node_modules/shared/package.json": `${JSON.stringify({
+      name: "shared",
+      version,
+      type: "module",
+      exports: { ".": "./index.js" },
+    }, null, 2)}\n`,
+    "node_modules/shared/index.js": `export const marker = ${JSON.stringify(marker)};\n`,
+  });
+}
+
+test("Web development isolates page and Worker npm graphs and watches both", { timeout: 120_000 }, async (context) => {
+  const directory = await temporaryRoot("velar-dev-worker-isolation-");
+  const projectRoot = join(directory, "app");
+  const pagePackage = join(directory, "linked-a");
+  const workerPackage = join(directory, "linked-b");
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  await mkdir(join(projectRoot, "node_modules"), { recursive: true });
+  await linkWebExtension(projectRoot);
+  await writeWorkerIsolationPackage(pagePackage, "linked-a", "pageLabel", "1.0.0", "page-shared-1");
+  await writeWorkerIsolationPackage(workerPackage, "linked-b", "workerLabel", "2.0.0", "worker-shared-2");
+  await symlink(pagePackage, join(projectRoot, "node_modules", "linked-a"), "dir");
+  await symlink(workerPackage, join(projectRoot, "node_modules", "linked-b"), "dir");
+  await writeTree(projectRoot, {
+    "package.json": `${JSON.stringify({ name: "worker-isolation-app", version: "1.0.0", private: true, type: "module" })}\n`,
+    "velar.json": `${JSON.stringify({
+      formatVersion: 2,
+      entry: "src/main.vel",
+      workers: { isolated: "src/isolated.vel" },
+      outDir: "dist",
+      build: { mode: "readable" },
+      extensions: ["@velarscript/web"],
+      web: { title: "Worker dependency isolation" },
+    }, null, 2)}\n`,
+    "src/main.vel": `import {pageLabel} from "linked-a"
+
+component App:
+    return <main data-label>{pageLabel()}</main>
+
+@main: mount(<App />, "#app")
+`,
+    "src/isolated.vel": `import {workerLabel} from "linked-b"
+
+export const isolatedWorkerLabel = workerLabel()
+`,
+  });
+
+  const production = spawnSync(process.execPath, [cliPath, "build"], {
+    cwd: projectRoot,
+    encoding: "utf8",
+    timeout: 300_000,
+  });
+  assert.equal(production.status, 0, `${production.stdout}${production.stderr}`);
+  const manifest = JSON.parse(await readFile(join(projectRoot, "dist", "velar-build.json"), "utf8")) as { readonly entry: string };
+  assert.match(await readFile(join(projectRoot, "dist", manifest.entry), "utf8"), /page-shared-1/u);
+  assert.match(await readFile(join(projectRoot, "dist", "isolated.js"), "utf8"), /worker-shared-2/u);
+
+  const port = 42896;
+  const server = startDevServer(projectRoot, port);
+  context.after(() => stopDevServer(server.child));
+  await server.waitForBanner();
+  const origin = `http://127.0.0.1:${port}`;
+  const document_ = await (await fetch(`${origin}/`)).text();
+  assert.doesNotMatch(document_, /VelarScript build error|multiple canonical package targets/u, document_.slice(0, 800));
+  const imports = importMapOf(document_);
+  assert.equal(typeof imports["linked-a"], "string");
+  assert.equal(imports["linked-b"], undefined, "a Worker-only Velar package must not enter the page import map");
+  assert.equal(typeof imports.shared, "string");
+  assert.match(await (await fetch(`${origin}${imports.shared}`)).text(), /page-shared-1/u);
+  assert.match(await (await fetch(`${origin}/isolated.js`)).text(), /worker-shared-2/u);
+
+  const beforeWorkerChange = server.rebuilds();
+  const workerDependency = join(workerPackage, "node_modules", "shared", "index.js");
+  await changeUntilReported(
+    workerDependency,
+    (attempt) => `export const marker = "worker-updated-${attempt}";\n`,
+    () => server.rebuilds() > beforeWorkerChange,
+  );
+  const deadline = Date.now() + 30_000;
+  let rebuiltWorker = "";
+  while (Date.now() < deadline) {
+    rebuiltWorker = await (await fetch(`${origin}/isolated.js`)).text();
+    if (/worker-updated-/u.test(rebuiltWorker)) break;
+    await new Promise((wait) => setTimeout(wait, 20));
+  }
+  assert.match(rebuiltWorker, /worker-updated-/u, "the Worker-only npm root must be watched and rebundled");
+  assert.match(await (await fetch(`${origin}${imports.shared}`)).text(), /page-shared-1/u,
+    "a Worker rebuild must not replace the page's import-map package instance");
+});

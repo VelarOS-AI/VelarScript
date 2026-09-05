@@ -469,10 +469,14 @@ print(read([1, 2, 3], 99))
 
 ## 11. Modules, and the JavaScript boundary
 
-Export and import by name. A package's public face is a barrel of explicit
-re-exports. Declarations initialize when a module is imported; application
-startup belongs to the module's `@main` region and runs only when that module is
-selected as a program entry.
+Export and import by name. A package has a mandatory root source entry and may
+add exact subpath entries; each entry exposes named exports directly or through
+an explicit re-export barrel. The package name selects `velar.entry`, while
+`toolkit/worker` selects `velar.entries["./worker"]`; undeclared subpaths do not
+fall back to a directory or `index.vel`. Declarations initialize when a module
+is imported; application startup belongs to the module's `@main` region and
+runs only when that module is selected as a program entry. The manifest rules
+are in [package distribution](package-distribution.md#package-source-entries).
 
 What a program can *compute* needs no import; what reaches *outside* the
 program must be imported. Four namespaces are permanent because they mirror a

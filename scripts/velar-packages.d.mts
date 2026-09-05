@@ -11,6 +11,7 @@ export interface VelarPackageManifest {
   readonly bin?: string | Readonly<Record<string, string>>;
   readonly velar?: {
     readonly entry?: string;
+    readonly entries?: Readonly<Record<string, string>>;
     readonly artifacts?: Readonly<Record<string, string>>;
     readonly resources?: Readonly<Record<string, {
       readonly path: string;

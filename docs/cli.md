@@ -241,17 +241,36 @@ JavaScript mode and Source Map are independent. `build.sourceMaps` defaults to
 `--source-maps` or `--no-source-maps`. Development and test execution retain
 their own enabled mappings regardless of the production build setting.
 
-`build-library` is the release build for a `kind: "library"` Core or Node library whose
-`package.json` declares `velar.entry`, one `velar.artifacts` receipt, and a root
-npm export. It replaces that declared artifact directory transactionally with
-frozen ABI-1 JavaScript, its ABI-owned source map, a portable type interface, and their hash
-receipt. The `.vel` source remains a separate published input; consumers use
-the artifact first and compile source only as a fallback. ABI 1 does not build
-Web/Desktop component packages.
+`build-library` is the release build for a `kind: "library"` Core or Node
+library whose `package.json` declares the root `velar.entry`, optional exact
+`velar.entries`, one `velar.artifacts` receipt, and a matching exact npm export
+for every entry. It checks every entry independently, then emits all distinct
+public entries through one ESM splitting build. Receipt format 2 records `.`
+and every exact subpath in `entries`, the union of checked sources in `sources`,
+and every shared JavaScript/source-map pair in `chunks`. Entry files and shared
+chunks are hashed as one package artifact set. Consumers authenticate the full
+set once per package and target. Commands that materialize a selected artifact
+use its verified in-memory JavaScript/source-map snapshots; `build-library`
+keeps an imported frozen package as its original bare npm specifier so that
+package continues to own its dependency graph. The set must be a closed local ESM graph;
+computed dynamic imports and relative edges outside its receipt fail closed.
+Root-only packages retain
+receipt format 1 and the original `index.*` layout. The `.vel` sources remain
+separate published inputs; consumers use one compatible artifact set first and
+compile source only as a fallback. ABI 1 does not build Web/Desktop component
+packages. Exact subpath and conditional-export rules are in
+[package distribution](package-distribution.md#package-source-entries).
 
 The Source Map switch belongs to application/module `build` output. A frozen
-library map remains mandatory because ABI 1 hashes and verifies it as part of
-the released artifact set.
+entry map and every format-2 shared-chunk map remain mandatory because ABI 1
+hashes and verifies them as part of the released artifact set.
+
+For frozen dependencies, `run` and `test` preserve resolution from the
+installed artifact owner and revalidate its bytes immediately before launch.
+The installed dependency tree must remain unchanged while the command runs.
+Framework-free and Node `build` currently require a
+dependency-free frozen artifact and reject its external npm imports rather than
+silently flattening or changing their runtime behavior.
 
 `verify` checks that a build is actually deployable rather than merely present.
 For a Node application, `build` instead writes a standalone ESM directory with

@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { velarPublishedWorkspacePackages } from "../scripts/velar-packages.mjs";
 import { parseNpmPackResult } from "../scripts/npm-pack-result.mjs";
-import { declaredEntryPaths, declaredImportSpecifiers, declaredJsonResourceImportSpecifiers, packageContentFailures, type PackedPackage } from "./package-contract.ts";
+import { declaredEntryPaths, declaredImportSpecifiers, declaredJsonResourceImportSpecifiers, packageContentFailures, packedTarballFileReader, type PackedPackage } from "./package-contract.ts";
 import { DESKTOP_NODE_RUNTIME_ARCHIVES, DESKTOP_NODE_RUNTIME_VERSION } from "../packages/desktop/src/config.ts";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -43,7 +43,14 @@ try {
   // What every published package must contain, asked of each manifest rather
   // than of a list: its licence, its README, and every file it points a
   // consumer at through `main`, `types`, `exports`, `bin` or `velar.entry`.
-  const contentFailures = published.flatMap((package_) => packageContentFailures(package_.manifest, named(package_.name)));
+  const contentFailures: string[] = [];
+  for (const package_ of published) {
+    contentFailures.push(...await packageContentFailures(
+      package_.manifest,
+      named(package_.name),
+      packedTarballFileReader(join(directory, named(package_.name).filename)),
+    ));
+  }
   assert.deepEqual(contentFailures, [], `packed packages do not contain what their manifests promise:\n${contentFailures.join("\n")}`);
   // The compiled packages additionally publish types beside their JavaScript.
   // Derived the same way: a package that promises a `.d.ts` anywhere in its

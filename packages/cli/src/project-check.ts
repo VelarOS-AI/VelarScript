@@ -6,6 +6,8 @@ import { compileProject, compileProjectEntries, type ProjectResult } from "./pro
 import { MAX_VELAR_PROJECT_MODULES } from "./source-limits.ts";
 import { nodeApplicationConfig } from "./node-application.ts";
 import { applicationEntry, applicationEntryMigration, type ApplicationEntryMigration } from "./application-entry.ts";
+import { projectPackageTarget } from "./project-package-target.ts";
+import type { VelarPackageTarget } from "./source-package-manifest.ts";
 
 /**
  * One compiled root of a `velar check` run: the project entry first, then every
@@ -42,14 +44,21 @@ export interface CheckedProject {
 export async function checkResolvedProject(
   config: VelarProjectConfig,
   input: string | null,
-  options: { readonly emitSourceMaps?: boolean } = {},
+  options: {
+    readonly emitSourceMaps?: boolean;
+    readonly packageTarget?: VelarPackageTarget;
+    readonly sourceRoot?: string;
+  } = {},
 ): Promise<CheckedProject> {
+  const packageTarget = options.packageTarget ?? projectPackageTarget(config);
   const project = await compileProjectEntries([config.entryPath, ...config.workerEntries.values()], config.entryPath, new Map(), {
+    ...(options.sourceRoot === undefined ? {} : { sourceRoot: options.sourceRoot }),
     projectRoot: config.root,
     publicRoot: config.publicDir,
     extensions: config.compilerExtensions,
     extensionConfig: config.extensionConfig,
     framework: config.framework,
+    packageTarget,
     emitSourceMaps: options.emitSourceMaps !== false,
   });
   // Every `.vel` file in the project, walked once and split between the two
@@ -92,6 +101,7 @@ export async function checkResolvedProject(
       extensions: config.compilerExtensions,
       extensionConfig: config.extensionConfig,
       framework: config.framework,
+      packageTarget,
       ...(isTestModule ? { exportTestFunctions: true } : {}),
       emitSourceMaps: options.emitSourceMaps !== false,
     });

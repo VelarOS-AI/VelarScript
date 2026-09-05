@@ -25,7 +25,10 @@ framework host, and cannot silently activate language syntax.
 }
 ```
 
-- `velar.entry` is the one public source entry resolved by the compiler.
+- `velar.entry` is the mandatory root source entry. A package that needs
+  separately importable surfaces may add exact `velar.entries` subpaths; the
+  root and every subpath remain part of one package contract. See
+  [package source entries](package-distribution.md#package-source-entries).
 - `velar.targets` states where the source may compile. A portable package uses
   the single declaration `["core"]`, which is valid in Core, Node, Web, and
   Desktop consumers; host-specific targets are listed exactly.

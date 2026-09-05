@@ -27,8 +27,9 @@ installable library, even when it is implemented entirely in VelarScript.
   members. Nothing patches JavaScript prototypes or creates new global names.
 - Implementation language does not determine membership. Reusable domain
   modules written in VelarScript distribute an ordinary installable package with
-  one `velar.entry` source entry and are imported by package name after
-  installation. Official non-standard experiments use the dedicated public
+  a mandatory root `velar.entry` and any needed exact `velar.entries`
+  subpaths, then are imported by those package specifiers after installation.
+  Official non-standard experiments use the dedicated public
   `@velarscript-labs/*` npm scope; `@velarscript/*` stays reserved for Standard
   owners, official targets, and the language toolchain.
 - Collection transforms return new lists and maps unless their name explicitly

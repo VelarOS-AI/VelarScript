@@ -91,22 +91,7 @@ export function createWebArtifacts(input: FrameworkHostArtifactsInput): Framewor
       addEventListener("error", async (event) => showError("VelarScript runtime error", await mapStack(event.error || event.message)))
       addEventListener("unhandledrejection", async (event) => showError("VelarScript unhandled rejection", await mapStack(event.reason)))
       try { await load() } catch (error) { showError("VelarScript runtime error", await mapStack(error)) }
-      new EventSource(eventsUrl).addEventListener("reload", async (event) => {
-        const update = JSON.parse(event.data)
-        if (update.errors.length) {
-          showError("VelarScript compile error", update.errors.join("\\n\\n"))
-          return
-        }
-        revision = update.revision
-        const stylesheet = document.querySelector("[data-velar-styles]")
-        if (stylesheet) stylesheet.href = ${JSON.stringify(withBase(config.base, "styles.css"))} + "?velar=" + revision
-        try {
-          await load()
-          hideError()
-        } catch (error) {
-          showError("VelarScript runtime error", await mapStack(error))
-        }
-      })
+      ${developmentReloadListener(withBase(config.base, "styles.css"))}
     </script>` : `
     <script type="module" src="${entryModule}"></script>`;
   const stylesheet = input.stylesheetPath && (styles || input.development)
@@ -137,6 +122,33 @@ export function createWebArtifacts(input: FrameworkHostArtifactsInput): Framewor
 </html>
 `,
   };
+}
+
+/** The generated SSE protocol stays separate from document assembly and metadata. */
+function developmentReloadListener(stylesheetPath: string): string {
+  return `let fullReloadPending = false
+      new EventSource(eventsUrl).addEventListener("reload", async (event) => {
+        const update = JSON.parse(event.data)
+        if (fullReloadPending) return
+        if (update.errors.length) {
+          showError("VelarScript compile error", update.errors.join("\\n\\n"))
+          return
+        }
+        if (update.fullReload === true) {
+          fullReloadPending = true
+          location.reload()
+          return
+        }
+        revision = update.revision
+        const stylesheet = document.querySelector("[data-velar-styles]")
+        if (stylesheet) stylesheet.href = ${JSON.stringify(stylesheetPath)} + "?velar=" + revision
+        try {
+          await load()
+          hideError()
+        } catch (error) {
+          showError("VelarScript runtime error", await mapStack(error))
+        }
+      })`;
 }
 
 /**

@@ -56,7 +56,6 @@
     "packages/cli/src/dev-server.ts#runDevServer": 246,
     "packages/cli/src/language-server.ts#runLanguageServer": 875,
     "packages/cli/src/language-server.ts#runLanguageServer.handle": 628,
-    "packages/cli/src/library-artifact.ts#validateValueType": 122,
     "packages/cli/src/mechanical-fixer.ts#applyProjectMechanicalFixes": 146,
     "packages/cli/src/npm.ts#resolveBrowserNpm": 151,
     "packages/cli/src/ownership-graph.ts#buildOwnershipGraphScoped": 223,
@@ -127,7 +126,6 @@
     "packages/web/src/editor.ts#completeWebProject": 121,
     "packages/web/src/emitter.ts#WebJavaScriptEmitter.emitJsxCode": 137,
     "packages/web/src/emitter.ts#WebJavaScriptEmitter.prepareLooks": 130,
-    "packages/web/src/host.ts#createWebArtifacts": 127,
     "packages/web/src/runtime-foundation.ts#webRuntimeFoundation": 1110,
     "tests/browser.acceptance.ts#acceptBrowser": 217,
     "tests/desktop-runtime.test.ts#bridge.invoke#2": 197

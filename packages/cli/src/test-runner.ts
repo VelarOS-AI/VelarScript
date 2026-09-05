@@ -10,6 +10,7 @@ import { compiledTestModulePath, createCompiledSandbox, portablePath, quoteRepor
 import type { TestWorkerInput, TestWorkerReport } from "./test-worker.ts";
 import { hostErrorStack } from "./host-error.ts";
 import { captureUnownedErrors, flushOutput, mapCompiledStacksToSources, unsettledWorkFailure } from "./unowned-errors.ts";
+import { projectPackageTarget } from "./project-package-target.ts";
 
 export interface TestRunnerOptions {
   readonly testTimeoutMs?: number;
@@ -99,6 +100,7 @@ export async function runTests(
         extensions: config.compilerExtensions,
         extensionConfig: config.extensionConfig,
         framework: config.framework,
+        packageTarget: projectPackageTarget(config),
         exportTestFunctions: true,
       });
       const errors = [

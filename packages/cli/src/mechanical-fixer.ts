@@ -7,6 +7,7 @@ import type { VelarProjectConfig } from "./config.ts";
 import { hostErrorMessage } from "./host-error.ts";
 import { compileProject, type ProjectModule, type ProjectResult } from "./project.ts";
 import { additionalProjectRoots, projectLayerFindings } from "./project-check.ts";
+import { projectPackageTarget } from "./project-package-target.ts";
 import { readVelarSourceFile } from "./source-limits.ts";
 
 export interface MechanicalFixReport {
@@ -68,7 +69,7 @@ export async function applyProjectMechanicalFixes(
         publicRoot: config.publicDir,
         extensions: config.compilerExtensions,
         extensionConfig: config.extensionConfig,
-        framework: config.framework,
+        framework: config.framework, packageTarget: projectPackageTarget(config),
         ...(entry === config.entryPath ? {} : { exportTestFunctions: true }),
       });
       for (const module of result.modules) covered.add(module.inputPath);

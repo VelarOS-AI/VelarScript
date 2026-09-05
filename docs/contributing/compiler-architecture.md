@@ -1,6 +1,6 @@
 # VelarScript Compiler Architecture
 
-Status: VelarScript 0.10 internal language, Standard API, secure static Web, semantic-tooling,
+Status: internal language, Standard API, secure static Web, semantic-tooling,
 and incremental pipeline implemented
 
 ## Pipeline
@@ -1003,11 +1003,17 @@ or bounded pieces without repeated source-level `.char(index)` calls or
 surrogate splitting.
 
 Reusable application algorithms outside the closed Standard vocabulary may be
-published as ordinary npm packages with a `velar.entry` source entry. The
-project loader resolves that entry from the installed package, keeps relative
-imports inside its package root, compiles it with the ordinary application
-pipeline, and rejects multiple installed instances of one package in an
-application build. No such application package is owned by this repository or
+published as ordinary npm packages with a mandatory root `velar.entry` and
+optional exact `velar.entries` subpaths. The project loader splits scoped and
+unscoped specifiers into package identity plus exact subpath, rejects an
+undeclared subpath rather than probing directories, and resolves every entry
+through the same package-owned manifest parser used by frozen-artifact builds.
+It keeps relative imports inside the package root, applies one package-level
+language/target/capability contract, compiles source fallback with the ordinary
+application pipeline, and rejects multiple installed instances of one package
+in an application build. A compatible multi-entry artifact supplies the exact
+selected interface and runtime export; an artifact package never mixes frozen
+and source entries. No such application package is owned by this repository or
 acquires a user-visible `velar/*` identity.
 
 Checked Number receiver methods use a separate compiler-owned Number runtime.

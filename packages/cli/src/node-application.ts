@@ -14,6 +14,7 @@ import {
   writeCompiledTestProject,
 } from "./test-output.ts";
 import { applicationEntry, type CheckedApplicationEntry } from "./application-entry.ts";
+import { projectPackageTarget } from "./project-package-target.ts";
 
 const NODE_EXTENSION_ID = "@velarscript/node";
 const SERVER_EXTENSION_ID = "@velarscript/server";
@@ -174,6 +175,7 @@ async function prepareNodeApplication(
     extensions: config.compilerExtensions,
     extensionConfig: config.extensionConfig,
     framework: null,
+    packageTarget: projectPackageTarget(config),
   });
   for (const notice of project.notices) process.stderr.write(`${notice.path}: notice: ${notice.message}\n`);
   const errors = [

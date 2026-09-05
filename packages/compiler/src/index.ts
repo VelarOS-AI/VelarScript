@@ -37,12 +37,12 @@ import {
   type TypeParameterBound,
   type ValueType,
 } from "./types.ts";
-
 export { advisory, diagnostic, formatAdvisory, formatDiagnostic, mechanicalEdits, mechanicalFix, type Advisory, type Diagnostic, type DiagnosticEdit, type DiagnosticFix } from "./diagnostic.ts";
 export { resolveAdvisorySuppressions, scanAdvisorySuppressions, type AdvisoryResolution, type AdvisorySuppression, type AdvisorySuppressionScan } from "./advisory-suppression.ts";
 export { applyMechanicalFixes, type AppliedMechanicalFix, type MechanicalFixResult } from "./mechanical-fix.ts";
 export { formatSource } from "./formatter.ts";
 export { collectionMemberGuidance, removedStandardFunctionGuidance, sourceTypeNameGuidance, type CollectionKind, type CollectionMemberGuidance, type SourceTypeGuidance } from "./language-guidance.ts";
+export { inspectJavaScriptModule, MAX_JAVASCRIPT_MODULE_SYNTAX_NODES, MAX_JAVASCRIPT_MODULE_TOKENS, type JavaScriptModuleEdge, type JavaScriptModuleInspection, type JavaScriptModuleInspectionOptions } from "./javascript-module.ts";
 export { SourceText, type Span } from "./source.ts";
 export type { EmbeddedJavaScriptEditorToken, EmbeddedJavaScriptEditorTokenModifier, EmbeddedJavaScriptEditorTokenType } from "./embedded-javascript-editor.ts";
 export { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
