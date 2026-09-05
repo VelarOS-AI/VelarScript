@@ -758,3 +758,21 @@ checkout 内串行）；Desktop 宿主夹具要有按 checkout 的应用数据�
 四包的 build tsconfig 补 `noUnusedLocals: true`，让死导入这一类自我执行（`packages/cli/src` 尚有四个：
 `ownership-graph.ts` `SemanticReference`、`preview-server.ts` `join`、`project.ts` `stat`、
 `typescript-declarations.ts` `describeType`——等 F5-node 落地后一并清）。
+
+### F5-node 落地（2026-09-06，提交 `d280e50`，合并进集成分支）
+
+十二项全落。要点：spawn 被操作系统拒绝（ENOENT / EACCES / ENOTDIR / cwd 不存在 / 只给命令名）在 worker
+里于句柄铸出之前就按调用拒绝，消息点名命令与 errno，代理不毒化、不逃逸；`__velarServeResponseCopy`
+两个分支都带 `contentType`；四个共享解码器 `ignoreBOM: true`（原先 `false` 会删掉 U+FEFF），
+`request.json()` 对坏 JSON 走框架自己的 **400 `request.invalid.json`**（账本 DECIDED 段已记录的既有状态码，
+不是裁决里写的 422——以框架现有码为准）；路由的每种结局在中间件链内成为响应，`use()` 把中间件记到
+应用上，框架 404 也从中经过；请求行之后的框架拒绝全部是问题文档（414 / 431 预检留 `text/plain`），
+`openapi()` 不改而变真；客户端挂断一句独立日志；编译期重叠裁判把 GET 与 WEBSOCKET 同形视为冲突；
+`listen({path})` 与 websocket 并用在装配期点名路径拒绝（编译期需要 `astNodesOfKind` 从
+`@velarscript/compiler/extension` 导出——进 F6）；`serverConfigurationFailure` 一处定义供 check 与 build；
+`application()` 收 0–65535；校验 `issues[].path` 只剩字段名段；路径参数不匹配空段。模块解析族：
+`ProjectFailure` 带 `code` / `span`，七处格式化并成 `formatProjectFailure`（LSP 同用），新码 VEL6007
+（未知导出，含最近名、`*.test.vel` 规则、自导入与 Core 前置名不双报）与 VEL6008（Web 侧拒绝，逐模块给去处）。
+未能在本波做的：VEL3007 的「该名无需导入」措辞在 `analysis/scopes.ts`（F5-core 的文件）——进 F6。
+指纹 26 个 Node 面文件变化（含 tour 的 `01-server.js`：`stream(...)` 现在自己设 `content-type`）。
+允许名单不增不涨，触到的条目全部下降（serve-runtime 4,228 → 3,800 等）。
