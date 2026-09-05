@@ -4397,7 +4397,12 @@ export component Profile(userId: string):
 
 A watch body is synchronous, so the reload is started with a `detach`
 statement rather than awaited; its failure still reports through the resource's
-own `error` field and the Web error chain.
+own `error` field and the Web error chain. Watching the resource's own `value`,
+`loading`, `ready`, or `error` and reloading it from there is refused where it
+is written, and so is a watch that unconditionally starts an `action` or an
+`async def` of the same module whose own top level writes the watched value:
+both re-trigger the watch on every completed run, and no budget can see either
+one, because the write arrives in a later task. Watch the input, not the result.
 
 Each load supersedes the one before it: a result that arrives after a newer
 reload started is discarded, and so is one that arrives after the component is
@@ -4433,7 +4438,13 @@ requirement: a `computed` callback may write state, and the write publishes
 normally. The compiler does not enforce purity, and a derived value that also
 mutates is legal — which is why the self-invalidation budget exists. A `computed`
 that invalidates itself is stopped and reported after 100 rounds rather than
-freezing the page. Keep derivations pure anyway; a `computed` that writes is a
+freezing the page. A cycle between two observers invalidates neither of them
+alone, so a second budget stands behind that one: the reactive runtime runs at
+most 100,000 observers **per host task**, counting the flushes a microtask chain
+links together as one. A macrotask boundary — a timer, an event, network I/O —
+starts a fresh budget, so an animation that writes state on every frame is never
+stopped. A cycle that crosses the network is beyond both budgets, and the two
+shapes of it a compile can prove are refused where they are written instead. Keep derivations pure anyway; a `computed` that writes is a
 side effect hiding in a cache, and `watch` is the spelling that says so.
 
 Reading a reactive source into an ordinary `const` freezes the value that was
@@ -4464,7 +4475,13 @@ never disposed — it lives for the life of the page, like a module `action` —
 a module watch is for application-wide facts, not for anything a component
 owns.
 
-A watch may write state, and it needs no declaration to do so. Within one
+A watch may write state, and it needs no declaration to do so. The one
+exclusion is the write that can only be a loop: a body whose top level
+unconditionally writes the watch's own subject — an assignment, a compound
+assignment, or a mutating collection call on the watched collection — is refused
+where it is written, because the run it schedules is its own and nothing ends
+it. A write under a condition, a write of a different state, and a write reached
+through a call are all untouched. Within one
 flush, watches run in the order they were written: two watches in one module
 run in source order, two live instances of one component run in mount order,
 and watches in two modules run in module initialization order. Two watches

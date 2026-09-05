@@ -9,6 +9,7 @@ import {
   isInvalidType,
   isAssignable,
   isReadonlyView,
+  mutatingCollectionMethods,
   nullType,
   nonOptional,
   numberType,
@@ -1269,6 +1270,190 @@ function watchSubjectPath(expression: Expression): boolean {
   }
 }
 
+/**
+ * D114 W: a reactive place written as one comparable key, so "the write and the
+ * subject name the same place" is one string equality.
+ *
+ * It is deliberately narrower than `renderWatchSubject`, which reconstructs any
+ * expression for a message. A key has to *decide*, so only the parts that name
+ * the same place on two evaluations are allowed into one: names, fields, and an
+ * index that is either a literal or another such path. `items[next()]` renders
+ * perfectly well and answers a different element every call, so it has no key
+ * and the shapes below stay silent on it — which is the right answer for a
+ * refusal that has to be right every time.
+ */
+function reactiveWritePath(expression: Expression): string | null {
+  switch (expression.kind) {
+    case "IdentifierExpression":
+      return expression.name;
+    case "MemberExpression": {
+      if (expression.optional) return null;
+      const object = reactiveWritePath(expression.object);
+      return object === null ? null : `${object}.${expression.property}`;
+    }
+    case "IndexExpression": {
+      if (expression.optional) return null;
+      const object = reactiveWritePath(expression.object);
+      if (object === null) return null;
+      const index = expression.index.kind === "LiteralExpression"
+        ? (typeof expression.index.value === "string" ? JSON.stringify(expression.index.value) : expression.index.raw)
+        : reactiveWritePath(expression.index);
+      return index === null ? null : `${object}[${index}]`;
+    }
+    default:
+      return null;
+  }
+}
+
+/** The root name a reactive path starts from, which is the binding it resolves through. */
+function reactivePathRoot(expression: Expression): string | null {
+  switch (expression.kind) {
+    case "IdentifierExpression":
+      return expression.name;
+    case "MemberExpression":
+    case "IndexExpression":
+      return reactivePathRoot(expression.object);
+    default:
+      return null;
+  }
+}
+
+type WatchBindingPattern = Extract<Statement, { readonly kind: "VariableDeclaration" }>["pattern"];
+
+function bindingPatternBinds(pattern: WatchBindingPattern, name: string): boolean {
+  switch (pattern.kind) {
+    case "NameBindingPattern":
+      return pattern.name === name;
+    case "ObjectBindingPattern":
+      return pattern.rest?.name === name || pattern.entries.some((entry) => bindingPatternBinds(entry.pattern, name));
+    case "ListBindingPattern":
+      return pattern.rest?.name === name
+        || pattern.elements.some((element) => element !== null && bindingPatternBinds(element, name));
+    default:
+      return false;
+  }
+}
+
+/**
+ * D114 W: whether a body statement introduces its own binding of `name`. From
+ * that statement on, the spelling names something else, and a write through it
+ * is not a write of the watched place. The scan stops there rather than
+ * guessing which of the two a later line meant.
+ */
+function statementBindsName(statement: Statement, name: string): boolean {
+  switch (statement.kind) {
+    case "VariableDeclaration":
+      return bindingPatternBinds(statement.pattern, name);
+    case "UsingDeclaration":
+    case "FunctionDeclaration":
+    case "ClassDeclaration":
+      return statement.name === name;
+    default:
+      return false;
+  }
+}
+
+/**
+ * D114 W: the call a body statement makes when the statement is nothing but
+ * that call. `detach` is included because it is how a synchronous watch body
+ * starts asynchronous work — the tour and four charter fences spell the reload
+ * that way — so a refusal that only saw the bare call would miss the shape it
+ * exists for. Everything else (a call inside an `if`, an argument, an assigned
+ * result) is not a plain top-level call and is not offered here.
+ */
+function topLevelCall(statement: Statement): Extract<Expression, { readonly kind: "CallExpression" }> | null {
+  const expression = statement.kind === "ExpressionStatement" ? statement.expression
+    : statement.kind === "DetachStatement" ? statement.expression
+      : null;
+  return expression !== null && expression.kind === "CallExpression" ? expression : null;
+}
+
+/**
+ * D114 W: whether one plain body statement writes the reactive place `path`.
+ * An assignment or a compound assignment to it is one; so is a call of a
+ * mutating collection method on it, because a watch on a collection fires on
+ * its deep mutation and `mutating` is the compiler's own roster of the calls
+ * that mutate.
+ */
+function reactiveWriteOf(statement: Statement, path: string, mutating: ReadonlySet<string> | null): boolean {
+  if (statement.kind === "AssignmentStatement") return reactiveWritePath(statement.target) === path;
+  if (mutating === null) return false;
+  const call = statement.kind === "ExpressionStatement" && statement.expression.kind === "CallExpression"
+    ? statement.expression
+    : null;
+  if (call === null || call.callee.kind !== "MemberExpression" || call.callee.optional) return false;
+  return mutating.has(call.callee.property) && reactiveWritePath(call.callee.object) === path;
+}
+
+/**
+ * D114 W A2(b): whether an `action` or `async def` writes `path` at its own top
+ * level, unconditionally. One hop: what the callee itself calls is not
+ * followed. A parameter of the callee's own that is spelled like the path's
+ * root, or a binding it declares before the write, means the write is not of
+ * the watched place and the answer is no.
+ */
+function writerWritesPath(
+  writer: ReactiveWriterDeclaration,
+  path: string,
+  root: string,
+  mutating: ReadonlySet<string> | null,
+): boolean {
+  if (writer.parameters.includes(root)) return false;
+  for (const statement of writer.body) {
+    if (statementBindsName(statement, root)) return false;
+    if (reactiveWriteOf(statement, path, mutating)) return true;
+  }
+  return false;
+}
+
+/**
+ * D114 W A2(b): the `action` and `async def` declarations of one module, by
+ * name. A name declared twice — or once as an ordinary `def` — answers `null`,
+ * because the refusal must know exactly which body a call reaches and two
+ * candidates mean it does not.
+ *
+ * The walk is `collectModuleFunctions`'s: module body, component bodies, and
+ * the bodies of the functions themselves, so a nested declaration of a name
+ * makes that name ambiguous here rather than silently resolving to the outer
+ * one.
+ */
+interface ReactiveWriterDeclaration {
+  readonly spelling: "action" | "async def";
+  readonly parameters: readonly string[];
+  readonly body: readonly Statement[];
+}
+
+function collectReactiveWriters(program: Program): ReadonlyMap<string, ReactiveWriterDeclaration | null> {
+  const writers = new Map<string, ReactiveWriterDeclaration | null>();
+  const claim = (name: string, declaration: ReactiveWriterDeclaration | null): void => {
+    writers.set(name, writers.has(name) ? null : declaration);
+  };
+  const record = (statements: readonly Statement[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === "FunctionDeclaration") {
+        claim(statement.name, statement.asynchronous
+          ? { spelling: "async def", parameters: statement.parameters.map((parameter) => parameter.name), body: statement.body }
+          : null);
+        record(statement.body);
+        continue;
+      }
+      if (!isWebStatement(statement)) continue;
+      if (statement.kind === "ExtensionStatement:web:action") {
+        claim(statement.name, {
+          spelling: "action",
+          parameters: statement.parameters.map((parameter) => parameter.name),
+          body: statement.body as readonly Statement[],
+        });
+        record(statement.body as readonly Statement[]);
+        continue;
+      }
+      if (statement.kind === "ExtensionStatement:web:component") record(statement.body as readonly Statement[]);
+    }
+  };
+  record(program.body);
+  return writers;
+}
+
 /** The escapes a text literal carries back into source (`scanStringEscape`). */
 const WATCH_SUBJECT_TEXT_ESCAPES: Readonly<Record<string, string>> = {
   "\\": "\\\\",
@@ -1867,6 +2052,15 @@ export class VelarWebAnalyzer extends Analyzer {
    * name resolves to even where a narrowed copy answers the lookup.
    */
   private readonly computedBindingSpans = new Set<string>();
+  /**
+   * D114 W: the declaration spans of every `resource` in scope, kept the way
+   * `computedBindingSpans` keeps derived values — the question is asked of the
+   * binding a name resolves to, so a local shadow of a resource's name is not
+   * one.
+   */
+  private readonly resourceBindingSpans = new Set<string>();
+  /** D114 W A2(b): this module's `action` and `async def` bodies by name. */
+  private reactiveWriters: ReadonlyMap<string, ReactiveWriterDeclaration | null> = new Map();
   /** Local names bound to an imported `export computed`, from the Web interface. */
   private readonly importedComputedNames: ReadonlySet<string>;
   /** The resolved spans of those imports, so a local shadow of the name is not one. */
@@ -1910,6 +2104,7 @@ export class VelarWebAnalyzer extends Analyzer {
     this.keyedListSources.clear();
     this.keyedListRebuilds.length = 0;
     this.moduleFunctions = collectModuleFunctions(program);
+    this.reactiveWriters = collectReactiveWriters(program);
     super.analyze(program);
     this.reportStaticJsxKeys();
     this.reportRetiredComputedFunction();
@@ -2086,7 +2281,9 @@ export class VelarWebAnalyzer extends Analyzer {
           // the body only runs on a later change, so its reads are deferred
           // for the module-initialization-cycle classification.
           const watched = this.inferExpression(statement.expression);
-          this.rejectFrozenWatchSubject(statement.expression, watched, statement.currentName, statement.previousName);
+          if (this.rejectFrozenWatchSubject(statement.expression, watched, statement.currentName, statement.previousName)) {
+            this.rejectWatchCycle(statement.expression, watched, statement.body);
+          }
           this.enterScope();
           if (statement.currentName) this.declareBinding(statement.currentName, false, watched, statement.span);
           if (statement.previousName) this.declareBinding(statement.previousName, false, watched, statement.span);
@@ -2213,6 +2410,16 @@ export class VelarWebAnalyzer extends Analyzer {
   private isComputedBinding(name: string): boolean {
     const binding = this.lookup(name);
     return binding !== null && this.computedBindingSpans.has(spanIdentity(binding.span));
+  }
+
+  /**
+   * True when `name` resolves to a `resource` declaration. Asked of the binding
+   * rather than of the spelling, for the reason `isComputedBinding` is: a local
+   * `state` may shadow a resource's name, and the shadow is not a resource.
+   */
+  private isResourceBinding(name: string): boolean {
+    const binding = this.lookup(name);
+    return binding !== null && this.resourceBindingSpans.has(spanIdentity(binding.span));
   }
 
   private isImportedComputedBinding(name: string): boolean {
@@ -2516,7 +2723,7 @@ export class VelarWebAnalyzer extends Analyzer {
     watched: ValueType,
     currentName: string | null,
     previousName: string | null,
-  ): void {
+  ): boolean {
     const name = expression.kind === "IdentifierExpression" ? expression.name : null;
     if (name !== null && this.reactiveBindingKind(name) === null && this.zeroArgumentReader(watched)) {
       this.diagnostics.push(diagnostic(
@@ -2524,7 +2731,7 @@ export class VelarWebAnalyzer extends Analyzer {
         `'${name}' is the reader itself, so watching it watches a value that never changes; declare the derived value — 'computed name = ${name}()' — then 'watch name:'`,
         expression.span,
       ));
-      return;
+      return false;
     }
     if (this.frozenWatchSubject(expression)) {
       this.diagnostics.push(diagnostic(
@@ -2532,16 +2739,16 @@ export class VelarWebAnalyzer extends Analyzer {
         `This watch subject never changes, so its body can never run${name === null ? "" : ` — '${name}' is not a reactive source`}; watch a 'state', a 'computed', a prop, or a resource field, or move these statements to where they should run`,
         expression.span,
       ));
-      return;
+      return false;
     }
-    if (watchSubjectPath(expression)) return;
+    if (watchSubjectPath(expression)) return true;
     // D69's own shape, `watch total()`, is a called `computed`, and VEL5063 has
     // already named it with the one-character edit that makes this subject
     // legal. Stacking the shape rule on top would report one mistake twice and
     // would hand the author 'computed value = total()' — a line that reports
     // VEL5063 in its turn. The same reason the frozen rule is asked first.
     if (this.diagnostics.some((item) => item.code === "VEL5063"
-      && item.span.start === expression.span.start && item.span.end === expression.span.end)) return;
+      && item.span.start === expression.span.start && item.span.end === expression.span.end)) return false;
     const derived = currentName ?? "value";
     const watchLine = currentName === null
       ? `watch ${derived}:`
@@ -2554,6 +2761,90 @@ export class VelarWebAnalyzer extends Analyzer {
         : `A watch subject names what to watch, not what to compute: '${rendered}' computes a value. Declare it — 'computed ${derived} = ${rendered}' — then '${watchLine}'`,
       expression.span,
     ));
+    return false;
+  }
+
+  /**
+   * D114 W: the three watch shapes a compile can prove re-trigger the watch
+   * itself. D90 R21 removed the analysis of *who writes what* across calls, and
+   * nothing here brings it back: two watches writing one state are still an
+   * ordinary program, a write reached through an ordinary helper is still
+   * silent, and a write under `if`, `match`, a loop, `try`, a nested `def` or an
+   * arrow is still the author's converging correction to make.
+   *
+   * What is refused is only what is decided at the top of the body, with no
+   * condition to end it:
+   *
+   *  - **B** the body writes the watched place itself (`watch count: count =
+   *    count + 1`), assignment, compound assignment, or a mutating collection
+   *    call on the watched collection;
+   *  - **A2(a)** the subject is a `resource` field and the body reloads that
+   *    same resource — a reload writes exactly those fields, so every completed
+   *    load re-triggers the watch;
+   *  - **A2(b)** the body starts an `action` or an `async def` of this module
+   *    whose own top level writes the watched place. One hop, one module, no
+   *    condition on either end; anything further is the runtime budget's.
+   *
+   * One diagnostic per watch, at the first statement that earns it. A watch with
+   * two of these has two mistakes, and the second is read after the first is
+   * fixed, exactly as two errors on one line are.
+   */
+  private rejectWatchCycle(subject: Expression, watched: ValueType, body: readonly Statement[]): void {
+    const root = reactivePathRoot(subject);
+    if (root === null) return;
+    const path = reactiveWritePath(subject);
+    const collection = nonOptional(this.expandAliases(watched));
+    const mutating = collection.kind === "list" || collection.kind === "map"
+      || collection.kind === "set" || collection.kind === "record"
+      ? mutatingCollectionMethods(collection.kind)
+      : null;
+    // A resource publishes `value`, `loading`, `ready` and `error`, and
+    // `reload` is the one member of the five that is not one of them. Asking it
+    // that way keeps `analyzeResourceDeclaration`'s field map the only roster:
+    // a field added there is a field this recognises, with nothing to update.
+    const resource = subject.kind === "MemberExpression" && !subject.optional
+      && subject.object.kind === "IdentifierExpression" && subject.property !== "reload"
+      && this.isResourceBinding(subject.object.name)
+      ? subject.object.name
+      : null;
+    for (const statement of body) {
+      if (statementBindsName(statement, root)) return;
+      if (path !== null && reactiveWriteOf(statement, path, mutating)) {
+        // A derived value is offered only where it could be declared. A field
+        // or an element has no `computed` spelling of its own, so naming one
+        // would hand the author a line that does not compile.
+        const derived = subject.kind === "IdentifierExpression"
+          ? `declare 'computed ${path} = ...' instead`
+          : "write this value where it is produced instead";
+        this.diagnostics.push(diagnostic(
+          "VEL5077",
+          `This watch writes its own subject '${path}' at the top of its body, so every run re-triggers it and the runtime stops the loop after 100 rounds; write the condition that ends it, or watch the input this value follows and ${derived}`,
+          statement.span,
+        ));
+        return;
+      }
+      const call = topLevelCall(statement);
+      if (call === null) continue;
+      if (resource !== null && call.callee.kind === "MemberExpression" && !call.callee.optional
+        && call.callee.property === "reload" && call.callee.object.kind === "IdentifierExpression"
+        && call.callee.object.name === resource) {
+        this.diagnostics.push(diagnostic(
+          "VEL5078",
+          `This watch reloads '${resource}' — the resource it watches — so every completed load re-triggers it; watch the input the load reads instead, as 'watch userId:' with 'detach ${resource}.reload()' in its body`,
+          call.span,
+        ));
+        return;
+      }
+      if (path === null || call.callee.kind !== "IdentifierExpression") continue;
+      const writer = this.reactiveWriters.get(call.callee.name) ?? null;
+      if (writer === null || !writerWritesPath(writer, path, root, mutating)) continue;
+      this.diagnostics.push(diagnostic(
+        "VEL5079",
+        `This watch starts '${call.callee.name}', which writes '${path}' — the reactive value this watch is on — so each completed run re-triggers the watch; make the write conditional, or watch the input '${call.callee.name}' reads`,
+        call.span,
+      ));
+      return;
+    }
   }
 
   /**
@@ -2958,6 +3249,7 @@ export class VelarWebAnalyzer extends Analyzer {
       ["reload", { kind: "function", parameters: [], requiredParameters: 0, result: { kind: "promise", value: nullType } }],
     ]);
     this.declareBinding(statement.name, false, { kind: "object", fields }, statement.span);
+    this.resourceBindingSpans.add(spanIdentity(statement.span));
   }
 
   private actionType(statement: ActionDeclaration): ValueType {
@@ -3040,7 +3332,9 @@ export class VelarWebAnalyzer extends Analyzer {
         this.flowFrameDepth += 1;
         this.synchronousReactiveDepth += 1;
         const watched = this.inferExpression(item.expression);
-        this.rejectFrozenWatchSubject(item.expression, watched, item.currentName, item.previousName);
+        if (this.rejectFrozenWatchSubject(item.expression, watched, item.currentName, item.previousName)) {
+          this.rejectWatchCycle(item.expression, watched, item.body);
+        }
         this.enterScope();
         if (item.currentName) this.declareBinding(item.currentName, false, watched, item.span);
         if (item.previousName) this.declareBinding(item.previousName, false, watched, item.span);

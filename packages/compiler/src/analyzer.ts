@@ -461,6 +461,25 @@ const CORE_SET_METHOD_NAMES = Object.freeze([
 const CORE_RECORD_METHOD_NAMES = Object.freeze([
   "get", "set", "has", "remove", "clear", "copy", "keys", "values", "entries",
 ] as const);
+
+/**
+ * The collection methods that change their receiver, by the kind of collection
+ * the receiver is. `readonly` refuses exactly these through a read-only view,
+ * and the Web extension's watch analysis asks the same question of a watch
+ * body: a call of one of these on the watched collection is a write of the
+ * subject, exactly as an assignment to it is.
+ *
+ * One roster, one answer. Two copies of it would be one concept with two
+ * definitions -- the shape this repository keeps finding -- and the copy that
+ * fell behind would be the one that decided whether a program compiles.
+ */
+export function mutatingCollectionMethods(kind: "list" | "map" | "set" | "record"): ReadonlySet<string> {
+  return kind === "list"
+    ? new Set(["append", "extend", "insert", "remove", "pop", "clear"])
+    : kind === "map" ? new Set(["set", "getOrSet", "getOrSetWith", "update", "remove", "clear"])
+      : kind === "set" ? new Set(["add", "update", "remove", "clear"])
+        : new Set(["set", "remove", "clear"]);
+}
 export interface FormReadField {
   readonly name: string;
   readonly kind: "string" | "number" | "bool" | "enum" | "strings";
@@ -10309,11 +10328,7 @@ export class Analyzer implements TypeEnvironment {
   ): ValueType | null {
     const object = this.expandAliases(this.inferredOrAnalyze(member.object));
     if (object.kind !== "list" && object.kind !== "map" && object.kind !== "set" && object.kind !== "record") return null;
-    const mutating = object.kind === "list"
-      ? new Set(["append", "extend", "insert", "remove", "pop", "clear"])
-      : object.kind === "map" ? new Set(["set", "getOrSet", "getOrSetWith", "update", "remove", "clear"])
-        : object.kind === "set" ? new Set(["add", "update", "remove", "clear"])
-          : new Set(["set", "remove", "clear"]);
+    const mutating = mutatingCollectionMethods(object.kind);
     if (object.readonlyView && mutating.has(member.property)) {
       for (const argument of sourceArguments) this.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument);
       this.typeError(`Cannot call mutating method '${member.property}' through ${describeType(object)}; it is a read-only view`, member.span);

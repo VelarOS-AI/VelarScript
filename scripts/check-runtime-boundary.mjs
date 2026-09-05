@@ -1295,6 +1295,13 @@ if (/\b(?:history|location)\.(?:pushState|replaceState|back|forward|reload|href|
 if (/\bqueueMicrotask\s*\(/u.test(webRuntimeSource)
   || /\bqueueMicrotask\s*\(/u.test(webEmitterSource)
   || /\bqueueMicrotask\s*\(/u.test(webFoundationSource)
+  // D114 W/A1: the flush budget's task window ends at a macrotask sentinel, so
+  // the foundation now reaches a second scheduling operation. It is captured at
+  // module initialization and applied through the captured Reflect.apply, like
+  // the microtask enqueue beside it -- an ambient call would let a replaced
+  // global decide when a runaway cycle stops being counted.
+  || /\bsetTimeout\s*\(/u.test(webFoundationSource)
+  || !webFoundationSource.includes("const __velarFoundationSetTimeout = globalThis.setTimeout")
   || /\bglobalThis\.Date\.now\s*\(/u.test(webFoundationSource)) {
   failures.push("packages/web: Web scheduling or timestamps bypass the captured browser host ABI");
 }

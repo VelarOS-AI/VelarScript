@@ -578,6 +578,7 @@ ${errorHostRuntime}
 const __velarRuntimeKey = Symbol.for(${JSON.stringify(VELAR_RUNTIME_REGISTRY_KEY)});
 const __velarFoundationReflectApply = Object.getOwnPropertyDescriptor(Reflect, "apply")?.value;
 const __velarFoundationQueueMicrotask = globalThis.queueMicrotask;
+const __velarFoundationSetTimeout = globalThis.setTimeout;
 const __velarFoundationDate = globalThis.Date;
 const __velarFoundationDateNow = typeof __velarFoundationDate === "function"
   ? Object.getOwnPropertyDescriptor(__velarFoundationDate, "now")?.value
@@ -689,12 +690,53 @@ function __velarNextObserverSequence() {
   return __velarObserverSequenceCell[0];
 }
 
-// The identity a flush stamps its run counts with, carried by an overrun into
-// the flush it schedules and consumed by the first flush that starts.
-let __velarOverflowToken = null;
+// D114 W/A1: the identity a flush stamps its run counts with, and the budget
+// those runs spend. Both belong to one host *task*, not to one flush.
+//
+// A cycle that crosses a microtask boundary -- 'watch x: detach step()', where
+// 'step' awaits an already-resolved Promise and then writes 'x' -- is a fresh
+// flush every round, so a budget that reset per flush never saw it: two
+// observer runs, well inside 100,000, forever. Flushes chained through
+// microtasks therefore share one token, one budget and one leaders list, and
+// the macrotask sentinel below closes the window. Work that resumes after a
+// timer, an event or network I/O is a new task and opens a fresh window, which
+// is what keeps an animation that writes state every frame from being stopped.
+//
+// The overrun's carried token is the same rule seen from one flush earlier: an
+// overrun schedules its continuation as a microtask, so that continuation is
+// this same task and continues these same counts by construction.
+const __velarFlushBudgetPerTask = 100000;
+let __velarFlushToken = null;
+let __velarFlushBudget = 0;
+// One sentinel is enough for a window: the first one to fire closes it, and
+// arming a second on every flush would leave a timer per flush behind.
+let __velarTaskSentinelArmed = false;
 
-// The three observers that have run most in the settle running now, kept as
-// the run counts are stamped rather than reconstructed afterwards: the queue at
+function __velarCloseTaskWindow() {
+  __velarTaskSentinelArmed = false;
+  __velarFlushToken = null;
+  return null;
+}
+
+// The macrotask boundary the run-count window ends at. 'setTimeout' is the one
+// scheduling operation every host this runtime supports publishes -- page,
+// worker, and the Node process a 'velar test' run drives the emitted runtime
+// in -- and it is captured at module initialization like every other ambient
+// operation here. A host that publishes none is not left without a gate: the
+// window then closes as soon as the flush chain comes to rest, which is the
+// per-flush budget this runtime had before, so the synchronous cycles stay
+// covered and only the asynchronous one goes back to being invisible.
+function __velarArmTaskSentinel() {
+  if (__velarTaskSentinelArmed) return true;
+  if (typeof __velarFoundationSetTimeout !== "function" || typeof __velarFoundationReflectApply !== "function") return false;
+  __velarTaskSentinelArmed = true;
+  try { __velarFoundationReflectApply(__velarFoundationSetTimeout, globalThis, [__velarCloseTaskWindow, 0]); }
+  catch { __velarTaskSentinelArmed = false; return false; }
+  return true;
+}
+
+// The three observers that have run most in the task window running now, kept
+// as the run counts are stamped rather than reconstructed afterwards: the queue at
 // the moment the budget runs out holds only whichever half of a cycle has not
 // just run, so it cannot name the ring on its own. An observer that has run
 // once is not a candidate, which is every observer of an ordinary flush.
@@ -750,7 +792,7 @@ function __velarFlushRunaway(stalled, token) {
     const named = observer.mode === "watch" && typeof observer.label === "string" && observer.label !== ""
       ? "the watch on '" + observer.label + "'"
       : "a " + observer.mode + " observer";
-    detail += (detail === "" ? "Ran most in this flush: " : ", ") + named
+    detail += (detail === "" ? "Ran most in this task: " : ", ") + named
       + " (" + observer.flushRuns + (observer.flushRuns === 1 ? " run)" : " runs)");
     if (component === "" && typeof observer.component === "string") component = observer.component;
   }
@@ -803,12 +845,16 @@ function __velarFlushOverflow(token) {
     requeued = true;
   }
   const runaway = __velarFlushRunaway(stalled, token);
-  __velarRuntime.report(new RangeError("Reactive updates cannot run more than 100000 observers in one flush"),
+  // The window keeps its token and its run counts -- the requeued flush is one
+  // more flush of the same task, and the pool of observers it has not reached
+  // yet only shrinks -- but the budget is granted again. Without that, the
+  // exhausted count would trip the very next flush of the same task, and the
+  // observers stopped for it would be whatever was queued at that moment: the
+  // innocent ones this overrun just put back, or an unrelated later write.
+  __velarFlushBudget = __velarFlushBudgetPerTask;
+  __velarRuntime.report(new RangeError("Reactive updates cannot run more than " + __velarFlushBudgetPerTask + " observers in one task"),
     { phase: "update", detail: runaway.detail, component: runaway.component, unhandled: true });
-  if (requeued) {
-    __velarOverflowToken = token;
-    __velarScheduleFlush();
-  }
+  if (requeued) __velarScheduleFlush();
 }
 
 // The one entry point: the microtask __velarScheduleFlush enqueues, and the
@@ -816,8 +862,18 @@ function __velarFlushOverflow(token) {
 // R1-a-scope's flush-scoped writer registry around the settle; R21 deleted the
 // registry with the referee that read it, so the name is all that remains and
 // it remains because __velarEnqueue and tick() both hold it.
+//
+// D114 W/A1: it is also where the task window is closed or handed on. Both
+// entries pass through here, including tick()'s drain, so the sentinel is armed
+// once per window however the flush was reached, and a host without a timer
+// falls back to closing the window here, one flush at a time.
 function __velarFlush() {
-  __velarFlushSettle();
+  try { __velarFlushSettle(); }
+  // Without a timer the window closes as soon as the chain comes to rest,
+  // which is the per-flush budget this runtime had before -- except that a
+  // flush already scheduled keeps it open, so an overrun's carried counts and
+  // the queues a settle could not finish reach the flush that continues them.
+  finally { if (!__velarArmTaskSentinel() && !__velarRuntime.flushPending) __velarCloseTaskWindow(); }
 }
 
 // Glitch-free order: every derived value and every watch settles to a fixed
@@ -837,12 +893,19 @@ function __velarFlush() {
 // queue in the order the action wrote the states. So each pass takes the queue
 // as it stands and runs it by sequence number. Watches queued by this pass are
 // picked up by the next one, in their own order.
+//
+// D114 W/A1: a flush that starts while the task window is still open continues
+// it -- the same token, so flushRuns keeps accumulating on every observer, the
+// same leaders, and the same remaining budget. A flush that finds the window
+// closed opens a new one.
 function __velarFlushSettle() {
   __velarRuntime.flushPending = false;
-  const token = __velarOverflowToken === null ? {} : __velarOverflowToken;
-  __velarOverflowToken = null;
-  __velarFlushLeaders.length = 0;
-  let budget = 100000;
+  if (__velarFlushToken === null) {
+    __velarFlushToken = {};
+    __velarFlushBudget = __velarFlushBudgetPerTask;
+    __velarFlushLeaders.length = 0;
+  }
+  const token = __velarFlushToken;
   const step = (observer) => {
     __velarGraphSetRemove(observer.mode === "watch" ? __velarRuntime.watchQueue : __velarRuntime.domQueue, observer);
     if (observer.flushToken === token) observer.flushRuns += 1;
@@ -855,7 +918,7 @@ function __velarFlushSettle() {
       let ran = false;
       for (const observer of __velarGraphSetItems(__velarRuntime.domQueue)) {
         if (observer.mode !== "computed") continue;
-        if ((budget -= 1) < 0) { __velarFlushOverflow(token); return; }
+        if ((__velarFlushBudget -= 1) < 0) { __velarFlushOverflow(token); return; }
         step(observer);
         ran = true;
       }
@@ -869,7 +932,7 @@ function __velarFlushSettle() {
         // snapshot is a plan, and the queue is what says whether it still owes
         // a run.
         if (observer.stopped || !__velarGraphSetContains(__velarRuntime.watchQueue, observer)) continue;
-        if ((budget -= 1) < 0) { __velarFlushOverflow(token); return; }
+        if ((__velarFlushBudget -= 1) < 0) { __velarFlushOverflow(token); return; }
         step(observer);
         ran = true;
       }
@@ -877,7 +940,7 @@ function __velarFlushSettle() {
     }
     for (const observer of __velarGraphSetItems(__velarRuntime.domQueue)) {
       if (observer.mode === "computed") break;
-      if ((budget -= 1) < 0) { __velarFlushOverflow(token); return; }
+      if ((__velarFlushBudget -= 1) < 0) { __velarFlushOverflow(token); return; }
       step(observer);
     }
   }

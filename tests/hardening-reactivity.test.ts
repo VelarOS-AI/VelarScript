@@ -812,7 +812,7 @@ test(
       assert.equal(failures.length, 1);
       assert.match(
         failures[0] ?? "",
-        /Reactive updates cannot run more than 100000 observers in one flush/u,
+        /Reactive updates cannot run more than 100000 observers in one task/u,
       );
     });
   },
@@ -898,7 +898,7 @@ test(
       // the ring is an ordinary program now, and the budget is the only gate
       // that stops it. The turn still ends, the page still answers, and the
       // unrelated write still reaches its watch.
-      const budget = failures.filter((item) => /Reactive updates cannot run more than 100000 observers in one flush/u.test(item));
+      const budget = failures.filter((item) => /Reactive updates cannot run more than 100000 observers in one task/u.test(item));
       assert.equal(budget.length, 1, JSON.stringify(failures.slice(0, 2)));
       assert.deepEqual(failures, budget);
     });
@@ -920,16 +920,20 @@ test("[rw-3] there is exactly one flush drain, and it carries the overrun progre
   assert.match(foundation, /if \(observer\.flushToken === token && observer\.flushRuns > threshold\) threshold = observer\.flushRuns;/u);
   assert.match(foundation, /if \(threshold > 4\) threshold = 4;/u);
   assert.match(foundation, /if \(threshold > 0 && observer\.flushToken === token && observer\.flushRuns >= threshold\)/u);
-  // The token carries into the flush the overrun schedules, so run counts
-  // accumulate across the chain and the unreached observers only shrink.
-  assert.match(foundation, /__velarOverflowToken = token;\n/u);
-  assert.match(foundation, /const token = __velarOverflowToken === null \? \{\} : __velarOverflowToken;\n\s*__velarOverflowToken = null;/u);
+  // D114 W/A1: the token that carried across an overrun is now the task
+  // window's own token, so the carry is what the window already does -- the
+  // overrun schedules a microtask, the microtask is this same task, and the
+  // flush it runs continues these counts because the window is still open. The
+  // budget is granted again so the exhausted count cannot trip the next flush.
+  assert.match(foundation, /if \(__velarFlushToken === null\) \{\n\s*__velarFlushToken = \{\};\n\s*__velarFlushBudget = __velarFlushBudgetPerTask;/u);
+  assert.match(foundation, /__velarFlushBudget = __velarFlushBudgetPerTask;\n\s*__velarRuntime\.report\(new RangeError\(/u);
+  assert.match(foundation, /if \(requeued\) __velarScheduleFlush\(\);/u);
   // One definition of each, and the emitter defines none of them.
   for (const name of ["__velarFlush", "__velarScheduleFlush", "__velarFlushOverflow"]) {
     assert.equal((foundation.match(new RegExp(`function ${name}\\(`, "gu")) ?? []).length, 1, name);
     assert.equal(emitter.match(new RegExp(`function ${name}\\(`, "gu")), null, name);
   }
-  assert.equal(emitter.includes("__velarOverflowToken ="), false);
+  assert.equal(emitter.includes("__velarFlushToken ="), false);
   assert.equal(emitter.includes("function __velarSchedule("), false);
 });
 

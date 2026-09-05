@@ -715,7 +715,10 @@ component Profile(userId: string):
 
 Watch the narrowest thing that should trigger a refetch — one prop, or a record
 of query inputs — and remember that a deep mutation inside a watched value is
-itself a change.
+itself a change. Watch the *input*, never the result: a watch on the resource's
+own `value`, `loading`, `ready`, or `error` whose body reloads that same
+resource is refused where it is written, because a reload writes exactly those
+fields and every completed load would re-trigger the watch that started it.
 
 ### Actions run in parallel
 
@@ -780,6 +783,21 @@ watches run in the order they were written — source order in one module,
 mount order across instances of one component, module initialization order
 across modules — and two watches that write one `state` both take effect in
 that order rather than being refused.
+
+Three shapes are refused where they are written, because each re-triggers the
+watch on every run and nothing ends it: a body whose top level unconditionally
+writes the watch's own subject (`watch count: count = count + 1`, including a
+compound assignment and a mutating call on the watched collection); a watch on a
+`resource` field whose body reloads that resource; and a watch that
+unconditionally starts an `action` or an `async def` of the same module whose own
+top level writes the watched value. Everything else stays legal — a write under
+a condition, a write of another state, a write two calls away, a writer in
+another module — and the runtime budget is what stands behind it. That budget is
+spent per task, so a cycle chained through microtasks is stopped and reported
+like a synchronous one. **A cycle that crosses the network is not, and cannot
+be**: its write arrives in a later task, with nothing to connect it to the flush
+that started the load. The rule that covers what no budget can see is the same
+one the resource section states — watch the input, not the result.
 
 **A watch runs before the DOM its own change produces.** Every `computed` and
 every watch settles to a fixed point first, and only then is the document
@@ -1078,12 +1096,18 @@ component RuntimeStatus:
   runtime rather than silently discarded. Error handlers therefore own their
   lifetime and must be removed during cleanup.
 - Reactive work is budgeted in both directions. A render or watch that
-  invalidates itself more than 100 times is stopped and reported, and one flush
+  invalidates itself more than 100 times is stopped and reported, and one *task*
   may run at most 100,000 observers: a pair of watches that write each other's
   state, which no single-observer cap can see, is stopped and reported through
   the same `velar/app` chain with phase `update` instead of freezing the page.
   Observers still queued when that budget is exhausted are stopped with it,
-  since they are the ones a runaway flush would resume.
+  since they are the ones a runaway flush would resume. The budget is per task
+  rather than per flush so that a cycle chained through microtasks — a watch
+  that detaches work which awaits an already-resolved Promise and writes back —
+  meets one budget rather than a fresh one every round. A macrotask boundary
+  ends the window, so writes driven by a timer, an event, or network I/O start a
+  new budget and an animation that writes state on every frame is never
+  stopped.
 - An application may install at most 1,000 error handlers. Manual report phases
   are limited to 256 characters and details to 64 KiB before entering the
   shared error channel.
