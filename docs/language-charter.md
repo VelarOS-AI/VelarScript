@@ -2189,7 +2189,7 @@ List members:
 | `map(transform)` | Transformed List. |
 | `flatMap(transform)` | Transformed then flattened one level: the transform returns a List for each element and the results concatenate in order. |
 | `filter(test)` | Filtered List; the exact predicate `x => x != null` narrows `List<T?>` to `List<T>`. |
-| `reduce(combine, initial)` | Folded result. |
+| `reduce(combine, initial)` | Folded result of `combine(accumulator, value, index)` over the snapshot, starting from `initial`. |
 | `sum()` | Sum of a `List<number>` from zero. |
 | `min()`, `max()` | Smallest/largest ordered element, or `null` when empty. |
 | `min(by=selector)`, `max(by=selector)` | The element with the smallest/largest ordered key, or `null` when empty; the key obeys `sorted(by=)`'s rules. |
@@ -2301,16 +2301,17 @@ changing which values belong to the current operation. So do the members that
 take no callback at all: `unique`, `compact`, `flatten`, `chunk`, `zip`, and
 `repeat` answer a fresh container built from one snapshot, and every result
 stays under the 1,000,000-item ceiling.
-Every callback that receives an element receives `(value, index)` — the
-zero-based position in that snapshot — and may declare only `value` when it
-does not need the position. There is no exception: `sorted(by=)` is an element
-callback like the rest, and its index is the position before the sort, the only
-one that exists while the keys are computed. Two callbacks receive no element
-of their own and keep their own shapes: `sorted`'s comparator weighs two
-elements against each other as `(left, right)`, and `reduce`'s combine folds an
-accumulator with a value as `(accumulator, value)`. The `by` selector is called
-exactly once per snapshot value. Comparator and `by` forms are mutually
-exclusive.
+Every callback that receives an element receives the element's zero-based
+position in that snapshot in the parameter after it, and may declare fewer
+parameters when it does not need the ones at the end. There is no exception:
+`sorted(by=)` is an element callback like the rest, and its index is the
+position before the sort, the only one that exists while the keys are computed;
+`reduce`'s combine folds an accumulator with an element, so it receives
+`(accumulator, value, index)` where every other callback receives
+`(value, index)`. One callback receives no element of its own and keeps its own
+shape: `sorted`'s comparator weighs two elements against each other as
+`(left, right)`. The `by` selector is called exactly once per snapshot value.
+Comparator and `by` forms are mutually exclusive.
 
 VelarScript does not expose `splice`, variadic `push`, `shift`, `unshift`, or
 mutating `sort`/`reverse`.

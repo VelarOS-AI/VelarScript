@@ -265,3 +265,116 @@ print(str(identity(1)))
 print(str(identity(1, 2)))
 `), "1\n1\n");
 });
+
+// ---------------------------------------------------------------------------
+// D114 S3c — reduce's combine is an element callback too
+// ---------------------------------------------------------------------------
+
+/**
+ * S3b left `reduce` as the one element-receiving List callback without the
+ * snapshot index and wrote that exception into the charter. There is no reason
+ * for it: the combine receives an element, so it receives the element's
+ * position after it, as `(accumulator, value, index)`. The comparator is still
+ * not an element callback — it weighs two elements — and item B's assignability
+ * rule keeps every one- and two-parameter combine ever written compiling and
+ * meaning the same thing.
+ */
+
+test("[D114 S3c] the combine receives the accumulator, the value, and the snapshot index", async () => {
+  const source = `
+const values: List<number> = [30, 10, 20]
+const weighted = values.reduce((total, value, index) => total + value * index, 0)
+const named = values.reduce(combine=(total, value, index) => total + value * index, initial=0)
+const text = values.reduce((joined, value, index) => f"{joined}{index}:{value} ", "")
+`;
+  assert.equal(typeOf(source, "weighted"), "number");
+  assert.equal(typeOf(source, "named"), "number");
+  assert.equal(typeOf(source, "text"), "string");
+  assert.equal(await run(`
+const values: List<number> = [30, 10, 20]
+const seen: List<string> = []
+
+def note(total: number, value: number, index: number) -> number:
+    seen.append(f"{index}={value}")
+    return total + value
+
+print(str(values.reduce(note, 0)))
+print(seen.join(" "))
+print(values.reduce((joined, value, index) => f"{joined}{index}:{value} ", "").trim())
+`), [
+    "60",
+    "0=30 1=10 2=20",
+    "0:30 1:10 2:20",
+    "",
+  ].join("\n"));
+});
+
+test("[D114 S3c] the index is the snapshot position, and the snapshot is still stable", async () => {
+  assert.equal(await run(`
+const growing: List<number> = [5, 7]
+
+def grow(total: number, value: number, index: number) -> number:
+    growing.append(value)
+    return total + index
+
+print(str(growing.reduce(grow, 0)))
+print(str(growing.size))
+`), "1\n4\n");
+});
+
+test("[D114 S3c] a two-parameter and a one-parameter combine still fold", async () => {
+  const source = `
+const values: List<number> = [3, 1, 2]
+const summed = values.reduce((total, value) => total + value, 0)
+const counted = values.reduce(total => total + 1, 0)
+const declared = values.reduce(combine=(total, value) => total + value, initial=0)
+`;
+  assert.equal(typeOf(source, "summed"), "number");
+  assert.equal(typeOf(source, "counted"), "number");
+  assert.equal(typeOf(source, "declared"), "number");
+  assert.equal(await run(`
+const values: List<number> = [3, 1, 2]
+print(str(values.reduce((total, value) => total + value, 0)))
+print(str(values.reduce(total => total + 1, 0)))
+`), "6\n3\n");
+});
+
+test("[D114 S3c] a combine may not require an argument the fold never passes", () => {
+  assert.deepEqual(messagesOf(`
+const values: List<number> = [3, 1, 2]
+print(str(values.reduce((total, value, index, extra) => total, 0)))
+`), ["Cannot assign (total: number, value: number, index: number, extra: unknown) -> number to (number, number, number) -> number"]);
+  assert.deepEqual(messagesOf(`
+const values: List<number> = [3, 1, 2]
+const fold = values.reduce
+print(str(fold((total, value, index, extra) => total, 0)))
+`), ["Cannot assign (total: number, value: number, index: number, extra: unknown) -> number to (number, number, number) -> number"]);
+});
+
+test("[D114 S3c] a bound reduce and an optional receiver take the same combines", async () => {
+  assert.deepEqual(messagesOf(`
+const values: List<number> = [3, 1, 2]
+const fold = values.reduce
+print(str(fold((total, value) => total + value, 0)))
+print(str(fold((total, value, index) => total + value + index, 0)))
+print(str(fold(combine=(total, value, index) => total + index, initial=0)))
+print(fold((joined, value) => f"{joined}{value}", ""))
+`), []);
+  assert.deepEqual(messagesOf(`
+def go(values: List<number>?):
+    print(str(values?.reduce((total, value) => total + value, 0)))
+    print(str(values?.reduce((total, value, index) => total + value + index, 0)))
+    print(str(values?.reduce(combine=(total, value, index) => total + index, initial=0)))
+`), []);
+  assert.equal(await run(`
+const values: List<number> = [3, 1, 2]
+const fold = values.reduce
+
+print(f"{fold((total, value) => total + value, 0)} {values.reduce((total, value) => total + value, 0)}")
+print(f"{fold((total, value, index) => total + value + index, 0)} {values.reduce((total, value, index) => total + value + index, 0)}")
+`), [
+    "6 6",
+    "9 9",
+    "",
+  ].join("\n"));
+});

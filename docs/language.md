@@ -256,9 +256,11 @@ and `flatMap` for stateless selection and projection; `some`, `every`, and
 `find` for queries; `sum`, `min`, `max`, and `reduce` for intentional folds;
 `groupBy`, `keyBy`, `countBy`, `partition`, `chunk`, `zip`, `unique`,
 `compact`, and `flatten` when the answer is a different collection.
-Every callback that receives an element — predicate, transform, and key
-selector alike, `sorted(by=)` included — receives the value and, when declared,
-its stable snapshot index: `tasks.map((task, index) => f"{index}: {task.title}")`.
+Every callback that receives an element — predicate, transform, key selector,
+and `reduce`'s combine alike, `sorted(by=)` included — receives the value and,
+when declared, its stable snapshot index in the parameter after it:
+`tasks.map((task, index) => f"{index}: {task.title}")` and
+`tasks.reduce((total, task, index) => total + index, 0)`.
 Use `for` when the work mutates state, has custom exits, writes multiple
 outputs, or depends on ordered effects. `velar check` reports A8/A13 only for
 the narrow loop shapes it can prove equivalent.

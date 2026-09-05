@@ -131,10 +131,11 @@ print(f"{drain(queue)} handled")
 
 Collection work is method chains: `filter`, `map`, `sorted(by=...)`,
 `reduce`, `sum`. A hand-advanced index loop is the exception reserved for
-genuine cursor algorithms, not the default. A List predicate or transform that
-needs its snapshot position declares the optional second callback parameter,
-as in `items.map((item, index) => ...)`. Imperative work uses the two-slot loop;
-never maintain a shadow counter.
+genuine cursor algorithms, not the default. A List callback that needs its
+snapshot position declares the parameter after the element, as in
+`items.map((item, index) => ...)` and
+`items.reduce((total, item, index) => ..., 0)`. Imperative work uses the
+two-slot loop; never maintain a shadow counter.
 
 When a loop only fills a fresh List from another List, use the collection API
 that states the data flow: `map` for projection, `filter` for selection,
